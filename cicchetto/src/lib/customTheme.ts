@@ -147,6 +147,15 @@ export function resolvePayloadForMode(pair: PayloadPair, dark: boolean): TokenPa
   return dark ? (pair.dark ?? pair.light) : pair.light;
 }
 
+// The mode the app should paint RIGHT NOW: the gallery preview override when
+// set, otherwise the OS `prefers-color-scheme`. Shared by the store apply
+// effect and the editor's restore-on-cancel snapshot so both resolve the SAME
+// slot — otherwise cancelling an edit while previewing the night theme in
+// daylight would flash to the day theme.
+function resolvedModeIsDark(override: "light" | "dark" | null): boolean {
+  return override !== null ? override === "dark" : prefersDark();
+}
+
 // Read the cached pair, defending BOTH the parse AND the shape. This runs at
 // module top-level (main.tsx boot, before render, outside any ErrorBoundary),
 // so a malformed cache that reached `tokenToCssVars` (`Object.entries(
@@ -181,7 +190,7 @@ function readCachePair(): PayloadPair {
 // defend-the-shape read as boot, so a corrupt cache degrades to "no
 // snapshot", never a throw.
 export function getAppliedThemePayload(): TokenPayload | null {
-  return resolvePayloadForMode(readCachePair(), prefersDark());
+  return resolvePayloadForMode(readCachePair(), resolvedModeIsDark(store.previewMode()));
 }
 
 // A `{light, dark}` cache object (vs a legacy bare `TokenPayload`, which
@@ -234,9 +243,7 @@ const store = createRoot(() => {
   // re-paints the matching slot live, no re-fetch. Day (light) mode paints
   // the light slot; night (dark) mode the dark slot with a light fallback.
   createEffect(() => {
-    const override = previewMode();
-    const dark = override !== null ? override === "dark" : prefersDark();
-    applyCustomTheme(resolvePayloadForMode(payloads(), dark));
+    applyCustomTheme(resolvePayloadForMode(payloads(), resolvedModeIsDark(previewMode())));
   });
 
   return { activePair, setActivePair, payloads, setPayloads, previewMode, setPreviewMode };

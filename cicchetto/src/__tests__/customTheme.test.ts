@@ -3,6 +3,7 @@ import {
   applyCustomTheme,
   COLOR_KEYS,
   getAppliedThemePayload,
+  setThemePreviewMode,
   tokenToCssVars,
 } from "../lib/customTheme";
 import { EDITOR_BASE_KEYS, EDITOR_MODE_KEYS, EDITOR_NICK_KEYS } from "../lib/themeEditor";
@@ -71,6 +72,23 @@ describe("customTheme.getAppliedThemePayload", () => {
   it("returns null on a wrong-shaped cache", () => {
     localStorage.setItem(CACHE_KEY, JSON.stringify({ nope: true }));
     expect(getAppliedThemePayload()).toBeNull();
+  });
+
+  // #358 — the restore snapshot must resolve through the SAME preview override
+  // the store apply effect uses, so cancelling an edit while previewing the
+  // night slot in daylight restores the night theme, not the day one.
+  it("resolves the snapshot through the gallery preview override", () => {
+    const dayP = payload({ colors: { ...fullColors(), bg: "#d0d0d0" } });
+    const nightP = payload({ colors: { ...fullColors(), bg: "#0d0d0d" } });
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ light: dayP, dark: nightP }));
+    try {
+      setThemePreviewMode("dark");
+      expect(getAppliedThemePayload()).toEqual(nightP);
+      setThemePreviewMode("light");
+      expect(getAppliedThemePayload()).toEqual(dayP);
+    } finally {
+      setThemePreviewMode(null);
+    }
   });
 });
 
