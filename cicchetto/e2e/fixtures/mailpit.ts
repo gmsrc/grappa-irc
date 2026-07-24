@@ -15,10 +15,13 @@
 // cicchettoPage.ts.
 //
 // Why filter recipient client-side rather than mailpit's `search` API:
-// each spec registers a UNIQUE per-run nick+email (e.g.
-// `wiz-<n>@grappa.test`), so a plain list + `To` filter is unambiguous
-// and needs no query-string escaping. Mailpit keeps everything in
-// memory (MP_MAX_MESSAGES=0, wiped on teardown).
+// the wizard spec registers against a fixed recipient (e.g.
+// `wiz-test@example.com` — note the REAL TLD: azzurra/services'
+// `validate_email` is a hardcoded ICANN-TLD allowlist, so a `.test`
+// recipient is rejected and never mailed), and `resetMailpit()` in the
+// spec's setup wipes any prior run's mail — so a plain list + `To` filter
+// is unambiguous and needs no query-string escaping. Mailpit keeps
+// everything in memory (MP_MAX_MESSAGES=0, wiped on teardown).
 
 const MAILPIT_URL = process.env.E2E_MAILPIT_URL ?? "http://mailpit:8025";
 
