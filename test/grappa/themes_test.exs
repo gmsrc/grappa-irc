@@ -491,6 +491,88 @@ defmodule Grappa.ThemesTest do
     end
   end
 
+  describe "get_active_theme_pair/1 + set_active_theme_pair/3 (#358 day/night)" do
+    test "get pair is {light: nil, dark: nil} when nothing is set" do
+      user = user_fixture()
+      assert Themes.get_active_theme_pair({:user, user.id}) == %{light: nil, dark: nil}
+    end
+
+    test "set with a nil dark stores a single (backward-compat) pick" do
+      user = user_fixture()
+      {:ok, theme} = Themes.create_theme({:user, user}, %{name: "Mine", payload: valid_payload()})
+
+      assert {:ok, %{light: light, dark: nil}} =
+               Themes.set_active_theme_pair({:user, user.id}, theme.id, nil)
+
+      assert light.id == theme.id
+      assert %{light: got_light, dark: nil} = Themes.get_active_theme_pair({:user, user.id})
+      assert got_light.id == theme.id
+    end
+
+    test "set with distinct light + dark persists and resolves both slots" do
+      user = user_fixture()
+      {:ok, day} = Themes.create_theme({:user, user}, %{name: "Day", payload: valid_payload()})
+      {:ok, night} = Themes.create_theme({:user, user}, %{name: "Night", payload: valid_payload()})
+
+      assert {:ok, %{light: l, dark: d}} =
+               Themes.set_active_theme_pair({:user, user.id}, day.id, night.id)
+
+      assert {l.id, d.id} == {day.id, night.id}
+      assert %{light: gl, dark: gd} = Themes.get_active_theme_pair({:user, user.id})
+      assert {gl.id, gd.id} == {day.id, night.id}
+    end
+
+    test "set with dark == light collapses to a single pick (dark nil)" do
+      user = user_fixture()
+      {:ok, theme} = Themes.create_theme({:user, user}, %{name: "Same", payload: valid_payload()})
+
+      assert {:ok, %{light: light, dark: nil}} =
+               Themes.set_active_theme_pair({:user, user.id}, theme.id, theme.id)
+
+      assert light.id == theme.id
+      assert %{dark: nil} = Themes.get_active_theme_pair({:user, user.id})
+    end
+
+    test "re-setting with a nil dark clears a previously-stored dark" do
+      user = user_fixture()
+      {:ok, day} = Themes.create_theme({:user, user}, %{name: "Day", payload: valid_payload()})
+      {:ok, night} = Themes.create_theme({:user, user}, %{name: "Night", payload: valid_payload()})
+
+      {:ok, _} = Themes.set_active_theme_pair({:user, user.id}, day.id, night.id)
+      {:ok, %{dark: nil}} = Themes.set_active_theme_pair({:user, user.id}, day.id, nil)
+      assert %{light: l, dark: nil} = Themes.get_active_theme_pair({:user, user.id})
+      assert l.id == day.id
+    end
+
+    test "an unknown light id → :not_found, nothing persisted" do
+      user = user_fixture()
+      assert {:error, :not_found} = Themes.set_active_theme_pair({:user, user.id}, 9_999_999, nil)
+      assert Themes.get_active_theme_pair({:user, user.id}) == %{light: nil, dark: nil}
+    end
+
+    test "a valid light but unknown dark → :not_found, light NOT persisted (atomic)" do
+      user = user_fixture()
+      {:ok, day} = Themes.create_theme({:user, user}, %{name: "Day", payload: valid_payload()})
+
+      assert {:error, :not_found} =
+               Themes.set_active_theme_pair({:user, user.id}, day.id, 9_999_999)
+
+      assert Themes.get_active_theme_pair({:user, user.id}) == %{light: nil, dark: nil}
+    end
+
+    test "get pair drops a dangling dark to nil while keeping a live light" do
+      user = user_fixture()
+      {:ok, day} = Themes.create_theme({:user, user}, %{name: "Day", payload: valid_payload()})
+      {:ok, night} = Themes.create_theme({:user, user}, %{name: "Night", payload: valid_payload()})
+      {:ok, _} = Themes.set_active_theme_pair({:user, user.id}, day.id, night.id)
+
+      :ok = Themes.delete_theme({:user, user}, night.id)
+
+      assert %{light: l, dark: nil} = Themes.get_active_theme_pair({:user, user.id})
+      assert l.id == day.id
+    end
+  end
+
   describe "store_background/2" do
     test "delegates to the background pipeline and returns an uploads slug" do
       user = user_fixture()

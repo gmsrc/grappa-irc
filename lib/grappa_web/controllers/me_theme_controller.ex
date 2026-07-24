@@ -1,16 +1,24 @@
 defmodule GrappaWeb.MeThemeController do
   @moduledoc """
-  The subject's ACTIVE theme — a server-persisted, per-subject pointer (#75
-  fork-1, cross-device). Behind `[:api, :authn]`.
+  The subject's ACTIVE theme pair — a server-persisted, per-subject
+  `{light, dark}` pointer pair (#75 fork-1, cross-device; #358 day/night).
+  Behind `[:api, :authn]`.
 
-      GET /me/theme   resolved active-theme wire, or JSON `null`   :show
-      PUT /me/theme   set the active theme id                       :update
+      GET /me/theme   resolved `%{"light" => wire|null, "dark" => wire|null}`   :show
+      PUT /me/theme   set the pair: `{light: id}` or `{light: id, dark: id}`    :update
 
-  `GET` returns the fully-resolved theme wire (not a scalar id) so the client
-  applies it directly; `null` means "no theme chosen / pointer dangling" and cic
-  falls back to its own default look. Distinct from `GrappaWeb.ThemesController`
-  because active-theme selection is a `UserSettings`-backed pointer, not a theme
-  resource CRUD op — same split as `MeController` vs the resource controllers.
+  `GET` returns fully-resolved theme wires (not scalar ids) so the client
+  applies them directly. `light` is the day (light-mode) slot; `dark` is the
+  optional night (dark-mode) slot — `null` dark means the light theme applies
+  in both modes (the #75 single pick). cic resolves which slot to paint from
+  the OS `prefers-color-scheme` signal (#358), never the server. A dangling
+  pointer (theme deleted) resolves to `null` and cic falls back to its default.
+
+  `PUT` takes the full desired pair: `light` (required) + optional `dark`
+  (omit or `null` for a single pick). BOTH ids are validated before either
+  persists — a bad dark 404s without half-applying. Distinct from
+  `GrappaWeb.ThemesController` because active-theme selection is a
+  `UserSettings`-backed pointer, not a theme resource CRUD op.
   """
 
   use GrappaWeb, :controller
@@ -24,27 +32,34 @@ defmodule GrappaWeb.MeThemeController do
     viewer = conn.assigns.current_subject
     subject = Subject.from_assigns(conn.assigns)
 
-    case Themes.get_active_theme(subject) do
-      nil -> json(conn, nil)
-      theme -> json(conn, Wire.to_wire(theme, viewer, Themes.count_theme_usage(theme.id)))
-    end
+    json(conn, pair_wire(Themes.get_active_theme_pair(subject), viewer))
   end
 
   @doc false
   @spec update(Plug.Conn.t(), map()) ::
           Plug.Conn.t() | {:error, :bad_request | :not_found | Ecto.Changeset.t()}
-  def update(conn, %{"id" => id}) do
+  def update(conn, %{"light" => light} = params) do
     viewer = conn.assigns.current_subject
     subject = Subject.from_assigns(conn.assigns)
 
-    with {:ok, theme_id} <- parse_id(id),
-         {:ok, theme} <- Themes.set_active_theme(subject, theme_id) do
-      # set_active_theme returns the theme via get_theme/1, which preloads :user.
-      json(conn, Wire.to_wire(theme, viewer, Themes.count_theme_usage(theme.id)))
+    with {:ok, light_id} <- parse_id(light),
+         {:ok, dark_id} <- parse_optional_id(Map.get(params, "dark")),
+         {:ok, pair} <- Themes.set_active_theme_pair(subject, light_id, dark_id) do
+      json(conn, pair_wire(pair, viewer))
     end
   end
 
   def update(_, _), do: {:error, :bad_request}
+
+  # A resolved pair → its wire envelope, each slot a full theme wire or null.
+  defp pair_wire(%{light: light, dark: dark}, viewer),
+    do: %{"light" => slot_wire(light, viewer), "dark" => slot_wire(dark, viewer)}
+
+  defp slot_wire(nil, _), do: nil
+  defp slot_wire(theme, viewer), do: Wire.to_wire(theme, viewer, Themes.count_theme_usage(theme.id))
+
+  defp parse_optional_id(nil), do: {:ok, nil}
+  defp parse_optional_id(id), do: parse_id(id)
 
   defp parse_id(id) when is_integer(id), do: {:ok, id}
 
@@ -54,4 +69,6 @@ defmodule GrappaWeb.MeThemeController do
       _ -> {:error, :not_found}
     end
   end
+
+  defp parse_id(_), do: {:error, :not_found}
 end

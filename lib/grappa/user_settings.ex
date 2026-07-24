@@ -54,6 +54,8 @@ defmodule Grappa.UserSettings do
   |                        |                        | `put_vhost_selection/2`         |
   | `"active_theme_id"`    | `pos_integer() \\| nil`| `get_active_theme_id/1`,        |
   |                        |                        | `put_active_theme_id/2`         |
+  | `"dark_theme_id"`      | `pos_integer() \\| nil`| `get_dark_theme_id/1`,          |
+  |                        |                        | `put_theme_pair/3` (#358)       |
 
   ## Boundary
 
@@ -104,6 +106,10 @@ defmodule Grappa.UserSettings do
   @upload_ttl_seconds_key "upload_ttl_seconds"
   @vhost_selection_key "vhost_selection"
   @active_theme_id_key "active_theme_id"
+  # #358 — the day/night pair's night slot. The `active_theme_id` key is the
+  # day (light) slot; `dark_theme_id` is the optional night (dark) slot. A
+  # `nil`/absent dark means "same theme both modes" (the #75 single pick).
+  @dark_theme_id_key "dark_theme_id"
 
   # Upper bound for upload_ttl_seconds: one year. Image hosts (litterbox,
   # 0x0.st) cap at days; nobody legitimately wants a year-long TTL token
@@ -468,21 +474,35 @@ defmodule Grappa.UserSettings do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Returns the subject's active theme id (the `themes.id` pointer), or `nil`
-  when no row exists, the key is absent, or the stored value is malformed.
+  Returns the subject's active (day/light) theme id, or `nil` when no row
+  exists, the key is absent, or the stored value is malformed.
 
   `nil` means "no theme chosen" — the caller
   (`Grappa.Themes.get_active_theme/1`) falls back to the client/default look.
   Reads with the string key (`:map` JSON round-trip).
   """
   @spec get_active_theme_id(Subject.t()) :: pos_integer() | nil
-  def get_active_theme_id({_, _} = subject) do
+  def get_active_theme_id({_, _} = subject),
+    do: get_theme_pointer(subject, @active_theme_id_key)
+
+  @doc """
+  Returns the subject's night (dark) theme id (#358), or `nil` when it is
+  unset/malformed. `nil` means the day slot applies in both modes (the #75
+  single-pick behaviour).
+  """
+  @spec get_dark_theme_id(Subject.t()) :: pos_integer() | nil
+  def get_dark_theme_id({_, _} = subject),
+    do: get_theme_pointer(subject, @dark_theme_id_key)
+
+  # Shared reader for either theme-pointer JSON key — a positive integer or nil.
+  @spec get_theme_pointer(Subject.t(), String.t()) :: pos_integer() | nil
+  defp get_theme_pointer(subject, key) do
     case fetch_existing_or_nil(subject) do
       nil ->
         nil
 
       %Settings{data: data} ->
-        case data[@active_theme_id_key] do
+        case data[key] do
           n when is_integer(n) and n > 0 -> n
           _ -> nil
         end
@@ -490,38 +510,59 @@ defmodule Grappa.UserSettings do
   end
 
   @doc """
-  Sets the subject's active theme id (a positive `themes.id`), or clears it
-  with `nil`. Preserves other keys in `data` (merge semantics). Validates the
-  id is `nil` or a positive integer; confirming that the id references a
-  readable theme is the caller's job (`Grappa.Themes.set_active_theme/2`).
+  Sets the subject's active (day/light) theme id, or clears it with `nil`.
+  Preserves other keys in `data` (merge semantics). Validates the id is `nil`
+  or a positive integer; confirming that the id references a readable theme is
+  the caller's job (`Grappa.Themes.set_active_theme/2`).
   """
   @spec put_active_theme_id(Subject.t(), pos_integer() | nil) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t()}
   def put_active_theme_id({_, _} = subject, id) do
-    with :ok <- validate_active_theme_id(id, subject),
+    with :ok <- validate_theme_pointer(id, subject, :active_theme_id),
          {:ok, settings} <- get_or_init(subject) do
-      merged_data =
-        case id do
-          nil -> Map.delete(settings.data, @active_theme_id_key)
-          n -> Map.put(settings.data, @active_theme_id_key, n)
-        end
-
-      cs = Settings.changeset(settings, %{data: merged_data})
-      Repo.update(cs)
+      merged_data = put_or_delete(settings.data, @active_theme_id_key, id)
+      Repo.update(Settings.changeset(settings, %{data: merged_data}))
     end
   end
 
-  @spec validate_active_theme_id(term(), Subject.t()) :: :ok | {:error, Ecto.Changeset.t()}
-  defp validate_active_theme_id(nil, _), do: :ok
-  defp validate_active_theme_id(n, _) when is_integer(n) and n > 0, do: :ok
+  @doc """
+  Atomically sets the day/night theme pair (#358) in ONE `data` update: the
+  `active_theme_id` (light) key always to `light_id`, and the `dark_theme_id`
+  key to `dark_id` (or deletes it when `nil`). A single write so a bad dark
+  never leaves a half-applied pair. Validates both ids are `nil`/positive;
+  confirming they reference readable themes is the caller's job
+  (`Grappa.Themes.set_active_theme_pair/3`).
+  """
+  @spec put_theme_pair(Subject.t(), pos_integer(), pos_integer() | nil) ::
+          {:ok, Settings.t()} | {:error, Ecto.Changeset.t()}
+  def put_theme_pair({_, _} = subject, light_id, dark_id) do
+    with :ok <- validate_theme_pointer(light_id, subject, :active_theme_id),
+         :ok <- validate_theme_pointer(dark_id, subject, :dark_theme_id),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data =
+        settings.data
+        |> put_or_delete(@active_theme_id_key, light_id)
+        |> put_or_delete(@dark_theme_id_key, dark_id)
 
-  defp validate_active_theme_id(_, subject) do
+      Repo.update(Settings.changeset(settings, %{data: merged_data}))
+    end
+  end
+
+  # Merge helper: a positive id is stored, a nil clears the key.
+  defp put_or_delete(data, key, nil), do: Map.delete(data, key)
+  defp put_or_delete(data, key, id), do: Map.put(data, key, id)
+
+  @spec validate_theme_pointer(term(), Subject.t(), atom()) :: :ok | {:error, Ecto.Changeset.t()}
+  defp validate_theme_pointer(nil, _, _), do: :ok
+  defp validate_theme_pointer(n, _, _) when is_integer(n) and n > 0, do: :ok
+
+  defp validate_theme_pointer(_, subject, field) do
     attrs = Subject.put_subject_id(%{data: %{}}, subject)
 
     cs =
       %Settings{}
       |> Settings.changeset(attrs)
-      |> Ecto.Changeset.add_error(:active_theme_id, "must be a positive integer or null")
+      |> Ecto.Changeset.add_error(field, "must be a positive integer or null")
 
     {:error, cs}
   end

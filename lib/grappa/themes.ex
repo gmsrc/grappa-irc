@@ -275,16 +275,33 @@ defmodule Grappa.Themes do
   (`Grappa.UserSettings` scope shape).
   """
   @spec get_active_theme(Subject.t()) :: Theme.t() | nil
-  def get_active_theme(subject) do
-    case UserSettings.get_active_theme_id(subject) do
-      nil ->
-        nil
+  def get_active_theme(subject),
+    do: resolve_pointer(UserSettings.get_active_theme_id(subject))
 
-      id ->
-        case get_theme(id) do
-          {:ok, theme} -> theme
-          {:error, :not_found} -> nil
-        end
+  @doc """
+  Resolve the subject's day/night theme PAIR (#358). Returns
+  `%{light: Theme.t() | nil, dark: Theme.t() | nil}`. `light` is the day slot
+  (the #75 `active_theme_id`); `dark` is the optional night slot. Either slot
+  is `nil` when unset OR the pointer dangles (deleted theme) — cic resolves a
+  `nil` dark to the light theme, so a single-pick (no dark) applies in both
+  modes. Takes the bare-id subject tuple.
+  """
+  @spec get_active_theme_pair(Subject.t()) :: %{light: Theme.t() | nil, dark: Theme.t() | nil}
+  def get_active_theme_pair(subject) do
+    %{
+      light: resolve_pointer(UserSettings.get_active_theme_id(subject)),
+      dark: resolve_pointer(UserSettings.get_dark_theme_id(subject))
+    }
+  end
+
+  # A stored id → its theme, or nil when unset (nil id) or dangling (deleted).
+  @spec resolve_pointer(pos_integer() | nil) :: Theme.t() | nil
+  defp resolve_pointer(nil), do: nil
+
+  defp resolve_pointer(id) do
+    case get_theme(id) do
+      {:ok, theme} -> theme
+      {:error, :not_found} -> nil
     end
   end
 
@@ -302,6 +319,40 @@ defmodule Grappa.Themes do
       {:ok, theme}
     end
   end
+
+  @doc """
+  Point the subject at a day/night theme PAIR (#358): `light_id` is the day
+  slot, `dark_id` the optional night slot (`nil` = same theme both modes, the
+  #75 single pick). BOTH ids are confirmed readable BEFORE anything persists
+  (atomic via `UserSettings.put_theme_pair/3` — a single `data` write), so a
+  bad dark never leaves a half-applied pair. A `dark_id` equal to `light_id`
+  is normalised to `nil` (same theme both modes IS a single pick). Returns the
+  resolved pair. Takes the bare-id subject tuple.
+  """
+  @spec set_active_theme_pair(Subject.t(), integer(), integer() | nil) ::
+          {:ok, %{light: Theme.t(), dark: Theme.t() | nil}}
+          | {:error, :not_found | Ecto.Changeset.t()}
+  def set_active_theme_pair(subject, light_id, dark_id)
+      when is_integer(light_id) and (is_integer(dark_id) or is_nil(dark_id)) do
+    with {:ok, light} <- get_theme(light_id),
+         {:ok, dark} <- resolve_optional_theme(dark_id),
+         dark = collapse_same(dark, light),
+         {:ok, _} <- UserSettings.put_theme_pair(subject, light_id, if(dark, do: dark.id)) do
+      {:ok, %{light: light, dark: dark}}
+    end
+  end
+
+  # A nil id resolves to no theme; a present id must reference a readable one.
+  @spec resolve_optional_theme(pos_integer() | nil) ::
+          {:ok, Theme.t() | nil} | {:error, :not_found}
+  defp resolve_optional_theme(nil), do: {:ok, nil}
+  defp resolve_optional_theme(id), do: get_theme(id)
+
+  # Same theme for both modes IS a single pick — drop the redundant dark slot.
+  @spec collapse_same(Theme.t() | nil, Theme.t()) :: Theme.t() | nil
+  defp collapse_same(nil, _), do: nil
+  defp collapse_same(%Theme{id: id}, %Theme{id: id}), do: nil
+  defp collapse_same(dark, _), do: dark
 
   @doc """
   Run a background-image source through the re-encode + re-host pipeline and
