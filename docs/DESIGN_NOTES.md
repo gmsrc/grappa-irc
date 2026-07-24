@@ -16521,3 +16521,83 @@ sites do this explicitly.
 
 Operator recipe (attach an ad-hoc forwarder + WAL/lock corroboration):
 `docs/OPERATIONS.md` → Monitoring → "Write-latency diagnostics (#357)".
+
+---
+
+## 2026-07-24 — Day/night theme pairing follows prefers-color-scheme (GH #358)
+
+**Ask.** The base `[data-theme]` already auto-switches with the OS
+(`theme.ts` `resolveAuto` on `prefers-color-scheme`), but a #75 gallery theme
+layers ONE user-picked palette over the base regardless of day/night — so
+picking a gallery theme *lost* the automatic light/dark behaviour the base
+has. #358: let the user pick a **day theme + a night theme** and swap between
+them on the SAME `prefers-color-scheme` signal. No time-of-day scheduler, no
+geolocation — the phone already toggles dark mode at sunset; we just follow the
+media query.
+
+**Spec challenge — "cic-only" was a mislabel.** The dispatch tagged #358
+cic-only, but the active theme is **server-owned** state
+(`UserSettings.active_theme_id`, the documented invariant in
+`customTheme.ts`). Extending "one theme" → "a `{light, dark}` pair" extends
+server state, so it is server+cic. Corrected before building (a 30-second
+question). It is still **HOT-eligible** (see below) and shipped merge+HOLD in
+the batch.
+
+**Decomposition: server owns the pair, cic derives the resolution.** The
+`{light, dark}` PAIR is persisted state (server); WHICH slot paints right now
+is a *view* derived from the OS signal (cic) — exactly like `isMobile`. cic
+never originates the pair; it mirrors the server-resolved ids and picks the
+slot from `prefersDark`.
+
+**Server — a second JSON key, NO migration → HOT-deployable.**
+`active_theme_id` was never a column: it is a key in `user_settings.data`
+(`:map`). #358 adds a sibling `dark_theme_id` key — zero schema change, so the
+server half ships hot. `UserSettings` refactors the light accessor + validator
+into shared `get_theme_pointer/2` + `validate_theme_pointer/3` and adds
+`put_theme_pair/3` (writes BOTH keys in ONE `data` update — atomic, so a bad
+dark never leaves a half-applied pair). `Themes.get_active_theme_pair/1` /
+`set_active_theme_pair/3` resolve/persist the pair; `MeThemeController`
+`GET/PUT /me/theme` now speak `%{"light" => wire|null, "dark" => wire|null}`
+(`PUT` takes `light` + optional `dark`, validating BOTH ids before either
+persists → 404 without half-applying).
+
+**Backward-compat + normalisation.** A single `{light: id}` PUT stores `dark:
+null` → the light theme applies in both modes (the #75 behaviour, unchanged).
+`dark == light` is **normalised to `nil`** in the context (same theme both
+modes IS a single pick), so `dark !== null` is an exact "is a distinct night
+theme set?" predicate for cic's toggle. The legacy #75 localStorage cache (a
+bare `TokenPayload`) is read as the light slot, so an existing user's theme
+survives the upgrade with no flash.
+
+**cic — one apply authority.** `theme.ts` gains a reactive `prefersDark`
+signal (its own listener on the SAME `(prefers-color-scheme: dark)` query; the
+base FOUC path keeps its imperative boot listener untouched — lower risk).
+`customTheme.ts` holds `{light, dark}` payloads + a single `createEffect` that
+re-applies `resolvePayloadForMode(payloads, prefersDark || previewMode)` — so
+an OS flip re-paints the matching slot **live, with no re-fetch**. Dark mode
+falls back to the light slot when unpaired. Boot applies the resolved slot
+imperatively (deferred effect flush would FOUC).
+
+**Gallery UX — a preview override, NOT a scheduler.** Once a theme is active,
+a "use a different theme at night" toggle reveals a Day/Night slot selector;
+tapping a card assigns it to the selected slot (`nextThemePair/4`, a pure
+helper, unit-tested). Selecting a slot sets `previewMode` so the user SEES the
+night theme they're editing even in daylight; leaving the gallery
+(`onCleanup`) clears the override and the automatic OS-driven swap resumes.
+`previewMode` overrides ONLY inside the picker — it is not a persisted schedule
+and never fights the OS signal outside the gallery. The single-pick "active"
+marker is preserved; a pair labels its day + night cards.
+
+**Known gap (deliberate, out of #358 scope).** `active_theme_counts/0` (the
+gallery "N in use") still counts the LIGHT slot only — a theme used solely as
+someone's night theme undercounts. Counting both slots needs a UNION over two
+JSON keys; #358 doesn't touch popularity, so it's left as a follow-up rather
+than scope-creep the counts SQL.
+
+**Tests.** vitest: `resolvePayloadForMode` (the re-apply decision, incl. the
+unpaired fallback), boot-applies-the-right-slot-per-mode + legacy-cache
+backward-compat, `prefersDark` live update on the media change, `nextThemePair`
+slot assignment, and the pair REST client. Playwright (`@webkit`,
+`emulateMedia({colorScheme})`) proves the gallery `--bg` layer actually SWAPS
+day↔night after a cache-cleared reload (server-owned pair, not the FOUC
+mirror).
