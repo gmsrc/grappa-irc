@@ -16411,3 +16411,51 @@ TLD); msmtp relays ALL mail to mailpit regardless of domain, so the flow stays
 fully hermetic (no real internet/DNS). The AUTH code rides the mail as `/msg
 NickServ AUTH <digits>`; the extraction regex `/AUTH (\d+)/` is case-sensitive
 so it can't false-match the lowercase "authorization code" prose line.
+
+## 2026-07-24 — Global Ctrl/Cmd+V focuses the compose bar + pastes (GH #352, cic)
+
+Paste used to work only with the compose textarea already focused (its
+`onPaste` was wired on the `<textarea>`); a Ctrl/Cmd+V with focus anywhere else
+(scrollback, body, a just-closed menu) was dropped. Now a boot-time
+document-level `paste` listener (`lib/globalPaste`, installed in `main.tsx`
+alongside `installKeyboardPreserve` — same single-global-listener pattern as
+`lib/keepKeyboard`) focuses the compose bar and pastes.
+
+**One router, both doors.** The file/text branching + caret insert were lifted
+out of `ComposeBox.onPaste` into `lib/pasteRoute` (`routeClipboardPaste` +
+`insertPastedText`); the textarea's own `onPaste` AND the global listener both
+call it, so the two paths can't drift (the CLAUDE.md "implement once, reuse
+everywhere" rule — a second copy of the upload/flood-guard branching would rot).
+The textarea is passed in explicitly rather than read off `e.currentTarget`, so
+the router is agnostic to whether the event fired on the textarea or was
+intercepted at the document.
+
+**`nativeInsertAvailable` is the only behavioural fork.** Focused path passes
+`true` → a below-threshold plain-text paste is LEFT to the browser's native
+insert (1–3-line pastes stay frictionless, unchanged). Global path passes
+`false` → the browser performs no native insert into an unfocused textarea, so
+below-threshold text is inserted explicitly. File paste (upload) and big-text
+(flood-confirm) are identical across both.
+
+**Boundary (don't over-hijack).** The listener bails when (a) a modal overlay
+is open — `overlayCount() > 0`, respecting the media viewer / theme editor /
+upload privacy modal's own paste semantics; (b) a different editable field —
+input / textarea / contentEditable — owns focus, which ALSO covers the compose
+textarea itself (its own `onPaste` runs; the global listener would otherwise
+double-fire); (c) no compose surface is mounted (home / mentions / admin /
+nothing selected — no `[data-compose-input]` in the DOM). The active
+(networkSlug, channelName) is DERIVED from `selectedChannel()` (the same source
+ComposeBox's props come from), not duplicated — the compose textarea is found by
+a `data-compose-input` hook, avoiding a coupling to its a11y label.
+
+**iOS graceful degrade (the issue's open question).** Chrome/Firefox expose
+`clipboardData` on a document-level paste even off an editable target; Safari/iOS
+may deny the read. So the listener focuses the compose bar FIRST and
+unconditionally — even when the payload can't be read (`routeClipboardPaste`
+no-ops on empty text), the user's paste / next keystroke lands in the now-focused
+compose box. cross-checked against the iOS notes in `keepKeyboard.ts`.
+
+vitest (`globalPaste.test.ts` guard matrix + `pasteRoute.test.ts` routing)
+proves the logic in jsdom; `e2e/tests/issue352-global-paste.spec.ts` is the
+real-browser proof that a paste with focus off the compose bar focuses it and
+lands the text. cic-only — no cold deploy.

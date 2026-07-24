@@ -370,7 +370,9 @@ const ComposeBox: Component<Props> = (props) => {
   // was intercepted at the document.
   const onPaste = (e: ClipboardEvent) => {
     if (textareaEl === undefined) return;
-    routeClipboardPaste(e, textareaEl, props.networkSlug, props.channelName);
+    // nativeInsertAvailable = true: focus is on this textarea, so a
+    // below-threshold paste is left to the browser's native insert.
+    routeClipboardPaste(e, textareaEl, props.networkSlug, props.channelName, true);
   };
 
   // #118 — "(i/N)" counter, shown only while a multi-file batch is in
@@ -498,6 +500,10 @@ const ComposeBox: Component<Props> = (props) => {
           placeholder={composePlaceholder(props.networkSlug, props.channelName)}
           rows={1}
           aria-label="compose message"
+          // #352 — stable hook for the boot-time global paste listener
+          // (lib/globalPaste) to find the ONE mounted compose surface without
+          // coupling to the a11y label.
+          data-compose-input
         />
         {/* UX-6 bucket F (2026-05-21) — arrow glyph + aria-label
             preserve a11y + byRole queries. SVG (not Unicode ➤) so the

@@ -18,6 +18,7 @@ import { mountBadgeReconcile, mountBadgeSync } from "./lib/badge";
 import { applyCachedCustomTheme, mountCustomThemeSync } from "./lib/customTheme";
 import { isDocumentVisible } from "./lib/documentVisibility";
 import { applyFontSizeFromStorage } from "./lib/fontSize";
+import { installGlobalPaste } from "./lib/globalPaste";
 import { installKeyboardPreserve } from "./lib/keepKeyboard";
 import { applyIosClass, isStandalonePwa } from "./lib/platform";
 import { installPushResubscribe } from "./lib/pushResubscribe";
@@ -126,6 +127,12 @@ installSmartScrollPin();
 // BIS-DEC) — every new tappable surface inherits the behavior
 // automatically.
 installKeyboardPreserve();
+
+// #352 — global Ctrl/Cmd+V. A single document-level paste listener: when a
+// paste fires while focus is off the compose textarea (scrollback / body), it
+// focuses the compose bar and routes the payload (text or image) through the
+// same shared router the textarea's own onPaste uses. See lib/globalPaste.
+installGlobalPaste();
 
 // Push notifications cluster B0 (2026-05-14) — capture
 // `beforeinstallprompt` early. Chrome fires this event ONCE, very

@@ -50,11 +50,22 @@ export function insertPastedText(
 
 // Route a clipboard `paste` event to the upload path or the text path for the
 // (networkSlug, channelName) window whose compose textarea is `ta`.
+//
+// `nativeInsertAvailable` splits the two callers:
+//   * true  — the textarea's own onPaste (focus is ON it): a below-threshold
+//             plain-text paste is LEFT to the browser's native insert, so
+//             1–3-line pastes stay frictionless.
+//   * false — the #352 global listener (paste fired with focus elsewhere): the
+//             browser performs NO native insert into the unfocused textarea, so
+//             below-threshold text is inserted explicitly here. Empty/unreadable
+//             text (iOS clipboard denial) is a no-op — the caller has already
+//             focused the compose bar for the graceful degrade.
 export function routeClipboardPaste(
   e: ClipboardEvent,
   ta: HTMLTextAreaElement,
   networkSlug: string,
   channelName: string,
+  nativeInsertAvailable: boolean,
 ): void {
   const data = e.clipboardData;
   if (!data) return;
@@ -82,18 +93,25 @@ export function routeClipboardPaste(
   // Reuses the store-driven confirm dialog (lib/confirmDialog) — Cancel is
   // the safe default (drop the paste), the affirmative button pastes.
   const text = data.getData("text");
-  if (!shouldGuardPaste(text)) return;
+  if (shouldGuardPaste(text)) {
+    e.preventDefault();
+    const lines = pastedLineCount(text);
+    requestConfirm({
+      title: `Paste ${lines} lines?`,
+      // Target-neutral copy: `channelName` is a nick on a query (DM) window,
+      // so "flood the channel" would misdescribe a DM. "a burst of messages"
+      // is honest without over-claiming one-message-per-line (blank lines are
+      // dropped at send — splitMessageLines), and reads right for both a
+      // channel and a DM.
+      body: `You're about to paste ${lines} lines into ${channelName}. Sending can flood it with a burst of messages.`,
+      confirmLabel: "Paste",
+      onConfirm: () => insertPastedText(ta, networkSlug, channelName, text),
+    });
+    return;
+  }
+  // Below the flood threshold.
+  if (nativeInsertAvailable) return; // focused textarea → the browser inserts it
+  if (text === "") return; // global path with no readable text → focus-only (iOS)
   e.preventDefault();
-  const lines = pastedLineCount(text);
-  requestConfirm({
-    title: `Paste ${lines} lines?`,
-    // Target-neutral copy: `channelName` is a nick on a query (DM) window,
-    // so "flood the channel" would misdescribe a DM. "a burst of messages"
-    // is honest without over-claiming one-message-per-line (blank lines are
-    // dropped at send — splitMessageLines), and reads right for both a
-    // channel and a DM.
-    body: `You're about to paste ${lines} lines into ${channelName}. Sending can flood it with a burst of messages.`,
-    confirmLabel: "Paste",
-    onConfirm: () => insertPastedText(ta, networkSlug, channelName, text),
-  });
+  insertPastedText(ta, networkSlug, channelName, text);
 }
