@@ -98,7 +98,11 @@ case "$cmd" in
         # second-network ircd (solanum, replacing the old bahamut-test2 —
         # it keeps the `bahamut-test2` network alias, but the compose
         # SERVICE name is solanum-test2).
-        docker compose up --build --wait hub leaf-v4 leaf-v6 services solanum-test2 grappa-test nginx-test
+        # #349 — `mailpit` is the mailcatcher the registration-wizard e2e
+        # polls for the emailed NickServ AUTH code (services relays via
+        # msmtp → mailpit:1025). Distroless image, no healthcheck → `--wait`
+        # treats it as up once running.
+        docker compose up --build --wait hub leaf-v4 leaf-v6 services solanum-test2 grappa-test nginx-test mailpit
         echo
         echo "testnet up. ports: nginx=http://nginx-test, irc=bahamut-test:6667 (in-network only)"
         echo "tear down: scripts/testnet.sh down"

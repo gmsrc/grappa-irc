@@ -70,6 +70,27 @@ services:
   leaf-v6:
     ports: !override []
 
+  # GH #349 — turn ON the azzurra/services outbound AUTH mail for the
+  # registration-wizard e2e, and put services on the grappa-e2e bridge so
+  # its msmtp shim can reach the mailpit sink (`mailpit:1025`). The
+  # submodule image is env-gated (SVC_EMAIL default 0 keeps the standalone
+  # testnet mail-free); here we flip EMAIL + FORCE_AUTH on so a fresh
+  # REGISTER must AUTH with the emailed code before the nick goes +r —
+  # exactly the flow the wizard spec drives + asserts. `svc-net: null`
+  # preserves the submodule's static-IP S2S link to the hub (same pattern
+  # as the leaf-v4 override above); grappa-e2e is added for mailpit reach.
+  services:
+    environment:
+      SVC_EMAIL: "1"
+      SVC_FORCE_AUTH: "1"
+      # services' validate_email() rejects the .test TLD; use the real
+      # services network domain (azzurra.chat) for the envelope-from.
+      SVC_RETURN: "noreply@azzurra.chat"
+    networks:
+      svc-net: null
+      grappa-e2e:
+        aliases: [services, services.azzurra.chat]
+
   # #211 phase 7 / #221 — a SECOND, SEPARATE IRC network: a standalone
   # ircd with its OWN nick namespace (NOT linked to the azzurra hub). This
   # is what makes "one visitor on TWO networks" a REAL two-network test
@@ -301,6 +322,19 @@ services:
         mix grappa.add_server --network azzurra2 --server bahamut-test2:6667 --no-tls
         mix run -e '{:ok, _net} = Grappa.Networks.find_or_create_network(%{slug: "azzurra3", visitor_enabled: true, visitor_autoconnect: false, max_concurrent_visitor_sessions: 100, max_per_ip: 100})'
         mix grappa.add_server --network azzurra3 --server bahamut-test:6667 --no-tls
+        # GH #349 — dedicated user + network for the registration-wizard
+        # real-services e2e. `azzurra-reg` is services_flavor=azzurra (drives
+        # the cic wizard's Azzurra REGISTER/AUTH templates) and points at the
+        # bahamut-test leaf → azzurra hub → the (now email-enabled) services.
+        # --auth none + a FRESH unregistered nick so the user connects NOT
+        # +r → the "Register nick" button shows; the spec registers the nick,
+        # reads the AUTH code from mailpit, sends AUTH <code>, and asserts +r.
+        # An ISOLATED user so the new button has zero blast radius on the
+        # other HomePane specs (which run as vjt).
+        mix grappa.create_user --name wiz-test --password test-password-not-secret
+        mix grappa.bind_network --user wiz-test --network azzurra-reg \
+          --services-flavor azzurra --server bahamut-test:6667 --no-tls \
+          --nick wiz-reg-nick --auth none
     networks:
       grappa-e2e: {}
 
@@ -475,6 +509,12 @@ services:
         condition: service_healthy
       push-catcher:
         condition: service_healthy
+      # GH #349 — the registration-wizard e2e polls mailpit's HTTP API
+      # for the NickServ confirmation mail. Distroless image → no
+      # healthcheck; service_started is enough (boots sub-second, nothing
+      # reads it until a spec sends mail).
+      mailpit:
+        condition: service_started
     volumes:
       # Source mount so spec edits hot-reload without rebuild.
       - .:/work
@@ -523,9 +563,42 @@ services:
       # `/received/<id>` to confirm Sender's HTTP POST landed.
       # See push-catcher/server.mjs for the path scheme.
       E2E_PUSH_CATCHER_URL: http://push-catcher:3000
+      # GH #349 — mailpit HTTP API base for the registration-wizard e2e.
+      # Specs GET /api/v1/messages (list) + /api/v1/message/{id} (body)
+      # to extract the NickServ confirmation code/link.
+      E2E_MAILPIT_URL: http://mailpit:8025
     networks:
       grappa-e2e: {}
     command: ["npx", "playwright", "test"]
+
+  # GH #349 registration wizard — mailcatcher for the real-services
+  # NickServ registration e2e. The wizard fires `REGISTER <pw> <email>`
+  # at a REAL services daemon (Azzurra IRC Services / Atheme /
+  # oftc-ircservices), which mails a confirmation code (Atheme/Azzurra)
+  # or web link (OFTC). Each services daemon's sendmail shim is pointed
+  # at mailpit's SMTP (`mailpit:1025`); the Playwright spec polls
+  # mailpit's HTTP API (`http://mailpit:8025/api/v1/...`) for the mail,
+  # extracts the code/link, and completes verification programmatically →
+  # the registration truly closes (nick goes +r), zero manual step,
+  # self-contained in CI. Same sidecar shape as push-catcher: a stock
+  # image with zero production-code surface, reachable only intra-network.
+  #
+  # `axllent/mailpit` is a distroless image (no shell), so no CMD-SHELL
+  # healthcheck; the runner + services depend on it with the default
+  # `service_started` condition. mailpit boots in well under a second and
+  # nothing polls it until a spec sends mail, long after boot.
+  mailpit:
+    image: axllent/mailpit:v1.20
+    container_name: grappa-e2e-mailpit
+    environment:
+      # Accept mail for any recipient; keep everything in memory (wiped
+      # on teardown, like the rest of the e2e state).
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+      MP_MAX_MESSAGES: "0"
+    networks:
+      grappa-e2e:
+        aliases: [mailpit]
 
   # Push notifications cluster B5 (2026-05-14) — fake Web Push vendor
   # for the e2e push-trigger specs. See push-catcher/server.mjs

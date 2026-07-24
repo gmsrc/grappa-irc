@@ -88,6 +88,18 @@ export const M9B_VICTIM_PASSWORD = "test-password-not-secret";
 export const M9B_VICTIM_IDENTIFIER = "m9b-victim@grappa.test";
 export const M9B_VICTIM_NICK = "m9b-victim-grappa";
 
+// GH #349 — dedicated user for the registration-wizard real-services
+// e2e. Bound to `azzurra-reg` (services_flavor=azzurra) with a FRESH
+// unregistered nick, so the "Register nick" button shows and the spec
+// can register it against the (email-enabled) azzurra services + read
+// the AUTH code from mailpit. Isolated from vjt so the new button has
+// zero blast radius on the other HomePane specs.
+export const WIZ_USER = "wiz-test";
+export const WIZ_PASSWORD = "test-password-not-secret";
+export const WIZ_IDENTIFIER = "wiz-test@grappa.test";
+export const WIZ_NETWORK_SLUG = "azzurra-reg";
+export const WIZ_NICK = "wiz-reg-nick";
+
 const TOKEN_ENV_VAR = "E2E_VJT_TOKEN";
 const SUBJECT_ENV_VAR = "E2E_VJT_SUBJECT";
 const ADMIN_TOKEN_ENV_VAR = "E2E_ADMIN_TOKEN";
@@ -95,6 +107,8 @@ const ADMIN_SUBJECT_ENV_VAR = "E2E_ADMIN_SUBJECT";
 const M9B_USER_ID_ENV_VAR = "E2E_M9B_USER_ID";
 const M9B_VICTIM_TOKEN_ENV_VAR = "E2E_M9B_VICTIM_TOKEN";
 const M9B_VICTIM_USER_ID_ENV_VAR = "E2E_M9B_VICTIM_USER_ID";
+const WIZ_TOKEN_ENV_VAR = "E2E_WIZ_TOKEN";
+const WIZ_SUBJECT_ENV_VAR = "E2E_WIZ_SUBJECT";
 
 export default async function globalSetup(): Promise<void> {
   const result = await loginWithRetry(VJT_IDENTIFIER, VJT_PASSWORD);
@@ -130,6 +144,12 @@ export default async function globalSetup(): Promise<void> {
   const victim = await loginWithRetry(M9B_VICTIM_IDENTIFIER, M9B_VICTIM_PASSWORD);
   process.env[M9B_VICTIM_TOKEN_ENV_VAR] = victim.token;
   process.env[M9B_VICTIM_USER_ID_ENV_VAR] = victim.subject.id;
+
+  // GH #349 — registration-wizard user. Bound to azzurra-reg; the spec
+  // logs in as this user and drives the wizard against real services.
+  const wiz = await loginWithRetry(WIZ_IDENTIFIER, WIZ_PASSWORD);
+  process.env[WIZ_TOKEN_ENV_VAR] = wiz.token;
+  process.env[WIZ_SUBJECT_ENV_VAR] = JSON.stringify(wiz.subject);
 }
 
 export function getSeededVjt(): SeededUser {
@@ -163,6 +183,24 @@ export function getSeededAdmin(): SeededUser {
     name: ADMIN_USER,
     password: ADMIN_PASSWORD,
     identifier: ADMIN_IDENTIFIER,
+    token,
+    subjectJson,
+  };
+}
+
+// GH #349 — registration-wizard user (token + subject) for loginAs.
+export function getSeededWizUser(): SeededUser {
+  const token = process.env[WIZ_TOKEN_ENV_VAR];
+  const subjectJson = process.env[WIZ_SUBJECT_ENV_VAR];
+  if (!token || !subjectJson) {
+    throw new Error(
+      `getSeededWizUser: ${WIZ_TOKEN_ENV_VAR}/${WIZ_SUBJECT_ENV_VAR} not set. Did playwright globalSetup run?`,
+    );
+  }
+  return {
+    name: WIZ_USER,
+    password: WIZ_PASSWORD,
+    identifier: WIZ_IDENTIFIER,
     token,
     subjectJson,
   };
