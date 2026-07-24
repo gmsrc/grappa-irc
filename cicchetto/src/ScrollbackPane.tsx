@@ -982,15 +982,16 @@ const ScrollbackPane: Component<Props> = (props) => {
   const [contextMenu, setContextMenu] = createSignal<ContextMenuState | null>(null);
 
   // #360 — mention-aware scroll-to-bottom badge. Holds the nearest-first ids
-  // of own-nick mentions currently below the fold in THIS window; its length
-  // is the badge count, its head (`[0]`) the next jump target. DERIVED from
-  // live geometry + scroll position (neither is a Solid signal), so it is
-  // recomputed at the same edges `atBottom` is: every onScroll (operator
-  // scroll AND the settle scrolls that activation / message-arrival fire) and,
-  // belt-and-suspenders, after each rows() recreation via rAF (a rows change
-  // that lands without a scroll event still refreshes the badge). Scope is
-  // MENTIONS only (`.scrollback-mention`); watchlist highlights are a separate
-  // track kept split for a follow-up (#360).
+  // of mentions (own nick ∪ /hilight keywords, #370) currently below the fold
+  // in THIS window; its length is the badge count, its head (`[0]`) the next
+  // jump target. DERIVED from live geometry + scroll position (neither is a
+  // Solid signal), so it is recomputed at the same edges `atBottom` is: every
+  // onScroll (operator scroll AND the settle scrolls that activation /
+  // message-arrival fire) and, belt-and-suspenders, after each rows()
+  // recreation via rAF (a rows change that lands without a scroll event still
+  // refreshes the badge). Scope is the `.scrollback-mention` class; the
+  // broader `.scrollback-highlight` (same match set, all content kinds) is not
+  // what the badge tracks.
   const [mentionsBelow, setMentionsBelow] = createSignal<number[]>([]);
   const mentionBadgeCount = (): number => mentionsBelow().length;
   const recomputeMentionsBelow = (): void => {

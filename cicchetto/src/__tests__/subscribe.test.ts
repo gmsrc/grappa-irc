@@ -1,3 +1,4 @@
+import { createSignal } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { channelKey } from "../lib/channelKey";
 
@@ -129,6 +130,14 @@ vi.mock("../lib/beep", () => ({
   playBeep: vi.fn(),
 }));
 
+// #370 — the keyword-highlight list, signal-backed so a test can stage
+// custom /hilight patterns. Default empty so the own-nick beep tests are
+// unaffected. The live beep now matches own nick ∪ these patterns (one path).
+const [highlightPatternsSig, setHighlightPatternsForTest] = createSignal<string[]>([]);
+vi.mock("../lib/highlightList", () => ({
+  highlightPatterns: () => highlightPatternsSig(),
+}));
+
 vi.mock("../lib/queryWindows", () => ({
   openQueryWindowState: vi.fn(),
   closeQueryWindowState: vi.fn(),
@@ -160,6 +169,7 @@ beforeEach(async () => {
   vi.resetModules();
   localStorage.clear();
   vi.clearAllMocks();
+  setHighlightPatternsForTest([]);
   // Reset H2 per-topic registry so cross-test handler counts don't
   // leak (each test that opts in via usePerTopicChannels gets a fresh
   // pool; tests that don't opt in fall back to the singleton mockChannel).
@@ -3069,6 +3079,34 @@ describe("subscribe — UX-6-L foreground beep wiring", () => {
     });
 
     fireMessageEvent("#grappa", { id: 300, kind: "privmsg", body: "alice ping" });
+
+    expect(beep.playBeep).toHaveBeenCalledTimes(1);
+  });
+
+  it("PRIVMSG matching a custom /hilight word (no own nick) on non-selected channel calls playBeep (#370)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    // Own-nick and custom keyword share ONE notify path: a keyword match must
+    // beep exactly like an own-nick mention (vjt simplification mandate).
+    setHighlightPatternsForTest(["deploy"]);
+    await seedStubs();
+    const beep = await import("../lib/beep");
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+
+    store.setSelectedChannel({
+      networkSlug: "freenode",
+      channelName: "#cicchetto",
+      kind: "channel",
+    });
+
+    // Body carries the keyword but NOT the own nick — only the keyword drives it.
+    fireMessageEvent("#grappa", { id: 305, kind: "privmsg", body: "the deploy is done" });
 
     expect(beep.playBeep).toHaveBeenCalledTimes(1);
   });

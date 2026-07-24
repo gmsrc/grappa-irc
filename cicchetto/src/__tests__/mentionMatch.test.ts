@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesWatchlist, mentionsUser } from "../lib/mentionMatch";
+import { matchesWatchlist } from "../lib/mentionMatch";
 
 // #370 — `matchesWatchlist` is the SINGLE client-side match predicate for
 // the in-message visual highlight (ScrollbackPane `.scrollback-mention` /
@@ -16,6 +16,11 @@ import { matchesWatchlist, mentionsUser } from "../lib/mentionMatch";
 describe("matchesWatchlist — own nick ∪ custom highlight patterns (#370)", () => {
   it("matches the own nick at a word boundary (own-nick path unchanged)", () => {
     expect(matchesWatchlist("hey vjt around?", "vjt", [])).toBe(true);
+    expect(matchesWatchlist("VJT ping", "vjt", [])).toBe(true);
+  });
+
+  it("respects word boundaries for the own nick (no substring match)", () => {
+    expect(matchesWatchlist("vjtfoo bar", "vjt", [])).toBe(false);
   });
 
   it("matches a CUSTOM highlight pattern even when the own nick is absent", () => {
@@ -49,12 +54,8 @@ describe("matchesWatchlist — own nick ∪ custom highlight patterns (#370)", (
     // A not-yet-resolved own nick must not blank out custom-word highlights.
     expect(matchesWatchlist("the deploy is done", null, ["deploy"])).toBe(true);
   });
-});
 
-describe("mentionsUser — single-term primitive (unchanged)", () => {
-  it("matches its single term at a word boundary, case-insensitively", () => {
-    expect(mentionsUser("VJT ping", "vjt")).toBe(true);
-    expect(mentionsUser("vjtfoo", "vjt")).toBe(false);
-    expect(mentionsUser("nope", null)).toBe(false);
+  it("is false when both the nick is null and there are no patterns", () => {
+    expect(matchesWatchlist("anything at all", null, [])).toBe(false);
   });
 });

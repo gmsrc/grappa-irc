@@ -16763,3 +16763,56 @@ layout: open drawer → 📇 present + ≥44px → archive is the last
 `.shell-chrome-btn` and list precedes it → tap → drawer closes +
 `DirectoryPane` renders. `issue291` / `issue299` footer-count assertions
 bumped 5 → 6.
+
+## 2026-07-24 — Custom /hilight words share ONE notify path with the own nick (GH #370, cic)
+
+**The bug.** Custom highlight words (the `/hilight` keyword list shipped in
+#356) fired OS push notifications (server-side `Grappa.Mentions.mentioned?/3`
+= own nick ∪ patterns) but rendered as PLAIN lines and made NO in-app sound —
+unlike the own nick, which is visually highlighted AND beeps. The client had
+FORKED the match: the visual highlight (`ScrollbackPane`, `MentionsWindow`)
+and the live beep (`subscribe.ts`) both matched the own nick ONLY, ignoring
+the keyword list. So the on-screen highlight + the in-app beep silently
+diverged from the server's push/count decision.
+
+**The fix (a de-duplication, cic-only).** ONE client-side predicate,
+`matchesWatchlist(body, ownNick, patterns)` in `lib/mentionMatch.ts`, is the
+single source of truth: the source is ONE list = own nick ∪ /hilight
+keywords, where **the nick is just another entry**, matched identically
+(word-boundary, case-insensitive) — a mirror of the server SSOT. EVERY client
+sink now reads that ONE predicate:
+- in-message visual highlight — `ScrollbackPane` `.scrollback-mention`
+  (privmsg) + `.scrollback-highlight` (all content kinds), `MentionsWindow`;
+- the live in-app beep + optimistic desktop-title bump — `subscribe.ts`
+  (previously `mentionsUser(ownNick)`, now the shared predicate);
+- the push-parity mirror — `pushTriggers.shouldNotify` (its private
+  `mentioned` copy deleted).
+The server already owned the remaining sinks (OS push + sidebar mention
+count) via the same `mentioned?/3` source, so those needed no change. The
+single-term primitive (`matchesTerm`) is now private — `matchesWatchlist` is
+the only exported predicate.
+
+**Consequence — #360 scroll badge widened (intended).** The scroll-to-bottom
+mention badge derives from `.scrollback-mention`, which now includes keyword
+matches. This CONVERGES it with the server sidebar count (which already
+counted keywords); the pre-#370 client badge was own-nick-only while the
+server count included patterns, so they disagreed. `mentionScroll.ts` +
+`ScrollbackPane`'s `mentionsBelow` docs updated (the old "watchlist highlights
+are a separate track kept split for a follow-up" claim was made false by this
+change).
+
+**Hydration.** The keyword list has NO server broadcast (unlike the presence
+watch list's `notify_list` after-join push) — its only pull was
+`WatchlistsSettings` on open, so the highlight/beep would have stayed dark
+until the operator opened settings once. `userTopic.ts` `onJoinOk` now calls
+`refreshHighlights()` on every user-topic (re)join (initial + every
+auto-rejoin after a WS gap); failure is logged, not swallowed, and the next
+rejoin retries.
+
+**Tests.** `mentionMatch.test.ts` pins the predicate (own nick ∪ patterns,
+word-boundary, null-nick-matches-on-patterns). `ScrollbackPane` +
+`MentionsWindow` tests pin the visual classes on a custom-word line (both use
+the REAL predicate now — the old substring mock is gone). `subscribe.test.ts`
+gains a keyword-beep case. Real e2e `issue370-custom-highlight-visual.spec.ts`
+drives the VISIBLE highlight both live (word added this session) and after a
+reload (proving the on-join re-hydration).

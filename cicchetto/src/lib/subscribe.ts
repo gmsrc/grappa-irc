@@ -7,9 +7,10 @@ import { playBeep } from "./beep";
 import { type ChannelKey, channelKey, decodeChannelKey } from "./channelKey";
 import { seedModes, seedTopic } from "./channelTopic";
 import { isDocumentVisible } from "./documentVisibility";
+import { highlightPatterns } from "./highlightList";
 import { seedIsupport } from "./isupport";
 import { applyPresenceEvent, seedMembers } from "./members";
-import { mentionsUser } from "./mentionMatch";
+import { matchesWatchlist } from "./mentionMatch";
 import { setServerMention } from "./mentions";
 import { channelsBySlug, networks, refetchChannels, refetchNetworks, user } from "./networks";
 import { nickEquals } from "./nickEquals";
@@ -232,19 +233,25 @@ createRoot(() => {
     // sidebar badge gate and the in-pane unread-marker stay aligned.
     if (isOperatorActionEcho(message)) return;
 
-    // Live mention alert (beep + optimistic PWA badge) — only PRIVMSGs
-    // whose body matches the operator's own nick, on a non-effectively-
-    // focused window, not from own nick.
+    // Live mention alert (beep + optimistic PWA badge) — PRIVMSGs whose body
+    // matches the operator's watchlist (own nick ∪ /hilight keywords), on a
+    // non-effectively-focused window, not from own nick.
     //
     // #267 — the mention COUNT is no longer bumped here. It is
     // server-authoritative (`mentions.ts`, seeded by /me + join_reply and
     // pushed on every new message + cursor advance via the `window_counts`
     // event), so the client-side count regex is gone — that regex never
     // rebuilt on reconnect / across tabs, the bug #267 fixes. What stays
-    // is the LIVE alert: `mentionsUser` (own nick) fires the in-app beep +
-    // the optimistic desktop-title badge bump the instant a mention lands
-    // on an unfocused window, before the server's window_counts push
-    // round-trips. These are transient live cues, not the count of record.
+    // is the LIVE alert: `matchesWatchlist` fires the in-app beep + the
+    // optimistic desktop-title badge bump the instant a match lands on an
+    // unfocused window, before the server's window_counts push round-trips.
+    // These are transient live cues, not the count of record.
+    //
+    // #370 — the SAME `matchesWatchlist` predicate the in-message visual
+    // highlight uses (own nick = just another entry in the watchlist source,
+    // NOT a special case). One notify path: a custom keyword beeps + bumps
+    // exactly like an own-nick mention, matching the server SSOT
+    // `Grappa.Mentions.mentioned?/3` that already drives OS push + the count.
     //
     // UX-6-L (2026-05-20): the beep complements the SW's
     // visibility-anywhere OS-notification suppression (`lib/pushDedup.ts`).
@@ -254,11 +261,11 @@ createRoot(() => {
       !nickEquals(message.sender, ownNick)
     ) {
       const u = untrack(user);
-      // #211 phase 7 — mention-match on the PER-NETWORK own nick (`ownNick`,
-      // already threaded into this handler), NOT the retired identity-wide
+      // #211 phase 7 — match on the PER-NETWORK own nick (`ownNick`, already
+      // threaded into this handler), NOT the retired identity-wide
       // `displayNick(u)` (a visitor has no single nick now). Guard on `u`
       // so a not-yet-loaded /me still skips.
-      if (u && ownNick != null && mentionsUser(message.body, ownNick)) {
+      if (u && matchesWatchlist(message.body, ownNick, highlightPatterns())) {
         playBeep();
         // Optimistic foreground badge bump so the desktop `document.title`
         // moves the instant a mention lands on an unfocused window, before

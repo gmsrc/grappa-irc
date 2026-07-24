@@ -10,20 +10,9 @@ vi.mock("../lib/highlightList", () => ({
   highlightPatterns: () => highlightPatternsSig(),
 }));
 
-// Mock mentionMatch so highlight logic is exercised without DOM-unfriendly
-// regex. #370 threaded the custom highlight patterns through as a 3rd arg;
-// the stand-in mirrors the real "own nick ∪ patterns" fold as a substring
-// check (word-boundary fidelity is pinned in mentionMatch.test.ts).
-vi.mock("../lib/mentionMatch", () => ({
-  matchesWatchlist: (body: string | null, nick: string | null, patterns: string[]) => {
-    if (!body) return false;
-    return [nick, ...patterns].some((t) =>
-      t ? body.toLowerCase().includes(t.toLowerCase()) : false,
-    );
-  },
-  mentionsUser: () => false,
-}));
-
+// #370 — MentionsWindow uses the REAL `matchesWatchlist` (pure, jsdom-safe),
+// matching the sibling ScrollbackPane.test; only the keyword-list store is
+// mocked. So these assertions exercise the actual word-boundary predicate.
 beforeEach(() => {
   setHighlightPatternsForTest([]);
 });

@@ -1,24 +1,27 @@
 // #360 — pure geometry core for the mention-aware scroll-to-bottom badge.
 //
 // The floating scroll-to-bottom button (C7.4, ScrollbackPane) becomes
-// mention-aware: it shows a badge counting the operator's own-nick mentions
-// that sit BELOW the current viewport in the active window, and a tap jumps
-// to the nearest one below (nearest-first, cycling down) until none remain,
-// at which point it falls back to the plain snap-to-bottom gesture.
+// mention-aware: it shows a badge counting the mentions that sit BELOW the
+// current viewport in the active window, and a tap jumps to the nearest one
+// below (nearest-first, cycling down) until none remain, at which point it
+// falls back to the plain snap-to-bottom gesture.
 //
 // ScrollbackPane owns the DOM read (offsetTop per `.scrollback-line`, the
-// `.scrollback-mention` class = own-nick match per `mentionsUser`); this
+// `.scrollback-mention` class = a mention per `matchesWatchlist` = own nick ∪
+// /hilight keywords, #370 — same set the server counts as a mention); this
 // module owns the below-the-fold DECISION so it can be unit-tested without a
-// real layout (jsdom reports 0 for every geometry). Scope is MENTIONS only
-// (`.scrollback-mention`); watchlist highlights (`.scrollback-highlight`) are
-// a deliberately separate track (#360, kept split for a follow-up).
+// real layout (jsdom reports 0 for every geometry). Scope is the
+// `.scrollback-mention` class (privmsg lines matching the watchlist); the
+// broader `.scrollback-highlight` class (the same match set across all content
+// kinds) is not what the badge tracks.
 
 export type ScrollbackLineGeom = {
   // Server message id (data-msg-id) — the jump target key.
   id: number;
   // offsetTop within the scroll container, in px.
   top: number;
-  // true when the line carries `.scrollback-mention` (own-nick match).
+  // true when the line carries `.scrollback-mention` (watchlist match:
+  // own nick ∪ /hilight keywords, #370).
   isMention: boolean;
 };
 
