@@ -1,0 +1,60 @@
+import { describe, expect, it } from "vitest";
+import { matchesWatchlist, mentionsUser } from "../lib/mentionMatch";
+
+// #370 — `matchesWatchlist` is the SINGLE client-side match predicate for
+// the in-message visual highlight (ScrollbackPane `.scrollback-mention` /
+// `.scrollback-highlight`, MentionsWindow) AND the notify mirror
+// (pushTriggers `mentioned`). It mirrors the server SSOT
+// `Grappa.Mentions.mentioned?/3` = own nick ∪ custom highlight patterns,
+// word-boundary, case-insensitive.
+//
+// The #370 bug was that the visual path only ever received the own nick —
+// so a message matching a custom /hilight word fired the (server-side)
+// notification but rendered as a plain line. These cases pin the extended
+// contract: a custom pattern matches exactly like the own nick does.
+
+describe("matchesWatchlist — own nick ∪ custom highlight patterns (#370)", () => {
+  it("matches the own nick at a word boundary (own-nick path unchanged)", () => {
+    expect(matchesWatchlist("hey vjt around?", "vjt", [])).toBe(true);
+  });
+
+  it("matches a CUSTOM highlight pattern even when the own nick is absent", () => {
+    // The #370 gap: this returned false before patterns were threaded in.
+    expect(matchesWatchlist("the deploy is done", "vjt", ["deploy"])).toBe(true);
+  });
+
+  it("is case-insensitive on a custom pattern", () => {
+    expect(matchesWatchlist("DEPLOY finished", "vjt", ["deploy"])).toBe(true);
+  });
+
+  it("respects word boundaries for a custom pattern (no substring match)", () => {
+    // "deployment" contains "deploy" but is a different word.
+    expect(matchesWatchlist("deployment scheduled", "vjt", ["deploy"])).toBe(false);
+  });
+
+  it("matches any one of several patterns", () => {
+    expect(matchesWatchlist("ship it", "vjt", ["deploy", "ship", "release"])).toBe(true);
+  });
+
+  it("does not match when neither the nick nor any pattern is present", () => {
+    expect(matchesWatchlist("just chatting here", "vjt", ["deploy"])).toBe(false);
+  });
+
+  it("is false for an empty body regardless of patterns", () => {
+    expect(matchesWatchlist("", "vjt", ["deploy"])).toBe(false);
+    expect(matchesWatchlist(null, "vjt", ["deploy"])).toBe(false);
+  });
+
+  it("tolerates a null own nick and matches on patterns alone", () => {
+    // A not-yet-resolved own nick must not blank out custom-word highlights.
+    expect(matchesWatchlist("the deploy is done", null, ["deploy"])).toBe(true);
+  });
+});
+
+describe("mentionsUser — single-term primitive (unchanged)", () => {
+  it("matches its single term at a word boundary, case-insensitively", () => {
+    expect(mentionsUser("VJT ping", "vjt")).toBe(true);
+    expect(mentionsUser("vjtfoo", "vjt")).toBe(false);
+    expect(mentionsUser("nope", null)).toBe(false);
+  });
+});

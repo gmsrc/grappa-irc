@@ -1,15 +1,32 @@
 import { fireEvent, render, screen, within } from "@solidjs/testing-library";
-import { describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import MentionsWindow, { type MentionClickedArgs, type MentionsBundle } from "../MentionsWindow";
 
-// Mock mentionMatch so highlight logic is exercised without DOM-unfriendly regex.
+// #370 — the keyword-highlight list, signal-backed so a test can stage
+// custom patterns. Default empty so the own-nick tests below are unaffected.
+const [highlightPatternsSig, setHighlightPatternsForTest] = createSignal<string[]>([]);
+vi.mock("../lib/highlightList", () => ({
+  highlightPatterns: () => highlightPatternsSig(),
+}));
+
+// Mock mentionMatch so highlight logic is exercised without DOM-unfriendly
+// regex. #370 threaded the custom highlight patterns through as a 3rd arg;
+// the stand-in mirrors the real "own nick ∪ patterns" fold as a substring
+// check (word-boundary fidelity is pinned in mentionMatch.test.ts).
 vi.mock("../lib/mentionMatch", () => ({
-  matchesWatchlist: (body: string | null, nick: string | null) => {
-    if (!body || !nick) return false;
-    return body.toLowerCase().includes(nick.toLowerCase());
+  matchesWatchlist: (body: string | null, nick: string | null, patterns: string[]) => {
+    if (!body) return false;
+    return [nick, ...patterns].some((t) =>
+      t ? body.toLowerCase().includes(t.toLowerCase()) : false,
+    );
   },
   mentionsUser: () => false,
 }));
+
+beforeEach(() => {
+  setHighlightPatternsForTest([]);
+});
 
 const MSG0 = {
   server_time: 1_746_442_200_000,
@@ -210,6 +227,18 @@ describe("MentionsWindow", () => {
     // Both rows contain "vjt" in body per makeBundle fixture.
     expect(rows[0]?.classList.contains("scrollback-highlight")).toBe(true);
     expect(rows[1]?.classList.contains("scrollback-highlight")).toBe(true);
+  });
+
+  it("highlights a row matching a CUSTOM highlight word even without the own nick (#370)", () => {
+    setHighlightPatternsForTest(["deploy"]);
+    const bundle = makeBundle({ messages: [{ ...MSG0, body: "the deploy is done" }] });
+    render(() => (
+      <MentionsWindow bundle={bundle} ownNick="vjt" onMentionClicked={vi.fn()} onClose={vi.fn()} />
+    ));
+
+    const rows = screen.getAllByTestId("mentions-row");
+    // Body carries no own nick — the highlight is driven by the /hilight word.
+    expect(rows[0]?.classList.contains("scrollback-highlight")).toBe(true);
   });
 
   it("does not highlight when ownNick is null", () => {

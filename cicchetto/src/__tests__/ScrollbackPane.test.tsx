@@ -135,6 +135,15 @@ vi.mock("../lib/networks", () => ({
 // messagesUnread / mentions) out of this suite's mock surface.
 vi.mock("../NextActiveButton", () => ({ default: () => null }));
 
+// #370 — the keyword-highlight list. Signal-backed stand-in so a test can
+// stage custom highlight patterns BEFORE render (the real store mirrors the
+// server round-trip; here we drive its value directly). Mocking it also
+// keeps highlightList's socket push verbs out of this suite's mock surface.
+const [highlightPatternsSig, setHighlightPatternsForTest] = createSignal<string[]>([]);
+vi.mock("../lib/highlightList", () => ({
+  highlightPatterns: () => highlightPatternsSig(),
+}));
+
 // C7.6: queryWindows + socket mocked so UserContextMenu import doesn't crash.
 const mockOpenQueryWindowState = vi.fn();
 vi.mock("../lib/queryWindows", () => ({
@@ -282,6 +291,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   setScrollback({});
   setUserNick(null);
+  setHighlightPatternsForTest([]);
   setDocVisible(true);
   setOwnSend(null);
   mockMembersByChannel.mockReturnValue({});
@@ -656,6 +666,98 @@ describe("ScrollbackPane", () => {
       ));
       const line = container.querySelector('[data-kind="topic"]');
       expect(line?.classList.contains("scrollback-mention")).toBe(false);
+    });
+
+    // #370 — a message matching a CUSTOM highlight word (from /hilight) must
+    // get the SAME in-place visual emphasis an own-nick mention gets: the
+    // SAME classes fire, so the CSS is byte-identical. Before #370 the visual
+    // matcher only ever saw the own nick, so a custom-word line rendered plain
+    // even though the (server-side) notification fired.
+    it("adds .scrollback-mention AND .scrollback-highlight to a privmsg matching a custom highlight word", () => {
+      setUserNick("vjt");
+      setHighlightPatternsForTest(["deploy"]);
+      setScrollback({
+        "freenode #a": [
+          {
+            id: 1,
+            network: "freenode",
+            channel: "#a",
+            server_time: 100,
+            kind: "privmsg",
+            sender: "alice",
+            // NO own nick — the highlight is driven purely by the custom word.
+            body: "the deploy is done",
+            meta: {},
+          },
+        ],
+      });
+      const { container } = render(() => (
+        <ScrollbackPane networkSlug="freenode" channelName="#a" kind="channel" />
+      ));
+      const line = container.querySelector('[data-kind="privmsg"]');
+      expect(line?.classList.contains("scrollback-mention")).toBe(true);
+      expect(line?.classList.contains("scrollback-highlight")).toBe(true);
+    });
+
+    it("custom-word match is case-insensitive and word-boundary bounded", () => {
+      setUserNick("vjt");
+      setHighlightPatternsForTest(["deploy"]);
+      setScrollback({
+        "freenode #a": [
+          {
+            id: 1,
+            network: "freenode",
+            channel: "#a",
+            server_time: 100,
+            kind: "privmsg",
+            sender: "alice",
+            body: "DEPLOY finished",
+            meta: {},
+          },
+          {
+            id: 2,
+            network: "freenode",
+            channel: "#a",
+            server_time: 101,
+            kind: "privmsg",
+            sender: "alice",
+            // substring inside a larger word → not a match
+            body: "deployment scheduled",
+            meta: {},
+          },
+        ],
+      });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#a" kind="channel" />);
+      const lines = screen.getAllByTestId("scrollback-line");
+      expect(lines[0]?.classList.contains("scrollback-highlight")).toBe(true);
+      expect(lines[1]?.classList.contains("scrollback-highlight")).toBe(false);
+      expect(lines[1]?.classList.contains("scrollback-mention")).toBe(false);
+    });
+
+    it("with NO custom patterns configured, a non-nick line stays a plain row", () => {
+      // Regression guard: the empty pattern list must not spuriously highlight.
+      setUserNick("vjt");
+      setHighlightPatternsForTest([]);
+      setScrollback({
+        "freenode #a": [
+          {
+            id: 1,
+            network: "freenode",
+            channel: "#a",
+            server_time: 100,
+            kind: "privmsg",
+            sender: "alice",
+            body: "the deploy is done",
+            meta: {},
+          },
+        ],
+      });
+      const { container } = render(() => (
+        <ScrollbackPane networkSlug="freenode" channelName="#a" kind="channel" />
+      ));
+      const line = container.querySelector('[data-kind="privmsg"]');
+      expect(line?.classList.contains("scrollback-mention")).toBe(false);
+      expect(line?.classList.contains("scrollback-highlight")).toBe(false);
     });
   });
 

@@ -16,6 +16,7 @@ import { setServerBundleHash, setServerBundleVersion } from "./bundleHash";
 import { onDirectoryComplete, onDirectoryFailed, onDirectoryProgress } from "./channelDirectory";
 import { channelKey } from "./channelKey";
 import { diagPush } from "./diagLog";
+import { refreshHighlights } from "./highlightList";
 import { patchHomeNetwork } from "./home";
 import { appendInviteAck } from "./inviteAck";
 import { seedIsupport } from "./isupport";
@@ -835,6 +836,19 @@ createRoot(() => {
 
     channel = joinUser(name, () => {
       stampUserTopicReady(name);
+      // #370 — hydrate the keyword-highlight list on every user-topic
+      // (re)join. Unlike the presence watch list (kept fresh by the server's
+      // `notify_list` after-join push), the /hilight keyword list has NO
+      // server broadcast — the only pull was `WatchlistsSettings` on open. So
+      // without this, the in-message visual highlight for custom words stayed
+      // dark until the operator opened the watch-lists settings section at
+      // least once. onJoinOk fires on the initial join AND every auto-rejoin
+      // (reconnect/rotation), so the list re-hydrates after a WS gap too. The
+      // notify path already fired (server-side); this closes the visual gap.
+      // Failure is logged, not swallowed — a next (re)join retries.
+      void refreshHighlights().catch((err) =>
+        console.warn("[userTopic] highlight-list hydrate failed", err),
+      );
     });
     channel.on("event", (raw: unknown) => {
       const payload = narrowUserEvent(raw);

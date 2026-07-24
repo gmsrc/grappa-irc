@@ -16,9 +16,10 @@ import { token } from "./lib/auth";
 import { channelKey, decodeChannelKey } from "./lib/channelKey";
 import { type TopicJoinLine, topicByChannel, topicJoinLine } from "./lib/channelTopic";
 import { isDocumentVisible } from "./lib/documentVisibility";
+import { highlightPatterns } from "./lib/highlightList";
 import { type InviteAckEntry, inviteAckBySlug } from "./lib/inviteAck";
 import { membersByChannel } from "./lib/members";
-import { matchesWatchlist, mentionsUser } from "./lib/mentionMatch";
+import { matchesWatchlist } from "./lib/mentionMatch";
 import {
   mentionJumpTargetId,
   mentionsBelowViewport,
@@ -70,9 +71,11 @@ import WhowasCard from "./WhowasCard";
 // `ComposeBox.tsx`. This pane is now compose-free; the parent layout
 // composes ScrollbackPane + ComposeBox vertically.
 //
-// Mention highlight (P4-1): privmsg lines whose `body` word-boundary
-// case-insensitive-matches the operator's own nick get .scrollback-mention
-// class. The matcher reads `networks.user()` for the nick.
+// Mention highlight (P4-1, extended #370): privmsg lines whose `body`
+// word-boundary case-insensitive-matches the operator's own nick OR a custom
+// /hilight pattern get the .scrollback-mention class. The matcher reads
+// `networks.user()` for the nick and `highlightList.highlightPatterns()` for
+// the keyword list — the SAME `matchesWatchlist` source the notify path uses.
 //
 // C5.0 (UX-5 BJ rewrite — 2026-05-19): own-nick JOIN auto-focus.
 // When the operator's own nick has a JOIN row in scrollback for this
@@ -121,10 +124,11 @@ import WhowasCard from "./WhowasCard";
 // MembersPane, ZERO new components). ownModes is derived from membersByChannel
 // for the logged-in nick so op-gated items are correctly enabled/disabled.
 //
-// C7.7: Watchlist highlight rendering — PRIVMSG / NOTICE / ACTION lines where
-// `matchesWatchlist(body, ownNick)` is true get .scrollback-highlight class.
-// MVP: watchlist = own nick only (no user_settings, no /watch). Named
-// separately from mentionsUser so the future /watch cluster can extend it.
+// C7.7 / #370: Watchlist highlight rendering — PRIVMSG / NOTICE / ACTION
+// lines where `matchesWatchlist(body, ownNick, highlightPatterns())` is true
+// get .scrollback-highlight class. The watchlist is own nick ∪ the custom
+// /hilight keyword list (highlightList.ts), mirroring the server SSOT
+// `Grappa.Mentions.mentioned?/3`.
 
 export type Props = {
   networkSlug: string;
@@ -353,8 +357,8 @@ const lastFullyVisibleRowId = (listRef: HTMLDivElement): number | null => {
 // #360 — per-row geometry read for the mention-aware scroll-to-bottom badge.
 // Mirrors `lastFullyVisibleRowId`'s offsetTop-based walk (cheap, layout-cached
 // — no getBoundingClientRect thrash) but tags each `.scrollback-line` with its
-// `.scrollback-mention` state (own-nick match, `mentionsUser`) so the pure
-// `mentionsBelowViewport` can decide which mentions sit below the fold. O(n)
+// `.scrollback-mention` state (own nick ∪ /hilight patterns, #370) so the
+// pure `mentionsBelowViewport` can decide which mentions sit below the fold. O(n)
 // over rendered rows; called from the (debounced-ish) onScroll + rows-effect
 // recompute paths, and once per tap — mentions are rare, the cost is bounded.
 const readMentionGeom = (listRef: HTMLDivElement): ScrollbackLineGeom[] => {
@@ -778,15 +782,22 @@ const ScrollbackLine: Component<{
   onNickContextMenu: (nick: string, e: MouseEvent) => void;
   onJoinChannel: (channel: string) => void;
 }> = (props) => {
+  // #370 — a mention is now own nick ∪ custom highlight patterns (the same
+  // set the server counts as a mention, and the same `matchesWatchlist`
+  // predicate the notify path uses). A privmsg matching a /hilight word gets
+  // the exact `.scrollback-mention` treatment an own-nick mention gets.
   const isMention = () =>
-    props.msg.kind === "privmsg" && mentionsUser(props.msg.body, props.userNick);
+    props.msg.kind === "privmsg" &&
+    matchesWatchlist(props.msg.body, props.userNick, highlightPatterns());
 
   // C7.2: muted — presence/event kinds are visually de-emphasized.
   const isMuted = () => PRESENCE_KINDS.has(props.msg.kind);
 
-  // C7.7: highlight — content kinds where body matches watchlist (own nick MVP).
+  // C7.7 / #370: highlight — content kinds where body matches the watchlist
+  // (own nick ∪ custom highlight patterns).
   const isHighlight = () =>
-    !PRESENCE_KINDS.has(props.msg.kind) && matchesWatchlist(props.msg.body, props.userNick);
+    !PRESENCE_KINDS.has(props.msg.kind) &&
+    matchesWatchlist(props.msg.body, props.userNick, highlightPatterns());
 
   const handlers: NickHandlers = {
     onNickClick: props.onNickClick,

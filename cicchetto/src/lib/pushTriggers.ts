@@ -17,10 +17,12 @@
 // the wireTypes parity gate.
 //
 // The mention sub-predicate is NOT reimplemented — it delegates to
-// `mentionsUser` from `mentionMatch.ts`, the established mirror of
-// `Grappa.Mentions.mentioned?/3`.
+// `matchesWatchlist` from `mentionMatch.ts`, the established mirror of
+// `Grappa.Mentions.mentioned?/3` (own nick ∪ highlight patterns). #370 —
+// the SAME predicate now drives the in-message visual highlight, so the
+// notify-match and the visual-match can never diverge again.
 
-import { mentionsUser } from "./mentionMatch";
+import { matchesWatchlist } from "./mentionMatch";
 import { rfc1459Fold } from "./nickEquals";
 import type { NotificationPrefs } from "./userSettings";
 
@@ -84,13 +86,6 @@ function channelMatch(
   return (
     prefs.channel_messages_all ||
     prefs.channel_messages_only.includes(message.channel.toLowerCase()) ||
-    (prefs.channel_mentions && mentioned(message.body, ownNick, patterns))
+    (prefs.channel_mentions && matchesWatchlist(message.body, ownNick, patterns))
   );
-}
-
-// Mirror of `Grappa.Mentions.mentioned?/3`: matches `ownNick` OR any
-// `patterns` entry at a word boundary, case-insensitively. Empty terms
-// are skipped by `mentionsUser` (falsy nick → false).
-function mentioned(body: string | null, ownNick: string, patterns: string[]): boolean {
-  return [ownNick, ...patterns].some((term) => mentionsUser(body, term));
 }

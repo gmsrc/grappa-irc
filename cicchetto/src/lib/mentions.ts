@@ -28,10 +28,11 @@ import { selectedChannel } from "./selection";
 // on the next cursor-advance settle. A selected-but-backgrounded tab keeps
 // its count so a returning operator sees the activity.
 //
-// Note: the per-row `.scrollback-mention` highlight (ScrollbackPane) still
-// uses the client `mentionsUser` regex — it's a deterministic per-row
-// render decision, not a count, with no cross-tab/reconnect consistency
-// problem. Only the COUNT moved server-side.
+// Note: the per-row `.scrollback-mention` highlight (ScrollbackPane) is a
+// client-side render decision (`matchesWatchlist` = own nick ∪ /hilight
+// patterns, #370) — deterministic per-row, not a count, with no
+// cross-tab/reconnect consistency problem. It matches the SAME set the
+// server counts as a mention. Only the COUNT moved server-side.
 //
 // Identity-scoped via identityScopedStore reset (dup-A3 close).
 
