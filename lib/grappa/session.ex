@@ -419,6 +419,18 @@ defmodule Grappa.Session do
   `{:error, :invalid_line}` if target/body fail CRLF/NUL safety,
   or `{:error, Ecto.Changeset.t()}` on validation failure of the
   scrollback row insert.
+
+  ## Telemetry (#357 D1)
+
+  Emits `[:grappa, :session, :send_privmsg, :start | :stop | :exception]` via
+  `:telemetry.span/3` around the `GenServer.call` round-trip. Because the span
+  runs in the CALLER's process and the call blocks until the reply, its `:stop`
+  `duration` is the TOTAL send latency INCLUDING the mailbox queue-wait behind
+  synchronous inbound inserts (mechanism 1). Paired with the "pure insert"
+  `[:grappa, :scrollback, :persist, :stop]` span (see
+  `Grappa.Scrollback.Telemetry`), the gap is the head-of-line blocking. Stop
+  metadata: `%{network_id, target, subject, outcome}`. The span is skipped for
+  a line rejected by the CRLF/NUL guard (no send happened).
   """
   @spec send_privmsg(subject(), integer(), String.t(), String.t()) ::
           {:ok, Grappa.Scrollback.Message.t()}
@@ -434,7 +446,28 @@ defmodule Grappa.Session do
     # row is never persisted on rejection (the call_session never runs).
     if Identifier.safe_line_token?(target) and Identifier.safe_line_token?(body) do
       # UX-4 A: lowercase channel-shape targets; nicks pass through.
-      call_session(subject, network_id, {:send_privmsg, Identifier.canonical_channel(target), body})
+      channel = Identifier.canonical_channel(target)
+
+      # #357 D1 — the "total send" half of the split-span pair. The span
+      # wraps the `GenServer.call` round-trip, so its duration INCLUDES the
+      # time the call sat in the `Session.Server` mailbox behind synchronous
+      # inbound inserts (mechanism 1, head-of-line blocking) — a gap the
+      # "pure insert" scrollback span cannot see. It runs in the CALLER's
+      # process (controller / channel), NOT the session hot loop, so it adds
+      # zero cost to message handling. Placed AFTER the injection guard so a
+      # rejected line never opens a meaningless zero-work span.
+      metadata = %{network_id: network_id, target: channel, subject: subject_kind(subject)}
+
+      :telemetry.span(
+        [:grappa, :session, :send_privmsg],
+        metadata,
+        fn ->
+          result = call_session(subject, network_id, {:send_privmsg, channel, body})
+          # `:telemetry.span` drops start metadata from `:stop` — repeat the
+          # tag map (+ outcome) so the STOP event stays target-tagged.
+          {result, Map.put(metadata, :outcome, send_outcome(result))}
+        end
+      )
     else
       {:error, :invalid_line}
     end
@@ -1392,4 +1425,24 @@ defmodule Grappa.Session do
       pid -> GenServer.cast(pid, request)
     end
   end
+
+  # #357 D1 — send-path span helpers.
+  @spec subject_kind(subject()) :: :user | :visitor
+  defp subject_kind({:user, _}), do: :user
+  defp subject_kind({:visitor, _}), do: :visitor
+
+  # Collapse the full `send_privmsg/4` return set to a closed outcome atom for
+  # the span stop-metadata. `:no_persist` (services target) and `:ok` (channel
+  # send) are the success shapes; every atom error (`:no_session`, `:timeout`,
+  # `:persist_unavailable`, …) passes through verbatim; a changeset error
+  # collapses to `:error` (nothing dashboard-useful to inspect in a tag).
+  @spec send_outcome(
+          {:ok, Grappa.Scrollback.Message.t()}
+          | {:ok, :no_persist}
+          | {:error, atom() | Ecto.Changeset.t()}
+        ) :: atom()
+  defp send_outcome({:ok, :no_persist}), do: :no_persist
+  defp send_outcome({:ok, _}), do: :ok
+  defp send_outcome({:error, reason}) when is_atom(reason), do: reason
+  defp send_outcome({:error, _}), do: :error
 end

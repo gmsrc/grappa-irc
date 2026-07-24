@@ -837,6 +837,66 @@ don't hardcode hostnames there.
   sessions are NOT swept here — they CASCADE from the visitor row via
   `Visitors.Reaper`.
 
+### Write-latency diagnostics (#357 — SQLite write-latency telemetry)
+
+The "sending feels slow on busier channels" symptom is a **write-path**
+problem, not a member-count one. #357 Deliverable 1 instruments it so the
+mechanism is provable before any fix (Deliverable 2, deferred). Four signals,
+mapped to the three mechanisms the issue traced:
+
+- **`[:grappa, :scrollback, :persist, :start | :stop]`** — a `:telemetry.span`
+  around every `messages` insert+preload, **tagged by `channel`** (also
+  `kind`, `network_id`, `subject`, and `outcome`). `:stop` `duration` is the
+  **pure insert** time (mechanism 3: index write-amplification grows it as the
+  table grows). Correlate a channel's `:stop` durations against its inbound
+  msg/s to confirm latency tracks **rate**, not member count.
+- **`[:grappa, :session, :send_privmsg, :start | :stop]`** — a span around the
+  outbound-send `GenServer.call` round-trip. Because it runs in the caller and
+  the call blocks until reply, `:stop` `duration` is the **total** send latency
+  **including mailbox queue-wait**. **`send_privmsg duration − persist
+  duration` = head-of-line blocking (mechanism 1)** — the user's own send
+  queued behind a busy channel's synchronous inbound inserts.
+- **`[:grappa, :scrollback, :persist, :contention]`** — fires per transient
+  SQLite write-contention fault in `with_pool_retry/3` (mechanism 2:
+  single-writer contention). Metadata `fault: :queue_timeout | :busy_locked`,
+  `dropped: false` (ridden out) / `true` (budget exhausted, row lost — the
+  telemetry twin of the `scrollback persist unavailable: SQLite pool
+  saturated` `Logger.warning`).
+- **Mailbox depth (mechanism 1, direct)** — a rising mailbox on the *sender's
+  own* session during a busy-channel burst proves the head-of-line blocking
+  outright. No new surface — sample the already-shipped ones:
+  - HTTP: `GET /admin/sessions` → each row's `live_state.mailbox_len` (+
+    `memory_bytes`). Admin-authn'd; poll it during a burst.
+  - CLI: `bin/grappa list-sessions` (the `mailbox` column).
+  - High-frequency: `bin/grappa remote-shell --batch -e` a
+    `Process.info(pid, :message_queue_len)` loop against the target session
+    pid (from `list-sessions`).
+
+No telemetry handler ships by default (the Phase 5 PromEx exporter is the
+consumer), so these events are a **no-op ETS miss** in prod until you attach
+one. To sample live without the exporter, attach an ad-hoc forwarder in
+`bin/grappa remote-shell` and log durations:
+
+```elixir
+:telemetry.attach_many(
+  "adhoc-357",
+  [
+    [:grappa, :scrollback, :persist, :stop],
+    [:grappa, :session, :send_privmsg, :stop],
+    [:grappa, :scrollback, :persist, :contention]
+  ],
+  fn event, meas, meta, _ -> IO.inspect({event, meas, meta}) end,
+  nil
+)
+# ... reproduce a busy-channel send ...
+:telemetry.detach("adhoc-357")
+```
+
+WAL/lock corroboration (mechanism 2, out-of-band): grep prod logs for the
+`SQLite pool saturated` warning and busy/locked `%Exqlite.Error{}` lines during
+the burst; watch WAL checkpoint pressure via the `runtime/*.db-wal` file size
+(a large, slow-shrinking `-wal` = checkpoints falling behind the write rate).
+
 ## Pending operator follow-ups
 
 Dated, operator-actioned items (not engineering work — migrated here from

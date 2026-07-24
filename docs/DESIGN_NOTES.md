@@ -16459,3 +16459,65 @@ vitest (`globalPaste.test.ts` guard matrix + `pasteRoute.test.ts` routing)
 proves the logic in jsdom; `e2e/tests/issue352-global-paste.spec.ts` is the
 real-browser proof that a paste with focus off the compose bar focuses it and
 lands the text. cic-only — no cold deploy.
+
+### 2026-07-24 — #357 D1: instrument SQLite write latency (measure before optimizing)
+
+**Symptom.** Sending feels slow, and worse on busier channels. First guess
+(per-member / mention-counter write) was **refuted**: `mentions.ex` is entirely
+read-side, unread/mention counts are derived at read time, and the message
+INSERT is O(1) in members (one `Repo.insert` + preload via
+`Scrollback.persist_event/1`, no member loop). Latency scales with **message
+rate / shared-channel population**, not member count. The real mechanism is a
+synchronous write serialized twice: (1) **per-session mailbox head-of-line
+blocking** — the user's own `{:send_privmsg}` `handle_call` queues behind a busy
+channel's synchronous inbound inserts in the same `Session.Server`; (2)
+**global single-writer contention** — one SQLite writer, WAL parallelizes reads
+not writes; (3) **index write-amplification** — the ~7 secondary indexes on
+`messages` grow lock-hold time as the table grows.
+
+**Decision: build the telemetry (D1) first, defer the fix (D2).** We were
+optimizing by feel. D2 (get the insert off the send `handle_call`, or trim the
+index set) is design-sensitive — #340 already rejected a *serialized batched
+writer* on latency grounds — so it stays deferred until the spans say which
+mechanism dominates. This entry records D1 only.
+
+**Four signals, one per mechanism (no fix).**
+
+- **`[:grappa, :scrollback, :persist, :start|:stop|:exception]`** — a
+  `:telemetry.span` around `persist_event/1`'s insert+preload, **channel-tagged**
+  (+ `kind`, `network_id`, `subject`, `outcome`). This is the **pure insert**
+  time (mechanism 3) AND the pure-insert half of the split-span pair. Lives in
+  `Grappa.Scrollback.Telemetry` (documented event catalog, mirroring
+  `Grappa.Admission.Telemetry`).
+- **`[:grappa, :session, :send_privmsg, :start|:stop|:exception]`** — a span
+  around the outbound `GenServer.call` round-trip in `Session.send_privmsg/4`.
+  Runs in the **caller's** process, so `:stop` `duration` is the **total** send
+  latency **including mailbox queue-wait**. `send − persist = head-of-line
+  blocking` (mechanism 1).
+- **`[:grappa, :scrollback, :persist, :contention]`** — per transient
+  busy/locked/queue_timeout fault in `with_pool_retry/3` (mechanism 2), with
+  `dropped: false|true`. The telemetry twin of the existing "SQLite pool
+  saturated" warning.
+- **Mailbox depth (mechanism 1, direct)** — **no new code**: `GET
+  /admin/sessions` already exposes `live_state.mailbox_len` and `bin/grappa
+  list-sessions` already prints the `mailbox` column (both via
+  `LiveIntrospection`). A rising sender-mailbox during a burst proves mechanism
+  1 outright. This is the CLAUDE.md "does the infrastructure already provide
+  this?" rule paying off — the diagnostic surface predated the issue.
+
+**Zero added latency on the hot send path (the binding constraint).** The send
+span runs in the caller (controller / channel), not the `Session.Server` loop.
+The persist span DOES run in the session loop, but a `:telemetry.span` with no
+attached handler is a sub-µs no-op ETS miss (two `monotonic_time` reads + two
+empty handler dispatches) and adds **zero synchronous IO** — no logging, no DB,
+no sampling on the send path. The `message_queue_len` sampling stays
+out-of-band (HTTP / CLI / RPC), never a per-send in-code sampler. No handler
+ships by default; the Phase 5 PromEx exporter is the eventual consumer.
+
+**Gotcha recorded.** `:telemetry.span/3` does **not** merge start metadata into
+the `:stop` event — the span function must return the full tag map (+ outcome)
+as its stop-metadata, or `:stop` loses the `channel`/`target` tag. Both call
+sites do this explicitly.
+
+Operator recipe (attach an ad-hoc forwarder + WAL/lock corroboration):
+`docs/OPERATIONS.md` → Monitoring → "Write-latency diagnostics (#357)".

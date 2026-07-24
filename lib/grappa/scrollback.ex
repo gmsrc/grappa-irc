@@ -56,7 +56,7 @@ defmodule Grappa.Scrollback do
 
   alias Grappa.IRC.Identifier
   alias Grappa.Repo
-  alias Grappa.Scrollback.{Message, Meta}
+  alias Grappa.Scrollback.{Message, Meta, Telemetry}
 
   # Identifier.nick_fold/1 is a query macro (rfc1459 fold fragment, #121).
   require Identifier
@@ -167,19 +167,70 @@ defmodule Grappa.Scrollback do
   def persist_event(%{kind: kind} = attrs) when is_atom(kind) do
     changeset = Message.changeset(%Message{}, attrs)
 
-    # Insert and preload each run through `with_pool_retry/1` so a pool
-    # saturation raise on EITHER step degrades to `{:error,
-    # :persist_unavailable}` instead of escaping. The `with` also carries
-    # a plain `{:error, %Changeset{}}` validation failure straight through
-    # (that op returns, never raises, so it's not retried). On a
-    # preload-only failure the row IS durably written but has no `:network`
-    # assoc for the wire payload — degrading is correct: the row surfaces
-    # on the next `fetch/5`, the live broadcast is what's lost.
+    # #357 D1 — the insert+preload is wrapped in the `[:grappa, :scrollback,
+    # :persist, …]` span (channel-tagged) so per-channel write latency
+    # (mechanism 3) is measurable, and it is the "pure insert" half of the
+    # split-span pair vs the send-path total (mechanism 1). The span returns
+    # the raw `result` unchanged — contract untouched. Metadata is read via
+    # `Map.get` (never dot-access) so a malformed attrs still fails LOUD as a
+    # changeset error, not a KeyError from the telemetry tag.
+    metadata = persist_metadata(attrs, kind)
+
+    Telemetry.span_persist(metadata, fn ->
+      result = persist_row(changeset)
+      # `:telemetry.span` does NOT carry start metadata into `:stop` — repeat
+      # the full tag map (+ outcome) so the STOP event stays channel-tagged.
+      {result, Map.put(metadata, :outcome, persist_outcome(result))}
+    end)
+  end
+
+  # Insert and preload each run through `with_pool_retry/1` so a pool
+  # saturation raise on EITHER step degrades to `{:error, :persist_unavailable}`
+  # instead of escaping. The `with` also carries a plain `{:error, %Changeset{}}`
+  # validation failure straight through (that op returns, never raises, so it's
+  # not retried). On a preload-only failure the row IS durably written but has
+  # no `:network` assoc for the wire payload — degrading is correct: the row
+  # surfaces on the next `fetch/5`, the live broadcast is what's lost. Extracted
+  # from the span closure to keep `persist_event/1`'s nesting ≤ 2 (Credo).
+  @spec persist_row(Ecto.Changeset.t()) :: {:ok, Message.t()} | {:error, persist_error()}
+  defp persist_row(changeset) do
     with {:ok, message} <- with_pool_retry(fn -> Repo.insert(changeset) end),
          {:ok, preloaded} <- with_pool_retry(fn -> {:ok, Repo.preload(message, :network)} end) do
       {:ok, preloaded}
     end
   end
+
+  # #357 D1 — span metadata. `channel`/`network_id` via `Map.get` (nil on a
+  # malformed attrs — the changeset rejects it downstream, unchanged
+  # failure mode). `subject` distinguishes user vs visitor writers so a
+  # dashboard can attribute per-subject write pressure.
+  @spec persist_metadata(map(), Message.kind()) :: Telemetry.persist_metadata()
+  defp persist_metadata(attrs, kind) do
+    %{
+      channel: Map.get(attrs, :channel),
+      kind: kind,
+      network_id: Map.get(attrs, :network_id),
+      subject: persist_subject(Map.get(attrs, :user_id), Map.get(attrs, :visitor_id))
+    }
+  end
+
+  # Takes the two nilable FK values (not the whole attrs map) so the spec is
+  # `term()`-precise — a `map()`-input spec here trips Dialyzer `:underspecs`
+  # (the single caller narrows the map type; the spec would be a supertype).
+  @spec persist_subject(term(), term()) :: Telemetry.subject()
+  defp persist_subject(user_id, visitor_id) do
+    cond do
+      not is_nil(user_id) -> :user
+      not is_nil(visitor_id) -> :visitor
+      true -> :unknown
+    end
+  end
+
+  @spec persist_outcome({:ok, Message.t()} | {:error, persist_error()}) ::
+          Telemetry.persist_outcome()
+  defp persist_outcome({:ok, _}), do: :ok
+  defp persist_outcome({:error, %Ecto.Changeset{}}), do: :validation_error
+  defp persist_outcome({:error, :persist_unavailable}), do: :unavailable
 
   @doc """
   Runs a best-effort persistence op with bounded retry over transient
@@ -241,6 +292,11 @@ defmodule Grappa.Scrollback do
           {:error, :persist_unavailable}
 
         System.monotonic_time(:millisecond) < deadline ->
+          # #357 D1 — surface mechanism 2 (single-writer contention) as
+          # telemetry, not just an eventual log grep: fires per transient
+          # fault while the budget rides it out. On the contention path only,
+          # so zero cost to an uncontended insert.
+          Telemetry.contention(fault_kind(error), attempt, false)
           # The backoff sleep runs after the failed checkout was already
           # released, so it holds no connection — bounded backpressure on
           # the flooding session, not a held-conn leak (#340).
@@ -248,6 +304,11 @@ defmodule Grappa.Scrollback do
           with_pool_retry(op, deadline, attempt + 1)
 
         true ->
+          # #357 D1 — the terminal contention event (row dropped): the
+          # telemetry companion of the warning below, so a dashboard counts
+          # drops without grepping logs.
+          Telemetry.contention(fault_kind(error), attempt, true)
+
           Logger.warning(
             "scrollback persist unavailable: SQLite pool saturated for the full " <>
               "#{@persist_retry_budget_ms}ms retry budget (#{attempt} attempts) — dropping row",
@@ -257,6 +318,15 @@ defmodule Grappa.Scrollback do
           {:error, :persist_unavailable}
       end
   end
+
+  # #357 D1 — classify a TRANSIENT fault for the contention telemetry. Only
+  # reached after `transient_fault?/1` returned true, so an `Exqlite.Error`
+  # here is always busy/locked (write-lock contention) and a
+  # `ConnectionError` is always a pool queue_timeout.
+  @spec fault_kind(DBConnection.ConnectionError.t() | Exqlite.Error.t()) ::
+          :queue_timeout | :busy_locked
+  defp fault_kind(%DBConnection.ConnectionError{}), do: :queue_timeout
+  defp fault_kind(%Exqlite.Error{}), do: :busy_locked
 
   # #340 — is this caught exception TRANSIENT write contention (retry) or a
   # permanent fault (degrade at once)? A pool queue_timeout is always

@@ -125,6 +125,45 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "#357: the send-path span [:grappa, :session, :send_privmsg] closes with outcome: :ok",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      handler_id = {__MODULE__, System.unique_integer([:positive])}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:grappa, :session, :send_privmsg, :stop],
+        fn event, measurements, metadata, _ ->
+          send(test_pid, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      conn
+      |> put_req_header("content-type", "application/json")
+      |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{"body" => "measured"})
+      |> json_response(201)
+
+      assert_receive {:telemetry, [:grappa, :session, :send_privmsg, :stop], measurements, metadata}
+
+      assert metadata.target == "#sniffo"
+      assert metadata.network_id == network.id
+      assert metadata.subject == :user
+      assert metadata.outcome == :ok
+      # Total round-trip INCLUDING mailbox queue time (mechanism 1) — the
+      # "pure insert" scrollback span is the other half; the gap is queue-wait.
+      assert is_integer(measurements.duration) and measurements.duration >= 0
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "POST then GET roundtrip — vjt's POST visible via vjt's subsequent GET",
          %{conn: conn, vjt: vjt} do
       {server, port} = start_server()
