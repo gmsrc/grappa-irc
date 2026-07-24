@@ -194,6 +194,9 @@ vi.mock("../lib/compose", () => ({
 
 vi.mock("../lib/theme", () => ({
   isMobile: () => mobileState.value,
+  // #358 — customTheme's apply effect reads this; a constant is enough here
+  // (these tests don't exercise day/night switching).
+  prefersDark: () => false,
 }));
 
 vi.mock("../lib/auth", () => ({

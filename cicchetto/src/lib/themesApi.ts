@@ -192,24 +192,40 @@ export async function copyTheme(token: string, id: number): Promise<ThemesWireT>
   return (await res.json()) as ThemesWireT;
 }
 
-// GET /me/theme — the resolved active theme, or null (none set, or the
-// stored id dangles server-side). cic falls back to its own default.
-export async function getActiveTheme(token: string): Promise<ThemesWireT | null> {
+// #358 — the resolved day/night theme pair. `light` is the day (light-mode)
+// slot, `dark` the optional night (dark-mode) slot. A null slot means unset
+// (or a dangling pointer); a null `dark` resolves to the light theme in both
+// modes (the #75 single pick). cic picks which slot to paint from the OS
+// `prefers-color-scheme` signal — never the server.
+export type ActiveThemePair = {
+  light: ThemesWireT | null;
+  dark: ThemesWireT | null;
+};
+
+// GET /me/theme — the resolved pair. A bare `null` body (no theme set, or a
+// benign test stub) resolves to an empty pair so callers never branch on it.
+export async function getActiveThemePair(token: string): Promise<ActiveThemePair> {
   const res = await fetch("/me/theme", { headers: buildHeaders(token) });
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as ThemesWireT | null;
+  const body = (await res.json()) as ActiveThemePair | null;
+  return body ?? { light: null, dark: null };
 }
 
-// PUT /me/theme — set the active theme by id (server validates it is
-// readable; unknown id → 404 not_found).
-export async function setActiveTheme(token: string, id: number): Promise<ThemesWireT> {
+// PUT /me/theme — set the full desired pair. `light` is required; `dark` null
+// (or equal to light) is a single pick. The server validates BOTH ids before
+// either persists (unknown id → 404 not_found, no half-applied pair).
+export async function setActiveThemePair(
+  token: string,
+  light: number,
+  dark: number | null,
+): Promise<ActiveThemePair> {
   const res = await fetch("/me/theme", {
     method: "PUT",
     headers: buildHeaders(token),
-    body: JSON.stringify({ id }),
+    body: JSON.stringify({ light, dark }),
   });
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as ThemesWireT;
+  return (await res.json()) as ActiveThemePair;
 }
 
 // POST /themes/background — upload a File (multipart "file") OR ask the

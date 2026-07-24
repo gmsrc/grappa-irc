@@ -48,11 +48,18 @@ export function applyTheme(): void {
   dark.addEventListener("change", () => writeDataset(resolveAuto()));
 }
 
-// Reactive viewport-mode signal — backed by matchMedia(MOBILE_QUERY).
-// Consumers (Shell.tsx for layout switch, keybindings.ts for gating)
-// call isMobile() inside reactive contexts and re-render on viewport
-// resize. createRoot anchors the listener since module-level effects
-// need an owner.
+const DARK_QUERY = "(prefers-color-scheme: dark)";
+
+// Reactive viewport-mode + OS-color-scheme signals — both backed by
+// matchMedia. Consumers (Shell.tsx for layout switch, keybindings.ts for
+// gating) call isMobile() inside reactive contexts and re-render on viewport
+// resize. `prefersDark()` is the reactive twin of the OS dark-mode signal:
+// the base [data-theme] path (`applyTheme`) keeps its own imperative boot
+// listener for FOUC, while the #75 gallery layer (customTheme.ts) subscribes
+// to this signal so a #358 day/night pair re-resolves live on an OS flip —
+// the SAME `prefers-color-scheme` media query the base already follows (no
+// scheduler, no geolocation). createRoot anchors the listeners since
+// module-level effects need an owner.
 const exports_ = createRoot(() => {
   const initial =
     typeof window !== "undefined" && window.matchMedia
@@ -60,20 +67,36 @@ const exports_ = createRoot(() => {
       : false;
   const [mobile, setMobile] = createSignal(initial);
 
+  const darkInitial =
+    typeof window !== "undefined" && window.matchMedia
+      ? window.matchMedia(DARK_QUERY).matches
+      : false;
+  const [prefersDark, setPrefersDark] = createSignal(darkInitial);
+
   if (typeof window !== "undefined" && window.matchMedia) {
     const mm = window.matchMedia(MOBILE_QUERY);
     const listener = (e: MediaQueryListEvent) => setMobile(e.matches);
     mm.addEventListener("change", listener);
+
+    const mmDark = window.matchMedia(DARK_QUERY);
+    mmDark.addEventListener("change", (e: MediaQueryListEvent) => setPrefersDark(e.matches));
+
     // No cleanup arm here: the module-singleton lives for app lifetime;
     // matchMedia listeners on window are cheap and there's no token-
-    // rotation analogue (viewport state is identity-agnostic).
+    // rotation analogue (viewport + OS-scheme state are identity-agnostic).
     void createEffect(() => {
-      // Force the signal into the createRoot's tracking scope.
+      // Force the signals into the createRoot's tracking scope.
       void mobile();
+      void prefersDark();
     });
   }
 
-  return { isMobile: mobile };
+  return { isMobile: mobile, prefersDark };
 });
 
 export const isMobile = exports_.isMobile;
+
+// #358 — the reactive OS dark-mode preference (true = dark). customTheme.ts's
+// apply effect subscribes to it; the gallery reads it to default the slot
+// selector to the current mode.
+export const prefersDark = exports_.prefersDark;

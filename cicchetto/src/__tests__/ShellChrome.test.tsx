@@ -53,6 +53,8 @@ vi.mock("../lib/mentionsWindow", () => ({
 const mobileState = vi.hoisted(() => ({ value: true }));
 vi.mock("../lib/theme", () => ({
   isMobile: () => mobileState.value,
+  // #358 — customTheme's apply effect reads this; a constant is enough here.
+  prefersDark: () => false,
 }));
 
 import ShellChrome from "../ShellChrome";

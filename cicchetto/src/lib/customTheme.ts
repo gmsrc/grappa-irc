@@ -1,10 +1,11 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import { token } from "./auth";
-import type { TokenPayload } from "./themesApi";
-import { getActiveTheme, setActiveTheme } from "./themesApi";
+import { prefersDark } from "./theme";
+import type { ActiveThemePair, TokenPayload } from "./themesApi";
+import { getActiveThemePair, setActiveThemePair } from "./themesApi";
 import type { ThemesWireT } from "./wireTypes";
 
-// #75 sub-task 5 — the custom-theme apply engine.
+// #75 sub-task 5 — the custom-theme apply engine. #358 — day/night pairing.
 //
 // A theme's frozen token payload (`TokenPayload`) is turned into scoped
 // CSS custom properties written directly onto `document.documentElement`
@@ -14,11 +15,19 @@ import type { ThemesWireT } from "./wireTypes";
 // with no FOUC (the boot path applies the localStorage-cached payload
 // synchronously before render, mirroring `applyTheme()` / font-size).
 //
-// Active theme is SERVER-owned (`UserSettings.active_theme_id`, read via
-// `GET /me/theme`). cic never originates it — it applies whatever the
-// server resolves, and writes changes back through `PUT /me/theme`
-// (`activateTheme`). The localStorage cache is a pure offline mirror for
-// the first paint, refreshed from the server on every login.
+// Active theme is SERVER-owned (`UserSettings.active_theme_id` +
+// `dark_theme_id`, read via `GET /me/theme`). cic never originates it — it
+// applies whatever the server resolves, and writes changes back through
+// `PUT /me/theme` (`activateThemePair`). The localStorage cache is a pure
+// offline mirror for the first paint, refreshed from the server on login.
+//
+// #358 — the active theme is a `{light, dark}` PAIR: the light (day) slot and
+// an optional dark (night) slot. WHICH slot paints is derived from the OS
+// `prefers-color-scheme` signal (`theme.ts` `prefersDark`), the SAME signal
+// the base [data-theme] already follows — no scheduler, no geolocation. The
+// server owns the pair (state); cic derives the resolution (view). A `null`
+// dark falls back to the light slot, so a single pick applies in both modes
+// (the #75 behaviour, preserved).
 
 // The 11 named color keys + nick_0..15 — mirror of
 // `Grappa.Themes.TokenModel.color_keys/0`. Exported so the editor's grouped
@@ -125,32 +134,62 @@ export function applyCustomTheme(payload: TokenPayload | null): void {
   );
 }
 
-// Read the cached payload, defending BOTH the parse AND the shape. This
-// runs at module top-level (main.tsx boot, before render, outside any
-// ErrorBoundary), so a malformed cache that reached `tokenToCssVars`
-// (`Object.entries(payload.colors)`) would throw and white-screen the PWA
-// on every boot — and the bad cache reloads each time, bricking it. A
-// wrong-shaped object is treated as "no cache" (the server refresh on the
-// next login re-establishes the real theme).
-function readCache(): TokenPayload | null {
+// #358 — the cached day/night payload pair. `light` is the day slot, `dark`
+// the optional night slot (null = same theme both modes).
+export type PayloadPair = { light: TokenPayload | null; dark: TokenPayload | null };
+
+const EMPTY_PAIR: PayloadPair = { light: null, dark: null };
+
+// Resolve which slot's payload paints for a given mode: dark mode → the dark
+// slot with a light fallback (an unpaired single pick applies in both modes);
+// light mode → always the light slot.
+export function resolvePayloadForMode(pair: PayloadPair, dark: boolean): TokenPayload | null {
+  return dark ? (pair.dark ?? pair.light) : pair.light;
+}
+
+// Read the cached pair, defending BOTH the parse AND the shape. This runs at
+// module top-level (main.tsx boot, before render, outside any ErrorBoundary),
+// so a malformed cache that reached `tokenToCssVars` (`Object.entries(
+// payload.colors)`) would throw and white-screen the PWA on every boot — and
+// the bad cache reloads each time, bricking it. A wrong-shaped object is
+// treated as "no cache". A legacy #75 cache (a bare `TokenPayload`, no
+// `{light,dark}`) is read as the light slot so an existing user's theme
+// survives the upgrade unchanged.
+function readCachePair(): PayloadPair {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
-    if (raw === null) return null;
+    if (raw === null) return EMPTY_PAIR;
     const parsed = JSON.parse(raw) as unknown;
-    if (!isTokenPayloadShape(parsed)) return null;
-    return parsed;
+    if (isPayloadPairShape(parsed)) {
+      return {
+        light: isTokenPayloadShape(parsed.light) ? parsed.light : null,
+        dark: isTokenPayloadShape(parsed.dark) ? parsed.dark : null,
+      };
+    }
+    // Legacy #75 single-payload cache → treat as the day (light) slot.
+    if (isTokenPayloadShape(parsed)) return { light: parsed, dark: null };
+    return EMPTY_PAIR;
   } catch {
-    return null;
+    return EMPTY_PAIR;
   }
 }
 
-// The theme payload currently PERSISTED as applied — the editor's
-// snapshot source for restore-on-cancel. Live preview (`applyCustomTheme`)
-// deliberately leaves the cache untouched, so mid-edit this still returns
-// the pre-edit active theme (or null = base cascade). Same defend-the-shape
-// read as boot, so a corrupt cache degrades to "no snapshot", never a throw.
+// The payload currently PERSISTED as applied FOR THE CURRENT MODE — the
+// editor's snapshot source for restore-on-cancel. Live preview
+// (`applyCustomTheme`) deliberately leaves the cache untouched, so mid-edit
+// this still returns the pre-edit active theme (or null = base cascade). Same
+// defend-the-shape read as boot, so a corrupt cache degrades to "no
+// snapshot", never a throw.
 export function getAppliedThemePayload(): TokenPayload | null {
-  return readCache();
+  return resolvePayloadForMode(readCachePair(), prefersDark());
+}
+
+// A `{light, dark}` cache object (vs a legacy bare `TokenPayload`, which
+// carries `colors`). Either slot may be null.
+function isPayloadPairShape(v: unknown): v is { light: unknown; dark: unknown } {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return ("light" in o || "dark" in o) && !("colors" in o);
 }
 
 function isTokenPayloadShape(v: unknown): v is TokenPayload {
@@ -164,9 +203,9 @@ function isTokenPayloadShape(v: unknown): v is TokenPayload {
   );
 }
 
-function writeCache(payload: TokenPayload | null): void {
+function writeCache(pair: PayloadPair): void {
   try {
-    if (payload) localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+    if (pair.light || pair.dark) localStorage.setItem(CACHE_KEY, JSON.stringify(pair));
     else localStorage.removeItem(CACHE_KEY);
   } catch {
     // localStorage unavailable (private mode / quota) — the server round
@@ -175,42 +214,72 @@ function writeCache(payload: TokenPayload | null): void {
   }
 }
 
-// Boot entry (main.tsx, BEFORE render) — apply the cached payload
-// synchronously so the first frame already carries the operator's theme.
-// The server round-trip in `mountCustomThemeSync` refreshes it after
-// login.
-export function applyCachedCustomTheme(): void {
-  applyCustomTheme(readCache());
-}
-
-// Active-theme id — the server-resolved active theme's id, mirrored for
-// the gallery's "active" marker. Own root (module-lifetime), fed by the
-// mount sync + `activateTheme`.
+// #358 — active-theme state. `activePair` are the resolved day/night theme
+// IDS (the gallery's day/night markers); `payloads` are their token payloads;
+// `previewMode` is a gallery-only override so selecting the Night slot paints
+// the night theme even in daylight (cleared on leaving the gallery — the
+// automatic behaviour always follows the OS). Own root (module-lifetime), fed
+// by the boot cache, the mount sync, and `activateThemePair`.
 const store = createRoot(() => {
-  const [activeThemeId, setActiveThemeId] = createSignal<number | null>(null);
-  return { activeThemeId, setActiveThemeId };
+  const [activePair, setActivePair] = createSignal<{ light: number | null; dark: number | null }>({
+    light: null,
+    dark: null,
+  });
+  const [payloads, setPayloads] = createSignal<PayloadPair>(EMPTY_PAIR);
+  const [previewMode, setPreviewMode] = createSignal<"light" | "dark" | null>(null);
+
+  // The SINGLE apply authority. Re-runs whenever the payloads change
+  // (login / activate / logout), the OS color scheme flips (`prefersDark`),
+  // or the gallery sets a preview override — so an OS light/dark flip
+  // re-paints the matching slot live, no re-fetch. Day (light) mode paints
+  // the light slot; night (dark) mode the dark slot with a light fallback.
+  createEffect(() => {
+    const override = previewMode();
+    const dark = override !== null ? override === "dark" : prefersDark();
+    applyCustomTheme(resolvePayloadForMode(payloads(), dark));
+  });
+
+  return { activePair, setActivePair, payloads, setPayloads, previewMode, setPreviewMode };
 });
 
-export const activeThemeId = store.activeThemeId;
+// The resolved day/night theme ids — the gallery's slot markers.
+export const activePair = store.activePair;
 
-// Reactive server sync — re-runs on every `token()` change. On login,
-// fetch the resolved active theme and apply + cache it; on logout, clear
-// the custom theme, the cache, and the active id. Registered inside a
-// `createRoot` by main.tsx (mirrors `mountBadgeSync`).
+// #358 gallery preview override: "light" | "dark" paints that slot regardless
+// of the OS; null (the default) follows the OS `prefers-color-scheme`. The
+// gallery sets it while its slot selector is open and clears it on close, so
+// the shipped auto-swap behaviour is never overridden outside the picker.
+export const setThemePreviewMode = store.setPreviewMode;
+
+// Boot entry (main.tsx, BEFORE render) — seed the cached pair + apply the
+// resolved-for-current-mode payload synchronously so the first frame already
+// carries the operator's theme (the store effect's first flush is deferred
+// past the first paint, so this imperative apply is what kills FOUC). The
+// server round-trip in `mountCustomThemeSync` refreshes it after login.
+export function applyCachedCustomTheme(): void {
+  const pair = readCachePair();
+  store.setPayloads(pair);
+  applyCustomTheme(resolvePayloadForMode(pair, prefersDark()));
+}
+
+// Reactive server sync — re-runs on every `token()` change. On login, fetch
+// the resolved pair and apply + cache it; on logout, clear the theme, cache,
+// and ids. Registered inside a `createRoot` by main.tsx (mirrors
+// `mountBadgeSync`).
 export function mountCustomThemeSync(): void {
   createEffect(() => {
     const t = token();
     if (!t) {
-      applyCustomTheme(null);
-      writeCache(null);
-      store.setActiveThemeId(null);
+      store.setActivePair({ light: null, dark: null });
+      store.setPayloads(EMPTY_PAIR);
+      writeCache(EMPTY_PAIR);
       return;
     }
-    void getActiveTheme(t)
-      .then((theme) => {
+    void getActiveThemePair(t)
+      .then((pair) => {
         // Token rotated mid-flight — a later effect run owns the DOM now.
         if (token() !== t) return;
-        applyResolved(theme);
+        applyResolvedPair(pair);
       })
       .catch((e) => {
         // Offline / transient failure — keep the boot-cached apply. Log
@@ -221,24 +290,38 @@ export function mountCustomThemeSync(): void {
   });
 }
 
-// User action — set the active theme server-side, then apply the
-// authoritative payload the server returns (never the optimistic
-// client copy) + cache it. Surfaces `ApiError` on failure so the
-// caller can show the error.
-export async function activateTheme(t: string, theme: ThemesWireT): Promise<void> {
-  const resolved = await setActiveTheme(t, theme.id);
-  applyResolved(resolved);
+// User action — set the full day/night pair server-side, then apply the
+// authoritative payloads the server returns (never the optimistic client
+// copy) + cache them. `light` is required; `dark` null is a single pick.
+// Surfaces `ApiError` on failure so the caller can show the error.
+export async function activateThemePair(
+  t: string,
+  light: number,
+  dark: number | null,
+): Promise<void> {
+  applyResolvedPair(await setActiveThemePair(t, light, dark));
 }
 
-function applyResolved(theme: ThemesWireT | null): void {
-  if (theme) {
-    const payload = theme.payload as TokenPayload;
-    applyCustomTheme(payload);
-    writeCache(payload);
-    store.setActiveThemeId(theme.id);
+// Convenience for "make THIS theme active" (the editor save + gallery copy
+// flows) — it keeps the day/night pairing intact: re-activating the current
+// night theme (e.g. an in-place edit) keeps it in the night slot; anything
+// else becomes the day slot while the night slot is preserved. So editing a
+// paired theme never silently collapses the pair.
+export async function activateTheme(t: string, theme: ThemesWireT): Promise<void> {
+  const cur = store.activePair();
+  if (cur.dark === theme.id) {
+    await activateThemePair(t, cur.light ?? theme.id, theme.id);
   } else {
-    applyCustomTheme(null);
-    writeCache(null);
-    store.setActiveThemeId(null);
+    await activateThemePair(t, theme.id, cur.dark);
   }
+}
+
+function applyResolvedPair(pair: ActiveThemePair): void {
+  const payloads: PayloadPair = {
+    light: (pair.light?.payload as TokenPayload | undefined) ?? null,
+    dark: (pair.dark?.payload as TokenPayload | undefined) ?? null,
+  };
+  store.setPayloads(payloads); // the store effect paints the resolved slot
+  store.setActivePair({ light: pair.light?.id ?? null, dark: pair.dark?.id ?? null });
+  writeCache(payloads);
 }

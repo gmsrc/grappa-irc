@@ -4,14 +4,14 @@ import {
   copyTheme,
   createTheme,
   deleteTheme,
-  getActiveTheme,
+  getActiveThemePair,
   getTheme,
   listBuiltinBackgrounds,
   listGallery,
   listMine,
   listUnpublishedBuiltins,
   publishTheme,
-  setActiveTheme,
+  setActiveThemePair,
   type TokenPayload,
   unpublishTheme,
   updateTheme,
@@ -205,26 +205,34 @@ describe("themesApi", () => {
     expect(init.method ?? "GET").toBe("GET");
   });
 
-  test("getActiveTheme GETs /me/theme and passes through null", async () => {
+  test("getActiveThemePair GETs /me/theme and coerces a null body to an empty pair", async () => {
     fetchSpy.mockResolvedValue(ok(null));
-    const active = await getActiveTheme(TOKEN);
-    expect(active).toBeNull();
+    const pair = await getActiveThemePair(TOKEN);
+    expect(pair).toEqual({ light: null, dark: null });
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("/me/theme");
   });
 
-  test("getActiveTheme returns the resolved theme when set", async () => {
-    fetchSpy.mockResolvedValue(ok(sampleTheme({ id: 3 })));
-    const active = await getActiveTheme(TOKEN);
-    expect(active?.id).toBe(3);
+  test("getActiveThemePair returns the resolved day/night pair", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: sampleTheme({ id: 3 }), dark: sampleTheme({ id: 7 }) }));
+    const pair = await getActiveThemePair(TOKEN);
+    expect(pair.light?.id).toBe(3);
+    expect(pair.dark?.id).toBe(7);
   });
 
-  test("setActiveTheme PUTs /me/theme with the id", async () => {
-    fetchSpy.mockResolvedValue(ok(sampleTheme({ id: 3 })));
-    await setActiveTheme(TOKEN, 3);
+  test("setActiveThemePair PUTs /me/theme with the {light,dark} pair", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: sampleTheme({ id: 3 }), dark: sampleTheme({ id: 7 }) }));
+    await setActiveThemePair(TOKEN, 3, 7);
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/me/theme");
     expect(init.method).toBe("PUT");
-    expect(JSON.parse(init.body as string)).toEqual({ id: 3 });
+    expect(JSON.parse(init.body as string)).toEqual({ light: 3, dark: 7 });
+  });
+
+  test("setActiveThemePair sends a null dark for a single pick", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: sampleTheme({ id: 3 }), dark: null }));
+    await setActiveThemePair(TOKEN, 3, null);
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ light: 3, dark: null });
   });
 
   test("uploadBackground by URL POSTs JSON body {url}", async () => {

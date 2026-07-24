@@ -69,4 +69,57 @@ describe("theme module", () => {
       expect(theme.isMobile()).toBe(false);
     });
   });
+
+  // #358 — the reactive OS dark-mode preference the gallery day/night layer
+  // subscribes to. Per-query mock so the dark query drives prefersDark while
+  // the mobile query stays independent.
+  describe("prefersDark() — reactive OS color-scheme signal", () => {
+    function mockMatchMedia(darkMatches: boolean): (m: string) => Record<string, unknown> {
+      const registries = new Map<string, ((e: { matches: boolean }) => void)[]>();
+      const factory = (media: string) => ({
+        media,
+        matches: media.includes("dark") ? darkMatches : false,
+        addEventListener: (_: string, cb: (e: { matches: boolean }) => void) => {
+          const list = registries.get(media) ?? [];
+          list.push(cb);
+          registries.set(media, list);
+        },
+        removeEventListener: vi.fn(),
+        // Test helper: fire the captured "change" listeners for this query.
+        __fire: (matches: boolean) => {
+          for (const cb of registries.get(media) ?? []) cb({ matches });
+        },
+      });
+      const cache = new Map<string, Record<string, unknown>>();
+      const memo = (media: string) => {
+        const hit = cache.get(media);
+        if (hit) return hit;
+        const made = factory(media);
+        cache.set(media, made);
+        return made;
+      };
+      window.matchMedia = ((media: string) => memo(media)) as unknown as typeof window.matchMedia;
+      return memo;
+    }
+
+    it("initialises from the dark media query at import", async () => {
+      mockMatchMedia(true);
+      const theme = await import("../lib/theme");
+      expect(theme.prefersDark()).toBe(true);
+    });
+
+    it("initialises false when the OS is in light mode", async () => {
+      mockMatchMedia(false);
+      const theme = await import("../lib/theme");
+      expect(theme.prefersDark()).toBe(false);
+    });
+
+    it("updates live when the OS flips dark (change listener fires)", async () => {
+      const memo = mockMatchMedia(false);
+      const theme = await import("../lib/theme");
+      expect(theme.prefersDark()).toBe(false);
+      (memo("(prefers-color-scheme: dark)").__fire as (m: boolean) => void)(true);
+      expect(theme.prefersDark()).toBe(true);
+    });
+  });
 });

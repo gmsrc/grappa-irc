@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   applyCachedCustomTheme,
   applyCustomTheme,
+  resolvePayloadForMode,
   THEME_CSS_VARS,
   tokenToCssVars,
 } from "../customTheme";
@@ -179,5 +180,84 @@ describe("applyCachedCustomTheme boot guard", () => {
     localStorage.setItem(KEY, JSON.stringify(payload()));
     applyCachedCustomTheme();
     expect(root().style.getPropertyValue("--bg")).toBe("#111111");
+  });
+});
+
+// #358 — day/night pair resolution. `resolvePayloadForMode` is the re-apply
+// DECISION (which slot paints for a given mode); the live wiring that flips
+// `dark` on an OS change is proven in theme.test.ts (`prefersDark` updates)
+// and end-to-end in the Playwright emulateMedia spec. The boot path applies
+// the resolved slot for the CURRENT mode with no FOUC.
+describe("resolvePayloadForMode (#358 day/night resolution)", () => {
+  const day = payload();
+  const night = payload();
+
+  test("light mode paints the light (day) slot", () => {
+    expect(resolvePayloadForMode({ light: day, dark: night }, false)).toBe(day);
+  });
+
+  test("dark mode paints the dark (night) slot", () => {
+    expect(resolvePayloadForMode({ light: day, dark: night }, true)).toBe(night);
+  });
+
+  test("dark mode falls back to the light slot when unpaired (single pick)", () => {
+    expect(resolvePayloadForMode({ light: day, dark: null }, true)).toBe(day);
+  });
+
+  test("an empty pair resolves to null in both modes", () => {
+    expect(resolvePayloadForMode({ light: null, dark: null }, true)).toBeNull();
+    expect(resolvePayloadForMode({ light: null, dark: null }, false)).toBeNull();
+  });
+});
+
+describe("applyCachedCustomTheme day/night pair boot (#358)", () => {
+  const root = () => document.documentElement;
+  const KEY = "grappa-custom-theme";
+
+  function payloadBg(bg: string): TokenPayload {
+    const p = payload();
+    return { ...p, colors: { ...p.colors, bg } };
+  }
+
+  // Boot a FRESH customTheme module with matchMedia reporting `dark`, so the
+  // OS-mode read at boot resolves to the right slot. resetModules re-imports
+  // theme.ts too, which reads this mock to seed `prefersDark`.
+  async function bootWith(dark: boolean, cache: unknown): Promise<void> {
+    for (const v of THEME_CSS_VARS) root().style.removeProperty(v);
+    vi.resetModules();
+    window.matchMedia = vi.fn().mockImplementation((media: string) => ({
+      media,
+      matches: media.includes("dark") ? dark : false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+    localStorage.setItem(KEY, JSON.stringify(cache));
+    const mod = await import("../customTheme");
+    mod.applyCachedCustomTheme();
+  }
+
+  afterEach(() => {
+    for (const v of THEME_CSS_VARS) root().style.removeProperty(v);
+    localStorage.removeItem(KEY);
+  });
+
+  test("dark OS mode paints the dark slot's --bg", async () => {
+    await bootWith(true, { light: payloadBg("#d1d1d1"), dark: payloadBg("#0a0a0a") });
+    expect(root().style.getPropertyValue("--bg")).toBe("#0a0a0a");
+  });
+
+  test("light OS mode paints the light slot's --bg", async () => {
+    await bootWith(false, { light: payloadBg("#d1d1d1"), dark: payloadBg("#0a0a0a") });
+    expect(root().style.getPropertyValue("--bg")).toBe("#d1d1d1");
+  });
+
+  test("dark OS mode with an unpaired cache falls back to the light slot", async () => {
+    await bootWith(true, { light: payloadBg("#d1d1d1"), dark: null });
+    expect(root().style.getPropertyValue("--bg")).toBe("#d1d1d1");
+  });
+
+  test("a legacy #75 bare-payload cache applies in both modes (backward-compat)", async () => {
+    await bootWith(true, payloadBg("#cafe00"));
+    expect(root().style.getPropertyValue("--bg")).toBe("#cafe00");
   });
 });
