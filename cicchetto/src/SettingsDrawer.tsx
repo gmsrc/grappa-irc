@@ -27,6 +27,7 @@ import {
 } from "./lib/push";
 import { reconnectConnectedNetworks } from "./lib/reconnect";
 import { consumePendingSettingsPage, type SettingsSubPage } from "./lib/settingsNav";
+import { openShareModal } from "./lib/shareModal";
 import { getTimeFormat, setTimeFormat, type TimeFormatKey } from "./lib/timeFormat";
 import { activeHost } from "./lib/uploadHost";
 import {
@@ -44,7 +45,6 @@ import {
   putVhostSelection,
   type VhostSettingsView,
 } from "./lib/userSettings";
-import ShareSessionPage from "./ShareSessionPage";
 import ThemeGallery from "./ThemeGallery";
 import VhostSettingsPage from "./VhostSettingsPage";
 import WatchlistsSettings from "./WatchlistsSettings";
@@ -60,8 +60,9 @@ import WatchlistsSettings from "./WatchlistsSettings";
 // keybindings drawer fallback (Shell.tsx closeDrawer) — the drawer is a
 // scroll-lock-only overlay, NOT in the #232 modal ESC stack, so the
 // delete-account modal opened FROM the drawer closes on the first Esc and
-// the drawer itself on the next. (#335 — share is no longer a modal; it's
-// the "share" sub-page, closed by its own back button, not Esc.)
+// the drawer itself on the next. (#392 — the share surface is a MODAL again,
+// mounted in Shell and closed via the shared overlay Esc stack, NOT a drawer
+// sub-page; the drawer's "share session" button just calls openShareModal.)
 
 export type Props = {
   open: boolean;
@@ -109,9 +110,10 @@ const SettingsDrawer: Component<Props> = (props) => {
   // originates vhost state — the sub-page reads `vhostView` + reports
   // changes up via the same save-on-change PUT flow.
   const [settingsPage, setSettingsPage] = createSignal<SettingsSubPage>("main");
-  // Visitor-only gate for the identity + share-session sections (#335 share
-  // is now the "share" sub-page). Hidden for user subjects entirely — users
-  // have passwords, no per-network identity editor, no session to share.
+  // Visitor-only gate for the identity + share-session sections. #392 — the
+  // share entry now opens a Shell-mounted MODAL (openShareModal), still
+  // visitor-only. Hidden for user subjects entirely — users have passwords,
+  // no per-network identity editor, no session to share.
   const isVisitor = (): boolean => getSubject()?.kind === "visitor";
   const isUser = (): boolean => getSubject()?.kind === "user";
   // #126 — a registered (NickServ-identified) visitor is a PERSISTENT
@@ -1023,29 +1025,23 @@ const SettingsDrawer: Component<Props> = (props) => {
               </div>
             </div>
 
-            {/* #335 — share-session section: a titled card (blurb + a
-                section-button) whose button follows the vhost/themes nav-row
-                pattern — tapping it pushes into the share sub-page, which
-                mints a fresh link on mount. isVisitor()-gated (mint 403s for
-                users). */}
-            <div
-              class="settings-section settings-section-card"
-              data-testid="settings-section-share"
+            {/* #392 — session-share entry. The #335 wrapper card + sub-page
+                are gone: a single muted-subtitle button opens the shared
+                "open on another device" modal (QR + native-share + countdown),
+                the SAME modal the home button opens. isVisitor()-gated (mint
+                403s for users — the modal is never reachable for a password
+                subject). */}
+            <button
+              type="button"
+              class="settings-share-button"
+              data-testid="share-session-entry"
+              onClick={() => openShareModal()}
             >
-              <h4 class="settings-section-heading">share session</h4>
-              <p class="settings-section-blurb">open this session on another device.</p>
-              <button
-                type="button"
-                class="settings-nav-row"
-                data-testid="share-session-entry"
-                onClick={() => setSettingsPage("share")}
-              >
-                <span class="settings-nav-row-label">create share link</span>
-                <span class="settings-nav-row-chevron" aria-hidden="true">
-                  ›
-                </span>
-              </button>
-            </div>
+              <span class="settings-share-button-label">share session</span>
+              <span class="settings-share-button-subtitle muted">
+                open this session on another device
+              </span>
+            </button>
           </Show>
 
           {/* #126 — canonical session-lifecycle verbs ("log out" retired).
@@ -1147,14 +1143,6 @@ const SettingsDrawer: Component<Props> = (props) => {
             directly (like the retired home WatchedPanel), so no data props. */}
         <Show when={settingsPage() === "watchlists"}>
           <WatchlistsSettings onBack={() => setSettingsPage("main")} />
-        </Show>
-
-        {/* #335 — share-session sub-page (was ShareSessionModal). Entered
-            from the visitor "share session" section-button; mints a fresh
-            share link on mount + offers copy / native-share. Back returns
-            to main, unmounting it (discards the on-screen token). */}
-        <Show when={settingsPage() === "share"}>
-          <ShareSessionPage onBack={() => setSettingsPage("main")} />
         </Show>
       </aside>
       <DeleteAccountModal

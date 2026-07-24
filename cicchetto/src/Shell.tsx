@@ -71,6 +71,7 @@ import ScrollbackPane from "./ScrollbackPane";
 import ServerReplyModal from "./ServerReplyModal";
 import ServiceModal from "./ServiceModal";
 import SettingsDrawer from "./SettingsDrawer";
+import ShareSessionModal from "./ShareSessionModal";
 import ShellChrome from "./ShellChrome";
 import Sidebar from "./Sidebar";
 import ThemeEditor from "./ThemeEditor";
@@ -564,6 +565,7 @@ const Shell: Component = () => {
           <ServerReplyModal />
           <ServiceModal />
           <RegistrationWizardModal />
+          <ShareSessionModal />
           <ConfirmModal />
           <aside class="shell-sidebar">
             <Sidebar />
@@ -768,6 +770,7 @@ const Shell: Component = () => {
         <ServerReplyModal />
         <ServiceModal />
         <RegistrationWizardModal />
+        <ShareSessionModal />
         <ConfirmModal />
         <Show when={membersOpen()}>
           <div
