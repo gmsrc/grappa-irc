@@ -16218,8 +16218,10 @@ on `+r` hangs autojoin forever if NickServ never answers; the ~0.5s fallback is
 exactly that fix. (2) *Retry on `477`* — keep firing at 001 and re-JOIN rejected
 `+R` channels post-identify: more moving parts, and it eats an initial reject
 per `+R` channel; superseded by identify-first, which avoids the reject entirely.
-(3) *Parse the NickServ IDENTIFY NOTICE* — banned; NOTICE-scraping is accepted
-only for the auto-registration wizard (#349), never for identify.
+(3) *Parse the NickServ IDENTIFY NOTICE* — banned; NOTICE-scraping stays
+banned everywhere. The auto-registration wizard (#349) DISPLAYS raw NickServ
+NOTICEs to the user but never scrapes them — it gates step success on the `+r`
+umode (structure), never on NOTICE text.
 
 **SASL non-regression is structural**, not a special case: only
 `auth_method == :nickserv_identify` arms the timer, so every other method leaves
@@ -16302,3 +16304,110 @@ is unreliable).
 handler must be removed, not layered — two live handlers for one gesture
 double-fire, and papering over that with `stopPropagation` silently breaks a
 sibling concern (here, the container's own drag-overlay bookkeeping).*
+
+## 2026-07-24 — NickServ registration wizard, Azzurra-only (GH #349)
+
+A guided 6-step "📝 Register nick" wizard on the Home pane's connected-network
+row (`RegistrationWizardModal`), for non-technical users to register their nick
+with the network's services. Predominantly cicchetto + one server field + one
+server credential-commit path. **Cold deploy** (the `services_flavor` column
+migration).
+
+**Azzurra ONLY, by hard constraint.** grappa's ENTIRE registration-success
+signal is the lowercase `+r` umode echo (`event_router.ex` self-MODE →
+`:umode_changed` → cic `umodesForNetwork(id).includes("r")`), which drives
+step-6 auto-complete, the launch-button auto-hide, AND the commit-on-+r
+credential save. Only **bahamut (Azzurra IRC Services)** emits lowercase `+r`:
+atheme (Libera/solanum) has NO registered umode (account-only identity —
+WHOIS 330 / `account-notify`); oftc uses UPPERCASE `+R`. So the wizard ships
+Azzurra-only; making it flavor-agnostic needs a new server identity signal
+(negotiate IRCv3 `account-notify`, handle self `ACCOUNT`, broadcast an identity
+event) — tracked as **#388** (Libera + OFTC rollout). The verb table
+(`registrationTemplates.ts`) is keyed on a server-owned flavor and carries only
+`"azzurra"`; `registerableFlavor` is false for every other value → button
+hidden.
+
+**services_flavor is server-owned (vjt decision b — NO cic picker).**
+`Grappa.Networks.Network.services_flavor` (`Ecto.Enum [:azzurra, :atheme, :oftc,
+:unknown]`, nullable), set by the operator at bind (`mix grappa.bind_network
+--services-flavor azzurra`) or via `PATCH /admin/networks/:slug`, rides both
+`GET /networks` twins + admin wire. cic→grappa carries only intent + data
+(email/password/code); the SERVER dialect is never a user question. Rejected: a
+cic-side "which services?" picker (pushes a technical Q onto the exact users
+this feature is for) and 005 `NETWORK=` auto-detect (fragile to key a
+security-sensitive command template on an advertised string).
+
+**No-parse: display raw, gate on structure (#91 stands).** The wizard DISPLAYS
+every NickServ NOTICE verbatim (`$server` rows with `id > stepSinceId`, via
+`MircBody`) but NEVER scrapes their text. Step success is gated on STRUCTURE
+only: step 6 (verify) auto-completes on the `+r` flip; step 4 (REGISTER) has NO
+structural terminator (register-accepted ≠ +r — +r only arrives after the
+emailed AUTH code), so it is USER-advanced with a 15s timeout guard (mirror
+#347 "a silent NickServ must never hang the flow"). Step 4 therefore cannot
+auto-detect a FAILED register (nick-taken / bad-email are NOTICE-text only) —
+accepted as an inherent limit of the no-parse rule; the raw reply is shown
+prominently + a Retry affordance.
+
+**Azzurra verbs (source-verified, azzurra/services GPLv2):** `REGISTER
+<password> <email>` (password FIRST) then `AUTH <code>` (a SINGLE numeric arg —
+the emailed code, NOT nick+code). Confirmed end-to-end against the real testnet.
+
+**commit-on-+r for USER credentials (vjt decision c).** When services confirm a
+wizard REGISTER (a staged `pending_registration_secret` + the `+r` echo), the
+REGISTER password is committed to the bound credential AND its `auth_method`
+flips `:none → :nickserv_identify`, so the now-registered nick auto-identifies
+on every future reconnect — WITHOUT this, an unidentified registered nick gets
+services-enforced (ghost/SVSNICK to Guest) ~60s into the next connect, turning
+the registration into a liability. This is a DISTINCT verb from #131's SET
+PASSWD committer (`credential_committer` → `Credentials.commit_password/3`,
+password-only, for an already-identifying session): registration PROMOTES a
+`--auth none` binding, so a sibling `registration_committer` (injected by
+`Networks.SessionPlan.resolve/1`, same Boundary-cycle function-reference
+indirection) forwards to `Credentials.commit_registration_password/3` →
+`Credential.registration_changeset/2` (password + auth_method, atomic). Scoped
+to the REGISTER case: the `{:user, _}` `+r` branch commits ONLY when
+`pending_registration_secret` is staged; a `+r` with only `pending_auth` (an
+operator's manual NickServ IDENTIFY) leaves the credential's auth posture
+untouched — that split-brain is #124's territory, deferred entirely.
+**Verification gap corrected:** the plan assumed the existing #211 visitor
+commit-on-+r arm worked "for free" for users; it does NOT — server.ex's
+`{:user, _}` branch had ignored+dropped the staged secret (visitor-only since
+#211). This entry is that arm, built.
+
+**FallbackController root-cause fix.** `Ecto.Enum` cast errors carry a
+parameterized `type:` opt whose value is a tuple, which crashed the 422 JSON
+renderer via `to_string/1`. `FallbackController.safe_to_string/1` now guards
+non-`String.Chars` opt values (an invalid `services_flavor` PATCH surfaces as a
+clean 422, not a 500).
+
+**Reactive-loop bug (cic) — caught by the real e2e, not the never-run faked
+spec.** The send-steps auto-fire their command on step entry via
+`createEffect(on(() => st().step, …))`. Solid's `on` does NOT value-dedupe — it
+re-invokes on EVERY change to a tracked signal — and reading `st().step` inline
+tracked the WHOLE wizard-state signal, so `runSendStep`'s own state patches
+(pending/stepSince/error) re-fired it: a runaway loop that flooded NickServ with
+~300 identical REGISTER commands and wedged the step transition. Fix: memoize
+the tracked derivations (`createMemo` DOES dedupe on value where `on` does not),
+so each effect fires only on a distinct step/`+r` change. *Lesson: `on(dep, fn)`
+in SolidJS is not a value-guard; if the callback mutates a signal the dep
+reads, memoize the dep or it self-feeds.*
+
+**Real-services e2e (the ship gate — hollow-green does not count).**
+`registration-wizard-real.spec.ts` drives the wizard through cicchetto against
+the LIVE stack (grappa-test → azzurra bahamut → email-enabled azzurra-services →
+a mailpit sink) and asserts an ACTUAL nick reaches `+r`: REGISTER → services
+email the AUTH code → the spec reads it from mailpit's HTTP API → AUTH → `+r` →
+success. Infra: a `mailpit` sidecar (`axllent/mailpit`), the `azzurra-testnet`
+submodule's env-gated msmtp→mailpit shim (`SVC_EMAIL=1`, `SVC_FORCE_AUTH=1`,
+`SVC_RETURN=noreply@azzurra.chat`), and a seeded `wiz-test` user bound to
+`azzurra-reg` (`services_flavor=azzurra`, `--auth none`, unregistered nick
+`wiz-reg-nick`, isolated from vjt).
+
+**Load-bearing email-domain finding (source-verified).** azzurra/services'
+`validate_email` (`src/misc.c`) is a HARDCODED ICANN-TLD allowlist
+(`validate_tld`) with NO DNS lookup — a `.test` recipient is rejected ("not
+valid") and never mailed. The e2e registers with `wiz-test@example.com` (a real
+TLD); msmtp relays ALL mail to mailpit regardless of domain, so the flow stays
+fully hermetic (no real internet/DNS). The AUTH code rides the mail as `/msg
+NickServ AUTH <digits>`; the extraction regex `/AUTH (\d+)/` is case-sensitive
+so it can't false-match the lowercase "authorization code" prose line.

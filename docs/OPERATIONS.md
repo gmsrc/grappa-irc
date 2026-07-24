@@ -38,7 +38,7 @@ bin/grappa help <verb>           # per-verb help
 
 # Boot-time verbs (mix tasks; auto-detect MIX_ENV from container):
 bin/grappa create-user --name <user> --password <pw>
-bin/grappa bind-network --user <user> --network <slug> --nick <nick> --auth <method> [--source <ip>]
+bin/grappa bind-network --user <user> --network <slug> --nick <nick> --auth <method> [--source <ip>] [--services-flavor <azzurra|atheme|oftc|unknown>]
 bin/grappa add-server --network <slug> --host <host> --port <port> [--tls] [--source <ip>]
 bin/grappa remove-server --network <slug> --host <host> --port <port>
 bin/grappa set-network-caps --network <slug> [--max-visitor-sessions N] [--max-user-sessions N] [--max-per-ip N]
@@ -798,6 +798,19 @@ don't hardcode hostnames there.
   `GrappaWeb.Endpoint` (no HTTP port bind) — so it no longer conflicts
   with an already-running release on the same port. Before this fix
   every admin task required `systemctl stop grappa` first.
+- **`--services-flavor` (GH #349)**: optional at bind (or later via
+  `PATCH /admin/networks/:slug {services_flavor: …}` / the admin Networks
+  tab). Declares which services suite the network runs
+  (`azzurra | atheme | oftc | unknown`, nullable). Only `azzurra` currently
+  enables cicchetto's in-app "📝 Register nick" wizard — grappa's only
+  registration-success signal is the lowercase `+r` umode, which only
+  bahamut/Azzurra services emit (atheme has no registered umode, oftc uses
+  uppercase `+R`; those flavors hide the button pending #388). Set it on
+  Azzurra binds so users can self-register; leave it unset/`unknown`
+  elsewhere. When a wizard registration completes (services set `+r`), the
+  REGISTER password is committed to the credential and its `auth_method`
+  flips to `:nickserv_identify` automatically, so the registered nick
+  auto-identifies on the next reconnect.
 
 ## Monitoring
 
