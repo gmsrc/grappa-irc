@@ -127,16 +127,21 @@ is DELETE-then-write, never append-only:
 - **BATCH ALL DEPLOYS — never deploy per-issue (vjt STANDING ORDER 2026-07-17).** A per-issue
   `--cic` bundle deploy (OR cold restart) spams live users with a BundleRefreshBanner every
   ~20min. So: as each issue completes, worker MERGES + pushes to origin/main (the CI-green
-  gate still gates the merge) and moves the issue `status:cooking → status:soon` — but does
-  **NOT** deploy. Accumulate in `soon`. Ship ONE batched deploy only when **~4–5 issues are
-  resolved (merged, awaiting deploy)**, carrying all of them in a single bundle broadcast, then
-  ONE announce covering the batch + close all + strip their `status:soon`. Merge ≠ deploy: the
-  m42 jail only pulls origin/main when `deploy-m42` runs, so merging freely does not touch prod.
-  This SUPERSEDES per-issue ship-on-green in dispatch briefs — tell the worker to merge+soon+HOLD,
-  not deploy. Deploy rules stack: this batching gate + the **CI-green-before-ship** gate
+  gate still gates the merge) — but does **NOT** deploy. Accumulate in `soon`. Ship ONE batched
+  deploy only when **~4–5 issues are resolved (merged, awaiting deploy)**, carrying all of them in
+  a single bundle broadcast, then ONE announce covering the batch + close all + strip their
+  `status:soon`. Merge ≠ deploy: the m42 jail only pulls origin/main when `deploy-m42` runs, so
+  merging freely does not touch prod. This SUPERSEDES per-issue ship-on-green in dispatch briefs —
+  tell the worker to merge+HOLD, not deploy. Deploy rules stack: this batching gate + the **CI-green-before-ship** gate
   (`integration` must be green before ANY merge/ship) + the **night-cold-deploy** window (cold-
   classified issues wait for the ~4am restart window; batch them there too). Prefer designing
   features HOT. See [[feedback_minimize_cold_deploys]].
+- **RELEASE-CUTTING + NEWS.JSON (vjt STANDING ORDERS 2026-07-24).** After a batch DEPLOYS to
+  Azzurra + verifies healthy: cut a GitHub **release + tag** (tag ≡ CTCP VERSION exactly, #391),
+  THEN produce the site's **News/Releases `news.json` entry** — bilingual, curated by vjt, and
+  **committed+pushed to `grappa-www` + deployed + CF-purged, NEVER deployed-not-committed**
+  (anti-drift; trigger = testimonials left live-but-uncommitted). Full procedure + schema
+  (grappa-www#4) in `docs/OPERATIONS.md` → "Release-cutting". See [[feedback_release_cut_news_json_committed]].
 - **Every new feature needs a REAL e2e** that asserts the user-visible outcome (not a
   hollow green spec). **A red `integration`/e2e CI job BLOCKS** — never build/ship on red;
   `gh run list` to find where it went red, fix/bump-to-front, green it. cic `ci` job is
@@ -151,16 +156,24 @@ is DELETE-then-write, never append-only:
   CLAUDE.md Development Cycle too.
 - **`status:*` label discipline (WIP board — grappa-irc #258, mandatory 2026-07-15).** The
   grappa.chat WIP board renders directly from three mutually-exclusive grappa-irc labels —
-  `status:queued` (accepted, in build queue, not started), `status:cooking` (actively building
-  now), `status:soon` (built/merged, in verify or awaiting a deploy window). The board's two
+  `status:queued` (accepted, in build queue, not started), `status:cooking` (worker STILL ON IT —
+  building, in code-review, waiting on CI **including post-merge CI polling**, addressing findings:
+  ANY active worker attention on the issue), `status:soon` (worker FULLY DONE + handed off, no
+  active work and NO CI-wait remaining, purely awaiting a deploy window). The board's two
   plain-link columns are derived: **backlog = open issues with NO `status:*` label** (shown
   before Queued), **closed = closed issues** (after Soon) — both exclude `status:*`. The
   orchestrator OWNS keeping these labels truthful, or the board drifts from reality:
+  - **`cooking → soon` fires ONLY at the worker's HAND-OFF, NEVER at merge (vjt order 2026-07-18).**
+    Waiting on CI — PR checks OR post-merge main CI — is STILL cooking, not soon. A merged issue
+    whose worker is still polling its post-merge run stays `cooking`. The ORCHESTRATOR flips it to
+    `soon` in the SAME turn it processes the worker's DONE hand-back (worker idle, CI settled, moved
+    on) — the worker does NOT self-flip to soon at merge. (Prior rule "worker merge+soon" flipped
+    prematurely during CI-wait → the exact drift vjt caught. Worker now: merge+HOLD, STAYS cooking.)
   - **Enqueue (`→ status:queued`) is done by the ircbot or vjt, NOT you** — that label is how
     work enters the queue (the ircbot no longer pings you to hand issues over; the label IS the
     handover). Your first touch is `status:queued → status:cooking` when the worker starts
-    building; at merge-ready/held-for-ship → move to `status:soon`. Move, don't add —
-    mutually exclusive (`gh issue edit N --remove-label status:X --add-label status:Y`).
+    building. Move, don't add — mutually exclusive
+    (`gh issue edit N --remove-label status:X --add-label status:Y`).
   - **On deploy/close → REMOVE the `status:*` label entirely** (a shipped+closed issue leaves
     the board's Soon column and shows only under the closed link). Removing it is part of the
     ship/close-out step, alongside `gh issue close` + announce.

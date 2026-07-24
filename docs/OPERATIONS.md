@@ -452,6 +452,47 @@ problem, defect #9) is solved differently here: the systemd unit runs
 exits — no custom wrapper needed. See
 `infra/linux/systemd/grappa.service`'s comments for the full rationale.
 
+### Release-cutting (post-deploy) — GitHub release + tag + News/Releases
+
+Standing order (vjt 2026-07-24): a batch deploy is not "done" until a GitHub
+release is cut AND the site's News/Releases entry is committed. After a **batch
+cold-deploy** lands on Azzurra (prod) and verifies healthy, run the full
+sequence:
+
+1. **Batch cold-deploy** (`deploy-m42.sh --force-cold`) → **Azzurra-verify**
+   (`/healthz` 200 + sessions reconnect + sanity).
+2. **Cut the GitHub release + tag** on `vjt/grappa`. The tag ≡ the version grappa
+   reports in `CTCP VERSION`, EXACTLY (issue #391 wires it: `Grappa.Version` folds
+   `mix.exs` `@version` with a compile-time git snapshot — a clean release tag
+   matching the mix version → bare `X.Y.Z`; anything else → `X.Y.Z-<shortsha>`,
+   `-dev` if git is absent). A released build reports the bare version; an
+   unreleased build carries the suffix. Keep the mix version and the tag in
+   lockstep at cut time.
+3. **News/Releases `news.json` entry** — anti-drift: MUST be committed, NEVER
+   deployed-not-committed (the trigger was testimonials left live-but-uncommitted).
+   Schema + rules are authoritative in **grappa-www#4**; reuse the existing item
+   shape (no `news.js` renderer change):
+
+   ```json
+   {
+     "date": "YYYY-MM-DD",
+     "text": { "en": "curated blurb", "it": "blurb curato" },
+     "link": {
+       "href": { "en": ".../grappa/releases/tag/<tag>", "it": ".../grappa/releases/tag/<tag>" },
+       "label": { "en": "release notes →", "it": "note di rilascio →" }
+     }
+   }
+   ```
+
+   - **Prepend** to `items[]` (newest first). `text` = a curated, bilingual,
+     user-friendly blurb drafted from the release notes (NOT the raw dev
+     changelog); `link` → the GitHub release for the full technical detail.
+   - **vjt drafts the copy** (his editorial lane) — don't auto-write it.
+   - **Commit + push to `grappa-www` AND deploy** (scp to m42 `htdocs`) **+
+     CF-purge** — one without the others is drift. That is the whole point.
+4. **Dual-net announce** (#grappa on Azzurra + Libera via the ircbot) + `gh issue
+   close` the deployed issues + strip their `status:soon`.
+
 ### Running operator actions against the live jail (prod)
 
 Prod is a **bastille jail** (name `grappa`, `/usr/local/bastille/jails/grappa/root`,
