@@ -16647,3 +16647,68 @@ peer OPERs up against the testnet O:line (`testoper`/`testoperpass`, as
 issue148) and vjt's /whois renders the real 313 role-text row — the
 integration proof; the bare-313 fallback can't be forced on a live ircd and
 stays unit-covered.
+
+---
+
+## 2026-07-24 — git tag ≡ CTCP VERSION, `-<shortsha>`/`-dev` for unreleased (GH #391)
+
+**Problem.** Tied to the new release-cutting workflow (batch deploy →
+Azzurra-verify → cut GitHub release+tag), grappa's reported version had to
+become release-cut-aware: a cut tag `vX.Y.Z` must correspond *exactly* to the
+`CTCP VERSION` string, and any build NOT sitting on a clean release tag must
+carry a suffix so an operator reading `CTCP VERSION` tells released-vs-
+unreleased at a glance. Before this, `Grappa.Version.current/0` returned the
+bare mix.exs `@version` regardless of git state — a hand-built dev checkout
+and a cut release were indistinguishable on the wire.
+
+**Design — base (live) + git suffix (build-time), folded in `derive/2`.**
+`Grappa.Version` keeps two independent inputs:
+
+  * **base** — `Version.base/0` still reads `@version` from `mix.exs` *live*
+    on every call. The reason is unchanged (the cluster `code-reload` path
+    re-evals `lib/*.ex` but never `mix.exs`, and `Application.spec/2` reads
+    the stale pre-load `.app`); a live file read keeps a hot-bump honest.
+  * **git suffix** — a `@git_facts` snapshot (`%{exact_tag, short_sha,
+    dirty?}`) captured **once at compile time** by shelling `git describe
+    --tags --exact-match`, `git rev-parse --short HEAD`, and `git status
+    --porcelain`. Build-time (not per-call) because the running mix release
+    has no live git checkout in the FreeBSD jail, and shelling out on every
+    CTCP reply would be absurd. `@external_resource` on `.git/HEAD` +
+    `packed-refs` re-triggers an incremental dev recompile when HEAD/refs
+    move; a cold deploy recompiles from scratch and re-snapshots regardless.
+
+`derive(base, git_facts)` is the pure kernel: bare `base` **only** when
+`exact_tag == "v#{base}"` AND `not dirty?`; otherwise `"#{base}-#{short_sha}"`,
+degrading to `"#{base}-dev"` when git left no sha (binary absent / no `.git`).
+A tag that mismatches the mix version, or a dirty tree on a matching tag, is
+*unreleased* → suffixed. Today (zero tags cut) the build reports e.g.
+`0.3.2-43698788`.
+
+**Why not runtime git.** Per-call `System.cmd("git", …)` fails in the jail
+(no checkout), is slow, and duplicates the exact staleness problem the
+compile-time snapshot avoids. The issue itself specifies "build-time git
+state" — compile-time is the intended mechanism, not a fork.
+
+**Why `-<shortsha>` over `-dev`.** The issue accepts either. `-<shortsha>`
+identifies the exact build (an operator can `git show <sha>`), so it's the
+default; `-dev` is only the degraded fallback when no sha is available.
+
+**Build-substrate dependency.** The mechanism needs `git` at *build* time.
+It's present everywhere builds happen: the Docker build image installs it
+(`Dockerfile`, for hex deps), and the FreeBSD-jail / Linux-systemd cold
+builds run inside a real `git` checkout that pulled origin/main. A git-less
+build degrades to `-dev` (honest: "unreleased, unknown commit") rather than
+lying about a release.
+
+**Callers unchanged.** `EventRouter`'s CTCP VERSION handler already composed
+`grappa #{Grappa.Version.current/0}` — it now naturally reports the honest
+suffixed/bare string with no handler change. `current/0` = `derive(base/0,
+@git_facts)`.
+
+**Tests.** `version_test.exs` unit-tests `derive/2` with synthetic git facts
+(clean-tag→bare, untagged→sha, dirty→sha, tag-mismatch→sha, no-git→dev) —
+synthetic because the test build's own compile-time git state is unstable and
+can't be asserted against a fixed literal. It also asserts the composed
+`VERSION grappa <v>` wire string clean-vs-untagged, and that `current/0`
+starts with `base/0`. The existing `event_router_test.exs` CTCP VERSION specs
+read `current/0` dynamically, so they hold across the change.

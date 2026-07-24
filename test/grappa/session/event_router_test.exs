@@ -430,9 +430,11 @@ defmodule Grappa.Session.EventRouterTest do
       # RFC 2812 + CTCP spec: response goes via NOTICE (NOT PRIVMSG) to
       # the SENDER's nick — prevents reply loops between two responsive
       # bots. Body is the canonical \x01VERSION grappa <version>\x01
-      # framing where <version> is read from mix.exs at runtime via
-      # Grappa.Version.current/0 (don't hardcode the literal here —
-      # bumping mix.exs would silently rot the assertion).
+      # framing where <version> comes from Grappa.Version.current/0 —
+      # the mix.exs base folded with the build-time git tag/sha state
+      # (#391), so it reports bare on a clean release tag and suffixed
+      # otherwise. Don't hardcode the literal here — a mix bump or a
+      # release-cut would silently rot the assertion.
       #
       # CRLF is added by Client.send_line at the transport boundary
       # (see ensure_crlf/1 in irc/client.ex), so the EventRouter emits
