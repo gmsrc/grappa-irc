@@ -53,7 +53,7 @@ defmodule Grappa.UserSettings do
   | `"vhost_selection"`    | `list(String.t())`     | `get_vhost_selection/1`,        |
   |                        |                        | `put_vhost_selection/2`         |
   | `"active_theme_id"`    | `pos_integer() \\| nil`| `get_active_theme_id/1`,        |
-  |                        |                        | `put_active_theme_id/2`         |
+  |                        |                        | `put_theme_pair/3` (#358)       |
   | `"dark_theme_id"`      | `pos_integer() \\| nil`| `get_dark_theme_id/1`,          |
   |                        |                        | `put_theme_pair/3` (#358)       |
 
@@ -478,8 +478,8 @@ defmodule Grappa.UserSettings do
   exists, the key is absent, or the stored value is malformed.
 
   `nil` means "no theme chosen" — the caller
-  (`Grappa.Themes.get_active_theme/1`) falls back to the client/default look.
-  Reads with the string key (`:map` JSON round-trip).
+  (`Grappa.Themes.get_active_theme_pair/1`) falls back to the client/default
+  look. Reads with the string key (`:map` JSON round-trip).
   """
   @spec get_active_theme_id(Subject.t()) :: pos_integer() | nil
   def get_active_theme_id({_, _} = subject),
@@ -506,22 +506,6 @@ defmodule Grappa.UserSettings do
           n when is_integer(n) and n > 0 -> n
           _ -> nil
         end
-    end
-  end
-
-  @doc """
-  Sets the subject's active (day/light) theme id, or clears it with `nil`.
-  Preserves other keys in `data` (merge semantics). Validates the id is `nil`
-  or a positive integer; confirming that the id references a readable theme is
-  the caller's job (`Grappa.Themes.set_active_theme/2`).
-  """
-  @spec put_active_theme_id(Subject.t(), pos_integer() | nil) ::
-          {:ok, Settings.t()} | {:error, Ecto.Changeset.t()}
-  def put_active_theme_id({_, _} = subject, id) do
-    with :ok <- validate_theme_pointer(id, subject, :active_theme_id),
-         {:ok, settings} <- get_or_init(subject) do
-      merged_data = put_or_delete(settings.data, @active_theme_id_key, id)
-      Repo.update(Settings.changeset(settings, %{data: merged_data}))
     end
   end
 

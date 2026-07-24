@@ -191,8 +191,8 @@ defmodule Grappa.ThemesTest do
 
       a = user_fixture()
       visitor = visitor_fixture()
-      {:ok, _} = Themes.set_active_theme({:user, a.id}, theme.id)
-      {:ok, _} = Themes.set_active_theme({:visitor, visitor.id}, theme.id)
+      {:ok, _} = Themes.set_active_theme_pair({:user, a.id}, theme.id, nil)
+      {:ok, _} = Themes.set_active_theme_pair({:visitor, visitor.id}, theme.id, nil)
 
       assert Themes.count_theme_usage(theme.id) == 2
     end
@@ -203,9 +203,9 @@ defmodule Grappa.ThemesTest do
       {:ok, two} = Themes.create_theme({:user, owner}, %{name: "Two", payload: valid_payload()})
       a = user_fixture()
       b = user_fixture()
-      {:ok, _} = Themes.set_active_theme({:user, a.id}, one.id)
-      {:ok, _} = Themes.set_active_theme({:user, b.id}, one.id)
-      {:ok, _} = Themes.set_active_theme({:user, owner.id}, two.id)
+      {:ok, _} = Themes.set_active_theme_pair({:user, a.id}, one.id, nil)
+      {:ok, _} = Themes.set_active_theme_pair({:user, b.id}, one.id, nil)
+      {:ok, _} = Themes.set_active_theme_pair({:user, owner.id}, two.id, nil)
 
       counts = Themes.active_theme_counts()
       assert counts[one.id] == 2
@@ -460,37 +460,6 @@ defmodule Grappa.ThemesTest do
     end
   end
 
-  describe "get_active_theme/1 + set_active_theme/2" do
-    test "get_active_theme returns nil when the subject has no active theme" do
-      user = user_fixture()
-      assert Themes.get_active_theme({:user, user.id}) == nil
-    end
-
-    test "set_active_theme persists the pointer and get resolves it" do
-      user = user_fixture()
-      {:ok, theme} = Themes.create_theme({:user, user}, %{name: "Mine", payload: valid_payload()})
-
-      assert {:ok, set} = Themes.set_active_theme({:user, user.id}, theme.id)
-      assert set.id == theme.id
-      assert Themes.get_active_theme({:user, user.id}).id == theme.id
-    end
-
-    test "set_active_theme returns :not_found for a missing id (no pointer stored)" do
-      user = user_fixture()
-      assert {:error, :not_found} = Themes.set_active_theme({:user, user.id}, 9_999_999)
-      assert Themes.get_active_theme({:user, user.id}) == nil
-    end
-
-    test "get_active_theme returns nil when the stored pointer dangles" do
-      user = user_fixture()
-      {:ok, theme} = Themes.create_theme({:user, user}, %{name: "Mine", payload: valid_payload()})
-      {:ok, _} = Themes.set_active_theme({:user, user.id}, theme.id)
-      :ok = Themes.delete_theme({:user, user}, theme.id)
-
-      assert Themes.get_active_theme({:user, user.id}) == nil
-    end
-  end
-
   describe "get_active_theme_pair/1 + set_active_theme_pair/3 (#358 day/night)" do
     test "get pair is {light: nil, dark: nil} when nothing is set" do
       user = user_fixture()
@@ -570,6 +539,16 @@ defmodule Grappa.ThemesTest do
 
       assert %{light: l, dark: nil} = Themes.get_active_theme_pair({:user, user.id})
       assert l.id == day.id
+    end
+
+    test "get pair drops a dangling light to nil (deleted single pick)" do
+      user = user_fixture()
+      {:ok, theme} = Themes.create_theme({:user, user}, %{name: "Solo", payload: valid_payload()})
+      {:ok, _} = Themes.set_active_theme_pair({:user, user.id}, theme.id, nil)
+
+      :ok = Themes.delete_theme({:user, user}, theme.id)
+
+      assert Themes.get_active_theme_pair({:user, user.id}) == %{light: nil, dark: nil}
     end
   end
 

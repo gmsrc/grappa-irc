@@ -268,17 +268,6 @@ defmodule Grappa.Themes do
   end
 
   @doc """
-  Resolve the subject's active theme (server-persisted per-subject pointer,
-  cross-device — #75 fork-1). Returns `nil` when no pointer is set OR the
-  pointer dangles (theme deleted / unpublished-and-gone) — the caller (cic)
-  falls back to its built-in default look. Takes the bare-id subject tuple
-  (`Grappa.UserSettings` scope shape).
-  """
-  @spec get_active_theme(Subject.t()) :: Theme.t() | nil
-  def get_active_theme(subject),
-    do: resolve_pointer(UserSettings.get_active_theme_id(subject))
-
-  @doc """
   Resolve the subject's day/night theme PAIR (#358). Returns
   `%{light: Theme.t() | nil, dark: Theme.t() | nil}`. `light` is the day slot
   (the #75 `active_theme_id`); `dark` is the optional night slot. Either slot
@@ -302,21 +291,6 @@ defmodule Grappa.Themes do
     case get_theme(id) do
       {:ok, theme} -> theme
       {:error, :not_found} -> nil
-    end
-  end
-
-  @doc """
-  Point the subject at `id` as their active theme. Any readable theme (every
-  theme is public by id — share-link target) is a valid target; the pointer is
-  only stored once the theme is confirmed to exist, so a bad id never persists.
-  Takes the bare-id subject tuple.
-  """
-  @spec set_active_theme(Subject.t(), integer()) ::
-          {:ok, Theme.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def set_active_theme(subject, id) when is_integer(id) do
-    with {:ok, theme} <- get_theme(id),
-         {:ok, _} <- UserSettings.put_active_theme_id(subject, id) do
-      {:ok, theme}
     end
   end
 
