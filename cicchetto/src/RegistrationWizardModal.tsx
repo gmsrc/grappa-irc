@@ -1,6 +1,7 @@
 import {
   type Component,
   createEffect,
+  createMemo,
   createSignal,
   For,
   Match,
@@ -151,25 +152,32 @@ const RegistrationWizardModal: Component = () => {
             });
         };
 
-        // Send once on entry to a send-step. `on` tracks the step INT only,
-        // so per-field edits (email/password/code) don't re-fire the send.
+        // Send once on entry to a send-step. The step is MEMOIZED so the
+        // effect re-runs ONLY when the step value actually changes: Solid's
+        // `on` does NOT value-dedupe (it re-invokes on every change to a
+        // tracked signal), and reading `st().step` inline tracks the WHOLE
+        // wizard-state signal — so without the memo, every state patch
+        // runSendStep makes (pending / stepSince / error) would re-fire
+        // runSendStep in a runaway loop (hundreds of REGISTER sends). The
+        // memo notifies only on a distinct step value, which also means
+        // per-field edits (email/password/code) never re-fire the send.
+        const currentStep = createMemo(() => st().step);
         createEffect(
-          on(
-            () => st().step,
-            (step) => {
-              if (step === STEP_REGISTER || step === STEP_VERIFY) runSendStep();
-            },
-          ),
+          on(currentStep, (step) => {
+            if (step === STEP_REGISTER || step === STEP_VERIFY) runSendStep();
+          }),
         );
 
         // Step-6 auto-complete: the ONLY success terminator is the server
-        // +r umode flip (no NickServ text parse). `on(registeredNow)` fires
-        // when it flips false→true; celebrate + auto-close (the launch
-        // button is already reactively hidden by the same signal).
-        const registeredNow = () => {
+        // +r umode flip (no NickServ text parse). Memoized (same reason as
+        // currentStep — `on` doesn't value-dedupe) so the effect fires only
+        // on a real +r change; when it flips false→true, celebrate +
+        // auto-close (the launch button is already reactively hidden by the
+        // same signal).
+        const registeredNow = createMemo(() => {
           const id = networkIdBySlug(st().networkSlug);
           return id !== undefined && umodesForNetwork(id).includes("r");
-        };
+        });
         createEffect(
           on(registeredNow, (isReg) => {
             if (isReg && st().step === STEP_VERIFY && !succeeded()) {
