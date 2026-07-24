@@ -461,17 +461,24 @@ sequence:
 
 1. **Batch cold-deploy** (`deploy-m42.sh --force-cold`) → **Azzurra-verify**
    (`/healthz` 200 + sessions reconnect + sanity).
-2. **Cut the GitHub release + tag** on `vjt/grappa`. The tag ≡ the version grappa
-   reports in `CTCP VERSION`, EXACTLY (issue #391 wires it: `Grappa.Version` folds
-   `mix.exs` `@version` with a compile-time git snapshot — a clean release tag
-   matching the mix version → bare `X.Y.Z`; anything else → `X.Y.Z-<shortsha>`,
-   `-dev` if git is absent). A released build reports the bare version; an
-   unreleased build carries the suffix. Keep the mix version and the tag in
-   lockstep at cut time.
-3. **News/Releases `news.json` entry** — anti-drift: MUST be committed, NEVER
+2. **The orchestrator CREATES a GitHub release + tag** on `vjt/grappa`, with a
+   **SEMVER bump SIZED TO THE BATCH**: a big batch = a **MINOR** bump, NOT
+   patchlevel; a **patch** bump only for a small / fix-only batch. The tag ≡ the
+   version grappa reports in `CTCP VERSION`, EXACTLY (issue #391 wires it:
+   `Grappa.Version` folds `mix.exs` `@version` with a compile-time git snapshot —
+   a clean release tag matching the mix version → bare `X.Y.Z`; anything else →
+   `X.Y.Z-<shortsha>`, `-dev` if git is absent). A released build reports the bare
+   version; an unreleased build carries the suffix. Keep the mix version and the
+   tag in lockstep at cut time.
+3. **Ping vjt** (via the ircbot) with **the tag + the release URL + 2 lines of
+   highlight**. vjt then writes the site's News entry (next step) from that.
+4. **News/Releases `news.json` entry — vjt's lane.** vjt writes a `news.json`
+   entry that LINKS the GitHub release + ~20 words of highlight (NOT a changelog
+   dump), then **commits/pushes it to `grappa-www` AND deploys** (scp to m42
+   `htdocs`) **+ CF-purge**. Anti-drift: the News content is never
    deployed-not-committed (the trigger was testimonials left live-but-uncommitted).
-   Schema + rules are authoritative in **grappa-www#4**; reuse the existing item
-   shape (no `news.js` renderer change):
+   Schema authoritative in **grappa-www#4**; reuse the existing item shape (no
+   `news.js` renderer change):
 
    ```json
    {
@@ -485,12 +492,12 @@ sequence:
    ```
 
    - **Prepend** to `items[]` (newest first). `text` = a curated, bilingual,
-     user-friendly blurb drafted from the release notes (NOT the raw dev
-     changelog); `link` → the GitHub release for the full technical detail.
-   - **vjt drafts the copy** (his editorial lane) — don't auto-write it.
-   - **Commit + push to `grappa-www` AND deploy** (scp to m42 `htdocs`) **+
-     CF-purge** — one without the others is drift. That is the whole point.
-4. **Dual-net announce** (#grappa on Azzurra + Libera via the ircbot) + `gh issue
+     ~20-word highlight (NOT the raw dev changelog); `link` → the GitHub release.
+
+   **Division of labor:** ORCHESTRATOR = create the GH release + ping vjt with
+   (tag, URL, 2-line highlight). vjt = news.json entry + grappa-www commit / push
+   / deploy / CF-purge.
+5. **Dual-net announce** (#grappa on Azzurra + Libera via the ircbot) + `gh issue
    close` the deployed issues + strip their `status:soon`.
 
 ### Running operator actions against the live jail (prod)
