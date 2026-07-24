@@ -63,6 +63,7 @@ import NamesModal from "./NamesModal";
 import NextActiveButton from "./NextActiveButton";
 import PresenceToasts from "./PresenceToasts";
 import PrivacyModal from "./PrivacyModal";
+import RegistrationWizardModal from "./RegistrationWizardModal";
 import ResizeHandle from "./ResizeHandle";
 import ScrollbackPane from "./ScrollbackPane";
 import ServerReplyModal from "./ServerReplyModal";
@@ -560,6 +561,7 @@ const Shell: Component = () => {
           <UmodeModal />
           <ServerReplyModal />
           <ServiceModal />
+          <RegistrationWizardModal />
           <ConfirmModal />
           <aside class="shell-sidebar">
             <Sidebar />
@@ -763,6 +765,7 @@ const Shell: Component = () => {
         <ModeModal />
         <ServerReplyModal />
         <ServiceModal />
+        <RegistrationWizardModal />
         <ConfirmModal />
         <Show when={membersOpen()}>
           <div

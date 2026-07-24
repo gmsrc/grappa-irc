@@ -168,6 +168,17 @@ export type UnreadCountsEnvelope = Record<string, Record<string, ServerWindowCou
 // badge rendering.
 export type ConnectionState = "connected" | "parked" | "failed";
 
+// #349 — per-network NickServ services flavor. Server-owned enum
+// (`Grappa.Networks.Network.services_flavor`, set by the operator at
+// bind) that tells cic which per-network REGISTER / verify command
+// template to build for the registration wizard (see
+// `lib/registrationTemplates.ts`). Closed set — the wizard button is
+// hidden for `"unknown"` and `null` (no template to register against).
+// `null` = a legacy credential bound before the field existed / an
+// operator who left it unset. The registration wizard is the only
+// consumer today.
+export type ServicesFlavor = "azzurra" | "atheme" | "oftc" | "unknown";
+
 // UX-4 bucket B — one row in the `home_data.networks` array, returned
 // from `GET /me` for user subjects. Mirror of server-side
 // `Grappa.Networks.Wire.home_network_row/0`. Identical shape to the
@@ -390,6 +401,11 @@ export type UserNetwork = {
   connection_state: ConnectionState;
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
+  // #349 — which NickServ dialect this network runs, so the registration
+  // wizard can build the right REGISTER / verify verbs. Nullable: a
+  // credential bound before the field existed, or an operator who left
+  // it unset, reports `null` and the wizard button stays hidden.
+  services_flavor: ServicesFlavor | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -417,6 +433,9 @@ export type VisitorNetwork = {
   connection_state: ConnectionState;
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
+  // #349 — services flavor (see UserNetwork). A visitor can register a
+  // nick just like a user, so the field rides the visitor row too.
+  services_flavor: ServicesFlavor | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -450,6 +469,10 @@ export type RawNetwork = {
   connection_state?: ConnectionState;
   connection_state_reason?: string | null;
   connection_state_changed_at?: string | null;
+  // #349 — optional on the raw type for legacy fixtures / mid-rollout
+  // servers that predate the field; `tagNetwork` defaults a missing
+  // value to null (→ wizard button hidden).
+  services_flavor?: ServicesFlavor | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -494,6 +517,7 @@ export function tagNetwork(raw: RawNetwork): Network | null {
     connection_state: raw.connection_state,
     connection_state_reason: raw.connection_state_reason ?? null,
     connection_state_changed_at: raw.connection_state_changed_at ?? null,
+    services_flavor: raw.services_flavor ?? null,
     inserted_at: raw.inserted_at,
     updated_at: raw.updated_at,
   };

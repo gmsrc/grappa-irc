@@ -424,6 +424,7 @@ describe("ownNickForNetwork (cic H3 fix + bucket F H4 type split)", () => {
     connection_state: "connected",
     connection_state_reason: null,
     connection_state_changed_at: null,
+    services_flavor: "azzurra",
     inserted_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   };
@@ -437,6 +438,7 @@ describe("ownNickForNetwork (cic H3 fix + bucket F H4 type split)", () => {
     connection_state: "connected",
     connection_state_reason: null,
     connection_state_changed_at: null,
+    services_flavor: "azzurra",
     inserted_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   };
@@ -450,6 +452,7 @@ describe("ownNickForNetwork (cic H3 fix + bucket F H4 type split)", () => {
     connection_state: "parked",
     connection_state_reason: null,
     connection_state_changed_at: null,
+    services_flavor: null,
     inserted_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   };
@@ -538,6 +541,7 @@ describe("tagNetwork (bucket F H4)", () => {
       connection_state: "connected",
       connection_state_reason: null,
       connection_state_changed_at: null,
+      services_flavor: null,
       inserted_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     });
@@ -559,6 +563,15 @@ describe("tagNetwork (bucket F H4)", () => {
       expect(out.nick).toBe("grappa");
       expect(out.connection_state).toBe("connected");
     }
+  });
+
+  it("#349 — passes services_flavor through; defaults a missing one to null", () => {
+    expect(api.tagNetwork({ ...rawComplete, services_flavor: "azzurra" })?.services_flavor).toBe(
+      "azzurra",
+    );
+    // rawComplete omits the field → the tagger defaults it to null (legacy
+    // credential / pre-field server).
+    expect(api.tagNetwork(rawComplete)?.services_flavor).toBeNull();
   });
 
   it("kind=user + missing nick → returns null + logs", () => {

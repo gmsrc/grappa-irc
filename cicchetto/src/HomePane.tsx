@@ -11,8 +11,11 @@ import { token } from "./lib/auth";
 import { channelKey } from "./lib/channelKey";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { homeData } from "./lib/home";
-import { refetchNetworks, refetchUser, user } from "./lib/networks";
+import { networkIdBySlug, refetchNetworks, refetchUser, user } from "./lib/networks";
+import { flavorForSlug, registerableFlavor } from "./lib/registrationTemplates";
+import { openRegistrationWizard } from "./lib/registrationWizard";
 import { setSelectedChannel } from "./lib/selection";
+import { umodesForNetwork } from "./lib/umodes";
 import { confirmDisconnectNetwork } from "./lib/windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
 import { windowStateByChannel } from "./lib/windowState";
@@ -249,6 +252,21 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
   const onDisconnect = () => {
     confirmDisconnectNetwork(props.row.slug);
   };
+  // #349 — the "Register nick" launcher is gated on TWO reactive signals:
+  // (a) the network runs a services suite cic has a REGISTER template for
+  // (registerable services_flavor, resolved from the networks store — the
+  // HomeRow itself doesn't carry it), and (b) we're NOT already registered
+  // (no live +r umode). Both are reactive, so the button auto-hides the
+  // instant registration completes (the +r flip) or on an unknown flavor —
+  // zero polling. `networkIdBySlug` can be undefined before the networks
+  // resource lands; treat that as "no umodes seeded yet" (button shows).
+  const canRegister = () => {
+    const slug = props.row.slug;
+    if (!registerableFlavor(flavorForSlug(slug))) return false;
+    const id = networkIdBySlug(slug);
+    const umodes = id === undefined ? [] : umodesForNetwork(id);
+    return !umodes.includes("r");
+  };
   return (
     <li class="home-pane-network-row home-pane-network-row-connected">
       <button type="button" class="home-pane-network-btn" onClick={onJump}>
@@ -260,6 +278,16 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
         <button type="button" class="home-pane-network-browse" onClick={onBrowse}>
           📇 Browse channels
         </button>
+        <Show when={canRegister()}>
+          <button
+            type="button"
+            class="home-pane-network-register"
+            data-testid={`home-register-nick-${props.row.slug}`}
+            onClick={() => openRegistrationWizard(props.row.slug)}
+          >
+            📝 Register nick
+          </button>
+        </Show>
         <button
           type="button"
           class="home-pane-network-disconnect"

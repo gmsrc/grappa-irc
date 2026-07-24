@@ -61,6 +61,14 @@ const networksMock = vi.fn<() => unknown[]>(() => []);
 // the SAME verb the sidebar/bottom-bar × fires. Mock it so the unit test
 // asserts the row REUSES that path (not raw disconnectNetwork / patchNetwork).
 const confirmDisconnectNetworkMock = vi.fn<(slug: string) => void>();
+// #349 — the "Register nick" launcher's three lib boundaries: the flavor
+// resolver, the umode (+r) source, and the wizard open verb. Defaults
+// hide the button (no flavor), so the pre-#349 row assertions are
+// unaffected. `networkIdBySlugMock` drives the +r lookup path.
+const flavorForSlugMock = vi.fn<(slug: string) => string | null>(() => null);
+const umodesForNetworkMock = vi.fn<(id: number) => string[]>(() => []);
+const openRegistrationWizardMock = vi.fn<(slug: string) => void>();
+const networkIdBySlugMock = vi.fn<(slug: string) => number | undefined>(() => undefined);
 
 vi.mock("../lib/home", () => ({
   homeData: () => homeDataMock(),
@@ -98,10 +106,9 @@ vi.mock("../lib/networks", () => ({
   networks: () => networksMock(),
   refetchUser: () => refetchUserMock(),
   refetchNetworks: () => refetchNetworksMock(),
-  // #356 — the "Watched" panel MOVED off the home page into the settings
-  // "watch lists" section, so HomePane no longer resolves network ids here.
-  // Kept as an inert stub in case a child in the render tree reaches for it.
-  networkIdBySlug: () => undefined,
+  // #349 — the registration button resolves the network id here to look
+  // up the +r umode. Controllable so a test can exercise the +r branch.
+  networkIdBySlug: (slug: string) => networkIdBySlugMock(slug),
 }));
 // channelKey is a pure fn — use the real one (mock at boundaries, not
 // pure helpers) so the joined-state key shape matches production exactly.
@@ -109,6 +116,25 @@ vi.mock("../lib/windowState", () => ({ windowStateByChannel: () => windowStateMo
 
 vi.mock("../lib/auth", () => ({
   token: () => tokenMock(),
+}));
+
+// #349 — mock the registration lib boundaries. `registerableFlavor`
+// mirrors the real production predicate (Azzurra ONLY — see
+// registrationTemplates.ts "Why Azzurra ONLY"); `flavorForSlug` is the
+// controllable source (mocked so its real `networkBySlug` transitive
+// import stays out of this test's module graph — it'd trip the token
+// mock's init order); `openRegistrationWizard` is the open verb.
+vi.mock("../lib/registrationTemplates", () => ({
+  registerableFlavor: (f: string | null) => f === "azzurra",
+  flavorForSlug: (slug: string) => flavorForSlugMock(slug),
+}));
+
+vi.mock("../lib/registrationWizard", () => ({
+  openRegistrationWizard: (slug: string) => openRegistrationWizardMock(slug),
+}));
+
+vi.mock("../lib/umodes", () => ({
+  umodesForNetwork: (id: number) => umodesForNetworkMock(id),
 }));
 
 vi.mock("../lib/selection", () => ({
@@ -147,6 +173,10 @@ describe("HomePane", () => {
     userMock.mockReturnValue(null);
     networksMock.mockReturnValue([]);
     confirmDisconnectNetworkMock.mockClear();
+    flavorForSlugMock.mockReturnValue(null);
+    umodesForNetworkMock.mockReturnValue([]);
+    openRegistrationWizardMock.mockClear();
+    networkIdBySlugMock.mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -215,6 +245,39 @@ describe("HomePane", () => {
 
       await screen.findByText("#welcome");
       expect(getFeaturedMock).toHaveBeenCalledWith("test-token", "azzurra");
+    });
+  });
+
+  describe("#349 register-nick launcher", () => {
+    it("shows the button on a connected row for a registerable flavor with no +r, and opens the wizard", async () => {
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      flavorForSlugMock.mockReturnValue("azzurra");
+      networkIdBySlugMock.mockReturnValue(7);
+      umodesForNetworkMock.mockReturnValue([]); // not registered yet
+      render(() => <HomePane />);
+
+      const btn = await screen.findByTestId("home-register-nick-azzurra");
+      expect(btn).toBeInTheDocument();
+      fireEvent.click(btn);
+      expect(openRegistrationWizardMock).toHaveBeenCalledWith("azzurra");
+    });
+
+    it("hides the button once the +r umode is set (registration complete)", () => {
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      flavorForSlugMock.mockReturnValue("azzurra");
+      networkIdBySlugMock.mockReturnValue(7);
+      umodesForNetworkMock.mockReturnValue(["r"]); // registered → hidden
+      render(() => <HomePane />);
+
+      expect(screen.queryByTestId("home-register-nick-azzurra")).toBeNull();
+    });
+
+    it("hides the button for an unknown / unset services flavor", () => {
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      flavorForSlugMock.mockReturnValue(null);
+      render(() => <HomePane />);
+
+      expect(screen.queryByTestId("home-register-nick-azzurra")).toBeNull();
     });
   });
 

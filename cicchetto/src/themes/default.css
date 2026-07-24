@@ -5996,6 +5996,229 @@ html.resize-dragging * {
   overflow-wrap: anywhere;
 }
 
+/* #349 — NickServ registration wizard. Same modal scaffolding as the
+ * services console (backdrop scrim, pinned header, scrollable body) but
+ * step-driven: an intro/email/password/register/code/verify sequence with
+ * a Back/Retry/Next footer. Theme-safe — all colors from CSS vars. */
+.registration-wizard-backdrop {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--viewport-height, 100dvh);
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom)) 1rem;
+}
+
+.registration-wizard {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  width: 100%;
+  max-width: 34rem;
+  max-height: min(var(--viewport-height, 100dvh), 100%);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  overflow: hidden;
+  box-shadow:
+    inset 0 0 0 1px var(--bg),
+    inset 0 0 0 2px var(--border);
+}
+
+.registration-wizard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 1rem;
+  flex: 0 0 auto;
+}
+
+.registration-wizard-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.registration-wizard-sigil {
+  margin-right: 0.5rem;
+}
+
+.registration-wizard-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  margin: -0.6rem -0.5rem -0.6rem 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.registration-wizard-close:hover {
+  color: var(--fg);
+}
+
+.registration-wizard-steps {
+  flex: 0 0 auto;
+  padding: 0.4rem 1rem 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm, 0.85em);
+  letter-spacing: 0.06em;
+}
+
+.registration-wizard-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0.5rem 1rem 0.75rem;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  min-height: 6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.registration-wizard-copy {
+  margin: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.registration-wizard-label {
+  font-weight: bold;
+}
+
+.registration-wizard-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: var(--tap-min);
+  background: var(--bg-alt, var(--bg));
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  padding: 0.5rem 0.6rem;
+}
+
+.registration-wizard-input:focus {
+  border-color: var(--accent);
+}
+
+.registration-wizard-input::placeholder {
+  color: var(--muted);
+}
+
+.registration-wizard-mirror {
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.6rem;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.registration-wizard-line {
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.registration-wizard-mirror-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.registration-wizard-hint {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.registration-wizard-success {
+  margin: 0;
+  color: var(--accent);
+  font-weight: bold;
+  line-height: 1.4;
+}
+
+.registration-wizard-error {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+  color: var(--error, #e06c75);
+  font-size: var(--font-size);
+  overflow-wrap: anywhere;
+}
+
+.registration-wizard-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+}
+
+.registration-wizard-back,
+.registration-wizard-retry,
+.registration-wizard-next {
+  min-height: var(--tap-min);
+  border-radius: 3px;
+  padding: 0.3rem 1rem;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  cursor: pointer;
+}
+
+.registration-wizard-back,
+.registration-wizard-retry {
+  background: transparent;
+  color: var(--fg-muted, var(--fg));
+  border: 1px solid var(--border);
+  margin-right: auto;
+}
+
+.registration-wizard-back:hover,
+.registration-wizard-retry:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.registration-wizard-retry:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.registration-wizard-next {
+  background: var(--accent);
+  color: var(--bg);
+  border: 1px solid var(--accent);
+  font-weight: bold;
+}
+
+.registration-wizard-next:hover {
+  background: var(--bg);
+  color: var(--accent);
+}
+
 /* C2 — WHOIS card. Inline ephemeral surface above scrollback when a
  * /whois bundle exists for the active window's network. Single-card
  * stack — replaces in place on each new /whois. */
@@ -7274,6 +7497,25 @@ html.resize-dragging * {
 }
 
 .home-pane-network-disconnect:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* #349 — "Register nick" launcher on :connected home rows. Secondary
+   chip geometry (same as Disconnect), auto-hidden by its <Show> guard on
+   an unknown flavor or a live +r. */
+.home-pane-network-register {
+  background: transparent;
+  color: var(--fg-muted, var(--fg));
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.3rem 0.8rem;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  cursor: pointer;
+}
+
+.home-pane-network-register:hover {
   border-color: var(--accent);
   color: var(--accent);
 }

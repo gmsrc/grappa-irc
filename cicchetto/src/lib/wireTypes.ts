@@ -10,6 +10,8 @@ export type NetworksCredentialAuthMethod = IRCAuthFSMAuthMethod;
 
 export type NetworksCredentialConnectionState = "connected" | "parked" | "failed";
 
+export type NetworksNetworkServicesFlavor = "azzurra" | "atheme" | "oftc" | "unknown";
+
 export type ScrollbackMessageKind =
   | "privmsg"
   | "notice"
@@ -420,6 +422,7 @@ export type NetworksWireNetworkWithNickJson = {
   kind: "user";
   id: number;
   slug: string;
+  services_flavor: NetworksNetworkServicesFlavor | null;
   nick: string;
   ident: string | null;
   realname: string | null;
@@ -434,6 +437,7 @@ export type NetworksWireVisitorNetworkWithNickJson = {
   kind: "visitor";
   id: number;
   slug: string;
+  services_flavor: NetworksNetworkServicesFlavor | null;
   nick: string;
   ident: string | null;
   realname: string | null;
