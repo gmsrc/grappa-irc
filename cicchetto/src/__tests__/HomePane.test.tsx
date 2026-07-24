@@ -69,6 +69,10 @@ const flavorForSlugMock = vi.fn<(slug: string) => string | null>(() => null);
 const umodesForNetworkMock = vi.fn<(id: number) => string[]>(() => []);
 const openRegistrationWizardMock = vi.fn<(slug: string) => void>();
 const networkIdBySlugMock = vi.fn<(slug: string) => number | undefined>(() => undefined);
+// #392 — the home "open on another device" button flips the shared share-
+// modal open signal. Mock the open verb so the click is observable without
+// mounting the modal (its behaviour is in ShareSessionModal.test.tsx).
+const openShareModalMock = vi.fn<() => void>();
 
 vi.mock("../lib/home", () => ({
   homeData: () => homeDataMock(),
@@ -133,6 +137,10 @@ vi.mock("../lib/registrationWizard", () => ({
   openRegistrationWizard: (slug: string) => openRegistrationWizardMock(slug),
 }));
 
+vi.mock("../lib/shareModal", () => ({
+  openShareModal: () => openShareModalMock(),
+}));
+
 vi.mock("../lib/umodes", () => ({
   umodesForNetwork: (id: number) => umodesForNetworkMock(id),
 }));
@@ -177,6 +185,7 @@ describe("HomePane", () => {
     umodesForNetworkMock.mockReturnValue([]);
     openRegistrationWizardMock.mockClear();
     networkIdBySlugMock.mockReturnValue(undefined);
+    openShareModalMock.mockClear();
   });
 
   afterEach(() => {
@@ -258,6 +267,9 @@ describe("HomePane", () => {
 
       const btn = await screen.findByTestId("home-register-nick-azzurra");
       expect(btn).toBeInTheDocument();
+      // #392 — the launcher sits in the network heading's right-side action
+      // area (alongside Disconnect), NOT loose in the row body.
+      expect(btn.closest(".home-pane-network-actions")).not.toBeNull();
       fireEvent.click(btn);
       expect(openRegistrationWizardMock).toHaveBeenCalledWith("azzurra");
     });
@@ -589,6 +601,30 @@ describe("HomePane", () => {
       // Brief microtask delay to let the promise chain settle.
       await new Promise((r) => setTimeout(r, 0));
       expect(patchNetworkMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // #392 — session-wide "open on another device" button, placed after the
+  // network list. Visitor-gated (server 403s /me/share-token for password
+  // users). Opens the SAME modal the settings button opens (openShareModal).
+  describe("#392 open-on-another-device (home share button)", () => {
+    it("shows the share button for a visitor and opens the share modal on click", () => {
+      userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest" });
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      render(() => <HomePane />);
+
+      const btn = screen.getByTestId("home-share-session");
+      expect(btn).toBeInTheDocument();
+      fireEvent.click(btn);
+      expect(openShareModalMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("hides the share button for a user subject (server 403s the mint)", () => {
+      userMock.mockReturnValue({ kind: "user", id: "u1", name: "vjt" });
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      render(() => <HomePane />);
+
+      expect(screen.queryByTestId("home-share-session")).toBeNull();
     });
   });
 });

@@ -15,6 +15,7 @@ import { networkIdBySlug, refetchNetworks, refetchUser, user } from "./lib/netwo
 import { flavorForSlug, registerableFlavor } from "./lib/registrationTemplates";
 import { openRegistrationWizard } from "./lib/registrationWizard";
 import { setSelectedChannel } from "./lib/selection";
+import { openShareModal } from "./lib/shareModal";
 import { umodesForNetwork } from "./lib/umodes";
 import { confirmDisconnectNetwork } from "./lib/windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
@@ -267,36 +268,43 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
     const umodes = id === undefined ? [] : umodesForNetwork(id);
     return !umodes.includes("r");
   };
+  // #392 — the row is a heading/separator: the network title (name + nick +
+  // state, clickable → jump-to-$server) on the left, a right-side action area
+  // holding the per-network 📝 Register nick launcher + Disconnect. The
+  // prominent 📇 Browse channels CTA sits BELOW the heading, above the
+  // operator-featured channels.
   return (
     <li class="home-pane-network-row home-pane-network-row-connected">
-      <button type="button" class="home-pane-network-btn" onClick={onJump}>
-        <span class="home-pane-network-slug">{props.row.slug}</span>
-        <NickText nick={props.row.nick} extraClass="home-pane-network-nick" />
-        <span class="home-pane-network-state">{props.row.connection_state}</span>
-      </button>
-      <div class="home-pane-network-actions">
-        <button type="button" class="home-pane-network-browse" onClick={onBrowse}>
-          📇 Browse channels
+      <div class="home-pane-network-heading">
+        <button type="button" class="home-pane-network-title" onClick={onJump}>
+          <span class="home-pane-network-slug">{props.row.slug}</span>
+          <NickText nick={props.row.nick} extraClass="home-pane-network-nick" />
+          <span class="home-pane-network-state">{props.row.connection_state}</span>
         </button>
-        <Show when={canRegister()}>
+        <div class="home-pane-network-actions">
+          <Show when={canRegister()}>
+            <button
+              type="button"
+              class="home-pane-network-register"
+              data-testid={`home-register-nick-${props.row.slug}`}
+              onClick={() => openRegistrationWizard(props.row.slug)}
+            >
+              📝 Register nick
+            </button>
+          </Show>
           <button
             type="button"
-            class="home-pane-network-register"
-            data-testid={`home-register-nick-${props.row.slug}`}
-            onClick={() => openRegistrationWizard(props.row.slug)}
+            class="home-pane-network-disconnect"
+            aria-label={`Disconnect ${props.row.slug}`}
+            onClick={onDisconnect}
           >
-            📝 Register nick
+            Disconnect
           </button>
-        </Show>
-        <button
-          type="button"
-          class="home-pane-network-disconnect"
-          aria-label={`Disconnect ${props.row.slug}`}
-          onClick={onDisconnect}
-        >
-          Disconnect
-        </button>
+        </div>
       </div>
+      <button type="button" class="home-pane-network-browse" onClick={onBrowse}>
+        📇 Browse channels
+      </button>
       <FeaturedLinks slug={props.row.slug} />
     </li>
   );
@@ -339,15 +347,16 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
         "home-pane-network-row-failed": props.row.connection_state === "failed",
       }}
     >
-      <div class="home-pane-network-card">
-        <div class="home-pane-network-card-row">
+      {/* #392 — same heading/separator shape as ConnectedRow: static title
+          (name + nick + state) on the left, Reconnect in the right action
+          area. Reason + inline error sit below the heading; no Browse (a
+          parked/failed network has no live session to /LIST). */}
+      <div class="home-pane-network-heading">
+        <div class="home-pane-network-title home-pane-network-title-static">
           <span class="home-pane-network-slug">{props.row.slug}</span>
           <NickText nick={props.row.nick} extraClass="home-pane-network-nick" />
           <span class="home-pane-network-state">{props.row.connection_state}</span>
         </div>
-        <Show when={props.row.connection_state_reason}>
-          <div class="home-pane-network-reason">{props.row.connection_state_reason}</div>
-        </Show>
         <div class="home-pane-network-actions">
           <button
             type="button"
@@ -358,17 +367,17 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
           >
             {pending() ? "Reconnecting…" : "Reconnect"}
           </button>
-          <Show when={error()}>
-            <span class="home-pane-network-error" role="alert">
-              {error()}
-            </span>
-          </Show>
         </div>
-        <FeaturedLinks slug={props.row.slug} />
-        {/* #356 — the "Watched" panel MOVED to the settings "watch lists"
-            section (bare /notify / the settings nav row). It is no longer
-            on the home page for either row state. */}
       </div>
+      <Show when={props.row.connection_state_reason}>
+        <div class="home-pane-network-reason">{props.row.connection_state_reason}</div>
+      </Show>
+      <Show when={error()}>
+        <span class="home-pane-network-error" role="alert">
+          {error()}
+        </span>
+      </Show>
+      <FeaturedLinks slug={props.row.slug} />
     </li>
   );
 };
@@ -422,6 +431,27 @@ const HomePaneBody: Component = () => {
       </Show>
 
       <AvailableNetworks available={available()} />
+
+      {/* #392 — session-wide "open on another device" entry, placed AFTER the
+          network list because the share is session-wide (every network),
+          unlike the per-network 📝 Register nick that lives in each row's
+          action area. Opens the SAME modal (QR + native-share + countdown) the
+          settings button opens. Visitor-gated: the server's /me/share-token
+          403s for password-holding users, who log in directly on the second
+          device — mirrors the settings-side isVisitor() gate. */}
+      <Show when={visitor()}>
+        <button
+          type="button"
+          class="home-pane-share"
+          data-testid="home-share-session"
+          onClick={() => openShareModal()}
+        >
+          <span class="home-pane-share-icon" aria-hidden="true">
+            📱
+          </span>
+          open on another device
+        </button>
+      </Show>
     </div>
   );
 };
