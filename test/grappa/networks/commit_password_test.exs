@@ -105,4 +105,74 @@ defmodule Grappa.Networks.CommitPasswordTest do
       assert Credential.password_changeset(cred, "new pass").valid?
     end
   end
+
+  describe "Credentials.commit_registration_password/3" do
+    test "commits the password AND flips auth_method :none → :nickserv_identify" do
+      {_, _, cred} = setup_credential(%{auth_method: :none, password: nil})
+      assert cred.auth_method == :none
+      assert is_nil(cred.password_encrypted)
+
+      assert {:ok, %Credential{}} =
+               Credentials.commit_registration_password(cred.user_id, cred.network_id, "regpass")
+
+      reloaded = reload(cred)
+      # The whole point vs commit_password/3: BOTH the password lands AND the
+      # binding is promoted to auto-identify (else the registered nick gets
+      # services-enforced on the next reconnect).
+      assert reloaded.password_encrypted == "regpass"
+      assert reloaded.auth_method == :nickserv_identify
+    end
+
+    test "preserves nick + autojoin — only password + auth_method change" do
+      {_, _, cred} =
+        setup_credential(%{
+          auth_method: :none,
+          password: nil,
+          nick: "wizreg",
+          autojoin_channels: ["#bofh"]
+        })
+
+      assert {:ok, _} =
+               Credentials.commit_registration_password(cred.user_id, cred.network_id, "regpass")
+
+      reloaded = reload(cred)
+      assert reloaded.nick == "wizreg"
+      assert reloaded.autojoin_channels == ["#bofh"]
+    end
+
+    test "{:error, :not_found} for an unknown (user, network)" do
+      assert {:error, :not_found} =
+               Credentials.commit_registration_password(Ecto.UUID.generate(), 999_999, "regpass")
+    end
+  end
+
+  describe "Credential.registration_changeset/2" do
+    test "casts the password + flips auth_method, encrypts, touching nothing else" do
+      {_, _, cred} =
+        setup_credential(%{auth_method: :none, password: nil, autojoin_channels: ["#grappa"]})
+
+      cs = Credential.registration_changeset(cred, "regpass")
+
+      assert cs.valid?
+      assert Ecto.Changeset.get_change(cs, :password_encrypted) == "regpass"
+      assert Ecto.Changeset.get_change(cs, :auth_method) == :nickserv_identify
+      refute Map.has_key?(cs.changes, :autojoin_channels)
+      refute Map.has_key?(cs.changes, :nick)
+    end
+
+    test "rejects a blank password at the changeset boundary" do
+      {_, _, cred} = setup_credential(%{auth_method: :none, password: nil})
+
+      refute Credential.registration_changeset(cred, "").valid?
+    end
+
+    test "rejects CR/LF/NUL — the password is re-interpolated into IDENTIFY" do
+      {_, _, cred} = setup_credential(%{auth_method: :none, password: nil})
+
+      refute Credential.registration_changeset(cred, "re\r\ngpass").valid?
+      refute Credential.registration_changeset(cred, "re\x00gpass").valid?
+      # A space is legal (rest-of-line password).
+      assert Credential.registration_changeset(cred, "reg pass").valid?
+    end
+  end
 end

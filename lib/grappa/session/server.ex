@@ -273,6 +273,28 @@ defmodule Grappa.Session.Server do
              {:ok, struct()} | {:error, :not_found | Ecto.Changeset.t()})
 
   @typedoc """
+  #349 — opaque callback injected by `Networks.SessionPlan.resolve/1` into
+  every USER-session plan. Invoked from the `+r` observer (`apply_effects/2`)
+  when a wizard-driven REGISTER is confirmed (a staged
+  `pending_registration_secret` + the services-set `+r`), so the REGISTER
+  password is committed to the bound credential AND its `auth_method` flips to
+  `:nickserv_identify` (the registered nick must auto-identify on every future
+  reconnect, else services enforce it).
+
+  Distinct from `credential_committer` (#131, SET PASSWD — password only, no
+  auth_method change): registration promotes a `--auth none` binding to
+  auto-identify, so it forwards to
+  `Grappa.Networks.Credentials.commit_registration_password/3`. Same
+  function-reference indirection (Networks deps Session; the reverse would
+  close a Boundary cycle) and `(user_id, network_id)` capture as
+  `credential_committer`. Visitor plans don't carry it (nil); the visitor `+r`
+  promotion runs via `visitor_committer` instead.
+  """
+  @type registration_committer ::
+          (String.t() ->
+             {:ok, struct()} | {:error, :not_found | Ecto.Changeset.t()})
+
+  @typedoc """
   CP22 cluster B (channel-client-polish #14, B-restart) — opaque
   callback that persists the current `Map.keys(state.members)` snapshot
   so a graceful or crash restart can rehydrate the channel list at boot.
@@ -409,6 +431,7 @@ defmodule Grappa.Session.Server do
           optional(:visitor_nick_persister) => visitor_nick_persister(),
           optional(:credential_failer) => credential_failer(),
           optional(:credential_committer) => credential_committer(),
+          optional(:registration_committer) => registration_committer(),
           optional(:last_joined_persister) => last_joined_persister(),
           optional(:refresh_plan) => refresh_plan_check(),
           # #100 sustained-reconnect reset gate — test seam. Production
@@ -489,6 +512,7 @@ defmodule Grappa.Session.Server do
           visitor_nick_persister: visitor_nick_persister() | nil,
           credential_failer: credential_failer() | nil,
           credential_committer: credential_committer() | nil,
+          registration_committer: registration_committer() | nil,
           last_joined_persister: last_joined_persister() | nil,
           ghost_recovery: GhostRecovery.t() | nil,
           ghost_timer: reference() | nil,
@@ -829,6 +853,7 @@ defmodule Grappa.Session.Server do
       visitor_nick_persister: Map.get(opts, :visitor_nick_persister),
       credential_failer: Map.get(opts, :credential_failer),
       credential_committer: Map.get(opts, :credential_committer),
+      registration_committer: Map.get(opts, :registration_committer),
       last_joined_persister: Map.get(opts, :last_joined_persister),
       ghost_recovery: nil,
       ghost_timer: nil,
@@ -3989,8 +4014,8 @@ defmodule Grappa.Session.Server do
           visitor_id: visitor_id
         )
 
-      {{:user, _}, _} ->
-        Logger.warning("visitor_r_observed effect on user session — ignored")
+      {{:user, user_id}, _} ->
+        commit_user_registration_on_r(user_id, password, state)
     end
 
     :ok = cancel_and_drain(state.pending_auth_timer, :pending_auth_timeout)
@@ -4096,6 +4121,42 @@ defmodule Grappa.Session.Server do
     end
 
     apply_effects(rest, state)
+  end
+
+  # #349 — commit-on-+r for USER sessions, scoped to the REGISTER case. A
+  # staged `pending_registration_secret` means this +r confirms a wizard-
+  # driven REGISTER, so promote the credential (password + auth_method →
+  # :nickserv_identify) via the injected `registration_committer`. A +r with
+  # only `pending_auth` staged (e.g. an operator's manual NickServ IDENTIFY)
+  # is NOT a registration — leave the credential's auth posture untouched
+  # (#124's territory), same drop-and-log as before. Multi-clause so the
+  # apply_effects +r arm stays flat.
+  defp commit_user_registration_on_r(user_id, password, %{
+         pending_registration_secret: secret,
+         registration_committer: committer
+       })
+       when is_binary(secret) and is_function(committer, 1) do
+    case committer.(password) do
+      {:ok, _} ->
+        Logger.info("user +r observed → registration password committed", user_id: user_id)
+
+      {:error, reason} ->
+        Logger.error("user +r observed but registration commit failed",
+          user_id: user_id,
+          reason: inspect(reason)
+        )
+    end
+  end
+
+  defp commit_user_registration_on_r(user_id, _, %{pending_registration_secret: secret})
+       when is_binary(secret) do
+    Logger.error("user +r observed with staged registration but no committer — drop",
+      user_id: user_id
+    )
+  end
+
+  defp commit_user_registration_on_r(_, _, _) do
+    Logger.warning("visitor_r_observed effect on user session — ignored")
   end
 
   # #116: on a 473 (+i) / 475 (+k) failure for a channel in the boot

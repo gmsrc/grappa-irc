@@ -4663,6 +4663,87 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "+r MODE on own nick → USER registration commit (#349)" do
+    test "user session: REGISTER stages the secret → +r commits password + flips auth_method" do
+      {server, port} = start_server()
+      # Wizard scenario: a --auth none binding (credential_fixture default).
+      {user, network, cred} = setup_user_and_network(port)
+      assert cred.auth_method == :none
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+
+      # The wizard's REGISTER leaves the wire (wire-only, no scrollback) and
+      # stages the untimed registration secret.
+      assert {:ok, :no_persist} =
+               Session.send_privmsg(
+                 {:user, user.id},
+                 network.id,
+                 "NickServ",
+                 "REGISTER regpass me@example.com"
+               )
+
+      assert :sys.get_state(pid).pending_registration_secret == "regpass"
+
+      # Services confirm the registration by setting +r on our nick.
+      mode_msg = %Message{
+        command: :mode,
+        params: [:sys.get_state(pid).nick, "+r"],
+        prefix: {:server, "irc.example.test"},
+        tags: %{}
+      }
+
+      send(pid, {:irc, mode_msg})
+
+      state = :sys.get_state(pid)
+      assert is_nil(state.pending_registration_secret)
+
+      # commit-on-+r: the credential now carries the password AND is promoted
+      # to auto-identify on the next reconnect.
+      reloaded = Credentials.get_credential!(user, network)
+      assert reloaded.password_encrypted == "regpass"
+      assert reloaded.auth_method == :nickserv_identify
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "user session: +r with only pending_auth (no registration) does NOT touch the credential" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+
+      # A manual NickServ IDENTIFY stages the TIMED pending_auth slot — not a
+      # registration. This is #124's territory, not commit-on-+r: the +r must
+      # leave the credential's :none auth posture untouched.
+      Session.send_privmsg({:user, user.id}, network.id, "NickServ", "IDENTIFY s3cret")
+      assert match?({"s3cret", _}, :sys.get_state(pid).pending_auth)
+      assert is_nil(:sys.get_state(pid).pending_registration_secret)
+
+      mode_msg = %Message{
+        command: :mode,
+        params: [:sys.get_state(pid).nick, "+r"],
+        prefix: {:server, "irc.example.test"},
+        tags: %{}
+      }
+
+      log =
+        capture_log(fn ->
+          send(pid, {:irc, mode_msg})
+          assert is_nil(:sys.get_state(pid).pending_auth)
+        end)
+
+      assert log =~ "visitor_r_observed effect on user session"
+
+      reloaded = Credentials.get_credential!(user, network)
+      assert reloaded.auth_method == :none
+      assert is_nil(reloaded.password_encrypted)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   # #129: the register→auth-code flow grants +r minutes-to-hours after
   # REGISTER, far outside the 10s `pending_auth` window. A captured
   # REGISTER secret is staged in a SEPARATE, UNTIMED slot

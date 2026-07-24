@@ -99,6 +99,16 @@ defmodule Grappa.Networks.SessionPlan do
       credential_committer: fn password ->
         Credentials.commit_password(user.id, cred.network_id, password)
       end,
+      # #349 — the registration wizard's commit-on-+r. Sibling of
+      # `credential_committer` but a DIFFERENT verb: it promotes the bound
+      # credential (password + auth_method → :nickserv_identify) so a nick
+      # registered in-session auto-identifies on every future reconnect.
+      # Invoked from Session.Server's `+r` observer when a wizard REGISTER
+      # is confirmed. Same (user_id, network_id) capture + Boundary-cycle
+      # indirection as `credential_committer`.
+      registration_committer: fn password ->
+        Credentials.commit_registration_password(user.id, cred.network_id, password)
+      end,
       # CP22 cluster B (channel-client-polish #14, B-restart) — opaque
       # closure that forwards `Map.keys(state.members)` snapshots to
       # the per-credential `last_joined_channels` column. Wraps the

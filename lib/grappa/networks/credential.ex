@@ -449,6 +449,32 @@ defmodule Grappa.Networks.Credential do
   end
 
   @doc """
+  #349 — narrow changeset for the registration wizard's commit-on-+r. Unlike
+  `password_changeset/2` (a bare password rotation on an already-identifying
+  credential), this ALSO flips `auth_method` to `:nickserv_identify`: the
+  wizard registers a nick on a `--auth none` credential, and once services
+  confirm the registration (`+r`) grappa MUST auto-identify on every future
+  reconnect — otherwise the now-registered nick gets ghosted/enforced to a
+  Guest nick within ~60s. Setting both fields atomically is the whole point
+  (a password without the auth_method flip never reaches the identify FSM,
+  `pending_password_from_opts/1` gating on `:nickserv_identify`).
+
+  Keyed as a distinct changeset (not a flag on `password_changeset/2`) so the
+  SET PASSWD path can NEVER accidentally flip a SASL/server-pass credential's
+  auth method — the two operations are genuinely different verbs.
+  """
+  @spec registration_changeset(t(), String.t()) :: Ecto.Changeset.t()
+  def registration_changeset(credential, password) when is_binary(password) do
+    credential
+    |> cast(%{password: password, auth_method: :nickserv_identify}, [:password, :auth_method])
+    |> validate_required([:password, :auth_method])
+    # Same wire-hygiene guard as password_changeset/2 — the stored password is
+    # re-interpolated into `PRIVMSG NickServ :IDENTIFY` on the next connect.
+    |> validate_change(:password, &Identity.safe_line_token/2)
+    |> put_encrypted_password()
+  end
+
+  @doc """
   #211 phase 6 — narrow changeset for a per-network IDENTITY edit
   (`nick` + `ident` + `realname`) on the `(subject, network)` credential.
   Backs `PATCH /networks/:network_id/identity` for BOTH subjects (ruling

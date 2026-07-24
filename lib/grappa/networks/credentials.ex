@@ -540,6 +540,44 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
+  #349 — commit-on-+r for the registration wizard. Writes the REGISTER
+  password AND flips `auth_method` to `:nickserv_identify` on the
+  `(user_id, network_id)` credential, atomically, via
+  `Credential.registration_changeset/2`.
+
+  `Session.Server`'s `registration_committer` callback invokes this from the
+  `+r` observer (`apply_effects/2`) once services confirm a wizard-driven
+  REGISTER: the `+r` umode is the cryptographic proof the registration took,
+  so unlike SET PASSWD (`commit_password/3`, password only) this promotes the
+  bound `--auth none` credential to auto-identify on every future reconnect —
+  without it a registered nick gets services-enforced to a Guest nick.
+
+  User-bound mirror of the visitor-side `Grappa.Visitors.commit_password/2`
+  `+r` promotion; the `Ecto.StaleEntryError` → `{:error, :not_found}` mapping
+  matches `commit_password/3` (a concurrent unbind must not crash the session
+  mid-effect).
+  """
+  @spec commit_registration_password(Ecto.UUID.t(), pos_integer(), String.t()) ::
+          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def commit_registration_password(user_id, network_id, password)
+      when is_binary(user_id) and is_integer(network_id) and is_binary(password) and password != "" do
+    case Repo.get_by(Credential, user_id: user_id, network_id: network_id) do
+      nil ->
+        {:error, :not_found}
+
+      %Credential{} = cred ->
+        try do
+          case cred |> Credential.registration_changeset(password) |> Repo.update() do
+            {:ok, updated} -> {:ok, updated}
+            {:error, changeset} -> {:error, changeset}
+          end
+        rescue
+          Ecto.StaleEntryError -> {:error, :not_found}
+        end
+    end
+  end
+
+  @doc """
   Returns the credential for `(user, network)` with `password_encrypted`
   already decrypted by Cloak. Raises `Ecto.NoResultsError` on miss —
   the operator-side mix tasks expect a missing binding to fail loudly.
