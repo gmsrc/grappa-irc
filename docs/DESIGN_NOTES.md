@@ -16816,3 +16816,71 @@ the REAL predicate now — the old substring mock is gone). `subscribe.test.ts`
 gains a keyword-beep case. Real e2e `issue370-custom-highlight-visual.spec.ts`
 drives the VISIBLE highlight both live (word added this session) and after a
 reload (proving the on-join re-hydration).
+
+## 2026-07-25 — Home restyle + session-share QR modal (GH #392, cic)
+
+**Scope challenge, resolved FIRST (visitor-only reuse, no server change).**
+#392 asks for a session-wide "open on another device" entry on BOTH the home
+pane and settings. The existing session-share infra
+(`ShareTokenController`, `Grappa.Visitors.ShareTokens`) is **visitor-only by
+deliberate security design**: `POST /me/share-token` 403s for a `{:user,
+%User{}}` subject, and consume re-mints a session for the SAME *visitor* row —
+no password ever involved. Its own moduledoc: *"Users have passwords… visitors
+have no password, so the link IS the auth mechanism."* Extending it to
+password-holding users would mint a full authenticated session from a leaked
+link — a deliberate account-takeover surface the current design refuses. vjt's
+call (2026-07-25): **visitor-only reuse, zero server change.** Both triggers
+gate on the visitor subject; registered/nickserv users don't see the button
+(they log in directly on the second device). "Session-wide" here means
+*all-networks* (which the token already is), NOT *all-user-classes*.
+
+**Sub-page → modal (reverses #335).** #335 had moved the share surface from a
+modal to a settings sub-page. #392 moves it back to a MODAL — now reachable
+from home too, and carrying a QR — so a single focused overlay serves both
+doors. `ShareSessionPage.tsx` (the #335 sub-page) is deleted; its
+mint/countdown/native-share/copy logic moves into `ShareSessionModal.tsx`,
+mounted ONCE in Shell (both mobile + desktop branches, beside
+`RegistrationWizardModal`). The `"share"` `SettingsSubPage` union member is
+retired.
+
+**One modal, two triggers.** `lib/shareModal.ts` is a module-singleton
+boolean signal (`shareModalOpen` / `openShareModal` / `closeShareModal`,
+`createRoot`-scoped like `serviceModal`). BOTH the home "open on another
+device" button (bottom of home, AFTER the network list — because the share is
+session-wide, unlike the per-network 📝 launcher in each row) and the settings
+"share session" button flip it. The modal mints on the OPEN edge (a
+`createEffect(on(shareModalOpen, …))`, NOT `onMount`/`createResource` — no boot
+fetch) and DISCARDS the token on close (a URL left on screen leaks), mirroring
+the #335 sub-page's mount lifecycle. Refcounted overlay scroll-lock + shared
+Esc via `createOverlayLock(…, ".share-modal", closeShareModal)`.
+
+**QR: `uqr` (minimal dep), rendered black-on-white.** Chosen over hand-rolling
+the QR algorithm because an encoder bug produces an UNSCANNABLE code that CI
+can't catch (Playwright can't operate a camera) — a published, tested encoder
+is correct-by-construction; chosen over heavier `qrcode`/canvas libs for bundle
+size + crisp vector output. `lib/qr.ts` wraps `uqr`'s matrix into a
+self-contained, viewBox-scaled SVG with a BLACK-on-WHITE symbol + quiet zone,
+**independent of the cic theme** — a QR that inherited a dark theme's colours
+would render light-on-dark and be rejected by many scanners. The modal frames
+it in its own light card.
+
+**Home restyle.** Each network row is now a heading/separator: the title
+(name + nick + state; a button on connected rows for jump-to-$server, a static
+block on parked/failed) with a right-side action area holding the per-network
+📝 Register nick launcher + Disconnect / Reconnect. The 📇 Browse channels CTA
+is bigger + accent-outlined (was a tiny muted text link) and sits below the
+heading, above the operator-featured channels. Dead `.home-pane-network-card`
+/ `-btn` CSS removed.
+
+**Tests.** `qr.test.ts` (dims, dark-modules, black-on-white scannability
+guard, determinism), `shareModal.test.ts` (open/close singleton),
+`ShareSessionModal.test.tsx` (no-mint-at-boot, mint-on-open, QR+link+countdown,
+native-share wiring, token discard on close). `HomePane.test.tsx` +
+`SettingsDrawer.test.tsx` updated for the restructure + modal wiring; the 📝
+launcher's action-area PLACEMENT is asserted in the HomePane unit (a pure DOM
+fact — it gates on a network's server-side `services_flavor`, so an e2e
+assertion would be testnet-config-dependent). Real e2e
+`issue392-home-restyle-share.spec.ts` drives the VISIBLE outcomes jsdom can't:
+the inline-`<svg>` QR + the modal opening from BOTH the settings and home
+buttons + the prominent Browse button. `visitor-session-sharing` +
+`issue335-identity-card-share` specs migrated sub-page → modal.
