@@ -7053,49 +7053,79 @@ html.resize-dragging * {
   padding: 0;
 }
 
+/* #392 — each network is a heading/separator block: a title row (name +
+   nick + state; a button on connected rows for jump-to-$server, a static
+   block on parked/failed) with a right-side action area (📝 Register nick +
+   Disconnect / Reconnect), a prominent Browse CTA, then featured channels.
+   Consecutive blocks are divided by a rule. */
 .home-pane-network-row {
-  margin: 0;
-  padding: 0;
+  margin: 0 0 1.25rem 0;
+  padding: 0 0 1.25rem 0;
+  border-bottom: 1px solid var(--border);
 }
 
-.home-pane-network-btn {
-  display: grid;
-  grid-template-columns: minmax(8rem, 1fr) minmax(6rem, auto) minmax(5rem, auto) 1fr;
+.home-pane-networks > .home-pane-network-row:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.home-pane-network-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.home-pane-network-title {
+  display: flex;
   align-items: baseline;
-  width: 100%;
+  gap: 0.6rem;
+  flex: 1 1 auto;
+  min-width: 0;
   background: transparent;
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 0.6rem 0.9rem;
-  margin-bottom: 0.4rem;
+  border: none;
+  padding: 0.2rem 0;
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  text-align: left;
+}
+
+button.home-pane-network-title {
+  cursor: pointer;
+}
+
+button.home-pane-network-title:hover .home-pane-network-slug {
+  text-decoration: underline;
+}
+
+.home-pane-network-title-static {
+  cursor: default;
+}
+
+/* #392 — Browse channels is the primary content CTA on a connected row:
+   accent-outlined + larger (was a tiny muted text link pre-#392). */
+.home-pane-network-browse {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.5rem 1.1rem;
   font-family: var(--font-mono);
   font-size: var(--font-size);
-  text-align: left;
+  font-weight: bold;
   cursor: pointer;
-}
-
-.home-pane-network-btn:hover {
-  background: var(--border);
-  border-color: var(--accent);
-}
-
-/* #84 — Browse channels secondary affordance on :connected rows. */
-.home-pane-network-browse {
-  background: transparent;
-  border: none;
-  color: var(--fg-muted, var(--fg));
-  cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: var(--font-size-sm, 0.85em);
-  padding: 0.2rem 0.4rem;
-  opacity: 0.7;
 }
 
 .home-pane-network-browse:hover {
-  opacity: 1;
-  color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
 }
 
 /* #135 — visitor landing sections: welcome / featured / directory link
@@ -7462,8 +7492,8 @@ html.resize-dragging * {
   color: #d04040;
 }
 
-.home-pane-network-row-parked .home-pane-network-btn,
-.home-pane-network-row-failed .home-pane-network-btn {
+.home-pane-network-row-parked .home-pane-network-title-static,
+.home-pane-network-row-failed .home-pane-network-title-static {
   opacity: 0.85;
 }
 
@@ -7471,44 +7501,19 @@ html.resize-dragging * {
   color: var(--muted);
   font-style: italic;
   font-size: 0.9em;
-  grid-column: 1 / -1;
-  border-top: 1px dashed var(--border);
-  padding-top: 0.4rem;
-  margin-top: 0.2rem;
+  margin-top: 0.5rem;
 }
 
-/* UX-5 BR (2026-05-19) — explicit [Reconnect] affordance for :parked
- * / :failed rows. Pre-BR the whole row was a single <button>; post-BR
- * non-connected rows render as <div class="home-pane-network-card">
- * with an inline chip so the action is visible AND nest-safe (button-
- * in-button is invalid HTML). :connected rows keep the whole-row
- * <button> as the jump-to-$server shortcut. */
-.home-pane-network-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 0.6rem 0.9rem;
-  margin-bottom: 0.4rem;
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
-  opacity: 0.85;
-}
-
-.home-pane-network-card-row {
-  display: grid;
-  grid-template-columns: minmax(8rem, 1fr) minmax(6rem, auto) minmax(5rem, auto);
-  gap: 0.75rem;
-  align-items: baseline;
-}
-
+/* #392 — right-side action area in the network heading: the per-network
+   chips (📝 Register nick, Disconnect / Reconnect). Right-justified so the
+   network name reads as the heading and the actions trail it. */
 .home-pane-network-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex: 0 0 auto;
 }
 
 .home-pane-network-reconnect {
@@ -7576,6 +7581,36 @@ html.resize-dragging * {
 .home-pane-network-error {
   color: #d04040;
   font-size: 0.9em;
+}
+
+/* #392 — session-wide "open on another device" entry, after the network
+   list (visitor-only). Full-width accent-outlined button; opens the shared
+   share modal. */
+.home-pane-share {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin-top: 1.5rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.7rem 1rem;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.home-pane-share:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.home-pane-share-icon {
+  font-size: 1.1em;
 }
 
 /* Media viewer modal — media-link cluster (2026-06-11). On-click
@@ -8052,4 +8087,225 @@ audio.media-viewer-media {
 .presence-toast-error .presence-toast-dot {
   color: #e57373;
   font-weight: bold;
+}
+
+/* ------------------------------------------------------------------ *
+ * #392 — session-share: settings entry button + "open on another
+ * device" modal (QR + native-share + countdown). The settings button
+ * dropped the #335 wrapper card for a bare button with a muted subtitle;
+ * the modal is the shared surface both the home and settings buttons
+ * open. Modal geometry mirrors the registration-wizard modal (scrim +
+ * centred card + z-index 1000 overlay tier).
+ * ------------------------------------------------------------------ */
+.settings-share-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.6rem 0.9rem;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-share-button:hover {
+  border-color: var(--accent);
+}
+
+.settings-share-button-label {
+  font-weight: bold;
+  color: var(--accent);
+}
+
+.settings-share-button-subtitle {
+  font-size: 0.85em;
+}
+
+.share-modal-backdrop {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--viewport-height, 100dvh);
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom)) 1rem;
+}
+
+.share-modal {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  width: 100%;
+  max-width: 26rem;
+  max-height: min(var(--viewport-height, 100dvh), 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding: 0 1.25rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  box-shadow:
+    inset 0 0 0 1px var(--bg),
+    inset 0 0 0 2px var(--border);
+}
+
+.share-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 0;
+  margin-bottom: 0.4rem;
+}
+
+.share-modal-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.share-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  margin: -0.6rem -0.5rem -0.6rem 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.share-modal-close:hover {
+  color: var(--fg);
+}
+
+.share-modal-qr-heading {
+  margin: 0;
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* Black-on-white QR framed in its own light card so it stays scannable
+   regardless of the cic theme (a light-on-dark QR is rejected by many
+   scanners). The inner <svg> is viewBox-scaled → it fills this box. */
+.share-modal-qr {
+  width: 12rem;
+  height: 12rem;
+  max-width: 70vw;
+  max-height: 70vw;
+  background: #fff;
+  border-radius: 6px;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+
+.share-modal-qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.share-modal-alt {
+  margin: 0.4rem 0 0;
+  text-align: center;
+}
+
+.share-modal-native {
+  background: var(--accent);
+  color: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.5rem 1.2rem;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.share-modal-native:hover {
+  background: var(--bg);
+  color: var(--accent);
+}
+
+.share-modal-url-row {
+  display: flex;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.share-modal-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg-alt, var(--bg));
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.5rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm, 0.85em);
+}
+
+.share-modal-copy {
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0.5rem 0.9rem;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  cursor: pointer;
+}
+
+.share-modal-copy:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.share-modal-countdown {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.share-modal-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+.share-modal-busy,
+.share-modal-error {
+  margin: 0.6rem 0;
+  text-align: center;
+}
+
+.share-modal-error {
+  color: #d04040;
 }
