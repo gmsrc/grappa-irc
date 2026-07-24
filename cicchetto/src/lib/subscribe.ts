@@ -265,6 +265,16 @@ createRoot(() => {
       // threaded into this handler), NOT the retired identity-wide
       // `displayNick(u)` (a visitor has no single nick now). Guard on `u`
       // so a not-yet-loaded /me still skips.
+      //
+      // #370 — the own-echo suppression above (`!nickEquals(sender, ownNick)`)
+      // is only sound while `ownNick` is non-null here (nickEquals returns
+      // false on a null side). That holds on every path that reaches this
+      // PRIVMSG beep: channel/DM handlers install with `ownNick = net.nick`
+      // (a required non-null field) only once the user→networks→channels
+      // resource chain has resolved, and the sole `ownNick=null` handler
+      // ($server) carries no PRIVMSGs. If channels ever become joinable
+      // before /me resolves, or `net.nick` is relaxed to nullable, restore an
+      // explicit own-nick guard here.
       if (u && matchesWatchlist(message.body, ownNick, highlightPatterns())) {
         playBeep();
         // Optimistic foreground badge bump so the desktop `document.title`

@@ -10,7 +10,8 @@
 //   - in-message visual highlight (ScrollbackPane `.scrollback-mention` /
 //     `.scrollback-highlight`, MentionsWindow),
 //   - the live in-app beep + optimistic desktop-title bump (subscribe.ts),
-//   - the client push-parity mirror (pushTriggers.shouldNotify).
+// and is kept in parity with the client push mirror (pushTriggers.shouldNotify,
+// a drift-guard tested against the shared server truth-table, no live caller).
 // The server owns the remaining sinks (OS push + sidebar count) via the same
 // `mentioned?/3` source. Before #370 the visual path and the live beep only
 // ever matched the own nick, so a /hilight word fired the (server-side)

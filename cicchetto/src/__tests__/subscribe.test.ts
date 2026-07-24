@@ -3111,6 +3111,40 @@ describe("subscribe — UX-6-L foreground beep wiring", () => {
     expect(beep.playBeep).toHaveBeenCalledTimes(1);
   });
 
+  it("own echo containing a custom /hilight word does NOT call playBeep (own-echo guard holds with keywords) (#370)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    // Regression guard for the null-ownNick reasoning: the own-echo suppression
+    // (`!nickEquals(sender, ownNick)`) must still hold once keywords can match,
+    // so an operator's OWN message carrying a keyword never self-beeps.
+    setHighlightPatternsForTest(["deploy"]);
+    await seedStubs();
+    const beep = await import("../lib/beep");
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+
+    store.setSelectedChannel({
+      networkSlug: "freenode",
+      channelName: "#cicchetto",
+      kind: "channel",
+    });
+
+    // sender === own nick AND body has the keyword → own-echo guard wins.
+    fireMessageEvent("#grappa", {
+      id: 306,
+      kind: "privmsg",
+      sender: "alice",
+      body: "alice deploy done",
+    });
+
+    expect(beep.playBeep).not.toHaveBeenCalled();
+  });
+
   it("PRIVMSG without nick mention does NOT call playBeep", async () => {
     localStorage.setItem("grappa-token", "tok");
     localStorage.setItem(
