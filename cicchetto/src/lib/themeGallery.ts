@@ -62,3 +62,21 @@ export function dedupeThemesById(themes: ThemesWireT[]): ThemesWireT[] {
   }
   return out;
 }
+
+// #358 — compute the `{light, dark}` id pair a card-tap should PUT, given the
+// current server pair, whether day/night pairing is open, and which slot the
+// selector targets. Pure so the assignment core is unit-tested without the DOM:
+//   * not paired    → single pick: the tapped theme in both modes (dark null).
+//   * paired + day  → replace the day slot, keep the night slot.
+//   * paired + night→ replace the night slot, keep the day slot (falling back
+//                     to the tapped theme only if no day slot exists yet).
+export function nextThemePair(
+  cur: { light: number | null; dark: number | null },
+  paired: boolean,
+  targetSlot: "light" | "dark",
+  tappedId: number,
+): { light: number; dark: number | null } {
+  if (!paired) return { light: tappedId, dark: null };
+  if (targetSlot === "light") return { light: tappedId, dark: cur.dark };
+  return { light: cur.light ?? tappedId, dark: tappedId };
+}

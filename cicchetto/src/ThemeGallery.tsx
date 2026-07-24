@@ -6,6 +6,7 @@ import {
   For,
   type JSX,
   Match,
+  onCleanup,
   Show,
   Switch,
   untrack,
@@ -13,11 +14,16 @@ import {
 import { ApiError } from "./lib/api";
 import { token } from "./lib/auth";
 import { requestConfirm } from "./lib/confirmDialog";
-import { activateTheme, activeThemeId } from "./lib/customTheme";
+import {
+  activateTheme,
+  activateThemePair,
+  activePair,
+  setThemePreviewMode,
+} from "./lib/customTheme";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { isAdmin } from "./lib/networks";
 import { newThemeSeedPayload, openThemeEditor, themesRevision } from "./lib/themeEditor";
-import { canManageTheme, dedupeThemesById, swatchColors } from "./lib/themeGallery";
+import { canManageTheme, dedupeThemesById, nextThemePair, swatchColors } from "./lib/themeGallery";
 import type { TokenPayload } from "./lib/themesApi";
 import {
   copyTheme,
@@ -44,6 +50,14 @@ import type { ThemesWireT } from "./lib/wireTypes";
 // The editor overlay (color pickers, live preview, save), self-hosted
 // fonts, and the background-upload UI are the producer path (deferred
 // sub-tasks 6/8/9).
+//
+// #358 — day/night pairing. Once a theme is active, a "use a different theme
+// at night" toggle reveals a Day/Night slot selector; tapping a card assigns
+// it to the selected slot. Selecting a slot previews it live
+// (`setThemePreviewMode`) so the user SEES the night theme they're editing
+// even in daylight; leaving the gallery clears the override and the automatic
+// OS-driven swap resumes. cic never originates the pair — every assignment is
+// a `PUT /me/theme` and `activePair()` mirrors the server-resolved ids.
 
 export type Props = {
   onBack: () => void;
@@ -62,6 +76,16 @@ const ThemeGallery: Component<Props> = (props) => {
   // both selects it AND applies it live. Nothing is selected on entry, so the
   // gallery opens uncluttered (44px tap targets, mobile-first).
   const [selectedId, setSelectedId] = createSignal<number | null>(null);
+
+  // #358 — day/night pairing UI state. `pairingOpen` is the local toggle;
+  // `isPaired` is true when the toggle is open OR the server pair already has
+  // a night slot. `targetSlot` is which slot a card-tap assigns (and previews).
+  const [pairingOpen, setPairingOpen] = createSignal(false);
+  const [targetSlot, setTargetSlot] = createSignal<"light" | "dark">("dark");
+  const isPaired = createMemo(() => activePair().dark !== null || pairingOpen());
+  // Leaving the gallery (unmount / back / drawer close) drops the preview
+  // override so the shipped auto OS-driven swap resumes.
+  onCleanup(() => setThemePreviewMode(null));
 
   const errMessage = (e: unknown): string =>
     e instanceof ApiError ? friendlyApiError(e) : "something went wrong";
@@ -125,10 +149,36 @@ const ThemeGallery: Component<Props> = (props) => {
 
   // Tap a card → reveal its actions (select) AND apply it live (activate).
   // The two are one gesture per the #299 item-7 spec (no standalone apply
-  // button): tapping a card is "try this on + manage it".
+  // button): tapping a card is "try this on + manage it". #358 — when the
+  // day/night toggle is open, the tap assigns to the SELECTED slot (day or
+  // night) instead of replacing the whole pick.
   const selectAndApply = (theme: ThemesWireT): Promise<void> => {
     setSelectedId(theme.id);
-    return withBusy(theme.id, (t) => activateTheme(t, theme));
+    const { light, dark } = nextThemePair(activePair(), isPaired(), targetSlot(), theme.id);
+    return withBusy(theme.id, (t) => activateThemePair(t, light, dark));
+  };
+
+  // #358 — flip the day/night toggle. ON reveals the slot selector, targets
+  // the night slot next, and previews it live. OFF collapses to a single pick
+  // (clears the night slot server-side) and drops the preview override.
+  const togglePairing = (on: boolean): Promise<void> | void => {
+    if (on) {
+      setPairingOpen(true);
+      setTargetSlot("dark");
+      setThemePreviewMode("dark");
+      return;
+    }
+    setPairingOpen(false);
+    setThemePreviewMode(null);
+    const light = activePair().light;
+    if (light !== null) return withBusy(light, (t) => activateThemePair(t, light, null));
+  };
+
+  // #358 — pick which slot the next card-tap edits, and preview it live so the
+  // user sees that mode's theme even when the OS is in the other mode.
+  const selectSlot = (slot: "light" | "dark"): void => {
+    setTargetSlot(slot);
+    setThemePreviewMode(slot);
   };
 
   const copy = (theme: ThemesWireT): Promise<void> =>
@@ -196,7 +246,7 @@ const ThemeGallery: Component<Props> = (props) => {
       class="theme-card"
       data-testid={`theme-card-${theme.id}`}
       classList={{
-        "theme-card-active": activeThemeId() === theme.id,
+        "theme-card-active": activePair().light === theme.id || activePair().dark === theme.id,
         "theme-card-selected": selectedId() === theme.id,
       }}
     >
@@ -224,9 +274,19 @@ const ThemeGallery: Component<Props> = (props) => {
           <span class="theme-card-count muted" data-testid={`theme-count-${theme.id}`}>
             {theme.in_use} in use
           </span>
-          <Show when={activeThemeId() === theme.id}>
-            <span class="theme-card-active-marker" data-testid={`theme-active-${theme.id}`}>
-              active
+          {/* #358 — day/night markers. A single pick (no night slot) keeps
+              the #75 "active" label; a pair labels its day + night cards. */}
+          <Show when={activePair().light === theme.id}>
+            <span
+              class="theme-card-active-marker"
+              data-testid={`theme-${activePair().dark !== null ? "day" : "active"}-${theme.id}`}
+            >
+              {activePair().dark !== null ? "day" : "active"}
+            </span>
+          </Show>
+          <Show when={activePair().dark === theme.id}>
+            <span class="theme-card-active-marker" data-testid={`theme-night-${theme.id}`}>
+              night
             </span>
           </Show>
         </div>
@@ -324,6 +384,50 @@ const ThemeGallery: Component<Props> = (props) => {
         <p class="theme-gallery-error" role="alert" data-testid="theme-gallery-error">
           {error()}
         </p>
+      </Show>
+
+      {/* #358 — day/night pairing controls. Only once a theme is active (there
+          is a day slot to pair a night one with). The toggle reveals a Day /
+          Night selector; the active slot is where the next card-tap lands. */}
+      <Show when={activePair().light !== null}>
+        <div class="theme-daynight" data-testid="theme-daynight">
+          <label class="theme-daynight-toggle">
+            <input
+              type="checkbox"
+              data-testid="theme-daynight-toggle"
+              checked={isPaired()}
+              disabled={busyId() !== null}
+              onChange={(e) => void togglePairing(e.currentTarget.checked)}
+            />
+            <span>use a different theme at night</span>
+          </label>
+          <Show when={isPaired()}>
+            <div class="theme-daynight-slots">
+              <button
+                type="button"
+                class="theme-slot"
+                classList={{ "theme-slot-active": targetSlot() === "light" }}
+                data-testid="theme-slot-day"
+                aria-pressed={targetSlot() === "light"}
+                disabled={busyId() !== null}
+                onClick={() => selectSlot("light")}
+              >
+                ☀ day
+              </button>
+              <button
+                type="button"
+                class="theme-slot"
+                classList={{ "theme-slot-active": targetSlot() === "dark" }}
+                data-testid="theme-slot-night"
+                aria-pressed={targetSlot() === "dark"}
+                disabled={busyId() !== null}
+                onClick={() => selectSlot("dark")}
+              >
+                ☾ night
+              </button>
+            </div>
+          </Show>
+        </div>
       </Show>
 
       <Show

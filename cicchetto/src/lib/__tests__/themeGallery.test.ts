@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { canManageTheme, dedupeThemesById, SWATCH_KEYS, swatchColors } from "../themeGallery";
+import {
+  canManageTheme,
+  dedupeThemesById,
+  nextThemePair,
+  SWATCH_KEYS,
+  swatchColors,
+} from "../themeGallery";
 import type { TokenPayload } from "../themesApi";
 import type { ThemesWireT } from "../wireTypes";
 
@@ -95,5 +101,30 @@ describe("dedupeThemesById", () => {
 
   test("returns an empty array when given no themes", () => {
     expect(dedupeThemesById([])).toEqual([]);
+  });
+});
+
+// #358 — the pure card-tap → {light,dark} assignment core.
+describe("nextThemePair (#358 day/night slot assignment)", () => {
+  test("not paired → single pick (tapped theme in both modes, dark null)", () => {
+    expect(nextThemePair({ light: 5, dark: 9 }, false, "dark", 3)).toEqual({
+      light: 3,
+      dark: null,
+    });
+  });
+
+  test("paired + day slot → replaces the day slot, keeps the night slot", () => {
+    expect(nextThemePair({ light: 5, dark: 9 }, true, "light", 3)).toEqual({ light: 3, dark: 9 });
+  });
+
+  test("paired + night slot → replaces the night slot, keeps the day slot", () => {
+    expect(nextThemePair({ light: 5, dark: 9 }, true, "dark", 3)).toEqual({ light: 5, dark: 3 });
+  });
+
+  test("paired + night slot with no day yet → tapped theme fills the day fallback", () => {
+    expect(nextThemePair({ light: null, dark: null }, true, "dark", 3)).toEqual({
+      light: 3,
+      dark: 3,
+    });
   });
 });

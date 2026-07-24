@@ -5336,6 +5336,58 @@ html.resize-dragging * {
   color: var(--mode-op);
 }
 
+/* #358 — day/night pairing controls. The toggle sits above the gallery
+   lists; when on, the Day/Night slot selector reveals which slot the next
+   card-tap edits. Tap targets are ABSOLUTE 44px (Apple HIG) — never rem
+   (root font-size 14px, feedback_cic_tap_target_rem_pitfall). */
+.theme-daynight {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+}
+
+.theme-daynight-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--tap-min);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.theme-daynight-slots {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.theme-slot {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.theme-slot:hover {
+  border-color: var(--accent);
+}
+
+.theme-slot:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.theme-slot.theme-slot-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* #75 producer path — theme editor overlay (new/edit). Mirrors the
    archive-modal backdrop+panel shell; adds a scrollable form of grouped
    color pickers, a font select, and the background controls. Tap targets
