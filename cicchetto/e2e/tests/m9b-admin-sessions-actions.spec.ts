@@ -81,12 +81,16 @@ test("M-9b admin Sessions tab lists live sessions including m9b-test seeded row"
   await adminFriendlyLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
 
-  // vjt + m9b-test + m9b-victim rows seeded → at least 3 admin-session
+  // vjt + m9b-test + m9b-victim (all bahamut-test) + wiz-test (azzurra-reg,
+  // GH #349's registration-wizard seed) rows seeded → 4 admin-session
   // rows. m9b-victim was added in GREEN-CI batch-1 as the sacrificial
   // target for destructive specs (see Disconnect / Terminate specs
-  // below). admin-vjt has no bind so doesn't appear.
+  // below); wiz-test joined in #349 as the register-wizard user, live at
+  // boot (--auth none, not yet +r). admin-vjt has no bind so doesn't
+  // appear. This exact count is a canary: a drop means a seeded session
+  // failed to connect; a rise means an unexpected session leaked.
   const rows = page.locator("[data-testid^='admin-session-row-']");
-  await expect(rows).toHaveCount(3, { timeout: 15_000 });
+  await expect(rows).toHaveCount(4, { timeout: 15_000 });
 });
 
 test("#242 admin Sessions tab shows the network slug (not the raw network_id FK)", async ({

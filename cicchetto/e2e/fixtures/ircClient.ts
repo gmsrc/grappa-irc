@@ -156,9 +156,12 @@ export class IrcPeer {
 
   // Register a nick with NickServ. Used by P-0a e2es to put a peer
   // into +r (registered) state so a subsequent /whois returns 307
-  // RPL_WHOISREGNICK. EMAIL:0 in the testnet conf disables the
-  // email-auth requirement, but services still validates the email
-  // FORMAT — `*.local` TLDs are rejected; use a well-formed address.
+  // RPL_WHOISREGNICK. With EMAIL:1 (the config since GH #349 wired the
+  // registration wizard's real-services e2e) REGISTER sets NI_AUTH and
+  // emails a confirmation code — the nick does NOT reach +r until the
+  // caller sends `AUTH <code>` (see `nickservAuth`). Services also
+  // validates the email FORMAT (`*.local` TLDs rejected) — use a
+  // well-formed address.
   async nickservRegister(password: string, email: string): Promise<void> {
     const noticeReceived = once(
       this.client,
@@ -200,6 +203,33 @@ export class IrcPeer {
       `umode +r on ${this.nick}`,
     );
     this.client.raw(["PRIVMSG", "NickServ", `IDENTIFY ${password}`]);
+    await Promise.all([noticeReceived, umodeRSet]);
+  }
+
+  // Complete a fresh registration's email-auth: send `AUTH <code>` and
+  // wait for the +r umode to land BEFORE resolving. With EMAIL:1 (the
+  // testnet config since GH #349) a just-REGISTERed nick carries NI_AUTH
+  // and is NOT +r until AUTH clears it; do_register already identified
+  // the caller, so AUTH alone flips +r (nickserv.c do_auth) — no separate
+  // IDENTIFY needed. The caller reads `code` from the mailpit sink the
+  // REGISTER mail was relayed to (fixtures/mailpit). Same +r-race guard
+  // as nickservIdentify: start the mode listener BEFORE sending AUTH.
+  async nickservAuth(code: string): Promise<void> {
+    const noticeReceived = once(
+      this.client,
+      "notice",
+      NICKSERV_TIMEOUT_MS,
+      `nickserv auth notice for ${this.nick}`,
+    );
+    const umodeRSet = onceMatching(
+      this.client,
+      "mode",
+      (event: { target: string; raw_modes: string }) =>
+        event.target === this.nick && event.raw_modes.includes("+r"),
+      NICKSERV_TIMEOUT_MS,
+      `umode +r on ${this.nick}`,
+    );
+    this.client.raw(["PRIVMSG", "NickServ", `AUTH ${code}`]);
     await Promise.all([noticeReceived, umodeRSet]);
   }
 

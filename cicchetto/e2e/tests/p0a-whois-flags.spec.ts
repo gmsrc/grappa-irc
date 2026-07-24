@@ -5,8 +5,9 @@
 //
 // Pre-conditions:
 //   - vjt logged in, focused on #bofh.
-//   - Peer "p0a-target" connects to a leaf, REGISTERs + IDENTIFYs with
-//     NickServ. azzurra-testnet d998d09 added the `U:services.azzurra
+//   - Peer "p0a-target" connects to a leaf, REGISTERs with NickServ, then
+//     AUTHs with the emailed code (EMAIL:1 since GH #349) to reach +r.
+//     azzurra-testnet d998d09 added the `U:services.azzurra
 //     .chat:*:*:` line on every leaf so the SVSMODE +r emitted by
 //     services-via-hub is actually applied on the leaf the peer is on
 //     (without that line, m_svsmode silently drops at IsULine and +r
@@ -29,15 +30,20 @@
 import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
+import { awaitMail, extractFromMail, resetMailpit } from "../fixtures/mailpit";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const PEER_NICK = "p0a-target";
 const PEER_PASSWORD = "p0a-test-password-not-secret";
-// services validates the email FORMAT at register time even with
-// EMAIL:0 (binary-side syntax check is independent of the outbound-
-// email feature flag). `*.local` TLDs are rejected — use a well-
-// formed example.com address.
+// The testnet runs EMAIL:1 (GH #349 wired real-services registration), so
+// REGISTER emails a confirmation code and the nick stays NOT-+r until the
+// peer sends `AUTH <code>`. The recipient MUST use a real (ICANN) TLD —
+// services' validate_email rejects `*.local`/`.test` — so use example.com;
+// msmtp relays it to the mailpit sink regardless of domain (hermetic).
 const PEER_EMAIL = "p0a@example.com";
+// Azzurra's confirmation mail carries the code as `AUTH <digits>`
+// (case-sensitive — same regex as registration-wizard-real.spec.ts).
+const AUTH_CODE_RE = /AUTH (\d+)/;
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test("P-0a — /whois shows 'registered' tag for a NickServ-identified peer (307 RPL_WHOISREGNICK delegated)", async ({
@@ -47,14 +53,22 @@ test("P-0a — /whois shows 'registered' tag for a NickServ-identified peer (307
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
 
+  // Wipe any prior confirmation mail so the To-filter is unambiguous.
+  await resetMailpit();
+
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
-    // `nickservIdentify` waits for both the confirmation notice AND
-    // the +r umode set before resolving — eliminating the race
-    // between services<->ircd round-trip and a subsequent /whois that
+    // EMAIL:1 registration is a two-step round-trip: REGISTER emails an
+    // AUTH code (the nick carries NI_AUTH, not yet +r), then `AUTH <code>`
+    // flips +r. Read the code from the mailpit sink the REGISTER mail was
+    // relayed to. `nickservAuth` waits for both the accept notice AND the
+    // +r umode before resolving — eliminating the race between the
+    // services<->ircd SVSMODE round-trip and a subsequent /whois that
     // would otherwise miss 307 RPL_WHOISREGNICK.
     await peer.nickservRegister(PEER_PASSWORD, PEER_EMAIL);
-    await peer.nickservIdentify(PEER_PASSWORD);
+    const mail = await awaitMail(PEER_EMAIL, { timeoutMs: 45_000 });
+    const code = extractFromMail(mail, AUTH_CODE_RE);
+    await peer.nickservAuth(code);
 
     // Join the shared channel so /whois 319 reports something + so
     // the upstream considers the peer reachable.
