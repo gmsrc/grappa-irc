@@ -411,6 +411,66 @@ defmodule GrappaWeb.Admin.NetworksControllerTest do
       row = Enum.find(rows, &(&1["slug"] == slug))
       assert row["visitor_autoconnect"] == true
     end
+
+    # GH #349 — services_flavor rides the SAME PATCH surface (no new
+    # route, no nginx change). Operator classifies a network's NickServ
+    # services so the cic registration wizard builds the right templates.
+    test "200 + sets services_flavor, surfaced on the row", %{conn: conn} do
+      slug = "p-sf-#{System.unique_integer([:positive])}"
+      {:ok, _} = Networks.find_or_create_network(%{slug: slug})
+
+      session = admin_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/admin/networks/#{slug}", Jason.encode!(%{services_flavor: "atheme"}))
+
+      body = json_response(conn, 200)
+      assert body["services_flavor"] == "atheme"
+
+      {:ok, reload} = Networks.get_network_by_slug(slug)
+      assert reload.services_flavor == :atheme
+    end
+
+    test "200 + nil clears services_flavor (back to unclassified)", %{conn: conn} do
+      slug = "p-sf-clear-#{System.unique_integer([:positive])}"
+      {:ok, _} = Networks.create_network(%{slug: slug, services_flavor: :azzurra})
+
+      session = admin_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/admin/networks/#{slug}", Jason.encode!(%{services_flavor: nil}))
+
+      assert json_response(conn, 200)["services_flavor"] == nil
+      {:ok, reload} = Networks.get_network_by_slug(slug)
+      assert reload.services_flavor == nil
+    end
+
+    test "422 on a services_flavor outside the closed set", %{conn: conn} do
+      slug = "p-sf-bad-#{System.unique_integer([:positive])}"
+      {:ok, _} = Networks.find_or_create_network(%{slug: slug})
+
+      session = admin_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/admin/networks/#{slug}", Jason.encode!(%{services_flavor: "suxserv"}))
+
+      # 422 (not a 500) — the Ecto.Enum cast error must render cleanly
+      # through FallbackController's changeset formatter, whose default
+      # to_string/1 chokes on the parameterized `type:` opt (fixed via
+      # safe_to_string/1).
+      body = json_response(conn, 422)
+      assert body["error"] == "validation_failed"
+      assert body["field_errors"]["services_flavor"] == ["is invalid"]
+    end
   end
 
   describe "POST /admin/networks — admin-panel bucket 1" do

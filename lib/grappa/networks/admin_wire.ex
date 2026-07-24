@@ -34,6 +34,7 @@ defmodule Grappa.Networks.AdminWire do
   @type t :: %{
           id: integer(),
           slug: String.t(),
+          services_flavor: Network.services_flavor() | nil,
           visitor_enabled: boolean(),
           visitor_autoconnect: boolean(),
           max_concurrent_visitor_sessions: non_neg_integer() | nil,
@@ -53,6 +54,10 @@ defmodule Grappa.Networks.AdminWire do
     %{
       id: net.id,
       slug: net.slug,
+      # GH #349 — the NickServ services flavor (nullable). Operator sets
+      # it via `PATCH /admin/networks/:slug`; drives the cic registration
+      # wizard's per-network REGISTER/verify templates.
+      services_flavor: net.services_flavor,
       # #211 phase 3 — the runtime visitor allowlist flag, admin-togglable
       # via `PATCH /admin/networks/:slug`. Operator console reads it to
       # render + toggle which networks accept visitor attachment.

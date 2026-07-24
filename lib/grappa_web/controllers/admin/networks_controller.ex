@@ -219,6 +219,7 @@ defmodule GrappaWeb.Admin.NetworksController do
   defp create_attrs(params) do
     allowed = [
       "slug",
+      "services_flavor",
       "max_concurrent_visitor_sessions",
       "max_concurrent_user_sessions",
       "max_per_ip"
@@ -256,6 +257,7 @@ defmodule GrappaWeb.Admin.NetworksController do
   # the operator.
   defp settings_attrs(params) do
     allowed = [
+      "services_flavor",
       "visitor_enabled",
       "visitor_autoconnect",
       "max_concurrent_visitor_sessions",

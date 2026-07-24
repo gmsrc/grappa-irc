@@ -68,6 +68,7 @@ defmodule Mix.Tasks.Grappa.BindNetwork do
   @switches [
     user: :string,
     network: :string,
+    services_flavor: :string,
     server: :string,
     tls: :boolean,
     nick: :string,
@@ -96,7 +97,18 @@ defmodule Mix.Tasks.Grappa.BindNetwork do
 
     user = Accounts.get_user_by_name!(user_name)
 
-    {:ok, network} = Networks.find_or_create_network(%{slug: slug})
+    # `--services-flavor` (GH #349) applies only on the CREATE path;
+    # `find_or_create_network/1` returns a pre-existing row unchanged, so
+    # re-classifying an existing network is an admin PATCH, not a re-bind.
+    # An invalid flavor string trips Ecto.Enum casting → the hard match
+    # below surfaces the changeset to the operator.
+    net_attrs =
+      case Keyword.get(opts, :services_flavor) do
+        nil -> %{slug: slug}
+        flavor -> %{slug: slug, services_flavor: flavor}
+      end
+
+    {:ok, network} = Networks.find_or_create_network(net_attrs)
 
     {host, port} = OptionParsing.parse_server(server)
 

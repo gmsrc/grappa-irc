@@ -168,6 +168,56 @@ defmodule Grappa.Networks.WireTest do
     end
   end
 
+  describe "services_flavor exposure (GH #349) on both GET /networks twins" do
+    test "network_with_nick_to_json/3 (user twin) carries services_flavor",
+         %{network: network} do
+      net = %{network | services_flavor: :atheme}
+
+      cred = %Credential{
+        network: net,
+        nick: "vjt",
+        connection_state: :connected,
+        connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
+      }
+
+      json = Wire.network_with_nick_to_json(net, "vjt", cred)
+
+      assert json.kind == :user
+      assert json.services_flavor == :atheme
+    end
+
+    test "visitor_network_to_json/3 (visitor twin) carries services_flavor",
+         %{network: network} do
+      net = %{network | services_flavor: :azzurra}
+
+      cred = %Credential{
+        network: net,
+        nick: "vjt",
+        connection_state: :connected,
+        connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
+      }
+
+      json = Wire.visitor_network_to_json(net, "vjt", cred)
+
+      assert json.kind == :visitor
+      assert json.services_flavor == :azzurra
+    end
+
+    test "an unclassified network surfaces services_flavor: nil (wizard hidden)",
+         %{network: network} do
+      cred = %Credential{
+        network: network,
+        nick: "vjt",
+        connection_state: :connected,
+        connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
+      }
+
+      # setup builds the network via find_or_create_network → nil flavor.
+      assert Wire.network_with_nick_to_json(network, "vjt", cred).services_flavor == nil
+      assert Wire.visitor_network_to_json(network, "vjt", cred).services_flavor == nil
+    end
+  end
+
   describe "visitor_network_to_json/3 (#211 phase 6 — visitor GET /networks row)" do
     test "renders the visitor twin shape (kind: :visitor, nick, connection_state)",
          %{network: network} do

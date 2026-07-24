@@ -54,6 +54,41 @@ defmodule Grappa.Networks.NetworkTest do
     end
   end
 
+  describe "services_flavor (GH #349 registration wizard)" do
+    for flavor <- [:azzurra, :atheme, :oftc, :unknown] do
+      test "casts #{flavor} (atom and string)" do
+        cs_atom = Network.changeset(%Network{}, %{slug: "testnet", services_flavor: unquote(flavor)})
+        assert cs_atom.valid?
+        assert Ecto.Changeset.get_change(cs_atom, :services_flavor) == unquote(flavor)
+
+        cs_str =
+          Network.changeset(%Network{}, %{slug: "testnet", services_flavor: unquote(to_string(flavor))})
+
+        assert cs_str.valid?
+        assert Ecto.Changeset.get_change(cs_str, :services_flavor) == unquote(flavor)
+      end
+    end
+
+    test "rejects a value outside the closed set (reject-at-boundary)" do
+      cs = Network.changeset(%Network{}, %{slug: "testnet", services_flavor: "suxserv"})
+      refute cs.valid?
+      assert %{services_flavor: [_ | _]} = errors_on(cs)
+    end
+
+    test "is optional — nil == unclassified (wizard hidden)" do
+      cs = Network.changeset(%Network{}, %{slug: "testnet"})
+      assert cs.valid?
+      assert Ecto.Changeset.get_field(cs, :services_flavor) == nil
+    end
+
+    test "accepts nil to clear an existing flavor" do
+      base = %Network{slug: "testnet", services_flavor: :azzurra}
+      cs = Network.changeset(base, %{services_flavor: nil})
+      assert cs.valid?
+      assert Ecto.Changeset.get_field(cs, :services_flavor) == nil
+    end
+  end
+
   describe "visitor_enabled (#211 phase 1 runtime allowlist)" do
     test "defaults to false (visitors disabled per-network — play safe)" do
       # The schema default mirrors the DB column default so a freshly

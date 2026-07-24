@@ -17,6 +17,7 @@ defmodule Grappa.Networks.AdminWireTest do
       net = %Network{
         id: 42,
         slug: "azzurra",
+        services_flavor: :azzurra,
         visitor_enabled: true,
         visitor_autoconnect: true,
         max_concurrent_visitor_sessions: 10,
@@ -29,6 +30,7 @@ defmodule Grappa.Networks.AdminWireTest do
       assert %{
                id: 42,
                slug: "azzurra",
+               services_flavor: :azzurra,
                visitor_enabled: true,
                visitor_autoconnect: true,
                max_concurrent_visitor_sessions: 10,
@@ -37,6 +39,12 @@ defmodule Grappa.Networks.AdminWireTest do
                inserted_at: ^now,
                updated_at: ^now
              } = AdminWire.network_to_admin_json(net)
+    end
+
+    test "an unclassified network surfaces services_flavor: nil" do
+      now = DateTime.utc_now()
+      net = %Network{id: 1, slug: "n", inserted_at: now, updated_at: now}
+      assert %{services_flavor: nil} = AdminWire.network_to_admin_json(net)
     end
 
     test "nil caps round-trip as nil (operator-cleared = unlimited)" do

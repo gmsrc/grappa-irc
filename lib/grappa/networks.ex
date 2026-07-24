@@ -110,7 +110,10 @@ defmodule Grappa.Networks do
   future cap fields) surfaces directly instead of being masked by a
   racing get_by.
   """
-  @spec find_or_create_network(%{required(:slug) => String.t()}) ::
+  @spec find_or_create_network(%{
+          required(:slug) => String.t(),
+          optional(:services_flavor) => Network.services_flavor() | String.t() | nil
+        }) ::
           {:ok, Network.t()} | {:error, Ecto.Changeset.t()}
   def find_or_create_network(%{slug: slug} = attrs) when is_binary(slug) do
     cs = Network.changeset(%Network{}, attrs)
@@ -519,6 +522,7 @@ defmodule Grappa.Networks do
   # thinking negative values were a runtime concern; they're rejected
   # at the changeset boundary unconditionally.
   @spec update_network_settings(Network.t(), %{
+          optional(:services_flavor) => Network.services_flavor() | nil,
           optional(:visitor_enabled) => boolean(),
           optional(:visitor_autoconnect) => boolean(),
           optional(:max_concurrent_visitor_sessions) => non_neg_integer() | nil,

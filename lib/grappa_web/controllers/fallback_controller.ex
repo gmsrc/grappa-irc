@@ -710,9 +710,24 @@ defmodule GrappaWeb.FallbackController do
   defp format_changeset_errors(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
       Enum.reduce(opts, msg, fn {k, v}, acc ->
-        String.replace(acc, "%{#{k}}", to_string(v))
+        String.replace(acc, "%{#{k}}", safe_to_string(v))
       end)
     end)
+  end
+
+  # Changeset error opts carry per-validation metadata (`count:`,
+  # `validation:`, `type:` …). The default Phoenix interpolation
+  # `to_string(v)`s EVERY opt eagerly — but a parameterized type opt
+  # (e.g. Ecto.Enum's `type: {:parameterized, {Ecto.Enum, %{...}}}`,
+  # GH #349's `Network.services_flavor` cast error) is a tuple with no
+  # `String.Chars` impl, so a bare `to_string/1` raises a 500 at the
+  # boundary that should have rendered a clean 422. Inspect anything not
+  # stringable — robust for the whole class of complex opt values, not
+  # just this one enum (fix the root cause, not the example).
+  defp safe_to_string(v) when is_binary(v), do: v
+
+  defp safe_to_string(v) do
+    if String.Chars.impl_for(v), do: to_string(v), else: inspect(v)
   end
 
   # Boot-time captcha config — read once at app start by

@@ -28,9 +28,25 @@ defmodule Grappa.Networks.Network do
   alias Grappa.IRC.Identifier
   alias Grappa.Networks.{Credential, FeaturedChannel, Server}
 
+  @typedoc """
+  The network's NickServ services implementation (GH #349). Determines
+  which per-network REGISTER + verify command templates the cic
+  registration wizard builds — `:azzurra` (bahamut + Azzurra IRC
+  Services: `AUTH <code>`), `:atheme` (Libera: `VERIFY REGISTER <nick>
+  <code>`), `:oftc` (oftc-ircservices), or `:unknown` (button hidden;
+  nothing to register against). The enum is **server-side only** — cic
+  carries intent + data, the server owns the per-network identity, so
+  templates key on this operator-set flavor, NOT on the operator-arbitrary
+  slug or a fragile 005 `NETWORK=` scrape. Nullable: a network the operator
+  never classified reads `nil`, treated identically to `:unknown` (wizard
+  button hidden).
+  """
+  @type services_flavor :: :azzurra | :atheme | :oftc | :unknown
+
   @type t :: %__MODULE__{
           id: integer() | nil,
           slug: String.t() | nil,
+          services_flavor: services_flavor() | nil,
           visitor_enabled: boolean() | nil,
           visitor_autoconnect: boolean() | nil,
           max_concurrent_visitor_sessions: non_neg_integer() | nil,
@@ -45,6 +61,12 @@ defmodule Grappa.Networks.Network do
 
   schema "networks" do
     field :slug, :string
+    # GH #349 — the network's NickServ services implementation, set by
+    # the operator (bind-time or admin PATCH). Drives the cic
+    # registration wizard's per-network REGISTER/verify templates.
+    # Nullable (`nil` == "unclassified", wizard hidden); Ecto.Enum
+    # rejects any value outside the closed set at the changeset boundary.
+    field :services_flavor, Ecto.Enum, values: [:azzurra, :atheme, :oftc, :unknown]
     # #211 phase 1 — runtime per-network visitor allowlist flag.
     # Replaces the compile-time `:visitor_network` pin: an admin can
     # toggle which networks accept visitor attachment without a restart.
@@ -108,6 +130,7 @@ defmodule Grappa.Networks.Network do
     network
     |> cast(attrs, [
       :slug,
+      :services_flavor,
       :visitor_enabled,
       :visitor_autoconnect,
       :max_concurrent_visitor_sessions,

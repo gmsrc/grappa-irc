@@ -212,6 +212,48 @@ defmodule Mix.Tasks.Grappa.BindNetworkTest do
     end
   end
 
+  test "--services-flavor sets the network's services flavor on create", %{user: _user} do
+    capture_io(fn ->
+      BindNetwork.run([
+        "--user",
+        "vjt",
+        "--network",
+        "libera",
+        "--services-flavor",
+        "atheme",
+        "--server",
+        "irc.libera.chat:6697",
+        "--nick",
+        "vjt-grappa",
+        "--auth",
+        "none"
+      ])
+    end)
+
+    {:ok, network} = Networks.find_or_create_network(%{slug: "libera"})
+    assert network.services_flavor == :atheme
+  end
+
+  test "no --services-flavor leaves the network unclassified (nil)", %{user: _user} do
+    capture_io(fn ->
+      BindNetwork.run([
+        "--user",
+        "vjt",
+        "--network",
+        "azzurra",
+        "--server",
+        "irc.azzurra.chat:6697",
+        "--nick",
+        "vjt-grappa",
+        "--auth",
+        "none"
+      ])
+    end)
+
+    {:ok, network} = Networks.find_or_create_network(%{slug: "azzurra"})
+    assert network.services_flavor == nil
+  end
+
   test "--source persists the server source_address", %{user: _user} do
     capture_io(fn ->
       BindNetwork.run([
