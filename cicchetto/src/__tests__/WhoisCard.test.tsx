@@ -18,6 +18,7 @@ const baseBundle: WhoisBundle = {
   server: "irc.azzurra.org",
   server_info: "Azzurra Hub",
   is_operator: false,
+  oper_text: null,
   idle_seconds: null,
   signon: null,
   channels: null,
@@ -178,6 +179,60 @@ describe("WhoisCard P-0a flags", () => {
     expect(card.textContent).toContain("+iZ");
     expect(card.textContent).toContain("AFK");
     expect(card.textContent).toContain("secure.host");
+  });
+});
+
+// #367 — 313 RPL_WHOISOPERATOR role text. bahamut (Azzurra) distinguishes
+// operator levels via the trailing text ("is an IRC Operator" vs "is a
+// Server Administrator" vs "is a Services Administrator"). The bug: the card
+// collapsed 313 to a bare "oper" badge and dropped the role text, so a
+// viewer could not tell an ordinary oper from a server/services admin. The
+// fix surfaces `oper_text` as a structured row while KEEPING the "oper"
+// badge as the always-on flag + the fallback for a bare 313.
+describe("WhoisCard #367 oper role text", () => {
+  afterEach(() => {
+    dismissWhoisCard("azzurra");
+  });
+
+  it("renders the role text row AND the oper badge when oper_text is present", () => {
+    setWhoisBundle("azzurra", {
+      ...baseBundle,
+      is_operator: true,
+      oper_text: "is a Services Administrator",
+    });
+    render(() => <WhoisCard networkSlug="azzurra" />);
+    const card = screen.getByTestId("whois-card");
+    // The role text is surfaced verbatim (upstream ircd string).
+    expect(card.textContent).toContain("is a Services Administrator");
+    expect(card.querySelector(".whois-card-oper-text")).not.toBeNull();
+    // The at-a-glance badge stays present alongside the detail row.
+    expect(card.querySelector(".whois-card-tag-oper")).not.toBeNull();
+  });
+
+  it("routes oper_text through the mIRC renderer, never leaking raw control bytes", () => {
+    // A services-set swhois can carry mIRC formatting — it must route
+    // through MircBody like every other free-text whois field (#142 lesson).
+    setWhoisBundle("azzurra", {
+      ...baseBundle,
+      is_operator: true,
+      oper_text: "\x0304is a Services Administrator\x0f",
+    });
+    render(() => <WhoisCard networkSlug="azzurra" />);
+    const card = screen.getByTestId("whois-card");
+    expect(card.textContent).toContain("is a Services Administrator");
+    for (const byte of ["\x03", "\x0f"]) {
+      expect(card.textContent).not.toContain(byte);
+    }
+  });
+
+  it("falls back to the bare oper badge with NO role row when oper_text is null (bare 313)", () => {
+    setWhoisBundle("azzurra", { ...baseBundle, is_operator: true, oper_text: null });
+    render(() => <WhoisCard networkSlug="azzurra" />);
+    const card = screen.getByTestId("whois-card");
+    // Badge still present (is_operator latched)...
+    expect(card.querySelector(".whois-card-tag-oper")).not.toBeNull();
+    // ...but no descriptive role row when the ircd sent no text.
+    expect(card.querySelector(".whois-card-oper-text")).toBeNull();
   });
 });
 

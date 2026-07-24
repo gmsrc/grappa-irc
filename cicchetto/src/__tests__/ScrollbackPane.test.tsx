@@ -3571,6 +3571,7 @@ describe("ScrollbackPane", () => {
       server: "irc.overlaynet",
       server_info: "Overlay Hub",
       is_operator: false,
+      oper_text: null,
       idle_seconds: null,
       signon: null,
       channels: null,

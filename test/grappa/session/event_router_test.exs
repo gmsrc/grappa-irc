@@ -2786,18 +2786,35 @@ defmodule Grappa.Session.EventRouterTest do
       assert new_state.whois_pending["alice"][:server_info] == "Azzurra Hub"
     end
 
-    test "313 RPL_WHOISOPERATOR folds is_operator: true" do
+    test "313 RPL_WHOISOPERATOR folds is_operator: true + oper_text from trailing" do
       state = whois_pending_state("alice")
 
       m =
         msg(
           {:numeric, 313},
-          ["vjt", "alice", "is an IRC operator"],
+          ["vjt", "alice", "is a Services Administrator"],
           {:server, "irc.test.org"}
         )
 
       {:cont, new_state, []} = EventRouter.route(m, state)
       assert new_state.whois_pending["alice"][:is_operator] == true
+      # #367 — the ircd role text distinguishes IRC Operator from Server /
+      # Services Administrator; it is upstream pass-through data, captured
+      # verbatim (NOT a grappa-localized string — see the bundle note).
+      assert new_state.whois_pending["alice"][:oper_text] == "is a Services Administrator"
+    end
+
+    test "313 RPL_WHOISOPERATOR with no trailing text folds is_operator: true, oper_text nil" do
+      state = whois_pending_state("alice")
+
+      # Some ircds send a bare 313 (target only, no role text). is_operator
+      # must still latch true; oper_text stays nil so cic falls back to the
+      # plain "oper" badge (#367 no-regression case).
+      m = msg({:numeric, 313}, ["vjt", "alice"], {:server, "irc.test.org"})
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+      assert new_state.whois_pending["alice"][:is_operator] == true
+      assert new_state.whois_pending["alice"][:oper_text] == nil
     end
 
     test "317 RPL_WHOISIDLE folds idle_seconds + signon (3-arg shape)" do

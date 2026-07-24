@@ -374,13 +374,16 @@ export class IrcPeer {
   // MODE +i / MODE +o anyone, including itself. With +O (and the
   // configured `OaARD` flagset on the leaf's O: line), ircops issue
   // MODE / SAMODE freely on any channel they're in.
+  //
+  // #367 — we wait on the raw `381` wire-line, NOT an `rpl_youreoper`
+  // named event: irc-framework does not surface 381 as a typed event, so
+  // the prior `once(client, "rpl_youreoper", …)` never fired even though
+  // bahamut DID send 381 (this method had no caller until #367's WHOIS
+  // oper-text e2e, so the dead event name went unnoticed). `waitForLine`
+  // is registered BEFORE the OPER frame goes out, so a fast 381 can't
+  // race the listener.
   async oper(name: string, password: string): Promise<void> {
-    const opered = once(
-      this.client,
-      "rpl_youreoper",
-      OPER_TIMEOUT_MS,
-      `oper ${name}`,
-    );
+    const opered = this.waitForLine(/ 381 /, `oper ${name}`, OPER_TIMEOUT_MS);
     this.client.raw(["OPER", name, password]);
     await opered;
   }

@@ -484,6 +484,8 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         (r.server !== null && typeof r.server !== "string") ||
         (r.server_info !== null && typeof r.server_info !== "string") ||
         typeof r.is_operator !== "boolean" ||
+        // #367 — oper role text: nullable string (bare 313 → null).
+        (r.oper_text !== null && typeof r.oper_text !== "string") ||
         (r.idle_seconds !== null && typeof r.idle_seconds !== "number") ||
         (r.signon !== null && typeof r.signon !== "number") ||
         typeof r.using_ssl !== "boolean" ||
@@ -527,6 +529,7 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         server: r.server as string | null,
         server_info: r.server_info as string | null,
         is_operator: r.is_operator,
+        oper_text: r.oper_text as string | null,
         idle_seconds: r.idle_seconds as number | null,
         signon: r.signon as number | null,
         channels,

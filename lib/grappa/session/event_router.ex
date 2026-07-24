@@ -1156,13 +1156,23 @@ defmodule Grappa.Session.EventRouter do
   end
 
   # 313 RPL_WHOISOPERATOR: `:server 313 own_nick target :is an IRC operator`.
-  # Folds `is_operator: true`.
+  # Folds `is_operator: true` plus the trailing role text (`oper_text`).
+  #
+  # #367 — bahamut (Azzurra) distinguishes operator levels via the trailing
+  # text ("is an IRC Operator" vs "is a Server Administrator" vs "is a
+  # Services Administrator"); collapsing 313 to a bare boolean drops that
+  # distinction. We capture the trailing verbatim as `oper_text`. This is
+  # upstream-ircd pass-through data — exactly like the 31x trailing already
+  # folded (server_info, channels) — NOT a grappa-generated localized
+  # string, so `feedback_no_localized_strings_server_side` does not apply.
+  # A bare 313 (no trailing) folds `oper_text: nil`; cic then falls back to
+  # the plain "oper" badge.
   defp do_route(
-         %Message{command: {:numeric, 313}, params: [_, target | _]},
+         %Message{command: {:numeric, 313}, params: [_, target | rest]},
          state
        )
        when is_binary(target) do
-    {:cont, whois_fold(state, target, %{is_operator: true}), []}
+    {:cont, whois_fold(state, target, %{is_operator: true, oper_text: whois_trailing(rest)}), []}
   end
 
   # 317 RPL_WHOISIDLE: `:server 317 own_nick target idle_seconds [signon] :seconds idle`.

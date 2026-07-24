@@ -16601,3 +16601,49 @@ slot assignment, and the pair REST client. Playwright (`@webkit`,
 `emulateMedia({colorScheme})`) proves the gallery `--bg` layer actually SWAPS
 day↔night after a cache-cleared reload (server-owned pair, not the FOUC
 mirror).
+
+## 2026-07-24 — WHOIS 313 role text: capture the oper level (GH #367)
+
+**Bug.** The WhoisCard collapsed `313 RPL_WHOISOPERATOR` into a single flat
+`oper` badge and dropped the ircd's trailing text. On bahamut (Azzurra) that
+trailing distinguishes the operator level — "is an IRC Operator" vs "is a
+Server Administrator" vs "is a Services Administrator" — so a viewer could not
+tell an ordinary oper from a server/services admin. Root cause was
+server-side: `EventRouter`'s 313 handler folded `%{is_operator: true}` and
+threw the trailing param away, so the bundle broadcast on 318 never carried
+the role text.
+
+**Fix — pass-through, end-to-end.** `EventRouter` 313 handler now folds
+`oper_text: whois_trailing(rest)` alongside `is_operator: true` (nil for a
+bare 313). `Session.Wire.whois_bundle/3` projects `oper_text` into the wire
+shape; `gen_wire_types` regenerates `SessionWireWhoisBundlePayload`; `api.ts`
++ the `userTopic.ts` narrower carry it (required nullable string, same
+contract as `server_info`); `WhoisCard.tsx` renders a `.whois-card-oper-text`
+row (routed through `MircBody` like every free-text whois field, #142) and
+KEEPS the `oper` badge as the always-on flag + the bare-313 fallback.
+
+**The `no_localized_strings_server_side` exception.** That policy keeps the
+server emitting typed booleans/strings and cic owning the human labels (the
+P-0a flags). It does NOT apply to `oper_text`: this string originates from
+the **upstream ircd**, not from grappa — it is pass-through server data in
+the same class as `server_info` and channel names, so stripping it would
+DISCARD real information the operator wants. The exception is documented at
+the 313 handler, the wire typespec, and the WhoisCard moduledoc so a future
+reader doesn't reflexively "fix" it back to a bare boolean.
+
+**Type shape — spec said `?: string`, codegen forced `string | null`.** The
+issue proposed `oper_text?: string`, but `_Assert_WhoisBundle` pins
+`WhoisBundle` to `Omit<SessionWireWhoisBundlePayload, "kind">`, and the wire
+generator emits `string | null` for a nullable field. `string | null` is
+also consistent with every other optional-string in the bundle. Followed the
+codegen pin, not the spec's inherited type bug.
+
+**Tests.** `event_router_test.exs` (313 folds oper_text from trailing; bare
+313 → is_operator true, oper_text nil). `wire_test.exs` (projection +
+default nil). `WhoisCard.test.tsx` (role-text row renders + mIRC-routed +
+bare-313 badge-only fallback). `userTopic.test.ts` (narrower preserves the
+string, drops a non-string). e2e `issue367-whois-oper-role-text.spec.ts`: a
+peer OPERs up against the testnet O:line (`testoper`/`testoperpass`, as
+issue148) and vjt's /whois renders the real 313 role-text row — the
+integration proof; the bare-313 fallback can't be forced on a live ircd and
+stays unit-covered.

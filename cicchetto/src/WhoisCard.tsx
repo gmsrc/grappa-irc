@@ -20,9 +20,14 @@ import NickText from "./NickText";
 //
 // P-0a — Cluster `numeric-delegation-p0` 2026-05-13. 11 additional
 // WHOIS-leg flags rendered as inline tags + structured rows. Per
-// `feedback_no_localized_strings_server_side`, ALL human strings are
-// built here from server-emitted typed booleans / strings — never
-// echoed from upstream wire trailing.
+// `feedback_no_localized_strings_server_side`, the P-0a human strings are
+// built here from server-emitted typed booleans / strings.
+//
+// #367 exception — `oper_text` (313 RPL_WHOISOPERATOR trailing) IS echoed
+// from the upstream wire trailing, deliberately: it is ircd pass-through
+// data (the operator-level distinction the server itself sends), not a
+// grappa-generated localized string, so the no-localized-strings policy
+// does not gate it. Same class as `server_info` / channel names.
 //
 // Close affordance: × button on the right calls `dismissWhoisCard` for
 // this network. Mounted by `ScrollbackPane.tsx` only when a bundle
@@ -137,6 +142,20 @@ const WhoisCard: Component<Props> = (props) => {
                 <dt>userhost</dt>
                 <dd>
                   {b().user}@{b().host}
+                </dd>
+              </Show>
+              {/* #367 — 313 RPL_WHOISOPERATOR role text. The header "oper"
+                  badge flags operator status at a glance; this row shows the
+                  exact ircd role (IRC Operator vs Server / Services
+                  Administrator) so a viewer can tell them apart. Absent for
+                  a bare 313 (oper_text null) — the badge alone remains, the
+                  pre-#367 fallback. Unlike the P-0a flags this string is
+                  upstream-ircd pass-through, so it routes through MircBody
+                  like every other free-text whois field (#142). */}
+              <Show when={b().oper_text}>
+                <dt>oper</dt>
+                <dd class="whois-card-oper-text">
+                  <MircBody body={b().oper_text ?? ""} />
                 </dd>
               </Show>
               {/* #221 — solanum account name (330 RPL_WHOISLOGGEDIN). The

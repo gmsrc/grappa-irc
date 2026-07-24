@@ -447,6 +447,11 @@ defmodule Grappa.Session.Wire do
           server: String.t() | nil,
           server_info: String.t() | nil,
           is_operator: boolean(),
+          # #367 — 313 RPL_WHOISOPERATOR trailing role text ("is an IRC
+          # Operator" / "is a Server Administrator" / …). Upstream-ircd
+          # pass-through, nil when the ircd sent a bare 313 (cic falls back
+          # to the plain "oper" badge).
+          oper_text: String.t() | nil,
           idle_seconds: integer() | nil,
           signon: integer() | nil,
           channels: [String.t()] | nil,
@@ -1140,6 +1145,8 @@ defmodule Grappa.Session.Wire do
       server: Map.get(accum, :server),
       server_info: Map.get(accum, :server_info),
       is_operator: Map.get(accum, :is_operator, false),
+      # #367 — trailing role text from 313 (nil for a bare 313 or no oper).
+      oper_text: Map.get(accum, :oper_text),
       idle_seconds: Map.get(accum, :idle_seconds),
       signon: Map.get(accum, :signon),
       channels: Map.get(accum, :channels),

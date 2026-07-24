@@ -1213,6 +1213,9 @@ describe("userTopic", () => {
       server: "irc.test",
       server_info: "test",
       is_operator: false,
+      // #367 — oper_text is REQUIRED by narrowUserEvent (nullable string,
+      // same contract as server_info); a realistic bundle always carries it.
+      oper_text: null,
       idle_seconds: 0,
       signon: 0,
       using_ssl: false,
@@ -1260,6 +1263,25 @@ describe("userTopic", () => {
     it("drops bundle when channels has a non-string element", async () => {
       const wc = await import("../lib/whoisCard");
       channelMock.fireEvent({ ...baseBundle, channels: ["#italia", 42] });
+      expect(wc.setWhoisBundle).not.toHaveBeenCalled();
+    });
+
+    it("#367 — preserves oper_text string through the narrower", async () => {
+      const wc = await import("../lib/whoisCard");
+      channelMock.fireEvent({
+        ...baseBundle,
+        channels: null,
+        oper_text: "is a Services Administrator",
+      });
+      expect(wc.setWhoisBundle).toHaveBeenCalledWith(
+        "azzurra",
+        expect.objectContaining({ oper_text: "is a Services Administrator" }),
+      );
+    });
+
+    it("#367 — drops bundle when oper_text is a non-string", async () => {
+      const wc = await import("../lib/whoisCard");
+      channelMock.fireEvent({ ...baseBundle, channels: null, oper_text: 42 });
       expect(wc.setWhoisBundle).not.toHaveBeenCalled();
     });
 

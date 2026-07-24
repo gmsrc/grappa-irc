@@ -175,7 +175,8 @@ export type _Assert_CredentialJson = Assert<Equal<CredentialJson, NetworksWireCr
 // === cross-surface S7 (2026-07-19 review) — the biggest boundary payloads ===
 // The assert list above stated the rule "per-arm PAYLOADS that have a flat
 // counterpart are pinned below", but the LARGEST payloads on the wire had
-// no pin: WhoisBundle (27 fields — it has already grown twice, P-0a + #221),
+// no pin: WhoisBundle (28 fields — it has already grown three times, P-0a +
+// #221 + #367 oper_text),
 // WhowasBundle, LusersBundle, the NamesReply/WhoReply envelopes, and the
 // #247 presence arms. A server-side field add/rename in any of these
 // regenerates wireTypes.ts cleanly and would leave the api.ts hand mirror +

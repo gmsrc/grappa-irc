@@ -837,6 +837,7 @@ export type SessionWireWhoisBundlePayload = {
   server: string | null;
   server_info: string | null;
   is_operator: boolean;
+  oper_text: string | null;
   idle_seconds: number | null;
   signon: number | null;
   channels: string[] | null;

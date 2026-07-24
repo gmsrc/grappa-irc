@@ -805,6 +805,13 @@ export type WhoisBundle = {
   server: string | null;
   server_info: string | null;
   is_operator: boolean;
+  // #367 — 313 RPL_WHOISOPERATOR trailing role text ("is an IRC Operator" /
+  // "is a Server Administrator" / "is a Services Administrator"). Upstream
+  // ircd pass-through (NOT a cic-localized string, unlike the P-0a flags);
+  // null for a bare 313, in which case WhoisCard shows only the "oper"
+  // badge. `string | null` (not `?: string`) to match the codegen-pinned
+  // wire shape asserted by `_Assert_WhoisBundle`.
+  oper_text: string | null;
   idle_seconds: number | null;
   signon: number | null;
   channels: string[] | null;

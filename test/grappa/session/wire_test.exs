@@ -587,6 +587,7 @@ defmodule Grappa.Session.WireTest do
         server: "irc.azzurra.org",
         server_info: "Azzurra Hub",
         is_operator: true,
+        oper_text: "is an IRC Operator",
         idle_seconds: 42,
         signon: 1_700_000_000,
         channels: ["@#italia", "+#grappa"]
@@ -604,6 +605,9 @@ defmodule Grappa.Session.WireTest do
                server: "irc.azzurra.org",
                server_info: "Azzurra Hub",
                is_operator: true,
+               # #367 — upstream ircd role text captured verbatim alongside
+               # the is_operator boolean (distinguishes oper levels).
+               oper_text: "is an IRC Operator",
                idle_seconds: 42,
                signon: 1_700_000_000,
                channels: ["@#italia", "+#grappa"],
@@ -644,6 +648,8 @@ defmodule Grappa.Session.WireTest do
                server: nil,
                server_info: nil,
                is_operator: false,
+               # #367 — bare bundle (no 313, or 313 with no role text): nil.
+               oper_text: nil,
                idle_seconds: nil,
                signon: nil,
                channels: nil,
