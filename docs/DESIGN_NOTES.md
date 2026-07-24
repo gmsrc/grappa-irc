@@ -16712,3 +16712,54 @@ can't be asserted against a fixed literal. It also asserts the composed
 `VERSION grappa <v>` wire string clean-vs-untagged, and that `current/0`
 starts with `base/0`. The existing `event_router_test.exs` CTCP VERSION specs
 read `current/0` dynamically, so they hold across the change.
+
+### 2026-07-24 — mobile list launcher (channel directory) in drawer footer (#361, cic)
+
+**Real gap (issue body was wrong).** On the mobile narrow layout there was
+NO way to open the `$list` channel-directory window except TYPING `/list`
+in a channel compose box — the desktop sidebar's 📇 `$list` row
+(`Sidebar.tsx`) has no mobile equivalent. The GitHub issue body cited that
+desktop `Sidebar.tsx` as a "mobile right sidebar," which is wrong; the
+mobile launcher surface is the members-drawer footer `.mobile-panel-actions`
+in `Shell.tsx` (the #291/#332 launcher hub, the surviving right-bar past
+#71). The issue body was rewritten to state the real gap + fix.
+
+**Fix.** A 📇 (`\u{1F4C7}`, same glyph as the desktop `$list` row) launcher
+added to the footer; on tap it dispatches the SAME selection-driven
+navigation the desktop row uses — `setSelectedChannel({ networkSlug,
+channelName: LIST_WINDOW_NAME, kind: "list" })` — so `DirectoryPane` mounts
+and auto-loads for the active network (no throttling change). The archive
+launcher moved to the END of the row; new order: 🏠 home → 📇 list → ⚙️
+settings → 🎨 themes → 🔧 admin → 📂 archive. The footer already
+`flex-wrap`s (#332), so the 6th button wraps rather than clipping.
+
+**Reuse decisions.**
+- **Gating.** The list launcher reuses `archiveSlugForSelection()`
+  (`lib/archiveContext.ts`) to gate visibility + source the active-network
+  slug — the predicate ("network slug of the current selection, or null on
+  home/mentions/admin") is exactly what a per-network list window needs,
+  and that accessor is already a multi-consumer "footer launcher network
+  context" helper (archive button + `ShellChrome` mentions re-open). Its
+  archive-specific NAME is now a mild misnomer across three consumers, but
+  renaming is pre-existing debt touching 4 files (module + test + `Shell` +
+  `ShellChrome`) — deferred, not accreted-into by this bucket beyond one
+  clarifying comment.
+- **Mutex helper.** The three selection-driven nav launchers (admin / home
+  / list) share ONE mutex body (close members + settings + archive, then
+  `navigate()`). Extracted to a private `openNavWindow/2` in
+  `mobilePanel.ts` so the mutex lives in one place (a future 4th nav
+  surface is a one-line edit); the three public wrappers stay (each keeps
+  its self-documenting name + WHY-comment + existing unit test) rather than
+  collapsing to one generic export, which would fork the module's
+  per-launcher helper convention. The own-signal launchers
+  (settings/themes/archive) each flip their own surface signal and do NOT
+  route through `openNavWindow`.
+
+**Tests.** `Shell.test.tsx` gains the #361 block (list button present, tap
+dispatches `$list` selection for the active network, tap closes the drawer
+via the mutex, archive renders DOM-last after list). New e2e
+`issue361-mobile-list-launcher.spec.ts` (@webkit) drives the real mobile
+layout: open drawer → 📇 present + ≥44px → archive is the last
+`.shell-chrome-btn` and list precedes it → tap → drawer closes +
+`DirectoryPane` renders. `issue291` / `issue299` footer-count assertions
+bumped 5 → 6.

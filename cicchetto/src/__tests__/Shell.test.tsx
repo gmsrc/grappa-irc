@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LIST_WINDOW_NAME } from "../lib/windowKinds";
 
 // UX-4 bucket N (2026-05-19) — selection mock must use a REAL Solid
 // signal so Shell's reactive `<Show when={sel.kind === "admin" && isAdmin()}>`
@@ -1004,6 +1005,94 @@ describe("Shell — mobile layout (isMobile = true)", () => {
         expect(container.querySelector(".shell-members.open")).toBeNull();
       });
     });
+  });
+});
+
+// #361 — mobile list launcher (channel directory / $list). Pre-bucket
+// the ONLY way to open the $list window on the mobile narrow layout was
+// to TYPE `/list` — the desktop sidebar $list row has no mobile
+// equivalent. This bucket adds a 📇 launcher to the drawer-footer
+// `.mobile-panel-actions` (the #291 right-bar hub) that dispatches the
+// same selection-driven navigation the desktop sidebar $list row uses,
+// and MOVES the archive launcher to the END of the row (archive is the
+// de-emphasised trailing affordance; list joins home as a primary
+// window-nav launcher near the left). Selection-driven + mutex shape
+// mirror the home/admin launchers.
+describe("#361 — mobile list launcher in drawer footer", () => {
+  it("mobile channel: footer hosts the 📇 list launcher (network context present)", async () => {
+    mobileState.value = true;
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    const { container } = render(() => <Shell />);
+    await waitFor(() => {
+      expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeInTheDocument();
+    });
+    const footer = container.querySelector(".shell-members .mobile-panel-actions");
+    expect(footer?.querySelector("[data-testid='mobile-panel-list']")).not.toBeNull();
+  });
+
+  it("list tap: dispatches selection to the $list window for the active network", async () => {
+    mobileState.value = true;
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    const { container } = render(() => <Shell />);
+    const btn = await waitFor(() => {
+      const b = container.querySelector<HTMLButtonElement>(
+        ".shell-members .mobile-panel-actions [data-testid='mobile-panel-list']",
+      );
+      expect(b).not.toBeNull();
+      return b as HTMLButtonElement;
+    });
+    fireEvent.click(btn);
+    expect(selectionState.setSelectedChannelMock).toHaveBeenCalledWith({
+      networkSlug: "freenode",
+      channelName: LIST_WINDOW_NAME,
+      kind: "list",
+    });
+  });
+
+  it("list tap: closes the members drawer (mutex with settings/archive)", async () => {
+    mobileState.value = true;
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    const { container } = render(() => <Shell />);
+    // Open the drawer first via the TopicBar hamburger (BM mutex).
+    const hamburger = await waitFor(() => {
+      const h = container.querySelector<HTMLButtonElement>(".topic-bar .topic-bar-hamburger");
+      expect(h).not.toBeNull();
+      return h as HTMLButtonElement;
+    });
+    fireEvent.click(hamburger);
+    await waitFor(() => {
+      expect(container.querySelector(".shell-members.open")).not.toBeNull();
+    });
+    const btn = container.querySelector<HTMLButtonElement>(
+      ".shell-members .mobile-panel-actions [data-testid='mobile-panel-list']",
+    );
+    expect(btn).not.toBeNull();
+    fireEvent.click(btn as HTMLButtonElement);
+    // Same mutex shape as openSettingsPanel/openAdminPanel — the drawer
+    // closes before navigating to the launched surface.
+    await waitFor(() => {
+      expect(container.querySelector(".shell-members.open")).toBeNull();
+    });
+  });
+
+  it("footer order: archive renders LAST, after the list + every other launcher", async () => {
+    mobileState.value = true;
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    const { container } = render(() => <Shell />);
+    await waitFor(() => {
+      expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeInTheDocument();
+    });
+    const footer = container.querySelector(".shell-members .mobile-panel-actions");
+    const testids = Array.from(
+      footer?.querySelectorAll<HTMLElement>(".shell-chrome-btn") ?? [],
+    ).map((b) => b.getAttribute("data-testid"));
+    // Archive is the trailing affordance.
+    expect(testids[testids.length - 1]).toBe("mobile-panel-archive");
+    // List is present and sits ahead of archive (primary nav, near home).
+    expect(testids.indexOf("mobile-panel-list")).toBeGreaterThanOrEqual(0);
+    expect(testids.indexOf("mobile-panel-list")).toBeLessThan(
+      testids.indexOf("mobile-panel-archive"),
+    );
   });
 });
 

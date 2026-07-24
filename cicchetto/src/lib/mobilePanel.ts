@@ -77,31 +77,47 @@ export function openArchivePanel(setters: MobilePanelSetters, slug: string): voi
   setArchiveModalNetwork(slug);
 }
 
-// UX-6 bucket C (2026-05-21) — admin launcher in the mobile drawer
-// footer (vjt iPhone-dogfood Bug 3). Unlike settings/archive, admin
-// navigation is selection-driven (Shell mounts AdminPane on
-// `selectedChannel.kind === "admin"` — single source of truth shared
-// with Sidebar admin row + SettingsDrawer admin entry). The helper's
-// job here is the SAME mutex shape as openSettingsPanel/openArchivePanel
-// — close the three sibling surfaces before navigating — and then
-// delegate the selection change via the `navigate` thunk. No new
-// `adminOpen` signal: the selection store already carries this state.
-export function openAdminPanel(setters: MobilePanelSetters, navigate: () => void): void {
+// #291 / UX-6-C / #361 — the three selection-driven "navigate to a window"
+// launchers (admin / home / list) share ONE mutex shape: close the members
+// drawer + settings + archive, THEN delegate the selection change via the
+// `navigate` thunk (Shell sets `selectedChannel` → the target kind). The
+// mutex lives HERE, in one place, so a future 4th nav surface (e.g.
+// `:search`) is a one-line edit, not N identical bodies (CLAUDE.md
+// "implement once, reuse everywhere"). The own-signal launchers
+// (openSettingsPanel / openThemesPanel / openArchivePanel) are NOT nav
+// launchers — each flips its OWN surface signal — so they stay distinct
+// and do NOT route through here. The three public wrappers below are kept
+// (rather than one generic `openNavPanel`) so each launcher keeps its
+// self-documenting name + WHY-comment, matching the per-launcher helper
+// convention the rest of this module already uses.
+function openNavWindow(setters: MobilePanelSetters, navigate: () => void): void {
   setters.setMembersOpen(false);
   setters.setSettingsOpen(false);
   setArchiveModalNetwork(null);
   navigate();
 }
 
+// UX-6 bucket C (2026-05-21) — admin launcher in the mobile drawer footer
+// (vjt iPhone-dogfood Bug 3). Selection-driven: Shell mounts AdminPane on
+// `selectedChannel.kind === "admin"` (single source of truth shared with
+// the Sidebar admin row + SettingsDrawer admin entry). No new `adminOpen`
+// signal — the selection store already carries this state.
+export function openAdminPanel(setters: MobilePanelSetters, navigate: () => void): void {
+  openNavWindow(setters, navigate);
+}
+
 // #291 — home launcher in the mobile drawer footer. Mobile narrow layout
 // has no other way back to the home window (desktop has the sidebar home
-// link). Same selection-driven, mutex shape as `openAdminPanel`: close
-// the three sibling surfaces, then delegate the selection change via the
-// `navigate` thunk (Shell sets `selectedChannel` → kind "home"). No new
-// signal — the selection store already carries this state.
+// link). Shell sets `selectedChannel` → kind "home".
 export function openHomePanel(setters: MobilePanelSetters, navigate: () => void): void {
-  setters.setMembersOpen(false);
-  setters.setSettingsOpen(false);
-  setArchiveModalNetwork(null);
-  navigate();
+  openNavWindow(setters, navigate);
+}
+
+// #361 — list launcher (channel directory / $list) in the mobile drawer
+// footer. Pre-bucket the ONLY mobile way to open the $list window was to
+// TYPE `/list`; the desktop sidebar's 📇 $list row had no mobile
+// equivalent. Shell sets `selectedChannel` → kind "list" for the active
+// network → DirectoryPane mounts and auto-loads.
+export function openListPanel(setters: MobilePanelSetters, navigate: () => void): void {
+  openNavWindow(setters, navigate);
 }

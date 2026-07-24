@@ -35,6 +35,7 @@ import {
   openAdminPanel,
   openArchivePanel,
   openHomePanel,
+  openListPanel,
   openSettingsPanel,
   openThemesPanel,
   toggleMembersPanel,
@@ -53,6 +54,7 @@ import {
   HOME_WINDOW_NAME,
   HOME_WINDOW_SLUG,
   kindHasScrollback,
+  LIST_WINDOW_NAME,
 } from "./lib/windowKinds";
 import { isActiveChannelJoined } from "./lib/windowState";
 import MediaViewerModal from "./MediaViewerModal";
@@ -948,18 +950,38 @@ const Shell: Component = () => {
             >
               {"\u{1F3E0}"}
             </button>
+            {/* #361 — list launcher (channel directory / $list). The
+                mobile narrow layout had NO way to open the $list window
+                except typing `/list` — the desktop sidebar's 📇 $list row
+                has no mobile equivalent. Gated on the SAME network-context
+                predicate as the archive launcher (`archiveSlugForSelection`
+                — the shared "which network is this footer launcher active
+                for" accessor whose moduledoc anticipates reuse for new
+                window kinds). Selection-driven, mutex shape mirrors the
+                home/admin launchers: dispatch the same $list navigation the
+                desktop sidebar row uses, so DirectoryPane mounts and
+                auto-loads for the active network (no throttling change).
+                Positioned right after home — list joins home as a primary
+                window-nav launcher, while archive moves to the row's END
+                (below). */}
             <Show when={archiveSlugForSelection()}>
               {(slug) => (
                 <button
                   type="button"
-                  class="shell-chrome-btn shell-chrome-archive"
-                  aria-label="open archive"
-                  data-testid="mobile-panel-archive"
+                  class="shell-chrome-btn shell-chrome-list"
+                  aria-label="open channel list"
+                  data-testid="mobile-panel-list"
                   onClick={() =>
-                    openArchivePanel({ membersOpen, setMembersOpen, setSettingsOpen }, slug())
+                    openListPanel({ membersOpen, setMembersOpen, setSettingsOpen }, () =>
+                      setSelectedChannel({
+                        networkSlug: slug(),
+                        channelName: LIST_WINDOW_NAME,
+                        kind: "list",
+                      }),
+                    )
                   }
                 >
-                  {"\u{1F4C2}"}
+                  {"\u{1F4C7}"}
                 </button>
               )}
             </Show>
@@ -1014,6 +1036,28 @@ const Shell: Component = () => {
               >
                 {"\u{1F527}"}
               </button>
+            </Show>
+            {/* #361 — archive launcher moved to the END of the row. It was
+                slot 2 (right after home); the 📇 list launcher now takes
+                that slot as a primary window-nav affordance, and archive
+                — the de-emphasised "old windows" surface — trails last.
+                Renders only when there's a network context, same
+                `archiveSlugForSelection()` rule that gates the standalone
+                ShellChrome archive button. */}
+            <Show when={archiveSlugForSelection()}>
+              {(slug) => (
+                <button
+                  type="button"
+                  class="shell-chrome-btn shell-chrome-archive"
+                  aria-label="open archive"
+                  data-testid="mobile-panel-archive"
+                  onClick={() =>
+                    openArchivePanel({ membersOpen, setMembersOpen, setSettingsOpen }, slug())
+                  }
+                >
+                  {"\u{1F4C2}"}
+                </button>
+              )}
             </Show>
           </footer>
         </aside>

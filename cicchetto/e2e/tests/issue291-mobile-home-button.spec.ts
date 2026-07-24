@@ -6,16 +6,17 @@
 // settings / admin — and enlarges ALL those launchers to ≥44px tap
 // targets. (#299 removed the #75 themes launcher from this footer — five
 // buttons overflowed on narrow devices and clipped admin. #332 (P0, vjt)
-// RESTORED the 🎨 themes launcher: the footer is back to FIVE — home /
-// archive / settings / themes / admin — and the overflow is now handled
-// by `flex-wrap` on `.mobile-panel-actions` instead of dropping a button,
-// so admin no longer clips. This spec's launcher-count assertions moved
-// from 4 to 5 with that restoration.)
+// RESTORED the 🎨 themes launcher, and #361 added the 📇 list launcher: the
+// footer is now SIX — home / list / settings / themes / admin / archive
+// (archive moved to the END by #361) — and the overflow is handled by
+// `flex-wrap` on `.mobile-panel-actions` instead of dropping a button, so
+// nothing clips. This spec's launcher-count assertions moved 4 → 5 (#332)
+// → 6 (#361).)
 //
 // This spec drives the real mobile layout (@webkit / iPhone 15): open
-// the hamburger, assert all 5 launchers are present and each ≥44px, tap
+// the hamburger, assert all 6 launchers are present and each ≥44px, tap
 // home and assert the drawer closes and the HOME window renders. The
-// 5-launcher count needs the admin button present, so vjt is temporarily
+// 6-launcher count needs the admin button present, so vjt is temporarily
 // promoted to admin (mirrors ux-6-c-mobile-admin-launcher), then reverted
 // in afterEach so the shared stack baseline is restored.
 
@@ -96,11 +97,14 @@ test.describe("#291 — mobile home button in drawer footer", () => {
     const launcherFooter = drawer.locator(".mobile-panel-actions");
     await expect(launcherFooter).toBeVisible();
 
-    // All launchers present. #332 RESTORED the #75 themes button, so an
-    // admin in a channel sees FIVE: home (#291), archive, settings, themes
-    // (#332), admin. The themes launcher deep-links to the settings
-    // drawer's themes sub-page (covered by issue332 spec).
+    // All launchers present. #332 RESTORED the #75 themes button and #361
+    // added the 📇 list launcher, so an admin in a channel sees SIX: home
+    // (#291), list (#361), settings, themes (#332), admin, archive — with
+    // archive moved to the END by #361. The themes launcher deep-links to
+    // the settings drawer's themes sub-page (covered by issue332 spec); the
+    // list launcher opens the $list directory (covered by issue361 spec).
     await expect(launcherFooter.locator("[data-testid='mobile-panel-home']")).toHaveCount(1);
+    await expect(launcherFooter.locator("[data-testid='mobile-panel-list']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
@@ -108,7 +112,7 @@ test.describe("#291 — mobile home button in drawer footer", () => {
 
     // Every launcher is a proper mobile tap target (≥44px, #291).
     const buttons = launcherFooter.locator(".shell-chrome-btn");
-    await expect(buttons).toHaveCount(5);
+    await expect(buttons).toHaveCount(6);
     const count = await buttons.count();
     for (let i = 0; i < count; i++) {
       const box = await buttons.nth(i).boundingBox();

@@ -99,11 +99,12 @@ test.describe("#299 — footer admin reachable (themes launcher removed)", () =>
     const footer = drawer.locator(".mobile-panel-actions");
     await expect(footer).toBeVisible();
 
-    // #332 restored the themes launcher; the footer is FIVE buttons and the
-    // row `flex-wrap`s so the 5th doesn't clip admin (the #299 regression
-    // this spec still guards, now via wrap instead of removal).
+    // #332 restored the themes launcher and #361 added the 📇 list launcher;
+    // the footer is SIX buttons and the row `flex-wrap`s so overflow doesn't
+    // clip admin (the #299 regression this spec still guards, now via wrap
+    // instead of removal).
     await expect(footer.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
-    await expect(footer.locator(".shell-chrome-btn")).toHaveCount(5);
+    await expect(footer.locator(".shell-chrome-btn")).toHaveCount(6);
 
     // Admin is present AND a proper ≥44px tap target (not clipped off-screen).
     const adminBtn = footer.locator("[data-testid='mobile-panel-admin']");
