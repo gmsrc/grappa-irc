@@ -86,6 +86,17 @@ services:
       # services' validate_email() rejects the .test TLD; use the real
       # services network domain (azzurra.chat) for the envelope-from.
       SVC_RETURN: "noreply@azzurra.chat"
+      # GH #349 — DISABLE services' clone-autokill (conf.c CLONES →
+      # CONF_AKILL_CLONES; default 5, expiry 600s). grappa is a BOUNCER:
+      # bahamut-test + azzurra + azzurra-reg sessions ALL link to this one
+      # hub from grappa's single container IP, so services see them as
+      # clones and autokill the IP on the 5th connection — a false positive
+      # that turns the FULL suite red from a hard cliff (Autokilled →
+      # session :failed → resetSubject 500 → live-IRC specs time out).
+      # main sits at 4 concurrent (margin-of-1); azzurra-reg is the +1 that
+      # tips it. 0 = akill off (detection/globops still run). This testnet
+      # is single-tenant + hermetic — there are no real clones to police.
+      SVC_AKILL_CLONES: "0"
     networks:
       svc-net: null
       grappa-e2e:
