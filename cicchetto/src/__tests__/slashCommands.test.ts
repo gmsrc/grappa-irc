@@ -651,6 +651,30 @@ describe("parseSlash — info verbs (TODO — server-side missing)", () => {
   it("/links <pattern>", () => {
     expect(parseSlash("/links *.irc.net")).toEqual({ kind: "links", pattern: "*.irc.net" });
   });
+
+  // #374 — /motd carries an optional target server (RFC 2812 §3.4.1
+  // `MOTD [<target>]`). Bare /motd = current server's MOTD (target null);
+  // /motd <server> routes the MOTD query through that server. Pre-#374 the
+  // argument was silently dropped, so the user got the wrong server's MOTD
+  // with no error. Mirrors the /who target shape (first token only).
+  it("/motd bare → motd with no target", () => {
+    expect(parseSlash("/motd")).toEqual({ kind: "motd", target: null });
+  });
+
+  it("/motd <server> → motd carrying the target server", () => {
+    expect(parseSlash("/motd void.azzurra.chat")).toEqual({
+      kind: "motd",
+      target: "void.azzurra.chat",
+    });
+  });
+
+  // Trailing tokens past the first are ignored (MOTD takes a single target).
+  it("/motd <server> <extra> → only the first token is the target", () => {
+    expect(parseSlash("/motd void.azzurra.chat junk")).toEqual({
+      kind: "motd",
+      target: "void.azzurra.chat",
+    });
+  });
 });
 
 // #356 — keyword highlight is classic-IRC irssi-shaped now: /hilight

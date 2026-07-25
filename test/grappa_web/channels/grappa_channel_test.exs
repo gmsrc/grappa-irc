@@ -1780,6 +1780,32 @@ defmodule GrappaWeb.GrappaChannelTest do
       {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "MOTD\r\n"), 1_000)
     end
 
+    # #374 — /motd <target> threads the target server through to the wire so
+    # upstream returns THAT server's MOTD (or a 402), not the current one.
+    test "motd: with target sends MOTD <target> upstream", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "motd", %{"network_id" => network.id, "target" => "void.azzurra.chat"})
+
+      assert_reply(ref, :ok)
+
+      {:ok, _} =
+        IRCServer.wait_for_line(irc_server, &(&1 == "MOTD void.azzurra.chat\r\n"), 1_000)
+    end
+
+    # #374 — an injection-shaped target is rejected at the channel boundary
+    # (safe_oper_token? via validate_args(server:)) before it reaches the wire.
+    test "motd: rejects an injection target with invalid_line", %{
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "motd", %{"network_id" => network.id, "target" => "srv\r\nQUIT"})
+
+      assert_reply(ref, :error, %{error: "invalid_line"})
+    end
+
     test "whois (REV-F H10): dead Session.Server socket → typed upstream_unavailable reply, Channel survives",
          %{socket: socket, network: network, user: user} do
       # REV-F (H10): `dispatch_subject_verb/3` (sister of `dispatch_ops_verb/3`)

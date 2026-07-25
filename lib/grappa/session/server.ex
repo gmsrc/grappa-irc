@@ -1413,8 +1413,12 @@ defmodule Grappa.Session.Server do
     {:reply, Client.send_version(state.client), %{state | version_pending: %{lines: []}}}
   end
 
-  def handle_call(:send_motd, _, state) do
-    {:reply, Client.send_motd(state.client), %{state | motd_pending: %{lines: []}}}
+  # #374 — /motd [<target>]. The optional target routes the query through a
+  # named server (or 402 ERR_NOSUCHSERVER when unknown); nil keeps the bare
+  # /motd. Priming motd_pending is target-independent — the reply burst (or
+  # 402 terminator) drains the modal either way.
+  def handle_call({:send_motd, target}, _, state) do
+    {:reply, Client.send_motd(state.client, target), %{state | motd_pending: %{lines: []}}}
   end
 
   # Channel directory (#84) refresh trigger. Three clauses, ordered:

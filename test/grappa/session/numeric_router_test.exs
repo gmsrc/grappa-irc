@@ -77,10 +77,31 @@ defmodule Grappa.Session.NumericRouterTest do
               # + channel-state numerics (324/329/331/332/333 delegated post
               # cluster `channel-created-notice`) + P-0c WHOWAS not-found
               # (406 delegated post numeric-delegation-p0) + #127 MOTD
-              # 422 ERR_NOMOTD (delegated to the server-reply modal clause)
-              # short-circuit before the param scan; exclude all classes so
-              # the property exercises the channel-prefix fallthrough only.
-              numeric not in [421, 432, 433, 437, 461, 471, 473, 474, 475, 403, 405, 324, 329, 331, 332, 333, 406, 422],
+              # 422 ERR_NOMOTD + #374 402 ERR_NOSUCHSERVER (both delegated to
+              # the server-reply modal clause) short-circuit before the param
+              # scan; exclude all classes so the property exercises the
+              # channel-prefix fallthrough only.
+              numeric not in [
+                421,
+                432,
+                433,
+                437,
+                461,
+                471,
+                473,
+                474,
+                475,
+                403,
+                405,
+                324,
+                329,
+                331,
+                332,
+                333,
+                406,
+                422,
+                402
+              ],
               chan_body <- string(:alphanumeric, min_length: 1, max_length: 20)
             ) do
         chan = "#" <> chan_body
@@ -274,7 +295,10 @@ defmodule Grappa.Session.NumericRouterTest do
     # #127 — MOTD 422 ERR_NOMOTD + INFO (371/374) + VERSION (351) delegated
     # so the EventRouter #127 clauses own them (drain a server_reply modal
     # when the matching command primed the session; $server persist when not).
+    # #374 — 402 ERR_NOSUCHSERVER joins the MOTD family: the terminator for
+    # `/motd <target>` to an unknown server, drained by the same clause.
     422,
+    402,
     371,
     374,
     351,

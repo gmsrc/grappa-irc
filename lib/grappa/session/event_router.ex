@@ -1930,22 +1930,25 @@ defmodule Grappa.Session.EventRouter do
     end
   end
 
-  # #127 — MOTD family (375 RPL_MOTDSTART, 372 RPL_MOTD, 376 RPL_ENDOFMOTD,
-  # 422 ERR_NOMOTD). Two surfaces, gated on state.motd_pending:
+  # #127/#374 — MOTD family (375 RPL_MOTDSTART, 372 RPL_MOTD, 376
+  # RPL_ENDOFMOTD, 422 ERR_NOMOTD) + #374's 402 ERR_NOSUCHSERVER terminator.
+  # Two surfaces, gated on state.motd_pending:
   #
-  #   * connect-time MOTD (motd_pending == nil) — the server auto-sends the
-  #     MOTD on registration. Keep the legacy BUG2 behaviour: persist each
-  #     line as a `:notice` row on the synthetic "$server" window so the
-  #     server-messages window has content. NumericRouter marks these
-  #     :delegated so no numeric_routed persist fires — this clause is the
-  #     canonical surface.
+  #   * connect-time / unprimed (motd_pending == nil) — the server auto-sends
+  #     the MOTD on registration (or a stray 402 arrives with no /motd in
+  #     flight). Keep the legacy BUG2 behaviour: persist each line as a
+  #     `:notice` row on the synthetic "$server" window so the server-messages
+  #     window has content. NumericRouter marks these :delegated so no
+  #     numeric_routed persist fires — this clause is the canonical surface.
   #
   #   * explicit /motd (motd_pending == %{lines: _}) — the operator asked.
   #     Fold 375/372 into the accumulator, drain ONE ephemeral
   #     `{:server_reply, :motd, lines}` effect on the terminator (mirror of
   #     the /who 315 drain → whoModal). NOTHING is persisted; cic renders a
-  #     dismissable retro modal. 422 carries the only line (no MOTD), so it
-  #     folds its own body before draining — an explicit /motd never dangles.
+  #     dismissable retro modal. 422 (no MOTD) and 402 (#374 — /motd <target>
+  #     to an UNKNOWN server) each carry the only line (no 375/372 burst), so
+  #     they fold their own body before draining — an explicit /motd never
+  #     dangles and a 402 never gets swallowed into a wrong-server MOTD.
   #
   # BUG2 fix-up (still applies to the $server path in persist_server_notice/2):
   # sender must be Message.sender_nick/1, never "".
@@ -1953,7 +1956,7 @@ defmodule Grappa.Session.EventRouter do
          %Message{command: {:numeric, motd_numeric}} = msg,
          state
        )
-       when motd_numeric in [375, 372, 376, 422] do
+       when motd_numeric in [375, 372, 376, 422, 402] do
     case Map.get(state, :motd_pending) do
       nil ->
         persist_server_notice(state, msg)
@@ -1966,7 +1969,7 @@ defmodule Grappa.Session.EventRouter do
           motd_numeric == 376 ->
             {:cont, %{state | motd_pending: nil}, [{:server_reply, :motd, server_reply_drain(accum)}]}
 
-          motd_numeric == 422 ->
+          motd_numeric in [422, 402] ->
             drained = server_reply_drain(server_reply_fold(accum, msg))
             {:cont, %{state | motd_pending: nil}, [{:server_reply, :motd, drained}]}
         end

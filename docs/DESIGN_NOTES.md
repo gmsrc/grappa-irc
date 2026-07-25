@@ -16884,3 +16884,75 @@ assertion would be testnet-config-dependent). Real e2e
 the inline-`<svg>` QR + the modal opening from BOTH the settings and home
 buttons + the prominent Browse button. `visitor-session-sharing` +
 `issue335-identity-card-share` specs migrated sub-page → modal.
+
+## 2026-07-25 — `/motd <target>` honors the target server (GH #374, cic + grappa)
+
+**Bug.** `/motd <server>` (e.g. `/motd void.azzurra.chat`) silently DROPPED the
+target and returned the CURRENT server's MOTD — the wrong server's data with no
+error. The argument was discarded in TWO independent places: cic's slash parser
+(`slashCommands.ts` — `motd: (_verb, _rest) => ({kind:"motd"})`, `_rest` thrown
+away) AND grappa's send path (`Client.send_motd/1` emitted a bare `MOTD`,
+target never forwarded). Fixing it required threading an optional target
+through the whole chain on both sides.
+
+**Fix — optional target threaded end-to-end.** cic: the `motd` parser now takes
+the first token (`{kind:"motd", target: string | null}`, mirror of `/who`;
+trailing tokens ignored) → `compose.ts` `pushMotd(networkId, cmd.target)` →
+`socket.ts` `pushMotd(networkId, target)` omits the wire key when null.
+grappa: `GrappaChannel` `handle_in("motd", …)` reads the optional `"target"`
+param → `Session.send_motd/3` (target `String.t() | nil`, NO default arg per
+CLAUDE.md) → `Server.handle_call({:send_motd, target}, …)` (primes
+`motd_pending` as before) → `Client.send_motd/2`: `nil` → bare `MOTD`, a target
+→ `MOTD <target>`. Scope is `/motd` ONLY — `/info` + `/version` stay no-arg
+(same #127 family, filed separately if raised).
+
+**Type shape: `target: string | null`, NOT the issue's `target?: string`.** The
+codebase convention for optional command args is `X: T | null` (`/who`,
+`/names`, `/list`, `/stats` all use it). Followed the documented consistency
+rule over the issue's shorthand — the two are semantically identical.
+
+**Injection gate: `safe_oper_token?/1`.** The target is validated at BOTH the
+channel boundary (`validate_args(server: target)` — the same `{:server, _}` gate
+WHOIS/STATS use) and in `Client.send_motd/2` (defense in depth). A single wire
+token — no whitespace (would splice an extra MOTD slot) / CRLF (command
+injection); rejection → `{:error, :invalid_line}`. A non-binary target
+(malformed client) is rejected loudly, never silently downgraded to a bare MOTD.
+
+**402 ERR_NOSUCHSERVER surfaces, never swallowed (the key correctness point).**
+An unknown target makes upstream answer 402 instead of the 375/372/376 burst.
+Pre-#374 `motd_pending` would have DANGLED (no terminator) and the 402 would
+scan-route to `$server`. The fix folds 402 into the MOTD EventRouter clause as a
+TERMINATOR identical to 422 ERR_NOMOTD: when `motd_pending` is primed, it drains
+ONE `{:server_reply, :motd, [line]}` modal effect (the same ServerReplyModal the
+happy path uses — source "motd", "Message of the Day") AND clears the
+accumulator. 402 was added to `@delegated_numerics` in the SAME commit (per the
+delegation contract) so NumericRouter stops persisting it; an UNPRIMED 402
+(no `/motd` in flight) falls through the clause's nil branch to the same
+`$server` :notice persist the rest of the MOTD family uses — same window + kind
+as the pre-#374 scan route (still VISIBLE, no silent swallow). One difference:
+`persist_server_notice/2` writes no meta, so the unprimed row loses the old
+scan path's `severity: :error` (plain, not red) — but that matches how unprimed
+422/375/372/376 already persist, so it's family-consistent, not a fresh
+inconsistency. Chose the modal over a `$server` line
+(the issue allowed either) because it reuses the primed-MOTD terminator path
+(DRY with 422) and is immediately visible to the operator who asked — the
+issue's core complaint was a SILENT wrong answer.
+
+**Test-vehicle fallout (delegation reclassifies 402).** Two pre-existing tests
+used 402 as an example of a NON-delegated numeric; delegating it moved 402 off
+the scan path, so they were retargeted WITHOUT changing their intent:
+`numeric_router_test`'s channel-prefix property excludes 402 (now short-circuits
+before the scan, like 422) and its delegated-numerics list gains 402;
+`server_test`'s labels_pending_at hot-reload-safety test swapped its vehicle to
+481 ERR_NOPRIVILEGES (another non-delegated `$server` numeric) so it still
+exercises the routing/persist branch it targets.
+
+**Tests.** Parser: `slashCommands.test.ts` (bare/target/trailing-ignored).
+Compose: `compose.test.ts` (`pushMotd(1, null)` + `pushMotd(1, "void…")`).
+grappa: `client_test` (bare/target wire framing + injection reject),
+`event_router_test` (primed 402 → modal + clear; unprimed 402 → `$server`),
+`grappa_channel_test` (target → `MOTD <target>` on wire; injection →
+invalid_line). Real e2e `issue374-motd-target-server.spec.ts` drives `/motd
+<unknown-server>` and asserts the surfaced 402 modal — a bare MOTD can NEVER
+yield ERR_NOSUCHSERVER, so a surfaced 402 is unforgeable proof the target
+reached the wire.

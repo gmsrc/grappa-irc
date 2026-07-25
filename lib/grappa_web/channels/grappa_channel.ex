@@ -699,16 +699,25 @@ defmodule GrappaWeb.GrappaChannel do
     )
   end
 
+  # #374 — /motd [<target>]. Unlike /info + /version (bare, same family,
+  # separate issue), MOTD carries an OPTIONAL target server (RFC 2812
+  # §3.4.1). Absent → bare MOTD (current server); present → validated as a
+  # single wire token (`{:server, _}` → `safe_oper_token?/1`) so an
+  # injection-shaped target is rejected at the boundary before it reaches
+  # the wire. An unknown target yields 402 ERR_NOSUCHSERVER upstream, which
+  # surfaces via the same server_reply modal (never a wrong-server MOTD).
   def handle_in(
         "motd",
-        %{"network_id" => network_id},
+        %{"network_id" => network_id} = params,
         socket
       )
       when is_integer(network_id) do
+    target = Map.get(params, "target")
+
     dispatch_subject_verb(
       socket,
-      fn -> {:ok, :ok} end,
-      fn subject -> Session.send_motd(subject, network_id) end
+      fn -> validate_motd_target(target) end,
+      fn subject -> Session.send_motd(subject, network_id, target) end
     )
   end
 
@@ -1359,6 +1368,14 @@ defmodule GrappaWeb.GrappaChannel do
   @spec validate_args([validate_arg()]) ::
           {:ok, :ok}
           | {:error, :invalid_channel | :invalid_nick | :invalid_mask | :invalid_line}
+  # #374 — /motd [<target>]. Absent (nil) → bare MOTD, no validation. Present
+  # → a single wire token (same `{:server, _}` gate WHOIS/STATS use). A
+  # non-binary target (malformed client) is rejected loudly, never silently
+  # downgraded to a bare MOTD.
+  defp validate_motd_target(nil), do: {:ok, :ok}
+  defp validate_motd_target(target) when is_binary(target), do: validate_args(server: target)
+  defp validate_motd_target(_), do: {:error, :invalid_line}
+
   defp validate_args([]), do: {:ok, :ok}
 
   defp validate_args([{:channel, value} | rest]) do

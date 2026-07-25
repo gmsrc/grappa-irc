@@ -963,6 +963,39 @@ defmodule Grappa.Session.EventRouterTest do
       assert attrs.channel == "$server"
     end
 
+    # #374 — /motd <target> to an UNKNOWN server: upstream answers 402
+    # ERR_NOSUCHSERVER instead of the 375/372/376 burst. A primed motd_pending
+    # must terminate on 402 (drain the modal carrying the error line + clear
+    # the accumulator) so the failure surfaces to the operator who asked and
+    # never dangles — mirror of the 422 ERR_NOMOTD terminator. NEVER swallowed
+    # into a wrong-server MOTD.
+    test "primed /motd to an unknown server drains {:server_reply, :motd, [error]} on 402" do
+      state = base_state(%{motd_pending: %{lines: []}})
+
+      assert {:cont, drained, [{:server_reply, :motd, ["No such server"]}]} =
+               EventRouter.route(
+                 msg({:numeric, 402}, ["vjt", "nope.invalid", "No such server"], nil),
+                 state
+               )
+
+      assert drained.motd_pending == nil
+    end
+
+    # An UNPRIMED 402 (no explicit /motd in flight) falls back to the same
+    # $server :notice persist the connect-time MOTD family uses — never
+    # silently swallowed.
+    test "unprimed 402 persists to $server, no server_reply" do
+      state = base_state()
+
+      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+               EventRouter.route(
+                 msg({:numeric, 402}, ["vjt", "nope.invalid", "No such server"], {:server, "irc.test"}),
+                 state
+               )
+
+      assert attrs.channel == "$server"
+    end
+
     # /info primes state.info_pending; 371 RPL_INFO burst folds, 374
     # RPL_ENDOFINFO drains {:server_reply, :info, lines}.
     test "primed /info folds 371 and drains {:server_reply, :info, lines} on 374" do

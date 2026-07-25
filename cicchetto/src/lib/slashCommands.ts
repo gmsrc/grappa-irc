@@ -131,7 +131,7 @@ export type SlashCommand =
   | { kind: "lusers" }
   | { kind: "info" }
   | { kind: "version" }
-  | { kind: "motd" }
+  | { kind: "motd"; target: string | null }
   | { kind: "stats"; query: string | null; target: string | null }
   | { kind: "rehash" }
   | { kind: "whois"; nick: string | null; server: string | null }
@@ -484,12 +484,20 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
 
   lusers: (_verb, _rest) => ({ kind: "lusers" }),
 
-  // #127 — /info, /version, /motd. No-arg server-text queries; the reply
-  // renders in a dismissable retro modal (ServerReplyModal). Mirror the
-  // /lusers no-arg shape.
+  // #127 — /info, /version. No-arg server-text queries; the reply renders
+  // in a dismissable retro modal (ServerReplyModal). Mirror the /lusers
+  // no-arg shape.
   info: (_verb, _rest) => ({ kind: "info" }),
   version: (_verb, _rest) => ({ kind: "version" }),
-  motd: (_verb, _rest) => ({ kind: "motd" }),
+  // #374 — /motd [<target>] (RFC 2812 §3.4.1). Bare = current server's
+  // MOTD (target null); /motd <server> routes the query through that server.
+  // Pre-#374 the arg was dropped, so the user got the wrong server's MOTD
+  // with no error. First token only (mirror of /who); trailing tokens are
+  // ignored. /info + /version stay no-arg (same family, separate issue).
+  motd: (_verb, rest) => {
+    const [target] = tokens(rest);
+    return { kind: "motd", target: target ?? null };
+  },
 
   // #155 — /stats [query] [server]. Native parser sugar over the raw
   // transport (like the #20 services shortcuts rewrite to {kind:"msg"}):

@@ -694,8 +694,15 @@ export function pushVersion(networkId: number): Promise<void> {
   return pushUserChannelVerb("version", { network_id: networkId });
 }
 
-export function pushMotd(networkId: number): Promise<void> {
-  return pushUserChannelVerb("motd", { network_id: networkId });
+// #374 — /motd [<target>]. Bare (target null) omits the wire key so grappa
+// emits `MOTD`; a target sends `{ target }` so grappa emits `MOTD <target>`
+// and the 375/372/376 (or 402 ERR_NOSUCHSERVER) reply routes back through
+// the same server_reply modal.
+export function pushMotd(networkId: number, target: string | null): Promise<void> {
+  return pushUserChannelVerb(
+    "motd",
+    target === null ? { network_id: networkId } : { network_id: networkId, target },
+  );
 }
 
 // #140 — /names <#channel>. Pushes on the user-level channel; server

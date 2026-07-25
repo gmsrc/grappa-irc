@@ -7018,14 +7018,22 @@ defmodule Grappa.Session.ServerTest do
     # and written via Map.put so a HOT code-reload of a pre-S10 process
     # (whose state map lacks the key) doesn't KeyError on its next routed
     # numeric. Simulate that process by deleting the key, then feed a
-    # non-delegated numeric (402 ERR_NOSUCHSERVER hits the routing/drain
-    # branch) and prove the session survives + the key is repopulated.
+    # non-delegated numeric (481 ERR_NOPRIVILEGES routes to $server via the
+    # routing/persist branch — the branch that repopulates the field) and
+    # prove the session survives + the key is repopulated. (Vehicle was 402
+    # ERR_NOSUCHSERVER pre-#374; #374 delegated 402 to the MOTD clause, which
+    # bypasses this branch, so the test now uses 481 — another non-delegated
+    # $server numeric — to keep exercising the routing branch it targets.)
     test "hot-reload safety: a routed numeric on a state map missing labels_pending_at does not crash",
          %{server: server, pid: pid} do
       _ = :sys.replace_state(pid, fn state -> Map.delete(state, :labels_pending_at) end)
 
       ref = Process.monitor(pid)
-      IRCServer.feed(server, ":irc.test.org 402 grappa-test nosuchserver :No such server\r\n")
+
+      IRCServer.feed(
+        server,
+        ":irc.test.org 481 grappa-test :Permission Denied- You're not an IRC operator\r\n"
+      )
 
       refute_receive {:DOWN, ^ref, :process, ^pid, _}, 300
 

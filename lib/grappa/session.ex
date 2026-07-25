@@ -1154,17 +1154,23 @@ defmodule Grappa.Session do
   end
 
   @doc """
-  #127 — sends bare `MOTD` upstream (primes `motd_pending`). The 375/372/376
-  (or 422) burst is drained as a typed `:server_reply` (source `:motd`) wire
-  event on `Topic.user/1` — cic renders a dismissable modal. Connect-time
-  MOTD is NOT affected (no pending flag → stays on `$server`). Returns `:ok`
-  or `{:error, :no_session}`.
+  #127/#374 — sends `MOTD [<target>]` upstream (primes `motd_pending`). `nil`
+  = the current server's MOTD; a `target` routes the query through that server
+  (RFC 2812 §3.4.1). The 375/372/376 (or 422 ERR_NOMOTD, or 402
+  ERR_NOSUCHSERVER for an unknown target) burst is drained as a typed
+  `:server_reply` (source `:motd`) wire event on `Topic.user/1` — cic renders
+  a dismissable modal. Connect-time MOTD is NOT affected (no pending flag →
+  stays on `$server`). Returns `:ok`, `{:error, :no_session}`, or
+  `{:error, :invalid_line}` if a non-nil target's syntax is rejected by
+  `Grappa.IRC.Client.send_motd/2` (mirror of `send_who/3`; the channel door
+  validates first, but the context contract stays honest for every door).
   """
-  @spec send_motd(subject(), integer()) ::
-          :ok | {:error, :no_session | send_transport_error()}
-  def send_motd(subject, network_id)
-      when is_subject(subject) and is_integer(network_id) do
-    call_session(subject, network_id, :send_motd)
+  @spec send_motd(subject(), integer(), String.t() | nil) ::
+          :ok | {:error, :no_session | :invalid_line | send_transport_error()}
+  def send_motd(subject, network_id, target)
+      when is_subject(subject) and is_integer(network_id) and
+             (is_binary(target) or is_nil(target)) do
+    call_session(subject, network_id, {:send_motd, target})
   end
 
   @doc """

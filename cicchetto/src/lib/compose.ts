@@ -804,7 +804,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "motd": {
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/motd: network not found" };
-          await pushMotd(networkId); // S6 (#364): await verb-ack
+          // #374 — thread the optional target server through so grappa emits
+          // `MOTD <target>` upstream (or bare MOTD when null). A 402
+          // ERR_NOSUCHSERVER for an unknown target surfaces via the same
+          // server_reply modal, never a wrong-server MOTD.
+          await pushMotd(networkId, cmd.target); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
         }

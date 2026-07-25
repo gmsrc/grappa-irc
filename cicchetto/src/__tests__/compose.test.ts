@@ -366,14 +366,28 @@ describe("compose submit — slash command dispatch", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("/motd pushes MOTD via pushMotd(networkId)", async () => {
+  it("/motd pushes MOTD via pushMotd(networkId, null)", async () => {
     const socket = await import("../lib/socket");
     const compose = await import("../lib/compose");
     const k = channelKey("freenode", "#a");
     compose.setDraft(k, "/motd");
     const result = await compose.submit(k, "freenode", "#a");
 
-    expect(socket.pushMotd).toHaveBeenCalledWith(1);
+    expect(socket.pushMotd).toHaveBeenCalledWith(1, null);
+    expect(result).toEqual({ ok: true });
+  });
+
+  // #374 — /motd <server> threads the target through pushMotd so grappa
+  // emits `MOTD <target>` upstream instead of dropping the arg and
+  // returning the current server's MOTD.
+  it("/motd <server> pushes MOTD via pushMotd(networkId, target)", async () => {
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/motd void.azzurra.chat");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.pushMotd).toHaveBeenCalledWith(1, "void.azzurra.chat");
     expect(result).toEqual({ ok: true });
   });
 

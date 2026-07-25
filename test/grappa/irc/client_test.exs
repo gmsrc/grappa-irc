@@ -433,6 +433,41 @@ defmodule Grappa.IRC.ClientTest do
       assert {:error, :invalid_line} = Client.send_who(client, "")
     end
 
+    # #374 — /motd <target> (RFC 2812 §3.4.1 `MOTD [<target>]`). Pre-#374
+    # send_motd/1 always emitted a bare `MOTD`, dropping the target so the
+    # user got the current server's MOTD. send_motd/2 forwards an optional
+    # target: nil → bare MOTD; a server token → `MOTD <target>`. The gate is
+    # safe_oper_token? (single wire token) so injection can't splice a slot.
+    test "send_motd/2 with nil emits bare MOTD framing" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_motd(client, nil)
+
+      assert {:ok, "MOTD\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "MOTD\r\n"), 1_000)
+    end
+
+    test "send_motd/2 with a target emits MOTD <target> framing" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_motd(client, "void.azzurra.chat")
+
+      assert {:ok, "MOTD void.azzurra.chat\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "MOTD void.azzurra.chat\r\n"), 1_000)
+    end
+
+    test "send_motd/2 rejects an injection target with {:error, :invalid_line}" do
+      {_, port} = start_server()
+      client = start_client(port)
+
+      # A space would splice an extra MOTD wire slot; CRLF would inject a
+      # follow-up command. Both rejected by the single-token gate.
+      assert {:error, :invalid_line} = Client.send_motd(client, "srv a")
+      assert {:error, :invalid_line} = Client.send_motd(client, "srv\r\nQUIT")
+    end
+
     test "send_topic_clear/2 emits TOPIC #chan : framing (empty trailing param)" do
       {server, port} = start_server()
       client = start_client(port)

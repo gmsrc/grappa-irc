@@ -764,17 +764,28 @@ defmodule Grappa.IRC.Client do
   end
 
   @doc """
-  #127 — sends bare `MOTD\\r\\n` upstream. Server replies with the
-  375/372/376 sequence (or 422 ERR_NOMOTD); when primed by `:send_motd`,
-  `EventRouter` folds the burst into `state.motd_pending` and
-  `Server.apply_effects` flushes a `{:server_reply, :motd, lines}` modal
-  effect on the terminator. Connect-time MOTD (unprimed) stays on `$server`.
+  #127/#374 — sends `MOTD [<target>]\\r\\n` upstream (RFC 2812 §3.4.1).
+  `nil` emits a bare `MOTD` (the current server's MOTD); a target emits
+  `MOTD <target>` so the query routes through that server. Server replies
+  with the 375/372/376 sequence (or 422 ERR_NOMOTD, or 402 ERR_NOSUCHSERVER
+  for an unknown target); when primed by `:send_motd`, `EventRouter` folds
+  the burst into `state.motd_pending` and `Server.apply_effects` flushes a
+  `{:server_reply, :motd, lines}` modal effect on the terminator (376/422/402).
+  Connect-time MOTD (unprimed) stays on `$server`.
 
-  No params, no validation: MOTD is universally accepted.
+  #374 — the target is gated by `safe_oper_token?/1` (a single wire token —
+  no whitespace/CRLF/NUL) so it cannot splice an extra wire slot or inject a
+  follow-up command; rejection yields `{:error, :invalid_line}`.
   """
-  @spec send_motd(pid()) :: send_result()
-  def send_motd(client) do
+  @spec send_motd(pid(), String.t() | nil) :: send_result()
+  def send_motd(client, nil) do
     send_line(client, "MOTD\r\n")
+  end
+
+  def send_motd(client, target) when is_binary(target) do
+    if Identifier.safe_oper_token?(target),
+      do: send_line(client, "MOTD #{target}\r\n"),
+      else: reject_invalid_line(:motd)
   end
 
   # S10 (cluster #10): byte-boundary observability for invalid_line
@@ -804,6 +815,7 @@ defmodule Grappa.IRC.Client do
            | :whowas
            | :who
            | :names
+           | :motd
            | :oper
            | :raw
 

@@ -302,7 +302,8 @@ defmodule Grappa.Session.NumericRouter do
                         255,
                         265,
                         266,
-                        # MOTD replies (375, 372, 376) + 422 ERR_NOMOTD.
+                        # MOTD replies (375, 372, 376) + 422 ERR_NOMOTD +
+                        # #374's 402 ERR_NOSUCHSERVER.
                         # #127: EventRouter's MOTD clause branches on
                         # state.motd_pending — an explicit /motd drains the
                         # burst into a `{:server_reply, :motd, lines}` modal
@@ -311,10 +312,26 @@ defmodule Grappa.Session.NumericRouter do
                         # the delegated clause, so 422 joins the family (a
                         # /motd against a server with no MOTD still resolves
                         # the modal instead of dangling).
+                        # #374: 402 is the terminator for `/motd <target>` to
+                        # an unknown server. Delegated so the primed MOTD clause
+                        # drains a modal + clears motd_pending (never a
+                        # wrong-server MOTD); an unprimed 402 falls through the
+                        # clause's nil branch to the same `$server` :notice
+                        # persist the rest of the MOTD family uses (same window
+                        # + kind as the pre-#374 scan route). One difference vs
+                        # the old generic scan: `persist_server_notice/2` writes
+                        # NO meta, so the unprimed row loses the scan path's
+                        # `severity: :error` (renders plain, not red) — but that
+                        # matches how unprimed 422/375/372/376 already persist,
+                        # so it's family-consistent, and it stays VISIBLE on
+                        # $server (no silent swallow). Introduced WITH the
+                        # EventRouter clause in the same commit per the
+                        # delegation contract.
                         375,
                         372,
                         376,
                         422,
+                        402,
                         # #127 — INFO (371 RPL_INFO burst, 374 RPL_ENDOFINFO)
                         # + VERSION (351 RPL_VERSION). Delegated so the
                         # EventRouter clauses own them: when the matching
