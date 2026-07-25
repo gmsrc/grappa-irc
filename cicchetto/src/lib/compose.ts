@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { addAlias, aliases, delAlias } from "./aliasList";
 import {
   ownNickForNetwork,
   patchNetwork,
@@ -204,7 +205,9 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     channelName: string,
   ): Promise<SubmitResult> => {
     const state = getState(key);
-    const cmd = parseSlash(state.draft);
+    // #385 — expand user-defined aliases (from the aliasList store) before
+    // dispatch; the parser stays pure and takes the map as an argument.
+    const cmd = parseSlash(state.draft, aliases());
     // Empty short-circuits before the token check — an empty submit is
     // a no-op regardless of session state, and the consumer (ComposeBox)
     // wants the same outcome whether or not a token is in play.
@@ -959,6 +962,23 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           if (networkId === undefined) return { error: "/oper: network not found" };
           await pushOper(networkId, cmd.name, cmd.password);
           result = { ok: true };
+          break;
+        }
+        // #385 — /alias <name> <expansion> defines/overwrites a user alias.
+        // Round-tripped through the aliasList store (full-map PUT, server
+        // normalizes + validates); a 422 (bad name/expansion, cap exceeded)
+        // is thrown as an ApiError and surfaces via friendlyError in the
+        // catch below with the per-field message. The green confirmation
+        // echoes the normalized definition.
+        case "alias-define": {
+          await addAlias(cmd.name, cmd.expansion);
+          result = { ok: `alias: /${cmd.name} → ${cmd.expansion}` };
+          break;
+        }
+        // #385 — /unalias <name> removes a user alias.
+        case "unalias": {
+          await delAlias(cmd.name);
+          result = { ok: `alias: removed /${cmd.name}` };
           break;
         }
         // ---------------------------------------------------------------

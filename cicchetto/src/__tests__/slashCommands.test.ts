@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSlash } from "../lib/slashCommands";
+import { expandAlias, isBuiltinVerb, MAX_ALIAS_DEPTH, parseSlash } from "../lib/slashCommands";
 
 describe("parseSlash — basics", () => {
   it("non-slash body parses as privmsg", () => {
@@ -894,5 +894,167 @@ describe("parseSlash — /notify + /watch presence (#356: irssi-direct, bare →
 
   it("bare /watch → open-settings (watchlists) — was an error pre-#356", () => {
     expect(parseSlash("/watch")).toEqual({ kind: "open-settings", section: "watchlists" });
+  });
+});
+
+describe("#385 — expandAlias grammar", () => {
+  it("positional $1 substitution (whois-with-idle motivating example)", () => {
+    // /wii foo → whois foo foo
+    expect(expandAlias("wii", "foo", { wii: "whois $1 $1" })).toEqual({
+      verb: "whois",
+      rest: "foo foo",
+    });
+  });
+
+  it("implicit verbatim append when the expansion has no placeholder", () => {
+    // alias w whois + /w foo bar → whois foo bar
+    expect(expandAlias("w2", "foo bar", { w2: "whois" })).toEqual({
+      verb: "whois",
+      rest: "foo bar",
+    });
+  });
+
+  it("no implicit append when a placeholder is present (no triple-arg)", () => {
+    // alias wii whois $1 $1 + /wii foo → whois foo foo (NOT foo foo foo)
+    expect(expandAlias("wii", "foo", { wii: "whois $1 $1" })).toEqual({
+      verb: "whois",
+      rest: "foo foo",
+    });
+  });
+
+  it("$* expands to all remaining args verbatim", () => {
+    expect(expandAlias("say", "hello there world", { say: "msg #chan $*" })).toEqual({
+      verb: "msg",
+      rest: "#chan hello there world",
+    });
+  });
+
+  it("a missing positional expands to the empty string (silent)", () => {
+    // /wii (no args) → whois  (both $1 empty) → trims to just the verb
+    expect(expandAlias("wii", "", { wii: "whois $1 $1" })).toEqual({
+      verb: "whois",
+      rest: "",
+    });
+  });
+
+  it("matches alias names case-insensitively", () => {
+    // typed /WII foo — the motivating example is upper-case
+    expect(expandAlias("WII", "foo", { wii: "whois $1 $1" })).toEqual({
+      verb: "whois",
+      rest: "foo foo",
+    });
+  });
+
+  it("leaves a non-alias verb untouched", () => {
+    expect(expandAlias("whois", "foo", { wii: "whois $1 $1" })).toEqual({
+      verb: "whois",
+      rest: "foo",
+    });
+  });
+
+  it("a builtin is never shadowed by a same-named alias (builtin wins)", () => {
+    // Even if the map somehow holds a builtin name, expansion does not fire.
+    expect(expandAlias("whois", "foo", { whois: "quote EVIL" })).toEqual({
+      verb: "whois",
+      rest: "foo",
+    });
+  });
+
+  it("expands alias → alias chains", () => {
+    // /a x → b x → whois x x
+    expect(expandAlias("a", "x", { a: "b $1", b: "whois $1 $1" })).toEqual({
+      verb: "whois",
+      rest: "x x",
+    });
+  });
+
+  it("errors (naming the chain) when a cycle exceeds MAX_ALIAS_DEPTH", () => {
+    const out = expandAlias("loop", "x", { loop: "loop $1" });
+    expect(out).toHaveProperty("error");
+    if ("error" in out) {
+      expect(out.error).toContain("too deep");
+      expect(out.error).toContain("loop");
+    }
+  });
+
+  it("allows a chain up to MAX_ALIAS_DEPTH deep", () => {
+    // a1→a2→…→a5→whois — exactly MAX_ALIAS_DEPTH (5) expansions.
+    const map: Record<string, string> = { a5: "whois" };
+    for (let i = 1; i < MAX_ALIAS_DEPTH; i++) map[`a${i}`] = `a${i + 1}`;
+    expect(expandAlias("a1", "", map)).toEqual({ verb: "whois", rest: "" });
+  });
+});
+
+describe("#385 — parseSlash with user aliases (end-to-end)", () => {
+  it("an expanded alias flows through the normal DISPATCH path", () => {
+    // /wii foo → whois foo foo → the whois command
+    expect(parseSlash("/wii foo", { wii: "whois $1 $1" })).toEqual({
+      kind: "whois",
+      nick: "foo",
+      server: "foo",
+    });
+  });
+
+  it("no aliases (default arg) → unchanged behaviour", () => {
+    expect(parseSlash("/whois alice")).toEqual({ kind: "whois", nick: "alice", server: null });
+  });
+
+  it("a cyclic alias surfaces an inline error", () => {
+    const out = parseSlash("/loop x", { loop: "loop $1" });
+    expect(out).toMatchObject({ kind: "error", verb: "loop" });
+  });
+
+  it("tolerates a leading slash in the expansion (equivalent forms)", () => {
+    expect(parseSlash("/wii foo", { wii: "/whois $1 $1" })).toEqual({
+      kind: "whois",
+      nick: "foo",
+      server: "foo",
+    });
+  });
+});
+
+describe("#385 — /alias + /unalias", () => {
+  it("bare /alias deep-links into the aliases settings sub-page", () => {
+    expect(parseSlash("/alias")).toEqual({ kind: "open-settings", section: "aliases" });
+  });
+
+  it("/alias <name> <expansion> defines (name lowercased, leading slash stripped)", () => {
+    expect(parseSlash("/alias WII whois $1 $1")).toEqual({
+      kind: "alias-define",
+      name: "wii",
+      expansion: "whois $1 $1",
+    });
+    // Leading slash stripped from the expansion (ww is not a builtin).
+    expect(parseSlash("/alias ww /whois")).toEqual({
+      kind: "alias-define",
+      name: "ww",
+      expansion: "whois",
+    });
+  });
+
+  it("rejects an alias name that collides with a builtin (never shadow)", () => {
+    // /whois is a builtin; /q and /w are builtin aliases too.
+    expect(parseSlash("/alias whois something")).toMatchObject({ kind: "error", verb: "alias" });
+    expect(parseSlash("/alias w something")).toMatchObject({ kind: "error", verb: "alias" });
+    expect(parseSlash("/alias q something")).toMatchObject({ kind: "error", verb: "alias" });
+  });
+
+  it("rejects a missing expansion", () => {
+    expect(parseSlash("/alias wii")).toMatchObject({ kind: "error", verb: "alias" });
+  });
+
+  it("/unalias <name> removes (name lowercased)", () => {
+    expect(parseSlash("/unalias WII")).toEqual({ kind: "unalias", name: "wii" });
+  });
+
+  it("bare /unalias errors with usage", () => {
+    expect(parseSlash("/unalias")).toMatchObject({ kind: "error", verb: "unalias" });
+  });
+
+  it("isBuiltinVerb reflects the live DISPATCH key set (incl. post-init /w /q)", () => {
+    expect(isBuiltinVerb("whois")).toBe(true);
+    expect(isBuiltinVerb("W")).toBe(true); // #122 post-init alias, case-insensitive
+    expect(isBuiltinVerb("alias")).toBe(true);
+    expect(isBuiltinVerb("wii")).toBe(false);
   });
 });

@@ -199,3 +199,60 @@ export async function putVhostSelection(
   }
   return (await res.json()) as VhostSettingsView;
 }
+
+// ---------------------------------------------------------------------------
+// aliases — user-defined command aliases (#385).
+//
+// A `%{name => expansion}` string map. Expansion grammar ($1..$9 / $* /
+// implicit append), builtin-collision precedence, and recursion depth are
+// all client-side (slashCommands.ts owns the DISPATCH table). The server
+// validates only structural shape and returns the NORMALIZED map (names
+// lowercased + trimmed), which the store mirrors as authoritative.
+//
+// Full-map PUT, no PATCH/diff — mirrors the notification-prefs convention.
+// The body is wrapped under an `aliases` key so an empty map ("clear all")
+// is distinguishable from a malformed request. The 422 envelope carries
+// `field_errors.aliases`; the whole body is stashed on ApiError.info so
+// friendlyApiError can render the per-field summary inline.
+// ---------------------------------------------------------------------------
+
+export type Aliases = Record<string, string>;
+
+export type AliasesResponse = {
+  aliases: Aliases;
+};
+
+export async function getAliases(token: string): Promise<Aliases> {
+  const res = await fetch("/me/settings/aliases", {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, res.statusText || "aliases_get_failed");
+  }
+  const body = (await res.json()) as AliasesResponse;
+  return body.aliases;
+}
+
+export async function putAliases(token: string, aliases: Aliases): Promise<Aliases> {
+  const res = await fetch("/me/settings/aliases", {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ aliases }),
+  });
+  if (!res.ok) {
+    let info: Record<string, unknown> = {};
+    let code = res.statusText || "aliases_put_failed";
+    try {
+      info = (await res.json()) as Record<string, unknown>;
+      if (typeof info.error === "string") code = info.error;
+    } catch {
+      /* fallthrough — code stays as statusText */
+    }
+    throw new ApiError(res.status, code, info);
+  }
+  const body = (await res.json()) as AliasesResponse;
+  return body.aliases;
+}

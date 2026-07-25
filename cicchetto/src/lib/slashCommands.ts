@@ -46,11 +46,20 @@
 // Parser stays pure — resolving null channel against the focused window
 // (and bailing if not on a channel window) is compose.ts's job.
 //
-// Aliases:
+// Built-in aliases:
 //   - `/q` == `/query` (both produce {kind: "query"})
 //   - `/j` == `/join`  (both produce {kind: "join"})
 //   - `/watch` == `/notify` (#356: presence; was a keyword alias pre-#356)
 //   - `/highlight` == `/hilight` (both keyword-highlight add)
+//
+// #385 — user-defined aliases: `/alias <name> <expansion>` /
+// `/unalias <name>` let users register their own. They are expanded
+// (`expandAlias`) BEFORE the DISPATCH lookup, so an expanded alias flows
+// through the normal command path. Builtins are never shadowed; expansion is
+// bounded at MAX_ALIAS_DEPTH. The `%{name => expansion}` map is passed into
+// `parseSlash` by compose.ts (from the aliasList store) — this parser stays
+// pure. Grammar: `$1..$9` positional (missing → empty), `$*` all args, and
+// implicit verbatim append when the expansion holds no placeholder.
 //
 // Services shortcuts (issue #20) — `/<x>s <cmd>` rewrites to
 // {kind: "msg", target}; a BARE `/<x>s` (issue #290) opens the dedicated
@@ -145,11 +154,17 @@ export type SlashCommand =
   // NOT the keyword highlight list above). irssi-direct: `/notify <nick> …`
   // adds. Removal is via the settings ×; a bare form opens settings.
   | { kind: "notify"; action: "add"; nicks: string[] }
-  // #356 — a BARE watch-family verb (/notify, /watch, /hilight,
-  // /highlight, /dehilight) opens the unified watch-lists settings section
-  // instead of printing inline. One section holds both lists, so a single
-  // section value covers every bare form.
-  | { kind: "open-settings"; section: "watchlists" }
+  // #356/#385 — a BARE verb that opens a settings sub-page instead of
+  // printing inline (watch-family → watch lists; bare /alias → aliases).
+  // Opening the drawer IS the feedback. `section` widens as sub-pages gain
+  // bare-verb deep-links; it must stay assignable to settingsNav's
+  // SettingsSubPage.
+  | { kind: "open-settings"; section: "watchlists" | "aliases" }
+  // #385 — user-defined command aliases. `/alias <name> <expansion>` defines
+  // one, `/unalias <name>` removes one. The define carries the parsed name +
+  // expansion; compose.ts round-trips them through the aliasList store.
+  | { kind: "alias-define"; name: string; expansion: string }
+  | { kind: "unalias"; name: string }
   | { kind: "quote"; line: string }
   | { kind: "oper"; name: string; password: string }
   | { kind: "error"; verb: string; message: string };
@@ -576,6 +591,14 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
   hs: (_verb, rest) => parseServiceShortcut("hs", "HelpServ", rest),
   rs: (_verb, rest) => parseServiceShortcut("rs", "RootServ", rest),
 
+  // #385 — user-defined command aliases. `/alias <name> <expansion>`
+  // defines/overwrites, `/unalias <name>` removes; bare `/alias` deep-links
+  // into the aliases settings sub-page (mirror of bare /notify). The
+  // collision-with-builtin rejection reads the LIVE DISPATCH key set, so it
+  // never drifts. Expansion happens in parseSlash (before DISPATCH lookup).
+  alias: (verb, rest) => parseAlias(verb, rest),
+  unalias: (verb, rest) => parseUnalias(verb, rest),
+
   // /quote <raw irc line> — escape hatch. Sends the raw bytes
   // verbatim upstream (CRLF appended by the client). Pure-parser pass-
   // through; compose.ts pushes the line via Phoenix Channel to
@@ -624,6 +647,104 @@ function parseServiceShortcut(_verb: string, target: string, rest: string): Slas
   return { kind: "msg", target, body: rest };
 }
 
+// #385 — is `verb` a built-in command (or a built-in alias like /q /j /w
+// /n)? Reads the LIVE DISPATCH key set so the check can't drift when a new
+// builtin is added. Must be called at RUNTIME (after the post-init block
+// below has populated q/j/w/n).
+export function isBuiltinVerb(verb: string): boolean {
+  return verb.toLowerCase() in DISPATCH;
+}
+
+// #385 — `/alias <name> <expansion>` defines/overwrites a user alias; bare
+// `/alias` deep-links into the aliases settings sub-page. A single optional
+// leading `/` is stripped from BOTH the name and the expansion so
+// `/alias w /whois` and `/alias w whois` are equivalent (the spec spells
+// expansions slash-less). Builtins are never shadowed (spec decision #3):
+// a collision is rejected here, at define time, naming it.
+function parseAlias(verb: string, rest: string): SlashCommand {
+  const trimmed = rest.trim();
+  if (trimmed === "") return { kind: "open-settings", section: "aliases" };
+
+  const sp = trimmed.search(/\s/);
+  if (sp === -1) return err(verb, "usage: /alias <name> <expansion>");
+
+  const name = trimmed.slice(0, sp).replace(/^\//, "").toLowerCase();
+  const expansion = trimmed
+    .slice(sp + 1)
+    .trim()
+    .replace(/^\//, "");
+  if (name === "" || expansion === "") return err(verb, "usage: /alias <name> <expansion>");
+
+  if (isBuiltinVerb(name)) {
+    return err(verb, `/${name} is a built-in command and can't be used as an alias name`);
+  }
+  return { kind: "alias-define", name, expansion };
+}
+
+// #385 — `/unalias <name>` removes a user alias. First token only.
+function parseUnalias(verb: string, rest: string): SlashCommand {
+  const [raw] = tokens(rest);
+  if (!raw) return err(verb, "usage: /unalias <name>");
+  return { kind: "unalias", name: raw.replace(/^\//, "").toLowerCase() };
+}
+
+// #385 — alias expansion. Iterate `verb`+`rest` through the user's alias map
+// until the head verb is a builtin (builtins win) or not an alias, bounded at
+// MAX_ALIAS_DEPTH. Returns the final verb+rest for the normal DISPATCH path,
+// or an {error} naming the chain when a cycle / over-long chain is hit
+// (surfaced inline in compose).
+export const MAX_ALIAS_DEPTH = 5;
+
+export type AliasExpansion = { verb: string; rest: string } | { error: string };
+
+export function expandAlias(
+  verb: string,
+  rest: string,
+  aliases: Readonly<Record<string, string>>,
+): AliasExpansion {
+  let curVerb = verb;
+  let curRest = rest;
+  const chain: string[] = [verb.toLowerCase()];
+
+  for (let depth = 0; ; depth++) {
+    const lower = curVerb.toLowerCase();
+    // Builtin wins; not an alias → nothing to expand. Either way, done.
+    if (lower in DISPATCH || !(lower in aliases)) {
+      return { verb: curVerb, rest: curRest };
+    }
+    if (depth >= MAX_ALIAS_DEPTH) {
+      return { error: `alias expansion too deep (chain: ${chain.join(" → ")})` };
+    }
+    // Tolerate a single leading `/` in the stored expansion — the CLI define
+    // path strips it, but a settings-sub-page edit submits raw, so the map
+    // may hold `/whois`. The expander is the one choke-point every expansion
+    // flows through, so normalise here too.
+    const template = (aliases[lower] as string).replace(/^\//, "");
+    const expanded = substituteAlias(template, curRest).trim();
+    const sp = expanded.search(/\s/);
+    curVerb = sp === -1 ? expanded : expanded.slice(0, sp);
+    curRest = sp === -1 ? "" : expanded.slice(sp + 1).trim();
+    chain.push(curVerb.toLowerCase());
+  }
+}
+
+const ALIAS_PLACEHOLDER = /\$(\*|[1-9])/;
+
+// Substitute placeholders in `template` from `rest`. If the template holds
+// ANY placeholder, only substitutions happen ($1..$9 → the Nth arg or empty
+// string; $* → all args verbatim). If it holds NONE, the rest is appended
+// verbatim (space-separated) — one rule serving both `alias w whois` (append)
+// and `alias wii whois $1 $1` (no double-append).
+function substituteAlias(template: string, rest: string): string {
+  if (!ALIAS_PLACEHOLDER.test(template)) {
+    return rest === "" ? template : `${template} ${rest}`;
+  }
+  const args = tokens(rest);
+  return template.replace(/\$(\*|[1-9])/g, (_m, g: string) =>
+    g === "*" ? rest : (args[Number(g) - 1] ?? ""),
+  );
+}
+
 // Post-init aliases. Adding to DISPATCH after the literal initializer
 // keeps the type narrowed in the original block while still surfacing
 // aliases through the same Handler indirection.
@@ -652,7 +773,15 @@ if (namesHandler) {
   (DISPATCH as Record<string, Handler>).n = namesHandler;
 }
 
-export function parseSlash(input: string): SlashCommand {
+// `aliases` (#385) is the user's `%{name => expansion}` map, passed in by
+// compose.ts from the aliasList store. It defaults to `{}` (no aliases → no
+// expansion, the correct production behavior when the user has defined none),
+// which also keeps the many pure `parseSlash(input)` call sites in tests
+// working unchanged.
+export function parseSlash(
+  input: string,
+  aliases: Readonly<Record<string, string>> = {},
+): SlashCommand {
   const trimmed = input.trim();
   if (trimmed === "") return { kind: "empty" };
 
@@ -671,11 +800,19 @@ export function parseSlash(input: string): SlashCommand {
   const verb = spaceIdx === -1 ? stripped : stripped.slice(0, spaceIdx);
   const rest = spaceIdx === -1 ? "" : stripped.slice(spaceIdx + 1).trim();
 
-  const verbLower = verb.toLowerCase();
+  // #385 — expand user-defined aliases BEFORE the DISPATCH lookup, so an
+  // expanded alias flows through the normal command path with no downstream
+  // special-casing (spec Placement). Builtins are never shadowed (checked
+  // inside expandAlias); a cycle / over-deep chain surfaces as an inline
+  // error.
+  const expanded = expandAlias(verb, rest, aliases);
+  if ("error" in expanded) return err(verb, expanded.error);
+
+  const verbLower = expanded.verb.toLowerCase();
   const handler = DISPATCH[verbLower];
   if (!handler) {
-    return err(verb, `unknown command: /${verb}`);
+    return err(expanded.verb, `unknown command: /${expanded.verb}`);
   }
 
-  return handler(verb, rest);
+  return handler(expanded.verb, expanded.rest);
 }

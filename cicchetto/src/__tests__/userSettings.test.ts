@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_NOTIFICATION_PREFS,
+  getAliases,
   getNotificationPrefs,
   getUploadTtlSeconds,
+  putAliases,
   putNotificationPrefs,
   putUploadTtlSeconds,
 } from "../lib/userSettings";
@@ -176,6 +178,75 @@ describe("putUploadTtlSeconds", () => {
     );
 
     await expect(putUploadTtlSeconds(TOKEN, -1)).rejects.toMatchObject({
+      status: 422,
+      code: "validation_failed",
+    });
+  });
+});
+
+// #385 — user-defined command aliases REST wrappers.
+describe("getAliases", () => {
+  it("GETs /me/settings/aliases with bearer and returns the map", async () => {
+    const map = { wii: "whois $1 $1" };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ aliases: map }), { status: 200 }));
+
+    const result = await getAliases(TOKEN);
+    expect(result).toEqual(map);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/me/settings/aliases");
+    const headers = init.headers as Record<string, string>;
+    expect(headers.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("throws ApiError on non-OK response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 500 }));
+    await expect(getAliases(TOKEN)).rejects.toThrow(/500/);
+  });
+});
+
+describe("putAliases", () => {
+  it("PUTs the map wrapped under `aliases` and returns the normalized shape", async () => {
+    const normalized = { wii: "whois $1 $1" };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ aliases: normalized }), { status: 200 }));
+
+    const result = await putAliases(TOKEN, { WII: "whois $1 $1" });
+    expect(result).toEqual(normalized);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/me/settings/aliases");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({ aliases: { WII: "whois $1 $1" } });
+  });
+
+  it("PUTs an empty map (clear all) wrapped under `aliases`", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ aliases: {} }), { status: 200 }));
+
+    const result = await putAliases(TOKEN, {});
+    expect(result).toEqual({});
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ aliases: {} });
+  });
+
+  it("throws ApiError carrying field_errors on 422", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: "validation_failed",
+          field_errors: { aliases: ["alias name must not contain whitespace"] },
+        }),
+        { status: 422 },
+      ),
+    );
+
+    await expect(putAliases(TOKEN, { "wi i": "whois" })).rejects.toMatchObject({
       status: 422,
       code: "validation_failed",
     });

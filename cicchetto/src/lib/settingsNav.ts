@@ -29,7 +29,11 @@ import { createSignal } from "solid-js";
 // #392 — the former "share" sub-page is retired: session-sharing is now a
 // modal (openShareModal), reachable from BOTH home and settings, so it is
 // no longer a drawer page.
-export type SettingsSubPage = "main" | "vhost" | "themes" | "watchlists";
+//
+// #385 — "aliases" sub-page (user-defined command aliases). Reached from a
+// nav row on the main page AND deep-linked by the bare `/alias` compose verb
+// via `requestOpenSettings` below.
+export type SettingsSubPage = "main" | "vhost" | "themes" | "watchlists" | "aliases";
 
 let pendingPage: SettingsSubPage | null = null;
 
