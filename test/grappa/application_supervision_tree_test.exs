@@ -37,7 +37,7 @@ defmodule Grappa.ApplicationSupervisionTreeTest do
       undocumented =
         running
         |> Enum.reject(fn {_, labels} ->
-          Enum.any?(labels, &String.contains?(tree, &1))
+          Enum.any?(labels, &documented?(tree, &1))
         end)
         |> Enum.map(fn {primary, _} -> primary end)
 
@@ -46,10 +46,10 @@ defmodule Grappa.ApplicationSupervisionTreeTest do
              CLAUDE.md "Top-level supervision tree" is missing supervised child(ren): #{inspect(undocumented)}.
 
              Every child started by lib/grappa/application.ex MUST appear in the
-             fenced tree block under "## Architecture" in CLAUDE.md — with its
-             one-line why-note — AND carry its ordering why-comment in
-             application.ex (CLAUDE.md "Don't touch supervision tree ordering
-             casually").
+             fenced tree block under "## Architecture" in CLAUDE.md, with its
+             one-line why-note. (Separately — not enforced here — add its
+             ordering why-comment in application.ex per CLAUDE.md "Don't touch
+             supervision tree ordering casually".)
 
              Fix: add the missing child(ren) to the CLAUDE.md tree block.
 
@@ -58,35 +58,41 @@ defmodule Grappa.ApplicationSupervisionTreeTest do
     end
   end
 
-  # For each running child, the set of labels the doc may legitimately use.
-  # `Supervisor.which_children/1` returns `{id, pid, type, modules}`. The
-  # child-spec `id` is sometimes the REGISTERED name (`Grappa.SessionRegistry`
+  # For each running child, the labels the doc may legitimately use to name
+  # it. `Supervisor.which_children/1` returns `{id, pid, type, modules}`;
+  # match on the child-spec `id` only. The `id` is the friendly name the
+  # tree uses — the plain module (`Grappa.AdminEvents`, `GrappaWeb.Endpoint`)
+  # or the REGISTERED name for library children (`Grappa.SessionRegistry`
   # for `{Registry, name: ...}`, `Grappa.SessionSupervisor`,
-  # `Grappa.TaskSupervisor`) and sometimes a WRAPPER module
-  # (`Phoenix.PubSub.Supervisor`), while `modules` carries the callback
-  # module(s). The tree block references children by whichever reads best,
-  # so a child counts as documented when EITHER its id OR any of its
-  # modules appears. `inspect/1` renders atoms without the `Elixir.` prefix
-  # — the spelling the doc uses. The `primary` label (id) is what the
-  # failure message reports for a genuinely-undocumented child.
+  # `Grappa.TaskSupervisor`). Deliberately NOT the `modules` field: it
+  # carries generic library module names (`Registry`, `Task.Supervisor`,
+  # `DynamicSupervisor`) that are already substrings of the tree, so a
+  # SECOND undocumented instance (e.g. another `{Registry, name: ...}`)
+  # would falsely pass. id-only errs toward false-FAIL (an unrecognised id
+  # is flagged), the safe direction — it forces documentation.
   #
-  # A `Foo.Supervisor` wrapper (many libs — Phoenix.PubSub among them —
-  # start a child whose id/module is `Foo.Supervisor` while the doc names
-  # the friendly `Foo`) also counts as documented when the doc names `Foo`,
-  # via the `.Supervisor`-suffix-stripped candidate label.
+  # One id is a `Foo.Supervisor` wrapper rather than the friendly name:
+  # Phoenix.PubSub's child id is `Phoenix.PubSub.Supervisor` while the tree
+  # names `Phoenix.PubSub`. The `.Supervisor`-suffix-stripped candidate
+  # covers that (and any other lib that wraps the same way). `inspect/1`
+  # renders atoms without the `Elixir.` prefix — the spelling the tree uses.
   defp running_children do
     Grappa.Supervisor
     |> Supervisor.which_children()
-    |> Enum.map(fn {id, _, _, modules} ->
-      labels =
-        [id | List.wrap(modules)]
-        |> Enum.filter(&is_atom/1)
-        |> Enum.map(&inspect/1)
-        |> Enum.flat_map(&[&1, String.replace_suffix(&1, ".Supervisor", "")])
-        |> Enum.uniq()
-
-      {inspect(id), labels}
+    |> Enum.map(fn {id, _, _, _} ->
+      label = inspect(id)
+      {label, Enum.uniq([label, String.replace_suffix(label, ".Supervisor", "")])}
     end)
+  end
+
+  # Whole-token containment: `label` must appear in the tree as a standalone
+  # dotted module token — not immediately preceded or followed by an
+  # identifier char (`[\w.]`). Prevents a child id from being spuriously
+  # "documented" by being a dotted PREFIX (or suffix) of a longer tree
+  # entry, e.g. a bare `Grappa.RateLimit` child must NOT match the
+  # `Grappa.RateLimit.DailyQuota` line.
+  defp documented?(tree, label) do
+    Regex.match?(~r/(?<![\w.])#{Regex.escape(label)}(?![\w.])/, tree)
   end
 
   # Extract the first fenced ``` block that follows the "supervision tree"
