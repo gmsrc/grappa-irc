@@ -94,6 +94,14 @@ defmodule Grappa.Networks.Credential do
   # so a pathological session can't grow the snapshot without limit.
   @last_joined_channels_max 200
 
+  # GH #189 — hard byte cap on the stored perform list. A perform list is a
+  # handful of on-connect commands, not a script; the cap bounds the
+  # encrypted column write + the per-connect execution cost, and keeps the
+  # feature clearly the static-MVP preset (#288's scripting engine, with its
+  # own resource budgets, stays out of scope). Byte-counted (not graphemes)
+  # so the bound matches the on-wire storage size.
+  @perform_list_max_bytes 8192
+
   @doc """
   Returns the schema-level cap on `last_joined_channels` length. Public
   so the context helper (`Credentials.update_last_joined_channels/3`)
@@ -138,6 +146,10 @@ defmodule Grappa.Networks.Credential do
           sasl_user: String.t() | nil,
           password_encrypted: binary() | nil,
           password: String.t() | nil,
+          oper_pass_encrypted: binary() | nil,
+          oper_pass: String.t() | nil,
+          perform_list_encrypted: binary() | nil,
+          perform_list: String.t() | nil,
           auth_method: auth_method() | nil,
           auth_command_template: String.t() | nil,
           autojoin_channels: [String.t()],
@@ -172,6 +184,21 @@ defmodule Grappa.Networks.Credential do
     # `@derive {Inspect, except: [:password]}` from sub-task 2f I3.
     field :password_encrypted, EncryptedBinary, redact: true
     field :password, :string, virtual: true, redact: true
+
+    # GH #189 — on-connect perform list + its `$oper_pass` secret. Both
+    # encrypted at rest (Cloak AES-GCM); `redact: true` so neither the
+    # decrypted-on-load `*_encrypted` value nor the input-only virtual leaks
+    # in `inspect/1` / Logger output. The perform list is encrypted (not a
+    # plain `:string`) because a user may paste a literal password into it —
+    # so the column IS a secret. The virtuals mirror `:password` above:
+    # input-only, copied into the encrypted column by the narrow
+    # `perform_changeset/2` only when otherwise valid. After `Repo.one!` the
+    # `*_encrypted` fields carry the DECRYPTED plaintext (see accessors
+    # `perform_list_text/1` / `upstream_oper_pass/1`).
+    field :oper_pass_encrypted, EncryptedBinary, redact: true
+    field :oper_pass, :string, virtual: true, redact: true
+    field :perform_list_encrypted, EncryptedBinary, redact: true
+    field :perform_list, :string, virtual: true, redact: true
     # No default: operators MUST pick the auth method explicitly. S29
     # H10: defaulting to `:auto` was a footgun — half-built attrs (in
     # tests, REPL, future REST attrs) without a password passed the
@@ -475,6 +502,63 @@ defmodule Grappa.Networks.Credential do
   end
 
   @doc """
+  GH #189 — narrow changeset for the on-connect perform list + `$oper_pass`.
+  Casts the two virtual inputs, encrypts them into the sibling `*_encrypted`
+  columns, and touches nothing else (mirror of `password_changeset/2` and
+  `last_joined_channels_changeset/2` — the narrow-changeset convention).
+
+  `empty_values: []` keeps a blank `""` as a real change (default `cast/3`
+  would drop it as "missing"), so the editor can CLEAR the perform list /
+  oper pass: `put_encrypted_perform_field/3` maps `""` → `nil` (stores SQL
+  NULL). Both fields are optional — an empty attrs map is a valid no-op.
+
+  The perform list may legitimately contain newlines (the line separator),
+  so it is NOT run through `safe_line_token/2`; instead `validate_perform/2`
+  rejects only NUL bytes and caps the byte size. Each individual expanded
+  line is CR/LF/NUL-guarded at send time by `Grappa.IRC.Client`. `oper_pass`
+  IS a single-line secret, so it gets the full `safe_line_token/2` guard.
+  """
+  @spec perform_changeset(t(), map()) :: Ecto.Changeset.t()
+  def perform_changeset(%__MODULE__{} = credential, attrs) when is_map(attrs) do
+    credential
+    |> cast(attrs, [:perform_list, :oper_pass], empty_values: [])
+    |> validate_change(:perform_list, &validate_perform/2)
+    |> validate_change(:oper_pass, &Identity.safe_line_token/2)
+    |> put_encrypted_perform_field(:perform_list, :perform_list_encrypted)
+    |> put_encrypted_perform_field(:oper_pass, :oper_pass_encrypted)
+  end
+
+  # NUL byte + byte-cap guard for the perform list. Allows newlines (the
+  # command separator) — unlike `safe_line_token/2` which rejects LF.
+  defp validate_perform(field, value) when is_binary(value) do
+    cond do
+      String.contains?(value, <<0>>) ->
+        [{field, "must not contain NUL bytes"}]
+
+      byte_size(value) > @perform_list_max_bytes ->
+        [{field, "must be at most #{@perform_list_max_bytes} bytes"}]
+
+      true ->
+        []
+    end
+  end
+
+  # Copies a validated virtual input into its encrypted storage column. A
+  # blank `""` clears the column (stores nil); any other value is put as
+  # plaintext for Cloak to encrypt on dump. Gated on `valid?: true` so an
+  # invalid changeset never writes a partial secret (mirror of
+  # `put_encrypted_password/1`).
+  defp put_encrypted_perform_field(%{valid?: true} = cs, virtual, column) do
+    case get_change(cs, virtual) do
+      nil -> cs
+      "" -> put_change(cs, column, nil)
+      value when is_binary(value) -> put_change(cs, column, value)
+    end
+  end
+
+  defp put_encrypted_perform_field(cs, _, _), do: cs
+
+  @doc """
   #211 phase 6 — narrow changeset for a per-network IDENTITY edit
   (`nick` + `ident` + `realname`) on the `(subject, network)` credential.
   Backs `PATCH /networks/:network_id/identity` for BOTH subjects (ruling
@@ -619,6 +703,27 @@ defmodule Grappa.Networks.Credential do
   """
   @spec upstream_password(t()) :: binary() | nil
   def upstream_password(%__MODULE__{password_encrypted: pw}), do: pw
+
+  @doc """
+  GH #189 — returns the post-Cloak-load plaintext `$oper_pass` secret, or
+  `nil` when unset. Same accessor contract as `upstream_password/1`: the
+  `:oper_pass_encrypted` field name describes the on-disk representation;
+  after `Repo.one!` it carries the DECRYPTED plaintext. Callers (the
+  perform-list expander at connect time) go through this accessor rather than
+  reading the misleadingly-named field directly.
+  """
+  @spec upstream_oper_pass(t()) :: binary() | nil
+  def upstream_oper_pass(%__MODULE__{oper_pass_encrypted: pw}), do: pw
+
+  @doc """
+  GH #189 — returns the post-Cloak-load plaintext on-connect perform list,
+  or `nil` when none is configured. Threaded into the connect plan by
+  `Grappa.Networks.SessionPlan.build_plan/4` and expanded at 001 by
+  `Grappa.Session.Server`. Same on-disk-name / in-memory-plaintext
+  contract as `upstream_password/1`.
+  """
+  @spec perform_list_text(t()) :: String.t() | nil
+  def perform_list_text(%__MODULE__{perform_list_encrypted: text}), do: text
 
   @doc """
   Returns `:realname` if set, otherwise `:nick`. The nil-fallback is
