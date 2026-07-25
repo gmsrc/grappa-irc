@@ -53,8 +53,10 @@ defmodule Grappa.IRC.AuthFSM do
 
       :none               -> NICK, USER
       :server_pass        -> PASS, NICK, USER
-      :nickserv_identify  -> NICK, USER -> on 001:
-                             PRIVMSG NickServ :IDENTIFY <pw>
+      :nickserv_identify  -> NICK, USER (the built-in IDENTIFY is NOT emitted
+                             here — Grappa.Session.Server sends it at 001,
+                             AFTER the on-connect perform list, so it can be
+                             suppressed when the list already identified; #189)
       :sasl               -> CAP LS 302, NICK, USER -> CAP REQ :sasl,
                              AUTHENTICATE PLAIN, AUTHENTICATE <base64>
                              -> on 903 CAP END;
@@ -373,9 +375,13 @@ defmodule Grappa.IRC.AuthFSM do
   # never opened the negotiation, so closing it would be protocol noise.
   # `cap_unavailable/1` covers the cases where the negotiation WAS opened
   # and must be closed (CAP NAK, no-sasl LS, etc.).
+  # #189 — the built-in NickServ IDENTIFY is NO LONGER emitted here. It
+  # moved to `Grappa.Session.Server`'s 001 handler so it runs AFTER the
+  # on-connect perform list (deterministic order, one process) and can be
+  # suppressed when the list already consumed `$nickserv_pass`. AuthFSM's
+  # 001 job is now purely the phase promotion + CAP-negotiation close.
   def step(state, %Message{command: {:numeric, 1}}) do
-    {identified_state, sends} = maybe_nickserv_identify(state)
-    {:cont, leave_cap_negotiation(identified_state, :registered), sends}
+    {:cont, leave_cap_negotiation(state, :registered), []}
   end
 
   def step(state, _), do: {:cont, state, []}
@@ -555,13 +561,6 @@ defmodule Grappa.IRC.AuthFSM do
   defp leave_cap_negotiation(state, new_phase) do
     %{state | phase: new_phase, caps_buffer: []}
   end
-
-  defp maybe_nickserv_identify(%__MODULE__{auth_method: :nickserv_identify, password: pw} = state)
-       when is_binary(pw) and pw != "" do
-    {state, ["PRIVMSG NickServ :IDENTIFY #{pw}\r\n"]}
-  end
-
-  defp maybe_nickserv_identify(state), do: {state, []}
 
   # SASL PLAIN payload is `\0<authzid>\0<authcid>\0<password>`. We use
   # `sasl_user` for both authzid and authcid — they only differ when the

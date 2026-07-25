@@ -237,9 +237,11 @@ defmodule Grappa.IRC.AuthFSMTest do
              ]
     end
 
-    test ":nickserv_identify -> NICK + USER only; password emitted post-001" do
+    test ":nickserv_identify -> NICK + USER only (built-in identify is post-001, #189)" do
       state = new!(%{auth_method: :nickserv_identify, password: "swordfish"})
       assert {%AuthFSM{phase: :pre_register}, sends} = AuthFSM.initial_handshake(state)
+      # The built-in NickServ IDENTIFY is NOT part of the handshake — since
+      # #189 Grappa.Session.Server sends it at 001, after the perform list.
       assert send_lines(sends) == ["NICK vjt", "USER vjt 0 * :Vincenzo"]
     end
   end
@@ -478,15 +480,17 @@ defmodule Grappa.IRC.AuthFSMTest do
                AuthFSM.step(mid_ls_state, msg)
     end
 
-    test "001 with auth_method :nickserv_identify -> PRIVMSG NickServ :IDENTIFY <pw>" do
+    test "001 with auth_method :nickserv_identify -> :registered, NO identify emitted (#189)" do
       {state, _} = AuthFSM.initial_handshake(new!(%{auth_method: :nickserv_identify, password: "swordfish"}))
 
       msg = %Message{command: {:numeric, 1}}
 
-      assert {:cont, %AuthFSM{phase: :registered, caps_buffer: []}, sends} =
+      # #189 — AuthFSM no longer emits the built-in IDENTIFY on 001. The host
+      # (Grappa.Session.Server) sends it at 001 AFTER the on-connect perform
+      # list, so it can be suppressed when the list already identified. See
+      # the "perform list on 001 (#189)" describe in server_test.exs.
+      assert {:cont, %AuthFSM{phase: :registered, caps_buffer: []}, []} =
                AuthFSM.step(state, msg)
-
-      assert send_lines(sends) == ["PRIVMSG NickServ :IDENTIFY swordfish"]
     end
 
     test "001 on :none -> :registered, no extra sends" do

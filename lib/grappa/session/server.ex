@@ -107,6 +107,7 @@ defmodule Grappa.Session.Server do
     NSInterceptor,
     NumericRouter,
     PartCleanup,
+    PerformList,
     Presence,
     WindowState
   }
@@ -439,7 +440,12 @@ defmodule Grappa.Session.Server do
           optional(:connection_stable_ms) => pos_integer(),
           # #347 deferred-autojoin fallback window — test seam. Production
           # omits it and inherits `@autojoin_defer_ms`.
-          optional(:autojoin_defer_ms) => pos_integer()
+          optional(:autojoin_defer_ms) => pos_integer(),
+          # GH #189 — on-connect perform list + its `$oper_pass` secret,
+          # decrypted plaintext from the credential (nil when unset). Run at
+          # 001 before the built-in identify and before autojoin.
+          optional(:perform_list) => String.t() | nil,
+          optional(:oper_pass) => String.t() | nil
         }
 
   @type t :: %{
@@ -507,6 +513,11 @@ defmodule Grappa.Session.Server do
           pending_auth_timer: reference() | nil,
           pending_registration_secret: String.t() | nil,
           pending_password: String.t() | nil,
+          # GH #189 — the on-connect perform list (raw text) + its `$oper_pass`
+          # secret, decrypted plaintext threaded from the credential at boot.
+          # Read ONCE at 001 by `run_perform_and_identify/1`. nil when unset.
+          perform_list: String.t() | nil,
+          oper_pass: String.t() | nil,
           visitor_committer: visitor_committer() | nil,
           visitor_password_rotator: visitor_password_rotator() | nil,
           visitor_nick_persister: visitor_nick_persister() | nil,
@@ -856,6 +867,8 @@ defmodule Grappa.Session.Server do
       pending_auth_timer: nil,
       pending_registration_secret: nil,
       pending_password: pending_password_from_opts(opts),
+      perform_list: Map.get(opts, :perform_list),
+      oper_pass: Map.get(opts, :oper_pass),
       visitor_committer: Map.get(opts, :visitor_committer),
       visitor_password_rotator: Map.get(opts, :visitor_password_rotator),
       visitor_nick_persister: Map.get(opts, :visitor_nick_persister),
@@ -2179,9 +2192,9 @@ defmodule Grappa.Session.Server do
       when is_binary(welcomed_nick) do
     state =
       state
+      |> run_perform_and_identify()
       |> maybe_autojoin_or_defer()
       |> maybe_fire_notify()
-      |> maybe_stage_pending_password()
 
     if welcomed_nick != state.nick do
       Logger.info("nick reconciled at registration",
@@ -2825,30 +2838,78 @@ defmodule Grappa.Session.Server do
     end
   end
 
-  # Latest-wins serialization for concurrent IDENTIFYs is automatic via
-  # Session.Server mailbox FIFO (W8): if a second IDENTIFY arrives
-  # before the first's +r confirmation, the second overwrites and the
-  # first's password is lost (correct — the user changed their mind
-  # between the two send_privmsg calls). Cancel the in-flight timer
-  # before arming a fresh one so timeouts always reflect the most-recent
-  # capture.
-  # AuthFSM (inside `Grappa.IRC.Client`) emits the wire IDENTIFY at 001
-  # for `:nickserv_identify` plans — that emission bypasses
-  # `handle_call({:send_privmsg, ...})`, so NSInterceptor doesn't fire.
-  # This helper stages `pending_auth` directly so the +r observer
-  # (`apply_effects/2 → :visitor_r_observed`) can commit when NickServ
-  # confirms. One-shot — `pending_password` is cleared after first 001
-  # to prevent a Phase-5 reconnect-001 from re-staging stale credentials.
-  @spec maybe_stage_pending_password(t()) :: t()
-  defp maybe_stage_pending_password(%{pending_password: nil} = state), do: state
+  # GH #189 — run the on-connect perform list at 001, then (unless the list
+  # already identified) grappa's built-in NickServ IDENTIFY, BEFORE autojoin.
+  # Every line goes through the SAME outbound choke point as `/quote`
+  # (`capture_outbound_ns_secret/2` → `Client.send_raw/2`), so `NSInterceptor`
+  # stages the `+r` rendezvous for any identify. This REPLACES the old
+  # `maybe_stage_pending_password/1`: the built-in identify used to be emitted
+  # by AuthFSM inside `Grappa.IRC.Client`, bypassing the choke point, so the
+  # host had to stage `pending_auth` by hand. Now the identify leaves through
+  # the choke point like any other line and self-stages. Running perform +
+  # identify + autojoin in this ONE handler (not split across Client + Server)
+  # makes their order deterministic rather than a cross-process race.
+  #
+  # `$nickserv_pass` resolves to `state.pending_password` (the credential's
+  # upstream password for `:nickserv_identify`, nil otherwise). Cleared after
+  # this pass — one-shot, mirroring the old staging: a defensive re-welcome
+  # (a second 001 without an intervening crash) must not re-run against a
+  # stale secret.
+  @spec run_perform_and_identify(t()) :: t()
+  defp run_perform_and_identify(state) do
+    %{lines: lines, consumed_nickserv_pass?: consumed?} =
+      PerformList.expand(state.perform_list, %{
+        nickserv_pass: state.pending_password,
+        oper_pass: state.oper_pass
+      })
 
-  defp maybe_stage_pending_password(%{pending_password: pwd} = state)
-       when is_binary(pwd) do
-    state
-    |> stage_pending_auth(pwd)
+    # Redaction only — line COUNT + total bytes, never the text. A user may
+    # paste a literal password instead of a variable, so no line is safe to
+    # log (mirror of the `/quote` byte-size-only log line).
+    if lines != [] do
+      bytes = lines |> Enum.map(&byte_size/1) |> Enum.sum()
+      Logger.info("perform: ran #{length(lines)} on-connect line(s) (#{bytes} bytes)", verb: :perform)
+    end
+
+    lines
+    |> Enum.reduce(state, &send_perform_line(&2, &1))
+    |> maybe_builtin_identify(consumed?)
     |> Map.put(:pending_password, nil)
   end
 
+  # Sends one expanded perform line through the outbound choke point: capture
+  # any NickServ secret (stages the `+r` rendezvous), then `Client.send_raw`
+  # (which frames + CR/LF/NUL-guards the line). Non-fatal on a dead socket or
+  # a line the guard rejects — a failed on-connect line must never crash the
+  # freshly-registered session.
+  @spec send_perform_line(t(), String.t()) :: t()
+  defp send_perform_line(state, line) do
+    state = capture_outbound_ns_secret(state, line)
+    _ = maybe_log_send_failure("perform_line", Client.send_raw(state.client, line))
+    state
+  end
+
+  # #189 — grappa's built-in NickServ IDENTIFY, sent AFTER the perform list.
+  # Suppressed when the perform list already consumed `$nickserv_pass` (the
+  # STRUCTURAL signal from the expander — never a scan of the line text) or
+  # for any non-`:nickserv_identify` plan / absent password. Routed through
+  # `send_perform_line/2` so it self-stages `pending_auth` via the choke point
+  # exactly like a user-typed identify.
+  @spec maybe_builtin_identify(t(), boolean()) :: t()
+  defp maybe_builtin_identify(%{auth_method: :nickserv_identify, pending_password: pw} = state, false)
+       when is_binary(pw) and pw != "" do
+    send_perform_line(state, "PRIVMSG NickServ :IDENTIFY #{pw}")
+  end
+
+  defp maybe_builtin_identify(state, _), do: state
+
+  # Cancel-and-arm the timed `pending_auth` rendezvous slot. Latest-wins
+  # serialization for concurrent IDENTIFYs is automatic via Session.Server
+  # mailbox FIFO (W8): if a second IDENTIFY arrives before the first's +r
+  # confirmation, the second overwrites and the first's password is lost
+  # (correct — the user changed their mind between the two calls). Cancel the
+  # in-flight timer before arming a fresh one so timeouts always reflect the
+  # most-recent capture.
   defp stage_pending_auth(state, password) do
     :ok = cancel_and_drain(state.pending_auth_timer, :pending_auth_timeout)
 
@@ -2872,9 +2933,10 @@ defmodule Grappa.Session.Server do
 
   # Single choke point for outbound-line NickServ-secret capture. Every
   # path that puts a line on the wire (send_privmsg, send_raw/`/quote`,
-  # ghost-recovery flush) runs this so no NickServ-secret form can bypass
-  # capture. The AuthFSM-emitted registration IDENTIFY/PASS at 001 stays
-  # on `maybe_stage_pending_password/1` — grappa already knows that secret.
+  # the #189 on-connect perform list + built-in identify, ghost-recovery
+  # flush) runs this so no NickServ-secret form can bypass capture. Since
+  # #189 the built-in registration IDENTIFY at 001 also flows through here
+  # (see `run_perform_and_identify/1`) rather than being staged by hand.
   # The verb class from NSInterceptor picks the action: IDENTIFY-family →
   # stage timed `pending_auth`; REGISTER → stage untimed
   # `pending_registration_secret`; SET PASSWD → commit OPTIMISTICALLY
@@ -2997,9 +3059,9 @@ defmodule Grappa.Session.Server do
   # ...})`, so manually run NSInterceptor over each line and stage
   # `pending_auth` on capture. This is what keeps the +r MODE rendezvous
   # (Task 15) firing for the `IDENTIFY` GhostRecovery emits on
-  # `:succeeded` — same one-feature-one-code-path discipline as the
-  # AuthFSM-emitted IDENTIFY at 001 (handled via
-  # `maybe_stage_pending_password/1`).
+  # `:succeeded` — same one-feature-one-code-path discipline as the #189
+  # built-in IDENTIFY at 001 (routed through the choke point by
+  # `run_perform_and_identify/1`).
   defp flush_lines(state, lines) do
     Enum.reduce(lines, state, fn line, acc ->
       acc = capture_outbound_ns_secret(acc, line)

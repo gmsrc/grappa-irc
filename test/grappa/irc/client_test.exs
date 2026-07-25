@@ -814,7 +814,7 @@ defmodule Grappa.IRC.ClientTest do
   end
 
   describe "auth_method: :nickserv_identify" do
-    test "sends NICK + USER with no CAP; on 001 sends PRIVMSG NickServ :IDENTIFY pwd" do
+    test "sends NICK + USER only; the built-in identify moved to Session.Server (#189)" do
       {server, port} = start_server(rfc_handler())
 
       _ =
@@ -823,14 +823,20 @@ defmodule Grappa.IRC.ClientTest do
           password: "swordfish"
         })
 
+      # Handshake is NICK + USER (no PASS / CAP / SASL for this method).
       assert {:ok, _} =
-               IRCServer.wait_for_line(
-                 server,
-                 &(&1 == "PRIVMSG NickServ :IDENTIFY swordfish\r\n"),
-                 1_000
-               )
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "NICK "), 1_000)
+
+      # rfc_handler replies 001; give the Client a beat to process it. Since
+      # #189 the built-in IDENTIFY is NOT emitted by the Client's AuthFSM on
+      # 001 — Grappa.Session.Server sends it, after the on-connect perform
+      # list. This Client-only harness has no Session.Server, so no IDENTIFY.
+      Process.sleep(150)
 
       lines = IRCServer.sent_lines(server)
+      assert Enum.any?(lines, &String.starts_with?(&1, "NICK "))
+      assert Enum.any?(lines, &String.starts_with?(&1, "USER "))
+      refute Enum.any?(lines, &String.contains?(&1, "IDENTIFY"))
       refute Enum.any?(lines, &String.starts_with?(&1, "PASS"))
       refute Enum.any?(lines, &String.starts_with?(&1, "CAP"))
       refute Enum.any?(lines, &String.starts_with?(&1, "AUTHENTICATE"))

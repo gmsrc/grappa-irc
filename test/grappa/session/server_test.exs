@@ -1030,6 +1030,122 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "perform list on 001 (#189)" do
+    # The on-connect perform list runs SERVER-side at 001, before the
+    # built-in NickServ identify and before autojoin. When the list itself
+    # identifies (consumes $nickserv_pass) grappa suppresses its built-in
+    # identify — the signal is structural (did the expansion consume the
+    # variable), never a scan of the line text.
+    defp put_perform_list(credential, text) do
+      {:ok, updated} =
+        credential
+        |> Grappa.Networks.Credential.perform_changeset(%{perform_list: text})
+        |> Repo.update()
+
+      updated
+    end
+
+    defp line_index(lines, line), do: Enum.find_index(lines, &(&1 == line))
+
+    test "runs each perform line at 001, then the built-in identify (not consumed)" do
+      {server, port} = start_server()
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :nickserv_identify,
+          password: "s3cr3t-identify",
+          autojoin_channels: []
+        })
+
+      cred_with_perform = put_perform_list(credential, "MODE grappa-test +x\nWHOIS grappa-test")
+      pid = nickserv_plan(user, network, cred_with_perform, 60_000)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      # The built-in identify still fires — the list did not consume the var.
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          server,
+          &(&1 == "PRIVMSG NickServ :IDENTIFY s3cr3t-identify\r\n"),
+          1_000
+        )
+
+      lines = IRCServer.sent_lines(server)
+      assert "MODE grappa-test +x\r\n" in lines
+      assert "WHOIS grappa-test\r\n" in lines
+
+      # Perform lines precede the built-in identify (deterministic order,
+      # one process — not a cross-process race between Client and Server).
+      assert line_index(lines, "MODE grappa-test +x\r\n") <
+               line_index(lines, "PRIVMSG NickServ :IDENTIFY s3cr3t-identify\r\n")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "suppresses the built-in identify when the list consumed $nickserv_pass" do
+      {server, port} = start_server()
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :nickserv_identify,
+          password: "s3cr3t-identify",
+          autojoin_channels: []
+        })
+
+      # The NS-alias form expands to a DIFFERENT wire line than the built-in
+      # `PRIVMSG NickServ :IDENTIFY …`, so we can prove the list owns the
+      # identify AND grappa's built-in one never fires.
+      cred_with_perform = put_perform_list(credential, "NS IDENTIFY $nickserv_pass")
+      pid = nickserv_plan(user, network, cred_with_perform, 60_000)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      {:ok, _} =
+        IRCServer.wait_for_line(server, &(&1 == "NS IDENTIFY s3cr3t-identify\r\n"), 1_000)
+
+      Process.sleep(150)
+      refute "PRIVMSG NickServ :IDENTIFY s3cr3t-identify\r\n" in IRCServer.sent_lines(server)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "runs the perform list before autojoin (autojoin still gated on +r)" do
+      {server, port} = start_server()
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :nickserv_identify,
+          password: "s3cr3t-identify",
+          autojoin_channels: ["#sniffo"]
+        })
+
+      cred_with_perform = put_perform_list(credential, "MODE grappa-test +x")
+      pid = nickserv_plan(user, network, cred_with_perform, 60_000)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      # Perform line runs at 001…
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "MODE grappa-test +x\r\n"), 1_000)
+
+      # …but autojoin is still deferred behind the +r gate (#347).
+      Process.sleep(150)
+      refute Enum.any?(IRCServer.sent_lines(server), &String.starts_with?(&1, "JOIN"))
+
+      IRCServer.feed(server, ":irc.test.org MODE grappa-test :+r\r\n")
+
+      assert {:ok, "JOIN #sniffo\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "JOIN #sniffo\r\n"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "presence arm at end-of-MOTD (#247)" do
     # The full 001 → 005 → 376 registration tail. The mechanism pick
     # needs the 005 tokens, so the arm rides 376/422 — NOT the 001
