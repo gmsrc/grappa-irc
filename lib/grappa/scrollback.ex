@@ -978,18 +978,42 @@ defmodule Grappa.Scrollback do
   # (#372). `dm_with` is stored case-PRESERVED (nick display rule,
   # `message.ex`), so every MATCH folds via `Identifier.nick_fold/1` —
   # the same query-side twin the WHOIS / query_windows lookups use (#121).
-  # Orphan rows (`dm_with IS NULL` — e.g. a server NOTICE 401 routed to a
-  # query window via numeric_router) match on the folded `channel`
-  # column, mirroring the archive `COALESCE(dm_with, channel)` grouping.
   # `folded_peer` MUST already be `Identifier.canonical_nick/1`-folded by
   # the caller (the value side of the fold).
+  #
+  # #393 — SARGABLE single predicate on `fold(COALESCE(dm_with, channel))`.
+  # This is EXACTLY equivalent to the prior two-arm disjunction
+  # `fold(dm_with) == peer OR (dm_with IS NULL AND fold(channel) == peer)`:
+  # when `dm_with` is non-NULL the COALESCE picks it (first arm); when it
+  # is NULL the COALESCE picks `channel` (the orphan arm — a server NOTICE
+  # 401 routed to a query window via numeric_router). vjt proved the
+  # equivalence empirically on a prod copy (`EXCEPT` over the whole of
+  # network 3: ZERO id mismatches, 27 rows vs 27). The disjunction form
+  # was NON-sargable — even with per-arm folded expression indexes the
+  # planner stayed on `messages_network_id_index` and folded row-by-row
+  # over the whole network's history (prod 2026-07-25: SQLite pool
+  # saturation, the `SELECT scrollback` at 409ms and `count_after_split`
+  # DM shape at 432ms). Collapsing the OR to one folded-COALESCE equality
+  # lets SQLite SEEK the matching expression index
+  # (`messages_<subject>_id_network_id_dm_coalesce_fold_id_kind_index` —
+  # `(subject, network_id, fold(COALESCE(dm_with, channel)), id, kind)`;
+  # `kind` at the tail makes the count aggregate covering, `id` keeps the
+  # `id > cursor` reads seekable): prod `EXPLAIN` flipped from `SEARCH USING
+  # messages_network_id_index` to `SEARCH USING COVERING INDEX ...
+  # (subject=? AND network_id=? AND <expr>=? AND id>?)`, 204ms → 0.000s.
+  # The expression is byte-identical to `Identifier.nick_fold_sql/1`
+  # applied to the COALESCE (pin test) and reuses the SAME query fragment
+  # `list_archive/3`'s GROUP BY already uses (in-house precedent). Because
+  # the match lives ONLY here, every consumer of the shared predicate
+  # (`fetch/6`, `fetch_after/6`, `fetch_around/6`, `unread_content_tail/6`,
+  # `count_after/5`, `count_after_split/5` via `channel_or_dm_where/3`, and
+  # `delete_for_dm/3` directly) becomes sargable in one shot.
   @spec where_dm_peer(Ecto.Query.t(), String.t()) :: Ecto.Query.t()
   defp where_dm_peer(query, folded_peer) when is_binary(folded_peer) do
     where(
       query,
       [m],
-      Identifier.nick_fold(m.dm_with) == ^folded_peer or
-        (is_nil(m.dm_with) and Identifier.nick_fold(m.channel) == ^folded_peer)
+      Identifier.nick_fold(fragment("COALESCE(?, ?)", m.dm_with, m.channel)) == ^folded_peer
     )
   end
 

@@ -551,6 +551,14 @@ defmodule Grappa.IRC.IdentifierTest do
     test "nick_fold_sql/1 renders the canonical fold" do
       assert Identifier.nick_fold_sql("COL") == @canonical
       assert Identifier.nick_fold_sql("nick") == String.replace(@canonical, "COL", "nick")
+
+      # #393 — the DM-peer covering index folds the COALESCE window key
+      # `COALESCE(dm_with, channel)` (the SAME expression `list_archive/3`'s
+      # GROUP BY uses). `nick_fold_sql/1` takes any column-expression, so the
+      # folded-COALESCE index literal is single-sourced here too; the
+      # scrollback DDL byte-identity test pins the migration to this string.
+      assert Identifier.nick_fold_sql("COALESCE(dm_with, channel)") ==
+               String.replace(@canonical, "COL", "COALESCE(dm_with, channel)")
     end
 
     test "every folded-index migration embeds the canonical fold verbatim" do

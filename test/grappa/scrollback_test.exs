@@ -45,6 +45,90 @@ defmodule Grappa.ScrollbackTest do
     )
   end
 
+  # #393 — EXPLAIN QUERY PLAN text for an Ecto query, rendered from the
+  # PRODUCTION SQL (`Repo.to_sql`) so the plan reflects exactly what runs.
+  defp explain_plan(query) do
+    {sql, params} = Repo.to_sql(:all, query)
+    {:ok, %{rows: rows}} = Repo.query("EXPLAIN QUERY PLAN " <> sql, params)
+    rows |> List.flatten() |> Enum.map_join("\n", &to_string/1)
+  end
+
+  # #393 — the FULL production folded DM-peer read (via the public
+  # `channel_or_dm_where/3`, so the predicate tracks `where_dm_peer/2`
+  # verbatim: the sargable single `fold(COALESCE(dm_with, channel)) == peer`
+  # equality that REPLACED the old two-arm disjunction, `own_nick = nil` for
+  # a nick-shaped peer).
+  defp folded_dm_read_query(subject, net, peer) do
+    Message
+    |> where([m], m.network_id == ^net.id)
+    |> subject_filter(subject)
+    |> Scrollback.channel_or_dm_where(peer, nil)
+    |> order_by([m], desc: m.server_time, desc: m.id)
+    |> limit(50)
+  end
+
+  # #393 — the DM count shape (id-cursor aggregate) + the content-tail
+  # shape, both built through the PRODUCTION `channel_or_dm_where/3` so they
+  # track the folded-COALESCE `where_dm_peer/2` predicate verbatim (no
+  # re-implementation of the match in the test).
+  defp dm_count_query(subject, net, peer) do
+    Message
+    |> subject_filter(subject)
+    |> where([m], m.network_id == ^net.id)
+    |> Scrollback.channel_or_dm_where(peer, nil)
+    |> where([m], m.id > ^0)
+    |> select([m], count(m.id))
+  end
+
+  defp dm_content_tail_query(subject, net, peer) do
+    Message
+    |> subject_filter(subject)
+    |> where([m], m.network_id == ^net.id)
+    |> Scrollback.channel_or_dm_where(peer, nil)
+    |> where([m], m.id > ^0)
+    |> where([m], m.kind in ^Message.content_kinds())
+    |> order_by([m], asc: m.id)
+    |> limit(50)
+  end
+
+  # #393 — the count_after_split shape: the covering aggregate over
+  # (subject, network, <target>, id > cursor) grouped by content-vs-event
+  # kind. Target-agnostic — `channel_or_dm_where/3` dispatches to the
+  # `m.channel == ?` (channel) OR the folded-COALESCE `where_dm_peer/2` (DM)
+  # branch, so this proves BOTH count_after_split/5 paths are covered by the
+  # respective `..._id_kind` index (kind at the tail = no per-row table
+  # fetch). `kind` is read by the GROUP BY, so a covering plan requires it in
+  # the index — this is the regression guard for the kind-at-tail claim.
+  defp count_split_query(subject, net, target) do
+    ck = Message.content_kinds()
+
+    Message
+    |> subject_filter(subject)
+    |> where([m], m.network_id == ^net.id)
+    |> Scrollback.channel_or_dm_where(target, nil)
+    |> where([m], m.id > ^0)
+    |> group_by([m], fragment("CASE WHEN ? THEN 1 ELSE 0 END", m.kind in ^ck))
+    |> select([m], {fragment("CASE WHEN ? THEN 1 ELSE 0 END", m.kind in ^ck), count(m.id)})
+  end
+
+  # #393 — messages index name list + a single index's committed DDL.
+  defp messages_index_names do
+    {:ok, %{rows: rows}} =
+      Repo.query("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages'")
+
+    List.flatten(rows)
+  end
+
+  defp index_ddl(name) do
+    {:ok, %{rows: [[sql]]}} =
+      Repo.query("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", [name])
+
+    sql
+  end
+
+  defp subject_filter(query, {:user, id}), do: where(query, [m], m.user_id == ^id)
+  defp subject_filter(query, {:visitor, id}), do: where(query, [m], m.visitor_id == ^id)
+
   describe "insert/1" do
     test "persists a valid message and returns the schema struct", %{user: user, network: net} do
       assert {:ok, %Message{} = m} = ScrollbackHelpers.insert(sample(user, net, 0))
@@ -1050,6 +1134,65 @@ defmodule Grappa.ScrollbackTest do
       assert Scrollback.count_after_split({:user, user.id}, net.id, "#sniffo", 0, nil) ==
                %{messages: 0, events: 2}
     end
+
+    # #393 — the DM window split exercises the folded COALESCE(dm_with,
+    # channel) predicate across BOTH match arms: inbound + outbound rows
+    # (dm_with = peer) AND the orphan arm (dm_with IS NULL, channel = peer,
+    # e.g. a server_event routed to the query window). The COALESCE
+    # single-predicate must produce the SAME split the OR did — this pins
+    # the result-invariance of the sargability rewrite.
+    test "DM window splits inbound + outbound + orphan rows by content-vs-event kind",
+         %{user: user, network: net} do
+      # Outbound content (channel = peer, dm_with = peer).
+      {:ok, _} =
+        Scrollback.persist_event(%{
+          user_id: user.id,
+          network_id: net.id,
+          channel: "peer",
+          server_time: 100,
+          kind: :privmsg,
+          sender: "vjt-grappa",
+          body: "out",
+          meta: %{},
+          dm_with: "peer"
+        })
+
+      # Inbound content (channel = own_nick, dm_with = peer) — two kinds.
+      for {kind, t} <- [{:privmsg, 101}, {:notice, 102}] do
+        {:ok, _} =
+          Scrollback.persist_event(%{
+            user_id: user.id,
+            network_id: net.id,
+            channel: "vjt-grappa",
+            server_time: t,
+            kind: kind,
+            sender: "peer",
+            body: "in-#{kind}",
+            meta: %{},
+            dm_with: "peer"
+          })
+      end
+
+      # Orphan event (channel = peer, dm_with = nil) — the arm the COALESCE
+      # picks via `channel` when `dm_with` is NULL.
+      {:ok, _} =
+        Scrollback.persist_event(%{
+          user_id: user.id,
+          network_id: net.id,
+          channel: "peer",
+          server_time: 103,
+          kind: :server_event,
+          sender: "server",
+          body: nil,
+          meta: %{},
+          dm_with: nil
+        })
+
+      # 3 content (outbound privmsg + inbound privmsg + inbound notice),
+      # 1 event (orphan server_event). own_nick threads the narrowing rule.
+      assert Scrollback.count_after_split({:user, user.id}, net.id, "peer", 0, "vjt-grappa") ==
+               %{messages: 3, events: 1}
+    end
   end
 
   # CP14 B3 — DM history bidirectional via :dm_with.
@@ -1468,6 +1611,292 @@ defmodule Grappa.ScrollbackTest do
 
       refute plan_text =~ "messages_network_id_dm_with_server_time_index",
              "old subject-less index must NOT be used:\n#{plan_text}"
+    end
+  end
+
+  # #393 — restore sargability of the rfc1459-FOLDED DM-peer read + count.
+  #
+  # `where_dm_peer/2` (shared by the read path `channel_or_dm_where/3` and
+  # the delete path `delete_for_dm/3`) matches the DM window on the FOLD of
+  # the peer key (#372: `dm_with` is stored case-preserved, matched folded).
+  # The prior two-arm disjunction `fold(dm_with) == peer OR (dm_with IS NULL
+  # AND fold(channel) == peer)` was NON-sargable — even with per-arm folded
+  # expression indexes the planner stayed on `messages_network_id_index` and
+  # folded row-by-row over the whole network's history (prod 2026-07-25:
+  # SQLite pool saturation, the `SELECT scrollback` at 409ms and the DM
+  # `count_after_split` at 432ms). #393 collapses the OR to the equivalent
+  # single folded-COALESCE equality `fold(COALESCE(dm_with, channel)) ==
+  # peer` (vjt proved equivalence on a prod copy via `EXCEPT` over network 3:
+  # ZERO id mismatches), sargable on ONE expression index per subject:
+  # `(subject, network_id, fold(COALESCE(dm_with, channel)), id, kind)` —
+  # `kind` at the tail makes the count aggregate COVERING, `id` keeps the
+  # `id > cursor` reads seekable. Prod `EXPLAIN` flipped from `SEARCH USING
+  # messages_network_id_index` to `SEARCH USING COVERING INDEX ...
+  # (subject=? AND network_id=? AND <expr>=? AND id>?)`, 204ms → 0.000s.
+  #
+  # WHAT THE SANDBOX PROVES (honesty, per the issue's caveat): NOT the
+  # wall-clock (cited from the prod EXPLAIN, not re-measured on the small
+  # test DB), but the two deterministic things the fix turns on —
+  #   1. byte-identity — the committed index DDL equals
+  #      `Identifier.nick_fold_sql/1` applied to `COALESCE(dm_with, channel)`
+  #      (a one-byte drift = silent index loss);
+  #   2. seekability — the single folded-COALESCE equality SEEKS the folded
+  #      value (`<expr>=?`) of the subject-leading covering index, never the
+  #      network-wide scan the incident named — proven for the read, the
+  #      count and the content-tail shapes (all consumers route through the
+  #      shared `where_dm_peer/2`, so one predicate fix covers them all).
+  describe "#393 B — DM folded-COALESCE covering index (sargability)" do
+    @dm_coalesce_index_names ~w(
+      messages_user_id_network_id_dm_coalesce_fold_id_kind_index
+      messages_visitor_id_network_id_dm_coalesce_fold_id_kind_index
+    )
+
+    test "the two folded-COALESCE DM covering indexes exist on messages" do
+      names = messages_index_names()
+
+      for idx <- @dm_coalesce_index_names do
+        assert idx in names,
+               "missing DM coalesce index #{idx}; messages indexes are:\n#{Enum.join(names, "\n")}"
+      end
+    end
+
+    test "each DM covering index's committed DDL is byte-identical to nick_fold_sql(COALESCE)" do
+      coalesce_fold = Identifier.nick_fold_sql("COALESCE(dm_with, channel)")
+
+      for idx <- @dm_coalesce_index_names do
+        assert index_ddl(idx) =~ coalesce_fold,
+               "#{idx} DDL drifted from Identifier.nick_fold_sql/1 applied to the COALESCE"
+      end
+    end
+
+    test "user-side DM read SEEKS the folded COALESCE value on the covering index",
+         %{user: user, network: net} do
+      plan = explain_plan(folded_dm_read_query({:user, user.id}, net, "peer"))
+
+      assert plan =~ "messages_user_id_network_id_dm_coalesce_fold_id_kind_index",
+             "expected the DM read to seek the folded-COALESCE index, got plan:\n#{plan}"
+
+      assert plan =~ "<expr>=?",
+             "expected a folded-VALUE seek (…AND <expr>=?), not a bare prefix scan:\n#{plan}"
+
+      refute plan =~ "SCAN messages", "DM read must not full-scan messages:\n#{plan}"
+      refute plan =~ "messages_network_id_index", "must not fall to the network-wide scan:\n#{plan}"
+    end
+
+    test "visitor-side DM read SEEKS the folded COALESCE value on the visitor covering index",
+         %{network: net} do
+      {:ok, visitor} = Grappa.Visitors.find_or_provision_anon("v-#{uniq()}", net.slug, "1.2.3.4")
+
+      plan = explain_plan(folded_dm_read_query({:visitor, visitor.id}, net, "peer"))
+
+      assert plan =~ "messages_visitor_id_network_id_dm_coalesce_fold_id_kind_index",
+             "expected the visitor DM read to seek the folded-COALESCE index, got plan:\n#{plan}"
+
+      refute plan =~ "SCAN messages", "visitor DM read must not full-scan messages:\n#{plan}"
+      refute plan =~ "messages_network_id_index", "must not fall to the network-wide scan:\n#{plan}"
+    end
+
+    test "the DM count aggregate is served by the folded COALESCE index (kind at the tail)",
+         %{user: user, network: net} do
+      plan = explain_plan(dm_count_query({:user, user.id}, net, "peer"))
+
+      assert plan =~ "messages_user_id_network_id_dm_coalesce_fold_id_kind_index",
+             "expected the DM count to seek the folded-COALESCE index, got plan:\n#{plan}"
+
+      refute plan =~ "SCAN messages", "DM count must not full-scan messages:\n#{plan}"
+      refute plan =~ "messages_network_id_index", "must not fall to the network-wide scan:\n#{plan}"
+    end
+
+    test "the DM content-tail read (unread_content_tail shape) seeks the folded COALESCE index",
+         %{user: user, network: net} do
+      plan = explain_plan(dm_content_tail_query({:user, user.id}, net, "peer"))
+
+      assert plan =~ "messages_user_id_network_id_dm_coalesce_fold_id_kind_index",
+             "expected the DM content-tail read to seek the folded-COALESCE index, got plan:\n#{plan}"
+
+      refute plan =~ "SCAN messages", "DM content-tail must not full-scan messages:\n#{plan}"
+      refute plan =~ "messages_network_id_index", "must not fall to the network-wide scan:\n#{plan}"
+    end
+
+    test "the DM count_after_split aggregate is COVERING on the coalesce index (kind at the tail)",
+         %{user: user, network: net} do
+      # count_after_split reads `kind` PER post-cursor row (content-vs-event
+      # GROUP BY). The DM index carries `kind` at the tail, so the split is
+      # COVERING — no per-row table fetch (the exact 432ms DM bug #393 fixed).
+      # This is the DM twin of the channel COVERING assertion; it regresses
+      # loudly if `kind` is ever dropped from the coalesce index tail.
+      plan = explain_plan(count_split_query({:user, user.id}, net, "peer"))
+
+      assert plan =~ "USING COVERING INDEX messages_user_id_network_id_dm_coalesce_fold_id_kind_index",
+             "expected the DM count_after_split covered by the coalesce kind index, got:\n#{plan}"
+    end
+
+    test "changes the PLAN, never the RESULT — fetch/6 folds rfc1459 variant peers to ONE window",
+         %{user: user, network: net} do
+      # Inbound DMs from a peer whose nick uses an rfc1459 national char,
+      # stored case-preserved at (channel = own_nick, dm_with = spelling).
+      spellings = ["foo[1]", "Foo[1]", "FOO[1]"]
+
+      for {spelling, i} <- Enum.with_index(spellings) do
+        {:ok, _} =
+          Scrollback.persist_event(%{
+            user_id: user.id,
+            network_id: net.id,
+            channel: "vjt-grappa",
+            server_time: 100 + i,
+            kind: :privmsg,
+            sender: spelling,
+            body: "from #{spelling}",
+            meta: %{},
+            dm_with: spelling
+          })
+      end
+
+      # The bracket-folded spelling `foo{1}` AND an ASCII-case variant both
+      # resolve to the SAME single DM window (#372) — the COALESCE predicate
+      # must change only the PLAN, never the row set.
+      via_brace = Scrollback.fetch({:user, user.id}, net.id, "foo{1}", nil, 10, nil)
+      via_upper = Scrollback.fetch({:user, user.id}, net.id, "FOO{1}", nil, 10, nil)
+
+      assert Enum.sort(Enum.map(via_brace, & &1.body)) ==
+               ["from FOO[1]", "from Foo[1]", "from foo[1]"]
+
+      assert Enum.map(via_brace, & &1.body) == Enum.map(via_upper, & &1.body)
+    end
+
+    test "delete_for_dm/3 folds inbound + outbound + orphan arms across casings (all matched by COALESCE)",
+         %{user: user, network: net} do
+      # Inbound (channel = own_nick, dm_with = peer), outbound (channel =
+      # peer, dm_with = peer), and orphan (channel = peer, dm_with = nil —
+      # e.g. a 401 NOTICE) rows for ONE peer, spelled with three rfc1459
+      # variants. The folded COALESCE(dm_with, channel) must collapse all
+      # three arms to one window, so a delete via a bracket-folded variant
+      # removes every row.
+      {:ok, _} =
+        Scrollback.persist_event(%{
+          user_id: user.id,
+          network_id: net.id,
+          channel: "vjt-grappa",
+          server_time: 100,
+          kind: :privmsg,
+          sender: "Foo[1]",
+          body: "in",
+          meta: %{},
+          dm_with: "Foo[1]"
+        })
+
+      {:ok, _} =
+        Scrollback.persist_event(%{
+          user_id: user.id,
+          network_id: net.id,
+          channel: "foo[1]",
+          server_time: 101,
+          kind: :privmsg,
+          sender: "vjt-grappa",
+          body: "out",
+          meta: %{},
+          dm_with: "foo[1]"
+        })
+
+      {:ok, _} =
+        Scrollback.persist_event(%{
+          user_id: user.id,
+          network_id: net.id,
+          channel: "FOO[1]",
+          server_time: 102,
+          kind: :server_event,
+          sender: "server",
+          body: nil,
+          meta: %{},
+          dm_with: nil
+        })
+
+      # DECOYS that MUST SURVIVE — delete is unrecoverable, so the COALESCE
+      # predicate must NOT over-match. A DM with a DIFFERENT peer and a
+      # channel row that merely shares a name-shape must be untouched.
+      {:ok, other_dm} =
+        Scrollback.persist_event(%{
+          user_id: user.id,
+          network_id: net.id,
+          channel: "vjt-grappa",
+          server_time: 103,
+          kind: :privmsg,
+          sender: "other",
+          body: "other-peer DM",
+          meta: %{},
+          dm_with: "other"
+        })
+
+      {:ok, chan_row} =
+        Scrollback.persist_event(%{
+          user_id: user.id,
+          network_id: net.id,
+          channel: "#linux",
+          server_time: 104,
+          kind: :privmsg,
+          sender: "someone",
+          body: "channel line",
+          meta: %{},
+          dm_with: nil
+        })
+
+      # Deleting via a bracket-folded variant removes EXACTLY the 3 foo[1]
+      # rows (both DM arms + orphan) — no more, no less.
+      assert {:ok, 3} = Scrollback.delete_for_dm({:user, user.id}, net.id, "foo{1}")
+      assert Scrollback.fetch({:user, user.id}, net.id, "foo{1}", nil, 10, nil) == []
+
+      # Decoys survive.
+      assert [%{id: id}] = Scrollback.fetch({:user, user.id}, net.id, "other", nil, 10, nil)
+      assert id == other_dm.id
+
+      assert [%{id: id}] = Scrollback.fetch({:user, user.id}, net.id, "#linux", nil, 10, nil)
+      assert id == chan_row.id
+    end
+  end
+
+  # #393 A — channel unread-count covering index (kind at the tail).
+  #
+  # `count_after_split/5` for a CHANNEL window is a GROUP BY aggregate with
+  # NO LIMIT over `(subject, network_id, channel, id > cursor)` reading
+  # `kind` per row. Appending `kind` to the `(subject, network, channel, id)`
+  # composite makes it COVERING (prod 2026-07-25: 80ms → 6ms, ~15x, via
+  # WindowCounts.snapshot/6 ← MeController.build_unread_counts/2). The new
+  # index shares the old one's prefix, so the redundant `..._channel_id_index`
+  # composites are dropped. Both covering indexes were applied LIVE on prod
+  # 07:52 UTC under the EXACT names asserted here; the migration reconciles
+  # via `create_if_not_exists`. dev/test/CI create them normally — these
+  # assertions hold in BOTH states.
+  describe "#393 A — channel unread-count covering index" do
+    test "the two channel+id+kind covering indexes exist on messages" do
+      names = messages_index_names()
+
+      assert "messages_user_id_network_id_channel_id_kind_index" in names
+      assert "messages_visitor_id_network_id_channel_id_kind_index" in names
+    end
+
+    test "the two now-redundant channel+id composites are dropped" do
+      names = messages_index_names()
+
+      refute "messages_user_id_network_id_channel_id_index" in names
+      refute "messages_visitor_id_network_id_channel_id_index" in names
+    end
+
+    test "channel count_after_split is served by the COVERING kind index (no table fetch)",
+         %{user: user, network: net} do
+      plan = explain_plan(count_split_query({:user, user.id}, net, "#linux"))
+
+      assert plan =~ "USING COVERING INDEX messages_user_id_network_id_channel_id_kind_index",
+             "expected count_after_split channel query covered by the kind index, got:\n#{plan}"
+    end
+
+    test "visitor-side channel count_after_split is COVERING too",
+         %{network: net} do
+      {:ok, visitor} = Grappa.Visitors.find_or_provision_anon("v-#{uniq()}", net.slug, "1.2.3.4")
+
+      plan = explain_plan(count_split_query({:visitor, visitor.id}, net, "#linux"))
+
+      assert plan =~ "USING COVERING INDEX messages_visitor_id_network_id_channel_id_kind_index",
+             "expected visitor count_after_split channel query covered by the kind index, got:\n#{plan}"
     end
   end
 
@@ -2335,8 +2764,16 @@ defmodule Grappa.ScrollbackTest do
   # These EXPLAIN tests pin that the id-cursor read is index-eligible and
   # is a regression guard against a future table-rebuild migration
   # dropping the id-twins (the exact drift class that caused this bug).
+  #
+  # #393 SUPERSEDED the two CHANNEL id-twins: the
+  # `(subject, network_id, channel, id, kind)` covering indexes have the
+  # `(subject, network_id, channel, id)` composite as a STRICT PREFIX, so
+  # the id-cursor seek is served identically (a clean prefix seek, no sort)
+  # AND the count aggregate is now covering. The redundant `..._channel_id`
+  # composites were dropped in `20260725120000`; these tests pin the
+  # superseding kind-covering index. The `dm_with` id-twins are unchanged.
   describe "#379 — id-cursor composite indexes (CP29 R-2 regression)" do
-    test "visitor channel since-cursor read seeks the id-composite, no sort",
+    test "visitor channel since-cursor read seeks the covering channel+id+kind index, no sort",
          %{network: net} do
       {:ok, visitor} =
         Grappa.Visitors.find_or_provision_anon("v-#{uniq()}", net.slug, "1.2.3.4")
@@ -2375,8 +2812,11 @@ defmodule Grappa.ScrollbackTest do
 
       plan = Enum.map_join(rows, "\n", fn [_, _, _, detail] -> detail end)
 
-      assert plan =~ "messages_visitor_id_network_id_channel_id_index",
-             "expected the id-cursor composite (clean seek), got:\n#{plan}"
+      # #393 — the covering (…, channel, id, kind) index supersedes the
+      # dropped (…, channel, id) composite; its prefix serves the id-cursor
+      # seek identically.
+      assert plan =~ "messages_visitor_id_network_id_channel_id_kind_index",
+             "expected the covering channel+id+kind index (clean seek), got:\n#{plan}"
 
       refute plan =~ "USE TEMP B-TREE",
              "id-cursor read must not sort in memory, got:\n#{plan}"
@@ -2385,7 +2825,7 @@ defmodule Grappa.ScrollbackTest do
              "must not fall back to the network-only scan, got:\n#{plan}"
     end
 
-    test "user channel since-cursor read seeks the id-composite, no sort",
+    test "user channel since-cursor read seeks the covering channel+id+kind index, no sort",
          %{user: user, network: net} do
       for st <- 1..8, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, st, %{channel: "#chan"}))
 
@@ -2403,8 +2843,10 @@ defmodule Grappa.ScrollbackTest do
 
       plan = Enum.map_join(rows, "\n", fn [_, _, _, detail] -> detail end)
 
-      assert plan =~ "messages_user_id_network_id_channel_id_index",
-             "expected the id-cursor composite (clean seek), got:\n#{plan}"
+      # #393 — see the visitor twin above: covering index supersedes the
+      # dropped composite.
+      assert plan =~ "messages_user_id_network_id_channel_id_kind_index",
+             "expected the covering channel+id+kind index (clean seek), got:\n#{plan}"
 
       refute plan =~ "USE TEMP B-TREE",
              "id-cursor read must not sort in memory, got:\n#{plan}"
@@ -2413,21 +2855,25 @@ defmodule Grappa.ScrollbackTest do
              "must not fall back to the network-only scan, got:\n#{plan}"
     end
 
-    test "all four id-cursor composites exist (anti-drift guard)" do
+    test "the id-cursor composites (or their covering supersets) exist (anti-drift guard)" do
       %Exqlite.Result{rows: rows} =
         Repo.query!("SELECT name FROM sqlite_master WHERE type = 'index'")
 
       names = List.flatten(rows)
 
+      # #393 dropped the two `..._channel_id` composites in favour of the
+      # `..._channel_id_kind` covering supersets (same prefix, `kind` at the
+      # tail). The `dm_with` id-twins are unchanged. Either the composite OR
+      # its covering superset satisfies the CP29 R-2 no-sort invariant.
       for idx <- [
-            "messages_visitor_id_network_id_channel_id_index",
-            "messages_user_id_network_id_channel_id_index",
+            "messages_visitor_id_network_id_channel_id_kind_index",
+            "messages_user_id_network_id_channel_id_kind_index",
             "messages_visitor_id_network_id_dm_with_id_index",
             "messages_user_id_network_id_dm_with_id_index"
           ] do
         assert idx in names,
                "#{idx} missing — CP29 R-2-class drift (a table-rebuild migration " <>
-                 "must re-create the id-twin composites); see #379"
+                 "must re-create the id-cursor composites / their covering supersets); see #379/#393"
       end
     end
   end

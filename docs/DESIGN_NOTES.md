@@ -17162,3 +17162,181 @@ ONE `/join #x,#y`, asserts BOTH `.sidebar-network-section li` rows exist AND
 each is actually JOINED (`selectChannel` with `ownNick` requires the
 per-channel self-JOIN line + WS-ready seam — a greyed `:pending` window
 satisfies neither), PARTs both in `finally`.
+
+---
+
+## 2026-07-25 — #393 restore sargability of two `messages` read shapes (SQLite pool saturation)
+
+**Incident.** Prod (m42 bastille jail) hit SQLite connection-pool
+saturation under real load — slow logon, sluggish `/motd`, laggy send.
+Fresh 25s prod telemetry (2026-07-25) showed 19,120ms of DB time
+concentrated in two `messages` read shapes, BOTH non-sargable:
+- a `SELECT` scrollback fetch — **409ms mean, n=24**;
+- the `count_after_split` DM unread shape — **432ms mean, n=6**.
+
+vjt drove the diagnosis LIVE with prod measurements (`EXPLAIN QUERY PLAN`,
+`EXCEPT`-based equivalence proofs, before/after timings) on a prod copy;
+the design below is his, verified empirically, not theoretical.
+
+**RETRACTED — the "3.7x" first read.** An early framing attributed the
+slowdown to a 3.7x row-count multiplier; that was WRONG and is retracted.
+The root cause is not row volume — it is **non-sargability**: the planner
+could not seek an index for either shape and folded/scanned row-by-row
+over the whole network's history. Adding rows only made a
+constant-per-row scan visibly slow. The fix is to make both shapes
+index-seekable; row count is a red herring.
+
+### (A) CHANNEL unread-count — `kind` at the index tail makes the count COVERING
+
+`Scrollback.count_after_split/5` for a CHANNEL window is a GROUP BY
+aggregate with NO LIMIT over `(subject, network_id, channel, id > cursor)`
+that reads `kind` for every post-cursor row (it splits the count into
+content vs event kinds). The prior `(subject, network_id, channel, id)`
+composite (`20260722202612`) covered the RANGE but not `kind`, so the
+aggregate did one table row-fetch per post-cursor row + a TEMP B-TREE
+(prod: 80ms/79ms over 11,066 rows on a busy `#linux`-class window).
+Appending `kind` at the index tail —
+`(subject, network_id, channel, id, kind)` — makes the aggregate a
+COVERING scan, no table touch (prod: 5–7ms, ~15x). The new kind-index is
+a strict SUPERSET of the old composite's prefix, so the two
+`..._channel_id_index` composites are DROPPED here — net
+write-amplification is exactly what it was before.
+
+### (B) DM read/count — collapse the OR to ONE sargable folded-COALESCE equality
+
+The DM-peer window match (`Scrollback.where_dm_peer/2`, shared by the read
+path `channel_or_dm_where/3` and the delete path `delete_for_dm/3`) folds
+the peer key under rfc1459 (#372: `dm_with` stored case-PRESERVED for
+display, matched folded). The prior form was a two-arm disjunction:
+
+```
+fold(dm_with) = ?  OR  (dm_with IS NULL AND fold(channel) = ?)
+```
+
+This was **NON-sargable**: even with per-arm folded expression indexes the
+SQLite planner stayed on `messages_network_id_index` and folded row-by-row
+over the entire network's history (measured — the per-arm index had NO
+effect; SQLite will not OR-merge two folded-expression seeks here).
+
+**#393 collapses the OR to the equivalent single predicate:**
+
+```
+fold(COALESCE(dm_with, channel)) = ?
+```
+
+**Equivalence (exact, not approximate).** When `dm_with` is non-NULL the
+COALESCE picks it → first arm. When `dm_with IS NULL` the COALESCE picks
+`channel` → the orphan arm (a server NOTICE / numeric routed to a query
+window via `numeric_router`, stored with `dm_with = nil`). There is no
+third case. vjt proved it empirically on a prod copy: `EXCEPT` of the old
+predicate's id-set against the new one over the whole of network 3 →
+**ZERO id mismatches** (27 rows vs 27, byte-identical set). The collapse
+changes the plan, not the result.
+
+That single predicate SEEKs an expression index
+`(subject, network_id, fold(COALESCE(dm_with, channel)), id, kind)`:
+prod `EXPLAIN` flipped from `SEARCH USING messages_network_id_index` to
+`SEARCH USING COVERING INDEX ... (subject=? AND network_id=? AND <expr>=?
+AND id>?)`, **204ms → 0.000s**. `kind` at the tail makes the count
+aggregate covering (as in (A)); `id` keeps the `id > cursor` reads
+(`fetch_after/6`, `unread_content_tail/6`, `count_after*/5`) seekable on
+the folded value.
+
+**One site, all five consumers.** Because the match lives ONLY in
+`where_dm_peer/2`, collapsing it fixes EVERY consumer of the shared
+predicate in one shot: `fetch/6`, `fetch_after/6`, `fetch_around/6`,
+`unread_content_tail/6`, `count_after/5` + `count_after_split/5` (all via
+`channel_or_dm_where/3`), and `delete_for_dm/3` (directly). No
+per-caller two-query split (mechanism 2) was needed — vjt chose
+mechanism 1 (the COALESCE collapse) as definitive.
+
+### `where_dm_peer` OR→COALESCE upholds the rfc1459-fold invariant
+
+CLAUDE.md's nick-fold invariant names `where_dm_peer/2` as a fold-MATCH
+site (#372). The OR→COALESCE rewrite is **semantically identical** and
+**still folds** via `Identifier.nick_fold/1` — a nick that folds
+identically (ASCII case + the four bracket chars `[ ] \ ~` → `{ } | ^`)
+still resolves to ONE DM window everywhere. The invariant holds byte-for-
+byte; only the disjunction shape changed. The fold expression is the SAME
+`COALESCE(dm_with, channel)` one `list_archive/3`'s GROUP BY has used
+since #372 (in-house precedent, `scrollback.ex:847`).
+
+### Byte-identity is load-bearing
+
+The (B) index expression MUST be character-identical to
+`Grappa.IRC.Identifier.nick_fold_sql/1` (ASCII `lower()` + four bracket
+`replace()`s) applied to `COALESCE(dm_with, channel)`, or SQLite silently
+stops recognising the folded query as index-eligible (no error — just the
+old scan). The migration inlines a `defp fold/1` helper (migrations run
+before `lib/` is loaded — mirrors `20260628100100`); the `IdentifierTest`
+pin test now asserts `nick_fold_sql("COALESCE(dm_with, channel)")` and the
+scrollback DDL byte-identity test guards the literal. `nick_fold_sql/1` is
+the single source — no new named helper (it would have one consumer); if a
+reviewer wants `Identifier.dm_peer_key_fold_sql/0` next to it later, route
+both the pin and the DDL test through it.
+
+### The four live prod indexes + ship sequence
+
+All four indexes were applied LIVE on prod ahead of the formal cold
+deploy (this is a prod incident in progress — CREATE INDEX is expand-class,
+online-safe for the running old code):
+- **07:52 UTC** — (A) `messages_user_id_network_id_channel_id_kind_index`,
+  `messages_visitor_id_network_id_channel_id_kind_index` (over 654k rows,
+  1.6–2.0s each).
+- **08:26 UTC** — (B) `messages_user_id_network_id_dm_coalesce_fold_id_kind_index`,
+  `messages_visitor_id_network_id_dm_coalesce_fold_id_kind_index` (2.442s /
+  2.570s, verified in `sqlite_master`).
+
+So the ONLY remaining ship is the CODE (the `where_dm_peer/2` query
+rewrite). Preflight `migration?/1` classifies a new `priv/repo/migrations/*`
+file as **Class 5 = COLD** (the hot path skips `mix ecto.migrate`), and
+there is no index-only exception. But the whole effect of this migration
+is ALREADY applied out-of-band, so the fix ships via a **code-only HOT
+deploy** using `--force-hot`: the code is a pure query rewrite over
+already-standing indexes. The migration reconciles at the next COLD deploy
+via `create_if_not_exists` (documented exception to the plain-`create`
+rule — a no-op on the already-live indexes; the migration row still
+records, so no drift). The live DDL is byte-identical to what Ecto emits
+(NO partial `WHERE` clause — the live prod DDL omits it). The two redundant
+`..._channel_id_index` composites remain on prod until the cold migrate
+(or an optional `DROP INDEX IF EXISTS` rpc) — harmless to leave.
+
+### Archive-index redundancy assessment (PR reminder iii) — KEEP them
+
+`messages_archive_user_idx` / `messages_archive_visitor_idx`
+(`20260522073826`) are `(subject, network_id, COALESCE(dm_with, channel),
+server_time)` — **UNFOLDED** coalesce, `server_time` at the tail. They are
+NOT redundant with the new (B) FOLDED coalesce index: different key
+(unfolded vs folded) AND different tail (`server_time` for the
+`MAX(server_time)` archive aggregate vs `id, kind` for the read/count
+cursor). Separately: `list_archive/3`'s GROUP BY has FOLDED the coalesce
+since **#372** (`Identifier.nick_fold(fragment("COALESCE(?, ?)", …))`), so
+the UNFOLDED archive indexes ALREADY don't match its group_by — a
+**pre-existing #372 staleness**, orthogonal to this P0. **DECISION: KEEP
+them.** Dropping risks `list_archive/3` and is out of scope for the
+incident fix; the #372 archive-index staleness is noted here for a future
+cleanup, NOT touched in this migration.
+
+### Spun out of the incident
+
+- **#395** — the architectural half: unread is computed two DIVERGENT ways
+  (the window count via `count_after_split/5` vs the badge count) and they
+  have drifted. #393 fixes the PERF of the count paths; reconciling the two
+  computations into one is #395, tracked separately — NOT part of this P0.
+- **#357 Fix B (materialised `unreads`) — PARKED.** #393 removed its
+  performance motivation (the count paths now seek). The decision gate to
+  un-park is a post-deploy telemetry re-run.
+- **#394** — iOS clients abort ~277x more than macOS; separate client
+  problem, not a server fix.
+- **Interim prod mitigation (not a cure).** vjt's 32 stale `read_cursors`
+  were deleted out-of-band, dropping his worst request from 163,975ms to
+  2–128ms; the cursors recreate as windows reopen. The code+index fix is
+  the actual cure.
+
+**Apply.** Non-sargability, not row count, is the class of bug here — when
+a folded/COALESCE predicate can't seek, add ONE expression index matching
+the exact fold literal and collapse any OR into a single equality if the
+arms are provably exhaustive (prove with `EXCEPT`). Put the aggregated
+column (`kind`) at the index tail to make the count covering. Any change to
+the fold literal in code MUST move in lockstep with the migration DDL and
+the pin test, or the index silently stops being used.
