@@ -17842,3 +17842,51 @@ secret is set, never the value. cic's editor mirrors the password-field idiom
 (leave-blank-to-keep). There is no live verb: an edit persists and takes effect
 on the next (re)connect (the plan is re-resolved on every `Session.Server`
 (re)start).
+
+## 2026-07-26 — #369 batch 3: closed-set wire kinds → atom unions (S14 sweep)
+
+Completed the S14 convention across EVERY `**/wire.ex` codegen module: a
+closed atom set on the wire is typed as an atom union and the value passes
+through UNCHANGED (Jason stringifies at the JSON edge — identical bytes),
+so `mix grappa.gen_wire_types` pins a literal TS union
+(`"channel" | "query"`) instead of the `kind: String.t()` widening that
+erased the closed set from codegen. This supersedes the earlier
+`Atom.to_string/1`-at-the-boundary form, which produced a `String.t()`
+value Dialyzer could not type as a union (defeating the codegen gate).
+Precedent was `Scrollback.Wire.to_json`'s `Message.kind()`; batch 3
+brought the stragglers into line:
+
+* `Scrollback.Wire.archive_wire_entry.kind` → `:channel | :query`
+  (inline — no named source type exists; `archive_entry/1` guard
+  tightened to `kind in [:channel, :query]`).
+* `ChannelDirectory.Wire.index_payload.status` → the named
+  `ChannelDirectory.status()` union (referenced, not inlined —
+  derive-not-duplicate, mirroring `Message.kind`; codegen emits a
+  `ChannelDirectoryStatus` external type). This was the LAST offender
+  inside a codegen module — caught in code review under "total
+  consistency": leaving it beside the archive fix would seed a live
+  wrong-pattern precedent.
+* `LiveIntrospection.AdminWire.t.subject_kind` → `:user | :visitor`.
+  `admin_wire.ex` is OUTSIDE the `**/wire.ex` glob (Dialyzer/doc-only,
+  admin panel owns its own TS types) but a closed set is still a typed
+  union per CLAUDE.md.
+
+Two non-kind fixes rode along:
+
+* Deleted the DEAD `@type Networks.connection_state_changed_event` — an
+  unreferenced, already-drifted duplicate of the live, codegen-emitted
+  `Networks.Wire.connection_state_event` (which already had
+  `kind: :connection_state_changed`, nullable `user_id`/`at`, and the
+  `network` field). Derive-don't-duplicate: two types describing one
+  event IS the drift bug.
+* `Themes.Wire.t.payload` bare `map()` → `%{optional(String.t()) =>
+  term()}` (the sanitized `TokenModel.token_map()` is string-keyed).
+  Same `Record<string, unknown>` codegen output, but removes the
+  gen_wire_types "bare map() defeats codegen" warning; cic owns the
+  closed token vocabulary in `themesApi.ts`, so a fully-typed wire shape
+  would duplicate it. The codegen's defensive bare-map fallback (and its
+  warning) stays — pinned by the gen_wire_types test — for any FUTURE
+  stray bare map; batch 3 just removed the one production use.
+
+All wire bytes unchanged (pinned by `Jason.encode!` round-trip tests at
+each site), so no cic contract change — cic bundle unaffected.
