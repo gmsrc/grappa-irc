@@ -16,7 +16,7 @@ defmodule Grappa.Session.WindowState do
   ## CLAUDE.md invariant: window state lives on the server
 
   > Window state model lives on the server. `Grappa.Session.Server`
-  > owns `window_states %{channel => :pending | :joined | :failed |
+  > owns `window_states %{channel => :pending | :invited | :joined | :failed |
   > :kicked | :parked}` + sibling `window_failure_{reasons,numerics}`
   > + `window_kicked_meta` maps. Transitions emit typed events on the
   > per-channel topic; cic's `lib/windowState.ts` mirrors via

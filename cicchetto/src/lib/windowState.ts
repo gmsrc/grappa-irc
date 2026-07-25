@@ -7,7 +7,7 @@ import { selectedChannel } from "./selection";
 // state machine. The server splits state across three maps so each
 // concern is reactive on its own (lib/grappa/session/server.ex):
 //
-//   * window_states         : %{channel => :pending | :joined | :failed | :kicked | :parked}
+//   * window_states         : %{channel => :pending | :invited | :joined | :failed | :kicked | :parked}
 //   * window_failure_reasons: %{channel => String.t()}
 //   * window_failure_numerics: %{channel => pos_integer()}
 //   * window_kicked_meta    : %{channel => %{by, reason}}
