@@ -102,11 +102,15 @@ mirror, bun cache survive across worktrees + sessions.
 `SRC_ROOT="$PWD"` only when the cwd is a git-worktree root (detected by
 `lib/` + a `.git` *file*); from anywhere else — including the worktree's
 own `cicchetto/` subdir — it falls back to the **main** repo. So
-`scripts/bun.sh run test ...` run from `<worktree>/cicchetto` silently
-tests **main's** source, passes green, and never touches your worktree
-changes. The tell: the test COUNT doesn't move when your new tests
-should have added to it. Always `cd <worktree-root>` first; verify a run
-hit the worktree by checking the count reflects your additions.
+`scripts/bun.sh run test` / `run check` run from `<worktree>/cicchetto`
+silently tests / typechecks **main's** source, passes green, and never
+touches your worktree changes. The tell: the test COUNT doesn't move when
+your new tests should have added to it — or `run check` reports 0 tsc
+errors on a type error you KNOW you just introduced (a brand violation, a
+new `error TS`), because it's typechecking main, not your branch. Always
+`cd <worktree-root>` first; verify a run hit the worktree by checking the
+count reflects your additions, or that a deliberate error is actually
+caught.
 
 **`scripts/bun.sh run build`/`run check` can FALSE-PASS a type error in a
 `src/__tests__/*` file.** `tsc`'s incremental `*.tsbuildinfo` cache (under
