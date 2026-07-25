@@ -29,6 +29,33 @@ defmodule GrappaWeb.Validation do
   end
 
   @doc """
+  Returns `:ok` if `name` is a non-empty RFC1459 comma-separated channel
+  LIST (`#a,#b,#c`) in which EVERY element is a syntactically valid
+  channel name, else `{:error, :bad_request}`.
+
+  #382 — the JOIN path (`ChannelsController.create/2`) accepts the
+  RFC1459 multi-channel form the client already forwards as one string.
+  This is the LIST-aware sibling of `validate_channel_name/1`, wired ONLY
+  at the create/JOIN door: PART / membership / TOPIC keep the strict
+  single-channel `validate_channel_name/1` (a comma there is genuinely
+  malformed). It reuses `validate_channel_name/1` per element so the
+  per-channel shape rule can never drift between the two doors
+  (implement-once). A single channel (no comma) is a list-of-one → `:ok`,
+  so the single-channel POST body is byte-identical behaviour. Fails the
+  WHOLE line if ANY member is invalid (no partial JOIN) and rejects the
+  empty string (`""` → `[""]` → invalid element) and a trailing comma
+  (empty trailing element).
+  """
+  @spec validate_channel_list(String.t()) :: :ok | {:error, :bad_request}
+  def validate_channel_list(name) when is_binary(name) do
+    channels = String.split(name, ",")
+
+    if Enum.all?(channels, fn channel -> validate_channel_name(channel) == :ok end),
+      do: :ok,
+      else: {:error, :bad_request}
+  end
+
+  @doc """
   Returns `:ok` if `name` is a syntactically valid IRC PRIVMSG read
   target — either a channel name (`#`/`&`/`+`/`!` sigil per RFC 2812
   §1.3), a nick (RFC 2812 §2.3.1), or the Grappa-internal synthetic

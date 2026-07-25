@@ -42,6 +42,28 @@ defmodule GrappaWeb.ValidationTest do
     end
   end
 
+  describe "validate_channel_list/1 (#382)" do
+    test "a single channel is :ok (list-of-one)" do
+      assert Validation.validate_channel_list("#chan") == :ok
+    end
+
+    test "a comma-separated list of valid channels is :ok" do
+      assert Validation.validate_channel_list("#a,#b,#c") == :ok
+    end
+
+    test "any invalid member fails the WHOLE line" do
+      assert Validation.validate_channel_list("#a,no-hash,#c") == {:error, :bad_request}
+    end
+
+    test "an empty string is rejected" do
+      assert Validation.validate_channel_list("") == {:error, :bad_request}
+    end
+
+    test "a trailing comma (empty trailing element) is rejected" do
+      assert Validation.validate_channel_list("#a,") == {:error, :bad_request}
+    end
+  end
+
   describe "take_atomized/3" do
     test "threads each retained value through value_fun keyed by its string key" do
       params = %{"auth_method" => "sasl", "nick" => "vjt"}

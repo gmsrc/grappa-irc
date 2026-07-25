@@ -1842,13 +1842,13 @@ defmodule Grappa.Session.Server do
   end
 
   @impl GenServer
-  def handle_call({:send_join, channel, key}, _, state)
-      when is_binary(channel) and (is_nil(key) or is_binary(key)) do
+  def handle_call({:send_join, channels, key}, _, state)
+      when is_list(channels) and (is_nil(key) or is_binary(key)) do
     # Code-review CRIT-1 (bucket C): post-irc/S2 `Client.send_join`
     # returns `{:error, :invalid_line}` for malformed channels. The
-    # `Session.send_join/4` facade gates `valid_channel?` before the
-    # call (CRIT-1 fix), so reaching this clause with a malformed
-    # channel requires a caller bypassing the facade. Defensive
+    # `Session.send_join/4` facade gates `valid_channel?` per element
+    # before the call (CRIT-1 fix), so reaching this clause with a
+    # malformed channel requires a caller bypassing the facade. Defensive
     # `{:error, :invalid_line}` arm mirrors the autojoin loop pattern
     # at handle_info({:irc, %Message{command: {:numeric, 1}}}, …) so
     # a future bypass-caller logs + drops instead of MatchError-crashing
@@ -1866,12 +1866,22 @@ defmodule Grappa.Session.Server do
     # UX-4 bucket F: `key` is the optional +k channel key (nil for
     # keyless channels). Client.send_join/3 emits the wire frame in
     # the keyed or keyless shape based on key.
-    case Client.send_join(state.client, channel, key) do
+    #
+    # #382: `channels` is the canonical-folded list from
+    # `Session.send_join/4` (a single channel is a list-of-one).
+    # `Client.send_join/3`'s list clause frames ONE multi-target JOIN
+    # line; on `:ok` we `record_in_flight_join/2` PER channel so EACH
+    # window flips to `:pending` and broadcasts `window_pending`.
+    case Client.send_join(state.client, channels, key) do
       :ok ->
-        {:reply, :ok, record_in_flight_join(state, channel)}
+        state = Enum.reduce(channels, state, &record_in_flight_join(&2, &1))
+        {:reply, :ok, state}
 
       {:error, :invalid_line} = err ->
-        Logger.warning("send_join call rejected: invalid channel name", channel: inspect(channel))
+        Logger.warning("send_join call rejected: invalid channel name",
+          channel: inspect(channels)
+        )
+
         {:reply, err, state}
 
       # Transport-level failure: client has no live socket (upstream
@@ -1884,7 +1894,7 @@ defmodule Grappa.Session.Server do
       # backoff tick will retry the socket.
       {:error, reason} ->
         Logger.warning("send_join call rejected: transport unavailable",
-          channel: inspect(channel),
+          channel: inspect(channels),
           reason: inspect(reason)
         )
 

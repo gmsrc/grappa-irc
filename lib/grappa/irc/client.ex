@@ -323,10 +323,38 @@ defmodule Grappa.IRC.Client do
   2026-05-12) the upstream-facing JOIN landed for malformed channels
   and the pending-window state machine wedged a `:pending` entry that
   never resolved.
+
+  ## Comma-separated multi-channel JOIN (#382)
+
+  A channel **list** frames ONE wire line `JOIN #a,#b,#c\\r\\n` (or the
+  keyed `JOIN #a,#b <key>\\r\\n`) — bahamut handles the multi-target
+  JOIN natively, so a list is a single JOIN, never N looped ones. EACH
+  element is re-validated with `valid_channel?/1` (the same irc/S2 gate
+  as the single-channel form): if ANY member is malformed the WHOLE
+  line is rejected with `{:error, :invalid_line}` and nothing reaches
+  the wire — no partial JOIN, no wedged `:pending` window. An empty list
+  is rejected. A single-element list frames identically to the
+  single-channel form.
   """
-  @spec send_join(pid(), String.t(), String.t() | nil) :: send_result()
+  @spec send_join(pid(), String.t() | [String.t()], String.t() | nil) :: send_result()
+  def send_join(client, channels, key) when is_list(channels) do
+    cond do
+      channels == [] or not Enum.all?(channels, &joinable_channel?/1) ->
+        reject_invalid_line(:join)
+
+      key in [nil, ""] ->
+        send_line(client, "JOIN #{Enum.join(channels, ",")}\r\n")
+
+      is_binary(key) and safe_join_key?(key) ->
+        send_line(client, "JOIN #{Enum.join(channels, ",")} #{key}\r\n")
+
+      true ->
+        reject_invalid_line(:join)
+    end
+  end
+
   def send_join(client, channel, nil) do
-    if Identifier.safe_line_token?(channel) and Identifier.valid_channel?(channel),
+    if joinable_channel?(channel),
       do: send_line(client, "JOIN #{channel}\r\n"),
       else: reject_invalid_line(:join)
   end
@@ -336,10 +364,16 @@ defmodule Grappa.IRC.Client do
   end
 
   def send_join(client, channel, key) when is_binary(key) do
-    if Identifier.safe_line_token?(channel) and Identifier.valid_channel?(channel) and
-         safe_join_key?(key),
-       do: send_line(client, "JOIN #{channel} #{key}\r\n"),
-       else: reject_invalid_line(:join)
+    if joinable_channel?(channel) and safe_join_key?(key),
+      do: send_line(client, "JOIN #{channel} #{key}\r\n"),
+      else: reject_invalid_line(:join)
+  end
+
+  # Per-channel JOIN/PART shape gate (irc/S2): CRLF/NUL-safe AND an
+  # RFC-2812-shaped channel name. Single source shared by the
+  # single-channel + list `send_join/3` clauses (#382 implement-once).
+  defp joinable_channel?(channel) do
+    Identifier.safe_line_token?(channel) and Identifier.valid_channel?(channel)
   end
 
   # +k channel key — additionally rejects whitespace (space, tab) since

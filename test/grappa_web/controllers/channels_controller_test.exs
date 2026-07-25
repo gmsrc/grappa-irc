@@ -79,6 +79,38 @@ defmodule GrappaWeb.ChannelsControllerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "#382 comma-list name sends ONE multi-target JOIN and returns 202",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels", %{"name" => "#alfa,#beta"})
+
+      assert json_response(conn, 202) == %{"ok" => true}
+
+      assert {:ok, "JOIN #alfa,#beta\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#382 comma-list with a malformed member returns 400 (fail whole)",
+         %{conn: conn, vjt: vjt} do
+      _ = ensure_azzurra_credential(vjt)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/azzurra/channels", %{"name" => "#alfa,no-hash"})
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+    end
+
     test "unknown network slug returns 404 not found", %{conn: conn} do
       conn =
         conn

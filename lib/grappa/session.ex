@@ -514,13 +514,29 @@ defmodule Grappa.Session do
   def send_join(subject, network_id, channel, key)
       when is_subject(subject) and is_integer(network_id) and is_binary(channel) and
              (is_nil(key) or is_binary(key)) do
-    if Identifier.safe_line_token?(channel) and Identifier.valid_channel?(channel) and
-         safe_join_key?(key) do
-      call_session(
-        subject,
-        network_id,
-        {:send_join, Identifier.canonical_channel(channel), normalize_join_key(key)}
-      )
+    # #382 — split the RFC1459 comma-separated channel list, validate +
+    # canonical-fold EACH element (invariant #364), and forward ONE
+    # `{:send_join, [channels], key}` message. A name with no comma is a
+    # list-of-one → byte-identical to the pre-#382 single-channel path.
+    # Fail the WHOLE line if ANY element is malformed (no partial JOIN).
+    with true <- safe_join_key?(key),
+         {:ok, channels} <- fold_join_channels(String.split(channel, ",")) do
+      call_session(subject, network_id, {:send_join, channels, normalize_join_key(key)})
+    else
+      _ -> {:error, :invalid_line}
+    end
+  end
+
+  # Recursive collect-or-bail traverse (CLAUDE.md pattern) over the split
+  # channel list: validate each element's IRC shape and accumulate its
+  # canonical-folded form, or bail on the first malformed member.
+  @spec fold_join_channels([String.t()]) :: {:ok, [String.t()]} | {:error, :invalid_line}
+  defp fold_join_channels(channels), do: fold_join_channels(channels, [])
+  defp fold_join_channels([], acc), do: {:ok, Enum.reverse(acc)}
+
+  defp fold_join_channels([channel | rest], acc) do
+    if Identifier.safe_line_token?(channel) and Identifier.valid_channel?(channel) do
+      fold_join_channels(rest, [Identifier.canonical_channel(channel) | acc])
     else
       {:error, :invalid_line}
     end

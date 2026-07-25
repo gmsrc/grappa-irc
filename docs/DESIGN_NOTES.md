@@ -17068,3 +17068,85 @@ oper SIGSEGV risk (unlike #375/#164). Server tests cover the 367+368 burst →
 `banlist_bundle` on `Topic.user`; event_router covers fold/emit/unprimed/older-
 ircd/rfc1459-fold; wire covers wire-order + nil round-trip; cic covers the
 narrow/dispatch arm + BanlistCard render.
+
+## 2026-07-25 — `/join #a,#b,#c` server-side comma-separated multi-JOIN (GH #382, grappa)
+
+**Problem.** `/join #a,#b,#c` (the RFC1459 comma-separated channel list) was
+rejected. cic ALREADY forwards the comma-list as one `channel` string
+(`slashCommands.ts` join: sigil'd lists pass through unsplit — only a
+bare-name-with-comma auto-`#` is refused); the SERVER's single-channel
+validator (`Identifier.valid_channel?/1`, whose `@channel_regex` excludes `,`)
+killed it → `{:error, :invalid_line}`, whole multi-join dead.
+
+**Decision — Approach A (server-side), NOT client fan-out.** Forced by the
+"One IRC parser, on the server" invariant: the server owns channel validation
+AND upstream wire framing. Client-side fan-out (cic splits → N `postJoin`s) was
+refused — it loses single-JOIN-line atomicity and multiplies REST round-trips.
+The server splits, validates + folds each, sends ONE RFC multi-target JOIN
+line (bahamut handles multi-target JOIN natively — NOT N looped JOINs), and
+opens a `:pending` window per channel. cic is UNCHANGED (no wire event added →
+`wireTypes.ts` untouched, no codegen regen).
+
+**The path (single-channel = a list-of-one, byte-identical to pre-#382).**
+- `GrappaWeb.Validation.validate_channel_list/1` — LIST-aware sibling of
+  `validate_channel_name/1`, wired ONLY at the create/JOIN door
+  (`ChannelsController.create/2`). Splits on `,`, requires EVERY element valid
+  (reuses `validate_channel_name/1` per element — implement-once), fails the
+  WHOLE request 400 on any bad member / empty / trailing comma. PART / TOPIC /
+  membership keep the strict single-channel `validate_channel_name/1` (a comma
+  there is genuinely malformed) — the loosening is scoped to the one door.
+- `Session.send_join/4` — splits `channel` on `,`, then a recursive
+  collect-or-bail traverse (`fold_join_channels/1`, CLAUDE.md pattern — NOT
+  `reduce_while`) validates (`safe_line_token?` + `valid_channel?`) AND
+  canonical-folds (`Identifier.canonical_channel/1`, invariant #364) EACH
+  element, bailing `{:error, :invalid_line}` on the first bad one. Forwards
+  ONE `{:send_join, [canon…], key}` message (message shape changed from a bare
+  binary to a LIST — the only constructor is this facade; no other caller
+  builds `{:send_join, …}`).
+- `IRC.Client.send_join/3` — new `is_list(channels)` clause frames ONE
+  `JOIN #a,#b\r\n` (or keyed `JOIN #a,#b <key>\r\n`); re-validates EACH element
+  via the shared `joinable_channel?/1` predicate (the same irc/S2 gate,
+  extracted so the single-channel + list clauses share it) — any bad member or
+  empty list → `{:error, :invalid_line}`, nothing on the wire.
+- `Session.Server.handle_call({:send_join, channels, key})` — now `is_list`;
+  on `Client.send_join` `:ok`, `Enum.reduce`s `record_in_flight_join/2` over
+  EACH channel (a genuine fold-with-state — each returns the next state), so
+  EACH channel flips `window_states[ch]=:pending` and broadcasts
+  `window_pending` → BOTH sidebar rows appear. `:invalid_line` /
+  `:not_connected` transport arms preserved.
+
+**Fail-WHOLE-line, never partial.** Any malformed member fails the entire JOIN
+at the earliest boundary (validator 400, or facade/Client `:invalid_line`) — no
+subset of the list is joined. Prevents a wedged `:pending` window for a channel
+the ircd can never JOIN (irc/S2 rationale, generalized to the list).
+
+**CHANNEL FOLD INVARIANT (#364).** The fold is PER channel at the split
+(`fold_join_channels/1`): `#A,#B` → `#a,#b` on the wire AND as the
+in_flight_joins / window_state keys — one canonical key per channel regardless
+of casing, consistent with the single-channel path (which already folded).
+
+**Key-list out of scope v1.** `JOIN #a,#b k1,k2` (per-channel keys) is NOT
+supported — a single `key` param applies to the whole multi-join. Documented
+limit; revisit only if a real need appears.
+
+**Log honesty.** The two `Session.Server` reject logs keep the registered
+`channel:` metadata key (allowlist is a closed set — no `channels:` added) with
+the list as the value.
+
+**One door.** JOIN is REST-only (`ChannelsController.create/2`) — there is NO
+`"join"` WS handler in `grappa_channel.ex`, so "one feature, one code path" is
+satisfied; no WS join was added.
+
+**Never assert the bug / TDD.** RED-first per layer: `validation_test`
+(`validate_channel_list/1` all-valid/any-invalid/empty/trailing-comma),
+`session_test` (facade split → `:no_session` for valid list, `:invalid_line`
+fail-whole for a bad member / CRLF / trailing comma), `client_test` (list
+clause frames exactly one `JOIN #a,#b\r\n` keyed + keyless; any bad element /
+empty list / bad key → `:invalid_line`), `server_test` (comma-list → ONE wire
+JOIN + in_flight + `:pending` + `window_pending` per channel; per-channel
+rfc1459 fold), `channels_controller_test` (comma-list → 202 one JOIN; bad
+member → 400). **Real e2e** (`issue382-multichannel-join.spec.ts`): vjt issues
+ONE `/join #x,#y`, asserts BOTH `.sidebar-network-section li` rows exist AND
+each is actually JOINED (`selectChannel` with `ownNick` requires the
+per-channel self-JOIN line + WS-ready seam — a greyed `:pending` window
+satisfies neither), PARTs both in `finally`.

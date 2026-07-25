@@ -2960,6 +2960,66 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "#382 comma-list JOIN frames ONE wire line + records in-flight + :pending per channel" do
+      # #382 — a `/join #a,#b` sends ONE RFC multi-target JOIN line
+      # (bahamut handles it natively — never N looped JOINs), records an
+      # in_flight_joins entry PER channel, flips window_states[ch] to
+      # :pending PER channel, and broadcasts window_pending PER channel on
+      # the user-topic so BOTH sidebar rows appear.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      :ok = Session.send_join({:user, user.id}, network.id, "#alfa,#beta", nil)
+
+      # EXACTLY ONE JOIN line carrying both channels (a looped impl would
+      # emit `JOIN #alfa\r\n` first).
+      assert {:ok, "JOIN #alfa,#beta\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      for chan <- ["#alfa", "#beta"] do
+        assert_receive %Phoenix.Socket.Broadcast{
+                         event: "event",
+                         payload: %{kind: :window_pending, channel: ^chan, state: :pending}
+                       },
+                       1_000
+      end
+
+      state = :sys.get_state(pid)
+      assert {"#alfa", _, nil} = Map.fetch!(state.in_flight_joins, "#alfa")
+      assert {"#beta", _, nil} = Map.fetch!(state.in_flight_joins, "#beta")
+      assert WindowState.state_of(state.window_state, "#alfa") == :pending
+      assert WindowState.state_of(state.window_state, "#beta") == :pending
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#382 comma-list JOIN canonical-folds EACH channel (rfc1459) on the wire + in-flight" do
+      # #382 — the fold is PER channel (invariant #364): `#A,#B` becomes
+      # `#a,#b` on the wire AND as the in_flight_joins / window_state keys,
+      # so cic sees one canonical key per channel regardless of casing.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      :ok = Session.send_join({:user, user.id}, network.id, "#Alfa,#BETA", nil)
+
+      assert {:ok, "JOIN #alfa,#beta\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      state = :sys.get_state(pid)
+      assert Map.has_key?(state.in_flight_joins, "#alfa")
+      assert Map.has_key?(state.in_flight_joins, "#beta")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "inbound non-awaiting INVITE broadcasts window_invited + records :invited + persists row at the channel (#78)" do
       # #78 / folds #128: an inbound INVITE we did NOT request surfaces the
       # invited channel as a not-joined :invited window. EventRouter emits

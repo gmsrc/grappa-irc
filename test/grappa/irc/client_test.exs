@@ -210,6 +210,40 @@ defmodule Grappa.IRC.ClientTest do
                IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
     end
 
+    # #382 — comma-separated multi-channel JOIN. bahamut handles the
+    # multi-target JOIN natively, so a channel LIST frames ONE wire line
+    # `JOIN #a,#b\r\n` (never N looped JOINs). The list clause is the
+    # server-side path cic's existing comma-list contract already feeds.
+    test "send_join/3 list clause emits ONE JOIN line for a comma list (no key)" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_join(client, ["#a", "#b", "#c"], nil)
+
+      assert {:ok, "JOIN #a,#b,#c\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+    end
+
+    test "send_join/3 list clause emits ONE JOIN line with a single key" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_join(client, ["#a", "#b"], "secret")
+
+      assert {:ok, "JOIN #a,#b secret\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+    end
+
+    test "send_join/3 list clause with a single-element list matches the single-channel form" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_join(client, ["#solo"], nil)
+
+      assert {:ok, "JOIN #solo\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+    end
+
     test "send_topic/3 emits TOPIC #chan :body framing" do
       {server, port} = start_server()
       client = start_client(port)
@@ -1245,6 +1279,21 @@ defmodule Grappa.IRC.ClientTest do
 
     test "send_join/3 rejects empty channel (irc/S2)", %{client: client} do
       assert {:error, :invalid_line} = Client.send_join(client, "", nil)
+    end
+
+    # #382 — the list clause validates EACH element (irc/S2 per-channel):
+    # any malformed member fails the WHOLE line so no partial JOIN goes
+    # on the wire and the pending-window state machine never wedges.
+    test "send_join/3 list clause rejects when ANY element is malformed", %{client: client} do
+      assert {:error, :invalid_line} = Client.send_join(client, ["#a", "no-hash", "#c"], nil)
+    end
+
+    test "send_join/3 list clause rejects an empty list", %{client: client} do
+      assert {:error, :invalid_line} = Client.send_join(client, [], nil)
+    end
+
+    test "send_join/3 list clause rejects a bad key", %{client: client} do
+      assert {:error, :invalid_line} = Client.send_join(client, ["#a", "#b"], "k\r\nQUIT")
     end
 
     test "send_part/2 rejects malformed channel (missing #/&/+/!) (irc/S2)", %{client: client} do

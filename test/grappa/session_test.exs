@@ -90,6 +90,31 @@ defmodule Grappa.SessionTest do
       assert {:error, :no_session} =
                Session.send_join({:user, @user_id}, @network_id, "#chan", "")
     end
+
+    # #382 — RFC1459 comma-separated multi-channel JOIN. The facade splits
+    # on `,`, validates + canonical-folds EACH element, and forwards ONE
+    # `{:send_join, [channels], key}` message. A valid multi-list passes
+    # the pre-dispatch guard and falls through to :no_session for an
+    # unknown session, exactly like the single-channel valid case.
+    test "valid comma-list falls through to :no_session for unknown session" do
+      assert {:error, :no_session} =
+               Session.send_join({:user, @user_id}, @network_id, "#a,#b,#c", nil)
+    end
+
+    test "a comma-list with ANY malformed member fails the WHOLE line before whereis" do
+      assert {:error, :invalid_line} =
+               Session.send_join({:user, @user_id}, @network_id, "#a,no-hash,#c", nil)
+    end
+
+    test "a comma-list with \\r\\n in one member is rejected before whereis" do
+      assert {:error, :invalid_line} =
+               Session.send_join({:user, @user_id}, @network_id, "#a,#b\r\nQUIT", nil)
+    end
+
+    test "a trailing comma (empty trailing element) is rejected before whereis" do
+      assert {:error, :invalid_line} =
+               Session.send_join({:user, @user_id}, @network_id, "#a,", nil)
+    end
   end
 
   describe "send_part/3 CRLF guard" do

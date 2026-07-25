@@ -39,7 +39,7 @@ defmodule GrappaWeb.ChannelsController do
   """
   use GrappaWeb, :controller
 
-  import GrappaWeb.Validation, only: [validate_channel_name: 1]
+  import GrappaWeb.Validation, only: [validate_channel_name: 1, validate_channel_list: 1]
 
   alias Grappa.Accounts.User
   alias Grappa.Networks.{Credentials, Network}
@@ -127,6 +127,15 @@ defmodule GrappaWeb.ChannelsController do
   has fired (and the synthetic sidebar pseudo-row has rendered) by the
   time this returns 202 + `{"ok": true}`.
 
+  #382 — `name` accepts the RFC1459 comma-separated channel LIST
+  (`"#a,#b,#c"`); `validate_channel_list/1` requires EVERY element to be
+  a valid channel (a malformed member fails the WHOLE request with 400,
+  no partial JOIN) and `Session.send_join/4` forwards ONE multi-target
+  JOIN line + opens a `:pending` window per channel. A single channel is
+  a list-of-one, so the single-channel body is unchanged. Key-list
+  (`JOIN #a,#b k1,k2`) is out of scope: a single `key` applies to the
+  whole multi-join.
+
   The key (when present) is forwarded to the upstream JOIN frame as
   the +k channel key. It is NOT persisted to autojoin and NOT logged
   in scrollback. A wrong/missing key surfaces server-side as 475
@@ -142,7 +151,7 @@ defmodule GrappaWeb.ChannelsController do
     network = conn.assigns.network
     key = normalize_join_key_param(Map.get(params, "key"))
 
-    with :ok <- validate_channel_name(name),
+    with :ok <- validate_channel_list(name),
          :ok <- validate_optional_key(key),
          :ok <- Session.send_join(subject, network.id, name, key) do
       conn
