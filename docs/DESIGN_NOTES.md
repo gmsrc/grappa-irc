@@ -17558,3 +17558,76 @@ mechanisms (SQL list vs Elixir guard), declare it ONCE and DERIVE each
 projection so the subset relationship is structural — never two
 hand-maintained lists that "happen to agree". A guard needs a compile-time
 `@attr = Mod.fun()`, not a runtime call.
+
+## 2026-07-25 — User-defined command aliases (GH #385, cic + grappa)
+
+A user-configurable slash-command alias layer: `alias wii whois $1 $1`,
+then `/wii foo` → `/whois foo foo`. Generalises the hardcoded parser-level
+DISPATCH aliases (`/w /q /hs …`) into a per-user layer — WITHOUT migrating
+the builtins (additive). vjt closed all five design questions up front; this
+records what shipped + the non-obvious calls.
+
+**1. Grammar — one rule for both cases.** `$1..$9` positional, `$*` all
+args. The load-bearing rule: if the expansion contains ANY placeholder, only
+substitutions happen; if it contains NONE, the rest of the input is appended
+verbatim. So `alias w whois` + `/w a b` → `whois a b` (append) while
+`alias wii whois $1 $1` + `/wii a` → `whois a a` (NOT `a a a` — no double
+append). A missing positional → empty string (silent). Names matched
+case-insensitively (verb lowercased before lookup, like builtins).
+
+**2. Storage — server-synced, no migration.** `Grappa.UserSettings` key
+`"aliases"` in the existing per-subject `data` JSON column (the column exists
+precisely to accumulate preference keys). `get_aliases/1` (safe `%{}`
+default, string-key, defensive string=>string filter) + `set_aliases/2`
+(validate → `get_or_init` → merge). Visitor-parity via `Subject.t()` tagged
+tuples. REST `GET/PUT /me/settings/aliases`, mirroring `notification_prefs`.
+
+**3. Server validates SHAPE ONLY; the client owns grammar + precedence.**
+The server can't know the builtin set (cic owns `DISPATCH`), so it validates
+only structure: name non-empty / no-whitespace / ≤32B, expansion non-empty /
+≤512B, ≤200 aliases (bounds a user-writable JSON blob — same rationale as
+`@upload_ttl_seconds_max`). Errors attach to the synthetic `:aliases`
+changeset field → `field_errors.aliases` in the 422 envelope. Expansion,
+builtin-collision precedence, and recursion depth are ALL client-side.
+
+**4. Precedence — builtins are never shadowed, checked against LIVE
+DISPATCH.** A `/alias` whose name collides with a builtin (or builtin alias
+`/q /j /w /n`, services, watch-family) is rejected at DEFINE time via
+`isBuiltinVerb` = `verb in DISPATCH` — read at runtime after the post-init
+block, so it can't drift when a builtin is added. Defense-in-depth: the
+expander ALSO stops on a builtin head (builtin wins) even if a stale alias
+somehow names one.
+
+**5. Expansion is the ONE choke-point, before DISPATCH lookup.** `parseSlash`
+gained an `aliases = {}` arg (genuine config default: no aliases → no
+expansion; keeps the many pure call sites unchanged); compose passes
+`aliases()` from the store. `expandAlias` iterates verb+rest through the map
+bounded at `MAX_ALIAS_DEPTH=5` (a cycle/over-deep chain → an inline error
+naming the chain, never a hang). Because it is the single point every
+expansion flows through, it also tolerates a leading `/` in a stored
+expansion (the CLI define strips it, but a settings-sub-page edit submits
+raw). An expanded alias then flows through the normal DISPATCH path with zero
+downstream special-casing (spec Placement) — `/wii foo` becomes exactly the
+`whois` command.
+
+**Full-map PUT + fresh-read-before-write (the clobber trap).** The server
+has NO add/del endpoint — it is a full-map replace (mirrors
+`notification_prefs`). So the store's `addAlias`/`delAlias` re-fetch the
+SERVER map FIRST, then merge, then PUT. Merging onto the LOCAL mirror would
+clobber: a `/alias` typed from compose without ever opening the settings page
+sees an empty/stale mirror and would wipe the user's other aliases. The
+body is wrapped under an `aliases` key so an empty map ("clear all") is
+distinguishable from a malformed request (bare `{}` → 400).
+
+**Surface — the #356 watch-family pattern, reused not reinvented.**
+`/alias NAME expansion` / `/unalias NAME` inline; bare `/alias` deep-links
+into a new `SettingsSubPage` `"aliases"` via `requestOpenSettings` (the drawer
+open-effect + Shell tick are page-agnostic — only the union widened).
+`AliasSettings.tsx` reuses the watch-lists list/add/error CSS idiom; the only
+new shape is the two-field add form (an alias is a name+expansion pair). A
+422 surfaces inline via `friendlyError` (per-field message).
+
+**Apply.** When a per-user map is stored as a full-map PUT (no server-side
+merge), a read-modify-write MUST re-read the server first — the local mirror
+is not a safe merge base. When one closed set (the builtin verbs) gates a
+user-input check, read it LIVE, never hand-copy it.
