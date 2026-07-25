@@ -496,6 +496,33 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
+  GH #189 — per-network ON-CONNECT PERFORM LIST edit on a
+  `(subject, network)` credential (the raw command list + its `$oper_pass`
+  secret). Backs `PUT /networks/:network_id/perform` for BOTH subjects.
+
+  Takes the already-resolved `%Credential{}` (the controller fetched it
+  subject-scoped, so ownership is asserted) + the attrs. Routes through the
+  narrow `Credential.perform_changeset/2` (perform_list + oper_pass only,
+  both encrypted at rest). Unlike identity, there is NO live verb: the
+  perform list is read at 001 by `Grappa.Session.Server` and re-resolved on
+  every (re)start via `SessionPlan.build_plan/4`, so an edit persists only
+  and takes effect on the next (re)connect. No `:network` preload — the
+  perform wire shape carries no network fields. A validation failure
+  (NUL / over-cap / CRLF in oper_pass) surfaces as a changeset error; a
+  concurrent unbind as `{:error, :not_found}`.
+  """
+  @spec update_perform_list(Credential.t(), map()) ::
+          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def update_perform_list(%Credential{} = credential, attrs) when is_map(attrs) do
+    case credential |> Credential.perform_changeset(attrs) |> Repo.update() do
+      {:ok, updated} -> {:ok, updated}
+      {:error, _} = err -> err
+    end
+  rescue
+    Ecto.StaleEntryError -> {:error, :not_found}
+  end
+
+  @doc """
   Rotates the stored upstream NickServ password for `(user_id, network_id)`.
 
   #131: the id-keyed write `Session.Server`'s `credential_committer`

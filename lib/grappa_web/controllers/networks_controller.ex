@@ -185,6 +185,46 @@ defmodule GrappaWeb.NetworksController do
     end
   end
 
+  @doc """
+  GH #189 — GET the on-connect perform list for this `(subject, network)`.
+
+  Returns `{perform_list, oper_pass_set}`: the raw command list (nil when
+  unset) plus a boolean for whether the write-only `$oper_pass` secret is
+  set. The oper pass itself is NEVER returned — write-only, like a
+  password. 404 if the credential vanished; 401 without a Bearer.
+  """
+  @spec perform(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :not_found}
+  def perform(conn, _) do
+    subject = conn.assigns.current_subject
+    network = conn.assigns.network
+
+    with {:ok, credential} <- fetch_credential(subject, network) do
+      render(conn, :perform, perform: perform_wire(credential))
+    end
+  end
+
+  @doc """
+  GH #189 — PUT the on-connect perform list + `$oper_pass`.
+
+  Body: `{perform_list?, oper_pass?}` — both optional; `""` clears a field.
+  Persists ONLY: there is no live verb, since the list is read at 001. A
+  live session applies it on its next (re)connect (the plan is re-resolved
+  on every `Session.Server` restart). 200 with `{perform_list,
+  oper_pass_set}`; 422 on validation (NUL / over-cap / CRLF in oper_pass);
+  404 if the credential vanished; 401 without a Bearer.
+  """
+  @spec update_perform(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :not_found | Ecto.Changeset.t()}
+  def update_perform(conn, params) do
+    subject = conn.assigns.current_subject
+    network = conn.assigns.network
+
+    with {:ok, credential} <- fetch_credential(subject, network),
+         {:ok, updated} <- Credentials.update_perform_list(credential, perform_attrs(params)) do
+      render(conn, :perform, perform: perform_wire(updated))
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
@@ -223,6 +263,27 @@ defmodule GrappaWeb.NetworksController do
 
   defp fetch_credential({:visitor, %Visitor{id: vid}}, %{id: nid}),
     do: Credentials.get_visitor_credential(vid, nid)
+
+  # #189 — pick ONLY the two perform-list fields from the request body
+  # (string keys). The `:network_id` route param and any stray keys are
+  # dropped before the changeset casts; `Credential.perform_changeset/2`
+  # validates the values (NUL / byte cap / oper_pass CRLF).
+  @spec perform_attrs(map()) :: map()
+  defp perform_attrs(params), do: Map.take(params, ["perform_list", "oper_pass"])
+
+  # #189 — the perform wire shape: the raw list text (nil when unset) + a
+  # boolean for whether the write-only `$oper_pass` secret is set. The
+  # secret itself is NEVER serialised (write-only, like a password).
+  @spec perform_wire(Credential.t()) :: %{
+          perform_list: String.t() | nil,
+          oper_pass_set: boolean()
+        }
+  defp perform_wire(%Credential{} = credential) do
+    %{
+      perform_list: Credential.perform_list_text(credential),
+      oper_pass_set: Credential.upstream_oper_pass(credential) != nil
+    }
+  end
 
   # Dispatch to the right context fn based on the target state. Both
   # transitions are subject-agnostic since phase 6 — `Networks.disconnect/2`

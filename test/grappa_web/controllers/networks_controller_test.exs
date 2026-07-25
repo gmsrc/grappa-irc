@@ -691,6 +691,132 @@ defmodule GrappaWeb.NetworksControllerTest do
     end
   end
 
+  describe "GET + PUT /networks/:network_id/perform (#189)" do
+    test "GET returns the perform list + oper_pass_set (empty by default)", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-perf-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-perf-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn = conn |> put_bearer(session.id) |> get("/networks/#{slug}/perform")
+
+      body = json_response(conn, 200)
+      assert body["perform_list"] == nil
+      assert body["oper_pass_set"] == false
+    end
+
+    test "PUT sets the list + oper_pass → 200, persisted, oper_pass write-only", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-perfw-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-perfw-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> put("/networks/#{slug}/perform", %{
+          perform_list: "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass",
+          oper_pass: "hunter2"
+        })
+
+      body = json_response(conn, 200)
+      assert body["perform_list"] == "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass"
+      assert body["oper_pass_set"] == true
+      # The secret is write-only — never echoed back, in any field.
+      refute Map.has_key?(body, "oper_pass")
+      refute body["perform_list"] =~ "hunter2"
+
+      {:ok, cred} = Credentials.get_credential(vjt, network)
+      assert Credential.perform_list_text(cred) == "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass"
+      assert Credential.upstream_oper_pass(cred) == "hunter2"
+    end
+
+    test "PUT with only perform_list leaves oper_pass unset", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-perfo-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-perfo-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> put("/networks/#{slug}/perform", %{perform_list: "MODE vjt-irc +x"})
+
+      body = json_response(conn, 200)
+      assert body["perform_list"] == "MODE vjt-irc +x"
+      assert body["oper_pass_set"] == false
+    end
+
+    test "PUT with empty strings clears the list + oper_pass", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-perfc-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-perfc-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      cred = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      {:ok, _} =
+        Credentials.update_perform_list(cred, %{perform_list: "MODE vjt-irc +x", oper_pass: "s3cr3t"})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> put("/networks/#{slug}/perform", %{perform_list: "", oper_pass: ""})
+
+      body = json_response(conn, 200)
+      assert body["perform_list"] == nil
+      assert body["oper_pass_set"] == false
+    end
+
+    test "rejects an over-cap perform list with 422", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-perfx-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-perfx-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> put("/networks/#{slug}/perform", %{perform_list: String.duplicate("MODE x\n", 2_000)})
+
+      assert json_response(conn, 422)
+    end
+
+    test "404 when the caller holds no credential on the network", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-perfz-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-perfz-#{u()}"
+      {:ok, _} = Networks.find_or_create_network(%{slug: slug})
+
+      conn = conn |> put_bearer(session.id) |> get("/networks/#{slug}/perform")
+
+      assert json_response(conn, 404)
+    end
+
+    test "visitor can set a perform list on their credential", %{conn: conn} do
+      slug = "net-perfv-#{u()}"
+      {_, _} = network_with_server(port: 9_999, slug: slug, visitor_enabled: true)
+      visitor = visitor_with_credential_fixture(network_slug: slug, nick: "v-#{u()}")
+      session = visitor_session_fixture(visitor)
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> put("/networks/#{slug}/perform", %{perform_list: "AWAY :brb"})
+
+      body = json_response(conn, 200)
+      assert body["perform_list"] == "AWAY :brb"
+    end
+  end
+
   describe "PATCH /networks/:network_id — authorization" do
     test "returns 404 when user has no credential for the network (authz oracle)", %{conn: conn} do
       vjt = user_fixture(name: "vjt-patch-authz-#{u()}")

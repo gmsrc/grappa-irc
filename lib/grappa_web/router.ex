@@ -353,6 +353,13 @@ defmodule GrappaWeb.Router do
     # allowlist — no proxy change.
     patch "/identity", NetworksController, :identity
 
+    # #189 — on-connect perform list editor (raw IRC lines run SERVER-side
+    # at 001, before the built-in identify + autojoin). Rides the same
+    # ResolveNetwork pipeline (ownership) + the `networks` nginx allowlist
+    # prefix (locations-api.conf) — no proxy change.
+    get "/perform", NetworksController, :perform
+    put "/perform", NetworksController, :update_perform
+
     get "/channels", ChannelsController, :index
     post "/channels", ChannelsController, :create
     delete "/channels/:channel_id", ChannelsController, :delete
