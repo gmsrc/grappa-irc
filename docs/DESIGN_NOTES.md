@@ -17680,3 +17680,25 @@ IRCop override never appear in the members map, so a hard gate would lock out
 people the server would authorise. The ircd's 482 is the real authority and
 surfaces inline. v1 lists `+b` only (decision #3 — `+e`/`+I` are the same UI
 with a different mode letter, a later afternoon).
+
+**Corner-case surfaced by the e2e (code-review + full-suite run): overlapping
+`/banlist` queries on the SAME channel are protocol-inherently racy.** The
+modal fires one `MODE #chan b` on open and another after an add/remove (to
+show the fresh list). 367/368 carry no request-id, so the accumulator
+(`banlist_pending`, keyed by folded channel) can't tell one query's burst from
+another's: if the open-query's 368 lands AFTER the add-query has started, that
+368 deletes the pending marker the add-query's 367 needs, and event_router
+skips the 367 as "unsolicited" — the added ban is dropped from the store and
+the modal shows empty. Real latency serialises the two (the open completes in
+~100ms, long before a human reads the list, types a nick, and clicks Add), so
+this is a non-issue in production AND self-healing (the modal's Refresh
+re-queries) — but bahamut's artificial per-connection fake-lag under a
+full-suite run does NOT serialise them, which is exactly what made the modal
+e2e flake. The fix is at the test (wait for the open-query to settle — the
+empty-list state — before mutating, mirroring real use), not a server-side
+request-correlation mechanism heavier than the near-impossible-in-prod problem
+it would guard. Also fixed alongside: `resolve_userhost`'s `with/else` now has
+the catch-all every sibling verb has, so a `Session.lookup_userhost/3`
+`{:error, :timeout}` degrades to a typed reply instead of a WithClauseError
+that crashes the channel (dropping the WS) — a real bug the same full-suite
+load exposed.
