@@ -14,7 +14,7 @@
 // when the master toggle would silently mute the user — render
 // inline.
 
-import { ApiError } from "./api";
+import { ApiError, readError } from "./api";
 
 export type NotificationPrefs = {
   channel_messages_all: boolean;
@@ -59,17 +59,10 @@ export async function putNotificationPrefs(
     },
     body: JSON.stringify(prefs),
   });
-  if (!res.ok) {
-    let info: Record<string, unknown> = {};
-    let code = res.statusText || "notification_prefs_put_failed";
-    try {
-      info = (await res.json()) as Record<string, unknown>;
-      if (typeof info.error === "string") code = info.error;
-    } catch {
-      /* fallthrough — code stays as statusText */
-    }
-    throw new ApiError(res.status, code, info);
-  }
+  // #112 — route through the ONE error decoder: dedups the redundant `error`
+  // key from `info` AND fires the shared 401 dead-token handler this inline
+  // shaper skipped (see `readError` moduledoc).
+  if (!res.ok) throw await readError(res);
   const body = (await res.json()) as NotificationPrefsResponse;
   return body.notification_prefs;
 }
@@ -115,17 +108,9 @@ export async function putUploadTtlSeconds(
     },
     body: JSON.stringify({ upload_ttl_seconds: seconds }),
   });
-  if (!res.ok) {
-    let info: Record<string, unknown> = {};
-    let code = res.statusText || "upload_ttl_put_failed";
-    try {
-      info = (await res.json()) as Record<string, unknown>;
-      if (typeof info.error === "string") code = info.error;
-    } catch {
-      /* fallthrough — code stays as statusText */
-    }
-    throw new ApiError(res.status, code, info);
-  }
+  // #112 — route through the ONE error decoder (see the notification-prefs
+  // twin above): dedups `info.error` + fires the shared 401 handler.
+  if (!res.ok) throw await readError(res);
   const body = (await res.json()) as UploadTtlResponse;
   return body.upload_ttl_seconds;
 }
@@ -186,17 +171,9 @@ export async function putVhostSelection(
     },
     body: JSON.stringify({ selection }),
   });
-  if (!res.ok) {
-    let info: Record<string, unknown> = {};
-    let code = res.statusText || "vhost_put_failed";
-    try {
-      info = (await res.json()) as Record<string, unknown>;
-      if (typeof info.error === "string") code = info.error;
-    } catch {
-      /* fallthrough — code stays as statusText */
-    }
-    throw new ApiError(res.status, code, info);
-  }
+  // #112 — route through the ONE error decoder (see the notification-prefs
+  // twin above): dedups `info.error` + fires the shared 401 handler.
+  if (!res.ok) throw await readError(res);
   return (await res.json()) as VhostSettingsView;
 }
 
@@ -242,17 +219,9 @@ export async function putAliases(token: string, aliases: Aliases): Promise<Alias
     },
     body: JSON.stringify({ aliases }),
   });
-  if (!res.ok) {
-    let info: Record<string, unknown> = {};
-    let code = res.statusText || "aliases_put_failed";
-    try {
-      info = (await res.json()) as Record<string, unknown>;
-      if (typeof info.error === "string") code = info.error;
-    } catch {
-      /* fallthrough — code stays as statusText */
-    }
-    throw new ApiError(res.status, code, info);
-  }
+  // #112 — route through the ONE error decoder (see the notification-prefs
+  // twin above): dedups `info.error` + fires the shared 401 handler.
+  if (!res.ok) throw await readError(res);
   const body = (await res.json()) as AliasesResponse;
   return body.aliases;
 }

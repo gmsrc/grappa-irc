@@ -19,7 +19,7 @@
 // cache headers — operator-rotation is rare and the payload is ~88
 // bytes; localStorage is the authoritative cache.
 
-import { ApiError } from "./api";
+import { ApiError, readError } from "./api";
 
 const VAPID_PUBLIC_KEY_STORAGE_KEY = "cic.vapidPublicKey";
 
@@ -114,17 +114,10 @@ export async function postPushSubscription(
     },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    let info: Record<string, unknown> = {};
-    let code = res.statusText || "push_subscribe_failed";
-    try {
-      info = (await res.json()) as Record<string, unknown>;
-      if (typeof info.error === "string") code = info.error;
-    } catch {
-      /* fallthrough — code stays as statusText */
-    }
-    throw new ApiError(res.status, code, info);
-  }
+  // #112 — route through the ONE error decoder: dedups the redundant `error`
+  // key from `info` AND fires the shared 401 dead-token handler this inline
+  // shaper skipped (see `readError` moduledoc).
+  if (!res.ok) throw await readError(res);
   return (await res.json()) as { id: SubscriptionId; created_at: string };
 }
 
