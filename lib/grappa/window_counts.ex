@@ -70,7 +70,13 @@ defmodule Grappa.WindowCounts do
 
   @typedoc """
   Per-window count snapshot. `messages` is exact (unbounded);
-  `mentions` is bounded by the scan cap.
+  `mentions` is bounded by the scan cap (`@mention_scan_cap`) — so it is
+  APPROXIMATE above the cap while `messages` stays EXACT. That asymmetry is
+  a deliberate, documented rule, not an oversight: it mirrors the PWA badge
+  cap (`Grappa.Push.BadgeCount`, "Approximate above the cap" — #395). Past
+  the cap the exact `mentions` value is immaterial (cic renders `@N`), and
+  removing the cap would re-introduce the unbounded in-memory regex scan it
+  exists to bound.
   """
   @type t :: %{
           messages: non_neg_integer(),

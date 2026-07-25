@@ -14,6 +14,30 @@ defmodule Grappa.Push.BadgeCount do
   (`Grappa.ReadCursor.bulk_for_subject/1`) and the unread tail
   (`Grappa.Scrollback.unread_content_tail/6`).
 
+  The notify predicate gates on `Grappa.Scrollback.Message.notify_kinds/0`
+  (`:privmsg`, `:action`) — the notify-worthy SUBSET of the unread-content
+  kinds `Grappa.WindowCounts.snapshot/6` counts. Both derive from ONE
+  projection declaration (#395), so this badge total is a subset of the
+  per-window unread message counts BY CONSTRUCTION: a `:notice` counts as
+  unread but never reaches this badge.
+
+  ## Approximate above the cap — a deliberate, documented rule (#395)
+
+  The badge is EXACT up to `99` and APPROXIMATE above it: `count/1`
+  early-bails at `@badge_cap` (99) and each window folds at most
+  `@per_channel_cap` (100) rows, so a subject with thousands of unread
+  notify-worthy messages reports `99`, not the true total. The per-window
+  unread MESSAGE count (`Grappa.WindowCounts.snapshot/6`'s `messages`
+  field, off `Scrollback.count_after_split/5`) is by contrast EXACT and
+  unbounded. This asymmetry is intentional, not an oversight: the badge
+  answers "roughly how many notify-worthy — capped, because the UI renders
+  `99+`", the window count answers "exactly how many new". Past the cap the
+  exact badge value is immaterial (the glyph is `99+`), and removing the
+  cap would re-introduce the unbounded per-window scan the cap exists to
+  bound — a performance regression #395 explicitly refuses to make. The
+  per-window MENTION count (`WindowCounts` `mentions`) is bounded the same
+  way (`@mention_scan_cap`), for the same reason.
+
   ## Why reuse the predicate instead of a per-branch SQL COUNT
 
   The approved design sketched a SQL-COUNT fast path for the

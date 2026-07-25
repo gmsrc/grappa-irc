@@ -80,6 +80,29 @@ defmodule Grappa.Push.TriggersTest do
                []
              )
     end
+
+    test "notifies for EXACTLY Message.notify_kinds/0 — SSOT drift gate (#395)" do
+      # The kind gate reads Grappa.Scrollback.Message.notify_kinds/0, NOT a
+      # local `[:privmsg, :action]` literal (that literal was the #395 defect:
+      # a second, independently-maintained kind list that could silently
+      # drift from — or exceed — the unread-content set). With the most
+      # permissive channel prefs the kind gate is the ONLY thing that can
+      # block a notify, so should_notify? must agree EXACTLY with membership
+      # in notify_kinds/0 across the WHOLE schema kind enum. Add a kind to
+      # notify_kinds (or let a literal drift from it) → this breaks.
+      for kind <- Message.kinds() do
+        m = msg(kind: kind, channel: "#sniffo", body: "vjt: ping")
+        expected = kind in Message.notify_kinds()
+
+        assert Triggers.should_notify?(
+                 m,
+                 "vjt",
+                 prefs(channel_messages_all: true, channel_mentions: true),
+                 ["vjt"]
+               ) == expected,
+               "kind #{inspect(kind)}: should_notify? must match notify_kinds/0 membership (#{expected})"
+      end
+    end
   end
 
   describe "should_notify?/4 — DM (channel == own_nick)" do

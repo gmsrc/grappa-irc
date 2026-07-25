@@ -112,18 +112,44 @@ defmodule Grappa.Scrollback.Message do
 
   @body_required_kinds [:privmsg, :notice, :action, :topic]
 
-  # S17 (2026-07-08 review) — the human-content subset of `@kinds`:
-  # the kinds that carry a notification/message meaning (a real body
-  # from a real sender), as opposed to presence/control events
-  # (:join, :part, :quit, :nick_change, :mode, :topic, :kick,
-  # :server_event). SINGLE SOURCE for the subset that was previously
-  # restated verbatim across `Grappa.Scrollback`, `Grappa.Mentions`,
-  # `Grappa.Session.EventRouter`, this module's `@dm_with_eligible_kinds`,
-  # the `dm_peer/4` guard, and a raw-SQL `IN (...)` bucket — six copies,
-  # one already reordered. Every consumer now derives from
-  # `content_kinds/0` at compile time so a new content kind is one edit
-  # here. Mirrors the cic `CONTENT_KINDS` set (`cicchetto/src/lib/api.ts`).
-  @content_kinds [:privmsg, :notice, :action]
+  # S17 (2026-07-08 review) / #395 — the human-content kinds and their
+  # unread PROJECTION, declared ONCE. Each content kind maps to whether it
+  # is notify-worthy (badge/push eligible):
+  #
+  #   * `:notify` — a real person's message: `:privmsg` and `:action`
+  #     (CTCP /me, semantically a PRIVMSG). Counts as unread AND is
+  #     badge/push eligible.
+  #   * `:unread` — content that counts as unread but NEVER badges/pushes.
+  #     Only `:notice`: services chatter (NickServ/ChanServ/bots) is the
+  #     dominant NOTICE shape; badging it would be spam. This is vjt's #395
+  #     decision — unchanged behaviour, but now an explicit, single-sourced
+  #     rule instead of an accident of two divergent kind lists.
+  #
+  # BOTH projections (`content_kinds/0`, `notify_kinds/0`) derive from THIS
+  # one list, so the notify-worthy set is a SUBSET of the unread-content set
+  # BY CONSTRUCTION — not because two hand-maintained lists happen to agree.
+  # That accident was the #395 defect: `Grappa.Push.Triggers` carried a
+  # divergent `[:privmsg, :action]` literal for its kind gate while the
+  # unread path derived from `content_kinds/0` (which includes `:notice`).
+  # A kind absent here (`:join`, `:part`, `:quit`, `:nick_change`, `:mode`,
+  # `:topic`, `:kick`, `:server_event`) is presence/control → NEITHER
+  # projection. This is the SINGLE SOURCE consumed by `Grappa.Scrollback`,
+  # `Grappa.Mentions`, `Grappa.Push.Triggers`, `Grappa.Session.EventRouter`,
+  # this module's `@dm_with_eligible_kinds`, and the `dm_peer/4` guard.
+  # Mirrors the cic `CONTENT_KINDS` / `NOTIFY_KINDS` sets
+  # (`cicchetto/src/lib/api.ts`, `cicchetto/src/lib/pushTriggers.ts`).
+  @content_kind_projection [privmsg: :notify, notice: :unread, action: :notify]
+
+  # The full unread-content subset of `@kinds`. Order is preserved from the
+  # projection so it stays `[:privmsg, :notice, :action]` (the cic
+  # `CONTENT_KINDS` mirror order, api.ts).
+  @content_kinds for {kind, _} <- @content_kind_projection, do: kind
+
+  # The notify-worthy subset — the kinds that raise a badge/push. Derived by
+  # selecting the `:notify` rows of the projection, so it can NEVER contain a
+  # kind that is absent from `@content_kinds`: badge-worthy ⊆ unread by
+  # construction (#395).
+  @notify_kinds for {kind, :notify} <- @content_kind_projection, do: kind
 
   # M8 fix 2026-05-08: kinds for which `:dm_with` may legitimately
   # carry a peer nick. CP23 cluster `code-reload` extended the list to
@@ -167,10 +193,25 @@ defmodule Grappa.Scrollback.Message do
   scrollback to "real message content" (notification counts, mention
   aggregation, DM-peer eligibility, the unread messages-vs-events
   split) derives from this at compile time instead of restating the
-  three atoms. Adding a content kind is one edit to `@content_kinds`.
+  three atoms. Adding a content kind is one edit to
+  `@content_kind_projection`.
   """
   @spec content_kinds() :: [:privmsg | :notice | :action, ...]
   def content_kinds, do: @content_kinds
+
+  @doc """
+  Returns the notify-worthy subset of `content_kinds/0` — `[:privmsg,
+  :action]`. #395 SINGLE SOURCE: the kinds that raise a badge/push.
+  `Grappa.Push.Triggers`' kind gate reads THIS instead of a local
+  `[:privmsg, :action]` literal, so the badge/push set can never silently
+  drift from — or exceed — the unread-content set (`:notice` counts as
+  unread but is deliberately absent here: services chatter never badges).
+  Derived from `@content_kind_projection`, so `notify_kinds/0 --
+  content_kinds/0 == []` holds by construction. Mirrors the cic
+  `NOTIFY_KINDS` set (`cicchetto/src/lib/pushTriggers.ts`).
+  """
+  @spec notify_kinds() :: [:privmsg | :action, ...]
+  def notify_kinds, do: @notify_kinds
 
   @type kind ::
           :privmsg

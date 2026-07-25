@@ -29,7 +29,8 @@ defmodule Grappa.Push.Triggers do
 
     3. Otherwise — no notify.
 
-  Only `:privmsg` and `:action` (CTCP /me) trigger. `:action` is
+  Only the kinds in `Grappa.Scrollback.Message.notify_kinds/0` —
+  `:privmsg` and `:action` (CTCP /me) — trigger. `:action` is
   semantically a `PRIVMSG` with content saying "<sender> did X" and
   carries the same notification meaning. `:notice` is intentionally
   excluded — services chatter (NickServ, ChanServ, BotNet status) is
@@ -37,6 +38,17 @@ defmodule Grappa.Push.Triggers do
   All other kinds (`:join`, `:part`, `:quit`, `:nick_change`,
   `:mode`, `:topic`, `:kick`, `:server_event`) are presence /
   control plane and do not push.
+
+  #395 — the kind gate reads `Message.notify_kinds/0` (a subset of
+  `Message.content_kinds/0`, derived from ONE projection declaration) via
+  the `@notify_kinds` compile-time attribute, NOT a local `[:privmsg,
+  :action]` literal. That literal used to be a second, independently
+  maintained kind list: the unread-window count derived from
+  `content_kinds/0` (which includes `:notice`), while this path hard-coded
+  its own copy. The two happened to agree — badge-worthy ⊆ unread — but
+  by accident, not by construction. Reading the shared SSOT makes that
+  subset structural: the notify set can never drift from, or exceed, the
+  unread-content set.
 
   ## own_nick — per-network, NOT account name
 
@@ -58,6 +70,14 @@ defmodule Grappa.Push.Triggers do
   alias Grappa.{Mentions, Push, Subject, UserSettings, WSPresence}
   alias Grappa.Push.Payload
   alias Grappa.Scrollback.Message
+
+  # #395 — the notify-worthy kind gate. Reads the shared SSOT subset
+  # (`Message.notify_kinds/0` ⊆ `Message.content_kinds/0`) instead of a
+  # local `[:privmsg, :action]` literal, so badge/push kinds can never
+  # drift from — or exceed — the unread-content set. A module attribute
+  # (inlined at compile time) so it is usable in the `when kind in
+  # @notify_kinds` guards below (a function call is not allowed in a guard).
+  @notify_kinds Message.notify_kinds()
 
   @typedoc """
   Caller context for `evaluate_and_dispatch/2`. Session.Server
@@ -96,14 +116,14 @@ defmodule Grappa.Push.Triggers do
   Sender fan-out) happens out-of-band so the Session.Server hot
   path never blocks on it.
 
-  Only `:privmsg` and `:action` kinds proceed past the kind gate;
-  every other kind short-circuits to `:ok` without spawning the
+  Only `Message.notify_kinds/0` (`:privmsg`, `:action`) proceed past the
+  kind gate; every other kind short-circuits to `:ok` without spawning the
   Task — avoids polluting the BEAM scheduler with no-op spawns
   on the high-volume presence-event paths.
   """
   @spec evaluate_and_dispatch(Message.t(), ctx()) :: :ok
   def evaluate_and_dispatch(%Message{kind: kind} = message, ctx)
-      when kind in [:privmsg, :action] and is_map(ctx) do
+      when kind in @notify_kinds and is_map(ctx) do
     %{
       subject: subject,
       subject_label: subject_label,
@@ -163,7 +183,7 @@ defmodule Grappa.Push.Triggers do
           highlight_patterns :: [String.t()]
         ) :: boolean()
   def should_notify?(%Message{kind: kind}, _, _, _)
-      when kind not in [:privmsg, :action],
+      when kind not in @notify_kinds,
       do: false
 
   def should_notify?(%Message{} = message, own_nick, prefs, patterns)

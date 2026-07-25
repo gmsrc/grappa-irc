@@ -47,6 +47,35 @@ defmodule Grappa.Scrollback.MessageTest do
     end
   end
 
+  describe "notify_kinds/0 (#395)" do
+    test "is the notify-worthy subset [:privmsg, :action]" do
+      assert Message.notify_kinds() == [:privmsg, :action]
+    end
+
+    test "notify kinds are a subset of content kinds BY CONSTRUCTION" do
+      # #395 core invariant: the badge/push kind set can NEVER exceed the
+      # unread-content set. Both derive from the ONE projection declaration,
+      # so `notify_kinds -- content_kinds` is empty by construction — badge
+      # ⊆ unread structurally, not because two hand-maintained lists agree.
+      assert Message.notify_kinds() -- Message.content_kinds() == [],
+             "notify_kinds must be a subset of content_kinds"
+    end
+
+    test ":notice counts as unread content but is NOT notify-worthy" do
+      # #395 decided behaviour (vjt): services chatter (NickServ/ChanServ/
+      # bots) is the dominant NOTICE shape — it counts as an unread message
+      # but must never raise a badge or a push.
+      assert :notice in Message.content_kinds()
+      refute :notice in Message.notify_kinds()
+    end
+
+    test "every notify kind is a valid schema kind (subset of kinds/0)" do
+      for k <- Message.notify_kinds() do
+        assert k in Message.kinds(), "#{inspect(k)} is not a valid Message kind"
+      end
+    end
+  end
+
   describe "changeset/2" do
     test "valid for fully-populated attrs" do
       cs = Message.changeset(%Message{}, @valid_attrs)
