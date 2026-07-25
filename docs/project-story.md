@@ -4474,3 +4474,58 @@ already serializes the work (here, the session) is usually enough, and a second
 one just moves the failure somewhere quieter. When the mandated design fails,
 read the logs before you re-run — the constraint name is the root cause, and
 "it's probably the box" is the sentence that hides it.*
+
+## The predicate that was also a join key (#393 → #396)
+
+The pool saturated again, and this time the culprit was a read. The DM
+scrollback fetch sat at 409ms, the DM unread count at 432ms, and both were
+holding sqlite connections long enough that the pool ran dry under a normal
+logon. The predicate underneath them was an `OR`: a DM window's rows were
+"`dm_with` folds to the peer, OR `dm_with` is NULL and `channel` folds to the
+peer" — the orphan arm covering server notices routed to a query window. It was
+*correct*. It was also un-plannable: even with a folded expression index on each
+arm, SQLite refused the seek and fell back to `messages_network_id_index`,
+folding every row of the whole network's history one at a time. A disjunction of
+two sargable predicates is not itself sargable — the planner can't SEEK two
+ranges through one OR. #393 collapsed the OR into a single equality on
+`fold(COALESCE(dm_with, channel))`: when `dm_with` is non-NULL the COALESCE
+picks it, when NULL it picks `channel` — the exact same two cases, expressed as
+one key. vjt proved the equivalence empirically before we trusted it — an
+`EXCEPT` over an entire prod network, 27 rows against 27, zero mismatches — and
+the `EXPLAIN` flipped from a full scan to a covering-index seek. 204ms became
+0.000s. Four indexes went live on prod, hot.
+
+I could have stopped there; the queries were fast. But #396 was still open, and
+its complaint was different in kind: not that any single query was slow, but that
+the cold-load fired *two per window* — a count split and a mention-tail scan —
+and looped every cursor. Fifty windows was a hundred round trips at every logon.
+Each one was now sub-6ms, and the sum was still the problem, because the cost
+wasn't the query — it was the fan-out. And the way to kill a fan-out is to stop
+fanning: drive one join off the read cursors and let the database group all the
+windows at once. The thing that made that *possible* was the same equality #393
+had just written for a different reason. `fold(COALESCE(dm_with, channel)) =
+fold(rc.channel)` isn't only a fast filter for one peer — it's a join key that
+matches a channel cursor (COALESCE picks the channel) and a DM cursor (COALESCE
+picks the peer) with one condition. A `read_cursors LEFT JOIN messages` on that
+key, grouped, is every window's count in a single statement; a ROW_NUMBER cap in
+a second statement is every window's mention tail. Two queries, not two-N —
+proven not with a stopwatch but with a telemetry counter asserting exactly two
+`[:grappa, :repo, :query]` events at three windows and at thirty.
+
+Collapsing the fan-out surfaced a bug the fan-out had hidden. The old per-window
+path narrowed the own-nick self window with `channel == own AND dm_with == own`
+— and it compared `dm_with` *raw*, unfolded, in a codebase whose one law is that
+every nick comparison folds. A mixed-case self-message silently fell out of the
+count. The unified predicate folds both sides, so #396 fixes it as a side
+effect: the self window now counts what the narrowing missed. vjt chose that
+deliberately — "un solo predicato," no special case — and it ships called-out in
+the commit and the design log rather than buried, because a count a user can see
+changing is not a refactor.
+
+*Law: a predicate you write to make one query sargable may also be a key that
+unifies two shapes into one — when you collapse an OR to make the planner seek,
+ask whether the same equality lets you collapse a fan-out too. Per-item speed and
+fan-out cost are independent problems; a hundred fast queries is still a hundred
+round trips, so prove the collapse with a query counter, not a wall-clock. And a
+predicate that special-cases one shape is where a fold bug hides — unifying the
+shapes is what drags it into the light.*
