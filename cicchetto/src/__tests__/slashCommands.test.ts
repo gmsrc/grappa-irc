@@ -515,6 +515,33 @@ describe("parseSlash — channel ops verbs", () => {
     expect(parseSlash("/unban")).toMatchObject({ kind: "error", verb: "unban" });
   });
 
+  // #386 — /kb <nick> [reason] kickban. Same grammar as /kick (first token
+  // is the nick, the rest is the reason); the ban-mask derivation + MODE+KICK
+  // sequencing live in compose.ts. /kickban is an irssi-spelling alias.
+  it("/kb <nick> bare (no reason)", () => {
+    expect(parseSlash("/kb alice")).toEqual({ kind: "kb", nick: "alice", reason: "" });
+  });
+
+  it("/kb <nick> <reason>", () => {
+    expect(parseSlash("/kb alice spam spam spam")).toEqual({
+      kind: "kb",
+      nick: "alice",
+      reason: "spam spam spam",
+    });
+  });
+
+  it("/kb missing nick → error", () => {
+    expect(parseSlash("/kb")).toMatchObject({ kind: "error", verb: "kb" });
+  });
+
+  it("/kickban is an alias of /kb", () => {
+    expect(parseSlash("/kickban alice rude")).toEqual({
+      kind: "kb",
+      nick: "alice",
+      reason: "rude",
+    });
+  });
+
   it("/banlist bare", () => {
     expect(parseSlash("/banlist")).toEqual({ kind: "banlist" });
   });

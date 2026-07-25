@@ -551,6 +551,31 @@ export function pushChannelBanlist(networkId: number, channel: string): void {
   _userChannel.push("banlist", { network_id: networkId, channel });
 }
 
+// #386 — resolve a nick's userhost on demand. cic has NO per-member host
+// (the members map is nick+modes only), so `/kb` and the BanlistModal mask
+// builder ask the server for the offender's {user, host} to build `*!*@host`.
+// Resolves with the server's cached entry, or `null` on a cache MISS
+// (`not_cached` — the fail-closed signal, vjt decision #1, callers turn into
+// "run /whois first"). Rejects on a REAL error (no_session, not connected,
+// timeout) so the caller can surface it distinctly from a plain miss.
+export function resolveUserhost(
+  networkId: number,
+  nick: string,
+): Promise<{ user: string; host: string } | null> {
+  const ch = _userChannel;
+  if (ch === null) return Promise.reject(new Error("not connected"));
+  return new Promise((resolve, reject) => {
+    ch.push("resolve_userhost", { network_id: networkId, nick })
+      .receive("ok", (reply: { user: string; host: string }) => resolve(reply))
+      .receive("error", (err: unknown) => {
+        const e = channelPushError(err);
+        if (e.code === "not_cached") resolve(null);
+        else reject(e);
+      })
+      .receive("timeout", () => reject(new Error("timeout")));
+  });
+}
+
 // /invite <nick> [#chan] → INVITE nick #chan
 //
 // S6 (#364) — no-silent-drop. INVITE is a WRITE verb: the server replies

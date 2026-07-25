@@ -10,7 +10,6 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import BanlistCard from "./BanlistCard";
 import LusersCard from "./LusersCard";
 import { isContentKind, ownNickForNetwork, postJoin, type ScrollbackMessage } from "./lib/api";
 import { token } from "./lib/auth";
@@ -2803,12 +2802,9 @@ const ScrollbackPane: Component<Props> = (props) => {
             $server. Snapshot replaces last-write-wins per network on every
             /lusers (manual or welcome-time auto-emit). */}
         <LusersCard networkSlug={props.networkSlug} />
-        {/* #376 — BANLIST card. Mounts on every window kind (mirror
-            WhoisCard / WhowasCard); short-circuits to null when no bundle
-            is present. Renders in the CURRENT window — issuing /banlist
-            from a channel surfaces the card there. Last-write-wins per
-            network on every /banlist. */}
-        <BanlistCard networkSlug={props.networkSlug} />
+        {/* #386 — the #376 inline BANLIST card was superseded by the
+            interactive BanlistModal (opened by /banlist, mounted in Shell),
+            mirroring how the #169 /who modal replaced the inline WHO dump. */}
       </div>
       <div
         ref={listRef}

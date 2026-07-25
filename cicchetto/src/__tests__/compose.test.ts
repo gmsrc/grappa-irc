@@ -64,6 +64,8 @@ vi.mock("../lib/socket", () => ({
   pushChannelBan: vi.fn(),
   pushChannelUnban: vi.fn(),
   pushChannelBanlist: vi.fn(),
+  // #386 — /kb resolves the offender's userhost on demand (host source).
+  resolveUserhost: vi.fn(),
   pushChannelInvite: vi.fn(),
   pushChannelUmode: vi.fn(),
   pushChannelMode: vi.fn(),
@@ -191,6 +193,11 @@ vi.mock("../lib/channelDirectory", () => ({
 
 // #216 — /mode viewer/editor modal store. compose.ts opens it for the
 // no-mode-args forms.
+vi.mock("../lib/banlistModal", () => ({
+  openBanlistModal: vi.fn(),
+  closeBanlistModal: vi.fn(),
+}));
+
 vi.mock("../lib/modeModal", () => ({
   openModeModal: vi.fn(),
   closeModeModal: vi.fn(),
@@ -1356,16 +1363,84 @@ describe("compose submit — channel ops verbs", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("/banlist pushes banlist channel event", async () => {
+  it("/banlist opens the ban modal and re-queries the ban list", async () => {
     localStorage.setItem("grappa-token", "tok");
     const socket = await import("../lib/socket");
+    const banlistModal = await import("../lib/banlistModal");
     const compose = await import("../lib/compose");
     const k = channelKey("freenode", "#a");
     compose.setDraft(k, "/banlist");
     const result = await compose.submit(k, "freenode", "#a");
 
+    // #386 — /banlist is now the modal surface (supersedes the inline card):
+    // open it AND fire a fresh 367/368 re-query so the list is live on open.
+    expect(banlistModal.openBanlistModal).toHaveBeenCalledWith("freenode", "#a");
     expect(socket.pushChannelBanlist).toHaveBeenCalledWith(1, "#a");
     expect(result).toEqual({ ok: true });
+  });
+
+  // #386 — /kb <nick> [reason]: ban FIRST (`*!*@host`, host from the on-demand
+  // userhost lookup), THEN kick — two frames, attempt both (vjt decisions #1/#4).
+  it("/kb <nick> resolves host → bans *!*@host then kicks (ban before kick)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    vi.mocked(socket.resolveUserhost).mockResolvedValue({ user: "ident", host: "evil.host.net" });
+    vi.mocked(socket.pushChannelBan).mockResolvedValue(undefined);
+    vi.mocked(socket.pushChannelKick).mockResolvedValue(undefined);
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/kb alice begone");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.resolveUserhost).toHaveBeenCalledWith(1, "alice");
+    expect(socket.pushChannelBan).toHaveBeenCalledWith(1, "#a", "*!*@evil.host.net");
+    expect(socket.pushChannelKick).toHaveBeenCalledWith(1, "#a", "alice", "begone");
+    // Ban FIRST (no rejoin window): its call order precedes the kick's.
+    const [banOrder] = vi.mocked(socket.pushChannelBan).mock.invocationCallOrder;
+    const [kickOrder] = vi.mocked(socket.pushChannelKick).mock.invocationCallOrder;
+    if (banOrder === undefined || kickOrder === undefined) {
+      throw new Error("expected both ban and kick to have been called");
+    }
+    expect(banOrder).toBeLessThan(kickOrder);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("/kb <nick> with unknown host → NO ban, still kicks, surfaces the ban error", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    // not_cached → resolveUserhost resolves null (fail-closed, no guess).
+    vi.mocked(socket.resolveUserhost).mockResolvedValue(null);
+    vi.mocked(socket.pushChannelKick).mockResolvedValue(undefined);
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/kb alice");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    // Fail-closed: no wider-mask guess → ban NOT sent.
+    expect(socket.pushChannelBan).not.toHaveBeenCalled();
+    // But the person's still kicked (immediate intent), and the ban error surfaces.
+    expect(socket.pushChannelKick).toHaveBeenCalledWith(1, "#a", "alice", "");
+    expect(result).not.toEqual({ ok: true });
+    if (result && "error" in result) {
+      expect(result.error).toMatch(/host/i);
+      expect(result.error).toMatch(/whois/i);
+    } else {
+      throw new Error("expected an error result");
+    }
+  });
+
+  it("/kb missing nick → error, no ban, no kick", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/kb");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.resolveUserhost).not.toHaveBeenCalled();
+    expect(socket.pushChannelBan).not.toHaveBeenCalled();
+    expect(socket.pushChannelKick).not.toHaveBeenCalled();
+    expect(result).not.toEqual({ ok: true });
   });
 
   it("/invite <nick> pushes invite channel event with active channel", async () => {

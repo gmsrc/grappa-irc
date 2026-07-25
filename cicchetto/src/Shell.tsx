@@ -13,6 +13,7 @@ import { Portal } from "solid-js/web";
 import AdminPane from "./AdminPane";
 import ArchiveModal from "./ArchiveModal";
 import AudioMiniPlayer from "./AudioMiniPlayer";
+import BanlistModal from "./BanlistModal";
 import BottomBar from "./BottomBar";
 import ComposeBox from "./ComposeBox";
 import ConfirmModal from "./ConfirmModal";
@@ -561,6 +562,7 @@ const Shell: Component = () => {
           <ThemeEditor />
           <WhoModal />
           <ModeModal />
+          <BanlistModal />
           <UmodeModal />
           <ServerReplyModal />
           <ServiceModal />
@@ -767,6 +769,7 @@ const Shell: Component = () => {
         <WhoModal />
         <UmodeModal />
         <ModeModal />
+        <BanlistModal />
         <ServerReplyModal />
         <ServiceModal />
         <RegistrationWizardModal />

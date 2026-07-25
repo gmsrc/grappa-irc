@@ -10,6 +10,8 @@ import {
   postTopic,
 } from "./api";
 import { token } from "./auth";
+import { openBanlistModal } from "./banlistModal";
+import { buildBanMask } from "./banMask";
 import { setQuery } from "./channelDirectory";
 import type { ChannelKey } from "./channelKey";
 import { friendlyError } from "./friendlyError";
@@ -56,6 +58,7 @@ import {
   pushWho,
   pushWhois,
   pushWhowas,
+  resolveUserhost,
 } from "./socket";
 import { openUmodeModal } from "./umodeModal";
 import { closeQueryWindow } from "./windowClose";
@@ -598,6 +601,46 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = { ok: true };
           break;
         }
+        case "kb": {
+          // #386 — kickban. Ban FIRST (`*!*@host`, no rejoin window), THEN
+          // kick — two frames, attempt BOTH regardless (vjt decision #4).
+          // The host comes from the on-demand `resolveUserhost` lookup (cic
+          // has none client-side); a cache MISS → null → fail-closed (vjt
+          // decision #1: never guess a wider mask), so the ban is NOT sent —
+          // but the kick still fires (immediate intent) and the ban error is
+          // surfaced.
+          const chanOrErr = requireChannel("kb");
+          if (typeof chanOrErr !== "string") return chanOrErr;
+          const networkId = networkIdBySlug(networkSlug);
+          if (networkId === undefined) return { error: "/kb: network not found" };
+
+          let banError: string | null = null;
+          try {
+            const uh = await resolveUserhost(networkId, cmd.nick);
+            const mask = uh
+              ? buildBanMask("host", { nick: cmd.nick, user: uh.user, host: uh.host })
+              : null;
+            if (mask === null) {
+              banError = `/kb: host unknown for ${cmd.nick} — ban not set (run /whois ${cmd.nick} first); kicking anyway`;
+            } else {
+              await pushChannelBan(networkId, chanOrErr, mask);
+            }
+          } catch (e) {
+            banError = `/kb: ban failed — ${friendlyError(e)}`;
+          }
+
+          // Always attempt the kick (getting the person out is the intent).
+          try {
+            await pushChannelKick(networkId, chanOrErr, cmd.nick, cmd.reason);
+          } catch (kickErr) {
+            // Both failed → surface the ban error (primary) if present, else the kick's.
+            return { error: banError ?? `/kb: kick failed — ${friendlyError(kickErr)}` };
+          }
+
+          if (banError !== null) return { error: banError };
+          result = { ok: true };
+          break;
+        }
         case "unban": {
           const chanOrErr = requireChannel("unban");
           if (typeof chanOrErr !== "string") return chanOrErr;
@@ -608,10 +651,16 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "banlist": {
+          // #386 — /banlist is now the ban-management MODAL surface (it
+          // supersedes the #376 inline BanlistCard, mirroring how the #169
+          // /who modal replaced the inline WHO dump). Open the modal AND fire
+          // a fresh re-query so the 367/368 list is live on open (pre-#386 it
+          // was fire-and-forget only).
           const chanOrErr = requireChannel("banlist");
           if (typeof chanOrErr !== "string") return chanOrErr;
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/banlist: network not found" };
+          openBanlistModal(networkSlug, chanOrErr);
           pushChannelBanlist(networkId, chanOrErr);
           result = { ok: true };
           break;

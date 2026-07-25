@@ -111,6 +111,11 @@ export type SlashCommand =
   | { kind: "voice"; nicks: string[] }
   | { kind: "devoice"; nicks: string[] }
   | { kind: "kick"; nick: string; reason: string }
+  // #386 — /kb <nick> [reason] kickban (irssi/xchat convenience). Pure parser
+  // shape: same grammar as /kick. compose.ts expands it into a MODE +b (mask
+  // from the server's userhost_cache, `*!*@host` fail-closed) followed by a
+  // KICK — two frames, ban first, attempt both (vjt decisions #1/#4).
+  | { kind: "kb"; nick: string; reason: string }
   | { kind: "ban"; mask: string }
   | { kind: "unban"; mask: string }
   | { kind: "banlist" }
@@ -385,6 +390,17 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     const nick = sp === -1 ? rest : rest.slice(0, sp);
     const reason = sp === -1 ? "" : rest.slice(sp + 1).trim();
     return { kind: "kick", nick, reason };
+  },
+
+  // #386 — /kb <nick> [reason] kickban. First token is the nick, the rest is
+  // the (optional) reason — identical grammar to /kick. The ban-mask build
+  // (`*!*@host` fail-closed) + MODE+KICK sequencing live in compose.ts.
+  kb: (verb, rest) => {
+    const sp = rest.search(/\s/);
+    if (rest === "") return err(verb, "/kb requires a nick");
+    const nick = sp === -1 ? rest : rest.slice(0, sp);
+    const reason = sp === -1 ? "" : rest.slice(sp + 1).trim();
+    return { kind: "kb", nick, reason };
   },
 
   ban: (verb, rest) => {
@@ -774,6 +790,11 @@ if (whoisHandler) {
 const namesHandler = DISPATCH.names;
 if (namesHandler) {
   (DISPATCH as Record<string, Handler>).n = namesHandler;
+}
+// #386 — /kickban → /kb (irssi spelling; both produce {kind: "kb"}).
+const kbHandler = DISPATCH.kb;
+if (kbHandler) {
+  (DISPATCH as Record<string, Handler>).kickban = kbHandler;
 }
 
 // `aliases` (#385) is the user's `%{name => expansion}` map, passed in by

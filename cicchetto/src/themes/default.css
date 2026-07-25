@@ -6552,7 +6552,6 @@ html.resize-dragging * {
 .whois-card-close,
 .whowas-card-close,
 .lusers-card-close,
-.banlist-card-close,
 .peer-away-banner-close {
   display: inline-flex;
   align-items: center;
@@ -6592,67 +6591,173 @@ html.resize-dragging * {
   color: var(--muted);
 }
 
-/* #376 — BANLIST card. Mirror of `.whowas-card` shape (inline ephemeral
-   surface above scrollback). Unlike whowas (a dl of one entity's fields)
-   the banlist is a LIST of rows — one per ban — so the body is a `ul`. */
-.banlist-card {
-  margin: 0.25rem 0.5rem 0.5rem 0.5rem;
-  padding: 0.5rem 0.75rem;
+/* #386 — BANLIST management modal. Reuses the `.mode-modal` chrome
+   (backdrop / framed dialog / header / body) — the interactive `/banlist`
+   surface that supersedes the #376 inline card: list rows + a mask-builder
+   add row + a per-row remove ×. The op-gate is a HINT (`.banlist-modal-deemph`
+   dims but never disables — vjt decision #2). */
+.banlist-modal-backdrop {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--viewport-height, 100dvh);
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom)) 1rem;
+}
+
+.banlist-modal {
+  background: var(--bg);
+  color: var(--fg);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--muted);
-  background: var(--bg-alt);
+  width: 100%;
+  max-width: 40rem;
+  max-height: min(var(--viewport-height, 100dvh), 100%);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  overflow: hidden;
+  box-shadow:
+    inset 0 0 0 1px var(--bg),
+    inset 0 0 0 2px var(--border);
+}
+
+.banlist-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 1rem;
+  flex: 0 0 auto;
+}
+
+.banlist-modal-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.banlist-modal-hint {
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: normal;
   font-size: 0.85rem;
 }
 
-.banlist-card-header {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  font-weight: bold;
-  color: var(--muted);
-  margin-bottom: 0.25rem;
-}
-
-.banlist-card-title {
-  flex: 0 0 auto;
-  text-transform: uppercase;
-  font-size: 0.75rem;
-  letter-spacing: 0.05em;
-}
-
-.banlist-card-channel {
-  flex: 0 0 auto;
-  color: var(--fg);
-}
-
-.banlist-card-count {
-  flex: 0 0 auto;
-  font-weight: normal;
-  font-size: 0.75rem;
-}
-
-/* Close (×) tap-target sizing shares the one #133 rule below. */
-.banlist-card-close {
-  margin-left: auto;
+.banlist-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  margin: -0.6rem -0.5rem -0.6rem 0;
+  padding: 0;
   background: transparent;
-  border: none;
   color: var(--muted);
-  font-size: 1rem;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
   line-height: 1;
   cursor: pointer;
-  padding: 0 0.3rem;
 }
 
-.banlist-card-close:hover {
+.banlist-modal-close:hover {
   color: var(--fg);
 }
 
-.banlist-card-empty {
+.banlist-modal-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0.75rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+
+.banlist-modal-error {
+  margin: 0;
+  color: var(--error, #c0392b);
+  font-size: 0.85rem;
+}
+
+/* Add-ban row: nick/mask input + form selector + Add button. */
+.banlist-modal-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.banlist-modal-add-input {
+  flex: 1 1 10rem;
+  min-width: 8rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--bg-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+}
+
+.banlist-modal-add-input:focus {
+  outline: none;
+  border-color: var(--accent, var(--fg));
+}
+
+.banlist-modal-add-form {
+  flex: 0 0 auto;
+  padding: 0.4rem 0.5rem;
+  background: var(--bg-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+}
+
+.banlist-modal-add-btn,
+.banlist-modal-refresh {
+  flex: 0 0 auto;
+  min-height: var(--tap-min);
+  padding: 0.4rem 0.8rem;
+  background: var(--bg-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  cursor: pointer;
+}
+
+.banlist-modal-add-btn:hover,
+.banlist-modal-refresh:hover {
+  border-color: var(--accent, var(--fg));
+}
+
+/* Op-gate HINT: dim non-op affordances, but keep them fully clickable
+   (the ircd's 482 is the real gate — vjt decision #2). */
+.banlist-modal-deemph {
+  opacity: 0.55;
+}
+
+.banlist-modal-empty {
   margin: 0;
   font-style: italic;
 }
 
-.banlist-card-rows {
+.banlist-modal-rows {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -6661,7 +6766,7 @@ html.resize-dragging * {
   gap: 0.15rem;
 }
 
-.banlist-card-row {
+.banlist-modal-row {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -6669,14 +6774,44 @@ html.resize-dragging * {
   word-break: break-word;
 }
 
-.banlist-card-mask {
+.banlist-modal-mask {
   color: var(--fg);
   font-family: var(--font-mono, monospace);
 }
 
-.banlist-card-setter,
-.banlist-card-time {
+.banlist-modal-setter,
+.banlist-modal-time {
   font-size: 0.8rem;
+}
+
+.banlist-modal-remove {
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.banlist-modal-remove:hover {
+  color: var(--error, #c0392b);
+}
+
+.banlist-modal-footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding: 0.6rem 1rem;
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* Push notifications cluster B0 (2026-05-14) — install splash.
