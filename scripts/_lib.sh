@@ -121,6 +121,14 @@ if [ "$SRC_ROOT" != "$REPO_ROOT" ]; then
         # worktree branch could never verify GREEN until merged. RO —
         # tests only read it.
         -v "$SRC_ROOT/CLAUDE.md:/app/CLAUDE.md:ro"
+        # Same drift-pin reasoning for the env-var registry (#369 X1):
+        # env_registry_drift_test.exs reads compose.yaml + .env.example to
+        # assert every runtime.exs System.get_env is propagated + documented.
+        # Root-level files aren't under the dir mounts above, so without
+        # these overrides a worktree run reads MAIN's copies and can never
+        # verify a fix GREEN before merge. RO — tests only read them.
+        -v "$SRC_ROOT/compose.yaml:/app/compose.yaml:ro"
+        -v "$SRC_ROOT/.env.example:/app/.env.example:ro"
     )
 fi
 

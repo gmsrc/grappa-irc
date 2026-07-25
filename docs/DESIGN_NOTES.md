@@ -17702,3 +17702,36 @@ the catch-all every sibling verb has, so a `Session.lookup_userhost/3`
 `{:error, :timeout}` degrades to a typed reply instead of a WithClauseError
 that crashes the channel (dropping the WS) — a real bug the same full-suite
 load exposed.
+
+## 2026-07-25 — #369 X1: env-var registry drift-pin (Docker contract only)
+
+`config/runtime.exs` has long *declared* itself the env-var registry in a
+comment (every read must appear in compose.yaml + .env.example) but
+nothing enforced it; the 2026-07-20 review measured live drift.
+`test/grappa/config/env_registry_drift_test.exs` now pins exactly that
+Docker contract. It DERIVES `app_vars` (design-rule 1 — derive, don't
+duplicate; a hand-kept manifest would drift, the very failure it guards)
+by parsing runtime.exs (`System.get_env`/`fetch_env!`) + bin/start.sh
+(`${VAR:=}`/`:?`/`:-` knobs), then asserts compose's grappa `environment:`
+≡ app_vars ∪ Docker-orchestration and `.env.example` ⊇ app_vars. Two
+exemptions: orchestration vars (UID/GID, ports, MIX_ENV) and DATABASE_PATH
+(compose computes it; a `.env` literal is shadowed). Test-only, no prod
+module. The win is modest — catch a missing forward in CI instead of at a
+prod boot — so scope stays deliberately narrow.
+
+Scope is the Docker contract ONLY. The substrate templates are NOT pinned:
+they have per-substrate consumers a flat pin gets wrong, and a missing
+prod-required var already crashes loud via runtime.exs `raise`. Concretely
+`GRAPPA_OUTBOUND_V6_POOL` is NOT dead on FreeBSD — it is the input to the
+`grappa_ndp_keepalive` rc.d daemon (`ndp_keepalive.pl`), exactly as the
+#228 note here warns; it STAYS in the jail template. The real prod v6
+addresses committed there (and in the rc.d comment) were swapped for
+RFC-3849 `2001:db8::` placeholders.
+
+Drift fixed to green the pin: compose now forwards POOL_SIZE/PORT/LOG_LEVEL
+with REAL defaults (`${VAR:-10/4000/info}`, matching UPLOADS_STORAGE_ROOT /
+RELEASE_COOKIE) — the naive `${VAR:-}` empty form forwards `""` and crashes
+`String.to_integer/1` at prod boot; EXTRA_CHECK_ORIGINS documented in
+.env.example. `scripts/_lib.sh` WORKTREE_VOLUMES gained RO mounts for
+compose.yaml + .env.example so the pin verifies GREEN from a worktree
+(same reasoning as batch-1's CLAUDE.md mount).

@@ -102,6 +102,15 @@ services:
       # so the existing host volume covers it). Override only if
       # disk-policy requires a separate volume.
       UPLOADS_STORAGE_ROOT: ${UPLOADS_STORAGE_ROOT:-/app/runtime/uploads}
+      # Optional, prod-tunable. Real defaults here (NOT ${VAR:-}, which
+      # forwards "" and crashes String.to_integer/1 at boot) so a .env
+      # override propagates AND an unset var lands a valid value — same
+      # convention as UPLOADS_STORAGE_ROOT / RELEASE_COOKIE above. Before
+      # #369 X1 these keys were absent, so a .env override was a silent
+      # no-op (compose never forwarded the host var).
+      POOL_SIZE: ${POOL_SIZE:-10}
+      PORT: ${PORT:-4000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:4000/healthz || exit 1"]
       interval: 5s

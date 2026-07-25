@@ -12,6 +12,10 @@ import Config
 #     this env var configures
 # Drift in any of these breaks the deploy in a way only real-browser
 # e2e catches (per CP11 S22 deploy-time bug post-mortem).
+# ENFORCED by test/grappa/config/env_registry_drift_test.exs (#369 X1):
+# it DERIVES this registry from the env-var reads below (+ the
+# bin/start.sh shell knobs) and pins it against compose.yaml + .env.example
+# — no hand-kept manifest to drift.
 # ===
 
 # Public hostname the bouncer is reached at via nginx. ONE read, one
