@@ -916,7 +916,7 @@ defmodule Grappa.UserSettings do
   defp normalize_alias_entries(entries, subject),
     do: normalize_alias_entries(entries, %{}, subject)
 
-  defp normalize_alias_entries([], acc, _subject), do: {:ok, acc}
+  defp normalize_alias_entries([], acc, _), do: {:ok, acc}
 
   defp normalize_alias_entries([{name, expansion} | rest], acc, subject) do
     case normalize_alias_entry(name, expansion) do
