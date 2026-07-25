@@ -17463,3 +17463,94 @@ GROUP BY (LEFT JOIN to keep zero-count items; a window function to cap
 per-item), and PROVE the collapse with a query-count telemetry test, not a
 wall-clock. A predicate that unifies two shapes into one join key is what
 makes the collapse possible — here #393's folded `COALESCE` was the enabler.
+
+## 2026-07-25 — #395 one SSOT for the unread kind set (notify ⊆ content by construction)
+
+**Problem.** "Unread" was computed by two paths with TWO independently
+maintained kind lists that had already drifted. The per-window count
+(`Scrollback.count_after_split/5` → `WindowCounts` → `MeController`) derives
+its content bucket from `Message.content_kinds/0` = `[:privmsg, :notice,
+:action]`. The notify/badge path (`Push.BadgeCount` →
+`Push.Triggers.should_notify?/4`) gated on a SEPARATE literal `[:privmsg,
+:action]` hard-coded in `triggers.ex`. So a channel `:notice` counted as
+unread content but could never be badge-worthy. The two lists happened to
+satisfy "badge-worthy ⊆ unread" — but by accident, not by construction:
+any edit to one could silently violate it. This is the exact
+`one-matcher-two-consumers` drift class CLAUDE.md forbids
+("implement once, reuse everywhere" / "one feature, one code path").
+
+**Decision (vjt, closed on the issue).** Behaviour UNCHANGED — notices stay
+unread, never badge, never push — but the structure is fixed: ONE function,
+one declaration, computing both projections, with badge-worthy a subset of
+unread BY CONSTRUCTION. The behavioural question ("should a notice that
+mentions you badge?") was settled *no*, and settled without a new rule: the
+badge and the OS push share the single predicate `should_notify?/4` (the
+`Mentions` moduledoc invariant — "same predicate guarantees the sidebar
+badge and the server push never disagree"), so "a notice must not push"
+AUTOMATICALLY means "a notice must not badge". Nothing to keep in sync.
+
+**Shape — the projection is the single source.** `Scrollback.Message`
+declares `@content_kind_projection [privmsg: :notify, notice: :unread,
+action: :notify]` ONCE. Both projections derive from it:
+
+- `@content_kinds = for {kind, _} <- projection, do: kind` → `[:privmsg,
+  :notice, :action]` (order preserved for the cic `CONTENT_KINDS` mirror);
+- `@notify_kinds = for {kind, :notify} <- projection, do: kind` →
+  `[:privmsg, :action]`.
+
+Because `@notify_kinds` is *selected from* the projection, `notify_kinds --
+content_kinds == []` holds structurally — a kind can never be notify-worthy
+without also being unread-content. `Push.Triggers` now gates on
+`Message.notify_kinds/0` via a compile-time `@notify_kinds` attribute
+(usable in the `when kind in @notify_kinds` guards — a function call is not
+allowed in a guard; same compile-time-dep pattern `Scrollback`/`Mentions`
+already use for `content_kinds/0`). The `[:privmsg, :action]` literal is
+gone from `triggers.ex` (both the `evaluate_and_dispatch/2` dispatch guard
+and the `should_notify?/4` kind gate).
+
+**Why NOT one literal SQL traversal.** vjt's early framing was "both numbers
+fall out of the same traversal". The count path is SQL (`kind IN (...)`),
+the notify path is Elixir (`should_notify?/4` folds the non-SQL-expressible
+`Mentions.mentioned?/3` regex). They cannot share one *row* traversal, and
+the final spec softened to "kind set stated exactly once, both paths reading
+it" — which is what one projection + two derived lists delivers. Merging
+`BadgeCount`'s per-window notify fold into `WindowCounts` was rejected: the
+badge needs prefs (all/whitelist/mentions), the window `mentions` field does
+not, so it would add per-window work `/me` discards and couple `WindowCounts`
+to prefs — heavier, not lighter (CLAUDE.md "lightweight over heavyweight").
+
+**The ≤99/100 cap divergence — documented, not removed.** The badge
+(`BadgeCount`, cap 99 + per-window 100) and the per-window `mentions`
+(`WindowCounts.@mention_scan_cap` 100) are APPROXIMATE above the cap, while
+the per-window MESSAGE count (`count_after_split/5`) is EXACT and unbounded.
+This asymmetry is now an explicit rule in both moduledocs, not an implicit
+accident: the badge answers "roughly how many notify-worthy — capped
+because the UI renders `99+`/`@N`", the message count answers "exactly how
+many new". Removing the cap re-introduces the unbounded per-window scan the
+cap exists to bound — a performance regression #395 refuses to make (the
+issue is explicitly NOT a perf issue; #393 already made each query fast).
+
+**Scope fence.** NO `unreads` table / materialisation. That half stays
+gated on the post-#393 telemetry measurement (#357 FIX B, PARKED). This is
+the structural single-code-path fix, which stands on its own.
+
+**Client twin left for a follow-up (out of scope).** cic carries the same
+class client-side — `NOTIFY_KINDS` (`pushTriggers.ts`) and `CONTENT_KINDS`
+(`api.ts`) are two independent literals. This diff is server-scoped and
+behaviour-neutral (the values agree), so cic stays correct; the server
+moduledocs now point at both cic files as the mirror. A cic-side derivation
+is a candidate follow-up, not part of #395.
+
+**Tests.** A subset-by-construction assertion (`notify_kinds --
+content_kinds == []`) + a `:notice is content, not notify` pin
+(`message_test.exs`), and a drift gate in `triggers_test.exs`:
+`should_notify?/4` must agree EXACTLY with `Message.notify_kinds/0`
+membership across the WHOLE `Message.kinds/0` enum (with maximally
+permissive prefs so the kind gate is the only blocker) — a literal drifting
+from the SSOT, or a kind added to one list only, breaks it.
+
+**Apply.** When the same closed set is consumed by two paths with different
+mechanisms (SQL list vs Elixir guard), declare it ONCE and DERIVE each
+projection so the subset relationship is structural — never two
+hand-maintained lists that "happen to agree". A guard needs a compile-time
+`@attr = Mod.fun()`, not a runtime call.
