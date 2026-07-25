@@ -1016,17 +1016,21 @@ defmodule Grappa.Session do
   311 RPL_WHOISUSER, and 352 RPL_WHOREPLY. Returns `{:ok, entry}` where
   `entry` is a `Grappa.Session.EventRouter.userhost_entry()` map,
   `{:error, :not_cached}` if the nick is not in the cache (no JOIN/WHOIS/WHO
-  data seen for this nick since the session started), or `{:error,
-  :no_session}` if no session is registered for `(subject, network_id)`.
+  data seen for this nick since the session started), `{:error, :no_session}`
+  if no session is registered for `(subject, network_id)`, or `{:error,
+  :timeout}` if the session's mailbox is saturated past the call deadline
+  (`call_session/4`) — callers must handle it, not enumerate only the first
+  two (#386: an un-handled `:timeout` crashed the channel `with`/`else`).
 
   Nick lookup is case-insensitive (rfc1459, #121) — callers may pass the
   nick in any case. This cache is consumed by S5's `/ban` mask derivation
-  and is NOT broadcast over PubSub (the data goes stale and WHOIS remains
-  the authoritative fallback when the cache misses).
+  and the #386 `/kb` + BanlistModal mask builder (via the `resolve_userhost`
+  channel verb), and is NOT broadcast over PubSub (the data goes stale and
+  WHOIS remains the authoritative fallback when the cache misses).
   """
   @spec lookup_userhost(subject(), integer(), String.t()) ::
           {:ok, Grappa.Session.EventRouter.userhost_entry()}
-          | {:error, :not_cached | :no_session}
+          | {:error, :not_cached | :no_session | :timeout}
   def lookup_userhost(subject, network_id, nick)
       when is_subject(subject) and is_integer(network_id) and is_binary(nick) do
     call_session(subject, network_id, {:lookup_userhost, nick})

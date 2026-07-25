@@ -66,15 +66,21 @@ test("#386 — banlist modal: add a ban by nick (mask builder), see it, remove i
     await page.getByTestId("banlist-add-btn").click();
 
     // The list re-queries after the add and renders the host-form mask + the
-    // setter (vjt) — the fields the #376 fold carries end-to-end.
+    // setter (vjt) — the fields the #376 fold carries end-to-end. This waits
+    // on TWO upstream frames (MODE +b, then the 367/368 re-query), each
+    // subject to bahamut's per-connection fake-lag; a full-suite run depletes
+    // that command bank, so the ceiling is 25s (headroom over ~2× the ~10s
+    // bank cap the ircClient's 15s single-frame ceiling cites) — a
+    // condition-wait ceiling, resolved the instant the row lands, NOT a sleep.
     const mask = modal.locator(".banlist-modal-mask");
-    await expect(mask).toContainText("*!*@", { timeout: 15_000 });
+    await expect(mask).toContainText("*!*@", { timeout: 25_000 });
     await expect(modal).toContainText("set by");
     await expect(modal).toContainText(NETWORK_NICK);
 
-    // Remove it in one click → MODE -b → re-query → the row is gone.
+    // Remove it in one click → MODE -b → re-query → the row is gone (two more
+    // fake-lag-subject upstream frames — same 25s ceiling rationale).
     await modal.getByTestId("banlist-remove-btn").first().click();
-    await expect(modal.getByTestId("banlist-remove-btn")).toHaveCount(0, { timeout: 15_000 });
+    await expect(modal.getByTestId("banlist-remove-btn")).toHaveCount(0, { timeout: 25_000 });
 
     // Close the modal so the compose textarea is actionable for cleanup.
     await modal.getByRole("button", { name: "close ban list" }).click();

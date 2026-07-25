@@ -585,9 +585,10 @@ defmodule GrappaWeb.GrappaChannel do
   # accumulates the 367 RPL_BANLIST rows keyed by folded channel and
   # 368 RPL_ENDOFBANLIST emits a `banlist_bundle` broadcast on the
   # subject's own subject_label topic (mirror of WHOWAS), which cic's
-  # `banlistCard.ts` renders as a BanlistCard. Pre-#376 this comment
-  # described that design but no such clause existed — 367/368 leaked
-  # the bare set-timestamp as a `$server` :notice row.
+  # `banlistCard.ts` store feeds to the #386 BanlistModal (the interactive
+  # /banlist surface that superseded the original inline card). Pre-#376
+  # this comment described the design but no such clause existed — 367/368
+  # leaked the bare set-timestamp as a `$server` :notice row.
   def handle_in(
         "banlist",
         %{"network_id" => network_id, "channel" => channel},
@@ -625,6 +626,12 @@ defmodule GrappaWeb.GrappaChannel do
       :error -> {:reply, {:error, %{error: "user_not_found"}}, socket}
       {:error, :not_cached} -> {:reply, {:error, %{error: "not_cached"}}, socket}
       {:error, :no_session} -> {:reply, {:error, %{error: "no_session"}}, socket}
+      # `Session.lookup_userhost/3` also surfaces `{:error, :timeout}` when the
+      # callee Session.Server mailbox is saturated past the call deadline
+      # (`call_session/4`). A catch-all keeps a slow lookup from raising
+      # WithClauseError and crashing the channel (dropping the WS + every
+      # subscription); it degrades to a typed reply like every sibling verb.
+      {:error, _} -> {:reply, {:error, %{error: "lookup_failed"}}, socket}
     end
   end
 
