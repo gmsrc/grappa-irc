@@ -716,4 +716,144 @@ defmodule Grappa.ReadCursorTest do
       assert ReadCursor.get(subject, net.id, "Guest99") == nil
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # #396 — bulk_unread_split/1 + bulk_unread_content_tails/2: the WHOLE
+  # subject's per-window counts / capped mention tails in ONE query each,
+  # driven by the read cursors via #393's unified
+  # `nick_fold(COALESCE(dm_with, channel))` window predicate.
+  # ---------------------------------------------------------------------------
+  describe "bulk_unread_split/1" do
+    test "splits content vs presence per window, across channels + DM + networks" do
+      user = user_fixture()
+      subject = {:user, user.id}
+      attrs = %{user_id: user.id}
+      net_a = network_fixture()
+      net_b = network_fixture()
+
+      # net_a #chan: anchor + 2 content + 1 join after the cursor.
+      a = insert_message(attrs, net_a.id, "#chan", 1)
+      insert_message(attrs, net_a.id, "#chan", 2, "c1")
+      insert_message(attrs, net_a.id, "#chan", 3, "c2")
+
+      {:ok, _} =
+        ScrollbackHelpers.insert(
+          Map.merge(attrs, %{
+            network_id: net_a.id,
+            channel: "#chan",
+            server_time: 4,
+            kind: :join,
+            sender: "bob",
+            body: nil
+          })
+        )
+
+      {:ok, _} = ReadCursor.set(subject, net_a.id, "#chan", a.id)
+
+      # net_a DM peer: inbound (channel=own, dm_with=peer) + outbound.
+      di = dm_row(attrs, net_a.id, "vjt", "peer", 5, "in")
+      dm_row(attrs, net_a.id, "peer", "peer", 6, "out")
+      {:ok, _} = ReadCursor.set(subject, net_a.id, "peer", di.id)
+
+      # net_b #ops: anchor + 1 content.
+      b = insert_message(attrs, net_b.id, "#ops", 1)
+      insert_message(attrs, net_b.id, "#ops", 2, "b1")
+      {:ok, _} = ReadCursor.set(subject, net_b.id, "#ops", b.id)
+
+      split = ReadCursor.bulk_unread_split(subject)
+
+      assert split[net_a.slug]["#chan"] == %{messages: 2, events: 1}
+      assert split[net_a.slug]["peer"] == %{messages: 1, events: 0}
+      assert split[net_b.slug]["#ops"] == %{messages: 1, events: 0}
+    end
+
+    test "a window read to the tail is present with zero counts (LEFT JOIN)" do
+      user = user_fixture()
+      subject = {:user, user.id}
+      net = network_fixture()
+
+      m = insert_message(%{user_id: user.id}, net.id, "#chan", 1)
+      {:ok, _} = ReadCursor.set(subject, net.id, "#chan", m.id)
+
+      assert ReadCursor.bulk_unread_split(subject)[net.slug]["#chan"] ==
+               %{messages: 0, events: 0}
+    end
+
+    test "returns an empty envelope for a subject with no cursors" do
+      user = user_fixture()
+      assert ReadCursor.bulk_unread_split({:user, user.id}) == %{}
+    end
+  end
+
+  describe "bulk_unread_content_tails/2" do
+    test "caps each window independently at `cap` oldest content rows" do
+      user = user_fixture()
+      subject = {:user, user.id}
+      attrs = %{user_id: user.id}
+      net = network_fixture()
+
+      a = insert_message(attrs, net.id, "#big", 1)
+      # 5 unread content rows after the cursor; cap to 3.
+      for st <- 2..6, do: insert_message(attrs, net.id, "#big", st, "line-#{st}")
+      {:ok, _} = ReadCursor.set(subject, net.id, "#big", a.id)
+
+      # A second window must NOT be starved by the first's volume.
+      b = insert_message(attrs, net.id, "#small", 1)
+      insert_message(attrs, net.id, "#small", 2, "only")
+      {:ok, _} = ReadCursor.set(subject, net.id, "#small", b.id)
+
+      tails = ReadCursor.bulk_unread_content_tails(subject, 3)
+
+      assert length(tails[net.slug]["#big"]) == 3
+      # Oldest-first within the cap.
+      assert Enum.map(tails[net.slug]["#big"], & &1.body) == ["line-2", "line-3", "line-4"]
+      assert length(tails[net.slug]["#small"]) == 1
+    end
+
+    test "excludes presence rows — only content is a mention candidate" do
+      user = user_fixture()
+      subject = {:user, user.id}
+      attrs = %{user_id: user.id}
+      net = network_fixture()
+
+      a = insert_message(attrs, net.id, "#chan", 1)
+      insert_message(attrs, net.id, "#chan", 2, "content")
+
+      {:ok, _} =
+        ScrollbackHelpers.insert(
+          Map.merge(attrs, %{
+            network_id: net.id,
+            channel: "#chan",
+            server_time: 3,
+            kind: :join,
+            sender: "bob",
+            body: nil
+          })
+        )
+
+      {:ok, _} = ReadCursor.set(subject, net.id, "#chan", a.id)
+
+      tails = ReadCursor.bulk_unread_content_tails(subject, 100)
+
+      assert Enum.map(tails[net.slug]["#chan"], & &1.body) == ["content"]
+    end
+  end
+
+  # Inserts a DM row (channel + dm_with), returns the persisted message.
+  defp dm_row(attrs, network_id, channel, dm_with, server_time, body) do
+    {:ok, message} =
+      ScrollbackHelpers.insert(
+        Map.merge(attrs, %{
+          network_id: network_id,
+          channel: channel,
+          dm_with: dm_with,
+          server_time: server_time,
+          kind: :privmsg,
+          sender: "peer",
+          body: body
+        })
+      )
+
+    message
+  end
 end

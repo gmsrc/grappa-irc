@@ -18,7 +18,7 @@ defmodule Grappa.WindowCountsTest do
   """
   use Grappa.DataCase, async: true
 
-  alias Grappa.{AuthFixtures, ScrollbackHelpers, WindowCounts}
+  alias Grappa.{AuthFixtures, ReadCursor, ScrollbackHelpers, WindowCounts}
 
   defp uniq, do: System.unique_integer([:positive])
 
@@ -26,6 +26,30 @@ defmodule Grappa.WindowCountsTest do
     user = AuthFixtures.user_fixture()
     network = AuthFixtures.network_fixture()
     %{subject: {:user, user.id}, network: network}
+  end
+
+  # #396 — insert into an explicit network (multi-network bulk tests).
+  defp ins(subject, network_id, channel, opts) do
+    attrs =
+      reject_nil(%{
+        user_id: elem(subject, 1),
+        network_id: network_id,
+        channel: channel,
+        server_time: opts[:st] || uniq(),
+        kind: opts[:kind] || :privmsg,
+        sender: opts[:sender] || "alice",
+        body: Keyword.get(opts, :body, "hello"),
+        dm_with: opts[:dm_with]
+      })
+
+    {:ok, message} = ScrollbackHelpers.insert(attrs)
+    message
+  end
+
+  # Sets the read cursor for a window (validated against a real row).
+  defp cursor(subject, network_id, channel, message_id) do
+    {:ok, _} = ReadCursor.set(subject, network_id, channel, message_id)
+    :ok
   end
 
   # Inserts one row, returns the persisted `%Message{}`.
@@ -219,5 +243,217 @@ defmodule Grappa.WindowCountsTest do
 
     result = WindowCounts.snapshot(c.subject, c.network.id, "#chan", anchor.id, nil, [])
     assert result == %{messages: 1, mentions: 0, events: 1, severity: :message}
+  end
+
+  # ---------------------------------------------------------------------------
+  # #396 — bulk_snapshot/3: the WHOLE subject's envelope in a CONSTANT number
+  # of queries. Identical to the per-window snapshot/6 loop for channel + DM
+  # windows; the own-nick SELF window count changes BY DESIGN (single COALESCE
+  # predicate — see the two self-DM tests below + DESIGN_NOTES 2026-07-25).
+  # ---------------------------------------------------------------------------
+  describe "bulk_snapshot/3 (#396 constant-query cold-load)" do
+    test "matches per-window snapshot/6 for channel + DM windows across networks" do
+      user = AuthFixtures.user_fixture()
+      subject = {:user, user.id}
+      net_a = AuthFixtures.network_fixture()
+      net_b = AuthFixtures.network_fixture()
+      own = "vjt"
+
+      # net_a #chan: anchor + 2 content (1 nick mention) + 1 presence event.
+      a = ins(subject, net_a.id, "#chan", st: 1, body: "anchor")
+      ins(subject, net_a.id, "#chan", st: 2, sender: "alice", body: "hi vjt")
+      ins(subject, net_a.id, "#chan", st: 3, sender: "bob", body: "plain")
+      ins(subject, net_a.id, "#chan", st: 4, sender: "bob", kind: :join, body: nil)
+      cursor(subject, net_a.id, "#chan", a.id)
+
+      # net_a DM peer window: inbound (channel=own, dm_with=peer) + outbound.
+      di = ins(subject, net_a.id, own, st: 5, sender: "peer", body: "vjt yo", dm_with: "peer")
+      ins(subject, net_a.id, "peer", st: 6, sender: own, body: "re", dm_with: "peer")
+      cursor(subject, net_a.id, "peer", di.id)
+
+      # net_b #ops: anchor + 1 content, distinct network in the same call.
+      b = ins(subject, net_b.id, "#ops", st: 1, body: "anchor-b")
+      ins(subject, net_b.id, "#ops", st: 2, sender: "carol", body: "ping")
+      cursor(subject, net_b.id, "#ops", b.id)
+
+      own_nicks = %{net_a.slug => {net_a.id, own}, net_b.slug => {net_b.id, own}}
+      bulk = WindowCounts.bulk_snapshot(subject, own_nicks, [])
+
+      assert bulk[net_a.slug]["#chan"] ==
+               WindowCounts.snapshot(subject, net_a.id, "#chan", a.id, own, [])
+
+      assert bulk[net_a.slug]["peer"] ==
+               WindowCounts.snapshot(subject, net_a.id, "peer", di.id, own, [])
+
+      assert bulk[net_b.slug]["#ops"] ==
+               WindowCounts.snapshot(subject, net_b.id, "#ops", b.id, own, [])
+    end
+
+    test "highlight patterns fold through the bulk mention path too" do
+      user = AuthFixtures.user_fixture()
+      subject = {:user, user.id}
+      net = AuthFixtures.network_fixture()
+      own = "vjt"
+
+      a = ins(subject, net.id, "#chan", st: 1, body: "anchor")
+      ins(subject, net.id, "#chan", st: 2, sender: "alice", body: "i love grappa")
+      ins(subject, net.id, "#chan", st: 3, sender: "bob", body: "unrelated")
+      cursor(subject, net.id, "#chan", a.id)
+
+      bulk = WindowCounts.bulk_snapshot(subject, %{net.slug => {net.id, own}}, ["grappa"])
+
+      assert bulk[net.slug]["#chan"] ==
+               WindowCounts.snapshot(subject, net.id, "#chan", a.id, own, ["grappa"])
+
+      assert bulk[net.slug]["#chan"].mentions == 1
+    end
+
+    test "own-nick self window: legacy (channel=own, dm_with NULL) rows now COUNT (#396)" do
+      user = AuthFixtures.user_fixture()
+      subject = {:user, user.id}
+      net = AuthFixtures.network_fixture()
+      own = "vjt"
+
+      anchor = ins(subject, net.id, own, st: 1, sender: own, body: "self anchor", dm_with: own)
+      cursor(subject, net.id, own, anchor.id)
+      # A legacy inbound row (pre-CP14-B3) / server notice routed to the own
+      # window: channel=own, dm_with NULL. The old narrowing excluded it.
+      ins(subject, net.id, own, st: 2, sender: "someone", body: "legacy line", dm_with: nil)
+      # A genuine self-message.
+      ins(subject, net.id, own, st: 3, sender: own, body: "to self", dm_with: own)
+
+      bulk = WindowCounts.bulk_snapshot(subject, %{net.slug => {net.id, own}}, [])
+
+      # #396: COALESCE(dm_with, channel) folds the NULL row's channel=own in.
+      assert bulk[net.slug][own].messages == 2
+
+      # Explicit behaviour delta: the OLD per-window narrowing
+      # (`channel == own AND dm_with == own`) MISSES the dm_with-NULL row.
+      assert WindowCounts.snapshot(subject, net.id, own, anchor.id, own, []).messages == 1
+    end
+
+    test "own-nick self window: mixed-case self-msg COUNTS via fold (#396)" do
+      user = AuthFixtures.user_fixture()
+      subject = {:user, user.id}
+      net = AuthFixtures.network_fixture()
+      own = "vjt"
+
+      anchor = ins(subject, net.id, own, st: 1, sender: own, body: "anchor", dm_with: own)
+      cursor(subject, net.id, own, anchor.id)
+      # Self-message whose dm_with is stored at a differing (rfc1459-equivalent)
+      # casing — display-preserved, so the fold is required to match.
+      ins(subject, net.id, own, st: 2, sender: own, body: "cased self", dm_with: "VJT")
+
+      bulk = WindowCounts.bulk_snapshot(subject, %{net.slug => {net.id, own}}, [])
+
+      # #396: both sides fold → "VJT" resolves to the own window.
+      assert bulk[net.slug][own].messages == 1
+
+      # OLD narrowing compared dm_with RAW → "VJT" != "vjt" → missed the row.
+      assert WindowCounts.snapshot(subject, net.id, own, anchor.id, own, []).messages == 0
+    end
+
+    test "nil own_nick (unbound network) yields mentions 0 but counts messages/events" do
+      user = AuthFixtures.user_fixture()
+      subject = {:user, user.id}
+      net = AuthFixtures.network_fixture()
+
+      anchor = ins(subject, net.id, "#chan", st: 1, body: "anchor")
+      cursor(subject, net.id, "#chan", anchor.id)
+      # Would be a mention if a nick were known — but no configured nick here.
+      ins(subject, net.id, "#chan", st: 2, sender: "bob", body: "vjt ping")
+      ins(subject, net.id, "#chan", st: 3, sender: "bob", kind: :join, body: nil)
+
+      # own_nicks WITHOUT this slug → own_nick_for_slug resolves nil.
+      bulk = WindowCounts.bulk_snapshot(subject, %{}, [])
+
+      assert bulk[net.slug]["#chan"] ==
+               %{messages: 1, mentions: 0, events: 1, severity: :message}
+    end
+
+    test "a window read to the tail is present with all-zero counts (LEFT JOIN)" do
+      user = AuthFixtures.user_fixture()
+      subject = {:user, user.id}
+      net = AuthFixtures.network_fixture()
+      own = "vjt"
+
+      m = ins(subject, net.id, "#chan", st: 1, body: "only")
+      cursor(subject, net.id, "#chan", m.id)
+
+      bulk = WindowCounts.bulk_snapshot(subject, %{net.slug => {net.id, own}}, [])
+
+      assert bulk[net.slug]["#chan"] ==
+               %{messages: 0, mentions: 0, events: 0, severity: :none}
+    end
+
+    test "a subject with no cursors yields an empty envelope" do
+      user = AuthFixtures.user_fixture()
+      subject = {:user, user.id}
+
+      assert WindowCounts.bulk_snapshot(subject, %{}, []) == %{}
+    end
+
+    test "issues a CONSTANT number of queries (2) regardless of window count" do
+      # The whole point of #396: the cold-load fan-out (2 queries PER window,
+      # ~2N) collapses to 2 total. Prove it with a query counter, at 3 and 30
+      # windows — the count must not scale with N.
+      subject_3 = seed_windows(3)
+      subject_30 = seed_windows(30)
+
+      q3 = count_repo_queries(fn -> WindowCounts.bulk_snapshot(subject_3, %{}, []) end)
+      q30 = count_repo_queries(fn -> WindowCounts.bulk_snapshot(subject_30, %{}, []) end)
+
+      assert q3 == 2, "expected exactly 2 queries for 3 windows, got #{q3}"
+      assert q30 == 2, "expected exactly 2 queries for 30 windows, got #{q30}"
+      # Sanity: the 30-window subject really has 30 windows in the envelope.
+      assert map_size(hd(Map.values(WindowCounts.bulk_snapshot(subject_30, %{}, [])))) == 30
+    end
+  end
+
+  # Seeds `n` channel windows (each: anchor + 1 unread) for a fresh subject on
+  # one network; returns the subject. Slug is single so the envelope nests
+  # under one network key.
+  defp seed_windows(n) do
+    user = AuthFixtures.user_fixture()
+    subject = {:user, user.id}
+    net = AuthFixtures.network_fixture()
+
+    for i <- 1..n do
+      a = ins(subject, net.id, "#c#{i}", st: 1, body: "anchor")
+      ins(subject, net.id, "#c#{i}", st: 2, sender: "bob", body: "unread")
+      cursor(subject, net.id, "#c#{i}", a.id)
+    end
+
+    subject
+  end
+
+  # Counts `[:grappa, :repo, :query]` telemetry events emitted while `fun`
+  # runs (Ecto emits one per statement, synchronously in the caller process).
+  defp count_repo_queries(fun) do
+    ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      {__MODULE__, ref},
+      [:grappa, :repo, :query],
+      fn _, _, _, _ -> send(test_pid, {ref, :q}) end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach({__MODULE__, ref})
+    end
+
+    drain_query_count(ref, 0)
+  end
+
+  defp drain_query_count(ref, acc) do
+    receive do
+      {^ref, :q} -> drain_query_count(ref, acc + 1)
+    after
+      0 -> acc
+    end
   end
 end

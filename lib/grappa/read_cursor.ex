@@ -211,6 +211,178 @@ defmodule Grappa.ReadCursor do
     end)
   end
 
+  @typedoc """
+  Bulk unread-split envelope (#396): nested
+  `%{network_slug => %{channel => %{messages: n, events: n}}}`. Same nesting
+  as `bulk_envelope/0`; the value is the content-vs-presence split
+  `Scrollback.count_after_split/5` returns per window.
+  """
+  @type bulk_split_envelope ::
+          %{String.t() => %{String.t() => %{messages: non_neg_integer(), events: non_neg_integer()}}}
+
+  @doc """
+  #396 — the ENTIRE subject's per-window unread `%{messages, events}` split
+  in ONE query, driven by the read cursors (replaces the cold-load's
+  N × `Scrollback.count_after_split/5` fan-out — ~2 queries per window at
+  logon).
+
+  Drives `FROM read_cursors` LEFT JOIN `messages` on the SINGLE unified
+  window predicate #393 made sargable: `nick_fold(COALESCE(m.dm_with,
+  m.channel)) == nick_fold(rc.channel)`. That one equality covers BOTH
+  window shapes — a channel cursor (`dm_with IS NULL` → COALESCE yields the
+  canonical `channel`) and a DM cursor (the cursor's `channel` IS the peer
+  nick → COALESCE yields `dm_with` for inbound, `channel` for outbound) —
+  and is served by the `messages_{subject}_id_network_id_dm_coalesce_fold_id_kind_index`
+  already live on prod. BOTH sides fold: channels are stored canonical
+  (#364) and nicks raw (#372), so the fold is required on each side for a
+  differently-cased DM peer to resolve to one window.
+
+  Semantics vs `count_after_split/5`: IDENTICAL for channel + DM-peer
+  windows. The own-nick SELF window (cursor channel == own nick) differs by
+  design (#396): the single predicate folds `COALESCE` and so counts self
+  rows the old `channel == own AND dm_with == own` narrowing missed —
+  legacy `(channel = own, dm_with IS NULL)` rows AND mixed-case self rows
+  (the old narrowing compared `dm_with` RAW). This is a deliberate,
+  user-visible count change — see DESIGN_NOTES 2026-07-25.
+
+  * The LEFT JOIN keeps a window with ZERO unread (yields `%{messages: 0,
+    events: 0}`), matching the per-window call's zero snapshot.
+  * `WHERE rc.last_read_message_id IS NOT NULL` drops nil-cursor windows —
+    exactly what the cold-load `is_integer(cursor)` guard skipped; a slug
+    whose channels ALL had nil cursors produces no rows and is absent from
+    the envelope (`refute Map.has_key?`).
+  * One statement covers ALL of the subject's networks (`rc` carries
+    `network_id`); the `Network` join resolves the slug.
+  """
+  @spec bulk_unread_split(subject()) :: bulk_split_envelope()
+  def bulk_unread_split(subject) do
+    content = Message.content_kinds()
+    {sub_field, sub_id} = subject_pair(subject)
+
+    query =
+      from(rc in Cursor,
+        join: n in Network,
+        on: n.id == rc.network_id,
+        left_join: m in Message,
+        on:
+          m.network_id == rc.network_id and
+            field(m, ^sub_field) == ^sub_id and
+            Identifier.nick_fold(fragment("COALESCE(?, ?)", m.dm_with, m.channel)) ==
+              Identifier.nick_fold(rc.channel) and
+            m.id > rc.last_read_message_id,
+        where: not is_nil(rc.last_read_message_id),
+        group_by: [n.slug, rc.channel, fragment("CASE WHEN ? THEN 1 ELSE 0 END", m.kind in ^content)],
+        select: {
+          n.slug,
+          rc.channel,
+          fragment("CASE WHEN ? THEN 1 ELSE 0 END", m.kind in ^content),
+          count(m.id)
+        }
+      )
+
+    query
+    |> subject_filter(subject)
+    |> Repo.all()
+    |> Enum.reduce(%{}, fn {slug, channel, bucket, n}, acc ->
+      key = if bucket == 1, do: :messages, else: :events
+      inner = Map.get(acc, slug, %{})
+      entry = Map.get(inner, channel, %{messages: 0, events: 0})
+      Map.put(acc, slug, Map.put(inner, channel, %{entry | key => n}))
+    end)
+  end
+
+  @typedoc """
+  Bulk content-tail envelope (#396): nested
+  `%{network_slug => %{channel => [%{sender: String.t(), body: String.t() | nil}]}}`
+  — up to `cap` oldest unread CONTENT rows per window, for the in-Elixir
+  mention fold (`Grappa.Mentions.mentioned?/3` is not expressible in SQL).
+  """
+  @type bulk_tail_envelope ::
+          %{String.t() => %{String.t() => [%{sender: String.t(), body: String.t() | nil}]}}
+
+  @doc """
+  #396 — up to `cap` oldest unread CONTENT rows per window for the WHOLE
+  subject in ONE query (replaces the cold-load's N ×
+  `Scrollback.unread_content_tail/6` fan-out). Returns only `sender` + `body`
+  — the two fields `WindowCounts` folds through `Mentions.mentioned?/3`.
+
+  Same unified `nick_fold(COALESCE(...))` window predicate as
+  `bulk_unread_split/1`, restricted to content kinds. An INNER JOIN (a
+  window with no unread content contributes no rows → zero mentions,
+  supplied by the caller's default). The per-window `cap` is enforced with a
+  `ROW_NUMBER() OVER (PARTITION BY window ORDER BY id)` window function
+  filtered in the outer query — so one huge window can't starve the others
+  and the in-memory regex fold stays bounded, exactly as the per-window
+  `unread_content_tail/6` cap did.
+  """
+  @spec bulk_unread_content_tails(subject(), pos_integer()) :: bulk_tail_envelope()
+  def bulk_unread_content_tails(subject, cap) when is_integer(cap) and cap > 0 do
+    content = Message.content_kinds()
+    {sub_field, sub_id} = subject_pair(subject)
+
+    ranked =
+      from(rc in Cursor,
+        join: n in Network,
+        on: n.id == rc.network_id,
+        join: m in Message,
+        on:
+          m.network_id == rc.network_id and
+            field(m, ^sub_field) == ^sub_id and
+            Identifier.nick_fold(fragment("COALESCE(?, ?)", m.dm_with, m.channel)) ==
+              Identifier.nick_fold(rc.channel) and
+            m.id > rc.last_read_message_id,
+        where: not is_nil(rc.last_read_message_id) and m.kind in ^content,
+        select: %{
+          slug: n.slug,
+          channel: rc.channel,
+          sender: m.sender,
+          body: m.body,
+          rn: over(row_number(), :w)
+        },
+        windows: [w: [partition_by: [n.slug, rc.channel], order_by: m.id]]
+      )
+
+    # Scope the DRIVING `read_cursors` to the subject via the shared
+    # `subject_filter/2` (binding 0 == `rc`), identical to
+    # `bulk_unread_split/1` + `bulk_for_subject/1` — one way to express
+    # "these cursors are mine". `subject_pair/1` is still needed for the
+    # `on:`-clause match on `messages` (a join-side filter belongs in `on:`,
+    # not `where`, so the JOIN keeps its driving row).
+    scoped = subject_filter(ranked, subject)
+
+    capped =
+      from(r in subquery(scoped),
+        where: r.rn <= ^cap,
+        select: {r.slug, r.channel, r.sender, r.body}
+      )
+
+    capped
+    |> Repo.all()
+    |> Enum.reduce(%{}, fn {slug, channel, sender, body}, acc ->
+      row = %{sender: sender, body: body}
+      inner = Map.get(acc, slug, %{})
+      tail = Map.get(inner, channel, [])
+      Map.put(acc, slug, Map.put(inner, channel, [row | tail]))
+    end)
+    |> reverse_tails()
+  end
+
+  # ROW_NUMBER orders oldest-first; the reduce prepends, so reverse each
+  # per-window list back to oldest-first (order is not load-bearing for the
+  # count, but a stable oldest-first list keeps tests deterministic).
+  defp reverse_tails(env) do
+    Map.new(env, fn {slug, channels} ->
+      {slug, Map.new(channels, fn {channel, rows} -> {channel, Enum.reverse(rows)} end)}
+    end)
+  end
+
+  # Subject → {message-column-atom, uuid} for a join-side `field/2` match
+  # (the LEFT/INNER JOIN keeps the driving `read_cursors` row, so the
+  # subject match on `messages` must live in the `on:` clause, not `where`).
+  @spec subject_pair(subject()) :: {:user_id | :visitor_id, Ecto.UUID.t()}
+  defp subject_pair({:user, user_id}) when is_binary(user_id), do: {:user_id, user_id}
+  defp subject_pair({:visitor, visitor_id}) when is_binary(visitor_id), do: {:visitor_id, visitor_id}
+
   @doc """
   Broadcasts a typed `read_cursor_set` event on the per-channel topic
   for `(user_name, network_slug, channel)`.

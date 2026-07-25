@@ -53,11 +53,11 @@ defmodule Grappa.WindowCounts do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.IRC, Grappa.Mentions, Grappa.Scrollback, Grappa.Subject],
+    deps: [Grappa.IRC, Grappa.Mentions, Grappa.ReadCursor, Grappa.Scrollback, Grappa.Subject],
     exports: [PushSource, Wire]
 
   alias Grappa.IRC.Identifier
-  alias Grappa.{Mentions, Scrollback, Subject}
+  alias Grappa.{Mentions, ReadCursor, Scrollback, Subject}
 
   @typedoc """
   Window severity, high to low. `:mention` = at least one unread
@@ -133,9 +133,99 @@ defmodule Grappa.WindowCounts do
     }
   end
 
+  @doc """
+  #396 — the WHOLE subject's per-window snapshot map in a CONSTANT number of
+  queries (2), independent of window count. Replaces the cold-load
+  (`MeController.build_unread_counts/2`) N × `snapshot/6` fan-out (~2 queries
+  per window, ~100 round trips at a ~50-window logon).
+
+  Returns the SAME nested shape the per-window loop built —
+  `%{network_slug => %{channel => t()}}` — so `/me`'s `unread_counts`
+  envelope is byte-identical for channel + DM-peer windows (the own-nick
+  SELF window count changes by design; see `ReadCursor.bulk_unread_split/1`
+  and DESIGN_NOTES 2026-07-25).
+
+  Two bulk reads, both driven by the read cursors (#393's single
+  `nick_fold(COALESCE(dm_with, channel))` predicate unifies channel + DM
+  windows into one join condition, served by the live prod indexes):
+
+    1. `ReadCursor.bulk_unread_split/1` — every window's `%{messages,
+       events}` in one grouped statement (zero-unread windows included,
+       nil-cursor windows skipped);
+    2. `ReadCursor.bulk_unread_content_tails/2` — every window's capped
+       unread content tail in one statement; the mention fold
+       (`Mentions.mentioned?/3`, not expressible in SQL) then runs in Elixir
+       per window, grouped by channel, exactly as `count_mentions/6` does
+       per window.
+
+  `own_nicks` (`%{slug => {network_id, own_nick}}`, off-Session via
+  `Push.BadgeCount.configured_nick_windows/1`) and `patterns` (subject-wide
+  highlight list) are resolved ONCE by the caller and threaded in — same
+  off-Session stance as `snapshot/6`. A slug with no configured nick
+  (`nil` own_nick, unbound-but-retained network) folds to `mentions: 0`,
+  the messages/events still counting — mirrors `snapshot/6`'s nil own_nick.
+  """
+  @spec bulk_snapshot(Subject.t(), %{String.t() => {integer(), String.t()}}, [String.t()]) ::
+          %{String.t() => %{String.t() => t()}}
+  def bulk_snapshot(subject, own_nicks, patterns)
+      when is_map(own_nicks) and is_list(patterns) do
+    counts = ReadCursor.bulk_unread_split(subject)
+    tails = ReadCursor.bulk_unread_content_tails(subject, @mention_scan_cap)
+
+    Map.new(counts, fn {slug, per_channel} ->
+      own_nick = own_nick_for_slug(own_nicks, slug)
+      slug_tails = Map.get(tails, slug, %{})
+
+      windows =
+        Map.new(per_channel, fn {channel, %{messages: messages, events: events}} ->
+          mentions = count_tail_mentions(Map.get(slug_tails, channel, []), own_nick, patterns)
+
+          {channel,
+           %{
+             messages: messages,
+             mentions: mentions,
+             events: events,
+             severity: severity(messages, mentions, events)
+           }}
+        end)
+
+      {slug, windows}
+    end)
+  end
+
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
+
+  # Configured own-nick for `slug`, or `nil` when the subject holds no
+  # credential there (unbound-but-retained network). Mirrors
+  # `MeController.own_nick_for_slug/2` — `nil` selects `mentions: 0` below.
+  @spec own_nick_for_slug(%{String.t() => {integer(), String.t()}}, String.t()) ::
+          String.t() | nil
+  defp own_nick_for_slug(own_nicks, slug) do
+    case Map.fetch(own_nicks, slug) do
+      {:ok, {_, own_nick}} -> own_nick
+      :error -> nil
+    end
+  end
+
+  # Mention count over a pre-fetched capped content tail (#396 bulk path),
+  # IDENTICAL fold to `count_mentions/6`'s per-window Enum.count: exclude
+  # own-sent rows (fold `sender` via the rfc1459 nick SSOT, #121), then the
+  # `Mentions.mentioned?/3` SSOT predicate. `nil` own_nick → nothing to
+  # match, so no mentions.
+  @spec count_tail_mentions([%{sender: String.t(), body: String.t() | nil}], String.t() | nil, [
+          String.t()
+        ]) :: non_neg_integer()
+  defp count_tail_mentions(_, nil, _), do: 0
+
+  defp count_tail_mentions(tail, own_nick, patterns) do
+    own = Identifier.canonical_nick(own_nick)
+
+    Enum.count(tail, fn %{sender: sender, body: body} ->
+      Identifier.canonical_nick(sender) != own and Mentions.mentioned?(body, own_nick, patterns)
+    end)
+  end
 
   # Counts unread content rows that mention the subject, excluding own-sent
   # rows (fold via the rfc1459 nick SSOT, #121). Bounded by the scan cap.

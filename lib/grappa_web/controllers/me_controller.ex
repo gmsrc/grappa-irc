@@ -52,43 +52,42 @@ defmodule GrappaWeb.MeController do
   missing keys as "no cursor for this window" and falls back to
   unread-everything semantics until the first POST advances one.
 
-  ## Unread-counts envelope (bucket C, 2026-06-01)
+  ## Unread-counts envelope (bucket C, 2026-06-01; #396 bulk 2026-07-25)
 
   The response carries `unread_counts: %{network_slug => %{channel =>
-  %{messages, mentions, events, severity}}}` — the per-channel
-  `Grappa.WindowCounts.snapshot/6` (#267) for every cursor in
-  `read_cursors`, with the same nested shape. cic's `applySeedEnvelope`
-  consumes the `selection.ts` `serverSeedCounts` signal so cold-load
-  sidebar badges render the right counts + severity colour for channels
-  the user has a cursor on but hasn't focused yet in this session — with
-  NO client-side count derivation (#267: server is authority, client
-  renders). Channels without a cursor are absent — cic falls back to the
-  per-channel join reply seed (bucket B1) for those.
+  %{messages, mentions, events, severity}}}` — one entry per cursor in
+  `read_cursors`, nested by network. cic's `applySeedEnvelope` consumes the
+  `selection.ts` `serverSeedCounts` signal so cold-load sidebar badges
+  render the right counts + severity colour for channels the user has a
+  cursor on but hasn't focused yet — with NO client-side count derivation
+  (#267: server is authority, client renders). Channels without a cursor
+  are absent — cic falls back to the per-channel join-reply seed (bucket
+  B1) for those.
 
-  Built inline here (not in `Scrollback`) so the slug→id resolution
-  stays controller-side and `Scrollback` doesn't grow a dependency
-  edge onto `Networks` (that would close a `Networks → Scrollback →
-  Networks` cycle). Inclusion is keyed on the GLOBAL
-  `Networks.network_id_by_slug_index/0` (every existing network row) —
-  NOT the credential-scoped window map — so a network the user unbound
-  but whose scrollback + cursors it retained (GH #105) still seeds, same
-  as the WS `join_reply` door. Per-cursor `count_after_split/5` is a
-  single SQL round-trip — bounded by the same ~600 worst-case cursor
-  count `bulk_for_subject/1` carries.
+  #396 — built via `Grappa.WindowCounts.bulk_snapshot/3` in a CONSTANT
+  number of queries (2), NOT 2 per window. The old path issued
+  `count_after_split/5` + `unread_content_tail/6` per cursor (~2N ≈ 100
+  round trips at a ~50-window logon); #393's single
+  `nick_fold(COALESCE(dm_with, channel))` predicate unified channel + DM
+  windows into ONE `read_cursors ⋈ messages` join (served by the live prod
+  indexes), so the count split and the mention tails are one statement
+  each. The `read_cursors ⋈ networks` join keeps the GH #105 inclusion
+  (unbound-but-retained networks' cursors seed too, since unbind deletes
+  only the credential row) and drops nil-cursor windows + all-nil slugs
+  identically (`refute Map.has_key?`).
 
-  `own_nick` is threaded per-network from the CONFIGURED credential nick
-  — the same off-Session resolver `Push.BadgeCount` uses
-  (`configured_nick_windows/1`), `nil` when the subject holds no
-  credential on that slug (the unbound-but-retained case). It narrows
-  the own-nick query window (`channel == own_nick`) to self-msgs so
-  inbound DMs don't over-count it; without it the seed disagreed with
-  the per-channel WS `join_reply` (which threads the live session nick)
-  by every inbound DM ever received (S2, 2026-07-08 review — the
-  CP14-B3 leak re-opened by `count_after_split/5`'s former
-  `own_nick \\ nil` default). Resolving from the configured nick keeps
-  the /me path off of `Grappa.Session` (a `GenServer.call` per network
-  at cold-load is unacceptable — DESIGN_NOTES 2026-06-21); accepted
-  staleness after a `/nick` until reconnect rewrites the credential.
+  own_nick is still threaded per-network from the CONFIGURED credential
+  nick (off-Session `Push.BadgeCount.configured_nick_windows/1`; `nil` on
+  an unbound network → `mentions: 0`) for the mention fold — keeping the
+  /me path off `Grappa.Session` (a `GenServer.call` per network at
+  cold-load is unacceptable — DESIGN_NOTES 2026-06-21). **Behaviour change
+  (#396, user-visible):** the single COALESCE predicate no longer applies
+  the old own-nick SELF-window narrowing (`channel == own AND dm_with ==
+  own`), so a self (own-nick) window now counts rows that narrowing
+  missed — legacy `(channel = own, dm_with IS NULL)` rows AND mixed-case
+  self rows (the old narrowing compared `dm_with` RAW). Deliberate, and
+  scoped to the self window only; every channel + DM-peer window count is
+  byte-identical. See DESIGN_NOTES 2026-07-25.
 
   ## badge_count (PWA icon badge door #2, 2026-06-21)
 
@@ -220,70 +219,26 @@ defmodule GrappaWeb.MeController do
   defp build_unread_counts(_, cursor_envelope) when map_size(cursor_envelope) == 0,
     do: %{}
 
-  defp build_unread_counts(subject, cursor_envelope) do
-    # Inclusion stays keyed on the GLOBAL network index (every existing
-    # network row), NOT on the credential-scoped window map: a user can
-    # unbind a network yet retain its scrollback + read cursors (GH #105
-    # — unbind deletes only the credential row). Those cursors must still
-    # seed unread_counts, matching the WS `join_reply` door (which keys on
-    # `get_network_by_slug`, credential-independent). Scoping inclusion to
-    # credentials would silently drop unbound-but-retained networks from
-    # the cold-load seed.
-    slug_to_id = Networks.network_id_by_slug_index()
-
-    # own_nick is resolved SEPARATELY from the off-Session configured-nick
-    # window map (`Push.BadgeCount.configured_nick_windows/1`); `nil` when
-    # the subject holds no credential on that slug (unbound network). nil
-    # own_nick falls back to channel-shape narrowing — the same shape the
-    # WS door uses when it has no live session, so the two doors stay
-    # consistent for the unbound case too.
+  defp build_unread_counts(subject, _) do
+    # #396 — the ENTIRE cold-load unread envelope in a CONSTANT number of
+    # queries (2), not 2 per window. `WindowCounts.bulk_snapshot/3` drives
+    # both the count split and the mention tails from the read cursors via
+    # #393's single `nick_fold(COALESCE(dm_with, channel))` predicate (one
+    # join condition for channel + DM windows, served by the live prod
+    # indexes). The `read_cursors ⋈ networks` join includes unbound-but-
+    # retained networks' cursors the same way the old
+    # `Networks.network_id_by_slug_index/0` inclusion did (GH #105 — unbind
+    # deletes only the credential row; the scrollback + cursors survive and
+    # must still seed the envelope), and it drops nil-cursor windows +
+    # all-nil slugs identically (`refute Map.has_key?`).
+    #
+    # own_nick (off-Session `Push.BadgeCount.configured_nick_windows/1`;
+    # `nil` for an unbound network → `mentions: 0`) and the subject-wide
+    # highlight `patterns` (#267) are resolved ONCE here and threaded into
+    # the bulk fold — the part of the old loop that was already right.
     own_nicks = BadgeCount.configured_nick_windows(subject)
-
-    # #267 — highlight patterns for the mention count are subject-wide
-    # (not per-network), so resolve once here and thread into every
-    # per-channel snapshot. Same off-Session stance as own_nick: no
-    # Session round-trip on the cold-load path.
     patterns = UserSettings.get_highlight_patterns(subject)
 
-    for {slug, per_channel} <- cursor_envelope,
-        Map.has_key?(slug_to_id, slug),
-        reduce: %{} do
-      acc ->
-        net_id = Map.fetch!(slug_to_id, slug)
-        own_nick = own_nick_for_slug(own_nicks, slug)
-
-        channel_counts =
-          for {channel, cursor} <- per_channel,
-              is_integer(cursor),
-              reduce: %{} do
-            inner ->
-              Map.put(
-                inner,
-                channel,
-                WindowCounts.snapshot(subject, net_id, channel, cursor, own_nick, patterns)
-              )
-          end
-
-        # Skip slugs whose channels all had nil cursors — keeps the
-        # envelope shape uniform with the "no cursor at all" case
-        # (`refute Map.has_key?`) downstream consumers already test.
-        if map_size(channel_counts) == 0 do
-          acc
-        else
-          Map.put(acc, slug, channel_counts)
-        end
-    end
-  end
-
-  # Configured own-nick for `slug`, or `nil` when the subject holds no
-  # credential there (unbound-but-retained network). `nil` selects
-  # channel-shape narrowing in `Scrollback.count_after_split/5`.
-  @spec own_nick_for_slug(%{String.t() => {integer(), String.t()}}, String.t()) ::
-          String.t() | nil
-  defp own_nick_for_slug(own_nicks, slug) do
-    case Map.fetch(own_nicks, slug) do
-      {:ok, {_, own_nick}} -> own_nick
-      :error -> nil
-    end
+    WindowCounts.bulk_snapshot(subject, own_nicks, patterns)
   end
 end

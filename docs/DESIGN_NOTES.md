@@ -17340,3 +17340,126 @@ arms are provably exhaustive (prove with `EXCEPT`). Put the aggregated
 column (`kind`) at the index tail to make the count covering. Any change to
 the fold literal in code MUST move in lockstep with the migration DDL and
 the pin test, or the index silently stops being used.
+
+---
+
+## 2026-07-25 — #396 cold-load unread counts: 2N queries → a CONSTANT 2
+
+**Problem.** `MeController.build_unread_counts/2` built the cold-load
+`unread_counts` envelope with a query PER window, TWICE: it looped every
+`(slug, channel)` cursor and called `WindowCounts.snapshot/6`, which issued
+`Scrollback.count_after_split/5` (the content/events aggregate) AND
+`count_mentions/6` → `Scrollback.unread_content_tail/6` (the capped
+mention-scan fetch). A subject with ~50 windows paid **~100 DB round trips
+at every logon**. #393 made each individual query fast (5–6ms channel,
+sub-ms DM); the residual cost is the **fan-out itself** — round trips +
+query planning, O(N) in window count.
+
+**This became expressible only because of #393.** #393 rewrote
+`where_dm_peer/2` to the single sargable predicate
+`nick_fold(COALESCE(dm_with, channel)) == peer`. That one equality unifies
+BOTH window shapes into ONE join condition:
+
+- a **channel** cursor → its rows have `dm_with IS NULL` → `COALESCE` yields
+  the (canonical) `channel`;
+- a **DM** cursor → the cursor's `channel` IS the peer nick → `COALESCE`
+  yields `dm_with` for inbound rows, `channel` for outbound.
+
+So `nick_fold(COALESCE(m.dm_with, m.channel)) = nick_fold(rc.channel)` joins
+messages to their window's cursor for every window at once, served by the
+`messages_{subject}_id_network_id_dm_coalesce_fold_id_kind_index` #393 put
+live on prod. **Both sides fold** — channels are stored canonical (#364),
+nicks raw (#372), so a differently-cased DM peer resolves to one window
+only if each side is folded. With the old `OR` form this join would not
+have planned; #393 is a hard prerequisite.
+
+### Shape — two bulk reads, driven by the read cursors (vjt: "un solo predicato")
+
+- **Query 1 — `ReadCursor.bulk_unread_split/1`.** `FROM read_cursors rc`
+  `LEFT JOIN messages m` on the unified predicate + `m.id >
+  rc.last_read_message_id`, `WHERE rc.last_read_message_id IS NOT NULL`,
+  `GROUP BY slug, rc.channel, <content-vs-events CASE bucket>`. One
+  statement, ALL of the subject's networks (`rc` carries `network_id`; the
+  `Network` join resolves the slug). The LEFT JOIN keeps zero-unread
+  windows (yields `%{messages: 0, events: 0}`); the `IS NOT NULL` filter
+  drops nil-cursor windows exactly as the old `is_integer(cursor)` guard
+  did (a slug whose channels are ALL nil-cursor produces no rows and is
+  absent — `refute Map.has_key?`).
+- **Query 2 — `ReadCursor.bulk_unread_content_tails/2`.** Same predicate,
+  content kinds only, INNER JOIN, with a per-window cap enforced by
+  `ROW_NUMBER() OVER (PARTITION BY window ORDER BY id) <= cap` in a
+  subquery — so one huge window can't starve the others and the in-memory
+  regex fold stays bounded (the per-window cap `unread_content_tail/6`
+  gave). The `Mentions.mentioned?/3` fold is NOT expressible in SQL
+  (SQLite has no `REGEXP`), so it stays in Elixir, grouped by window,
+  own-sent rows excluded via the rfc1459 nick fold (#121).
+- `WindowCounts.bulk_snapshot/3` orchestrates: the two bulk reads +
+  per-window mention fold + the `severity/3` ladder, returning the SAME
+  `%{slug => %{channel => %{messages, mentions, events, severity}}}`
+  envelope the loop built. `MeController.build_unread_counts/2` now calls
+  it. **Proven** with a telemetry query-counter test: `bulk_snapshot/3`
+  emits EXACTLY 2 `[:grappa, :repo, :query]` events for a 3-window subject
+  AND a 30-window subject — constant, not 2N.
+
+### Boundary — the join lives in `ReadCursor`, not `Scrollback`
+
+The join spans `Cursor` (ReadCursor) and `Message` (Scrollback). Scrollback
+CANNOT depend on ReadCursor (ReadCursor already deps Scrollback — a reverse
+edge closes a cycle Boundary rejects). ReadCursor already legitimately
+joins `Message` (`message_belongs?/4`) + `Network` (`bulk_for_subject/1`)
+and aliases `Identifier`, so the driven queries extend that established
+cross-point. `WindowCounts` (the counts domain) gained a `ReadCursor` dep
+and orchestrates via ReadCursor's PUBLIC API — no raw `Cursor` alias
+elsewhere (the schema is documented internal). The fold reuses
+`Identifier.nick_fold/1` (SSOT — no hand-copied `replace(...lower(`
+literal, so the #364 "no lib/ module hand-copies the fold" guard holds) and
+the kind set reuses `Message.content_kinds/0`.
+
+### BEHAVIOUR CHANGE — the own-nick SELF window count shifts (user-visible)
+
+vjt chose the single unified predicate for ALL windows (OPTION 1,
+#grappa 2026-07-25 "un solo predicato"), knowing it changes one case. The
+old per-window path narrowed the own-nick SELF window (cursor channel ==
+the subject's own nick) with `channel == own AND dm_with == own`. The
+unified `nick_fold(COALESCE(dm_with, channel))` does NOT — so the self
+window now counts rows the old narrowing missed:
+
+1. **legacy `(channel = own, dm_with IS NULL)` rows** — pre-CP14-B3 inbound
+   history + any server notice routed to the own window. `COALESCE` picks
+   `channel = own` when `dm_with` is NULL → included. The old `dm_with ==
+   own` required a non-NULL match → excluded.
+2. **mixed-case self rows** — a self-message whose `dm_with` is stored at a
+   differing (rfc1459-equivalent) casing. The unified predicate folds both
+   sides → matched; the old narrowing compared `dm_with` RAW → missed.
+
+This is a **deliberate, user-visible count change for the self window
+only** — every channel + DM-peer window count is byte-identical (proven by
+the `bulk_snapshot/3` == `snapshot/6` invariance test). It is arguably more
+correct (the second case was a latent fold bug), but it IS a change and is
+called out here + in the commit message rather than buried in a refactor,
+per vjt's explicit requirement. Two tests pin BOTH sub-cases and contrast
+`bulk_snapshot/3` (includes) against `snapshot/6` (excludes).
+
+The change is a COUNT change in the full sense: the same widened self-window
+row set also feeds the mention fold, so a legacy `(channel = own, dm_with
+IS NULL)` server notice (or a mixed-case self row) whose body word-matches
+`own_nick` now enters the capped tail and can lift the self window's
+`mentions` — and therefore its `severity` — to `:mention` where the old
+narrowing showed `:message`/`:none`. Still scoped to the self window only;
+channel + DM-peer `mentions`/`severity` stay byte-identical.
+
+### Spun out earlier / relationship to #395
+
+#396 is the **zero-new-state** alternative floated in #395 (unread computed
+two divergent ways) and #357 (materialised `unreads` table, now PARKED). By
+making the derived count cheap at any window count, #396 removes most of
+the performance argument for materialisation — leaving #395 as the
+drift/duplication concern it actually is, to be decided on a post-deploy
+telemetry re-run.
+
+**Apply.** When a cold-load path fans a fast per-item query across N items,
+the fan-out itself is the cost — collapse it to a cursor-driven join +
+GROUP BY (LEFT JOIN to keep zero-count items; a window function to cap
+per-item), and PROVE the collapse with a query-count telemetry test, not a
+wall-clock. A predicate that unifies two shapes into one join key is what
+makes the collapse possible — here #393's folded `COALESCE` was the enabler.
