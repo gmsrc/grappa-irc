@@ -85,6 +85,13 @@ defmodule GrappaWeb.GrappaChannel do
   - `"banlist"` — query the channel ban list. Payload: `%{"network_id" => id,
     "channel" => chan}`. Issues `MODE #chan b` (no sign); server replies with 367/368.
 
+  - `"resolve_userhost"` — on-demand per-nick userhost lookup (#386). Payload:
+    `%{"network_id" => id, "nick" => nick}`. Replies `{:ok, %{user, host}}` from
+    the session's `userhost_cache` (populated from JOIN prefix / 311 / 352), or
+    `{:error, %{error: "not_cached"}}` on a miss (the fail-closed signal cic's
+    `/kb` + BanlistModal mask builder surface as "run /whois first"). Read-only,
+    so visitors are entitled (own session only).
+
   - `"whois"` — issue WHOIS on a nick. Payload: `%{"network_id" => id, "nick" => nick}`,
     with an optional `"server"` (#198 — RFC 2812 §3.6.2 target-server routing:
     when present the emitted frame is `WHOIS <server> <nick>`, else `WHOIS <nick>`).
@@ -592,6 +599,33 @@ defmodule GrappaWeb.GrappaChannel do
       fn -> validate_args(channel: channel) end,
       fn subject -> Session.send_banlist(subject, network_id, channel) end
     )
+  end
+
+  # #386 — resolve_userhost: on-demand per-nick userhost lookup. cic has no
+  # per-member host client-side (the members map is nick+modes only), so the
+  # /kb command and the BanlistModal's mask builder ask the server for the
+  # offender's `user`/`host` to build `*!*@host` (fail-closed on a miss, vjt
+  # decision #1). This is the surgical exposure of the SERVER's userhost_cache
+  # (populated from JOIN prefix / 311 / 352). Read-only query → visitors are
+  # entitled (own session only, like /whois + /banlist). Returns the cached
+  # entry, or {:error, not_cached} — the fail-closed signal cic surfaces so the
+  # operator runs /whois rather than banning something wider than intended.
+  def handle_in(
+        "resolve_userhost",
+        %{"network_id" => network_id, "nick" => nick},
+        socket
+      )
+      when is_integer(network_id) and is_binary(nick) do
+    with {:ok, _} <- validate_args(nick: nick),
+         {:ok, subject} <- resolve_subject(socket.assigns.user_name),
+         {:ok, entry} <- Session.lookup_userhost(subject, network_id, nick) do
+      {:reply, {:ok, %{user: entry.user, host: entry.host}}, socket}
+    else
+      {:error, :invalid_nick} -> {:reply, {:error, %{error: "invalid_nick"}}, socket}
+      :error -> {:reply, {:error, %{error: "user_not_found"}}, socket}
+      {:error, :not_cached} -> {:reply, {:error, %{error: "not_cached"}}, socket}
+      {:error, :no_session} -> {:reply, {:error, %{error: "no_session"}}, socket}
+    end
   end
 
   # C2 — /whois <nick>. Server primes the per-target accumulator and

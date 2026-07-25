@@ -1270,6 +1270,50 @@ defmodule GrappaWeb.GrappaChannelTest do
       {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "MODE #snap b\r\n"), 1_000)
     end
 
+    # #386 — resolve_userhost: on-demand per-nick userhost lookup, the surgical
+    # host source the /kb + BanlistModal mask builder consume (cic has no
+    # per-member host client-side). Read-only query over Session.lookup_userhost/3.
+    test "resolve_userhost: cache hit returns {:ok, %{user, host}}", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      # A peer JOINs with a full nick!user@host prefix → userhost_cache populated.
+      IRCServer.feed(irc_server, ":bob!bob_u@bob.host JOIN :#snap\r\n")
+      flush_server(irc_server)
+
+      ref =
+        push(socket, "resolve_userhost", %{
+          "network_id" => network.id,
+          "nick" => "bob"
+        })
+
+      assert_reply(ref, :ok, %{user: "bob_u", host: "bob.host"})
+    end
+
+    test "resolve_userhost: cache miss returns {:error, not_cached} (fail-closed)", %{
+      socket: socket,
+      network: network
+    } do
+      ref =
+        push(socket, "resolve_userhost", %{
+          "network_id" => network.id,
+          "nick" => "ghost"
+        })
+
+      assert_reply(ref, :error, %{error: "not_cached"})
+    end
+
+    test "resolve_userhost: unknown network_id returns {:error, no_session}", %{socket: socket} do
+      ref =
+        push(socket, "resolve_userhost", %{
+          "network_id" => 999_999,
+          "nick" => "bob"
+        })
+
+      assert_reply(ref, :error, %{error: "no_session"})
+    end
+
     test "umode: sends MODE own_nick <modes> upstream", %{
       irc_server: irc_server,
       socket: socket,
