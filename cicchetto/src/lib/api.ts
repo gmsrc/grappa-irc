@@ -1579,7 +1579,8 @@ export class ApiError extends Error {
 // — same `error:` key as the REST `FallbackController` shape — so cic
 // has one envelope to extract from. `code` carries the wire token
 // (`"invalid_channel"`, `"upstream_unavailable"`, etc.); `info` captures
-// the full server reply so callers can read sibling fields.
+// the server reply's SIBLING fields (limit, retry_after, …) — the
+// redundant `error` key is dropped, since `code` already holds it (#112).
 //
 // Branching on `code` is the FUTURE consumer pattern (mirroring
 // `friendlyApiError(e: ApiError)` for REST); current consumers
@@ -1609,7 +1610,10 @@ export function channelPushError(raw: unknown): ChannelPushError {
   }
   const r = raw as Record<string, unknown>;
   const code = typeof r.error === "string" ? r.error : String(raw);
-  return new ChannelPushError(code, r);
+  // #112 — `code` is the token's home; strip the redundant `error` key so
+  // `info` carries only the sibling fields callers actually branch on.
+  const { error: _drop, ...info } = r;
+  return new ChannelPushError(code, info);
 }
 
 // 401-handler registry. `auth.ts` registers a callback at module-load
@@ -1651,9 +1655,11 @@ export async function readError(res: Response): Promise<ApiError> {
     //   1. `body.error` — the canonical A7 envelope shape used by every
     //      `FallbackController` arm (`{error: "<token>"}`), including
     //      the bucket-G-unified 422 `{error: "validation_failed",
-    //      field_errors: ...}` shape. The whole body is captured into
-    //      `info` so callers can read `err.info.field_errors`,
-    //      `err.info.site_key`, etc. without a second round-trip.
+    //      field_errors: ...}` shape. The body's SIBLING fields are
+    //      captured into `info` (the redundant `error` key is dropped
+    //      — it's lifted to `code`, #112) so callers can read
+    //      `err.info.field_errors`, `err.info.site_key`, etc. without a
+    //      second round-trip.
     //   2. `body.errors.detail` — Phoenix's default `ErrorJSON` shape
     //      for 404/500/etc. (see `lib/grappa_web/controllers/error_json.ex`).
     //      Distinct from the post-bucket-G changeset path (`field_errors`)
@@ -1670,7 +1676,9 @@ export async function readError(res: Response): Promise<ApiError> {
     const n = Number(retryAfter);
     if (Number.isFinite(n)) body.retry_after = n;
   }
-  return new ApiError(res.status, code, body);
+  // #112 — drop the redundant `error` key; `code` is its canonical home.
+  const { error: _drop, ...info } = body;
+  return new ApiError(res.status, code, info);
 }
 
 export async function login(req: LoginRequest): Promise<LoginResponse> {

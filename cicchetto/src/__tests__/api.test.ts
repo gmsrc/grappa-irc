@@ -299,6 +299,9 @@ describe("ApiError info field (T31 admission errors)", () => {
       expect(err.code).toBe("captcha_required");
       expect(err.info.site_key).toBe("k");
       expect(err.info.provider).toBe("turnstile");
+      // #112 — the `error` token is lifted to `code`; `info` must not
+      // duplicate it.
+      expect(err.info.error).toBeUndefined();
     }
   });
 
@@ -718,17 +721,19 @@ describe("REV-K M20 — channelPushError extractor", () => {
   // the opaque `unknown` reply into a typed `ChannelPushError` so
   // push helpers can reject with `.code` available for branching.
 
-  it("extracts `code` from {error: '<token>'} envelope", () => {
+  it("extracts `code` from {error: '<token>'} envelope, dropping the redundant error key", () => {
+    // #112 — `code` is the token's home; `info` carries only siblings, so
+    // an envelope with no siblings yields an empty `info` (no `error` dup).
     const e = api.channelPushError({ error: "invalid_channel" });
     expect(e).toBeInstanceOf(api.ChannelPushError);
     expect(e.code).toBe("invalid_channel");
-    expect(e.info).toEqual({ error: "invalid_channel" });
+    expect(e.info).toEqual({});
   });
 
-  it("preserves sibling fields in `info` for callers", () => {
+  it("preserves sibling fields in `info` for callers (minus the redundant error key)", () => {
     const e = api.channelPushError({ error: "body_too_large", limit: 4096 });
     expect(e.code).toBe("body_too_large");
-    expect(e.info).toEqual({ error: "body_too_large", limit: 4096 });
+    expect(e.info).toEqual({ limit: 4096 });
   });
 
   it("falls back to stringified raw when object lacks `error` key", () => {
