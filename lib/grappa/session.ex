@@ -161,7 +161,13 @@ defmodule Grappa.Session do
           optional(:credential_committer) => Server.credential_committer(),
           optional(:registration_committer) => Server.registration_committer(),
           optional(:last_joined_persister) => Server.last_joined_persister(),
-          optional(:refresh_plan) => Server.refresh_plan_check()
+          optional(:refresh_plan) => Server.refresh_plan_check(),
+          # GH #189 — on-connect perform list + its `$oper_pass` secret,
+          # decrypted plaintext from the credential (nil when unset). Set by
+          # `SessionPlan.base_plan/6` for BOTH subjects; run at 001 by
+          # `Session.Server` before the built-in identify and before autojoin.
+          optional(:perform_list) => String.t() | nil,
+          optional(:oper_pass) => String.t() | nil
         }
 
   @doc """
