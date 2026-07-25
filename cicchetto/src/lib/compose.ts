@@ -841,7 +841,12 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "rehash": {
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/rehash: network not found" };
-          await pushRaw(networkId, "REHASH");
+          // REHASH [option] — omit a null option (bare /rehash → "REHASH",
+          // the default full-config reload). #375: mirror the /stats null
+          // filter so the option (MOTD/DNS/GC/…) rides the raw frame instead
+          // of being dropped into a bare REHASH.
+          const line = ["REHASH", cmd.opt].filter((t): t is string => t !== null).join(" ");
+          await pushRaw(networkId, line);
           result = { ok: true };
           break;
         }

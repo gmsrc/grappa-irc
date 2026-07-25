@@ -763,13 +763,20 @@ describe("parseSlash — /stats (#155)", () => {
   });
 });
 
-describe("parseSlash — /rehash (#155)", () => {
-  it("parses bare /rehash", () => {
-    expect(parseSlash("/rehash")).toEqual({ kind: "rehash" });
+describe("parseSlash — /rehash (#155, #375)", () => {
+  it("parses bare /rehash → null opt (full ircd.conf reload)", () => {
+    expect(parseSlash("/rehash")).toEqual({ kind: "rehash", opt: null });
   });
 
-  it("ignores any trailing args (REHASH is param-less)", () => {
-    expect(parseSlash("/rehash ignored")).toEqual({ kind: "rehash" });
+  // #375 — the option (MOTD / DNS / GC / TKLINE / …) must survive parsing.
+  // Pre-fix it was silently dropped (bare REHASH → full reload); mirrors
+  // /stats + #374's /motd first-token-only grammar.
+  it("/rehash MOTD → opt: 'MOTD' (scoped reload)", () => {
+    expect(parseSlash("/rehash MOTD")).toEqual({ kind: "rehash", opt: "MOTD" });
+  });
+
+  it("keeps only the first token (REHASH takes one option upstream)", () => {
+    expect(parseSlash("/rehash DNS extra junk")).toEqual({ kind: "rehash", opt: "DNS" });
   });
 });
 

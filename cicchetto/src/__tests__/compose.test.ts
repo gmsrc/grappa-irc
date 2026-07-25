@@ -87,6 +87,9 @@ vi.mock("../lib/socket", () => ({
   pushMotd: vi.fn(),
   // P-0d / #248 — /lusers bridge.
   pushLusers: vi.fn(),
+  // #155 — /stats + /rehash ship the raw frame via pushRaw (the #153-de-gated
+  // raw transport). #375 asserts the /rehash option rides this frame.
+  pushRaw: vi.fn().mockResolvedValue(undefined),
 }));
 
 // #248 — compose marks a /lusers request solicited so the incoming
@@ -388,6 +391,32 @@ describe("compose submit — slash command dispatch", () => {
     const result = await compose.submit(k, "freenode", "#a");
 
     expect(socket.pushMotd).toHaveBeenCalledWith(1, "void.azzurra.chat");
+    expect(result).toEqual({ ok: true });
+  });
+
+  // #155 — bare /rehash ships the raw "REHASH" frame (full ircd.conf reload).
+  it("/rehash pushes bare REHASH via pushRaw(networkId, 'REHASH')", async () => {
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/rehash");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.pushRaw).toHaveBeenCalledWith(1, "REHASH");
+    expect(result).toEqual({ ok: true });
+  });
+
+  // #375 — /rehash <option> must forward the option on the wire (mirror of
+  // /stats): pre-fix compose hardcoded a bare "REHASH", dropping the option
+  // so bahamut ran the default full-config reload instead of REHASH MOTD.
+  it("/rehash MOTD pushes REHASH MOTD via pushRaw", async () => {
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/rehash MOTD");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.pushRaw).toHaveBeenCalledWith(1, "REHASH MOTD");
     expect(result).toEqual({ ok: true });
   });
 

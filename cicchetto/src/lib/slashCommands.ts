@@ -133,7 +133,7 @@ export type SlashCommand =
   | { kind: "version" }
   | { kind: "motd"; target: string | null }
   | { kind: "stats"; query: string | null; target: string | null }
-  | { kind: "rehash" }
+  | { kind: "rehash"; opt: string | null }
   | { kind: "whois"; nick: string | null; server: string | null }
   | { kind: "whowas"; nick: string }
   // #356 — keyword highlight list (classic-IRC /hilight + /dehilight,
@@ -510,11 +510,17 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     return { kind: "stats", query: query ?? null, target: target ?? null };
   },
 
-  // #155 — /rehash. No args (oper-only UPSTREAM — a non-oper gets 481, an
-  // oper's config reload runs server-side; cic never client-gates it, same
-  // as /oper letting the ircd reject). Compose ships the bare `REHASH`
-  // frame via pushRaw.
-  rehash: (_verb, _rest) => ({ kind: "rehash" }),
+  // #155 / #375 — /rehash [option]. Oper-only UPSTREAM — a non-oper gets 481,
+  // an oper's config reload runs server-side; cic never client-gates it, same
+  // as /oper letting the ircd reject. #375: the OPTION (MOTD / DNS / GC /
+  // TKLINE / …) must survive parsing — pre-fix it was dropped, so bahamut ran
+  // the default full-config reload instead of the scoped `REHASH <option>`.
+  // First-token-only, mirroring /stats + #374's /motd (REHASH takes one
+  // option upstream); compose builds the raw `REHASH [option]` frame.
+  rehash: (_verb, rest) => {
+    const [opt] = tokens(rest);
+    return { kind: "rehash", opt: opt ?? null };
+  },
 
   // #122 — bare /whois (and its /w alias) no longer errors here. A null
   // nick signals "use the current context": the compose consumer resolves

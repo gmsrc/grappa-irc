@@ -16956,3 +16956,51 @@ invalid_line). Real e2e `issue374-motd-target-server.spec.ts` drives `/motd
 <unknown-server>` and asserts the surfaced 402 modal — a bare MOTD can NEVER
 yield ERR_NOSUCHSERVER, so a surfaced 402 is unforgeable proof the target
 reached the wire.
+
+## 2026-07-25 — `/rehash <option>` forwards the option (GH #375, cic-only)
+
+**Bug — the TWIN of #374, but cicchetto-ONLY.** `/rehash MOTD` (reload only the
+MOTD file) dropped the option and shipped a bare `REHASH`, so bahamut ran the
+DEFAULT full-config reload instead of the scoped `REHASH MOTD`. Same
+silent-arg-drop class as #374, but here grappa needs NO change: `/rehash` rides
+the #153-de-gated raw transport (`compose.ts` → `pushRaw` → `handle_in("raw",…)`
+→ `Session.send_raw`, verbatim); the ircd O:line enforces perms. A forwarded
+option reaches the ircd intact. The arg was discarded ONLY in cic — the slash
+parser (`rehash: (_verb, _rest) => ({kind:"rehash"})`) and `compose.ts` (`case
+"rehash"` hardcoded `pushRaw(networkId, "REHASH")`).
+
+**Fix — mirror the /stats sibling exactly (both added in the same #155 change).**
+Parser (`slashCommands.ts`): `{kind:"rehash"}` → `{kind:"rehash"; opt: string |
+null}`; `rehash: (_verb, rest) => { const [opt] = tokens(rest); return
+{kind:"rehash", opt: opt ?? null}; }` — first-token-only, like /stats + #374's
+/motd (REHASH takes one option upstream; trailing tokens ignored). Compose
+(`compose.ts`): `const line = ["REHASH", cmd.opt].filter((t): t is string => t
+!== null).join(" "); await pushRaw(networkId, line);` — the identical null-filter
+the /stats case a few lines above uses. Bare `/rehash` still ships EXACTLY
+`REHASH` (the null-filter drops the absent option); `/rehash MOTD` →
+`REHASH MOTD`; DNS/GC/TKLINE/… pass through verbatim. Permission (481) and
+unknown-option handling stay UPSTREAM, no client-side gating.
+
+**Type shape: `opt: string | null`, NOT the issue's `opt?: string`.** Same
+consistency call as #374 — the codebase optional-command-arg convention is
+`X: T | null` (`/who`, `/names`, `/list`, `/stats`, `/motd`). The documented
+consistency rule beats the issue's shorthand; the two are semantically identical.
+
+**Never assert the bug.** `slashCommands.test.ts`'s old `it("ignores any trailing
+args (REHASH is param-less)")` ENCODED THE BUG (asserted the dropped arg). It was
+flipped: bare → `opt:null`, `/rehash MOTD` → `opt:"MOTD"`, first-token-only.
+
+**e2e observes the raw OUTBOUND frame, not the reply — because the reply can't
+distinguish the option and opering would crash the testnet.** A non-oper's
+`REHASH` gets the same 481 ERR_NOPRIVILEGES back with OR without an option
+(bahamut's m_rehash checks `!OPCanRehash` BEFORE parsing the option), so the
+reply is scope-agnostic. And we must NOT oper-then-rehash: an OPER'd REHASH
+triggers the real config reload, which SIGSEGVs this testnet bahamut build (#164)
+and poisons the whole suite. So `issue375-rehash-option.spec.ts` captures every
+Phoenix WS `framesent` (`["raw",{network_id,line}]`) and asserts `/rehash MOTD`
+ships `line: "REHASH MOTD"` — the exact bytes grappa forwards verbatim — while
+bare `/rehash` ships exactly `REHASH` (regression guard against a leaked trailing
+space / stringified null). The non-oper 481 rendering in `$server` is kept as a
+belt-and-suspenders witness that the frame genuinely reached upstream. Tests:
+parser (`slashCommands.test.ts`), compose (`compose.test.ts` — bare →
+`pushRaw(1,"REHASH")`, MOTD → `pushRaw(1,"REHASH MOTD")`), e2e (above).
