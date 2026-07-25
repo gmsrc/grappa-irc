@@ -149,8 +149,10 @@ const PerformSettings: Component<{ onBack: () => void }> = (props) => {
           here. Write the wire command itself:{" "}
           <code>PRIVMSG NickServ :IDENTIFY $nickserv_pass</code>,{" "}
           <code>OPER myname $oper_pass</code>, <code>MODE mynick +x</code>. Use{" "}
-          <code>$nickserv_pass</code> and <code>$oper_pass</code> so passwords stay out of the text.
-          Lines starting with <code>#</code> are comments.
+          <code>$nickserv_pass</code> and <code>$oper_pass</code> so passwords stay out of the text.{" "}
+          <code>$nickserv_pass</code> only expands when this network authenticates via NickServ
+          identify — on SASL or server-password networks it resolves to empty. Lines starting with{" "}
+          <code>#</code> are comments.
         </p>
         <Show
           when={(networks() ?? []).length > 0}

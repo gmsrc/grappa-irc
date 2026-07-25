@@ -17735,3 +17735,110 @@ RELEASE_COOKIE) — the naive `${VAR:-}` empty form forwards `""` and crashes
 .env.example. `scripts/_lib.sh` WORKTREE_VOLUMES gained RO mounts for
 compose.yaml + .env.example so the pin verifies GREEN from a worktree
 (same reasoning as batch-1's CLAUDE.md mount).
+---
+
+## 2026-07-25 — On-connect perform list (GH #189, cic + grappa)
+
+A per-network, user-defined list of commands run automatically on every
+(re)connect — the classic IRC "perform" — so a NickServ identify, an `/oper`,
+a `+x` self-mode, or an auto-rejoin don't have to be re-entered by hand after a
+COLD deploy or a drop. #288's Lua/Luerl scripting engine names this static
+command list as its MVP preset; #189 ships exactly that preset and **nothing
+else** — no sandboxing, no control flow, no scripting API. If the design starts
+growing hooks, it goes back to #288.
+
+**It cannot be client-side.** The issue's original Notes proposed cicchetto
+replaying stored commands after it connects to the bouncer. That does not hold:
+the whole point is running commands **before autojoin**, and autojoin is
+server-side, fired off 001 (deferred behind #347's `+r` gate). A client that
+connects to the bouncer cannot order itself ahead of that. So **the server
+executes the perform list, in the connection lifecycle, at 001, before the
+autojoin sequence.** cic owns only the editor panel.
+
+**The built-in NickServ identify MOVED from `AuthFSM` to `Session.Server`.**
+This is the load-bearing structural change. `AuthFSM` runs *inside*
+`Grappa.IRC.Client` — a different process from the one that runs the perform
+list (`Session.Server`) — and used to emit `PRIVMSG NickServ :IDENTIFY` on 001
+via `maybe_nickserv_identify`. With the identify in one process and the perform
+list in another, "perform before identify" could not be ordered, and the
+suppression decision had nowhere to live. Moving the built-in identify into
+`Session.Server`'s single 001 handler (`run_perform_and_identify/1`) makes the
+sequence deterministic: **001 → perform list → built-in identify (gated) →
+#347 `+r` gate → autojoin.** #347's gate keys on `+r` *without caring who
+caused it*, so if the user's own script is what identifies, the gate opens just
+the same and the deferred autojoin proceeds unchanged — no coupling to add.
+
+**`maybe_stage_pending_password/1` was DELETED, not adapted.** That helper
+existed for ONE reason: the `AuthFSM`-emitted identify bypassed
+`Session.Server`'s outbound choke point (`capture_outbound_ns_secret →
+Client.send_raw`), so `NSInterceptor` never saw it and the host had to stage
+the `+r` rendezvous (`pending_auth`) by hand. Now the built-in identify — and
+every perform line — leaves through that same choke point (it is, in effect, a
+batch of internal `/quote` lines), so `NSInterceptor` self-stages `pending_auth`
+uniformly. One code path, not two. `pending_password` stays (the 433
+ghost-recovery path still reads it) and sources both `$nickserv_pass` and the
+built-in identify; it is cleared one-shot after the pass, preserving the old
+re-welcome guard.
+
+**Suppression is STRUCTURAL, never a text scan.** The built-in identify is
+skipped iff the expansion actually *consumed* `$nickserv_pass`
+(`PerformList.expand/2`'s `consumed_nickserv_pass?`), a structural fact known at
+expansion time. The tempting version — grep the list for `ns id` / `identify`
+and skip if found — is a heuristic on free text that misfires on
+`/quote ns id`, a commented-out line, or `/msg NickServ identify …` spelled
+out. `NSInterceptor` already rejected exactly this heuristic; re-introducing it
+here would contradict a decision the parser already makes. A literal password
+pasted instead of the variable means a double identify, and that is **accepted**
+(vjt): grappa can't know the user pasted it, the `+r` gate keys on `+r` not on
+who identified, so a second IDENTIFY confuses nothing downstream.
+
+**The stored line is RAW IRC, verbatim** — the scope-deciding call (vjt). No
+slash-stripping (a leading `/` is not tolerated and not silently removed), no
+#385 alias expansion, no server-side slash interpreter (that is #288). The
+rejected alternative — tolerate a leading slash and strip it — happens to work
+on bahamut only because `NS`/`ID`/`IDENTIFY`/`OPER` are real ircd commands; it
+breaks the moment a client verb doesn't coincide with an ircd verb (`/msg foo
+bar` → `MSG foo bar` → 421), and it teaches a false model. **cic's help text
+for the panel says this plainly** — the honesty has to be in the interface, not
+just this note. `$nickserv_pass` (the NickServ-identify secret) and `$oper_pass`
+(a new sibling field) are the only variables; an unbound variable expands to `""`,
+never the literal token; blank + `#`-comment lines are dropped. `$nickserv_pass`
+binds only when the network's `auth_method` is `:nickserv_identify` (it is sourced
+from `pending_password`, which is nil for `:none`/SASL/server-pass) — a SASL or
+server-password user's stored secret is deliberately NOT routed into a plaintext
+NickServ PRIVMSG under this name (vjt, review finding #4); the cic panel help says
+so plainly, since this is exactly the case where the user trusts the variable and
+it silently does nothing. It expands to `""` there, per the unbound-variable rule.
+
+**Rejected alternative — hard-fail on an unbound `$nickserv_pass`.** CLAUDE.md
+forbids silent-swallow at boundaries, so the null case was WEIGHED, not defaulted
+into. The obvious "loud" design is to raise / refuse the connect when a perform
+line references `$nickserv_pass` on a non-`:nickserv_identify` network. Rejected on
+three grounds. (1) The authoring boundary and the expansion boundary are decoupled
+in time — the list is validated at PUT, but whether `$nickserv_pass` will bind is a
+property of the connection resolved at 001, so a PUT-time reject would have to know
+the future auth method, and a 001-time reject would abort the whole connect
+(perform **and** autojoin) over a single variable — heavier than the problem, and
+it degrades a working bouncer for a documentation gap. (2) The unbound→`""` rule is
+UNIFORM across every variable (`$oper_pass` too); a special-case crash for one name
+is the two-patterns trap the codebase keeps warning against. (3) The place the
+human MUST see the failure (the rule's actual intent) is the AUTHORING UI, not a
+runtime crash — so the honesty is discharged by the cic help text stating the
+binding condition up front. This is a conscious, documented exception to the
+no-silent-swallow default, surfaced at the boundary that can actually explain it.
+
+**Secrets.** The perform list is stored **encrypted at rest** (`EncryptedBinary
+redact: true`, Cloak AES-GCM) — not a plain `:string` column — because a user
+may paste a literal `/oper vjt <pass>` regardless of the variables, so the
+column IS a secret. `$oper_pass` is its sibling encrypted field. Neither is ever
+logged: `run_perform_and_identify/1` logs only a REDACTION (line count + total
+byte size), never the line text — the raw form is not safe either, since a
+literal-pasted password lives in it. The REST surface (`GET/PUT
+/networks/:network_id/perform`, both subjects, riding the existing
+`ResolveNetwork` ownership pipeline + the `networks` nginx allowlist prefix)
+returns the list text (the owner edits it) but keeps `oper_pass` **write-only**:
+the wire shape is `{perform_list, oper_pass_set}` — a boolean for whether the
+secret is set, never the value. cic's editor mirrors the password-field idiom
+(leave-blank-to-keep). There is no live verb: an edit persists and takes effect
+on the next (re)connect (the plan is re-resolved on every `Session.Server`
+(re)start).

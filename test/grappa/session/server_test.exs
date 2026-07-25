@@ -1113,6 +1113,43 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "a LITERAL-password identify line does NOT suppress the built-in identify (structural, not a text scan)" do
+      {server, port} = start_server()
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :nickserv_identify,
+          password: "s3cr3t-identify",
+          autojoin_channels: []
+        })
+
+      # A pasted literal password (no $nickserv_pass variable) does NOT consume
+      # the secret, so suppression — being STRUCTURAL (did the expansion consume
+      # the variable), not a scan of the text for "identify" — does not trigger.
+      # BOTH the user's literal line and grappa's built-in identify fire; the
+      # double identify is accepted (vjt): the #347 +r gate keys on +r, not on
+      # who identified, so a second IDENTIFY confuses nothing downstream.
+      cred_with_perform = put_perform_list(credential, "NS IDENTIFY hunter2")
+      pid = nickserv_plan(user, network, cred_with_perform, 60_000)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          server,
+          &(&1 == "PRIVMSG NickServ :IDENTIFY s3cr3t-identify\r\n"),
+          1_000
+        )
+
+      lines = IRCServer.sent_lines(server)
+      assert "NS IDENTIFY hunter2\r\n" in lines
+      assert "PRIVMSG NickServ :IDENTIFY s3cr3t-identify\r\n" in lines
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "runs the perform list before autojoin (autojoin still gated on +r)" do
       {server, port} = start_server()
 

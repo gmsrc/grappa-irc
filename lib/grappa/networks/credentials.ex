@@ -505,7 +505,7 @@ defmodule Grappa.Networks.Credentials do
   narrow `Credential.perform_changeset/2` (perform_list + oper_pass only,
   both encrypted at rest). Unlike identity, there is NO live verb: the
   perform list is read at 001 by `Grappa.Session.Server` and re-resolved on
-  every (re)start via `SessionPlan.build_plan/4`, so an edit persists only
+  every (re)start via `SessionPlan.base_plan/6`, so an edit persists only
   and takes effect on the next (re)connect. No `:network` preload — the
   perform wire shape carries no network fields. A validation failure
   (NUL / over-cap / CRLF in oper_pass) surfaces as a changeset error; a

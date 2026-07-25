@@ -718,7 +718,7 @@ defmodule Grappa.Networks.Credential do
   @doc """
   GH #189 — returns the post-Cloak-load plaintext on-connect perform list,
   or `nil` when none is configured. Threaded into the connect plan by
-  `Grappa.Networks.SessionPlan.build_plan/4` and expanded at 001 by
+  `Grappa.Networks.SessionPlan.base_plan/6` and expanded at 001 by
   `Grappa.Session.Server`. Same on-disk-name / in-memory-plaintext
   contract as `upstream_password/1`.
   """

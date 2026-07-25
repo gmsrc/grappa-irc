@@ -978,18 +978,22 @@ defmodule Grappa.Session.Server do
     {:ok, state, {:continue, {:start_client, client_opts(opts)}}}
   end
 
-  # `Grappa.IRC.AuthFSM.step/2` already emits the wire `PRIVMSG NickServ
-  # :IDENTIFY <pw>` on `{:numeric, 1}` for `auth_method:
-  # :nickserv_identify` — that emission goes through `IRC.Client`'s
-  # socket and bypasses `handle_call({:send_privmsg, _, _}, _, _)`, so
-  # `NSInterceptor` never sees it. Server therefore must carry the
-  # password forward in state and stage `pending_auth` at 001 itself
-  # so the +r MODE observer (Task 15) finds it ready when NickServ
-  # confirms. Anon visitors (`auth_method: :none`) and SASL/server-pass
-  # users keep `pending_password = nil`.
+  # `pending_password` carries the `:nickserv_identify` upstream secret
+  # forward in `Session.Server` state so the single 001 handler can both
+  # (a) feed the built-in `PRIVMSG NickServ :IDENTIFY <pw>` from
+  # `run_perform_and_identify/1` and (b) expand `$nickserv_pass` in the
+  # perform list. Both leave through the outbound choke point
+  # (`capture_outbound_ns_secret → Client.send_raw`), so `NSInterceptor`
+  # self-stages the +r MODE `pending_auth` rendezvous uniformly — GH #189
+  # moved the built-in identify out of `AuthFSM` and DELETED the host-side
+  # `maybe_stage_pending_password/1` staging helper. It is also read on the
+  # 433 ghost-recovery path (433 precedes 001) and cleared one-shot after
+  # the identify. Anon visitors (`auth_method: :none`) and SASL/server-pass
+  # users keep `pending_password = nil`; an empty-string password is treated
+  # as absent (nothing to identify with, so `$nickserv_pass` stays unbound).
   @spec pending_password_from_opts(init_opts()) :: String.t() | nil
   defp pending_password_from_opts(%{auth_method: :nickserv_identify, password: pw})
-       when is_binary(pw),
+       when is_binary(pw) and pw != "",
        do: pw
 
   defp pending_password_from_opts(_), do: nil

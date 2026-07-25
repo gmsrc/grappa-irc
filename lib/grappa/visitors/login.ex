@@ -62,13 +62,15 @@ defmodule Grappa.Visitors.Login do
              respawn fresh Session.Server, `NetworkCircuit.record_success/1`
              on welcome, mint a fresh Accounts.Session.
 
-         On the respawn path the NickServ `IDENTIFY` is emitted by the
-         AuthFSM at 001 for the `:nickserv_identify` plan — the single
-         IDENTIFY site (see `Grappa.IRC.AuthFSM.maybe_nickserv_identify/1`,
-         staged for the +r MODE observer via
-         `Session.Server.maybe_stage_pending_password/1`). Login does NOT
-         send a second one post-readiness (#27): a duplicate IDENTIFY
-         made NickServ reply with the "identified" NOTICE twice.
+         On the respawn path the built-in NickServ `IDENTIFY` is emitted by
+         `Session.Server.run_perform_and_identify/1` at 001 for the
+         `:nickserv_identify` plan (GH #189 moved it out of `AuthFSM`, ahead
+         of the perform list) — the single IDENTIFY site. It leaves through
+         the outbound choke point (`capture_outbound_ns_secret`), so
+         `NSInterceptor` self-stages the +r MODE rendezvous — no explicit
+         staging helper. Login does NOT send a second one post-readiness
+         (#27): a duplicate IDENTIFY made NickServ reply with the
+         "identified" NOTICE twice.
 
        * **Case 3 — anon (Credential `password_encrypted` nil).** Check
          capacity, then require a valid bearer token that resolves

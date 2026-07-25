@@ -752,6 +752,33 @@ defmodule GrappaWeb.NetworksControllerTest do
       assert body["oper_pass_set"] == false
     end
 
+    test "PUT with only oper_pass keeps the existing perform_list (keep-branch)", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-perfk-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-perfk-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      cred = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      # Seed a list first, then PUT oper_pass ALONE — the changeset omits
+      # perform_list (get_change == nil), so the stored list must survive
+      # while the secret is updated. This is the leave-list-alone keep branch.
+      {:ok, _} = Credentials.update_perform_list(cred, %{perform_list: "MODE vjt-irc +x"})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> put("/networks/#{slug}/perform", %{oper_pass: "s3cr3t"})
+
+      body = json_response(conn, 200)
+      assert body["perform_list"] == "MODE vjt-irc +x"
+      assert body["oper_pass_set"] == true
+
+      {:ok, reloaded} = Credentials.get_credential(vjt, network)
+      assert Credential.perform_list_text(reloaded) == "MODE vjt-irc +x"
+      assert Credential.upstream_oper_pass(reloaded) == "s3cr3t"
+    end
+
     test "PUT with empty strings clears the list + oper_pass", %{conn: conn} do
       vjt = user_fixture(name: "vjt-perfc-#{u()}")
       session = session_fixture(vjt)
