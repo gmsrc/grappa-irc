@@ -43,6 +43,11 @@ defmodule GrappaWeb.UserSettingsJSON do
           selection: [String.t()]
         }
 
+  @typedoc "Wire shape for the aliases envelope (#385 user-defined aliases)."
+  @type aliases_response :: %{
+          aliases: %{String.t() => String.t()}
+        }
+
   @doc "Renders the `:notification_prefs` action — GET/PUT 200 response shape."
   @spec notification_prefs(%{prefs: UserSettings.notification_prefs()}) ::
           notification_prefs_response()
@@ -67,5 +72,11 @@ defmodule GrappaWeb.UserSettingsJSON do
           vhost_response()
   def vhost(%{available: available, selection: selection}) do
     %{available: available, selection: selection}
+  end
+
+  @doc "Renders the `:aliases` action — GET/PUT 200 response shape (#385)."
+  @spec aliases(%{aliases: %{String.t() => String.t()}}) :: aliases_response()
+  def aliases(%{aliases: aliases}) do
+    %{aliases: aliases}
   end
 end

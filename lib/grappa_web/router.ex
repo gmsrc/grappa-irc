@@ -264,6 +264,15 @@ defmodule GrappaWeb.Router do
     get "/me/settings/vhost", UserSettingsController, :show_vhost
     put "/me/settings/vhost", UserSettingsController, :update_vhost
 
+    # #385 — user-defined command aliases. GET returns the subject's
+    # `%{name => expansion}` map; PUT replaces it (body wrapped under an
+    # `aliases` key so an empty map — "clear all" — is distinguishable from
+    # a malformed request). Expansion + builtin-collision precedence are
+    # client-side (cic owns DISPATCH); the server validates only structural
+    # shape. Rides the existing `/me` nginx allowlist (no proxy change).
+    get "/me/settings/aliases", UserSettingsController, :show_aliases
+    put "/me/settings/aliases", UserSettingsController, :update_aliases
+
     # Visitor session-sharing mint — visitor-only (users get 403).
     # Returns a short-TTL Phoenix-signed token + ISO8601 expires_at.
     # The cic SPA wraps the token in a shareable URL; the consume

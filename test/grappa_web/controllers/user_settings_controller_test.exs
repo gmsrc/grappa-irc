@@ -341,4 +341,127 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       assert stored.channel_messages_only == ["#sbiffo"]
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # aliases — #385 user-defined command aliases
+  # ---------------------------------------------------------------------------
+
+  describe "GET /me/settings/aliases — auth gating" do
+    test "401 without bearer", %{conn: conn} do
+      conn = get(conn, "/me/settings/aliases")
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "200 + {} for a visitor subject (visitor-parity)", %{conn: conn} do
+      {_, session} = visitor_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> get("/me/settings/aliases")
+
+      assert json_response(conn, 200) == %{"aliases" => %{}}
+    end
+  end
+
+  describe "GET /me/settings/aliases — happy path" do
+    setup %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id), user: user}
+    end
+
+    test "returns empty map when never persisted", %{conn: conn} do
+      conn = get(conn, "/me/settings/aliases")
+      assert json_response(conn, 200) == %{"aliases" => %{}}
+    end
+
+    test "reflects the most-recent PUT", %{conn: conn, user: user} do
+      {:ok, _} = UserSettings.set_aliases({:user, user.id}, %{"wii" => "whois $1 $1"})
+
+      conn = get(conn, "/me/settings/aliases")
+      assert json_response(conn, 200) == %{"aliases" => %{"wii" => "whois $1 $1"}}
+    end
+  end
+
+  describe "PUT /me/settings/aliases — happy path" do
+    setup %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id), user: user}
+    end
+
+    test "200 + persisted aliases (wrapped body)", %{conn: conn, user: user} do
+      body = %{"aliases" => %{"WII" => "whois $1 $1"}}
+      conn = put(conn, "/me/settings/aliases", body)
+
+      # Server lowercases the name.
+      assert %{"aliases" => returned} = json_response(conn, 200)
+      assert returned == %{"wii" => "whois $1 $1"}
+
+      assert UserSettings.get_aliases({:user, user.id}) == %{"wii" => "whois $1 $1"}
+    end
+
+    test "accepts an empty aliases map (clears all)", %{conn: conn, user: user} do
+      {:ok, _} = UserSettings.set_aliases({:user, user.id}, %{"wii" => "whois $1 $1"})
+
+      conn = put(conn, "/me/settings/aliases", %{"aliases" => %{}})
+      assert json_response(conn, 200) == %{"aliases" => %{}}
+      assert UserSettings.get_aliases({:user, user.id}) == %{}
+    end
+  end
+
+  describe "PUT /me/settings/aliases — validation + bad shape" do
+    setup %{conn: conn} do
+      {_, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id)}
+    end
+
+    test "422 + field_errors.aliases when a name contains whitespace", %{conn: conn} do
+      conn = put(conn, "/me/settings/aliases", %{"aliases" => %{"wi i" => "whois"}})
+
+      assert %{"error" => "validation_failed", "field_errors" => fe} = json_response(conn, 422)
+      assert Map.has_key?(fe, "aliases")
+    end
+
+    test "422 when an expansion is empty", %{conn: conn} do
+      conn = put(conn, "/me/settings/aliases", %{"aliases" => %{"wii" => "   "}})
+      assert %{"error" => "validation_failed"} = json_response(conn, 422)
+    end
+
+    test "400 when the body has no aliases key", %{conn: conn} do
+      conn = put(conn, "/me/settings/aliases", %{"nope" => %{}})
+      assert json_response(conn, 400) == %{"error" => "bad_request"}
+    end
+
+    test "400 when aliases is not a map", %{conn: conn} do
+      conn = put(conn, "/me/settings/aliases", %{"aliases" => ["not", "a", "map"]})
+      assert json_response(conn, 400) == %{"error" => "bad_request"}
+    end
+  end
+
+  describe "PUT /me/settings/aliases — visitor parity + key isolation" do
+    test "200 + persisted for a visitor subject", %{conn: conn} do
+      {visitor, session} = visitor_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/aliases", %{"aliases" => %{"wii" => "whois $1 $1"}})
+
+      assert %{"aliases" => %{"wii" => "whois $1 $1"}} = json_response(conn, 200)
+      assert UserSettings.get_aliases({:visitor, visitor.id}) == %{"wii" => "whois $1 $1"}
+    end
+
+    test "highlight_patterns survives an aliases PUT", %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo", "bar"])
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/aliases", %{"aliases" => %{"wii" => "whois $1 $1"}})
+
+      assert json_response(conn, 200)
+      assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
+    end
+  end
 end

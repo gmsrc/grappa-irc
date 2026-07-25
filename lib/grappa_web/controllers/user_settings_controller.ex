@@ -150,6 +150,40 @@ defmodule GrappaWeb.UserSettingsController do
 
   def update_vhost(_, _), do: {:error, :bad_request}
 
+  @doc """
+  `GET /me/settings/aliases` — return the subject's user-defined command
+  aliases as `{"aliases": {"<name>": "<expansion>", ...}}`. Empty map when
+  the subject has never defined one (#385).
+  """
+  @spec show_aliases(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def show_aliases(conn, _) do
+    subject = Subject.from_assigns(conn.assigns)
+    render(conn, :aliases, aliases: UserSettings.get_aliases(subject))
+  end
+
+  @doc """
+  `PUT /me/settings/aliases` — replace the subject's alias map. Body:
+  `{"aliases": {"<name>": "<expansion>", ...}}`. An empty map clears all
+  aliases (that is why the map is wrapped under an `aliases` key — a bare
+  `{}` body would be indistinguishable from a malformed request).
+
+  Structural validation (name/expansion shape, count cap) lives in
+  `Grappa.UserSettings.set_aliases/2`; 422 + `field_errors.aliases` on
+  rejection. Expansion grammar + builtin-collision precedence are
+  client-side (cic owns the DISPATCH table).
+  """
+  @spec update_aliases(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t()}
+  def update_aliases(conn, %{"aliases" => aliases}) when is_map(aliases) do
+    subject = Subject.from_assigns(conn.assigns)
+
+    with {:ok, _} <- UserSettings.set_aliases(subject, aliases) do
+      render(conn, :aliases, aliases: UserSettings.get_aliases(subject))
+    end
+  end
+
+  def update_aliases(_, _), do: {:error, :bad_request}
+
   # Builds the render assigns for the vhost view — allowed set (each option
   # marked in_pool + granted + a resolved rDNS name), current selection.
   # `granted` reflects a real per-subject grant row, NOT allow-set

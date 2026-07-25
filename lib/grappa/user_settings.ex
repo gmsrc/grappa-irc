@@ -56,6 +56,8 @@ defmodule Grappa.UserSettings do
   |                        |                        | `put_theme_pair/3` (#358)       |
   | `"dark_theme_id"`      | `pos_integer() \\| nil`| `get_dark_theme_id/1`,          |
   |                        |                        | `put_theme_pair/3` (#358)       |
+  | `"aliases"`            | `%{String.t() =>       | `get_aliases/1`,                |
+  |                        | String.t()}`           | `set_aliases/2` (#385)          |
 
   ## Boundary
 
@@ -110,6 +112,18 @@ defmodule Grappa.UserSettings do
   # day (light) slot; `dark_theme_id` is the optional night (dark) slot. A
   # `nil`/absent dark means "same theme both modes" (the #75 single pick).
   @dark_theme_id_key "dark_theme_id"
+  # #385 — user-defined command aliases. A string→string map: alias name
+  # (lowercased verb) → raw expansion template (`whois $1 $1`). Expansion +
+  # builtin-collision precedence are client-side (cic owns DISPATCH); the
+  # server validates only structural shape at this boundary.
+  @aliases_key "aliases"
+
+  # Structural bounds for aliases — a user-writable JSON blob needs a boundary
+  # or it becomes an unbounded storage/DOS vector (same rationale as
+  # @upload_ttl_seconds_max). Generous enough that no real config hits them.
+  @alias_name_max_bytes 32
+  @alias_expansion_max_bytes 512
+  @aliases_max_count 200
 
   # Upper bound for upload_ttl_seconds: one year. Image hosts (litterbox,
   # 0x0.st) cap at days; nobody legitimately wants a year-long TTL token
@@ -581,6 +595,67 @@ defmodule Grappa.UserSettings do
   end
 
   # ---------------------------------------------------------------------------
+  # aliases accessors (#385 user-defined command aliases)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Returns the subject's user-defined command aliases as a
+  `%{name => expansion}` map (both strings).
+
+  Returns `%{}` when no row exists, the `"aliases"` key is absent, or the
+  stored value is malformed (not a map). Non-`string => string` entries are
+  filtered out defensively (a miscoded writer could leave a stray shape after
+  a JSON round-trip). Side-effect-free — does NOT create the row.
+
+  Reads with the string key `"aliases"` (Ecto `:map` decodes JSON with string
+  keys after a DB round-trip).
+  """
+  @spec get_aliases(Subject.t()) :: %{String.t() => String.t()}
+  def get_aliases({_, _} = subject) do
+    case fetch_existing_or_nil(subject) do
+      nil ->
+        %{}
+
+      %Settings{data: data} ->
+        case data[@aliases_key] do
+          %{} = stored -> sanitize_aliases_read(stored)
+          _ -> %{}
+        end
+    end
+  end
+
+  @doc """
+  Replaces the subject's alias map, preserving other keys in `data` (merge
+  semantics, like `put_notification_prefs/2`). An empty map clears all aliases.
+
+  ## Validation (structural — the boundary the server owns)
+
+    * Every key AND value must be a string. Each name is trimmed +
+      lowercased; each expansion trimmed.
+    * A name must be non-empty, contain no whitespace (it is a command verb),
+      and be at most #{@alias_name_max_bytes} bytes.
+    * An expansion must be non-empty and at most #{@alias_expansion_max_bytes}
+      bytes.
+    * At most #{@aliases_max_count} aliases total.
+
+  Expansion grammar (`$1..$9` / `$*` / implicit append), builtin-collision
+  precedence, and recursion depth are enforced client-side (cic owns the
+  DISPATCH table) — NOT here. Errors are added on the synthetic `:aliases`
+  changeset field so they surface as `field_errors.aliases` in the 422
+  envelope.
+  """
+  @spec set_aliases(Subject.t(), %{optional(String.t()) => term()}) ::
+          {:ok, Settings.t()} | {:error, Ecto.Changeset.t()}
+  def set_aliases({_, _} = subject, aliases) when is_map(aliases) do
+    with {:ok, normalized} <- validate_and_normalize_aliases(aliases, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data = Map.put(settings.data, @aliases_key, normalized)
+      cs = Settings.changeset(settings, %{data: merged_data})
+      Repo.update(cs)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
 
@@ -808,5 +883,82 @@ defmodule Grappa.UserSettings do
   @spec stringify_prefs(notification_prefs()) :: %{String.t() => term()}
   defp stringify_prefs(prefs) do
     Map.new(prefs, fn {k, v} -> {Atom.to_string(k), v} end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # aliases helpers (#385)
+  # ---------------------------------------------------------------------------
+
+  # Defensive read: keep only string => string entries. A JSON round-trip
+  # gives string keys; a stray non-string value (miscoded writer) is dropped
+  # rather than surfaced to callers.
+  @spec sanitize_aliases_read(map()) :: %{String.t() => String.t()}
+  defp sanitize_aliases_read(stored) do
+    stored
+    |> Enum.filter(fn {k, v} -> is_binary(k) and is_binary(v) end)
+    |> Map.new()
+  end
+
+  @spec validate_and_normalize_aliases(map(), Subject.t()) ::
+          {:ok, %{String.t() => String.t()}} | {:error, Ecto.Changeset.t()}
+  defp validate_and_normalize_aliases(aliases, subject) do
+    entries = Map.to_list(aliases)
+
+    if length(entries) > @aliases_max_count do
+      {:error, aliases_changeset_error("too many aliases (max #{@aliases_max_count})", subject)}
+    else
+      normalize_alias_entries(entries, subject)
+    end
+  end
+
+  @spec normalize_alias_entries([{term(), term()}], Subject.t()) ::
+          {:ok, %{String.t() => String.t()}} | {:error, Ecto.Changeset.t()}
+  defp normalize_alias_entries(entries, subject),
+    do: normalize_alias_entries(entries, %{}, subject)
+
+  defp normalize_alias_entries([], acc, _subject), do: {:ok, acc}
+
+  defp normalize_alias_entries([{name, expansion} | rest], acc, subject) do
+    case normalize_alias_entry(name, expansion) do
+      {:ok, {n, e}} -> normalize_alias_entries(rest, Map.put(acc, n, e), subject)
+      {:error, reason} -> {:error, aliases_changeset_error(reason, subject)}
+    end
+  end
+
+  @spec normalize_alias_entry(term(), term()) ::
+          {:ok, {String.t(), String.t()}} | {:error, String.t()}
+  defp normalize_alias_entry(name, expansion) when is_binary(name) and is_binary(expansion) do
+    n = name |> String.trim() |> String.downcase()
+    e = String.trim(expansion)
+
+    cond do
+      n == "" ->
+        {:error, "alias name must not be empty"}
+
+      String.match?(n, ~r/\s/u) ->
+        {:error, "alias name must not contain whitespace"}
+
+      byte_size(n) > @alias_name_max_bytes ->
+        {:error, "alias name too long (max #{@alias_name_max_bytes} bytes)"}
+
+      e == "" ->
+        {:error, "alias expansion must not be empty"}
+
+      byte_size(e) > @alias_expansion_max_bytes ->
+        {:error, "alias expansion too long (max #{@alias_expansion_max_bytes} bytes)"}
+
+      true ->
+        {:ok, {n, e}}
+    end
+  end
+
+  defp normalize_alias_entry(_, _), do: {:error, "alias name and expansion must be strings"}
+
+  defp aliases_changeset_error(message, subject) do
+    attrs = Subject.put_subject_id(%{data: %{}}, subject)
+
+    %Settings{}
+    |> Settings.changeset(attrs)
+    |> Ecto.Changeset.add_error(:aliases, message)
   end
 end

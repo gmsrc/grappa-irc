@@ -683,4 +683,131 @@ defmodule Grappa.UserSettingsTest do
       assert :ok = UserSettings.reset_for_user(user.id)
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # aliases accessors (#385 user-defined command aliases)
+  # ---------------------------------------------------------------------------
+
+  describe "get_aliases/1" do
+    test "returns %{} when no settings row exists" do
+      fake_id = Ecto.UUID.generate()
+      assert UserSettings.get_aliases({:user, fake_id}) == %{}
+    end
+
+    test "returns %{} when row exists but no aliases key" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.get_or_init({:user, user.id})
+      assert UserSettings.get_aliases({:user, user.id}) == %{}
+    end
+
+    test "returns %{} when stored value is malformed (list instead of map)" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+      Repo.update!(Settings.changeset(settings, %{data: %{"aliases" => ["not", "a", "map"]}}))
+      assert UserSettings.get_aliases({:user, user.id}) == %{}
+    end
+
+    test "filters non-string entries defensively (string => string only)" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+
+      Repo.update!(
+        Settings.changeset(settings, %{
+          data: %{"aliases" => %{"wii" => "whois $1 $1", "bad" => 42}}
+        })
+      )
+
+      assert UserSettings.get_aliases({:user, user.id}) == %{"wii" => "whois $1 $1"}
+    end
+
+    test "returns the stored map when present" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.set_aliases({:user, user.id}, %{"wii" => "whois $1 $1"})
+      assert UserSettings.get_aliases({:user, user.id}) == %{"wii" => "whois $1 $1"}
+    end
+  end
+
+  describe "set_aliases/2" do
+    test "persists a map and reads back identically" do
+      user = user_fixture()
+
+      aliases = %{"wii" => "whois $1 $1", "j" => "join $*"}
+
+      assert {:ok, %Settings{}} = UserSettings.set_aliases({:user, user.id}, aliases)
+      assert UserSettings.get_aliases({:user, user.id}) == aliases
+    end
+
+    test "lowercases alias names (case-insensitive keys)" do
+      user = user_fixture()
+      assert {:ok, _} = UserSettings.set_aliases({:user, user.id}, %{"WII" => "whois $1 $1"})
+      assert UserSettings.get_aliases({:user, user.id}) == %{"wii" => "whois $1 $1"}
+    end
+
+    test "trims surrounding whitespace from name and expansion" do
+      user = user_fixture()
+      assert {:ok, _} = UserSettings.set_aliases({:user, user.id}, %{"  wii  " => "  whois $1  "})
+      assert UserSettings.get_aliases({:user, user.id}) == %{"wii" => "whois $1"}
+    end
+
+    test "accepts an empty map (clears all aliases)" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.set_aliases({:user, user.id}, %{"wii" => "whois $1 $1"})
+      assert {:ok, _} = UserSettings.set_aliases({:user, user.id}, %{})
+      assert UserSettings.get_aliases({:user, user.id}) == %{}
+    end
+
+    test "rejects an empty alias name" do
+      user = user_fixture()
+      assert {:error, %Ecto.Changeset{}} = UserSettings.set_aliases({:user, user.id}, %{"" => "whois"})
+    end
+
+    test "rejects an alias name containing whitespace" do
+      user = user_fixture()
+
+      assert {:error, %Ecto.Changeset{}} =
+               UserSettings.set_aliases({:user, user.id}, %{"wi i" => "whois"})
+    end
+
+    test "rejects an empty expansion" do
+      user = user_fixture()
+      assert {:error, %Ecto.Changeset{}} = UserSettings.set_aliases({:user, user.id}, %{"wii" => "   "})
+    end
+
+    test "rejects non-string values" do
+      user = user_fixture()
+      assert {:error, %Ecto.Changeset{}} = UserSettings.set_aliases({:user, user.id}, %{"wii" => 42})
+    end
+
+    test "rejects a name longer than 32 bytes" do
+      user = user_fixture()
+      long = String.duplicate("a", 33)
+      assert {:error, %Ecto.Changeset{}} = UserSettings.set_aliases({:user, user.id}, %{long => "whois"})
+    end
+
+    test "rejects an expansion longer than 512 bytes" do
+      user = user_fixture()
+      long = String.duplicate("x", 513)
+      assert {:error, %Ecto.Changeset{}} = UserSettings.set_aliases({:user, user.id}, %{"big" => long})
+    end
+
+    test "rejects more than 200 aliases" do
+      user = user_fixture()
+      too_many = Map.new(1..201, fn n -> {"a#{n}", "whois"} end)
+      assert {:error, %Ecto.Changeset{}} = UserSettings.set_aliases({:user, user.id}, too_many)
+    end
+
+    test "preserves other data keys (highlight_patterns)" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo", "bar"])
+
+      assert {:ok, _} = UserSettings.set_aliases({:user, user.id}, %{"wii" => "whois $1 $1"})
+      assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
+    end
+
+    test "works for visitor subjects (visitor-parity)" do
+      visitor = visitor_fixture()
+      assert {:ok, _} = UserSettings.set_aliases({:visitor, visitor.id}, %{"wii" => "whois $1 $1"})
+      assert UserSettings.get_aliases({:visitor, visitor.id}) == %{"wii" => "whois $1 $1"}
+    end
+  end
 end
