@@ -27,10 +27,20 @@ Grappa.Application
 ├── Grappa.Session.Backoff             (ETS — per-(subject, network) failure counter)
 ├── Grappa.WSPresence                  (per-user WS pid tracking → auto-away signal)
 ├── Grappa.Admission.NetworkCircuit    (T31 ETS-backed per-network circuit breaker)
+├── Grappa.AdminEvents                 (M-11 admin-event ring buffer + telemetry sink)
+├── Grappa.SessionLog                  (#215 IRC session-lifecycle log sink)
+├── Grappa.Visitors.ShareTokens        (ETS one-shot visitor share-link tokens)
+├── Grappa.RateLimit.DailyQuota        (#75 per-(bucket, subject, day) creation quota)
+├── Grappa.RateLimit.FailureWindow     (S6 per-(bucket, key) login-throttle window)
+├── Grappa.RateLimit.TokenBucket       (#340 per-(subject, network) send token bucket)
+├── Grappa.Net.PtrCache                (#252 vhost reverse-DNS (PTR) name cache)
+├── Task.Supervisor                    (name: Grappa.TaskSupervisor — detached tasks)
 ├── DynamicSupervisor                  (name: Grappa.SessionSupervisor)
 │   └── Grappa.Session.Server          (one per (user, network), :transient)
 ├── GrappaWeb.Endpoint                 (Phoenix HTTP + WS)
 ├── Grappa.Visitors.Reaper             (60s sweep of expired visitors; after Endpoint)
+├── Grappa.Uploads.Reaper              (UX-6-B1 upload GC sweep; after Endpoint)
+├── Grappa.Accounts.Reaper             (#223 idle auth-session GC; after Endpoint)
 └── Grappa.Bootstrap                   (reads DB credentials, spawns sessions; LAST)
 ```
 
@@ -435,10 +445,11 @@ not the surrounding code.**
   skip-the-plug shortcuts. Distinct from the loopback `:admin`
   pipeline (which gates `/admin/reload` + `/admin/cic-bundle-changed`
   on `Plugs.LoopbackOnly`); same URL prefix, separate scopes. The
-  nginx allowlist (`infra/nginx.conf` + e2e
-  `cicchetto/e2e/nginx-test.conf`) must list the new resource — both
-  the `:80` and `:443` server blocks — or the route 404s at the proxy
-  before reaching Phoenix.
+  nginx allowlist lives in `infra/snippets/locations-api.conf` — the
+  single source of truth `include`d by every server block of both
+  `infra/nginx.conf` and the e2e `cicchetto/e2e/nginx-test.conf` — and
+  must list the new resource, or the route 404s at the proxy before
+  reaching Phoenix.
 
 ### Charset / wire-format rule
 

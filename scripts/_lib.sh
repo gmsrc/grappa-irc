@@ -114,6 +114,13 @@ if [ "$SRC_ROOT" != "$REPO_ROOT" ]; then
         -v "$SRC_ROOT/.formatter.exs:/app/.formatter.exs:ro"
         -v "$SRC_ROOT/.credo.exs:/app/.credo.exs:ro"
         -v "$SRC_ROOT/.sobelow-conf:/app/.sobelow-conf:ro"
+        # CLAUDE.md is docs-as-authority (#369 theme 8): drift-pin tests
+        # read it (application_supervision_tree_test.exs) to assert the doc
+        # matches reality. Without this override a worktree oneshot reads
+        # MAIN's CLAUDE.md via the base `./:/app` bind, so a fix on the
+        # worktree branch could never verify GREEN until merged. RO —
+        # tests only read it.
+        -v "$SRC_ROOT/CLAUDE.md:/app/CLAUDE.md:ro"
     )
 fi
 
