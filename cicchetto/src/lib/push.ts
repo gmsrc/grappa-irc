@@ -89,6 +89,14 @@ export type PushSubscribeRequest = {
   supersedes?: string;
 };
 
+// #112 — an opaque, server-minted push-subscription id. Branded (nominal
+// typing) so a bare `string` — a nick, a bearer token, an endpoint — can't
+// be passed where a subscription id is expected. The sole producer is the
+// server (`POST` / `GET /push/subscriptions`); the sole consumer is
+// `DELETE /push/subscriptions/:id`. The brand is applied at the two source
+// boundaries only (the raw JSON reply + the localStorage recall).
+export type SubscriptionId = string & { readonly __brand: "SubscriptionId" };
+
 /**
  * POSTs a fresh subscription to the server's registry. The
  * authenticated bearer token is required; both registered users and
@@ -97,7 +105,7 @@ export type PushSubscribeRequest = {
 export async function postPushSubscription(
   token: string,
   body: PushSubscribeRequest,
-): Promise<{ id: string; created_at: string }> {
+): Promise<{ id: SubscriptionId; created_at: string }> {
   const res = await fetch("/push/subscriptions", {
     method: "POST",
     headers: {
@@ -117,7 +125,7 @@ export async function postPushSubscription(
     }
     throw new ApiError(res.status, code, info);
   }
-  return (await res.json()) as { id: string; created_at: string };
+  return (await res.json()) as { id: SubscriptionId; created_at: string };
 }
 
 /**
@@ -125,7 +133,7 @@ export async function postPushSubscription(
  * device "Remove" button and by `disablePush` when the master toggle
  * is flipped off.
  */
-export async function deletePushSubscription(token: string, id: string): Promise<void> {
+export async function deletePushSubscription(token: string, id: SubscriptionId): Promise<void> {
   const res = await fetch(`/push/subscriptions/${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${token}` },
@@ -136,7 +144,7 @@ export async function deletePushSubscription(token: string, id: string): Promise
 }
 
 export type PushDeviceSummary = {
-  id: string;
+  id: SubscriptionId;
   user_agent: string | null;
   created_at: string;
   last_used_at: string | null;
@@ -170,15 +178,16 @@ export async function listPushDevices(token: string): Promise<PushDeviceSummary[
 const SUBSCRIPTION_ID_STORAGE_KEY = "cic.pushSubscriptionId";
 const SUBSCRIPTION_ENDPOINT_STORAGE_KEY = "cic.pushSubscriptionEndpoint";
 
-function rememberSubscription(id: string, endpoint: string): void {
+function rememberSubscription(id: SubscriptionId, endpoint: string): void {
   localStorage.setItem(SUBSCRIPTION_ID_STORAGE_KEY, id);
   localStorage.setItem(SUBSCRIPTION_ENDPOINT_STORAGE_KEY, endpoint);
 }
 
-function recallSubscriptionId(endpoint: string): string | null {
+function recallSubscriptionId(endpoint: string): SubscriptionId | null {
   const storedEndpoint = localStorage.getItem(SUBSCRIPTION_ENDPOINT_STORAGE_KEY);
   if (storedEndpoint !== endpoint) return null;
-  return localStorage.getItem(SUBSCRIPTION_ID_STORAGE_KEY);
+  // localStorage hands back a bare string; brand it at this recall seam.
+  return localStorage.getItem(SUBSCRIPTION_ID_STORAGE_KEY) as SubscriptionId | null;
 }
 
 function forgetSubscription(): void {
@@ -204,7 +213,7 @@ function forgetSubscription(): void {
  *     instruction copy.
  */
 export type EnablePushResult =
-  | { status: "enabled"; subscriptionId: string }
+  | { status: "enabled"; subscriptionId: SubscriptionId }
   | { status: "permission_denied" }
   | { status: "permission_dismissed" }
   | { status: "unsupported"; reason: "no_service_worker" | "no_push_manager" | "no_notification" };
@@ -300,7 +309,7 @@ export async function disablePush(token: string): Promise<boolean> {
     // 410 and the server row is a ghost it keeps 2xx-ing. DELETE it by its
     // stashed id instead of merely forgetting the mapping (the pre-#181 bug
     // that orphaned the row). A missing row is a benign no-op.
-    const orphanId = localStorage.getItem(SUBSCRIPTION_ID_STORAGE_KEY);
+    const orphanId = localStorage.getItem(SUBSCRIPTION_ID_STORAGE_KEY) as SubscriptionId | null;
     if (orphanId !== null) {
       await deletePushSubscription(token, orphanId).catch(() => {
         /* swallowed — an already-gone row is fine */

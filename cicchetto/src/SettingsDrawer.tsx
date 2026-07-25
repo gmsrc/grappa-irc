@@ -25,6 +25,7 @@ import {
   enablePush,
   listPushDevices,
   type PushDeviceSummary,
+  type SubscriptionId,
 } from "./lib/push";
 import { reconnectConnectedNetworks } from "./lib/reconnect";
 import { consumePendingSettingsPage, type SettingsSubPage } from "./lib/settingsNav";
@@ -474,7 +475,7 @@ const SettingsDrawer: Component<Props> = (props) => {
     }
   };
 
-  const removeDevice = async (id: string) => {
+  const removeDevice = async (id: SubscriptionId) => {
     const t = token();
     if (t === null) return;
     try {

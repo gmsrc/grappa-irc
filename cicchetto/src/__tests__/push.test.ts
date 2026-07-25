@@ -7,6 +7,7 @@ import {
   getVapidPublicKey,
   listPushDevices,
   postPushSubscription,
+  type SubscriptionId,
   vapidKeyToUint8Array,
 } from "../lib/push";
 
@@ -307,7 +308,7 @@ describe("deletePushSubscription", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(null, { status: 204 }));
 
-    await deletePushSubscription("token-xyz", "abc-123");
+    await deletePushSubscription("token-xyz", "abc-123" as SubscriptionId);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/push/subscriptions/abc-123",
@@ -323,14 +324,14 @@ describe("deletePushSubscription", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(null, { status: 204 }));
 
-    await deletePushSubscription("token", "with spaces");
+    await deletePushSubscription("token", "with spaces" as SubscriptionId);
 
     expect(fetchMock).toHaveBeenCalledWith("/push/subscriptions/with%20spaces", expect.anything());
   });
 
   it("throws ApiError on 404", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not found", { status: 404 }));
-    await expect(deletePushSubscription("token", "id")).rejects.toThrow(/404/);
+    await expect(deletePushSubscription("token", "id" as SubscriptionId)).rejects.toThrow(/404/);
   });
 });
 
