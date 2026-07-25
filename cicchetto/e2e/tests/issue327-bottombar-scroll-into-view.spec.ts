@@ -77,8 +77,14 @@ test("#327 @webkit — tapping next-active scrolls a far-off-screen unread tab f
     await loginAs(page, vjt);
 
     // Every joined tab is rendered (JOINs settled + channel list fetched).
+    // Budget 20s (was 15s): on webkit-iphone-15 under FULL-suite CI load,
+    // login + WS + the 7-channel-join render legitimately hugs 15s — isolated
+    // --repeat-each runs clock 14.9–15.7s, so a 15s budget flaked ~20% here.
+    // This is a PRECONDITION wait for the initial render, NOT the #327 scroll
+    // behaviour under test (that poll is below, with its own budget), so a
+    // wider budget removes the false red without weakening any assertion.
     const targetTab = sidebarWindow(page, NETWORK_SLUG, TARGET);
-    await expect(targetTab).toBeVisible({ timeout: 15_000 });
+    await expect(targetTab).toBeVisible({ timeout: 20_000 });
 
     // Park on the leftmost window ($server) — outside the unread cycle, and
     // its selection scrolls the strip to the left edge.
