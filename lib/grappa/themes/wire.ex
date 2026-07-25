@@ -65,7 +65,13 @@ defmodule Grappa.Themes.Wire do
           apply_count: integer(),
           in_use: non_neg_integer(),
           mine: boolean(),
-          payload: map(),
+          # The sanitized closed-token map (`Grappa.Themes.TokenModel.token_map()`
+          # — string-keyed: `"colors"` / `"font_family"` / `"background"`). Typed
+          # as an open string-keyed map, NOT a bare `map()`: cic owns the closed
+          # token vocabulary in `themesApi.ts`, so the wire codegen emits
+          # `Record<string, unknown>` (a bare `map()` would trip the
+          # gen_wire_types "defeats codegen" warning for the same output).
+          payload: %{optional(String.t()) => term()},
           inserted_at: String.t()
         }
 

@@ -49,7 +49,7 @@ defmodule Grappa.LiveIntrospection.AdminWire do
         }
 
   @type t :: %{
-          subject_kind: String.t(),
+          subject_kind: :user | :visitor,
           subject_id: String.t(),
           subject_label: String.t() | nil,
           last_seen_at: String.t() | nil,
@@ -61,8 +61,11 @@ defmodule Grappa.LiveIntrospection.AdminWire do
   Render one `SessionEntry` + its resolved `subject_label` +
   optional `last_seen_at` to the admin JSON shape.
 
-  `subject_kind` is the atom-as-string (`"user"` | `"visitor"`);
-  `subject_id` is the inner UUID. `subject_label` is the
+  `subject_kind` is the `:user | :visitor` atom, passed through
+  unchanged — Jason stringifies it to `"user"` / `"visitor"` at the
+  JSON edge (a closed set stays a typed atom union, not an untyped
+  `String.t()`, per CLAUDE.md; mirrors `Grappa.AdminEvents.Wire`'s
+  `subject_kind`). `subject_id` is the inner UUID. `subject_label` is the
   human-readable display name (`user.name` / `visitor.nick`) or
   `nil` when the DB row was missing at composition time.
 
@@ -79,10 +82,11 @@ defmodule Grappa.LiveIntrospection.AdminWire do
   """
   @spec session_to_admin_json(SessionEntry.t(), String.t() | nil, DateTime.t() | nil) :: t()
   def session_to_admin_json(%SessionEntry{subject: {kind, id}} = entry, label, last_seen_at)
-      when (is_binary(label) or is_nil(label)) and
+      when kind in [:user, :visitor] and
+             (is_binary(label) or is_nil(label)) and
              (is_struct(last_seen_at, DateTime) or is_nil(last_seen_at)) do
     %{
-      subject_kind: Atom.to_string(kind),
+      subject_kind: kind,
       subject_id: id,
       subject_label: label,
       last_seen_at: encode_last_seen(last_seen_at),

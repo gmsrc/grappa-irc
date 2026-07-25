@@ -22,13 +22,24 @@ defmodule Grappa.ChannelDirectory.WireTest do
              next_cursor: "C",
              total: 2,
              captured_at: "2026-06-26T10:00:00Z",
-             status: "fresh"
+             status: :fresh
            }
   end
 
   test "nil captured_at stays nil; empty featured set marks nothing" do
     page = %{entries: [], next_cursor: nil, total: 0, captured_at: nil, status: :empty}
-    assert %{captured_at: nil, status: "empty"} = Wire.index_payload(page, MapSet.new())
+    assert %{captured_at: nil, status: :empty} = Wire.index_payload(page, MapSet.new())
+  end
+
+  # S14: the `:fresh | :stale | :empty | :refreshing` status atom is carried
+  # in the term (the typed closed union codegen pins as a literal TS union);
+  # Jason stringifies it to identical wire bytes at the JSON edge.
+  test "status atom passes through in the term; Jason encodes it to the string on the wire" do
+    page = %{entries: [], next_cursor: nil, total: 0, captured_at: nil, status: :refreshing}
+    wire = Wire.index_payload(page, MapSet.new())
+
+    assert wire.status == :refreshing
+    assert Jason.decode!(Jason.encode!(wire))["status"] == "refreshing"
   end
 
   test "featured match folds rfc1459 brackets, not bare downcase (#364)" do

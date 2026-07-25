@@ -621,36 +621,6 @@ defmodule Grappa.Networks do
     end
   end
 
-  @typedoc """
-  PubSub event payload broadcast on every successful (non-idempotent)
-  `connection_state` transition. Topic shape is
-  `Grappa.PubSub.Topic.user(user_name)` — delivered on the user-level
-  channel alongside `channels_changed`, `query_windows_list`,
-  `own_nick_changed`, etc., because the cicchetto user-level WS
-  channel is the only WS channel cic joins for non-channel events
-  (no per-network channel join exists). Network discrimination is
-  carried in the `network_slug:` payload field.
-
-  Subscribers (cicchetto via `userTopic.ts`, future Phase 6 listener)
-  consume this to render the user-visible state badge + the
-  server-messages-window lifecycle line.
-
-  Delivered through `Grappa.PubSub.broadcast_event/2` so cic receives
-  it via the framework fastlane (no manual `Phoenix.PubSub.subscribe`
-  on `GrappaChannel`). The `kind:` discriminator is a string literal
-  matching the cic-side wire-event dispatch contract.
-  """
-  @type connection_state_changed_event :: %{
-          kind: String.t(),
-          user_id: Ecto.UUID.t(),
-          network_id: integer(),
-          network_slug: String.t(),
-          from: Credential.connection_state(),
-          to: Credential.connection_state(),
-          reason: String.t() | nil,
-          at: DateTime.t()
-        }
-
   @doc """
   Transitions a credential to `:connected`. Idempotent if already
   `:connected` (no DB write, no broadcast).

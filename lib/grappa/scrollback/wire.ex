@@ -51,14 +51,15 @@ defmodule Grappa.Scrollback.Wire do
   @typedoc """
   Per-target archive entry — public wire shape returned by
   `GrappaWeb.ArchiveJSON.index/1`. The `:kind` atom (`:channel |
-  :query`) is converted to its string projection at the wire
-  boundary, mirroring the `kind: STRING JSON-wire convention`
-  documented in `Grappa.Session.Wire` — closed atom sets stringify
-  here so cic never observes Elixir-specific values.
+  :query`) passes through UNCHANGED (Jason stringifies at the JSON
+  edge), so the typed contract keeps the closed atom union and
+  `mix grappa.gen_wire_types` pins the literal TS union
+  (`"channel" | "query"`) — same S14 convention as the message
+  `:kind` in `t/0`. See `archive_entry/1`.
   """
   @type archive_wire_entry :: %{
           target: String.t(),
-          kind: String.t(),
+          kind: :channel | :query,
           last_activity: integer(),
           row_count: non_neg_integer()
         }
@@ -93,9 +94,10 @@ defmodule Grappa.Scrollback.Wire do
   `Atom.to_string(m.kind)` boundary: that produced a `String.t()` value
   Dialyzer could not type as a union, defeating the codegen gate — the
   atom-through form is strictly stronger (Dialyzer reads the union AND
-  codegen pins it). `archive_entry/1` keeps its own `Atom.to_string/1`
-  because its `:channel | :query` set is not a `Message.kind()` and has
-  no generated counterpart.
+  codegen pins it). `archive_entry/1` follows the SAME S14 convention:
+  its `:channel | :query` kind passes through unchanged so
+  `archive_wire_entry.kind` codegens as the `"channel" | "query"`
+  literal union rather than a bare `string`.
   """
   @spec to_json(Message.t()) :: t()
   def to_json(%Message{network: %Network{slug: slug}, kind: kind} = m) when kind != nil do
@@ -134,18 +136,20 @@ defmodule Grappa.Scrollback.Wire do
 
   @doc """
   Renders one `Scrollback.archive_entry()` to its public wire shape.
-  Atom-stringifies `:kind` (`:channel | :query` → `"channel" |
-  "query"`) so cic doesn't see Elixir-specific values; same
-  convention as `Session.Wire`. The schema-level keys (atoms) match
-  the rest of the wire surface — `Jason` encodes atom-keyed maps to
-  string-keyed JSON natively.
+  The `:kind` atom (`:channel | :query`) passes through UNCHANGED —
+  Jason stringifies it at the JSON edge (identical bytes to the former
+  `Atom.to_string/1`), so the typed contract keeps the closed union
+  and codegen pins the `"channel" | "query"` literal (S14; see `t/0`'s
+  `:kind`). The schema-level keys (atoms) match the rest of the wire
+  surface — `Jason` encodes atom-keyed maps to string-keyed JSON
+  natively.
   """
   @spec archive_entry(Scrollback.archive_entry()) :: archive_wire_entry()
   def archive_entry(%{target: target, kind: kind, last_activity: last_activity, row_count: row_count})
-      when is_atom(kind) do
+      when kind in [:channel, :query] do
     %{
       target: target,
-      kind: Atom.to_string(kind),
+      kind: kind,
       last_activity: last_activity,
       row_count: row_count
     }

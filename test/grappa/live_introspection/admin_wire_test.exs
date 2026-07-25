@@ -9,7 +9,7 @@ defmodule Grappa.LiveIntrospection.AdminWireTest do
 
   alias Grappa.LiveIntrospection.{AdminWire, SessionEntry}
 
-  test "session_to_admin_json/3 stringifies subject_kind + projects live_state subfields + subject_label" do
+  test "session_to_admin_json/3 passes subject_kind atom through + projects live_state subfields + subject_label" do
     uuid = Ecto.UUID.generate()
 
     entry = %SessionEntry{
@@ -25,7 +25,11 @@ defmodule Grappa.LiveIntrospection.AdminWireTest do
 
     json = AdminWire.session_to_admin_json(entry, "M\\Grappa", nil)
 
-    assert json.subject_kind == "visitor"
+    # subject_kind is the `:user | :visitor` ATOM in the term — the closed
+    # set is typed as an atom union, and Jason stringifies at the JSON edge
+    # (identical wire bytes to the former Atom.to_string/1).
+    assert json.subject_kind == :visitor
+    assert Jason.decode!(Jason.encode!(json))["subject_kind"] == "visitor"
     assert json.subject_id == uuid
     assert json.subject_label == "M\\Grappa"
     assert json.network_id == 42
@@ -54,7 +58,7 @@ defmodule Grappa.LiveIntrospection.AdminWireTest do
 
     json = AdminWire.session_to_admin_json(entry, "vjt", nil)
 
-    assert json.subject_kind == "user"
+    assert json.subject_kind == :user
     assert json.subject_id == uuid
     assert json.subject_label == "vjt"
     assert json.live_state.joined_channels == nil

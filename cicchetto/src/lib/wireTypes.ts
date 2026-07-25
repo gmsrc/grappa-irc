@@ -4,6 +4,8 @@
 
 // === External types (referenced by Wire modules) ===
 
+export type ChannelDirectoryStatus = "fresh" | "stale" | "empty" | "refreshing";
+
 export type IRCAuthFSMAuthMethod = "auto" | "sasl" | "server_pass" | "nickserv_identify" | "none";
 
 export type NetworksCredentialAuthMethod = IRCAuthFSMAuthMethod;
@@ -378,7 +380,7 @@ export type ChannelDirectoryWireIndexPayload = {
   next_cursor: string | null;
   total: number;
   captured_at: string | null;
-  status: string;
+  status: ChannelDirectoryStatus;
 };
 
 // === Grappa.Cic.Wire ===
@@ -546,7 +548,7 @@ export type ScrollbackWireEvent = {
 
 export type ScrollbackWireArchiveWireEntry = {
   target: string;
-  kind: string;
+  kind: "channel" | "query";
   last_activity: number;
   row_count: number;
 };

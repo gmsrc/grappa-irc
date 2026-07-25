@@ -104,7 +104,10 @@ defmodule Grappa.Scrollback.WireTest do
   end
 
   describe "archive_entry/1" do
-    test "stringifies :kind atom and preserves remaining fields under atom keys" do
+    # S14: kind is the `:channel | :query` ATOM in the term (Jason
+    # stringifies at the JSON edge; codegen pins the literal union
+    # `"channel" | "query"`) — same convention as the message `:kind`.
+    test "passes the :kind atom through and preserves remaining fields under atom keys" do
       assert Wire.archive_entry(%{
                target: "#sniffo",
                kind: :channel,
@@ -112,19 +115,34 @@ defmodule Grappa.Scrollback.WireTest do
                row_count: 7
              }) == %{
                target: "#sniffo",
-               kind: "channel",
+               kind: :channel,
                last_activity: 12_345,
                row_count: 7
              }
     end
 
-    test "stringifies :query kind for nick-targeted DM windows" do
+    test "passes the :query kind atom through for nick-targeted DM windows" do
       assert Wire.archive_entry(%{
                target: "vjt-peer",
                kind: :query,
                last_activity: 999,
                row_count: 1
-             }).kind == "query"
+             }).kind == :query
+    end
+
+    # S14: prove the WIRE BYTES are unchanged — Jason stringifies the kind
+    # atom to the same JSON value the former `Atom.to_string/1` emitted, so
+    # no runtime contract change reaches cic.
+    test "Jason encodes the archive kind atom to its string on the wire" do
+      wire =
+        Wire.archive_entry(%{
+          target: "vjt-peer",
+          kind: :query,
+          last_activity: 999,
+          row_count: 1
+        })
+
+      assert Jason.decode!(Jason.encode!(wire))["kind"] == "query"
     end
   end
 
@@ -137,8 +155,8 @@ defmodule Grappa.Scrollback.WireTest do
 
       assert Wire.archive_index(entries) == %{
                archive: [
-                 %{target: "vjt-peer", kind: "query", last_activity: 300, row_count: 1},
-                 %{target: "#a", kind: "channel", last_activity: 100, row_count: 1}
+                 %{target: "vjt-peer", kind: :query, last_activity: 300, row_count: 1},
+                 %{target: "#a", kind: :channel, last_activity: 100, row_count: 1}
                ]
              }
     end
