@@ -73,9 +73,9 @@ defmodule Grappa.Session.Server do
   scrollback row with `sender = state.nick`, broadcasts on the
   per-channel PubSub topic, AND sends the PRIVMSG upstream — atomic
   from the caller's view, single source for the row + wire event.
-  `{:send_join, ch}` / `{:send_part, ch}` are upstream-only
-  (channel-membership tracking lands in Phase 5 alongside JOIN/PART
-  persistence).
+  `{:send_join, [ch, …], key}` (a canonical-folded channel LIST — #382)
+  / `{:send_part, ch}` are upstream-only (channel-membership tracking
+  lands in Phase 5 alongside JOIN/PART persistence).
   """
   use GenServer, restart: :transient
 

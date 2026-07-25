@@ -1296,6 +1296,18 @@ defmodule Grappa.IRC.ClientTest do
       assert {:error, :invalid_line} = Client.send_join(client, ["#a", "#b"], "k\r\nQUIT")
     end
 
+    # #382 review Finding 1: a comma-list whose framed wire line would
+    # exceed the RFC 2812 §2.3 512-byte limit is rejected WHOLE — else
+    # bahamut truncates the line, silently drops the tail channels, and
+    # their :pending windows wedge forever (window_state :pending is not
+    # TTL-swept). Each element is individually valid (≤50 chars); only the
+    # JOINED line overflows.
+    test "send_join/3 list clause rejects an over-512-byte framed line (no truncation)",
+         %{client: client} do
+      channels = for i <- 1..30, do: "#c382-#{String.duplicate("x", 20)}-#{i}"
+      assert {:error, :invalid_line} = Client.send_join(client, channels, nil)
+    end
+
     test "send_part/2 rejects malformed channel (missing #/&/+/!) (irc/S2)", %{client: client} do
       assert {:error, :invalid_line} = Client.send_part(client, "no-hash")
     end

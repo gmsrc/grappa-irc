@@ -17129,6 +17129,18 @@ of casing, consistent with the single-channel path (which already folded).
 supported — a single `key` param applies to the whole multi-join. Documented
 limit; revisit only if a real need appears.
 
+**RFC 512-byte framed-line cap (code-review Finding 1).** `Client.send_join`'s
+list clause builds the frame then rejects WHOLE if `byte_size(frame) > 512`
+(`@rfc_line_limit`, RFC 2812 §2.3). Newly reachable in #382: a comma-list of
+individually-valid channels (each ≤50 chars) can overflow the wire line. Without
+the cap the ircd truncates the line and silently drops the tail channels, whose
+`:pending` windows then wedge forever — `window_state` `:pending` is NOT
+TTL-swept (only `in_flight_joins` / `labels_pending` are), so the greyed rows
+never clear for the process lifetime. Failing WHOLE upholds the same irc/S2
+"no wedged pending window" guarantee the single-channel `valid_channel?` gate
+gives. The single-channel form (≤50-char channel + ≤64-byte key) can never
+overflow, so the cap lives only on the list clause.
+
 **Log honesty.** The two `Session.Server` reject logs keep the registered
 `channel:` metadata key (allowlist is a closed set — no `channels:` added) with
 the list as the value.

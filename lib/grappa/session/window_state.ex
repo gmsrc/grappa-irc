@@ -92,8 +92,9 @@ defmodule Grappa.Session.WindowState do
   @doc """
   Marks `channel` as `:pending`. Called by
   `Session.Server.record_in_flight_join/2` (CP17) when an outbound
-  JOIN is recorded as in-flight — both the `{:send_join, _}` cast
-  path and the 001 RPL_WELCOME autojoin loop converge here.
+  JOIN is recorded as in-flight — the `{:send_join, [ch, …], key}` call
+  (once per channel in the list — #382) and the 001 RPL_WELCOME autojoin
+  loop both converge here.
 
   Does NOT touch `failure_reasons` / `failure_numerics` /
   `kicked_meta`. A retry after a previous `:failed` deliberately

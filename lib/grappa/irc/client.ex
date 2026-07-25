@@ -335,21 +335,29 @@ defmodule Grappa.IRC.Client do
   the wire — no partial JOIN, no wedged `:pending` window. An empty list
   is rejected. A single-element list frames identically to the
   single-channel form.
+
+  The framed line is also bounded to the RFC 2812 §2.3 512-byte limit
+  (#382 review Finding 1): a longer comma-list is rejected WHOLE rather
+  than sent, because the ircd would silently truncate it — dropping the
+  tail channels and stranding their `:pending` windows forever
+  (`window_state` `:pending` is not TTL-swept). Each element on its own
+  is ≤50 chars, so only a multi-element list can overflow; the
+  single-channel form (≤50-char channel + ≤64-byte key) never does.
   """
+  # RFC 2812 §2.3 — a wire line (incl. the trailing CRLF) is at most 512
+  # bytes. The ircd truncates anything longer, so grappa must reject a
+  # multi-target JOIN that would overflow instead of silently losing the
+  # tail channels (see the list clause below, #382 review Finding 1).
+  @rfc_line_limit 512
+
   @spec send_join(pid(), String.t() | [String.t()], String.t() | nil) :: send_result()
   def send_join(client, channels, key) when is_list(channels) do
-    cond do
-      channels == [] or not Enum.all?(channels, &joinable_channel?/1) ->
-        reject_invalid_line(:join)
-
-      key in [nil, ""] ->
-        send_line(client, "JOIN #{Enum.join(channels, ",")}\r\n")
-
-      is_binary(key) and safe_join_key?(key) ->
-        send_line(client, "JOIN #{Enum.join(channels, ",")} #{key}\r\n")
-
-      true ->
-        reject_invalid_line(:join)
+    with true <- channels != [] and Enum.all?(channels, &joinable_channel?/1),
+         {:ok, frame} <- join_frame(channels, key),
+         true <- byte_size(frame) <= @rfc_line_limit do
+      send_line(client, frame)
+    else
+      _ -> reject_invalid_line(:join)
     end
   end
 
@@ -368,6 +376,22 @@ defmodule Grappa.IRC.Client do
       do: send_line(client, "JOIN #{channel} #{key}\r\n"),
       else: reject_invalid_line(:join)
   end
+
+  # Builds the multi-target JOIN wire frame (`:error` on a bad key). A
+  # nil / empty key frames the keyless form; a non-empty key must clear
+  # `safe_join_key?/1` (CR/LF/NUL/whitespace-free) or the whole JOIN is
+  # rejected.
+  @spec join_frame([String.t()], String.t() | nil) :: {:ok, String.t()} | :error
+  defp join_frame(channels, key) when key in [nil, ""],
+    do: {:ok, "JOIN #{Enum.join(channels, ",")}\r\n"}
+
+  defp join_frame(channels, key) when is_binary(key) do
+    if safe_join_key?(key),
+      do: {:ok, "JOIN #{Enum.join(channels, ",")} #{key}\r\n"},
+      else: :error
+  end
+
+  defp join_frame(_, _), do: :error
 
   # Per-channel JOIN/PART shape gate (irc/S2): CRLF/NUL-safe AND an
   # RFC-2812-shaped channel name. Single source shared by the
