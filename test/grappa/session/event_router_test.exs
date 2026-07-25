@@ -3921,6 +3921,148 @@ defmodule Grappa.Session.EventRouterTest do
     end
   end
 
+  # #376 — BANLIST bundle (367 RPL_BANLIST / 368 RPL_ENDOFBANLIST). Mirror
+  # of the WHOWAS shape but keyed by FOLDED channel (#364), not nick:
+  # send_banlist primes banlist_pending[folded_chan]; 367 appends one
+  # {mask, setter, set_ts} entry; 368 emits :banlist_bundle + clears.
+  # setter/set_ts are OPTIONAL (older ircds/solanum may omit).
+  describe "#376 — BANLIST bundle (367 / 368)" do
+    defp banlist_pending_state(channel_display) do
+      base_state(%{
+        banlist_pending: %{
+          Grappa.IRC.Identifier.canonical_channel(channel_display) => %{
+            channel_display: channel_display,
+            entries: []
+          }
+        }
+      })
+    end
+
+    test "367 RPL_BANLIST appends a ban entry to entries list" do
+      state = banlist_pending_state("#test")
+
+      m =
+        msg(
+          {:numeric, 367},
+          ["vjt", "#test", "*!*@banned.host", "op!u@h", "1784572878"],
+          {:server, "irc.test.org"}
+        )
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+
+      assert new_state.banlist_pending["#test"][:entries] == [
+               %{mask: "*!*@banned.host", setter: "op!u@h", set_ts: "1784572878"}
+             ]
+    end
+
+    test "367 with no banlist_pending entry is silently ignored (unsolicited)" do
+      state = base_state(%{banlist_pending: %{}})
+
+      m =
+        msg(
+          {:numeric, 367},
+          ["vjt", "#test", "*!*@x", "op", "1784572878"],
+          {:server, "irc.test.org"}
+        )
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+      assert new_state.banlist_pending == %{}
+    end
+
+    test "367 with missing setter/set_ts (older ircd shape) folds nils" do
+      state = banlist_pending_state("#test")
+
+      m = msg({:numeric, 367}, ["vjt", "#test", "*!*@old.host"], {:server, "irc.test.org"})
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+
+      assert new_state.banlist_pending["#test"][:entries] == [
+               %{mask: "*!*@old.host", setter: nil, set_ts: nil}
+             ]
+    end
+
+    test "multiple 367 entries accumulate REVERSED (head = most recent for O(1) prepend)" do
+      state = banlist_pending_state("#test")
+
+      m1 =
+        msg({:numeric, 367}, ["vjt", "#test", "a!*@1", "op", "111"], {:server, "irc.test.org"})
+
+      m2 =
+        msg({:numeric, 367}, ["vjt", "#test", "b!*@2", "op", "222"], {:server, "irc.test.org"})
+
+      {:cont, s1, []} = EventRouter.route(m1, state)
+      {:cont, s2, []} = EventRouter.route(m2, s1)
+
+      m368 = msg({:numeric, 368}, ["vjt", "#test", "End of Channel Ban List"], {:server, "irc.test.org"})
+      {:cont, _, [{:banlist_bundle, _, accum}]} = EventRouter.route(m368, s2)
+
+      # The EFFECT accum stores entries reversed (head = most recent 367,
+      # O(1) prepend); `Wire.banlist_bundle/3` reverses to restore the wire
+      # order (asserted in wire_test). Here we lock the storage contract.
+      assert Enum.map(accum[:entries], & &1[:mask]) == ["b!*@2", "a!*@1"]
+    end
+
+    test "368 RPL_ENDOFBANLIST emits :banlist_bundle effect + drops entry" do
+      state =
+        base_state(%{
+          banlist_pending: %{
+            "#test" => %{
+              channel_display: "#Test",
+              entries: [%{mask: "*!*@h", setter: "op", set_ts: "1784572878"}]
+            }
+          }
+        })
+
+      m =
+        msg(
+          {:numeric, 368},
+          ["vjt", "#test", "End of Channel Ban List"],
+          {:server, "irc.test.org"}
+        )
+
+      {:cont, new_state, [{:banlist_bundle, channel, accum}]} = EventRouter.route(m, state)
+      # The router carries `channel_display` through VERBATIM (whatever was
+      # primed) — proven here with a mixed-case value so a stray fold in the
+      # router would fail. In production the facade (`Session.send_banlist/3`)
+      # already folded it, so the live `channel_display` is the canonical
+      # spelling (#364) — see the server.ex :send_banlist comment.
+      assert channel == "#Test"
+      assert length(accum[:entries]) == 1
+      assert new_state.banlist_pending == %{}
+    end
+
+    test "368 with no pending entry is silently ignored (unsolicited terminator)" do
+      state = base_state(%{banlist_pending: %{}})
+
+      m =
+        msg(
+          {:numeric, 368},
+          ["vjt", "#test", "End of Channel Ban List"],
+          {:server, "irc.test.org"}
+        )
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+      assert new_state.banlist_pending == %{}
+    end
+
+    test "367/368 channel lookup folds rfc1459 (#364) — primed #chan, wire #CHAN" do
+      state = banlist_pending_state("#chan")
+
+      m367 =
+        msg({:numeric, 367}, ["vjt", "#CHAN", "*!*@h", "op", "111"], {:server, "irc.test.org"})
+
+      {:cont, s1, []} = EventRouter.route(m367, state)
+      assert length(s1.banlist_pending["#chan"][:entries]) == 1
+
+      m368 =
+        msg({:numeric, 368}, ["vjt", "#CHAN", "End"], {:server, "irc.test.org"})
+
+      {:cont, s2, [{:banlist_bundle, _, accum}]} = EventRouter.route(m368, s1)
+      assert length(accum[:entries]) == 1
+      assert s2.banlist_pending == %{}
+    end
+  end
+
   # #169 — /who returns a typed modal, mirroring /names. 352 RPL_WHOREPLY
   # rows fold into state.who_pending[channel_lower].replies (each also
   # upserting userhost_cache); 315 RPL_ENDOFWHO drains the entry into ONE

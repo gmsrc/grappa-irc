@@ -7291,6 +7291,57 @@ defmodule Grappa.Session.ServerTest do
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
+
+    test "#376 /banlist primes pending and 367+368 burst flushes :banlist_bundle on Topic.user/1",
+         %{
+           server: server,
+           user: user,
+           network: network,
+           pid: pid
+         } do
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      # Operator issues /banlist #test — primes banlist_pending["#test"].
+      assert :ok = Grappa.Session.send_banlist({:user, user.id}, network.id, "#test")
+
+      # Bahamut emits the ban list: 367 rows then 368 terminator.
+      IRCServer.feed(
+        server,
+        ":irc.test.org 367 grappa-test #test *!*@banned.host op!u@h 1784572878\r\n"
+      )
+
+      IRCServer.feed(
+        server,
+        ":irc.test.org 367 grappa-test #test evil!*@spam.net mod!u@h 1784564620\r\n"
+      )
+
+      IRCServer.feed(
+        server,
+        ":irc.test.org 368 grappa-test #test :End of Channel Ban List\r\n"
+      )
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :banlist_bundle} = ev
+                     },
+                     1_500
+
+      assert ev.network == network.slug
+      assert ev.channel == "#test"
+      assert length(ev.entries) == 2
+
+      # Wire order preserved; first ban carries mask/setter/set_ts (NOT a
+      # bare set-ts — the #376 leak is gone).
+      assert Enum.at(ev.entries, 0) == %{
+               mask: "*!*@banned.host",
+               setter: "op!u@h",
+               set_ts: "1784572878"
+             }
+
+      assert Enum.at(ev.entries, 1)[:mask] == "evil!*@spam.net"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
   end
 
   # ---------------------------------------------------------------------------

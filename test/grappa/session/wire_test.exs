@@ -838,6 +838,53 @@ defmodule Grappa.Session.WireTest do
     end
   end
 
+  # #376 — BANLIST bundle. Unlike whowas (projects only the most-recent
+  # entry) the banlist ships ALL entries — a channel's ban list is a set
+  # of rows. EventRouter stores entries reversed (O(1) prepend); the wire
+  # builder restores wire order.
+  describe "banlist_bundle/3" do
+    test "ships all entries in wire order with mask/setter/set_ts" do
+      # EventRouter prepends (head = most recent 367); wire builder reverses.
+      accum = %{
+        channel_display: "#Test",
+        entries: [
+          %{mask: "b!*@2", setter: "op2", set_ts: "222"},
+          %{mask: "a!*@1", setter: "op1", set_ts: "111"}
+        ]
+      }
+
+      payload = Wire.banlist_bundle("azzurra", "#Test", accum)
+
+      assert payload == %{
+               kind: :banlist_bundle,
+               network: "azzurra",
+               channel: "#Test",
+               entries: [
+                 %{mask: "a!*@1", setter: "op1", set_ts: "111"},
+                 %{mask: "b!*@2", setter: "op2", set_ts: "222"}
+               ]
+             }
+    end
+
+    test "empty entries → empty list (channel with no bans)" do
+      payload = Wire.banlist_bundle("net", "#empty", %{channel_display: "#empty", entries: []})
+
+      assert payload == %{
+               kind: :banlist_bundle,
+               network: "net",
+               channel: "#empty",
+               entries: []
+             }
+    end
+
+    test "entry with nil setter/set_ts (older ircd) round-trips nils" do
+      accum = %{channel_display: "#c", entries: [%{mask: "*!*@h", setter: nil, set_ts: nil}]}
+      payload = Wire.banlist_bundle("net", "#c", accum)
+
+      assert payload.entries == [%{mask: "*!*@h", setter: nil, set_ts: nil}]
+    end
+  end
+
   describe "kind: discriminator atom contract" do
     test "every Wire fn output carries kind: as an atom literal (Jason serializes to string at wire boundary)" do
       payloads = [
@@ -858,6 +905,7 @@ defmodule Grappa.Session.WireTest do
         Wire.lusers_bundle("net", %{}),
         Wire.whowas_bundle("net", "alice", %{}),
         Wire.whowas_bundle("net", "ghost", %{not_found: true}),
+        Wire.banlist_bundle("net", "#c", %{channel_display: "#c", entries: []}),
         Wire.connection_progress("net", :connecting),
         Wire.connection_progress("net", :connected)
       ]

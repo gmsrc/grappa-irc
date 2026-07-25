@@ -615,6 +615,7 @@ export type SessionWireWireEventKind =
   | "invite_ack"
   | "lusers_bundle"
   | "whowas_bundle"
+  | "banlist_bundle"
   | "directory_progress"
   | "directory_complete"
   | "directory_failed"
@@ -903,6 +904,19 @@ export type SessionWireWhowasBundlePayload = {
   not_found: boolean;
 };
 
+export type SessionWireBanlistEntry = {
+  mask: string;
+  setter: string | null;
+  set_ts: string | null;
+};
+
+export type SessionWireBanlistBundlePayload = {
+  kind: "banlist_bundle";
+  network: string;
+  channel: string;
+  entries: SessionWireBanlistEntry[];
+};
+
 export type SessionWireDirectoryProgressPayload = {
   kind: "directory_progress";
   network: string;
@@ -955,6 +969,7 @@ export type WireSessionEvent =
   | SessionWireInviteAckPayload
   | SessionWireLusersBundlePayload
   | SessionWireWhowasBundlePayload
+  | SessionWireBanlistBundlePayload
   | SessionWireDirectoryProgressPayload
   | SessionWireDirectoryCompletePayload
   | SessionWireDirectoryFailedPayload

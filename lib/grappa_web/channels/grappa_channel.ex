@@ -574,9 +574,13 @@ defmodule GrappaWeb.GrappaChannel do
   # /banlist  →  MODE #chan b (query form, no sign)
   #
   # CP24 bucket B reviewer add-on: read-only verb — visitors are
-  # entitled to issue it. The 367/368 numerics broadcast on the
-  # subject's own subject_label topic (mirror of WHOIS post-C3),
-  # so the visitor's cic surface is the only consumer.
+  # entitled to issue it. #376 wired the real handler: EventRouter
+  # accumulates the 367 RPL_BANLIST rows keyed by folded channel and
+  # 368 RPL_ENDOFBANLIST emits a `banlist_bundle` broadcast on the
+  # subject's own subject_label topic (mirror of WHOWAS), which cic's
+  # `banlistCard.ts` renders as a BanlistCard. Pre-#376 this comment
+  # described that design but no such clause existed — 367/368 leaked
+  # the bare set-timestamp as a `$server` :notice row.
   def handle_in(
         "banlist",
         %{"network_id" => network_id, "channel" => channel},

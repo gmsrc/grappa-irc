@@ -2,6 +2,7 @@ import type { Channel } from "phoenix";
 import { createEffect, createRoot, untrack } from "solid-js";
 import {
   assertNever,
+  type BanlistEntry,
   type ConnectionState,
   type MentionsBundleMessage,
   type NotifyEntry,
@@ -12,6 +13,7 @@ import {
 import { loadArchive } from "./archive";
 import { socketUserName, token } from "./auth";
 import { setAwayState } from "./awayStatus";
+import { setBanlistBundle } from "./banlistCard";
 import { setServerBundleHash, setServerBundleVersion } from "./bundleHash";
 import { onDirectoryComplete, onDirectoryFailed, onDirectoryProgress } from "./channelDirectory";
 import { channelKey } from "./channelKey";
@@ -170,6 +172,27 @@ function narrowWhoisExtraLine(raw: unknown): WhoisExtraLine | null {
   const r = raw as Record<string, unknown>;
   if (typeof r.numeric !== "number" || typeof r.text !== "string") return null;
   return { numeric: r.numeric, text: r.text };
+}
+
+// #376 — per-element narrower for the BANLIST `entries` array. Mirror of
+// `Grappa.Session.Wire.banlist_entry/0` — `{mask, setter, set_ts}`. `mask`
+// is required; `setter`/`set_ts` are nullable (older ircds omit them). A
+// malformed element drops the WHOLE bundle (strict, matching
+// narrowWhoisExtraLine) so a bad wire element can't crash the card.
+function narrowBanlistEntry(raw: unknown): BanlistEntry | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.mask !== "string" ||
+    (r.setter !== null && typeof r.setter !== "string") ||
+    (r.set_ts !== null && typeof r.set_ts !== "string")
+  )
+    return null;
+  return {
+    mask: r.mask,
+    setter: r.setter as string | null,
+    set_ts: r.set_ts as string | null,
+  };
 }
 
 // S43 — per-entry narrower for `query_windows_list`. Mirror of
@@ -719,6 +742,30 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         logoff_time: r.logoff_time as string | null,
         not_found: r.not_found,
       };
+    case "banlist_bundle": {
+      // #376 — BANLIST bundle. All entries ship (a ban list is a set of
+      // rows). cic owns the rendering (single card per network,
+      // last-write-wins per /banlist). Each element is narrowed against
+      // the wire shape; ANY malformed element drops the whole bundle.
+      if (
+        typeof r.network !== "string" ||
+        typeof r.channel !== "string" ||
+        !Array.isArray(r.entries)
+      )
+        return null;
+      const entries: BanlistEntry[] = [];
+      for (const raw of r.entries) {
+        const entry = narrowBanlistEntry(raw);
+        if (entry === null) return null;
+        entries.push(entry);
+      }
+      return {
+        kind: "banlist_bundle",
+        network: r.network,
+        channel: r.channel,
+        entries,
+      };
+    }
     case "joined":
     case "join_failed":
     case "kicked":
@@ -1128,6 +1175,16 @@ createRoot(() => {
           // "no history" surface from the boolean.
           const { kind: _omit, ...bundle } = payload;
           setWhowasBundle(payload.network, bundle);
+          return;
+        }
+
+        case "banlist_bundle": {
+          // #376 — BANLIST bundle. Last-write-wins per-network. Renders
+          // inline above the active window scrollback (mirrors WhoisCard/
+          // WhowasCard). No focus change: operator typed /banlist from the
+          // window they're looking at; the card renders there.
+          const { kind: _omit, ...bundle } = payload;
+          setBanlistBundle(payload.network, bundle);
           return;
         }
 

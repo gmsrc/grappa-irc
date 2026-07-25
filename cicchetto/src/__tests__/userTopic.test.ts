@@ -97,6 +97,10 @@ vi.mock("../lib/whowasCard", () => ({
   setWhowasBundle: vi.fn(),
 }));
 
+vi.mock("../lib/banlistCard", () => ({
+  setBanlistBundle: vi.fn(),
+}));
+
 vi.mock("../lib/inviteAck", () => ({
   appendInviteAck: vi.fn(),
 }));
@@ -1061,6 +1065,95 @@ describe("userTopic", () => {
         not_found: false,
       });
       expect(wc.setWhowasBundle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("banlist_bundle arm (#376)", () => {
+    it("calls setBanlistBundle with the bundle (kind stripped) on success path", async () => {
+      const bc = await import("../lib/banlistCard");
+      channelMock.fireEvent({
+        kind: "banlist_bundle",
+        network: "azzurra",
+        channel: "#test",
+        entries: [
+          { mask: "*!*@banned.host", setter: "op!u@h", set_ts: "1784572878" },
+          { mask: "evil!*@spam.net", setter: "mod!u@h", set_ts: "1784564620" },
+        ],
+      });
+      expect(bc.setBanlistBundle).toHaveBeenCalledWith("azzurra", {
+        network: "azzurra",
+        channel: "#test",
+        entries: [
+          { mask: "*!*@banned.host", setter: "op!u@h", set_ts: "1784572878" },
+          { mask: "evil!*@spam.net", setter: "mod!u@h", set_ts: "1784564620" },
+        ],
+      });
+    });
+
+    it("accepts empty entries (channel with no bans)", async () => {
+      const bc = await import("../lib/banlistCard");
+      channelMock.fireEvent({
+        kind: "banlist_bundle",
+        network: "azzurra",
+        channel: "#empty",
+        entries: [],
+      });
+      expect(bc.setBanlistBundle).toHaveBeenCalledWith(
+        "azzurra",
+        expect.objectContaining({ channel: "#empty", entries: [] }),
+      );
+    });
+
+    it("accepts an entry with nil setter/set_ts (older ircd shape)", async () => {
+      const bc = await import("../lib/banlistCard");
+      channelMock.fireEvent({
+        kind: "banlist_bundle",
+        network: "azzurra",
+        channel: "#old",
+        entries: [{ mask: "*!*@old.host", setter: null, set_ts: null }],
+      });
+      expect(bc.setBanlistBundle).toHaveBeenCalledWith(
+        "azzurra",
+        expect.objectContaining({
+          entries: [{ mask: "*!*@old.host", setter: null, set_ts: null }],
+        }),
+      );
+    });
+
+    it("drops payload with non-array entries (type mismatch)", async () => {
+      const bc = await import("../lib/banlistCard");
+      channelMock.fireEvent({
+        kind: "banlist_bundle",
+        network: "azzurra",
+        channel: "#test",
+        entries: "nope",
+      });
+      expect(bc.setBanlistBundle).not.toHaveBeenCalled();
+    });
+
+    it("drops the whole bundle when ANY entry element is malformed (missing mask)", async () => {
+      const bc = await import("../lib/banlistCard");
+      channelMock.fireEvent({
+        kind: "banlist_bundle",
+        network: "azzurra",
+        channel: "#test",
+        entries: [
+          { mask: "*!*@ok.host", setter: "op", set_ts: "111" },
+          { setter: "op", set_ts: "222" },
+        ],
+      });
+      expect(bc.setBanlistBundle).not.toHaveBeenCalled();
+    });
+
+    it("drops payload with non-string channel", async () => {
+      const bc = await import("../lib/banlistCard");
+      channelMock.fireEvent({
+        kind: "banlist_bundle",
+        network: "azzurra",
+        channel: 42,
+        entries: [],
+      });
+      expect(bc.setBanlistBundle).not.toHaveBeenCalled();
     });
   });
 

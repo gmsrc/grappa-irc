@@ -90,6 +90,7 @@ defmodule Grappa.Session.Wire do
           | :invite_ack
           | :lusers_bundle
           | :whowas_bundle
+          | :banlist_bundle
           | :directory_progress
           | :directory_complete
           | :directory_failed
@@ -582,6 +583,37 @@ defmodule Grappa.Session.Wire do
           server: String.t() | nil,
           logoff_time: String.t() | nil,
           not_found: boolean()
+        }
+
+  @typedoc """
+  #376 — one ban entry from a 367 RPL_BANLIST row. `mask` is the ban
+  target (`nick!user@host` or `*!*@host`); `setter` is the nick/mask that
+  set it; `set_ts` is the RAW upstream unix-epoch string (shipped verbatim,
+  cic formats it to the viewer's locale per
+  `feedback_no_localized_strings_server_side`). `setter`/`set_ts` are nil
+  when the upstream omits them (older ircds / solanum send only the mask).
+  """
+  @type banlist_entry :: %{
+          mask: String.t(),
+          setter: String.t() | nil,
+          set_ts: String.t() | nil
+        }
+
+  @typedoc """
+  #376 — BANLIST bundle. Aggregated reply to operator-issued `/banlist`
+  (or a raw `MODE #chan b`). Unlike `whowas_bundle` (which projects only
+  the most-recent historical entry into flat fields) the banlist ships
+  ALL `entries` — a channel's ban list is a set of rows. `entries` are in
+  the wire order the ircd sent them. `channel` is the rfc1459-folded
+  channel (#364) — the card renders it as the surface header. cic owns the
+  human-readable rendering (mask · set-by · set-time); the server never
+  emits a bare set-timestamp (the #376 leak).
+  """
+  @type banlist_bundle_payload :: %{
+          kind: :banlist_bundle,
+          network: String.t(),
+          channel: String.t(),
+          entries: [banlist_entry()]
         }
 
   @typedoc """
@@ -1278,6 +1310,42 @@ defmodule Grappa.Session.Wire do
       server: Map.get(last_entry, :server),
       logoff_time: Map.get(last_entry, :logoff_time),
       not_found: not_found
+    }
+  end
+
+  @doc """
+  #376 — BANLIST bundle. Broadcast on `Topic.user/1` (mirrors
+  `whowas_bundle/3` — single-surface ephemeral data). cic dispatches in
+  `userTopic.ts`'s `banlist_bundle` arm into the per-network
+  `banlistCard.ts` store (last-write-wins replacement).
+
+  Unlike whowas, ALL `entries` are shipped (a ban list is a set of rows).
+  EventRouter stores entries REVERSED (head = most recent 367, for an O(1)
+  prepend); this restores the wire order via `Enum.reverse/1`. Each entry
+  is normalised to the `banlist_entry/0` wire shape so a missing
+  `setter`/`set_ts` (older ircds) ships as nil. NOT persisted — operator
+  types /banlist to refresh.
+  """
+  @spec banlist_bundle(String.t(), String.t(), map()) :: banlist_bundle_payload()
+  def banlist_bundle(network_slug, channel, accum)
+      when is_binary(network_slug) and is_binary(channel) and is_map(accum) do
+    entries =
+      accum
+      |> Map.get(:entries, [])
+      |> Enum.reverse()
+      |> Enum.map(fn e ->
+        %{
+          mask: Map.get(e, :mask),
+          setter: Map.get(e, :setter),
+          set_ts: Map.get(e, :set_ts)
+        }
+      end)
+
+    %{
+      kind: :banlist_bundle,
+      network: network_slug,
+      channel: channel,
+      entries: entries
     }
   end
 

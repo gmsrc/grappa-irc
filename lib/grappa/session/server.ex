@@ -681,6 +681,14 @@ defmodule Grappa.Session.Server do
           # (typically 0-1 at a time) AND the S10 lazy @pending_ttl_ms sweep
           # (withheld 369/406 can't strand the entry). NOT persisted.
           whowas_pending: %{String.t() => map()},
+          # #376 — pending BANLIST accumulators keyed by FOLDED channel
+          # (#364), not nick. Set up on `:send_banlist`; 367 RPL_BANLIST
+          # appends a `%{mask, setter, set_ts}` entry to `entries`; 368
+          # RPL_ENDOFBANLIST emits `{:banlist_bundle, channel_display,
+          # accum}` and clears the entry. Bounded by in-flight /banlist
+          # commands AND the S10 lazy @pending_ttl_ms sweep (a withheld 368
+          # can't strand the entry). NOT persisted across crashes.
+          banlist_pending: %{String.t() => map()},
           # Channel directory (#84) refresh tunables — config-derived at
           # boot (`config :grappa, Grappa.ChannelDirectory`), opts-overridable
           # in `do_init/1` so tests can pin them. Read by later tasks: the
@@ -914,6 +922,11 @@ defmodule Grappa.Session.Server do
       # emits a not_found bundle. Bounded by in-flight /whowas commands
       # (typically 0-1 at a time). NOT persisted across crashes.
       whowas_pending: %{},
+      # #376 — pending BANLIST accumulators keyed by folded channel (#364).
+      # Set up on `:send_banlist`; 367 appends entries; 368 emits
+      # :banlist_bundle and clears. Bounded by in-flight /banlist commands.
+      # NOT persisted across crashes.
+      banlist_pending: %{},
       # Channel directory (#84) refresh tunables — config default
       # (`@directory_*` from `config :grappa, Grappa.ChannelDirectory`),
       # opts-overridable so tests can pin a short timeout / small batch.
@@ -1457,9 +1470,27 @@ defmodule Grappa.Session.Server do
     {:reply, {:error, :already_refreshing}, state}
   end
 
-  # Banlist query form — no sign, just the mode letter.
+  # #376 — /banlist <#chan>. Mirror of :send_whowas shape but keyed by
+  # channel, not nick. Two effects: (1) prime the accumulator in
+  # state.banlist_pending so EventRouter folds 367 RPL_BANLIST rows into
+  # it (368 RPL_ENDOFBANLIST drains it as :banlist_bundle); (2) emit
+  # `MODE #chan b\r\n`. NOTE the channel arriving here is ALREADY
+  # rfc1459-folded by the facade (`Session.send_banlist/3`, mirroring the
+  # WHO/NAMES sibling verbs) — so `channel_display` is the FOLDED channel,
+  # NOT the user-typed casing (the card header shows the canonical
+  # spelling, per #364; unlike WHOWAS, which is nick-keyed and preserves
+  # display case). Re-folding for `chan_key` here is idempotent and keeps
+  # the key-derivation local so 367/368 rows drain the accumulator
+  # regardless of upstream casing. On send_line failure the accumulator
+  # stays primed — harmless until the next /banlist replaces the entry.
   def handle_call({:send_banlist, channel}, _, state) when is_binary(channel) do
-    {:reply, Client.send_banlist(state.client, channel), state}
+    chan_key = Identifier.canonical_channel(channel)
+
+    next_pending =
+      prime_pending(state.banlist_pending, chan_key, %{channel_display: channel, entries: []})
+
+    next_state = %{state | banlist_pending: next_pending}
+    {:reply, Client.send_banlist(state.client, channel), next_state}
   end
 
   # C2 — /whois <nick>. Two effects: (1) prime the accumulator entry in
@@ -3837,6 +3868,21 @@ defmodule Grappa.Session.Server do
       Grappa.PubSub.broadcast_event(
         Topic.user(state.subject_label),
         SessionWire.whowas_bundle(state.network_slug, target, accum)
+      )
+
+    apply_effects(rest, state)
+  end
+
+  # #376 — BANLIST bundle ephemeral. Broadcast on the user-level topic
+  # (mirrors :whowas_bundle — the wire payload carries its own `network` +
+  # `channel` fields). cic dispatches in `userTopic.ts`'s `banlist_bundle`
+  # arm into the per-network `banlistCard.ts` store (last-write-wins per
+  # network). NOT persisted — operator types /banlist to refresh.
+  defp apply_effects([{:banlist_bundle, channel, accum} | rest], state) do
+    :ok =
+      Grappa.PubSub.broadcast_event(
+        Topic.user(state.subject_label),
+        SessionWire.banlist_bundle(state.network_slug, channel, accum)
       )
 
     apply_effects(rest, state)

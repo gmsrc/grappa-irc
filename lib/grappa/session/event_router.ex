@@ -191,6 +191,7 @@ defmodule Grappa.Session.EventRouter do
           | {:invited, channel :: String.t()}
           | {:lusers_bundle, accum :: map()}
           | {:whowas_bundle, target :: String.t(), accum :: map()}
+          | {:banlist_bundle, channel :: String.t(), accum :: map()}
           | {:umode_changed, modes :: [String.t()]}
           | {:supported_umodes_changed, modes :: [String.t()]}
           | {:session_identity_changed, :acquired | :lost}
@@ -285,9 +286,11 @@ defmodule Grappa.Session.EventRouter do
   # Numerics where channel is at param 1 (after the own-nick echo).
   # 332 RPL_TOPIC / 333 RPL_TOPICWHOTIME / 331 RPL_NOTOPIC / 329
   # RPL_CREATIONTIME / 324 RPL_CHANNELMODEIS / 366 RPL_ENDOFNAMES /
-  # 352 RPL_WHOREPLY / join-failure 403/405/471/473/474/475/476/477.
+  # 352 RPL_WHOREPLY / join-failure 403/405/471/473/474/475/476/477 /
+  # #376 BANLIST 367 RPL_BANLIST + 368 RPL_ENDOFBANLIST (fold the
+  # channel key so the bundle keys/broadcasts on one window — #364).
   defp do_canonicalize_params({:numeric, n}, [own_nick, ch | rest])
-       when n in [332, 333, 331, 329, 324, 366, 352, 403, 405, 471, 473, 474, 475, 476, 477] and
+       when n in [332, 333, 331, 329, 324, 366, 352, 367, 368, 403, 405, 471, 473, 474, 475, 476, 477] and
               is_binary(ch) do
     [own_nick, Identifier.canonical_channel(ch) | rest]
   end
@@ -1930,6 +1933,55 @@ defmodule Grappa.Session.EventRouter do
     end
   end
 
+  # #376 — BANLIST bundle (367 / 368). Bahamut emits one 367 RPL_BANLIST
+  # row per ban entry, terminated by 368 RPL_ENDOFBANLIST. Mirror of the
+  # WHOWAS shape but keyed by FOLDED channel (#364 channel pattern), not
+  # nick:
+  #   * `:send_banlist` primes `state.banlist_pending[folded_chan] =
+  #     %{channel_display, entries: []}` (Server.handle_call).
+  #   * 367 appends one `%{mask, setter, set_ts}` entry.
+  #   * 368 emits `{:banlist_bundle, channel_display, accum}` and clears
+  #     the pending entry.
+  # The channel key is already folded by `canonicalize_channel_params/1`
+  # (route/2 runs it before do_route); `normalize_channel/1` here keeps the
+  # key-derivation explicit + idempotent, matching the prime site.
+
+  # 367 RPL_BANLIST: `:server 367 own_nick #chan <mask> [setter] [set_ts]`.
+  # setter/set_ts are OPTIONAL — older ircds / solanum may send only the
+  # mask (see reference_solanum_vs_bahamut_shapes). Append a new entry.
+  # Skips when no banlist_pending entry exists (unsolicited 367 — operator
+  # never issued /banlist; not actionable).
+  defp do_route(
+         %Message{command: {:numeric, 367}, params: [_, channel, mask | rest]},
+         state
+       )
+       when is_binary(channel) and is_binary(mask) do
+    entry = %{mask: mask, setter: Enum.at(rest, 0), set_ts: Enum.at(rest, 1)}
+    {:cont, banlist_append_entry(state, channel, entry), []}
+  end
+
+  # 368 RPL_ENDOFBANLIST: `:server 368 own_nick #chan :End of Channel Ban List`.
+  # Emits the bundle (carrying the case-preserved `channel_display`) + drops
+  # the pending entry. Silently ignored if no accumulator exists (unsolicited
+  # terminator).
+  defp do_route(
+         %Message{command: {:numeric, 368}, params: [_, channel | _]},
+         state
+       )
+       when is_binary(channel) do
+    pending = Map.get(state, :banlist_pending, %{})
+    chan_key = normalize_channel(channel)
+
+    case Map.fetch(pending, chan_key) do
+      {:ok, accum} ->
+        next_state = %{state | banlist_pending: Map.delete(pending, chan_key)}
+        {:cont, next_state, [{:banlist_bundle, Map.get(accum, :channel_display, channel), accum}]}
+
+      :error ->
+        {:cont, state, []}
+    end
+  end
+
   # #127/#374 — MOTD family (375 RPL_MOTDSTART, 372 RPL_MOTD, 376
   # RPL_ENDOFMOTD, 422 ERR_NOMOTD) + #374's 402 ERR_NOSUCHSERVER terminator.
   # Two surfaces, gated on state.motd_pending:
@@ -2972,6 +3024,30 @@ defmodule Grappa.Session.EventRouter do
         entries = [entry | Map.get(accum, :entries, [])]
         merged = Map.put(accum, :entries, entries)
         %{state | whowas_pending: Map.put(pending, nick_key, merged)}
+    end
+  end
+
+  # #376 — append one ban entry to `banlist_pending[folded_chan].entries`.
+  # Entries are stored REVERSED (head = most recent 367) for an O(1)
+  # prepend (Credo's MapInto check rejects the O(n) `++ [entry]` shape);
+  # `Wire.banlist_bundle/3` reverses to restore the wire order. Skips when
+  # no banlist_pending entry exists (unsolicited 367 — operator never
+  # issued /banlist; not actionable). Mirror of `whowas_append_entry/3`
+  # but keyed by folded channel (#364), not nick.
+  @spec banlist_append_entry(state(), String.t(), map()) :: state()
+  defp banlist_append_entry(state, channel, entry)
+       when is_binary(channel) and is_map(entry) do
+    pending = Map.get(state, :banlist_pending, %{})
+    chan_key = normalize_channel(channel)
+
+    case Map.fetch(pending, chan_key) do
+      :error ->
+        state
+
+      {:ok, accum} ->
+        entries = [entry | Map.get(accum, :entries, [])]
+        merged = Map.put(accum, :entries, entries)
+        %{state | banlist_pending: Map.put(pending, chan_key, merged)}
     end
   end
 

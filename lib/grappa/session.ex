@@ -1217,8 +1217,17 @@ defmodule Grappa.Session do
   end
 
   @doc """
-  Sends `MODE <channel> b` upstream — the banlist query form (no sign).
-  Numerics 367 RPL_BANLIST + 368 RPL_ENDOFBANLIST reply with the ban list.
+  Sends `MODE <channel> b` upstream — the banlist query form (no sign) —
+  and primes the per-channel accumulator in `state.banlist_pending` so
+  EventRouter folds the 367 RPL_BANLIST rows into it. On 368
+  RPL_ENDOFBANLIST the bundle is broadcast on `Topic.user/1` as a
+  `banlist_bundle` event (#376). The accumulator keys on the
+  rfc1459-folded channel (#364) so the rows drain regardless of upstream
+  casing.
+
+  Ephemeral — NOT persisted in scrollback. Bundle replaces any prior
+  bundle for the same channel.
+
   Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}`
   if the channel syntax is rejected by `Grappa.IRC.Client.send_banlist/2`.
   """

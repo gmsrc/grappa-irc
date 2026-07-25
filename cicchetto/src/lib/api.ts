@@ -935,6 +935,30 @@ export type WhowasBundle = {
   not_found: boolean;
 };
 
+// #376 — one ban entry from a 367 RPL_BANLIST row. Mirrors
+// `Grappa.Session.Wire.banlist_entry/0`. `mask` is the ban target
+// (`nick!user@host` or `*!*@host`); `setter` is the nick/mask that set
+// it; `set_ts` is the RAW upstream unix-epoch string (server ships it
+// verbatim per `feedback_no_localized_strings_server_side` — cic formats
+// it to the viewer's locale). `setter`/`set_ts` are null when the ircd
+// omits them (older ircds / solanum send only the mask).
+export type BanlistEntry = {
+  mask: string;
+  setter: string | null;
+  set_ts: string | null;
+};
+
+// #376 — BANLIST bundle payload. Mirrors `Grappa.Session.Wire.banlist_bundle/3`.
+// Aggregated reply to `/banlist <#chan>` (or a raw `MODE #chan b`). Unlike
+// WhowasBundle (most-recent entry only) it ships ALL `entries` — a ban
+// list is a set of rows — in the wire order the ircd sent them. `channel`
+// is the rfc1459-folded channel (#364).
+export type BanlistBundle = {
+  network: string;
+  channel: string;
+  entries: BanlistEntry[];
+};
+
 // Mirror of the events fanned out on the user-level PubSub topic
 // (`Topic.user(user_name)`), pinned by:
 //   * `Grappa.Session.Wire.{channels_changed/0, own_nick_changed/2,
@@ -1091,6 +1115,7 @@ export type WireUserEvent =
       max_global: number | null;
     }
   | ({ kind: "whowas_bundle" } & WhowasBundle)
+  | ({ kind: "banlist_bundle" } & BanlistBundle)
   | {
       // P-0e + P-0f — 341 RPL_INVITING ack. Server broadcasts on
       // user-topic (P-0f flipped from per-channel; operators usually

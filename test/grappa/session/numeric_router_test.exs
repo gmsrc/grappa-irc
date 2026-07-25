@@ -50,9 +50,15 @@ defmodule Grappa.Session.NumericRouterTest do
       assert {:channel, "#sniffo"} = NumericRouter.route(m, state())
     end
 
-    test "367 RPL_BANLIST extracts channel even with extra params" do
+    # #376 — 367 RPL_BANLIST is NO LONGER param-scanned to a channel route.
+    # Pre-#376 it fell through to `scan_params/2` and routed to
+    # `{:channel, "#sniffo"}`, but Server's catch-all then ALSO persisted a
+    # bare `:notice` row body=trailing-param (the set-ts) — the #376 leak.
+    # It is now :delegated so EventRouter's banlist_bundle fold owns it.
+    # (Full delegation coverage: the "367/368 is delegated" tests below.)
+    test "367 RPL_BANLIST is delegated (no channel scan-route #376)" do
       m = msg(367, ["vjt", "#sniffo", "*!*@host", "setter", "1234567890"])
-      assert {:channel, "#sniffo"} = NumericRouter.route(m, state())
+      assert :delegated = NumericRouter.route(m, state())
     end
 
     test "channel & prefix is recognised" do
@@ -333,7 +339,14 @@ defmodule Grappa.Session.NumericRouterTest do
     330,
     335,
     338,
-    671
+    671,
+    # #376 — BANLIST bundle (367 RPL_BANLIST, 368 RPL_ENDOFBANLIST).
+    # EventRouter accumulates {mask, setter, set_ts} per 367 and emits
+    # :banlist_bundle on 368. Without delegation the param-derived scan
+    # leaks the trailing set-timestamp as a bare `:notice` row — same
+    # disease as 333.
+    367,
+    368
   ]
 
   describe "delegated numerics → :delegated" do
@@ -346,6 +359,19 @@ defmodule Grappa.Session.NumericRouterTest do
 
     test "311 RPL_WHOISUSER is delegated" do
       m = msg(311, ["vjt", "nick", "user", "host", "*", "realname"])
+      assert :delegated = NumericRouter.route(m, state())
+    end
+
+    # #376 — 367/368 must be delegated so EventRouter's banlist_bundle
+    # fold owns them. Pre-fix they fell through scan_params → {:server, nil}
+    # and Server persisted each 367 as a bare :notice row body=set_ts.
+    test "367 RPL_BANLIST is delegated (no $server set-ts leak #376)" do
+      m = msg(367, ["vjt", "#test", "*!*@banned.host", "op!u@h", "1784572878"])
+      assert :delegated = NumericRouter.route(m, state())
+    end
+
+    test "368 RPL_ENDOFBANLIST is delegated (#376)" do
+      m = msg(368, ["vjt", "#test", "End of Channel Ban List"])
       assert :delegated = NumericRouter.route(m, state())
     end
 

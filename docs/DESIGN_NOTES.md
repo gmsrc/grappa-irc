@@ -17004,3 +17004,67 @@ space / stringified null). The non-oper 481 rendering in `$server` is kept as a
 belt-and-suspenders witness that the frame genuinely reached upstream. Tests:
 parser (`slashCommands.test.ts`), compose (`compose.test.ts` — bare →
 `pushRaw(1,"REHASH")`, MOTD → `pushRaw(1,"REHASH MOTD")`), e2e (above).
+
+## 2026-07-25 — `/banlist` renders a real BanlistCard (GH #376, grappa + cic)
+
+**Bug — the WORST of the numeric-render family (333 leak / #374 / #375).** Those
+leak or drop ONE field; #376 made the WHOLE `/banlist` feature unusable. `/banlist`
+(and raw `MODE #chan b`) rendered every ban entry as a bare `$server` :notice line
+carrying ONLY the set-time unix timestamp — banmask, setter, channel all DROPPED
+(`-<server>- 1784572878` per line). Root cause, SAME disease as 333: 367
+RPL_BANLIST + 368 RPL_ENDOFBANLIST were absent from `@delegated_numerics`
+(`numeric_router.ex`), so they fell through `param_derived_route` → `scan_params/2`
+→ default `{:server, nil}` and `Session.Server` persisted each 367 as a bare
+`:notice` row body=trailing-param (the set_ts). Compounded by a **phantom
+handler**: comments at `grappa_channel.ex` CLAIMED the 367/368 numerics
+"broadcast on the subject_label topic (mirror of WHOIS)" but there was NO
+EventRouter clause, NO accumulator, NO `banlist_bundle` broadcast — same
+phantom class as the LIST/LINKS "No-silent-drops B6.1" note. The outbound
+(`Client.send_banlist/2` → clean `MODE #chan b`) was always correct; the defect
+was entirely the inbound fold/render. Full-stack: grappa fold missing AND cic
+renderer missing.
+
+**Fix — mirror the WHOWAS bundle end-to-end (367/368 ≈ 314/369), but keyed by
+CHANNEL not nick.** GRAPPA: (1) `numeric_router.ex` delegates 367/368 (introduced
+WITH the EventRouter clause, per the delegation contract). (2) `event_router.ex`
+folds one `{mask, setter, set_ts}` entry per 367 into
+`banlist_pending[folded_chan].entries` (stored REVERSED for an O(1) prepend, like
+whowas) and on 368 emits `{:banlist_bundle, channel_display, accum}` + clears the
+entry; unprimed 367/368 are no-ops (unsolicited, not actionable). setter/set_ts
+are OPTIONAL — older ircds / solanum send only the mask
+(`[_, channel, mask | rest]`, `Enum.at(rest, 0/1)`). (3) `server.ex` adds
+`banlist_pending` state (primed on `:send_banlist` via the shared `prime_pending`
+→ S10 TTL sweep covers it) + an `apply_effects` arm broadcasting
+`SessionWire.banlist_bundle` on `Topic.user`. (4) `wire.ex` adds
+`banlist_entry`/`banlist_bundle_payload` types + `banlist_bundle/3` (reverses the
+accum back to WIRE order; ships ALL entries — a ban list is a set of rows, unlike
+whowas's most-recent-only projection). CIC (mirror WhowasCard): `api.ts`
+`BanlistBundle`/`BanlistEntry`; `banlistCard.ts` identity-scoped store (keyed by
+network slug, one card at a time, bundle carries the channel); `userTopic.ts`
+`narrowBanlistEntry` (per-element guard — ANY malformed entry drops the whole
+bundle, mirror of `narrowWhoisExtraLine`) + build/dispatch arm; `BanlistCard.tsx`
+renders rows (mask · set-by · formatted-time); mounted in `ScrollbackPane`
+overlay. `wireTypes.ts` regenerated.
+
+**CHANNEL FOLD INVARIANT (#364).** The 367/368 channel param (index 1) is folded
+by `canonicalize_channel_params/1` and the `banlist_pending` key + 368 lookup +
+prime site all route through `Identifier.canonical_channel/1` — NEVER a bare
+downcase, else the bundle keys/broadcasts on the wrong window. Consequence: the
+facade (`Session.send_banlist/3`) folds the channel BEFORE the server, so
+`channel_display` is the CANONICAL spelling (the card header shows `#chan` for a
+typed `#Chan`) — consistent with the channel-keyed WHO/NAMES sibling verbs, NOT
+case-preserved like WHOWAS (which is nick-keyed). This diverged from the initial
+"case-preserved" comment; corrected to match reality (the code is the truth, not
+the phantom comment).
+
+**Never assert the bug.** `numeric_router_test.exs`'s old "367 RPL_BANLIST extracts
+channel even with extra params" asserted `{:channel, "#sniffo"}` — it ENCODED the
+pre-#376 scan-route that caused the leak. Flipped to assert `:delegated`.
+
+**Real e2e** (`issue376-banlist-render.spec.ts`): vjt creates a fresh channel
+(→ sole op), sets `/ban <mask>`, issues `/banlist`, and asserts the BanlistCard
+shows the mask + setter (NOT a bare ts). Setting +b is a NORMAL channel op — no
+oper SIGSEGV risk (unlike #375/#164). Server tests cover the 367+368 burst →
+`banlist_bundle` on `Topic.user`; event_router covers fold/emit/unprimed/older-
+ircd/rfc1459-fold; wire covers wire-order + nil round-trip; cic covers the
+narrow/dispatch arm + BanlistCard render.

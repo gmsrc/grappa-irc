@@ -294,6 +294,19 @@ defmodule Grappa.Session.NumericRouter do
                         314,
                         369,
                         406,
+                        # #376 — BANLIST bundle (367 RPL_BANLIST, 368
+                        # RPL_ENDOFBANLIST). EventRouter accumulates one
+                        # {mask, setter, set_ts} entry per 367 into
+                        # banlist_pending[folded_chan] and emits a
+                        # :banlist_bundle effect on 368. Without delegation,
+                        # `param_derived_route/3` falls through to `scan_params/2`
+                        # → default `{:server, nil}` and Server persists each 367
+                        # as a bare `:notice` row whose body is the trailing param
+                        # (the set-timestamp) — the exact #376 leak, same disease
+                        # shape as 333. Introduced WITH the EventRouter clause in
+                        # the same commit per the delegation contract.
+                        367,
+                        368,
                         # LUSERS bundle (251, 252, 253, 254, 255, 265, 266)
                         251,
                         252,
