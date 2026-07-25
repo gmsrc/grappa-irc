@@ -360,19 +360,26 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
     await loginAs(page, vjt);
     await focusChannelAndWaitForRows(page);
 
-    // Scroll up, settle, then back to bottom, settle. Final cursor
-    // = tail id.
+    // Scroll up, settle, then back to bottom. The scroll-to-bottom wheel
+    // fires ONE WheelEvent → the 500ms settle → a DEBOUNCED, ASYNC cursor
+    // POST of the tail. The tail after scroll-to-bottom is the store tail
+    // (the bottom-most row) — deterministic, scroll-band-independent.
     await scrollByPx(page, -150);
     await page.waitForTimeout(SETTLE_WAIT_MS);
     await scrollToBottom(page);
-    await page.waitForTimeout(SETTLE_WAIT_MS);
 
-    const visible = await visibleRowIds(page);
-    const tail = visible[visible.length - 1];
-    if (tail === undefined) throw new Error("no visible tail");
+    const tail = await storeTailId(page);
+    if (tail === null) throw new Error("no store tail");
 
-    const cursorFinal = await fetchCursor(vjt.token, CHANNEL);
-    expect(cursorFinal).toBe(tail);
+    // POLL the server cursor until the settle-triggered POST lands at the
+    // tail, rather than reading ONCE after a fixed wait. The fixed-wait read
+    // raced the debounce + POST + round-trip under full-suite load (the write
+    // outran SETTLE_WAIT_MS ~1/run) — this is the condition-based-waiting fix
+    // the WS-observe sites in this file already use. Instant on match; the
+    // ceiling only bites a genuine no-advance regression.
+    await expect
+      .poll(async () => await fetchCursor(vjt.token, CHANNEL), { timeout: 8_000 })
+      .toBe(tail);
   });
 
   // ── UX-8-D scenario 3 (scroll-settle no-retreat) ──────────────────
