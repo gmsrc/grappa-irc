@@ -17631,3 +17631,52 @@ new shape is the two-field add form (an alias is a name+expansion pair). A
 merge), a read-modify-write MUST re-read the server first — the local mirror
 is not a safe merge base. When one closed set (the builtin verbs) gates a
 user-input check, read it LIVE, never hand-copy it.
+
+## 2026-07-25 — Ban management UX: banlist modal + /kb kickban (GH #386, cic + grappa)
+
+Two ban-management conveniences (issue #386), built to vjt's four closed
+design decisions. #376 (`banlist_bundle`) was the data prerequisite.
+
+**The spec's premise was factually wrong, and it changed the design.**
+Decision #1 said the `/kb` mask is "built from the member's known host **in
+cic's members map**." cic has NO per-member host: the members map
+(`memberTypes.ts`) is `{nick, modes}` only (353 NAMES carries no host, there's
+no `userhost-in-names`/auto-WHO), and scrollback rows carry no prefix. The host
+lives ONLY server-side in `Session.Server`'s `userhost_cache` (populated from
+the JOIN prefix / 311 / 352), which already backs `/ban`'s bare-nick mask
+derivation. So a server touch was unavoidable — the issue's "no server work /
+pure client-side" framing didn't survive contact with the data. vjt chose the
+**surgical** resolution over enriching the whole members payload: a read-only
+`resolve_userhost` channel query over the existing `Session.lookup_userhost/3`,
+fetched **on demand** only when actually banning (no bulk host exposure). The
+lesson (again): a spec premise about *where data lives* is a claim to verify in
+the code before building, not a given — challenge it, surface it, then build.
+
+**`/kb` = two frames, ban first, both attempted (decisions #1/#4).** cic's
+`/kb <nick> [reason]` (+ `/kickban` alias) resolves the offender's userhost,
+builds `*!*@host` (`banMask.ts`, the pure shared form builder), sends `MODE +b`,
+**then** `KICK`. Ban first closes the rejoin window. The host is used VERBATIM
+— hostname, Azzurra cloak, or IPv4/v6 literal alike — NO domain wildcard, NO
+octet wildcard (octet-wildcarding smuggles the width back through the side
+door). FAIL-CLOSED on a cache miss: no wider-mask guess — the ban is skipped
+and its error surfaced ("run /whois first"), but the KICK still fires (getting
+the person out is the immediate intent — decision #4's "attempt both").
+
+**The modal supersedes the inline card (one code path).** `/banlist` now opens
+the interactive `BanlistModal` — list `+b` (mask · set-by · time), add via the
+mask builder (nick → `nick!*@*` / `*!*@host` / `*!user@host`, or a verbatim
+mask), remove in one click — re-querying on open + on demand. It reuses the
+#376 `banlist_bundle` store and retires the inline `BanlistCard`, mirroring how
+the #169 /who modal replaced the inline WHO dump. Two surfaces for one datum
+would violate "one feature, one code path"; the #376 e2e's fold coverage moves
+into the #386 modal spec (the list rows still assert mask + setter end-to-end).
+
+**Op-gating is a HINT, never a hard block (decision #2).** The enabled set is
+`o`+`h` holders (halfop sets `+b` on bahamut), derived client-side via the
+shared `ownHoldsChannelEditorSigil` (the same o/h derivation ModeModal uses) —
+BUT the mutating actions stay ALWAYS clickable, merely de-emphasised for
+non-ops. The client cannot actually know who may ban: op via ChanServ and
+IRCop override never appear in the members map, so a hard gate would lock out
+people the server would authorise. The ircd's 482 is the real authority and
+surfaces inline. v1 lists `+b` only (decision #3 — `+e`/`+I` are the same UI
+with a different mode letter, a later afternoon).

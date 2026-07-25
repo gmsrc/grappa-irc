@@ -218,8 +218,9 @@ Typed in cicchetto's compose box, parsed client-side, dispatched to REST or IRC.
 | `/lusers` | Network-stats card pinned in the current window |
 | `/op` `/deop` `/voice` `/devoice` `<nick>…` | Channel `MODE ±o` / `±v` (chunked per ISUPPORT `MODES=`) |
 | `/kick <nick> [reason]` | KICK on the active channel |
+| `/kb <nick> [reason]` · `/kickban …` | Kickban: `MODE +b *!*@host` (offender's host verbatim, from the on-demand userhost lookup — no domain/octet wildcard; fail-closed if the host is unknown, "run /whois first") **then** KICK. Two frames, ban first (no rejoin window), both attempted |
 | `/ban <nick-or-mask>` · `/unban <mask>` | `MODE +b` / `-b` (bare nick → mask via WHOIS cache) |
-| `/banlist` | List channel bans inline |
+| `/banlist` | Open the ban-management modal: list the channel's `+b` masks (mask · set-by · time), **add** a ban via an easy mask builder (nick → `nick!*@*` / `*!*@host` / `*!user@host`, or paste a mask verbatim), **remove** a ban in one click. Op-gated as a hint (non-ops see a de-emphasised, still-clickable UI — the server's 482 is the real gate) |
 | `/invite <nick> [#chan]` | INVITE (active channel by default) |
 | `/umode <modes>` | Set own user modes (e.g. `/umode +i`) |
 | `/umode` | With NO mode args: open the user-mode (umode) viewer/editor modal — your own umodes as retro toggle buttons; server/services-managed umodes (o/r/a/A/S) shown read-only. Also reachable via `/mode <yournick>` or by tapping the umode indicator on the network-header row |
