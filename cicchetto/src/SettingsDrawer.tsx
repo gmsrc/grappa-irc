@@ -8,6 +8,7 @@ import {
   onMount,
   Show,
 } from "solid-js";
+import AliasSettings from "./AliasSettings";
 import DeleteAccountModal from "./DeleteAccountModal";
 import InlineConfirmButton from "./InlineConfirmButton";
 import { ApiError, displayNick, type Network, visitorAnchorNick } from "./lib/api";
@@ -843,6 +844,21 @@ const SettingsDrawer: Component<Props> = (props) => {
             </span>
           </button>
 
+          {/* #385 — aliases sub-page nav row (user-defined command aliases).
+              Also deep-linked by the bare /alias compose verb via
+              requestOpenSettings("aliases"). */}
+          <button
+            type="button"
+            class="settings-nav-row"
+            data-testid="aliases-settings-entry"
+            onClick={() => setSettingsPage("aliases")}
+          >
+            <span class="settings-nav-row-label">aliases</span>
+            <span class="settings-nav-row-chevron" aria-hidden="true">
+              ›
+            </span>
+          </button>
+
           <fieldset class="font-size-fieldset">
             <legend>text size</legend>
             <label>
@@ -1143,6 +1159,13 @@ const SettingsDrawer: Component<Props> = (props) => {
             directly (like the retired home WatchedPanel), so no data props. */}
         <Show when={settingsPage() === "watchlists"}>
           <WatchlistsSettings onBack={() => setSettingsPage("main")} />
+        </Show>
+
+        {/* #385 — aliases sub-page (user-defined command aliases).
+            Self-contained: reads the aliasList store directly, so no data
+            props. Reached via the nav row and bare /alias. */}
+        <Show when={settingsPage() === "aliases"}>
+          <AliasSettings onBack={() => setSettingsPage("main")} />
         </Show>
       </aside>
       <DeleteAccountModal

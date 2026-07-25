@@ -8127,6 +8127,37 @@ audio.media-viewer-media {
   font-size: 0.85rem;
 }
 
+/* #385 — user-defined command aliases sub-page. Reuses the watch-lists
+   list/add idiom (.watchlists-list/-item/-remove/-add/-error) so there is
+   ONE settings list styling; these rules only add the alias row's two-part
+   shape (monospace /name → expansion) and let the two-field add form wrap on
+   narrow screens. */
+.aliases-item {
+  gap: 0.3rem;
+}
+
+.aliases-name {
+  font-family: var(--font-mono);
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+.aliases-arrow {
+  color: var(--muted);
+}
+
+.aliases-expansion {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.aliases-add {
+  flex-wrap: wrap;
+}
+
 /* #247 — presence transition toasts. Fixed stack, bottom-right on
    desktop; self-expiring, click-to-dismiss. Deliberately quiet — the
    durable signal is the Watched panel dot, not this. */
