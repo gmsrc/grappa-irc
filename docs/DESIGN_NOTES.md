@@ -17534,12 +17534,16 @@ issue is explicitly NOT a perf issue; #393 already made each query fast).
 gated on the post-#393 telemetry measurement (#357 FIX B, PARKED). This is
 the structural single-code-path fix, which stands on its own.
 
-**Client twin left for a follow-up (out of scope).** cic carries the same
+**Client twin unified (follow-up, same PR series).** cic carried the same
 class client-side — `NOTIFY_KINDS` (`pushTriggers.ts`) and `CONTENT_KINDS`
-(`api.ts`) are two independent literals. This diff is server-scoped and
-behaviour-neutral (the values agree), so cic stays correct; the server
-moduledocs now point at both cic files as the mirror. A cic-side derivation
-is a candidate follow-up, not part of #395.
+(`api.ts`) were two independent literals. Now `api.ts` owns ONE
+`CONTENT_KIND_PROJECTION` map (mirroring the server
+`@content_kind_projection`); `CONTENT_KINDS` + the exported `NOTIFY_KINDS`
+derive from it, so notify ⊆ content by construction on the client too.
+`pushTriggers.ts` imports `NOTIFY_KINDS` instead of its own literal (kind
+cast `message.kind as MessageKind` at the `.has` boundary — the
+`wireNarrow.ts` convention). Behaviour-neutral (values unchanged); the
+`shouldNotifyTruthTable.json` parity gate + full vitest stay green.
 
 **Tests.** A subset-by-construction assertion (`notify_kinds --
 content_kinds == []`) + a `:notice is content, not notify` pin

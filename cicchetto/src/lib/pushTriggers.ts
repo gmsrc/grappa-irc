@@ -22,6 +22,7 @@
 // the SAME predicate now drives the in-message visual highlight, so the
 // notify-match and the visual-match can never diverge again.
 
+import { type MessageKind, NOTIFY_KINDS } from "./api";
 import { matchesWatchlist } from "./mentionMatch";
 import { rfc1459Fold } from "./nickEquals";
 import type { NotificationPrefs } from "./userSettings";
@@ -36,17 +37,14 @@ export type ShouldNotifyMessage = {
   body: string | null;
 };
 
-// Mirror of the Elixir kind gate: only PRIVMSG + ACTION (CTCP /me) carry
-// a notification meaning. NOTICE (services chatter) and every presence /
-// control kind never notify.
-const NOTIFY_KINDS = new Set(["privmsg", "action"]);
-
 /**
  * Returns true when `message` should produce a notification for the
  * operator whose IRC nick is `ownNick`, given `prefs` + `patterns`.
  *
  * Faithful transcription of `Grappa.Push.Triggers.should_notify?/4`:
- *   1. kind gate — non-(privmsg|action) → false.
+ *   1. kind gate — only the shared `NOTIFY_KINDS` SSOT (privmsg|action,
+ *      the "notify" subset of api's CONTENT_KINDS, #395) → everything else
+ *      false. NOTICE (services chatter) counts as unread but never notifies.
  *   2. DM (channel === ownNick): private_messages_all OR
  *      rfc1459Fold(sender) in private_messages_only (mirrors the
  *      server's `canonical_nick(sender) in ...`).
@@ -59,7 +57,11 @@ export function shouldNotify(
   prefs: NotificationPrefs,
   patterns: string[],
 ): boolean {
-  if (!NOTIFY_KINDS.has(message.kind)) return false;
+  // `message.kind` is a bare string (the truth-table JSON / any message-like
+  // object); cast to MessageKind for the typed-set membership check — a
+  // non-member string just returns false. Same `.has(x as MessageKind)`
+  // convention as `wireNarrow.ts`.
+  if (!NOTIFY_KINDS.has(message.kind as MessageKind)) return false;
 
   if (message.channel === ownNick) {
     return dmMatch(message, prefs);

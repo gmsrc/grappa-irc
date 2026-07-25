@@ -750,3 +750,28 @@ describe("REV-K M20 — channelPushError extractor", () => {
     expect(e.message).toContain("no_session");
   });
 });
+
+describe("#395 — unread kind projection (CONTENT_KINDS / NOTIFY_KINDS)", () => {
+  // Client twin of the server SSOT (Grappa.Scrollback.Message
+  // @content_kind_projection): both sets derive from ONE declaration so
+  // the notify-worthy set is a subset of the unread-content set BY
+  // CONSTRUCTION — not because two hand-maintained literals happen to agree.
+  it("CONTENT_KINDS is the human-content subset {privmsg, notice, action}", () => {
+    expect([...api.CONTENT_KINDS].sort()).toEqual(["action", "notice", "privmsg"]);
+  });
+
+  it("NOTIFY_KINDS is the notify-worthy subset {privmsg, action}", () => {
+    expect([...api.NOTIFY_KINDS].sort()).toEqual(["action", "privmsg"]);
+  });
+
+  it("NOTIFY_KINDS is a subset of CONTENT_KINDS BY CONSTRUCTION", () => {
+    for (const k of api.NOTIFY_KINDS) {
+      expect(api.CONTENT_KINDS.has(k)).toBe(true);
+    }
+  });
+
+  it("notice counts as unread content but is NOT notify-worthy", () => {
+    expect(api.CONTENT_KINDS.has("notice")).toBe(true);
+    expect(api.NOTIFY_KINDS.has("notice")).toBe(false);
+  });
+});
