@@ -8262,6 +8262,41 @@ audio.media-viewer-media {
   font-size: 0.85rem;
 }
 
+/* #189 — on-connect perform list sub-page. Reuses the watch-lists
+   per-network block idiom (.watchlists-network/-add/-error); adds only the
+   multi-line textarea for the raw command list + the write-only oper-pass
+   row (a password-style input + a "set / not set" status). */
+.perform-textarea {
+  width: 100%;
+  min-height: 5rem;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.perform-oper {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.perform-oper-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.perform-oper-status {
+  color: var(--muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.perform-save {
+  margin-top: 0.4rem;
+}
+
 /* #385 — user-defined command aliases sub-page. Reuses the watch-lists
    list/add idiom (.watchlists-list/-item/-remove/-add/-error) so there is
    ONE settings list styling; these rules only add the alias row's two-part

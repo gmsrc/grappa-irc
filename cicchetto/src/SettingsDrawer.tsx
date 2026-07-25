@@ -46,6 +46,7 @@ import {
   putVhostSelection,
   type VhostSettingsView,
 } from "./lib/userSettings";
+import PerformSettings from "./PerformSettings";
 import ThemeGallery from "./ThemeGallery";
 import VhostSettingsPage from "./VhostSettingsPage";
 import WatchlistsSettings from "./WatchlistsSettings";
@@ -859,6 +860,20 @@ const SettingsDrawer: Component<Props> = (props) => {
             </span>
           </button>
 
+          {/* #189 — on-connect perform list nav row (per-network raw IRC
+              commands run at 001, before autojoin). */}
+          <button
+            type="button"
+            class="settings-nav-row"
+            data-testid="perform-settings-entry"
+            onClick={() => setSettingsPage("perform")}
+          >
+            <span class="settings-nav-row-label">on-connect commands</span>
+            <span class="settings-nav-row-chevron" aria-hidden="true">
+              ›
+            </span>
+          </button>
+
           <fieldset class="font-size-fieldset">
             <legend>text size</legend>
             <label>
@@ -1166,6 +1181,13 @@ const SettingsDrawer: Component<Props> = (props) => {
             props. Reached via the nav row and bare /alias. */}
         <Show when={settingsPage() === "aliases"}>
           <AliasSettings onBack={() => setSettingsPage("main")} />
+        </Show>
+
+        {/* #189 — on-connect perform list sub-page (per-network). Self-
+            contained: each block loads/saves its own list via the perform
+            REST endpoints. Reached via the nav row. */}
+        <Show when={settingsPage() === "perform"}>
+          <PerformSettings onBack={() => setSettingsPage("main")} />
         </Show>
       </aside>
       <DeleteAccountModal

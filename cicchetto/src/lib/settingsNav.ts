@@ -33,7 +33,11 @@ import { createSignal } from "solid-js";
 // #385 — "aliases" sub-page (user-defined command aliases). Reached from a
 // nav row on the main page AND deep-linked by the bare `/alias` compose verb
 // via `requestOpenSettings` below.
-export type SettingsSubPage = "main" | "vhost" | "themes" | "watchlists" | "aliases";
+//
+// #189 — "perform" sub-page (per-network on-connect command list). Reached
+// from a nav row on the main page. Per-network (one block per network),
+// unlike the global aliases page.
+export type SettingsSubPage = "main" | "vhost" | "themes" | "watchlists" | "aliases" | "perform";
 
 let pendingPage: SettingsSubPage | null = null;
 
