@@ -51,7 +51,13 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const addAlias = async (name: string, expansion: string): Promise<Aliases> => {
     const t = requireToken();
     const current = await getAliases(t);
-    const map = await putAliases(t, { ...current, [name]: expansion });
+    // Lowercase the merge key at this one choke-point. The server map is
+    // already lowercased, and the compose path lowercases in parseAlias — but
+    // the settings form passes the raw name. Without this, re-adding `WII`
+    // when `wii` exists would PUT two keys (`wii` + `WII`); the server folds
+    // both to `wii` via Map.put over an unordered list, so the winner is
+    // term-order-dependent and the new expansion could be silently dropped.
+    const map = await putAliases(t, { ...current, [name.toLowerCase()]: expansion });
     setAliases(map);
     return map;
   };
@@ -61,7 +67,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     const t = requireToken();
     const current = await getAliases(t);
     const next = { ...current };
-    delete next[name];
+    delete next[name.toLowerCase()]; // server keys are lowercase; match them
     const map = await putAliases(t, next);
     setAliases(map);
     return map;

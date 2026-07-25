@@ -1,5 +1,6 @@
 import type { Channel } from "phoenix";
 import { createEffect, createRoot, untrack } from "solid-js";
+import { refreshAliases } from "./aliasList";
 import {
   assertNever,
   type BanlistEntry,
@@ -895,6 +896,17 @@ createRoot(() => {
       // Failure is logged, not swallowed — a next (re)join retries.
       void refreshHighlights().catch((err) =>
         console.warn("[userTopic] highlight-list hydrate failed", err),
+      );
+      // #385 — hydrate the user-defined alias map on every user-topic
+      // (re)join, for the SAME reason as the highlight list above: the
+      // aliases live in server user_settings with NO broadcast, and the
+      // compose expander (parseSlash) reads them from the aliasList store.
+      // Without this the store starts every page load at {} and a persisted
+      // alias would read "unknown command" until the operator opened the
+      // aliases settings sub-page at least once — defeating the whole point
+      // of a server-synced, cross-device alias layer.
+      void refreshAliases().catch((err) =>
+        console.warn("[userTopic] alias-list hydrate failed", err),
       );
     });
     channel.on("event", (raw: unknown) => {

@@ -1058,3 +1058,25 @@ describe("#385 — /alias + /unalias", () => {
     expect(isBuiltinVerb("wii")).toBe(false);
   });
 });
+
+describe("#385 — expandAlias grammar edge cases", () => {
+  it("$10 → arg1 then a literal 0 (only $1..$9 are placeholders)", () => {
+    expect(expandAlias("a", "x", { a: "cmd $10" })).toEqual({ verb: "cmd", rest: "x0" });
+  });
+
+  it("adjacent placeholders $1$2 concatenate", () => {
+    expect(expandAlias("a", "foo bar", { a: "cmd $1$2" })).toEqual({
+      verb: "cmd",
+      rest: "foobar",
+    });
+  });
+
+  it("a $ not followed by a digit/star is literal → no-placeholder append", () => {
+    // `$x` is not a placeholder, so the template has NONE → rest is appended.
+    expect(expandAlias("e", "foo", { e: "echo $x" })).toEqual({ verb: "echo", rest: "$x foo" });
+  });
+
+  it("$* with empty rest collapses to nothing", () => {
+    expect(expandAlias("s", "", { s: "msg #c $*" })).toEqual({ verb: "msg", rest: "#c" });
+  });
+});

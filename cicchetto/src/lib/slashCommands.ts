@@ -739,6 +739,9 @@ function substituteAlias(template: string, rest: string): string {
   if (!ALIAS_PLACEHOLDER.test(template)) {
     return rest === "" ? template : `${template} ${rest}`;
   }
+  // Deliberate asymmetry: `$*` substitutes the RAW rest (internal spacing
+  // preserved — "all remaining args verbatim"), while `$1..$9` pull from the
+  // whitespace-collapsed token list. Don't "fix" one to match the other.
   const args = tokens(rest);
   return template.replace(/\$(\*|[1-9])/g, (_m, g: string) =>
     g === "*" ? rest : (args[Number(g) - 1] ?? ""),
