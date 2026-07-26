@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { expandAlias, isBuiltinVerb, MAX_ALIAS_DEPTH, parseSlash } from "../lib/slashCommands";
+import {
+  expandAlias,
+  isNonShadowableVerb,
+  MAX_ALIAS_DEPTH,
+  parseSlash,
+} from "../lib/slashCommands";
 
 describe("parseSlash — basics", () => {
   it("non-slash body parses as privmsg", () => {
@@ -979,11 +984,27 @@ describe("#385 — expandAlias grammar", () => {
     });
   });
 
-  it("a builtin is never shadowed by a same-named alias (builtin wins)", () => {
-    // Even if the map somehow holds a builtin name, expansion does not fire.
+  // #427 — REVERSES #385 decision #3. A user alias whose name collides with a
+  // builtin now SHADOWS it: the alias expands (alias wins). The one exception
+  // is the two-verb deny list (alias/unalias) covered below.
+  it("a same-named alias shadows a builtin (alias wins) — #427", () => {
     expect(expandAlias("whois", "foo", { whois: "quote EVIL" })).toEqual({
-      verb: "whois",
-      rest: "foo",
+      verb: "quote",
+      rest: "EVIL foo",
+    });
+  });
+
+  // #427 — /alias and /unalias are the in-client repair surface and are NOT
+  // shadowable. Even if the map holds one (settings UI can store a dead entry),
+  // the expander refuses it: the real handler always wins.
+  it("/alias and /unalias are never shadowed (repair path intact) — #427", () => {
+    expect(expandAlias("alias", "x y", { alias: "quote EVIL" })).toEqual({
+      verb: "alias",
+      rest: "x y",
+    });
+    expect(expandAlias("unalias", "x", { unalias: "quote EVIL" })).toEqual({
+      verb: "unalias",
+      rest: "x",
     });
   });
 
@@ -1038,6 +1059,29 @@ describe("#385 — parseSlash with user aliases (end-to-end)", () => {
       server: "foo",
     });
   });
+
+  // #427 — a user alias shadowing a builtin flows through the shadow, not the
+  // builtin. /join is aliased to /whois; typing /join <nick> runs whois.
+  it("a builtin is shadowed end-to-end when a same-named alias exists — #427", () => {
+    expect(parseSlash("/join alice", { join: "whois" })).toEqual({
+      kind: "whois",
+      nick: "alice",
+      server: null,
+    });
+  });
+
+  // #427 — the deny list holds end-to-end: even with an alias entry, /alias and
+  // /unalias resolve to their real handlers (repair path intact).
+  it("/alias and /unalias resolve to their real handlers despite an alias entry — #427", () => {
+    expect(parseSlash("/alias", { alias: "whois" })).toEqual({
+      kind: "open-settings",
+      section: "aliases",
+    });
+    expect(parseSlash("/unalias wii", { unalias: "whois" })).toEqual({
+      kind: "unalias",
+      name: "wii",
+    });
+  });
 });
 
 describe("#385 — /alias + /unalias", () => {
@@ -1059,11 +1103,25 @@ describe("#385 — /alias + /unalias", () => {
     });
   });
 
-  it("rejects an alias name that collides with a builtin (never shadow)", () => {
-    // /whois is a builtin; /q and /w are builtin aliases too.
-    expect(parseSlash("/alias whois something")).toMatchObject({ kind: "error", verb: "alias" });
-    expect(parseSlash("/alias w something")).toMatchObject({ kind: "error", verb: "alias" });
-    expect(parseSlash("/alias q something")).toMatchObject({ kind: "error", verb: "alias" });
+  // #427 — a name colliding with a builtin is now ALLOWED (shadowing). /whois,
+  // /q, /w, /join etc. define normally.
+  it("allows an alias name that collides with a builtin (shadowing) — #427", () => {
+    expect(parseSlash("/alias whois quote EVIL")).toEqual({
+      kind: "alias-define",
+      name: "whois",
+      expansion: "quote EVIL",
+    });
+    expect(parseSlash("/alias w foo")).toMatchObject({ kind: "alias-define", name: "w" });
+    expect(parseSlash("/alias join foo")).toMatchObject({ kind: "alias-define", name: "join" });
+  });
+
+  // #427 — the only two verbs that CANNOT be shadowed: /alias and /unalias
+  // (the command-side repair surface). Rejected inline at define time.
+  it("rejects aliasing /alias or /unalias (deny list) — #427", () => {
+    expect(parseSlash("/alias alias something")).toMatchObject({ kind: "error", verb: "alias" });
+    expect(parseSlash("/alias unalias something")).toMatchObject({ kind: "error", verb: "alias" });
+    // Case-insensitive: the name is lowercased before the check.
+    expect(parseSlash("/alias ALIAS something")).toMatchObject({ kind: "error", verb: "alias" });
   });
 
   it("rejects a missing expansion", () => {
@@ -1078,11 +1136,18 @@ describe("#385 — /alias + /unalias", () => {
     expect(parseSlash("/unalias")).toMatchObject({ kind: "error", verb: "unalias" });
   });
 
-  it("isBuiltinVerb reflects the live DISPATCH key set (incl. post-init /w /q)", () => {
-    expect(isBuiltinVerb("whois")).toBe(true);
-    expect(isBuiltinVerb("W")).toBe(true); // #122 post-init alias, case-insensitive
-    expect(isBuiltinVerb("alias")).toBe(true);
-    expect(isBuiltinVerb("wii")).toBe(false);
+  // #427 — the non-shadowable predicate is a FIXED two-name set, NOT the live
+  // DISPATCH key set (reusing DISPATCH membership would reproduce the old
+  // reject-everything behaviour). Only /alias and /unalias are protected.
+  it("isNonShadowableVerb protects only /alias and /unalias (case-insensitive) — #427", () => {
+    expect(isNonShadowableVerb("alias")).toBe(true);
+    expect(isNonShadowableVerb("unalias")).toBe(true);
+    expect(isNonShadowableVerb("ALIAS")).toBe(true); // case-insensitive
+    // Every other builtin is now shadowable → not protected.
+    expect(isNonShadowableVerb("whois")).toBe(false);
+    expect(isNonShadowableVerb("join")).toBe(false);
+    expect(isNonShadowableVerb("w")).toBe(false);
+    expect(isNonShadowableVerb("wii")).toBe(false);
   });
 });
 

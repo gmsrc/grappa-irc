@@ -55,8 +55,10 @@
 // #385 — user-defined aliases: `/alias <name> <expansion>` /
 // `/unalias <name>` let users register their own. They are expanded
 // (`expandAlias`) BEFORE the DISPATCH lookup, so an expanded alias flows
-// through the normal command path. Builtins are never shadowed; expansion is
-// bounded at MAX_ALIAS_DEPTH. The `%{name => expansion}` map is passed into
+// through the normal command path. Aliases MAY shadow builtins (#427 — reverses
+// #385 decision #3), except the two-verb deny list /alias + /unalias (the
+// command-side repair surface). Expansion is bounded at MAX_ALIAS_DEPTH. The
+// `%{name => expansion}` map is passed into
 // `parseSlash` by compose.ts (from the aliasList store) — this parser stays
 // pure. Grammar: `$1..$9` positional (missing → empty), `$*` all args, and
 // implicit verbatim append when the expansion holds no placeholder.
@@ -609,9 +611,10 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
 
   // #385 — user-defined command aliases. `/alias <name> <expansion>`
   // defines/overwrites, `/unalias <name>` removes; bare `/alias` deep-links
-  // into the aliases settings sub-page (mirror of bare /notify). The
-  // collision-with-builtin rejection reads the LIVE DISPATCH key set, so it
-  // never drifts. Expansion happens in parseSlash (before DISPATCH lookup).
+  // into the aliases settings sub-page (mirror of bare /notify). #427 — a
+  // define may shadow any builtin EXCEPT /alias + /unalias (the two-verb deny
+  // list `isNonShadowableVerb`, NOT the live DISPATCH set). Expansion happens
+  // in parseSlash (before DISPATCH lookup).
   alias: (verb, rest) => parseAlias(verb, rest),
   unalias: (verb, rest) => parseUnalias(verb, rest),
 
@@ -663,20 +666,25 @@ function parseServiceShortcut(_verb: string, target: string, rest: string): Slas
   return { kind: "msg", target, body: rest };
 }
 
-// #385 — is `verb` a built-in command (or a built-in alias like /q /j /w
-// /n)? Reads the LIVE DISPATCH key set so the check can't drift when a new
-// builtin is added. Must be called at RUNTIME (after the post-init block
-// below has populated q/j/w/n).
-export function isBuiltinVerb(verb: string): boolean {
-  return verb.toLowerCase() in DISPATCH;
+// #427 — the two verbs a user alias may NOT shadow: /alias and /unalias
+// themselves — the command-side repair surface. Everything else (/join, /quit,
+// /w, /q, /j, /n, …) is shadowable (ruling vjt 2026-07-26). This is a FIXED
+// two-name set on PURPOSE: the old `isBuiltinVerb` gate read the LIVE DISPATCH
+// key set, which rejected EVERY builtin — reusing it here would reproduce that
+// reject-everything behaviour. Both the define-time gate (`parseAlias`) and the
+// expander bail (`expandAlias`) route through this one predicate.
+const NON_SHADOWABLE_VERBS: ReadonlySet<string> = new Set(["alias", "unalias"]);
+
+export function isNonShadowableVerb(verb: string): boolean {
+  return NON_SHADOWABLE_VERBS.has(verb.toLowerCase());
 }
 
 // #385 — `/alias <name> <expansion>` defines/overwrites a user alias; bare
 // `/alias` deep-links into the aliases settings sub-page. A single optional
 // leading `/` is stripped from BOTH the name and the expansion so
 // `/alias w /whois` and `/alias w whois` are equivalent (the spec spells
-// expansions slash-less). Builtins are never shadowed (spec decision #3):
-// a collision is rejected here, at define time, naming it.
+// expansions slash-less). #427 — a define MAY shadow a builtin; only /alias
+// and /unalias are rejected here, at define time, naming them.
 function parseAlias(verb: string, rest: string): SlashCommand {
   const trimmed = rest.trim();
   if (trimmed === "") return { kind: "open-settings", section: "aliases" };
@@ -691,8 +699,8 @@ function parseAlias(verb: string, rest: string): SlashCommand {
     .replace(/^\//, "");
   if (name === "" || expansion === "") return err(verb, "usage: /alias <name> <expansion>");
 
-  if (isBuiltinVerb(name)) {
-    return err(verb, `/${name} is a built-in command and can't be used as an alias name`);
+  if (isNonShadowableVerb(name)) {
+    return err(verb, `/${name} can't be aliased — it's needed to manage aliases`);
   }
   return { kind: "alias-define", name, expansion };
 }
@@ -705,8 +713,10 @@ function parseUnalias(verb: string, rest: string): SlashCommand {
 }
 
 // #385 — alias expansion. Iterate `verb`+`rest` through the user's alias map
-// until the head verb is a builtin (builtins win) or not an alias, bounded at
-// MAX_ALIAS_DEPTH. Returns the final verb+rest for the normal DISPATCH path,
+// until the head verb is non-shadowable (/alias, /unalias — always win, #427)
+// or not an alias, bounded at MAX_ALIAS_DEPTH. A same-named alias now shadows
+// any OTHER builtin (the alias fires). Returns the final verb+rest for the
+// normal DISPATCH path,
 // or an {error} naming the chain when a cycle / over-long chain is hit
 // (surfaced inline in compose).
 export const MAX_ALIAS_DEPTH = 5;
@@ -724,8 +734,10 @@ export function expandAlias(
 
   for (let depth = 0; ; depth++) {
     const lower = curVerb.toLowerCase();
-    // Builtin wins; not an alias → nothing to expand. Either way, done.
-    if (lower in DISPATCH || !(lower in aliases)) {
+    // #427 — non-shadowable verb (/alias, /unalias) wins; not an alias →
+    // nothing to expand. Either way, done. Any OTHER builtin with a same-named
+    // alias falls through and expands (the alias shadows it).
+    if (isNonShadowableVerb(lower) || !(lower in aliases)) {
       return { verb: curVerb, rest: curRest };
     }
     if (depth >= MAX_ALIAS_DEPTH) {
@@ -826,9 +838,9 @@ export function parseSlash(
 
   // #385 — expand user-defined aliases BEFORE the DISPATCH lookup, so an
   // expanded alias flows through the normal command path with no downstream
-  // special-casing (spec Placement). Builtins are never shadowed (checked
-  // inside expandAlias); a cycle / over-deep chain surfaces as an inline
-  // error.
+  // special-casing (spec Placement). #427 — a same-named alias shadows its
+  // builtin (except /alias + /unalias, guarded inside expandAlias); a cycle /
+  // over-deep chain surfaces as an inline error.
   const expanded = expandAlias(verb, rest, aliases);
   if ("error" in expanded) return err(verb, expanded.error);
 

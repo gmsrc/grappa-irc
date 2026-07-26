@@ -80,15 +80,16 @@ test("#385 — define via /alias, then the expanded command takes effect (/act �
     // Not rendered as a raw privmsg — the alias resolved to /me, not text.
     await expect(scrollbackLine(page, "privmsg", tag)).toHaveCount(0);
 
-    // Precedence: a name colliding with a builtin is rejected inline (sticky
-    // red), never shadowing the builtin. Draft is preserved on error, so drive
-    // the textarea directly rather than composeSend.
+    // #427 — precedence REVERSED: a name colliding with a builtin is now
+    // ALLOWED (shadowing). Only the two-verb deny list (/alias, /unalias) is
+    // rejected inline (sticky red). Draft is preserved on error, so drive the
+    // textarea directly rather than composeSend.
     const ta = composeTextarea(page);
-    await ta.fill("/alias whois something");
+    await ta.fill("/alias unalias something");
     await ta.press("Enter");
     const alert = page.locator(".compose-box-error");
     await expect(alert).toBeVisible({ timeout: 5_000 });
-    await expect(alert).toContainText(/built-in/i);
+    await expect(alert).toContainText(/can't be aliased/i);
   } finally {
     await clearAliases(vjt.token);
   }

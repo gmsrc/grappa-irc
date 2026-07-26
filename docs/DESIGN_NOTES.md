@@ -19624,3 +19624,54 @@ distinct element — it degrades to a 1–2px lighter tint on the bowl rim,
 effectively imperceptible. This is inherent to a 16px raster (vjt flagged it up
 front) and accepted; the favicon still reads unmistakably as the grappa glass.
 Rides the batch COLD deploy (cic bundle change).
+
+## 2026-07-26 — #427 user aliases may shadow builtins, except /alias + /unalias
+
+Reverses **#385 decision #3** ("builtins are never shadowed"). Ruling (vjt,
+#grappa 12:20, refined 12:27): a user alias MAY shadow any built-in command —
+including `/join`, `/quit`, `/w`, `/q`, `/j`, `/n` — with a **minimal deny list
+of exactly two verbs: `/alias` and `/unalias`**. vjt's framing on the general
+case: if a user aliases `/join` and breaks their own client, that is their
+problem.
+
+**Why those two, and why it's safe.** There are two recovery paths and the
+ruling keeps both: (1) the alias list stays editable from **Settings → Alias**
+(the primary escape hatch, always reachable); (2) `/alias` + `/unalias`
+themselves are the in-client command-side repair surface. Shadowing those would
+remove the command-side repair path, so they are the two exceptions. **Binding
+condition (unchanged):** removal from the Settings UI must remain reachable
+unconditionally — if any future change gates the alias drawer behind a command,
+or makes removal reachable only via a shadowable path, this ruling no longer
+holds.
+
+**The trap — do NOT reuse `isBuiltinVerb` as the gate.** `isBuiltinVerb` read
+the LIVE `DISPATCH` key set; reusing it reproduces exactly #385's
+reject-EVERY-builtin behaviour. It was **removed** (production-dead after the
+swap; leaving it invites a future dev to re-wire it as a gate) and replaced by
+`isNonShadowableVerb`, a FIXED two-name `Set(["alias","unalias"])`. Both sites
+route through this one predicate:
+- `parseAlias` (define-time): rejects only the two verbs, naming them
+  ("/alias can't be aliased — it's needed to manage aliases").
+- `expandAlias` (the expander bail): the old `lower in DISPATCH` (builtin wins)
+  became `isNonShadowableVerb(lower)`. So `/alias`+`/unalias` always resolve to
+  their real handlers, while any OTHER builtin with a same-named alias now
+  expands (the alias shadows it). `expandAlias` is the ONE choke-point every
+  expansion flows through (CLI and settings-UI defines both), so it is the
+  load-bearing guard for the two verbs.
+
+**Scope — only two sites (cic).** The server does NOT validate builtin
+collision (`UserSettings.set_aliases` moduledoc: "cic owns the DISPATCH table —
+NOT here"), and the Settings → Alias add path (`AliasSettings.onAdd`) was
+already permissive (no client-side builtin check). So the UI define door needs
+no change: a `/alias`→x entry stored via the UI is INERT (the expander refuses
+to expand it) and removable — repair path intact. No escape prefix, no general
+reserved list.
+
+Tests: `slashCommands.test.ts` inverts the two #385 tests that encoded the old
+"builtin wins" behaviour (`expandAlias` now shadows; `parseAlias` now allows
+builtin names, rejects only alias/unalias) and replaces the `isBuiltinVerb`
+test with `isNonShadowableVerb`. E2e: `issue427-alias-shadow-builtins.spec.ts`
+proves a shadow takes effect end-to-end (`/whois`→`/me` renders an action row)
++ deny-list sticky-red + the binding condition (a shadowing alias stays
+removable from Settings → Alias). Rides the batch COLD deploy (cic bundle
+change).
