@@ -91,29 +91,11 @@ const DEAD_SESSION: AdminSession = {
     mailbox_len: 0,
     memory_bytes: 0,
     joined_channels: null,
-    // `alive` NOT in degraded — the false value is trustworthy
-    // (pid registered, Session.Server is genuinely dead between
-    // BEAM crash + registry sweep). Distinct from
-    // ALIVE_UNKNOWN_SESSION where introspection itself timed out.
-    introspection_degraded: ["mailbox_len", "memory_bytes", "joined_channels"],
-  },
-};
-
-const ALIVE_UNKNOWN_SESSION: AdminSession = {
-  subject_kind: "user",
-  subject_id: "55555555-5555-5555-5555-555555555555",
-  subject_label: "alive-unknown-user",
-  last_seen_at: null,
-  network_id: 1,
-  live_state: {
-    alive: false,
-    pid_inspect: "#PID<0.888.0>",
-    mailbox_len: 0,
-    memory_bytes: 0,
-    joined_channels: null,
-    // `alive` IS in degraded — boolean value unreliable; render
-    // "alive unknown" rather than trusting the half-truth (M4).
-    introspection_degraded: ["alive", "mailbox_len", "memory_bytes", "joined_channels"],
+    // `alive: false` is trustworthy here (pid registered, Session.Server
+    // genuinely dead between BEAM crash + registry sweep) — it can never
+    // appear in introspection_degraded, whose only member is
+    // `:joined_channels` (#428, server-authoritative degraded_field set).
+    introspection_degraded: ["joined_channels"],
   },
 };
 
@@ -148,6 +130,9 @@ function rowId(s: AdminSession): string {
 const BAHAMUT_NET: AdminNetwork = {
   id: 1,
   slug: "bahamut",
+  services_flavor: null,
+  visitor_enabled: true,
+  visitor_autoconnect: false,
   max_concurrent_visitor_sessions: 50,
   max_concurrent_user_sessions: 10,
   max_per_ip: 1,
@@ -160,6 +145,9 @@ const BAHAMUT_NET: AdminNetwork = {
 const AZZURRA_NET: AdminNetwork = {
   id: 2,
   slug: "azzurra",
+  services_flavor: null,
+  visitor_enabled: false,
+  visitor_autoconnect: false,
   max_concurrent_visitor_sessions: null, // unlimited
   max_concurrent_user_sessions: 5,
   max_per_ip: 2,
@@ -297,17 +285,6 @@ describe("AdminSessionsTab", () => {
     const lastSeenCell = row.querySelector(`td[title='${ninetySecondsAgo}']`);
     expect(lastSeenCell).not.toBeNull();
     expect(lastSeenCell?.textContent).toBe("1m");
-  });
-
-  it("renders 'alive unknown' when 'alive' itself is in introspection_degraded (M4)", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([ALIVE_UNKNOWN_SESSION]);
-
-    render(() => <AdminSessionsTab />);
-
-    const badge = await screen.findByLabelText(/alive unknown/i);
-    expect(badge.classList.contains("dead")).toBe(true);
-    expect(badge.textContent).toContain("alive unknown");
   });
 
   it("renders an introspection_degraded warning chip when non-empty", async () => {

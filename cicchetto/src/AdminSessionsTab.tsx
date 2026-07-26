@@ -297,27 +297,22 @@ const AdminSessionsTab: Component = () => {
   );
 };
 
-// Same three-state badge shape as AdminVisitorsTab.LiveBadge, but
-// `live_state` here is non-nullable (registry-driven — every row IS
-// a live pid). The `null` (U-0 honesty) branch lives on /admin/visitors
-// + /admin/credentials, not here.
+// Two-state badge (dead / alive), like AdminVisitorsTab.LiveBadge but
+// with `live_state` non-nullable (registry-driven — every row IS a live
+// pid). The `null` (U-0 honesty) branch lives on /admin/visitors +
+// /admin/credentials, not here.
 //
-// Per M4 reviewer (`feedback_no_silent_drops_closed` spirit): when
-// `"alive"` itself is in `introspection_degraded`, the boolean value
-// is unreliable — surface "alive unknown" instead of trusting the
-// half-truth. The degraded chip in the same row carries the detail.
+// #428 — the server's `SessionEntry.degraded_field` allowlist is
+// `:joined_channels` ONLY: `alive`/`mailbox_len`/`memory_bytes` come from
+// synchronous Process BIFs that never time out, so only the
+// `list_channels` GenServer.call can degrade. The prior "alive unknown"
+// branch (guarded on `"alive"` ∈ introspection_degraded, M4 reviewer)
+// checked a state the server can never emit; the codegen-tightened
+// `introspection_degraded: "joined_channels"[]` proved it dead code and
+// tsc rejected it. Removed. If per-field degradation of alive/mailbox/
+// memory is ever wanted, widen the SERVER `degraded_field` type first —
+// the client then inherits it through the generated mirror.
 const LiveBadge: Component<{ live: AdminSession["live_state"] }> = (props) => {
-  if (props.live.introspection_degraded.includes("alive")) {
-    return (
-      <span
-        class="live-badge dead"
-        role="status"
-        aria-label="liveness introspection timed out — alive unknown"
-      >
-        alive unknown
-      </span>
-    );
-  }
   if (props.live.alive === false) {
     return (
       <span

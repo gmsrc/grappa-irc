@@ -52,6 +52,9 @@ const USER: AdminUser = {
 const NETWORK: AdminNetwork = {
   id: 7,
   slug: "azzurra",
+  services_flavor: null,
+  visitor_enabled: false,
+  visitor_autoconnect: false,
   max_concurrent_visitor_sessions: null,
   max_concurrent_user_sessions: null,
   max_per_ip: null,
@@ -66,6 +69,7 @@ const CRED: AdminCredential = {
   network_id: NETWORK.id,
   network_slug: NETWORK.slug,
   nick: "alice",
+  ident: null,
   realname: null,
   sasl_user: null,
   auth_method: "none",

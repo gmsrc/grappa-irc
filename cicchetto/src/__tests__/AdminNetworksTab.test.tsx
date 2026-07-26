@@ -56,6 +56,9 @@ import { installAdminEvents, uninstallAdminEvents } from "../lib/adminEvents";
 const BAHAMUT: AdminNetwork = {
   id: 1,
   slug: "bahamut-test",
+  services_flavor: null,
+  visitor_enabled: false,
+  visitor_autoconnect: false,
   max_concurrent_visitor_sessions: 100,
   max_concurrent_user_sessions: 3,
   max_per_ip: 5,
@@ -68,6 +71,9 @@ const BAHAMUT: AdminNetwork = {
 const AZZURRA: AdminNetwork = {
   id: 2,
   slug: "azzurra",
+  services_flavor: null,
+  visitor_enabled: false,
+  visitor_autoconnect: false,
   max_concurrent_visitor_sessions: 100,
   max_concurrent_user_sessions: 3,
   max_per_ip: 3,
@@ -80,6 +86,9 @@ const AZZURRA: AdminNetwork = {
 const OPEN_CIRCUIT: AdminNetwork = {
   id: 3,
   slug: "tripped",
+  services_flavor: null,
+  visitor_enabled: false,
+  visitor_autoconnect: false,
   max_concurrent_visitor_sessions: 100,
   max_concurrent_user_sessions: 3,
   max_per_ip: 3,
@@ -98,6 +107,9 @@ const OPEN_CIRCUIT: AdminNetwork = {
 const UNLIMITED: AdminNetwork = {
   id: 4,
   slug: "unlimited",
+  services_flavor: null,
+  visitor_enabled: false,
+  visitor_autoconnect: false,
   max_concurrent_visitor_sessions: null,
   max_concurrent_user_sessions: null,
   max_per_ip: null,

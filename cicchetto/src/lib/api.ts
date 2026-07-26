@@ -19,15 +19,56 @@ import type { MemberEntry } from "./memberTypes";
 // `active_host` closed set (`"embedded" | "litterbox"`) is pinned by
 // the server typespec, not re-hardcoded here.
 import type {
+  AccountsAdminWireT,
+  AdminEventsWireEvent,
+  AdmissionNetworkCircuitAdminWireT,
   ChannelDirectoryStatus,
-  NetworksCredentialAuthMethod,
+  ChannelDirectoryWireEntry,
+  ChannelDirectoryWireIndexPayload,
+  LiveIntrospectionAdminWireLiveStateJson,
+  LiveIntrospectionAdminWireT,
+  NetworksAdminWireT,
   NetworksCredentialConnectionState,
+  NetworksCredentialsAdminWireSessionAction,
+  NetworksCredentialsAdminWireT,
+  NetworksFeaturedChannelsAdminWireT,
+  NetworksFeaturedChannelsWireIndexPayload,
+  NetworksFeaturedChannelsWireLink,
   NetworksNetworkServicesFlavor,
+  NetworksServersAdminWireT,
+  NetworksWireAvailableNetworkRow,
+  NetworksWireChannelJson,
+  NetworksWireCredentialJson,
+  NetworksWireHomeData,
+  NetworksWireHomeNetworkRow,
+  NetworksWireNetworkWithNickJson,
+  NetworksWireVisitorNetworkWithNickJson,
+  NotifyWireEntry,
+  QueryWindowsWireWindowsEntry,
   ScrollbackMessageKind,
+  ScrollbackWireArchiveWireEntry,
+  ScrollbackWireT,
   ServerSettingsWireUploadView,
   SessionLogWireListResult,
   SessionLogWireT,
+  SessionWireBanlistBundlePayload,
+  SessionWireBanlistEntry,
+  SessionWireLinksBundlePayload,
+  SessionWireLinksEntry,
+  SessionWireMentionsBundleMessage,
+  SessionWireNamesReplyPayload,
+  SessionWireServerReplyPayload,
   SessionWireServerReplySource,
+  SessionWireWhoisBundlePayload,
+  SessionWireWhoisExtraLine,
+  SessionWireWhoReplyPayload,
+  SessionWireWhoUser,
+  SessionWireWhowasBundlePayload,
+  SubjectSearchAdminWireResultJson,
+  VhostsAdminWireGrantJson,
+  VhostsAdminWireVhostJson,
+  VisitorsAdminWireNetworkJson,
+  VisitorsAdminWireT,
   WindowCountsSeverity,
 } from "./wireTypes";
 
@@ -211,19 +252,13 @@ export type ServicesFlavor = NetworksNetworkServicesFlavor;
 // Strict subset of `UserNetwork` (no `id`, no `kind`, no timestamps):
 // the home pane is a UI view, not a network mirror. cic's
 // `HomePaneRegistered` reads ONLY these fields.
-export type HomeNetworkRow = {
-  slug: string;
-  nick: string;
-  connection_state: ConnectionState;
-  connection_state_reason: string | null;
-  connection_state_changed_at: string | null;
-};
+export type HomeNetworkRow = NetworksWireHomeNetworkRow;
 
 // #211 phase 6 — a network AVAILABLE for a visitor to connect on-demand
 // (`visitor_enabled − attached`). Rendered on the shared home page's
 // "available to connect" section (ruling C). Users get an empty list.
 // Mirror of server-side `Grappa.Networks.Wire.available_network_row/0`.
-export type AvailableNetworkRow = { slug: string };
+export type AvailableNetworkRow = NetworksWireAvailableNetworkRow;
 
 // UX-4 bucket B / #211 phase 6 — `home_data` envelope. Populated for
 // BOTH subjects now (ruling A — the user + visitor home pages are the
@@ -231,10 +266,7 @@ export type AvailableNetworkRow = { slug: string };
 // = the visitor on-demand-connect tier (empty for users). Nested (NOT
 // flat) so future home cards land as sibling keys without touching every
 // caller.
-export type HomeData = {
-  networks: HomeNetworkRow[];
-  available_networks: AvailableNetworkRow[];
-};
+export type HomeData = NetworksWireHomeData;
 
 export type MeResponse =
   | {
@@ -400,70 +432,9 @@ export function ownNickForNetwork(net: Network, me: MeResponse | null | undefine
 // this mirrors the user-vs-visitor `MeResponse` discriminated union
 // that already lives at line 63 — the kind is the same domain
 // boundary, the type system enforces it the same way.
-export type UserNetwork = {
-  kind: "user";
-  id: number;
-  slug: string;
-  // The per-network IRC nick configured in the credential — REQUIRED
-  // for user subjects per server contract. Pre-bucket-F this was
-  // `nick?: string` and a missing-nick branch leaked through to
-  // `ownNickForNetwork` which logged "server contract violation" and
-  // returned null. The required-string typing here puts the
-  // contract violation at the construction boundary
-  // (`lib/networks.ts` resource fetch) instead of the consumption
-  // boundary (every callsite that reads `.nick`).
-  nick: string;
-  // #211 phase 7 — per-network IRC ident + realname (both nullable until
-  // set) now ride the GET /networks rows so the SettingsDrawer per-network
-  // identity editor can seed its inputs for BOTH subjects. The wire change
-  // the phase-6 visitor editor deferred to "the phase-7 convergence".
-  ident: string | null;
-  realname: string | null;
-  // T32 connection-state fields — REQUIRED for user subjects. Default
-  // for a freshly-bound credential is "connected". `failed` is a
-  // server-set transition (admission failure / network unreachable);
-  // `parked` is a user-initiated /disconnect.
-  connection_state: ConnectionState;
-  connection_state_reason: string | null;
-  connection_state_changed_at: string | null;
-  // #349 — which NickServ dialect this network runs, so the registration
-  // wizard can build the right REGISTER / verify verbs. Nullable: a
-  // credential bound before the field existed, or an operator who left
-  // it unset, reports `null` and the wizard button stays hidden.
-  services_flavor: ServicesFlavor | null;
-  inserted_at: string;
-  updated_at: string;
-};
+export type UserNetwork = NetworksWireNetworkWithNickJson;
 
-export type VisitorNetwork = {
-  kind: "visitor";
-  id: number;
-  slug: string;
-  // #211 phase 6 — the visitor row is now the TWIN of UserNetwork
-  // (ruling A: "visitors as equal to users as possible"). A visitor is
-  // multi-network (accretion + autoconnect), so `GET /networks` returns
-  // one row per attached network carrying the per-network live-nick
-  // (cic's `ownNickForNetwork` / DM-topic subscription resolves it here,
-  // no longer from the retired singular `me.network_slug`) AND the
-  // (now-real) `connection_state` (ruling D: visitor credentials carry a
-  // real connection_state — park/reconnect via PATCH /networks/:id like
-  // users, persistent across reboot). Only `kind` differs from
-  // UserNetwork.
-  nick: string;
-  // #211 phase 7 — per-network ident + realname (see UserNetwork). A
-  // visitor's identity is per-network now; the SettingsDrawer editor seeds
-  // + edits these via PATCH /networks/:id/identity.
-  ident: string | null;
-  realname: string | null;
-  connection_state: ConnectionState;
-  connection_state_reason: string | null;
-  connection_state_changed_at: string | null;
-  // #349 — services flavor (see UserNetwork). A visitor can register a
-  // nick just like a user, so the field rides the visitor row too.
-  services_flavor: ServicesFlavor | null;
-  inserted_at: string;
-  updated_at: string;
-};
+export type VisitorNetwork = NetworksWireVisitorNetworkWithNickJson;
 
 export type Network = UserNetwork | VisitorNetwork;
 
@@ -556,11 +527,7 @@ export function tagNetwork(raw: RawNetwork): Network | null {
 //
 // Q3 of P4-1 cluster pinned the merge: when a channel is in BOTH sources,
 // `:autojoin` wins (operator intent durable; session JOIN transient).
-export type ChannelEntry = {
-  name: string;
-  joined: boolean;
-  source: "autojoin" | "joined";
-};
+export type ChannelEntry = NetworksWireChannelJson;
 
 // Mirror of `GrappaWeb.DirectoryController.index/2` wire shape.
 // `status` indicates the staleness of the captured list; `captured_at` is
@@ -570,24 +537,13 @@ export type ChannelEntry = {
 // enabled `network_featured_channels` set — re-derived server-side on
 // every directory fetch (on-display freshness). No top-pinning; the
 // sort order is unchanged.
-export type DirectoryEntry = {
-  name: string;
-  topic: string | null;
-  user_count: number;
-  featured: boolean;
-};
+export type DirectoryEntry = ChannelDirectoryWireEntry;
 
 // #410 — single-sourced to the codegen mirror of
 // `Grappa.ChannelDirectory.Wire` status closed set.
 export type DirectoryStatus = ChannelDirectoryStatus;
 
-export type DirectoryPage = {
-  entries: DirectoryEntry[];
-  next_cursor: string | null;
-  total: number;
-  captured_at: string | null;
-  status: DirectoryStatus;
-};
+export type DirectoryPage = ChannelDirectoryWireIndexPayload;
 
 // Mirror of `Grappa.Scrollback.Wire.t/0` + the `:event` push wrapper
 // emitted by `GrappaWeb.GrappaChannel`. The push event name on the wire
@@ -661,16 +617,7 @@ export const NOTIFY_KINDS: ReadonlySet<MessageKind> = new Set(
 export const isContentKind = (k: MessageKind): boolean => CONTENT_KINDS.has(k);
 export const isPresenceKind = (k: MessageKind): boolean => !CONTENT_KINDS.has(k);
 
-export type ScrollbackMessage = {
-  id: number;
-  network: string;
-  channel: string;
-  server_time: number;
-  kind: MessageKind;
-  sender: string;
-  body: string | null;
-  meta: Record<string, unknown>;
-};
+export type ScrollbackMessage = ScrollbackWireT;
 
 // Bucket G H3 (codebase-review-2026-05-12): canonical full union of
 // per-channel WS events pushed by `GrappaWeb.GrappaChannel` on the
@@ -804,22 +751,14 @@ export type ChannelEvent = Extract<WireChannelEvent, { kind: "message" }>;
 // `QueryWindowsWireWindowsEntry` (see `_Assert_QueryWindowEntry`), and
 // the `query_windows_list` narrower now validates each entry against
 // this shape instead of a bare cast.
-export type QueryWindowEntry = {
-  network_id: number;
-  target_nick: string;
-  opened_at: string;
-};
+export type QueryWindowEntry = QueryWindowsWireWindowsEntry;
 
 // #247 — one /notify watch-list entry (Notify.Wire `entry/0`,
 // codegen-pinned by `_Assert_NotifyEntry`). `nick` is the display form
 // (first-add-wins); `network_id` is redundant on cic (map key) but
 // pins the type to the generated `NotifyWireEntry` — same S43 rationale
 // as `QueryWindowEntry` above.
-export type NotifyEntry = {
-  network_id: number;
-  nick: string;
-  added_at: string;
-};
+export type NotifyEntry = NotifyWireEntry;
 
 // Per-message item in the `mentions_bundle` payload (Session.Wire
 // `mentions_bundle_message/0`). Deliberately stripped vs
@@ -829,13 +768,7 @@ export type NotifyEntry = {
 // `ScrollbackMessage.kind`); the server typespec now pins the literal
 // union so codegen emits it and `_Assert_MentionsBundleMessage` gates
 // this mirror.
-export type MentionsBundleMessage = {
-  server_time: number;
-  channel: string;
-  sender: string;
-  body: string | null;
-  kind: MessageKind;
-};
+export type MentionsBundleMessage = SessionWireMentionsBundleMessage;
 
 // C2 — WHOIS bundle payload. Mirrors `Grappa.Session.Wire.whois_bundle/3`.
 // Aggregated reply to `/whois <nick>` issued by the operator. Every
@@ -844,67 +777,13 @@ export type MentionsBundleMessage = {
 // the bundle has only `target` populated and cic renders a "no such
 // nick" surface. `channels` is the joined list with mode prefixes
 // preserved (e.g. ["@#italia", "+#grappa"]).
-export type WhoisBundle = {
-  network: string;
-  target: string;
-  user: string | null;
-  host: string | null;
-  realname: string | null;
-  server: string | null;
-  server_info: string | null;
-  is_operator: boolean;
-  // #367 — 313 RPL_WHOISOPERATOR trailing role text ("is an IRC Operator" /
-  // "is a Server Administrator" / "is a Services Administrator"). Upstream
-  // ircd pass-through (NOT a cic-localized string, unlike the P-0a flags);
-  // null for a bare 313, in which case WhoisCard shows only the "oper"
-  // badge. `string | null` (not `?: string`) to match the codegen-pinned
-  // wire shape asserted by `_Assert_WhoisBundle`.
-  oper_text: string | null;
-  idle_seconds: number | null;
-  signon: number | null;
-  channels: string[] | null;
-  // P-0a — Cluster `numeric-delegation-p0` 2026-05-13. Server emits typed
-  // booleans / strings / integers; cic owns the human-readable rendering
-  // ("Services Agent" / "is using SSL" / etc) per
-  // `feedback_no_localized_strings_server_side`. Booleans default false
-  // when the corresponding numeric did not fire; optional strings nil.
-  using_ssl: boolean;
-  is_registered: boolean;
-  is_admin: boolean;
-  is_services_admin: boolean;
-  is_helper: boolean;
-  is_chanop: boolean;
-  is_agent: boolean;
-  is_java: boolean;
-  umodes: string | null;
-  away_message: string | null;
-  actually_host: string | null;
-  actually_ip: string | null;
-  // #221 — solanum (Libera.Chat) WHOIS-leg fields. Azzurra's bahamut
-  // never emits the source numerics; solanum does. cic owns the human
-  // rendering per `feedback_no_localized_strings_server_side`.
-  //   account     — 330 RPL_WHOISLOGGEDIN account name (null = not identified)
-  //   secure      — 671 RPL_WHOISSECURE (connected over TLS)
-  //   secure_cipher — 671 bracketed `[<version>, <cipher>]` TLS-protocol
-  //                 string (null when the requester can't see it)
-  //   certfp      — 276 RPL_WHOISCERTFP client cert fingerprint (null = none)
-  //   extra_lines — 320 RPL_WHOISSPECIAL + any unhandled WHOIS-leg numeric,
-  //                 relayed verbatim in arrival order (the future-proof slot).
-  account: string | null;
-  secure: boolean;
-  secure_cipher: string | null;
-  certfp: string | null;
-  extra_lines: WhoisExtraLine[] | null;
-};
+export type WhoisBundle = Omit<SessionWireWhoisBundlePayload, "kind">;
 
 // #221 — one free-form / unhandled WHOIS-leg line relayed verbatim.
 // Mirrors `Grappa.Session.Wire.whois_extra_line/0`. `numeric` is the
 // source RPL_* code; `text` the upstream trailing (network-defined
 // free-form, so cic renders it as-is — no typed field to localize).
-export type WhoisExtraLine = {
-  numeric: number;
-  text: string;
-};
+export type WhoisExtraLine = SessionWireWhoisExtraLine;
 
 // #140 — /names roster bundle payload. Mirrors
 // `Grappa.Session.Wire.names_reply/3`. Ephemeral reply to `/names
@@ -913,11 +792,7 @@ export type WhoisExtraLine = {
 // `members_seeded`, the authoritative sidebar set — this is a parallel
 // VIEW). cic renders a grouped, scrollable, dismissable modal; clicking
 // a nick opens a query. NOT persisted to scrollback.
-export type NamesReply = {
-  network: string;
-  channel: string;
-  members: MemberEntry[];
-};
+export type NamesReply = Omit<SessionWireNamesReplyPayload, "kind">;
 
 // #169 — one parsed 352 RPL_WHOREPLY row for the /who modal. Mirrors
 // `Grappa.Session.Wire.who_user/1`. A SUPERSET of `MemberEntry` (adds
@@ -926,27 +801,14 @@ export type NamesReply = {
 // modal renders it verbatim. `hops`/`realname` are null when the server
 // omits the trailing field. WHOX (354) is not handled; the shape leaves
 // room for a future handler to add account etc.
-export type WhoUser = {
-  nick: string;
-  user: string;
-  host: string;
-  server: string;
-  modes: string;
-  hops: number | null;
-  realname: string | null;
-  channel: string;
-};
+export type WhoUser = SessionWireWhoUser;
 
 // #169 — /who roster bundle payload. Mirrors
 // `Grappa.Session.Wire.who_reply/3`. Ephemeral reply to `/who <#chan|nick>`:
 // the server folds the 352 burst and drains on 315 into ONE typed event
 // with the parsed per-user rows. cic renders a dismissable per-user table
 // (WhoModal); clicking a nick opens a query. NOT persisted to scrollback.
-export type WhoReply = {
-  network: string;
-  target: string;
-  users: WhoUser[];
-};
+export type WhoReply = Omit<SessionWireWhoReplyPayload, "kind">;
 
 // #127 — /info, /version, /motd reply bundle. Mirrors
 // `Grappa.Session.Wire.server_reply/3`. Ephemeral reply to an explicit
@@ -960,11 +822,7 @@ export type WhoReply = {
 // #410 — single-sourced to the codegen mirror of the Session.Wire
 // server-reply `source` closed set.
 export type ServerReplySource = SessionWireServerReplySource;
-export type ServerReply = {
-  network: string;
-  source: ServerReplySource;
-  lines: string[];
-};
+export type ServerReply = Omit<SessionWireServerReplyPayload, "kind">;
 
 // P-0c — WHOWAS bundle payload. Mirrors `Grappa.Session.Wire.whowas_bundle/3`.
 // Aggregated reply to `/whowas <nick>` issued by the operator. The
@@ -974,16 +832,7 @@ export type ServerReply = {
 // a "no history" surface. `logoff_time` ships as the upstream-supplied
 // localized ctime string (server emits it verbatim — cic does NOT
 // parse).
-export type WhowasBundle = {
-  network: string;
-  target: string;
-  user: string | null;
-  host: string | null;
-  realname: string | null;
-  server: string | null;
-  logoff_time: string | null;
-  not_found: boolean;
-};
+export type WhowasBundle = Omit<SessionWireWhowasBundlePayload, "kind">;
 
 // #376 — one ban entry from a 367 RPL_BANLIST row. Mirrors
 // `Grappa.Session.Wire.banlist_entry/0`. `mask` is the ban target
@@ -992,22 +841,14 @@ export type WhowasBundle = {
 // verbatim per `feedback_no_localized_strings_server_side` — cic formats
 // it to the viewer's locale). `setter`/`set_ts` are null when the ircd
 // omits them (older ircds / solanum send only the mask).
-export type BanlistEntry = {
-  mask: string;
-  setter: string | null;
-  set_ts: string | null;
-};
+export type BanlistEntry = SessionWireBanlistEntry;
 
 // #376 — BANLIST bundle payload. Mirrors `Grappa.Session.Wire.banlist_bundle/3`.
 // Aggregated reply to `/banlist <#chan>` (or a raw `MODE #chan b`). Unlike
 // WhowasBundle (most-recent entry only) it ships ALL `entries` — a ban
 // list is a set of rows — in the wire order the ircd sent them. `channel`
 // is the rfc1459-folded channel (#364).
-export type BanlistBundle = {
-  network: string;
-  channel: string;
-  entries: BanlistEntry[];
-};
+export type BanlistBundle = Omit<SessionWireBanlistBundlePayload, "kind">;
 
 // #238 — one server node from a 364 RPL_LINKS row. Mirrors
 // `Grappa.Session.Wire.links_entry/0`. `server` is the node; `linked_to`
@@ -1015,12 +856,7 @@ export type BanlistBundle = {
 // distance/depth. `linked_to`/`hopcount`/`description` are null only when
 // the upstream line is malformed. Pinned to the generated
 // SessionWireLinksEntry by `_Assert_LinksEntry`.
-export type LinksEntry = {
-  server: string;
-  linked_to: string | null;
-  hopcount: number | null;
-  description: string | null;
-};
+export type LinksEntry = SessionWireLinksEntry;
 
 // #238 — LINKS topology bundle payload. Mirrors
 // `Grappa.Session.Wire.links_bundle/2`. Aggregated reply to `/links [<mask>]`:
@@ -1028,10 +864,7 @@ export type LinksEntry = {
 // server nodes (a topology is a set). cic reconstructs the spanning tree from
 // the `linked_to` parent edges (LinksModal, an interactive SVG map). An EMPTY
 // `entries` list is the restricted/hidden-topology signal. NOT persisted.
-export type LinksReply = {
-  network: string;
-  entries: LinksEntry[];
-};
+export type LinksReply = Omit<SessionWireLinksBundlePayload, "kind">;
 
 // Mirror of the events fanned out on the user-level PubSub topic
 // (`Topic.user(user_name)`), pinned by:
@@ -1341,258 +1174,12 @@ export type AdmissionFlow =
   | "bootstrap_visitor"
   | "patch_network_connect";
 
+// #428 — mirror of AdminEventsWireEvent; capacity_reject.flow kept tight (AdmissionFlow) until the server closes the atom() set (follow-up).
 export type WireAdminEvent =
-  | {
-      kind: "circuit_open";
-      network_id: number;
-      network_slug: string | null;
-      threshold: number;
-      cooldown_ms: number;
-      at: string;
-    }
-  | {
-      kind: "circuit_close";
-      network_id: number;
-      network_slug: string | null;
-      reason: "success" | "cooldown_expired";
-      at: string;
-    }
-  | {
-      kind: "capacity_reject";
+  | Exclude<AdminEventsWireEvent, { kind: "capacity_reject" }>
+  | (Omit<Extract<AdminEventsWireEvent, { kind: "capacity_reject" }>, "flow"> & {
       flow: AdmissionFlow;
-      error: string;
-      network_id: number;
-      network_slug: string | null;
-      source_ip: string | null;
-      at: string;
-    }
-  | {
-      kind: "visitor_deleted";
-      visitor_id: string;
-      visitor_nick: string | null;
-      // #211 phase 7 — `network_slug` DROPPED (a visitor is multi-network;
-      // the delete event uses the representative-credential nick, not a
-      // singular slug). Mirrors the server `AdminEvents.Wire` drop.
-      actor_user_id: string | null;
-      actor_user_name: string | null;
-      at: string;
-    }
-  | {
-      kind: "visitor_reaped";
-      visitor_id: string;
-      visitor_nick: string | null;
-      // #211 phase 7 — `network_slug` DROPPED (see visitor_deleted).
-      at: string;
-    }
-  | { kind: "reaper_swept"; count: number; at: string }
-  // REV-A C1 — per-upload reap event. Mirror of
-  // `Grappa.AdminEvents.Wire.upload_reaped/4` (wire.ex:113-127). Emitted
-  // by `Grappa.Uploads.Reaper` on every TTL-expired upload row. Pre-REV-A
-  // this kind was missing from the cic union; an upload sweep crashed
-  // `ingest()` via `assertNever` (every TTL tick on a deployment with
-  // active uploads).
-  | {
-      kind: "upload_reaped";
-      upload_id: string;
-      slug: string;
-      subject_kind: "user" | "visitor";
-      subject_id: string;
-      at: string;
-    }
-  // REV-A C1 — end-of-sweep summary. Mirror of
-  // `Grappa.AdminEvents.Wire.uploads_swept/1` (wire.ex:122-126). Fires
-  // once per non-empty Reaper tick + every operator-triggered sweep.
-  | { kind: "uploads_swept"; count: number; at: string }
-  | {
-      kind: "session_disconnected";
-      subject_kind: "user" | "visitor";
-      subject_id: string;
-      network_id: number;
-      network_slug: string | null;
-      actor_user_id: string | null;
-      actor_user_name: string | null;
-      at: string;
-    }
-  | {
-      kind: "session_terminated";
-      subject_kind: "user" | "visitor";
-      subject_id: string;
-      network_id: number;
-      network_slug: string | null;
-      actor_user_id: string | null;
-      actor_user_name: string | null;
-      at: string;
-    }
-  | {
-      kind: "network_caps_updated";
-      network_id: number;
-      network_slug: string;
-      max_concurrent_visitor_sessions: number | null;
-      max_concurrent_user_sessions: number | null;
-      max_per_ip: number | null;
-      actor_user_id: string | null;
-      actor_user_name: string | null;
-      at: string;
-    }
-  | {
-      kind: "circuit_reset";
-      network_id: number;
-      network_slug: string | null;
-      actor_user_id: string | null;
-      actor_user_name: string | null;
-      at: string;
-    }
-  | {
-      // REV-H H5 (2026-05-22): `network_slug` tightened to non-null.
-      // The server-side broadcaster (`AdminEvents.broadcast_lifecycle/3`)
-      // early-returns when `Networks.get_network/1` returns nil, so
-      // this event NEVER fires with a missing slug. Other admin events
-      // (circuit_open / capacity_reject / session_terminated) keep
-      // their nullable `network_slug` because the deleted-network race
-      // CAN reach those paths.
-      kind: "cap_counts_changed";
-      network_id: number;
-      network_slug: string;
-      visitors: number;
-      users: number;
-      max_concurrent_visitor_sessions: number | null;
-      max_concurrent_user_sessions: number | null;
-      at: string;
-    }
-  // ----- Admin-panel bucket 4 mutation events ----------------------
-  //
-  // Operator-initiated CRUD on users / networks / servers /
-  // credentials. All carry non-null actor (admin gate guarantees a
-  // logged-in operator at the controller). Wire shapes mirror
-  // `lib/grappa/admin_events/wire.ex` constructors.
-  | {
-      kind: "user_created";
-      user_id: string;
-      user_name: string;
-      is_admin: boolean;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "user_updated";
-      user_id: string;
-      user_name: string;
-      is_admin: boolean;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "user_password_changed";
-      user_id: string;
-      user_name: string;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "user_deleted";
-      user_id: string;
-      user_name: string;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "network_created";
-      network_id: number;
-      network_slug: string;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "network_deleted";
-      network_id: number;
-      network_slug: string;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "server_added";
-      network_id: number;
-      network_slug: string;
-      server_id: number;
-      host: string;
-      port: number;
-      tls: boolean;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "server_updated";
-      network_id: number;
-      network_slug: string;
-      server_id: number;
-      host: string;
-      port: number;
-      tls: boolean;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "server_removed";
-      network_id: number;
-      network_slug: string;
-      server_id: number;
-      host: string;
-      port: number;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "credential_bound";
-      user_id: string;
-      user_name: string;
-      network_id: number;
-      network_slug: string;
-      nick: string;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "credential_updated";
-      user_id: string;
-      user_name: string;
-      network_id: number;
-      network_slug: string;
-      session_action: "left_alone" | "stopped";
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  | {
-      kind: "credential_unbound";
-      user_id: string;
-      user_name: string;
-      network_id: number;
-      network_slug: string;
-      actor_user_id: string;
-      actor_user_name: string;
-      at: string;
-    }
-  // S6 (review 2026-07-19) — a source IP crossed the mode-1 login
-  // failure threshold. Emitted once per (ip, window), on the crossing
-  // failure only. `source_ip` null mirrors the server's RemoteIP
-  // honesty (unresolvable peer).
-  | {
-      kind: "login_throttled";
-      source_ip: string | null;
-      failures: number;
-      window_ms: number;
-      at: string;
-    };
+    });
 
 export type AdminSnapshotPayload = { events: WireAdminEvent[] };
 
@@ -1773,14 +1360,7 @@ export async function me(token: string): Promise<MeResponse> {
 // `/admin/sessions[].live_state` (non-null since the latter is
 // registry-driven). Single source per "Implement once, reuse
 // everywhere".
-export type AdminLiveState = {
-  alive: boolean;
-  pid_inspect: string;
-  mailbox_len: number;
-  memory_bytes: number;
-  joined_channels: string[] | null;
-  introspection_degraded: string[];
-};
+export type AdminLiveState = LiveIntrospectionAdminWireLiveStateJson;
 
 export type AdminVisitorLiveState = AdminLiveState;
 
@@ -1788,30 +1368,12 @@ export type AdminVisitorLiveState = AdminLiveState;
 // multi-network; each attached network carries its own nick +
 // connection_state + live_state (`null` = the U-0 honesty signal). Mirror
 // of `Grappa.Visitors.AdminWire.network_json/0`.
-export type AdminVisitorNetwork = {
-  network_slug: string;
-  // #269 — the raw integer FK. The Visitors-tab per-network Disconnect ⇄
-  // Reconnect toggle builds the composite session id
-  // `visitor:<id>:<network_id>` from it to drive the `/admin/sessions/:id/*`
-  // verbs (which key on that composite, NOT the slug). Mirror of the
-  // `network_id` added to `Grappa.Visitors.AdminWire.network_json/0`.
-  network_id: number;
-  nick: string;
-  connection_state: ConnectionState;
-  live_state: AdminVisitorLiveState | null;
-};
+export type AdminVisitorNetwork = VisitorsAdminWireNetworkJson;
 
 // #211 phase 7 — the admin visitor row is identity-wide + a per-network
 // list (was flat `{nick, network_slug, live_state}`). `identified` derives
 // server-side from the credentials (any network holds a NickServ secret).
-export type AdminVisitor = {
-  id: string;
-  expires_at: string | null;
-  identified: boolean;
-  ip: string | null;
-  inserted_at: string;
-  networks: AdminVisitorNetwork[];
-};
+export type AdminVisitor = VisitorsAdminWireT;
 
 export type AdminVisitorsResponse = { visitors: AdminVisitor[] };
 
@@ -1847,20 +1409,7 @@ export async function adminDeleteVisitor(token: string, id: string): Promise<voi
 // server — it's a human-readable label only.
 export type AdminSessionLiveState = AdminLiveState;
 
-export type AdminSession = {
-  subject_kind: "user" | "visitor";
-  subject_id: string;
-  subject_label: string | null;
-  // ISO8601 of MAX(accounts_sessions.last_seen_at) across the
-  // subject's cookie sessions, or null when no cookie ever existed
-  // (Bootstrap-spawned bouncer with no browser login). Bumped at
-  // most every 60s by REST + WS authn paths — minute-resolution in
-  // practice. Useful diagnostic for "is the user actually using
-  // the PWA" alongside the live BEAM state.
-  last_seen_at: string | null;
-  network_id: number;
-  live_state: AdminSessionLiveState;
-};
+export type AdminSession = LiveIntrospectionAdminWireT;
 
 export type AdminSessionsResponse = { sessions: AdminSession[] };
 
@@ -1961,12 +1510,8 @@ export async function adminListSessionLog(
 // renderer.
 export type AdminCircuitStateKind = "open" | "closed";
 
-export type AdminCircuitState = {
+export type AdminCircuitState = Omit<AdmissionNetworkCircuitAdminWireT, "state"> & {
   state: AdminCircuitStateKind;
-  failure_count: number;
-  window_start_ms: number;
-  cooled_at_ms: number;
-  retry_after_seconds: number;
 };
 
 // U-3 (UD4): per-network live-session counts split by subject_kind.
@@ -1980,14 +1525,7 @@ export type AdminLiveCounts = {
   users: number;
 };
 
-export type AdminNetwork = {
-  id: number;
-  slug: string;
-  max_concurrent_visitor_sessions: number | null;
-  max_concurrent_user_sessions: number | null;
-  max_per_ip: number | null;
-  inserted_at: string;
-  updated_at: string;
+export type AdminNetwork = NetworksAdminWireT & {
   circuit_state: AdminCircuitState | null;
   live_counts: AdminLiveCounts;
 };
@@ -2042,20 +1580,10 @@ export async function adminPatchNetworkCaps(
 // availability-only (#251: the admin hard-pin was removed; the user always
 // decides selection). `host_candidates` are the host's bindable IP literals
 // (loopback/link-local pre-filtered) the admin picks from when creating a vhost.
-export type AdminVhost = {
-  id: number;
-  address: string;
-  in_pool: boolean;
-  generally_available: boolean;
-  inserted_at: string;
-  updated_at: string;
-};
+export type AdminVhost = VhostsAdminWireVhostJson;
 
-export type AdminVhostGrant = {
-  id: number;
-  vhost_id: number;
+export type AdminVhostGrant = Omit<VhostsAdminWireGrantJson, "subject_type"> & {
   subject_type: "user" | "visitor";
-  subject_id: string;
 };
 
 export type AdminVhostsResponse = {
@@ -2151,11 +1679,8 @@ export async function adminRevokeVhostGrant(token: string, grantId: number): Pro
 // ("network - nick"); it is null for a user (no single network). Nests
 // under `/admin/vhosts/` so it rides the existing nginx allowlist alt (no
 // proxy change). Server shape: `Grappa.SubjectSearch.AdminWire`.
-export type AdminSubjectSearchResult = {
+export type AdminSubjectSearchResult = Omit<SubjectSearchAdminWireResultJson, "type"> & {
   type: "user" | "visitor";
-  id: string;
-  network: string | null;
-  nick: string;
 };
 
 export type AdminSubjectSearchResponse = { results: AdminSubjectSearchResult[] };
@@ -2480,12 +2005,7 @@ export async function postPart(
 // open query windows) + the `$server` pseudo-channel. The unwrap below
 // returns the inner array; the envelope is a stylistic mirror of
 // MembersJSON's `{"members": [...]}` shape.
-export type ArchiveEntry = {
-  target: string;
-  kind: "channel" | "query";
-  last_activity: number;
-  row_count: number;
-};
+export type ArchiveEntry = ScrollbackWireArchiveWireEntry;
 
 export async function listArchive(token: string, networkSlug: string): Promise<ArchiveEntry[]> {
   const res = await fetch(`/networks/${encodeURIComponent(networkSlug)}/archive`, {
@@ -2592,25 +2112,7 @@ export async function deleteNotifyNick(
 // surface.
 export type CredentialConnectionStateRequest = "connected" | "parked";
 
-export type CredentialJson = {
-  network: string;
-  nick: string;
-  // #152 — per-network IRC ident (nullable; falls back to nick server-side).
-  ident: string | null;
-  realname: string | null;
-  sasl_user: string | null;
-  // S3 — the codegen gate (`_Assert_CredentialJson`) revealed this had
-  // drifted to open `string`; pinned back to the server's closed
-  // `Grappa.IRC.AuthFSM.auth_method/0` union.
-  auth_method: NetworksCredentialAuthMethod;
-  auth_command_template: string | null;
-  autojoin_channels: string[];
-  connection_state: ConnectionState;
-  connection_state_reason: string | null;
-  connection_state_changed_at: string | null;
-  inserted_at: string;
-  updated_at: string;
-};
+export type CredentialJson = NetworksWireCredentialJson;
 
 export async function patchNetwork(
   token: string,
@@ -2699,14 +2201,7 @@ export async function putPerform(
 // upstream (`:admin_authn`). Shapes match `Grappa.{Accounts,Networks,
 // Networks.Servers,Networks.Credentials}.AdminWire.t()` server-side.
 
-export type AdminUser = {
-  id: string;
-  name: string;
-  is_admin: boolean;
-  inserted_at: string;
-  updated_at: string;
-  live_session_count: number;
-};
+export type AdminUser = AccountsAdminWireT;
 
 export type AdminUsersResponse = { users: AdminUser[] };
 
@@ -2801,22 +2296,7 @@ export async function adminDeleteNetwork(token: string, id: number): Promise<voi
 
 // Bucket 1 — Server CRUD scoped under a network.
 
-export type AdminServer = {
-  id: number;
-  network_id: number;
-  host: string;
-  port: number;
-  tls: boolean;
-  priority: number;
-  enabled: boolean;
-  // #266 — admin-configured per-network outbound source bind (null = unset →
-  // vhost selection / pool / kernel default). Mirrors
-  // Grappa.Networks.Servers.AdminWire (hand-declared: admin_wire.ex is outside
-  // the gen_wire_types glob).
-  source_address: string | null;
-  inserted_at: string;
-  updated_at: string;
-};
+export type AdminServer = NetworksServersAdminWireT;
 
 export type AdminServerCreate = {
   host: string;
@@ -2900,20 +2380,11 @@ export async function adminDeleteServer(
 // read-only to users/visitors via the public on-display read.
 
 // Public delivery shape — mirrors NetworksFeaturedChannelsWireLink.
-export type FeaturedChannelLink = { name: string; description: string | null };
-export type FeaturedChannelsResponse = { channels: FeaturedChannelLink[] };
+export type FeaturedChannelLink = NetworksFeaturedChannelsWireLink;
+export type FeaturedChannelsResponse = NetworksFeaturedChannelsWireIndexPayload;
 
 // Admin shape — mirrors Grappa.Networks.FeaturedChannels.AdminWire.
-export type AdminFeaturedChannel = {
-  id: number;
-  network_id: number;
-  name: string;
-  description: string | null;
-  position: number;
-  enabled: boolean;
-  inserted_at: string;
-  updated_at: string;
-};
+export type AdminFeaturedChannel = NetworksFeaturedChannelsAdminWireT;
 
 export type AdminFeaturedChannelCreate = {
   name: string;
@@ -3000,25 +2471,9 @@ export async function adminDeleteFeaturedChannel(
 
 export type AdminCredentialLiveState = AdminLiveState;
 
-export type AdminCredential = {
-  user_id: string;
-  network_id: number;
-  network_slug: string;
-  nick: string;
-  realname: string | null;
-  sasl_user: string | null;
-  auth_method: string;
-  auth_command_template: string | null;
-  autojoin_channels: string[];
-  last_joined_channels: string[];
-  connection_state: ConnectionState;
-  connection_state_reason: string | null;
-  connection_state_changed_at: string | null;
-  inserted_at: string;
-  updated_at: string;
-  live_state: AdminCredentialLiveState | null;
+export type AdminCredential = NetworksCredentialsAdminWireT & {
   // Present on PUT responses only; index/GET shape excludes it.
-  session_action?: "left_alone" | "stopped";
+  session_action?: NetworksCredentialsAdminWireSessionAction;
 };
 
 export type AdminCredentialsResponse = { credentials: AdminCredential[] };
