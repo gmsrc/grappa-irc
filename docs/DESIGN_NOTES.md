@@ -19129,3 +19129,24 @@ finite-and-positive (not a bare `typeof` — a NaN/0 cap is not a real limit, so
 it falls back to the vetted capless copy rather than render "0 bytes"),
 mirroring `credentials_present` / `anon_collision`. The friendlyApiError matrix
 grows a cap row beside the fallback row, same shape as those siblings.
+
+**Update (same day) — vjt resolved the two flags this entry deferred.**
+
+1. **FLOOR, not round (cap-safety).** `formatBytes` now floors instead of
+   rounding: a non-round cap must never render LARGER than the true limit (round
+   would let a 1.99 MB cap read "2 MB", overstating it). A direct consequence:
+   flooring can never overflow a unit (round could push 1023.99 KB → "1024 KB"),
+   so the **boundary-promotion branch is removed as now-dead code** — 1048575 B
+   reads "1023 KB", never the rounded-up "1 MB". Its vitest gained discriminating
+   floor cases (2.75 KB → "2.7 KB", 10.5 MB → "10 MB", 1023.99 KB → "1023 KB").
+
+2. **Cap spelling UNIFIED — the deliberate split is resolved.** The three
+   `uploadOrchestrator` cap messages (`httpUploadMessage`'s 413 arm, the
+   pre-check reject, the transcode-oversize combined error) now spell their cap
+   via `formatBytes`, matching `friendlyApiError`. Both surfaces now agree at
+   EVERY magnitude — an admin-set 512 KB cap reads "512 KB" on both, not
+   "0.5 MB" on one. `mbLabel` survives ONLY as the fixed MB-only spelling of the
+   "X of Y" upload-PROGRESS line (a genuine fixed-units contract, untouched):
+   the split was between cap-print and progress, and only the cap-print side
+   moved. This is "reuse the verbs, not the nouns" — one cap formatter, one
+   progress formatter, no data-model overlap.
