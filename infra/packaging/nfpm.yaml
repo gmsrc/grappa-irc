@@ -1,0 +1,104 @@
+# nfpm config — builds the grappa .deb (and, once R3 adds a per-distro
+# ERTS build matrix, the .rpm) from the staging tree assembled by build.sh.
+#
+# nfpm is a single Go binary (no dpkg/rpmbuild toolchain, no host hex) —
+# it renders the SAME staging tree into either format. R1 ships the .deb
+# only: the release bundles ERTS + crypto NIFs linked against the BUILD
+# host's libc/libssl, so a Debian-built payload is a valid .deb but NOT a
+# valid .rpm (a Fedora .rpm needs a Fedora-built ERTS). See build.sh + the
+# packaging README for that R3 boundary.
+#
+# ${GRAPPA_VERSION} / ${GRAPPA_PKG_ARCH} are expanded from the environment
+# build.sh exports.
+
+name: grappa
+arch: ${GRAPPA_PKG_ARCH}
+platform: linux
+version: ${GRAPPA_VERSION}
+section: net
+priority: optional
+maintainer: "Marcello Barnaba <vjt@users.noreply.github.com>"
+vendor: "Marcello Barnaba"
+homepage: "https://github.com/vjt/grappa-irc"
+license: "MIT"
+description: |
+  Always-on IRC bouncer with a REST + Phoenix Channels API and a bundled
+  irssi-shaped web PWA (cicchetto).
+  One supervised OTP process per (user, network); sqlite-backed
+  scrollback. Ships a self-contained Erlang/OTP release and self-serves
+  the web frontend, so nginx is recommended for TLS but not required.
+
+# Runtime shared libraries the bundled ERTS + crypto/exiftool paths need.
+# The mix release bundles ERTS itself; these are the system libs it links.
+depends:
+  - libssl3
+  - libncurses6
+  - libstdc++6
+  - libgcc-s1
+  - ca-certificates
+  - passwd
+
+# Media metadata strip (#39) shells out to these fail-closed; without
+# them uploads 422. nginx is the recommended TLS/static front. All
+# optional — the bouncer boots and serves without any of them.
+recommends:
+  - libimage-exiftool-perl
+  - ffmpeg
+  - nginx
+
+contents:
+  # The mix release (self-contained ERTS + compiled app + boot scripts).
+  - src: ./staging/usr/lib/grappa
+    dst: /usr/lib/grappa
+
+  # The built cicchetto SPA dist (CIC_DIST_ROOT points here). Read-only
+  # static assets served by Plug.Static.
+  - src: ./staging/usr/share/grappa/cicchetto-dist
+    dst: /usr/share/grappa/cicchetto-dist
+
+  # systemd vendor unit.
+  - src: ./grappa.service
+    dst: /usr/lib/systemd/system/grappa.service
+
+  # Env template (postinstall copies to /etc/grappa/grappa.env on first
+  # install) + the openssl secret generator.
+  - src: ./grappa.env.example
+    dst: /usr/share/grappa/grappa.env.example
+  - src: ./gen-secrets.sh
+    dst: /usr/share/grappa/gen-secrets.sh
+    file_info:
+      mode: 0755
+
+  # Operator CLI: `grappa migrate`, `grappa remote`, `grappa gen-secrets`.
+  - src: ./grappa-wrapper.sh
+    dst: /usr/bin/grappa
+    file_info:
+      mode: 0755
+
+  # README shipped to the doc dir (postinstall points the operator here).
+  - src: ./README.md
+    dst: /usr/share/doc/grappa/README.md
+
+  # State + config dirs (owned so the daemon can write; env dir root:grappa).
+  - dst: /var/lib/grappa
+    type: dir
+    file_info:
+      mode: 0750
+      owner: grappa
+      group: grappa
+  - dst: /etc/grappa
+    type: dir
+    file_info:
+      mode: 0750
+      owner: root
+      group: grappa
+
+# NB: /etc/grappa/grappa.env is intentionally NOT a packaged file (and
+# not a conffile). postinstall creates it from the template with generated
+# secrets, so an upgrade never clobbers an operator's live secrets.
+
+scripts:
+  preinstall: ./scripts/preinstall.sh
+  postinstall: ./scripts/postinstall.sh
+  preremove: ./scripts/preremove.sh
+  postremove: ./scripts/postremove.sh

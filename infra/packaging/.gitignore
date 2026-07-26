@@ -1,0 +1,4 @@
+# Build artifacts assembled by build.sh — never committed.
+staging/
+*.deb
+*.rpm

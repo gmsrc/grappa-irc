@@ -18790,3 +18790,91 @@ deliberate open map. `CredentialConnectionStateRequest` (`connected|parked`,
 a narrower REQUEST subset) is deliberately NOT merged into
 `ConnectionState`. cic-only: `wireTypes.ts` unchanged, no server `@type`
 touched, wire bytes identical.
+
+## 2026-07-26 — Self-hosting Part 2 / R1: distro packaging substrate + `.deb` (GH #419)
+
+Part 1 (#399) made the release self-serve the cicchetto SPA
+(`Grappa.Cic.Bundle.root/0` + `Plug.Static` + `SpaController` catch-all,
+relocatable via `CIC_DIST_ROOT`), so a native install stands up without
+nginx. Part 2 packages that: a `.deb` carrying a self-contained
+`mix release` (bundled ERTS, no target-side mix), the built SPA, a
+systemd unit, and a migrate command an operator can run without a dev
+toolchain. All new files live under `infra/packaging/`; **zero Elixir
+changed** — the release + `Grappa.Release.migrate/0` already existed.
+
+**Decomposition (scope is the risk, not the code).** #419 spans three
+package formats + AUR + release CI + a migrate command — easily three
+rounds, and a half-done packaging migration is worse than none. Split by
+a shared **substrate** + thin per-format **renderers** (reuse the verbs,
+not the nouns): the substrate is `build.sh` (mix release + cic build →
+FHS staging), the FHS layout, the maintainer scripts, the openssl secret
+bootstrap, and the migrate command; each format is a thin renderer over
+it. R1 = substrate + the first renderer (nfpm → `.deb`) + the migrate
+proof. R2 = Arch `PKGBUILD`/AUR. R3 = tag-driven release CI (+ the
+`.rpm`). A `.deb` without a `.rpm` is a coverage gap, not the
+"half-typed" landmine CLAUDE.md warns about — the substrate is shared and
+each renderer is complete.
+
+**FHS.** Release → `/usr/lib/grappa`; SPA dist → `/usr/share/grappa/cicchetto-dist`
+(`CIC_DIST_ROOT`); env/secrets → `/etc/grappa/grappa.env` (`0640`
+root:grappa, created on first install, never a conffile so upgrades never
+clobber live secrets); state (DB + uploads) → `/var/lib/grappa`; unit →
+`/usr/lib/systemd/system/grappa.service`; operator CLI → `/usr/bin/grappa`
+(wrapper: sources env, drops to the `grappa` system user, maps
+`migrate`→`eval 'Grappa.Release.migrate()'` and `gen-secrets`).
+
+**Secrets via openssl only — deliberately OFF the release `eval` path.**
+A packaged host has no mix, so the from-source bootstrap
+(`infra/linux/install.sh`, which shells to `mix phx.gen.secret` etc.)
+cannot run. `gen-secrets.sh` generates every secret with openssl,
+matching the mix generators' shapes: `GRAPPA_ENCRYPTION_KEY` =
+`openssl rand -base64 32` ≡ `Base.encode64(:crypto.strong_rand_bytes(32))`;
+VAPID = `openssl ecparam prime256v1` → base64url(65-byte uncompressed
+point / 32-byte scalar), byte-identical to
+`Mix.Tasks.Grappa.GenVapid`'s `:crypto.generate_key(:ecdh, :prime256v1)`
++ `Base.url_encode64(_, padding: false)`. Validated on real OpenSSL 3.6.2,
+including the leading-`0x00`-scalar edge (hex→bytes stays in-pipe so
+command substitution can't strip the NUL; left-pad to the RFC-7518 fixed
+32 bytes). Tying secret gen to `eval` would build on the very path R1
+still has to prove works.
+
+**The migrate/eval proof + risk.** `grappa migrate` reaches
+`Ecto.Migrator` via `bin/grappa eval 'Grappa.Release.migrate()'`. On the
+FreeBSD jail this works; but `install.sh` documents that on a native-Linux
+**asdf-built** ERTS the release `eval`/`remote`/`rpc` boot variant crashes
+at kernel start (a `persistent_term`/`code_server` badarg — even
+`eval '1 + 1'`), and sidesteps it with `mix ecto.migrate`. A packaged host
+has no mix, so migrate MUST work through `eval` on the **packaged** ERTS.
+R1 PROVED it: `build.sh` in `elixir:1.19-otp-28` produced
+`grappa_0.5.0_arm64.deb`; installed on a clean `debian:trixie` (no
+elixir), `postinstall` generated the secrets (openssl) and ran migrate via
+`eval` — **72 migrations applied, zero eval-crash**. The native-Linux
+crash is asdf-ERTS-specific and does NOT reproduce on the bundled-ERTS
+package. The release then booted web-only (`bin/grappa start`), served
+`/healthz` 200 and the SPA `index.html`. So the packaged migrate model is
+sound — safe to replicate onto rpm/Arch in R2/R3. `postinstall` runs
+migrate and fails LOUD on error (no half-migrated silent install); if a
+future target ever DID hit the crash, the fallback is a boot-time migrate
+flag (a separate design, not silently bolted on).
+
+**Locale finding (from the proof).** A locale-less boot warned "the VM is
+running with native name encoding of latin1 which may cause Elixir to
+malfunction" — real risk since IRC nicks/channels/filenames are UTF-8, and
+systemd sets no `LANG` by default. Fixed in the packaged unit with
+`Environment=LANG=C.UTF-8` (always present on glibc, no locale-gen). The
+pre-existing `infra/linux` + `infra/freebsd` units carry the same latent
+gap — flagged, out of R1 scope.
+
+**`priv/static` single-tarball: declined for packaging** (#419 asked to
+decide it here). The `CIC_DIST_ROOT`-relocatable model ships the dist as a
+separate payload, which is exactly what packaging needs; `priv/static`
+reaches into deploy machinery. A package can still adopt it later via the
+env var.
+
+**Build isolation.** `build.sh` runs in a throwaway Debian/glibc
+`elixir:1.19-otp-28` container (NOT the alpine dev image — musl ERTS won't
+run on a glibc target; NOT `scripts/*.sh`, which share the MAIN repo's
+`_build` via the `./:/app` bind mount and would contend with concurrent
+compiles). nfpm is a single Go binary (no dpkg/rpmbuild, no host hex).
+The `.rpm` needs a Fedora-built ERTS (glibc/libssl specific) → an R3
+per-distro build matrix, not a one-line nfpm flip.
