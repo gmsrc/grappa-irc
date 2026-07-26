@@ -73,6 +73,14 @@ const networkIdBySlugMock = vi.fn<(slug: string) => number | undefined>(() => un
 // modal open signal. Mock the open verb so the click is observable without
 // mounting the modal (its behaviour is in ShareSessionModal.test.tsx).
 const openShareModalMock = vi.fn<() => void>();
+// #238 — ConnectedRow's 🗺 Map button pushes LINKS. Mock the socket boundary
+// so the REAL socket.ts (a top-level createRoot effect that reads token() at
+// import time) stays out of this test's module graph — importing it eagerly
+// trips the token mock's init order (the same trap flavorForSlug is mocked to
+// avoid; see the registrationTemplates mock note below).
+const pushLinksMock = vi.fn<(id: number, mask: string | null) => Promise<void>>(() =>
+  Promise.resolve(),
+);
 
 vi.mock("../lib/home", () => ({
   homeData: () => homeDataMock(),
@@ -141,6 +149,10 @@ vi.mock("../lib/shareModal", () => ({
   openShareModal: () => openShareModalMock(),
 }));
 
+vi.mock("../lib/socket", () => ({
+  pushLinks: (id: number, mask: string | null) => pushLinksMock(id, mask),
+}));
+
 vi.mock("../lib/umodes", () => ({
   umodesForNetwork: (id: number) => umodesForNetworkMock(id),
 }));
@@ -186,6 +198,7 @@ describe("HomePane", () => {
     openRegistrationWizardMock.mockClear();
     networkIdBySlugMock.mockReturnValue(undefined);
     openShareModalMock.mockClear();
+    pushLinksMock.mockClear();
   });
 
   afterEach(() => {
@@ -552,6 +565,43 @@ describe("HomePane", () => {
       // Reuse the #195 modal — NOT a raw park PATCH, NOT a jump.
       expect(patchNetworkMock).not.toHaveBeenCalled();
       expect(setSelectedChannelMock).not.toHaveBeenCalled();
+    });
+
+    // #238 — per-network 🗺 Map button. Jumps to the network's $server window
+    // (so the network-scoped LinksModal shows THIS net's topology when the
+    // bundle arrives) THEN pushes LINKS. Fire-and-forget behind the modal (the
+    // canonical error door is the /links slash command) — NOT a REST call.
+    it(":connected row 'Map' button jumps to $server then pushes LINKS (#238)", () => {
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      networkIdBySlugMock.mockReturnValue(7);
+      render(() => <HomePane />);
+
+      const mapBtn = screen.getByRole("button", { name: /network map for azzurra/i });
+      fireEvent.click(mapBtn);
+
+      // The jump lands on the network's $server window...
+      expect(setSelectedChannelMock).toHaveBeenCalledWith({
+        networkSlug: "azzurra",
+        channelName: "$server",
+        kind: "server",
+      });
+      // ...and LINKS is pushed bare (no mask) for the resolved network id.
+      expect(pushLinksMock).toHaveBeenCalledWith(7, null);
+      // A UI shortcut — no REST call.
+      expect(patchNetworkMock).not.toHaveBeenCalled();
+    });
+
+    // #238 — with no live session (networkIdBySlug → undefined) the Map button
+    // still jumps but skips the push rather than calling pushLinks(undefined).
+    it(":connected row 'Map' button skips the push when the network id is unknown (#238)", () => {
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      networkIdBySlugMock.mockReturnValue(undefined);
+      render(() => <HomePane />);
+
+      fireEvent.click(screen.getByRole("button", { name: /network map for azzurra/i }));
+
+      expect(setSelectedChannelMock).toHaveBeenCalled();
+      expect(pushLinksMock).not.toHaveBeenCalled();
     });
 
     it(":connected row Disconnect is identical for a VISITOR subject (#283 single path)", () => {

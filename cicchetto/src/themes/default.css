@@ -4578,7 +4578,8 @@ html.resize-dragging * {
    the "#channel — N people" heading + "End of /NAMES list" count stay
    visible on large channels. */
 .names-modal-backdrop,
-.who-modal-backdrop {
+.who-modal-backdrop,
+.links-modal-backdrop {
   position: fixed;
   left: 0;
   right: 0;
@@ -4900,6 +4901,265 @@ html.resize-dragging * {
 .who-modal-server {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* #238 — /links topology visualizer. Covering modal (backdrop shared with
+ * .who-modal-backdrop above). The panel is WIDER than the info modals — a
+ * network map wants room — and its body is the interactive SVG canvas
+ * (pan/zoom/pinch via pointer + wheel), NOT a scrolling list. Theme-safe:
+ * only existing --tokens; node fills come from an inline HSL depth ramp (a
+ * cic display concern), the chrome uses --bg/--fg/--border/--accent/--muted. */
+.links-modal {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  width: 100%;
+  max-width: 56rem;
+  max-height: min(var(--viewport-height, 100dvh), 100%);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  overflow: hidden;
+}
+
+.links-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 1rem;
+  flex: 0 0 auto;
+}
+
+.links-modal-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.links-modal-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex: 0 0 auto;
+}
+
+.links-modal-zoom,
+.links-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  margin: -0.6rem 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.links-modal-close {
+  margin-right: -0.5rem;
+  font-size: 1.5rem;
+}
+
+.links-modal-zoom:hover,
+.links-modal-close:hover {
+  color: var(--fg);
+}
+
+.links-modal-body {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 24rem;
+  overflow: hidden;
+  /* The SVG owns all touch gestures (pan + pinch) via pointer handlers, so
+     the browser must NOT hijack them. This is the registered overlay-lock
+     scroller selector, but nothing scrolls inside — the canvas fills it. */
+  touch-action: none;
+  overscroll-behavior: contain;
+  /* Subtle depth: a faint radial vignette so the mesh reads as "in space". */
+  background: radial-gradient(circle at 50% 45%, var(--bg-alt) 0%, var(--bg) 70%);
+}
+
+.links-modal-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+}
+
+.links-modal-svg:active {
+  cursor: grabbing;
+}
+
+.links-modal-edge {
+  stroke: var(--border);
+  stroke-width: 1.5;
+  /* Edges fade in after the nodes settle (the "reveal"). */
+  animation: links-edge-in 0.45s ease-out both;
+}
+
+.links-modal-node {
+  cursor: pointer;
+  /* Opacity-only on the GROUP: a CSS `transform` here would override the
+     inline `translate(x y)` presentation attribute (CSS transform wins in
+     SVG) and fling every node to the origin. The scale pop lives on the dot
+     (its local origin is its own centre). */
+  animation: links-node-in 0.35s ease-out both;
+}
+
+.links-modal-dot {
+  stroke: var(--bg);
+  stroke-width: 2;
+  transition:
+    r 0.15s ease,
+    stroke 0.15s ease;
+  /* Circle is at local (0,0) inside the translated node group, so the SVG
+     default transform-origin (0 0) is its centre — a safe centred pop. */
+  animation: links-dot-in 0.35s ease-out both;
+}
+
+.links-modal-node-root .links-modal-dot {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.links-modal-node-active .links-modal-dot {
+  stroke: var(--fg);
+  stroke-width: 3;
+}
+
+.links-modal-label {
+  fill: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  /* Keep labels readable over edges without a background box. */
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.links-modal-node-root .links-modal-label {
+  font-weight: bold;
+  text-anchor: middle;
+}
+
+.links-modal-node-active .links-modal-label {
+  fill: var(--accent);
+}
+
+.links-modal-empty {
+  height: 100%;
+  min-height: 20rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.links-modal-empty p {
+  margin: 0;
+}
+
+.links-modal-empty-sub {
+  font-size: 0.85rem;
+  max-width: 24rem;
+}
+
+.links-modal-footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-height: 1.2rem;
+  overflow: hidden;
+}
+
+.links-modal-hint {
+  color: var(--muted);
+}
+
+.links-modal-detail {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.75rem;
+}
+
+.links-modal-detail-name {
+  color: var(--fg);
+  font-weight: bold;
+  overflow-wrap: anywhere;
+}
+
+.links-modal-detail-hops,
+.links-modal-detail-uplink {
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.links-modal-detail-desc {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Group reveal is OPACITY-ONLY (see .links-modal-node): a `transform` here
+   would override the inline translate(x y) and fling every node to the origin
+   for the animation's duration. The scale-pop lives on the dot below. */
+@keyframes links-node-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The centred scale-pop — safe on the dot because the <circle> sits at the
+   node group's local (0,0), so the SVG default transform-origin IS its centre
+   (it grows in place, never flying to the canvas origin). */
+@keyframes links-dot-in {
+  from {
+    transform: scale(0.4);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@keyframes links-edge-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Respect reduced-motion: skip the reveal animations. */
+@media (prefers-reduced-motion: reduce) {
+  .links-modal-node,
+  .links-modal-dot,
+  .links-modal-edge {
+    animation: none;
+  }
 }
 
 /* #216 — /mode viewer/editor modal. Overlay + panel scaffolding mirrors

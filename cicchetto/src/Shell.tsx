@@ -23,6 +23,7 @@ import DirectoryPane from "./DirectoryPane";
 import DropUploadZone from "./DropUploadZone";
 import ErrorBanners from "./ErrorBanners";
 import HomePane from "./HomePane";
+import LinksModal from "./LinksModal";
 import { jumpToNextActiveWindow, jumpToPrevActiveWindow } from "./lib/activeWindows";
 import { ownNickForNetwork } from "./lib/api";
 import { archiveSlugForSelection } from "./lib/archiveContext";
@@ -561,6 +562,7 @@ const Shell: Component = () => {
           <NamesModal />
           <ThemeEditor />
           <WhoModal />
+          <LinksModal />
           <ModeModal />
           <BanlistModal />
           <UmodeModal />
@@ -767,6 +769,7 @@ const Shell: Component = () => {
         <NamesModal />
         <ThemeEditor />
         <WhoModal />
+        <LinksModal />
         <UmodeModal />
         <ModeModal />
         <BanlistModal />

@@ -5,6 +5,7 @@ import {
   assertNever,
   type BanlistEntry,
   type ConnectionState,
+  type LinksEntry,
   type MentionsBundleMessage,
   type NotifyEntry,
   type QueryWindowEntry,
@@ -23,6 +24,7 @@ import { refreshHighlights } from "./highlightList";
 import { patchHomeNetwork } from "./home";
 import { appendInviteAck } from "./inviteAck";
 import { seedIsupport } from "./isupport";
+import { setLinksReply } from "./linksModal";
 import { applyLusersBundle, clearLusersRequested } from "./lusersBundle";
 import { setMentionsBundle } from "./mentionsWindow";
 import { setNamesReply } from "./namesModal";
@@ -203,6 +205,30 @@ function narrowBanlistEntry(raw: unknown): BanlistEntry | null {
     mask: r.mask,
     setter: r.setter as string | null,
     set_ts: r.set_ts as string | null,
+  };
+}
+
+// #238 — per-entry narrower for a `links_bundle` topology row. Mirror of
+// `Grappa.Session.Wire.links_entry/0` (pinned to SessionWireLinksEntry by
+// `_Assert_LinksEntry`). `server` is required; `linked_to`/`description` are
+// nullable strings; `hopcount` a nullable number. ANY malformed element drops
+// the whole bundle (strict — a partial topology is a server bug, not a
+// graceful-degradation case). Mirror of `narrowBanlistEntry`.
+function narrowLinksEntry(raw: unknown): LinksEntry | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.server !== "string" ||
+    (r.linked_to !== null && typeof r.linked_to !== "string") ||
+    (r.hopcount !== null && typeof r.hopcount !== "number") ||
+    (r.description !== null && typeof r.description !== "string")
+  )
+    return null;
+  return {
+    server: r.server,
+    linked_to: r.linked_to as string | null,
+    hopcount: r.hopcount as number | null,
+    description: r.description as string | null,
   };
 }
 
@@ -777,6 +803,17 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         entries,
       };
     }
+    case "links_bundle": {
+      // #238 — LINKS topology bundle. All server nodes ship (a topology is a
+      // set). Per-element narrowing (`narrowLinksEntry`); ANY malformed element
+      // drops the whole bundle. An EMPTY entries array is valid (the
+      // restricted/hidden-topology signal) — the modal renders the empty
+      // state. Mirror of the banlist_bundle arm.
+      if (typeof r.network !== "string") return null;
+      const entries = narrowArray(r.entries, narrowLinksEntry);
+      if (entries === null) return null;
+      return { kind: "links_bundle", network: r.network, entries };
+    }
     case "joined":
     case "join_failed":
     case "kicked":
@@ -1207,6 +1244,19 @@ createRoot(() => {
           // window they're looking at; the card renders there.
           const { kind: _omit, ...bundle } = payload;
           setBanlistBundle(payload.network, bundle);
+          return;
+        }
+
+        case "links_bundle": {
+          // #238 — LINKS topology complete (server's 365 RPL_ENDOFLINKS, gated
+          // on a pending /links). Replace any prior topology for this network;
+          // LinksModal (mounted in Shell, network-scoped) renders the
+          // interactive SVG map for the active network. An empty bundle
+          // (restricted topology) still fills the store → the modal opens to
+          // the "hides topology" empty state. No focus change — the operator
+          // stays on the issuing window. Mirror of who_reply.
+          const { kind: _omit, ...reply } = payload;
+          setLinksReply(payload.network, reply);
           return;
         }
 

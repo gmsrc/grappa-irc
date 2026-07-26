@@ -49,6 +49,7 @@ import {
   pushChannelUnban,
   pushChannelVoice,
   pushInfo,
+  pushLinks,
   pushLusers,
   pushMotd,
   pushNames,
@@ -816,8 +817,21 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = { ok: true };
           break;
         }
-        case "links":
-          return { error: "/links: server-side handler not yet implemented (future bucket)" };
+        case "links": {
+          // #238 — /links [<mask>]. Push on the user-level channel; server
+          // primes links_pending + emits LINKS upstream. The 364 burst folds
+          // server-side and 365 RPL_ENDOFLINKS drains ONE ephemeral
+          // `links_bundle` event on the user topic; LinksModal (mounted in
+          // Shell, network-scoped) renders the interactive topology map. No
+          // focus change + no scrollback rows (mirrors /who + /names). An empty
+          // bundle (restricted/oper-only network) still opens the modal to the
+          // "hides topology" state. `cmd.pattern` is the optional server mask.
+          const networkId = networkIdBySlug(networkSlug);
+          if (networkId === undefined) return { error: "/links: network not found" };
+          await pushLinks(networkId, cmd.pattern); // S6 (#364): await verb-ack
+          result = { ok: true };
+          break;
+        }
         // P-0d — /lusers. Bare verb, no args. Pushes on user-level channel;
         // server emits the 7-numeric LUSERS bundle. cic dispatches the
         // typed `:lusers_bundle` wire event in userTopic.ts and renders

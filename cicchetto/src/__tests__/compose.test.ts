@@ -89,6 +89,8 @@ vi.mock("../lib/socket", () => ({
   pushMotd: vi.fn(),
   // P-0d / #248 — /lusers bridge.
   pushLusers: vi.fn(),
+  // #238 — /links topology bridge.
+  pushLinks: vi.fn(),
   // #155 — /stats + /rehash ship the raw frame via pushRaw (the #153-de-gated
   // raw transport). #375 asserts the /rehash option rides this frame.
   pushRaw: vi.fn().mockResolvedValue(undefined),
@@ -2083,14 +2085,32 @@ describe("compose submit — info verbs (TODO stubs)", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("/links returns inline error (server-side not yet implemented)", async () => {
+  // #238 — /links dispatches via pushLinks(networkId, mask). Bare form sends a
+  // null mask (grappa emits `LINKS`); a mask threads through (grappa emits
+  // `LINKS <mask>`). The 364/365 burst drains into the links_bundle event that
+  // opens LinksModal — no scrollback rows, so submit returns { ok: true }.
+  it("/links pushes bare LINKS via pushLinks(networkId, null)", async () => {
     localStorage.setItem("grappa-token", "tok");
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/links");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.pushLinks).toHaveBeenCalledWith(1, null);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("/links <mask> threads the mask through pushLinks(networkId, mask)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const socket = await import("../lib/socket");
     const compose = await import("../lib/compose");
     const k = channelKey("freenode", "#a");
     compose.setDraft(k, "/links *.irc.net");
     const result = await compose.submit(k, "freenode", "#a");
 
-    expect(result).toMatchObject({ error: expect.stringContaining("not yet implemented") });
+    expect(socket.pushLinks).toHaveBeenCalledWith(1, "*.irc.net");
+    expect(result).toEqual({ ok: true });
   });
 });
 

@@ -1009,6 +1009,30 @@ export type BanlistBundle = {
   entries: BanlistEntry[];
 };
 
+// #238 — one server node from a 364 RPL_LINKS row. Mirrors
+// `Grappa.Session.Wire.links_entry/0`. `server` is the node; `linked_to`
+// its uplink (the root self-links, server === linked_to); `hopcount` the
+// distance/depth. `linked_to`/`hopcount`/`description` are null only when
+// the upstream line is malformed. Pinned to the generated
+// SessionWireLinksEntry by `_Assert_LinksEntry`.
+export type LinksEntry = {
+  server: string;
+  linked_to: string | null;
+  hopcount: number | null;
+  description: string | null;
+};
+
+// #238 — LINKS topology bundle payload. Mirrors
+// `Grappa.Session.Wire.links_bundle/2`. Aggregated reply to `/links [<mask>]`:
+// the server folds the 364 burst and drains ONE typed event on 365 with ALL
+// server nodes (a topology is a set). cic reconstructs the spanning tree from
+// the `linked_to` parent edges (LinksModal, an interactive SVG map). An EMPTY
+// `entries` list is the restricted/hidden-topology signal. NOT persisted.
+export type LinksReply = {
+  network: string;
+  entries: LinksEntry[];
+};
+
 // Mirror of the events fanned out on the user-level PubSub topic
 // (`Topic.user(user_name)`), pinned by:
 //   * `Grappa.Session.Wire.{channels_changed/0, own_nick_changed/2,
@@ -1166,6 +1190,7 @@ export type WireUserEvent =
     }
   | ({ kind: "whowas_bundle" } & WhowasBundle)
   | ({ kind: "banlist_bundle" } & BanlistBundle)
+  | ({ kind: "links_bundle" } & LinksReply)
   | {
       // P-0e + P-0f — 341 RPL_INVITING ack. Server broadcasts on
       // user-topic (P-0f flipped from per-channel; operators usually

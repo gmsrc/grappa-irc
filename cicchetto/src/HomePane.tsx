@@ -17,6 +17,7 @@ import { flavorForSlug, registerableFlavor } from "./lib/registrationTemplates";
 import { openRegistrationWizard } from "./lib/registrationWizard";
 import { setSelectedChannel } from "./lib/selection";
 import { openShareModal } from "./lib/shareModal";
+import { pushLinks } from "./lib/socket";
 import { umodesForNetwork } from "./lib/umodes";
 import { confirmDisconnectNetwork } from "./lib/windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
@@ -251,6 +252,18 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
       kind: "list",
     });
   };
+  // #238 — the per-network "server window" entry point the issue asks for
+  // (alongside the /links slash command). Land on this network's $server
+  // (so the network-scoped LinksModal shows THIS network's topology when the
+  // bundle arrives) then push LINKS. Fire-and-forget behind the modal, like
+  // onDisconnect — the canonical error-surfacing door is the /links slash
+  // command in the compose box; a rejected push (e.g. no live session) just
+  // leaves the modal unopened rather than crashing the row.
+  const onTopology = () => {
+    onJump();
+    const id = networkIdBySlug(props.row.slug);
+    if (id !== undefined) void pushLinks(id, null).catch(() => {});
+  };
   // #283 — per-network Disconnect, symmetric with DisconnectedRow's
   // Reconnect chip. REUSES the #195 confirm modal (windowClose.
   // confirmDisconnectNetwork → "Disconnect from <slug>?"), the SAME verb
@@ -302,6 +315,15 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
               📝 Register nick
             </button>
           </Show>
+          <button
+            type="button"
+            class="home-pane-network-topology"
+            data-testid={`home-topology-${props.row.slug}`}
+            aria-label={`Network map for ${props.row.slug}`}
+            onClick={onTopology}
+          >
+            🗺 Map
+          </button>
           <button
             type="button"
             class="home-pane-network-disconnect"

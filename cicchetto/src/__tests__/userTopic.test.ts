@@ -1645,3 +1645,91 @@ describe("narrowUserEvent — names_reply (#140)", () => {
     ).toBeNull();
   });
 });
+
+// #238 — links_bundle: the /links topology reply. Per-element narrowing on the
+// entries array (`narrowLinksEntry`); ANY malformed element drops the WHOLE
+// bundle (strict — a partial topology is a server bug). An EMPTY entries array
+// is VALID (the restricted/hidden-topology signal). Mirror of the banlist arm.
+describe("narrowUserEvent — links_bundle (#238)", () => {
+  it("narrows a well-formed topology", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(
+      narrowUserEvent({
+        kind: "links_bundle",
+        network: "azzurra",
+        entries: [
+          { server: "hub", linked_to: "hub", hopcount: 0, description: "the hub" },
+          { server: "leaf", linked_to: "hub", hopcount: 1, description: null },
+        ],
+      }),
+    ).toEqual({
+      kind: "links_bundle",
+      network: "azzurra",
+      entries: [
+        { server: "hub", linked_to: "hub", hopcount: 0, description: "the hub" },
+        { server: "leaf", linked_to: "hub", hopcount: 1, description: null },
+      ],
+    });
+  });
+
+  it("narrows an empty topology (restricted / hidden — bare 365)", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(narrowUserEvent({ kind: "links_bundle", network: "azzurra", entries: [] })).toEqual({
+      kind: "links_bundle",
+      network: "azzurra",
+      entries: [],
+    });
+  });
+
+  it("accepts null linked_to / hopcount / description on an entry", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(
+      narrowUserEvent({
+        kind: "links_bundle",
+        network: "azzurra",
+        entries: [{ server: "lonely", linked_to: null, hopcount: null, description: null }],
+      }),
+    ).toEqual({
+      kind: "links_bundle",
+      network: "azzurra",
+      entries: [{ server: "lonely", linked_to: null, hopcount: null, description: null }],
+    });
+  });
+
+  it("rejects a links_bundle missing the network field", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(narrowUserEvent({ kind: "links_bundle", entries: [] })).toBeNull();
+  });
+
+  it("drops the WHOLE bundle when one entry has a non-string server", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(
+      narrowUserEvent({
+        kind: "links_bundle",
+        network: "azzurra",
+        entries: [
+          { server: "hub", linked_to: "hub", hopcount: 0, description: null },
+          { server: 42, linked_to: "hub", hopcount: 1, description: null },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("drops the WHOLE bundle when one entry has a non-number hopcount", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(
+      narrowUserEvent({
+        kind: "links_bundle",
+        network: "azzurra",
+        entries: [{ server: "hub", linked_to: "hub", hopcount: "zero", description: null }],
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects a links_bundle whose entries field is not an array", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(
+      narrowUserEvent({ kind: "links_bundle", network: "azzurra", entries: "nope" }),
+    ).toBeNull();
+  });
+});

@@ -50,6 +50,8 @@ import type {
   FeaturedChannelLink,
   HomeData,
   HomeNetworkRow,
+  LinksEntry,
+  LinksReply,
   MentionsBundleMessage,
   NamesReply,
   NotifyEntry,
@@ -88,6 +90,8 @@ import type {
   SessionWireJoinedPayload,
   SessionWireJoinFailedPayload,
   SessionWireKickedPayload,
+  SessionWireLinksBundlePayload,
+  SessionWireLinksEntry,
   SessionWireLusersBundlePayload,
   SessionWireMember,
   SessionWireMentionsBundleMessage,
@@ -185,6 +189,13 @@ export type _Assert_NamesReply = Assert<
 export type _Assert_WhoReply = Assert<Equal<WhoReply, Omit<SessionWireWhoReplyPayload, "kind">>>;
 export type _Assert_LusersBundle = Assert<
   Equal<Extract<WireUserEvent, { kind: "lusers_bundle" }>, SessionWireLusersBundlePayload>
+>;
+// #238 — LINKS topology bundle. `LinksEntry` pinned like `WhoUser`; the
+// `LinksReply` envelope pinned like `WhoReply` (Omit kind — the union arm
+// adds `kind: "links_bundle"`).
+export type _Assert_LinksEntry = Assert<Equal<LinksEntry, SessionWireLinksEntry>>;
+export type _Assert_LinksReply = Assert<
+  Equal<LinksReply, Omit<SessionWireLinksBundlePayload, "kind">>
 >;
 export type _Assert_PresenceChanged = Assert<
   Equal<Extract<WireUserEvent, { kind: "presence_changed" }>, SessionWirePresenceChangedPayload>

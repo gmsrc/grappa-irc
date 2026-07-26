@@ -19479,3 +19479,90 @@ serves the auto-unset path).
 
 **Cold deploy.** Two new columns → migration → COLD (already the COLD
 batch plan for the night).
+## 2026-07-26 — #238 /links: the server mesh as an interactive radial map
+
+`/links` surfaces the IRC server-to-server topology as an interactive SVG map
+in cic. Shipped in two increments on one branch: **INC-1** (server, commit
+`168d1f23`) parses the 364 RPL_LINKS / 365 RPL_ENDOFLINKS burst in the ONE
+server-side parser and pushes a typed `links_bundle` wire event; **INC-2** (cic)
+reconstructs + renders the tree. cic NEVER parses IRC — it consumes the typed
+event, exactly like /who, /names, /lusers.
+
+**Why a tree, not a force-directed graph — and zero new deps.** An IRC network
+is a SPANNING TREE by protocol (no loops): each 364 carries a server, its uplink
+(`linked_to`), and a hopcount. So the topology IS a hierarchy, and a
+deterministic radial tidy-tree renders it more readably than a force sim thrown
+at hierarchical data. Deterministic also means the layout is UNIT-TESTABLE and
+the e2e can assert exact node/edge counts from parsed numerics — a force sim's
+random jitter makes both impossible. vjt's ruling (ratified): **NO 3D, SVG
+hand-rolled, ZERO new deps** — "non aggiungiamo 150k per un giocattolo" (a
+three.js/WebGL force graph is ~150k, wrong on hierarchical data AND
+non-deterministic → unassertable). 3D is DEFERRED behind an explicit future
+gate. The layout lives in `cicchetto/src/lib/linksLayout.ts` as a PURE
+`radialLayout(entries, opts)`: root selection (self-link → else min-hopcount →
+else first), depth from the reconstructed root, leaves get equal angular slices
+in DFS order, each internal node sits at the mean of its children's angles
+(the polar Reingold–Tilford simplification), one edge per parent→child link.
+Orphans (a `linked_to` absent from the set — a masked/partial reply) re-parent
+to the root so no server is dropped; a mutual-uplink cycle is broken by a
+visited-set so the walk always terminates with each node once.
+
+**Prime-on-send gate (mirror of MOTD/WHOWAS/LUSERS).** `Session.Server`'s
+`:send_links` handler primes `state.links_pending = %{entries: []}` BEFORE the
+LINKS goes upstream. 364 appends one `%{server, linked_to, hopcount,
+description}` entry (stored REVERSED for an O(1) prepend; `Wire.links_bundle/2`
+reverses to restore wire order); 365 flushes `{:links_bundle, accum}` and clears
+the accumulator. An unsolicited 364/365 (no `links_pending`) is a NO-OP — an
+ircd never emits LINKS unrequested, so there is nothing to gate against at
+connect time, unlike the MOTD auto-burst.
+
+**481 ERR_NOPRIVILEGES is deliberately NOT delegated.** NumericRouter delegates
+364/365 to the dedicated EventRouter clauses (else the generic scan-route would
+double each 364 as a `$server` :notice). 481 is left on the generic scan route
+so an oper-only-LINKS denial persists a visible red `$server` :notice — never
+silent. Delegating 481 globally would swallow OTHER commands' 481s (it is a
+generic oper-error, not LINKS-specific).
+
+**Topic.user routing + empty = hidden.** The bundle broadcasts on
+`Topic.user/1` (verified against LUSERS/WHOWAS/WHOIS/BANLIST — all Topic.user;
+the payload carries its own `network`, so no third routing convention). It is
+EPHEMERAL, never persisted (a topology snapshot, not scrollback). An EMPTY
+entries list (a restricted/oper-only net answering a bare 365 with no 364 rows)
+is a VALID bundle — the modal opens to the "this network hides its topology"
+empty state rather than staying dark. cic's `narrowLinksEntry` drops the WHOLE
+bundle on any malformed element (strict — a partial topology is a server bug,
+not a graceful-degradation case), but an empty list passes.
+
+**Two doors, one path.** The `/links [<mask>]` slash command (canonical
+error-surfacing door) and the per-network 🗺 Map button on HomePane's connected
+row both push LINKS; the Map button first jumps to that network's `$server` so
+the network-scoped `LinksModal` (keyed on `selectedChannel().networkSlug`)
+shows THIS network's topology when the bundle arrives.
+
+**The SVG animation trap (found + fixed in INC-2 review).** A CSS `transform` on
+the node `<g>` group OVERRIDES its inline `transform="translate(x y)"` (CSS wins
+in SVG) and flings every node to the canvas origin for the animation's duration.
+The reveal is therefore split: `links-node-in` on the GROUP is OPACITY-ONLY, and
+the scale-pop lives in `links-dot-in` on the `<circle>` — safe because the
+circle sits at the group's local (0,0), so the SVG default transform-origin IS
+its centre (it grows in place). Both are disabled under
+`prefers-reduced-motion`.
+
+**364 param order — CONFIRMED against real Bahamut.** INC-1 assumed 364 params =
+`[client, server, linked_to, ":hopcount info"]` (node = params[1], uplink =
+params[2]; the bahamut/ircu/solanum lineage). The real e2e
+(`links238-modal.spec.ts`, live azzurra testnet) confirms it: querying from a
+client on leaf4, LINKS returns leaf4.azzurra.chat (0 hops, root) → hub (1 hop) →
+leaf6 (2 hops) — three correctly-named nodes with correct hopcounts + real
+descriptions, a connected tree (edges = nodes − 1), exactly one root. A swapped
+param order would have collapsed the de-dup-by-server-name to a single node; it
+did not. The root is the server grappa is connected to (min-hopcount), which is
+the natural "as seen from here" centre for the radial map. e2e teeth assert the
+structural invariants (a green empty spec would not have caught a param swap).
+
+Unit coverage: `linksLayout.test.ts` (root selection, depth, edges, orphan
+re-parent, cycle termination, root-at-centre), `LinksModal.test.tsx` (render +
+node click → detail + empty state + Esc/× dismiss), `userTopic.test.ts`
+(links_bundle narrowing), `HomePane.test.tsx` (🗺 Map button jump + push),
+`compose.test.ts` (/links dispatch). All rides the batch COLD deploy (INC-1 is a
+new EventRouter clause; cic is a bundle change).

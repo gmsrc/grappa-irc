@@ -730,6 +730,18 @@ export function pushMotd(networkId: number, target: string | null): Promise<void
   );
 }
 
+// #238 — /links [<mask>]. Bare (mask null) omits the wire key so grappa emits
+// `LINKS`; a mask sends `{ mask }` so grappa emits `LINKS <mask>`. The 364/365
+// burst drains ONE ephemeral `links_bundle` event on Topic.user/1 which
+// userTopic.ts routes into the linksModal store (LinksModal renders the
+// interactive topology map). Mirrors pushMotd's optional-arg omit.
+export function pushLinks(networkId: number, mask: string | null): Promise<void> {
+  return pushUserChannelVerb(
+    "links",
+    mask === null ? { network_id: networkId } : { network_id: networkId, mask },
+  );
+}
+
 // #140 — /names <#channel>. Pushes on the user-level channel; server
 // primes names_pending + emits NAMES upstream. The 353/366 burst drains
 // into ONE ephemeral `names_reply` event on the user topic (NamesModal
