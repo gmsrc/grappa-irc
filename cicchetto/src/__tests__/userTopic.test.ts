@@ -797,6 +797,23 @@ describe("userTopic", () => {
       channelMock.fireEvent(connectionStateChanged("bahamut-test", "connected"));
       expect(rs.setReconnecting).not.toHaveBeenCalled();
     });
+
+    // #410 LOCK — an off-contract connection_state drops the whole
+    // connection_state_changed payload: `isConnectionState` (folded onto the
+    // generated NETWORKS_CREDENTIAL_CONNECTION_STATE const) rejects it,
+    // narrowUserEvent returns null, and the arm never runs. Uses a would-be
+    // reconnecting-clearing state ("failed") mutated to "bogus", so a
+    // forked/loosened set would call setReconnecting — this pins the drop.
+    it("drops connection_state_changed with an unknown connection_state", async () => {
+      const rs = await import("../lib/reconnectingStatus");
+      const valid = connectionStateChanged("bahamut-test", "failed");
+      channelMock.fireEvent({
+        ...valid,
+        to: "bogus",
+        network: { ...valid.network, connection_state: "bogus" },
+      });
+      expect(rs.setReconnecting).not.toHaveBeenCalled();
+    });
   });
 
   // CP23 S4 B5 — bundle_hash dispatch.
