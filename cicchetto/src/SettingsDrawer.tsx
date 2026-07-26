@@ -53,10 +53,14 @@ import ThemeGallery from "./ThemeGallery";
 import VhostSettingsPage from "./VhostSettingsPage";
 import WatchlistsSettings from "./WatchlistsSettings";
 
-// Right-overlay drawer: theme toggle + notifications (push permission +
-// per-trigger prefs + device list) + optional "admin console" entry
-// (gated on `isAdmin()` from lib/networks.ts — single source of truth
-// shared with Shell.tsx pane gate + Sidebar.tsx admin row) + logout.
+// Right-overlay drawer. #460 — the main page is now an INDEX of nav rows;
+// each row pushes into a dedicated sub-page. Some sub-pages are separate
+// components (themes, watch lists, aliases, perform, vhost); three are INLINE
+// `<Show>` blocks whose signals live in this component's body (general =
+// upload retention + visitor identity; display = text size / timestamp /
+// colored nicklist; push = notifications). The main page keeps, BELOW the
+// index, the subject-gated affordances that aren't sub-pages: admin console,
+// share session, detach, quit, delete account, done.
 //
 // open prop drives the .open class; the drawer stays mounted across
 // open/close so onMount-loaded state (devices + prefs) doesn't refetch
@@ -109,11 +113,10 @@ const SettingsDrawer: Component<Props> = (props) => {
   // guard + drives the button label; `reconnectError` surfaces a failure.
   const [reconnecting, setReconnecting] = createSignal(false);
   const [reconnectError, setReconnectError] = createSignal<string | null>(null);
-  // #252 — settings sub-page navigation. The drawer is a flat page ("main")
-  // that can push into a dedicated sub-page ("vhost"); the pattern mirrors
-  // AdminPane's tab signal and is reusable for future sub-pages. cic never
-  // originates vhost state — the sub-page reads `vhostView` + reports
-  // changes up via the same save-on-change PUT flow.
+  // #252 — settings sub-page navigation. The drawer is an index page ("main")
+  // that can push into a dedicated sub-page; the pattern mirrors AdminPane's
+  // tab signal. cic never originates vhost state — the sub-page reads
+  // `vhostView` + reports changes up via the same save-on-change PUT flow.
   const [settingsPage, setSettingsPage] = createSignal<SettingsSubPage>("main");
   // Visitor-only gate for the identity + share-session sections. #392 — the
   // share entry now opens a Shell-mounted MODAL (openShareModal), still
@@ -611,6 +614,25 @@ const SettingsDrawer: Component<Props> = (props) => {
     setSettingsPage("vhost");
   };
 
+  // #460 — shared back-header for the INLINE sub-pages (general / display /
+  // push), mirroring the AliasSettings / WatchlistsSettings convention so
+  // every sub-page presents one consistent "‹ back" affordance. Local (not a
+  // component) so it stays inside the signal scope without prop threading.
+  const subpageHeader = (title: string, backTestId: string) => (
+    <header class="settings-subpage-header">
+      <button
+        type="button"
+        class="settings-back"
+        data-testid={backTestId}
+        aria-label="back to settings"
+        onClick={() => setSettingsPage("main")}
+      >
+        ‹ back
+      </button>
+      <h3>{title}</h3>
+    </header>
+  );
+
   return (
     <>
       <div
@@ -645,195 +667,50 @@ const SettingsDrawer: Component<Props> = (props) => {
           </button>
         </header>
 
-        {/* #252 — main settings page. A `<Show>`-gated sub-page (vhost)
-            renders in its place; the header × stays visible for both. */}
+        {/* #460 — the main settings page is an INDEX of nav rows. Each row
+            pushes into a dedicated sub-page (a `<Show>`-gated block that
+            replaces the index in place); the header × stays visible for both.
+            Below the index sit the subject-gated affordances that are NOT
+            sub-pages (admin console, share session, detach, quit, delete
+            account, done). */}
         <Show when={settingsPage() === "main"}>
-          {/* #299 — the legacy auto/mirc-light/irssi-dark radio selector was
-              removed here. It is superseded by the #75 theme gallery (cog →
-              themes) and was broken: an active gallery theme layers inline
-              CSS vars over the [data-theme] base blocks, so toggling the radio
-              did nothing visible. The base look is now OS-resolved at boot
-              (lib/theme.applyTheme). */}
-          <fieldset class="notifications-fieldset">
-            <legend>notifications</legend>
-            <label class="master-toggle">
-              <input
-                type="checkbox"
-                checked={pushEnabled()}
-                onChange={(e) => {
-                  void onMasterToggle((e.currentTarget as HTMLInputElement).checked);
-                }}
-                data-testid="push-master-toggle"
-              />
-              enable browser notifications
-            </label>
-            <Show when={pushBanner() !== null}>
-              <p class="push-banner" role="alert" data-testid="push-banner">
-                {pushBanner()}
-              </p>
-            </Show>
+          {/* Index rows, in order: general, display, themes, push
+              (notifications), watch lists, aliases, on-connect commands,
+              source address (LAST). */}
 
-            <hr />
-
-            <label>
-              <input
-                type="checkbox"
-                checked={prefs().channel_messages_all}
-                disabled={savingPrefs()}
-                onChange={(e) =>
-                  togglePref("channel_messages_all", (e.currentTarget as HTMLInputElement).checked)
-                }
-                data-testid="pref-channel-all"
-              />
-              all channel messages
-            </label>
-            <label class="prefs-list">
-              only in channels:
-              <input
-                type="text"
-                value={channelsOnlyText()}
-                disabled={prefs().channel_messages_all || savingPrefs()}
-                placeholder="#sbiffo, #grappa"
-                onInput={(e) => setChannelsOnlyText((e.currentTarget as HTMLInputElement).value)}
-                onBlur={commitChannelsOnly}
-                data-testid="pref-channels-only"
-              />
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={prefs().channel_mentions}
-                disabled={savingPrefs()}
-                onChange={(e) =>
-                  togglePref("channel_mentions", (e.currentTarget as HTMLInputElement).checked)
-                }
-                data-testid="pref-channel-mentions"
-              />
-              channel mentions
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={prefs().private_messages_all}
-                disabled={savingPrefs()}
-                onChange={(e) =>
-                  togglePref("private_messages_all", (e.currentTarget as HTMLInputElement).checked)
-                }
-                data-testid="pref-private-all"
-              />
-              all private messages
-            </label>
-            <label class="prefs-list">
-              only from nicks:
-              <input
-                type="text"
-                value={nicksOnlyText()}
-                disabled={prefs().private_messages_all || savingPrefs()}
-                placeholder="alice, bob"
-                onInput={(e) => setNicksOnlyText((e.currentTarget as HTMLInputElement).value)}
-                onBlur={commitNicksOnly}
-                data-testid="pref-nicks-only"
-              />
-            </label>
-
-            <Show when={prefsError() !== null}>
-              <p class="prefs-error" role="alert" data-testid="prefs-error">
-                {prefsError()}
-              </p>
-            </Show>
-
-            <Show when={devices().length > 0}>
-              <h3>devices</h3>
-              <ul class="devices-list" data-testid="devices-list">
-                <For each={devices()}>
-                  {(d) => {
-                    // UX-4 bucket L (2026-05-19) — replace the raw UA
-                    // string with `{icon} {Browser} on {OS}`. Title
-                    // attribute preserves the full UA so a hover (desktop)
-                    // can still surface the original for debugging /
-                    // device disambiguation across same-browser instances.
-                    const parsed = parseUserAgent(d.user_agent);
-                    return (
-                      <li>
-                        <span class="device-ua" title={d.user_agent ?? "(unknown browser)"}>
-                          <span class="device-ua-icon" aria-hidden="true">
-                            {deviceClassIcon(parsed.deviceClass)}
-                          </span>
-                          <span class="device-ua-name">
-                            {parsed.browser} on {parsed.os}
-                          </span>
-                        </span>
-                        <button
-                          type="button"
-                          class="device-remove"
-                          onClick={() => {
-                            void removeDevice(d.id);
-                          }}
-                        >
-                          remove
-                        </button>
-                      </li>
-                    );
-                  }}
-                </For>
-              </ul>
-            </Show>
-          </fieldset>
-
-          {/* UX-4 bucket M (2026-05-19) — upload retention preference.
-            Host-gated: only renders when the active image host exposes
-            ttlOptions (litterbox does; a hypothetical imgur-style host
-            wouldn't). The `<option value="">` "use site default" entry
-            maps to a `null` PUT — clears the preference and falls back
-            to `activeHost().defaultTtl`. Server stores integer seconds,
-            cic translates to/from the host token at this boundary. */}
-          <Show when={activeHost().ttlOptions.length > 0}>
-            <fieldset class="upload-ttl-fieldset">
-              <legend>upload retention</legend>
-              <label>
-                upload duration:
-                <select
-                  data-testid="upload-ttl-select"
-                  value={uploadTtlSelectValue()}
-                  onChange={(e) => {
-                    void onUploadTtlChange(e);
-                  }}
-                >
-                  <option value="">use site default ({defaultTtlLabel()})</option>
-                  <For each={activeHost().ttlOptions}>
-                    {(opt) => <option value={opt.value}>{opt.label}</option>}
-                  </For>
-                </select>
-              </label>
-              <Show when={uploadTtlSavingError() !== null}>
-                <p class="upload-ttl-error" role="alert" data-testid="upload-ttl-error">
-                  {uploadTtlSavingError()}
-                </p>
-              </Show>
-            </fieldset>
-          </Show>
-
-          {/* #252 — source address (vhost). The interim #228 `<select
-            multiple>` is replaced by a dedicated, mobile-friendly SUB-PAGE
-            (tap-select, NAME-primary). This is the nav ROW into it; it
-            renders only once the server view has loaded (non-null). */}
-          <Show when={vhostView() !== null}>
+          {/* general — upload retention (host-gated) + visitor identity
+              (visitor-gated). The row is gated on the OR of its children so it
+              never opens an empty page. */}
+          <Show when={activeHost().ttlOptions.length > 0 || isVisitor()}>
             <button
               type="button"
               class="settings-nav-row"
-              data-testid="vhost-settings-entry"
-              onClick={enterVhostPage}
+              data-testid="general-settings-entry"
+              onClick={() => setSettingsPage("general")}
             >
-              <span class="settings-nav-row-label">source address (vhost)</span>
+              <span class="settings-nav-row-label">general</span>
               <span class="settings-nav-row-chevron" aria-hidden="true">
                 ›
               </span>
             </button>
           </Show>
 
+          {/* display — text size, timestamp format, colored nicklist (#443). */}
+          <button
+            type="button"
+            class="settings-nav-row"
+            data-testid="display-settings-entry"
+            onClick={() => setSettingsPage("display")}
+          >
+            <span class="settings-nav-row-label">display</span>
+            <span class="settings-nav-row-chevron" aria-hidden="true">
+              ›
+            </span>
+          </button>
+
           {/* #75 — themes gallery sub-page nav row. Always available (any
-              logged-in subject can browse + apply the published +
-              built-in gallery). */}
+              logged-in subject can browse + apply the published + built-in
+              gallery). */}
           <button
             type="button"
             class="settings-nav-row"
@@ -841,6 +718,20 @@ const SettingsDrawer: Component<Props> = (props) => {
             onClick={() => setSettingsPage("themes")}
           >
             <span class="settings-nav-row-label">themes</span>
+            <span class="settings-nav-row-chevron" aria-hidden="true">
+              ›
+            </span>
+          </button>
+
+          {/* push — notifications: push permission + per-trigger prefs +
+              device list. */}
+          <button
+            type="button"
+            class="settings-nav-row"
+            data-testid="push-settings-entry"
+            onClick={() => setSettingsPage("push")}
+          >
+            <span class="settings-nav-row-label">notifications</span>
             <span class="settings-nav-row-chevron" aria-hidden="true">
               ›
             </span>
@@ -878,7 +769,8 @@ const SettingsDrawer: Component<Props> = (props) => {
           </button>
 
           {/* #189 — on-connect perform list nav row (per-network raw IRC
-              commands run at 001, before autojoin). */}
+              commands run at 001, before autojoin). Sits right after aliases —
+              both are command-automation surfaces. */}
           <button
             type="button"
             class="settings-nav-row"
@@ -891,119 +783,23 @@ const SettingsDrawer: Component<Props> = (props) => {
             </span>
           </button>
 
-          {/* #443 — display options: text size, timestamp format, and the
-              show-colored-nicklist toggle grouped into one titled section
-              (no sub-page; the SettingsSubPage union in lib/settingsNav.ts
-              stays untouched). */}
-          <section class="settings-section" data-testid="settings-section-display">
-            <h4 class="settings-section-heading">display options</h4>
-
-            <fieldset class="font-size-fieldset">
-              <legend>text size</legend>
-              <label>
-                <input
-                  type="radio"
-                  name="font-size"
-                  value="S"
-                  checked={size() === "S"}
-                  onChange={onFontSizeChange}
-                  data-testid="font-size-S"
-                />
-                S
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="font-size"
-                  value="M"
-                  checked={size() === "M"}
-                  onChange={onFontSizeChange}
-                  data-testid="font-size-M"
-                />
-                M
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="font-size"
-                  value="L"
-                  checked={size() === "L"}
-                  onChange={onFontSizeChange}
-                  data-testid="font-size-L"
-                />
-                L
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="font-size"
-                  value="XL"
-                  checked={size() === "XL"}
-                  onChange={onFontSizeChange}
-                  data-testid="font-size-XL"
-                />
-                XL
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="font-size"
-                  value="XXL"
-                  checked={size() === "XXL"}
-                  onChange={onFontSizeChange}
-                  data-testid="font-size-XXL"
-                />
-                XXL
-              </label>
-            </fieldset>
-
-            {/* #217 — message timestamp format. Closed-set (with/without
-            seconds), client-only, persisted in localStorage. Mirrors the
-            text-size radio-group pattern. */}
-            <fieldset class="time-format-fieldset">
-              <legend>timestamp format</legend>
-              <label>
-                <input
-                  type="radio"
-                  name="time-format"
-                  value="hms"
-                  checked={timeFmt() === "hms"}
-                  onChange={onTimeFormatChange}
-                  data-testid="time-format-hms"
-                />
-                with seconds (HH:MM:SS)
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="time-format"
-                  value="hm"
-                  checked={timeFmt() === "hm"}
-                  onChange={onTimeFormatChange}
-                  data-testid="time-format-hm"
-                />
-                no seconds (HH:MM)
-              </label>
-            </fieldset>
-
-            {/* #443 — per-nick colors in the members pane. Off by default: the
-              nicklist stays monochrome so its color reads as the mode tier,
-              not identity. When on, MembersPane drops `noColor` so NickText
-              applies the per-nick hash hue; the mode-prefix glyph keeps its
-              own tier color either way. */}
-            <fieldset class="colored-nicklist-fieldset">
-              <legend>nicklist</legend>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={coloredNicklist()}
-                  onChange={onColoredNicklistChange}
-                  data-testid="colored-nicklist-toggle"
-                />
-                show colored nicklist
-              </label>
-            </fieldset>
-          </section>
+          {/* #252 — source address (vhost) nav row. LAST in the index; the
+              interim #228 `<select multiple>` is replaced by a dedicated,
+              mobile-friendly SUB-PAGE (tap-select, NAME-primary). It renders
+              only once the server view has loaded (non-null). */}
+          <Show when={vhostView() !== null}>
+            <button
+              type="button"
+              class="settings-nav-row"
+              data-testid="vhost-settings-entry"
+              onClick={enterVhostPage}
+            >
+              <span class="settings-nav-row-label">source address (vhost)</span>
+              <span class="settings-nav-row-chevron" aria-hidden="true">
+                ›
+              </span>
+            </button>
+          </Show>
 
           <Show when={isAdmin()}>
             <button
@@ -1019,106 +815,24 @@ const SettingsDrawer: Component<Props> = (props) => {
             </button>
           </Show>
 
-          <Show when={isVisitor()}>
-            {/* #211 phase 7 — per-network visitor identity editor (targets
-              the anchor network). Saving PATCHes /networks/:slug/identity
-              which live-applies via internal reconnect (the session bounces
-              + rejoins). The confirm-armed save communicates the reconnect
-              cost; a 422 renders inline. */}
-            {/* #335 — identity now sits inside a titled .settings-section
-                card (was a bare, unstyled block with no wrapper). */}
-            <div
-              class="settings-section settings-section-card"
-              data-testid="settings-section-identity"
+          {/* #392 — session-share entry. isVisitor()-gated (mint 403s for
+              users — the modal is never reachable for a password subject).
+              #363 — also hidden while incognito: an ephemeral session must not
+              be portable to another device. #460 — split out of the old
+              isVisitor block (identity moved into the general sub-page); the
+              share entry STAYS on the main index. */}
+          <Show when={isVisitor() && !isIncognito()}>
+            <button
+              type="button"
+              class="settings-share-button"
+              data-testid="share-session-entry"
+              onClick={() => openShareModal()}
             >
-              <h4 class="settings-section-heading">identity</h4>
-              <div class="settings-identity" data-testid="settings-identity">
-                <label for="settings-nick">Nick</label>
-                <input
-                  id="settings-nick"
-                  type="text"
-                  autocapitalize="none"
-                  autocorrect="off"
-                  spellcheck={false}
-                  value={nickText()}
-                  onInput={(e) => setNickText(e.currentTarget.value)}
-                />
-
-                <label for="settings-realname">Real name</label>
-                <input
-                  id="settings-realname"
-                  type="text"
-                  autocapitalize="none"
-                  autocorrect="off"
-                  spellcheck={false}
-                  value={realnameText()}
-                  onInput={(e) => setRealnameText(e.currentTarget.value)}
-                />
-
-                <label for="settings-ident">Ident</label>
-                <input
-                  id="settings-ident"
-                  type="text"
-                  autocapitalize="none"
-                  autocorrect="off"
-                  spellcheck={false}
-                  value={identText()}
-                  onInput={(e) => setIdentText(e.currentTarget.value)}
-                />
-                <p class="settings-identity-hint">
-                  Applying reconnects your session — you'll briefly drop and rejoin your channels.
-                </p>
-
-                <InlineConfirmButton
-                  idleLabel={identitySaving() ? "applying…" : "apply identity"}
-                  confirmLabel="apply — this reconnects"
-                  testId="settings-identity-apply"
-                  armed={identityArmed()}
-                  onArm={() => setIdentityArmed(true)}
-                  onConfirm={() => {
-                    void onSaveIdentity();
-                  }}
-                />
-
-                <Show when={identityError()}>
-                  {(msg) => (
-                    <p
-                      role="alert"
-                      class="settings-identity-error"
-                      data-testid="settings-identity-error"
-                    >
-                      {msg()}
-                    </p>
-                  )}
-                </Show>
-                <Show when={identitySaved()}>
-                  <p class="settings-identity-ok" data-testid="settings-identity-ok">
-                    Identity applied.
-                  </p>
-                </Show>
-              </div>
-            </div>
-
-            {/* #392 — session-share entry. The #335 wrapper card + sub-page
-                are gone: a single muted-subtitle button opens the shared
-                "open on another device" modal (QR + native-share + countdown),
-                the SAME modal the home button opens. isVisitor()-gated (mint
-                403s for users — the modal is never reachable for a password
-                subject). #363 — also hidden while incognito: an ephemeral
-                session must not be portable to another device. */}
-            <Show when={!isIncognito()}>
-              <button
-                type="button"
-                class="settings-share-button"
-                data-testid="share-session-entry"
-                onClick={() => openShareModal()}
-              >
-                <span class="settings-share-button-label">share session</span>
-                <span class="settings-share-button-subtitle muted">
-                  open this session on another device
-                </span>
-              </button>
-            </Show>
+              <span class="settings-share-button-label">share session</span>
+              <span class="settings-share-button-subtitle muted">
+                open this session on another device
+              </span>
+            </button>
           </Show>
 
           {/* #126 — canonical session-lifecycle verbs ("log out" retired).
@@ -1174,9 +888,6 @@ const SettingsDrawer: Component<Props> = (props) => {
             </button>
           </Show>
 
-          {/* UX-6 D12 — viewport diagnostics fieldset moved to AdminPane
-            Debug tab. See AdminDebugTab.tsx. */}
-
           {/* UX-4 bucket L — bottom "done" button. Same close verb as
             the top × — mobile thumb-reach surface. Sits below logout
             so the scroll position when scroll-to-bottom lands on a
@@ -1189,6 +900,392 @@ const SettingsDrawer: Component<Props> = (props) => {
           >
             done
           </button>
+        </Show>
+
+        {/* #460 — general sub-page: upload retention (host-gated) + visitor
+            identity (visitor-gated). Both blocks moved VERBATIM from the old
+            flat main page. */}
+        <Show when={settingsPage() === "general"}>
+          <section class="settings-subpage general-subpage" data-testid="general-subpage">
+            {subpageHeader("general", "general-back")}
+
+            {/* UX-4 bucket M (2026-05-19) — upload retention preference.
+              Host-gated: only renders when the active image host exposes
+              ttlOptions (litterbox does; a hypothetical imgur-style host
+              wouldn't). The `<option value="">` "use site default" entry
+              maps to a `null` PUT — clears the preference and falls back
+              to `activeHost().defaultTtl`. Server stores integer seconds,
+              cic translates to/from the host token at this boundary. */}
+            <Show when={activeHost().ttlOptions.length > 0}>
+              <fieldset class="upload-ttl-fieldset">
+                <legend>upload retention</legend>
+                <label>
+                  upload duration:
+                  <select
+                    data-testid="upload-ttl-select"
+                    value={uploadTtlSelectValue()}
+                    onChange={(e) => {
+                      void onUploadTtlChange(e);
+                    }}
+                  >
+                    <option value="">use site default ({defaultTtlLabel()})</option>
+                    <For each={activeHost().ttlOptions}>
+                      {(opt) => <option value={opt.value}>{opt.label}</option>}
+                    </For>
+                  </select>
+                </label>
+                <Show when={uploadTtlSavingError() !== null}>
+                  <p class="upload-ttl-error" role="alert" data-testid="upload-ttl-error">
+                    {uploadTtlSavingError()}
+                  </p>
+                </Show>
+              </fieldset>
+            </Show>
+
+            {/* #211 phase 7 — per-network visitor identity editor (targets
+              the anchor network). Saving PATCHes /networks/:slug/identity
+              which live-applies via internal reconnect (the session bounces
+              + rejoins). The confirm-armed save communicates the reconnect
+              cost; a 422 renders inline. */}
+            {/* #335 — identity sits inside a titled .settings-section card. */}
+            <Show when={isVisitor()}>
+              <div
+                class="settings-section settings-section-card"
+                data-testid="settings-section-identity"
+              >
+                <h4 class="settings-section-heading">identity</h4>
+                <div class="settings-identity" data-testid="settings-identity">
+                  <label for="settings-nick">Nick</label>
+                  <input
+                    id="settings-nick"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={nickText()}
+                    onInput={(e) => setNickText(e.currentTarget.value)}
+                  />
+
+                  <label for="settings-realname">Real name</label>
+                  <input
+                    id="settings-realname"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={realnameText()}
+                    onInput={(e) => setRealnameText(e.currentTarget.value)}
+                  />
+
+                  <label for="settings-ident">Ident</label>
+                  <input
+                    id="settings-ident"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={identText()}
+                    onInput={(e) => setIdentText(e.currentTarget.value)}
+                  />
+                  <p class="settings-identity-hint">
+                    Applying reconnects your session — you'll briefly drop and rejoin your channels.
+                  </p>
+
+                  <InlineConfirmButton
+                    idleLabel={identitySaving() ? "applying…" : "apply identity"}
+                    confirmLabel="apply — this reconnects"
+                    testId="settings-identity-apply"
+                    armed={identityArmed()}
+                    onArm={() => setIdentityArmed(true)}
+                    onConfirm={() => {
+                      void onSaveIdentity();
+                    }}
+                  />
+
+                  <Show when={identityError()}>
+                    {(msg) => (
+                      <p
+                        role="alert"
+                        class="settings-identity-error"
+                        data-testid="settings-identity-error"
+                      >
+                        {msg()}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={identitySaved()}>
+                    <p class="settings-identity-ok" data-testid="settings-identity-ok">
+                      Identity applied.
+                    </p>
+                  </Show>
+                </div>
+              </div>
+            </Show>
+          </section>
+        </Show>
+
+        {/* #460 — display sub-page: text size, timestamp format, and the
+            colored-nicklist toggle (#443 section moved VERBATIM). */}
+        <Show when={settingsPage() === "display"}>
+          <section class="settings-subpage display-subpage" data-testid="display-subpage">
+            {subpageHeader("display", "display-back")}
+
+            {/* #299 — the legacy auto/mirc-light/irssi-dark radio selector was
+                removed. It is superseded by the #75 theme gallery (a themes
+                nav row on the index) and was broken: an active gallery theme
+                layers inline CSS vars over the [data-theme] base blocks, so
+                toggling the radio did nothing visible. The base look is
+                OS-resolved at boot (lib/theme.applyTheme). */}
+            <section class="settings-section" data-testid="settings-section-display">
+              <h4 class="settings-section-heading">display options</h4>
+
+              <fieldset class="font-size-fieldset">
+                <legend>text size</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="font-size"
+                    value="S"
+                    checked={size() === "S"}
+                    onChange={onFontSizeChange}
+                    data-testid="font-size-S"
+                  />
+                  S
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="font-size"
+                    value="M"
+                    checked={size() === "M"}
+                    onChange={onFontSizeChange}
+                    data-testid="font-size-M"
+                  />
+                  M
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="font-size"
+                    value="L"
+                    checked={size() === "L"}
+                    onChange={onFontSizeChange}
+                    data-testid="font-size-L"
+                  />
+                  L
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="font-size"
+                    value="XL"
+                    checked={size() === "XL"}
+                    onChange={onFontSizeChange}
+                    data-testid="font-size-XL"
+                  />
+                  XL
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="font-size"
+                    value="XXL"
+                    checked={size() === "XXL"}
+                    onChange={onFontSizeChange}
+                    data-testid="font-size-XXL"
+                  />
+                  XXL
+                </label>
+              </fieldset>
+
+              {/* #217 — message timestamp format. Closed-set (with/without
+              seconds), client-only, persisted in localStorage. Mirrors the
+              text-size radio-group pattern. */}
+              <fieldset class="time-format-fieldset">
+                <legend>timestamp format</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="time-format"
+                    value="hms"
+                    checked={timeFmt() === "hms"}
+                    onChange={onTimeFormatChange}
+                    data-testid="time-format-hms"
+                  />
+                  with seconds (HH:MM:SS)
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="time-format"
+                    value="hm"
+                    checked={timeFmt() === "hm"}
+                    onChange={onTimeFormatChange}
+                    data-testid="time-format-hm"
+                  />
+                  no seconds (HH:MM)
+                </label>
+              </fieldset>
+
+              {/* #443 — per-nick colors in the members pane. Off by default: the
+                nicklist stays monochrome so its color reads as the mode tier,
+                not identity. When on, MembersPane drops `noColor` so NickText
+                applies the per-nick hash hue; the mode-prefix glyph keeps its
+                own tier color either way. */}
+              <fieldset class="colored-nicklist-fieldset">
+                <legend>nicklist</legend>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={coloredNicklist()}
+                    onChange={onColoredNicklistChange}
+                    data-testid="colored-nicklist-toggle"
+                  />
+                  show colored nicklist
+                </label>
+              </fieldset>
+            </section>
+          </section>
+        </Show>
+
+        {/* #460 — push sub-page: notifications (push permission + per-trigger
+            prefs + device list). Moved VERBATIM from the old flat main page. */}
+        <Show when={settingsPage() === "push"}>
+          <section class="settings-subpage push-subpage" data-testid="push-subpage">
+            {subpageHeader("notifications", "push-back")}
+
+            <fieldset class="notifications-fieldset">
+              <legend>notifications</legend>
+              <label class="master-toggle">
+                <input
+                  type="checkbox"
+                  checked={pushEnabled()}
+                  onChange={(e) => {
+                    void onMasterToggle((e.currentTarget as HTMLInputElement).checked);
+                  }}
+                  data-testid="push-master-toggle"
+                />
+                enable browser notifications
+              </label>
+              <Show when={pushBanner() !== null}>
+                <p class="push-banner" role="alert" data-testid="push-banner">
+                  {pushBanner()}
+                </p>
+              </Show>
+
+              <hr />
+
+              <label>
+                <input
+                  type="checkbox"
+                  checked={prefs().channel_messages_all}
+                  disabled={savingPrefs()}
+                  onChange={(e) =>
+                    togglePref(
+                      "channel_messages_all",
+                      (e.currentTarget as HTMLInputElement).checked,
+                    )
+                  }
+                  data-testid="pref-channel-all"
+                />
+                all channel messages
+              </label>
+              <label class="prefs-list">
+                only in channels:
+                <input
+                  type="text"
+                  value={channelsOnlyText()}
+                  disabled={prefs().channel_messages_all || savingPrefs()}
+                  placeholder="#sbiffo, #grappa"
+                  onInput={(e) => setChannelsOnlyText((e.currentTarget as HTMLInputElement).value)}
+                  onBlur={commitChannelsOnly}
+                  data-testid="pref-channels-only"
+                />
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={prefs().channel_mentions}
+                  disabled={savingPrefs()}
+                  onChange={(e) =>
+                    togglePref("channel_mentions", (e.currentTarget as HTMLInputElement).checked)
+                  }
+                  data-testid="pref-channel-mentions"
+                />
+                channel mentions
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={prefs().private_messages_all}
+                  disabled={savingPrefs()}
+                  onChange={(e) =>
+                    togglePref(
+                      "private_messages_all",
+                      (e.currentTarget as HTMLInputElement).checked,
+                    )
+                  }
+                  data-testid="pref-private-all"
+                />
+                all private messages
+              </label>
+              <label class="prefs-list">
+                only from nicks:
+                <input
+                  type="text"
+                  value={nicksOnlyText()}
+                  disabled={prefs().private_messages_all || savingPrefs()}
+                  placeholder="alice, bob"
+                  onInput={(e) => setNicksOnlyText((e.currentTarget as HTMLInputElement).value)}
+                  onBlur={commitNicksOnly}
+                  data-testid="pref-nicks-only"
+                />
+              </label>
+
+              <Show when={prefsError() !== null}>
+                <p class="prefs-error" role="alert" data-testid="prefs-error">
+                  {prefsError()}
+                </p>
+              </Show>
+
+              <Show when={devices().length > 0}>
+                <h3>devices</h3>
+                <ul class="devices-list" data-testid="devices-list">
+                  <For each={devices()}>
+                    {(d) => {
+                      // UX-4 bucket L (2026-05-19) — replace the raw UA
+                      // string with `{icon} {Browser} on {OS}`. Title
+                      // attribute preserves the full UA so a hover (desktop)
+                      // can still surface the original for debugging /
+                      // device disambiguation across same-browser instances.
+                      const parsed = parseUserAgent(d.user_agent);
+                      return (
+                        <li>
+                          <span class="device-ua" title={d.user_agent ?? "(unknown browser)"}>
+                            <span class="device-ua-icon" aria-hidden="true">
+                              {deviceClassIcon(parsed.deviceClass)}
+                            </span>
+                            <span class="device-ua-name">
+                              {parsed.browser} on {parsed.os}
+                            </span>
+                          </span>
+                          <button
+                            type="button"
+                            class="device-remove"
+                            onClick={() => {
+                              void removeDevice(d.id);
+                            }}
+                          >
+                            remove
+                          </button>
+                        </li>
+                      );
+                    }}
+                  </For>
+                </ul>
+              </Show>
+            </fieldset>
+          </section>
         </Show>
 
         {/* #252 — vhost sub-page. Replaces the main page while active; the

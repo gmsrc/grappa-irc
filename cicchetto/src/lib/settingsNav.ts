@@ -37,7 +37,24 @@ import { createSignal } from "solid-js";
 // #189 — "perform" sub-page (per-network on-connect command list). Reached
 // from a nav row on the main page. Per-network (one block per network),
 // unlike the global aliases page.
-export type SettingsSubPage = "main" | "vhost" | "themes" | "watchlists" | "aliases" | "perform";
+//
+// #460 — the drawer's main page became an INDEX of nav rows; three groups of
+// formerly-inline content moved into their own sub-pages: "general"
+// (upload-retention + visitor identity), "display" (text size / timestamp /
+// colored nicklist), and "push" (notifications). They are INLINE `<Show>`
+// blocks in SettingsDrawer (their signals live in its body) rather than
+// separate components, but they share the same `settingsPage` routing + the
+// deep-link machinery below, so they belong in this union.
+export type SettingsSubPage =
+  | "main"
+  | "general"
+  | "display"
+  | "vhost"
+  | "themes"
+  | "push"
+  | "watchlists"
+  | "aliases"
+  | "perform";
 
 let pendingPage: SettingsSubPage | null = null;
 

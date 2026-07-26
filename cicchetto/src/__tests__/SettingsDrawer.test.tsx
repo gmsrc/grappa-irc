@@ -219,6 +219,11 @@ import SettingsDrawer from "../SettingsDrawer";
 const wrap = (open: boolean, onClose = vi.fn(), onOpenAdmin = vi.fn()) =>
   render(() => <SettingsDrawer open={open} onClose={onClose} onOpenAdmin={onOpenAdmin} />);
 
+// #460 — the settings main page is an index of nav rows; general / display /
+// push (notifications) content now lives in dedicated sub-pages reached by
+// tapping the owning row. Content assertions navigate into the sub-page first.
+const openSub = (entryTestId: string) => fireEvent.click(screen.getByTestId(entryTestId));
+
 beforeEach(() => {
   vi.clearAllMocks();
   // Default: no subject loaded yet — covers the pre-login / loading
@@ -240,6 +245,7 @@ describe("SettingsDrawer", () => {
 
   it("renders the #217 timestamp-format radios (default with-seconds checked)", () => {
     wrap(true);
+    openSub("display-settings-entry");
     const hms = screen.getByTestId("time-format-hms") as HTMLInputElement;
     const hm = screen.getByTestId("time-format-hm") as HTMLInputElement;
     expect(hms).toBeInTheDocument();
@@ -252,6 +258,7 @@ describe("SettingsDrawer", () => {
   it("picking a timestamp format fires setTimeFormat", async () => {
     const timeFormat = await import("../lib/timeFormat");
     wrap(true);
+    openSub("display-settings-entry");
     fireEvent.click(screen.getByTestId("time-format-hm"));
     expect(timeFormat.setTimeFormat).toHaveBeenCalledWith("hm");
   });
@@ -295,11 +302,12 @@ describe("SettingsDrawer", () => {
 describe("SettingsDrawer display options section (#443)", () => {
   it("groups text size, timestamp format and the colored-nicklist toggle under one section", () => {
     wrap(true);
+    // #460 — the display section moved VERBATIM into the display sub-page; the
+    // three controls still live grouped in ONE .settings-section-display block.
+    openSub("display-settings-entry");
     const section = screen.getByTestId("settings-section-display");
     expect(section).toBeInTheDocument();
     expect(section.textContent).toContain("display options");
-    // The three display controls live INSIDE the section — grouping onto the
-    // main page (no new sub-page) is the point of #443.
     expect(section.querySelector('[data-testid="font-size-M"]')).not.toBeNull();
     expect(section.querySelector('[data-testid="time-format-hms"]')).not.toBeNull();
     expect(section.querySelector('[data-testid="colored-nicklist-toggle"]')).not.toBeNull();
@@ -307,6 +315,7 @@ describe("SettingsDrawer display options section (#443)", () => {
 
   it("renders the colored-nicklist toggle unchecked by default", () => {
     wrap(true);
+    openSub("display-settings-entry");
     const toggle = screen.getByTestId("colored-nicklist-toggle") as HTMLInputElement;
     // getColoredNicklist mock returns false → off by default (current behavior).
     expect(toggle.checked).toBe(false);
@@ -315,6 +324,7 @@ describe("SettingsDrawer display options section (#443)", () => {
   it("toggling the colored-nicklist checkbox fires setColoredNicklist(true)", async () => {
     const colorNicklist = await import("../lib/colorNicklist");
     wrap(true);
+    openSub("display-settings-entry");
     fireEvent.click(screen.getByTestId("colored-nicklist-toggle"));
     expect(colorNicklist.setColoredNicklist).toHaveBeenCalledWith(true);
   });
@@ -323,6 +333,7 @@ describe("SettingsDrawer display options section (#443)", () => {
 describe("SettingsDrawer notifications section", () => {
   it("renders the master toggle + 4 prefs checkboxes + 2 whitelist inputs", () => {
     wrap(true);
+    openSub("push-settings-entry");
     expect(screen.getByTestId("push-master-toggle")).toBeInTheDocument();
     expect(screen.getByTestId("pref-channel-all")).toBeInTheDocument();
     expect(screen.getByTestId("pref-channel-mentions")).toBeInTheDocument();
@@ -342,6 +353,7 @@ describe("SettingsDrawer notifications section", () => {
   it("clicking master toggle calls enablePush", async () => {
     const push = await import("../lib/push");
     wrap(true);
+    openSub("push-settings-entry");
     const toggle = screen.getByTestId("push-master-toggle") as HTMLInputElement;
     fireEvent.click(toggle);
     await waitFor(() => {
@@ -352,6 +364,7 @@ describe("SettingsDrawer notifications section", () => {
   it("toggling a pref checkbox calls putNotificationPrefs", async () => {
     const userSettings = await import("../lib/userSettings");
     wrap(true);
+    openSub("push-settings-entry");
     await waitFor(() => {
       expect(userSettings.getNotificationPrefs).toHaveBeenCalled();
     });
@@ -371,6 +384,7 @@ describe("SettingsDrawer notifications section", () => {
       channel_messages_all: true,
     });
     wrap(true);
+    openSub("push-settings-entry");
     await waitFor(() => {
       const input = screen.getByTestId("pref-channels-only") as HTMLInputElement;
       expect(input.disabled).toBe(true);
@@ -383,6 +397,7 @@ describe("SettingsDrawer notifications section", () => {
       status: "permission_denied",
     });
     wrap(true);
+    openSub("push-settings-entry");
     fireEvent.click(screen.getByTestId("push-master-toggle"));
     await waitFor(() => {
       expect(screen.getByTestId("push-banner")).toBeInTheDocument();
@@ -412,6 +427,7 @@ describe("SettingsDrawer (visitor subject)", () => {
 
   it("renders the same notifications surface for visitor as for user", () => {
     wrap(true);
+    openSub("push-settings-entry");
     expect(screen.getByTestId("push-master-toggle")).toBeInTheDocument();
     expect(screen.getByTestId("pref-channel-all")).toBeInTheDocument();
     expect(screen.getByTestId("pref-channel-mentions")).toBeInTheDocument();
@@ -431,6 +447,7 @@ describe("SettingsDrawer (visitor subject)", () => {
   it("clicking master toggle calls enablePush for visitor (no client-side hide)", async () => {
     const push = await import("../lib/push");
     wrap(true);
+    openSub("push-settings-entry");
     fireEvent.click(screen.getByTestId("push-master-toggle"));
     await waitFor(() => {
       expect(push.enablePush).toHaveBeenCalledWith("test-bearer");
@@ -558,6 +575,7 @@ describe("SettingsDrawer (bucket L — chrome polish)", () => {
 describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
   it("renders the upload-TTL select with the active host's ladder", () => {
     wrap(true);
+    openSub("general-settings-entry");
     const select = screen.getByTestId("upload-ttl-select") as HTMLSelectElement;
     expect(select).toBeInTheDocument();
     const opts = Array.from(select.querySelectorAll("option")).map((o) => o.value);
@@ -576,6 +594,7 @@ describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
   // ttlOptions ladder the other options use — no bespoke formatter.
   it("renders the site-default option with a human label, not raw seconds", () => {
     wrap(true);
+    openSub("general-settings-entry");
     const select = screen.getByTestId("upload-ttl-select") as HTMLSelectElement;
     const defaultOpt = Array.from(select.querySelectorAll("option")).find((o) => o.value === "");
     expect(defaultOpt).toBeDefined();
@@ -590,6 +609,7 @@ describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
   // (multi-type uploads on the roadmap). Locks the rename against regression.
   it("labels the fieldset 'upload retention' (type-agnostic legend)", () => {
     wrap(true);
+    openSub("general-settings-entry");
     const legend = screen.getByText("upload retention");
     expect(legend).toBeInTheDocument();
     expect(legend.tagName).toBe("LEGEND");
@@ -610,6 +630,7 @@ describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
     // allowed_ttl_seconds whitelist).
     uploadTtlHolder.current = 86_400;
     wrap(true);
+    openSub("general-settings-entry");
     const select = screen.getByTestId("upload-ttl-select") as HTMLSelectElement;
     expect(select.value).toBe("86400");
   });
@@ -617,6 +638,7 @@ describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
   it("selecting an option PUTs the matching seconds", async () => {
     const orch = await import("../lib/uploadOrchestrator");
     wrap(true);
+    openSub("general-settings-entry");
     const select = screen.getByTestId("upload-ttl-select") as HTMLSelectElement;
     // UX-6-B2: embeddedHost option value is "3600" (integer-seconds).
     fireEvent.change(select, { target: { value: "3600" } });
@@ -629,6 +651,7 @@ describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
     const orch = await import("../lib/uploadOrchestrator");
     uploadTtlHolder.current = 3600;
     wrap(true);
+    openSub("general-settings-entry");
     const select = screen.getByTestId("upload-ttl-select") as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "" } });
     await waitFor(() => {
@@ -659,17 +682,20 @@ describe("SettingsDrawer (share session — visitor only)", () => {
     expect(screen.getByTestId("share-session-entry")).toBeInTheDocument();
   });
 
-  it("shows the identity section + share button when subject is a visitor", () => {
+  it("shows the identity section (general sub-page) + share button (main) when subject is a visitor", () => {
     subjectHolder.current = {
       kind: "visitor",
       id: "v1",
       nick: "alice",
     };
     wrap(true);
+    // #460 — the share entry STAYS on the main page (split out of the old
+    // isVisitor block); the identity card MOVED into the general sub-page.
+    expect(screen.getByTestId("share-session-entry")).toBeInTheDocument();
+    openSub("general-settings-entry");
     // #335 identity card stays; #392 dropped the share wrapper card — the
     // share entry is now a bare muted-subtitle button.
     expect(screen.getByTestId("settings-section-identity")).toBeInTheDocument();
-    expect(screen.getByTestId("share-session-entry")).toBeInTheDocument();
   });
 
   it("hides share-session entry when subject is not loaded", () => {
@@ -824,6 +850,7 @@ describe("SettingsDrawer (#126 — registered-visitor lifecycle verbs)", () => {
       },
     ];
     wrap(true);
+    openSub("general-settings-entry");
 
     // Fields seed from the anchor network row on open.
     const nickInput = screen.getByLabelText(/^nick$/i) as HTMLInputElement;
@@ -860,6 +887,9 @@ describe("SettingsDrawer (#126 — registered-visitor lifecycle verbs)", () => {
     };
     subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
     wrap(true);
+    // #460 — identity lives in the general sub-page now; for a user subject it
+    // is still withheld there (visitor-gated). Navigate in, then assert absent.
+    openSub("general-settings-entry");
     expect(screen.queryByTestId("settings-identity")).toBeNull();
   });
 });
@@ -955,8 +985,10 @@ describe("SettingsDrawer (#252 — vhost sub-page nav)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("vhost-subpage")).toBeInTheDocument();
     });
-    // Main-page chrome (a stable settings row) is gone while on the sub-page.
-    expect(screen.queryByTestId("push-master-toggle")).toBeNull();
+    // #460 — main-page chrome (a stable index nav row) is gone while on the
+    // sub-page. (The notifications toggle now lives in its own push sub-page,
+    // so it is no longer a main-page marker.)
+    expect(screen.queryByTestId("themes-settings-entry")).toBeNull();
   });
 
   it("the sub-page back button returns to the main page", async () => {
@@ -966,7 +998,7 @@ describe("SettingsDrawer (#252 — vhost sub-page nav)", () => {
     await waitFor(() => screen.getByTestId("vhost-subpage"));
     fireEvent.click(screen.getByTestId("vhost-back"));
     await waitFor(() => {
-      expect(screen.getByTestId("push-master-toggle")).toBeInTheDocument();
+      expect(screen.getByTestId("themes-settings-entry")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("vhost-subpage")).toBeNull();
   });
@@ -996,7 +1028,102 @@ describe("SettingsDrawer — IRC keyboard toggle removed (#177)", () => {
   // settings row) so a testid typo can't silently green the absence.
   it("no longer offers an IRC keyboard toggle (native keyboard is the only input)", () => {
     const { queryByTestId } = wrap(true);
-    expect(queryByTestId("push-master-toggle")).not.toBeNull();
+    // #460 — positive twin is a stable main-page index row (the push toggle
+    // moved into its own sub-page).
+    expect(queryByTestId("themes-settings-entry")).not.toBeNull();
     expect(queryByTestId("irc-keyboard-toggle")).toBeNull();
+  });
+});
+
+// #460 — the settings main page is now an INDEX of nav rows; general
+// (upload-retention + identity), display (text size / timestamp / colored
+// nicklist), and push (notifications) content moved into dedicated sub-pages
+// reached by tapping the owning row. This block pins the index IA + the
+// index↔sub-page↔back navigation; the per-page content assertions live in the
+// sub-page-specific describes above (navigate-then-assert).
+describe("SettingsDrawer (#460 — settings index)", () => {
+  const rowIds = (container: HTMLElement): (string | null)[] =>
+    Array.from(container.querySelectorAll(".settings-nav-row")).map((el) =>
+      el.getAttribute("data-testid"),
+    );
+
+  it("renders the index nav rows in order; the vhost row appends LAST once its view loads", async () => {
+    const { container } = wrap(true);
+    // The always-present index rows, in the #460 order (perform right after
+    // aliases; source-address last).
+    expect(rowIds(container)).toEqual([
+      "general-settings-entry",
+      "display-settings-entry",
+      "themes-settings-entry",
+      "push-settings-entry",
+      "watchlists-settings-entry",
+      "aliases-settings-entry",
+      "perform-settings-entry",
+    ]);
+    // The vhost row is gated on the async view load; it appends at the end.
+    await waitFor(() => expect(screen.getByTestId("vhost-settings-entry")).toBeInTheDocument());
+    expect(rowIds(container)).toEqual([
+      "general-settings-entry",
+      "display-settings-entry",
+      "themes-settings-entry",
+      "push-settings-entry",
+      "watchlists-settings-entry",
+      "aliases-settings-entry",
+      "perform-settings-entry",
+      "vhost-settings-entry",
+    ]);
+  });
+
+  it("tapping the display row opens the display sub-page; back returns to the index", () => {
+    wrap(true);
+    openSub("display-settings-entry");
+    expect(screen.getByTestId("settings-section-display")).toBeInTheDocument();
+    // The index chrome is replaced while on the sub-page.
+    expect(screen.queryByTestId("themes-settings-entry")).toBeNull();
+    fireEvent.click(screen.getByTestId("display-back"));
+    expect(screen.getByTestId("themes-settings-entry")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-section-display")).toBeNull();
+  });
+
+  it("tapping the notifications row opens the push sub-page; back returns to the index", () => {
+    wrap(true);
+    openSub("push-settings-entry");
+    expect(screen.getByTestId("push-master-toggle")).toBeInTheDocument();
+    expect(screen.queryByTestId("themes-settings-entry")).toBeNull();
+    fireEvent.click(screen.getByTestId("push-back"));
+    expect(screen.getByTestId("themes-settings-entry")).toBeInTheDocument();
+    expect(screen.queryByTestId("push-master-toggle")).toBeNull();
+  });
+
+  it("tapping the general row opens the general sub-page (visitor: identity + upload retention); back returns", () => {
+    subjectHolder.current = { kind: "visitor", id: "v1", nick: "alice" };
+    wrap(true);
+    openSub("general-settings-entry");
+    expect(screen.getByTestId("settings-section-identity")).toBeInTheDocument();
+    expect(screen.getByTestId("upload-ttl-select")).toBeInTheDocument();
+    expect(screen.queryByTestId("themes-settings-entry")).toBeNull();
+    fireEvent.click(screen.getByTestId("general-back"));
+    expect(screen.getByTestId("themes-settings-entry")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-section-identity")).toBeNull();
+  });
+
+  it("a pending deep-link request lands the drawer directly on that sub-page (index deep-links survive)", async () => {
+    // The deep-link machinery (requestSettingsPage → consume on open) is
+    // unchanged by #460; assert it still lands the drawer on a sub-page (here
+    // the NEW push page) instead of the index.
+    const nav = await import("../lib/settingsNav");
+    nav.requestSettingsPage("push");
+    wrap(true);
+    await waitFor(() => expect(screen.getByTestId("push-master-toggle")).toBeInTheDocument());
+    expect(screen.queryByTestId("themes-settings-entry")).toBeNull();
+  });
+
+  it("share session, quit + done stay on the main index page (not moved into a sub-page)", () => {
+    subjectHolder.current = { kind: "visitor", id: "v1", nick: "alice" };
+    wrap(true);
+    // These affordances live BELOW the index on the main page.
+    expect(screen.getByTestId("share-session-entry")).toBeInTheDocument();
+    expect(screen.getByTestId("quit-irc-btn")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-drawer-done")).toBeInTheDocument();
   });
 });
