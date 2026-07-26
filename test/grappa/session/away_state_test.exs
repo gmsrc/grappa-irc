@@ -79,6 +79,22 @@ defmodule Grappa.Session.AwayStateTest do
     end
   end
 
+  describe "restore_explicit/2 (#417)" do
+    test "rebuilds :away_explicit stamping started_at to the GIVEN since (not now)" do
+      # The whole reason this exists (vs set_explicit_away/2): a restored
+      # away must resume the ORIGINAL window so the mentions-bundle at /back
+      # stays honest. `since` is deliberately in the past — a now-stamp
+      # would silently truncate the window.
+      since = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      as = AwayState.restore_explicit("lunch", since)
+
+      assert AwayState.state_of(as) == :away_explicit
+      assert AwayState.reason(as) == "lunch"
+      assert AwayState.started_at(as) == since
+    end
+  end
+
   describe "set_auto_away/1" do
     test "transitions to :away_auto, records the fixed auto-away reason" do
       before = DateTime.utc_now()

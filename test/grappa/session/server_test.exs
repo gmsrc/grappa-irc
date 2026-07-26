@@ -6745,6 +6745,31 @@ defmodule Grappa.Session.ServerTest do
       start_server(handler)
     end
 
+    # Condition-poll until at least `want` sent lines match `pred`, or the
+    # deadline elapses. `IRCServer.wait_for_line/3` can only match the FIRST
+    # buffered line, so a RE-EMIT assertion (#417 same-process reconnect,
+    # where a second AWAY must appear) needs a count, not a first-match wait.
+    defp await_sent_line_count(server, pred, want, timeout_ms) do
+      deadline = System.monotonic_time(:millisecond) + timeout_ms
+      do_await_sent_line_count(server, pred, want, deadline)
+    end
+
+    defp do_await_sent_line_count(server, pred, want, deadline) do
+      count = server |> IRCServer.sent_lines() |> Enum.count(pred)
+
+      cond do
+        count >= want ->
+          :ok
+
+        System.monotonic_time(:millisecond) >= deadline ->
+          {:error, {:timeout, count}}
+
+        true ->
+          Process.sleep(10)
+          do_await_sent_line_count(server, pred, want, deadline)
+      end
+    end
+
     test "set_explicit_away issues AWAY :reason upstream and returns :ok" do
       {server, port} = start_server_with_001()
       {user, network, _} = setup_user_and_network(port)
@@ -6854,6 +6879,33 @@ defmodule Grappa.Session.ServerTest do
       cred = Credentials.get_credential!(user, network)
       assert cred.away_reason == nil
       assert cred.away_since == nil
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "a second 001 re-emits in-memory away upstream — same-process reconnect (#417)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      # Auto-away held ONLY in memory (never persisted). A same-process
+      # upstream reconnect emits a fresh, away-blind 001 — the session must
+      # re-assert the away it still knows about, even though nothing hit the
+      # DB. This is the in-memory arm of maybe_resend_away/1 (the DB-restore
+      # arm is the "restored + re-sent" test above).
+      :ok = Session.set_auto_away({:user, user.id}, network.id)
+      auto? = &String.starts_with?(&1, "AWAY :auto")
+      {:ok, _} = IRCServer.wait_for_line(server, auto?, 1_000)
+
+      # Simulate the reconnect re-welcome — the numeric-1 arm handles a second
+      # 001 defensively (connection_stable cancel+drain).
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome back\r\n")
+
+      # The resend fires again: TWO AWAY :auto lines total on the wire.
+      assert :ok = await_sent_line_count(server, auto?, 2, 1_000)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
