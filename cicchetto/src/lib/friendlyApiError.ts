@@ -1,4 +1,5 @@
 import { type ApiError, assertNever } from "./api";
+import { formatBytes } from "./formatBytes";
 import { ERROR_TOKENS_REST_ERROR_TOKEN, type ErrorTokensRestErrorToken } from "./wireTypes";
 
 // U-3 (UD3): single closed-union typed-error → human copy module.
@@ -225,12 +226,26 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
     // ── #411 D6b — the 23 previously-unmapped REST tokens (product copy,
     //    vetted by vjt). Grouped by surface, same actionable-copy contract.
 
-    // Upload pipeline. `file_too_large` carries `max_bytes` on the wire, but
-    // rendering a human size ("12 MB") needs a byte-formatter — deferred
-    // pending vjt's decision on interpolation (#411 open decision 1). Plain
-    // copy for now; a formatter is a one-line swap if approved.
-    case "file_too_large":
-      return "That file is too large. Choose a smaller one.";
+    // Upload pipeline. `file_too_large` carries `max_bytes` on the wire;
+    // render it in human units (`formatBytes`) so the copy names the real cap,
+    // with a graceful fallback to the capless (vetted) copy when the field is
+    // absent or garbage — mirrors `credentials_present` / `anon_collision`.
+    // The guard is finite-and-positive (not a bare `typeof`): a NaN/0 cap is
+    // not a real limit, so it falls back rather than render "0 bytes".
+    //
+    // This is the GENERAL typed-error surface (a #411 drift-guard arm). Live
+    // file uploads render their own 413 via `uploadOrchestrator`'s
+    // `httpUploadMessage`, which spells the cap in fixed MB (`mbLabel`) to
+    // match its sibling progress/pre-check lines — a DELIBERATE spelling split
+    // for two non-overlapping surfaces. Both are base-1024, so a whole-MB cap
+    // (the production defaults) agrees across surfaces; only an admin-set
+    // non-whole-MB cap would read e.g. "512 KB" here vs "0.5 MB" there.
+    case "file_too_large": {
+      const max = err.info.max_bytes;
+      return typeof max === "number" && Number.isFinite(max) && max > 0
+        ? `That file is too large. The most you can upload is ${formatBytes(max)}. Choose a smaller one.`
+        : "That file is too large. Choose a smaller one.";
+    }
     case "metadata_strip_failed":
       // #39 — EXIF/QuickTime metadata strip failed; the upload is rejected
       // fail-CLOSED (storing the original would leak GPS + device identity).

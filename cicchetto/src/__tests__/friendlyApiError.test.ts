@@ -90,6 +90,12 @@ const CASES: Array<{ code: string; matches: RegExp; info?: Record<string, unknow
   // behavioural canary that the arm renders human copy, not a raw wire token.
   // Product copy, vetted by vjt (issue #411 comment).
   // Upload pipeline (#39 metadata, UX-6-B1 caps/MIME).
+  // file_too_large carries max_bytes; interpolated (human size) + fallback.
+  {
+    code: "file_too_large",
+    matches: /most you can upload is 5 MB/i,
+    info: { max_bytes: 5 * 1024 * 1024 },
+  },
   { code: "file_too_large", matches: /file is too large/i },
   { code: "metadata_strip_failed", matches: /metadata.*wasn't uploaded|couldn't strip/i },
   { code: "insufficient_storage", matches: /storage is full/i },
