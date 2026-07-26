@@ -19927,3 +19927,38 @@ links rather than just checking the file exists.
 `SKIP_CIC`); without the opt-out a failed client build fails the package
 build, because a package that silently ships without a binary it
 advertises is worse than one that refuses to build.
+
+## 2026-07-26 — shottino alias shadowing realigned to #427
+
+Caught while rebasing the shottino work onto upstream for the PR. The two
+landed the same day and crossed: shottino implemented #385 decision #3
+("builtins are never shadowed") while #427 reversed exactly that rule
+upstream (ruling vjt 2026-07-26 — an alias MAY shadow any verb except
+`/alias` and `/unalias`).
+
+Git rebased them cleanly, because the collision is SEMANTIC, not textual:
+cicchetto's rule lives in `slashCommands.ts` and shottino's in `alias.c`,
+so nothing conflicted and nothing warned. The result would have been two
+clients disagreeing about whether `/alias join …` is legal — a parity
+break in the one area the parity work exists to close, shipped silently.
+
+shottino now mirrors `isNonShadowableVerb`: a fixed two-name deny list,
+checked at BOTH define time and expansion, deliberately NOT the built-in
+verb list. Upstream's comment records why that distinction matters — the
+old gate tested the live DISPATCH set and so rejected every builtin, and
+reusing that list for the deny check reproduces the reject-everything
+behaviour the ruling reversed. The C twin has the same trap available
+(`alias_is_builtin` existed and was the obvious thing to reach for), so
+the built-in list was DELETED rather than left as a loaded footgun; it had
+no other consumer.
+
+The old test asserted the reversed decision, so it was rewritten rather
+than adjusted. A test that encodes a superseded ruling is worse than no
+test: it argues for the wrong behaviour to whoever reads it next.
+
+Note on the rebase itself: writing a test for "a shadowing alias expands"
+surfaced that aliasing `me` too makes the expansion re-expand (bounded,
+eight deep). That is correct given both aliases exist and matches cic's
+bounded `expandAlias`, but it made the assertion unreadable — the test
+now uses a fresh table whose expansion target is not itself aliased, and
+leaves the recursion case to the test that exists for it.

@@ -5,28 +5,27 @@
 #include <string.h>
 #include <strings.h>
 
-/* The single list of built-in verbs. `alias_is_builtin` is the only
- * consumer, but keeping it here (rather than inline in the dispatcher)
- * means the shadowing rule and the dispatcher's verb set are edited
- * together — a new command added to one without the other is the drift
- * this is meant to prevent. */
-static const char *const BUILTINS[] = {
-    "quit",   "exit",     "help",    "chat",    "archive",   "settings", "admin",
-    "share",  "open",     "clear",   "close",   "join",      "j",        "part",
-    "nick",   "msg",      "query",   "q",       "me",        "disconnect", "connect",
-    "away",   "whois",    "whowas",  "who",     "names",     "lusers",   "members",
-    "users",  "topic",    "quote",   "oper",    "op",        "deop",     "voice",
-    "devoice","kick",     "ban",     "unban",   "banlist",   "invite",   "umode",
-    "mode",   "links",    "motd",    "info",    "version",   "stats",    "rehash",
-    "kb",     "kickban",  "cs",      "ns",      "ms",        "os",       "hs",
-    "rs",     "notify",   "hilight", "dehilight", "highlight", "watch",  "alias",
-    "unalias","list",     "window",  "win",     "w",         "upload", NULL};
+/* #427 — the two verbs a user alias may NOT shadow.
+ *
+ * Reverses the original "builtins are never shadowed" rule (ruling: vjt
+ * 2026-07-26). A user alias MAY shadow any built-in — /join, /quit, /w,
+ * /q, /j — because the Settings alias list stays reachable as an escape
+ * hatch, so nothing can be permanently locked out. The exception is the
+ * command-side repair surface itself: shadow /alias or /unalias and you
+ * lose the ability to undo it from the compose line.
+ *
+ * This is a FIXED two-name set ON PURPOSE. The previous gate tested the
+ * whole built-in verb list, which rejected EVERY builtin; reusing that
+ * list here would silently reproduce the reject-everything behaviour the
+ * ruling reversed. cicchetto's `isNonShadowableVerb` is the twin.
+ */
+static const char *const NON_SHADOWABLE[] = {"alias", "unalias", NULL};
 
-bool alias_is_builtin(const char *verb) {
+bool alias_is_non_shadowable(const char *verb) {
     if (!verb) return false;
     if (*verb == '/') verb++;
-    for (size_t i = 0; BUILTINS[i]; i++)
-        if (strcasecmp(verb, BUILTINS[i]) == 0) return true;
+    for (size_t i = 0; NON_SHADOWABLE[i]; i++)
+        if (strcasecmp(verb, NON_SHADOWABLE[i]) == 0) return true;
     return false;
 }
 
@@ -38,7 +37,7 @@ static const char *strip_slash(const char *name) {
 alias_set_result alias_set(struct alias_table *t, const char *name, const char *expansion) {
     name = strip_slash(name);
     if (!t || !name || !*name || !expansion || !*expansion) return ALIAS_SET_INVALID;
-    if (alias_is_builtin(name)) return ALIAS_SET_BUILTIN;
+    if (alias_is_non_shadowable(name)) return ALIAS_SET_NON_SHADOWABLE;
 
     struct alias_entry *slot = NULL;
     for (size_t i = 0; i < t->count; i++)
@@ -85,9 +84,9 @@ bool alias_expand_once(const struct alias_table *t, const char *line, char *out,
     memcpy(verb, line + 1, vlen);
     verb[vlen] = '\0';
 
-    /* Built-ins always win — checked BEFORE the table so a stale alias
-     * cannot capture a verb that later became built-in. */
-    if (alias_is_builtin(verb)) return false;
+    /* #427 — an alias may shadow a builtin, so the TABLE is consulted
+     * first. Only the two-verb repair surface is off limits. */
+    if (alias_is_non_shadowable(verb)) return false;
     const char *expansion = alias_get(t, verb);
     if (!expansion) return false;
 

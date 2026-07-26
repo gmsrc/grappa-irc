@@ -141,8 +141,10 @@ Media link previews:
   lists, despite the shared irssi heritage.
 - **Services** — `/cs` `/ns` `/ms` `/os` `/hs` `/rs`; the bare form sends HELP.
 - **Aliases** — `/alias <name> <expansion>` with `$1`…`$9` and `$*`; an
-  expansion containing no placeholder gets the arguments appended. Built-ins
-  cannot be shadowed. `/unalias <name>`, bare `/alias` lists.
+  expansion containing no placeholder gets the arguments appended. An alias
+  may shadow any built-in except `/alias` and `/unalias` (#427), which stay
+  reachable so a shadow can always be undone. `/unalias <name>`, bare
+  `/alias` lists.
 - **Files** — `/upload <path>` posts a file and shares its link. IRC stays
   text: the link is a clickable URL, never an inline embed.
 - **Directory** — `/list [query]` browses the channel directory,

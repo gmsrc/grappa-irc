@@ -4803,8 +4803,8 @@ static void directory_command(struct app *app, const char *rest) {
 /* ── User-defined aliases ──────────────────────────────────────────────
  * Grammar mirrors cicchetto's: $1..$9 positional (missing → empty), $*
  * all args, and an implicit verbatim append when the expansion holds no
- * placeholder. Builtins are never shadowed and expansion is depth-bounded
- * so `/alias a /a` cannot spin. */
+ * placeholder. An alias may shadow any builtin except /alias and /unalias
+ * (#427); expansion is depth-bounded so `/alias a /a` cannot spin. */
 /* Alias storage + expansion live in alias.[ch] — pure, and tested there.
  * These wrappers only add the app lock and the user-facing log lines. */
 
@@ -4841,8 +4841,8 @@ static void alias_command(struct app *app, const char *rest) {
     case ALIAS_SET_OK:
         log_line(app, "alias /%s = %s", name, expansion);
         break;
-    case ALIAS_SET_BUILTIN:
-        log_line(app, "/alias: %s is a built-in command and cannot be redefined", name);
+    case ALIAS_SET_NON_SHADOWABLE:
+        log_line(app, "/alias: /%s can't be aliased — it's needed to manage aliases", name);
         break;
     case ALIAS_SET_FULL:
         log_line(app, "/alias: table full (%d)", ALIAS_MAX_ENTRIES);

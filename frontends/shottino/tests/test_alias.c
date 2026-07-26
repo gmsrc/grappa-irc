@@ -46,18 +46,55 @@ TEST(set_get_unset) {
     CHECK_STR(alias_get(&t, "bye"), "/quit later");
 }
 
-TEST(builtins_are_never_shadowed) {
+/* #427 reversed the original "builtins are never shadowed" rule: an alias
+ * MAY shadow any verb except /alias and /unalias. These assert the CURRENT
+ * ruling; the old suite asserted its opposite, so it was rewritten rather
+ * than adjusted — a test that encodes a reversed decision is worse than no
+ * test, because it argues for the wrong behaviour. */
+TEST(builtins_are_shadowable) {
     struct alias_table t = {0};
-    const char *builtins[] = {"join", "part", "quit", "me", "msg", "mode", "w", "j", "q"};
+    const char *builtins[] = {"join", "part", "quit", "me", "msg", "mode", "w", "j", "q", "n"};
     for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
-        CHECK(alias_is_builtin(builtins[i]));
-        CHECK(alias_set(&t, builtins[i], "/me hijacked") == ALIAS_SET_BUILTIN);
+        CHECK(alias_set(&t, builtins[i], "/me hijacked") == ALIAS_SET_OK);
+        CHECK(!alias_is_non_shadowable(builtins[i]));
     }
+    CHECK_LONG(t.count, sizeof(builtins) / sizeof(builtins[0]));
+
+    /* And the shadow must actually take effect at expansion time — the
+     * alias wins over the builtin it shadows. Checked in a FRESH table
+     * whose expansion target is not itself aliased: with `me` also
+     * shadowed (as it is in `t` above) the result re-expands, which is
+     * correct-but-bounded behaviour and would obscure what is under test
+     * here. `chained_expansion_is_bounded` covers that case directly. */
+    struct alias_table one = {0};
+    CHECK(alias_set(&one, "join", "/me hijacked") == ALIAS_SET_OK);
+    CHECK_STR(expand(&one, "/join #chan"), "/me hijacked #chan");
+
+    struct alias_table two = {0};
+    CHECK(alias_set(&two, "q", "/msg bob") == ALIAS_SET_OK);
+    CHECK_STR(expand(&two, "/q hello"), "/msg bob hello");
+}
+
+/* The two-verb deny list: shadowing the repair surface would leave no way
+ * to undo the alias from the compose line. */
+TEST(alias_and_unalias_are_not_shadowable) {
+    struct alias_table t = {0};
+    CHECK(alias_is_non_shadowable("alias"));
+    CHECK(alias_is_non_shadowable("unalias"));
+    CHECK(alias_is_non_shadowable("/alias"));   /* leading slash tolerated */
+    CHECK(alias_is_non_shadowable("ALIAS"));    /* case-insensitive */
+    CHECK(!alias_is_non_shadowable("aliases")); /* not a prefix match */
+    CHECK(!alias_is_non_shadowable(NULL));
+
+    CHECK(alias_set(&t, "alias", "/me hijacked") == ALIAS_SET_NON_SHADOWABLE);
+    CHECK(alias_set(&t, "unalias", "/me hijacked") == ALIAS_SET_NON_SHADOWABLE);
+    CHECK(alias_set(&t, "/alias", "/me hijacked") == ALIAS_SET_NON_SHADOWABLE);
     CHECK_LONG(t.count, 0);
-    /* Case-insensitively too — /JOIN must not become definable. */
-    CHECK(alias_is_builtin("JOIN"));
-    CHECK(alias_is_builtin("/join"));
-    CHECK(!alias_is_builtin("definitelynotaverb"));
+
+    /* Even if an entry somehow existed, expansion must refuse to apply
+     * it — the define-time gate and the expander share one predicate. */
+    CHECK_STR(expand(&t, "/alias x /me y"), "/alias x /me y");
+    CHECK_STR(expand(&t, "/unalias x"), "/unalias x");
 }
 
 TEST(positional_placeholders) {
@@ -140,7 +177,8 @@ TEST(non_aliases_pass_through_untouched) {
     CHECK_STR(expand(&t, "hello world"), "hello world");
     /* An unknown verb passes through so the dispatcher can report it. */
     CHECK_STR(expand(&t, "/nosuchverb arg"), "/nosuchverb arg");
-    /* A built-in passes through even if an alias somehow shares the name. */
+    /* A built-in with NO alias defined passes through untouched. (With an
+     * alias defined it would expand — see builtins_are_shadowable.) */
     CHECK_STR(expand(&t, "/join #chan"), "/join #chan");
     /* Bare slash, and slash-space, are not verbs. */
     CHECK_STR(expand(&t, "/"), "/");
@@ -205,7 +243,7 @@ TEST(null_safety) {
     CHECK(!alias_expand_once(NULL, NULL, out, sizeof(out)));
     CHECK(alias_get(NULL, "x") == NULL);
     CHECK(!alias_unset(NULL, "x"));
-    CHECK(!alias_is_builtin(NULL));
+    CHECK(!alias_is_non_shadowable(NULL));
     struct alias_table t = {0};
     CHECK_LONG(alias_expand(&t, NULL, out, sizeof(out)), 0);
     CHECK_STR(out, "");
@@ -213,7 +251,8 @@ TEST(null_safety) {
 
 int main(void) {
     RUN(set_get_unset);
-    RUN(builtins_are_never_shadowed);
+    RUN(builtins_are_shadowable);
+    RUN(alias_and_unalias_are_not_shadowable);
     RUN(positional_placeholders);
     RUN(star_placeholder);
     RUN(implicit_append);
