@@ -4,7 +4,9 @@ import { formatBytes } from "../formatBytes";
 // #411 — human byte-size formatter for the `file_too_large` cap copy (and any
 // future size-carrying surface). Base-1024 with "bytes"/KB/MB/GB/TB labels,
 // mirroring the upload orchestrator's binary spelling. These cases pin the
-// edge behaviour vjt asked for: zero, sub-KB, rounding, and huge values.
+// edge behaviour vjt asked for: zero, sub-KB, flooring (cap-safety), and huge
+// values. FLOOR, never round — a non-round cap must never render LARGER than
+// the true limit.
 describe("formatBytes", () => {
   it("renders 0 as '0 bytes'", () => {
     expect(formatBytes(0)).toBe("0 bytes");
@@ -26,18 +28,25 @@ describe("formatBytes", () => {
     expect(formatBytes(3 * 1024 * 1024 * 1024)).toBe("3 GB");
   });
 
-  it("rounds a fractional value to one decimal below 10", () => {
+  it("floors a fractional value to one decimal below 10", () => {
     expect(formatBytes(1536)).toBe("1.5 KB");
     expect(formatBytes(Math.round(2.5 * 1024 * 1024))).toBe("2.5 MB");
+    // 2816 B = 2.75 KB → floor to 2.7 (round would give 2.8): a cap must
+    // never read larger than the true limit.
+    expect(formatBytes(2816)).toBe("2.7 KB");
   });
 
-  it("drops the decimal once the value reaches 10 in a unit", () => {
-    expect(formatBytes(Math.round(10.5 * 1024 * 1024))).toBe("11 MB");
+  it("drops the decimal once the value reaches 10 in a unit (floored)", () => {
+    // 10.5 MB → floor to 10 (round would give 11): whole number at >= 10.
+    expect(formatBytes(Math.round(10.5 * 1024 * 1024))).toBe("10 MB");
   });
 
-  it("promotes at the rounding boundary instead of showing 1024 of a unit", () => {
-    // 1048575 B is 1023.999… KB → rounds to 1024 KB → promote to 1 MB.
-    expect(formatBytes(1024 * 1024 - 1)).toBe("1 MB");
+  it("floors just below a unit boundary without overflowing (never promotes)", () => {
+    // 1048575 B is 1023.999… KB. FLOOR keeps it at 1023 KB — round would push
+    // to 1024 KB and force a promote to 1 MB. Flooring can never overflow a
+    // unit, so this cap reads "1023 KB", never the rounded-up "1 MB" that
+    // would overstate the limit.
+    expect(formatBytes(1024 * 1024 - 1)).toBe("1023 KB");
   });
 
   it("handles huge values, clamping the largest unit at TB", () => {
