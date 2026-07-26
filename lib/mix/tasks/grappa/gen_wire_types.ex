@@ -205,9 +205,13 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     # #411 D6b — the enum→array rule is structural, not location-scoped: a
     # pure atom-union external type (e.g. Networks.Credential.connection_state,
     # referenced from a Wire module) gets the SAME `as const` array + derived
-    # type as a wire-module enum. External types have no same-module sibling
-    # registry, so composition-by-ref can't occur here — a pure atom union is
-    # the only enum shape reachable, and that's all any external enum is today.
+    # type as a wire-module enum. External types are rendered one-at-a-time by
+    # alias with no same-module sibling registry, so a COMPOSING enum (one that
+    # spreads a sibling enum's const) can't be HANDLED here — it would emit a
+    # plain typedef. Every external enum today is a pure atom union, so this is
+    # unobservable; if a future external module gains a composing enum, promote
+    # it into a `**/wire.ex` module (which has the registry) rather than
+    # teaching the external path to resolve refs.
     case pure_atom_union_arms(stripped) do
       {:ok, arms} -> emit_enum(alias_name, arms)
       :error -> format_plain_typedef(alias_name, stripped)
@@ -365,7 +369,10 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   # followed by `export type Alias = (typeof SCREAMING)[number];`. The const
   # is declared before any type/const that spreads it because typedefs are
   # emitted in source order and a composing enum lists its referenced enum
-  # first (Elixir `shared | specific`).
+  # first (Elixir `shared | specific`). ORDER-DEPENDENT: if a composing enum
+  # is ever declared BEFORE the enum it spreads, `...CONST` would precede
+  # `const CONST` ("used before declaration") — tsc catches it, and the
+  # SHARED-before-REST ordering test pins the ErrorTokens case.
   defp render_enum_typedef(mod, ts_name, stripped) do
     emit_enum(ts_name, enum_array_arms(stripped, mod))
   end

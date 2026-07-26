@@ -30,7 +30,7 @@ const CASES: Array<{ code: string; matches: RegExp }> = [
   // an ordinary `/hilight del <missing>` showed "channel push error:
   // not_found".
   { code: "not_found", matches: /highlight list|not in your/i },
-  { code: "save_failed", matches: /couldn't save|try again/i },
+  { code: "save_failed", matches: /couldn't save your highlight list/i },
   // #411 D6b — the 8 previously-unmapped channel tokens. The client union is
   // now the FULL `GrappaWeb.ErrorTokens.channel_error_token` set (generated),
   // so `assertNever` forces an arm for every one. Product copy (issue #411).

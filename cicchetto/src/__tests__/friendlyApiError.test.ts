@@ -61,7 +61,8 @@ const CASES: Array<{ code: string; matches: RegExp; info?: Record<string, unknow
   { code: "rate_limited", matches: /today's theme limit/i },
   // #75 themes — background-image upload pipeline errors.
   { code: "not_raster", matches: /supported image/i },
-  { code: "too_large", matches: /too large/i },
+  // Phrase unique to this arm — `file_too_large` also contains "too large".
+  { code: "too_large", matches: /image is too large/i },
   { code: "ssrf_blocked", matches: /url isn't allowed/i },
   { code: "fetch_failed", matches: /couldn't fetch that image url/i },
   { code: "image_reencode_failed", matches: /couldn't be processed/i },
@@ -74,7 +75,7 @@ const CASES: Array<{ code: string; matches: RegExp; info?: Record<string, unknow
   // KnownApiErrorCode had no arm, despite the server comments promising
   // cic copy.
   // 504 — REST IRC-verb path hit an upstream-stuck Session.Server.
-  { code: "session_timeout", matches: /taking too long|try again/i },
+  { code: "session_timeout", matches: /taking too long to respond/i },
   // 422 — ReadCursor.set referenced a message outside (subject, network,
   // channel) scope.
   { code: "invalid_message", matches: /read position|this conversation/i },
@@ -109,6 +110,9 @@ const CASES: Array<{ code: string; matches: RegExp; info?: Record<string, unknow
   { code: "credentials_present", matches: /still has.*connected user/i },
   // Login / registration tokens (#152 ident, #211 visitor networks, #40 nick).
   { code: "malformed_nick", matches: /nickname isn't valid/i },
+  // #152 — pre-existing arm; distinct ident-specific copy (adjacent to
+  // malformed_nick, so a copy/paste swap must be caught by a dedicated row).
+  { code: "malformed_ident", matches: /ident must be 1.10 characters/i },
   { code: "password_required", matches: /requires a password/i },
   { code: "password_mismatch", matches: /password is incorrect/i },
   { code: "network_not_visitor_enabled", matches: /isn't open to guests/i },
