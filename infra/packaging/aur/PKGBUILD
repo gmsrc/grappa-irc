@@ -1,0 +1,116 @@
+# Maintainer: Marcello Barnaba <vjt@users.noreply.github.com>
+#
+# Arch/AUR renderer for grappa (self-hosting Part 2, #419 R2). Unlike the
+# .deb (infra/packaging/nfpm.yaml — a BINARY package built once in CI from a
+# glibc ERTS), this is a SOURCE package: makepkg builds the mix release +
+# cicchetto SPA on the target host, so the bundled ERTS + crypto NIFs link
+# against the user's own Arch libs. That sidesteps the cross-distro ERTS
+# problem that deferred the .rpm (a Debian-built ERTS is not a valid RHEL
+# payload) AND matches AUR convention (rebuild-on-upgrade). It REUSES the
+# format-agnostic substrate under infra/packaging/ (FHS layout, systemd unit,
+# openssl secret bootstrap, the `grappa` operator wrapper with the #419
+# packaged migrate) — the only Arch-specific pieces are this file, the
+# install scriptlet, and the sysusers.d/tmpfiles.d declarations.
+#
+# arch=(x86_64) only: bun (the cicchetto build toolchain) is in the official
+# `extra` repo for x86_64 but NOT for Arch Linux ARM. See README.md.
+#
+# BUILD ≠ PUBLISH: this recipe + its regenerated .SRCINFO are committed here
+# so they stay readable + rebuildable and track the substrate. Publishing to
+# the AUR (and cutting the git tag this pulls) is a human step — never
+# automated from here, no AUR credentials live in this tree. See README.md.
+
+pkgname=grappa
+pkgver=0.5.0
+pkgrel=1
+pkgdesc="Always-on IRC bouncer with a REST + Phoenix Channels API and a bundled web PWA (cicchetto)"
+arch=('x86_64')
+url="https://github.com/vjt/grappa-irc"
+license=('MIT')
+# Runtime shared libs the bundled ERTS + crypto/exiftool paths link against.
+# The mix release bundles ERTS itself; these are the system libs it needs.
+depends=('openssl' 'ncurses' 'gcc-libs' 'ca-certificates')
+# elixir pulls erlang-core (= the OTP the release bundles); bun builds the
+# cicchetto SPA. git is intentionally NOT here: the tarball has no .git, so
+# Grappa.Version degrades to the documented `-dev` suffix (see README.md).
+makedepends=('elixir' 'bun')
+# Media metadata strip (#39) shells out to these fail-closed; nginx fronts
+# TLS/static. All optional — the bouncer boots + self-serves without any.
+optdepends=('perl-image-exiftool: strip metadata from image uploads (#39)'
+            'ffmpeg: strip metadata from video uploads (#39)'
+            'nginx: TLS + static reverse proxy (recommended, not required)')
+install="${pkgname}.install"
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+# SKIP until the vX.Y.Z tag exists: the release step regenerates this with
+# `updpkgsums` (and .SRCINFO with `makepkg --printsrcinfo`). See README.md.
+sha256sums=('SKIP')
+
+# The payload IS a self-contained Erlang/OTP release (bundled ERTS + NIFs) +
+# a static SPA. Do not let makepkg strip/mangle the release blob — match the
+# proven-good .deb payload, which nfpm never strips.
+options=('!strip' '!debug')
+
+# GitHub tag tarballs extract to <repo>-<version>/ = grappa-irc-<pkgver>/.
+_srcdir="grappa-irc-${pkgver}"
+
+build() {
+	cd "${srcdir}/${_srcdir}"
+
+	# Keep hex/rebar/mix state inside the build dir (no writes to the
+	# builder's ~). MIX_ENV=prod = the release env.
+	export MIX_ENV=prod
+	export HEX_HOME="${srcdir}/.hex"
+	export MIX_HOME="${srcdir}/.mix"
+	export HOME="${srcdir}/.home"
+	mkdir -p "${HOME}"
+
+	echo "==> mix release (bundles this host's ERTS/OTP)"
+	mix local.hex --force
+	mix local.rebar --force
+	mix deps.get --only prod
+	# No --warnings-as-errors: this compiles on the user's Arch toolchain
+	# (Elixir 1.20 / OTP 29 today, vs the dev pin 1.19 / OTP 28), whose
+	# newer compiler may warn where the pinned one does not — a distro
+	# rebuild must not hard-fail on that. mix.exs allows `~> 1.19`.
+	mix release --overwrite
+
+	echo "==> cicchetto SPA (bun + vite)"
+	cd cicchetto
+	bun install --frozen-lockfile
+	bun run build
+}
+
+package() {
+	cd "${srcdir}/${_srcdir}"
+
+	# The mix release (self-contained ERTS + compiled app + boot scripts).
+	install -dm755 "${pkgdir}/usr/lib/grappa"
+	cp -a _build/prod/rel/grappa/. "${pkgdir}/usr/lib/grappa/"
+
+	# The built cicchetto SPA (CIC_DIST_ROOT points here; served by the BEAM).
+	install -dm755 "${pkgdir}/usr/share/grappa/cicchetto-dist"
+	cp -a cicchetto/dist/. "${pkgdir}/usr/share/grappa/cicchetto-dist/"
+
+	# Shared substrate (single source of truth under infra/packaging/).
+	install -Dm644 infra/packaging/grappa.service \
+		"${pkgdir}/usr/lib/systemd/system/grappa.service"
+	install -Dm644 infra/packaging/grappa.env.example \
+		"${pkgdir}/usr/share/grappa/grappa.env.example"
+	install -Dm755 infra/packaging/gen-secrets.sh \
+		"${pkgdir}/usr/share/grappa/gen-secrets.sh"
+	install -Dm755 infra/packaging/grappa-wrapper.sh \
+		"${pkgdir}/usr/bin/grappa"
+	install -Dm644 infra/packaging/README.md \
+		"${pkgdir}/usr/share/doc/grappa/README.md"
+
+	# Arch-native declarative system user + state dirs. Materialized by the
+	# systemd-sysusers / systemd-tmpfiles alpm hooks, AND force-run in the
+	# install scriptlet before the first migrate (the hooks fire at
+	# transaction end, after post_install).
+	install -Dm644 infra/packaging/aur/grappa.sysusers \
+		"${pkgdir}/usr/lib/sysusers.d/grappa.conf"
+	install -Dm644 infra/packaging/aur/grappa.tmpfiles \
+		"${pkgdir}/usr/lib/tmpfiles.d/grappa.conf"
+
+	install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

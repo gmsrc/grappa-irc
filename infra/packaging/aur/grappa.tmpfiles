@@ -1,0 +1,16 @@
+# systemd-tmpfiles: grappa's writable state dirs (Arch-native equivalent of
+# the .deb postinstall's mkdir + chown). Installed to
+# /usr/lib/tmpfiles.d/grappa.conf. The sqlite DB + uploads live here, owned
+# by the grappa daemon user. 0750 = owner rwx, group rx, world nothing.
+#
+# The env/config dir /etc/grappa is NOT here — it is created by
+# grappa.install's post_install, co-located with the secrets env-file write
+# (which is genuinely imperative: created on first install, never clobbered).
+#
+# Materialized by the systemd-tmpfiles alpm hook at transaction end, AND
+# force-run (`systemd-tmpfiles --create`) by grappa.install's post_install so
+# the state dir exists before the first migrate writes the DB into it.
+#
+# Type Path                      Mode  User    Group   Age  Argument
+d      /var/lib/grappa           0750  grappa  grappa  -
+d      /var/lib/grappa/uploads   0750  grappa  grappa  -

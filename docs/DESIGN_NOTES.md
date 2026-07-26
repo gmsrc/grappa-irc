@@ -18878,3 +18878,73 @@ run on a glibc target; NOT `scripts/*.sh`, which share the MAIN repo's
 compiles). nfpm is a single Go binary (no dpkg/rpmbuild, no host hex).
 The `.rpm` needs a Fedora-built ERTS (glibc/libssl specific) → an R3
 per-distro build matrix, not a one-line nfpm flip.
+
+---
+
+## 2026-07-26 — Self-hosting Part 2 / R2: Arch `PKGBUILD` + AUR recipe (GH #419)
+
+R2 adds the Arch renderer on top of R1's substrate, under
+[`infra/packaging/aur/`](../infra/packaging/aur/README.md): `PKGBUILD`,
+`.SRCINFO`, the `grappa.install` scriptlet, and `sysusers.d`/`tmpfiles.d`.
+
+**Source package, not binary — and that is the whole point.** The `.deb` is a
+BINARY package built once from a glibc ERTS; the `.rpm` was deferred precisely
+because a Debian-built ERTS is not a valid RHEL payload (a Fedora `.rpm` needs
+a Fedora-built ERTS). Arch dodges that entirely: `makepkg` builds the `mix
+release` + cicchetto **on the target host**, so the bundled ERTS + crypto NIFs
+link against the user's own Arch libs. That is also the AUR convention
+(rebuild-on-upgrade). So R2 is a source recipe, and the cross-distro ERTS
+problem simply does not arise here — it stays an R3/`.rpm` concern.
+
+**Reuse the verbs, not the nouns** (CLAUDE.md design discipline #6). The
+shared substrate (FHS layout, `grappa.service`, `gen-secrets.sh`, the `grappa`
+wrapper with the packaged migrate) is installed straight from the source
+tarball's `infra/packaging/`. The Arch-SPECIFIC pieces replace the .deb's
+imperative maintainer scripts with Arch-native mechanisms: `sysusers.d`
+(the `grappa` user) + `tmpfiles.d` (`/var/lib/grappa` state), and
+`grappa.install` for the genuinely-imperative first-install steps (env-file
+bootstrap, secrets, migrate, `systemctl enable`). **Hook-order gotcha:** the
+alpm `sysusers`/`tmpfiles` hooks fire at TRANSACTION END, *after* the install
+scriptlet — but the first `grappa migrate` needs the user + state dir to
+already exist, so `post_install` force-runs `systemd-sysusers` +
+`systemd-tmpfiles --create` before migrating.
+
+**`arch=(x86_64)` only.** `bun` (the cicchetto build toolchain) is in the
+official `extra` repo for x86_64 but NOT for Arch Linux ARM (a separate
+project). Mainline Arch is x86_64 anyway, so that is both the canonical AUR
+target and the only arch with an official `bun`. `git` is deliberately NOT a
+makedep: a tag tarball has no `.git`, so `Grappa.Version` (#391) degrades to
+the documented `X.Y.Z-dev` suffix — an AUR source build self-reports `-dev`
+even though it is the released code. Making it report the bare version would
+need a `Grappa.Version` env-override seam; NOT bolted on here.
+
+**Constraint-(d) proof (the migrate model on the Arch toolchain).** R1's rule
+was: prove the packaged migrate holds, do not assume. The Arch-specific risk
+is the toolchain-version delta — grappa dev-pins Elixir 1.19 / OTP 28, Arch
+ships **Elixir 1.20.2 / OTP 29.0.1**. That delta is distro-independent, so it
+was proven on the official `elixir:1.20.2-otp-29` image (native, the exact
+Arch versions, glibc bundled ERTS): `mix release` compiles clean, `bin/grappa
+eval 'Grappa.Release.migrate()'` applies **72 migrations** (same count as R1's
+`.deb`), `gen-secrets.sh` fills every secret, `/healthz` is green. R1 proved
+the OTHER end (1.19/OTP28), so the model is now bracketed across both
+toolchains. **`mix release` must NOT use `--warnings-as-errors` on Arch** —
+Elixir 1.20 emits `xref:`-deprecation warnings from deps (mint/finch) a strict
+build would false-fail; the `PKGBUILD` omits it.
+
+**What was NOT built locally — and why (honesty, per #419's own ask).** A full
+`makepkg` → `pacman -U` on real Arch was not run on the arm64 dev host: Arch
+is x86_64-only and qemu-user cannot run the OTP-29 ERTS (the `prim_tty` NIF is
+undefined and crashes even `mix`), while native Arch Linux ARM's mirrors were
+too slow to pull the toolchain (`erlang-core` stalled at <1 B/s). So the
+`makepkg` assembly + the pacman-invoked scriptlet are exercised end-to-end
+only by R3 CI on a real x86_64 runner. Locally: `PKGBUILD` passes `namcap` +
+`makepkg --printsrcinfo` (the committed `.SRCINFO`), `grappa.install` passes
+`shellcheck`, and the scriptlet's core (gen-secrets + migrate) is covered by
+the gate above. This is documented in the recipe README rather than dressed up
+as a full local build.
+
+**BUILD ≠ PUBLISH.** The recipe + its regenerated `.SRCINFO` live in-tree so
+they stay reviewable and track the substrate. Cutting the `vX.Y.Z` tag,
+running `updpkgsums`, and pushing to the AUR is a HUMAN step — no AUR
+credentials in the tree, nothing here pushes. `sha256sums=('SKIP')` is
+committed on purpose (the tag tarball does not exist until the tag is cut).

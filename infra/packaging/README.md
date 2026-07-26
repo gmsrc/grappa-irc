@@ -137,11 +137,14 @@ bolted on here.
 - **`.rpm`** — nfpm renders it from the same config, but the bundled ERTS
   is glibc/libssl-specific, so a valid `.rpm` needs a Fedora-built
   release. That is an R3 per-distro build matrix, not a one-line flip.
-- **Arch `PKGBUILD` + AUR recipe** (R2) — reuses this substrate's FHS
-  paths + maintainer logic.
+- **Arch `PKGBUILD` + AUR recipe** — **shipped (R2)**, see
+  [`aur/`](aur/README.md). A source package (`makepkg` builds on the target),
+  which reuses this substrate's FHS paths + maintainer logic and sidesteps
+  the cross-distro ERTS problem the `.rpm` still has.
 - **Tag-driven release CI** (R3) — builds + uploads per tag; regenerates
-  the AUR recipe. Publishing (AUR push, GitHub Release) stays a human
-  decision.
+  the AUR recipe (`updpkgsums` + `makepkg --printsrcinfo`) and runs the full
+  `makepkg` → `pacman -U` on a real x86_64 Arch runner. Publishing (AUR push,
+  GitHub Release) stays a human decision.
 - **`grappa create-user`** subcommand — see First user.
 - **`priv/static` single-tarball** — declined for packaging: the
   `CIC_DIST_ROOT`-relocatable model (Part 1) ships the dist as a separate

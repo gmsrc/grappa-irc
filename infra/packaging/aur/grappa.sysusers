@@ -1,0 +1,11 @@
+# systemd-sysusers: the grappa system user + group (Arch-native equivalent of
+# the .deb preinstall's useradd). Installed to /usr/lib/sysusers.d/grappa.conf.
+# The `u` line creates BOTH the user and its primary group `grappa`, with
+# home /var/lib/grappa and a nologin shell — a daemon identity, never a login.
+#
+# Materialized by the systemd-sysusers alpm hook at transaction end, AND
+# force-run by grappa.install's post_install (the hook fires AFTER the
+# scriptlet, but the first migrate needs the user to already exist).
+#
+# Type Name    ID  GECOS                  Home            Shell
+u     grappa   -   "Grappa IRC bouncer"   /var/lib/grappa /usr/bin/nologin

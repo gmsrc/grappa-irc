@@ -1,0 +1,120 @@
+# pacman install scriptlet for grappa (AUR). Mirrors the .deb maintainer
+# scripts' LOGIC (infra/packaging/scripts/*.sh) using Arch-native mechanisms:
+# the grappa user + state dirs are declarative (sysusers.d / tmpfiles.d), and
+# everything genuinely imperative on first install — env-file bootstrap,
+# openssl secrets, the #419 packaged migrate, systemd enable — lives here.
+#
+# WHY force-run sysusers/tmpfiles here: the alpm hooks that process
+# /usr/lib/{sysusers,tmpfiles}.d fire at TRANSACTION END, i.e. AFTER this
+# scriptlet. But the first `grappa migrate` (which drops to the grappa user
+# and writes the DB into /var/lib/grappa) needs both to already exist. So we
+# materialize them explicitly, in order, before migrating.
+#
+# systemd-sysusers / systemd-tmpfiles are standalone tools (no running PID-1
+# systemd required); systemctl calls ARE guarded (a chroot/container install
+# has no live manager), matching the .deb scripts' `command -v systemctl`.
+
+_bootstrap() {
+	# grappa user + group, then the writable state dirs — BEFORE migrate.
+	systemd-sysusers /usr/lib/sysusers.d/grappa.conf
+	systemd-tmpfiles --create /usr/lib/tmpfiles.d/grappa.conf
+
+	# Env/config dir + file: created on FIRST install only, never clobbered
+	# (an upgrade must not wipe an operator's live secrets). root:grappa so
+	# systemd (root) reads it before dropping to User=grappa.
+	install -d -o root -g grappa -m 0750 /etc/grappa
+	if [ ! -f /etc/grappa/grappa.env ]; then
+		install -o root -g grappa -m 0640 \
+			/usr/share/grappa/grappa.env.example /etc/grappa/grappa.env
+	fi
+
+	# openssl-only secrets, idempotent (fills REPLACE_ME, never touches real
+	# values). A packaged host has no mix, so generation stays off the BEAM.
+	/usr/share/grappa/gen-secrets.sh
+
+	# The #419 packaged migrate: Ecto.Migrator via the release eval, no
+	# mix/toolchain. FAIL LOUD — a broken migrate must surface as a failed
+	# transaction, not a silently half-migrated install (CLAUDE.md
+	# "no silent-swallow at boundaries"). Applies only PENDING migrations,
+	# so it is also correct to run on every upgrade.
+	if ! /usr/bin/grappa migrate; then
+		echo "grappa: database migration FAILED (see error above)." >&2
+		echo "        The package is installed but the schema is not applied." >&2
+		echo "        Fix the cause and re-run: sudo grappa migrate" >&2
+		return 1
+	fi
+}
+
+post_install() {
+	_bootstrap || return 1
+
+	# Enable on boot, but do NOT start: the service refuses to boot until
+	# the operator sets a real PHX_HOST in /etc/grappa/grappa.env.
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl daemon-reload || true
+		systemctl enable grappa.service || true
+	fi
+
+	cat <<'EOF'
+
+grappa installed.
+
+  1. Set the public hostname:
+       sudoedit /etc/grappa/grappa.env      # set PHX_HOST=your.host
+  2. Start it:
+       sudo systemctl start grappa
+  3. Create your first user (after it is running) — see the "First user"
+     section of /usr/share/doc/grappa/README.md.
+
+  Health:  curl http://127.0.0.1:4000/healthz
+  Logs:    journalctl -u grappa -f
+
+  Back up /etc/grappa/grappa.env's GRAPPA_ENCRYPTION_KEY now — it encrypts
+  stored IRC credentials at rest; lose it and they are unrecoverable.
+
+  nginx is recommended for TLS/static fronting but NOT required — the
+  bouncer self-serves the cicchetto PWA on PORT (default 4000).
+EOF
+}
+
+post_upgrade() {
+	# Re-run the SAME idempotent bootstrap as first install: sysusers/tmpfiles
+	# no-op when present, the env file is never clobbered (its `[ ! -f ]`
+	# guard also self-heals a deleted one), gen-secrets fills only NEW keys a
+	# version introduces, migrate applies only PENDING migrations. Crucially
+	# it inherits the SAME fail-loud posture — no `|| true` swallow — so a
+	# broken secret-fill or migrate aborts the transaction, exactly like the
+	# .deb postinstall (which runs identical code on install + upgrade under
+	# `set -e`). CLAUDE.md "no silent-swallow at boundaries".
+	_bootstrap || return 1
+
+	# Never auto-restart: leave it to the operator, so the epmd-name
+	# stop/start race (FreeBSD defect #9) stays off the upgrade path.
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl daemon-reload || true
+	fi
+	echo "grappa upgraded. Restart to run the new release:"
+	echo "       sudo systemctl restart grappa"
+}
+
+pre_remove() {
+	# Stop + disable only on a real removal (pacman -R). An upgrade routes
+	# through post_upgrade, which never touches the running service.
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl stop grappa.service || true
+		systemctl disable grappa.service || true
+	fi
+}
+
+post_remove() {
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl daemon-reload || true
+	fi
+	# Data preservation: NEVER auto-delete state or config — losing the DB /
+	# uploads / GRAPPA_ENCRYPTION_KEY is unrecoverable (CLAUDE.md
+	# delete-discipline). The grappa system user is left in place so a
+	# reinstall re-adopts the same uid and /var/lib/grappa ownership.
+	echo "grappa: removed. State left in /var/lib/grappa (DB + uploads) and"
+	echo "        config in /etc/grappa. Remove manually for a clean slate:"
+	echo "        sudo rm -rf /var/lib/grappa /etc/grappa"
+}
