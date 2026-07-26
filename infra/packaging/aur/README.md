@@ -91,16 +91,23 @@ not exist until the tag is cut, so the real hash cannot be known yet.
 reviewable in-tree; it is **derived** — regenerate it whenever `PKGBUILD`
 changes, never hand-edit.
 
-## Version reporting caveat (`-dev` suffix)
+## Version reporting (bare `X.Y.Z`, #419 R3)
 
-`Grappa.Version` derives its `CTCP VERSION` string from **build-time git
-state** (#391): a clean checkout on the exact `vX.Y.Z` tag reports the bare
-`X.Y.Z`; anything else reports `X.Y.Z-<sha>` or `X.Y.Z-dev`. A GitHub tag
-**tarball has no `.git`**, so an AUR source build degrades to the documented
-`X.Y.Z-dev` — the package is the released code, but it self-reports `-dev`.
-This is `Grappa.Version`'s intended graceful degradation, not a packaging
-bug; making an AUR build report the bare version would require a
-`Grappa.Version` env-override seam, deliberately **not** bolted on here.
+`Grappa.Version` reports the **bare `X.Y.Z`** for an AUR build. The base
+version is the `.app` metadata (`Application.spec(:grappa, :vsn)`, compiled
+from `@version`), and the #391 git suffix is applied **only when `.git` is
+present at build**. A GitHub tag **tarball has no `.git`**, so `makepkg`'s
+build sees `nil` git facts and reports the package version with no suffix —
+the released code self-reports as released.
+
+This replaces R2's `-dev` caveat: earlier `Grappa.Version` read `@version`
+from `mix.exs` at runtime and folded git state, so a tarball build degraded
+to `X.Y.Z-dev`. #419 R3 removed the runtime `mix.exs` read entirely (a
+package ships no `mix.exs` — the source never enters the CI-built artifact,
+and the read raised there): the version is baked into the artifact, not
+derived from a file the package doesn't carry. The release CI asserts the
+built Arch package reports the bare version — see
+[`.github/workflows/release.yml`](../../../.github/workflows/release.yml).
 
 ## What is proven, and what R3 CI must still exercise
 
@@ -143,10 +150,14 @@ is genuinely CI-only.
 
 ## Deferred (tracked follow-ups)
 
-- **Tag-driven release CI (R3)** — cuts the tag, runs `updpkgsums` +
-  `makepkg --printsrcinfo`, and exercises the full `makepkg` → `pacman -U`
-  path on real x86_64 Arch. Publishing (the AUR push, the GitHub Release)
-  stays a human decision.
+- **Tag-driven release CI (R3)** — **shipped**, see
+  [`.github/workflows/release.yml`](../../../.github/workflows/release.yml).
+  On a `vX.Y.Z` tag it runs `updpkgsums` + `makepkg --printsrcinfo`, builds
+  the package with the full `makepkg` → `pacman -U` path on a real x86_64
+  Arch container (secrets + migrate proven on the installed artifact), and
+  attaches the package + regenerated `PKGBUILD`/`.SRCINFO` to the GitHub
+  Release. Publishing to the AUR stays a human decision (no AUR creds
+  in-tree).
 - **`.rpm` (R3)** — nfpm renders it from the same substrate, but the bundled
   ERTS is glibc/libssl-specific, so a valid `.rpm` needs a Fedora-built
   release: a per-distro build matrix, not a one-line nfpm flip.

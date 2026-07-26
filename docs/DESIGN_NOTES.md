@@ -19206,3 +19206,93 @@ bundle — that's the Option-2 follow-up, on top of this floor, not instead of i
 
 **Known gap (called out in the issue).** This changes only what is stored going
 *forward* — rows persisted before the fix lost their middle params permanently.
+
+## 2026-07-26 — Self-hosting Part 2 / R3: release CI + version seam (GH #419)
+
+R3 closes #419: a tag-driven release workflow that builds, PROVES, and
+publishes the packages R1 (`.deb`) + R2 (Arch/AUR) built by hand, plus the
+version seam R2 deferred. New file: `.github/workflows/release.yml`; one
+Elixir change (`lib/grappa/version.ex`).
+
+**The discovery that reframed the seam — a crash, not a `-dev`.** R2 noted a
+tarball build self-reports `X.Y.Z-dev` because the tag tarball has no `.git`,
+and deferred a fix. Building R3 surfaced the real defect: `Grappa.Version`
+read `@version` from `mix.exs` at **runtime** via `File.read!/1` (the #391
+"live base" read). A distro package ships a self-contained `mix release` with
+**no `mix.exs`** — the source never enters the CI-built artifact — so that
+read does not degrade to `-dev`, it **raises**, crashing the `CTCP VERSION`
+reply. Reading a build-time file at runtime was the bug; `-dev` was never the
+whole story.
+
+**Canonical fix — `.app` metadata, not a runtime file read (vjt ruling).**
+The version now comes from `Application.spec(:grappa, :vsn)` — the vsn OTP
+compiles into the `.app` resource from `@version` at build time. It is the
+canonical "what version is running", the SAME `@version` source, baked into
+the artifact. The `File.read!/1` is **removed outright** — not wrapped in a
+rescue, not kept with a fallback beside it (that would be the hack vjt
+excluded). This is *derive, don't inject*: no hand-set env var can drift out
+of sync with the artifact (the drift #391 exists to prevent). `base/0` is the
+`.app` vsn everywhere; the #391 git suffix is applied **only when `.git` was
+present at build** (`@git_facts` is `nil` for a tarball → bare base).
+
+**Why removing the runtime read regresses nothing — evidence, not
+assertion.** #391 read `mix.exs` live to beat a real staleness: `POST
+/admin/reload` (`admin_controller.ex`) soft-purges + reloads `lib/*.ex`
+modules via `:code.soft_purge/1` + `:code.load_abs/1` but never the `.app`
+resource, so `Application.spec/2` could go stale after a hot-deployed
+`@version` bump. But that staleness is unreachable: `@version` lives only in
+`mix.exs`, and `Grappa.Deploy.Preflight` classifies any `mix.exs` change as
+**COLD** (`mix_deps?/1` → `:deps` reason). A version bump therefore always
+restarts the node, which reloads `.app` fresh. There is no hot path that
+changes `@version`, so the `.app` vsn is always current — the live read
+guarded an impossible state. Prod (source-present, `.git` present) keeps the
+#391 git-suffix path byte-for-byte; only the packaged (no-`.git`) path
+changes, and only from "crash / `-dev`" to the correct bare `X.Y.Z`.
+
+**Boundary check (the `nil`-vsn risk).** `Application.spec/2` returns `nil` if
+the app is not loaded (a mix task before start, an escript). Verified there is
+no such caller: the only runtime consumer is `EventRouter` composing `CTCP
+VERSION` inside the started app, plus the tests under a started app; no mix
+task or escript references `Grappa.Version`. The release CI's version probe
+`Application.load(:grappa)`s first, as `Grappa.Release.migrate/0` already does.
+A worktree stores `.git` as a FILE, not a dir, so the presence probe is
+`File.exists?/1`, not `File.dir?/1` — a worktree is still a source build that
+must keep the suffix.
+
+**Release CI — build, then PROVE on the built artifact.** `release.yml` fires
+on a `vX.Y.Z` tag: **deb** (nfpm, amd64, `setup-beam` 1.19/OTP28) and **arch**
+(`makepkg` on a real x86_64 `archlinux` container — the 1.20/OTP29 toolchain
+R2 could only prove on a like-for-like image, now a full `makepkg` →
+`pacman -U`). Each job INSTALLS the package so the openssl-secret bootstrap +
+packaged migrate run for real (both scriptlets guard `systemctl`, so no live
+systemd is needed), then asserts two things on the installed artifact:
+
+  * **migrate proof** — `schema_migrations` count equals the migration-file
+    count, computed DYNAMICALLY (`find priv/repo/migrations -name '*.exs'`),
+    never a hardcoded number (it was 72 at R1/R2, is 73 now, and will grow).
+  * **version proof** — the authoritative packaged-version gate. Rather than a
+    unit test faking a source-less host (which proves only that a mock works),
+    the built artifact is queried: the `.deb` builds in the CI checkout (has
+    `.git` on the clean tag) and reports bare via the #391 clean-tag path; the
+    Arch package builds from the GitHub source **tarball** (no `.git` by
+    construction) and reports bare via the `nil`-git-facts path — both must
+    equal the bare tag. The unit tests in `version_test.exs` stay pure-kernel
+    (`derive/2` with explicit inputs), locking the logic; the artifact is the
+    end-to-end truth.
+
+The **publish** job attaches the `.deb`, the `.pkg.tar.zst`, and the
+**regenerated** `PKGBUILD`/`.SRCINFO` (`updpkgsums` + `makepkg --printsrcinfo`)
+to the GitHub Release. The workflow also asserts `tag == pkgver == mix.exs
+@version` (a botched release fails loud).
+
+**BUILD ≠ PUBLISH TO AUR.** CI publishes GitHub Release assets and regenerates
+the AUR recipe metadata; pushing to `aur.archlinux.org` stays a human step
+(no AUR credentials in-tree). The `.rpm` stays deferred — the bundled ERTS is
+glibc/libssl-specific, so a valid `.rpm` needs a Fedora-built release (a
+per-distro build matrix, not a one-line nfpm flip), per R1/R2.
+
+**Honest scope.** `release.yml` runs only on a `v*` tag push, so it is not
+exercised by a normal commit; the first real tag cut is its end-to-end proof.
+It was validated statically here (shellcheck on the `run` blocks; the `.deb`
+build model proven by R1, the OTP-29 migrate by R2) — same honesty discipline
+as R1/R2, which documented what only a real runner exercises.

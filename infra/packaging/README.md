@@ -49,9 +49,13 @@ The `.deb` lands in `./dist/`.
 
 ### In CI (R3)
 
-The tag-driven release workflow (deferred) runs `build.sh` on a
-`setup-beam` runner with `bun` installed, then uploads `dist/*.deb` to the
-GitHub Release. `build.sh` downloads a pinned nfpm if it is not on PATH.
+The tag-driven release workflow
+([`.github/workflows/release.yml`](../../.github/workflows/release.yml))
+runs `build.sh` on a `setup-beam` runner (Elixir 1.19 / OTP 28) with `bun`
+installed, **installs** the built `.deb` (so postinstall's openssl secrets +
+packaged migrate run for real), asserts the migration count and that the
+artifact reports the bare `X.Y.Z`, then uploads `dist/*.deb` to the GitHub
+Release. `build.sh` downloads a pinned nfpm if it is not on PATH.
 
 ## Installing
 
@@ -141,10 +145,12 @@ bolted on here.
   [`aur/`](aur/README.md). A source package (`makepkg` builds on the target),
   which reuses this substrate's FHS paths + maintainer logic and sidesteps
   the cross-distro ERTS problem the `.rpm` still has.
-- **Tag-driven release CI** (R3) — builds + uploads per tag; regenerates
-  the AUR recipe (`updpkgsums` + `makepkg --printsrcinfo`) and runs the full
-  `makepkg` → `pacman -U` on a real x86_64 Arch runner. Publishing (AUR push,
-  GitHub Release) stays a human decision.
+- **Tag-driven release CI** (R3) — **shipped**
+  ([`.github/workflows/release.yml`](../../.github/workflows/release.yml)):
+  builds + proves + uploads per tag; regenerates the AUR recipe
+  (`updpkgsums` + `makepkg --printsrcinfo`) and runs the full `makepkg` →
+  `pacman -U` on a real x86_64 Arch runner. Publishing (AUR push) stays a
+  human decision.
 - **`grappa create-user`** subcommand — see First user.
 - **`priv/static` single-tarball** — declined for packaging: the
   `CIC_DIST_ROOT`-relocatable model (Part 1) ships the dist as a separate

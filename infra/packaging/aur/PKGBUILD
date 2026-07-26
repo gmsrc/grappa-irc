@@ -31,8 +31,10 @@ license=('MIT')
 # The mix release bundles ERTS itself; these are the system libs it needs.
 depends=('openssl' 'ncurses' 'gcc-libs' 'ca-certificates')
 # elixir pulls erlang-core (= the OTP the release bundles); bun builds the
-# cicchetto SPA. git is intentionally NOT here: the tarball has no .git, so
-# Grappa.Version degrades to the documented `-dev` suffix (see README.md).
+# cicchetto SPA. git is intentionally NOT here: the tarball has no .git, and
+# Grappa.Version (#419 R3) reports the bare package version from the `.app`
+# metadata when `.git` is absent — no git suffix, no git needed at build
+# (see README.md "Version reporting").
 makedepends=('elixir' 'bun')
 # Media metadata strip (#39) shells out to these fail-closed; nginx fronts
 # TLS/static. All optional — the bouncer boots + self-serves without any.
