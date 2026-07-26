@@ -481,35 +481,6 @@ static void clear_matching_pending_echo(struct app *app, const char *network, co
     pthread_mutex_unlock(&app->lock);
 }
 
-static bool has_matching_pending_echo(struct app *app, const char *network, const char *channel, const char *body) {
-    bool found = false;
-    pthread_mutex_lock(&app->lock);
-    for (size_t i = 0; i < app->pending_count; i++) {
-        if (strcmp(app->pending[i].network, network) == 0 && strcmp(app->pending[i].channel, channel) == 0 && strcmp(app->pending[i].body, body) == 0) {
-            found = true;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&app->lock);
-    return found;
-}
-
-static bool has_matching_confirmed_line(struct app *app, const char *network, const char *channel, const char *sender, const char *body) {
-    char key[MAX_SLUG + MAX_CHANNEL + 8];
-    snprintf(key, sizeof(key), "[%s/%s]", network, channel);
-    bool found = false;
-    pthread_mutex_lock(&app->lock);
-    for (size_t i = 0; i < app->log_count; i++) {
-        if (app->log_pending[i]) continue;
-        if (strncmp(app->log[i], key, strlen(key)) == 0 && strstr(app->log[i], sender) && strstr(app->log[i], body)) {
-            found = true;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&app->lock);
-    return found;
-}
-
 /* Caller holds app->lock. */
 static void clear_panel_lines_locked(struct app *app) {
     for (size_t i = 0; i < app->panel_line_count; i++) free(app->panel_lines[i]);
@@ -1242,10 +1213,23 @@ static void render_message(struct app *app, const struct wire_scrollback_message
         add_window_ex(app, network, display_channel, false);
     }
 
-    bool had_pending = has_matching_pending_echo(app, network, channel, body);
-    if (!had_pending && !live && has_matching_confirmed_line(app, network, display_channel, sender, body)) return;
-    clear_matching_pending_echo(app, network, display_channel, body);
-
+    /* Dedup by ID, BEFORE mutating anything.
+     *
+     * Every message we send arrives TWICE: once as the POST /messages
+     * response (worker thread), once as the `message` wire event
+     * (socket). Both carry the same scrollback id, so the id IS the
+     * identity — and the check has to come first.
+     *
+     * The previous order cleared a matching pending echo and only THEN
+     * discovered the row was a duplicate, returning without rendering.
+     * Because the echo was matched by BODY TEXT, the second delivery of
+     * one message deleted the "[sending]" line of a DIFFERENT message
+     * that merely said the same thing. Send "ok" twice and the second
+     * vanished, reappearing only when some later delivery happened to
+     * land — which is exactly "I don't see my message until another one
+     * arrives".
+     *
+     * A duplicate delivery must be inert. */
     if (id > 0 && network[0] && channel[0]) {
         pthread_mutex_lock(&app->lock);
         for (size_t i = 0; i < app->seen_count; i++) {
@@ -1262,6 +1246,12 @@ static void render_message(struct app *app, const struct wire_scrollback_message
         if (app->seen_count < SEEN_MESSAGES) app->seen_count++;
         pthread_mutex_unlock(&app->lock);
     }
+
+    /* Only now that the row is known to be NEW, retire its optimistic
+     * echo. Matching by text is still imprecise when two pending messages
+     * say the same thing, but it can no longer delete a line without
+     * putting the confirmed one in its place. */
+    clear_matching_pending_echo(app, network, display_channel, body);
 
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
