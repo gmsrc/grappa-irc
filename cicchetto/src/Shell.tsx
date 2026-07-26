@@ -38,6 +38,7 @@ import {
   openArchivePanel,
   openHomePanel,
   openListPanel,
+  openMembersPanel,
   openSettingsPanel,
   openThemesPanel,
   toggleMembersPanel,
@@ -49,6 +50,7 @@ import { queryWindowsByNetwork } from "./lib/queryWindows";
 import { closeToPreviousWindow, selectedChannel, setSelectedChannel } from "./lib/selection";
 import { settingsOpenTick } from "./lib/settingsNav";
 import { isMobile } from "./lib/theme";
+import { bindEdgeGesture } from "./lib/touchGesture";
 import { loadUploadTtlSeconds } from "./lib/uploadOrchestrator";
 import {
   ADMIN_WINDOW_NAME,
@@ -761,7 +763,26 @@ const Shell: Component = () => {
           channels are navigated via BottomBar. This is a full JSX branch,
           not a CSS-display toggle, so the sidebar DOM is absent entirely.
       */}
-      <div class="shell shell-mobile">
+      <div
+        class="shell shell-mobile"
+        // #308 INC-A — right-edge swipe (right→center) opens the members drawer,
+        // an ADDITIVE second door onto the permanent right rail (the BottomBar
+        // stays the primary nav — #71 ruling). Bound at element level with a
+        // non-passive touchmove + explicit onCleanup (Solid delegates touch to a
+        // passive document listener, and function refs are not re-invoked at
+        // unmount — #308 landmines 1 + 3). Claims late, so a vertical drag is
+        // left entirely to native scroll (the hard constraint). Mobile-only: the
+        // ref lives in the isMobile() JSX branch, so it attaches only here.
+        ref={(el) =>
+          onCleanup(
+            bindEdgeGesture(el, {
+              viewportWidth: () => window.innerWidth,
+              onOpenMembers: () =>
+                openMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen }),
+            }),
+          )
+        }
+      >
         {/* UX-6 D6 — DiagFloat lives in a Portal mounted on document.body
             so it is anchored to the layout viewport independent of this
             subtree (visible above the on-screen keyboard during

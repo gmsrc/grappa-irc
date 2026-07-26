@@ -9,7 +9,7 @@ vi.mock("../archive", () => ({
   setArchiveModalNetwork: (v: unknown) => setArchiveModalNetwork(v),
 }));
 
-import { openHomePanel } from "../mobilePanel";
+import { openHomePanel, openMembersPanel } from "../mobilePanel";
 
 function setters() {
   return {
@@ -32,5 +32,21 @@ describe("openHomePanel (#291)", () => {
     expect(s.setSettingsOpen).toHaveBeenCalledWith(false);
     expect(setArchiveModalNetwork).toHaveBeenCalledWith(null);
     expect(navigate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("openMembersPanel (#308 edge-swipe)", () => {
+  beforeEach(() => {
+    setArchiveModalNetwork.mockReset();
+  });
+
+  test("opens members and closes settings + archive, idempotently", () => {
+    const s = setters(); // membersOpen() === true
+    openMembersPanel(s);
+    expect(s.setSettingsOpen).toHaveBeenCalledWith(false);
+    expect(setArchiveModalNetwork).toHaveBeenCalledWith(null);
+    expect(s.setMembersOpen).toHaveBeenCalledWith(true);
+    // Unlike toggleMembersPanel, an OPEN gesture never closes an open drawer.
+    expect(s.setMembersOpen).not.toHaveBeenCalledWith(false);
   });
 });

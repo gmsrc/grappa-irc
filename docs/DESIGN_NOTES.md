@@ -20029,3 +20029,69 @@ so the unified target is a tested contract until #445 revisits it.
 
 INC-3 is cic-only (no server change); rides the batch COLD deploy
 (cic bundle change).
+
+## 2026-07-26 — #308 INC-A cic mobile touch gestures: right-edge → members
+
+First increment of #308 (mobile touch gestures). The issue title proposes
+three gestures; the maintainer resolved the scope in-channel to **gestures as
+an ADDITION alongside the mobile BottomBar, which STAYS** — the earlier
+drawer-only / edge-swipe-as-nav-replacement direction is withdrawn (it died
+with #71's 2nd ruling: the BottomBar is the mobile nav). INC-A ships gesture 1
+only; the center-swipe channel nav is INC-B.
+
+**Gesture 1 — right-edge swipe (right→center) opens the members drawer.** An
+additive second door onto the permanent right rail (#71 INC-2); the ☰ openers
+and the BottomBar are unchanged. Wired on the mobile shell root
+(`.shell-mobile`) via a ref that binds `bindEdgeGesture` and registers its
+disposer with `onCleanup`.
+
+**Shared gesture core — `lib/touchGesture.ts`.** Pure geometry (`touchZone`
+edge/center classification; `horizontalClaim` the claim-late angle gate
+`|dx| >= |dy|*k`, k≈1.5) plus the DOM directive `bindEdgeGesture`. It COMPOSES
+the proven pure helpers in `lib/swipe.ts` (the ComposeBox #123 toolkit —
+`swipeDirection`, `Point`, `DRAG_SLOP_PX`) by import; `swipe.ts` is left
+byte-identical, so ComposeBox's production swipe behaviour is untouched (the
+maintainer's explicit condition: generalising the shared toolkit must not
+regress #123). The three landmines are honoured: (1) listeners bound at
+ELEMENT level with a non-passive `touchmove` — Solid delegates touch to a
+single PASSIVE document listener where `preventDefault` silently no-ops;
+(3) an explicit `onCleanup` disposer — Solid function refs fire only at mount
+and are NOT re-invoked with `undefined` at unmount as in React. The hard
+constraint (never break vertical scroll) is structural: the gesture CLAIMS
+(preventDefaults) only after `horizontalClaim` proves horizontal intent, so a
+vertical-dominant drag is never claimed and native vertical scroll + momentum
+are left entirely to the browser. This is asserted, not hoped — a jsdom unit
+test proves a vertical drag is never claimed, and the chromium e2e proves a
+vertical drag from the very edge is never `preventDefault`ed and opens nothing.
+
+**Gesture 2 (edge-swipe left → open the left bar) is DROPPED — registered, not
+forgotten.** Per the maintainer, the drop is recorded here and on #308 with its
+reason, same discipline as the #71 INC-3 narrowing. Reason: the target no
+longer exists. After UX-5 bucket A and #71, the mobile branch renders NO left
+sidebar (`Shell.tsx`: "the mobile branch doesn't render `.shell-sidebar` at
+all … No left sidebar" — mobile nav IS the BottomBar), so a left-edge gesture
+would open something that isn't there. A second, independently sufficient
+reason: a left-edge swipe is iOS Safari's OS "back" gesture in a browser tab
+(suppressed only in an installed PWA), so it would fight the browser. The
+spec's alternatives were both rejected — mirroring the center-swipe on the
+left edge is redundant, and there is no other sensible left-edge target.
+
+**`touch-action` is deferred to INC-B, deliberately.** INC-A adds no
+`touch-action` CSS. The belt-and-suspenders `touch-action: pan-y` belongs on
+the SCROLLBACK container (so the browser owns vertical natively) and is
+load-bearing only for INC-B's center-swipe, which coexists with scrollback
+content. Critically, setting `pan-y` on the scrollback ALONE — without the
+`pan-x pan-y` override on wide horizontally-scrollable children (code blocks,
+tables) — would REGRESS their horizontal scroll, so the two must land together
+in INC-B. Gesture 1 needs no `touch-action` change: it is a JS claim-late
+gesture, and vertical scroll is protected by never claiming a vertical drag.
+
+**Testing.** Pure gates + directive glue are unit-tested in jsdom (the
+load-bearing classifier + the hard-constraint "vertical never claimed"
+assertion). The e2e runs on chromium, untagged, with a forced narrow viewport
+(so `isMobile()` mounts `.shell-mobile`) — chromium's `TouchEvent`/`Touch`
+constructors are reliable where webkit's are not
+(feedback_playwright_webkit_not_ios_scroll). The gesture FEEL (real finger
+drag, native momentum) is a device call the maintainer dogfoods post-deploy;
+synthetic events cannot drive real pixel-scroll. INC-A is cic-only (no server
+change); rides the batch COLD deploy (cic bundle change).

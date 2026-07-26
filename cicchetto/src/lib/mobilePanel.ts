@@ -52,6 +52,18 @@ export function toggleMembersPanel(setters: MobilePanelSetters): void {
   setters.setMembersOpen(true);
 }
 
+// #308 INC-A — open the members drawer (edge-swipe right→center). Unlike
+// `toggleMembersPanel`, this is an idempotent OPEN: an already-open drawer stays
+// open. The right-edge swipe means "show me the members bar", never "hide it" —
+// so it must not double as a close (the drawer covers the right edge once open,
+// and a directional open gesture that toggles-closed reads as a bug). Same mutex
+// as the toggle's open branch: close settings + archive first.
+export function openMembersPanel(setters: MobilePanelSetters): void {
+  setters.setSettingsOpen(false);
+  setArchiveModalNetwork(null);
+  setters.setMembersOpen(true);
+}
+
 export function openSettingsPanel(setters: MobilePanelSetters): void {
   setters.setMembersOpen(false);
   setArchiveModalNetwork(null);
