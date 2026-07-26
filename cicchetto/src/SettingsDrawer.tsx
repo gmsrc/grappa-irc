@@ -614,6 +614,18 @@ const SettingsDrawer: Component<Props> = (props) => {
     setSettingsPage("vhost");
   };
 
+  // #460 — the general sub-page is conditionally composed (upload retention is
+  // host-gated, per-network identity is visitor-gated), so its index subtitle
+  // names ONLY the children the current subject will actually see — honest, and
+  // consistent with the row's own reactive OR-gate. At least one part is always
+  // present (the row is gated on the OR of the two), so it is never empty.
+  const generalSubtitle = (): string => {
+    const parts: string[] = [];
+    if (activeHost().ttlOptions.length > 0) parts.push("upload retention");
+    if (isVisitor()) parts.push("per-network identity");
+    return parts.join(" and ");
+  };
+
   // #460 — shared back-header for the INLINE sub-pages (general / display /
   // push), mirroring the AliasSettings / WatchlistsSettings convention so
   // every sub-page presents one consistent "‹ back" affordance. Local (not a
@@ -690,9 +702,7 @@ const SettingsDrawer: Component<Props> = (props) => {
             >
               <span class="settings-nav-row-text">
                 <span class="settings-nav-row-label">general</span>
-                <span class="settings-nav-row-subtitle">
-                  upload retention and per-network identity
-                </span>
+                <span class="settings-nav-row-subtitle">{generalSubtitle()}</span>
               </span>
               <span class="settings-nav-row-chevron" aria-hidden="true">
                 ›

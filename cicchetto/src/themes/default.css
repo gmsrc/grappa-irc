@@ -5561,6 +5561,9 @@ html.resize-dragging * {
 .settings-nav-row-subtitle {
   color: var(--muted);
   font-size: 0.85em;
+  /* A long unbroken token (a future URL/slug subtitle) breaks instead of
+   * overflowing the row horizontally past the chevron. */
+  overflow-wrap: anywhere;
 }
 
 /* #335/#333 — the ONE titled "section" idiom across every settings surface:

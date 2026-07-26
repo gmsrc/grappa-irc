@@ -1087,6 +1087,28 @@ describe("SettingsDrawer (#460 — settings index)", () => {
     }
   });
 
+  it("the general subtitle names only upload retention for a non-visitor (no false identity promise)", () => {
+    // null subject (loading / user-like): the general page shows only the
+    // host-gated upload retention — identity is visitor-gated — so the
+    // subtitle must NOT promise identity the subject will never see.
+    wrap(true);
+    const sub = screen
+      .getByTestId("general-settings-entry")
+      .querySelector(".settings-nav-row-subtitle");
+    expect(sub?.textContent).toContain("upload retention");
+    expect(sub?.textContent).not.toContain("identity");
+  });
+
+  it("the general subtitle names identity too for a visitor (both children visible)", () => {
+    subjectHolder.current = { kind: "visitor", id: "v1", nick: "alice" };
+    wrap(true);
+    const sub = screen
+      .getByTestId("general-settings-entry")
+      .querySelector(".settings-nav-row-subtitle");
+    expect(sub?.textContent).toContain("upload retention");
+    expect(sub?.textContent).toContain("per-network identity");
+  });
+
   it("tapping the display row opens the display sub-page; back returns to the index", () => {
     wrap(true);
     openSub("display-settings-entry");
