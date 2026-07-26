@@ -33,6 +33,14 @@ defmodule Grappa.UserSettingsTest do
     user
   end
 
+  # A COMPLETE notification_prefs map: production defaults with the test's
+  # overrides applied. `cast_bools/4` requires EVERY `@prefs_bool_keys`
+  # member present, so a hand-written literal silently rots into a 422 the
+  # moment a pref key is added — #378 did exactly that to ten of these.
+  # Tests state only the keys they are about; new keys ride along.
+  defp full_prefs(overrides),
+    do: Map.merge(UserSettings.default_notification_prefs(), Map.new(overrides))
+
   # ---------------------------------------------------------------------------
   # get_or_init/1
   # ---------------------------------------------------------------------------
@@ -283,8 +291,89 @@ defmodule Grappa.UserSettingsTest do
                channel_messages_only: [],
                channel_mentions: true,
                private_messages_all: true,
-               private_messages_only: []
+               private_messages_only: [],
+               presence_online: false,
+               presence_offline: false
              }
+    end
+
+    test "#378 presence push is OFF by default in BOTH directions" do
+      defaults = UserSettings.default_notification_prefs()
+
+      # Default-ON would flip a new push class on for every existing user,
+      # including those who deliberately configured their prefs — a stored
+      # map is indistinguishable from a never-configured one. The
+      # checkboxes are the opt-in.
+      refute defaults.presence_online
+      refute defaults.presence_offline
+    end
+  end
+
+  describe "#378 — @prefs_trigger_keys stays a PROPER SUBSET of @prefs_bool_keys" do
+    test "a legacy row inherits presence prefs as false, not as a surprise opt-in" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+
+      # A row written before #378: the three message bools, no presence keys.
+      Repo.update!(
+        Settings.changeset(settings, %{
+          data: %{
+            "notification_prefs" => %{
+              "channel_messages_all" => false,
+              "channel_mentions" => true,
+              "private_messages_all" => true,
+              "channel_messages_only" => [],
+              "private_messages_only" => []
+            }
+          }
+        })
+      )
+
+      prefs = UserSettings.get_notification_prefs({:user, user.id})
+
+      refute prefs.presence_online
+      refute prefs.presence_offline
+      # ...and the user's actual choices survive the merge untouched.
+      assert prefs.channel_mentions
+      assert prefs.private_messages_all
+    end
+
+    test "all-message-triggers-off is STILL rejected even with presence_online on" do
+      # The reason presence keys must NOT join @prefs_trigger_keys: the
+      # guard exists to stop a prefs map that silently mutes every MESSAGE
+      # push. If a presence key satisfied it, this PUT would pass and the
+      # user would lose message pushes without being told.
+      user = user_fixture()
+
+      attempt =
+        UserSettings.put_notification_prefs(
+          {:user, user.id},
+          Map.merge(UserSettings.default_notification_prefs(), %{
+            channel_messages_all: false,
+            channel_mentions: false,
+            private_messages_all: false,
+            presence_online: true,
+            presence_offline: true
+          })
+        )
+
+      assert {:error, %Ecto.Changeset{} = cs} = attempt
+      assert errors_on(cs)[:notification_prefs] != nil
+    end
+
+    test "presence keys ARE required by cast_bools — a pre-#378 PUT shape 422s" do
+      # Deploy-skew contract: a stale cic bundle PUTting the old five-field
+      # map is rejected rather than silently storing a partial row.
+      user = user_fixture()
+
+      assert {:error, %Ecto.Changeset{}} =
+               UserSettings.put_notification_prefs({:user, user.id}, %{
+                 channel_messages_all: false,
+                 channel_messages_only: [],
+                 channel_mentions: true,
+                 private_messages_all: true,
+                 private_messages_only: []
+               })
     end
   end
 
@@ -363,13 +452,14 @@ defmodule Grappa.UserSettingsTest do
     test "persists a complete prefs map and reads back identically" do
       user = user_fixture()
 
-      prefs = %{
-        channel_messages_all: false,
-        channel_messages_only: ["#sbiffo"],
-        channel_mentions: true,
-        private_messages_all: false,
-        private_messages_only: ["alice"]
-      }
+      prefs =
+        full_prefs(%{
+          channel_messages_all: false,
+          channel_messages_only: ["#sbiffo"],
+          channel_mentions: true,
+          private_messages_all: false,
+          private_messages_only: ["alice"]
+        })
 
       assert {:ok, %Settings{}} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
       assert UserSettings.get_notification_prefs({:user, user.id}) == prefs
@@ -378,13 +468,14 @@ defmodule Grappa.UserSettingsTest do
     test "lowercases + trims whitelist members" do
       user = user_fixture()
 
-      prefs = %{
-        channel_messages_all: false,
-        channel_messages_only: ["  #SBiffo  ", "#Italia"],
-        channel_mentions: true,
-        private_messages_all: false,
-        private_messages_only: ["  Alice ", "BOB"]
-      }
+      prefs =
+        full_prefs(%{
+          channel_messages_all: false,
+          channel_messages_only: ["  #SBiffo  ", "#Italia"],
+          channel_mentions: true,
+          private_messages_all: false,
+          private_messages_only: ["  Alice ", "BOB"]
+        })
 
       assert {:ok, _} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
 
@@ -396,17 +487,18 @@ defmodule Grappa.UserSettingsTest do
     test "folds BOTH nick and channel whitelists under rfc1459 (#121, #364)" do
       user = user_fixture()
 
-      prefs = %{
-        channel_messages_all: false,
-        # #364: channels now fold via canonical_channel under the SAME
-        # rfc1459 casemapping as nicks (bahamut casemaps channels too), so
-        # `#Foo[X]` folds `[`→`{` + case → `#foo{x}` (was plain downcase).
-        channel_messages_only: ["#Foo[X]"],
-        channel_mentions: true,
-        private_messages_all: false,
-        # Nicks fold via canonical_nick (rfc1459): `[`→`{`, `~`→`^`, plus case.
-        private_messages_only: ["Foo[Bar]", "quux~"]
-      }
+      prefs =
+        full_prefs(%{
+          channel_messages_all: false,
+          # #364: channels now fold via canonical_channel under the SAME
+          # rfc1459 casemapping as nicks (bahamut casemaps channels too), so
+          # `#Foo[X]` folds `[`→`{` + case → `#foo{x}` (was plain downcase).
+          channel_messages_only: ["#Foo[X]"],
+          channel_mentions: true,
+          private_messages_all: false,
+          # Nicks fold via canonical_nick (rfc1459): `[`→`{`, `~`→`^`, plus case.
+          private_messages_only: ["Foo[Bar]", "quux~"]
+        })
 
       assert {:ok, _} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
 
@@ -418,13 +510,14 @@ defmodule Grappa.UserSettingsTest do
     test "deduplicates whitelist members preserving first-occurrence order" do
       user = user_fixture()
 
-      prefs = %{
-        channel_messages_all: false,
-        channel_messages_only: ["#a", "#b", "#A", "#c", "#B"],
-        channel_mentions: true,
-        private_messages_all: true,
-        private_messages_only: []
-      }
+      prefs =
+        full_prefs(%{
+          channel_messages_all: false,
+          channel_messages_only: ["#a", "#b", "#A", "#c", "#B"],
+          channel_mentions: true,
+          private_messages_all: true,
+          private_messages_only: []
+        })
 
       assert {:ok, _} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
 
@@ -435,13 +528,14 @@ defmodule Grappa.UserSettingsTest do
     test "stores whitelist even when corresponding _all is true (UI fallback)" do
       user = user_fixture()
 
-      prefs = %{
-        channel_messages_all: true,
-        channel_messages_only: ["#sbiffo"],
-        channel_mentions: true,
-        private_messages_all: true,
-        private_messages_only: ["alice"]
-      }
+      prefs =
+        full_prefs(%{
+          channel_messages_all: true,
+          channel_messages_only: ["#sbiffo"],
+          channel_mentions: true,
+          private_messages_all: true,
+          private_messages_only: ["alice"]
+        })
 
       assert {:ok, _} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
 
@@ -453,13 +547,14 @@ defmodule Grappa.UserSettingsTest do
     test "rejects when no trigger is enabled" do
       user = user_fixture()
 
-      prefs = %{
-        channel_messages_all: false,
-        channel_messages_only: [],
-        channel_mentions: false,
-        private_messages_all: false,
-        private_messages_only: []
-      }
+      prefs =
+        full_prefs(%{
+          channel_messages_all: false,
+          channel_messages_only: [],
+          channel_mentions: false,
+          private_messages_all: false,
+          private_messages_only: []
+        })
 
       assert {:error, %Ecto.Changeset{}} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
     end
@@ -467,12 +562,18 @@ defmodule Grappa.UserSettingsTest do
     test "tolerates string-keyed prefs (post-JSON-decode shape)" do
       user = user_fixture()
 
+      # Deliberately ALL-string keys — that is the shape under test, so this
+      # one cannot go through `full_prefs/1` (atom-keyed defaults would sit
+      # alongside the string keys and win on read). Every bool key must be
+      # present, presence keys included.
       prefs = %{
         "channel_messages_all" => false,
         "channel_messages_only" => ["#italia"],
         "channel_mentions" => true,
         "private_messages_all" => true,
-        "private_messages_only" => []
+        "private_messages_only" => [],
+        "presence_online" => false,
+        "presence_offline" => false
       }
 
       assert {:ok, _} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
@@ -485,13 +586,14 @@ defmodule Grappa.UserSettingsTest do
     test "rejects when a boolean field has a non-boolean value" do
       user = user_fixture()
 
-      prefs = %{
-        channel_messages_all: false,
-        channel_messages_only: [],
-        channel_mentions: "yes",
-        private_messages_all: true,
-        private_messages_only: []
-      }
+      prefs =
+        full_prefs(%{
+          channel_messages_all: false,
+          channel_messages_only: [],
+          channel_mentions: "yes",
+          private_messages_all: true,
+          private_messages_only: []
+        })
 
       assert {:error, %Ecto.Changeset{}} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
     end
@@ -499,13 +601,14 @@ defmodule Grappa.UserSettingsTest do
     test "rejects when a list field is not a list" do
       user = user_fixture()
 
-      prefs = %{
-        channel_messages_all: false,
-        channel_messages_only: "#italia",
-        channel_mentions: true,
-        private_messages_all: true,
-        private_messages_only: []
-      }
+      prefs =
+        full_prefs(%{
+          channel_messages_all: false,
+          channel_messages_only: "#italia",
+          channel_mentions: true,
+          private_messages_all: true,
+          private_messages_only: []
+        })
 
       assert {:error, %Ecto.Changeset{}} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
     end
@@ -514,13 +617,14 @@ defmodule Grappa.UserSettingsTest do
       user = user_fixture()
       {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo", "bar"])
 
-      prefs = %{
-        channel_messages_all: false,
-        channel_messages_only: [],
-        channel_mentions: true,
-        private_messages_all: true,
-        private_messages_only: []
-      }
+      prefs =
+        full_prefs(%{
+          channel_messages_all: false,
+          channel_messages_only: [],
+          channel_mentions: true,
+          private_messages_all: true,
+          private_messages_only: []
+        })
 
       assert {:ok, _} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
       assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
@@ -634,13 +738,7 @@ defmodule Grappa.UserSettingsTest do
       {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo"])
 
       {:ok, _} =
-        UserSettings.put_notification_prefs({:user, user.id}, %{
-          channel_messages_all: false,
-          channel_messages_only: [],
-          channel_mentions: true,
-          private_messages_all: true,
-          private_messages_only: []
-        })
+        UserSettings.put_notification_prefs({:user, user.id}, full_prefs(channel_mentions: true))
 
       assert {:ok, _} = UserSettings.put_upload_ttl_seconds({:user, user.id}, 3600)
 

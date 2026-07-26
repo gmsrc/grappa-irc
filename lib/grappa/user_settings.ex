@@ -91,16 +91,25 @@ defmodule Grappa.UserSettings do
   Same for `private_messages_all` / `private_messages_only`.
 
   Channel names + nicks are stored lowercased + trimmed (set via
-  `put_notification_prefs/2`). Trigger eval (B4) uses
-  `String.downcase` on incoming message fields so the comparison
-  is case-insensitive end-to-end.
+  `put_notification_prefs/2`). Trigger eval (B4) folds incoming
+  message fields through `Identifier.canonical_nick/1` /
+  `canonical_channel/1` (#121, #364) so the comparison is
+  casemapping-correct end-to-end — NOT a bare `String.downcase`,
+  which fails to fold the rfc1459 bracket characters.
+
+  `presence_online` / `presence_offline` (#378) gate Web Push for
+  `/notify` watch-list presence transitions. They are push-only
+  gates: the in-app presence toast fires regardless. Both default
+  `false` — see `default_notification_prefs/0`.
   """
   @type notification_prefs :: %{
           channel_messages_all: boolean(),
           channel_messages_only: [String.t()],
           channel_mentions: boolean(),
           private_messages_all: boolean(),
-          private_messages_only: [String.t()]
+          private_messages_only: [String.t()],
+          presence_online: boolean(),
+          presence_offline: boolean()
         }
 
   @notification_prefs_key "notification_prefs"
@@ -274,7 +283,9 @@ defmodule Grappa.UserSettings do
       channel_messages_only: [],
       channel_mentions: true,
       private_messages_all: true,
-      private_messages_only: []
+      private_messages_only: [],
+      presence_online: false,
+      presence_offline: false
     }
   end
 
@@ -742,8 +753,21 @@ defmodule Grappa.UserSettings do
   # notification_prefs helpers
   # ---------------------------------------------------------------------------
 
-  @prefs_bool_keys ~w(channel_messages_all channel_mentions private_messages_all)a
+  # EVERY boolean pref. Drives merge_with_defaults/1, cast_bools/2, and
+  # thus the read, validate, and write paths — one edit propagates to all
+  # three.
+  @prefs_bool_keys ~w(channel_messages_all channel_mentions private_messages_all
+                      presence_online presence_offline)a
   @prefs_list_keys ~w(channel_messages_only private_messages_only)a
+  # The MESSAGE-push triggers only — a PROPER SUBSET of @prefs_bool_keys
+  # since #378, NOT a copy of it. `ensure_at_least_one_trigger/2` exists to
+  # reject a prefs map that would silently mute every message push; the
+  # #378 presence keys are an orthogonal trigger class and MUST stay out,
+  # or a user unchecking all three message triggers would still validate
+  # (on the strength of a presence key) and silently lose message pushes.
+  # Consequence, accepted: presence-only push is unrepresentable — at least
+  # one message trigger must stay on. `prefs_trigger_keys_subset_test`
+  # pins the relation; do NOT "tidy up" the apparent duplication.
   @prefs_trigger_keys ~w(channel_messages_all channel_mentions private_messages_all)a
 
   # Reads atom + string keys from `stored` (post-DB-roundtrip is string),

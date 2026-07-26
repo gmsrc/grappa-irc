@@ -25,14 +25,12 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
   alias Grappa.UserSettings
 
+  # Projected from the PRODUCTION defaults rather than restated as a
+  # literal: `cast_bools/4` requires every `@prefs_bool_keys` member on a
+  # PUT, so a hand-written wire map rots into a 422 the moment a pref key
+  # is added (#378 added two). Derive, don't duplicate.
   defp default_prefs_wire do
-    %{
-      "channel_messages_all" => false,
-      "channel_messages_only" => [],
-      "channel_mentions" => true,
-      "private_messages_all" => true,
-      "private_messages_only" => []
-    }
+    Map.new(UserSettings.default_notification_prefs(), fn {k, v} -> {Atom.to_string(k), v} end)
   end
 
   defp valid_prefs_wire(overrides \\ %{}) do
@@ -73,25 +71,25 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
     test "reflects the most-recent PUT", %{conn: conn, user: user} do
       {:ok, _} =
-        UserSettings.put_notification_prefs({:user, user.id}, %{
-          channel_messages_all: false,
-          channel_messages_only: ["#sbiffo"],
-          channel_mentions: true,
-          private_messages_all: false,
-          private_messages_only: ["alice"]
-        })
+        UserSettings.put_notification_prefs(
+          {:user, user.id},
+          Map.merge(UserSettings.default_notification_prefs(), %{
+            channel_messages_only: ["#sbiffo"],
+            private_messages_all: false,
+            private_messages_only: ["alice"]
+          })
+        )
 
       conn = get(conn, "/me/settings/notification-prefs")
 
       assert %{"notification_prefs" => prefs} = json_response(conn, 200)
 
-      assert prefs == %{
-               "channel_messages_all" => false,
-               "channel_messages_only" => ["#sbiffo"],
-               "channel_mentions" => true,
-               "private_messages_all" => false,
-               "private_messages_only" => ["alice"]
-             }
+      assert prefs ==
+               valid_prefs_wire(%{
+                 "channel_messages_only" => ["#sbiffo"],
+                 "private_messages_all" => false,
+                 "private_messages_only" => ["alice"]
+               })
     end
   end
 
@@ -326,13 +324,10 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
     test "notification_prefs survives an upload_ttl_seconds PUT", %{conn: conn, user: user} do
       {:ok, _} =
-        UserSettings.put_notification_prefs({:user, user.id}, %{
-          channel_messages_all: false,
-          channel_messages_only: ["#sbiffo"],
-          channel_mentions: true,
-          private_messages_all: true,
-          private_messages_only: []
-        })
+        UserSettings.put_notification_prefs(
+          {:user, user.id},
+          Map.put(UserSettings.default_notification_prefs(), :channel_messages_only, ["#sbiffo"])
+        )
 
       conn = put(conn, "/me/settings/upload-ttl-seconds", %{"upload_ttl_seconds" => 3600})
       assert json_response(conn, 200)
