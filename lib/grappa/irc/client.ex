@@ -846,6 +846,32 @@ defmodule Grappa.IRC.Client do
       else: reject_invalid_line(:motd)
   end
 
+  @doc """
+  #238 — sends `LINKS [<mask>]\\r\\n` upstream (RFC 2812 §3.4.5). `nil`
+  emits a bare `LINKS` (the full server mesh); a mask emits `LINKS <mask>`
+  to filter the reply to matching server names. Server replies with the
+  364 RPL_LINKS burst (one per server) + 365 RPL_ENDOFLINKS terminator;
+  when primed by `:send_links`, `EventRouter` appends each 364 entry into
+  `state.links_pending` and `Server.apply_effects` flushes a
+  `{:links_bundle, accum}` effect on 365. Many networks restrict LINKS to
+  opers → a bare 365 (empty topology) or 481 ERR_NOPRIVILEGES; both are
+  handled downstream (empty bundle / red $server row).
+
+  The mask is gated by `safe_oper_token?/1` (a single wire token — no
+  whitespace/CRLF/NUL) so it cannot splice an extra wire slot or inject a
+  follow-up command; rejection yields `{:error, :invalid_line}`.
+  """
+  @spec send_links(pid(), String.t() | nil) :: send_result()
+  def send_links(client, nil) do
+    send_line(client, "LINKS\r\n")
+  end
+
+  def send_links(client, mask) when is_binary(mask) do
+    if Identifier.safe_oper_token?(mask),
+      do: send_line(client, "LINKS #{mask}\r\n"),
+      else: reject_invalid_line(:links)
+  end
+
   # S10 (cluster #10): byte-boundary observability for invalid_line
   # rejections. Every public send_* helper funnels its `else` arm
   # through here so a silently-rejected outbound verb is greppable
@@ -874,6 +900,7 @@ defmodule Grappa.IRC.Client do
            | :who
            | :names
            | :motd
+           | :links
            | :oper
            | :raw
 

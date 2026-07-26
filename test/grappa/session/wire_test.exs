@@ -885,6 +885,43 @@ defmodule Grappa.Session.WireTest do
     end
   end
 
+  describe "links_bundle/2 (#238)" do
+    test "ships all topology entries in wire order (reverses EventRouter's prepend)" do
+      # EventRouter prepends (head = most recent 364); wire builder reverses
+      # so the wire order matches the ircd emit order (root first).
+      accum = %{
+        entries: [
+          %{server: "leaf.azzurra.org", linked_to: "hub.azzurra.org", hopcount: 1, description: "Leaf"},
+          %{server: "hub.azzurra.org", linked_to: "hub.azzurra.org", hopcount: 0, description: "Hub"}
+        ]
+      }
+
+      payload = Wire.links_bundle("azzurra", accum)
+
+      assert payload == %{
+               kind: :links_bundle,
+               network: "azzurra",
+               entries: [
+                 %{server: "hub.azzurra.org", linked_to: "hub.azzurra.org", hopcount: 0, description: "Hub"},
+                 %{server: "leaf.azzurra.org", linked_to: "hub.azzurra.org", hopcount: 1, description: "Leaf"}
+               ]
+             }
+    end
+
+    test "empty entries → empty list (restricted/hidden topology)" do
+      payload = Wire.links_bundle("net", %{entries: []})
+
+      assert payload == %{kind: :links_bundle, network: "net", entries: []}
+    end
+
+    test "entry with nil linked_to/hopcount/description (malformed line) round-trips nils" do
+      accum = %{entries: [%{server: "s.host", linked_to: nil, hopcount: nil, description: nil}]}
+      payload = Wire.links_bundle("net", accum)
+
+      assert payload.entries == [%{server: "s.host", linked_to: nil, hopcount: nil, description: nil}]
+    end
+  end
+
   describe "kind: discriminator atom contract" do
     test "every Wire fn output carries kind: as an atom literal (Jason serializes to string at wire boundary)" do
       payloads = [
@@ -906,6 +943,7 @@ defmodule Grappa.Session.WireTest do
         Wire.whowas_bundle("net", "alice", %{}),
         Wire.whowas_bundle("net", "ghost", %{not_found: true}),
         Wire.banlist_bundle("net", "#c", %{channel_display: "#c", entries: []}),
+        Wire.links_bundle("net", %{entries: []}),
         Wire.connection_progress("net", :connecting),
         Wire.connection_progress("net", :connected)
       ]

@@ -636,6 +636,7 @@ export const SESSION_WIRE_WIRE_EVENT_KIND = [
   "lusers_bundle",
   "whowas_bundle",
   "banlist_bundle",
+  "links_bundle",
   "directory_progress",
   "directory_complete",
   "directory_failed",
@@ -940,6 +941,19 @@ export type SessionWireBanlistBundlePayload = {
   entries: SessionWireBanlistEntry[];
 };
 
+export type SessionWireLinksEntry = {
+  server: string;
+  linked_to: string | null;
+  hopcount: number | null;
+  description: string | null;
+};
+
+export type SessionWireLinksBundlePayload = {
+  kind: "links_bundle";
+  network: string;
+  entries: SessionWireLinksEntry[];
+};
+
 export type SessionWireDirectoryProgressPayload = {
   kind: "directory_progress";
   network: string;
@@ -993,6 +1007,7 @@ export type WireSessionEvent =
   | SessionWireLusersBundlePayload
   | SessionWireWhowasBundlePayload
   | SessionWireBanlistBundlePayload
+  | SessionWireLinksBundlePayload
   | SessionWireDirectoryProgressPayload
   | SessionWireDirectoryCompletePayload
   | SessionWireDirectoryFailedPayload

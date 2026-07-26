@@ -290,11 +290,13 @@ defmodule Grappa.Session.NumericRouterTest do
     315,
     353,
     366,
-    # No-silent-drops B6.1 HIGH-3 (2026-05-14): LIST (321/322/323) +
-    # LINKS (364/365) REMOVED from @delegated_numerics. They never had
-    # an EventRouter handler; delegation routed them to
-    # `{:cont, state, []}` and the rows silently dropped. Default
-    # `scan_params` route now persists them as plain `:notice` rows.
+    # No-silent-drops B6.1 HIGH-3 (2026-05-14): LIST (321/322/323)
+    # REMOVED from @delegated_numerics (no EventRouter handler; the cic
+    # directory UI consumes the REST snapshot). #238 — LINKS (364/365)
+    # took the OTHER branch: a dedicated EventRouter clause now folds them
+    # into a :links_bundle, so they ARE delegated (added below).
+    364,
+    365,
     375,
     372,
     376,
@@ -412,19 +414,29 @@ defmodule Grappa.Session.NumericRouterTest do
       assert :delegated = NumericRouter.route(m, state)
     end
 
-    # B6.1 HIGH-3 — LIST (321/322/323) + LINKS (364/365) used to be
-    # `:delegated` to a phantom EventRouter handler, dropping silently.
-    # Now they fall through to `scan_params` and route to `$server` (or
-    # the channel-prefix param when present), so Server's numeric
-    # handler persists them as visible `:notice` rows.
+    # B6.1 HIGH-3 — LIST (321/322/323) used to be `:delegated` to a phantom
+    # EventRouter handler, dropping silently. Now it falls through to
+    # `scan_params` and routes to `$server` (or the channel-prefix param
+    # when present), so Server's numeric handler persists visible `:notice`
+    # rows. LINKS (364/365) took the OTHER branch — see the #238 delegation
+    # tests below.
     test "322 RPL_LIST is no longer delegated; routes to channel param" do
       m = msg(322, ["vjt", "#chan", "42", "a channel topic"])
       assert {:channel, "#chan"} = NumericRouter.route(m, state())
     end
 
-    test "364 RPL_LINKS is no longer delegated; routes to $server" do
-      m = msg(364, ["vjt", "irc.example.com", "*", "0 server description"])
-      assert {:server, nil} = NumericRouter.route(m, state())
+    # #238 — LINKS (364/365) are delegated so EventRouter's links_bundle
+    # fold owns them. Without delegation `scan_params` would ALSO persist
+    # each 364 as a `$server` :notice, doubling the topology rows against
+    # the typed bundle.
+    test "364 RPL_LINKS is delegated (#238 — no $server row double)" do
+      m = msg(364, ["vjt", "leaf.example.com", "hub.example.com", "1 leaf server"])
+      assert :delegated = NumericRouter.route(m, state())
+    end
+
+    test "365 RPL_ENDOFLINKS is delegated (#238 terminator)" do
+      m = msg(365, ["vjt", "*", "End of /LINKS list."])
+      assert :delegated = NumericRouter.route(m, state())
     end
 
     # #221 — the generic WHOIS-leg guard. An unhandled numeric whose

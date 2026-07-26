@@ -766,6 +766,30 @@ defmodule GrappaWeb.GrappaChannel do
     )
   end
 
+  # #238 — /links [<mask>]. No-arg (full mesh) or an OPTIONAL server-name
+  # mask (RFC 2812 §3.4.5). Read-only network query; visitors are entitled
+  # to issue it (mirror of /lusers + /motd). The mask, when present, is
+  # validated as a single wire token (`safe_oper_token?/1`) so an
+  # injection-shaped mask is rejected at the boundary before it reaches the
+  # wire. The 364/365 burst drains ONE ephemeral `links_bundle` event on
+  # the subject's `subject_label` topic — cic renders the topology map,
+  # nothing is persisted. A restricted/oper-only network yields an empty
+  # bundle ("hides topology") or a red $server 481 row.
+  def handle_in(
+        "links",
+        %{"network_id" => network_id} = params,
+        socket
+      )
+      when is_integer(network_id) do
+    mask = Map.get(params, "mask")
+
+    dispatch_subject_verb(
+      socket,
+      fn -> validate_links_mask(mask) end,
+      fn subject -> Session.send_links(subject, network_id, mask) end
+    )
+  end
+
   # CP22 cluster B (channel-client-polish #14) — /who <#channel>. cic
   # pushes after the operator types `/who #chan`; the channel relays to
   # Session.send_who/3 which primes who_pending + emits WHO upstream.
@@ -1420,6 +1444,13 @@ defmodule GrappaWeb.GrappaChannel do
   defp validate_motd_target(nil), do: {:ok, :ok}
   defp validate_motd_target(target) when is_binary(target), do: validate_args(server: target)
   defp validate_motd_target(_), do: {:error, :invalid_line}
+
+  # #238 — /links [<mask>]. nil = full mesh (bare LINKS); a binary mask is
+  # gated as a single wire token (reuses the `:server` validator →
+  # `safe_oper_token?/1`), mirroring /motd's optional target.
+  defp validate_links_mask(nil), do: {:ok, :ok}
+  defp validate_links_mask(mask) when is_binary(mask), do: validate_args(server: mask)
+  defp validate_links_mask(_), do: {:error, :invalid_line}
 
   defp validate_args([]), do: {:ok, :ok}
 

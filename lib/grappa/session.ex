@@ -1205,6 +1205,29 @@ defmodule Grappa.Session do
   end
 
   @doc """
+  #238 — sends `LINKS [<mask>]` upstream (primes `links_pending`). `nil`
+  = the full server mesh; a `mask` filters the reply to matching server
+  names (RFC 2812 §3.4.5). The 364 RPL_LINKS burst + 365 RPL_ENDOFLINKS
+  terminator are folded by `EventRouter` into `state.links_pending` and
+  drained as a typed `:links_bundle` wire event on `Topic.user/1` — cic
+  renders an interactive topology map. A restricted/oper-only network
+  answers with a bare 365 (empty bundle → cic shows "hides topology") or
+  481 ERR_NOPRIVILEGES (a red `$server` :notice, not a bundle).
+
+  Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}` if
+  a non-nil mask's syntax is rejected by `Grappa.IRC.Client.send_links/2`
+  (mirror of `send_motd/3`; the channel door validates first, but the
+  context contract stays honest for every door).
+  """
+  @spec send_links(subject(), integer(), String.t() | nil) ::
+          :ok | {:error, :no_session | :invalid_line | send_transport_error()}
+  def send_links(subject, network_id, mask)
+      when is_subject(subject) and is_integer(network_id) and
+             (is_binary(mask) or is_nil(mask)) do
+    call_session(subject, network_id, {:send_links, mask})
+  end
+
+  @doc """
   #247 — the live /notify presence map for `(subject, network_id)`:
   `%{folded_nick => :online | :offline | :unknown}`. `{:error,
   :no_session}` when no session is running — callers surface the DB

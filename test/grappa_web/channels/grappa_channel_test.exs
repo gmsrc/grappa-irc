@@ -1850,6 +1850,43 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert_reply(ref, :error, %{error: "invalid_line"})
     end
 
+    # #238 — /links bridge: cic pushes the bare verb (or with a mask) with
+    # %{network_id}; the channel relays to Session.send_links/3 which primes
+    # links_pending + emits LINKS upstream. Smoke-tests dispatch plumbing;
+    # the 364/365 fold + broadcast are covered by the EventRouter #238 tests.
+    test "links: sends bare LINKS upstream", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "links", %{"network_id" => network.id})
+
+      assert_reply(ref, :ok)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "LINKS\r\n"), 1_000)
+    end
+
+    test "links: with mask sends LINKS <mask> upstream", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "links", %{"network_id" => network.id, "mask" => "*.azzurra.org"})
+
+      assert_reply(ref, :ok)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "LINKS *.azzurra.org\r\n"), 1_000)
+    end
+
+    # An injection-shaped mask is rejected at the channel boundary
+    # (safe_oper_token? via validate_args(server:)) before it reaches the wire.
+    test "links: rejects an injection mask with invalid_line", %{
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "links", %{"network_id" => network.id, "mask" => "x\r\nQUIT"})
+
+      assert_reply(ref, :error, %{error: "invalid_line"})
+    end
+
     test "whois (REV-F H10): dead Session.Server socket → typed upstream_unavailable reply, Channel survives",
          %{socket: socket, network: network, user: user} do
       # REV-F (H10): `dispatch_subject_verb/3` (sister of `dispatch_ops_verb/3`)

@@ -4719,4 +4719,169 @@ defmodule Grappa.Session.EventRouterTest do
       assert eo == []
     end
   end
+
+  describe "#238 — LINKS topology bundle (364 / 365)" do
+    # LINKS is an on-demand server-mesh query. `:send_links` primes
+    # `state.links_pending = %{entries: []}` (Server.handle_call); 364
+    # RPL_LINKS appends one `%{server, linked_to, hopcount, description}`
+    # entry; 365 RPL_ENDOFLINKS flushes `{:links_bundle, accum}` and
+    # clears the accumulator. Un-keyed (one topology per network, like
+    # LUSERS) but multi-entry + explicit-terminator (like WHOWAS). The
+    # prime gate makes an unsolicited 364/365 a no-op (an ircd never
+    # emits LINKS unrequested — LINKS is not in the connect burst).
+    defp links_pending_state do
+      base_state(%{links_pending: %{entries: []}})
+    end
+
+    test "364 RPL_LINKS appends a {server, linked_to, hopcount, description} entry" do
+      state = links_pending_state()
+
+      m =
+        msg(
+          {:numeric, 364},
+          ["vjt", "leaf.azzurra.org", "hub.azzurra.org", "1 Azzurra Leaf Server"],
+          {:server, "hub.azzurra.org"}
+        )
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+
+      assert new_state.links_pending[:entries] == [
+               %{
+                 server: "leaf.azzurra.org",
+                 linked_to: "hub.azzurra.org",
+                 hopcount: 1,
+                 description: "Azzurra Leaf Server"
+               }
+             ]
+    end
+
+    test "364 with NO links_pending is silently ignored (unsolicited — never primed)" do
+      state = base_state(%{links_pending: nil})
+
+      m =
+        msg(
+          {:numeric, 364},
+          ["vjt", "leaf.azzurra.org", "hub.azzurra.org", "1 Leaf"],
+          {:server, "hub.azzurra.org"}
+        )
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+      assert new_state.links_pending == nil
+    end
+
+    test "the ROOT server (self-link, hopcount 0) parses linked_to == server" do
+      state = links_pending_state()
+
+      m =
+        msg(
+          {:numeric, 364},
+          ["vjt", "hub.azzurra.org", "hub.azzurra.org", "0 Azzurra Hub"],
+          {:server, "hub.azzurra.org"}
+        )
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+      [entry] = new_state.links_pending[:entries]
+      assert entry.server == "hub.azzurra.org"
+      assert entry.linked_to == "hub.azzurra.org"
+      assert entry.hopcount == 0
+      assert entry.description == "Azzurra Hub"
+    end
+
+    test "multiple 364 entries accumulate REVERSED (head = most recent, O(1) prepend)" do
+      state = links_pending_state()
+
+      m1 =
+        msg(
+          {:numeric, 364},
+          ["vjt", "hub.azzurra.org", "hub.azzurra.org", "0 Hub"],
+          {:server, "hub.azzurra.org"}
+        )
+
+      m2 =
+        msg(
+          {:numeric, 364},
+          ["vjt", "leaf.azzurra.org", "hub.azzurra.org", "1 Leaf"],
+          {:server, "hub.azzurra.org"}
+        )
+
+      {:cont, s1, []} = EventRouter.route(m1, state)
+      {:cont, s2, []} = EventRouter.route(m2, s1)
+
+      entries = s2.links_pending[:entries]
+      assert length(entries) == 2
+      # Head = most recent (m2); wire builder reverses to restore wire order.
+      assert Enum.at(entries, 0).server == "leaf.azzurra.org"
+      assert Enum.at(entries, 1).server == "hub.azzurra.org"
+    end
+
+    test "364 with a description-less trailing (bare hopcount) yields empty description" do
+      state = links_pending_state()
+
+      m =
+        msg(
+          {:numeric, 364},
+          ["vjt", "hub.azzurra.org", "hub.azzurra.org", "0"],
+          {:server, "hub.azzurra.org"}
+        )
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+      [entry] = new_state.links_pending[:entries]
+      assert entry.hopcount == 0
+      assert entry.description == ""
+    end
+
+    test "365 RPL_ENDOFLINKS flushes {:links_bundle, accum} and clears links_pending" do
+      state =
+        base_state(%{
+          links_pending: %{
+            entries: [
+              %{server: "leaf.azzurra.org", linked_to: "hub.azzurra.org", hopcount: 1, description: "Leaf"},
+              %{server: "hub.azzurra.org", linked_to: "hub.azzurra.org", hopcount: 0, description: "Hub"}
+            ]
+          }
+        })
+
+      m =
+        msg(
+          {:numeric, 365},
+          ["vjt", "*", "End of /LINKS list."],
+          {:server, "hub.azzurra.org"}
+        )
+
+      {:cont, new_state, [{:links_bundle, accum}]} = EventRouter.route(m, state)
+      assert new_state.links_pending == nil
+      # Accumulator carries the entries as-stored (reversed); the wire
+      # builder restores wire order.
+      assert length(accum[:entries]) == 2
+    end
+
+    test "365 with an EMPTY entries list (restricted/hidden topology) flushes an empty bundle" do
+      state = base_state(%{links_pending: %{entries: []}})
+
+      m =
+        msg(
+          {:numeric, 365},
+          ["vjt", "*", "End of /LINKS list."],
+          {:server, "hub.azzurra.org"}
+        )
+
+      {:cont, new_state, [{:links_bundle, accum}]} = EventRouter.route(m, state)
+      assert new_state.links_pending == nil
+      assert accum[:entries] == []
+    end
+
+    test "365 with NO links_pending is silently ignored (unsolicited terminator)" do
+      state = base_state(%{links_pending: nil})
+
+      m =
+        msg(
+          {:numeric, 365},
+          ["vjt", "*", "End of /LINKS list."],
+          {:server, "hub.azzurra.org"}
+        )
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+      assert new_state.links_pending == nil
+    end
+  end
 end

@@ -690,6 +690,17 @@ defmodule Grappa.Session.Server do
           # first LUSERS numeric and fills until flush. NOT persisted
           # across crashes — operator types /lusers to refresh.
           lusers_pending: nil | map(),
+          # #238 — pending LINKS topology accumulator. Un-keyed (one
+          # topology per network, like LUSERS) but PRIMED on `:send_links`
+          # (unlike LUSERS): `nil` = idle, `%{entries: [...]}` = an explicit
+          # /links is in flight. The prime gate makes an unsolicited 364/365
+          # a no-op (an ircd never emits LINKS unrequested). 364 RPL_LINKS
+          # appends a `%{server, linked_to, hopcount, description}` entry;
+          # 365 RPL_ENDOFLINKS emits `{:links_bundle, accum}` and clears to
+          # nil. A withheld 365 leaves the accumulator set until the next
+          # /links clobbers it (harmless — not persisted, mirror of the
+          # un-swept lusers_pending). NOT persisted across crashes.
+          links_pending: nil | map(),
           # #127 — per-source server-text-reply accumulators, primed by
           # `:send_info` / `:send_version` / `:send_motd`. `nil` = idle (no
           # explicit request in flight); `%{lines: [...]}` = collecting the
@@ -960,6 +971,10 @@ defmodule Grappa.Session.Server do
       # end). Bounded by the fixed 7-numeric sequence Bahamut emits;
       # NOT persisted across crashes.
       lusers_pending: nil,
+      # #238 — pending LINKS topology accumulator. nil when idle; primed to
+      # `%{entries: []}` by `:send_links`; 364 appends entries; 365 emits
+      # `{:links_bundle, accum}` and clears. See the state typedef above.
+      links_pending: nil,
       # #127 — server-text-reply accumulators (idle until /info /version
       # /motd primes the matching flag). See the state typedef above.
       info_pending: nil,
@@ -1493,6 +1508,17 @@ defmodule Grappa.Session.Server do
   # 402 terminator) drains the modal either way.
   def handle_call({:send_motd, target}, _, state) do
     {:reply, Client.send_motd(state.client, target), %{state | motd_pending: %{lines: []}}}
+  end
+
+  # #238 — /links [<mask>]. Prime the accumulator BEFORE the send so the
+  # 364/365 burst folds into a bundle instead of the generic $server
+  # scan-route notice (the pending flag IS the explicit-request signal —
+  # an unsolicited 364/365, which an ircd never emits, is a no-op). The
+  # optional mask filters the reply to matching server names; nil is the
+  # full mesh. Priming before the send is safe: replies only arrive after
+  # the send returns (mailbox-serialized ordering, same as /motd).
+  def handle_call({:send_links, mask}, _, state) do
+    {:reply, Client.send_links(state.client, mask), %{state | links_pending: %{entries: []}}}
   end
 
   # Channel directory (#84) refresh trigger. Three clauses, ordered:
@@ -4020,6 +4046,22 @@ defmodule Grappa.Session.Server do
       Grappa.PubSub.broadcast_event(
         Topic.user(state.subject_label),
         SessionWire.lusers_bundle(state.network_slug, accum)
+      )
+
+    apply_effects(rest, state)
+  end
+
+  # #238 — LINKS topology bundle ephemeral. Broadcast on the user-level
+  # topic (mirrors `:lusers_bundle` — ephemerals carrying their own
+  # `network` field route via Topic.user/1). cic dispatches in
+  # `userTopic.ts`'s `links_bundle` arm into the per-network `linksModal.ts`
+  # store (last-write-wins replacement) and renders the interactive
+  # topology map. NOT persisted — operator types /links to refresh.
+  defp apply_effects([{:links_bundle, accum} | rest], state) do
+    :ok =
+      Grappa.PubSub.broadcast_event(
+        Topic.user(state.subject_label),
+        SessionWire.links_bundle(state.network_slug, accum)
       )
 
     apply_effects(rest, state)

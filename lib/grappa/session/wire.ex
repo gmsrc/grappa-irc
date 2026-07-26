@@ -91,6 +91,7 @@ defmodule Grappa.Session.Wire do
           | :lusers_bundle
           | :whowas_bundle
           | :banlist_bundle
+          | :links_bundle
           | :directory_progress
           | :directory_complete
           | :directory_failed
@@ -614,6 +615,42 @@ defmodule Grappa.Session.Wire do
           network: String.t(),
           channel: String.t(),
           entries: [banlist_entry()]
+        }
+
+  @typedoc """
+  #238 — one server node from a 364 RPL_LINKS row. `server` is the node's
+  name; `linked_to` is its uplink (the server it is directly connected to) —
+  the root self-links (`server == linked_to`, `hopcount == 0`). `hopcount`
+  is the distance in hops from the server grappa is connected to (the tree
+  depth). `description` is the free-text server info (may be `""`).
+  `hopcount`/`description` are nil only when the upstream trailing is
+  malformed (defensive). cic reconstructs the spanning tree from the
+  `linked_to` parent edges — the typed bundle IS the tree; cic NEVER parses
+  IRC.
+  """
+  @type links_entry :: %{
+          server: String.t(),
+          linked_to: String.t() | nil,
+          hopcount: integer() | nil,
+          description: String.t() | nil
+        }
+
+  @typedoc """
+  #238 — LINKS topology bundle. Aggregated reply to operator-issued
+  `/links [<mask>]`. Broadcast on `Topic.user/1` (mirrors `banlist_bundle`
+  — ephemeral, carries its own `network`; cic keys the per-network topology
+  store by slug). Ships ALL `entries` in the wire order the ircd sent them
+  (a topology is a set of nodes). An EMPTY `entries` list is the
+  restricted/hidden-topology signal (an oper-only network answered with a
+  bare 365 and no 364 rows) — cic renders "this network hides its
+  topology". A 481 ERR_NOPRIVILEGES denial never reaches this bundle: it
+  stays a red `$server` :notice on the generic scan route. NOT persisted —
+  operator types /links to refresh.
+  """
+  @type links_bundle_payload :: %{
+          kind: :links_bundle,
+          network: String.t(),
+          entries: [links_entry()]
         }
 
   @typedoc """
@@ -1345,6 +1382,44 @@ defmodule Grappa.Session.Wire do
       kind: :banlist_bundle,
       network: network_slug,
       channel: channel,
+      entries: entries
+    }
+  end
+
+  @doc """
+  #238 — LINKS topology bundle. Broadcast on `Topic.user/1` (mirrors
+  `banlist_bundle/3` — ephemeral, ships ALL entries as a set). cic
+  dispatches in `userTopic.ts`'s `links_bundle` arm into the per-network
+  `linksModal.ts` store (last-write-wins replacement) and reconstructs the
+  spanning tree from the `linked_to` parent edges + `hopcount` depth.
+
+  EventRouter stores entries REVERSED (head = most recent 364, for an O(1)
+  prepend); this restores the wire order via `Enum.reverse/1`. Each entry
+  is normalised to the `links_entry/0` wire shape so a missing
+  `linked_to`/`hopcount`/`description` (malformed upstream line) ships as
+  nil. An empty `entries` list (restricted topology) ships verbatim — the
+  empty-set-is-hidden contract. NOT persisted — operator types /links to
+  refresh.
+  """
+  @spec links_bundle(String.t(), map()) :: links_bundle_payload()
+  def links_bundle(network_slug, accum)
+      when is_binary(network_slug) and is_map(accum) do
+    entries =
+      accum
+      |> Map.get(:entries, [])
+      |> Enum.reverse()
+      |> Enum.map(fn e ->
+        %{
+          server: Map.get(e, :server),
+          linked_to: Map.get(e, :linked_to),
+          hopcount: Map.get(e, :hopcount),
+          description: Map.get(e, :description)
+        }
+      end)
+
+    %{
+      kind: :links_bundle,
+      network: network_slug,
       entries: entries
     }
   end

@@ -213,6 +213,7 @@ defmodule Grappa.Session.EventRouter do
           | {:lusers_bundle, accum :: map()}
           | {:whowas_bundle, target :: String.t(), accum :: map()}
           | {:banlist_bundle, channel :: String.t(), accum :: map()}
+          | {:links_bundle, accum :: map()}
           | {:umode_changed, modes :: [String.t()]}
           | {:supported_umodes_changed, modes :: [String.t()]}
           | {:session_identity_changed, :acquired | :lost}
@@ -2003,6 +2004,56 @@ defmodule Grappa.Session.EventRouter do
     end
   end
 
+  # #238 — LINKS topology bundle (364 / 365). On-demand server-mesh query;
+  # `:send_links` primes `state.links_pending = %{entries: []}`
+  # (Server.handle_call) so an unsolicited 364/365 (an ircd never emits
+  # LINKS unrequested — it is NOT in the connect burst) is a no-op. 364
+  # RPL_LINKS appends one `%{server, linked_to, hopcount, description}`
+  # entry to the accumulator (stored REVERSED, head = most recent, for an
+  # O(1) prepend — `Wire.links_bundle/2` reverses to restore wire order,
+  # mirroring the banlist/whowas shape). 365 RPL_ENDOFLINKS flushes
+  # `{:links_bundle, accum}` and clears the accumulator. An EMPTY entries
+  # list at 365 (a restricted/oper-only network that answers with a bare
+  # 365 and no 364 rows) flushes an empty bundle — cic renders "this
+  # network hides its topology" from the empty set. A 481 ERR_NOPRIVILEGES
+  # denial is deliberately NOT delegated (see the numeric_router note): it
+  # stays on the generic scan route and persists a red `$server` :notice
+  # (visible, never silent) — delegating a generic oper-error globally
+  # would swallow 481s from OTHER commands.
+  #
+  # LINKS is a spanning tree by protocol: each 364 carries the server, its
+  # uplink (`linked_to`), and the hopcount (depth). The root self-links
+  # (server == linked_to, hopcount 0). cic reconstructs the tree from the
+  # parent edges — no client-side IRC parsing; the typed bundle IS the tree.
+
+  # 364 RPL_LINKS: `:hub 364 own_nick <server> <linked_to> :<hopcount> <info>`.
+  # Append one topology entry. Skips when no links_pending (unsolicited).
+  defp do_route(
+         %Message{command: {:numeric, 364}, params: [_, server, linked_to | rest]},
+         state
+       )
+       when is_binary(server) and is_binary(linked_to) do
+    {hopcount, description} = parse_links_trailing(List.last(rest))
+    entry = %{server: server, linked_to: linked_to, hopcount: hopcount, description: description}
+    {:cont, links_append_entry(state, entry), []}
+  end
+
+  # 365 RPL_ENDOFLINKS: `:hub 365 own_nick <mask> :End of /LINKS list.`.
+  # Flush the bundle + clear the accumulator. Silently ignored when no
+  # links_pending exists (unsolicited terminator).
+  defp do_route(
+         %Message{command: {:numeric, 365}},
+         state
+       ) do
+    case Map.get(state, :links_pending) do
+      nil ->
+        {:cont, state, []}
+
+      accum when is_map(accum) ->
+        {:cont, %{state | links_pending: nil}, [{:links_bundle, accum}]}
+    end
+  end
+
   # #127/#374 — MOTD family (375 RPL_MOTDSTART, 372 RPL_MOTD, 376
   # RPL_ENDOFMOTD, 422 ERR_NOMOTD) + #374's 402 ERR_NOSUCHSERVER terminator.
   # Two surfaces, gated on state.motd_pending:
@@ -3103,6 +3154,41 @@ defmodule Grappa.Session.EventRouter do
         entries = [entry | Map.get(accum, :entries, [])]
         merged = Map.put(accum, :entries, entries)
         %{state | banlist_pending: Map.put(pending, chan_key, merged)}
+    end
+  end
+
+  # #238 — append one 364 RPL_LINKS entry to `links_pending.entries`.
+  # Entries are stored REVERSED (head = most recent 364) for an O(1)
+  # prepend (Credo's MapInto check rejects the O(n) `++ [entry]` shape);
+  # `Wire.links_bundle/2` reverses to restore the wire order. Skips when
+  # no links_pending exists (unsolicited 364 — operator never issued
+  # /links; not actionable). Un-keyed (one topology per network, like
+  # LUSERS), so unlike whowas/banlist there is no per-target map —
+  # `links_pending` is `nil | %{entries: [...]}`.
+  @spec links_append_entry(state(), map()) :: state()
+  defp links_append_entry(state, entry) when is_map(entry) do
+    case Map.get(state, :links_pending) do
+      nil ->
+        state
+
+      accum when is_map(accum) ->
+        entries = [entry | Map.get(accum, :entries, [])]
+        %{state | links_pending: Map.put(accum, :entries, entries)}
+    end
+  end
+
+  # #238 — split a 364 trailing (`"<hopcount> <server info>"`) into the
+  # integer hopcount + the remaining description. Defensive against a
+  # trailing that omits the info (bare hopcount → "" description) or the
+  # hopcount (non-integer leading token → nil hopcount, whole string as
+  # description). `nil` trailing (malformed line) → {nil, nil}.
+  @spec parse_links_trailing(String.t() | nil) :: {integer() | nil, String.t() | nil}
+  defp parse_links_trailing(nil), do: {nil, nil}
+
+  defp parse_links_trailing(trailing) when is_binary(trailing) do
+    case Integer.parse(String.trim_leading(trailing)) do
+      {hop, rest} -> {hop, String.trim_leading(rest)}
+      :error -> {nil, trailing}
     end
   end
 

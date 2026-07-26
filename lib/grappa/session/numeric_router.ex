@@ -270,20 +270,33 @@ defmodule Grappa.Session.NumericRouter do
                         353,
                         366,
                         # No-silent-drops B6.1 HIGH-3 (2026-05-14):
-                        # LIST (321/322/323) + LINKS (364/365) numerics
-                        # were previously listed as `:delegated` to a
-                        # phantom EventRouter handler. Removing them
-                        # lets `param_derived_route/3` fall through to
-                        # `scan_params/2`, which routes them via the
-                        # default `{:server, nil}` path — Server's
+                        # LIST (321/322/323) numerics were previously
+                        # listed as `:delegated` to a phantom EventRouter
+                        # handler. Removing them lets `param_derived_route/3`
+                        # fall through to `scan_params/2`, which routes them
+                        # via the default `{:server, nil}` path — Server's
                         # numeric handler then persists them as plain
                         # `:notice` rows on `$server` with
                         # `meta.numeric/severity`. Visible, never silent.
-                        # When a future polish cluster wires the cic
-                        # /list and /links UI, it can either keep this
-                        # default route (rows already visible) or
-                        # introduce a dedicated EventRouter clause +
-                        # delegation entry in the SAME commit.
+                        # (The cic /list directory UI consumes the REST
+                        # `directory` snapshot, not these numerics.)
+                        #
+                        # #238 — LINKS (364/365) took the OTHER branch of
+                        # that contract: the cic /links topology UI wires a
+                        # DEDICATED EventRouter clause (364 appends a
+                        # topology entry into `state.links_pending`, 365
+                        # flushes a `{:links_bundle, accum}` effect), so
+                        # 364/365 are delegated HERE in the SAME commit.
+                        # Without delegation `param_derived_route/3` would
+                        # ALSO persist each 364 as a `$server` :notice,
+                        # doubling the rows. 481 ERR_NOPRIVILEGES (oper-only
+                        # denial) is deliberately NOT delegated — it is a
+                        # generic oper-error shared by many commands, so it
+                        # stays on the scan route as a red `$server` :notice
+                        # (visible); delegating it globally would swallow
+                        # 481s from OTHER commands.
+                        364,
+                        365,
                         # INVITE-ack (341)
                         341,
                         # P-0c WHOWAS bundle (314, 369, 406). 312 RPL_WHOISSERVER is
