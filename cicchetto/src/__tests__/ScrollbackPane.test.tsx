@@ -363,6 +363,26 @@ describe("ScrollbackPane", () => {
     expect(line.textContent ?? "").not.toContain("ACTION ");
   });
 
+  it("renders the action row with one space between '*' and the nick (not two) — #457", () => {
+    // Regression pin for #457: the :action arm rendered `*  nick` (two
+    // spaces) while every sibling `*`-framed kind (join/part/quit/…) uses
+    // the one-space `* ` chrome. The other action assertions above go
+    // through toHaveTextContent, which normalises whitespace, so the double
+    // space was silently untested. Assert the RAW textContent so the shared
+    // `* ` convention is pinned on the action row either way.
+    setScrollback({ "freenode #grappa": fixture });
+    render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+    const actionLine = screen
+      .getAllByTestId("scrollback-line")
+      .find((l) => l.dataset.kind === "action");
+    expect(actionLine).toBeDefined();
+    // textContent is `HH:MM:SS * bob waves` (the timestamp gutter prefixes
+    // every line), so assert on the `*`-to-body segment, not the whole string.
+    const text = actionLine?.textContent ?? "";
+    expect(text).toContain("* bob waves");
+    expect(text).not.toContain("*  ");
+  });
+
   it("renders all ten server kinds without falling through to PRIVMSG framing", () => {
     // Server `Grappa.Scrollback.Message.kind()` enum: ten kinds. Phase 5
     // presence-event capture will emit any of them on the wire; the

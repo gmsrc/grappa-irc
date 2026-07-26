@@ -656,8 +656,7 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
     case "action":
       return (
         <span class="scrollback-body">
-          *{"  "}
-          {bareSenderSpan(msg.sender)} <MircBody body={stripCtcpAction(msg.body)} />
+          * {bareSenderSpan(msg.sender)} <MircBody body={stripCtcpAction(msg.body)} />
         </span>
       );
     case "join":
