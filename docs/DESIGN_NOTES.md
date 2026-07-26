@@ -19033,3 +19033,61 @@ exposes the flag on the login response and `/me`; cic mirrors it in
 Follow-up #426 tracks two non-blocking seed edge-case tests (re-login flip
 keeps 3600; rollback-on-seed-failure). Deploy rides a COLD batch (migration
 `20260726130000_add_incognito_to_visitors`).
+## 2026-07-26 — #423 order-safe `appendToScrollback` (reconnect scrollback order)
+
+A PWA left in the background and brought back to the foreground rendered a
+channel pane **out of chronological order**: the newest live rows first, then
+a block of OLDER rows appended below them (`09:33:45` followed by `09:25:25`,
+…). Cold reopen rendered the same channel correctly — the tell that only the
+LIVE in-memory store order was wrong, not the server data.
+
+**Root cause.** `cicchetto/src/lib/scrollback.ts` has two ingest verbs with
+different ordering contracts: `mergeIntoScrollback` (id-dedupe + `.sort`) and
+`appendToScrollback` (id-dedupe + tail-push, no sort). `appendToScrollback`'s
+"push to tail" contract holds ONLY when the incoming row is newer than the
+current tail — true for live WS pushes, which is what it was designed for. But
+`refreshScrollback` (the reconnect/rejoin recovery path) ingests a whole REST
+`?after=<resume cursor>` page through it, one row at a time. On resume the two
+paths race: the socket rejoins and the newest live traffic lands at the tail
+first, then `refreshScrollback` resolves its page covering the disconnect gap
+and pushes those OLDER rows after the live block. Rows already present are
+dropped by the id dedupe, so only the still-missing older gap rows land — at
+the end. Store order IS display order (`ScrollbackPane` renders
+`scrollbackByChannel` verbatim, no re-sort), hence "newest block, then an
+older block".
+
+**Fix (issue's Option B).** Make the single-row verb order-safe: push when the
+row is at/after the tail (the hot live-append path, byte-identical to before),
+otherwise re-sort it into its `(server_time, id)` position via the module's
+single-source `byServerTimeThenId`. This keeps ONE ingest verb with ONE
+ordering contract ("reuse the verbs, not the nouns") and hardens it for ANY
+future non-tail caller ("fix root causes, not examples"). `refreshScrollback`
+is unchanged.
+
+**Option A rejected.** Routing `refreshScrollback` through
+`mergeIntoScrollback` (accumulate the page, merge once) would reopen the S20
+unbounded-growth vector: `mergeIntoScrollback` does NOT apply
+`capScrollbackRing` (the ring cap `appendToScrollback` enforces), and it lacks
+the per-row `recordSeen` high-water-mark roll-forward the refresh loop needs
+for second-disconnect resume.
+
+**Bonus — a latent cap bug fixed for free.** `capScrollbackRing` assumes rows
+are ASC by id (its cursor-boundary `findIndex(m.id >= cursor)` is only valid on
+a sorted list). Pre-fix, an out-of-order append handed `capScrollbackRing` an
+UNSORTED list, mis-scanning the evictable boundary. Post-fix the list is always
+sorted before capping, so the cap's boundary math is now always correct.
+
+**Cost.** One comparison against the tail on the hot live-append path; a
+re-sort only on out-of-order rows. In the targeted reconnect burst every
+gap-page row is older than the live tail, so up to `REFRESH_LIMIT` (200) rows
+take the sort path, each sorting a list bounded by `SCROLLBACK_RING_CAP`
+(1000) — a brief, infrequent reconnect-time cost, not a hot-path regression.
+
+**Regression coverage.** A store-level vitest test seeds live rows (ids 20,
+21) at the tail, runs `refreshScrollback` with an older gap page (6, 7, 8), and
+asserts the store is ascending `[6,7,8,20,21]`. It reproduces the exact
+production disorder (`[20,21,6,7,8]`) on the pre-fix code. The render is a
+verbatim projection of the store, so the store-level assertion IS the
+display-order assertion — a Playwright reconnect-race e2e would only add
+timing flakiness (WS-vs-REST resolution order) for no extra coverage of the
+root cause.
