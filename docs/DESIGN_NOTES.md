@@ -18948,3 +18948,88 @@ they stay reviewable and track the substrate. Cutting the `vX.Y.Z` tag,
 running `updpkgsums`, and pushing to the AUR is a HUMAN step — no AUR
 credentials in the tree, nothing here pushes. `sha256sums=('SKIP')` is
 committed on purpose (the tag tarball does not exist until the tag is cut).
+
+## 2026-07-26 — #363 incognito ephemeral visitor session
+
+A per-session ephemeral "incognito" anon visitor. A login checkbox under
+Advanced arms it (visitor-anon ONLY — hidden when the identifier carries an
+"@"; the account path drops the flag). Messages ARE stored server-side while
+the session lives; the promise is deletion on browser close, not "not stored."
+
+**Linger derived from presence, not a duplicated state machine.** An incognito
+visitor is born (`Visitors.create_anon/4`) with a short TTL
+(`@incognito_linger_seconds`, 1h) instead of the 48h anon TTL, and the flag is
+set ONLY on fresh provision — a returning row keeps its persistence semantics
+(incognito is a fresh-session choice, never a retroactive conversion that would
+delete data the holder never opted to lose). `touch/1`'s incognito branch is a
+deliberate no-op that preserves the `:expired` read-gate
+(`incognito_read_gate/1`): the reconcile owns the clock, so touch must not
+slide the TTL out to 48h.
+
+The refresh is reconcile-from-presence, NOT event-driven, because there is no
+single truthful "last socket gone" signal to subscribe to: a visitor has N
+`Session.Server`s, `ws_all_hidden` ("no visible tab") is a desktop-backgrounded
+footgun distinct from "disconnected," and "last socket dropped" is not emitted
+today. So `Reaper.sweep` calls `reconcile_incognito_lingers/0` BEFORE
+`list_expired/0`: `slide_incognito_lingers/1` (a set-based `update_all`,
+filtered to `incognito == true`) pushes `expires_at = now + 1h` for every
+incognito visitor whose label is in `WSPresence.list_user_names()`. A connected
+incognito visitor is slid forward and never reaped; a disconnected one winds
+down and the ordinary reaper CASCADE collects it ~1h later; reconnect (~1-2s)
+re-populates the set and cancels the linger — no client beacon, the WS drop IS
+the signal, refresh is safe. The connected-label decode goes through
+`Grappa.Subject.from_label/1` (the #413 label-codec SSOT), NOT a hand-rolled
+`"visitor:"` prefix match, so the Reaper cannot silently fork from the codec if
+the label scheme ever changes.
+
+**Deletion reuses the existing reaper machinery** (`Visitors.delete/1` → the FK
+CASCADE across every visitor-scoped table); zero new deletion code. `DELETE
+/me` (AccountDeletion) forbids anon visitors, so the Reaper is the only door.
+
+**Uploads: a gentle default, NOT a session-tied wipe and NOT a clamp.** Two
+earlier designs (session-reap `File.rm`; a 4h max file lifetime) were rejected
+in favour of the lightest mechanism that already exists. Every upload is
+already born with a mandatory `expires_at` (ladder 1h/12h/24h/72h, default
+24h — `UploadsController` `@allowed`/`@default_ttl_seconds`) and the existing
+`Uploads.Reaper` sweeps file-then-row on it. So a fresh incognito session
+simply SEEDS its own upload-TTL preference to the gentlest rung (3600s / 1h)
+via `UserSettings.put_upload_ttl_seconds({:visitor, id}, 3600)`, inside the
+provision transaction (rolls back with the row). This needs zero
+controller/`parse_ttl` change because settings have been subject-scoped since
+the visitor-parity cluster (V1) and cic's `Shell.tsx` one-shot bootstrap
+already carries the pref into the upload `expire=` param. It is a DEFAULT, not
+a cap: the holder can raise it to the 72h ladder ceiling from the settings
+drawer and the server does NOT re-limit them (explicit product call — no
+server-side clamp). A distinct `@incognito_upload_ttl_seconds` attribute (even
+though it equals `@incognito_linger_seconds` today) keeps the session-linger
+clock and the upload-expiry clock free to diverge.
+
+**Share-token: the every-door gate, server-side too.** An incognito session is
+deliberately non-portable. cic hides the share control, but `POST
+/me/share-token` was a live REST door: a direct call would mint a working link,
+carrying the ephemeral session to another device (and the shared socket would
+keep the reconcile linger alive). `ShareTokenController.mint/2` now 403s a
+`{:visitor, %Visitor{incognito: true}}` subject before the general visitor
+clause — the server twin of the client hide (CLAUDE.md "one feature, one code
+path, every door").
+
+**Honest copy — over-promises in neither direction.** The checkbox promises the
+session and its message history are deleted when the browser closes (no
+duration surfaced — the ~1h linger is only the fallback for a close we cannot
+intercept — and no "everything"), and it DECLARES what survives by design:
+uploaded files follow their own expiry (1h default here, up to 72h, not tied to
+the session close); themes you published re-home to the house account (#299);
+your nick stays in the admin audit event; and each person you talked to keeps
+their own copy of the conversation (incognito only ever covers YOUR half). The
+copy is asserted in e2e by `data-testid`, never by wording, so final phrasing
+never breaks a spec.
+
+**Threading.** `incognito` is an optional input key mirroring `:network`:
+`auth_controller` (`Map.get(params, "incognito") == true`) → `nick_login` →
+`visitor_login` → `Login` input → `find_or_provision_anon/4`. `Visitors.Wire`
+exposes the flag on the login response and `/me`; cic mirrors it in
+`api.ts`/`auth.ts` + the generated `wireTypes.ts`.
+
+Follow-up #426 tracks two non-blocking seed edge-case tests (re-login flip
+keeps 3600; rollback-on-seed-failure). Deploy rides a COLD batch (migration
+`20260726130000_add_incognito_to_visitors`).
