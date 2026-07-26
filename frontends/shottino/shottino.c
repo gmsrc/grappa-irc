@@ -35,6 +35,7 @@
 #include <limits.h>
 
 #include "alias.h"
+#include "http.h"
 #include "json.h"
 #include "mirc.h"
 #include "termcolor.h"
@@ -774,6 +775,15 @@ static bool conn_open(struct app *app, struct tls_conn *conn) {
         if (!conn->ssl) return false;
         SSL_set_fd(conn->ssl, conn->fd);
         SSL_set_tlsext_host_name(conn->ssl, app->url.host);
+        /* SNI (above) only NAMES the host in the ClientHello — it does not
+         * make OpenSSL verify anything. SSL_VERIFY_PEER (see ssl_ctx setup)
+         * validates the certificate CHAIN but NOT that the cert belongs to
+         * this host, so without binding the expected name any CA-signed cert
+         * for ANY domain passes: an active MITM could present a valid cert
+         * for attacker.example and read the bearer token we send on this
+         * connection. SSL_set1_host makes the handshake fail on a hostname
+         * mismatch — the client twin of the server's #89 hostname check. */
+        if (SSL_set1_host(conn->ssl, app->url.host) != 1) return false;
         if (SSL_connect(conn->ssl) != 1) return false;
     }
     return true;
@@ -830,31 +840,6 @@ static char *read_all(struct tls_conn *conn, size_t *out_len) {
     return buf;
 }
 
-static char *decode_chunked(const char *body, size_t len, size_t *out_len) {
-    char *out = malloc(len + 1);
-    if (!out) die("out of memory");
-    size_t pos = 0, w = 0;
-    while (pos < len) {
-        size_t line = pos;
-        while (line + 1 < len && !(body[line] == '\r' && body[line + 1] == '\n')) line++;
-        if (line + 1 >= len) break;
-        size_t n = 0;
-        for (size_t i = pos; i < line; i++) {
-            int v = hexval(body[i]);
-            if (v < 0) break;
-            n = n * 16 + (size_t)v;
-        }
-        pos = line + 2;
-        if (n == 0 || pos + n > len) break;
-        memcpy(out + w, body + pos, n);
-        w += n;
-        pos += n + 2;
-    }
-    out[w] = 0;
-    *out_len = w;
-    return out;
-}
-
 /* Generalised request: an explicit content type and an explicit body
  * length, so a body containing NUL bytes (a file upload) survives. The
  * JSON wrapper below is the common case and keeps its old signature. */
@@ -896,7 +881,8 @@ static struct http_response http_request_raw(struct app *app, const char *method
     char *payload = NULL;
     size_t payload_len = 0;
     if (strcasestr(raw, "Transfer-Encoding: chunked")) {
-        payload = decode_chunked(body_start, blen, &payload_len);
+        payload = http_decode_chunked(body_start, blen, &payload_len);
+        if (!payload) die("out of memory");
     } else {
         payload = malloc(blen + 1);
         if (!payload) die("out of memory");
@@ -2609,7 +2595,11 @@ static void set_window_state(struct app *app, const char *network, const char *c
 
 static void copy_members_from_wire(struct app *app, const char *network, const char *channel,
                                    const json_value *list, size_t count) {
-    struct member members[512];
+    /* Zero-init: wire_member_at cannot fail on a narrowed event today, but if
+     * it ever did, the `continue` below would leave members[i] as uninitialised
+     * stack that set_window_members still copies (interior hole -> a nick made
+     * of stack garbage). One line closes that narrower/accessor coupling. */
+    struct member members[512] = {0};
     size_t n = count > 512 ? 512 : count;
     for (size_t i = 0; i < n; i++) {
         struct wire_member wm;
