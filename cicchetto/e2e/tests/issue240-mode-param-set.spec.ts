@@ -54,19 +54,24 @@ test("#240 — an op sets +k <key> and +l <n> from the mode modal and the MODE i
     await modal.getByTestId("mode-param-set-k").click();
 
     // Reflected: the server echoed `MODE #chan +k <key>` → modesByChannel
-    // re-seeds → the +k row renders as active with the key value.
-    await expect(modal.locator(".mode-modal-param-row-active").filter({ hasText: key })).toBeVisible(
-      { timeout: 15_000 },
-    );
+    // re-seeds → the +k row renders active with the key value. Assert the row
+    // BY TESTID, not a `.mode-modal-param-row-active` hasText filter: `key`
+    // and `limit` can share a substring (a random `s3cr3t…42…` key vs limit
+    // "42"), so the filter matched BOTH active rows → strict-mode violation
+    // (#446 review, ~1-in-25 flake). Testid is per-letter and collision-free;
+    // the reflected VALUE is still asserted via toContainText.
+    const keyRow = modal.getByTestId("mode-param-row-k");
+    await expect(keyRow).toHaveClass(/mode-modal-param-row-active/, { timeout: 15_000 });
+    await expect(keyRow).toContainText(key);
 
     // --- SET +l <n> from the input ---------------------------------------
     const limitInput = modal.getByTestId("mode-param-input-l");
     await limitInput.fill(limit);
     await modal.getByTestId("mode-param-set-l").click();
 
-    await expect(
-      modal.locator(".mode-modal-param-row-active").filter({ hasText: limit }),
-    ).toBeVisible({ timeout: 15_000 });
+    const limitRow = modal.getByTestId("mode-param-row-l");
+    await expect(limitRow).toHaveClass(/mode-modal-param-row-active/, { timeout: 15_000 });
+    await expect(limitRow).toContainText(limit);
 
     // --- Visible outcome outside the modal -------------------------------
     // Close the modal and confirm the TopicBar mode indicator now shows

@@ -63,7 +63,11 @@ const ParamModeRow: Component<{
   };
 
   return (
-    <div class="mode-modal-param-row" classList={{ "mode-modal-param-row-active": props.active() }}>
+    <div
+      class="mode-modal-param-row"
+      classList={{ "mode-modal-param-row-active": props.active() }}
+      data-testid={`mode-param-row-${props.mode.letter}`}
+    >
       <span class="mode-modal-toggle-flag">+{props.mode.letter}</span>
       <span class="mode-modal-toggle-label">{props.mode.label}</span>
       <Show when={props.active() && props.paramValue() !== null}>
