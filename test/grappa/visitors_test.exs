@@ -185,6 +185,46 @@ defmodule Grappa.VisitorsTest do
       assert second.id == first.id
       assert UserSettings.get_upload_ttl_seconds({:visitor, second.id}) == nil
     end
+
+    test "an existing incognito row keeps its seeded 3600 pref when re-logged-in as non-incognito" do
+      # #426, the flip's OTHER direction (mirror of the test above): a fresh
+      # incognito session seeds 3600, then the SAME nick re-logs-in with
+      # incognito: false. The existing-row branch (`maybe_refresh_ip`) never
+      # re-seeds NOR clears the pref, exactly as it never flips the flag — so
+      # the gentle upload TTL the holder was given survives the re-login. The
+      # existing-row branch touching the pref (either direction) is the
+      # regression this locks.
+      {:ok, first} = Visitors.find_or_provision_anon("flip-ul", @network, "1.2.3.4", true)
+
+      assert UserSettings.get_upload_ttl_seconds({:visitor, first.id}) ==
+               @seeded_incognito_upload_ttl
+
+      {:ok, second} = Visitors.find_or_provision_anon("flip-ul", @network, "1.2.3.4", false)
+
+      # Same row, and the flag is not flipped either (fresh-only), so the
+      # incognito clock and its seeded pref both persist untouched.
+      assert second.id == first.id
+      assert second.incognito == true
+
+      assert UserSettings.get_upload_ttl_seconds({:visitor, second.id}) ==
+               @seeded_incognito_upload_ttl
+    end
+
+    # #426 point 2 (rollback-on-seed-failure) is DELIBERATELY not covered here,
+    # and that is a motivated choice, not an omission — see the issue comment.
+    # The seed cannot be driven to `{:error, changeset}` with real data: it is
+    # called with a valid constant (@incognito_upload_ttl_seconds ≤ max) on a
+    # visitor already inserted in the same transaction, so `get_or_init`'s
+    # `validate_subject_exists` is always `:ok`, the settings insert uses
+    # `on_conflict: :nothing`, and the update is of a valid changeset. The
+    # transaction's all-or-nothing rollback can only be driven by the clause-2
+    # credential collision, which is NOT fixture-reachable: the guard
+    # `resolve_identity_by_nick`/`fetch_visitor_credential_by_nick` shares the
+    # exact partial scope (`WHERE visitor_id IS NOT NULL`) and rfc1459 fold of
+    # the `network_credentials_visitor_folded_nick_network_id_index` it guards,
+    # so it is a genuine concurrency race, not a single-threaded scenario.
+    # Forcing it would need a production seam (design-discipline #4: the
+    # mechanism heavier than the problem) for a P2 regression test.
   end
 
   describe "commit_password/3 (#211 phase 7 — per-network credential)" do
