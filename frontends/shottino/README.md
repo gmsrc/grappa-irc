@@ -113,10 +113,10 @@ Key bindings:
 
 Media link previews:
 
-- Moving the mouse over an image or video link shows a `click to preview:`
-  hint on the chrome line.
-- Left-clicking the link opens a full-screen preview (a still frame for video);
-  press any key to return to the chat.
+- `/preview` opens the most recent image or video link full-screen (a still
+  frame for video); press any key to return to the chat. No mouse needed.
+- With `/mouse on`, hovering an image or video link shows a `click to preview:`
+  hint and left-clicking opens the same preview.
 - A terminal with a graphics protocol (Kitty, iTerm2, Sixel, WezTerm) shows a
   real bitmap. **Every other terminal gets coloured character art instead** —
   the frame is rendered as half-block glyphs, two pixels per cell, in truecolor
@@ -125,12 +125,13 @@ Media link previews:
   `chafa` is used when installed but is not needed.
 - Sixel support cannot be probed reliably. Set `SHOTTINO_GRAPHICS=1` to force
   the bitmap path on a terminal you know supports it.
-- While shottino runs, mouse tracking is enabled, which necessarily suppresses
-  the terminal's own text selection: the terminal forwards button and motion
-  events to shottino instead of selecting. **`/mouse off` turns tracking off and
-  gives selection back** (click-to-preview stops working until `/mouse on`).
-  Shift-drag overrides tracking in most terminals if you only need it
-  occasionally.
+- **Mouse tracking is OFF by default**, so your terminal keeps its own
+  copy/paste selection. Previews are still reachable from the keyboard with
+  `/preview`, which shows the most recent image or video link.
+- `/mouse on` enables tracking, which adds the hover hint and click-to-preview
+  — and necessarily suppresses terminal selection while it is on, because the
+  terminal then forwards button and motion events to shottino instead of
+  selecting. `/mouse off` restores selection; bare `/mouse` toggles.
 
 ## Commands
 

@@ -287,6 +287,9 @@ struct app {
     char input[MAX_LINE];
     size_t input_len;
     char last_url[MAX_LINE];
+    /* Most recent IMAGE/VIDEO link, for keyboard-driven /preview. */
+    char last_media_url[MAX_LINE];
+    bool last_media_is_video;
     char hover_url[MAX_LINE];
     struct link_region link_regions[MAX_LINK_REGIONS];
     size_t link_region_count;
@@ -294,9 +297,11 @@ struct app {
     size_t history_count;
     size_t history_pos;
     struct alias_table aliases;
-    /* Mouse tracking preference. ON by default so click-to-preview works
-     * out of the box; `/mouse off` trades it for the terminal's own text
-     * selection, which tracking necessarily suppresses. */
+    /* Mouse tracking preference. OFF by default: tracking necessarily
+     * suppresses the terminal's own copy/paste selection, and for a
+     * terminal client selection matters far more day-to-day than
+     * click-to-preview — which `/preview` provides from the keyboard
+     * anyway. `/mouse on` opts back in. */
     bool mouse_enabled;
     bool running;
     pthread_mutex_t lock;
@@ -1386,8 +1391,19 @@ static bool message_mentions_me(struct app *app, const char *network, const char
 static void remember_url(struct app *app, const char *body) {
     const char *url = find_url(body);
     if (!url) return;
+    char token[MAX_LINE];
+    copy_url_token(url, token, sizeof(token));
+    enum media_kind kind = media_kind_of(token);
     pthread_mutex_lock(&app->lock);
-    copy_url_token(url, app->last_url, sizeof(app->last_url));
+    snprintf(app->last_url, sizeof(app->last_url), "%s", token);
+    /* Tracked separately from last_url so `/preview` targets the last
+     * IMAGE OR VIDEO rather than whatever link happened to arrive most
+     * recently — a plain link after a picture must not shadow it. This is
+     * what makes previews reachable without the mouse. */
+    if (kind != MEDIA_NONE) {
+        snprintf(app->last_media_url, sizeof(app->last_media_url), "%s", token);
+        app->last_media_is_video = (kind == MEDIA_VIDEO);
+    }
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -4314,8 +4330,28 @@ static void mouse_reporting(bool on) {
 }
 
 /* Apply the user's preference. Used everywhere tracking is (re-)asserted
- * so a `/mouse off` is never silently undone by a preview or a resize. */
-static void mouse_apply(struct app *app) { mouse_reporting(app->mouse_enabled); }
+ * so a `/mouse off` is never silently undone by a preview or a resize.
+ *
+ * BOTH halves are required, and sending only the escape sequences (as the
+ * first attempt at this did) does not work: ncurses OWNS the mouse mode
+ * once `mousemask()` is set non-zero, and re-emits the enable sequence on
+ * its own schedule, so a raw `\033[?1000l` is silently undone and
+ * selection never comes back. Clearing the mask is what actually makes
+ * ncurses stop; the raw sequences then mop up 1003/1006, which it does
+ * not consistently manage. */
+static void mouse_apply(struct app *app) {
+    if (app->mouse_enabled) {
+        mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
+        mouseinterval(0);
+        mouse_reporting(true);
+    } else {
+        mousemask(0, NULL);
+        mouse_reporting(false);
+    }
+    /* ncurses buffers its own output; without this the mode change does
+     * not reach the terminal until the next unrelated repaint. */
+    refresh();
+}
 
 /* Full-screen modal media preview. Both images and videos are normalized to a
  * single PNG frame by ffmpeg (which also does the network fetch + decode),
@@ -4504,7 +4540,8 @@ static void show_help(struct app *app) {
     log_line(app, "watch: /notify [nick...|del nick|list] watches PEOPLE; /hilight pattern, /dehilight pattern watch WORDS (/watch add|del|list is the older spelling)");
     log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
     log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
-    log_line(app, "terminal: /mouse [on|off] — turn off to restore the terminal's own copy/paste selection (disables click-to-preview)");
+    log_line(app, "terminal: mouse tracking is OFF by default so the terminal keeps its own copy/paste selection; /mouse on enables click-to-preview (and suppresses selection), /mouse off restores it");
+    log_line(app, "media: /preview shows the last image/video link without needing the mouse; /open opens the last link externally");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
 
@@ -5006,6 +5043,19 @@ static void handle_command_dispatch(struct app *app, char *line) {
         open_panel(app, PANEL_ADMIN);
     } else if (strcmp(line, "/share") == 0) {
         mint_share_link(app);
+    } else if (strcmp(line, "/preview") == 0) {
+        /* The keyboard route to click-to-preview. With mouse tracking off
+         * by default (so the terminal keeps its own selection), this is
+         * how the preview stays reachable — the feature is not gated on
+         * surrendering copy/paste. */
+        char url[MAX_LINE];
+        bool is_video;
+        pthread_mutex_lock(&app->lock);
+        snprintf(url, sizeof(url), "%s", app->last_media_url);
+        is_video = app->last_media_is_video;
+        pthread_mutex_unlock(&app->lock);
+        if (!url[0]) log_line(app, "/preview: no image or video link seen yet in this session");
+        else preview_media(app, url, is_video);
     } else if (strcmp(line, "/open") == 0) {
         open_external_url(app, app->last_url);
     } else if (strcmp(line, "/clear") == 0) {
@@ -5447,8 +5497,6 @@ static void event_loop(struct app *app) {
     noecho();
     keypad(stdscr, TRUE);
     timeout(50);
-    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
-    mouseinterval(0);
     mouse_apply(app);
     app->running = true;
     while (app->running) {
@@ -5570,7 +5618,7 @@ int main(int argc, char **argv) {
     pthread_mutex_init(&app->jobs_lock, NULL);
     pthread_cond_init(&app->jobs_cond, NULL);
     app->ws.fd = -1;
-    app->mouse_enabled = true;
+    app->mouse_enabled = false;
     char *share_base = NULL, *share_token = NULL;
     const char *server_url;
     if (share_mode) {
