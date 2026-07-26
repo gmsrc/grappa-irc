@@ -37,6 +37,7 @@
 #include "alias.h"
 #include "http.h"
 #include "json.h"
+#include "media.h"
 #include "mirc.h"
 #include "termcolor.h"
 #include "wire.h"
@@ -57,6 +58,17 @@
 #define INPUT_HISTORY 200
 #define PANEL_LINES 256
 #define MAX_LINK_REGIONS 256
+/* How many decoded inline images to keep resident. Scrollback is long;
+ * pictures are not, and each holds either a protocol payload or a pixel
+ * buffer. Oldest slot is recycled. */
+#define MAX_INLINE_MEDIA 24
+/* Sentinel slot id for the full-screen preview, distinct from the inline
+ * pool indices the decode job otherwise receives. */
+#define MEDIA_SLOT_PREVIEW (-2)
+#define INLINE_MAX_ROWS 14
+/* #451/#324 — cap on the deployment's HTTP host aliases retained from
+ * /api/server-settings for first-party media classification. */
+#define MAX_HTTP_ALIASES 16
 
 enum color_pair {
     CP_MAIN = 1,
@@ -211,7 +223,8 @@ enum job_kind {
     JOB_TOPIC,
     JOB_MEMBERS,
     JOB_CLOSE_QUERY,
-    JOB_READ_CURSOR
+    JOB_READ_CURSOR,
+    JOB_MEDIA
 };
 
 struct job {
@@ -241,6 +254,35 @@ enum panel_kind {
     PANEL_ARCHIVE,
     PANEL_SETTINGS,
     PANEL_ADMIN
+};
+
+/* An image attached to a scrollback row.
+ *
+ * Lifecycle is explicit because decoding is ASYNC: the UI thread never
+ * waits on ffmpeg. A row starts IDLE, the draw path promotes it to
+ * FETCHING when it first becomes visible (so we decode what is on screen
+ * rather than everything ever linked), the worker fills it and marks it
+ * READY or FAILED.
+ *
+ * `payload` holds a ready-to-write terminal escape when a graphics
+ * protocol is in use; `rgb` holds pixels when falling back to character
+ * art. Exactly one is populated. */
+enum inline_state { IM_IDLE = 0, IM_FETCHING, IM_READY, IM_FAILED };
+
+struct inline_media {
+    char url[MAX_LINE];
+    bool is_video;
+    enum inline_state state;
+    bool force_ascii;        /* /preview-ascii: skip any graphics protocol */
+    int cols, rows;          /* cell box the image occupies */
+    char *payload;           /* protocol escape bytes, or NULL */
+    size_t payload_len;
+    unsigned char *rgb;      /* art path: cols x (rows*2) RGB24, or NULL */
+    /* Where it was last drawn, so a protocol image is re-emitted only
+     * when its position actually moves. Re-emitting a multi-KB sixel
+     * every 50 ms frame would saturate the tty for no benefit. */
+    int drawn_y, drawn_x;
+    bool drawn;
 };
 
 /* A clickable media link rendered in the chat area. Recorded each draw()
@@ -294,6 +336,25 @@ struct app {
     char hover_url[MAX_LINE];
     struct link_region link_regions[MAX_LINK_REGIONS];
     size_t link_region_count;
+    struct inline_media media[MAX_INLINE_MEDIA];
+    /* The full-screen preview gets its OWN slot so opening one never
+     * evicts an inline image that is currently on screen. */
+    struct inline_media preview;
+    bool preview_pending;
+    size_t media_count;
+    size_t media_next;              /* recycle cursor */
+    /* Index into `media` per log row, or -1. Parallel to log[] like the
+     * mention/pending/id arrays. */
+    int log_media[LOG_LINES];
+    media_protocol proto;           /* detected once, before ncurses */
+    bool inline_media_enabled;
+    /* #451/#324 — this deployment's HTTP host aliases (from
+     * /api/server-settings). With app->url.host they define which
+     * /uploads/ links are first-party and may auto-render inline; every
+     * other peer URL stays click-to-preview. Empty = restrictive (only
+     * the connect host). The shottino twin of cic's mediaLink.ts set. */
+    char http_host_aliases[MAX_HTTP_ALIASES][256];
+    size_t http_host_alias_count;
     char history[INPUT_HISTORY][MAX_LINE];
     size_t history_count;
     size_t history_pos;
@@ -386,12 +447,14 @@ static void log_line(struct app *app, const char *fmt, ...) {
         memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
         memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
         memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
+        memmove(app->log_media, app->log_media + 1, sizeof(app->log_media[0]) * (LOG_LINES - 1));
         app->log_count--;
     }
     app->log[app->log_count] = s;
     app->log_mentions[app->log_count] = false;
     app->log_pending[app->log_count] = false;
     app->log_ids[app->log_count] = 0;
+    app->log_media[app->log_count] = -1;
     app->log_count++;
     pthread_mutex_unlock(&app->lock);
 }
@@ -416,12 +479,14 @@ static void log_line_mention(struct app *app, bool mention, const char *fmt, ...
         memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
         memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
         memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
+        memmove(app->log_media, app->log_media + 1, sizeof(app->log_media[0]) * (LOG_LINES - 1));
         app->log_count--;
     }
     app->log[app->log_count] = s;
     app->log_mentions[app->log_count] = mention;
     app->log_pending[app->log_count] = false;
     app->log_ids[app->log_count] = 0;
+    app->log_media[app->log_count] = -1;
     app->log_count++;
     pthread_mutex_unlock(&app->lock);
 }
@@ -440,12 +505,14 @@ static void add_pending_echo(struct app *app, const char *network, const char *c
         memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
         memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
         memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
+        memmove(app->log_media, app->log_media + 1, sizeof(app->log_media[0]) * (LOG_LINES - 1));
         app->log_count--;
     }
     app->log[app->log_count] = line;
     app->log_mentions[app->log_count] = false;
     app->log_pending[app->log_count] = true;
     app->log_ids[app->log_count] = 0;
+    app->log_media[app->log_count] = -1;
     app->log_count++;
     if (app->pending_count < sizeof(app->pending) / sizeof(app->pending[0])) {
         struct pending_echo *p = &app->pending[app->pending_count++];
@@ -480,35 +547,6 @@ static void clear_matching_pending_echo(struct app *app, const char *network, co
         }
     }
     pthread_mutex_unlock(&app->lock);
-}
-
-static bool has_matching_pending_echo(struct app *app, const char *network, const char *channel, const char *body) {
-    bool found = false;
-    pthread_mutex_lock(&app->lock);
-    for (size_t i = 0; i < app->pending_count; i++) {
-        if (strcmp(app->pending[i].network, network) == 0 && strcmp(app->pending[i].channel, channel) == 0 && strcmp(app->pending[i].body, body) == 0) {
-            found = true;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&app->lock);
-    return found;
-}
-
-static bool has_matching_confirmed_line(struct app *app, const char *network, const char *channel, const char *sender, const char *body) {
-    char key[MAX_SLUG + MAX_CHANNEL + 8];
-    snprintf(key, sizeof(key), "[%s/%s]", network, channel);
-    bool found = false;
-    pthread_mutex_lock(&app->lock);
-    for (size_t i = 0; i < app->log_count; i++) {
-        if (app->log_pending[i]) continue;
-        if (strncmp(app->log[i], key, strlen(key)) == 0 && strstr(app->log[i], sender) && strstr(app->log[i], body)) {
-            found = true;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&app->lock);
-    return found;
 }
 
 /* Caller holds app->lock. */
@@ -1096,6 +1134,11 @@ static void clear_active_window_log(struct app *app) {
             app->log[write_i] = app->log[read_i];
             app->log_mentions[write_i] = app->log_mentions[read_i];
             app->log_pending[write_i] = app->log_pending[read_i];
+            /* These two were missed when the parallel arrays were added:
+             * compacting the log without them left the unread divider and
+             * the inline images bound to the WRONG rows after a /clear. */
+            app->log_ids[write_i] = app->log_ids[read_i];
+            app->log_media[write_i] = app->log_media[read_i];
         }
         write_i++;
     }
@@ -1157,9 +1200,28 @@ static void set_window_topic(struct app *app, const char *network, const char *c
 }
 
 static void remember_url(struct app *app, const char *body);
+static const char *find_url(const char *s);
+static size_t copy_url_token(const char *url, char *out, size_t out_size);
+/* Defined here rather than beside media_kind_of(): the scrollback attach
+ * path needs the complete type, and a forward declaration cannot give it
+ * a size. */
+enum media_kind { MEDIA_NONE = 0, MEDIA_IMAGE, MEDIA_VIDEO };
+static enum media_kind media_kind_of(const char *url);
+static int media_claim_locked(struct app *app, const char *url, bool is_video);
 static bool message_mentions_me(struct app *app, const char *network, const char *sender, const char *body);
 static bool nick_case_equal(const char *a, const char *b);
 static const char *own_nick_for_network(struct app *app, const char *network);
+
+/* Adapter: classify `url` against this deployment's host set (connect
+ * host + server aliases). The classification LOGIC is the tested pure
+ * media_url_is_first_party in media.c; this only marshals app state to it
+ * (the 2-D alias store into a pointer array). */
+static bool url_is_first_party(struct app *app, const char *url) {
+    const char *ptrs[MAX_HTTP_ALIASES];
+    for (size_t i = 0; i < app->http_host_alias_count; i++)
+        ptrs[i] = app->http_host_aliases[i];
+    return media_url_is_first_party(url, app->url.host, ptrs, app->http_host_alias_count);
+}
 
 /* Render one scrollback row.
  *
@@ -1228,10 +1290,23 @@ static void render_message(struct app *app, const struct wire_scrollback_message
         add_window_ex(app, network, display_channel, false);
     }
 
-    bool had_pending = has_matching_pending_echo(app, network, channel, body);
-    if (!had_pending && !live && has_matching_confirmed_line(app, network, display_channel, sender, body)) return;
-    clear_matching_pending_echo(app, network, display_channel, body);
-
+    /* Dedup by ID, BEFORE mutating anything.
+     *
+     * Every message we send arrives TWICE: once as the POST /messages
+     * response (worker thread), once as the `message` wire event
+     * (socket). Both carry the same scrollback id, so the id IS the
+     * identity — and the check has to come first.
+     *
+     * The previous order cleared a matching pending echo and only THEN
+     * discovered the row was a duplicate, returning without rendering.
+     * Because the echo was matched by BODY TEXT, the second delivery of
+     * one message deleted the "[sending]" line of a DIFFERENT message
+     * that merely said the same thing. Send "ok" twice and the second
+     * vanished, reappearing only when some later delivery happened to
+     * land — which is exactly "I don't see my message until another one
+     * arrives".
+     *
+     * A duplicate delivery must be inert. */
     if (id > 0 && network[0] && channel[0]) {
         pthread_mutex_lock(&app->lock);
         for (size_t i = 0; i < app->seen_count; i++) {
@@ -1248,6 +1323,12 @@ static void render_message(struct app *app, const struct wire_scrollback_message
         if (app->seen_count < SEEN_MESSAGES) app->seen_count++;
         pthread_mutex_unlock(&app->lock);
     }
+
+    /* Only now that the row is known to be NEW, retire its optimistic
+     * echo. Matching by text is still imprecise when two pending messages
+     * say the same thing, but it can no longer delete a line without
+     * putting the confirmed one in its place. */
+    clear_matching_pending_echo(app, network, display_channel, body);
 
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
@@ -1287,6 +1368,24 @@ static void render_message(struct app *app, const struct wire_scrollback_message
      * divider lands on the exact row the server's cursor names rather
      * than being guessed from position. */
     if (app->log_count > 0) app->log_ids[app->log_count - 1] = id;
+    /* Attach an image slot when the row carries one. Claiming is cheap —
+     * DECODING is deferred until the row is actually on screen. */
+    if (app->log_count > 0 && conversational) {
+        const char *u = find_url(body);
+        if (u) {
+            char tok[MAX_LINE];
+            copy_url_token(u, tok, sizeof(tok));
+            enum media_kind mk = media_kind_of(tok);
+            /* #451: auto-render inline ONLY for first-party /uploads/
+             * links — grappa's own store (host in {connect host} ∪ the
+             * server alias set, the same rule as cic's mediaLink.ts).
+             * Every other peer http(s) URL stays click-to-preview: no
+             * automatic ffmpeg fetch on scroll (the H1 fix). */
+            if (mk != MEDIA_NONE && url_is_first_party(app, tok))
+                app->log_media[app->log_count - 1] =
+                    media_claim_locked(app, tok, mk == MEDIA_VIDEO);
+        }
+    }
     if (!app->scrollback_pinned) app->scrollback_offset = 0;
     pthread_mutex_unlock(&app->lock);
 }
@@ -1327,8 +1426,6 @@ static bool token_has_suffix(const char *token, const char *const *exts) {
     }
     return false;
 }
-
-enum media_kind { MEDIA_NONE = 0, MEDIA_IMAGE, MEDIA_VIDEO };
 
 /* Classify a URL by extension (and grappa's /uploads/ image convention) in a
  * single lowercasing pass. Video is checked first so an extension wins over the
@@ -1501,11 +1598,12 @@ static int wrapped_text_lines_visible(const char *s, int width) {
  * of exhausting the table on the first screenful. */
 #define CP_MIRC_BASE 40
 
+#define MIRC_PAIR_POOL 4096
 static struct {
     short fg;
     short bg;
     short pair;
-} mirc_pairs[216];
+} mirc_pairs[MIRC_PAIR_POOL];
 static size_t mirc_pair_count;
 static short mirc_pair_next = CP_MIRC_BASE;
 static short mirc_pair_limit;
@@ -1513,8 +1611,15 @@ static short mirc_pair_limit;
 static void mirc_colors_init(void) {
     /* Leave headroom below the cap: exhausting COLOR_PAIRS makes
      * init_pair fail silently and text renders in the last pair set. */
-    mirc_pair_limit = (short)(COLOR_PAIRS > 256 ? 256 : COLOR_PAIRS);
-    if (mirc_pair_limit > (short)(CP_MIRC_BASE + 216)) mirc_pair_limit = CP_MIRC_BASE + 216;
+    /* Inline image art needs one pair per (top,bottom) colour pair in the
+     * picture, which is far more than coloured TEXT ever asks for. A
+     * 256-colour terminal reports COLOR_PAIRS in the tens of thousands, so
+     * the old 256 cap was needlessly tight and would have made every
+     * image collapse onto the fallback pair after the first few rows. */
+    long cap = COLOR_PAIRS > 0 ? COLOR_PAIRS - 1 : 0;
+    if (cap > CP_MIRC_BASE + MIRC_PAIR_POOL) cap = CP_MIRC_BASE + MIRC_PAIR_POOL;
+    if (cap > 32000) cap = 32000; /* short */
+    mirc_pair_limit = (short)cap;
 }
 
 /* Quantisation lives in termcolor.[ch]; the choice of WHICH quantiser is
@@ -1540,7 +1645,7 @@ static int mirc_pair_for(long fg_rgb, long bg_rgb, int fallback_pair) {
     short bg = bg_rgb < 0 ? (short)-1 : mirc_terminal_color(bg_rgb);
     for (size_t i = 0; i < mirc_pair_count; i++)
         if (mirc_pairs[i].fg == fg && mirc_pairs[i].bg == bg) return mirc_pairs[i].pair;
-    if (mirc_pair_next >= mirc_pair_limit || mirc_pair_count >= 216) return fallback_pair;
+    if (mirc_pair_next >= mirc_pair_limit || mirc_pair_count >= MIRC_PAIR_POOL) return fallback_pair;
     short pair = mirc_pair_next++;
     if (init_pair(pair, fg, bg) == ERR) return fallback_pair;
     mirc_pairs[mirc_pair_count].fg = fg;
@@ -3381,6 +3486,88 @@ static void ws_pump(struct app *app) {
     }
 }
 
+/* Draw a decoded image at (y, x).
+ *
+ * Character art goes through ncurses like any other text, so it
+ * participates in normal repaint and scrolling — no special handling.
+ * A protocol image cannot: ncurses knows nothing about it, so the escape
+ * is written directly and only when the picture MOVES. That works
+ * precisely because ncurses repaints changed cells only; the cells under
+ * an image stay blank in its model, so it leaves them alone.
+ *
+ * Caller holds app->lock. */
+static void draw_inline_media(struct inline_media *m, int y, int x, int max_rows,
+                              int max_cols) {
+    if (m->state != IM_READY || m->rows <= 0) return;
+    /* Clamp BOTH axes. The cell box was fitted when the row was first
+     * measured; a terminal resize since then leaves it stale, and an
+     * image that overruns its box writes over the member pane or past
+     * the scroll region. */
+    int rows = m->rows > max_rows ? max_rows : m->rows;
+    int cols = m->cols > max_cols ? max_cols : m->cols;
+    if (rows <= 0 || cols <= 0) return;
+
+    if (m->rgb) {
+        /* Half blocks: two image rows per cell, upper glyph in the top
+         * pixel's colour over the bottom pixel's. */
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                const unsigned char *top = m->rgb + (((size_t)(r * 2) * m->cols) + c) * 3;
+                const unsigned char *bot = m->rgb + (((size_t)(r * 2 + 1) * m->cols) + c) * 3;
+                long tv = ((long)top[0] << 16) | ((long)top[1] << 8) | top[2];
+                long bv = ((long)bot[0] << 16) | ((long)bot[1] << 8) | bot[2];
+                int pair = mirc_pair_for(tv, bv, CP_MAIN);
+                attron(COLOR_PAIR(pair));
+                mvaddstr(y + r, x + c, "\u2580");
+                attroff(COLOR_PAIR(pair));
+            }
+        }
+        return;
+    }
+
+    if (m->payload) {
+        /* Reserve the cells so ncurses does not paint over the picture,
+         * then place it. Re-emitted only when the position changed. */
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++) mvaddch(y + r, x + c, ' ');
+        if (!m->drawn || m->drawn_y != y || m->drawn_x != x) {
+            refresh();
+            printf("\033[%d;%dH", y + 1, x + 1); /* 1-based cursor address */
+            fwrite(m->payload, 1, m->payload_len, stdout);
+            fflush(stdout);
+            m->drawn = true;
+            m->drawn_y = y;
+            m->drawn_x = x;
+        }
+    }
+}
+
+/* Rows a message's image adds, by state.
+ *
+ * ONE definition, used by BOTH the measuring pass (which sizes the scroll
+ * region) and the draw pass (which consumes the rows). They disagreed:
+ * measuring reserved the full picture height for an image that was still
+ * LOADING, while drawing spent a single line on the placeholder. That
+ * inflated total_visible_lines, which inflated the scroll offset, which
+ * made the draw loop skip rows that should have been on screen — a chat
+ * window that goes blank and stays blank while a decode is slow or
+ * wedged. Two numbers that must agree belong in one function.
+ *
+ * Caller holds app->lock, which draw() holds for the whole frame, so a
+ * worker cannot flip the state between the two passes. */
+static int media_extra_rows(const struct inline_media *m) {
+    if (!m) return 0;
+    switch (m->state) {
+    case IM_READY:
+        return m->rows;
+    case IM_IDLE:     /* promoted to FETCHING by the draw pass */
+    case IM_FETCHING: /* "[loading image…]" */
+    case IM_FAILED:   /* "[image could not be decoded…]" */
+        return 1;
+    }
+    return 0;
+}
+
 /* One-character marker for a non-joined window state. A joined window (or
  * one whose state the server has not told us yet) gets a blank, so only
  * genuinely-abnormal windows draw the eye. */
@@ -3410,6 +3597,50 @@ static const char *window_state_label(enum window_state state) {
     case WS_UNKNOWN: return NULL;
     }
     return NULL;
+}
+
+/* ── Inline media ──────────────────────────────────────────────────────
+ *
+ * Decoding is asynchronous by construction: the UI thread only ever
+ * allocates a slot and reads a finished one. ffmpeg runs on the worker,
+ * which is why a picture arriving no longer freezes the client the way
+ * the old synchronous preview did.
+ *
+ * Slots are claimed lazily from the DRAW path — a row's image is fetched
+ * the first time it is actually on screen. Scrollback holds thousands of
+ * rows; decoding every link ever seen would burn CPU and bandwidth on
+ * pictures nobody scrolled to. */
+
+static void media_decode_job(struct app *app, int slot);
+static bool enqueue_job(struct app *app, struct job job);
+
+static void media_slot_reset(struct inline_media *m) {
+    free(m->payload);
+    free(m->rgb);
+    memset(m, 0, sizeof(*m));
+}
+
+/* Claim a slot for `url`, recycling the oldest when full. Caller holds
+ * app->lock. Returns the index, or -1 when inline media is off. */
+static int media_claim_locked(struct app *app, const char *url, bool is_video) {
+    if (!app->inline_media_enabled) return -1;
+    size_t idx;
+    if (app->media_count < MAX_INLINE_MEDIA) {
+        idx = app->media_count++;
+    } else {
+        idx = app->media_next;
+        app->media_next = (app->media_next + 1) % MAX_INLINE_MEDIA;
+        /* Any log row still pointing at the recycled slot must let go, or
+         * it would render someone else's picture. */
+        for (size_t i = 0; i < app->log_count; i++)
+            if (app->log_media[i] == (int)idx) app->log_media[i] = -1;
+    }
+    struct inline_media *m = &app->media[idx];
+    media_slot_reset(m);
+    snprintf(m->url, sizeof(m->url), "%s", url);
+    m->is_video = is_video;
+    m->state = IM_IDLE;
+    return (int)idx;
 }
 
 /* Record the screen rectangle of a media link so a later mouse event can map
@@ -3555,12 +3786,36 @@ static void draw(struct app *app) {
     size_t visible[LOG_LINES];
     int heights[LOG_LINES];
     size_t visible_count = 0;
+    static int text_heights[LOG_LINES];
     int total_visible_lines = 0;
     for (size_t i = 0; i < app->log_count; i++) {
         if (strncmp(app->log[i], "[", 1) != 0 || strncmp(app->log[i], wanted_prefix, strlen(wanted_prefix)) == 0) {
             visible[visible_count] = i;
             heights[visible_count] = message_display_lines(app->log[i], main_w - 2);
             if (heights[visible_count] < 1) heights[visible_count] = 1;
+            /* The TEXT height, kept apart from the total below. Conflating
+             * the two put the image after text+image rows instead of
+             * after the text, and double-counted it in used_lines — which
+             * pushed later rows past the scroll region and over the input
+             * box, leaving the client looking dead. */
+            text_heights[visible_count] = heights[visible_count];
+            /* An image reserves rows UNDER its message line. The height is
+             * known before the picture is decoded (the cell box is chosen
+             * from the available width), so the layout does not jump when
+             * the decode lands. */
+            int mi = app->log_media[i];
+            if (mi >= 0 && mi < (int)app->media_count) {
+                struct inline_media *m = &app->media[mi];
+                if (m->rows <= 0) {
+                    int box_rows = INLINE_MAX_ROWS;
+                    if (box_rows > scroll_h / 2) box_rows = scroll_h / 2;
+                    if (box_rows < 3) box_rows = 3;
+                    /* Aspect is unknown until decode; assume 4:3, which is
+                     * close enough that the reserved box rarely changes. */
+                    media_fit_cells(4, 3, main_w - 4, box_rows, &m->cols, &m->rows);
+                }
+                heights[visible_count] += media_extra_rows(m);
+            }
             total_visible_lines += heights[visible_count];
             visible_count++;
         }
@@ -3581,7 +3836,7 @@ static void draw(struct app *app) {
             continue;
         }
         int available = scroll_h - used_lines;
-        int draw_lines = heights[vi];
+        int draw_lines = text_heights[vi];
         if (draw_lines > available) draw_lines = available;
         if (draw_lines <= 0) break;
         int msg_y = scroll_y + used_lines;
@@ -3611,6 +3866,36 @@ static void draw(struct app *app) {
             copy_url_token(msg_url, url_tok, sizeof(url_tok));
             add_link_region(app, msg_y, msg_y + draw_lines - 1, main_x + 1,
                             main_x + main_w - 2, url_tok, mk == MEDIA_VIDEO);
+        }
+        /* Draw the row's image beneath it, and kick off its decode the
+         * first time it is on screen — lazy by design, so scrollback full
+         * of links costs nothing until you scroll to them. */
+        int mi = app->log_media[i];
+        if (mi >= 0 && mi < (int)app->media_count) {
+            struct inline_media *m = &app->media[mi];
+            if (m->state == IM_IDLE && m->cols > 0) {
+                m->state = IM_FETCHING;
+                struct job mj = {.kind = JOB_MEDIA};
+                snprintf(mj.arg1, sizeof(mj.arg1), "%d", mi);
+                enqueue_job(app, mj);
+            }
+            int img_y = msg_y + draw_lines;
+            int room = scroll_y + scroll_h - img_y;
+            /* Spend exactly what the measuring pass reserved, clamped to
+             * the room actually left. */
+            int want = media_extra_rows(m);
+            int spend = want < room ? want : room;
+            if (spend > 0) {
+                if (m->state == IM_READY) {
+                    draw_inline_media(m, img_y, main_x + 2, spend, main_w - 4);
+                } else if (m->state == IM_FAILED) {
+                    draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM,
+                              "  [image could not be decoded — /open to view externally]");
+                } else {
+                    draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM, "  [loading image…]");
+                }
+                used_lines += spend;
+            }
         }
         used_lines += draw_lines;
         skip_lines = 0;
@@ -3959,6 +4244,9 @@ static void *worker_main(void *arg) {
         case JOB_READ_CURSOR:
             push_read_cursor(app, job.network, job.channel, strtol(job.arg1, NULL, 10));
             break;
+        case JOB_MEDIA:
+            media_decode_job(app, (int)strtol(job.arg1, NULL, 10));
+            break;
         case JOB_SEND: {
             send_message_target(app, job.network, job.channel, job.arg1);
             break;
@@ -4225,26 +4513,6 @@ static void open_external_url(struct app *app, const char *url) {
     log_line(app, "opened %s", url);
 }
 
-/* Search PATH for an executable named `name` (no shell, no PATH injection). */
-static bool tool_on_path(const char *name) {
-    const char *path = getenv("PATH");
-    if (!path || !path[0]) path = "/usr/bin:/bin";
-    char buf[PATH_MAX];
-    const char *p = path;
-    while (*p) {
-        const char *colon = strchr(p, ':');
-        size_t dir_len = colon ? (size_t)(colon - p) : strlen(p);
-        if (dir_len > 0 && dir_len + 1 + strlen(name) + 1 < sizeof(buf)) {
-            memcpy(buf, p, dir_len);
-            buf[dir_len] = '/';
-            snprintf(buf + dir_len + 1, sizeof(buf) - dir_len - 1, "%s", name);
-            if (access(buf, X_OK) == 0) return true;
-        }
-        if (!colon) break;
-        p = colon + 1;
-    }
-    return false;
-}
 
 /* Run argv[0] with execvp (no shell). stderr always discarded; stdout goes to
  * the controlling terminal when `inherit_stdout` (so chafa can paint), else to
@@ -4349,108 +4617,243 @@ static void mouse_apply(struct app *app) {
  * (Kitty > iTerm2 > Sixel > symbols). Falls back to xdg-open when either tool
  * is absent or the frame extraction fails. Blocks until a key is pressed; the
  * caller's next draw() repaints the chat, clearing the preview. */
-/* Built-in preview path: ffmpeg decodes straight to raw RGB at the exact
- * cell grid, and we draw it ourselves. This is what makes a preview work
- * with NO chafa installed at all — previously a missing chafa meant no
- * preview, just an external browser launch. */
-static bool preview_builtin(const char *url, const char *dir, int cols, int rows,
-                            term_color_depth depth) {
-    /* Two source pixels per cell row, so ask ffmpeg for double height.
-     * `format=rgb24` before scale keeps the pixel layout predictable
-     * regardless of the source's colour space. */
-    int px_w = cols;
-    int px_h = rows * 2;
-    if (px_w < 2 || px_h < 2) return false;
+/* Decode one inline image on the WORKER thread.
+ *
+ * Two output shapes, chosen by protocol:
+ *   kitty / iTerm2 — a PNG, which the terminal decodes itself;
+ *   sixel / art    — raw RGB24 at the exact pixel grid we will draw.
+ *
+ * Either way ffmpeg does the fetch, decode and scale in one pass, and the
+ * `thumbnail` filter picks a representative frame so a video does not
+ * render as a black leader frame.
+ *
+ * Runs entirely off the UI thread; the only shared-state touch is the
+ * short critical section at the end that publishes the result. */
+static void media_decode_job(struct app *app, int slot) {
+    if (slot != MEDIA_SLOT_PREVIEW && (slot < 0 || slot >= MAX_INLINE_MEDIA)) return;
 
-    char raw[PATH_MAX];
-    snprintf(raw, sizeof(raw), "%s/frame.rgb", dir);
-    /* Fit inside the grid preserving aspect, then pad to the exact size so
-     * the raw buffer length is known up front. */
-    char scale[192];
-    snprintf(scale, sizeof(scale), "thumbnail,scale=%d:%d:force_original_aspect_ratio=decrease,"
-                                   "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
-             px_w, px_h, px_w, px_h);
-    char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
-                    "-i", (char *)url, "-vf", scale, "-frames:v", "1",
-                    "-f", "rawvideo", "-pix_fmt", "rgb24", raw, NULL};
-    if (run_cmd(argv, false) != 0) return false;
+    char url[MAX_LINE];
+    media_protocol proto;
+    int cols, rows;
+    pthread_mutex_lock(&app->lock);
+    struct inline_media *m =
+        (slot == MEDIA_SLOT_PREVIEW) ? &app->preview : &app->media[slot];
+    snprintf(url, sizeof(url), "%s", m->url);
+    /* /preview-ascii forces the pixel path regardless of what the
+     * terminal can do. */
+    proto = m->force_ascii ? MEDIA_PROTO_NONE : app->proto;
+    cols = m->cols;
+    rows = m->rows;
+    pthread_mutex_unlock(&app->lock);
+    if (!url[0] || cols <= 0 || rows <= 0) return;
 
-    size_t want = (size_t)px_w * (size_t)px_h * 3;
-    unsigned char *buf = malloc(want);
-    if (!buf) return false;
-    FILE *f = fopen(raw, "rb");
-    if (!f) {
-        free(buf);
-        return false;
+    char dir[] = "/tmp/shottino-media-XXXXXX";
+    if (!mkdtemp(dir)) return;
+
+    bool ok = false;
+    char *payload = NULL;
+    size_t payload_len = 0;
+    unsigned char *rgb = NULL;
+
+    if (proto == MEDIA_PROTO_KITTY || proto == MEDIA_PROTO_ITERM2) {
+        /* Let the terminal scale: ask ffmpeg for a reasonable pixel size
+         * and pass the CELL box in the escape. */
+        char png[PATH_MAX];
+        snprintf(png, sizeof(png), "%s/m.png", dir);
+        char scale[96];
+        snprintf(scale, sizeof(scale), "thumbnail,scale=%d:-1:flags=lanczos", cols * 8);
+        char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
+                        /* #451: fetch untrusted peer media, so bound ffmpeg to the
+                         * protocols this path actually needs — file (temp output),
+                         * http/https + tcp/tls/crypto (the fetch). Blocks the
+                         * concat/hls/rtp/data/pipe demuxers a hostile URL could
+                         * otherwise reach. Input option, so it precedes -i. */
+                        "-protocol_whitelist", "file,crypto,tcp,tls,http,https",
+                        "-i", url, "-vf", scale, "-frames:v", "1", png, NULL};
+        if (run_cmd(argv, false) == 0) {
+            FILE *f = fopen(png, "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long n = ftell(f);
+                rewind(f);
+                if (n > 0 && n < 8L * 1024 * 1024) {
+                    unsigned char *buf = malloc((size_t)n);
+                    if (buf && fread(buf, 1, (size_t)n, f) == (size_t)n) {
+                        char *mem = NULL;
+                        size_t mem_len = 0;
+                        FILE *ms = open_memstream(&mem, &mem_len);
+                        if (ms) {
+                            ok = (proto == MEDIA_PROTO_KITTY)
+                                     ? media_emit_kitty(buf, (size_t)n, cols, rows, ms)
+                                     : media_emit_iterm2(buf, (size_t)n, cols, rows, ms);
+                            fclose(ms);
+                            if (ok) { payload = mem; payload_len = mem_len; }
+                            else free(mem);
+                        }
+                    }
+                    free(buf);
+                }
+                fclose(f);
+            }
+            unlink(png);
+        }
+    } else {
+        /* Sixel and character art both want pixels. Two source rows per
+         * cell row: sixel draws at pixel resolution, and the art renderer
+         * packs two pixels into one cell as a half block. */
+        int px_w = cols, px_h = rows * 2;
+        if (proto == MEDIA_PROTO_SIXEL) { px_w = cols * 6; px_h = rows * 12; }
+        char raw[PATH_MAX];
+        snprintf(raw, sizeof(raw), "%s/m.rgb", dir);
+        char scale[192];
+        snprintf(scale, sizeof(scale),
+                 "thumbnail,scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,"
+                 "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
+                 px_w, px_h, px_w, px_h);
+        char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
+                        /* #451: fetch untrusted peer media, so bound ffmpeg to the
+                         * protocols this path actually needs — file (temp output),
+                         * http/https + tcp/tls/crypto (the fetch). Blocks the
+                         * concat/hls/rtp/data/pipe demuxers a hostile URL could
+                         * otherwise reach. Input option, so it precedes -i. */
+                        "-protocol_whitelist", "file,crypto,tcp,tls,http,https",
+                        "-i", url, "-vf", scale, "-frames:v", "1",
+                        "-f", "rawvideo", "-pix_fmt", "rgb24", raw, NULL};
+        if (run_cmd(argv, false) == 0) {
+            size_t want = (size_t)px_w * (size_t)px_h * 3;
+            unsigned char *buf = malloc(want);
+            FILE *f = buf ? fopen(raw, "rb") : NULL;
+            if (f) {
+                if (fread(buf, 1, want, f) == want) {
+                    if (proto == MEDIA_PROTO_SIXEL) {
+                        char *mem = NULL;
+                        size_t mem_len = 0;
+                        FILE *ms = open_memstream(&mem, &mem_len);
+                        if (ms) {
+                            ok = media_emit_sixel(buf, px_w, px_h, ms);
+                            fclose(ms);
+                            if (ok) { payload = mem; payload_len = mem_len; }
+                            else free(mem);
+                        }
+                        free(buf);
+                        buf = NULL;
+                    } else {
+                        rgb = buf;
+                        buf = NULL;
+                        ok = true;
+                    }
+                }
+                fclose(f);
+            }
+            free(buf);
+            unlink(raw);
+        }
     }
-    size_t got = fread(buf, 1, want, f);
-    fclose(f);
-    unlink(raw);
-    if (got != want) {
-        free(buf);
-        return false;
+    rmdir(dir);
+
+    pthread_mutex_lock(&app->lock);
+    m = (slot == MEDIA_SLOT_PREVIEW) ? &app->preview : &app->media[slot];
+    /* The slot may have been recycled while ffmpeg ran; publishing then
+     * would attach this picture to a different message. */
+    if (strcmp(m->url, url) == 0 && m->state == IM_FETCHING) {
+        m->payload = payload;
+        m->payload_len = payload_len;
+        m->rgb = rgb;
+        m->state = ok ? IM_READY : IM_FAILED;
+        m->drawn = false;
+    } else {
+        free(payload);
+        free(rgb);
     }
-    termcolor_render_rgb(buf, px_w, px_h, depth, stdout);
-    free(buf);
-    return true;
+    pthread_mutex_unlock(&app->lock);
 }
 
-static void preview_media(struct app *app, const char *url, bool is_video) {
-    if (!url || !url[0]) return;
-    /* ffmpeg is the only hard requirement: it is what fetches and decodes
-     * the media. chafa is now optional — without it we draw the frame
-     * ourselves as coloured half-blocks. */
-    if (!tool_on_path("ffmpeg")) {
-        log_line(app, "preview needs 'ffmpeg' on PATH — opening externally");
-        open_external_url(app, url);
+
+/* Full-screen preview. `force_ascii` bypasses any graphics protocol and
+ * renders character art — the `/preview-ascii` path. */
+/* ── Full-screen preview, decoded off the UI thread ────────────────────
+ *
+ * The old preview ran ffmpeg inline: `/preview` froze the whole client
+ * for as long as the fetch and decode took, which on a large image over a
+ * slow link is seconds of a dead terminal. It reused the same modal
+ * takeover for the display, so the two were welded together.
+ *
+ * They are split now. `request_preview` claims a slot sized to the screen
+ * and hands the decode to the worker — the client keeps drawing, chat
+ * keeps arriving, input keeps working. The event loop notices when the
+ * slot is ready and only THEN takes the screen over.
+ *
+ * chafa is no longer used: with a dithered sixel encoder and the
+ * half-block renderer in-tree there is no reason to keep a second,
+ * differently-tuned path that may or may not be installed. */
+static void request_preview(struct app *app, const char *url, bool is_video, bool force_ascii) {
+    int rows_avail = LINES > 4 ? LINES - 3 : 1;
+    int cols_avail = COLS > 4 ? COLS - 2 : 1;
+
+    pthread_mutex_lock(&app->lock);
+    /* Reuse the dedicated preview slot rather than competing with the
+     * inline pool, so opening a preview never evicts an image that is on
+     * screen. */
+    struct inline_media *m = &app->preview;
+    media_slot_reset(m);
+    snprintf(m->url, sizeof(m->url), "%s", url);
+    m->is_video = is_video;
+    m->force_ascii = force_ascii;
+    /* Aspect is unknown until decode; ffmpeg letterboxes into this box. */
+    m->cols = cols_avail;
+    m->rows = rows_avail;
+    m->state = IM_FETCHING;
+    app->preview_pending = true;
+    pthread_mutex_unlock(&app->lock);
+
+    struct job job = {.kind = JOB_MEDIA};
+    snprintf(job.arg1, sizeof(job.arg1), "%d", MEDIA_SLOT_PREVIEW);
+    enqueue_job(app, job);
+    log_line(app, "preparing preview of %.60s%s", url, force_ascii ? " (ascii)" : "");
+}
+
+/* Display an already-decoded preview. Runs on the UI thread — it owns the
+ * screen — but does no fetching, so the takeover is brief. */
+static void show_preview(struct app *app) {
+    char url[MAX_LINE];
+    bool is_video, ok;
+    char *payload = NULL;
+    size_t payload_len = 0;
+    unsigned char *rgb = NULL;
+    int cols, rows;
+
+    pthread_mutex_lock(&app->lock);
+    struct inline_media *m = &app->preview;
+    snprintf(url, sizeof(url), "%s", m->url);
+    is_video = m->is_video;
+    ok = (m->state == IM_READY);
+    /* Take ownership of the buffers so the modal can run without the
+     * lock and without the worker recycling them underneath it. */
+    payload = m->payload;
+    payload_len = m->payload_len;
+    rgb = m->rgb;
+    cols = m->cols;
+    rows = m->rows;
+    m->payload = NULL;
+    m->rgb = NULL;
+    m->state = IM_IDLE;
+    app->preview_pending = false;
+    pthread_mutex_unlock(&app->lock);
+
+    if (!ok) {
+        log_line(app, "preview: could not decode %.60s — /open to view externally", url);
+        free(payload);
+        free(rgb);
         return;
-    }
-
-    char dir[] = "/tmp/shottino-preview-XXXXXX";
-    if (!mkdtemp(dir)) {
-        log_line(app, "preview: failed to create temp dir — opening externally");
-        open_external_url(app, url);
-        return;
-    }
-    char png[PATH_MAX];
-    snprintf(png, sizeof(png), "%s/frame.png", dir);
-
-    bool have_chafa = tool_on_path("chafa");
-    bool graphics = termcolor_has_graphics();
-    term_color_depth depth = termcolor_detect_depth();
-
-    /* Only the chafa path needs a PNG; the built-in renderer decodes
-     * straight to raw RGB later, at the exact cell grid. */
-    if (have_chafa) {
-        /* ffmpeg fetches + decodes the URL and writes one representative frame.
-         * The thumbnail filter picks a non-leader frame for video and is a no-op
-         * pass-through for a still image, so one pipeline covers both (and avoids a
-         * black first frame for an extensionless video URL). rw_timeout bounds a
-         * stalled network fetch (microseconds). */
-        char *ff_argv[] = {"ffmpeg", "-y", "-loglevel", "error",
-                           "-rw_timeout", "15000000", "-i", (char *)url,
-                           "-vf", "thumbnail", "-frames:v", "1", png, NULL};
-        int rc = run_cmd(ff_argv, false);
-        if (rc != 0 || access(png, R_OK) != 0) {
-            log_line(app, "preview: could not fetch/decode media (ffmpeg rc=%d) — opening externally", rc);
-            open_external_url(app, url);
-            unlink(png);
-            rmdir(dir);
-            return;
-        }
     }
 
     struct winsize ws = {0};
-    int term_rows = 24, term_cols = 80;
+    int term_rows = LINES, term_cols = COLS;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 2 && ws.ws_col > 0) {
         term_rows = ws.ws_row;
         term_cols = ws.ws_col;
     }
-    char size_arg[32];
-    snprintf(size_arg, sizeof(size_arg), "%dx%d", term_cols, term_rows - 2);
 
-    /* Leave ncurses entirely so chafa's protocol detection sees a real tty and
-     * its escapes don't fight the ncurses screen buffer. */
     def_prog_mode();
     endwin();
     mouse_reporting(false);
@@ -4460,67 +4863,35 @@ static void preview_media(struct app *app, const char *url, bool is_video) {
     printf("preview: %.*s\r\n", url_w, url);
     fflush(stdout);
 
-    const char *how = NULL;
-    if (have_chafa) {
-        /* chafa auto-detects a graphics protocol, but on a terminal with
-         * none it must be told to render SYMBOLS explicitly — otherwise a
-         * conservative detection can leave the preview blank. Colour
-         * count is pinned to what the terminal actually has so the art is
-         * as colourful as the terminal allows and no more. */
-        const char *colors = depth == TERM_COLOR_TRUE  ? "full"
-                             : depth == TERM_COLOR_256 ? "256"
-                             : depth == TERM_COLOR_8   ? "16"
-                                                       : "none";
-        if (graphics) {
-            char *argv[] = {"chafa", "--clear", "--size", size_arg, png, NULL};
-            run_cmd(argv, true);
-            how = "image";
-        } else {
-            char *argv[] = {"chafa", "--clear", "--format", "symbols", "--colors",
-                            (char *)colors, "--symbols", "block+border+space",
-                            "--size", size_arg, png, NULL};
-            run_cmd(argv, true);
-            how = depth == TERM_COLOR_NONE ? "ascii" : "colour ascii";
-        }
+    const char *how;
+    if (payload) {
+        fwrite(payload, 1, payload_len, stdout);
+        how = "image";
     } else {
-        /* No chafa: draw it ourselves. */
-        if (preview_builtin(url, dir, term_cols, term_rows - 2, depth)) {
-            how = depth == TERM_COLOR_NONE ? "ascii" : "colour ascii";
-        } else {
-            /* Decode failed with no fallback renderer left — restore the
-             * screen before handing off, or the terminal is left in the
-             * half-torn-down state this branch was entered with. */
-            reset_prog_mode();
-            clearok(stdscr, TRUE);
-            refresh();
-            mouse_apply(app);
-            log_line(app, "preview: could not decode media — opening externally");
-            open_external_url(app, url);
-            rmdir(dir);
-            return;
-        }
+        termcolor_render_rgb(rgb, cols, rows * 2, termcolor_detect_depth(), stdout);
+        how = termcolor_detect_depth() == TERM_COLOR_NONE ? "ascii" : "colour ascii";
     }
+    fflush(stdout);
 
     printf("\033[%d;1H[ %s%s — press any key to return ]", term_rows,
            is_video ? "video frame, " : "", how);
     fflush(stdout);
     wait_for_dismiss_key();
 
-    /* Kitty placements persist above the cell grid; ask the terminal to drop
-     * all images so the chat repaint underneath is clean (no-op elsewhere). */
+    /* Kitty placements persist above the cell grid; drop them so the chat
+     * repaint underneath is clean (a no-op on other terminals). */
     fputs("\033_Ga=d\033\\", stdout);
     fflush(stdout);
 
-    unlink(png);
-    rmdir(dir);
+    free(payload);
+    free(rgb);
 
-    /* Restore ncurses first, then re-assert mouse reporting so our escapes
-     * aren't clobbered by terminfo strings reset_prog_mode may re-emit. */
     reset_prog_mode();
     clearok(stdscr, TRUE);
     refresh();
     mouse_apply(app);
 }
+
 
 static void show_help(struct app *app) {
     log_line(app, "commands: /help /archive /settings /admin /chat /exit /quit /window N [/w N, /win N] /join #chan [/j] /part /close /clear /msg nick text /query nick [/q nick] /me text");
@@ -4531,7 +4902,8 @@ static void show_help(struct app *app) {
     log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
     log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
     log_line(app, "terminal: mouse tracking is OFF by default so the terminal keeps its own copy/paste selection; /mouse on enables click-to-preview (and suppresses selection), /mouse off restores it");
-    log_line(app, "media: /preview shows the last image/video link without needing the mouse; /open opens the last link externally");
+    log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; /media [on|off] toggles");
+    log_line(app, "       /preview full-screen; /preview-ascii forces the art renderer; /open opens externally; with /mouse on, click a link to preview");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
 
@@ -4619,25 +4991,61 @@ static void handle_command_dispatch(struct app *app, char *line);
  * text, the URL is a clickable link, and the 📸 prefix matches what
  * cicchetto ships so the two clients produce identical wire bytes.
  * Nothing is rendered inline in scrollback. */
+/* Declared MIME per extension.
+ *
+ * The server validates against a CLOSED allowlist
+ * (`UploadsController.@mime_categories`) and trusts what we declare, so
+ * this table must mirror it: a type it does not list is a 415, and a type
+ * we mislabel is a 415 the user cannot act on. Kept in the same order as
+ * the server's map so the two can be diffed.
+ *
+ * Deliberately ABSENT: ogg and opus. The server does not accept them
+ * (Safari support is patchy, so they were left out on purpose) and
+ * claiming a MIME it will reject only converts a clear local message into
+ * a confusing server error. */
 static const char *mime_for_path(const char *path) {
     const char *dot = strrchr(path, '.');
-    if (!dot) return "application/octet-stream";
-    struct { const char *ext; const char *mime; } table[] = {
+    if (!dot) return NULL;
+    static const struct { const char *ext; const char *mime; } table[] = {
+        /* image */
         {"png", "image/png"},   {"jpg", "image/jpeg"},  {"jpeg", "image/jpeg"},
-        {"gif", "image/gif"},   {"webp", "image/webp"}, {"mp4", "video/mp4"},
-        {"webm", "video/webm"}, {"mov", "video/quicktime"}, {"mp3", "audio/mpeg"},
-        {"ogg", "audio/ogg"},   {"opus", "audio/opus"}, {"wav", "audio/wav"},
-        {"flac", "audio/flac"}, {"pdf", "application/pdf"}, {"txt", "text/plain"},
+        {"gif", "image/gif"},   {"webp", "image/webp"}, {"apng", "image/apng"},
+        /* video */
+        {"mp4", "video/mp4"},   {"mov", "video/quicktime"}, {"webm", "video/webm"},
+        /* document */
+        {"pdf", "application/pdf"}, {"txt", "text/plain"},
+        {"odt", "application/vnd.oasis.opendocument.text"},
+        {"ods", "application/vnd.oasis.opendocument.spreadsheet"},
+        {"docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+        {"xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        /* audio */
+        {"mp3", "audio/mpeg"},  {"m4a", "audio/mp4"},   {"m4r", "audio/mp4"},
+        {"aac", "audio/aac"},   {"wav", "audio/wav"},   {"flac", "audio/flac"},
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
         if (strcasecmp(dot + 1, table[i].ext) == 0) return table[i].mime;
-    return "application/octet-stream";
+    return NULL; /* unsupported — refused locally, see upload_command */
 }
 
 static void upload_command(struct app *app, const char *path) {
     while (*path == ' ') path++;
     if (!*path) {
         log_line(app, "/upload requires a file path");
+        return;
+    }
+    /* Refuse an unsupported type HERE. The server would answer 415, and
+     * "HTTP 415" tells the user nothing about which types it takes. */
+    const char *mime = mime_for_path(path);
+    if (!mime) {
+        log_line(app, "/upload: unsupported file type — images (png jpg gif webp apng), "
+                      "video (mp4 mov webm), audio (mp3 m4a aac wav flac), "
+                      "documents (pdf txt odt ods docx xlsx)");
+        return;
+    }
+    /* Same read-only rule as a typed message: the link would be posted to
+     * the current window, and $server rejects a PRIVMSG. */
+    if (strcmp(app->windows[app->current].channel, "$server") == 0) {
+        log_line(app, "/upload: the server window is read-only — switch to a channel or query first");
         return;
     }
     FILE *f = fopen(path, "rb");
@@ -4679,7 +5087,7 @@ static void upload_command(struct app *app, const char *path) {
     char *head = xasprintf("--%s\r\n"
                            "Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
                            "Content-Type: %s\r\n\r\n",
-                           boundary, base, mime_for_path(path));
+                           boundary, base, mime);
     char *tail = xasprintf("\r\n--%s--\r\n", boundary);
     size_t hlen = strlen(head), tlen = strlen(tail);
     size_t total = hlen + got + tlen;
@@ -5033,6 +5441,27 @@ static void handle_command_dispatch(struct app *app, char *line) {
         open_panel(app, PANEL_ADMIN);
     } else if (strcmp(line, "/share") == 0) {
         mint_share_link(app);
+    } else if (strcmp(line, "/media") == 0 || strncmp(line, "/media ", 7) == 0) {
+        const char *rest = line[6] ? line + 7 : "";
+        while (*rest == ' ') rest++;
+        if (!*rest) app->inline_media_enabled = !app->inline_media_enabled;
+        else if (strcmp(rest, "on") == 0) app->inline_media_enabled = true;
+        else if (strcmp(rest, "off") == 0) app->inline_media_enabled = false;
+        else { log_line(app, "/media [on|off] — bare /media toggles inline images"); return; }
+        log_line(app, "inline images %s (terminal graphics: %s)",
+                 app->inline_media_enabled ? "ON" : "OFF", media_protocol_name(app->proto));
+    } else if (strcmp(line, "/preview-ascii") == 0) {
+        /* Force the character-art renderer even where a graphics protocol
+         * exists — useful over a link that mangles binary escapes, or just
+         * to see the art. */
+        char url[MAX_LINE];
+        bool is_video;
+        pthread_mutex_lock(&app->lock);
+        snprintf(url, sizeof(url), "%s", app->last_media_url);
+        is_video = app->last_media_is_video;
+        pthread_mutex_unlock(&app->lock);
+        if (!url[0]) log_line(app, "/preview-ascii: no image or video link seen yet");
+        else request_preview(app, url, is_video, true);
     } else if (strcmp(line, "/preview") == 0) {
         /* The keyboard route to click-to-preview. With mouse tracking off
          * by default (so the terminal keeps its own selection), this is
@@ -5045,7 +5474,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
         is_video = app->last_media_is_video;
         pthread_mutex_unlock(&app->lock);
         if (!url[0]) log_line(app, "/preview: no image or video link seen yet in this session");
-        else preview_media(app, url, is_video);
+        else request_preview(app, url, is_video, false);
     } else if (strcmp(line, "/open") == 0) {
         open_external_url(app, app->last_url);
     } else if (strcmp(line, "/clear") == 0) {
@@ -5469,7 +5898,10 @@ static void handle_mouse(struct app *app) {
     pthread_mutex_unlock(&app->lock);
 
     if (click && hit) {
-        preview_media(app, url, is_video);
+        /* Clicking a media link previews it, using the terminal's
+         * graphics protocol when there is one and character art when
+         * there is not — the same path as /preview. */
+        request_preview(app, url, is_video, false);
         pthread_mutex_lock(&app->lock);
         app->hover_url[0] = 0;
         pthread_mutex_unlock(&app->lock);
@@ -5491,6 +5923,15 @@ static void event_loop(struct app *app) {
     app->running = true;
     while (app->running) {
         ws_pump(app);
+        /* A requested preview displays as soon as the worker finishes.
+         * Until then the client keeps running normally — that is the
+         * whole point of splitting decode from display. */
+        pthread_mutex_lock(&app->lock);
+        bool preview_ready =
+            app->preview_pending &&
+            (app->preview.state == IM_READY || app->preview.state == IM_FAILED);
+        pthread_mutex_unlock(&app->lock);
+        if (preview_ready) show_preview(app);
         draw(app);
         int ch = getch();
         if (ch == ERR) continue;
@@ -5556,6 +5997,35 @@ static void print_usage(FILE *out, const char *prog) {
     fprintf(out, "\nOnce connected, /help lists every command.\n");
 }
 
+/* #451/#324 — retain the deployment's HTTP host aliases at boot from the
+ * same /api/server-settings payload cic reads (ServerSettings.public_view
+ * → http_host_aliases). Used with app->url.host to classify first-party
+ * /uploads/ links for inline auto-render. On any failure the set stays
+ * empty, which is the restrictive fallback: only the connect host is
+ * first-party. Fetched BEFORE the first scrollback render so seeded rows
+ * classify correctly. */
+static void load_http_host_aliases(struct app *app) {
+    app->http_host_alias_count = 0;
+    struct http_response r = http_request(app, "GET", "/api/server-settings", NULL);
+    if (r.status >= 200 && r.status < 300 && r.body) {
+        json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+        if (doc) {
+            const json_value *list = json_get(json_root(doc), "http_host_aliases");
+            if (list)
+                for (size_t i = 0; i < json_len(list) &&
+                                   app->http_host_alias_count < MAX_HTTP_ALIASES;
+                     i++) {
+                    const char *h = json_string(json_at(list, i));
+                    if (h && h[0])
+                        snprintf(app->http_host_aliases[app->http_host_alias_count++],
+                                 sizeof(app->http_host_aliases[0]), "%s", h);
+                }
+            json_free(doc);
+        }
+    }
+    free(r.body);
+}
+
 int main(int argc, char **argv) {
     const char *mode = "auto";
     const char *login_override = NULL;
@@ -5609,6 +6079,7 @@ int main(int argc, char **argv) {
     pthread_cond_init(&app->jobs_cond, NULL);
     app->ws.fd = -1;
     app->mouse_enabled = false;
+    app->inline_media_enabled = true;
     char *share_base = NULL, *share_token = NULL;
     const char *server_url;
     if (share_mode) {
@@ -5651,6 +6122,18 @@ int main(int argc, char **argv) {
     }
     startup("authenticated as %s", app->subject);
     startup("loading networks and channels");
+    /* Probe BEFORE the first scrollback fetch. Detection has to precede
+     * ncurses anyway (the sixel DA1 query needs the raw tty), and it has
+     * to precede parsing too: rows parsed while the protocol is unknown
+     * and the feature still off get no image attached, which is why the
+     * first screenful used to come up pictureless. */
+    app->proto = media_detect(STDIN_FILENO, 120);
+    startup("terminal graphics: %s", media_protocol_name(app->proto));
+    /* Retain the deployment's upload host set BEFORE any scrollback
+     * renders, so first-party /uploads/ links classify from frame one. */
+    load_http_host_aliases(app);
+    startup("first-party upload hosts: %s + %zu alias(es)", app->url.host,
+            app->http_host_alias_count);
     seed_state(app);
     startup("loading initial scrollback for %zu windows", app->window_count);
     for (size_t i = 0; i < app->window_count; i++) fetch_scrollback(app, &app->windows[i]);
