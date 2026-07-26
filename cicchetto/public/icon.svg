@@ -1,4 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  #274 — THE single source of truth for the cicchetto PWA icon mark.
+
+  This is the CANONICAL grappa-glass mark, reused verbatim from
+  `favicon.svg` in the grappa-www repo (owner's decision, issue #274
+  comment 5084209310): a solid martini glass in the site accent #5fafd7
+  with an olive in accent-2 #8fd0f0. Keeping ONE mark across the app icon,
+  the site favicon and the 🍸 wordmark is the whole point — do NOT redraw it.
+
+  This is also the ONLY file to edit if the mark ever changes: swap it and
+  re-run `scripts/gen-pwa-icons.mjs` to re-mint the whole raster set
+  (favicon.ico, apple-touch, `any` + `maskable` 192/512). The generator adds
+  the opaque #0a0a0a background at raster time (this artwork is transparent),
+  scales the mark into the central 80% safe zone for the maskable variants
+  (the artwork is edge-to-edge, so Android's circular mask would otherwise
+  clip the rim + foot), and flattens apple-touch onto #0a0a0a.
+-->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" fill="#0a0a0a" />
-  <text x="32" y="44" font-family="ui-monospace, monospace" font-size="40" fill="#5fafd7" text-anchor="middle">C</text>
+  <!-- grappa martini glass — solid silhouette in the site accent (#5fafd7),
+       so it reads at 16px. Matches the 🍸 wordmark in the header. -->
+  <path fill="#5fafd7"
+        d="M8 12 L56 12 L34 35 L34 50 L45 50 L45 54 L19 54 L19 50 L30 50 L30 35 Z"/>
+  <!-- olive: a small accent-2 dot on the rim for a hint of the cocktail -->
+  <circle cx="45" cy="16" r="3.4" fill="#8fd0f0"/>
 </svg>
