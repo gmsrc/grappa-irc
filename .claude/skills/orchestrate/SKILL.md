@@ -219,6 +219,17 @@ is DELETE-then-write, never append-only:
   in the conversation alone does NOT count as pinging him. (Routine ship announces still go without
   the highlight; the highlight is specifically for "I need your input".) This is non-negotiable —
   vjt set it as a standing order 2026-06-29. See [[feedback_orchestrator_ping_vjt_via_ircbot]].
+- **PERMISSION DIALOGS ARE VJT'S, WITH EXACTLY ONE STANDING EXCEPTION (vjt, 2026-07-26).** You do NOT
+  answer a worker's permission prompt on your own — that dialog is his control point, and your own
+  judgement that an action "looks harmless" is precisely what it exists to not rely on. **The single
+  exception he granted: removing a STALE GIT LOCK FILE inside the worker's own worktree.** Its two
+  conditions are non-negotiable and he stated both explicitly: (1) **"verifica sempre prima"** — every
+  single time, first confirm no git process is running (`pgrep -fl "git "` on the worker's host, PATH
+  exported) and inspect the lock; never once-and-for-all. (2) **"e SOLO per git lock / non altri
+  files"** — git lock files ONLY. Anything else, however similar it feels (a stale submodule `.git`, an
+  object file, a scratch artifact), goes back to him. Always answer **option 1**, NEVER option 2 —
+  option 2 is a permanent directory allowlist he has not granted. When you do use the exception, say so
+  in the turn so the click is on the record.
 
 After reading the handoff, proceed to Step 1 (resume-check) to reconcile it against live daemon/pane state.
 
