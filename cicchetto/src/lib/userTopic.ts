@@ -56,6 +56,10 @@ import {
   narrowWindowStateEvent,
 } from "./wireNarrow";
 import type { ServerSettingsWireUploadView } from "./wireTypes";
+// #410 — the connection_state runtime guard derives from the generated const
+// (mirror of `Grappa.Networks.Credential.connection_state/0`), single-sourced
+// like the leaf-enum allowlists in wireNarrow.ts.
+import { NETWORKS_CREDENTIAL_CONNECTION_STATE } from "./wireTypes";
 
 // Per-user PubSub topic subscriber. Module-singleton side-effect:
 // imports for effect, exports nothing public. `main.tsx` imports this
@@ -98,14 +102,17 @@ function parseWindowsMap(raw: Record<string, QueryWindowEntry[]>): Record<number
   return result;
 }
 
-// REV-H H2 (2026-05-22) — runtime narrower for ConnectionState. Mirror
-// of server-side `Credential.connection_state()` closed atom union. A
-// fourth state lands here as one edit; until then any string outside
-// the union drops the payload (drop + log via narrowUserEvent's
-// downstream dispatch). Refer to `ConnectionState` in api.ts for the
-// single source of truth.
+// REV-H H2 (2026-05-22) — runtime narrower for ConnectionState. #410 — the
+// value set IS the codegen-emitted `NETWORKS_CREDENTIAL_CONNECTION_STATE`
+// const (mirror of `Grappa.Networks.Credential.connection_state/0`), so a
+// fourth server state regenerates the const and flows here with no hand
+// edit; any string outside the set drops the payload (drop + log via
+// narrowUserEvent's downstream dispatch).
 function isConnectionState(value: unknown): value is ConnectionState {
-  return value === "connected" || value === "parked" || value === "failed";
+  return (
+    typeof value === "string" &&
+    (NETWORKS_CREDENTIAL_CONNECTION_STATE as readonly string[]).includes(value)
+  );
 }
 
 // S15 — exhaustive `Record<Host, true>` over the generated
