@@ -20241,7 +20241,14 @@ as the per-char union. Consequence accepted (recorded, not a bug): **zero-gap
 adjacency `*_word_*` is bold-only** — the inner `_` opener is preceded by `*`,
 which is not a left word boundary (rule a); a space-separated `*bold _und_*`
 nests correctly. And `/word/`-bare (no inner slash) DOES italicize even when it
-was meant as a regex — inherent to the `/` marker, an accepted risk.
+was meant as a regex — inherent to the `/` marker, an accepted risk. One more
+consequence of the linkify-first ordering: a marker pair whose closer sits
+right after a trailing URL (`*see https://x.com/a*`) does NOT emphasize — the
+URL regex (`\S+`) swallows the trailing `*` into the url segment, so the opener
+is left without a closer in its text segment and renders literal. This is
+correct, not a regression (running emphasis *before* linkify would reintroduce
+the `_`/`/`-in-URL false positives, strictly worse); markers stay visible so
+nothing is destroyed.
 
 **Testing.** The tokenizer is exhaustively unit-tested
 (`src/__tests__/emphasisMarkers.test.ts`) including the two-independent-pairs

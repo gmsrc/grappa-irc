@@ -61,6 +61,10 @@ describe("splitEmphasis (#455)", () => {
     it("allows multi-word spans", () => {
       expect(splitEmphasis("*due parole*")).toEqual([bold("*due parole*")]);
     });
+
+    it("keeps a multi-byte grapheme intact inside a span (no split mid-surrogate)", () => {
+      expect(splitEmphasis("a *🎉* b")).toEqual([plain("a "), bold("*🎉*"), plain(" b")]);
+    });
   });
 
   describe("non-greedy: nearest valid closer, two independent pairs per line", () => {
@@ -120,6 +124,14 @@ describe("splitEmphasis (#455)", () => {
       expect(splitEmphasis("2 * 3 * 4")).toEqual([plain("2 * 3 * 4")]);
     });
 
+    it("leaves doubled markers **bold** literal (adjacent markers open empty)", () => {
+      expect(splitEmphasis("**bold**")).toEqual([plain("**bold**")]);
+    });
+
+    it("leaves an interior marker a*b*c literal (opener after a letter)", () => {
+      expect(splitEmphasis("a*b*c")).toEqual([plain("a*b*c")]);
+    });
+
     it("leaves an unmatched lone marker untouched", () => {
       expect(splitEmphasis("a _lonely marker")).toEqual([plain("a _lonely marker")]);
     });
@@ -165,6 +177,8 @@ describe("splitEmphasis (#455)", () => {
       fidelity("*hi* and *bye*");
       fidelity("(*bold*). and /it/,");
       fidelity("*bold _und_*");
+      fidelity("a *🎉* b");
+      fidelity("**bold** and a*b*c");
     });
   });
 });
