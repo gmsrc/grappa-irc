@@ -50,10 +50,10 @@ run_as_grappa() {
 # ... -H` has switched user — no need to look it up here.
 asdf_path_export='export PATH="$HOME/.local/bin:$HOME/.asdf/shims:$PATH"'
 
-say "1/10 install_prereqs.sh"
+say "1/11 install_prereqs.sh"
 "${SCRIPT_DIR}/install_prereqs.sh"
 
-say "2/10 clone / update checkout at ${REPO_ROOT}"
+say "2/11 clone / update checkout at ${REPO_ROOT}"
 if [ ! -d "${REPO_ROOT}/.git" ]; then
 	# The target may sit below a root-owned parent (the default is
 	# /home/grappa/grappa). Create the checkout directory itself with the
@@ -65,10 +65,10 @@ else
 fi
 chown -R "${GRAPPA_USER}:${GRAPPA_USER}" "${REPO_ROOT}"
 
-say "3/10 install_toolchain.sh (erlang build from source — can take 10-20 min)"
+say "3/11 install_toolchain.sh (erlang build from source — can take 10-20 min)"
 "${SCRIPT_DIR}/install_toolchain.sh" "${REPO_ROOT}"
 
-say "4/10 first build (mix deps.get / compile / release)"
+say "4/11 first build (mix deps.get / compile / release)"
 # Full `mix deps.get` (NOT --only prod) — the secrets bootstrap below
 # (step 5) runs several mix tasks under MIX_ENV=dev (the FreeBSD/
 # Docker-proven chicken-and-egg workaround: a prod-env mix task reads
@@ -93,7 +93,7 @@ run_as_grappa "
 	mix release --overwrite
 "
 
-say "5/10 secrets bootstrap (${ENV_FILE})"
+say "5/11 secrets bootstrap (${ENV_FILE})"
 if [ ! -f "${ENV_FILE}" ]; then
 	install -o root -g "${GRAPPA_USER}" -m 0640 "${REPO_ROOT}/infra/linux/grappa.env.example" "${ENV_FILE}"
 fi
@@ -230,7 +230,7 @@ force_set_env PORT "${PORT}"
 mkdir -p "${REPO_ROOT}/runtime/uploads"
 chown -R "${GRAPPA_USER}:${GRAPPA_USER}" "${REPO_ROOT}/runtime"
 
-say "6/10 first migration"
+say "6/11 first migration"
 # Plain `mix ecto.migrate`, NOT `release.sh eval 'Grappa.Release.migrate()'`.
 # Found live on a native-Linux install (2026-07-22): the packaged release's `eval`
 # (and `remote`/`rpc`, which share the same `--boot
@@ -256,16 +256,24 @@ run_as_grappa "
 	mix ecto.migrate
 "
 
-say "7/10 cic_build.sh"
+say "7/11 seed built-in themes"
+run_as_grappa "
+	${asdf_path_export}
+	set -a; . '${ENV_FILE}'; set +a
+	cd '${REPO_ROOT}'
+	MIX_ENV=prod mix grappa.seed_themes
+"
+
+say "8/11 cic_build.sh"
 "${SCRIPT_DIR}/cic_build.sh" "${REPO_ROOT}"
 
-say "8/10 install_systemd.sh"
+say "9/11 install_systemd.sh"
 "${SCRIPT_DIR}/install_systemd.sh"
 
-say "9/10 install_nginx.sh"
+say "10/11 install_nginx.sh"
 LISTEN_ADDR="${LISTEN_ADDR:-0.0.0.0:80}" TRUSTED_UPSTREAM_CIDR="${TRUSTED_UPSTREAM_CIDR:-}" REPO_ROOT="${REPO_ROOT}" "${SCRIPT_DIR}/install_nginx.sh"
 
-say "10/10 starting grappa + healthcheck"
+say "11/11 starting grappa + healthcheck"
 systemctl start grappa
 
 deadline=$((SECONDS + 120))

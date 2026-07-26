@@ -44,13 +44,15 @@ directly and through the locally-installed nginx.
    `compile --warnings-as-errors`, `release --overwrite`.
 5. **Secrets bootstrap** — see below.
 6. **First migration** — `Grappa.Release.migrate()` via `release.sh`.
-7. **`cic_build.sh`** — builds the cicchetto PWA with bun into
+7. **Theme seed** — idempotently materialises the curated built-in theme
+   gallery in the database.
+8. **`cic_build.sh`** — builds the cicchetto PWA with bun into
    `runtime/cicchetto-dist/`.
-8. **`install_systemd.sh`** — installs + enables (doesn't start) the
+9. **`install_systemd.sh`** — installs + enables (doesn't start) the
    `grappa.service` unit.
-9. **`install_nginx.sh`** — installs nginx config + the shared
+10. **`install_nginx.sh`** — installs nginx config + the shared
    `infra/snippets/*.conf`, symlinks the PWA dist, starts/reloads nginx.
-10. **Start + healthcheck** — `systemctl start grappa`, poll
+11. **Start + healthcheck** — `systemctl start grappa`, poll
     `/healthz` until it's green.
 
 Re-running `install.sh` is safe: it never regenerates an
