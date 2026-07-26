@@ -10,7 +10,7 @@ CFLAGS += $(CFLAGS_DEPS)
 LDLIBS += $(LDLIBS_DEPS)
 
 BIN := shottino
-OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o
+OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o
 
 # Test binaries link only the pure modules they exercise — no ncurses, no
 # OpenSSL, no terminal. That is the point of keeping the narrowing and
@@ -23,12 +23,12 @@ OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o
 # without the runtime.
 #
 # COVERAGE CAVEAT: the sanitizers ride ONLY these leaf-module test binaries
-# (the parsers, formatters and the HTTP chunk decoder). shottino.c itself has
-# no test target and the `all` binary is built WITHOUT sanitizers, so
-# shottino.c's own logic — websocket framing, event dispatch, the draw path —
-# is NOT under ASan/UBSan. Do not trust this net for changes there; add a test
-# or reason about the path by hand.
-TESTS := tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http
+# (the parsers, formatters, the HTTP chunk decoder and the media encoders).
+# shottino.c itself has no test target and the `all` binary is built WITHOUT
+# sanitizers, so shottino.c's own logic — websocket framing, event dispatch,
+# the draw path — is NOT under ASan/UBSan. Do not trust this net for changes
+# there; add a test or reason about the path by hand.
+TESTS := tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media
 SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O1 -g $(SANITIZE)
 
@@ -42,13 +42,14 @@ $(BIN): $(OBJS)
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-shottino.o: shottino.c json.h wire.h alias.h mirc.h termcolor.h http.h
+shottino.o: shottino.c json.h wire.h alias.h mirc.h termcolor.h http.h media.h
 json.o: json.c json.h
 wire.o: wire.c wire.h json.h
 alias.o: alias.c alias.h
 mirc.o: mirc.c mirc.h
 termcolor.o: termcolor.c termcolor.h
 http.o: http.c http.h
+media.o: media.c media.h termcolor.h
 
 tests/test_json: tests/test_json.c tests/test.h json.c json.h
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) -o $@ tests/test_json.c json.c
@@ -67,6 +68,9 @@ tests/test_termcolor: tests/test_termcolor.c tests/test.h termcolor.c termcolor.
 
 tests/test_http: tests/test_http.c tests/test.h http.c http.h
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) -o $@ tests/test_http.c http.c
+
+tests/test_media: tests/test_media.c tests/test.h media.c media.h termcolor.c termcolor.h
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) -o $@ tests/test_media.c media.c termcolor.c
 
 # `make check` is the gate: build every suite, run every suite, fail loud.
 check: $(TESTS)
