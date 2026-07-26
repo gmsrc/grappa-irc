@@ -137,23 +137,31 @@ describe("keybindings", () => {
     });
   });
 
-  it("Tab in textarea dispatches cycleNickComplete(forward=true)", () => {
+  it("Tab in the compose textarea dispatches cycleNickComplete(forward=true)", () => {
     const ta = document.createElement("textarea");
+    // #409 — nick-completion is scoped to the compose box, identified by the
+    // `data-compose-input` marker (the same stable hook globalPaste uses), NOT
+    // to any typing surface.
+    ta.setAttribute("data-compose-input", "");
     document.body.appendChild(ta);
     ta.focus();
 
     const ev = new KeyboardEvent("keydown", {
       key: "Tab",
       bubbles: true,
+      cancelable: true,
     });
     ta.dispatchEvent(ev);
 
     expect(handlers.cycleNickComplete).toHaveBeenCalledWith(true);
+    // Native Tab is suppressed inside compose so the cycle owns it.
+    expect(ev.defaultPrevented).toBe(true);
     document.body.removeChild(ta);
   });
 
-  it("Shift+Tab in textarea dispatches cycleNickComplete(forward=false)", () => {
+  it("Shift+Tab in the compose textarea dispatches cycleNickComplete(forward=false)", () => {
     const ta = document.createElement("textarea");
+    ta.setAttribute("data-compose-input", "");
     document.body.appendChild(ta);
     ta.focus();
 
@@ -161,10 +169,44 @@ describe("keybindings", () => {
       key: "Tab",
       shiftKey: true,
       bubbles: true,
+      cancelable: true,
     });
     ta.dispatchEvent(ev);
 
     expect(handlers.cycleNickComplete).toHaveBeenCalledWith(false);
+    expect(ev.defaultPrevented).toBe(true);
+    document.body.removeChild(ta);
+  });
+
+  // #409 — nick-completion must NOT swallow Tab in every form. In a typing
+  // surface that is NOT the compose box (a settings input, the alias add form,
+  // admin fields) Tab falls through to native focus traversal: the handler
+  // neither fires the cycle nor preventDefaults.
+  it("Tab in a NON-compose input does NOT dispatch cycleNickComplete (#409)", () => {
+    const input = document.createElement("input");
+    input.type = "text";
+    document.body.appendChild(input);
+    input.focus();
+
+    const ev = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    input.dispatchEvent(ev);
+
+    expect(handlers.cycleNickComplete).not.toHaveBeenCalled();
+    // Native focus traversal preserved — the handler left the event alone.
+    expect(ev.defaultPrevented).toBe(false);
+    document.body.removeChild(input);
+  });
+
+  it("Tab in a NON-compose textarea does NOT dispatch cycleNickComplete (#409)", () => {
+    const ta = document.createElement("textarea");
+    document.body.appendChild(ta);
+    ta.focus();
+
+    const ev = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    ta.dispatchEvent(ev);
+
+    expect(handlers.cycleNickComplete).not.toHaveBeenCalled();
+    expect(ev.defaultPrevented).toBe(false);
     document.body.removeChild(ta);
   });
 

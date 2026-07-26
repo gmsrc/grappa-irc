@@ -43,12 +43,23 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || target.isContentEditable;
 }
 
+// #409 — the compose box is the ONLY surface where Tab nick-completes. It
+// carries the `data-compose-input` marker (ComposeBox.tsx) — the same stable
+// hook lib/globalPaste uses to find the one mounted compose surface. Keying
+// the Tab handler off this marker (not off `isTypingTarget`, which matches ANY
+// input/textarea/contenteditable) restores native Tab focus traversal in every
+// OTHER form (alias settings, admin, login) while compose still completes.
+function isComposeInput(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.hasAttribute("data-compose-input");
+}
+
 function onKeydown(e: KeyboardEvent): void {
   if (handlers === null) return;
 
-  // Tab cycle: only fire when the target is a typing surface (compose
-  // box). Lets the rest of the page receive native Tab focus traversal.
-  if (e.key === "Tab" && isTypingTarget(e.target)) {
+  // Tab cycle: only fire when the target is the compose box itself (#409),
+  // NOT any typing surface — so every other form keeps native Tab focus
+  // traversal (the alias settings name→expansion move that surfaced this).
+  if (e.key === "Tab" && isComposeInput(e.target)) {
     e.preventDefault();
     handlers.cycleNickComplete(!e.shiftKey);
     return;
