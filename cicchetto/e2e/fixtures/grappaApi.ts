@@ -64,13 +64,20 @@ export type MintedVisitor = {
   nick: string;
   network_slug: string;
   token: string;
+  // #363 — the full login-response subject (carries `incognito`), so a spec
+  // can boot cic with the exact persisted shape rather than hand-building it.
+  subject: { kind: "visitor"; id: string; registered?: boolean; incognito?: boolean };
 };
 
-export async function mintVisitor(nick: string): Promise<MintedVisitor> {
+// #363 — `incognito` mints an ephemeral session (short linger TTL, deleted on
+// browser close). Default false = an ordinary 48h anon visitor.
+export async function mintVisitor(nick: string, incognito = false): Promise<MintedVisitor> {
+  const loginBody: { identifier: string; incognito?: boolean } = { identifier: nick };
+  if (incognito) loginBody.incognito = true;
   const response = await fetch(`${GRAPPA_BASE_URL}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ identifier: nick }),
+    body: JSON.stringify(loginBody),
   });
   if (!response.ok) {
     throw new Error(
@@ -79,7 +86,7 @@ export async function mintVisitor(nick: string): Promise<MintedVisitor> {
   }
   const body = (await response.json()) as {
     token: string;
-    subject: { kind: "visitor"; id: string };
+    subject: { kind: "visitor"; id: string; registered?: boolean; incognito?: boolean };
   };
   if (body.subject.kind !== "visitor") {
     throw new Error(`grappaApi.mintVisitor: expected visitor subject, got ${body.subject.kind}`);
@@ -108,6 +115,7 @@ export async function mintVisitor(nick: string): Promise<MintedVisitor> {
     nick: anchor.nick,
     network_slug: anchor.slug,
     token: body.token,
+    subject: body.subject,
   };
 }
 
