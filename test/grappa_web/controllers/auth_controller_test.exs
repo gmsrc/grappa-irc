@@ -4,9 +4,13 @@ defmodule GrappaWeb.AuthControllerTest do
 
   `login` dispatches via `Grappa.Auth.IdentifierClassifier`: `@`-bearing
   identifiers route to mode-1 (admin, password REQUIRED, name-keyed
-  Accounts lookup against the local-part); plain nicks route to the
-  visitor path (`Grappa.Visitors.Login.login/2`, password OPTIONAL,
-  bearer reused on anon-collision retry per W13).
+  Accounts lookup against the local-part). A plain nick is resolved
+  against `Accounts` FIRST (#404): an existing account name is that
+  account's credential → account login (password REQUIRED; a wrong/absent
+  password is refused with `:invalid_credentials`, never a silent guest);
+  a nick with NO matching account routes to the visitor path
+  (`Grappa.Visitors.Login.login/2`, password OPTIONAL, bearer reused on
+  anon-collision retry per W13).
 
   Response shape: `{token, subject: {kind: :user|:visitor, ...}}`.
 
@@ -117,6 +121,15 @@ defmodule GrappaWeb.AuthControllerTest do
 
     test "non-string identifier → 400 bad_request", %{conn: conn} do
       conn = post(conn, "/auth/login", %{"identifier" => 42, "password" => "x"})
+      assert json_response(conn, 400)["error"] == "bad_request"
+    end
+
+    # A non-binary password is malformed wire input — reject it at the
+    # boundary with 400 (same posture as a non-string identifier), NOT a
+    # 500 FunctionClauseError from the downstream `is_binary(password)`
+    # pattern-matches (account_login/3 + Login.login/2). #404 code review.
+    test "non-string password → 400 bad_request", %{conn: conn} do
+      conn = post(conn, "/auth/login", %{"identifier" => "vjt@example.com", "password" => 42})
       assert json_response(conn, 400)["error"] == "bad_request"
     end
 

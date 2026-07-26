@@ -70,10 +70,11 @@ defmodule GrappaWeb.AuthController do
   `POST /auth/login` — `{identifier, password?}` →
   `{token, subject: {kind, id, ...}}`.
 
-  Validates the input shape at the boundary (identifier present + binary)
-  and returns 400 otherwise. Dispatch is delegated to
-  `IdentifierClassifier`; per-branch failures map to canonical HTTP
-  statuses (see moduledoc + `visitor_login/3`).
+  Validates the input shape at the boundary (identifier present + binary;
+  `captcha_token` + `password` binary-or-absent) and returns 400
+  otherwise. Dispatch is delegated to `IdentifierClassifier`; per-branch
+  failures map to canonical HTTP statuses (see moduledoc + `nick_login/6`
+  / `account_login/3` / `visitor_login/6`).
   """
   @spec login(Plug.Conn.t(), map()) ::
           Plug.Conn.t()
@@ -105,16 +106,16 @@ defmodule GrappaWeb.AuthController do
     # → Login defaults to the sole `visitor_enabled` network.
     network = Map.get(params, "network")
 
-    case validate_captcha_token(captcha_token) do
-      :ok ->
-        case IdentifierClassifier.classify(sanitize_identifier(id)) do
-          {:email, email} -> mode1_login(conn, email, password)
-          {:nick, nick} -> nick_login(conn, nick, password, captcha_token, identity, network)
-          {:error, :malformed} -> {:error, :malformed_nick}
-        end
-
-      :bad_token ->
-        {:error, :bad_request}
+    with :ok <- validate_captcha_token(captcha_token),
+         :ok <- validate_password(password) do
+      case IdentifierClassifier.classify(sanitize_identifier(id)) do
+        {:email, email} -> mode1_login(conn, email, password)
+        {:nick, nick} -> nick_login(conn, nick, password, captcha_token, identity, network)
+        {:error, :malformed} -> {:error, :malformed_nick}
+      end
+    else
+      :bad_token -> {:error, :bad_request}
+      :bad_password -> {:error, :bad_request}
     end
   end
 
@@ -161,6 +162,20 @@ defmodule GrappaWeb.AuthController do
        do: :ok
 
   defp validate_captcha_token(_), do: :bad_token
+
+  # `password` is operator-attacker-controlled wire input. It is optional
+  # (absent → anon visitor; the account paths refuse a nil password with
+  # `:invalid_credentials`), but when present it MUST be a binary — the
+  # downstream `account_login/3` + `Login.login/2` both pattern-match on
+  # `is_binary(password) | nil`, so a JSON `42` / `[]` / `true` would trip
+  # a `FunctionClauseError` → 500 at the boundary. Reject the malformed
+  # shape here with a 400 instead (same posture as `validate_captcha_token/1`
+  # and the non-binary `identifier` 400), so neither account door nor the
+  # visitor login ever sees a non-binary password.
+  @spec validate_password(term()) :: :ok | :bad_password
+  defp validate_password(nil), do: :ok
+  defp validate_password(password) when is_binary(password), do: :ok
+  defp validate_password(_), do: :bad_password
 
   @doc """
   `DELETE /auth/logout` — **detach** (#126). Revokes the session whose
