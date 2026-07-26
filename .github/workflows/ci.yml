@@ -124,14 +124,15 @@ jobs:
         with:
           submodules: recursive
 
-      # The three things ./configure probes for. ncursesw (WIDE) is what
-      # shottino links — the narrow libncurses is not a substitute, since
-      # the client is UTF-8 end to end.
+      # The three things ./configure probes for. libncurses-dev is the
+      # package that ships ncursesw.pc — shottino links the WIDE build
+      # (it is UTF-8 end to end), and the old libncursesw5-dev name no
+      # longer exists on current Debian/Ubuntu.
       - name: Install build dependencies
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            pkg-config libncursesw5-dev libssl-dev
+            pkg-config libncurses-dev libssl-dev
 
       - name: Configure
         run: ./configure
