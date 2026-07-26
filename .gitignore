@@ -98,6 +98,12 @@ Thumbs.db
 
 # ── Native terminal shottino build artifacts
 /frontends/shottino/shottino
+/frontends/shottino/*.o
+# Test binaries — `make check` rebuilds these from tests/*.c on demand.
+# The sources and the header are tracked; the binaries are not.
+/frontends/shottino/tests/test_*
+!/frontends/shottino/tests/test_*.c
+!/frontends/shottino/tests/test.h
 
 # GitHub CLI config
 .gh

@@ -19726,3 +19726,122 @@ archive list share `.sidebar-network-section`, so e2e asserts BOTH coexist
 without the grouping rail forking — mentions row → 2px `border-left`, archived
 row → 0px (`:not(.sidebar-archive-list)` scoping). INC-2 is cic-only (no server
 change); rides the batch COLD deploy (cic bundle change).
+## 2026-07-26 — shottino brought to feature parity with cicchetto
+
+vjt asked for shottino (the C/ncurses terminal client under
+`frontends/shottino/`) to reach feature parity with cicchetto. Scope agreed
+up front: everything meaningful in a TTY. Excluded as inherently
+browser-only — PWA install / service worker, web push, the theme editor and
+background images, drag-drop upload + video transcode, pinch-zoom and swipe,
+QR, captcha, the CRT splash, the audio mini-player.
+
+### Why the substring dispatch had to go first
+
+Shottino consumed FOUR event kinds (`message`, `topic_changed`,
+`members_seeded`, `query_windows_list`), matched with
+`strstr(frame, "\"kind\":\"message\"")`, and pulled scalars with a
+`json_find_string` that scanned for a key ANYWHERE in the buffer at ANY
+depth. That is adequate for four flat payloads with unique key names and
+nothing else. It cannot express the rest of the surface: `message` nests an
+object, `query_windows_list` is a map keyed by nick, `whois_bundle` holds
+arrays, and sibling payloads reuse `network` / `channel` / `nick` at
+different depths. A key-anywhere scan silently reads the WRONG nesting
+level — no error, just a wrong value.
+
+So `json.[ch]` (arena-backed recursive descent, depth-bounded, escapes and
+surrogate pairs resolved at parse time) and `wire.[ch]` (typed narrowing for
+all ~50 kinds) came first. `wire.c` is a deliberate transliteration of
+cicchetto's `wireNarrow.ts` + `userTopic.ts` — same arms, same field order,
+same strictness — so the two can be diffed by eye when the server grows an
+arm. Narrowing is all-or-nothing per event and BORROWS from the json_doc
+(nothing allocates, nothing can leak).
+
+**Closed sets were verified against the SERVER typespecs, not transcribed
+from cic.** That caught `window_counts.severity`, which had been written as
+three plural values and is in fact four singular ones (`:mention`,
+`:message`, `:event`, `:none` per `Grappa.WindowCounts.severity/0`). A
+mismatch there silently degrades every window to `:none`.
+
+### Deliberate tolerances, reproduced and pinned
+
+Where the server contract tolerates a missing or garbled field, the C
+narrower reproduces the tolerance and a test pins it, because each one
+encodes a bug someone already paid for: `join_failed.numeric` nullable (cic
+S13 — requiring it dropped the whole reconnect "failed tab" snapshot);
+`read_cursor_set.badge_count` defaulting to 0 (the cursor sync is the
+load-bearing half); per-field coercion of `lusers` counts (a display-only
+card — one garbled count must not blow away eleven good ones); severity
+degrading to `:none`; upload host aliases degrading to empty rather than
+stranding the caps beside them.
+
+### Pre-existing bugs surfaced while replacing the readers
+
+- **REST scrollback rendered upside down.** `Scrollback.fetch/6` returns
+  DESC; cic reverses on ingestion and shottino never did, so every replayed
+  page read newest-first.
+- **The scrollback reader skipped presence rows entirely.** It found rows by
+  scanning for `"body"` then walking BACKWARDS to the nearest `{` — which
+  lands inside `meta` once meta is non-empty, and misses every row with a
+  null body (all joins/parts/quits). `render_message` had the same bail, so
+  shottino never displayed a join, part, quit or nick change at all.
+- The members reader copied every character after a quote that was not `m`
+  (an attempt to skip the literal key `"modes"`), mangling the mode letter m.
+- `query_windows_list` read the network id by assuming the first digit after
+  a quote belonged to the key — broken by any nick containing a digit.
+- `json_find_string` decoded every `\uXXXX` as a literal `?`.
+- `handle_command` mutated the string it was given, and internal callers
+  pass string literals (`handle_command(app, "/close")`).
+- A dropped websocket was **terminal**: it logged "websocket disconnected",
+  cleared the flag, and nothing ever set it again. The client stayed up
+  looking healthy while receiving nothing — the worst failure shape, since
+  the user has no reason to distrust what they see.
+
+### Reconnect needs backfill, not just reconnect
+
+PubSub broadcast is fire-and-forget, so anything sent during a WS gap is
+GONE — rejoining topics does not replay it. Each window refetches from its
+last seen id via `?after=` (ASC, unlike the DESC tail fetch). Without the
+backfill the client silently drops every message in the gap, which is
+strictly worse than a visible disconnect. Backoff carries jitter so a fleet
+knocked offline by a bouncer restart does not return in lockstep.
+
+### Media previews: no graphics protocol is not a refusal
+
+Previously a preview required a graphics protocol AND chafa, else
+`xdg-open` — which on a remote SSH session does nothing at all. The two
+capability axes (bitmap protocol; colour depth) are now probed separately.
+Without a protocol, the frame renders as coloured half-block character art:
+two vertically-adjacent pixels per cell, upper-half glyph in the top pixel's
+colour over the bottom pixel's, which doubles vertical resolution and is why
+it reads as a picture rather than as ASCII art. Below 256 colours it
+degrades to one averaged cell with a luminance ramp glyph. `ffmpeg` is the
+only hard dependency; chafa is used when present.
+
+**Truecolor is never guessed** — it requires an explicit `COLORTERM`
+advertisement, because emitting 24-bit escapes at a terminal that cannot
+parse them prints raw garbage at the user, a worse failure than rendering in
+256 colours.
+
+### Testing a C client
+
+Shottino shipped with no test target. The pure logic — JSON, wire narrowing,
+alias expansion, mIRC parsing, colour quantisation — is deliberately kept in
+modules free of app state and terminal state, so `make check` exercises them
+without a TTY. Suites build with ASan+UBSan: this is C, the parser walks
+attacker-shaped input off the network, and an arena overrun is exactly the
+class of bug that passes a plain assertion suite and corrupts the app hours
+later. ~5,000 assertions at the time of writing.
+
+`mirc.c` reproduces cic's lookahead rules exactly because that is where naive
+parsers go wrong and each mistake is visible on screen: a comma not followed
+by digits stays literal (`\x034,foo` is red `,foo`), a partial hex run is NOT
+consumed, and `\x0310` is colour 10 rather than colour 1 then "0".
+
+### Still not rendered
+
+`channel_created`, `channels_changed`, `notify_list`, `presence_snapshot`,
+`supported_umodes_changed`, `bundle_hash`, `server_settings_changed`,
+`archive_changed`, `archive_purged` are narrowed but not surfaced. They are
+listed explicitly in the dispatch switch rather than swept into a `default`
+arm, so `-Wswitch` flags the next kind the server adds instead of letting it
+vanish silently.
