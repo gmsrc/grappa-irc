@@ -113,8 +113,11 @@ function isConnectionState(value: unknown): value is ConnectionState {
 // server host (`Grappa.ServerSettings.upload_host/0` → codegen literal
 // union) FAILS tsc here until handled, instead of the
 // `server_settings_changed` narrower silently DROPPING the whole
-// settings event on the unknown value. Same posture as
-// `MESSAGE_KIND_PRESENCE` in `wireNarrow.ts`.
+// settings event on the unknown value. NB (#410): `active_host` is a
+// struct-FIELD enum, so codegen emits no standalone `as const` array for
+// it — this `Record<Host, true>` stays the exhaustiveness guard. Standalone
+// leaf enums (message kind, severity, session-log event, …) instead derive
+// their runtime Set directly from the generated const (see `wireNarrow.ts`).
 type UploadActiveHost = ServerSettingsWireUploadView["active_host"];
 
 const UPLOAD_ACTIVE_HOST_PRESENCE: Record<UploadActiveHost, true> = {

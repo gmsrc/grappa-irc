@@ -10,15 +10,19 @@ import type {
 import type { ModesEntry, TopicEntry } from "./channelTopic";
 import type { MemberEntry } from "./memberTypes";
 import type { SessionLogEvent, SessionLogWireT, WindowCountsSeverity } from "./wireTypes";
+// #410 — the runtime allowlists derive from the codegen-emitted `as const`
+// enum arrays, so each closed set has ONE source (the server typespec via
+// wireTypes.ts), not a hand copy that can silently drift.
+import { SCROLLBACK_MESSAGE_KIND, SESSION_LOG_EVENT, WINDOW_COUNTS_SEVERITY } from "./wireTypes";
 
 // #267 — narrow the window_counts severity to the closed union, defaulting
 // to "none" for an unknown value (defensive: a stale server mid hot-reload
 // must never null the whole event for a bad severity — the counts are the
-// load-bearing part). Kept adjacent to `narrowChannelEvent`'s window_counts
-// arm; the value set mirrors `Grappa.WindowCounts.severity/0`.
-const SEVERITIES: readonly WindowCountsSeverity[] = ["mention", "message", "event", "none"];
+// load-bearing part). #410 — the value set IS the codegen-emitted
+// `WINDOW_COUNTS_SEVERITY` const (mirror of `Grappa.WindowCounts.severity/0`),
+// not a hand copy.
 function narrowSeverity(raw: unknown): WindowCountsSeverity {
-  return typeof raw === "string" && (SEVERITIES as readonly string[]).includes(raw)
+  return typeof raw === "string" && (WINDOW_COUNTS_SEVERITY as readonly string[]).includes(raw)
     ? (raw as WindowCountsSeverity)
     : "none";
 }
@@ -58,29 +62,15 @@ function narrowSeverity(raw: unknown): WindowCountsSeverity {
 // per-topic narrowers (e.g. a `narrowAdminEvent` if Phase 5 grows the
 // /admin LiveDashboard's WS surface).
 
-// S14 — exhaustive `Record<MessageKind, true>` so a new server kind
-// (`Message.@kinds` → `ScrollbackWireT.kind` literal union →
-// `MessageKind`, pinned by `_Assert_MessageKind` in `wireTypesAssert.ts`)
-// FAILS tsc here until it is added, instead of silently dropping every
-// message of that kind at `narrowScrollbackMessage`. The runtime Set
-// derives from the keys — one edit, tsc-enforced completeness.
-const MESSAGE_KIND_PRESENCE: Record<MessageKind, true> = {
-  privmsg: true,
-  notice: true,
-  action: true,
-  join: true,
-  part: true,
-  quit: true,
-  nick_change: true,
-  mode: true,
-  topic: true,
-  kick: true,
-  server_event: true,
-};
-
-const VALID_MESSAGE_KINDS: ReadonlySet<MessageKind> = new Set(
-  Object.keys(MESSAGE_KIND_PRESENCE) as MessageKind[],
-);
+// #410 — the runtime allowlist derives from the codegen-emitted
+// `SCROLLBACK_MESSAGE_KIND` const (mirror of `Grappa.Scrollback.Message`'s
+// `kind()` closed set). `MessageKind` (api.ts) is the type alias over the
+// SAME const, so the compile-time union and this runtime Set share ONE
+// source: a new server kind regenerates the const and flows to both — no
+// hand map to keep in sync. (Pre-#410 an exhaustive `Record<MessageKind,
+// true>` was hand-maintained and its keys built this Set — S14; the codegen
+// const supersedes the hand exhaustiveness guard.)
+const VALID_MESSAGE_KINDS: ReadonlySet<MessageKind> = new Set(SCROLLBACK_MESSAGE_KIND);
 
 // S14 — shared runtime guard for the `Message.kind()` closed set. Used
 // by `narrowScrollbackMessage` here and `narrowMentionsBundleMessage`
@@ -926,15 +916,10 @@ export function narrowAdminSnapshot(raw: unknown): AdminSnapshotPayload | null {
 // live push (field missing / wrong-typed) drops instead of crashing
 // the store setter. `event` is validated against the closed
 // `SessionLogEvent` set so a version-skewed server that adds a new
-// kind drops (runtime mirror of the tsc-side literal union).
-const VALID_SESSION_LOG_EVENTS: ReadonlySet<SessionLogEvent> = new Set<SessionLogEvent>([
-  "connected",
-  "registered",
-  "identified",
-  "deidentified",
-  "disconnected",
-  "backoff",
-]);
+// kind drops (runtime mirror of the tsc-side literal union). #410 — the
+// set IS the codegen-emitted `SESSION_LOG_EVENT` const (mirror of
+// `Grappa.SessionLog.Wire` event closed set), not a hand copy.
+const VALID_SESSION_LOG_EVENTS: ReadonlySet<SessionLogEvent> = new Set(SESSION_LOG_EVENT);
 
 /**
  * Runtime narrower for a single `SessionLogWireT` row. Mirror of the

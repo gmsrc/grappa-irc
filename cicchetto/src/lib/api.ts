@@ -19,10 +19,15 @@ import type { MemberEntry } from "./memberTypes";
 // `active_host` closed set (`"embedded" | "litterbox"`) is pinned by
 // the server typespec, not re-hardcoded here.
 import type {
+  ChannelDirectoryStatus,
   NetworksCredentialAuthMethod,
+  NetworksCredentialConnectionState,
+  NetworksNetworkServicesFlavor,
+  ScrollbackMessageKind,
   ServerSettingsWireUploadView,
   SessionLogWireListResult,
   SessionLogWireT,
+  SessionWireServerReplySource,
   WindowCountsSeverity,
 } from "./wireTypes";
 
@@ -166,7 +171,11 @@ export type UnreadCountsEnvelope = Record<string, Record<string, ServerWindowCou
 // `HomeNetworkRow`, `CredentialJson`, `narrowUserEvent`'s
 // `connection_state_changed` arm, and the per-network sidebar
 // badge rendering.
-export type ConnectionState = "connected" | "parked" | "failed";
+// #410 — single-sourced to the codegen mirror of
+// `Grappa.Networks.Credential.connection_state/0`. Re-exported under the
+// domain name so call sites keep `ConnectionState`, not the leaky codegen
+// alias. (Was a hand literal union pinned by `_Assert_ConnectionState`.)
+export type ConnectionState = NetworksCredentialConnectionState;
 
 // #349 — per-network NickServ services flavor. Server-owned enum
 // (`Grappa.Networks.Network.services_flavor`, set by the operator at
@@ -177,7 +186,9 @@ export type ConnectionState = "connected" | "parked" | "failed";
 // `null` = a legacy credential bound before the field existed / an
 // operator who left it unset. The registration wizard is the only
 // consumer today.
-export type ServicesFlavor = "azzurra" | "atheme" | "oftc" | "unknown";
+// #410 — single-sourced to the codegen mirror of
+// `Grappa.Networks.Network.services_flavor`.
+export type ServicesFlavor = NetworksNetworkServicesFlavor;
 
 // UX-4 bucket B — one row in the `home_data.networks` array, returned
 // from `GET /me` for user subjects. Mirror of server-side
@@ -552,7 +563,9 @@ export type DirectoryEntry = {
   featured: boolean;
 };
 
-export type DirectoryStatus = "fresh" | "stale" | "refreshing" | "empty";
+// #410 — single-sourced to the codegen mirror of
+// `Grappa.ChannelDirectory.Wire` status closed set.
+export type DirectoryStatus = ChannelDirectoryStatus;
 
 export type DirectoryPage = {
   entries: DirectoryEntry[];
@@ -583,18 +596,14 @@ export type DirectoryPage = {
 // notices at the type level. ScrollbackPane's dispatcher now has a
 // dedicated arm; the legacy `notice + raw_verb` arm stays as a
 // fallback for any rows the cold-deploy backfill missed.
-export type MessageKind =
-  | "privmsg"
-  | "notice"
-  | "action"
-  | "join"
-  | "part"
-  | "quit"
-  | "nick_change"
-  | "mode"
-  | "topic"
-  | "kick"
-  | "server_event";
+// #410 — single-sourced to the codegen mirror of
+// `Grappa.Scrollback.Message`'s `kind()` closed set
+// (`SCROLLBACK_MESSAGE_KIND` const + `ScrollbackMessageKind` type in
+// wireTypes.ts). Re-exported under the pervasive domain name; the runtime
+// allowlist `VALID_MESSAGE_KINDS` (wireNarrow.ts) derives from the SAME
+// const, so type + Set share ONE source. (Was a hand literal union pinned
+// by `_Assert_MessageKind`.)
+export type MessageKind = ScrollbackMessageKind;
 
 // Kind class for the unread-badge memo derivation (2026-06-01,
 // unread-badges-from-cursor cluster) + the notify/push gate (#395). The
@@ -934,7 +943,9 @@ export type WhoReply = {
 // modal (ServerReplyModal). NOT persisted; connect-time MOTD is unaffected
 // (it stays on the $server window). `source` mirrors
 // `SessionWireServerReplySource`.
-export type ServerReplySource = "info" | "version" | "motd";
+// #410 — single-sourced to the codegen mirror of the Session.Wire
+// server-reply `source` closed set.
+export type ServerReplySource = SessionWireServerReplySource;
 export type ServerReply = {
   network: string;
   source: ServerReplySource;

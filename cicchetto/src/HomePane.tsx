@@ -3,6 +3,7 @@ import {
   ApiError,
   type AvailableNetworkRow,
   addNetwork,
+  type ConnectionState,
   getFeaturedChannels,
   patchNetwork,
   postJoin,
@@ -221,7 +222,7 @@ function isVisitorSubject(): boolean {
 type HomeRow = {
   slug: string;
   nick: string;
-  connection_state: "connected" | "parked" | "failed";
+  connection_state: ConnectionState;
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
 };

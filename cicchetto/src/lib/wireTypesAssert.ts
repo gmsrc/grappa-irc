@@ -45,19 +45,16 @@
 //     truth per CLAUDE.md "Implement once, reuse everywhere").
 
 import type {
-  ConnectionState,
   CredentialJson,
   DirectoryEntry,
   FeaturedChannelLink,
   HomeData,
   HomeNetworkRow,
   MentionsBundleMessage,
-  MessageKind,
   NamesReply,
   NotifyEntry,
   QueryWindowEntry,
   ScrollbackMessage,
-  ServerReplySource,
   WhoisBundle,
   WhoReply,
   WhoUser,
@@ -70,7 +67,6 @@ import type { MemberEntry } from "./memberTypes";
 import type {
   ChannelDirectoryWireEntry,
   CicWireBundleHashPayload,
-  NetworksCredentialConnectionState,
   NetworksFeaturedChannelsWireLink,
   NetworksWireConnectionStateEvent,
   NetworksWireCredentialJson,
@@ -81,7 +77,6 @@ import type {
   QueryWindowsWireWindowsEntry,
   QueryWindowsWireWindowsListPayload,
   ReadCursorWireReadCursorSet,
-  ScrollbackMessageKind,
   ScrollbackWireArchiveChangedPayload,
   ScrollbackWireArchivePurgedPayload,
   ScrollbackWireEvent,
@@ -100,7 +95,6 @@ import type {
   SessionWirePresenceChangedPayload,
   SessionWirePresenceErrorPayload,
   SessionWirePresenceSnapshotPayload,
-  SessionWireServerReplySource,
   SessionWireTopicEntryWire,
   SessionWireWhoisBundlePayload,
   SessionWireWhoReplyPayload,
@@ -118,16 +112,6 @@ type Equal<A, B> =
 
 type Assert<T extends true> = T;
 
-// === CLOSES H2 — ConnectionState ===
-// api.ts ConnectionState was declared open-string in REV-H pre-fix;
-// post-H2 it's a closed atom union mirroring server-side
-// `Grappa.Networks.Credential.connection_state/0`. This assert pins
-// the contract: any future change to either side fails at compile
-// time.
-export type _Assert_ConnectionState = Assert<
-  Equal<ConnectionState, NetworksCredentialConnectionState>
->;
-
 // === #85 — Featured channels ===
 // Public delivery link (HomePane) + the /list directory entry's new
 // `featured` flag, pinned to their codegen counterparts.
@@ -144,21 +128,22 @@ export type _Assert_DirectoryEntry = Assert<Equal<DirectoryEntry, ChannelDirecto
 // parallel transcription. The gate now covers the scrollback message
 // (S14 kind atom union), the mentions bundle (S14 sibling), the query
 // window (S43), the /who + /topic + /modes + members payloads, the
-// home rows, the credential JSON (S3 caught `auth_method` drift), and
-// the `server_reply` + connection-state closed sets.
+// home rows, and the credential JSON (S3 caught `auth_method` drift).
+//
+// #410 — the leaf ENUM types (MessageKind, ConnectionState, ServicesFlavor,
+// DirectoryStatus, ServerReplySource) are no longer asserted here: they are
+// now single-sourced in api.ts as `export type X = <generated>` aliases, so
+// equality with the codegen type holds BY CONSTRUCTION (an alias can't
+// drift). Only the STRUCT mirrors below still need a pin.
 //
 // Enriched / discriminated types (`WireUserEvent`, `WireChannelEvent`,
 // `WireAdminEvent`, `MeResponse`, `Network`) carry cic-side
 // consumer enrichments and are validated via their runtime narrowers +
 // `assertNever`; their per-arm PAYLOADS that have a flat counterpart
 // are pinned below (e.g. `ScrollbackMessage`, `MentionsBundleMessage`).
-export type _Assert_MessageKind = Assert<Equal<MessageKind, ScrollbackMessageKind>>;
 export type _Assert_ScrollbackMessage = Assert<Equal<ScrollbackMessage, ScrollbackWireT>>;
 export type _Assert_MentionsBundleMessage = Assert<
   Equal<MentionsBundleMessage, SessionWireMentionsBundleMessage>
->;
-export type _Assert_ServerReplySource = Assert<
-  Equal<ServerReplySource, SessionWireServerReplySource>
 >;
 export type _Assert_WhoUser = Assert<Equal<WhoUser, SessionWireWhoUser>>;
 export type _Assert_MemberEntry = Assert<Equal<MemberEntry, SessionWireMember>>;

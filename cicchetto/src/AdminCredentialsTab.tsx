@@ -13,6 +13,10 @@ import {
   adminUpdateCredential,
 } from "./lib/api";
 import { token } from "./lib/auth";
+// #410 — the auth-method options ARE the codegen-emitted
+// `IRCAUTH_FSMAUTH_METHOD` const (mirror of `Grappa.IRC.Auth.FSM`'s
+// auth_method closed set), not a hand copy.
+import { IRCAUTH_FSMAUTH_METHOD } from "./lib/wireTypes";
 
 // Admin-panel bucket 5 — Credentials admin tab.
 //
@@ -60,8 +64,6 @@ const EMPTY_BIND: BindForm = {
   realname: "",
   autojoin_channels: "",
 };
-
-const AUTH_METHODS = ["auto", "sasl", "server_pass", "nickserv_identify", "none"] as const;
 
 type EditForm = {
   nick: string;
@@ -321,7 +323,7 @@ const AdminCredentialsTab: Component = () => {
           data-testid="admin-credentials-bind-auth-method"
           aria-label="auth method"
         >
-          <For each={AUTH_METHODS}>{(m) => <option value={m}>{m}</option>}</For>
+          <For each={IRCAUTH_FSMAUTH_METHOD}>{(m) => <option value={m}>{m}</option>}</For>
         </select>
         <input
           type="password"
@@ -551,7 +553,7 @@ const CredentialEditFields: Component<{
         data-testid={`admin-credential-edit-auth-method-${props.credKey}`}
         aria-label="auth method"
       >
-        <For each={AUTH_METHODS}>{(m) => <option value={m}>{m}</option>}</For>
+        <For each={IRCAUTH_FSMAUTH_METHOD}>{(m) => <option value={m}>{m}</option>}</For>
       </select>
       <input
         type="password"
