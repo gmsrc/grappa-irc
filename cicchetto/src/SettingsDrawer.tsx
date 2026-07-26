@@ -13,6 +13,7 @@ import DeleteAccountModal from "./DeleteAccountModal";
 import InlineConfirmButton from "./InlineConfirmButton";
 import { ApiError, displayNick, type Network, visitorAnchorNick } from "./lib/api";
 import { getSubject, token } from "./lib/auth";
+import { getColoredNicklist, setColoredNicklist } from "./lib/colorNicklist";
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { detach, quit, updateIdentity } from "./lib/lifecycle";
@@ -84,6 +85,7 @@ const SettingsDrawer: Component<Props> = (props) => {
   const navigate = useNavigate();
   const [size, setSize] = createSignal<FontSizeKey>(getFontSize());
   const [timeFmt, setTimeFmt] = createSignal<TimeFormatKey>(getTimeFormat());
+  const [coloredNicklist, setColoredNicklistSig] = createSignal<boolean>(getColoredNicklist());
 
   const [prefs, setPrefs] = createSignal<NotificationPrefs>(DEFAULT_NOTIFICATION_PREFS);
   const [devices, setDevices] = createSignal<PushDeviceSummary[]>([]);
@@ -184,6 +186,12 @@ const SettingsDrawer: Component<Props> = (props) => {
     const value = (e.currentTarget as HTMLInputElement).value as TimeFormatKey;
     setTimeFmt(value);
     setTimeFormat(value);
+  };
+
+  const onColoredNicklistChange = (e: Event) => {
+    const on = (e.currentTarget as HTMLInputElement).checked;
+    setColoredNicklistSig(on);
+    setColoredNicklist(on);
   };
 
   // #126 — detach: leave cic, KEEP the bouncer up. Persistent identities
@@ -883,93 +891,119 @@ const SettingsDrawer: Component<Props> = (props) => {
             </span>
           </button>
 
-          <fieldset class="font-size-fieldset">
-            <legend>text size</legend>
-            <label>
-              <input
-                type="radio"
-                name="font-size"
-                value="S"
-                checked={size() === "S"}
-                onChange={onFontSizeChange}
-                data-testid="font-size-S"
-              />
-              S
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="font-size"
-                value="M"
-                checked={size() === "M"}
-                onChange={onFontSizeChange}
-                data-testid="font-size-M"
-              />
-              M
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="font-size"
-                value="L"
-                checked={size() === "L"}
-                onChange={onFontSizeChange}
-                data-testid="font-size-L"
-              />
-              L
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="font-size"
-                value="XL"
-                checked={size() === "XL"}
-                onChange={onFontSizeChange}
-                data-testid="font-size-XL"
-              />
-              XL
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="font-size"
-                value="XXL"
-                checked={size() === "XXL"}
-                onChange={onFontSizeChange}
-                data-testid="font-size-XXL"
-              />
-              XXL
-            </label>
-          </fieldset>
+          {/* #443 — display options: text size, timestamp format, and the
+              show-colored-nicklist toggle grouped into one titled section
+              (no sub-page; the SettingsSubPage union in lib/settingsNav.ts
+              stays untouched). */}
+          <section class="settings-section" data-testid="settings-section-display">
+            <h4 class="settings-section-heading">display options</h4>
 
-          {/* #217 — message timestamp format. Closed-set (with/without
+            <fieldset class="font-size-fieldset">
+              <legend>text size</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="font-size"
+                  value="S"
+                  checked={size() === "S"}
+                  onChange={onFontSizeChange}
+                  data-testid="font-size-S"
+                />
+                S
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="font-size"
+                  value="M"
+                  checked={size() === "M"}
+                  onChange={onFontSizeChange}
+                  data-testid="font-size-M"
+                />
+                M
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="font-size"
+                  value="L"
+                  checked={size() === "L"}
+                  onChange={onFontSizeChange}
+                  data-testid="font-size-L"
+                />
+                L
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="font-size"
+                  value="XL"
+                  checked={size() === "XL"}
+                  onChange={onFontSizeChange}
+                  data-testid="font-size-XL"
+                />
+                XL
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="font-size"
+                  value="XXL"
+                  checked={size() === "XXL"}
+                  onChange={onFontSizeChange}
+                  data-testid="font-size-XXL"
+                />
+                XXL
+              </label>
+            </fieldset>
+
+            {/* #217 — message timestamp format. Closed-set (with/without
             seconds), client-only, persisted in localStorage. Mirrors the
             text-size radio-group pattern. */}
-          <fieldset class="time-format-fieldset">
-            <legend>timestamp format</legend>
-            <label>
-              <input
-                type="radio"
-                name="time-format"
-                value="hms"
-                checked={timeFmt() === "hms"}
-                onChange={onTimeFormatChange}
-                data-testid="time-format-hms"
-              />
-              with seconds (HH:MM:SS)
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="time-format"
-                value="hm"
-                checked={timeFmt() === "hm"}
-                onChange={onTimeFormatChange}
-                data-testid="time-format-hm"
-              />
-              no seconds (HH:MM)
-            </label>
-          </fieldset>
+            <fieldset class="time-format-fieldset">
+              <legend>timestamp format</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="time-format"
+                  value="hms"
+                  checked={timeFmt() === "hms"}
+                  onChange={onTimeFormatChange}
+                  data-testid="time-format-hms"
+                />
+                with seconds (HH:MM:SS)
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="time-format"
+                  value="hm"
+                  checked={timeFmt() === "hm"}
+                  onChange={onTimeFormatChange}
+                  data-testid="time-format-hm"
+                />
+                no seconds (HH:MM)
+              </label>
+            </fieldset>
+
+            {/* #443 — per-nick colors in the members pane. Off by default: the
+              nicklist stays monochrome so its color reads as the mode tier,
+              not identity. When on, MembersPane drops `noColor` so NickText
+              applies the per-nick hash hue; the mode-prefix glyph keeps its
+              own tier color either way. */}
+            <fieldset class="colored-nicklist-fieldset">
+              <legend>nicklist</legend>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={coloredNicklist()}
+                  onChange={onColoredNicklistChange}
+                  data-testid="colored-nicklist-toggle"
+                />
+                show colored nicklist
+              </label>
+            </fieldset>
+          </section>
 
           <Show when={isAdmin()}>
             <button

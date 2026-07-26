@@ -68,12 +68,25 @@ vi.mock("../lib/selection", () => ({
   applySeedEnvelope: vi.fn(),
 }));
 
+// #443 — colored-nicklist pref. Mock with a mutable holder so each test
+// drives the on/off state deterministically (the real signal reactivity is
+// covered in colorNicklist.test.ts; here we assert MembersPane's wiring:
+// off → monochrome nick-text, on → per-nick color, prefix glyph unaffected).
+const coloredHolder = vi.hoisted(() => ({ current: false }));
+vi.mock("../lib/colorNicklist", () => ({
+  getColoredNicklist: () => coloredHolder.current,
+  setColoredNicklist: (on: boolean) => {
+    coloredHolder.current = on;
+  },
+}));
+
 import MembersPane from "../MembersPane";
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockMembers = {};
   mockWindowState = {};
+  coloredHolder.current = false;
 });
 
 describe("MembersPane", () => {
@@ -369,5 +382,45 @@ describe("MembersPane", () => {
     render(() => <MembersPane networkSlug="freenode" channelName="#italia" />);
     const halfop = document.querySelector(".member-halfop");
     expect(halfop?.textContent).toContain("%carol");
+  });
+});
+
+// #443 — "show colored nicklist" opt-in. Default OFF keeps the pane
+// monochrome (the color channel there reads as the mode tier, not identity);
+// ON drops NickText's `noColor` so the per-nick hash hue applies. Either
+// way the mode-prefix glyph keeps its own tier color, so the tier signal
+// survives — that is the whole reason the toggle is safe.
+describe("MembersPane colored-nicklist (#443)", () => {
+  it("renders nick text monochrome (no inline color) when the pref is off", () => {
+    coloredHolder.current = false;
+    mockWindowState = { "freenode #italia": "joined" };
+    mockMembers = { "freenode #italia": [{ nick: "alice", modes: ["+"] }] };
+    render(() => <MembersPane networkSlug="freenode" channelName="#italia" />);
+    const nickText = document.querySelector(".member-voiced .nick-text") as HTMLElement;
+    expect(nickText).not.toBeNull();
+    // noColor=true → NickText omits the inline style → no per-nick color var.
+    expect(nickText.getAttribute("style") ?? "").not.toContain("color");
+  });
+
+  it("applies the per-nick hash color when the pref is on", () => {
+    coloredHolder.current = true;
+    mockWindowState = { "freenode #italia": "joined" };
+    mockMembers = { "freenode #italia": [{ nick: "alice", modes: ["+"] }] };
+    render(() => <MembersPane networkSlug="freenode" channelName="#italia" />);
+    const nickText = document.querySelector(".member-voiced .nick-text") as HTMLElement;
+    expect(nickText).not.toBeNull();
+    // noColor=false → NickText applies { color: nickColorVar(nick) }.
+    expect(nickText.getAttribute("style") ?? "").toContain("color");
+  });
+
+  it("keeps the mode-prefix glyph colored even with the pref off (tier signal survives)", () => {
+    coloredHolder.current = false;
+    mockWindowState = { "freenode #italia": "joined" };
+    mockMembers = { "freenode #italia": [{ nick: "alice", modes: ["+"] }] };
+    render(() => <MembersPane networkSlug="freenode" channelName="#italia" />);
+    // The voiced prefix span carries its own tier class (its color is CSS-
+    // driven, independent of noColor) — never suppressed by the toggle.
+    const prefix = document.querySelector(".member-voiced .nick-prefix-voiced");
+    expect(prefix?.textContent).toBe("+");
   });
 });

@@ -16,6 +16,11 @@ vi.mock("../lib/timeFormat", () => ({
   setTimeFormat: vi.fn(),
 }));
 
+vi.mock("../lib/colorNicklist", () => ({
+  getColoredNicklist: vi.fn(() => false),
+  setColoredNicklist: vi.fn(),
+}));
+
 const subjectHolder = vi.hoisted(() => ({
   current: null as
     | { kind: "user"; id: string; name: string }
@@ -284,6 +289,34 @@ describe("SettingsDrawer", () => {
     wrap(false);
     const drawer = screen.getByRole("dialog", { name: /settings/i });
     expect(drawer.classList.contains("open")).toBe(false);
+  });
+});
+
+describe("SettingsDrawer display options section (#443)", () => {
+  it("groups text size, timestamp format and the colored-nicklist toggle under one section", () => {
+    wrap(true);
+    const section = screen.getByTestId("settings-section-display");
+    expect(section).toBeInTheDocument();
+    expect(section.textContent).toContain("display options");
+    // The three display controls live INSIDE the section — grouping onto the
+    // main page (no new sub-page) is the point of #443.
+    expect(section.querySelector('[data-testid="font-size-M"]')).not.toBeNull();
+    expect(section.querySelector('[data-testid="time-format-hms"]')).not.toBeNull();
+    expect(section.querySelector('[data-testid="colored-nicklist-toggle"]')).not.toBeNull();
+  });
+
+  it("renders the colored-nicklist toggle unchecked by default", () => {
+    wrap(true);
+    const toggle = screen.getByTestId("colored-nicklist-toggle") as HTMLInputElement;
+    // getColoredNicklist mock returns false → off by default (current behavior).
+    expect(toggle.checked).toBe(false);
+  });
+
+  it("toggling the colored-nicklist checkbox fires setColoredNicklist(true)", async () => {
+    const colorNicklist = await import("../lib/colorNicklist");
+    wrap(true);
+    fireEvent.click(screen.getByTestId("colored-nicklist-toggle"));
+    expect(colorNicklist.setColoredNicklist).toHaveBeenCalledWith(true);
   });
 });
 

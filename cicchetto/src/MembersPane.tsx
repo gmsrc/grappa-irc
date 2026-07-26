@@ -1,6 +1,7 @@
 import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { ownNickForNetwork } from "./lib/api";
 import { channelKey } from "./lib/channelKey";
+import { getColoredNicklist } from "./lib/colorNicklist";
 import { memberSigil } from "./lib/memberSigil";
 import { type MemberEntry, membersByChannel, sortMembers } from "./lib/members";
 import { networkBySlug, networks, user } from "./lib/networks";
@@ -179,7 +180,16 @@ const MembersPane: Component<Props> = (props) => {
                     onClick={() => onClick(m.nick)}
                     onContextMenu={(e) => onContextMenu(e, m.nick)}
                   >
-                    <NickText nick={m.nick} prefix={sigilToPrefix(m.modes)} noColor />
+                    {/* #443 — colored nicklist opt-in (off by default). When
+                        on, drop `noColor` so NickText applies the per-nick
+                        hash hue; the mode-prefix glyph keeps its tier color
+                        either way. Reading the signal here re-renders the
+                        open list live on toggle. */}
+                    <NickText
+                      nick={m.nick}
+                      prefix={sigilToPrefix(m.modes)}
+                      noColor={!getColoredNicklist()}
+                    />
                   </button>
                 </li>
               )}

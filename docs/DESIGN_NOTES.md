@@ -20144,3 +20144,41 @@ defensive — unreachable via the terminal-bounded callers but the encoder is a
 public tested API); and the trivial `Makefile` union with #446's `http.c/.h`
 `decode_chunked` extraction. shottino native `make check` (ASan+UBSan) green.
 Rides the batch COLD deploy (server + cic bundle).
+
+## 2026-07-26 — #443 display-options settings section + colored-nicklist toggle
+
+Grouped the loose display fieldsets (text size, timestamp format #217) into one
+titled "display options" section on the settings-drawer MAIN page, and added a
+"show colored nicklist" toggle to it. No new sub-page: the `SettingsSubPage`
+union in `lib/settingsNav.ts` is untouched (no routing / deep-link surface).
+Off by default — the members pane renders nicks monochrome on purpose
+(`MembersPane` passes `noColor` to `NickText`) because there the color channel
+encodes the mode TIER, not identity; opting in flips `noColor` so the per-nick
+hash hue applies, and the mode-prefix glyph keeps its own tier color either
+way, so the tier signal survives. This is a user preference, NOT a theme
+property — themes are shareable/publishable artifacts and must not carry it, or
+someone else's theme would silently overwrite the personal choice.
+
+### Why localStorage, not server-synced (the #449 boundary)
+
+The toggle persists client-side via `lib/colorNicklist.ts`, following
+`timeFormat.ts` (module-singleton Solid signal via `createRoot`), NOT
+`fontSize.ts`: the flag is read at RENDER time by `MembersPane`, so a bare
+`localStorage.getItem` in the render path would not re-run on change — the
+signal makes toggling re-render the open nicklist live. A CSS-only variant
+(`html[data-…]` + a rule) does not work: with `noColor` there is no per-nick
+inline color to reveal, the color comes from the prop path, so the prop is what
+has to flip.
+
+#449 wants ALL display prefs (presence filter #222, timestamp format #217, and
+"whatever #443 lands") moved to a server-backed `/me/settings` full-map path so
+they converge across devices. #443 deliberately stays on localStorage anyway:
+that keeps it the THIRD instance of the ONE existing localStorage display-pref
+pattern, so #449 migrates the whole set uniformly in one dedicated move.
+Server-syncing ONLY this toggle while presence + timestamp stay local is the
+half-migrated state CLAUDE.md bans ("Total consistency or nothing"), and #449
+would have to redo it into the full-map shape regardless — so localStorage-for-
+#443 is the anti-second-road choice, not the opposite. The durable part (the UI
+section + the reactive signal module) survives #449 untouched; only the
+persistence backend moves later, in lockstep with its neighbours. Nothing was
+pre-built toward #449 (speculative). Ships COLD (cic bundle).
