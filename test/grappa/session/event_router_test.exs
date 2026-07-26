@@ -817,6 +817,96 @@ defmodule Grappa.Session.EventRouterTest do
     end
   end
 
+  # #400 — a services-sender NOTICE / PRIVMSG normally re-keys to the
+  # synthetic `$server` window (so it bypasses cic's dm-listener auto-open
+  # and doesn't spawn a stray query per service). But when the operator
+  # already has an OPEN query window with that service — they `/msg`'d it
+  # by hand — the reply belongs in THAT window, not $server where they'd
+  # never see it. The open-window fact is a DB read; EventRouter is a pure
+  # classifier ("No Repo"), so the lookup is injected as an opaque
+  # `state.query_window_open?` callback (mirror of `visitor_nick_persister`
+  # — the SessionPlan.resolve/1 DI seam the Server already carries). Absent
+  # (pure tests that don't inject it) → false → today's $server behaviour.
+  describe "route/2 — #400 services re-key to an open query window" do
+    test "NOTICE from a service with an OPEN query window routes to the service nick" do
+      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+
+      m =
+        msg(
+          :notice,
+          ["vjt", "nick last seen 3d ago"],
+          {:nick, "SeenServ", "service", "azzurra.chat"}
+        )
+
+      assert {:cont, ^state, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
+      assert attrs.channel == "SeenServ"
+      assert attrs.sender == "SeenServ"
+    end
+
+    test "NOTICE from a service with NO open query window still routes to $server (regression)" do
+      state = base_state(%{query_window_open?: fn _, _, _ -> false end})
+
+      m =
+        msg(
+          :notice,
+          ["vjt", "nick last seen 3d ago"],
+          {:nick, "SeenServ", "service", "azzurra.chat"}
+        )
+
+      assert {:cont, ^state, [{:persist, :notice, %{channel: "$server"}}]} =
+               EventRouter.route(m, state)
+    end
+
+    test "PRIVMSG from a service with an OPEN query window routes to the service nick" do
+      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+
+      m =
+        msg(
+          :privmsg,
+          ["vjt", "here is your answer"],
+          {:nick, "SeenServ", "service", "azzurra.chat"}
+        )
+
+      assert {:cont, ^state, [{:persist, :privmsg, attrs}]} = EventRouter.route(m, state)
+      assert attrs.channel == "SeenServ"
+      assert attrs.sender == "SeenServ"
+    end
+
+    test "the open-window predicate is called with (subject, network_id, service nick)" do
+      parent = self()
+
+      state =
+        base_state(%{
+          query_window_open?: fn subject, network_id, nick ->
+            send(parent, {:open_check, subject, network_id, nick})
+            true
+          end
+        })
+
+      m = msg(:notice, ["vjt", "reply"], {:nick, "SeenServ", "service", "azzurra.chat"})
+      EventRouter.route(m, state)
+
+      assert_received {:open_check, {:user, _}, 42, "SeenServ"}
+    end
+
+    test "ChanServ bracket-prefixed NOTICE keeps channel precedence even with an open query window (open-Q 3)" do
+      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+
+      m =
+        msg(
+          :notice,
+          ["vjt", "[#italia] access list updated"],
+          {:nick, "ChanServ", "s", "h"}
+        )
+
+      # The `[ #chan ]:` bracket branch routes to the channel window BEFORE
+      # the services re-key is consulted — a channel-scoped notice belongs
+      # to the channel even when a ChanServ query window is open.
+      assert {:cont, ^state, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
+      assert attrs.channel == "#italia"
+    end
+  end
+
   # #218 — a NOTICE/PRIVMSG addressed to a STATUSMSG target (a membership
   # sigil prefixing a channel, e.g. `@#chan` ops-only, `+#chan` voice)
   # belongs in the underlying channel window, NOT the network/$server tab

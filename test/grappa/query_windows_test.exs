@@ -299,6 +299,49 @@ defmodule Grappa.QueryWindowsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # open?/3 (#400 — services NOTICE/PRIVMSG re-key consults open windows)
+  # ---------------------------------------------------------------------------
+
+  describe "open?/3" do
+    test "returns true when a query window is open for the nick" do
+      user = user_fixture()
+      net = network_fixture()
+      {:ok, _} = QueryWindows.open({:user, user.id}, net.id, "SeenServ", user.name)
+
+      assert QueryWindows.open?({:user, user.id}, net.id, "SeenServ")
+    end
+
+    test "returns false when no query window is open for the nick" do
+      user = user_fixture()
+      net = network_fixture()
+
+      refute QueryWindows.open?({:user, user.id}, net.id, "SeenServ")
+    end
+
+    test "folds rfc1459: an open 'seenserv' matches 'SeenServ' and 'nick[1]' matches 'nick{1}'" do
+      user = user_fixture()
+      net = network_fixture()
+      {:ok, _} = QueryWindows.open({:user, user.id}, net.id, "seenserv", user.name)
+      {:ok, _} = QueryWindows.open({:user, user.id}, net.id, "nick[1]", user.name)
+
+      # rfc1459 case-fold: besides A-Z it folds `[ ] \ ~` -> `{ } | ^` — the
+      # #400 re-key MUST match the folded uniqueness index (#121/#372) or a
+      # `SeenServ` reply forks from a `seenserv` window the operator opened.
+      assert QueryWindows.open?({:user, user.id}, net.id, "SeenServ")
+      assert QueryWindows.open?({:user, user.id}, net.id, "nick{1}")
+    end
+
+    test "is scoped to (subject, network) — a window on another network is not seen" do
+      user = user_fixture()
+      net1 = network_fixture()
+      net2 = network_fixture()
+      {:ok, _} = QueryWindows.open({:user, user.id}, net1.id, "SeenServ", user.name)
+
+      refute QueryWindows.open?({:user, user.id}, net2.id, "SeenServ")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # rename/4 (#373 — query window follows a peer NICK change)
   # ---------------------------------------------------------------------------
 

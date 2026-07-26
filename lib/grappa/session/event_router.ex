@@ -111,6 +111,27 @@ defmodule Grappa.Session.EventRouter do
         }
 
   @typedoc """
+  #400 — injected open-query-window predicate `(subject, network_id, nick)
+  -> bool`. Read from `state.query_window_open?` (an `optional(any())`
+  key on the state map above) to decide whether a services-sender arrival
+  re-keys to the service's own query window or the synthetic `$server`.
+
+  EventRouter is a pure classifier ("No Repo, no Logger"); the fact it
+  needs is a DB read (`Grappa.QueryWindows.open?/3`). Rather than alias
+  `Repo`/`QueryWindows` and drag the sandbox-free classifier suite onto
+  `DataCase`, `Session.Server` injects the function reference into the
+  state map — the same `SessionPlan.resolve/1` dependency-injection seam
+  the Server already carries for `visitor_nick_persister` /
+  `last_joined_persister` / `registration_committer`. Absent (pure tests
+  that don't inject it) → treated as `false` → `$server`, today's
+  behaviour. (The 2026-04-27 review #369 flagged these injected closures
+  as a symptom of the `Networks -> Session` edge pointing the wrong way,
+  but vjt dropped that theme — the pattern stands accepted, so this 4th
+  closure is coherent with the decision, not new debt.)
+  """
+  @type query_window_open? :: (Session.subject(), integer(), String.t() -> boolean())
+
+  @typedoc """
   Persist-effect attrs map. Exactly one of `:user_id` / `:visitor_id`
   is set per `Grappa.Scrollback.Message` XOR check (Task 4 migration);
   the choice is derived from `state.subject` via
@@ -2107,7 +2128,7 @@ defmodule Grappa.Session.EventRouter do
               byte_size(target) > 0 and
               binary_part(target, 0, 1) not in ["#", "&", "!", "+"] do
     sender = Message.sender_nick(msg)
-    {channel, body_to_persist} = route_non_channel_notice(sender, body)
+    {channel, body_to_persist} = route_non_channel_notice(sender, body, state)
     {state, eff} = build_persist(state, :notice, channel, sender, body_to_persist, %{})
     {:cont, state, [eff]}
   end
@@ -2373,23 +2394,26 @@ defmodule Grappa.Session.EventRouter do
   end
 
   # Decide which window a non-channel NOTICE lands in + the body to persist.
-  # Pure: takes sender + body, returns {channel, body}. The ChanServ branch
-  # rewrites body to drop the `[ #chan ]:` prefix; other branches return
-  # body unchanged.
-  @spec route_non_channel_notice(String.t(), String.t()) :: {String.t(), String.t()}
-  defp route_non_channel_notice(sender, body) do
+  # Takes sender + body + state, returns {channel, body}. The ChanServ
+  # `[ #chan ]:` branch rewrites body to drop the prefix and keeps
+  # PRIORITY (a channel-scoped notice belongs to the channel window even
+  # when a ChanServ query window is open — #400 open-Q 3); other branches
+  # return body unchanged. `state` is threaded only for the #400 services
+  # re-key lookup (see `service_route_channel/2`).
+  @spec route_non_channel_notice(String.t(), String.t(), state()) :: {String.t(), String.t()}
+  defp route_non_channel_notice(sender, body, state) do
     case chanserv_bracket_match(sender, body) do
       {_, _} = bracket -> bracket
-      nil -> route_non_channel_notice_non_chanserv(sender, body)
+      nil -> route_non_channel_notice_non_chanserv(sender, body, state)
     end
   end
 
-  @spec route_non_channel_notice_non_chanserv(String.t(), String.t()) ::
+  @spec route_non_channel_notice_non_chanserv(String.t(), String.t(), state()) ::
           {String.t(), String.t()}
-  defp route_non_channel_notice_non_chanserv(sender, body) do
+  defp route_non_channel_notice_non_chanserv(sender, body, state) do
     cond do
       Identifier.services_sender?(sender) ->
-        {"$server", body}
+        {service_route_channel(sender, state), body}
 
       String.contains?(sender, ".") ->
         {"$server", body}
@@ -2405,6 +2429,32 @@ defmodule Grappa.Session.EventRouter do
         # somewhere — losing it would mask connection-time diagnostics.
         {"$server", body}
     end
+  end
+
+  # #400 — where a services-sender arrival (NOTICE or DM-shaped PRIVMSG)
+  # lands. The default re-keys to the synthetic `$server` window so the
+  # traffic surfaces in the server-messages tab and bypasses cic's
+  # dm-listener auto-open (no stray query window per service). EXCEPTION:
+  # when the operator already has an OPEN query window with this service —
+  # they `/msg`'d it by hand — the reply belongs in THAT window, not
+  # `$server` where they'd stare at an empty query while the answer landed
+  # elsewhere. Neither invariant weakens: an existing window is not being
+  # *opened* (auto-open untouched), and `$server` stays the fallback for
+  # unsolicited service traffic (NickServ-at-connect, the common case).
+  #
+  # The open-window fact is a per-(subject, network) DB read. EventRouter
+  # is a pure classifier ("No Repo"), so the lookup is injected as the
+  # opaque `state.query_window_open?` callback (see the type's docstring).
+  # Absent → false → `$server`, keeping the sandbox-free classifier suite
+  # and today's behaviour intact. Shared by the NOTICE arm and
+  # `privmsg_default/3` so the two doors can't drift.
+  @spec service_route_channel(String.t(), state()) :: String.t()
+  defp service_route_channel(sender, state) do
+    open? = Map.get(state, :query_window_open?, fn _, _, _ -> false end)
+
+    if open?.(state.subject, state.network_id, sender),
+      do: sender,
+      else: "$server"
   end
 
   @spec chanserv_bracket_match(String.t(), String.t()) :: {String.t(), String.t()} | nil
@@ -2467,9 +2517,14 @@ defmodule Grappa.Session.EventRouter do
     # exists for doesn't apply. This makes channel-PRIVMSG symmetric with
     # the channel-NOTICE arm above (line ~344), which already routes
     # services advertisements to the channel everyone is watching.
+    # #400: a DM-shaped services PRIVMSG re-keys to `$server` UNLESS the
+    # operator has that service's query window open (then it lands there).
+    # `service_route_channel/2` is shared with the NOTICE arm so both doors
+    # observe the same open-window rule. Channel-target services traffic is
+    # unaffected — it belongs in the channel window regardless (#78).
     route_channel =
       if Identifier.services_sender?(sender) and not channel_target?(channel),
-        do: "$server",
+        do: service_route_channel(sender, state),
         else: channel
 
     {state, eff} = build_persist(state, kind, route_channel, sender, body, %{})

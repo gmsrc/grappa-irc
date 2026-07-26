@@ -433,6 +433,7 @@ defmodule Grappa.Session.Server do
           optional(:credential_committer) => credential_committer(),
           optional(:registration_committer) => registration_committer(),
           optional(:last_joined_persister) => last_joined_persister(),
+          optional(:query_window_open?) => EventRouter.query_window_open?(),
           optional(:refresh_plan) => refresh_plan_check(),
           # #100 sustained-reconnect reset gate — test seam. Production
           # omits it and inherits `@connection_stable_ms`.
@@ -524,6 +525,7 @@ defmodule Grappa.Session.Server do
           credential_committer: credential_committer() | nil,
           registration_committer: registration_committer() | nil,
           last_joined_persister: last_joined_persister() | nil,
+          query_window_open?: EventRouter.query_window_open?(),
           ghost_recovery: GhostRecovery.t() | nil,
           ghost_timer: reference() | nil,
           away_state: AwayState.t(),
@@ -875,6 +877,14 @@ defmodule Grappa.Session.Server do
       credential_committer: Map.get(opts, :credential_committer),
       registration_committer: Map.get(opts, :registration_committer),
       last_joined_persister: Map.get(opts, :last_joined_persister),
+      # #400 — open-query-window predicate EventRouter consults to re-key a
+      # services-sender NOTICE/PRIVMSG onto the service's own query window
+      # when the operator has one open (else `$server`, today's behaviour).
+      # Production default is the real DB read; Server already deps
+      # QueryWindows (#373 `rename/4`), so injecting the fn reference adds
+      # no new Boundary edge. Tests override via opts with a fake closure —
+      # EventRouter stays a pure, sandbox-free classifier ("No Repo").
+      query_window_open?: Map.get(opts, :query_window_open?, &QueryWindows.open?/3),
       ghost_recovery: nil,
       ghost_timer: nil,
       away_state: AwayState.new(),

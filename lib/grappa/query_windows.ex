@@ -329,6 +329,30 @@ defmodule Grappa.QueryWindows do
   end
 
   @doc """
+  Returns `true` when `subject` has an open DM (query) window for
+  `target_nick` on `network_id`.
+
+  Case-insensitive under rfc1459 (#121/#372): `open?(s, n, "SeenServ")`
+  matches a stored `"seenserv"` window (and `"nick[1]"`/`"nick{1}"`).
+  Folds `target_nick` via `Identifier.canonical_nick/1` and delegates to
+  the same `new_window_exists?/3` exists-query the fold-collision path in
+  `rename/4` uses — character-identical to the folded unique **expression**
+  index, so the check is sargable.
+
+  Added for #400: `Grappa.Session.EventRouter` re-keys a services-sender
+  NOTICE / PRIVMSG onto this window instead of the synthetic `$server`
+  when one exists (the operator `/msg`'d the service by hand and expects
+  the reply in that window). EventRouter is a pure classifier and must not
+  alias `Repo`, so it reaches this via an injected callback (`&open?/3`)
+  rather than a static dependency.
+  """
+  @spec open?(Subject.t(), integer(), String.t()) :: boolean()
+  def open?({_, _} = subject, network_id, target_nick)
+      when is_integer(network_id) and is_binary(target_nick) do
+    new_window_exists?(subject, network_id, Identifier.canonical_nick(target_nick))
+  end
+
+  @doc """
   Test-support: drains every `query_windows` row for `user_id` in a
   single DELETE. Intended for `Grappa.TestSupport.SubjectReset` only —
   production lifecycle uses `open/4` + `close/4` per (subject, network,

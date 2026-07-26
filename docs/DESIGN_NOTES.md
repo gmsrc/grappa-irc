@@ -18338,3 +18338,75 @@ bracket-fold row. All cic-only: zero server code changed; the server side
 of the shared golden was verified green by source-reading the parity
 harness (it reads prefs RAW from JSON and calls `should_notify?/4`, which
 folds the inbound channel via `canonical_channel`).
+## 2026-07-26 — #400 service NOTICE/PRIVMSG re-key follows an open query window
+
+**Bug (third-party instance).** `/msg SeenServ …` with no `/ss` alias
+opens a query window with the service, but the service's NOTICE replies
+were re-keyed onto the synthetic `$server` window *unconditionally* — the
+operator stared at an empty query while the answer landed in the server
+tab. Worst on mobile, where defining an alias before every ad-hoc service
+interaction is awkward.
+
+**Why the `$server` re-key exists (both invariants kept).** A
+services-sender NOTICE/PRIVMSG is re-keyed to `$server` so it (a) surfaces
+in the server-messages tab and (b) does NOT trip cic's dm-listener
+auto-open (which would spawn a stray query window per service). The
+outbound side stays asymmetric by design: `Session.Server.service_target?`
+makes a PRIVMSG *to* a service wire-only so `IDENTIFY <password>` never
+persists. #400 touches NEITHER — outbound suppression is explicitly out of
+scope (issue open-Q 2).
+
+**Fix.** Make the `$server` re-key CONDITIONAL: if the operator already
+has an open query window with that service on this `(subject, network)` →
+persist on the service nick's window; else `$server`, exactly as before.
+Neither reason weakens — an *existing* window is not being *opened* (no
+auto-open), and `$server` stays the fallback for unsolicited service
+traffic (NickServ-at-connect, the common case). The ChanServ `[ #chan ]:`
+bracket branch keeps PRIORITY (a channel-scoped notice belongs to the
+channel window even when a ChanServ query is open — open-Q 3). The routing
+rule most IRC clients implement (query if open, common channel otherwise,
+status last); services don't join channels, so it degrades to those two.
+
+**Where the fold matters.** The open-window lookup is a per-`(subject,
+network)` exists-query on `query_windows`, rfc1459-folded on `target_nick`
+(#121/#372) — a `SeenServ` reply must match a `seenserv`/`SeenServ`/
+`Seen[…]` window the operator opened, or it forks. New public
+`QueryWindows.open?/3` folds the raw nick via `Identifier.canonical_nick/1`
+and delegates to the same private `new_window_exists?/3` exists-query the
+`rename/4` fold-collision path already uses — character-identical to the
+folded UNIQUE expression index, so the check is sargable. No cache: service
+traffic is low-volume, so a direct DB read per inbound service message is
+the lightweight choice (CLAUDE.md lightweight-over-heavyweight; caching
+would be a parallel structure needing invalidation housekeeping).
+
+**Purity preserved via the existing DI seam — NOT a direct Repo call.**
+`Session.EventRouter` is a documented pure classifier ("No process, no
+socket, no Repo, no Logger") and its whole test suite runs sandbox-free.
+The issue's impl-note suggested EventRouter call `QueryWindows.open?/3`
+directly, but that would (a) break the purity invariant and (b) drag the
+entire NOTICE-routing test suite onto `DataCase`, all for one lookup — a
+bad trade. Instead the predicate is INJECTED as an opaque
+`state.query_window_open?` callback `(subject, network_id, nick -> bool)`,
+the same dependency-injection seam the Server already carries for
+`visitor_nick_persister` / `last_joined_persister` /
+`registration_committer` (closures resolved outside the pure module to
+dodge a static alias). Server injects `&QueryWindows.open?/3` as the
+production default (Server already deps QueryWindows via #373 `rename/4`,
+so ZERO new Boundary edge); tests inject `fn _, _, _ -> true end`. Absent
+(pure classifier tests that don't inject it) → treated as `false` →
+`$server`, today's behaviour, so the sandbox-free suite is untouched.
+
+*(Note for future readers: the 2026-04-27 review #369 flagged these
+injected closures as a symptom of the `Networks → Session` Boundary edge
+pointing the wrong way. vjt DROPPED that theme — the closure-injection
+pattern stands accepted, so this 4th closure is coherent with the decision
+on record, not new debt. Don't re-litigate it here.)*
+
+**Test level.** Server-side ExUnit is the faithful level — the routing
+logic's visible outcome is the persisted-row channel. `QueryWindows.open?/3`
+gets a DataCase test (open→true, none→false, rfc1459 fold `SeenServ`≡
+`seenserv` + `nick[1]`≡`nick{1}`, per-network scoping). EventRouter gets
+pure classifier tests (open→service nick, closed→`$server` regression,
+PRIVMSG arm, predicate called with `(subject, network_id, nick)`, ChanServ
+bracket precedence). A live Anope-service-NOTICE e2e is possible but the
+ExUnit routing test is the batch gate.

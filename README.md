@@ -213,7 +213,7 @@ Typed in cicchetto's compose box, parsed client-side, dispatched to REST or IRC.
 | `/part [#chan] [reason]` | Part the active or named channel |
 | `/topic <text>` · `/topic -delete` | Set / clear the channel topic |
 | `/nick <newnick>` | Change nick (users and visitors) |
-| `/msg <nick> <text>` | Private message — opens a query window (channel-shaped targets are rejected) |
+| `/msg <nick> <text>` | Private message — opens a query window (channel-shaped targets are rejected). When the target is a network service (NickServ/ChanServ/SeenServ/…), its replies land in that open query window rather than the server tab (#400); unsolicited service traffic with no open query still lands in the server tab |
 | `/query <nick>` · `/q <nick>` | Open a query window without sending |
 | `/whois <nick>` · `/whowas <nick>` | WHOIS / WHOWAS; reply renders as an inline card |
 | `/who <#chan-or-mask>` · `/names <#chan>` | WHO (channel or host/nick mask) / NAMES; WHO opens a modal, NAMES a members refresh |
