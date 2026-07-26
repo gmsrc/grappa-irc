@@ -313,36 +313,36 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
 
   defp render_module(mod) do
     case Code.Typespec.fetch_types(mod) do
-      {:ok, types} ->
-        # Filter to publicly-exported @type entries only (skip @typep / @opaque).
-        # Code.Typespec.fetch_types/1 returns the list in REVERSE source
-        # order; un-reverse so emitted typedefs match the order an
-        # operator reads in the .ex file.
-        typedefs =
-          for {kind, {name, ast, vars}} <- types, kind == :type do
-            {name, ast, vars}
-          end
-          |> Enum.reverse()
-
-        if typedefs == [] do
-          ""
-        else
-          # #411 D6b — a per-module registry of STRIPPED asts keyed by type
-          # name, so the enum resolver can follow same-module `user_type`
-          # refs (e.g. rest_error_token → shared_error_token) to decide
-          # whether a type is a (recursively-)enum and spread its array.
-          types_by_name =
-            Map.new(typedefs, fn {name, ast, _} -> {name, strip_typespec_metadata(ast)} end)
-
-          rendered = Enum.map(typedefs, &render_typedef(mod, &1, types_by_name))
-          union = render_kind_union(mod, typedefs)
-          header = "// === #{inspect(mod)} ===\n\n"
-          header <> Enum.join(rendered, "\n\n") <> union
-        end
-
-      :error ->
-        ""
+      {:ok, types} -> render_typedefs(mod, exported_typedefs(types))
+      :error -> ""
     end
+  end
+
+  # Filter to publicly-exported @type entries only (skip @typep / @opaque).
+  # Code.Typespec.fetch_types/1 returns the list in REVERSE source order;
+  # un-reverse so emitted typedefs match the order an operator reads in the
+  # .ex file.
+  defp exported_typedefs(types) do
+    for {kind, {name, ast, vars}} <- types, kind == :type do
+      {name, ast, vars}
+    end
+    |> Enum.reverse()
+  end
+
+  defp render_typedefs(_, []), do: ""
+
+  defp render_typedefs(mod, typedefs) do
+    # #411 D6b — a per-module registry of STRIPPED asts keyed by type name, so
+    # the enum resolver can follow same-module `user_type` refs (e.g.
+    # rest_error_token → shared_error_token) to decide whether a type is a
+    # (recursively-)enum and spread its array.
+    types_by_name =
+      Map.new(typedefs, fn {name, ast, _} -> {name, strip_typespec_metadata(ast)} end)
+
+    rendered = Enum.map(typedefs, &render_typedef(mod, &1, types_by_name))
+    union = render_kind_union(mod, typedefs)
+    header = "// === #{inspect(mod)} ===\n\n"
+    header <> Enum.join(rendered, "\n\n") <> union
   end
 
   defp render_typedef(mod, {name, ast, _}, types_by_name) do
@@ -357,7 +357,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     # cycle) — everything else stays a plain `export type`.
     result =
       case classify_enum(name, types_by_name) do
-        {:enum, _terminates} -> render_enum_typedef(mod, ts_name, stripped)
+        {:enum, _} -> render_enum_typedef(mod, ts_name, stripped)
         :not_enum -> format_plain_typedef(ts_name, stripped)
       end
 
@@ -444,7 +444,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
         |> flatten_union([])
         |> classify_enum_arms(types_by_name, [name | stack])
 
-      {:ok, _non_union} ->
+      {:ok, _} ->
         :not_enum
 
       # A ref to a type not declared in THIS module (remote/unknown) is not a
@@ -454,7 +454,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     end
   end
 
-  defp classify_enum_arms([], _types_by_name, _stack), do: {:enum, :ok}
+  defp classify_enum_arms([], _, _), do: {:enum, :ok}
 
   defp classify_enum_arms([arm | rest], types_by_name, stack) do
     case arm do
