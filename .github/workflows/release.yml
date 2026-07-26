@@ -1,0 +1,251 @@
+name: release
+
+# Tag-driven release CI — self-hosting Part 2 / #419 R3.
+#
+# Fires on a `vX.Y.Z` tag push. Builds the distro packages from that tag,
+# PROVES each one on the built artifact (the migrate path + the reported
+# version), and publishes them as GitHub Release assets. This is the
+# authoritative gate for the packaging work: R1/R2 proved the model by
+# hand in containers; R3 runs that proof in CI on every tag.
+#
+#   * deb    — nfpm binary package (amd64), built by infra/packaging/build.sh
+#              on a glibc setup-beam runner (Elixir 1.19 / OTP 28), then
+#              INSTALLED (apt) so postinstall's openssl secrets + packaged
+#              migrate run for real.
+#   * arch   — source package built by `makepkg` on a real x86_64 Arch
+#              container (Elixir 1.20 / OTP 29 — the toolchain delta R2
+#              could only prove on a like-for-like image, never a full
+#              makepkg → pacman -U). Regenerates .SRCINFO + updpkgsums.
+#   * publish — attaches deb + pkg.tar.zst + the regenerated PKGBUILD/.SRCINFO
+#              to the GitHub Release.
+#
+# Version proof (#419 R3 / #391): the packaged build must report the BARE
+# `X.Y.Z`, never `-dev`. Two paths, both asserted on the real artifact:
+#   * the .deb builds in the CI checkout (has .git on the clean tag) → the
+#     #391 clean-tag path yields the bare version;
+#   * the Arch package builds from the GitHub source TARBALL (no .git by
+#     construction) → Grappa.Version's nil-git-facts path yields the bare
+#     `.app` version. This is the whole reason the runtime mix.exs read was
+#     removed — see lib/grappa/version.ex + DESIGN_NOTES.
+#
+# BUILD ≠ PUBLISH TO AUR. This workflow publishes GitHub Release assets and
+# regenerates the AUR recipe metadata; pushing to aur.archlinux.org stays a
+# HUMAN step (no AUR credentials in the tree). See infra/packaging/aur/README.md.
+#
+# The .rpm is still deferred (needs a Fedora-built ERTS — a glibc/Debian
+# release is not a valid RHEL payload; see DESIGN_NOTES R1/R2).
+#
+# NOTE: this workflow only runs on a `v*` tag; a normal main-branch push
+# never triggers it (ci.yml + integration.yml handle those). Its concurrency
+# group is per-tag and separate from ci.yml, so it never cancels a CI run.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  ELIXIR_VERSION: "1.19.5"
+  OTP_VERSION: "28.5"
+
+jobs:
+  deb:
+    name: build + prove .deb (amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (tags for #391 version derivation)
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          # fetch-depth 0 pulls tags so `git describe --tags --exact-match`
+          # resolves the release tag at build time — the .deb's Grappa.Version
+          # then reports the bare X.Y.Z via the #391 clean-tag path.
+          fetch-depth: 0
+
+      - name: Verify the tag matches mix.exs @version
+        id: ver
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          mixv="$(grep -oE '@version "[^"]+"' mix.exs | head -1 | sed -E 's/@version "([^"]+)"/\1/')"
+          echo "tag=$tag mix.exs=$mixv"
+          if [ "$tag" != "$mixv" ]; then
+            echo "::error::tag v$tag does not match mix.exs @version $mixv — bump @version before cutting the tag"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Setup BEAM (Elixir 1.19 / OTP 28)
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Setup bun (cicchetto build)
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install media tools + sqlite (boot deps + migrate proof)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            libimage-exiftool-perl ffmpeg sqlite3
+
+      - name: Build the .deb
+        run: infra/packaging/build.sh
+
+      - name: Install the .deb (postinstall runs openssl secrets + migrate)
+        run: sudo apt-get install -y ./dist/grappa_*.deb
+
+      - name: Prove the packaged migrate applied every migration
+        run: |
+          expected="$(find priv/repo/migrations -name '*.exs' | wc -l | tr -d ' ')"
+          applied="$(sudo sqlite3 /var/lib/grappa/grappa.db 'SELECT count(*) FROM schema_migrations')"
+          echo "migrations: expected=$expected applied=$applied"
+          if [ "$applied" != "$expected" ]; then
+            echo "::error::migration count mismatch — expected $expected, applied $applied"
+            exit 1
+          fi
+
+      - name: Prove the artifact reports the bare tag version
+        run: |
+          want="${{ steps.ver.outputs.version }}"
+          got="$(sudo grappa eval 'Application.load(:grappa); IO.puts(Grappa.Version.current())' | tail -n1 | tr -d '\r')"
+          echo "reported version: '$got' (want '$want')"
+          if [ "$got" != "$want" ]; then
+            echo "::error::packaged .deb reports '$got', expected bare '$want'"
+            exit 1
+          fi
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: grappa-deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  arch:
+    name: build + prove Arch pkg (x86_64)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install the Arch build toolchain
+        run: |
+          pacman -Sy --noconfirm --needed \
+            base-devel git elixir bun namcap sqlite sudo
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Verify pkgver matches the tag and mix.exs @version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkgver="$(sed -n 's/^pkgver=//p' infra/packaging/aur/PKGBUILD | head -1)"
+          mixv="$(grep -oE '@version "[^"]+"' mix.exs | head -1 | sed -E 's/@version "([^"]+)"/\1/')"
+          echo "tag=$tag pkgver=$pkgver mix.exs=$mixv"
+          if [ "$tag" != "$pkgver" ] || [ "$tag" != "$mixv" ]; then
+            echo "::error::version mismatch — tag=$tag pkgver=$pkgver mix.exs=$mixv must all agree"
+            exit 1
+          fi
+
+      - name: Create an unprivileged build user (makepkg refuses root)
+        run: |
+          useradd -m builder
+          printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
+          chown -R builder:builder .
+
+      - name: makepkg — build the package, regenerate updpkgsums + .SRCINFO
+        run: |
+          cd infra/packaging/aur
+          # updpkgsums fetches the now-existing tag tarball and rewrites
+          # sha256sums=('SKIP'); .SRCINFO is regenerated from the PKGBUILD.
+          # makepkg builds the mix release + cicchetto FROM THE TARBALL (no
+          # .git → Grappa.Version reports the bare version). No
+          # --warnings-as-errors: Elixir 1.20 warns from deps (see PKGBUILD).
+          sudo -u builder bash -euo pipefail -c '
+            updpkgsums
+            makepkg --printsrcinfo > .SRCINFO
+            makepkg -f --noconfirm
+          '
+
+      - name: namcap the built package (advisory)
+        run: |
+          cd infra/packaging/aur
+          sudo -u builder namcap ./*.pkg.tar.zst || true
+
+      - name: Install the package (grappa.install runs secrets + migrate)
+        run: |
+          cd infra/packaging/aur
+          pacman -U --noconfirm ./*.pkg.tar.zst
+
+      - name: Prove the packaged migrate applied every migration
+        run: |
+          expected="$(find priv/repo/migrations -name '*.exs' | wc -l | tr -d ' ')"
+          applied="$(sqlite3 /var/lib/grappa/grappa.db 'SELECT count(*) FROM schema_migrations')"
+          echo "migrations: expected=$expected applied=$applied"
+          if [ "$applied" != "$expected" ]; then
+            echo "::error::migration count mismatch — expected $expected, applied $applied"
+            exit 1
+          fi
+
+      - name: Prove the artifact reports the bare tag version (tarball → no .git → bare)
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          got="$(grappa eval 'Application.load(:grappa); IO.puts(Grappa.Version.current())' | tail -n1 | tr -d '\r')"
+          echo "reported version: '$got' (want '$want')"
+          if [ "$got" != "$want" ]; then
+            echo "::error::packaged Arch build reports '$got', expected bare '$want'"
+            exit 1
+          fi
+
+      - name: Stage Arch artifacts (package + regenerated recipe metadata)
+        run: |
+          mkdir -p arch-out
+          cp infra/packaging/aur/*.pkg.tar.zst arch-out/
+          # The regenerated recipe metadata a human copies into the AUR repo.
+          cp infra/packaging/aur/PKGBUILD infra/packaging/aur/.SRCINFO arch-out/
+
+      - name: Upload Arch artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: grappa-arch
+          path: arch-out/*
+          if-no-files-found: error
+
+  publish:
+    name: publish GitHub Release assets
+    needs: [deb, arch]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: assets
+
+      - name: Create the release and attach assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          find assets -type f -print
+          # Create the release on first run; on a re-run the release already
+          # exists, so fall back to uploading with --clobber. BUILD ≠ PUBLISH
+          # TO AUR: the regenerated PKGBUILD/.SRCINFO ride along as assets for
+          # a human to push to aur.archlinux.org — nothing here pushes there.
+          if ! gh release create "${GITHUB_REF_NAME}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --title "grappa ${GITHUB_REF_NAME}" \
+                --generate-notes \
+                assets/grappa-deb/*.deb \
+                assets/grappa-arch/*; then
+            gh release upload "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" --clobber \
+              assets/grappa-deb/*.deb \
+              assets/grappa-arch/*
+          fi
