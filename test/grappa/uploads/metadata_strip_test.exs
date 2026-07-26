@@ -15,7 +15,11 @@ defmodule Grappa.Uploads.MetadataStripTest do
   # :oriented_jpeg participates: its markers deliberately exclude the
   # bare "Exif" string (a minimal APP1 with the whitelisted Orientation
   # legitimately survives), so the loop's absence assertions hold.
-  for name <- [:gps_jpeg, :gps_png, :gps_mp4, :gps_mov, :tagged_webm, :oriented_jpeg] do
+  # :p3_jpeg likewise: its markers are the EXIF Make/Model privacy
+  # payload (which dies); the whitelisted Display-P3 ICC profile that
+  # survives (#416) carries no ASCII marker string, so the absence
+  # assertions hold — the "still stripped" direction of #416's guard.
+  for name <- [:gps_jpeg, :gps_png, :gps_mp4, :gps_mov, :tagged_webm, :oriented_jpeg, :p3_jpeg] do
     test "#{name}: strips every metadata marker" do
       name = unquote(name)
       input = bytes(name)
@@ -56,6 +60,41 @@ defmodule Grappa.Uploads.MetadataStripTest do
       assert {:ok, stripped} = MetadataStrip.run(input, mime(:oriented_jpeg))
       assert read_tag(stripped, "Orientation") == "6"
       assert read_tag(stripped, "GPSLatitude") == nil
+    end
+
+    test "p3_jpeg: Display-P3 ICC_Profile survives the strip, GPS + device identity do not" do
+      # #416: iPhone photos are Display-P3. Stripping the colour profile
+      # makes the browser read P3 pixel values as sRGB → washed out.
+      # ICC_Profile is presentation-critical, so it earns a whitelist
+      # slot — but ONLY pinned in both directions here: the profile
+      # survives (ProfileDescription probed through exiftool, the same
+      # oracle the Orientation test uses) AND the privacy leak (binary
+      # EXIF GPS + device Make/Model) still dies. A widened whitelist that
+      # became a general escape hatch — dragging the EXIF back with the
+      # ICC — fails the GPS/Model absence, the exact failure mode this
+      # module exists to prevent.
+      input = bytes(:p3_jpeg)
+      assert read_tag(input, "ProfileDescription") == "Display P3"
+      assert read_tag(input, "GPSLatitude") != nil
+      assert read_tag(input, "Model") == "iPhone 15 Pro"
+
+      assert {:ok, stripped} = MetadataStrip.run(input, mime(:p3_jpeg))
+      assert read_tag(stripped, "ProfileDescription") == "Display P3"
+      assert read_tag(stripped, "GPSLatitude") == nil
+      assert read_tag(stripped, "Model") == nil
+
+      # exiftool copies the profile back as ONE opaque block, so its
+      # constant vendor boilerplate rides along. Pin that as INTENTIONAL
+      # and accepted, NOT "claimed absent": the standard P3 profile's
+      # copyright + author-manufacturer survive verbatim. They are
+      # identical across every P3 image (not per-user/device capture
+      # data — outside the GPS/fingerprint threat model) and, being
+      # UTF-16BE ICC-internal text, are invisible to both the ASCII
+      # marker scan and the EXIF read_tag oracle — so pin them here or
+      # nothing does.
+      assert read_tag(input, "ProfileCopyright") =~ "Apple"
+      assert read_tag(stripped, "ProfileCopyright") == read_tag(input, "ProfileCopyright")
+      assert read_tag(stripped, "DeviceManufacturer") == read_tag(input, "DeviceManufacturer")
     end
 
     test "files without Orientation still strip to a fully bare output" do

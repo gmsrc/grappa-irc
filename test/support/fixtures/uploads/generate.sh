@@ -58,3 +58,21 @@ exiftool -q -overwrite_original \
   -GPSLongitude=12.4964 -GPSLongitudeRef=E \
   -Make=Apple -Model="iPhone 15 Pro" \
   -Orientation#=6 oriented.jpg
+
+# p3 jpeg: a Display-P3 ICC profile embedded ALONGSIDE the GPS/identity
+# leak — the iPhone wide-gamut shape (#416). Pins the whitelist in both
+# directions: ICC_Profile is presentation-critical (stripping it makes
+# the browser read P3 pixels as sRGB → washed out) and MUST survive,
+# while GPS/Make/Model are privacy payload and MUST die. The profile
+# source `display-p3.icc` is COMMITTED next to this script (the standard
+# Display P3 matrix profile — the same colour space an iPhone embeds; a
+# committed source keeps this reproducible in the container, which ships
+# no ICC profiles). Its description is UTF-16 `mluc`, so the kept
+# profile carries no ASCII marker string that could fool the strip test.
+ffmpeg -y -loglevel error -f lavfi -i color=c=magenta:s=32x32 -frames:v 1 p3.jpg
+exiftool -q -overwrite_original \
+  -GPSLatitude=41.9028 -GPSLatitudeRef=N \
+  -GPSLongitude=12.4964 -GPSLongitudeRef=E \
+  -Make=Apple -Model="iPhone 15 Pro" \
+  -DateTimeOriginal="2026:06:10 12:00:00" \
+  "-icc_profile<=display-p3.icc" p3.jpg

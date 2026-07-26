@@ -15,13 +15,16 @@ defmodule Grappa.Uploads.MetadataStrip do
   critical tags with no provenance payload are copied back after the
   wipe, for image/* mimes only. Today that is EXIF Orientation (a 1-8
   rotation value; stripping it made every portrait phone photo render
-  sideways). A JPEG that carried Orientation therefore keeps a MINIMAL
-  EXIF APP1 segment: the allowlisted tag plus exiftool's mandatory
-  IFD0 companion defaults (e.g. YCbCrPositioning=1 — a fixed default,
-  NOT copied from the source). Video rotation needs no entry:
-  QuickTime stores it in the tkhd track matrix, which is structure,
-  not metadata — `-all=` never touched it — so the video path stays a
-  blanket wipe.
+  sideways) and the ICC_Profile colour profile (#416 — iPhone photos
+  are Display-P3; stripping the profile makes the browser read P3
+  pixel values as sRGB, rendering them washed out). A JPEG that
+  carried Orientation therefore keeps a MINIMAL EXIF APP1 segment: the
+  allowlisted tag plus exiftool's mandatory IFD0 companion defaults
+  (e.g. YCbCrPositioning=1 — a fixed default, NOT copied from the
+  source); a JPEG that carried an ICC profile keeps its APP2 profile
+  block. Video rotation needs no entry: QuickTime stores it in the
+  tkhd track matrix, which is structure, not metadata — `-all=` never
+  touched it — so the video path stays a blanket wipe.
 
   Failure mode is CLOSED: if the strip fails for any reason (tool
   missing, malformed file, unmapped media type) the upload is
@@ -204,14 +207,37 @@ defmodule Grappa.Uploads.MetadataStrip do
   # Presentation-critical tags copied BACK from the original after the
   # wipe (#39 round 2, vjt 2026-06-11): `-all=` alone also killed EXIF
   # Orientation, so every portrait phone photo rendered sideways
-  # (browsers honor the tag via `image-orientation: from-image`).
+  # (browsers honor the tag via `image-orientation: from-image`), and
+  # it killed the ICC_Profile, so Display-P3 iPhone photos rendered
+  # washed out (the browser reads P3 pixels as sRGB — #416).
   # `-all= -tagsfromfile @ -Tag` is exiftool's own preserve-while-
   # stripping idiom; the copy-back is a no-op when the tag is absent.
-  # ALLOWLIST, not keep-by-default: a tag earns its place here only by
-  # being rendering data with no provenance payload. Candidates lacking
-  # a test fixture (ICC_Profile — wide-gamut color) stay OUT until one
-  # exists; an untested whitelist entry is a privacy hole nobody pinned.
-  @kept_tags ~w(Orientation)
+  # ALLOWLIST, not keep-by-default: a tag earns its place here only when
+  # it is rendering data whose surviving payload stays OUTSIDE the strip's
+  # threat model (inadvertent per-image / per-device leaks: EXIF/QuickTime
+  # GPS, device Make/Model), AND only once a committed fixture pins BOTH
+  # directions (the tag survives AND the privacy payload still dies).
+  #
+  # ICC_Profile qualifies with an eyes-open caveat. exiftool copies the
+  # profile as ONE opaque APP2 block — it cannot selectively drop the
+  # profile's internal tags — so whatever the source profile embeds rides
+  # back. A standard camera/phone profile (the `:p3_jpeg` fixture's
+  # Display-P3) carries only CONSTANT vendor boilerplate — a
+  # `ProfileCopyright` ("Copyright Apple Inc., 2022") and
+  # `DeviceManufacturer` ("Apple Computer Inc.", the profile AUTHOR, not
+  # the capturing device) — which is identical across every P3 image and
+  # reveals nothing per-user/per-device, so it is not a GPS/fingerprint
+  # leak. (It is UTF-16BE `mluc`, which is also why the marker-absence
+  # ASCII scan stays honest with the profile kept.) A deliberately
+  # crafted profile stuffing identifying text into `dmdd`/`dmnd` would
+  # survive too — out of scope: the strip defends inadvertent
+  # auto-embedded metadata, not a poster steganographising their own
+  # upload; surgically rebuilding the profile needs lcms (absent from the
+  # image) and buys nothing against that non-threat. `:p3_jpeg`
+  # (`test/support/fixtures/uploads/`) pins the survivor AND the EXIF
+  # death. An untested whitelist entry is a privacy hole nobody pinned —
+  # do not add one.
+  @kept_tags ~w(Orientation ICC_Profile)
 
   # `-o` writes a fresh output file (never exists — slug-unique name)
   # so a failed run can't leave a half-written in-place original.

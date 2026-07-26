@@ -15,6 +15,10 @@ defmodule Grappa.UploadFixtures do
       Apple devices write GPS to.
     * `:tagged_webm` — Matroska Title/Comment. exiftool cannot
       write Matroska, so this pins the ffmpeg-remux strip path.
+    * `:p3_jpeg` — a Display-P3 ICC profile (`display-p3.icc`)
+      ALONGSIDE the GPS/identity EXIF leak. Pins #416 in both
+      directions: the colour profile survives (iPhone wide-gamut
+      photos render correctly) while the privacy payload still dies.
 
   Marker strings for presence/absence assertions are exposed via
   `markers/1` so the tests and the fixture stay in lockstep: a test
@@ -24,7 +28,14 @@ defmodule Grappa.UploadFixtures do
 
   @fixtures_dir Path.expand("fixtures/uploads", __DIR__)
 
-  @type name :: :gps_jpeg | :gps_png | :gps_mp4 | :gps_mov | :tagged_webm | :oriented_jpeg
+  @type name ::
+          :gps_jpeg
+          | :gps_png
+          | :gps_mp4
+          | :gps_mov
+          | :tagged_webm
+          | :oriented_jpeg
+          | :p3_jpeg
 
   @spec bytes(name()) :: binary()
   def bytes(name), do: File.read!(Path.join(@fixtures_dir, file_for(name)))
@@ -36,6 +47,7 @@ defmodule Grappa.UploadFixtures do
   def mime(:gps_mov), do: "video/quicktime"
   def mime(:tagged_webm), do: "video/webm"
   def mime(:oriented_jpeg), do: "image/jpeg"
+  def mime(:p3_jpeg), do: "image/jpeg"
 
   @doc """
   Byte sequences that prove metadata presence. Every marker appears
@@ -52,6 +64,15 @@ defmodule Grappa.UploadFixtures do
   # legitimately SURVIVES in this fixture's stripped output. Markers
   # are the privacy payload only.
   def markers(:oriented_jpeg), do: ["Apple", "iPhone 15 Pro"]
+  # Device identity (EXIF Make/Model) — the privacy payload that must
+  # die. The committed Display-P3 ICC profile (#416) legitimately
+  # SURVIVES the strip so wide-gamut iPhone photos render correctly; its
+  # text (description/copyright/manufacturer) is UTF-16BE `mluc`, NOT the
+  # ASCII bytes these markers scan, so a KEPT profile never trips the
+  # absence assertion here — the surviving vendor boilerplate is pinned
+  # explicitly in the strip test instead. Markers are the privacy
+  # payload only.
+  def markers(:p3_jpeg), do: ["Apple", "iPhone 15 Pro"]
 
   @doc """
   Assert every metadata marker for `name` is PRESENT in `binary` —
@@ -94,4 +115,5 @@ defmodule Grappa.UploadFixtures do
   defp file_for(:gps_mov), do: "gps.mov"
   defp file_for(:tagged_webm), do: "tagged.webm"
   defp file_for(:oriented_jpeg), do: "oriented.jpg"
+  defp file_for(:p3_jpeg), do: "p3.jpg"
 end
