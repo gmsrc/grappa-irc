@@ -346,6 +346,16 @@ services:
         mix grappa.bind_network --user wiz-test --network azzurra-reg \
           --services-flavor azzurra --server bahamut-test:6667 --no-tls \
           --nick wiz-reg-nick --auth none
+        # #405 — a FRESH non-admin account with NO network bind, for the
+        # first-login journey e2e (issue405-fresh-account-journey.spec.ts).
+        # Deliberately NO bind_network + NO --admin: this is the "brand-new
+        # account an operator just created, before binding any network" case.
+        # The spec logs in via the cic form with the BARE name (no `@`) to
+        # exercise the #404 dispatch fix end-to-end, then asserts the USER
+        # (not guest) empty-networks home state. NOT added to the runner's
+        # globalSetup (fixtures/seedData.ts) — the spec drives the real login
+        # itself; seeding a token here would defeat the point.
+        mix grappa.create_user --name fresh405 --password test-password-not-secret
     networks:
       grappa-e2e: {}
 

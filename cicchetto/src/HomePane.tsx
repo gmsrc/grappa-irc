@@ -402,7 +402,7 @@ const HomePaneBody: Component = () => {
       <Show
         when={rows().length > 0}
         fallback={
-          <p class="muted">
+          <p class="muted" data-testid="home-networks-empty">
             <Show
               when={visitor()}
               fallback={

@@ -100,6 +100,18 @@ export const WIZ_IDENTIFIER = "wiz-test@grappa.test";
 export const WIZ_NETWORK_SLUG = "azzurra-reg";
 export const WIZ_NICK = "wiz-reg-nick";
 
+// #405 — a FRESH non-admin account with NO network bind (seeded via
+// `mix grappa.create_user --name fresh405` in compose.yaml, no
+// bind_network + no --admin). The first-login journey spec logs in with
+// the BARE name (NO `@`) to exercise the #404 dispatch fix through cic,
+// then asserts the USER (not guest) empty-networks home state. Unlike the
+// other seeded users this is NOT logged in at globalSetup — the spec
+// drives the real login form itself, so there is no stashed token. The
+// identifier IS the bare name (no `name@grappa.test` email shape): a bare
+// account name is exactly what #404 must resolve to the account, not a guest.
+export const FRESH_USER = "fresh405";
+export const FRESH_PASSWORD = "test-password-not-secret";
+
 const TOKEN_ENV_VAR = "E2E_VJT_TOKEN";
 const SUBJECT_ENV_VAR = "E2E_VJT_SUBJECT";
 const ADMIN_TOKEN_ENV_VAR = "E2E_ADMIN_TOKEN";

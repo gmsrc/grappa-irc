@@ -18175,3 +18175,37 @@ below → a dead end. With the dispatch fixed, a fresh account lands on the
 bound. Ask the operator to bind one via `bin/grappa bind-network`."* —
 the actionable contract for a brand-new account with no credential. #405
 encodes this end-to-end.
+
+## #405 — fresh non-admin account first-login e2e (2026-07-26)
+
+`issue405-fresh-account-journey.spec.ts` drives the brand-new-account path
+nobody had exercised: the whole e2e suite's other accounts are SEEDED with
+a credential (and log in via the `name@grappa.test` email shape — itself a
+#404 workaround), and non-seeded specs drive the *visitor* branch. The new
+spec seeds a fresh non-admin account (`fresh405`, **no** `bind_network`,
+**no** `--admin`) via the operator mix task `grappa.create_user` in
+`cicchetto/e2e/compose.yaml`, then logs in through the **real cic form**
+with the **bare name** (no `@`) — exercising the #404 dispatch end-to-end,
+unstubbed — and asserts the USER (not guest) empty-networks home + a
+logout→re-login that stays a USER.
+
+**Empty-state contract (pinned).** The spec adds
+`data-testid="home-networks-empty"` to the HomePane placeholder and asserts
+the **user** copy renders ("No networks bound. Ask the operator…") and the
+visitor dead-end ("Connecting… pick a network below") + the visitor welcome
+block are ABSENT. That triad is the visible proof the account bound a USER,
+not a guest.
+
+**Scope — focused, not the full live journey (orchestrator ruling).** The
+brief listed a bind→connect→join→send→read journey; that was scoped OUT
+because (a) it re-tests what the existing seeded-user specs already cover,
+and (b) it would add live-bahamut flake + a new seeded network bind. Two
+facts made the focused scope safe + sufficient: a fresh-account login mints
+NO `Session.Server` (no network) — only an `accounts_sessions` row — so a
+REAL login here does NOT dangle an upstream IRC connection on the shared
+stack (contrast the visitor-login poison in
+`feedback_e2e_real_login_poisons_shared_stack`); and the auth-binding
+correctness (bare account name → user, refuse-on-mismatch) is pinned
+server-side by the #404 RED-first tests. The spec's logout uses a
+same-origin `DELETE /auth/logout` (real session revoke) — the detach *UI*
+is covered by `issue126-detach-lifecycle`.
