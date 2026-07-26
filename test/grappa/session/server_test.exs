@@ -33,6 +33,27 @@ defmodule Grappa.Session.ServerTest do
   alias Grappa.{IRCServer, PubSub.Topic, Repo, Scrollback, Session, WSPresence}
   alias Grappa.Networks.{Credentials, SessionPlan}
   alias Grappa.Session.{AwayState, Backoff, GhostRecovery, ISupport, Server, WindowState}
+  alias Grappa.WindowCounts.PushSource
+
+  # C3 (arch review #369 A3) — a `WindowCounts.PushSource` seam probe that
+  # records the ctx of every `push/1` to the test process. The push runs in
+  # the Session.Server process, not the test PID, so `self()` (the
+  # `PushSourceTest.StubSource` trick) is wrong here — the target pid is
+  # stashed in `:persistent_term` by the drift-lock describe's `setup`.
+  defmodule WindowPushProbe do
+    @moduledoc false
+    @behaviour Grappa.WindowCounts.PushSource
+
+    @impl Grappa.WindowCounts.PushSource
+    def push(ctx) do
+      case :persistent_term.get({__MODULE__, :probe_pid}, nil) do
+        nil -> :ok
+        pid -> send(pid, {:window_push, ctx})
+      end
+
+      :ok
+    end
+  end
 
   defp passthrough_handler, do: fn state, _ -> {:reply, nil, state} end
 
@@ -1502,6 +1523,124 @@ defmodule Grappa.Session.ServerTest do
       assert net_slug == network.slug
 
       assert [] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
+  # C3 drift lock (arch review #369 A3): the persist→broadcast shape is
+  # hand-rolled at THREE sites (inbound `:persist`, outbound
+  # `persist_and_send_fragments`, `:join_failed`) and only the inbound arm
+  # carries the #267 `WindowCounts.PushSource.push` obligation — the exact
+  # divergence the review flagged as a live correctness-drift channel. These
+  # tests pin that differential BEFORE the `Session.Persistor` extraction
+  # folds the shared persist→broadcast→(optional push) core into one place,
+  # so the refactor can neither add the push to an outbound/failure row nor
+  # drop it from the inbound row.
+  describe "persist-site window_counts push differential (C3 drift lock)" do
+    setup do
+      original = PushSource.impl()
+      :persistent_term.put({WindowPushProbe, :probe_pid}, self())
+      PushSource.put_test_impl(WindowPushProbe)
+
+      on_exit(fn ->
+        PushSource.put_test_impl(original)
+        :persistent_term.erase({WindowPushProbe, :probe_pid})
+      end)
+
+      :ok
+    end
+
+    test "inbound PRIVMSG fires the window_counts push with the row's window ctx" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      IRCServer.feed(server, ":alice!~a@host PRIVMSG #sniffo :hello\r\n")
+
+      subject = {:user, user.id}
+      net_id = network.id
+      net_slug = network.slug
+      label = user.name
+
+      assert_receive {:window_push,
+                      %{
+                        subject: ^subject,
+                        network_id: ^net_id,
+                        network_slug: ^net_slug,
+                        subject_label: ^label,
+                        channel: "#sniffo",
+                        own_nick: "vjt"
+                      }},
+                     1_000
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "outbound send_privmsg persists + broadcasts but fires NO window_counts push" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+
+      :ok =
+        Phoenix.PubSub.subscribe(
+          Grappa.PubSub,
+          Topic.channel(user.name, network.slug, "#sniffo")
+        )
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      assert {:ok, msg} =
+               Session.send_privmsg({:user, user.id}, network.id, "#sniffo", "hi all")
+
+      assert msg.kind == :privmsg
+      assert msg.channel == "#sniffo"
+
+      # The row broadcasts on the per-channel topic (persist+broadcast core)…
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{message: %{sender: "vjt", body: "hi all"}}
+                     },
+                     1_000
+
+      # …but the operator's own outbound row must NOT fire the #267
+      # window-counts push (it is the inbound arm's obligation only).
+      refute_receive {:window_push, _}, 300
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "join_failed (473) persists + broadcasts the notice but fires NO window_counts push" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+
+      :ok =
+        Phoenix.PubSub.subscribe(
+          Grappa.PubSub,
+          Topic.channel(user.name, network.slug, "#sniffo")
+        )
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      :ok = Session.send_join({:user, user.id}, network.id, "#sniffo", nil)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      IRCServer.feed(
+        server,
+        ":irc.test.org 473 grappa-test #sniffo :Cannot join channel (+i)\r\n"
+      )
+
+      # The failure notice broadcasts on the per-channel topic (persist+broadcast core)…
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{message: %{body: "Cannot join channel (+i)"}}
+                     },
+                     1_000
+
+      # …but a never-joined window fires NO #267 window-counts push.
+      refute_receive {:window_push, _}, 300
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
