@@ -35,12 +35,39 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   emitted at its source module's section; the reference site just
   uses the alias).
 
+  Pure atom-union `@type`s (and unions composing them) are ALSO emitted
+  as `as const` arrays — see "Enum types" below.
+
   ## File shape
 
   Modules emitted in alphabetical order; types within a module in
   source order. Each module gets a `// === Grappa.X.Wire ===` header.
   When multiple `@type X_payload :: %{kind: :literal, ...}` exist in
   one module, codegen ALSO emits a `WireXEvent` discriminated union.
+
+  ## Enum types → `as const` array + derived type (#411 D6b)
+
+  A **(recursively-)enum** `@type` — a union whose every member is an
+  atom literal (≠ `nil`/`true`/`false`) OR a same-module `user_type`
+  ref to another enum — is emitted as a runtime `as const` array PLUS a
+  type derived from it via `(typeof ARR)[number]`:
+
+      export const REST_ERROR_TOKENS = [...SHARED_ERROR_TOKENS, "bad_request", …] as const;
+      export type ErrorTokensRestErrorToken = (typeof REST_ERROR_TOKENS)[number];
+
+  This collapses the three-parallel-structures problem in cicchetto's
+  `friendly*Error.ts` (literal union + runtime narrowing `Set` +
+  `switch`): the union and the `Set` now derive from ONE generated
+  array. A composing enum SPREADS the referenced enum's const rather
+  than re-inlining its literals (mirrors the Elixir `shared | specific`
+  composition; the referenced const is emitted first because typedefs
+  follow source order). The derived type is structurally identical to
+  the old literal union, so consumers are unaffected. The const name is
+  the SCREAMING_SNAKE of the type alias (1:1, so const + type can't
+  drift). Two guards: **(a)** a cyclic ref RAISES with the type names in
+  the cycle (never infinite recursion); **(b)** array element order is
+  the declaration order (no sort/dedup) so regen output is stable and
+  diffs don't flicker.
   """
   use Boundary, top_level?: true, deps: []
 
@@ -48,6 +75,14 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
 
   @output_path "cicchetto/src/lib/wireTypes.ts"
   @wire_glob "lib/grappa/**/wire.ex"
+
+  # #411 D6b — the wire-token error space (`GrappaWeb.ErrorTokens`) is the
+  # codegen source for the cicchetto client's error unions, but it lives in
+  # the WEB layer on purpose (HTTP/Channel wire tokens are not domain data),
+  # so it sits outside `@wire_glob`. Widen the source set to reach it
+  # WITHOUT relocating the module into `lib/grappa/**/wire.ex` — a
+  # boundary-preserving glob widen, not a file move.
+  @extra_globs ["lib/grappa_web/error_tokens.ex"]
 
   @impl Mix.Task
   def run(argv) do
@@ -73,8 +108,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     Process.put(:wire_external_refs, %{})
 
     body =
-      @wire_glob
-      |> Path.wildcard()
+      (Path.wildcard(@wire_glob) ++ Enum.flat_map(@extra_globs, &Path.wildcard/1))
       |> Enum.sort()
       |> Enum.map(&module_from_path/1)
       |> Enum.reject(&is_nil/1)
@@ -166,7 +200,22 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   end
 
   defp format_external_typedef(alias_name, ast) do
-    body = do_render(strip_typespec_metadata(ast))
+    stripped = strip_typespec_metadata(ast)
+
+    # #411 D6b — the enum→array rule is structural, not location-scoped: a
+    # pure atom-union external type (e.g. Networks.Credential.connection_state,
+    # referenced from a Wire module) gets the SAME `as const` array + derived
+    # type as a wire-module enum. External types have no same-module sibling
+    # registry, so composition-by-ref can't occur here — a pure atom union is
+    # the only enum shape reachable, and that's all any external enum is today.
+    case pure_atom_union_arms(stripped) do
+      {:ok, arms} -> emit_enum(alias_name, arms)
+      :error -> format_plain_typedef(alias_name, stripped)
+    end
+  end
+
+  defp format_plain_typedef(alias_name, stripped) do
+    body = do_render(stripped)
     sep = if String.starts_with?(body, "\n"), do: "", else: " "
     inline_candidate = "export type #{alias_name} = #{body};"
 
@@ -178,6 +227,24 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
       true -> inline_candidate
     end
   end
+
+  # A real union of ONLY atom literals (≠ nil/true/false) → its quoted-string
+  # arms; anything else → :error (stays a plain typedef). Used by the external
+  # path, which has no sibling registry to resolve enum-ref composition.
+  defp pure_atom_union_arms({:|, _, _} = union) do
+    arms = flatten_union(union, [])
+
+    if Enum.all?(arms, &atom_literal_arm?/1) do
+      {:ok, Enum.map(arms, fn {:atom, _, [a]} -> ~s("#{Atom.to_string(a)}") end)}
+    else
+      :error
+    end
+  end
+
+  defp pure_atom_union_arms(_), do: :error
+
+  defp atom_literal_arm?({:atom, _, [a]}) when a not in [nil, true, false], do: true
+  defp atom_literal_arm?(_), do: false
 
   defp reformat_to_multiline(alias_name, body) do
     multi = String.replace(body, " | ", "\n  | ")
@@ -206,7 +273,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     """
     // GENERATED FILE — DO NOT EDIT
     // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-    // Source: lib/grappa/**/wire.ex
+    // Source: lib/grappa/**/wire.ex + lib/grappa_web/error_tokens.ex
 
     #{body}
     """
@@ -256,7 +323,14 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
         if typedefs == [] do
           ""
         else
-          rendered = Enum.map(typedefs, &render_typedef(mod, &1))
+          # #411 D6b — a per-module registry of STRIPPED asts keyed by type
+          # name, so the enum resolver can follow same-module `user_type`
+          # refs (e.g. rest_error_token → shared_error_token) to decide
+          # whether a type is a (recursively-)enum and spread its array.
+          types_by_name =
+            Map.new(typedefs, fn {name, ast, _} -> {name, strip_typespec_metadata(ast)} end)
+
+          rendered = Enum.map(typedefs, &render_typedef(mod, &1, types_by_name))
           union = render_kind_union(mod, typedefs)
           header = "// === #{inspect(mod)} ===\n\n"
           header <> Enum.join(rendered, "\n\n") <> union
@@ -267,44 +341,142 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     end
   end
 
-  defp render_typedef(mod, {name, ast, _}) do
+  defp render_typedef(mod, {name, ast, _}, types_by_name) do
     Process.put(:wire_current_module, mod)
+    stripped = strip_typespec_metadata(ast)
     ts_name = render_alias_name(mod, name)
-    body = do_render(strip_typespec_metadata(ast))
+
+    # #411 D6b — a (recursively-)enum type is emitted as a runtime `as const`
+    # array PLUS a type derived from it via `(typeof ARR)[number]`, so the
+    # client's narrowing Set and its compile-time union share ONE generated
+    # source. `classify_enum/2` follows same-module refs (raising loudly on a
+    # cycle) — everything else stays a plain `export type`.
+    result =
+      case classify_enum(name, types_by_name) do
+        {:enum, _terminates} -> render_enum_typedef(mod, ts_name, stripped)
+        :not_enum -> format_plain_typedef(ts_name, stripped)
+      end
+
     Process.delete(:wire_current_module)
+    result
+  end
 
-    # Match biome formatter: when body begins with a newline (multi-line
-    # union OR map literal), drop the trailing space after `=`. When
-    # body begins with `{` (map literal) we still want a single space.
-    sep = if String.starts_with?(body, "\n"), do: "", else: " "
+  # #411 D6b — enum emission: `export const SCREAMING = [...] as const;`
+  # followed by `export type Alias = (typeof SCREAMING)[number];`. The const
+  # is declared before any type/const that spreads it because typedefs are
+  # emitted in source order and a composing enum lists its referenced enum
+  # first (Elixir `shared | specific`).
+  defp render_enum_typedef(mod, ts_name, stripped) do
+    emit_enum(ts_name, enum_array_arms(stripped, mod))
+  end
 
-    inline_candidate = "export type #{ts_name} = #{body};"
+  defp emit_enum(ts_name, arms) do
+    const_name = screaming_const_name(ts_name)
+    array_line = format_const_array(const_name, arms)
+    array_line <> "\n" <> format_derived_type(ts_name, const_name)
+  end
 
-    # A top-level union may render inline (short). If the resulting
-    # full line exceeds biome's lineWidth: 100, switch the top-level
-    # union to multiline shape (`= \n  | a\n  | b;`). Nested unions
-    # inside a map field render via do_render and decide their own
-    # mode based on their own length.
-    cond do
-      # Already multi-line (map body or already-multiline union)
-      String.starts_with?(body, "{") ->
-        "export type #{ts_name} = #{body};"
+  # biome wraps an over-long derived-type line at `=` with a 2-space
+  # continuation indent (lineWidth: 100), e.g. the long
+  # `NetworksCredentialConnectionState` alias.
+  defp format_derived_type(ts_name, const_name) do
+    inline = "export type #{ts_name} = (typeof #{const_name})[number];"
 
-      String.starts_with?(body, "\n") ->
-        "export type #{ts_name} =#{sep}#{body};"
-
-      String.length(inline_candidate) <= 100 ->
-        inline_candidate
-
-      # Top-level union overflow: do_render rendered inline (pipe-
-      # joined); split it onto leading lines for biome's lineWidth.
-      String.contains?(body, " | ") ->
-        multi = String.replace(body, " | ", "\n  | ")
-        "export type #{ts_name} =\n  | #{multi};"
-
-      true ->
-        inline_candidate
+    if String.length(inline) <= 100 do
+      inline
+    else
+      "export type #{ts_name} =\n  (typeof #{const_name})[number];"
     end
+  end
+
+  # biome array formatting at lineWidth: 100 with trailingCommas: "all".
+  # Fits on one line → inline, no trailing comma. Otherwise → one element
+  # per line, indent 2, trailing comma on EVERY element (incl. last).
+  defp format_const_array(const_name, arms) do
+    inline = "export const #{const_name} = [#{Enum.join(arms, ", ")}] as const;"
+
+    if String.length(inline) <= 100 do
+      inline
+    else
+      body = Enum.map_join(arms, "\n", fn arm -> "  #{arm}," end)
+      "export const #{const_name} = [\n#{body}\n] as const;"
+    end
+  end
+
+  # One array element per union arm, in source order: an atom literal → the
+  # quoted string; a same-module enum ref → a `...SCREAMING` spread of that
+  # enum's already-emitted const. classify_enum/2 guarantees every ref here
+  # is itself an enum, so the spread target always exists.
+  defp enum_array_arms(stripped, mod) do
+    stripped
+    |> flatten_enum_arms()
+    |> Enum.map(fn
+      {:atom, _, [a]} when a not in [nil, true, false] -> ~s("#{Atom.to_string(a)}")
+      {:user_type, _, [ref]} -> "..." <> screaming_const_name(render_alias_name(mod, ref))
+    end)
+  end
+
+  # Classify a type as a (recursively-)enum: a union whose every member is an
+  # atom literal (≠ nil/true/false) OR a same-module `user_type` ref to
+  # another enum, terminating in atoms. Returns `{:enum, :ok}` or `:not_enum`;
+  # RAISES loudly (with the type names in the cycle) on a cyclic ref rather
+  # than recursing forever (#411 guard a).
+  defp classify_enum(name, types_by_name), do: resolve_enum(name, types_by_name, [])
+
+  defp resolve_enum(name, types_by_name, stack) do
+    if name in stack do
+      cycle = Enum.map_join(Enum.reverse([name | stack]), " → ", &Atom.to_string/1)
+      raise "gen_wire_types: cyclic enum reference: #{cycle}"
+    end
+
+    case Map.fetch(types_by_name, name) do
+      # Only a real UNION is a candidate enum (matches the "union of atom
+      # literals or enum refs" rule; a lone scalar/map/single-atom type is not).
+      {:ok, {:|, _, _} = union} ->
+        union
+        |> flatten_union([])
+        |> classify_enum_arms(types_by_name, [name | stack])
+
+      {:ok, _non_union} ->
+        :not_enum
+
+      # A ref to a type not declared in THIS module (remote/unknown) is not a
+      # same-module enum — the composing type is therefore not an enum.
+      :error ->
+        :not_enum
+    end
+  end
+
+  defp classify_enum_arms([], _types_by_name, _stack), do: {:enum, :ok}
+
+  defp classify_enum_arms([arm | rest], types_by_name, stack) do
+    case arm do
+      {:atom, _, [a]} when a not in [nil, true, false] ->
+        classify_enum_arms(rest, types_by_name, stack)
+
+      {:user_type, _, [ref]} ->
+        case resolve_enum(ref, types_by_name, stack) do
+          {:enum, :ok} -> classify_enum_arms(rest, types_by_name, stack)
+          :not_enum -> :not_enum
+        end
+
+      # Any non-atom, non-enum-ref arm (map, remote type, scalar, nil,
+      # boolean) means this type is not a clean string enum.
+      _ ->
+        :not_enum
+    end
+  end
+
+  # A union flattens to its arms; a single non-union type is a one-arm list.
+  defp flatten_enum_arms({:|, _, _} = union), do: flatten_union(union, [])
+  defp flatten_enum_arms(other), do: [other]
+
+  # CamelCase alias → SCREAMING_SNAKE const name (deterministic, 1:1 with the
+  # type alias so the const and its type never drift apart).
+  defp screaming_const_name(camel) do
+    camel
+    |> String.replace(~r/(?<=[a-z0-9])(?=[A-Z])/, "_")
+    |> String.upcase()
   end
 
   # Convert Erlang abstract-form typespec AST (returned by

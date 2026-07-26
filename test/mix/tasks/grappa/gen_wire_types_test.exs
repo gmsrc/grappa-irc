@@ -86,9 +86,24 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
       assert output =~ ~s(  maybe_label: string | null;)
     end
 
-    test "renders WireFixture.subject_kind as a string union" do
+    # #411 D6b — a pure atom-union @type is now an ENUM: codegen emits an
+    # `as const` runtime array AND derives the type from it via
+    # `(typeof ARR)[number]`, so the runtime narrowing Set and the compile-time
+    # union share ONE generated source (kills the three-parallel-structures
+    # half-migration in friendly*Error.ts). The derived type is structurally
+    # identical to the old `"user" | "visitor"` literal union — consumers are
+    # unaffected.
+    test "renders WireFixture.subject_kind as an as-const array + derived type" do
       output = GenWireTypes.render_module_for_test(Grappa.WireFixture)
-      assert output =~ ~s(export type WireFixtureSubjectKind = "user" | "visitor";)
+
+      assert output =~
+               ~s|export const WIRE_FIXTURE_SUBJECT_KIND = ["user", "visitor"] as const;|
+
+      assert output =~
+               ~s|export type WireFixtureSubjectKind = (typeof WIRE_FIXTURE_SUBJECT_KIND)[number];|
+
+      # The OLD bare-literal-union shape must be gone (total consistency).
+      refute output =~ ~s|export type WireFixtureSubjectKind = "user" \| "visitor";|
     end
 
     test "renders WireFixture.collection_payload referencing WireFixtureSubjectKind alias" do
@@ -135,6 +150,76 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
       {idx_admin, _} = :binary.match(full, "Grappa.AdminEvents.Wire")
       {idx_fixture, _} = :binary.match(full, "Grappa.WireFixture")
       assert idx_admin < idx_fixture
+    end
+  end
+
+  # #411 D6b — the enum→array rule generalized to recursively-enum unions:
+  # every member is an atom literal (≠ nil/true/false) OR a same-module
+  # user_type ref to another enum, and the array SPREADS the referenced
+  # enum's array — mirroring the Elixir `shared | specific` composition in
+  # GrappaWeb.ErrorTokens. This is the codegen source #411 widens the glob
+  # to reach.
+  describe "recursively-enum arrays (GrappaWeb.ErrorTokens)" do
+    test "the widened glob reaches GrappaWeb.ErrorTokens in a full generate/0 run" do
+      full = GenWireTypes.generate()
+      assert full =~ "// === GrappaWeb.ErrorTokens ==="
+    end
+
+    # Substring asserts (robust to biome's inline-vs-multiline wrapping at
+    # lineWidth 100 — a long array wraps one-element-per-line; the separate
+    # `bun run check` biome gate pins the exact whitespace).
+    test "a pure atom-union member type emits its array + derived type" do
+      output = GenWireTypes.render_module_for_test(GrappaWeb.ErrorTokens)
+
+      assert output =~ ~s|export const ERROR_TOKENS_SHARED_ERROR_TOKEN = [|
+      assert output =~ ~s|"not_found"|
+      assert output =~ ~s|"body_too_large"|
+
+      assert output =~
+               ~s|export type ErrorTokensSharedErrorToken = (typeof ERROR_TOKENS_SHARED_ERROR_TOKEN)[number];|
+    end
+
+    test "a composing enum SPREADS the referenced enum array, not inlined" do
+      output = GenWireTypes.render_module_for_test(GrappaWeb.ErrorTokens)
+
+      # rest_error_token leads with `shared_error_token` then its own atoms,
+      # so the array SPREADS the SHARED const rather than re-inlining its
+      # tokens (DRY composition, mirroring the Elixir `shared | specific`).
+      assert output =~ ~s|export const ERROR_TOKENS_REST_ERROR_TOKEN = [|
+      assert output =~ ~s|...ERROR_TOKENS_SHARED_ERROR_TOKEN|
+      assert output =~ ~s|"bad_request"|
+
+      assert output =~
+               ~s|export type ErrorTokensRestErrorToken = (typeof ERROR_TOKENS_REST_ERROR_TOKEN)[number];|
+
+      # channel_error_token composes the same way.
+      assert output =~ ~s|export const ERROR_TOKENS_CHANNEL_ERROR_TOKEN = [|
+      assert output =~ ~s|"unknown_topic"|
+
+      # A shared token appears ONCE (in the SHARED const), never duplicated
+      # into the composing arrays — proves spread, not inline.
+      shared_occurrences =
+        output |> String.split(~s|"not_found"|) |> length() |> Kernel.-(1)
+
+      assert shared_occurrences == 1
+    end
+
+    test "the SHARED const is emitted before the REST const that spreads it" do
+      output = GenWireTypes.render_module_for_test(GrappaWeb.ErrorTokens)
+      {idx_shared, _} = :binary.match(output, "export const ERROR_TOKENS_SHARED_ERROR_TOKEN")
+      {idx_rest, _} = :binary.match(output, "export const ERROR_TOKENS_REST_ERROR_TOKEN")
+      assert idx_shared < idx_rest
+    end
+
+    test "a cyclic enum reference raises loudly with the type names in the cycle" do
+      err =
+        assert_raise RuntimeError, fn ->
+          GenWireTypes.render_module_for_test(Grappa.WireCycleFixture)
+        end
+
+      assert err.message =~ "cyclic enum reference"
+      assert err.message =~ "enum_a"
+      assert err.message =~ "enum_b"
     end
   end
 

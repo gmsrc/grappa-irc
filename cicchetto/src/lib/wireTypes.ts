@@ -1,43 +1,59 @@
 // GENERATED FILE — DO NOT EDIT
 // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-// Source: lib/grappa/**/wire.ex
+// Source: lib/grappa/**/wire.ex + lib/grappa_web/error_tokens.ex
 
 // === External types (referenced by Wire modules) ===
 
-export type ChannelDirectoryStatus = "fresh" | "stale" | "empty" | "refreshing";
+export const CHANNEL_DIRECTORY_STATUS = ["fresh", "stale", "empty", "refreshing"] as const;
+export type ChannelDirectoryStatus = (typeof CHANNEL_DIRECTORY_STATUS)[number];
 
-export type IRCAuthFSMAuthMethod = "auto" | "sasl" | "server_pass" | "nickserv_identify" | "none";
+export const IRCAUTH_FSMAUTH_METHOD = [
+  "auto",
+  "sasl",
+  "server_pass",
+  "nickserv_identify",
+  "none",
+] as const;
+export type IRCAuthFSMAuthMethod = (typeof IRCAUTH_FSMAUTH_METHOD)[number];
 
 export type NetworksCredentialAuthMethod = IRCAuthFSMAuthMethod;
 
-export type NetworksCredentialConnectionState = "connected" | "parked" | "failed";
+export const NETWORKS_CREDENTIAL_CONNECTION_STATE = ["connected", "parked", "failed"] as const;
+export type NetworksCredentialConnectionState =
+  (typeof NETWORKS_CREDENTIAL_CONNECTION_STATE)[number];
 
-export type NetworksNetworkServicesFlavor = "azzurra" | "atheme" | "oftc" | "unknown";
+export const NETWORKS_NETWORK_SERVICES_FLAVOR = ["azzurra", "atheme", "oftc", "unknown"] as const;
+export type NetworksNetworkServicesFlavor = (typeof NETWORKS_NETWORK_SERVICES_FLAVOR)[number];
 
-export type ScrollbackMessageKind =
-  | "privmsg"
-  | "notice"
-  | "action"
-  | "join"
-  | "part"
-  | "quit"
-  | "nick_change"
-  | "mode"
-  | "topic"
-  | "kick"
-  | "server_event";
+export const SCROLLBACK_MESSAGE_KIND = [
+  "privmsg",
+  "notice",
+  "action",
+  "join",
+  "part",
+  "quit",
+  "nick_change",
+  "mode",
+  "topic",
+  "kick",
+  "server_event",
+] as const;
+export type ScrollbackMessageKind = (typeof SCROLLBACK_MESSAGE_KIND)[number];
 
 export type ScrollbackMetaT = Record<string, unknown>;
 
-export type SessionLogEvent =
-  | "connected"
-  | "registered"
-  | "identified"
-  | "deidentified"
-  | "disconnected"
-  | "backoff";
+export const SESSION_LOG_EVENT = [
+  "connected",
+  "registered",
+  "identified",
+  "deidentified",
+  "disconnected",
+  "backoff",
+] as const;
+export type SessionLogEvent = (typeof SESSION_LOG_EVENT)[number];
 
-export type WindowCountsSeverity = "mention" | "message" | "event" | "none";
+export const WINDOW_COUNTS_SEVERITY = ["mention", "message", "event", "none"] as const;
+export type WindowCountsSeverity = (typeof WINDOW_COUNTS_SEVERITY)[number];
 
 // === Grappa.Accounts.Wire ===
 
@@ -55,33 +71,35 @@ export type AccountsWireCredentialJson = {
 
 // === Grappa.AdminEvents.Wire ===
 
-export type AdminEventsWireEventKind =
-  | "circuit_open"
-  | "circuit_close"
-  | "capacity_reject"
-  | "visitor_deleted"
-  | "visitor_reaped"
-  | "reaper_swept"
-  | "upload_reaped"
-  | "uploads_swept"
-  | "session_disconnected"
-  | "session_terminated"
-  | "network_caps_updated"
-  | "circuit_reset"
-  | "cap_counts_changed"
-  | "user_created"
-  | "user_updated"
-  | "user_password_changed"
-  | "user_deleted"
-  | "network_created"
-  | "network_deleted"
-  | "server_added"
-  | "server_updated"
-  | "server_removed"
-  | "credential_bound"
-  | "credential_updated"
-  | "credential_unbound"
-  | "login_throttled";
+export const ADMIN_EVENTS_WIRE_EVENT_KIND = [
+  "circuit_open",
+  "circuit_close",
+  "capacity_reject",
+  "visitor_deleted",
+  "visitor_reaped",
+  "reaper_swept",
+  "upload_reaped",
+  "uploads_swept",
+  "session_disconnected",
+  "session_terminated",
+  "network_caps_updated",
+  "circuit_reset",
+  "cap_counts_changed",
+  "user_created",
+  "user_updated",
+  "user_password_changed",
+  "user_deleted",
+  "network_created",
+  "network_deleted",
+  "server_added",
+  "server_updated",
+  "server_removed",
+  "credential_bound",
+  "credential_updated",
+  "credential_unbound",
+  "login_throttled",
+] as const;
+export type AdminEventsWireEventKind = (typeof ADMIN_EVENTS_WIRE_EVENT_KIND)[number];
 
 export type AdminEventsWireCircuitOpenEvent = {
   kind: "circuit_open";
@@ -592,39 +610,41 @@ export type ServerSettingsWireChangedPayload = {
 
 // === Grappa.Session.Wire ===
 
-export type SessionWireWireEventKind =
-  | "channels_changed"
-  | "own_nick_changed"
-  | "isupport_changed"
-  | "umode_changed"
-  | "supported_umodes_changed"
-  | "topic_changed"
-  | "channel_modes_changed"
-  | "channel_created"
-  | "members_seeded"
-  | "names_reply"
-  | "who_reply"
-  | "server_reply"
-  | "joined"
-  | "window_pending"
-  | "window_invited"
-  | "join_failed"
-  | "kicked"
-  | "away_confirmed"
-  | "mentions_bundle"
-  | "whois_bundle"
-  | "peer_away"
-  | "invite_ack"
-  | "lusers_bundle"
-  | "whowas_bundle"
-  | "banlist_bundle"
-  | "directory_progress"
-  | "directory_complete"
-  | "directory_failed"
-  | "connection_progress"
-  | "presence_changed"
-  | "presence_error"
-  | "presence_snapshot";
+export const SESSION_WIRE_WIRE_EVENT_KIND = [
+  "channels_changed",
+  "own_nick_changed",
+  "isupport_changed",
+  "umode_changed",
+  "supported_umodes_changed",
+  "topic_changed",
+  "channel_modes_changed",
+  "channel_created",
+  "members_seeded",
+  "names_reply",
+  "who_reply",
+  "server_reply",
+  "joined",
+  "window_pending",
+  "window_invited",
+  "join_failed",
+  "kicked",
+  "away_confirmed",
+  "mentions_bundle",
+  "whois_bundle",
+  "peer_away",
+  "invite_ack",
+  "lusers_bundle",
+  "whowas_bundle",
+  "banlist_bundle",
+  "directory_progress",
+  "directory_complete",
+  "directory_failed",
+  "connection_progress",
+  "presence_changed",
+  "presence_error",
+  "presence_snapshot",
+] as const;
+export type SessionWireWireEventKind = (typeof SESSION_WIRE_WIRE_EVENT_KIND)[number];
 
 export type SessionWireChannelsChangedPayload = {
   kind: "channels_changed";
@@ -745,7 +765,8 @@ export type SessionWireWhoReplyPayload = {
   users: SessionWireWhoUser[];
 };
 
-export type SessionWireServerReplySource = "info" | "version" | "motd";
+export const SESSION_WIRE_SERVER_REPLY_SOURCE = ["info", "version", "motd"] as const;
+export type SessionWireServerReplySource = (typeof SESSION_WIRE_SERVER_REPLY_SOURCE)[number];
 
 export type SessionWireServerReplyPayload = {
   kind: "server_reply";
@@ -1042,3 +1063,92 @@ export type WindowCountsWireEvent = {
   events: number;
   severity: WindowCountsSeverity;
 };
+
+// === GrappaWeb.ErrorTokens ===
+
+export const ERROR_TOKENS_SHARED_ERROR_TOKEN = [
+  "not_found",
+  "forbidden",
+  "invalid_line",
+  "body_too_large",
+] as const;
+export type ErrorTokensSharedErrorToken = (typeof ERROR_TOKENS_SHARED_ERROR_TOKEN)[number];
+
+export const ERROR_TOKENS_REST_ERROR_TOKEN = [
+  ...ERROR_TOKENS_SHARED_ERROR_TOKEN,
+  "bad_request",
+  "unauthorized",
+  "file_too_large",
+  "metadata_strip_failed",
+  "insufficient_storage",
+  "unsupported_media_type",
+  "invalid_setting",
+  "rate_limited",
+  "too_many_attempts",
+  "theme_cap_reached",
+  "list_full",
+  "not_raster",
+  "too_large",
+  "ssrf_blocked",
+  "fetch_failed",
+  "image_reencode_failed",
+  "not_connected",
+  "forbidden_vhost",
+  "invalid_credentials",
+  "too_many_sessions",
+  "network_busy",
+  "network_unreachable",
+  "captcha_required",
+  "captcha_failed",
+  "service_degraded",
+  "malformed_nick",
+  "malformed_ident",
+  "password_required",
+  "password_mismatch",
+  "network_not_visitor_enabled",
+  "network_ambiguous",
+  "network_unconfigured",
+  "upstream_unreachable",
+  "connect_timeout",
+  "welcome_timeout",
+  "session_timeout",
+  "probe_timeout",
+  "internal",
+  "session_plan_resolve_failed",
+  "invalid_message",
+  "anon_collision",
+  "nick_in_use",
+  "cannot_disconnect_self",
+  "source_not_local",
+  "already_exists",
+  "already_attached",
+  "credentials_present",
+  "scrollback_present",
+  "last_admin",
+  "share_token_expired",
+  "share_token_consumed",
+  "validation_failed",
+] as const;
+export type ErrorTokensRestErrorToken = (typeof ERROR_TOKENS_REST_ERROR_TOKEN)[number];
+
+export const ERROR_TOKENS_CHANNEL_ERROR_TOKEN = [
+  ...ERROR_TOKENS_SHARED_ERROR_TOKEN,
+  "unknown_topic",
+  "invalid_payload",
+  "user_not_found",
+  "network_not_found",
+  "no_session",
+  "not_explicit",
+  "invalid_nick",
+  "not_cached",
+  "lookup_failed",
+  "open_failed",
+  "unknown_event",
+  "save_failed",
+  "invalid_reason",
+  "invalid_mask",
+  "upstream_unavailable",
+  "persist_failed",
+  "invalid_channel",
+] as const;
+export type ErrorTokensChannelErrorToken = (typeof ERROR_TOKENS_CHANNEL_ERROR_TOKEN)[number];
