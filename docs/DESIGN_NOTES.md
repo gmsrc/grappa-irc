@@ -18209,3 +18209,54 @@ correctness (bare account name → user, refuse-on-mismatch) is pinned
 server-side by the #404 RED-first tests. The spec's logout uses a
 same-origin `DELETE /auth/logout` (real session revoke) — the detach *UI*
 is covered by `issue126-detach-lifecycle`.
+## #409 — command-alias follow-ups: Tab-scope + in-place edit (2026-07-26)
+
+Two cic-only follow-ups to #385 (command aliases), from channel feedback
+after the 0.5.0 ship. Items 1 and 3 only; **item 2 (user aliases shadowing
+built-ins) is deliberately EXCLUDED** — it is a spec change that reverses
+#385 spec-decision-3 (builtins are never shadowed) and, if taken, makes
+`/join` / `/quit` themselves shadowable and so needs an escape hatch
+(reserved-verb deny list or a literal prefix). That is an open decision
+with vjt, so `parseAlias`'s `if (isBuiltinVerb(name)) return err(...)` and
+`expandAlias`'s DISPATCH-first bail stay untouched.
+
+**Item 1 — Tab was swallowed globally, not just in the alias form.**
+`keybindings.ts` fired the nick-completion cycle on Tab whenever the event
+target was ANY typing surface (`isTypingTarget`: input / textarea /
+contenteditable). The alias settings form was merely where it was noticed;
+the real defect was that native Tab focus traversal was dead in *every*
+form. The comment claimed it "lets the rest of the page receive native Tab
+focus traversal" — but it keyed off the element TAG, not the compose scope,
+so the comment described a behaviour the code did not have. Fix: scope the
+Tab handler to the compose box itself via its existing `data-compose-input`
+marker (the same stable hook `lib/globalPaste` already uses to find the one
+mounted compose surface — reuse, not a parallel identifier). The sibling
+auto-focus branch (a printable key redirects into compose) KEEPS
+`isTypingTarget` — typing in *any* form must suppress the redirect, so that
+one is correctly tag-scoped, not compose-scoped. Regression guard baked
+into one e2e: Tab traverses the alias add form (name→expansion) AND compose
+still nick-completes in the same run.
+
+**Item 3 — aliases are now editable in place, not just add/remove.** The
+#385 sub-page shipped add + × remove only; the ask reads "editable", not
+"present", so this extends the existing page (no new page). `aliasList`
+gains `editAlias(oldName, newName, expansion)`: ONE fresh-read-then-PUT of
+the whole map — the SAME read-modify-write discipline as `addAlias` /
+`delAlias`, not two round-trips. A rename is drop-old-key + set-new-key in
+the SAME map before the PUT (atomic, never strands the old key); both names
+fold to the server's lowercase keying (matches `addAlias`'s merge
+choke-point); an unchanged name collapses to an expansion overwrite. The
+server still validates + normalizes (422 → `friendlyError`), same as add —
+no client-side validation was bolted on. `AliasSettings` gets an "edit"
+button per row that swaps the display row for the two-field form (reusing
+the `.aliases-add` layout for ONE row shape), prefilled with the current
+values; a single `editingName` signal means exactly one row edits at a time
+(so the `aliases-edit-*` testids need no per-row suffix).
+
+**Known tradeoff (accepted, not a bug):** renaming an alias onto a name
+that already exists silently overwrites that existing alias — consistent
+with `addAlias`, which already overwrites on a re-add of the same name.
+Whether a rename-collision should instead be rejected/confirmed is a UX
+call left to a possible follow-up; the shipped behaviour keeps ONE map
+semantics across add and edit rather than introducing an edit-only
+client-side guard the server does not enforce.

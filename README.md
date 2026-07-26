@@ -233,7 +233,7 @@ Typed in cicchetto's compose box, parsed client-side, dispatched to REST or IRC.
 | `/away [reason]` | Set away; bare `/away` clears explicit away |
 | `/notify <nick>…` · `/watch <nick>…` | Watch nicks for presence (online/offline dots + toasts); bare opens the **watch lists** settings section |
 | `/hilight <pattern>` · `/dehilight <pattern>` | Add / remove a highlight keyword (alias `/highlight`); bare opens the **watch lists** settings section |
-| `/alias <name> <expansion>` · `/unalias <name>` | Define / remove your own slash-command alias (`/alias wii whois $1 $1` → `/wii foo` runs `/whois foo foo`). `$1`..`$9` positional, `$*` all args; with no placeholder the rest is appended. Server-synced per user; builtins can't be shadowed. Bare `/alias` opens the **aliases** settings section |
+| `/alias <name> <expansion>` · `/unalias <name>` | Define / remove your own slash-command alias (`/alias wii whois $1 $1` → `/wii foo` runs `/whois foo foo`). `$1`..`$9` positional, `$*` all args; with no placeholder the rest is appended. Server-synced per user; builtins can't be shadowed. Bare `/alias` opens the **aliases** settings section, where existing aliases are also editable in place (rename + change expansion) |
 | `/connect <network>` | Unpark + respawn a network |
 | `/disconnect [network] [reason]` | Park one network (persists across reboots until `/connect`) |
 | `/quit [reason]` | Park all networks, QUIT upstream, log out |
