@@ -61,6 +61,9 @@
  * pictures are not, and each holds either a protocol payload or a pixel
  * buffer. Oldest slot is recycled. */
 #define MAX_INLINE_MEDIA 24
+/* Sentinel slot id for the full-screen preview, distinct from the inline
+ * pool indices the decode job otherwise receives. */
+#define MEDIA_SLOT_PREVIEW (-2)
 #define INLINE_MAX_ROWS 14
 
 enum color_pair {
@@ -266,6 +269,7 @@ struct inline_media {
     char url[MAX_LINE];
     bool is_video;
     enum inline_state state;
+    bool force_ascii;        /* /preview-ascii: skip any graphics protocol */
     int cols, rows;          /* cell box the image occupies */
     char *payload;           /* protocol escape bytes, or NULL */
     size_t payload_len;
@@ -329,6 +333,10 @@ struct app {
     struct link_region link_regions[MAX_LINK_REGIONS];
     size_t link_region_count;
     struct inline_media media[MAX_INLINE_MEDIA];
+    /* The full-screen preview gets its OWN slot so opening one never
+     * evicts an inline image that is currently on screen. */
+    struct inline_media preview;
+    bool preview_pending;
     size_t media_count;
     size_t media_next;              /* recycle cursor */
     /* Index into `media` per log row, or -1. Parallel to log[] like the
@@ -4446,26 +4454,6 @@ static void open_external_url(struct app *app, const char *url) {
     log_line(app, "opened %s", url);
 }
 
-/* Search PATH for an executable named `name` (no shell, no PATH injection). */
-static bool tool_on_path(const char *name) {
-    const char *path = getenv("PATH");
-    if (!path || !path[0]) path = "/usr/bin:/bin";
-    char buf[PATH_MAX];
-    const char *p = path;
-    while (*p) {
-        const char *colon = strchr(p, ':');
-        size_t dir_len = colon ? (size_t)(colon - p) : strlen(p);
-        if (dir_len > 0 && dir_len + 1 + strlen(name) + 1 < sizeof(buf)) {
-            memcpy(buf, p, dir_len);
-            buf[dir_len] = '/';
-            snprintf(buf + dir_len + 1, sizeof(buf) - dir_len - 1, "%s", name);
-            if (access(buf, X_OK) == 0) return true;
-        }
-        if (!colon) break;
-        p = colon + 1;
-    }
-    return false;
-}
 
 /* Run argv[0] with execvp (no shell). stderr always discarded; stdout goes to
  * the controlling terminal when `inherit_stdout` (so chafa can paint), else to
@@ -4583,15 +4571,18 @@ static void mouse_apply(struct app *app) {
  * Runs entirely off the UI thread; the only shared-state touch is the
  * short critical section at the end that publishes the result. */
 static void media_decode_job(struct app *app, int slot) {
-    if (slot < 0 || slot >= MAX_INLINE_MEDIA) return;
+    if (slot != MEDIA_SLOT_PREVIEW && (slot < 0 || slot >= MAX_INLINE_MEDIA)) return;
 
     char url[MAX_LINE];
     media_protocol proto;
     int cols, rows;
     pthread_mutex_lock(&app->lock);
-    struct inline_media *m = &app->media[slot];
+    struct inline_media *m =
+        (slot == MEDIA_SLOT_PREVIEW) ? &app->preview : &app->media[slot];
     snprintf(url, sizeof(url), "%s", m->url);
-    proto = app->proto;
+    /* /preview-ascii forces the pixel path regardless of what the
+     * terminal can do. */
+    proto = m->force_ascii ? MEDIA_PROTO_NONE : app->proto;
     cols = m->cols;
     rows = m->rows;
     pthread_mutex_unlock(&app->lock);
@@ -4690,7 +4681,7 @@ static void media_decode_job(struct app *app, int slot) {
     rmdir(dir);
 
     pthread_mutex_lock(&app->lock);
-    m = &app->media[slot];
+    m = (slot == MEDIA_SLOT_PREVIEW) ? &app->preview : &app->media[slot];
     /* The slot may have been recycled while ffmpeg ran; publishing then
      * would attach this picture to a different message. */
     if (strcmp(m->url, url) == 0 && m->state == IM_FETCHING) {
@@ -4706,113 +4697,92 @@ static void media_decode_job(struct app *app, int slot) {
     pthread_mutex_unlock(&app->lock);
 }
 
-/* Built-in preview path: ffmpeg decodes straight to raw RGB at the exact
- * cell grid, and we draw it ourselves. This is what makes a preview work
- * with NO chafa installed at all — previously a missing chafa meant no
- * preview, just an external browser launch. */
-static bool preview_builtin(const char *url, const char *dir, int cols, int rows,
-                            term_color_depth depth) {
-    /* Two source pixels per cell row, so ask ffmpeg for double height.
-     * `format=rgb24` before scale keeps the pixel layout predictable
-     * regardless of the source's colour space. */
-    int px_w = cols;
-    int px_h = rows * 2;
-    if (px_w < 2 || px_h < 2) return false;
-
-    char raw[PATH_MAX];
-    snprintf(raw, sizeof(raw), "%s/frame.rgb", dir);
-    /* Fit inside the grid preserving aspect, then pad to the exact size so
-     * the raw buffer length is known up front. */
-    char scale[192];
-    snprintf(scale, sizeof(scale), "thumbnail,scale=%d:%d:force_original_aspect_ratio=decrease,"
-                                   "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
-             px_w, px_h, px_w, px_h);
-    char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
-                    "-i", (char *)url, "-vf", scale, "-frames:v", "1",
-                    "-f", "rawvideo", "-pix_fmt", "rgb24", raw, NULL};
-    if (run_cmd(argv, false) != 0) return false;
-
-    size_t want = (size_t)px_w * (size_t)px_h * 3;
-    unsigned char *buf = malloc(want);
-    if (!buf) return false;
-    FILE *f = fopen(raw, "rb");
-    if (!f) {
-        free(buf);
-        return false;
-    }
-    size_t got = fread(buf, 1, want, f);
-    fclose(f);
-    unlink(raw);
-    if (got != want) {
-        free(buf);
-        return false;
-    }
-    termcolor_render_rgb(buf, px_w, px_h, depth, stdout);
-    free(buf);
-    return true;
-}
 
 /* Full-screen preview. `force_ascii` bypasses any graphics protocol and
  * renders character art — the `/preview-ascii` path. */
-static void preview_media_as(struct app *app, const char *url, bool is_video, bool force_ascii) {
-    if (!url || !url[0]) return;
-    /* ffmpeg is the only hard requirement: it is what fetches and decodes
-     * the media. chafa is now optional — without it we draw the frame
-     * ourselves as coloured half-blocks. */
-    if (!tool_on_path("ffmpeg")) {
-        log_line(app, "preview needs 'ffmpeg' on PATH — opening externally");
-        open_external_url(app, url);
+/* ── Full-screen preview, decoded off the UI thread ────────────────────
+ *
+ * The old preview ran ffmpeg inline: `/preview` froze the whole client
+ * for as long as the fetch and decode took, which on a large image over a
+ * slow link is seconds of a dead terminal. It reused the same modal
+ * takeover for the display, so the two were welded together.
+ *
+ * They are split now. `request_preview` claims a slot sized to the screen
+ * and hands the decode to the worker — the client keeps drawing, chat
+ * keeps arriving, input keeps working. The event loop notices when the
+ * slot is ready and only THEN takes the screen over.
+ *
+ * chafa is no longer used: with a dithered sixel encoder and the
+ * half-block renderer in-tree there is no reason to keep a second,
+ * differently-tuned path that may or may not be installed. */
+static void request_preview(struct app *app, const char *url, bool is_video, bool force_ascii) {
+    int rows_avail = LINES > 4 ? LINES - 3 : 1;
+    int cols_avail = COLS > 4 ? COLS - 2 : 1;
+
+    pthread_mutex_lock(&app->lock);
+    /* Reuse the dedicated preview slot rather than competing with the
+     * inline pool, so opening a preview never evicts an image that is on
+     * screen. */
+    struct inline_media *m = &app->preview;
+    media_slot_reset(m);
+    snprintf(m->url, sizeof(m->url), "%s", url);
+    m->is_video = is_video;
+    m->force_ascii = force_ascii;
+    /* Aspect is unknown until decode; ffmpeg letterboxes into this box. */
+    m->cols = cols_avail;
+    m->rows = rows_avail;
+    m->state = IM_FETCHING;
+    app->preview_pending = true;
+    pthread_mutex_unlock(&app->lock);
+
+    struct job job = {.kind = JOB_MEDIA};
+    snprintf(job.arg1, sizeof(job.arg1), "%d", MEDIA_SLOT_PREVIEW);
+    enqueue_job(app, job);
+    log_line(app, "preparing preview of %.60s%s", url, force_ascii ? " (ascii)" : "");
+}
+
+/* Display an already-decoded preview. Runs on the UI thread — it owns the
+ * screen — but does no fetching, so the takeover is brief. */
+static void show_preview(struct app *app) {
+    char url[MAX_LINE];
+    bool is_video, ok;
+    char *payload = NULL;
+    size_t payload_len = 0;
+    unsigned char *rgb = NULL;
+    int cols, rows;
+
+    pthread_mutex_lock(&app->lock);
+    struct inline_media *m = &app->preview;
+    snprintf(url, sizeof(url), "%s", m->url);
+    is_video = m->is_video;
+    ok = (m->state == IM_READY);
+    /* Take ownership of the buffers so the modal can run without the
+     * lock and without the worker recycling them underneath it. */
+    payload = m->payload;
+    payload_len = m->payload_len;
+    rgb = m->rgb;
+    cols = m->cols;
+    rows = m->rows;
+    m->payload = NULL;
+    m->rgb = NULL;
+    m->state = IM_IDLE;
+    app->preview_pending = false;
+    pthread_mutex_unlock(&app->lock);
+
+    if (!ok) {
+        log_line(app, "preview: could not decode %.60s — /open to view externally", url);
+        free(payload);
+        free(rgb);
         return;
-    }
-
-    char dir[] = "/tmp/shottino-preview-XXXXXX";
-    if (!mkdtemp(dir)) {
-        log_line(app, "preview: failed to create temp dir — opening externally");
-        open_external_url(app, url);
-        return;
-    }
-    char png[PATH_MAX];
-    snprintf(png, sizeof(png), "%s/frame.png", dir);
-
-    bool have_chafa = tool_on_path("chafa");
-    /* A detected graphics protocol beats the older env heuristic;
-     * force_ascii overrides both. */
-    bool graphics = !force_ascii && (app->proto != MEDIA_PROTO_NONE || termcolor_has_graphics());
-    if (force_ascii) have_chafa = false; /* our own renderer, predictably */
-    term_color_depth depth = termcolor_detect_depth();
-
-    /* Only the chafa path needs a PNG; the built-in renderer decodes
-     * straight to raw RGB later, at the exact cell grid. */
-    if (have_chafa) {
-        /* ffmpeg fetches + decodes the URL and writes one representative frame.
-         * The thumbnail filter picks a non-leader frame for video and is a no-op
-         * pass-through for a still image, so one pipeline covers both (and avoids a
-         * black first frame for an extensionless video URL). rw_timeout bounds a
-         * stalled network fetch (microseconds). */
-        char *ff_argv[] = {"ffmpeg", "-y", "-loglevel", "error",
-                           "-rw_timeout", "15000000", "-i", (char *)url,
-                           "-vf", "thumbnail", "-frames:v", "1", png, NULL};
-        int rc = run_cmd(ff_argv, false);
-        if (rc != 0 || access(png, R_OK) != 0) {
-            log_line(app, "preview: could not fetch/decode media (ffmpeg rc=%d) — opening externally", rc);
-            open_external_url(app, url);
-            unlink(png);
-            rmdir(dir);
-            return;
-        }
     }
 
     struct winsize ws = {0};
-    int term_rows = 24, term_cols = 80;
+    int term_rows = LINES, term_cols = COLS;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 2 && ws.ws_col > 0) {
         term_rows = ws.ws_row;
         term_cols = ws.ws_col;
     }
-    char size_arg[32];
-    snprintf(size_arg, sizeof(size_arg), "%dx%d", term_cols, term_rows - 2);
 
-    /* Leave ncurses entirely so chafa's protocol detection sees a real tty and
-     * its escapes don't fight the ncurses screen buffer. */
     def_prog_mode();
     endwin();
     mouse_reporting(false);
@@ -4822,67 +4792,35 @@ static void preview_media_as(struct app *app, const char *url, bool is_video, bo
     printf("preview: %.*s\r\n", url_w, url);
     fflush(stdout);
 
-    const char *how = NULL;
-    if (have_chafa) {
-        /* chafa auto-detects a graphics protocol, but on a terminal with
-         * none it must be told to render SYMBOLS explicitly — otherwise a
-         * conservative detection can leave the preview blank. Colour
-         * count is pinned to what the terminal actually has so the art is
-         * as colourful as the terminal allows and no more. */
-        const char *colors = depth == TERM_COLOR_TRUE  ? "full"
-                             : depth == TERM_COLOR_256 ? "256"
-                             : depth == TERM_COLOR_8   ? "16"
-                                                       : "none";
-        if (graphics) {
-            char *argv[] = {"chafa", "--clear", "--size", size_arg, png, NULL};
-            run_cmd(argv, true);
-            how = "image";
-        } else {
-            char *argv[] = {"chafa", "--clear", "--format", "symbols", "--colors",
-                            (char *)colors, "--symbols", "block+border+space",
-                            "--size", size_arg, png, NULL};
-            run_cmd(argv, true);
-            how = depth == TERM_COLOR_NONE ? "ascii" : "colour ascii";
-        }
+    const char *how;
+    if (payload) {
+        fwrite(payload, 1, payload_len, stdout);
+        how = "image";
     } else {
-        /* No chafa: draw it ourselves. */
-        if (preview_builtin(url, dir, term_cols, term_rows - 2, depth)) {
-            how = depth == TERM_COLOR_NONE ? "ascii" : "colour ascii";
-        } else {
-            /* Decode failed with no fallback renderer left — restore the
-             * screen before handing off, or the terminal is left in the
-             * half-torn-down state this branch was entered with. */
-            reset_prog_mode();
-            clearok(stdscr, TRUE);
-            refresh();
-            mouse_apply(app);
-            log_line(app, "preview: could not decode media — opening externally");
-            open_external_url(app, url);
-            rmdir(dir);
-            return;
-        }
+        termcolor_render_rgb(rgb, cols, rows * 2, termcolor_detect_depth(), stdout);
+        how = termcolor_detect_depth() == TERM_COLOR_NONE ? "ascii" : "colour ascii";
     }
+    fflush(stdout);
 
     printf("\033[%d;1H[ %s%s — press any key to return ]", term_rows,
            is_video ? "video frame, " : "", how);
     fflush(stdout);
     wait_for_dismiss_key();
 
-    /* Kitty placements persist above the cell grid; ask the terminal to drop
-     * all images so the chat repaint underneath is clean (no-op elsewhere). */
+    /* Kitty placements persist above the cell grid; drop them so the chat
+     * repaint underneath is clean (a no-op on other terminals). */
     fputs("\033_Ga=d\033\\", stdout);
     fflush(stdout);
 
-    unlink(png);
-    rmdir(dir);
+    free(payload);
+    free(rgb);
 
-    /* Restore ncurses first, then re-assert mouse reporting so our escapes
-     * aren't clobbered by terminfo strings reset_prog_mode may re-emit. */
     reset_prog_mode();
     clearok(stdscr, TRUE);
     refresh();
     mouse_apply(app);
 }
+
 
 static void show_help(struct app *app) {
     log_line(app, "commands: /help /archive /settings /admin /chat /exit /quit /window N [/w N, /win N] /join #chan [/j] /part /close /clear /msg nick text /query nick [/q nick] /me text");
@@ -5452,7 +5390,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
         is_video = app->last_media_is_video;
         pthread_mutex_unlock(&app->lock);
         if (!url[0]) log_line(app, "/preview-ascii: no image or video link seen yet");
-        else preview_media_as(app, url, is_video, true);
+        else request_preview(app, url, is_video, true);
     } else if (strcmp(line, "/preview") == 0) {
         /* The keyboard route to click-to-preview. With mouse tracking off
          * by default (so the terminal keeps its own selection), this is
@@ -5465,7 +5403,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
         is_video = app->last_media_is_video;
         pthread_mutex_unlock(&app->lock);
         if (!url[0]) log_line(app, "/preview: no image or video link seen yet in this session");
-        else preview_media_as(app, url, is_video, false);
+        else request_preview(app, url, is_video, false);
     } else if (strcmp(line, "/open") == 0) {
         open_external_url(app, app->last_url);
     } else if (strcmp(line, "/clear") == 0) {
@@ -5892,7 +5830,7 @@ static void handle_mouse(struct app *app) {
         /* Clicking a media link previews it, using the terminal's
          * graphics protocol when there is one and character art when
          * there is not — the same path as /preview. */
-        preview_media_as(app, url, is_video, false);
+        request_preview(app, url, is_video, false);
         pthread_mutex_lock(&app->lock);
         app->hover_url[0] = 0;
         pthread_mutex_unlock(&app->lock);
@@ -5914,6 +5852,15 @@ static void event_loop(struct app *app) {
     app->running = true;
     while (app->running) {
         ws_pump(app);
+        /* A requested preview displays as soon as the worker finishes.
+         * Until then the client keeps running normally — that is the
+         * whole point of splitting decode from display. */
+        pthread_mutex_lock(&app->lock);
+        bool preview_ready =
+            app->preview_pending &&
+            (app->preview.state == IM_READY || app->preview.state == IM_FAILED);
+        pthread_mutex_unlock(&app->lock);
+        if (preview_ready) show_preview(app);
         draw(app);
         int ch = getch();
         if (ch == ERR) continue;
@@ -6032,6 +5979,7 @@ int main(int argc, char **argv) {
     pthread_cond_init(&app->jobs_cond, NULL);
     app->ws.fd = -1;
     app->mouse_enabled = false;
+    app->inline_media_enabled = true;
     char *share_base = NULL, *share_token = NULL;
     const char *server_url;
     if (share_mode) {
@@ -6074,6 +6022,13 @@ int main(int argc, char **argv) {
     }
     startup("authenticated as %s", app->subject);
     startup("loading networks and channels");
+    /* Probe BEFORE the first scrollback fetch. Detection has to precede
+     * ncurses anyway (the sixel DA1 query needs the raw tty), and it has
+     * to precede parsing too: rows parsed while the protocol is unknown
+     * and the feature still off get no image attached, which is why the
+     * first screenful used to come up pictureless. */
+    app->proto = media_detect(STDIN_FILENO, 120);
+    startup("terminal graphics: %s", media_protocol_name(app->proto));
     seed_state(app);
     startup("loading initial scrollback for %zu windows", app->window_count);
     for (size_t i = 0; i < app->window_count; i++) fetch_scrollback(app, &app->windows[i]);
@@ -6093,12 +6048,6 @@ int main(int argc, char **argv) {
     }
     startup("starting background worker");
     pthread_create(&app->worker, NULL, worker_main, app);
-    /* Probe BEFORE ncurses takes the tty: the sixel DA1 query has to read
-     * the terminal's reply itself, which is impossible once ncurses owns
-     * input. 120 ms bounds a terminal that ignores DA1. */
-    app->proto = media_detect(STDIN_FILENO, 120);
-    app->inline_media_enabled = true;
-    startup("terminal graphics: %s", media_protocol_name(app->proto));
     startup("entering terminal UI");
     event_loop(app);
     pthread_mutex_lock(&app->jobs_lock);
