@@ -88,13 +88,11 @@ defmodule Grappa.Session.Server do
     Scrollback,
     Session,
     SessionLog,
-    UserSettings,
-    WindowCounts
+    UserSettings
   }
 
   alias Grappa.IRC.{AuthFSM, Client, CTCP, Identifier, Message}
   alias Grappa.PubSub.Topic
-  alias Grappa.Push.Triggers, as: PushTriggers
   alias Grappa.Scrollback.Wire
 
   alias Grappa.Session.{
@@ -108,6 +106,7 @@ defmodule Grappa.Session.Server do
     NumericRouter,
     PartCleanup,
     PerformList,
+    Persistor,
     Presence,
     WindowState
   }
@@ -2777,16 +2776,14 @@ defmodule Grappa.Session.Server do
         state.subject
       )
 
-    with {:ok, message} <- Scrollback.persist_event(attrs),
-         :ok <-
-           Grappa.PubSub.broadcast_event(
-             Topic.channel(state.subject_label, state.network_slug, target),
-             Wire.message_payload(message)
-           ),
-         # `Client.send_privmsg` returns `:ok | {:error, :invalid_line}`
-         # since S29 C1. The Session facade pre-validates so the error
-         # branch is unreachable on the documented path; forward-compat
-         # insurance against a future caller bypassing the facade.
+    # Persist + broadcast via the shared Persistor (`push: false` — an
+    # operator's own outbound row must not self-notify or fire the #267
+    # window-counts push; that obligation is the inbound arm's alone),
+    # then relay upstream. `Client.send_privmsg` returns
+    # `:ok | {:error, :invalid_line}` since S29 C1; the Session facade
+    # pre-validates so the error branch is unreachable on the documented
+    # path — forward-compat insurance against a future facade bypass.
+    with {:ok, message} <- Persistor.persist_and_broadcast(attrs, state, push: false),
          :ok <- send_privmsg_or_log(state.client, target, fragment) do
       persist_and_send_fragments(target, rest, state, message)
     else
@@ -3404,48 +3401,6 @@ defmodule Grappa.Session.Server do
     Logger.warning("scrollback row dropped: SQLite pool saturated — session continues", metadata)
   end
 
-  # Push notifications cluster B4 (2026-05-14) — fire-and-forget
-  # trigger eval after a successful Scrollback.persist_event/1 in the
-  # `:persist` apply_effects/2 arm. Subject-aware as of visitor-parity
-  # V3 (2026-05-15) — both `{:user, _}` and `{:visitor, _}` subjects
-  # dispatch through `Push.Triggers`.
-  #
-  # Two short-circuits before delegating:
-  #
-  #   1. Self-echoes never push. Outbound PRIVMSG / ACTION rows have
-  #      `sender == state.nick` (the per-network IRC nick reconciled at
-  #      001). Pushing an OS notification for messages the operator
-  #      typed themselves would be obviously wrong.
-  #   2. Kind gate is enforced inside `Triggers.evaluate_and_dispatch/2`
-  #      — only `:privmsg` and `:action` proceed past it. Filtering
-  #      here too would be belt-and-braces; let the canonical predicate
-  #      live in one place.
-  #
-  # `Triggers` itself spawns the unlinked Task for prefs lookup +
-  # Sender fan-out, so this call site is sub-microsecond on the hot
-  # path. No state mutation — Session.Server's struct shape is
-  # untouched, keeping the deploy preflight in HOT mode.
-  @spec maybe_dispatch_push(Scrollback.Message.t(), t()) :: :ok
-  defp maybe_dispatch_push(%Scrollback.Message{sender: sender} = message, %{subject: subject} = state) do
-    # Skip self-push — never notify the operator about their own message.
-    # rfc1459 fold (#121) instead of an exact-match dispatch guard (can't
-    # fold in a guard): if `echo-message` is ever enabled an upstream-cased
-    # echo of the own nick (`MyNick` vs `mynick`) must still suppress. Today
-    # outbound rows persist `sender = state.nick` verbatim so the exact case
-    # already matches, but the fold keeps this consistent with every other
-    # nick compare regardless of that invariant holding.
-    if Identifier.canonical_nick(sender) == Identifier.canonical_nick(state.nick) do
-      :ok
-    else
-      PushTriggers.evaluate_and_dispatch(message, %{
-        subject: subject,
-        subject_label: state.subject_label,
-        network_slug: state.network_slug,
-        own_nick: state.nick
-      })
-    end
-  end
-
   @spec apply_effects([EventRouter.effect()], t()) :: t()
   defp apply_effects([], state), do: state
 
@@ -3773,22 +3728,15 @@ defmodule Grappa.Session.Server do
         state.subject
       )
 
-    case Scrollback.persist_event(attrs) do
-      {:ok, message} ->
-        # Broadcast the persisted notice as a regular `kind: "message"`
-        # wire event so cic appends it to the channel's scrollback in
-        # real time. Without this push, the notice row exists in the DB
-        # but cic only sees it on the NEXT loadInitialScrollback (which
-        # is `loadedChannels`-gated and won't re-fire). Symmetric with
-        # the `:persist` effect arm — the only difference is that
-        # `:join_failed` carries an extra typed event below for the
-        # state-machine flip.
-        :ok =
-          Grappa.PubSub.broadcast_event(
-            Topic.channel(state.subject_label, state.network_slug, channel),
-            Wire.message_payload(message)
-          )
-
+    # Persist + broadcast the failure notice via the shared Persistor
+    # (`push: false` — a never-joined window has no live count to snapshot
+    # and the notice is server-authored, not a peer message to notify on).
+    # The broadcast makes cic append the notice to the channel scrollback
+    # in real time; without it the row exists in the DB but cic only sees
+    # it on the NEXT (loadedChannels-gated, non-re-firing)
+    # loadInitialScrollback.
+    case Persistor.persist_and_broadcast(attrs, state, push: false) do
+      {:ok, _} ->
         # UX-5 bucket BK (2026-05-19): the persisted notice qualifies
         # as archive content (`Scrollback.list_archive/3` filters by
         # `active_keyset`; the failed channel was never JOINed so it's
@@ -4019,45 +3967,16 @@ defmodule Grappa.Session.Server do
   defp apply_effects([{:persist, kind, attrs} | rest], state) do
     full_attrs = Map.put(attrs, :kind, kind)
 
-    case Scrollback.persist_event(full_attrs) do
-      {:ok, message} ->
-        # Topic shape is `(subject_label, network_slug, channel)` —
-        # sub-task 2h roots every Grappa topic in the subject
-        # discriminator (Task 6.5 generalized "user_name" to
-        # opaque subject_label so visitors map to a parallel
-        # `"visitor:<uuid>"` root). `:network` is preloaded by
-        # `Scrollback.persist_event/1`; Wire.message_payload
-        # pattern-matches on it.
-        :ok =
-          Grappa.PubSub.broadcast_event(
-            Topic.channel(state.subject_label, state.network_slug, attrs.channel),
-            Wire.message_payload(message)
-          )
-
-        # Push notifications cluster B4 — fire-and-forget trigger
-        # eval on inbound PRIVMSG / ACTION. Triggers spawns its own
-        # unlinked Task; this call is sub-microsecond. See
-        # `maybe_dispatch_push/2` for the user-only + non-self-echo
-        # short-circuit logic.
-        :ok = maybe_dispatch_push(message, state)
-
-        # #267 — push the fresh server-authoritative window_counts snapshot
-        # for this window so a connected cic renders the new count without
-        # deriving it. Fires for EVERY kind (presence events move the
-        # events/severity tier too). Routed through the PushSource config
-        # seam — a static Session → Pusher edge would close the cycle
-        # Session → ReadCursor → Networks → Session. The impl gates on live
-        # WS presence and does the snapshot DB work in its own Task, so this
-        # call is sub-microsecond on the hot path.
-        :ok =
-          WindowCounts.PushSource.push(%{
-            subject: state.subject,
-            network_id: state.network_id,
-            network_slug: state.network_slug,
-            subject_label: state.subject_label,
-            channel: message.channel,
-            own_nick: state.nick
-          })
+    # Persist + broadcast + push via the shared Persistor. `push: true` is
+    # the inbound-only obligation, folding BOTH the cluster-B4
+    # OS-notification dispatch (self-echo-skipped) and the #267
+    # window-counts snapshot behind one flag. Keeping them behind a single
+    # opt (vs re-listing them at each call site) is what stops a future
+    # post-persist hook from landing on this arm while skipping the
+    # outbound / join_failed paths — the exact drift #369 A3 flagged.
+    case Persistor.persist_and_broadcast(full_attrs, state, push: true) do
+      {:ok, _} ->
+        :ok
 
       {:error, reason} ->
         log_persist_failure(reason, command: kind, channel: attrs.channel)

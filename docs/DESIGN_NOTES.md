@@ -17890,3 +17890,66 @@ Two non-kind fixes rode along:
 
 All wire bytes unchanged (pinned by `Jason.encode!` round-trip tests at
 each site), so no cic contract change — cic bundle unaffected.
+
+## 2026-07-26 — #369 batch 5 / C3: `Session.Persistor` extraction (A20/A3)
+
+Landed the persist→broadcast extraction deferred since 2026-04-27 (the
+A20 note) and re-flagged by the 2026-07-20 architecture review as A3 —
+"the single hub split with a *live* correctness-drift channel."
+
+**The drift.** The shape *persist a `Scrollback` row → broadcast
+`Wire.message_payload/1` on the per-channel topic → (maybe) fire the
+post-persist push obligations* was hand-rolled at THREE sites in
+`server.ex`: the inbound `:persist` effect, the outbound
+`persist_and_send_fragments/4` loop, and the `:join_failed` effect. Only
+the inbound arm carried the #267 `WindowCounts.PushSource.push` (and the
+cluster-B4 OS-notification dispatch). A new post-persist obligation
+landing on one path silently skipped the other two — the exact failure
+the A20 deferral risked, realised once #267 added the window-counts push
+to inbound only. (The review named two sites; verifying by hand found
+the third — `join_failed` — the "grep the whole class" lesson again.)
+
+**The fix — reuse the verbs, not the nouns.**
+`Grappa.Session.Persistor.persist_and_broadcast/3` owns the shared
+*execution* core — persist, broadcast, and (gated by `push: true`) BOTH
+push obligations folded behind one flag. The three callers keep their
+own *attrs construction* (inbound `EventRouter`-prebuilt; outbound
+own-nick privmsg/action with a snapshotted sender-prefix; join_failed a
+`:notice` carrying the numeric in `meta`) and their own site-specific
+follow-ups (outbound wire-send + `{:ok, last_message}` HTTP reply;
+join_failed `archive_changed` + `window_state`). The shared thing is the
+persist→broadcast→push execution, NOT the attrs shape — a shared attrs
+builder with per-site flags would have been a shared-data-model-with-a-
+type-flag boundary violation across three legitimately different shapes.
+The single `push:` opt is the whole point: a future post-persist hook
+now lives in exactly one place and cannot drift onto one path again.
+
+**Design details.** `Persistor` is a submodule of the top-level
+`Grappa.Session` boundary, so it inherits the `Push` / `WindowCounts` /
+`Scrollback` / `PubSub` / `IRC` deps and needs no export (only `Server`
+calls it). Its `session_ctx` is an OPEN map type
+(`%{:subject => ..., optional(any()) => any()}`): callers pass the full
+`state`, the five required keys are pinned so a drifted state shape fails
+at Dialyzer rather than silently skipping the push, and the 55 other
+keys are absorbed. `maybe_dispatch_push/2` and the inline WindowCounts
+push moved out of `server.ex` (−80 lines; orphan `WindowCounts` /
+`Push.Triggers` aliases swept).
+
+**One behaviour alignment (unreachable in prod).** The outbound path
+previously had the broadcast inside its `with` as `:ok <- broadcast(...)`
+— a broadcast `{:error, _}` would propagate to the HTTP caller and the
+session would survive. `Persistor` uses `:ok = broadcast(...)` (a
+broadcast surprise is a bug we want loud), matching what the inbound and
+join_failed arms *already* did — outbound was the outlier. On the
+single-node m42 topology the local `Phoenix.PubSub` adapter always
+returns `:ok`, so the branch is unreachable; the alignment just makes all
+three sites consistent with grappa's let-it-crash idiom.
+
+**Discipline.** LOCK-REFACTOR-VERIFY: a cross-process `WindowPushProbe`
+(the push runs in the `Session.Server` pid, not the test, so the probe
+pid is stashed in `:persistent_term` — the `self()`/StubSource trick
+can't reach the test) locks the differential in a SEPARATE commit before
+the extraction: inbound fires the window push with the row's window ctx;
+outbound and join_failed fire none. Flip any `push:` flag and a test
+fails. Full `check.sh` green: 4259 tests / 0 failures, Dialyzer 0, Credo
+clean.
