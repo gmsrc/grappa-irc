@@ -6,8 +6,8 @@ import { SERVER_WINDOW_NAME } from "./windowKinds";
 // `$server` (windowKinds.ts), not a real IRC target — interpolating it
 // raw into `message ${channelName}` leaked the token to the operator.
 // The server window is labelled with its network slug, mirroring the
-// Sidebar's `⚙️ <slug>` network-header row (the same row that IS the
-// server-window selector).
+// Sidebar's `<slug>` network-header row (the same row that IS the
+// server-window selector; its leading ⚙️ was removed in #71 INC-1).
 //
 // General rule, not the one example (CLAUDE.md "fix root causes" +
 // "total consistency"): EVERY synthetic window carries a `$`-prefixed

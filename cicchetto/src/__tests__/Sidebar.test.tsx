@@ -799,9 +799,10 @@ describe("Sidebar", () => {
   // `lib/archive.ts` `visibleArchiveForNetwork/2` so BottomBar's chip +
   // ArchiveModal share it. Coverage moved to `archive.test.ts`.
 
-  // UX-4 bucket C — collapsed network+server window with `⚙️ <slug>`
-  // prefix. The per-network `<h3>` header is gone; the first `<li>` IS
-  // both the network grouping label AND the server-window selector.
+  // UX-4 bucket C — collapsed network+server window row labelled with the
+  // `<slug>` (the leading `⚙️` prefix this comment used to describe was
+  // removed in #71 INC-1). The per-network `<h3>` header is gone; the first
+  // `<li>` IS both the network grouping label AND the server-window selector.
   //
   // UX-5 BH (2026-05-19): the legacy `<section class="sidebar-network">`
   // wrapper was killed; the per-network `<ul>` carries
@@ -965,11 +966,13 @@ describe("Sidebar", () => {
     });
   });
 
-  // UX-5 bucket B — home sidebar row 🏠 emoji icon. Visual parity with
-  // the bucket-C network ⚙️ + bucket-N admin 🔧 treatment so the three
-  // identity-scoped row kinds (home, admin, per-network header) read as
-  // a uniform "iconed row" group. Pre-bucket the home row rendered text
-  // only — the visual outlier.
+  // UX-5 bucket B — home sidebar row 🏠 emoji icon. Visual parity with the
+  // bucket-N admin 🔧 treatment so the identity-scoped pinned rows (home,
+  // admin) read as a uniform "iconed row" group. (The bucket-C network
+  // header's leading ⚙️ was removed in #71 INC-1 — the network header is now
+  // distinguished as the group PARENT by weight/background + a grouping rail,
+  // not a leading glyph, so it's intentionally no longer part of this iconed
+  // set.) Pre-bucket the home row rendered text only — the visual outlier.
   describe("UX-5 bucket B — home row emoji icon", () => {
     it("home row renders the 🏠 emoji prefix", () => {
       const { container } = render(() => <Sidebar />);
@@ -979,7 +982,7 @@ describe("Sidebar", () => {
   });
 
   // #84 — per-network channel directory row. Renders unconditionally
-  // between the ⚙️ server row and the channel list. Click selects the
+  // between the server-header row and the channel list. Click selects the
   // `$list` pseudo-window (kind "list"); no scrollback fetch because
   // kindHasScrollback("list") = false.
   describe("#84 — channel directory 📇 row", () => {

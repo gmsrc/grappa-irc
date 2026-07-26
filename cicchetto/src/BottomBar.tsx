@@ -30,9 +30,12 @@ import NickText from "./NickText";
 // entry. Pre-fix narrow rendered TWO entries per network: a passive
 // `.bottom-bar-network-chip` span + a standalone `.bottom-bar-tab`
 // labelled "Server". That diverged from wide mode, where the
-// `.sidebar-network-header` row carries the emoji ⚙️ + slug AND is the
-// clickable server-window selector (kind = "server"). Narrow now mirrors
-// wide: one clickable `.bottom-bar-network-header` per network. The
+// `.sidebar-network-header` row IS the clickable server-window selector
+// (kind = "server"). Narrow now mirrors wide STRUCTURALLY: one clickable
+// header per network. (#71 INC-1 removed the sidebar header's leading ⚙️
+// to kill its reverse-indent; BottomBar keeps its own ⚙️ header glyph —
+// the narrow bar isn't reverse-indented, so the glyphs intentionally
+// differ until/unless a later #71 increment reconciles them.) The
 // disconnect × sibling matches the wide-mode UX-4-D affordance (visitor
 // = quit-all / registered = park-one).
 //

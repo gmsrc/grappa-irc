@@ -13,7 +13,8 @@ describe("composePlaceholder (#151)", () => {
     // The bug was the raw sentinel surfacing in the UI.
     expect(placeholder).not.toContain(SERVER_WINDOW_NAME);
     expect(placeholder).not.toContain("$");
-    // Mirrors Sidebar's `⚙️ <slug>` server-window label.
+    // Mirrors Sidebar's `<slug>` server-window label (the leading ⚙️ was
+    // removed in #71 INC-1).
     expect(placeholder).toBe("message freenode");
   });
 

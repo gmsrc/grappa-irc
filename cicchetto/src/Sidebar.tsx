@@ -634,6 +634,12 @@ const Sidebar: Component<Props> = () => {
                     <span class="sidebar-own-nick-emoji" aria-hidden="true">
                       👤
                     </span>
+                    {/* The 👤 is aria-hidden (its glyph name is noise); this
+                      sr-only prefix gives a screen reader the context that the
+                      following nick is the operator's OWN identity on this
+                      network, not a peer. Mirrors the away-badge aria-label
+                      pattern (visible glyph hidden, meaning spoken). */}
+                    <span class="sr-only">your nick: </span>
                     <span class="sidebar-own-nick-name">{nick()}</span>
                   </div>
                 )}
