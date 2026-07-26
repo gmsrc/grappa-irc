@@ -19150,3 +19150,59 @@ grows a cap row beside the fallback row, same shape as those siblings.
    the split was between cap-print and progress, and only the cap-print side
    moved. This is "reuse the verbs, not the nouns" — one cap formatter, one
    progress formatter, no data-model overlap.
+---
+
+## 2026-07-26 — #424 middle-param numerics: persist `raw_params` on the generic path
+
+**Symptom.** An oper ran `/stats` from cicchetto and saw only the *last*
+argument of each reply numeric — every middle param gone. Not a rendering gap:
+the data never reached the client because it was never persisted.
+
+**Root cause.** `Session.Server`'s generic numeric persist path (the
+`handle_info({:irc, %Message{command: {:numeric, _}}}, state)` non-delegated
+arm) built the scrollback row as `body: List.last(msg.params)` +
+`meta = %{numeric, severity}`. `body` is only the *trailing* param, and meta
+carried nothing else — so any numeric whose payload lives in the **middle**
+params lost that payload on the way to the DB. The STATS family is exactly
+that shape:
+
+- `218 <nick> Y <class> <pingfreq> <confreq> <maxlinks> <sendq>` → only `sendq`
+- `213 <nick> C <host> <*> <server> <port> <class>` → only `class`
+- `219 <nick> <letter> :End of /STATS report` → fine *by luck* (payload trailing)
+
+`NumericRouter` deliberately routes the whole `211..219 ++ 240..250` range to
+`{:server, nil}` (#184, so the STATS letter stops being read as a DM target),
+but STATS has **no delegated bundle handler** (unlike LUSERS / MOTD / INFO /
+VERSION / BANLIST, which `EventRouter` accumulates into `{:server_reply, …}`
+bundles). So STATS fell through to the generic persist above and was truncated.
+
+**Fix — the honest floor, fixing the CLASS not the STATS example.** Persist the
+full param list in `meta.raw_params`, mirroring `EventRouter.persist_raw_event/3`
+(the unhandled-*verb* path already keeps `raw_params` for cic's
+`renderRawEvent`). One line in the generic numeric arm; `raw_params` was already
+in the `Grappa.Scrollback.Meta` `@known_keys` allowlist, so **no schema or
+migration change**. This repairs every middle-param numeric at once — the full
+payload is now *preserved* in scrollback rather than truncated at write.
+
+**Server-side floor only — cic display is deferred.** The data is persisted but
+latent: cic's `:notice` render arm still shows `msg.body` (the trailing param)
+and only reaches `renderRawEvent` when `meta.raw_verb` is set, which numeric
+notices don't have. So `raw_params` is captured for a future numeric render arm
+(the Option-2 structured STATS view) — this commit does NOT yet make `/stats`
+readable in cic. It stops the *loss*; wiring the display is the follow-up.
+
+**Contract ripple.** The meta of *every* generic-numeric `:notice` row now
+carries `raw_params`. The `server_test.exs` "CP13" exact-meta assertions
+(404 / 421 / 401) move in lockstep. **Delegated** numerics are untouched: 473
+join-failed still persists via its own handler with `meta = %{numeric}` — it
+never flows through the edited arm (verified: `@delegated_numerics` includes
+473; the generic arm always sets both `numeric` *and* `severity`, so a
+`%{numeric}`-only row is proof it came from the delegated handler).
+
+**Apply.** A numeric persisted with only its trailing param is a bug: the
+generic path keeps the full `raw_params`. When a new numeric needs a *structured*
+view (a table of typed rows), add it to `@delegated_numerics` + an EventRouter
+bundle — that's the Option-2 follow-up, on top of this floor, not instead of it.
+
+**Known gap (called out in the issue).** This changes only what is stored going
+*forward* — rows persisted before the fix lost their middle params permanently.
