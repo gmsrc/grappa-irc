@@ -22,8 +22,8 @@ defmodule Grappa.Networks.AwayTest do
 
   import Grappa.AuthFixtures
 
+  alias Grappa.{Networks, Repo}
   alias Grappa.Networks.{Credential, Credentials, SessionPlan}
-  alias Grappa.Repo
 
   defp setup_credential(attrs \\ %{}) do
     user = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
@@ -119,6 +119,58 @@ defmodule Grappa.Networks.AwayTest do
       {:ok, plan} = SessionPlan.resolve(reload(cred))
 
       assert plan.restored_away == nil
+    end
+  end
+
+  describe "away lifecycle across connection-state transitions (#417 park-clear)" do
+    # Ruling (vjt): a DELIBERATE park clears the away; an AUTOMATIC one keeps
+    # it. The two paths are structurally distinct — `Networks.disconnect/2`
+    # (the manual /disconnect + /quit + operator-CLI path, its only two
+    # callers) sets :parked, while automatic transient drops stay :connected
+    # and hard failures go :failed via `mark_failed/2`. So the clear lives in
+    # disconnect/2 alone; nothing else touches the away columns.
+    test "manual disconnect (/disconnect, /quit) clears the persisted away" do
+      {_, _, cred} = setup_credential()
+      :ok = Credentials.update_away(cred.user_id, cred.network_id, "lunch", DateTime.utc_now())
+
+      assert {:ok, updated} = Networks.disconnect(cred, "user-disconnect")
+      assert updated.connection_state == :parked
+
+      # The away columns are the persisted source of truth (not the returned
+      # struct, whose away fields may be stale relative to the fresh clear) —
+      # assert the DB row.
+      reloaded = reload(cred)
+      assert reloaded.connection_state == :parked
+      assert reloaded.away_reason == nil
+      assert reloaded.away_since == nil
+    end
+
+    test "automatic mark_failed (k-line / permanent error) PRESERVES the persisted away" do
+      {_, _, cred} = setup_credential()
+      since = DateTime.utc_now()
+      :ok = Credentials.update_away(cred.user_id, cred.network_id, "brb", since)
+
+      assert {:ok, updated} = Networks.mark_failed(cred, "k-line: G:Lined")
+      assert updated.connection_state == :failed
+
+      # A hard upstream failure is not user intent — the away survives in the
+      # DB so a later recovery (/connect → restore → re-send) resumes it.
+      reloaded = reload(cred)
+      assert reloaded.away_reason == "brb"
+      assert reloaded.away_since == since
+    end
+
+    test "manual disconnect on a VISITOR credential is a safe no-op for away" do
+      # Visitor away is never persisted, so the clear must be a no-op. The
+      # user_id guard on `clear_away_on_manual_park/1` is load-bearing: without
+      # it, `update_away/4`'s `is_binary(user_id)` guard would crash the
+      # visitor disconnect — a real path via the phase-6 self-service
+      # `PATCH /networks/:id`. This locks that guard down.
+      {visitor, network} = visitor_with_network(6667)
+      {:ok, cred} = Credentials.get_visitor_credential(visitor.id, network.id)
+
+      assert {:ok, updated} = Networks.disconnect(cred, "user-disconnect")
+      assert updated.connection_state == :parked
     end
   end
 end

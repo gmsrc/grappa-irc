@@ -19428,12 +19428,25 @@ bundle). The migration is nullable, no backfill (existing rows read nil
 - **Credential unbind (row deletion)** → the columns go with the row; no
   special handling.
 - **Auto-away set/unset** → NEVER touches the columns (never persisted).
-- **Deliberate park (`/disconnect`, `/quit` → `:parked`)** → **PENDING
-  vjt product ruling.** Question: is an away set today re-emitted at a
-  `/connect` three days later? It is a product choice, not a correctness
-  one — both answers use the same two columns; the only difference is
-  whether `Networks.disconnect/2` NULLs the row in the same transition.
-  Wired as the last switch once vjt answers. **[AWAITING RULING]**
+- **Deliberate park (`/disconnect`, `/quit` → `:parked`) CLEARS it;
+  automatic disconnects do NOT (vjt ruling, 2026-07-26).** The away is
+  tied to the connection the user chose to tear down: a manual park is
+  user intent to go dark, so a stale away must not be silently re-emitted
+  at a `/connect` days later. An automatic loss carries NO user intent —
+  a transient backoff / crash / network drop stays `:connected` (the
+  session reconnects and re-asserts the away at 001, above), and a hard
+  upstream failure goes `:failed` via `mark_failed/2`, which does NOT
+  clear — so a recovering row resumes its away. The two paths are
+  structurally distinct (verified before wiring, not assumed):
+  `Networks.disconnect/2` is the SOLE manual entry to `:parked` — its
+  only callers are the user-driven REST disconnect and the operator CLI
+  verb, both deliberate — while automatic paths stay `:connected` or go
+  `:failed` and never reach it. So the clear lives in `disconnect/2`
+  alone (`clear_away_on_manual_park/1`), routed through a FRESH
+  `Credentials.update_away/4` null (robust to a stale in-memory
+  `away_reason` on the passed struct — a nil-over-stale-nil changeset
+  would no-op while the DB still held the away). USER-only (visitor away
+  is never persisted, so nothing to clear).
 
 **Re-send upstream on reconnect (not local-only).** A restored-away
 session re-sends `AWAY :<reason>` upstream at `001 RPL_WELCOME`

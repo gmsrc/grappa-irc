@@ -77,7 +77,7 @@ defmodule Grappa.Networks do
 
   alias Grappa.{Accounts, Repo, Scrollback, Session}
   alias Grappa.Accounts.User
-  alias Grappa.Networks.{Credential, Network, Wire}
+  alias Grappa.Networks.{Credential, Credentials, Network, Wire}
   alias Grappa.PubSub.Topic
 
   require Logger
@@ -546,7 +546,7 @@ defmodule Grappa.Networks do
   def home_data_for_user(%User{id: user_id} = user) do
     pairs =
       user
-      |> Grappa.Networks.Credentials.list_credentials_for_user()
+      |> Credentials.list_credentials_for_user()
       |> Enum.map(fn cred -> {cred, resolve_network_nick({:user, user_id}, cred)} end)
 
     Wire.home_data(pairs, [])
@@ -570,7 +570,7 @@ defmodule Grappa.Networks do
   """
   @spec home_data_for_visitor(Ecto.UUID.t()) :: Wire.home_data()
   def home_data_for_visitor(visitor_id) when is_binary(visitor_id) do
-    credentials = Grappa.Networks.Credentials.list_visitor_credentials(visitor_id)
+    credentials = Credentials.list_visitor_credentials(visitor_id)
 
     pairs =
       Enum.map(credentials, fn cred ->
@@ -679,6 +679,9 @@ defmodule Grappa.Networks do
     :ok = Session.stop_session(subject, cred.network_id)
 
     updated = transition!(cred, :parked, reason)
+    # GH #417 — a DELIBERATE park clears the persisted explicit away (see
+    # clear_away_on_manual_park/1 for the manual-vs-automatic rationale).
+    :ok = clear_away_on_manual_park(cred)
     broadcast_state_change(updated, :connected, :parked, reason)
     {:ok, updated}
   end
@@ -805,6 +808,47 @@ defmodule Grappa.Networks do
     })
     |> Repo.update!()
   end
+
+  # GH #417 — a DELIBERATE park clears the persisted explicit away; an
+  # AUTOMATIC one keeps it (vjt ruling). The away is tied to the connection
+  # the user chose to tear down, so a manual `/disconnect` / `/quit` (this is
+  # `disconnect/2`, whose only callers are NetworksController's user-driven
+  # disconnect + Operator's CLI verb — both deliberate) drops it. Automatic
+  # paths never reach here: a transient backoff/crash/network loss stays
+  # `:connected` (the session reconnects and re-asserts the away at 001), and
+  # a hard upstream failure goes `:failed` via `mark_failed/2`, which does NOT
+  # clear — so a recovering row resumes its away. USER-only: visitor away is
+  # never persisted, so there is nothing to clear.
+  #
+  # Routes through `Credentials.update_away/4` (a FRESH `Repo.get_by` + null),
+  # NOT a changeset on the passed struct: a caller could pass a `cred` whose
+  # in-memory `away_reason` predates the user's `/away` (today's two callers
+  # happen to reload fresh), and a nil-over-stale-nil changeset would no-op
+  # while the DB still held the away. The fresh read is the robust clear
+  # regardless of caller freshness.
+  @spec clear_away_on_manual_park(Credential.t()) :: :ok
+  defp clear_away_on_manual_park(%Credential{user_id: uid, network_id: nid})
+       when is_binary(uid) do
+    case Credentials.update_away(uid, nid, nil, nil) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        # A concurrent unbind in the window after `transition!` already
+        # parked the row — the away died with the row, so this is benign.
+        # Log (don't silently swallow) for symmetry with
+        # `mark_failed_by_ids/3`'s `:not_found` handling.
+        Logger.warning("clear_away_on_manual_park: away not cleared",
+          user_id: uid,
+          network_id: nid,
+          reason: inspect(reason)
+        )
+
+        :ok
+    end
+  end
+
+  defp clear_away_on_manual_park(%Credential{}), do: :ok
 
   # Best-effort upstream QUIT before the supervised stop. `:no_session`
   # means the row's `Session.Server` already isn't running (crashed,
