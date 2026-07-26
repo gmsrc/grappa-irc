@@ -4637,6 +4637,12 @@ static void media_decode_job(struct app *app, int slot) {
         char scale[96];
         snprintf(scale, sizeof(scale), "thumbnail,scale=%d:-1:flags=lanczos", cols * 8);
         char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
+                        /* #451: fetch untrusted peer media, so bound ffmpeg to the
+                         * protocols this path actually needs — file (temp output),
+                         * http/https + tcp/tls/crypto (the fetch). Blocks the
+                         * concat/hls/rtp/data/pipe demuxers a hostile URL could
+                         * otherwise reach. Input option, so it precedes -i. */
+                        "-protocol_whitelist", "file,crypto,tcp,tls,http,https",
                         "-i", url, "-vf", scale, "-frames:v", "1", png, NULL};
         if (run_cmd(argv, false) == 0) {
             FILE *f = fopen(png, "rb");
@@ -4679,6 +4685,12 @@ static void media_decode_job(struct app *app, int slot) {
                  "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
                  px_w, px_h, px_w, px_h);
         char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
+                        /* #451: fetch untrusted peer media, so bound ffmpeg to the
+                         * protocols this path actually needs — file (temp output),
+                         * http/https + tcp/tls/crypto (the fetch). Blocks the
+                         * concat/hls/rtp/data/pipe demuxers a hostile URL could
+                         * otherwise reach. Input option, so it precedes -i. */
+                        "-protocol_whitelist", "file,crypto,tcp,tls,http,https",
                         "-i", url, "-vf", scale, "-frames:v", "1",
                         "-f", "rawvideo", "-pix_fmt", "rgb24", raw, NULL};
         if (run_cmd(argv, false) == 0) {
