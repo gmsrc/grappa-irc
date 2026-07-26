@@ -1047,6 +1047,38 @@ describe("refreshScrollback (CP29 R-5)", () => {
 
     consoleSpy.mockRestore();
   });
+
+  it("keeps the store ascending when the refresh gap page is OLDER than live rows already at the tail (#423)", async () => {
+    // Reconnect-to-foreground race: the socket rejoins and the NEWEST live
+    // WS traffic lands at the tail first (ids 20, 21); THEN refreshScrollback
+    // resolves its ?after=<resume cursor> page covering the disconnect gap —
+    // rows (6, 7, 8) that sort BEFORE the live tail. Store order IS display
+    // order (ScrollbackPane reads scrollbackByChannel verbatim), so ingest
+    // must not strand the older gap rows AFTER the newer live block.
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    const scrollback = await import("../lib/scrollback");
+    const key = channelKey("freenode", "#grappa");
+
+    // Live WS rows arrive first (newest traffic at the tail).
+    scrollback.appendToScrollback(key, sample(20, "live-a"));
+    scrollback.appendToScrollback(key, sample(21, "live-b"));
+
+    // Resume from the pre-disconnect high-water mark; the gap page is OLDER
+    // than what already landed live. sample() sets server_time = id*1000, so
+    // ascending id == ascending (server_time, id).
+    mockGetResumeCursor.mockReturnValue(5);
+    vi.mocked(api.listMessagesAfter).mockResolvedValue([
+      sample(6, "gap-1"),
+      sample(7, "gap-2"),
+      sample(8, "gap-3"),
+    ]);
+
+    await scrollback.refreshScrollback("freenode", "#grappa");
+
+    const list = scrollback.scrollbackByChannel()[key] ?? [];
+    expect(list.map((m) => m.id)).toEqual([6, 7, 8, 20, 21]);
+  });
 });
 
 describe("purgeScrollback (UX-7-B 2026-05-22)", () => {

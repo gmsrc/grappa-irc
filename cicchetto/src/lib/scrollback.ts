@@ -186,11 +186,20 @@ const exports = identityScopedStore((onIdentityChange) => {
   onIdentityChange(() => setScrollbackByChannel({}));
   onIdentityChange(() => setLastOwnSend(null));
 
-  // Insert an incoming message into the per-channel ascending list,
-  // deduping by id. REST + WS can overlap: the row inserted by POST
-  // arrives both as the HTTP 201 body (we ignore that body) and as a
-  // WS push from the per-channel PubSub broadcast. Both paths route
-  // through here; whichever lands first wins, the second is dropped.
+  // Insert an incoming message into the per-channel ascending list at its
+  // (server_time, id) position, deduping by id. REST + WS can overlap: the
+  // row inserted by POST arrives both as the HTTP 201 body (we ignore that
+  // body) and as a WS push from the per-channel PubSub broadcast. Both paths
+  // route through here; whichever lands first wins, the second is dropped.
+  //
+  // #423 — order-safe insert. The live WS path appends the server's NEWEST
+  // row (contiguous with the tail — the hot common case), but
+  // `refreshScrollback` feeds a REST gap page whose rows can sort BEFORE a
+  // live row that already landed at the tail during a reconnect. Store order
+  // IS display order (`ScrollbackPane` renders `scrollbackByChannel` verbatim,
+  // no re-sort), so push only when the row is at/after the tail; otherwise
+  // re-sort it into position. Costs one comparison against the tail on the hot
+  // path and a re-sort only on the rare out-of-order row.
   const appendToScrollback = (key: ChannelKey, msg: ScrollbackMessage) => {
     // S20: track whether the ring cap evicted older rows so we can reset the
     // loadMore exhausted latch below. Computed inside the pure updater,
@@ -200,7 +209,16 @@ const exports = identityScopedStore((onIdentityChange) => {
     setScrollbackByChannel((prev) => {
       const existing = prev[key];
       if (existing?.some((m) => m.id === msg.id)) return prev;
-      const next = existing ? [...existing, msg] : [msg];
+      let next: ScrollbackMessage[];
+      if (!existing || existing.length === 0) {
+        next = [msg];
+      } else {
+        const tail = existing[existing.length - 1];
+        next =
+          tail && byServerTimeThenId(msg, tail) < 0
+            ? [...existing, msg].sort(byServerTimeThenId)
+            : [...existing, msg];
+      }
       const capped = capScrollbackRing(key, next);
       evicted = capped.length < next.length;
       return { ...prev, [key]: capped };
