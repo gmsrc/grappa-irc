@@ -22,7 +22,33 @@ export type NotificationPrefs = {
   channel_mentions: boolean;
   private_messages_all: boolean;
   private_messages_only: string[];
+  // #378 — Web Push for /notify watch-list presence transitions. PUSH-ONLY
+  // gates: the in-app presence toast (notifyWatch.ts) fires regardless, so
+  // the labels say "push when..." rather than "notify me when...".
+  presence_online: boolean;
+  presence_offline: boolean;
 };
+
+/**
+ * The MESSAGE-trigger subset of {@link NotificationPrefs} — everything
+ * `shouldNotify` actually reads.
+ *
+ * Mirrors the server's `@prefs_trigger_keys`, which is likewise a proper
+ * subset of `@prefs_bool_keys` since #378: the presence prefs gate a push
+ * class that has nothing to do with whether a MESSAGE notifies, so a
+ * message predicate must not require them. A full `NotificationPrefs` is
+ * structurally assignable here, so real callers are unaffected — it is
+ * the shared truth-table fixture (message keys only, by construction)
+ * that this keeps honest.
+ */
+export type MessageNotificationPrefs = Pick<
+  NotificationPrefs,
+  | "channel_messages_all"
+  | "channel_messages_only"
+  | "channel_mentions"
+  | "private_messages_all"
+  | "private_messages_only"
+>;
 
 export type NotificationPrefsResponse = {
   notification_prefs: NotificationPrefs;
@@ -34,6 +60,8 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   channel_mentions: true,
   private_messages_all: true,
   private_messages_only: [],
+  presence_online: false,
+  presence_offline: false,
 };
 
 export async function getNotificationPrefs(token: string): Promise<NotificationPrefs> {

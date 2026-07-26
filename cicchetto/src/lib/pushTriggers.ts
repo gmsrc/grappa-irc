@@ -26,7 +26,7 @@ import { type MessageKind, NOTIFY_KINDS } from "./api";
 import { canonicalChannel } from "./channelKey";
 import { matchesWatchlist } from "./mentionMatch";
 import { rfc1459Fold } from "./nickEquals";
-import type { NotificationPrefs } from "./userSettings";
+import type { MessageNotificationPrefs } from "./userSettings";
 
 // Minimal structural shape the predicate needs — a subset of the wire
 // scrollback message. Kept narrow so the truth-table JSON maps directly
@@ -55,7 +55,7 @@ export type ShouldNotifyMessage = {
 export function shouldNotify(
   message: ShouldNotifyMessage,
   ownNick: string,
-  prefs: NotificationPrefs,
+  prefs: MessageNotificationPrefs,
   patterns: string[],
 ): boolean {
   // `message.kind` is a bare string (the truth-table JSON / any message-like
@@ -70,7 +70,7 @@ export function shouldNotify(
   return channelMatch(message, prefs, ownNick, patterns);
 }
 
-function dmMatch(message: ShouldNotifyMessage, prefs: NotificationPrefs): boolean {
+function dmMatch(message: ShouldNotifyMessage, prefs: MessageNotificationPrefs): boolean {
   // rfc1459 fold on the sender, mirroring the server's
   // `Identifier.canonical_nick(sender) in private_messages_only` — the
   // whitelist entries are stored server-folded. A bare `.toLowerCase()`
@@ -82,7 +82,7 @@ function dmMatch(message: ShouldNotifyMessage, prefs: NotificationPrefs): boolea
 
 function channelMatch(
   message: ShouldNotifyMessage,
-  prefs: NotificationPrefs,
+  prefs: MessageNotificationPrefs,
   ownNick: string,
   patterns: string[],
 ): boolean {

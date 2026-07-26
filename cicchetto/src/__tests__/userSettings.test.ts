@@ -16,12 +16,13 @@ import {
 
 const TOKEN = "test-bearer";
 
+// A COMPLETE prefs map: the PUT is full-body (no diff semantics) and the
+// server's cast_bools requires every boolean key, so this must carry the
+// #378 presence keys too. Spread from the exported default rather than
+// restating it, so the next key added rides along.
 const sample = {
-  channel_messages_all: false,
+  ...DEFAULT_NOTIFICATION_PREFS,
   channel_messages_only: ["#sbiffo"],
-  channel_mentions: true,
-  private_messages_all: true,
-  private_messages_only: [],
 };
 
 beforeEach(() => {
@@ -41,8 +42,15 @@ describe("DEFAULT_NOTIFICATION_PREFS", () => {
       channel_mentions: true,
       private_messages_all: true,
       private_messages_only: [],
+      presence_online: false,
+      presence_offline: false,
     });
   });
+
+  // This literal is a readability aid, NOT the drift gate — it cannot
+  // detect divergence from the server, because it never reads the server.
+  // `src/lib/pushParity.test.ts` does that, against the same fixture
+  // `test/grappa/push/push_parity_test.exs` asserts the server produces.
 });
 
 describe("getNotificationPrefs", () => {

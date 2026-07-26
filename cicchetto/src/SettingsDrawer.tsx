@@ -728,6 +728,35 @@ const SettingsDrawer: Component<Props> = (props) => {
               />
             </label>
 
+            {/* #378 — /notify watch-list presence. These say "push when"
+                because, unlike every sibling checkbox in this fieldset,
+                they gate ONLY the OS push: the in-app presence toast
+                (notifyWatch.ts) fires regardless of these. */}
+            <label>
+              <input
+                type="checkbox"
+                checked={prefs().presence_online}
+                disabled={savingPrefs()}
+                onChange={(e) =>
+                  togglePref("presence_online", (e.currentTarget as HTMLInputElement).checked)
+                }
+                data-testid="pref-presence-online"
+              />
+              push when a watched nick comes online
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={prefs().presence_offline}
+                disabled={savingPrefs()}
+                onChange={(e) =>
+                  togglePref("presence_offline", (e.currentTarget as HTMLInputElement).checked)
+                }
+                data-testid="pref-presence-offline"
+              />
+              push when a watched nick goes offline
+            </label>
+
             <Show when={prefsError() !== null}>
               <p class="prefs-error" role="alert" data-testid="prefs-error">
                 {prefsError()}

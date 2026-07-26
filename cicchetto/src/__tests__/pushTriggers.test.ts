@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type ShouldNotifyMessage, shouldNotify } from "../lib/pushTriggers";
 import truthTable from "../lib/shouldNotifyTruthTable.json";
-import type { NotificationPrefs } from "../lib/userSettings";
+import type { MessageNotificationPrefs } from "../lib/userSettings";
 
 // PWA icon badge (2026-06-21) — `shouldNotify` is the foreground mirror
 // of `Grappa.Push.Triggers.should_notify?/4`. This suite drives it with
@@ -15,7 +15,7 @@ type TruthCase = {
   name: string;
   message: ShouldNotifyMessage;
   own_nick: string;
-  prefs: NotificationPrefs;
+  prefs: MessageNotificationPrefs;
   patterns: string[];
   expected: boolean;
 };

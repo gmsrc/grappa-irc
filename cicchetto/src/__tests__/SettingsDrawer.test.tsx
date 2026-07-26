@@ -298,6 +298,26 @@ describe("SettingsDrawer notifications section", () => {
     expect(screen.getByTestId("pref-nicks-only")).toBeInTheDocument();
   });
 
+  it("renders both #378 presence-push checkboxes", () => {
+    wrap(true);
+    expect(screen.getByTestId("pref-presence-online")).toBeInTheDocument();
+    expect(screen.getByTestId("pref-presence-offline")).toBeInTheDocument();
+  });
+
+  it("labels the presence prefs as PUSH gates, since the toast fires regardless", () => {
+    wrap(true);
+    // The in-app presence toast is gated only on `initial` in
+    // notifyWatch.ts — these checkboxes do not silence it. Every sibling
+    // checkbox in this fieldset gates push too, so without the word the
+    // labels would read as "notify me at all".
+    expect(screen.getByTestId("pref-presence-online").closest("label")?.textContent).toContain(
+      "push when",
+    );
+    expect(screen.getByTestId("pref-presence-offline").closest("label")?.textContent).toContain(
+      "push when",
+    );
+  });
+
   it("loads prefs on mount via getNotificationPrefs", async () => {
     const userSettings = await import("../lib/userSettings");
     wrap(true);
