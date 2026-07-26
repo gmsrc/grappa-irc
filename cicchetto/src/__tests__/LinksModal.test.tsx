@@ -113,6 +113,39 @@ describe("LinksModal (#238)", () => {
     expect(detail.textContent).toContain("hub.test.org");
   });
 
+  // #238 — the heading counts RECONSTRUCTED nodes, not raw wire entries: a
+  // de-duped double-364 (last-write-wins in buildTree) must not over-report.
+  it("counts de-duped nodes in the heading, not raw entries", () => {
+    focusNetwork();
+    setLinksReply(
+      SLUG,
+      reply([
+        linkEntry({ server: "hub", linked_to: "hub", hopcount: 0 }),
+        linkEntry({ server: "leaf", linked_to: "hub", hopcount: 1, description: "first" }),
+        linkEntry({ server: "leaf", linked_to: "hub", hopcount: 1, description: "second" }),
+      ]),
+    );
+    render(() => <LinksModal />);
+    // Three wire entries, but "leaf" de-dupes → two rendered nodes.
+    expect(nodeEls()).toHaveLength(2);
+    expect(screen.getByTestId("links-modal").textContent).toContain("network map — 2 servers");
+  });
+
+  // #238 — the component is permanently mounted (only the <Show> body unmounts),
+  // so a fresh /links replacing the topology must RESET the stale selection —
+  // else the detail footer would show a node from the previous layout.
+  it("clears the selected-node detail when the topology is replaced", async () => {
+    focusNetwork();
+    setLinksReply(SLUG, tripleReply());
+    render(() => <LinksModal />);
+    fireEvent.click(nodeFor("mid.test.org") as HTMLElement);
+    expect(screen.getByTestId("links-modal-detail")).toBeInTheDocument();
+
+    // A fresh /links for the same network replaces the topology.
+    setLinksReply(SLUG, reply([linkEntry({ server: "solo", linked_to: "solo", hopcount: 0 })]));
+    await waitFor(() => expect(screen.queryByTestId("links-modal-detail")).not.toBeInTheDocument());
+  });
+
   it("renders the empty state (no svg) for a hidden topology", () => {
     focusNetwork();
     setLinksReply(SLUG, reply([]));

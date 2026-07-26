@@ -1,5 +1,20 @@
-import { type Component, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { DEFAULT_LAYOUT_OPTS, type LayoutNode, radialLayout } from "./lib/linksLayout";
+import {
+  type Component,
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  on,
+  onCleanup,
+  Show,
+} from "solid-js";
+import {
+  clientToViewBox,
+  DEFAULT_LAYOUT_OPTS,
+  type LayoutNode,
+  radialLayout,
+  viewBoxFit,
+} from "./lib/linksLayout";
 import { dismissLinksModal, linksModalBySlug } from "./lib/linksModal";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import { selectedChannel } from "./lib/selection";
@@ -84,14 +99,25 @@ const LinksModal: Component = () => {
     setTy(0);
     setK(1);
     setSelected(null);
+    setHovered(null);
   };
 
-  // Client px → viewBox units (the SVG auto-fits its viewBox to its client
-  // box; preserveAspectRatio keeps x/y scales equal, so width ratio suffices).
-  const vbPerPx = (vbWidth: number): number => {
-    const w = svgEl?.clientWidth ?? 0;
-    return w === 0 ? 1 : vbWidth / w;
-  };
+  // Reset pan/zoom + selection whenever the active topology CHANGES — open, a
+  // fresh /links replacing it, or the active network switching. The component is
+  // permanently mounted (only the <Show> body unmounts), so its transform +
+  // `selected` LayoutNode would otherwise survive a close and bleed into the
+  // NEXT map: a reopen would appear pre-panned/zoomed, and the detail footer
+  // would show a stale node from a different network's layout. `on(bundle)`
+  // fires only when THIS network's bundle reference changes (a /links on another
+  // network leaves our slug's value untouched → no reset mid-pan).
+  createEffect(on(bundle, () => resetView()));
+
+  // Client px → viewBox units under preserveAspectRatio="xMidYMid meet": a
+  // UNIFORM scale + a centering letterbox offset (see `viewBoxFit`). A naive
+  // per-axis ratio with no offset anchors zoom off-cursor + lags pan on any
+  // non-square canvas (every phone). `fit` reads the live client box each call.
+  const fitFor = (vbWidth: number, vbHeight: number) =>
+    viewBoxFit(svgEl?.clientWidth ?? 0, svgEl?.clientHeight ?? 0, vbWidth, vbHeight);
 
   // Zoom around a fixed viewBox point (keeps that point under the cursor/pinch
   // centre). worldPoint = (vbPoint - t)/k is invariant across the zoom.
@@ -108,9 +134,12 @@ const LinksModal: Component = () => {
     e.preventDefault();
     if (svgEl === undefined) return;
     const rect = svgEl.getBoundingClientRect();
-    const vbx = (e.clientX - rect.left) * vbPerPx(vbWidth);
-    const vby = (e.clientY - rect.top) * (vbHeight / (svgEl.clientHeight || 1));
-    zoomAround(vbx, vby, e.deltaY < 0 ? 1.12 : 1 / 1.12);
+    const p = clientToViewBox(
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+      fitFor(vbWidth, vbHeight),
+    );
+    zoomAround(p.x, p.y, e.deltaY < 0 ? 1.12 : 1 / 1.12);
   };
 
   const onPointerDown = (e: PointerEvent): void => {
@@ -135,16 +164,20 @@ const LinksModal: Component = () => {
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
       if (pinchDist > 0 && svgEl !== undefined) {
         const rect = svgEl.getBoundingClientRect();
-        const midX = ((a.x + b.x) / 2 - rect.left) * vbPerPx(vbWidth);
-        const midY = ((a.y + b.y) / 2 - rect.top) * (vbHeight / (svgEl.clientHeight || 1));
-        zoomAround(midX, midY, dist / pinchDist);
+        const mid = clientToViewBox(
+          (a.x + b.x) / 2 - rect.left,
+          (a.y + b.y) / 2 - rect.top,
+          fitFor(vbWidth, vbHeight),
+        );
+        zoomAround(mid.x, mid.y, dist / pinchDist);
       }
       pinchDist = dist;
       return;
     }
 
-    // Single-pointer drag → pan (viewBox units; translate is scale-independent).
-    const factor = vbPerPx(vbWidth);
+    // Single-pointer drag → pan. Delta is a client-px vector; the viewBox is
+    // uniformly scaled, so divide by the fit scale (same factor both axes).
+    const factor = 1 / fitFor(vbWidth, vbHeight).scale;
     setTx(tx() + (cur.x - prev.x) * factor);
     setTy(ty() + (cur.y - prev.y) * factor);
   };
@@ -161,7 +194,11 @@ const LinksModal: Component = () => {
     <Show when={bundle()} keyed>
       {(b) => {
         const layout = createMemo(() => radialLayout(b.entries, DEFAULT_LAYOUT_OPTS));
-        const nodeCount = (): number => b.entries.length;
+        // Count the RECONSTRUCTED nodes, not the raw wire entries: a de-duped
+        // double-364 (last-write-wins in buildTree) renders fewer dots than
+        // `entries.length`, so sourcing the heading / aria-label / label
+        // threshold from the layout keeps the "N servers" count honest.
+        const nodeCount = (): number => layout().nodes.length;
         const showAllLabels = (): boolean => nodeCount() <= LABEL_ALL_THRESHOLD;
         const detail = (): LayoutNode | null => {
           const sel = selected();

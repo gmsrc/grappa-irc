@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LinksEntry } from "../lib/api";
-import { DEFAULT_LAYOUT_OPTS, radialLayout } from "../lib/linksLayout";
+import { clientToViewBox, DEFAULT_LAYOUT_OPTS, radialLayout, viewBoxFit } from "../lib/linksLayout";
 
 // #238 — radialLayout is the PURE, DETERMINISTIC heart of the /links topology
 // map: parsed 364/365 `links_bundle` entries → a positioned radial tidy-tree.
@@ -245,6 +245,28 @@ describe("radialLayout (#238) — resilience: orphans, dupes, cycles", () => {
     expect(layout.edges).toHaveLength(1);
   });
 
+  it("keeps every node of a DISCONNECTED uplink cycle (none reachable from root)", () => {
+    // R is the root; a→b and b→a form a self-contained loop whose members'
+    // uplinks point only at each other, so neither is reachable by the walk
+    // from R. Without the post-walk stray sweep they'd vanish silently,
+    // breaking the "no node is ever dropped" contract. Both must survive.
+    const layout = radialLayout(
+      [
+        entry({ server: "R", linked_to: "R", hopcount: 0 }),
+        entry({ server: "a", linked_to: "b", hopcount: 5 }),
+        entry({ server: "b", linked_to: "a", hopcount: 5 }),
+      ],
+      DEFAULT_LAYOUT_OPTS,
+    );
+    const servers = serverSet(layout);
+    expect(servers).toHaveLength(3);
+    expect(new Set(servers)).toEqual(new Set(["R", "a", "b"]));
+    // Connected tree of 3 nodes → 2 edges; still exactly one root.
+    expect(layout.edges).toHaveLength(2);
+    expect(layout.nodes.filter((n) => n.isRoot)).toHaveLength(1);
+    expect(nodeBy(layout, "R")?.isRoot).toBe(true);
+  });
+
   it("never emits a duplicate node across a larger mixed topology", () => {
     const layout = radialLayout(
       [
@@ -263,5 +285,49 @@ describe("radialLayout (#238) — resilience: orphans, dupes, cycles", () => {
     // Every non-root node contributes exactly one edge → edges == nodes - 1.
     expect(layout.edges).toHaveLength(5);
     expect(layout.maxDepth).toBe(2);
+  });
+});
+
+describe("viewBoxFit + clientToViewBox (#238) — preserveAspectRatio=xMidYMid meet", () => {
+  it("is the identity map when the client box equals the (square) viewBox", () => {
+    const fit = viewBoxFit(400, 400, 400, 400);
+    expect(fit).toEqual({ scale: 1, offsetX: 0, offsetY: 0 });
+    expect(clientToViewBox(100, 250, fit)).toEqual({ x: 100, y: 250 });
+  });
+
+  it("applies a uniform scale for a smaller square client box (no letterbox)", () => {
+    const fit = viewBoxFit(200, 200, 400, 400);
+    expect(fit).toEqual({ scale: 0.5, offsetX: 0, offsetY: 0 });
+    // A client point maps to double its coordinate in viewBox units.
+    expect(clientToViewBox(100, 100, fit)).toEqual({ x: 200, y: 200 });
+  });
+
+  it("centers content vertically on a PORTRAIT canvas (width-limited fit)", () => {
+    // 360×640 client, 400×400 viewBox: scale = min(0.9, 1.6) = 0.9; drawn box
+    // 360×360 centered → offsetY = (640-360)/2 = 140, offsetX = 0.
+    const fit = viewBoxFit(360, 640, 400, 400);
+    expect(fit.scale).toBeCloseTo(0.9, 10);
+    expect(fit.offsetX).toBeCloseTo(0, 10);
+    expect(fit.offsetY).toBeCloseTo(140, 10);
+    // The TOP edge of the drawn content (relY = offsetY) is viewBox y = 0 — the
+    // exact anchor the pre-fix per-axis math got wrong (it would have returned
+    // 140 * 400/640 = 87.5, flinging zoom off-cursor).
+    expect(clientToViewBox(180, 140, fit)).toEqual({ x: 200, y: 0 });
+    // The client-box centre maps to the viewBox centre.
+    expect(clientToViewBox(180, 320, fit)).toEqual({ x: 200, y: 200 });
+  });
+
+  it("centers content horizontally on a LANDSCAPE canvas (height-limited fit)", () => {
+    // 800×400 client, 400×400 viewBox: scale = min(2, 1) = 1; offsetX = 200.
+    const fit = viewBoxFit(800, 400, 400, 400);
+    expect(fit).toEqual({ scale: 1, offsetX: 200, offsetY: 0 });
+    expect(clientToViewBox(200, 0, fit)).toEqual({ x: 0, y: 0 });
+    expect(clientToViewBox(400, 200, fit)).toEqual({ x: 200, y: 200 });
+  });
+
+  it("degrades to an identity map on a zero dimension (unmeasured ref)", () => {
+    const fit = viewBoxFit(0, 0, 0, 0);
+    expect(fit.scale).toBe(1);
+    expect(clientToViewBox(50, 50, fit)).toEqual({ x: 50, y: 50 });
   });
 });

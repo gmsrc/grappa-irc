@@ -120,7 +120,23 @@ function buildTree(entries: LinksEntry[]): TreeNode | null {
     return { server: entry.server, entry, children, depth, angle: 0 };
   };
 
-  return build(rootEntry, 0);
+  const root = build(rootEntry, 0);
+
+  // Sweep any node NOT reached by the walk from the root. A DISCONNECTED cycle
+  // — every member's uplink points inside the cycle, so none is reachable from
+  // the root — would otherwise vanish silently, breaking the "no node is ever
+  // dropped" contract (the orphan re-parenting above only catches uplinks
+  // ABSENT from the set, not a self-contained loop). Attach each straggler under
+  // the root at depth 1; `build` itself breaks the stray's own cycle via
+  // `visited`. Deterministic order (by server name).
+  const strays = [...byServer.values()]
+    .filter((e) => !visited.has(e.server))
+    .sort((a, b) => (a.server < b.server ? -1 : a.server > b.server ? 1 : 0));
+  for (const e of strays) {
+    if (!visited.has(e.server)) root.children.push(build(e, 1));
+  }
+
+  return root;
 }
 
 function selectRoot(entries: LinksEntry[]): LinksEntry {
@@ -227,4 +243,32 @@ export function radialLayout(entries: LinksEntry[], opts: LayoutOpts): Layout {
   addEdges(root);
 
   return { nodes, edges, width: size, height: size, maxDepth };
+}
+
+// Client-pixel → viewBox-unit mapping for the topology <svg>, laid out under
+// `preserveAspectRatio="xMidYMid meet"`. `meet` scales the viewBox UNIFORMLY by
+// the smaller of the two axis ratios, then CENTERS the drawn content (a
+// letterbox gap on the larger axis). Getting both right is what keeps a
+// wheel/pinch zoom anchored under the cursor and a drag locked to the finger on
+// a NON-square canvas (i.e. every phone) — a naive per-axis ratio with no offset
+// makes the map jump on zoom and lag on pan. Pure + DOM-free so LinksModal's
+// interaction math is unit-testable (the gemello of pinchZoom.ts for #213, whose
+// center-origin/clamped-pan model does NOT fit this free-pan viewBox surface).
+export type ViewBoxFit = { scale: number; offsetX: number; offsetY: number };
+
+export function viewBoxFit(clientW: number, clientH: number, vbW: number, vbH: number): ViewBoxFit {
+  // A zero client/viewBox dimension (unmeasured ref, empty layout) degrades to
+  // an identity 1:1 map rather than dividing by zero.
+  const scale = Math.min(clientW / vbW, clientH / vbH) || 1;
+  return { scale, offsetX: (clientW - vbW * scale) / 2, offsetY: (clientH - vbH * scale) / 2 };
+}
+
+// Map a point already made relative to the svg's client box (clientX - rect.left,
+// clientY - rect.top) into viewBox units under the given fit.
+export function clientToViewBox(
+  relX: number,
+  relY: number,
+  fit: ViewBoxFit,
+): { x: number; y: number } {
+  return { x: (relX - fit.offsetX) / fit.scale, y: (relY - fit.offsetY) / fit.scale };
 }
