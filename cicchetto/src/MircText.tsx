@@ -53,6 +53,17 @@ export type LinkPolicy = "navigate" | "link-wins" | "surface-wins";
 // sub-run renders as a bare text node — no wrapper span, no DOM churn on
 // the common no-marker path, and the concatenated text content stays
 // byte-identical to the source (copy-paste fidelity).
+//
+// GATED per surface (#455 vjt ruling): this layer is OPT-IN, off by
+// default. IRC carries no human-vs-bot signal (a bot PRIVMSG is
+// byte-identical to a person's and grappa reads no `bot` message tag), so
+// "human-authored" cannot be a per-message test — it is a per-SURFACE
+// gate. `MircBody` callers that render user-typed text pass `emphasis`;
+// server/service-generated surfaces (whois cards, /list, server-reply and
+// service modals, /links, our own wizard copy) leave it off, which also
+// removes the surfaces where paths/`snake_case`/URL-junk actually
+// concentrate BEFORE the tokenizer runs. The wire-formatting layer
+// (\x02/\x1D/\x1F) is unaffected and stays on everywhere.
 const renderEmphasis = (text: string): JSX.Element => (
   <For each={splitEmphasis(text)}>
     {(span) => {
@@ -78,7 +89,7 @@ const renderEmphasis = (text: string): JSX.Element => (
 // the common case so this stays cheap. Each Run gets a class for each
 // active toggle attribute + inline style for fg/bg colors (the palette is
 // 16 fixed values — we don't generate per-color CSS classes).
-const renderRun = (run: Run, linkPolicy: LinkPolicy): JSX.Element => {
+const renderRun = (run: Run, linkPolicy: LinkPolicy, emphasis: boolean): JSX.Element => {
   const style: Record<string, string> = {};
   // Reverse swaps fg/bg. mIRC reverses the rendered colors AND falls back
   // to the terminal default when fg/bg aren't set, but in a web context
@@ -116,7 +127,7 @@ const renderRun = (run: Run, linkPolicy: LinkPolicy): JSX.Element => {
     >
       <For each={segments}>
         {(seg, i) => {
-          if (seg.type !== "url") return renderEmphasis(seg.value);
+          if (seg.type !== "url") return emphasis ? renderEmphasis(seg.value) : seg.value;
           // Media-link cluster (2026-06-11): same-origin media URLs get
           // a click intercept → in-app viewer modal (lib/mediaViewer),
           // because in-PWA-scope links navigate the iOS standalone
@@ -226,17 +237,29 @@ const renderRun = (run: Run, linkPolicy: LinkPolicy): JSX.Element => {
   );
 };
 
-export const MircBody: Component<{ body: string; linkPolicy?: LinkPolicy }> = (props) => {
+export const MircBody: Component<{
+  body: string;
+  linkPolicy?: LinkPolicy;
+  // #455 — opt in to the textual-emphasis layer (default off). Only the
+  // surfaces that render user-typed text (scrollback messages/actions,
+  // the mentions window, the topic bar) pass this; server/service-
+  // generated surfaces leave it off. Like linkPolicy, a per-surface flag
+  // is inherently static — pass a stable literal, not a reactive signal.
+  emphasis?: boolean;
+}> = (props) => {
   const runs = (): Run[] => parseMircFormat(props.body);
   // Default "navigate" is the genuine config default — correct
   // production behavior for every non-tappable-surface consumer.
   //
-  // Constraint: `linkPolicy` is read inside the <For> child, which
-  // re-maps only when runs() (i.e. props.body) changes — so a caller
-  // must pass linkPolicy as a STABLE value (a literal, as all current
-  // callers do), not a reactive signal that changes independently of
-  // body. A per-surface policy is inherently static, so this is a
-  // non-issue in practice; documented so a future reactive caller isn't
-  // surprised by a stale policy.
-  return <For each={runs()}>{(run) => renderRun(run, props.linkPolicy ?? "navigate")}</For>;
+  // Constraint: `linkPolicy`/`emphasis` are read inside the <For> child,
+  // which re-maps only when runs() (i.e. props.body) changes — so a caller
+  // must pass them as STABLE values (literals, as all current callers do),
+  // not reactive signals that change independently of body. A per-surface
+  // policy is inherently static, so this is a non-issue in practice;
+  // documented so a future reactive caller isn't surprised by a stale one.
+  return (
+    <For each={runs()}>
+      {(run) => renderRun(run, props.linkPolicy ?? "navigate", props.emphasis ?? false)}
+    </For>
+  );
 };

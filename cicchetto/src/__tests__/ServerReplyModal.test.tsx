@@ -88,6 +88,35 @@ describe("ServerReplyModal (#127)", () => {
     }
   });
 
+  // #455 — the textual-emphasis marker layer (*bold*/_under_//italic/) is
+  // GATED OFF on server-generated surfaces. ServerReplyModal renders raw
+  // MOTD/INFO/VERSION text (paths, underscores and slashes live here), so a
+  // line with marker characters must render them LITERAL — no marker-layer
+  // span — while wire mIRC bytes still format (only the marker layer is
+  // gated). This is the whole point of vjt's per-surface ruling.
+  it("does NOT apply the textual-marker layer — server-reply is an off surface (#455)", () => {
+    focusNetwork();
+    setServerReply(
+      SLUG,
+      // Wire bold on "banner"; textual markers on the rest + a real path.
+      reply("motd", ["\x02banner\x02 see *bold* _under_ and /usr/local/etc"]),
+    );
+    render(() => <ServerReplyModal />);
+    const modal = screen.getByTestId("server-reply-modal");
+
+    // Wire formatting still renders (the gate only suppresses the marker layer).
+    const bold = modal.querySelectorAll(".scrollback-mirc-bold");
+    expect(bold).toHaveLength(1);
+    expect(bold[0]?.textContent).toBe("banner");
+
+    // The textual markers produce NO span and stay literal in the text.
+    expect(modal.querySelector(".scrollback-mirc-underline")).toBeNull();
+    expect(modal.querySelector(".scrollback-mirc-italic")).toBeNull();
+    expect(modal.textContent).toContain("*bold*");
+    expect(modal.textContent).toContain("_under_");
+    expect(modal.textContent).toContain("/usr/local/etc");
+  });
+
   it("renders an empty-reply fallback (422 no-MOTD)", () => {
     focusNetwork();
     setServerReply(SLUG, reply("motd", []));

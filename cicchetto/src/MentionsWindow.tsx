@@ -137,7 +137,7 @@ const MentionsWindow: Component<Props> = (props) => {
             {startTime()} – {endTime()}
             <Show when={props.bundle.away_reason}>
               {" · "}
-              <MircBody body={props.bundle.away_reason ?? ""} />
+              <MircBody body={props.bundle.away_reason ?? ""} emphasis />
             </Show>
           </div>
         </Show>
@@ -186,7 +186,7 @@ const MentionsWindow: Component<Props> = (props) => {
                             the /list directory row: the anchor
                             stopPropagation so this row button never fires
                             on a link tap. */}
-                        <MircBody body={row.body ?? ""} linkPolicy="link-wins" />
+                        <MircBody body={row.body ?? ""} linkPolicy="link-wins" emphasis />
                       </span>
                     </button>
                   );

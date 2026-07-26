@@ -334,7 +334,7 @@ const TopicBar: Component<Props> = (props) => {
             {/* #220 — the bar NEVER navigates a link directly; a tap on a
                 link "surface-wins" (suppresses navigation) and bubbles to
                 the strip's onClick, which opens the modal. */}
-            <MircBody body={topicText() ?? ""} linkPolicy="surface-wins" />
+            <MircBody body={topicText() ?? ""} linkPolicy="surface-wins" emphasis />
           </Show>
         </span>
       </button>
@@ -379,7 +379,7 @@ const TopicBar: Component<Props> = (props) => {
                 <>
                   <p class="topic-modal-text">
                     <Show when={topicText() !== null} fallback={"(no topic set)"}>
-                      <MircBody body={topicText() ?? ""} />
+                      <MircBody body={topicText() ?? ""} emphasis />
                     </Show>
                   </p>
                   <Show when={topicEntry() !== null}>

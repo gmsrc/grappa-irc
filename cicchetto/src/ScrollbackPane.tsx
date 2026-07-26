@@ -402,7 +402,7 @@ const reasonSuffix = (reason: string | null): JSX.Element =>
   reason ? (
     <>
       {" ("}
-      <MircBody body={reason} />
+      <MircBody body={reason} emphasis />
       {")"}
     </>
   ) : null;
@@ -479,13 +479,13 @@ const renderRawEvent = (
     case "WALLOPS":
       return (
         <span class="scrollback-body">
-          *** Wallops from {senderSpan(sender)}: <MircBody body={trailing} />
+          *** Wallops from {senderSpan(sender)}: <MircBody body={trailing} emphasis />
         </span>
       );
     case "GLOBOPS":
       return (
         <span class="scrollback-body">
-          *** Globops from {senderSpan(sender)}: <MircBody body={trailing} />
+          *** Globops from {senderSpan(sender)}: <MircBody body={trailing} emphasis />
         </span>
       );
     case "KILL": {
@@ -626,7 +626,7 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
         <>
           {senderSpan("<", ">", msg.sender)}{" "}
           <span class="scrollback-body">
-            <MircBody body={msg.body ?? ""} />
+            <MircBody body={msg.body ?? ""} emphasis />
           </span>
         </>
       );
@@ -648,7 +648,7 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
         <>
           {senderSpan("-", "-", msg.sender)}{" "}
           <span class="scrollback-body">
-            <MircBody body={msg.body ?? ""} />
+            <MircBody body={msg.body ?? ""} emphasis />
           </span>
         </>
       );
@@ -656,7 +656,7 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
     case "action":
       return (
         <span class="scrollback-body">
-          * {bareSenderSpan(msg.sender)} <MircBody body={stripCtcpAction(msg.body)} />
+          * {bareSenderSpan(msg.sender)} <MircBody body={stripCtcpAction(msg.body)} emphasis />
         </span>
       );
     case "join":
@@ -722,7 +722,7 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
     case "topic":
       return (
         <span class="scrollback-body">
-          * {bareSenderSpan(msg.sender)} changed topic: <MircBody body={msg.body ?? ""} />
+          * {bareSenderSpan(msg.sender)} changed topic: <MircBody body={msg.body ?? ""} emphasis />
         </span>
       );
     case "kick": {
@@ -750,7 +750,7 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
       // bug, but render the body so it isn't invisible.
       return (
         <span class="scrollback-body">
-          *** {bareSenderSpan(msg.sender)} <MircBody body={msg.body ?? ""} />
+          *** {bareSenderSpan(msg.sender)} <MircBody body={msg.body ?? ""} emphasis />
         </span>
       );
     }
@@ -2908,7 +2908,7 @@ const ScrollbackPane: Component<Props> = (props) => {
                   >
                     <span class="scrollback-topic-join-label">Topic for {row.line.channel}:</span>{" "}
                     <span class="scrollback-body">
-                      <MircBody body={row.line.text} />
+                      <MircBody body={row.line.text} emphasis />
                     </span>
                     <Show when={row.line.meta}>
                       <span class="scrollback-topic-join-meta"> — {row.line.meta}</span>
