@@ -18410,3 +18410,21 @@ pure classifier tests (open→service nick, closed→`$server` regression,
 PRIVMSG arm, predicate called with `(subject, network_id, nick)`, ChanServ
 bracket precedence). A live Anope-service-NOTICE e2e is possible but the
 ExUnit routing test is the batch gate.
+
+## 2026-07-26 — #380 uploads.user_id cascade-FK index (closes #379's class)
+
+One-line completion of #379's root-cause class. `uploads` is an
+`ON DELETE CASCADE` child of BOTH `visitors` and `users` (the #211 XOR-FK
+visitor-parity shape). #379 (P0) added the missing `uploads.visitor_id`
+index — the proven hot path, driven by the 60s `Visitors.Reaper`. Its
+`user_id` sibling is the IDENTICAL bug class: an unindexed cascade-FK child
+column, so deleting a user full-scans `uploads` to enforce the FK
+(`EXPLAIN → SCAN uploads`). It only bites the rare manual user-delete admin
+op (not the periodic sweep), so it was deliberately scoped OUT of the #379
+P0 to keep that minimal; this closes the class completely ("fix root
+causes, not examples"). New migration `create index(:uploads, [:user_id])`
+(id-twin, plain `create` so drift fails loudly; **COLD** — a new
+`priv/repo/migrations/*` is Preflight Class 5). Guard test id-twins the
+`#379 — uploads.visitor_id cascade-FK index` EXPLAIN-QUERY-PLAN assertion:
+the `user_id` FK-enforcement lookup now SEARCHes `uploads_user_id_index`,
+not SCANs.

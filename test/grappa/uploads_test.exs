@@ -555,4 +555,32 @@ defmodule Grappa.UploadsTest do
              """
     end
   end
+
+  # #380 (2026-07-26) — `uploads.user_id` is the XOR sibling of #379's
+  # `uploads.visitor_id`: an `ON DELETE CASCADE` child of `users` that also
+  # shipped WITHOUT an index (`20260520215304_create_uploads_and_server_
+  # settings.exs`). A manual user-delete admin op therefore full-scans
+  # `uploads` to enforce the FK — the identical bug class as #379, scoped
+  # out of that P0 because it's the rare op (not the 60s Reaper sweep).
+  # This closes the root-cause class.
+  describe "#380 — uploads.user_id cascade-FK index" do
+    test "the FK-enforcement lookup seeks uploads_user_id_index, not SCAN" do
+      # Mirrors the child-key lookup SQLite runs to enforce the
+      # `ON DELETE CASCADE` when a user row is deleted.
+      %Exqlite.Result{rows: rows} =
+        Repo.query!(
+          "EXPLAIN QUERY PLAN SELECT 1 FROM uploads WHERE user_id = ? LIMIT 1",
+          [Ecto.UUID.generate()]
+        )
+
+      plan = Enum.map_join(rows, "\n", fn [_, _, _, detail] -> detail end)
+
+      assert plan =~ "uploads_user_id_index",
+             """
+             Expected EXPLAIN QUERY PLAN to SEARCH via uploads_user_id_index
+             (not SCAN uploads), got:
+             #{plan}
+             """
+    end
+  end
 end
