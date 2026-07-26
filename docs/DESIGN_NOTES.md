@@ -18493,3 +18493,89 @@ tolerates ONLY the ±0.5px rounding band: a genuinely short tap-target
 (< 43.5px) still rounds below 44 and fails (a broken 40px button →
 `Math.round(40) = 40 < 44` → red). It is not a loosening. e2e-only; the
 behavioural gate is the playwright integration run, not `bun run check`.
+## 2026-07-26 — #413 subject-label codec owned by Grappa.Subject
+
+The user-rooted topic-label — `user.name` for users, `"visitor:" <> id`
+for visitors — was the `:user_name` segment of every `Grappa.PubSub.Topic`,
+restated at ~6 code branches across 4 functions
+(`Networks.subject_label_of/1`, `Visitors.mark_failed/2`,
+`Visitors.SessionPlan.build_plan/4`, `GrappaWeb.Subject.topic_label/1`)
+with ONE inverse parser (`GrappaWeb.Subject.from_topic_label/1`). Nothing
+owned the pairing. The failure mode the #369 review flagged is a **silent
+dead-drop on drift**: change the encode side and a subject stops matching
+its own topic — every cross-device broadcast (`ReadCursor.broadcast_set/5`,
+archive invalidations, `notify_list`) silently misses, no crash, symptom
+far from cause.
+
+Fix: promote the pair to `Grappa.Subject.label/1` + `from_label/1`. It
+lands in the **core** boundary deliberately — `GrappaWeb.Subject` is
+unreachable from core (the Boundary graph runs web → core), which is the
+very reason the core sites (`Networks`, `Visitors`) each grew their own
+literal instead of reusing the web module. One codec both boundaries reach
+collapses the duplication; `GrappaWeb.Subject` now delegates
+(`from_topic_label` is a `defdelegate`, `topic_label` extracts the struct's
+name/id then calls `label/1`).
+
+Key type distinction: the codec input is **label_parts**
+`{:user, name} | {:visitor, id}`, NOT `Grappa.Subject.t/0`
+(`{:user, uuid} | {:visitor, uuid}`) — the label uses the user NAME, `t/0`
+carries the user ID. So callers extract name/id from whatever struct they
+hold (`%User{}`, `%Visitor{}`, `%Credential{}` FK) and pass bare strings;
+`label/1` is a pure string codec with no struct dep. `@visitor_prefix` is
+single-sourced in `Grappa.Subject`.
+
+A StreamData round-trip property is the whole point of an encode/decode
+pair. It holds **by domain**: valid `user.name`s
+(`^[a-zA-Z][a-zA-Z0-9_-]*$`, `Accounts.User` @name_format) never contain a
+colon, so a bare name can never collide with the `"visitor:"` prefix.
+
+Scope boundary: `session_log`'s `"<kind>:<uuid>:<network_id>"` session-id
+is a DIFFERENT scheme (a `user:` prefix for users too, plus a network
+suffix) — a `(subject, network)` composite key, not the topic label. Left
+untouched: reuse the verb, not the noun.
+
+## 2026-07-26 — #416 keep ICC_Profile: Display-P3 photos no longer wash out
+
+Spun out of #112 as a user-visible bug. iPhone photos are Display-P3;
+`Grappa.Uploads.MetadataStrip.@kept_tags` excluded `ICC_Profile`, so the
+strip removed the colour profile and the browser then interpreted the P3
+pixel values as sRGB — the image rendered **washed out**, visibly wrong to
+whoever posted it.
+
+The strip is a **privacy** mechanism, so widening its allowlist is only
+safe pinned in BOTH directions. New committed fixture `:p3_jpeg`: a
+Display-P3 ICC profile (`display-p3.icc`, the standard matrix profile,
+committed as the `generate.sh` source so the fixture reproduces in the
+container — which ships exiftool + ffmpeg only, no ICC profiles) embedded
+ALONGSIDE the GPS/Make/Model EXIF leak. The test asserts through exiftool
+(the strip's own tool, the only honest oracle): (1) the profile survives
+(`ProfileDescription == "Display P3"`) and (2) the privacy payload still
+dies (binary EXIF GPS + device Model gone). `:p3_jpeg` also joins the
+blanket marker-strip loop.
+
+`ICC_Profile` qualifies with an **eyes-open caveat** (surfaced by the code
+review). exiftool copies the profile as ONE opaque APP2 block — it cannot
+selectively drop the profile's internal tags — so whatever the source
+profile embeds rides back. The standard Display-P3 profile carries
+CONSTANT vendor boilerplate: `ProfileCopyright` ("Copyright Apple Inc.,
+2022") and `DeviceManufacturer` ("Apple Computer Inc." — the profile
+AUTHOR, not the capturing device). That is identical across every P3 image
+and reveals nothing per-user/per-device, so it is not a GPS/fingerprint
+leak — outside the strip's threat model (inadvertent auto-embedded EXIF
+GPS + device Make/Model). It is UTF-16BE `mluc`, which is ALSO why the
+test's ASCII marker-absence scan stays honest with the profile kept — but
+that is a happy side effect, not a "no provenance payload" claim: the test
+PINS the surviving copyright/manufacturer verbatim (they are invisible to
+both the ASCII scan and the EXIF `read_tag` oracle, so pinning is the only
+honest record). A deliberately crafted profile stuffing identifying text
+into ICC `dmdd`/`dmnd` device tags would survive too — explicitly out of
+scope: the strip defends inadvertent metadata, not a poster
+steganographising their own upload, and rebuilding the profile to sanitise
+it needs lcms (absent from the image) for no gain against a non-threat.
+
+The copy-back stays image/* only (`-tagsfromfile @ -ICC_Profile`; an ICC
+copied into an mp4 would be nonsense — the video path stays a blanket
+wipe). The allowlist did NOT become a general escape hatch: the
+two-direction fixture (ICC survives, EXIF GPS/Model die) is what proves it,
+exactly the discipline #39-round-2's Orientation entry established. No
+deploy change beyond the code; the strip runs on every image upload.
