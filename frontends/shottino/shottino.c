@@ -846,25 +846,32 @@ static char *decode_chunked(const char *body, size_t len, size_t *out_len) {
     return out;
 }
 
-static struct http_response http_request(struct app *app, const char *method, const char *path, const char *body) {
+/* Generalised request: an explicit content type and an explicit body
+ * length, so a body containing NUL bytes (a file upload) survives. The
+ * JSON wrapper below is the common case and keeps its old signature. */
+static struct http_response http_request_raw(struct app *app, const char *method, const char *path,
+                                             const char *body, size_t body_len,
+                                             const char *content_type) {
     struct tls_conn conn;
     if (!conn_open(app, &conn)) die("failed to connect to %s:%s", app->url.host, app->url.port);
-    size_t body_len = body ? strlen(body) : 0;
     char auth[MAX_TOKEN + 64] = "";
     if (app->token[0]) snprintf(auth, sizeof(auth), "Authorization: Bearer %s\r\n", app->token);
-    char *req = xasprintf(
+    char *head = xasprintf(
         "%s %s HTTP/1.1\r\n"
         "Host: %s\r\n"
         "User-Agent: shottino/0.1\r\n"
         "Accept: application/json\r\n"
-        "Content-Type: application/json\r\n"
+        "Content-Type: %s\r\n"
         "%s"
         "Connection: close\r\n"
-        "Content-Length: %zu\r\n\r\n"
-        "%s",
-        method, path, app->url.host, auth, body_len, body ? body : "");
-    if (!conn_write_all(&conn, req, strlen(req))) die("HTTP write failed");
-    free(req);
+        "Content-Length: %zu\r\n\r\n",
+        method, path, app->url.host, content_type, auth, body_len);
+    bool ok = conn_write_all(&conn, head, strlen(head));
+    free(head);
+    /* Body written separately — it is binary and must not go through a
+     * format string. */
+    if (ok && body_len) ok = conn_write_all(&conn, body, body_len);
+    if (!ok) die("HTTP write failed");
     size_t raw_len = 0;
     char *raw = read_all(&conn, &raw_len);
     conn_close(&conn);
@@ -890,6 +897,10 @@ static struct http_response http_request(struct app *app, const char *method, co
     }
     free(raw);
     return (struct http_response){ .status = status, .body = payload, .body_len = payload_len };
+}
+
+static struct http_response http_request(struct app *app, const char *method, const char *path, const char *body) {
+    return http_request_raw(app, method, path, body, body ? strlen(body) : 0, "application/json");
 }
 
 /* Read one top-level string out of a small REST response body.
@@ -3114,6 +3125,22 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
         break;
     }
 
+    /* A /list scan runs in the background and can take a while on a
+     * large network; without these the user types /list, sees an empty
+     * cache, and has no idea a scan is running. */
+    case WIRE_DIRECTORY_PROGRESS:
+        card(app, ev->u.directory.network, "--- channel scan: %ld so far", ev->u.directory.count);
+        break;
+
+    case WIRE_DIRECTORY_COMPLETE:
+        card(app, ev->u.directory.network, "--- channel scan complete: %ld channels — /list to browse",
+             ev->u.directory.count);
+        break;
+
+    case WIRE_DIRECTORY_FAILED:
+        card(app, ev->u.directory.network, "--- channel scan failed: %s", ev->u.directory.reason);
+        break;
+
     case WIRE_CHANNEL_CREATED:
     case WIRE_CHANNELS_CHANGED:
     case WIRE_NOTIFY_LIST:
@@ -3123,9 +3150,6 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
     case WIRE_SERVER_SETTINGS_CHANGED:
     case WIRE_ARCHIVE_CHANGED:
     case WIRE_ARCHIVE_PURGED:
-    case WIRE_DIRECTORY_PROGRESS:
-    case WIRE_DIRECTORY_COMPLETE:
-    case WIRE_DIRECTORY_FAILED:
     case WIRE_UNKNOWN:
         /* Narrowed but not yet rendered — landing here is deliberate, not
          * a gap in the switch. Each becomes a card or a store update in a
@@ -4400,6 +4424,7 @@ static void show_help(struct app *app) {
     log_line(app, "ops: /op nicks /deop nicks /voice nicks /devoice nicks /kick nick [reason] /kb nick [reason] /ban mask /unban mask /banlist /invite nick");
     log_line(app, "watch: /notify [nick...|del nick|list] watches PEOPLE; /hilight pattern, /dehilight pattern watch WORDS (/watch add|del|list is the older spelling)");
     log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
+    log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
 
@@ -4479,6 +4504,123 @@ static void mint_share_link(struct app *app) {
 }
 
 static void handle_command_dispatch(struct app *app, char *line);
+
+/* ── /upload ───────────────────────────────────────────────────────────
+ *
+ * Posts a local file to grappa's upload surface and sends the resulting
+ * URL to the current window as TEXT. That is the whole model: IRC stays
+ * text, the URL is a clickable link, and the 📸 prefix matches what
+ * cicchetto ships so the two clients produce identical wire bytes.
+ * Nothing is rendered inline in scrollback. */
+static const char *mime_for_path(const char *path) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) return "application/octet-stream";
+    struct { const char *ext; const char *mime; } table[] = {
+        {"png", "image/png"},   {"jpg", "image/jpeg"},  {"jpeg", "image/jpeg"},
+        {"gif", "image/gif"},   {"webp", "image/webp"}, {"mp4", "video/mp4"},
+        {"webm", "video/webm"}, {"mov", "video/quicktime"}, {"mp3", "audio/mpeg"},
+        {"ogg", "audio/ogg"},   {"opus", "audio/opus"}, {"wav", "audio/wav"},
+        {"flac", "audio/flac"}, {"pdf", "application/pdf"}, {"txt", "text/plain"},
+    };
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
+        if (strcasecmp(dot + 1, table[i].ext) == 0) return table[i].mime;
+    return "application/octet-stream";
+}
+
+static void upload_command(struct app *app, const char *path) {
+    while (*path == ' ') path++;
+    if (!*path) {
+        log_line(app, "/upload requires a file path");
+        return;
+    }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        log_line(app, "/upload: cannot open %s", path);
+        return;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        log_line(app, "/upload: cannot size %s", path);
+        return;
+    }
+    long size = ftell(f);
+    rewind(f);
+    /* Bounded so a mistyped path at a huge file cannot exhaust memory
+     * before the server's cap ever sees it. */
+    if (size < 0 || size > 64L * 1024 * 1024) {
+        fclose(f);
+        log_line(app, "/upload: %s is too large (%ld bytes)", path, size);
+        return;
+    }
+    char *data = malloc((size_t)size);
+    if (!data) {
+        fclose(f);
+        log_line(app, "/upload: out of memory");
+        return;
+    }
+    size_t got = fread(data, 1, (size_t)size, f);
+    fclose(f);
+    if (got != (size_t)size) {
+        free(data);
+        log_line(app, "/upload: short read on %s", path);
+        return;
+    }
+
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    const char *boundary = "----shottino7RcH2mQx";
+    char *head = xasprintf("--%s\r\n"
+                           "Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+                           "Content-Type: %s\r\n\r\n",
+                           boundary, base, mime_for_path(path));
+    char *tail = xasprintf("\r\n--%s--\r\n", boundary);
+    size_t hlen = strlen(head), tlen = strlen(tail);
+    size_t total = hlen + got + tlen;
+    char *body = malloc(total);
+    if (!body) {
+        free(head); free(tail); free(data);
+        log_line(app, "/upload: out of memory");
+        return;
+    }
+    memcpy(body, head, hlen);
+    memcpy(body + hlen, data, got);
+    memcpy(body + hlen + got, tail, tlen);
+    free(head);
+    free(tail);
+    free(data);
+
+    char ctype[128];
+    snprintf(ctype, sizeof(ctype), "multipart/form-data; boundary=%s", boundary);
+    log_line(app, "uploading %s (%ld bytes)...", base, size);
+    struct http_response r = http_request_raw(app, "POST", "/api/uploads", body, total, ctype);
+    free(body);
+
+    if (r.status < 200 || r.status >= 300) {
+        log_line(app, "/upload failed HTTP %d: %.200s", r.status, r.body ? r.body : "");
+        free(r.body);
+        return;
+    }
+    char url[MAX_LINE] = "";
+    if (!json_top_string(r.body, r.body_len, "url", url, sizeof(url)) || !url[0]) {
+        log_line(app, "/upload: response missing url");
+        free(r.body);
+        return;
+    }
+    free(r.body);
+
+    /* The server may answer with a path rather than an absolute URL;
+     * make it absolute so the link is clickable from any client. */
+    char message[MAX_LINE];
+    if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0)
+        snprintf(message, sizeof(message), "📸 %s", url);
+    else
+        snprintf(message, sizeof(message), "📸 %s%s", app->url.base, url);
+
+    const char *network = app->windows[app->current].network;
+    const char *channel = app->windows[app->current].channel;
+    add_pending_echo(app, network, channel, own_nick_for_network(app, network), message);
+    enqueue_send(app, network, channel, message);
+}
 
 /* ── /archive open|purge ───────────────────────────────────────────────
  * `open` re-opens an archived window locally and pulls its scrollback
@@ -5093,6 +5235,10 @@ static void handle_command_dispatch(struct app *app, char *line) {
         alias_command(app, line + 6);
     } else if (strncmp(line, "/unalias ", 9) == 0) {
         alias_remove(app, line + 9);
+    } else if (strncmp(line, "/upload ", 8) == 0) {
+        upload_command(app, line + 8);
+    } else if (strcmp(line, "/upload") == 0) {
+        log_line(app, "/upload <path> — send a local file and post its link");
     } else if (strcmp(line, "/list") == 0 || strncmp(line, "/list ", 6) == 0) {
         directory_command(app, line[5] ? line + 6 : "");
     } else if (strncmp(line, "/watch ", 7) == 0 || strncmp(line, "/highlight ", 11) == 0) {

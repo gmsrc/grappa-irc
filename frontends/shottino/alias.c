@@ -20,7 +20,7 @@ static const char *const BUILTINS[] = {
     "mode",   "links",    "motd",    "info",    "version",   "stats",    "rehash",
     "kb",     "kickban",  "cs",      "ns",      "ms",        "os",       "hs",
     "rs",     "notify",   "hilight", "dehilight", "highlight", "watch",  "alias",
-    "unalias","list",     "window",  "win",     "w",         NULL};
+    "unalias","list",     "window",  "win",     "w",         "upload", NULL};
 
 bool alias_is_builtin(const char *verb) {
     if (!verb) return false;
