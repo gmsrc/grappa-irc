@@ -13,7 +13,14 @@
          fallback for engines without SVG-favicon support. -->
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
-    <!-- iOS Safari ignores manifest.json for standalone-mode chrome
+    <!-- #430 — `mobile-web-app-capable` is the standardised, unprefixed
+         standalone-mode opt-in: the cross-runtime signal recent PWA
+         engines read, and it silences Chrome's deprecation warning about
+         the apple-only shape. It is a NO-OP on iOS Safari (which reads
+         only the apple- tag below), so both ship — the standard tag is
+         an addition, never a replacement.
+
+         iOS Safari ignores manifest.json for standalone-mode chrome
          and splash; these three drive Add-to-Home-Screen on iOS (S45).
          `apple-mobile-web-app-capable` opts into standalone mode (no
          Safari chrome); `apple-mobile-web-app-status-bar-style` tunes
@@ -24,6 +31,7 @@
          screenshot, so the pre-#274 `/icon.svg` here never rendered the
          mark on the home screen. Android/Chrome are manifest-driven and
          unaffected. -->
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
