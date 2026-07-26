@@ -34,6 +34,7 @@
 #include <sys/stat.h>
 #include <limits.h>
 
+#include "alias.h"
 #include "json.h"
 #include "wire.h"
 
@@ -223,6 +224,7 @@ struct seen_message {
     char channel[MAX_CHANNEL];
 };
 
+
 struct pending_echo {
     unsigned long id;
     char network[MAX_SLUG];
@@ -284,6 +286,7 @@ struct app {
     char history[INPUT_HISTORY][MAX_LINE];
     size_t history_count;
     size_t history_pos;
+    struct alias_table aliases;
     bool running;
     pthread_mutex_t lock;
     pthread_mutex_t jobs_lock;
@@ -3620,9 +3623,11 @@ static void preview_media(struct app *app, const char *url, bool is_video) {
 
 static void show_help(struct app *app) {
     log_line(app, "commands: /help /archive /settings /admin /chat /exit /quit /window N [/w N, /win N] /join #chan [/j] /part /close /clear /msg nick text /query nick [/q nick] /me text");
-    log_line(app, "network: /connect slug /disconnect [slug] [reason] /nick nick /away [reason]");
-    log_line(app, "info: /topic [text|-delete] /members [/users] /whois nick /whowas nick /who [#chan] /names [#chan] /lusers /watch add|del|list pattern");
-    log_line(app, "ops: /op nicks /deop nicks /voice nicks /devoice nicks /kick nick [reason] /ban mask /unban mask /banlist /invite nick");
+    log_line(app, "network: /connect slug /disconnect [slug] [reason] /nick nick /away [reason] /umode +modes /mode [#chan] +modes [params]");
+    log_line(app, "info: /topic [text|-delete] /members [/users] /whois nick /whowas nick /who [#chan] /names [#chan] /lusers /list [-refresh|query] /links /motd /info /version /stats [q] /rehash [opt]");
+    log_line(app, "ops: /op nicks /deop nicks /voice nicks /devoice nicks /kick nick [reason] /kb nick [reason] /ban mask /unban mask /banlist /invite nick");
+    log_line(app, "watch: /notify [nick...|del nick|list] watches PEOPLE; /hilight pattern, /dehilight pattern watch WORDS (/watch add|del|list is the older spelling)");
+    log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
 
@@ -3701,7 +3706,209 @@ static void mint_share_link(struct app *app) {
     free(enc);
 }
 
-static void handle_command(struct app *app, char *line) {
+static void handle_command_dispatch(struct app *app, char *line);
+
+/* ── Services shortcuts ────────────────────────────────────────────────
+ * /cs /ns /ms /os /hs /rs → the conventional service nicks. Keyed on the
+ * first letter, which is unambiguous across the six. */
+static const char *service_for_shortcut(char c) {
+    switch (c) {
+    case 'c': return "ChanServ";
+    case 'n': return "NickServ";
+    case 'm': return "MemoServ";
+    case 'o': return "OperServ";
+    case 'h': return "HelpServ";
+    case 'r': return "RootServ";
+    default:  return "NickServ";
+    }
+}
+
+/* ── /notify — presence watch list ─────────────────────────────────────
+ * A REST resource (GET/POST/DELETE /notify), NOT the `watchlist` push,
+ * which is the separate keyword-highlight list. Sharing the irssi verb
+ * names between two different server stores is a real trap: /notify
+ * watches PEOPLE, /hilight watches WORDS. */
+static void notify_command(struct app *app, const char *rest) {
+    while (*rest == ' ') rest++;
+    if (!*rest || strcmp(rest, "list") == 0) {
+        struct http_response r = http_request(app, "GET", "/notify", NULL);
+        if (r.status < 200 || r.status >= 300) {
+            log_line(app, "/notify failed HTTP %d", r.status);
+        } else {
+            json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+            const json_value *list = json_root(doc);
+            log_line(app, "--- watched nicks (%zu)", json_len(list));
+            for (size_t i = 0; i < json_len(list); i++) {
+                const json_value *row = json_at(list, i);
+                const char *nick = json_string(json_get(row, "nick"));
+                const char *presence = json_string(json_get(row, "presence"));
+                if (nick) log_line(app, "  %-20s %s", nick, presence ? presence : "unknown");
+            }
+            if (json_len(list) == 0) log_line(app, "  (none — /notify <nick> to add)");
+            json_free(doc);
+        }
+        free(r.body);
+        return;
+    }
+    if (strncmp(rest, "del ", 4) == 0 || strncmp(rest, "-", 1) == 0) {
+        const char *nick = rest[0] == '-' ? rest + 1 : rest + 4;
+        while (*nick == ' ') nick++;
+        char *enc = url_encode(nick);
+        char *path = xasprintf("/notify/%s", enc);
+        free(enc);
+        struct http_response r = http_request(app, "DELETE", path, NULL);
+        free(path);
+        if (r.status >= 200 && r.status < 300) log_line(app, "no longer watching %s", nick);
+        else log_line(app, "/notify del failed HTTP %d", r.status);
+        free(r.body);
+        return;
+    }
+    /* Bare nicks (possibly several) are an add. */
+    char nicks_json[MAX_LINE];
+    char *arr = json_array_words(rest);
+    snprintf(nicks_json, sizeof(nicks_json), "{\"nicks\":%s}", arr);
+    free(arr);
+    struct http_response r = http_request(app, "POST", "/notify", nicks_json);
+    if (r.status >= 200 && r.status < 300) log_line(app, "watching %s", rest);
+    else log_line(app, "/notify failed HTTP %d: %.200s", r.status, r.body);
+    free(r.body);
+}
+
+/* ── /list — channel directory ─────────────────────────────────────────
+ * A full LIST is expensive on a large network, so grappa runs it as a
+ * background scan (POST .../directory/refresh) that reports progress via
+ * directory_* events, and serves the result from a cached table. Bare
+ * /list reads the cache; `/list -refresh` starts a new scan. */
+static void directory_command(struct app *app, const char *rest) {
+    while (*rest == ' ') rest++;
+    const char *network = app->windows[app->current].network;
+    char *slug = url_encode(network);
+    if (strcmp(rest, "-refresh") == 0) {
+        char *path = xasprintf("/networks/%s/directory/refresh", slug);
+        free(slug);
+        struct http_response r = http_request(app, "POST", path, "{}");
+        free(path);
+        if (r.status >= 200 && r.status < 300) log_line(app, "scanning %s channel list...", network);
+        else log_line(app, "/list refresh failed HTTP %d: %.200s", r.status, r.body);
+        free(r.body);
+        return;
+    }
+    char *path;
+    if (*rest) {
+        char *q = url_encode(rest);
+        path = xasprintf("/networks/%s/directory?q=%s", slug, q);
+        free(q);
+    } else {
+        path = xasprintf("/networks/%s/directory", slug);
+    }
+    free(slug);
+    struct http_response r = http_request(app, "GET", path, NULL);
+    free(path);
+    if (r.status < 200 || r.status >= 300) {
+        log_line(app, "/list failed HTTP %d: %.200s", r.status, r.body);
+        free(r.body);
+        return;
+    }
+    json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+    /* The endpoint may answer with a bare array or an envelope carrying
+     * the rows plus scan metadata; accept either rather than guessing. */
+    const json_value *root = json_root(doc);
+    const json_value *rows = json_type_of(root) == JSON_ARRAY ? root : json_get(root, "channels");
+    if (!rows) rows = json_get(root, "entries");
+    size_t n = json_len(rows);
+    log_line(app, "--- channel directory %s (%zu)", network, n);
+    for (size_t i = 0; i < n; i++) {
+        const json_value *row = json_at(rows, i);
+        const char *name = json_string(json_get(row, "name"));
+        const char *topic = json_string(json_get(row, "topic"));
+        long users = 0;
+        json_long(json_get(row, "users"), &users);
+        if (name) log_line(app, "  %-28s %4ld  %.80s", name, users, topic ? topic : "");
+    }
+    if (n == 0) log_line(app, "  (empty — /list -refresh to scan)");
+    json_free(doc);
+    free(r.body);
+}
+
+/* ── User-defined aliases ──────────────────────────────────────────────
+ * Grammar mirrors cicchetto's: $1..$9 positional (missing → empty), $*
+ * all args, and an implicit verbatim append when the expansion holds no
+ * placeholder. Builtins are never shadowed and expansion is depth-bounded
+ * so `/alias a /a` cannot spin. */
+/* Alias storage + expansion live in alias.[ch] — pure, and tested there.
+ * These wrappers only add the app lock and the user-facing log lines. */
+
+static void alias_command(struct app *app, const char *rest) {
+    while (*rest == ' ') rest++;
+    if (!*rest) {
+        pthread_mutex_lock(&app->lock);
+        size_t count = app->aliases.count;
+        log_line(app, "--- aliases (%zu)", count);
+        for (size_t i = 0; i < count; i++)
+            log_line(app, "  /%-12s %s", app->aliases.entries[i].name,
+                     app->aliases.entries[i].expansion);
+        pthread_mutex_unlock(&app->lock);
+        if (count == 0) log_line(app, "  (none — /alias <name> <expansion>)");
+        return;
+    }
+    const char *sp = strchr(rest, ' ');
+    if (!sp) {
+        log_line(app, "/alias requires <name> <expansion>");
+        return;
+    }
+    char name[ALIAS_MAX_NAME];
+    size_t nlen = (size_t)(sp - rest);
+    if (nlen >= sizeof(name)) nlen = sizeof(name) - 1;
+    memcpy(name, rest, nlen);
+    name[nlen] = '\0';
+    const char *expansion = sp + 1;
+    while (*expansion == ' ') expansion++;
+
+    pthread_mutex_lock(&app->lock);
+    alias_set_result res = alias_set(&app->aliases, name, expansion);
+    pthread_mutex_unlock(&app->lock);
+    switch (res) {
+    case ALIAS_SET_OK:
+        log_line(app, "alias /%s = %s", name, expansion);
+        break;
+    case ALIAS_SET_BUILTIN:
+        log_line(app, "/alias: %s is a built-in command and cannot be redefined", name);
+        break;
+    case ALIAS_SET_FULL:
+        log_line(app, "/alias: table full (%d)", ALIAS_MAX_ENTRIES);
+        break;
+    case ALIAS_SET_INVALID:
+        log_line(app, "/alias requires <name> <expansion>");
+        break;
+    }
+}
+
+static void alias_remove(struct app *app, const char *name) {
+    while (*name == ' ') name++;
+    pthread_mutex_lock(&app->lock);
+    bool found = alias_unset(&app->aliases, name);
+    pthread_mutex_unlock(&app->lock);
+    if (found) log_line(app, "alias /%s removed", name);
+    else log_line(app, "/unalias: no such alias: %s", name);
+}
+
+static void handle_command(struct app *app, const char *input) {
+    /* Alias expansion happens BEFORE dispatch, so an expanded alias flows
+     * through the ordinary command path and cannot reach a second, parallel
+     * implementation. Bounded so a self-referential alias terminates.
+     *
+     * Works on a LOCAL copy: internal callers pass string literals
+     * (`handle_command(app, "/close")`), and the dispatcher itself splits
+     * arguments in place with `*sp = 0`. Writing through to the caller's
+     * buffer would be undefined behaviour for those. */
+    char line[MAX_LINE];
+    pthread_mutex_lock(&app->lock);
+    alias_expand(&app->aliases, input, line, sizeof(line));
+    pthread_mutex_unlock(&app->lock);
+    handle_command_dispatch(app, line);
+}
+
+static void handle_command_dispatch(struct app *app, char *line) {
     if (strcmp(line, "/quit") == 0) {
         logout_grappa(app);
         app->running = false;
@@ -3920,8 +4127,144 @@ static void handle_command(struct app *app, char *line) {
         char *payload = xasprintf("{\"network_id\":%d,\"modes\":\"%s\"}", current_network_id(app), modes);
         ws_push_user(app, "umode", payload);
         free(modes); free(payload);
-    } else if (strncmp(line, "/mode ", 6) == 0) {
-        log_line(app, "/mode is available through /quote MODE ... in this build");
+    } else if (strncmp(line, "/mode", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) {
+        /* The server has taken a structured `mode` verb since before this
+         * client existed — {network_id, target, modes, params}. The old
+         * body told the user to fall back to `/quote MODE`, which skipped
+         * the server's validation and its channel_modes_changed
+         * broadcast. Grammar mirrors cicchetto's:
+         *   /mode                → show current channel's modes
+         *   /mode +ns            → apply to the current channel
+         *   /mode #chan +ns      → apply to a named channel
+         *   /mode +k secret      → mode letters plus positional params
+         */
+        char *rest = line + 5;
+        while (*rest == ' ') rest++;
+        char target[MAX_CHANNEL];
+        snprintf(target, sizeof(target), "%s", current_channel(app));
+        if (*rest == '#' || *rest == '&' || *rest == '+' || *rest == '!') {
+            char *sp = strchr(rest, ' ');
+            if (sp) {
+                *sp = 0;
+                snprintf(target, sizeof(target), "%s", rest);
+                rest = sp + 1;
+                while (*rest == ' ') rest++;
+            } else {
+                snprintf(target, sizeof(target), "%s", rest);
+                rest += strlen(rest);
+            }
+        }
+        if (!target[0] || strcmp(target, "$server") == 0) {
+            log_line(app, "/mode needs a channel; use /mode #chan +modes from a server window");
+        } else {
+            /* Split "+k secret" into the mode string and its params. */
+            char modes[128] = "";
+            char *sp = strchr(rest, ' ');
+            const char *params_src = "";
+            if (sp) { *sp = 0; params_src = sp + 1; }
+            snprintf(modes, sizeof(modes), "%s", rest);
+            char *tgt = json_escape(target);
+            char *mds = json_escape(modes);
+            char *params = json_array_words(params_src);
+            char *payload = xasprintf(
+                "{\"network_id\":%d,\"target\":\"%s\",\"modes\":\"%s\",\"params\":%s}",
+                current_network_id(app), tgt, mds, params);
+            ws_push_user(app, "mode", payload);
+            free(tgt); free(mds); free(params); free(payload);
+        }
+    } else if (strcmp(line, "/links") == 0) {
+        char *payload = xasprintf("{\"network_id\":%d}", current_network_id(app));
+        ws_push_user(app, "links", payload);
+        free(payload);
+    } else if (strcmp(line, "/motd") == 0 || strcmp(line, "/info") == 0 ||
+               strcmp(line, "/version") == 0) {
+        /* All three answer with a `server_reply` bundle discriminated by
+         * source, so one arm covers them. */
+        char *payload = xasprintf("{\"network_id\":%d}", current_network_id(app));
+        ws_push_user(app, line + 1, payload);
+        free(payload);
+    } else if (strncmp(line, "/stats", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) {
+        /* STATS has no structured verb; it rides `raw`, as in cicchetto.
+         * Trailing args are omitted rather than sent empty so the frame
+         * stays positionally valid. */
+        const char *rest = line + 6;
+        while (*rest == ' ') rest++;
+        char frame[MAX_LINE];
+        if (*rest) snprintf(frame, sizeof(frame), "STATS %s", rest);
+        else snprintf(frame, sizeof(frame), "STATS");
+        char *raw = json_escape(frame);
+        char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", current_network_id(app), raw);
+        ws_push_user(app, "raw", payload);
+        free(raw); free(payload);
+    } else if (strncmp(line, "/rehash", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
+        const char *rest = line + 7;
+        while (*rest == ' ') rest++;
+        char frame[MAX_LINE];
+        if (*rest) snprintf(frame, sizeof(frame), "REHASH %s", rest);
+        else snprintf(frame, sizeof(frame), "REHASH");
+        char *raw = json_escape(frame);
+        char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", current_network_id(app), raw);
+        ws_push_user(app, "raw", payload);
+        free(raw); free(payload);
+    } else if (strncmp(line, "/kb ", 4) == 0 || strncmp(line, "/kickban ", 9) == 0) {
+        /* Kick + ban as one verb. Banning FIRST is deliberate: kick then
+         * ban leaves a window in which the user can rejoin ahead of the
+         * ban landing. */
+        char *rest = strchr(line + 1, ' ');
+        rest++;
+        while (*rest == ' ') rest++;
+        char *sp = strchr(rest, ' ');
+        if (sp) *sp = 0;
+        if (!*rest) {
+            log_line(app, "/kb requires <nick> [reason]");
+        } else {
+            char mask[MAX_CHANNEL + 8];
+            snprintf(mask, sizeof(mask), "%s!*@*", rest);
+            char *emask = json_escape(mask);
+            char *ban_extra = xasprintf("\"mask\":\"%s\"", emask);
+            push_simple_channel_action(app, "ban", ban_extra);
+            free(emask); free(ban_extra);
+            char *nick = json_escape(rest);
+            char *reason = json_escape(sp ? sp + 1 : "");
+            char *kick_extra = xasprintf("\"nick\":\"%s\",\"reason\":\"%s\"", nick, reason);
+            push_simple_channel_action(app, "kick", kick_extra);
+            free(nick); free(reason); free(kick_extra);
+        }
+    } else if (strncmp(line, "/cs ", 4) == 0 || strncmp(line, "/ns ", 4) == 0 ||
+               strncmp(line, "/ms ", 4) == 0 || strncmp(line, "/os ", 4) == 0 ||
+               strncmp(line, "/hs ", 4) == 0 || strncmp(line, "/rs ", 4) == 0 ||
+               strcmp(line, "/cs") == 0 || strcmp(line, "/ns") == 0 ||
+               strcmp(line, "/ms") == 0 || strcmp(line, "/os") == 0 ||
+               strcmp(line, "/hs") == 0 || strcmp(line, "/rs") == 0) {
+        /* Services shortcuts: /<x>s <cmd> is a PRIVMSG to the service. A
+         * BARE /<x>s sends HELP, which is what cicchetto's services modal
+         * opens with. */
+        const char *service = service_for_shortcut(line[1]);
+        const char *rest = line[3] ? line + 4 : "";
+        while (*rest == ' ') rest++;
+        const char *body = *rest ? rest : "HELP";
+        const char *network = app->windows[app->current].network;
+        query_window(app, service);
+        add_pending_echo(app, network, service, own_nick_for_network(app, network), body);
+        enqueue_send(app, network, service, body);
+    } else if (strncmp(line, "/notify", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
+        notify_command(app, line + 7);
+    } else if (strncmp(line, "/hilight ", 9) == 0 || strncmp(line, "/dehilight ", 11) == 0) {
+        /* Keyword highlights are a DIFFERENT list from /notify's presence
+         * watch — same irssi naming, separate server stores. */
+        bool remove = line[1] == 'd';
+        const char *rest = strchr(line + 1, ' ') + 1;
+        while (*rest == ' ') rest++;
+        char *pat = json_escape(rest);
+        char *payload = xasprintf("{\"action\":\"%s\",\"pattern\":\"%s\"}", remove ? "del" : "add", pat);
+        ws_push_user(app, "watchlist", payload);
+        free(pat); free(payload);
+    } else if (strncmp(line, "/alias", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) {
+        alias_command(app, line + 6);
+    } else if (strncmp(line, "/unalias ", 9) == 0) {
+        alias_remove(app, line + 9);
+    } else if (strcmp(line, "/list") == 0 || strncmp(line, "/list ", 6) == 0) {
+        directory_command(app, line[5] ? line + 6 : "");
     } else if (strncmp(line, "/watch ", 7) == 0 || strncmp(line, "/highlight ", 11) == 0) {
         char *rest = strchr(line + 1, ' ');
         char action[16] = "list";
@@ -3942,7 +4285,7 @@ static void handle_command(struct app *app, char *line) {
             enqueue_fetch(app, app->windows[app->current].network, app->windows[app->current].channel);
         }
     } else {
-        log_line(app, "unknown command; supported verbs include /join /part /msg /query /me /nick /away /whois /whowas /who /names /lusers /op /deop /voice /devoice /kick /ban /unban /banlist /invite /quote /oper /watch /share /disconnect /connect /window /quit");
+        log_line(app, "unknown command: %.40s — /help lists every verb", line);
     }
 }
 
