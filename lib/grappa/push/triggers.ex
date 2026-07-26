@@ -6,12 +6,21 @@ defmodule Grappa.Push.Triggers do
 
   ## Where this fits
 
-  `Grappa.Session.Server`'s `apply_effects/2` `:persist` arm calls
-  `evaluate_and_dispatch/2` immediately after a successful
-  `Scrollback.persist_event/1` for a `:privmsg` or `:action` row. The
-  call is fire-and-forget — Triggers spawns an unlinked `Task` so the
-  hot path stays sub-millisecond and Sender failures don't bleed into
-  the mailbox.
+  Two independent entry points, both fire-and-forget (unlinked `Task`,
+  so the hot path stays sub-millisecond and Sender failures don't bleed
+  into the mailbox):
+
+    * `evaluate_and_dispatch/2` — MESSAGE push. Called by
+      `Grappa.Session.Persistor.maybe_dispatch_push/2` immediately
+      after a successful `Scrollback.persist_event/1` for a `:privmsg`
+      or `:action` row. (It moved out of `Session.Server`'s
+      `apply_effects/2` `:persist` arm with the #369 A3 extraction —
+      `Persistor` owns post-persist obligations.)
+    * `dispatch_presence/4` — PRESENCE push (#378). Called by
+      `Session.Server`'s `apply_effects/2` `{:presence_changed, ...}`
+      arm, next to the wire broadcast. NOT routed through `Persistor`:
+      a presence transition persists nothing, so there is no
+      post-persist obligation for `Persistor` to guard.
 
   ## Decision logic — `should_notify?/4`
 
@@ -35,9 +44,15 @@ defmodule Grappa.Push.Triggers do
   carries the same notification meaning. `:notice` is intentionally
   excluded — services chatter (NickServ, ChanServ, BotNet status) is
   the dominant inbound NOTICE shape; pushing those would be spam.
-  All other kinds (`:join`, `:part`, `:quit`, `:nick_change`,
-  `:mode`, `:topic`, `:kick`, `:server_event`) are presence /
-  control plane and do not push.
+  All other SCROLLBACK kinds (`:join`, `:part`, `:quit`,
+  `:nick_change`, `:mode`, `:topic`, `:kick`, `:server_event`) are
+  presence / control plane and never push.
+
+  That is separate from `/notify` watch-list presence (#378), which
+  does NOT arrive as a scrollback row: genuine `:transition` reports
+  push via `dispatch_presence/4`, gated by the `presence_online` /
+  `presence_offline` prefs (both default off). Baseline `:initial`
+  reports never push.
 
   #395 — the kind gate reads `Message.notify_kinds/0` (a subset of
   `Message.content_kinds/0`, derived from ONE projection declaration) via
@@ -102,6 +117,20 @@ defmodule Grappa.Push.Triggers do
   """
   @type prefs :: UserSettings.notification_prefs()
 
+  @typedoc """
+  Baseline-vs-genuine-flip classification for a `/notify` presence
+  report (#378).
+
+  Structurally identical to `Grappa.Session.Presence.change_kind/0`,
+  and deliberately NOT an alias of it: `Presence` is not exported from
+  the `Grappa.Session` boundary, and `Grappa.Push` cannot dep
+  `Grappa.Session` because `Grappa.Session` already deps `Grappa.Push`
+  — the reverse edge is a cycle. Two atoms are cheaper than either
+  fix. (Contrast `prefs()` above, which CAN re-export because
+  `Grappa.UserSettings` IS a `Grappa.Push` dep.)
+  """
+  @type presence_kind :: :initial | :transition
+
   # ---------------------------------------------------------------------------
   # Public — call from Session.Server
   # ---------------------------------------------------------------------------
@@ -161,9 +190,71 @@ defmodule Grappa.Push.Triggers do
 
   def evaluate_and_dispatch(%Message{}, _), do: :ok
 
+  @doc """
+  Fires Web Push for one `/notify` watch-list presence transition
+  (#378) and, on a match, fans out via `Push.Sender.send_to_subject/2`.
+
+  Same fire-and-forget shape as `evaluate_and_dispatch/2`: unlinked
+  `Task`, always returns `:ok`, no `try/rescue`.
+
+  `:initial` gates in the FUNCTION HEAD, before the Task spawn — a
+  MONITOR/WATCH baseline burst (connect-time arm, `/notify add` bulk,
+  the 421 fallback re-arm, or a post-reconnect re-seed) is many reports
+  at once and must not spawn a Task each just to decide "no". Same
+  rationale as `evaluate_and_dispatch/2`'s kind gate.
+
+  Deliberately NO catch-all clause: the caller's `change_kind()` is a
+  closed pair, so a third kind should crash `Session.Server` loudly
+  rather than be silently dropped.
+  """
+  @spec dispatch_presence(String.t(), :online | :offline, presence_kind(), ctx()) :: :ok
+  def dispatch_presence(nick, presence, :transition, ctx)
+      when is_binary(nick) and presence in [:online, :offline] and is_map(ctx) do
+    %{subject: subject, subject_label: subject_label, network_slug: network_slug} = ctx
+
+    {:ok, _} =
+      Task.start(fn ->
+        prefs = UserSettings.get_notification_prefs(subject)
+
+        # #182 foreground suppression, identical to the message path: pure
+        # predicate first, then the WSPresence read as a separate step.
+        if should_notify_presence?(presence, prefs) and
+             not WSPresence.any_visible?(subject_label) do
+          Push.Sender.send_to_subject(
+            subject,
+            Payload.build_presence(nick, presence, network_slug),
+            :presence
+          )
+        end
+      end)
+
+    :ok
+  end
+
+  def dispatch_presence(_, _, :initial, _), do: :ok
+
   # ---------------------------------------------------------------------------
   # Public — pure predicate (testable in isolation)
   # ---------------------------------------------------------------------------
+
+  @doc """
+  Returns `true` when a presence transition to `presence` should push,
+  given `prefs` (#378).
+
+  `Map.fetch!/2`, NOT `Map.get(prefs, key, false)`: every caller routes
+  through `UserSettings.get_notification_prefs/1`, which runs
+  `merge_with_defaults/1` and therefore guarantees both keys are
+  present. A `false` fallback here would be a SECOND declaration of the
+  default, free to drift from `default_notification_prefs/0` — the
+  exact smell at `dm_match?/2` and `channel_match?/4` below, which this
+  does not copy.
+  """
+  @spec should_notify_presence?(:online | :offline, prefs()) :: boolean()
+  def should_notify_presence?(:online, prefs) when is_map(prefs),
+    do: Map.fetch!(prefs, :presence_online)
+
+  def should_notify_presence?(:offline, prefs) when is_map(prefs),
+    do: Map.fetch!(prefs, :presence_offline)
 
   @doc """
   Returns `true` when `message` should produce a push notification

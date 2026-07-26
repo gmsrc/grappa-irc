@@ -144,6 +144,40 @@ defmodule Grappa.Session.Presence do
   end
 
   @doc """
+  Resets a tracked `nick` (folded) back to `:unknown`, leaving the map
+  untouched when the nick is not watched — the peer-NICK-rename path
+  (#378).
+
+  A watched nick renaming makes upstream emit `601 RPL_LOGOFF` (WATCH)
+  / `731 RPL_MONOFFLINE` (MONITOR) for the OLD nick. Against an
+  `:online` entry that classifies as a `:transition`, so a push would
+  announce "alice is offline" for someone who merely renamed — and if
+  a DIFFERENT person then takes the freed nick, the follow-on `600`
+  announces "alice is online" about a stranger. An OS banner makes an
+  identity assertion, so unlike #247's status dot it cannot shrug this
+  off.
+
+  Resetting to `:unknown` — rather than dropping the key, which is
+  `untrack/2`'s job for `/notify del` — keeps the nick WATCHED while
+  making the imminent report classify `:initial`: baseline, silent,
+  and the dot still repaints.
+
+  The watch-list ENTRY deliberately does not follow the rename; #247
+  defines presence as nick-keyed, not account-keyed. Boundary: IRC
+  delivers a NICK only to channel-sharing peers, so a rename by
+  someone we share no channel with is invisible here.
+  """
+  @spec forget(state_map(), String.t()) :: state_map()
+  def forget(map, nick) when is_map(map) and is_binary(nick) do
+    key = Identifier.canonical_nick(nick)
+
+    case Map.fetch(map, key) do
+      {:ok, _} -> Map.put(map, key, :unknown)
+      :error -> map
+    end
+  end
+
+  @doc """
   Drops `nicks` (folded) from the map — the live `/notify del` /
   `clear` path.
   """

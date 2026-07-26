@@ -44,6 +44,13 @@ defmodule Grappa.Push.TriggersTest do
 
   defp prefs(overrides), do: Map.merge(default_prefs(), Map.new(overrides))
 
+  # #378 — dispatch_presence/4 ctx. Same four keys as the message path's,
+  # built inline at each call site (Session.Server for presence, Persistor
+  # for messages) rather than shared.
+  defp presence_ctx(subject, label) do
+    %{subject: subject, subject_label: label, network_slug: "azzurra", own_nick: "vjt"}
+  end
+
   describe "should_notify?/4 — kind gate" do
     test "non-PRIVMSG kinds always return false" do
       for kind <- [:notice, :join, :part, :quit, :nick_change, :mode, :topic, :kick, :server_event] do
@@ -441,15 +448,16 @@ defmodule Grappa.Push.TriggersTest do
       subject = {:user, user.id}
       _ = subscription_fixture(subject, endpoint)
 
-      # Override defaults: channel_mentions OFF
+      # Override defaults: channel_mentions OFF. Derived from the production
+      # defaults, not a literal — `cast_bools/4` requires EVERY
+      # `@prefs_bool_keys` member present, so a hand-written map silently
+      # rots into a 422 the moment a pref key is added (#378 did exactly
+      # that).
       {:ok, _} =
-        UserSettings.put_notification_prefs(subject, %{
-          channel_messages_all: false,
-          channel_messages_only: [],
-          channel_mentions: false,
-          private_messages_all: true,
-          private_messages_only: []
-        })
+        UserSettings.put_notification_prefs(
+          subject,
+          Map.put(UserSettings.default_notification_prefs(), :channel_mentions, false)
+        )
 
       # Mention body but mentions OFF → no notify
       m = msg(channel: "#sniffo", sender: "alice", body: "vjt ping")
@@ -608,6 +616,222 @@ defmodule Grappa.Push.TriggersTest do
       refute_receive {:telemetry, [:grappa, :push, :send, :start], _, _}, 300
 
       Process.exit(device, :kill)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # should_notify_presence?/2 — pure predicate (#378)
+  # ---------------------------------------------------------------------------
+
+  describe "should_notify_presence?/2" do
+    test "each presence reads ONLY its own pref — the full 2x4 truth table" do
+      for online? <- [true, false], offline? <- [true, false] do
+        p = prefs(presence_online: online?, presence_offline: offline?)
+
+        assert Triggers.should_notify_presence?(:online, p) == online?
+        assert Triggers.should_notify_presence?(:offline, p) == offline?
+      end
+    end
+
+    test "both defaults are OFF — a deploy pushes nothing until the user opts in" do
+      refute Triggers.should_notify_presence?(:online, default_prefs())
+      refute Triggers.should_notify_presence?(:offline, default_prefs())
+    end
+
+    test "raises on a prefs map missing the key rather than defaulting silently" do
+      # Map.fetch!/2 by design: every real caller goes through
+      # get_notification_prefs/1 -> merge_with_defaults/1, so an absent key
+      # means a NEW bug, not a legacy row. A `false` fallback here would be
+      # a second declaration of the default, free to drift.
+      assert_raise KeyError, fn ->
+        Triggers.should_notify_presence?(:online, %{})
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # dispatch_presence/4 — #378 gates
+  #
+  # Same observation technique as evaluate_and_dispatch/2: there is no
+  # Push.Sender DI seam, so the assertion surface is Bypass + a real
+  # push_subscriptions row + the [:grappa, :push, :send, :*] telemetry.
+  # WSPresence is singleton-class, hence async: false + reset_for_test/0.
+  # ---------------------------------------------------------------------------
+
+  describe "dispatch_presence/4 — #378" do
+    setup do
+      :ok = WSPresence.reset_for_test()
+      bypass = Bypass.open()
+      {:ok, bypass: bypass, endpoint: "http://localhost:#{bypass.port}/wp"}
+    end
+
+    test "an :initial baseline NEVER pushes, even with the pref on", %{
+      bypass: bypass,
+      endpoint: endpoint
+    } do
+      attach_telemetry([[:grappa, :push, :send, :start]])
+      Bypass.stub(bypass, "POST", "/wp", fn conn -> Plug.Conn.resp(conn, 500, "should-not-happen") end)
+
+      user = user_fixture()
+      subject = {:user, user.id}
+      _ = subscription_fixture(subject, endpoint)
+      {:ok, _} = UserSettings.put_notification_prefs(subject, prefs(presence_online: true))
+
+      assert :ok =
+               Triggers.dispatch_presence("alice", :online, :initial, presence_ctx(subject, user.name))
+
+      refute_receive {:telemetry, [:grappa, :push, :send, :start], _, _}, 300
+    end
+
+    test "a :transition with the pref OFF does not push", %{bypass: bypass, endpoint: endpoint} do
+      attach_telemetry([[:grappa, :push, :send, :start]])
+      Bypass.stub(bypass, "POST", "/wp", fn conn -> Plug.Conn.resp(conn, 500, "should-not-happen") end)
+
+      user = user_fixture()
+      subject = {:user, user.id}
+      _ = subscription_fixture(subject, endpoint)
+      {:ok, _} = UserSettings.put_notification_prefs(subject, prefs(presence_online: false))
+
+      assert :ok =
+               Triggers.dispatch_presence(
+                 "alice",
+                 :online,
+                 :transition,
+                 presence_ctx(subject, user.name)
+               )
+
+      refute_receive {:telemetry, [:grappa, :push, :send, :start], _, _}, 300
+    end
+
+    test "a :transition with the pref ON and no visible device pushes, tagged class: :presence",
+         %{bypass: bypass, endpoint: endpoint} do
+      attach_telemetry([[:grappa, :push, :send, :start], [:grappa, :push, :send, :stop]])
+      Bypass.expect(bypass, "POST", "/wp", fn conn -> Plug.Conn.resp(conn, 201, "") end)
+
+      user = user_fixture()
+      subject = {:user, user.id}
+      _ = subscription_fixture(subject, endpoint)
+      {:ok, _} = UserSettings.put_notification_prefs(subject, prefs(presence_online: true))
+
+      assert :ok =
+               Triggers.dispatch_presence(
+                 "alice",
+                 :online,
+                 :transition,
+                 presence_ctx(subject, user.name)
+               )
+
+      # class: :presence is the whole point — without it a watch-list burst
+      # is indistinguishable from message traffic in every metric, and
+      # #378's "revisit with production evidence" can never trigger.
+      assert_receive {:telemetry, [:grappa, :push, :send, :start], %{count: 1}, %{subject: ^subject, class: :presence}},
+                     2_000
+
+      assert_receive {:telemetry, [:grappa, :push, :send, :stop], %{success: 1}, %{class: :presence}},
+                     2_000
+    end
+
+    test "the offline direction reads its own pref independently", %{
+      bypass: bypass,
+      endpoint: endpoint
+    } do
+      attach_telemetry([[:grappa, :push, :send, :start]])
+      Bypass.stub(bypass, "POST", "/wp", fn conn -> Plug.Conn.resp(conn, 201, "") end)
+
+      user = user_fixture()
+      subject = {:user, user.id}
+      _ = subscription_fixture(subject, endpoint)
+
+      # online ON, offline OFF → an offline transition must stay silent.
+      {:ok, _} =
+        UserSettings.put_notification_prefs(
+          subject,
+          prefs(presence_online: true, presence_offline: false)
+        )
+
+      assert :ok =
+               Triggers.dispatch_presence(
+                 "alice",
+                 :offline,
+                 :transition,
+                 presence_ctx(subject, user.name)
+               )
+
+      refute_receive {:telemetry, [:grappa, :push, :send, :start], _, _}, 300
+    end
+
+    test "a VISIBLE device suppresses the fan-out (#182 gate applies unchanged)", %{
+      bypass: bypass,
+      endpoint: endpoint
+    } do
+      attach_telemetry([[:grappa, :push, :send, :start]])
+      Bypass.stub(bypass, "POST", "/wp", fn conn -> Plug.Conn.resp(conn, 500, "should-not-happen") end)
+
+      user = user_fixture()
+      subject = {:user, user.id}
+      _ = subscription_fixture(subject, endpoint)
+      {:ok, _} = UserSettings.put_notification_prefs(subject, prefs(presence_online: true))
+
+      device = spawn(fn -> Process.sleep(:infinity) end)
+      :ok = WSPresence.register(user.name, device)
+      :ok = WSPresence.set_visibility(user.name, device, true)
+      assert WSPresence.any_visible?(user.name)
+
+      assert :ok =
+               Triggers.dispatch_presence(
+                 "alice",
+                 :online,
+                 :transition,
+                 presence_ctx(subject, user.name)
+               )
+
+      refute_receive {:telemetry, [:grappa, :push, :send, :start], _, _}, 300
+
+      Process.exit(device, :kill)
+    end
+
+    test "a VISITOR subject pushes to its own subscriptions (visitor parity)", %{
+      bypass: bypass,
+      endpoint: endpoint
+    } do
+      attach_telemetry([[:grappa, :push, :send, :start], [:grappa, :push, :send, :stop]])
+      Bypass.expect(bypass, "POST", "/wp", fn conn -> Plug.Conn.resp(conn, 201, "") end)
+
+      visitor = visitor_fixture()
+      subject = {:visitor, visitor.id}
+      label = "visitor:#{visitor.id}"
+      _ = subscription_fixture(subject, endpoint)
+      {:ok, _} = UserSettings.put_notification_prefs(subject, prefs(presence_online: true))
+
+      assert :ok =
+               Triggers.dispatch_presence("alice", :online, :transition, presence_ctx(subject, label))
+
+      assert_receive {:telemetry, [:grappa, :push, :send, :start], %{count: 1}, %{subject: ^subject, class: :presence}},
+                     2_000
+
+      # :stop fires after the fan-out drains — without it the test can end
+      # before the POST lands and Bypass's expectation goes unmet.
+      assert_receive {:telemetry, [:grappa, :push, :send, :stop], %{success: 1},
+                      %{subject: ^subject, class: :presence}},
+                     2_000
+    end
+
+    test "a subject with NO subscriptions is a safe no-op", %{bypass: _bypass} do
+      attach_telemetry([[:grappa, :push, :send, :start]])
+
+      user = user_fixture()
+      subject = {:user, user.id}
+      {:ok, _} = UserSettings.put_notification_prefs(subject, prefs(presence_online: true))
+
+      assert :ok =
+               Triggers.dispatch_presence(
+                 "alice",
+                 :online,
+                 :transition,
+                 presence_ctx(subject, user.name)
+               )
+
+      refute_receive {:telemetry, [:grappa, :push, :send, :start], _, _}, 300
     end
   end
 end

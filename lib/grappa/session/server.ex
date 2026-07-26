@@ -111,6 +111,7 @@ defmodule Grappa.Session.Server do
     WindowState
   }
 
+  alias Grappa.Push.Triggers, as: PushTriggers
   alias Grappa.Session.Wire, as: SessionWire
 
   require Logger
@@ -3533,6 +3534,29 @@ defmodule Grappa.Session.Server do
         )
       )
 
+    # #378 — the SECOND consumer of this one effect: OS-level Web Push for
+    # a genuine transition when no device has the PWA on-screen. Dispatched
+    # from here, NOT from `Session.Persistor`: `Persistor` owns POST-PERSIST
+    # obligations (#369 A3) and a presence report persists nothing, so
+    # routing it there would mean inventing a fake persist path. That does
+    # re-open a direct Server -> Push edge, deliberately and narrowly: one
+    # call, in this arm, beside the broadcast it mirrors.
+    #
+    # The ctx map is built inline rather than shared with the message path's
+    # copy in `Persistor` — the two live in different modules and derive
+    # from different sources (`state` here, `session_ctx()` there), so a
+    # shared four-key helper would buy nothing.
+    #
+    # Gating (`:initial` baselines, both prefs, #182 foreground suppression)
+    # lives in `Push.Triggers`, the canonical predicate site — never here.
+    :ok =
+      PushTriggers.dispatch_presence(nick, presence, kind, %{
+        subject: state.subject,
+        subject_label: state.subject_label,
+        network_slug: state.network_slug,
+        own_nick: state.nick
+      })
+
     apply_effects(rest, state)
   end
 
@@ -4226,7 +4250,14 @@ defmodule Grappa.Session.Server do
         :ok
     end
 
-    apply_effects(rest, state)
+    # #378 — a rename is not a departure. Upstream will emit 601/731 for the
+    # freed OLD nick; against an `:online` entry that reads as a genuine
+    # transition and would push "alice is offline" (and, if someone else
+    # grabs the nick, "alice is online" about a stranger). Reset to
+    # `:unknown` so the imminent report classifies `:initial` — silent.
+    # Runs on BOTH `:renamed` and `:noop`: the query window may not exist,
+    # but the presence entry can, and they are independent stores.
+    apply_effects(rest, Map.update(state, :presence, %{}, &Presence.forget(&1, old_nick)))
   end
 
   # #349 — commit-on-+r for USER sessions, scoped to the REGISTER case. A

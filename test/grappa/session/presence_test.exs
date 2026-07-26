@@ -118,4 +118,40 @@ defmodule Grappa.Session.PresenceTest do
       assert Presence.untrack(map, ["foo{1}"]) == %{"bar" => :unknown}
     end
   end
+
+  describe "forget/2 — peer NICK rename (#378)" do
+    test "resets a tracked nick to :unknown, keeping it watched" do
+      assert Presence.forget(%{"alice" => :online}, "alice") == %{"alice" => :unknown}
+    end
+
+    test "fold-matches the old nick (#121)" do
+      assert Presence.forget(%{"alice{m}" => :online}, "Alice[m]") == %{"alice{m}" => :unknown}
+    end
+
+    test "leaves an unwatched nick alone — never invents an entry" do
+      map = %{"alice" => :online}
+      assert Presence.forget(map, "mallory") == map
+    end
+
+    test "the reset makes the rename's 601/731 classify :initial, so no push fires" do
+      # THE point of forget/2. A watched nick renaming makes upstream emit
+      # RPL_LOGOFF for the OLD nick; against :online that is a genuine
+      # :transition and would push "alice is offline" for someone who only
+      # renamed. After forget/2 the same report is a silent baseline.
+      online = %{"alice" => :online}
+      assert {:changed, :transition, _} = Presence.apply_report(online, "alice", :offline)
+
+      forgotten = Presence.forget(online, "alice")
+
+      assert {:changed, :initial, %{"alice" => :offline}} =
+               Presence.apply_report(forgotten, "alice", :offline)
+    end
+
+    test "a stranger taking the freed nick also reads :initial, not a false 'online'" do
+      forgotten = Presence.forget(%{"alice" => :online}, "alice")
+
+      assert {:changed, :initial, %{"alice" => :online}} =
+               Presence.apply_report(forgotten, "alice", :online)
+    end
+  end
 end
