@@ -84,7 +84,18 @@ const SELECTABLE_TEXT_SURFACES = ".scrollback, .topic-modal-text";
 //     policy ≠ selection policy for content that is also a control.
 // `.scrollback-link` also covers media links (`.scrollback-media-link` is
 // applied alongside it, MircText.tsx). See DESIGN_NOTES 2026-07-20 (#350).
-const SELECTABLE_TEXT_EXCLUDE = ".scrollback-invite-join, .scrollback-link";
+//   * `.nick-clickable` (the sender nick rendered inline as an open-query
+//     control, #354) is the SAME class as `.scrollback-link`: a COPYABLE
+//     inline control. A tap should keep the keyboard (it opens a query; the
+//     mousedown preventDefault leaves the click's open-query onClick
+//     untouched), but its nick text must stay copyable, so — like the link —
+//     it is deliberately NOT in the CSS `user-select` re-exclude (forcing
+//     `user-select: none` is the exact `.nick-clickable` regression #250
+//     fixed). Before #354 it fell onto the duration-gated selectable path
+//     (inside `.scrollback`, not excluded), so a TAP dropped the keyboard and
+//     a LONG-PRESS select-all'd the row — both wrong for a control. Same
+//     class of bug as #350. See DESIGN_NOTES 2026-07-26 (#354).
+const SELECTABLE_TEXT_EXCLUDE = ".scrollback-invite-join, .scrollback-link, .nick-clickable";
 
 // #79 (2026-07-04) — long-press threshold, shared by BOTH the mousedown
 // tap-vs-hold split and the #366 touchend select-all. For a TAP, iOS

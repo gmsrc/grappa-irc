@@ -18428,3 +18428,46 @@ causes, not examples"). New migration `create index(:uploads, [:user_id])`
 `#379 — uploads.visitor_id cascade-FK index` EXPLAIN-QUERY-PLAN assertion:
 the `user_id` FK-enforcement lookup now SEARCHes `uploads_user_id_index`,
 not SCANs.
+
+## #354 — keep the mobile keyboard up on a scrollback nick tap (2026-07-26)
+
+`.nick-clickable` (the sender nick rendered inline in the scrollback as an
+open-query control) dropped the iOS on-screen keyboard when tapped, and
+select-all'd the whole message row on a long-press. Same class of bug as
+#350 (link taps); filed separately per that issue's note.
+
+**Root cause.** `keepKeyboard.ts`'s `installKeyboardPreserve` classifies a
+mousedown as one of three cases: a different input (allow the focus
+transfer), a selectable-text surface (`.scrollback` / `.topic-modal-text`,
+duration-gated — a TAP dismisses the keyboard, a LONG-PRESS preserves it +
+select-all's the row), or generic chrome (always preserve). Controls that
+live INSIDE a selectable surface but are NOT selectable text re-exclude
+themselves via `SELECTABLE_TEXT_EXCLUDE` (the [Join] CTA
+`.scrollback-invite-join`, and the linkified URL `.scrollback-link` added by
+#350). `.nick-clickable` was missing from that exclude, so — living inside
+`.scrollback` — it fell onto the duration-gated selectable path: a tap let
+the focus shift proceed (keyboard dismissed) and a long-press select-all'd
+the row. Both are wrong for a control: a nick tap opens a query (not a
+tap-to-close-keyboard gesture), and a nick long-press is open-query, not
+grab-message.
+
+**Fix.** Add `.nick-clickable` to `SELECTABLE_TEXT_EXCLUDE`, exactly
+mirroring #350's `.scrollback-link` treatment. `isSelectableSurface()` now
+returns false for a nick, so a nick mousedown reaches the always-fire
+`e.preventDefault()` control path (keyboard preserved on both tap and
+long-press) and never calls `selectEntireMessage`.
+
+**Keyboard policy ≠ selection policy (the #250 trap).** This is a
+KEYBOARD/focus change only. The nick text MUST stay copyable
+(`user-select: text`) — forcing `user-select: none` is the exact
+`.nick-clickable` regression #250 fixed (it drops the nick from a
+drag-selection that SPANS it). The fix therefore does NOT touch default.css's
+`html.is-ios` `user-select` re-exclude; `.nick-clickable` is a
+keyboard-preserve control that stays selectable, identical to
+`.scrollback-link`.
+
+RED-first: two vitest rows in `keepKeyboard.test.ts` (short tap keeps the
+keyboard; long-press does not select-all), both proven red before the
+one-line exclude change (short tap: `defaultPrevented` was false; long-press:
+`addRange` was called once). cic-only, zero server code. Device-verify on a
+real phone post-ship (jsdom can't exercise the real iOS keyboard).

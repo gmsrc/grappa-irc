@@ -102,6 +102,7 @@ function surfaceChild(className: string): HTMLSpanElement {
 function scrollbackMessageRow(body: string): {
   bodySpan: HTMLSpanElement;
   row: HTMLDivElement;
+  sender: HTMLButtonElement;
 } {
   const scrollback = document.createElement("div");
   scrollback.className = "scrollback";
@@ -120,7 +121,7 @@ function scrollbackMessageRow(body: string): {
   row.append(time, document.createTextNode(" "), sender, document.createTextNode(" "), bodySpan);
   scrollback.append(row);
   document.body.append(scrollback);
-  return { bodySpan, row };
+  return { bodySpan, row, sender };
 }
 
 // jsdom's Selection is a no-op for addRange/toString (real serialization
@@ -288,6 +289,48 @@ describe("keepKeyboard — installKeyboardPreserve", () => {
     scrollback.append(link);
     document.body.append(scrollback);
     expect(pressDefaultPrevented(link, LONG_PRESS_MS - 100)).toBe(true);
+  });
+
+  // #354 — a `.nick-clickable` (the sender nick rendered inline as an
+  // open-query control) is a CONTROL, not selectable text, exactly like a
+  // `.scrollback-link` (#350). It lives inside `.scrollback`, so before #354
+  // it fell onto the duration-gated selectable path: a TAP dropped the
+  // keyboard and a LONG-PRESS select-all'd the whole row — both wrong for a
+  // control. The #350 fix (exclude it) makes a tap KEEP the keyboard and a
+  // long-press a plain keep (no grab-message). Same class of bug as #350;
+  // keyboard policy ≠ selection policy — the nick stays `user-select: text`
+  // (the #250 regression), we only change its KEYBOARD/focus behaviour.
+  it("iOS: SHORT tap on a .nick-clickable IS prevented (nick tap keeps the keyboard, never a tap-to-close — #354)", () => {
+    stubUserAgent(IPHONE_UA);
+    input.focus();
+    const { sender } = scrollbackMessageRow("body text next to the clicked nick");
+    expect(pressDefaultPrevented(sender, LONG_PRESS_MS - 100)).toBe(true);
+  });
+
+  it("iOS: LONG-press on a .nick-clickable does NOT select-all (it's a control, not selectable text — #354)", () => {
+    stubUserAgent(IPHONE_UA);
+    input.focus();
+    const sel = stubSelection();
+    // A real message row: the nick sender IS inside a `.scrollback-line`, so
+    // if a regression let it back onto the selectable path the select-all
+    // WOULD fire here — this asserts it does not (control path, keyboard
+    // kept, no grab-message).
+    const { sender } = scrollbackMessageRow("body text next to the clicked nick");
+    expect(pressDefaultPrevented(sender, LONG_PRESS_MS + 100)).toBe(true);
+    expect(sel.addRange).not.toHaveBeenCalled();
+  });
+
+  it("iOS: LONG-press via TOUCH (no mousedown) on a .nick-clickable does NOT select-all (real-iOS path — a nick long-press is open-query, not grab-message, #354)", () => {
+    stubUserAgent(IPHONE_UA);
+    input.focus();
+    const sel = stubSelection();
+    // On real iOS a long-press synthesizes NO mousedown (#366), so the
+    // select-all rides `touchend` (handleTouchEnd) — the path that actually
+    // fires on device. It gates on the SAME isSelectableSurface predicate,
+    // so the #354 exclude fixes it too; assert the real gesture directly.
+    const { sender } = scrollbackMessageRow("body text next to the clicked nick");
+    longPressTouch(sender, LONG_PRESS_MS + 100);
+    expect(sel.addRange).not.toHaveBeenCalled();
   });
 
   it("iOS: mousedown on a different input is NOT prevented (focus transfer allowed)", () => {

@@ -1926,12 +1926,15 @@ html.resize-dragging * {
      button's own `user-select: text` makes its text stay selectable
      under touch drag while leaving the tap-to-query handler intact.
      Desktop mouse-selection + iOS (via the .scrollback cascade) already
-     kept it; this only ADDS Android. `.nick-clickable` already lives
-     inside `.scrollback`, which is in keepKeyboard.ts's
-     SELECTABLE_TEXT_SURFACES, so this introduces no new unlisted
-     selectable surface — the iOS long-press keyboard contract is
-     unchanged. Range/Playwright cannot prove the Android behavior (see
-     issue250 spec header); device-verified post-ship. */
+     kept it; this only ADDS Android. This is the SELECTION policy only —
+     the KEYBOARD/focus policy is owned separately by keepKeyboard.ts, and
+     #354 moved `.nick-clickable` into its SELECTABLE_TEXT_EXCLUDE (a
+     keyboard-preserve control, like `.scrollback-link`), so a nick tap now
+     KEEPS the keyboard and a long-press no longer select-all's the row.
+     This CSS `user-select: text` is deliberately kept INDEPENDENT of that
+     (keyboard policy ≠ selection policy — #250 must stay text-selectable).
+     Range/Playwright cannot prove the Android behavior (see issue250 spec
+     header); device-verified post-ship. */
   -webkit-user-select: text;
   user-select: text;
 }
