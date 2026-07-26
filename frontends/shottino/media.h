@@ -74,6 +74,14 @@ bool media_emit_kitty(const unsigned char *png, size_t len, int cols, int rows, 
  * 240-entry palette (the xterm cube + greys, shared with termcolor) and
  * Floyd–Steinberg dithering, which is what keeps a photograph from
  * banding at 240 colours. */
+/* True when a `w` x `h` RGB image can be sixel-encoded without the
+ * intermediate buffers (`w*h*3` ints for the dither pass, `w*h` bytes
+ * for the palette indices) overflowing size_t. `media_emit_sixel`
+ * refuses when this is false. Terminal-bounded callers never approach
+ * the limit (#451 L1) — this guards a future caller with unbounded
+ * dims. Exposed for tests. */
+bool media_sixel_dims_ok(int w, int h);
+
 bool media_emit_sixel(const unsigned char *rgb, int w, int h, FILE *out);
 
 /* Cell box for an image of `img_w` x `img_h`, fitted inside `max_cols` x

@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <poll.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -216,8 +217,19 @@ static int nearest_palette(int r, int g, int b) {
 
 static int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
+bool media_sixel_dims_ok(int w, int h) {
+    if (w <= 0 || h <= 0) return false;
+    /* The dither working copy is w*h*3 ints and the index buffer w*h
+     * bytes; refuse dims whose product would wrap size_t before either
+     * malloc silently under-allocates and the band loop runs past it. */
+    size_t px = (size_t)w * (size_t)h;
+    if (px / (size_t)w != (size_t)h) return false;       /* w*h wrapped */
+    if (px > SIZE_MAX / (3 * sizeof(int))) return false; /* *3*sizeof(int) wraps */
+    return true;
+}
+
 bool media_emit_sixel(const unsigned char *rgb, int w, int h, FILE *out) {
-    if (!rgb || !out || w <= 0 || h <= 0) return false;
+    if (!rgb || !out || !media_sixel_dims_ok(w, h)) return false;
 
     /* Dither into a palette-index buffer first, so the band encoder below
      * deals only with indices. Errors diffuse in a working copy of the

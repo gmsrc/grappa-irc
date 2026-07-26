@@ -7,6 +7,7 @@
 #include "../media.h"
 #include "test.h"
 
+#include <limits.h>
 #include <stdlib.h>
 
 static char *emit(bool (*fn)(const unsigned char *, size_t, int, int, FILE *),
@@ -229,6 +230,26 @@ TEST(sixel_rejects_bad_input) {
     CHECK(emit_sixel(px, -1, -1, NULL) == NULL);
 }
 
+/* #451 L1 — the sixel encoder's intermediate buffers are w*h*3 ints
+ * (the dither working copy) and w*h bytes (the palette indices).
+ * Unbounded dims would wrap size_t and under-allocate, after which the
+ * band loops write out of bounds. Not reachable through the
+ * terminal-bounded callers today, but the encoder is a public API, so
+ * the overflow guard is verified here rather than left to luck. */
+TEST(sixel_dims_overflow_guard) {
+    CHECK(media_sixel_dims_ok(4, 6));
+    CHECK(media_sixel_dims_ok(1920, 1080)); /* large but well within size_t */
+    CHECK(!media_sixel_dims_ok(0, 10));
+    CHECK(!media_sixel_dims_ok(10, 0));
+    CHECK(!media_sixel_dims_ok(-1, -1));
+    /* w*h*3*sizeof(int) overflows size_t. */
+    CHECK(!media_sixel_dims_ok(INT_MAX, INT_MAX));
+    /* And the encoder itself refuses those dims rather than
+     * under-allocating and running the band loop past the buffer. */
+    unsigned char px[3] = {0};
+    CHECK(emit_sixel(px, INT_MAX, INT_MAX, NULL) == NULL);
+}
+
 /* Cells are ~2x taller than wide. Without correcting for that, every
  * image renders vertically stretched — the single most visible flaw in
  * naive terminal image output. */
@@ -272,6 +293,7 @@ int main(void) {
     RUN(sixel_framing);
     RUN(sixel_run_length_encodes);
     RUN(sixel_rejects_bad_input);
+    RUN(sixel_dims_overflow_guard);
     RUN(cell_fitting_corrects_aspect);
     return test_report();
 }
