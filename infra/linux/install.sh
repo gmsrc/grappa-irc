@@ -55,7 +55,10 @@ say "1/10 install_prereqs.sh"
 
 say "2/10 clone / update checkout at ${REPO_ROOT}"
 if [ ! -d "${REPO_ROOT}/.git" ]; then
-	mkdir -p "$(dirname "${REPO_ROOT}")"
+	# The target may sit below a root-owned parent (the default is
+	# /home/grappa/grappa). Create the checkout directory itself with the
+	# runtime user's ownership before cloning as that user.
+	install -d -o "${GRAPPA_USER}" -g "${GRAPPA_USER}" -m 0755 "${REPO_ROOT}"
 	run_as_grappa "git clone '${GIT_REMOTE_URL}' '${REPO_ROOT}'"
 else
 	echo "[install] ${REPO_ROOT} already a git checkout, leaving as-is"
