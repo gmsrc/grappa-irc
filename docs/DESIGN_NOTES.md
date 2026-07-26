@@ -18765,7 +18765,9 @@ source BEFORE any swap (the #372/#411 "never merge distinct sets" rule):
   (`SCROLLBACK_MESSAGE_KIND`, deleting the hand `Record<MessageKind,true>`
   exhaustiveness map — codegen now guarantees completeness), `narrowSeverity`
   (`WINDOW_COUNTS_SEVERITY`), `VALID_SESSION_LOG_EVENTS` (`SESSION_LOG_EVENT`),
-  and the AdminCredentials auth-method dropdown (`IRCAUTH_FSMAUTH_METHOD`).
+  `isConnectionState` (`NETWORKS_CREDENTIAL_CONNECTION_STATE`, userTopic.ts —
+  caught in code review as the one missed runtime guard, folded in the same
+  cut), and the AdminCredentials auth-method dropdown (`IRCAUTH_FSMAUTH_METHOD`).
 - The five api.ts hand literal unions become re-exports of the generated
   type: `MessageKind`, `ConnectionState`, `ServicesFlavor`, `DirectoryStatus`,
   `ServerReplySource`. The now-tautological enum equality asserts in
