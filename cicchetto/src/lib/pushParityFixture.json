@@ -1,0 +1,98 @@
+{
+  "_comment": [
+    "#378 drift gate. ONE fixture, both ports. There is no codegen between",
+    "Grappa.Push.Payload / Grappa.UserSettings and their TypeScript mirrors",
+    "(scripts/check.sh's gen_wire_types --check covers wireTypes.ts only, and",
+    "notification_prefs passes through UserSettingsJSON as an opaque map), so",
+    "this file is the enforcement.",
+    "",
+    "ExUnit (test/grappa/push/push_parity_test.exs) asserts the SERVER",
+    "produces exactly these shapes. vitest (src/lib/pushParity.test.ts)",
+    "asserts the CLIENT accepts them and that DEFAULT_NOTIFICATION_PREFS",
+    "matches. Change either side -> one suite goes red -> update this file ->",
+    "the other suite picks it up. Same discipline as",
+    "shouldNotifyTruthTable.json.",
+    "",
+    "A hand-copied literal in a vitest test would NOT be a gate: if the",
+    "Elixir builder changed, the literal would not move and both suites would",
+    "stay green."
+  ],
+
+  "notification_prefs_defaults": {
+    "channel_messages_all": false,
+    "channel_messages_only": [],
+    "channel_mentions": true,
+    "private_messages_all": true,
+    "private_messages_only": [],
+    "presence_online": false,
+    "presence_offline": false
+  },
+
+  "presence_payloads": [
+    {
+      "why": "plain online transition",
+      "nick": "alice",
+      "presence": "online",
+      "network_slug": "azzurra",
+      "payload": {
+        "title": "alice is online",
+        "body": "on azzurra",
+        "tag": "azzurra:presence:alice",
+        "url": "/?network=azzurra&channel=alice"
+      },
+      "expect_target": { "kind": "query", "channelName": "alice" }
+    },
+    {
+      "why": "offline direction",
+      "nick": "alice",
+      "presence": "offline",
+      "network_slug": "azzurra",
+      "payload": {
+        "title": "alice is offline",
+        "body": "on azzurra",
+        "tag": "azzurra:presence:alice",
+        "url": "/?network=azzurra&channel=alice"
+      },
+      "expect_target": { "kind": "query", "channelName": "alice" }
+    },
+    {
+      "why": "title keeps upstream casing, tag folds it (#121)",
+      "nick": "Alice",
+      "presence": "online",
+      "network_slug": "azzurra",
+      "payload": {
+        "title": "Alice is online",
+        "body": "on azzurra",
+        "tag": "azzurra:presence:alice",
+        "url": "/?network=azzurra&channel=Alice"
+      },
+      "expect_target": { "kind": "query", "channelName": "Alice" }
+    },
+    {
+      "why": "rfc1459 bracket fold in the tag — alice[m] and alice{m} are one identity",
+      "nick": "alice[m]",
+      "presence": "online",
+      "network_slug": "azzurra",
+      "payload": {
+        "title": "alice[m] is online",
+        "body": "on azzurra",
+        "tag": "azzurra:presence:alice{m}",
+        "url": "/?network=azzurra&channel=alice%5Bm%5D"
+      },
+      "expect_target": { "kind": "query", "channelName": "alice[m]" }
+    },
+    {
+      "why": "non-ASCII nick percent-encodes in the deep link",
+      "nick": "café",
+      "presence": "online",
+      "network_slug": "azzurra",
+      "payload": {
+        "title": "café is online",
+        "body": "on azzurra",
+        "tag": "azzurra:presence:café",
+        "url": "/?network=azzurra&channel=caf%C3%A9"
+      },
+      "expect_target": { "kind": "query", "channelName": "café" }
+    }
+  ]
+}
