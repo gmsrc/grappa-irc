@@ -19566,3 +19566,61 @@ node click → detail + empty state + Esc/× dismiss), `userTopic.test.ts`
 (links_bundle narrowing), `HomePane.test.tsx` (🗺 Map button jump + push),
 `compose.test.ts` (/links dispatch). All rides the batch COLD deploy (INC-1 is a
 new EventRouter clause; cic is a bundle change).
+
+## 2026-07-26 — #274 real PWA icon set derived from a single-source SVG
+
+The installable PWA shipped a placeholder "C" and a single `icon-192/512.png`
+declared `purpose: "any maskable"` — one bitmap forced to satisfy both roles, so
+it was either clipped when a platform masked it (Android circle/squircle) or
+floating-small when it didn't. apple-touch pointed at `/icon.svg`, which iOS
+ignores (it falls back to a page screenshot), so the mark never rendered on an
+iOS home screen. #274 replaces this with a proper set.
+
+**Single source, mechanical derivation.** `cicchetto/public/icon.svg` is now the
+ONLY hand-authored artifact. `cicchetto/scripts/gen-pwa-icons.mjs` rasterizes the
+whole set from it: `icon-192/512.png` (`any`, full-bleed), `icon-192/512-maskable.png`
+(`maskable`, rendered into the central 80% safe zone on an opaque bg),
+`apple-touch-icon.png` (180, iOS — no maskable/transparency), and `favicon.ico`
+(16/32/48 PNG payloads packed into an ICO container). A mark change is one SVG
+edit + one re-run — nothing else is hand-touched. The SVG favicon role is served
+by the same `/icon.svg` (the approved "one source" fork), so there is no
+duplicate `favicon.svg` to drift.
+
+**WHY headless Chrome over a node SVG lib.** The browser is the one renderer
+whose SVG output matches what the PWA actually paints, and it is already exposed
+to the worker over CDP. The generator drives raw DevTools protocol over Node's
+global `WebSocket`/`fetch` (Node 22+) — zero npm deps — and runs on the HOST
+(the bun container can't see the host's Chrome; `CDP_URL` overrides for a
+container run). CI never runs the generator; it consumes the committed PNGs. The
+script exits non-zero with a clear message if the CDP endpoint is absent rather
+than silently skipping the pixels.
+
+**any/maskable is a purpose SPLIT, not a shared asset.** `src/lib/pwaIcons.ts`
+stays the single source of truth shared with the SW Web Push notification icon
+(S18); `purpose` is now a typed literal union `"any" | "maskable"` and the array
+carries four distinct entries. `NOTIFICATION_ICON` is pinned to the full-bleed
+`any` 192 (the notification chrome frames it itself, so the safe-zone-padded
+bitmap would render needlessly small). The manifest wiring (`vite.config.ts`) and
+head links (`index.html`) flow from this.
+
+**Test teeth.** `pwaIcons.test.ts` pins the split + notification tie against the
+SSOT (fast, always runs). `e2e/issue274-pwa-icons.spec.ts` proves the SHIPPED
+artifacts: it fetches every icon off the served dist and asserts 200 + PNG IHDR
+dimensions match the declared `sizes`, apple-touch is a 180×180 PNG (never an SVG
+iOS ignores), `favicon.ico` is a real ICO container (magic bytes), and the head
+wires the raster apple-touch + the .ico fallback. Served-artifact assertions,
+not a rendered-install check — you cannot headlessly mint a WebAPK or scrape an
+iOS home-screen icon (same rationale as the #234 manifest spec).
+
+**The mark is the canonical grappa martini glass**, reused verbatim from
+`favicon.svg` in the `grappa-www` repo (owner's decision, issue comment
+5084209310): a solid silhouette in the site accent `#5fafd7` with an olive in
+accent-2 `#8fd0f0`. Reusing it keeps the app icon, the site favicon and the 🍸
+wordmark ONE mark — that identity reuse is the point, so the SVG is copied, not
+redrawn. The pipeline stays glyph-agnostic: a future mark change is still one
+`icon.svg` edit + one regen. **16px caveat (verified by actually looking):** the
+glass silhouette reads cleanly at 16px, but the olive dot does NOT survive as a
+distinct element — it degrades to a 1–2px lighter tint on the bowl rim,
+effectively imperceptible. This is inherent to a 16px raster (vjt flagged it up
+front) and accepted; the favicon still reads unmistakably as the grappa glass.
+Rides the batch COLD deploy (cic bundle change).

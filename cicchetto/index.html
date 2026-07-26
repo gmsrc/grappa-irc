@@ -7,18 +7,26 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="theme-color" content="#0a0a0a" />
+    <!-- #274 — real PWA icon set (all derived from /icon.svg via
+         scripts/gen-pwa-icons.mjs). Modern browsers pick the crisp SVG
+         favicon; `favicon.ico` (16/32/48 packed) is the legacy tab
+         fallback for engines without SVG-favicon support. -->
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <!-- iOS Safari ignores manifest.json for standalone-mode chrome
          and splash; these three drive Add-to-Home-Screen on iOS (S45).
          `apple-mobile-web-app-capable` opts into standalone mode (no
          Safari chrome); `apple-mobile-web-app-status-bar-style` tunes
          the status-bar overlay (black-translucent lets the page paint
          under it); `apple-touch-icon` is what iOS scrapes for the
-         home-screen icon. Android/Chrome are manifest-driven and
+         home-screen icon. #274 — this MUST be a raster PNG (180×180):
+         iOS ignores an SVG apple-touch-icon and falls back to a
+         screenshot, so the pre-#274 `/icon.svg` here never rendered the
+         mark on the home screen. Android/Chrome are manifest-driven and
          unaffected. -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <title>Cicchetto</title>
   </head>
   <body>

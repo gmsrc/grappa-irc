@@ -86,7 +86,20 @@ export default defineConfig({
       // main.tsx imports the virtual module, but pinning `false` makes
       // the choice deterministic instead of plugin-internal-heuristic.)
       injectRegister: false,
-      includeAssets: ["icon.svg", "icon-192.png", "icon-512.png"],
+      // #274 — the full derived icon set (all minted from public/icon.svg
+      // by scripts/gen-pwa-icons.mjs): SVG favicon, `any` + `maskable`
+      // PNGs, the iOS apple-touch PNG, and the legacy favicon.ico. Listed
+      // so the SW precaches them (they're in public/ so Vite copies them
+      // regardless; this adds them to the offline shell).
+      includeAssets: [
+        "icon.svg",
+        "icon-192.png",
+        "icon-512.png",
+        "icon-192-maskable.png",
+        "icon-512-maskable.png",
+        "apple-touch-icon.png",
+        "favicon.ico",
+      ],
       manifest: {
         // Stable PWA identity per W3C Manifest spec — resolved as a
         // URL relative to the manifest origin (so this becomes
