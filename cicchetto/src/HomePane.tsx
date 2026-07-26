@@ -216,6 +216,15 @@ function isVisitorSubject(): boolean {
   return m?.kind === "visitor";
 }
 
+// #363 — is the current visitor session incognito (ephemeral)? Drives the
+// share-session gate: an incognito session is deleted on browser close, so
+// it must not be made portable to another device. Reads the /me resource
+// (like `isVisitorSubject`) so a mid-session refetch is honoured.
+function isIncognitoSession(): boolean {
+  const m = user();
+  return m?.kind === "visitor" && m.incognito === true;
+}
+
 // UX-5 BR row sub-component. Per-row local error signal so each
 // chip's failure text scopes to its own row — a single top-level
 // signal would render the message on every row.
@@ -392,6 +401,8 @@ const HomePaneBody: Component = () => {
   const rows = () => homeData()?.networks ?? [];
   const available = () => homeData()?.available_networks ?? [];
   const visitor = () => isVisitorSubject();
+  // #363 — an incognito session is ephemeral, so share-session is disabled.
+  const incognito = () => isIncognitoSession();
 
   return (
     <div class="home-pane home-pane-registered">
@@ -439,8 +450,9 @@ const HomePaneBody: Component = () => {
           action area. Opens the SAME modal (QR + native-share + countdown) the
           settings button opens. Visitor-gated: the server's /me/share-token
           403s for password-holding users, who log in directly on the second
-          device — mirrors the settings-side isVisitor() gate. */}
-      <Show when={visitor()}>
+          device — mirrors the settings-side isVisitor() gate. #363 — also
+          hidden while incognito: an ephemeral session must not be portable. */}
+      <Show when={visitor() && !incognito()}>
         <button
           type="button"
           class="home-pane-share"

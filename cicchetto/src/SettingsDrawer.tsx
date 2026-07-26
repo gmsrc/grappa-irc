@@ -119,6 +119,14 @@ const SettingsDrawer: Component<Props> = (props) => {
   // no per-network identity editor, no session to share.
   const isVisitor = (): boolean => getSubject()?.kind === "visitor";
   const isUser = (): boolean => getSubject()?.kind === "user";
+  // #363 — an incognito (ephemeral) visitor session must not be portable, so
+  // share-session is hidden for it. Reads the persisted subject (same source
+  // as isVisitor); narrow on kind first — `incognito` lives only on the
+  // visitor variant (mirrors isRegisteredVisitor's shape).
+  const isIncognito = (): boolean => {
+    const s = getSubject();
+    return s?.kind === "visitor" && s.incognito === true;
+  };
   // #126 — a registered (NickServ-identified) visitor is a PERSISTENT
   // identity (`registered === true`, derived server-side from
   // password_encrypted). It gets the persistent-identity verbs (detach +
@@ -1062,18 +1070,21 @@ const SettingsDrawer: Component<Props> = (props) => {
                 "open on another device" modal (QR + native-share + countdown),
                 the SAME modal the home button opens. isVisitor()-gated (mint
                 403s for users — the modal is never reachable for a password
-                subject). */}
-            <button
-              type="button"
-              class="settings-share-button"
-              data-testid="share-session-entry"
-              onClick={() => openShareModal()}
-            >
-              <span class="settings-share-button-label">share session</span>
-              <span class="settings-share-button-subtitle muted">
-                open this session on another device
-              </span>
-            </button>
+                subject). #363 — also hidden while incognito: an ephemeral
+                session must not be portable to another device. */}
+            <Show when={!isIncognito()}>
+              <button
+                type="button"
+                class="settings-share-button"
+                data-testid="share-session-entry"
+                onClick={() => openShareModal()}
+              >
+                <span class="settings-share-button-label">share session</span>
+                <span class="settings-share-button-subtitle muted">
+                  open this session on another device
+                </span>
+              </button>
+            </Show>
           </Show>
 
           {/* #126 — canonical session-lifecycle verbs ("log out" retired).

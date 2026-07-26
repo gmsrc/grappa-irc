@@ -120,6 +120,7 @@ describe("Login — #204 on-submit nick sanitization", () => {
       expect(auth.login).toHaveBeenCalledWith("my_nick", null, undefined, {
         ident: "",
         realname: "",
+        incognito: false,
       });
     });
   });
@@ -149,6 +150,7 @@ describe("Login — #204 on-submit nick sanitization", () => {
       expect(auth.login).toHaveBeenCalledWith("alice", "secret", undefined, {
         ident: "",
         realname: "",
+        incognito: false,
       });
     });
   });
@@ -165,8 +167,39 @@ describe("Login — #204 on-submit nick sanitization", () => {
       expect(auth.login).toHaveBeenCalledWith("alice", null, undefined, {
         ident: "~grp",
         realname: "Alice L",
+        incognito: false,
       });
     });
+  });
+
+  it("#363 shows the incognito checkbox inside Advanced for a nick login", () => {
+    renderLogin();
+    fireEvent.input(nickField(), { target: { value: "ghost" } });
+    openAdvanced();
+    expect(screen.getByTestId("login-incognito")).toBeInTheDocument();
+  });
+
+  it("#363 submits incognito: true when the box is checked", async () => {
+    vi.mocked(auth.login).mockResolvedValue(undefined);
+    renderLogin();
+    fireEvent.input(nickField(), { target: { value: "ghost" } });
+    openAdvanced();
+    fireEvent.click(screen.getByTestId("login-incognito"));
+    fireEvent.click(connectBtn());
+    await waitFor(() => {
+      expect(auth.login).toHaveBeenCalledWith("ghost", null, undefined, {
+        ident: "",
+        realname: "",
+        incognito: true,
+      });
+    });
+  });
+
+  it("#363 hides the incognito checkbox when the identifier is an email (account login)", () => {
+    renderLogin();
+    fireEvent.input(nickField(), { target: { value: "alice@example.com" } });
+    openAdvanced();
+    expect(screen.queryByTestId("login-incognito")).not.toBeInTheDocument();
   });
 
   it("rejects an illegal nick inline WITHOUT calling auth.login", async () => {
@@ -190,6 +223,7 @@ describe("Login — #204 on-submit nick sanitization", () => {
       expect(auth.login).toHaveBeenCalledWith("alice@example.com", null, undefined, {
         ident: "",
         realname: "",
+        incognito: false,
       });
     });
   });
@@ -333,6 +367,7 @@ describe("Login — captcha flow (carried forward)", () => {
       expect(auth.login).toHaveBeenCalledWith("alice", null, "solved-token", {
         ident: "",
         realname: "",
+        incognito: false,
       });
     });
   });

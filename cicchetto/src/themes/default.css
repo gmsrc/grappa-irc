@@ -707,6 +707,27 @@ html.overlay-open #root > div {
   margin: 0;
 }
 
+/* #363 — incognito (ephemeral-session) toggle inside the Advanced
+   disclosure. Checkbox + wrapping label; align to the box top so a
+   two-line label stays readable next to the checkbox. */
+.login-incognito {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--fg);
+}
+
+.login-incognito input {
+  margin-top: 0.15rem;
+  flex: 0 0 auto;
+}
+
+.login-incognito-label {
+  line-height: 1.35;
+}
+
 .login-error {
   color: var(--accent);
   margin: 0.5rem 0 0;

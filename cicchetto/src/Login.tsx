@@ -16,6 +16,29 @@ import { classifyLoginIdentifier } from "./lib/loginIdentifier";
 
 type CaptchaChallenge = { provider: CaptchaProvider; siteKey: string };
 
+// #363 — INCOGNITO COPY, single swap point.
+//
+// vjt's rules (confirmed on IRC, applied here):
+//   * PROMISE: the session AND its message history are DELETED when the
+//     browser closes — no duration, no "everything." (The ~1h server-side
+//     linger is only a fallback for when we can't catch the close; it is
+//     NOT promised to the user.) Messages ARE stored server-side while the
+//     session lives, so "no persistence" / "not stored" would be a lie.
+//   * HONEST about what SURVIVES by design, so the copy over-promises in
+//     neither direction: uploaded files follow their OWN expiry, NOT the
+//     session close — a fresh incognito session SEEDS its upload-TTL pref to
+//     the gentle 1h ladder rung server-side (`Visitors.create_anon` →
+//     `UserSettings.put_upload_ttl_seconds({:visitor, id}, 3600)`), which the
+//     holder can raise to the 72h ladder cap from the drawer with NO server
+//     clamp (vjt 2026-07-26); published themes re-home to the house account
+//     (#299); the reaped nick stays in the admin audit log; and the peer
+//     keeps their own scrollback copy (incognito only ever covers YOUR half).
+// The e2e keys off the checkbox's `data-testid`, NOT this text, so the exact
+// wording stays vjt's to bless without ever breaking a test.
+const INCOGNITO_LABEL = "Incognito — delete this session and its history when I close the browser";
+const INCOGNITO_HINT =
+  "Closing the browser deletes this session and its message history. Some things aren't tied to that: files you upload follow their own expiry (1 hour by default here, adjustable up to 72 hours), themes you've published stay in the gallery, your nick stays in the admin audit log, and everyone you talk to keeps their own copy of the conversation.";
+
 // Codebase audit cic M6 — sub-component captures the challenge prop
 // and runs mount inside `onMount` (after the ref-bound div is in the
 // DOM, guaranteed by Solid's mount lifecycle). Eliminates the
@@ -110,6 +133,11 @@ const Login: Component = () => {
   // (nick for ident, "Grappa Visitor" for realname).
   const [realname, setRealname] = createSignal("");
   const [ident, setIdent] = createSignal("");
+  // #363 — incognito (ephemeral) session toggle. Visitor-path only: hidden
+  // when the identifier is an email (an account login is never ephemeral;
+  // the server also drops the flag on the account path). Threaded through
+  // the same `advancedFields` bundle as ident/realname.
+  const [incognito, setIncognito] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [advanced, setAdvanced] = createSignal(false);
   // `connecting` drives the whole-view swap: while an auth.login attempt is
@@ -180,7 +208,7 @@ const Login: Component = () => {
       // guest/plain login stays a minimal request. Named `advancedFields`
       // (not `advanced`) so it doesn't shadow the `advanced()` toggle
       // signal accessor in this scope.
-      const advancedFields = { ident: ident(), realname: realname() };
+      const advancedFields = { ident: ident(), realname: realname(), incognito: incognito() };
       // Preserve the auth.login(id, pwd, captcha?) boundary shape: forward
       // the captcha token only when present, so the plain path stays a
       // 2-arg call (the captcha retry is the only 3-arg caller).
@@ -359,6 +387,27 @@ const Login: Component = () => {
                     Real name and ident are optional and shown to other users. Leave blank to use
                     the defaults.
                   </p>
+
+                  {/* #363 — incognito (ephemeral) session. Visitor-path only:
+                    hidden when the identifier is an email (an account login is
+                    never ephemeral; the server also drops the flag there).
+                    Copy lives in INCOGNITO_LABEL/HINT (one swap point, pending
+                    vjt's final wording); the e2e keys off data-testid. */}
+                  <Show when={!identifier().includes("@")}>
+                    <label class="login-incognito" for="login-incognito">
+                      <input
+                        id="login-incognito"
+                        type="checkbox"
+                        data-testid="login-incognito"
+                        checked={incognito()}
+                        onChange={(e) => setIncognito(e.currentTarget.checked)}
+                      />
+                      <span class="login-incognito-label">{INCOGNITO_LABEL}</span>
+                    </label>
+                    <p class="login-advanced-hint" data-testid="login-incognito-hint">
+                      {INCOGNITO_HINT}
+                    </p>
+                  </Show>
                 </div>
               </Show>
 

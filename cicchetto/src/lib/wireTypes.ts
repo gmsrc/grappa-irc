@@ -1045,12 +1045,14 @@ export type ThemesWireT = {
 export type VisitorsWireCredentialJson = {
   id: string;
   registered: boolean;
+  incognito: boolean;
 };
 
 export type VisitorsWireT = {
   id: string;
   expires_at: string | null;
   registered: boolean;
+  incognito: boolean;
 };
 
 // === Grappa.WindowCounts.Wire ===

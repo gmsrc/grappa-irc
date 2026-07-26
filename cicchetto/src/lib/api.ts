@@ -51,6 +51,11 @@ export type LoginRequest = {
   // the server sanitizes (leading-`~` strip) + shape-validates.
   ident?: string;
   realname?: string;
+  // #363 — ephemeral "incognito" session (visitor path only). Present +
+  // true → the fresh anon visitor is provisioned incognito (short linger
+  // TTL, deleted ~1h after the browser closes). The server ignores it on
+  // the account path; omitted → an ordinary persistent session.
+  incognito?: boolean;
 };
 
 export type AdmissionError =
@@ -97,7 +102,12 @@ export type Subject =
   // only the identity-wide `{id, registered}`. Mirrors the server-side
   // `Grappa.Visitors.Wire` drop + the `isValidSubject` relaxation in
   // auth.ts. `registered` is derived server-side (≥1 NickServ credential).
-  | { kind: "visitor"; id: string; registered?: boolean };
+  // #363 — `incognito` = this visitor session is ephemeral (deleted ~1h
+  // after the browser closes). cic reads it to disable share-session (an
+  // ephemeral session isn't portable). Optional so a subject persisted
+  // before this field landed still validates (read as non-incognito);
+  // fresh logins always carry it. Server-derived from `visitors.incognito`.
+  | { kind: "visitor"; id: string; registered?: boolean; incognito?: boolean };
 
 export type LoginResponse = {
   token: string;
@@ -281,6 +291,10 @@ export type MeResponse =
       // Optional so test mocks predating the field don't need touching;
       // production /me always emits it.
       registered?: boolean;
+      // #363 — this visitor session is incognito (ephemeral). cic reads it
+      // to disable share-session; the linger countdown still derives from
+      // `expires_at`. Optional for the same test-mock reason as `registered`.
+      incognito?: boolean;
       read_cursors?: ReadCursorsEnvelope;
       // Bucket C (2026-06-01) — visitors get the same envelope shape;
       // empty `{}` for a fresh visitor (no cursors yet).

@@ -79,7 +79,9 @@ export async function login(
   // #152 — login-Advanced ident + realname (both optional). Blank/absent
   // fields are omitted from the request so a plain/guest login stays a
   // minimal `{identifier}` body and never clobbers visitor defaults.
-  advanced?: { ident?: string | null; realname?: string | null },
+  // #363 — `incognito` rides the same advanced bundle; only a literal true
+  // is sent (absent → an ordinary persistent session).
+  advanced?: { ident?: string | null; realname?: string | null; incognito?: boolean },
 ): Promise<void> {
   const req: api.LoginRequest =
     password !== null && password !== "" ? { identifier, password } : { identifier };
@@ -89,6 +91,9 @@ export async function login(
   }
   if (advanced?.realname !== null && advanced?.realname !== undefined && advanced.realname !== "") {
     req.realname = advanced.realname;
+  }
+  if (advanced?.incognito === true) {
+    req.incognito = true;
   }
   const { token: t, subject } = await api.login(req);
   localStorage.setItem(SUBJECT_KEY, JSON.stringify(subject));
@@ -172,7 +177,9 @@ function isValidSubject(v: unknown): v is api.Subject {
       // `registered` is optional for backward compat: a subject persisted
       // before the field landed still validates (read as not-registered).
       // When present it MUST be a boolean.
-      (r.registered === undefined || typeof r.registered === "boolean")
+      (r.registered === undefined || typeof r.registered === "boolean") &&
+      // #363 — `incognito` optional for the same backward-compat reason.
+      (r.incognito === undefined || typeof r.incognito === "boolean")
     );
   }
   return false;
