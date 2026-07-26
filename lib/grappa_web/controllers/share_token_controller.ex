@@ -38,9 +38,10 @@ defmodule GrappaWeb.ShareTokenController do
     * `:share_token_expired` → 410 Gone
     * `:share_token_consumed` → 410 Gone
 
-  Reused: `:forbidden` (user trying to mint), `:bad_request` (missing
-  token param), `:unauthorized` (invalid signature), `:not_found`
-  (visitor row gone between mint and consume).
+  Reused: `:forbidden` (a user OR an incognito visitor trying to
+  mint — #363), `:bad_request` (missing token param), `:unauthorized`
+  (invalid signature), `:not_found` (visitor row gone between mint and
+  consume).
   """
   use GrappaWeb, :controller
 
@@ -71,11 +72,22 @@ defmodule GrappaWeb.ShareTokenController do
   in the share modal.
 
   Users get 403 explicitly: the feature is meaningless for a
-  password-holding identity.
+  password-holding identity. Incognito visitors (#363) also get 403:
+  an ephemeral session must not be made portable.
   """
   @spec mint(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :forbidden}
   def mint(conn, _) do
     case conn.assigns[:current_subject] do
+      {:visitor, %Visitor{incognito: true}} ->
+        # #363 — an incognito session is deliberately non-portable: its
+        # whole point is "gone when this browser closes." Minting a share
+        # link would carry the session to another device (and the shared
+        # socket would keep the reconcile linger alive), defeating the
+        # ephemerality. cic already hides the share control for incognito;
+        # this is the server-side twin of that gate so the REST door can't
+        # be driven directly ("one feature, every door").
+        {:error, :forbidden}
+
       {:visitor, %Visitor{id: visitor_id}} ->
         token = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, visitor_id)
         expires_at = DateTime.add(DateTime.utc_now(), @max_age_seconds, :second)

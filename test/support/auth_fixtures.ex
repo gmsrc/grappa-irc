@@ -289,6 +289,8 @@ defmodule Grappa.AuthFixtures do
     network_slug = Keyword.get(attrs, :network_slug, "azzurra")
     expires_at = Keyword.get(attrs, :expires_at, DateTime.add(DateTime.utc_now(), 48, :hour))
     ip = Keyword.get(attrs, :ip)
+    # #363 — ephemeral session flag; default false = an ordinary anon row.
+    incognito = Keyword.get(attrs, :incognito, false)
 
     # B5.4 M-pers-3: `Visitor.create_changeset/1` rejects past
     # `expires_at` (correct production rule — a row born expired is no
@@ -296,7 +298,8 @@ defmodule Grappa.AuthFixtures do
     # explicitly want an already-expired row in the DB to verify the
     # reaping behaviour. Bypass the changeset for those via the
     # schemaless `Ecto.Changeset.change/2` path.
-    visitor = insert_visitor(%{expires_at: expires_at, ip: ip}, expired?(expires_at))
+    visitor =
+      insert_visitor(%{expires_at: expires_at, ip: ip, incognito: incognito}, expired?(expires_at))
 
     # Provision the anon credential when the slug resolves — mirrors the
     # atomic (row + credential) shape production always creates.

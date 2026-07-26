@@ -5,6 +5,8 @@ defmodule GrappaWeb.ShareTokenControllerTest do
   Mint side (`/me/share-token`):
     * visitor subject → 200 + signed token + expires_at
     * user subject → 403 forbidden
+    * incognito visitor subject → 403 forbidden (#363 — a non-portable
+      ephemeral session must not be shareable to another device)
     * missing Bearer → 401 unauthorized
 
   Consume side (`/auth/share/consume`):
@@ -65,6 +67,20 @@ defmodule GrappaWeb.ShareTokenControllerTest do
 
     test "user subject returns 403 forbidden", %{conn: conn} do
       {_, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> post("/me/share-token")
+
+      assert json_response(conn, 403) == %{"error" => "forbidden"}
+    end
+
+    test "incognito visitor subject returns 403 forbidden", %{conn: conn} do
+      # #363 — an incognito session is deliberately non-portable; the mint
+      # door is closed server-side, not just hidden in cic.
+      visitor = visitor_fixture(incognito: true)
+      session = visitor_session_fixture(visitor)
 
       conn =
         conn
