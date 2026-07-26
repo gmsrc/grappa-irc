@@ -18108,3 +18108,70 @@ Dialyzer 0, Credo clean, Sobelow clean. 10x code-reviewer APPROVE
 (SSOT complete + exact, gate load-bearing both directions + non-vacuous,
 rename behaviour-safe; no half-migration). HELD — no push, no deploy
 (batching).
+
+---
+
+## #404 — login dispatch: a bare account name must log in the ACCOUNT, not a guest (2026-07-26)
+
+**The bug.** `POST /auth/login` dispatched account-vs-guest SOLELY on
+whether the identifier contained `@` (`IdentifierClassifier.classify/1`).
+An account holder who typed their BARE account name (no `@`) classified
+as a `{:nick, …}` and fell straight through to the visitor path: with a
+`visitor_enabled` network configured this minted a *guest* session (HTTP
+200, `sessions.user_id = nil`, `visitor_id` set) holding the account's
+name — a silent wrong identity. The guest then held the nick, so the
+account holder's *next* attempt 409-collided with their own ghost. The
+only working account shape was `name@anything` (the local-part was split
+out and the domain discarded — `User` has no email column), and nothing
+told the user their real name had silently become a guest. Same door was
+an **impersonation** hole: a stranger typing someone's account name got a
+guest session wearing that account's IRC identity.
+
+**The fix (server-only, no schema change).** When `classify/1` returns
+`{:nick, name}`, resolve the name against `Accounts` FIRST
+(`nick_login/6` → `Accounts.get_user_by_name/1`, a new typed-nil sibling
+of `get_user_by_name!/1`):
+
+  * **an existing account name** is unambiguously that account's
+    credential → route to the shared `account_login/3` core (the same
+    throttle + Argon2 verify + session-mint the mode-1 `@` branch uses).
+    Correct password → account (`{:user, …}`) session. Wrong OR absent
+    password → **refuse** with `:invalid_credentials` (401), never a
+    guest — this closes both the silent-wrong-identity trap AND the
+    impersonation hole at the root.
+  * **a name with no matching account** → visitor path exactly as before,
+    so anonymous IRC still works and `name@anything` stays back-compatible.
+
+`mode1_login/3` (the `@` branch) was refactored to delegate to the same
+`account_login/3`, so BOTH account-login doors share ONE throttle bucket
++ verify + mint (reuse the verbs, not the nouns).
+
+**Two deliberate choices, recorded so they aren't "tidied" away:**
+
+  1. **`:invalid_credentials` is reused, not a new token.** It already
+     lives in `GrappaWeb.ErrorTokens.rest_error_token` (401 via
+     `FallbackController`) and matches the enumeration-safe oracle
+     `Accounts.get_user_by_credentials/2` already uses (wrong-user and
+     wrong-password collapse to one shape). No D6a SSOT / drift-gate
+     churn, no cic change.
+  2. **The account lookup is case-SENSITIVE, NOT rfc1459-folded.** Account
+     `name` is the account key — a namespace distinct from the IRC nick.
+     `get_user_by_name/1` is a plain `Repo.get_by(User, name:)`, the SAME
+     key `get_user_by_credentials/2` uses, so the two account lookups can
+     never disagree on what "the account named X" is. Folding it here
+     would diverge from the `@` branch and fork the account identity
+     across the two login doors. (Consequence: `Vjt` and `vjt` are
+     distinct accounts, consistent with mode-1 today. A guest grabbing a
+     *casing variant* of a registered nick is bounded by the upstream
+     ircd's own nick-in-use / NickServ protection, not this dispatch — a
+     separate concern from account-vs-guest routing.)
+
+**Empty-state consequence (feeds #405).** The "empty shell, no way
+forward" a fresh account hit was a *symptom* of this bug, not a missing
+feature: the account got a guest session → cic's `HomePane` rendered the
+**visitor** empty-state ("Connecting… pick a network below") with nothing
+below → a dead end. With the dispatch fixed, a fresh account lands on the
+**user** empty-state that already exists in `HomePane.tsx`: *"No networks
+bound. Ask the operator to bind one via `bin/grappa bind-network`."* —
+the actionable contract for a brand-new account with no credential. #405
+encodes this end-to-end.

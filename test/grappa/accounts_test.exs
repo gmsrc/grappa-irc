@@ -158,6 +158,31 @@ defmodule Grappa.AccountsTest do
     end
   end
 
+  describe "get_user_by_name/1 (#404 typed-nil sibling)" do
+    test "returns the user by exact name" do
+      {:ok, user} = Accounts.create_user(%{name: "vjt-gubn-1", password: @password})
+      assert %User{id: id} = Accounts.get_user_by_name("vjt-gubn-1")
+      assert id == user.id
+    end
+
+    test "returns nil on miss" do
+      assert Accounts.get_user_by_name("no-such-account-#{System.unique_integer([:positive])}") ==
+               nil
+    end
+
+    # Account names are the account key — a distinct namespace from the
+    # rfc1459-folded IRC nick. The lookup is case-SENSITIVE (plain
+    # `Repo.get_by(User, name:)`), the SAME semantics
+    # `get_user_by_credentials/2` uses, so the two account lookups can
+    # never disagree on what "the account named X" is (the #404 dispatch
+    # relies on this).
+    test "is case-sensitive (does NOT nick-fold the name)" do
+      {:ok, _} = Accounts.create_user(%{name: "CaseAcct", password: @password})
+      assert %User{name: "CaseAcct"} = Accounts.get_user_by_name("CaseAcct")
+      assert Accounts.get_user_by_name("caseacct") == nil
+    end
+  end
+
   describe "list_all_users/0 (M-6 admin console)" do
     test "returns every users row ordered by name ascending" do
       # Insert in reverse-name order to prove the ordering isn't

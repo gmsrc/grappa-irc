@@ -150,6 +150,64 @@ defmodule GrappaWeb.AuthControllerTest do
     end
   end
 
+  # #404 — an account holder who types their BARE account name (no `@`)
+  # must get an ACCOUNT session, not a silently-provisioned guest. Pre-fix
+  # the dispatch keyed SOLELY on `@` presence, so a bare account name
+  # routed to the visitor path: with a visitor network enabled it minted a
+  # guest holding the account's nick (silent wrong identity + a 409 on the
+  # next attempt), and with none enabled it 503'd — either way the account
+  # holder could never log in with their real name. The fix resolves the
+  # nick against `Accounts` FIRST: an existing account name is the
+  # account's credential (verify → user session; refuse on mismatch), and
+  # a name with NO matching account still routes to the visitor path.
+  #
+  # No visitor network is set up here, so the assertions are deterministic
+  # + synchronous — the fixed account path never touches IRC (it mints only
+  # an accounts_sessions row, like the mode-1 email branch). A bare nick
+  # with no matching account → visitor is covered by the anon (case 1)
+  # test in the visitor describe below (that nick has no user fixture).
+  describe "POST /auth/login (bare account name — #404)" do
+    test "bare account name + correct password → 200 + user session (not guest)",
+         %{conn: conn} do
+      {user, password} = user_fixture_with_password()
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/auth/login", %{"identifier" => user.name, "password" => password})
+
+      body = json_response(conn, 200)
+      assert body["subject"]["kind"] == "user"
+      assert body["subject"]["id"] == user.id
+      assert body["subject"]["name"] == user.name
+
+      session = Repo.get(Session, body["token"])
+      assert session.user_id == user.id
+      assert is_nil(session.visitor_id)
+      assert is_nil(session.revoked_at)
+    end
+
+    test "bare account name + wrong password → 401 invalid_credentials, no guest provisioned",
+         %{conn: conn} do
+      {user, _} = user_fixture_with_password()
+
+      conn = post(conn, "/auth/login", %{"identifier" => user.name, "password" => "WRONG"})
+
+      assert json_response(conn, 401) == %{"error" => "invalid_credentials"}
+      assert session_count() == 0
+    end
+
+    test "bare account name + no password → 401 invalid_credentials (account requires password)",
+         %{conn: conn} do
+      {user, _} = user_fixture_with_password()
+
+      conn = post(conn, "/auth/login", %{"identifier" => user.name})
+
+      assert json_response(conn, 401)["error"] == "invalid_credentials"
+      assert session_count() == 0
+    end
+  end
+
   describe "POST /auth/login (visitor via nick)" do
     test "anon (case 1) → 200 + subject{kind: visitor}", %{conn: conn} do
       {server, port} = start_server()

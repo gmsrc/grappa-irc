@@ -5,8 +5,8 @@ defmodule Grappa.Accounts do
   Public surface:
 
     * users: `create_user/1`, `get_user_by_credentials/2`, `get_user!/1`,
-      `get_user/1`, `get_user_by_name!/1`, `list_all_users/0`,
-      `update_admin_flags/2`
+      `get_user/1`, `get_user_by_name!/1`, `get_user_by_name/1`,
+      `list_all_users/0`, `update_admin_flags/2`
     * sessions: `create_session/4`, `authenticate/1`, `revoke_session/1`
 
   Both `User` and `Session` schemas are exported so downstream callers
@@ -246,6 +246,23 @@ defmodule Grappa.Accounts do
   """
   @spec get_user_by_name!(String.t()) :: User.t()
   def get_user_by_name!(name) when is_binary(name), do: Repo.get_by!(User, name: name)
+
+  @doc """
+  Typed-nil sibling of `get_user_by_name!/1` — fetches a user by `name`,
+  returning `nil` on a miss instead of raising (mirrors the
+  `get_user!/1` ↔ `get_user/1` pair).
+
+  Used by the #404 login dispatch (`GrappaWeb.AuthController`): when a
+  bare login identifier classifies as an IRC nick, this decides whether
+  it ALSO names an existing account (→ route to the account credential,
+  never a silently-provisioned guest) or not (→ visitor path). Matches
+  the case-sensitive `name`-key semantics of `get_user_by_credentials/2`
+  so the two account lookups can never disagree on what "an account
+  named X" is — account names are the account key, a distinct namespace
+  from the rfc1459-folded IRC nick.
+  """
+  @spec get_user_by_name(String.t()) :: User.t() | nil
+  def get_user_by_name(name) when is_binary(name), do: Repo.get_by(User, name: name)
 
   @doc """
   Toggle the operator-authorization `is_admin` bit on `user`. The M

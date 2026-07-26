@@ -4,12 +4,19 @@ defmodule GrappaWeb.AuthController do
 
     * `POST /auth/login` — `{identifier, password?}` →
       `{token, subject: {kind, id, ...}}`. Dispatched by
-      `Grappa.Auth.IdentifierClassifier`:
+      `Grappa.Auth.IdentifierClassifier`, then (for the nick case)
+      resolved against `Accounts`:
       - `@` present → mode-1 admin → name-keyed lookup against the
         local-part via `Accounts.get_user_by_credentials/2` (password
         REQUIRED). Phase 5 hardening adds a real email column.
-      - else → visitor path → `Grappa.Visitors.Login.login/2` (password
-        OPTIONAL — required only for registered visitors).
+      - else (a bare nick) → resolve the name against `Accounts` (#404):
+        an EXISTING account name is unambiguously that account's
+        credential → account login (password REQUIRED; a wrong/absent
+        password is REFUSED with `:invalid_credentials`, NEVER a
+        silently-provisioned guest holding the account's name — that was
+        the #404 impersonation + silent-wrong-identity hole). A name with
+        NO matching account → visitor path → `Grappa.Visitors.Login.login/2`
+        (password OPTIONAL — required only for registered visitors).
     * `DELETE /auth/logout` — revokes the session bound to the bearer
       token via the `:authn` pipeline. Idempotent.
 
@@ -102,7 +109,7 @@ defmodule GrappaWeb.AuthController do
       :ok ->
         case IdentifierClassifier.classify(sanitize_identifier(id)) do
           {:email, email} -> mode1_login(conn, email, password)
-          {:nick, nick} -> visitor_login(conn, nick, password, captcha_token, identity, network)
+          {:nick, nick} -> nick_login(conn, nick, password, captcha_token, identity, network)
           {:error, :malformed} -> {:error, :malformed_nick}
         end
 
@@ -270,13 +277,56 @@ defmodule GrappaWeb.AuthController do
     end)
   end
 
-  defp mode1_login(_, _, nil), do: {:error, :invalid_credentials}
+  # #404 — a bare identifier (no `@`) is a valid IRC nick, but it may ALSO
+  # be an operator-managed account name. Resolve it against `Accounts`
+  # FIRST: an existing account name is unambiguously that account's
+  # credential, so it MUST authenticate as the account (verify → user
+  # session) and MUST NOT silently provision a guest holding the account's
+  # name — that guest was the #404 impersonation hole (a stranger grabbing
+  # the account's IRC identity) AND the silent-wrong-identity trap (the
+  # account holder gets a guest session, then 409-collides with it on the
+  # next attempt). A name with NO matching account routes to the visitor
+  # path exactly as before, so anonymous IRC still works.
+  #
+  # Account names are matched the ACCOUNT way — the case-sensitive
+  # `Accounts.get_user_by_name/1`, the SAME `name` key
+  # `mode1_login/3` + `get_user_by_credentials/2` use — NOT the rfc1459
+  # nick fold. Account name is the account key, a namespace distinct from
+  # the IRC nick; folding it here would diverge from the email branch and
+  # fork what "the account named X" means across the two login doors.
+  @spec nick_login(
+          Plug.Conn.t(),
+          String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          %{ident: String.t() | nil, realname: String.t() | nil},
+          String.t() | nil
+        ) :: Plug.Conn.t() | {:error, term()}
+  defp nick_login(conn, nick, password, captcha_token, identity, network) do
+    case Accounts.get_user_by_name(nick) do
+      %Accounts.User{} -> account_login(conn, nick, password)
+      nil -> visitor_login(conn, nick, password, captcha_token, identity, network)
+    end
+  end
 
-  defp mode1_login(conn, email, password) when is_binary(password) do
-    # Mode-1 today is name-keyed. Phase 5 hardening adds a real email
-    # column; for now the dispatch routes by `@` presence but the lookup
-    # uses the local-part as the user `name`.
+  # Mode-1 today is name-keyed. Phase 5 hardening adds a real email
+  # column; for now the `@`-dispatch routes by presence but the lookup
+  # uses the local-part as the user `name`. Delegates to the shared
+  # `account_login/3` core (also reached by the #404 bare-account-name
+  # path) so both account-login doors share ONE throttle + verify + mint.
+  defp mode1_login(conn, email, password) do
     name = email |> String.split("@", parts: 2) |> List.first()
+    account_login(conn, name, password)
+  end
+
+  # Shared account-login core for BOTH doors — the mode-1 email branch and
+  # the #404 bare-account-name branch. A nil (absent) password can never
+  # verify against an Argon2 hash, so it refuses with the same
+  # `:invalid_credentials` oracle the wrong-password path uses (uniform
+  # 401 — no leak of which credential half was wrong, no guest fallback).
+  defp account_login(_, _, nil), do: {:error, :invalid_credentials}
+
+  defp account_login(conn, name, password) when is_binary(password) do
     ip = format_ip(conn)
 
     with :ok <- check_mode1_throttle(ip),
