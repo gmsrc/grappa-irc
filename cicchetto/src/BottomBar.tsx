@@ -3,6 +3,7 @@ import CloseButton from "./CloseButton";
 import { channelKey } from "./lib/channelKey";
 import { mentionCounts } from "./lib/mentions";
 import { channelsBySlug, networks } from "./lib/networks";
+import { pseudoChannelsForNetwork } from "./lib/pseudoChannels";
 import { queryWindowsByNetwork } from "./lib/queryWindows";
 import { requestScrollToBottom } from "./lib/scrollToBottomCommand";
 import {
@@ -12,7 +13,12 @@ import {
   selectedChannel,
   setSelectedChannel,
 } from "./lib/selection";
-import { closeQueryWindow, confirmDisconnectNetwork, confirmLeaveChannel } from "./lib/windowClose";
+import {
+  closeQueryWindow,
+  confirmDisconnectNetwork,
+  confirmLeaveChannel,
+  dismissPseudoWindow,
+} from "./lib/windowClose";
 import type { WindowKind } from "./lib/windowKinds";
 import { SERVER_WINDOW_NAME } from "./lib/windowKinds";
 import NickText from "./NickText";
@@ -220,6 +226,47 @@ const BottomBar: Component<Props> = (props) => {
                     </>
                   );
                 }}
+              </For>
+
+              {/* #71 INC-3 — the /invite-opened `:invited` virtual channel.
+                  The mobile BottomBar surfaces ONLY the `:invited` slice of
+                  the shared pseudo-row projection (lib/pseudoChannels.ts).
+                  The desktop Sidebar renders EVERY non-joined state
+                  (pending/failed/kicked/parked) as a greyed row; the bottom
+                  bar is space-scarce, so failed/kicked/parked history stays
+                  confined to the sidebar — an INTENTIONAL narrowing, not a
+                  second projection (DESIGN_NOTES 2026-07-26 #71 INC-3). The
+                  tab is greyed + tappable (opens the invite notice + JOIN
+                  button in scrollback, kind "channel"); the × routes through
+                  the shared `dismissPseudoWindow` verb (windowClose.ts) — the
+                  SAME verb the desktop Sidebar's pseudo-row × uses, so a
+                  dismiss lands focus identically on both surfaces ($server;
+                  see DESIGN_NOTES 2026-07-26). */}
+              <For
+                each={pseudoChannelsForNetwork(network.slug, network.id).filter(
+                  (row) => row.state === "invited",
+                )}
+              >
+                {(row) => (
+                  <>
+                    <button
+                      type="button"
+                      role="tab"
+                      class="bottom-bar-tab bottom-bar-tab-with-close bottom-bar-tab-invited"
+                      classList={{ selected: isSelected(network.slug, row.name) }}
+                      data-window-name={row.name}
+                      data-window-state={row.state}
+                      onClick={() => handleClick(network.slug, row.name, "channel")}
+                    >
+                      {row.name}
+                    </button>
+                    <CloseButton
+                      class="bottom-bar-close"
+                      ariaLabel={`Close ${row.name}`}
+                      onConfirm={() => dismissPseudoWindow(network.slug, row.name)}
+                    />
+                  </>
+                )}
               </For>
 
               {/* Query (DM) windows */}

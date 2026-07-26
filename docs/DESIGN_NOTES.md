@@ -19962,3 +19962,70 @@ eight deep). That is correct given both aliases exist and matches cic's
 bounded `expandAlias`, but it made the assertion unreadable — the test
 now uses a fresh table whose expansion target is not itself aliased, and
 leaves the recursion case to the test that exists for it.
+
+## 2026-07-26 — #71 INC-3 cic BottomBar gets the /invite virtual channel
+
+INC-3 of the #71 chrome rework, after vjt's 2nd-ruling reversal, is a
+single, contained change: the mobile **BottomBar STAYS** (the earlier
+sidebar-as-drawer / edge-swipe-kill-BottomBar increments are CANCELLED),
+and the ONE gap it had — the `/invite`-opened `:invited` virtual channel
+(#78), which the desktop Sidebar already rendered as a greyed pseudo-row
+but the BottomBar did not — is closed. An inbound INVITE now surfaces a
+greyed, tappable tab in the mobile bottom bar; tapping it opens the invite
+notice + `[Join]` in scrollback; the `×` dismisses it via `setParted`
+(the bucket-E close-watcher in `selection.ts` then redirects focus — the
+same path every other close rides).
+
+**One shared projection, not two.** The synthetic non-joined window rows
+were computed by a Sidebar-component-local `pseudoChannelsForNetwork`.
+It was extracted verbatim into `lib/pseudoChannels.ts` (no behavior
+change; Sidebar's 72-test suite is the refactor lock) so BOTH navs derive
+their rows from ONE source. The desktop Sidebar renders every non-joined
+state; the BottomBar consumes the SAME projection and renders only the
+`:invited` slice.
+
+**The `:invited`-only narrowing is INTENTIONAL, not an oversight (vjt
+ruling, Option A).** The mobile bottom bar is a horizontally-scrolled,
+space-scarce strip; `:pending` is transient and `:failed`/`:kicked`/
+`:parked` are history that reads better in the desktop sidebar, where
+there is room. So the BottomBar deliberately shows only the one
+actionable non-joined state — an inbound invite you can act on — and
+leaves the rest to the sidebar. This is a presentation filter at one
+call-site (`.filter((r) => r.state === "invited")`), a different
+RENDERING of the one shared source — NOT a second projection. A future
+change that wants the other states in the bar should lift the filter,
+not fork a parallel projection. The e2e
+(`issue71-inc3-bottombar-invite.spec.ts`, @webkit) asserts BOTH sides of
+the narrowing on a real mobile viewport: an invited channel APPEARS in
+the bar, and a `+i`-rejected `:failed` channel does NOT — even though its
+`:failed` state genuinely materialized (compose-box greyed) — so the
+exclusion is a tested contract, not an accident that drifts on the next
+edit.
+
+**Dismiss is one verb, one navigation, both surfaces.** The × on a
+non-joined pseudo-row now routes through a single shared verb,
+`dismissPseudoWindow(slug, name)` in `lib/windowClose.ts` — extracted from
+what used to be `Sidebar.handleClosePseudo` and now called by BOTH the
+desktop Sidebar and the mobile BottomBar. It drops the `windowState` key
+(`setParted`) and, if the dismissed row is the FOCUSED window, redirects to
+the network `$server` window first. This closed a divergence the INC-3
+review caught: the BottomBar had briefly used a raw `setParted` and let the
+`selection.ts` bucket-E close-watcher pick the redirect target (MRU),
+while the Sidebar redirected to `$server` — same action, two navigations
+by surface. Per "one feature, one code path" + #71's "one design" mandate,
+unifying the BEHAVIOUR of the action is itself UX unification (in scope),
+so the divergence was removed HERE, not deferred to a follow-up (which
+would be the "Phase 2 later" half-migration CLAUDE.md forbids). The
+`windowClose → selection` dependency this appears to add already existed
+inline in `handleClosePseudo`; the extraction only names it.
+
+**Deferred (explicitly, as a choice — not an oversight):** whether the
+dismiss-focus target should be `$server` (the historical Sidebar choice,
+kept here so INC-3 changed no existing behaviour) or MRU (what every OTHER
+window close already does via bucket-E). That is a product/UX decision,
+filed as **#445**; INC-3 deliberately unified on `$server` without
+re-deciding it. The @webkit e2e asserts the mobile × lands on `$server`,
+so the unified target is a tested contract until #445 revisits it.
+
+INC-3 is cic-only (no server change); rides the batch COLD deploy
+(cic bundle change).

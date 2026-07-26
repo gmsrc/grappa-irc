@@ -22,7 +22,12 @@ import {
 } from "./lib/selection";
 import { openUmodeModal } from "./lib/umodeModal";
 import { umodesForNetwork } from "./lib/umodes";
-import { closeQueryWindow, confirmDisconnectNetwork, confirmLeaveChannel } from "./lib/windowClose";
+import {
+  closeQueryWindow,
+  confirmDisconnectNetwork,
+  confirmLeaveChannel,
+  dismissPseudoWindow,
+} from "./lib/windowClose";
 import type { WindowKind } from "./lib/windowKinds";
 import {
   ADMIN_WINDOW_NAME,
@@ -32,7 +37,7 @@ import {
   LIST_WINDOW_NAME,
   SERVER_WINDOW_NAME,
 } from "./lib/windowKinds";
-import { setParted, windowStateByChannel } from "./lib/windowState";
+import { windowStateByChannel } from "./lib/windowState";
 import NickText from "./NickText";
 
 // Left-pane sidebar: network → window tree. Renders ordered windows:
@@ -164,26 +169,11 @@ const Sidebar: Component<Props> = () => {
     closeQueryWindow(networkId, targetNick);
   };
 
-  const handleClosePseudo = (slug: string, name: string) => {
-    // UX-5 bucket BK (2026-05-19): × on a pseudo-row (pending/failed/
-    // kicked/parked) drops the windowStateByChannel entry. setParted
-    // is the existing "absence is the projection" verb — all three
-    // sibling maps cleared. After this fires:
-    //   * The pseudo-row vanishes (windowState key gone →
-    //     pseudoChannelsForNetwork no longer emits it).
-    //   * visibleArchiveForNetwork's pseudo-name filter releases, so
-    //     the archive section shows the row (if it carries scrollback;
-    //     pending never has scrollback so it surfaces nowhere — that's
-    //     correct, the operator cancelled a join in flight).
-    // If the closed pseudo-row WAS the selected window, redirect
-    // selection to $server (same shape as own-PART dismiss in
-    // subscribe.ts:347).
-    const sel = selectedChannel();
-    if (sel !== null && sel.networkSlug === slug && sel.channelName === name) {
-      setSelectedChannel({ networkSlug: slug, channelName: SERVER_WINDOW_NAME, kind: "server" });
-    }
-    setParted(channelKey(slug, name));
-  };
+  // #71 INC-3 — pseudo-row × (pending/failed/kicked/parked) routes through
+  // the shared `dismissPseudoWindow` verb in windowClose.ts (drops the
+  // windowState key + redirects a focused row to $server). Extracted so the
+  // desktop Sidebar and the mobile BottomBar dismiss identically — no inline
+  // duplication left behind.
 
   // UX-4 bucket D — close the server window for a network. Routes
   // through windowClose.ts → visitor branches to quitAll (nuclear: park
@@ -550,7 +540,7 @@ const Sidebar: Component<Props> = () => {
                       <CloseButton
                         class="sidebar-close"
                         ariaLabel={`Close ${row.name}`}
-                        onConfirm={() => handleClosePseudo(network.slug, row.name)}
+                        onConfirm={() => dismissPseudoWindow(network.slug, row.name)}
                       />
                     </li>
                   )}

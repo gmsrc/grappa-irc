@@ -3,6 +3,8 @@ import { getSubject, token } from "./auth";
 import { channelKey } from "./channelKey";
 import { requestConfirm } from "./confirmDialog";
 import { closeQueryWindowState } from "./queryWindows";
+import { selectedChannel, setSelectedChannel } from "./selection";
+import { SERVER_WINDOW_NAME } from "./windowKinds";
 import { setParted } from "./windowState";
 
 // Shared close-window helpers. Two call sites today: Sidebar × on
@@ -40,6 +42,31 @@ export function closeChannelWindow(networkSlug: string, channelName: string): vo
 
 export function closeQueryWindow(networkId: number, targetNick: string): void {
   closeQueryWindowState(networkId, targetNick);
+}
+
+// #71 INC-3 — THE shared verb for dismissing a non-joined pseudo-row
+// (invited/failed/kicked/parked) via its ×. Both the desktop Sidebar and
+// the mobile BottomBar route their pseudo-row × through here, so the same
+// action produces the same navigation on both surfaces (one design). Was
+// previously inline in Sidebar.handleClosePseudo; the mobile bar's raw
+// setParted let the bucket-E close-watcher pick MRU, a per-surface
+// divergence the INC-3 review caught.
+//
+// UX-5 bucket BK — `setParted` is the "absence is the projection" verb: it
+// drops the key from all three windowState maps, so the pseudo-row vanishes
+// and (if it had scrollback) resurfaces in the archive section.
+//
+// If the dismissed row IS the focused window, redirect to the network's
+// $server window FIRST, pre-empting the bucket-E watcher (which would
+// otherwise pick the most-recently-viewed window). $server-vs-MRU is a
+// deferred product choice — see DESIGN_NOTES 2026-07-26 #71 INC-3 + the
+// follow-up issue; today both surfaces land on $server.
+export function dismissPseudoWindow(networkSlug: string, name: string): void {
+  const sel = selectedChannel();
+  if (sel !== null && sel.networkSlug === networkSlug && sel.channelName === name) {
+    setSelectedChannel({ networkSlug, channelName: SERVER_WINDOW_NAME, kind: "server" });
+  }
+  setParted(channelKey(networkSlug, name));
 }
 
 // UX-4 bucket D — close the server window for a network by PARKING it.

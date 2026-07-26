@@ -4448,7 +4448,14 @@ html.resize-dragging * {
   color: var(--accent);
 }
 
-.bottom-bar-tab.parted {
+/* #71 INC-3 — the `:invited` virtual-channel tab shares the parted tab's
+   dim+italic "not-joined" treatment (mirrors the desktop sidebar's
+   `.sidebar-window-greyed` for invited rows). Co-qualified to the same
+   (0,2,0) specificity as `.parted` so it stacks cleanly after
+   `.bottom-bar-tab.selected` — a SELECTED invited tab keeps the selected
+   background and reads dim, exactly like a selected parted tab. */
+.bottom-bar-tab.parted,
+.bottom-bar-tab.bottom-bar-tab-invited {
   color: var(--muted);
   font-style: italic;
 }

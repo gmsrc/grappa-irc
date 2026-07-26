@@ -66,6 +66,17 @@ vi.mock("../lib/windowState", () => ({
   setParted: vi.fn(),
 }));
 
+// dismissPseudoWindow (#71 INC-3) imports selection to redirect focus off a
+// dismissed, currently-focused pseudo-row. Mock it as controllable spies —
+// same "boundary spy, don't pull the reactive chain" rationale as the
+// windowState mock above.
+const selectedChannelMock = vi.hoisted(() => vi.fn<() => unknown>());
+const setSelectedChannelMock = vi.hoisted(() => vi.fn());
+vi.mock("../lib/selection", () => ({
+  selectedChannel: () => selectedChannelMock(),
+  setSelectedChannel: (...args: unknown[]) => setSelectedChannelMock(...args),
+}));
+
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
@@ -192,5 +203,57 @@ describe("disconnectNetwork — registered-user branch", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("[/disconnect]"))).toBe(true);
     warnSpy.mockRestore();
+  });
+});
+
+// #71 INC-3 — dismissPseudoWindow is THE shared verb behind the × on a
+// non-joined pseudo-row (invited/failed/kicked/parked): drop its
+// windowState key AND, if the row was the FOCUSED window, redirect to the
+// network's $server window BEFORE dropping it. Both the desktop Sidebar
+// and the mobile BottomBar route their pseudo-row × through this — one
+// implementation, one navigation outcome on both surfaces (the divergence
+// the INC-3 review caught: BottomBar previously did a raw setParted and
+// let the bucket-E watcher pick MRU). The $server-vs-MRU destination is a
+// deferred product choice (DESIGN_NOTES 2026-07-26 + follow-up issue).
+describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focused", () => {
+  it("clears the windowState entry via setParted", async () => {
+    selectedChannelMock.mockReturnValue(null);
+    const windowState = await import("../lib/windowState");
+    const { channelKey } = await import("../lib/channelKey");
+    const { dismissPseudoWindow } = await import("../lib/windowClose");
+    dismissPseudoWindow("freenode", "#inv");
+    expect(windowState.setParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
+    expect(setSelectedChannelMock).not.toHaveBeenCalled();
+  });
+
+  it("redirects focus to the network $server window when the dismissed pseudo-row IS the focused one", async () => {
+    selectedChannelMock.mockReturnValue({
+      networkSlug: "freenode",
+      channelName: "#inv",
+      kind: "channel",
+    });
+    const { SERVER_WINDOW_NAME } = await import("../lib/windowKinds");
+    const windowState = await import("../lib/windowState");
+    const { channelKey } = await import("../lib/channelKey");
+    const { dismissPseudoWindow } = await import("../lib/windowClose");
+    dismissPseudoWindow("freenode", "#inv");
+    // Redirect fires BEFORE the drop (pre-empts the bucket-E MRU pick).
+    expect(setSelectedChannelMock).toHaveBeenCalledWith({
+      networkSlug: "freenode",
+      channelName: SERVER_WINDOW_NAME,
+      kind: "server",
+    });
+    expect(windowState.setParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
+  });
+
+  it("does NOT redirect when a DIFFERENT window is focused (no focus steal)", async () => {
+    selectedChannelMock.mockReturnValue({
+      networkSlug: "freenode",
+      channelName: "#other",
+      kind: "channel",
+    });
+    const { dismissPseudoWindow } = await import("../lib/windowClose");
+    dismissPseudoWindow("freenode", "#inv");
+    expect(setSelectedChannelMock).not.toHaveBeenCalled();
   });
 });

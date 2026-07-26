@@ -14,6 +14,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // rationale; mobile mirrors the desktop wiring exactly).
 const isActiveSelectionMock = vi.hoisted(() => vi.fn<(next: unknown) => boolean>());
 
+// #71 INC-3 — controllable shared pseudo-row projection. Default [] so the
+// existing tests see no invited tabs; the invited tests override per network.
+const pseudoRowsMock = vi.hoisted(() =>
+  vi.fn<(slug: string, id: number) => Array<{ name: string; state: string }>>(),
+);
+
 vi.mock("../lib/networks", () => ({
   networks: () => [
     { id: 1, slug: "freenode", inserted_at: "", updated_at: "" },
@@ -64,10 +70,17 @@ vi.mock("../lib/queryWindows", () => ({
 
 vi.mock("../lib/windowClose", () => ({
   // #195 — the channel/network × now route through the confirm-gated verbs;
-  // query stays a direct (non-destructive) close.
+  // query stays a direct (non-destructive) close. #71 INC-3 — the invited
+  // pseudo-row × routes through the shared dismissPseudoWindow verb.
   closeQueryWindow: vi.fn(),
   confirmLeaveChannel: vi.fn(),
   confirmDisconnectNetwork: vi.fn(),
+  dismissPseudoWindow: vi.fn(),
+}));
+
+// #71 INC-3 — the shared pseudo-row projection.
+vi.mock("../lib/pseudoChannels", () => ({
+  pseudoChannelsForNetwork: (slug: string, id: number) => pseudoRowsMock(slug, id),
 }));
 
 vi.mock("../lib/archive", () => ({
@@ -89,6 +102,8 @@ beforeEach(() => {
   // #243 — default "not the active window" so existing click tests never
   // trip the scroll-to-bottom branch.
   isActiveSelectionMock.mockReturnValue(false);
+  // #71 INC-3 — no pseudo rows by default; invited tests opt in per network.
+  pseudoRowsMock.mockReturnValue([]);
 });
 
 describe("BottomBar", () => {
@@ -736,6 +751,74 @@ describe("BottomBar", () => {
       expect(scrollToSpy).not.toHaveBeenCalled();
 
       vi.unstubAllGlobals();
+    });
+  });
+
+  // #71 INC-3 — the /invite-opened `:invited` virtual channel is added to
+  // the mobile BottomBar (post-vjt-reversal scope: BottomBar STAYS; only
+  // the invited window was missing from it). The bar renders ONLY the
+  // `:invited` slice of the shared pseudo-row projection — an INTENTIONAL
+  // narrowing vs the desktop Sidebar (which shows every non-joined state),
+  // because the bottom bar is space-scarce and failed/kicked/parked are
+  // history best confined to the sidebar. The e2e asserts BOTH sides
+  // (invited appears; failed does not); these unit tests lock the filter +
+  // the tab affordances.
+  describe("#71 INC-3 — :invited virtual channel", () => {
+    it("renders an :invited pseudo-channel as a tab carrying data-window-state='invited'", () => {
+      pseudoRowsMock.mockImplementation((slug) =>
+        slug === "freenode" ? [{ name: "#invited", state: "invited" }] : [],
+      );
+      const { container } = render(() => <BottomBar />);
+      const tab = container.querySelector('.bottom-bar-tab[data-window-state="invited"]');
+      expect(tab).not.toBeNull();
+      expect(tab?.getAttribute("data-window-name")).toBe("#invited");
+      expect(tab?.textContent).toContain("#invited");
+    });
+
+    it("renders ONLY :invited — a :failed or :kicked pseudo-channel does NOT appear (narrowing)", () => {
+      pseudoRowsMock.mockImplementation((slug) =>
+        slug === "freenode"
+          ? [
+              { name: "#invited", state: "invited" },
+              { name: "#failed", state: "failed" },
+              { name: "#kicked", state: "kicked" },
+            ]
+          : [],
+      );
+      render(() => <BottomBar />);
+      expect(screen.getByText("#invited")).toBeInTheDocument();
+      expect(screen.queryByText("#failed")).toBeNull();
+      expect(screen.queryByText("#kicked")).toBeNull();
+    });
+
+    it("tapping the invited tab selects it with kind 'channel'", () => {
+      pseudoRowsMock.mockImplementation((slug) =>
+        slug === "freenode" ? [{ name: "#invited", state: "invited" }] : [],
+      );
+      render(() => <BottomBar />);
+      fireEvent.click(screen.getByText("#invited"));
+      expect(selMod.setSelectedChannel).toHaveBeenCalledWith({
+        networkSlug: "freenode",
+        channelName: "#invited",
+        kind: "channel",
+      });
+    });
+
+    it("the invited tab has a close × that dismisses the invite via the shared dismissPseudoWindow verb", () => {
+      pseudoRowsMock.mockImplementation((slug) =>
+        slug === "freenode" ? [{ name: "#invited", state: "invited" }] : [],
+      );
+      render(() => <BottomBar />);
+      // Query the × by its accessible name — `getByRole` throws if absent,
+      // so no null-guard / non-null assertion is needed (and it doubles as
+      // the a11y-label assertion).
+      const closeBtn = screen.getByRole("button", { name: "Close #invited" });
+      expect(closeBtn).toHaveClass("bottom-bar-close");
+      fireEvent.click(closeBtn);
+      // Same verb the desktop Sidebar × uses (one code path, one navigation
+      // outcome). The verb's own drop+redirect behavior is covered in
+      // windowClose.test.ts.
+      expect(windowCloseMod.dismissPseudoWindow).toHaveBeenCalledWith("freenode", "#invited");
     });
   });
 });
