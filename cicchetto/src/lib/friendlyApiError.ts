@@ -235,11 +235,11 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
     //
     // This is the GENERAL typed-error surface (a #411 drift-guard arm). Live
     // file uploads render their own 413 via `uploadOrchestrator`'s
-    // `httpUploadMessage`, which spells the cap in fixed MB (`mbLabel`) to
-    // match its sibling progress/pre-check lines — a DELIBERATE spelling split
-    // for two non-overlapping surfaces. Both are base-1024, so a whole-MB cap
-    // (the production defaults) agrees across surfaces; only an admin-set
-    // non-whole-MB cap would read e.g. "512 KB" here vs "0.5 MB" there.
+    // `httpUploadMessage`, which now spells the cap via this SAME `formatBytes`
+    // (#411 follow-up), so the two surfaces agree at every magnitude — an
+    // admin-set 512 KB cap reads "512 KB" on both, not "0.5 MB" on one. The
+    // orchestrator's `mbLabel` survives only for the fixed-unit "X of Y"
+    // upload-progress line.
     case "file_too_large": {
       const max = err.info.max_bytes;
       return typeof max === "number" && Number.isFinite(max) && max > 0

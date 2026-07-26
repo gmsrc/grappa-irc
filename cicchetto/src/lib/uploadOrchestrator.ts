@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import type { ChannelKey } from "./channelKey";
+import { formatBytes } from "./formatBytes";
 import { sendMessage } from "./scrollback";
 import {
   categoryOf,
@@ -223,9 +224,13 @@ export function privacyModalState(): PrivacyModalState {
   return modalState();
 }
 
-// Single bytes→MB label for every upload error surface — three
-// messages render sizes; one spelling ("N MB", "<0.1" floor so a
-// nonzero count never reads as zero).
+// Fixed MB spelling for the "X of Y MB sent" upload-PROGRESS line only. A
+// progress counter that flips KB→MB→GB as it climbs reads worse than a stable
+// unit, so this stays deliberately MB-only ("N MB", "<0.1" floor so a nonzero
+// count never reads as zero). The one-shot CAP/size surfaces (file_too_large +
+// the pre-check and transcode caps) now spell their limit via the adaptive
+// `formatBytes` (#411), so a sub-MB cap reads "512 KB" not "0.5 MB" and agrees
+// with `friendlyApiError` — this is NOT that formatter.
 function mbLabel(bytes: number): string {
   const mb = bytes / (1024 * 1024);
   if (mb < 0.1) return "<0.1";
@@ -266,11 +271,11 @@ function httpUploadMessage(status: number, body: string): string {
     }
     case "file_too_large": {
       // 413 — server per-file cap. Render the max_bytes the server threads
-      // "so cic can render the actionable threshold" (same MB spelling as
-      // the client-side pre-check); fall back to a capless message if the
-      // field is absent.
+      // "so cic can render the actionable threshold" (same `formatBytes`
+      // spelling as the client-side pre-check and friendlyApiError, #411);
+      // fall back to a capless message if the field is absent.
       const cap =
-        typeof token?.max_bytes === "number" ? ` (max ${mbLabel(token.max_bytes)} MB)` : "";
+        typeof token?.max_bytes === "number" ? ` (max ${formatBytes(token.max_bytes)})` : "";
       return `File is too large${cap}.`;
     }
     case "metadata_strip_failed": {
@@ -404,7 +409,7 @@ async function dispatchUpload(
       loaded: 0,
       total: 0,
       phase: "uploading",
-      error: `File is too large (max ${mbLabel(cap)} MB).`,
+      error: `File is too large (max ${formatBytes(cap)}).`,
     });
     return;
   }
@@ -556,7 +561,7 @@ async function prepareVideo(
       loaded: 0,
       total: 0,
       phase: "transcoding",
-      error: `Video processing failed (${reason}); the original is too large (max ${mbLabel(cap)} MB).`,
+      error: `Video processing failed (${reason}); the original is too large (max ${formatBytes(cap)}).`,
     });
     return null;
   }

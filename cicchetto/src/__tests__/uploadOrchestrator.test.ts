@@ -470,6 +470,17 @@ describe("embedded-host token error copy (#364 S4)", () => {
     expect(uploadState(key)?.error).toMatch(/max 5 MB/i);
   });
 
+  it("file_too_large spells a sub-MB cap in adaptive units (formatBytes, not fixed MB)", async () => {
+    // #411 — the cap spelling on the live upload path is unified onto
+    // formatBytes (base-1024, adaptive), matching friendlyApiError. A 512 KB
+    // admin cap must read "512 KB", not the old fixed-MB "0.5 MB" that
+    // understated the unit. (The "X of Y" progress line keeps mbLabel's fixed
+    // MB — a deliberate, separate contract left untouched.)
+    await rejectWith(JSON.stringify({ error: "file_too_large", max_bytes: 512 * 1024 }), 413);
+    expect(uploadState(key)?.error).toMatch(/too large/i);
+    expect(uploadState(key)?.error).toMatch(/max 512 KB/i);
+  });
+
   it("insufficient_storage points at the admin — never suggests retry", async () => {
     await rejectWith(JSON.stringify({ error: "insufficient_storage" }), 507);
     expect(uploadState(key)?.error).toMatch(/full|admin/i);
