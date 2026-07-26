@@ -8,7 +8,9 @@ defmodule Grappa.Visitors.Wire do
   A visitor is MULTI-network now, and its per-network identity
   (nick/ident/realname/password) lives on the `network_credentials` rows,
   NOT on the visitor row. So the visitor SUBJECT wire carries only the
-  identity-wide fields the row still owns: `{id, expires_at, registered}`.
+  identity-wide fields the row still owns: `{id, expires_at, registered,
+  incognito}` (`incognito` #363 — the ephemeral-session flag; cic marks the
+  session and disables share-session from it, never any secret).
   Per-network nick + connection state live on the `GET /networks` rows
   (`Grappa.Networks.Wire.visitor_network_to_json/3`); cic resolves "my nick
   on network X" from there (`ownNickForNetwork`), never from the subject.
@@ -28,11 +30,13 @@ defmodule Grappa.Visitors.Wire do
 
   ## Two shapes (pre-extraction CP16 B2)
 
-    * `visitor_to_json/2` — full profile `{id, expires_at, registered}`.
-      Used by `MeJSON` so the SPA can render the session-end countdown.
-    * `visitor_to_credential_json/2` — minimal `{id, registered}`. Used by
-      `AuthJSON` post-login where the SPA already has the bearer token TTL
-      via `accounts_sessions.expires_at` on a separate door.
+    * `visitor_to_json/2` — full profile `{id, expires_at, registered,
+      incognito}`. Used by `MeJSON` so the SPA can render the session-end
+      countdown + the incognito indicator.
+    * `visitor_to_credential_json/2` — minimal `{id, registered, incognito}`.
+      Used by `AuthJSON` post-login where the SPA already has the bearer token
+      TTL via `accounts_sessions.expires_at` on a separate door; `incognito`
+      rides along so the SPA knows the session mode from first login.
 
   Same {full, credential} pair pattern as `Grappa.Accounts.Wire`.
   """
@@ -41,13 +45,15 @@ defmodule Grappa.Visitors.Wire do
 
   @type credential_json :: %{
           id: Ecto.UUID.t(),
-          registered: boolean()
+          registered: boolean(),
+          incognito: boolean()
         }
 
   @type t :: %{
           id: Ecto.UUID.t(),
           expires_at: DateTime.t() | nil,
-          registered: boolean()
+          registered: boolean(),
+          incognito: boolean()
         }
 
   @doc """
@@ -60,7 +66,10 @@ defmodule Grappa.Visitors.Wire do
   def visitor_to_credential_json(%Visitor{} = v, registered) when is_boolean(registered) do
     %{
       id: v.id,
-      registered: registered
+      registered: registered,
+      # #363 — cic marks the session ephemeral + disables share-session from
+      # this flag; it exposes only the FACT of the mode, never any data.
+      incognito: v.incognito == true
     }
   end
 
@@ -75,7 +84,10 @@ defmodule Grappa.Visitors.Wire do
     %{
       id: v.id,
       expires_at: v.expires_at,
-      registered: registered
+      registered: registered,
+      # #363 — the SPA reads this to render the incognito indicator + disable
+      # share-session; the linger-countdown still derives from `expires_at`.
+      incognito: v.incognito == true
     }
   end
 end

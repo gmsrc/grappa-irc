@@ -481,6 +481,27 @@ defmodule GrappaWeb.AuthControllerTest do
 
       stop_visitor_session(v.id, network.id)
     end
+
+    test "#363 incognito param provisions an ephemeral (incognito) visitor", %{conn: conn} do
+      {server, port} = start_server()
+      {network, _} = setup_visitor_network(port)
+
+      task =
+        Task.async(fn ->
+          post(conn, "/auth/login", %{"identifier" => "ghost", "incognito" => true})
+        end)
+
+      :ok = await_handshake(server)
+      feed_001(server, "ghost")
+
+      resp = Task.await(task, 10_000)
+      assert json_response(resp, 200)["subject"]["kind"] == "visitor"
+
+      visitor = Visitors.resolve_identity_by_nick("ghost", network.id)
+      assert visitor.incognito == true
+
+      stop_visitor_session(visitor.id, network.id)
+    end
   end
 
   # NOTE: 503 connect_timeout / welcome_timeout are exercised in

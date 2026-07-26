@@ -63,13 +63,14 @@ defmodule Grappa.Visitors do
       Grappa.SpawnOrchestrator,
       Grappa.Subject,
       Grappa.Themes,
+      Grappa.UserSettings,
       Grappa.Visitors.Visitor
     ],
     exports: [AdminWire, Login, SessionPlan, Wire]
 
   import Ecto.Query
 
-  alias Grappa.{Admission, Networks, Repo, Session, SpawnOrchestrator, Themes}
+  alias Grappa.{Admission, Networks, Repo, Session, SpawnOrchestrator, Themes, UserSettings}
   alias Grappa.Networks.{Credential, Credentials}
   alias Grappa.Visitors.{SessionPlan, Visitor}
 
@@ -77,6 +78,26 @@ defmodule Grappa.Visitors do
 
   @anon_ttl_seconds 48 * 3600
   @touch_cadence_seconds 3600
+  # #363 incognito — the linger window. A fresh incognito visitor is born
+  # with this short TTL instead of the 48h anon TTL; `slide_incognito_lingers/1`
+  # (driven by the Reaper reconcile) refreshes it to `now + @incognito_linger_seconds`
+  # ONLY while a browser socket is connected. Once the last socket drops the TTL
+  # is no longer refreshed and elapses ~1h later, and the ordinary `list_expired/0`
+  # sweep collects the row with the full CASCADE wipe — reconnect within the
+  # window resumes the slide and cancels the deletion.
+  @incognito_linger_seconds 3600
+
+  # #363 incognito — the GENTLE upload-expiry default seeded onto a fresh
+  # incognito session's own upload-TTL preference (see `create_anon/4`). 3600
+  # is the shortest rung of the upload ladder (`@allowed_ttl_seconds` in
+  # `GrappaWeb.UploadsController`, self-verified), so an attachment defaults to
+  # a 1h life instead of the standard 24h anon default. It is a DEFAULT, not a
+  # clamp: the holder can raise it to the 72h ladder cap from the settings
+  # drawer and the server does NOT re-limit them (vjt 2026-07-26). Distinct
+  # attr from `@incognito_linger_seconds` even though both are 3600 today —
+  # session linger and upload expiry are unrelated clocks that must be free to
+  # diverge.
+  @incognito_upload_ttl_seconds 3600
 
   @doc """
   Find an existing visitor identity by `(nick, network)`, or provision
@@ -111,11 +132,27 @@ defmodule Grappa.Visitors do
           {:ok, Visitor.t()} | {:error, :network_unconfigured | Ecto.Changeset.t()}
   def find_or_provision_anon(nick, network_slug, ip)
       when is_binary(nick) and is_binary(network_slug) do
+    find_or_provision_anon(nick, network_slug, ip, false)
+  end
+
+  @doc """
+  #363 incognito variant. The `incognito` flag is applied ONLY on FRESH
+  provision: a returning identity keeps its existing persistence semantics —
+  incognito is a fresh-session choice, not a retroactive conversion that
+  would delete data the holder never opted to lose. A fresh incognito row is
+  born with the short linger TTL (`@incognito_linger_seconds`) rather than
+  the 48h anon TTL; the Reaper reconcile (`slide_incognito_lingers/1`) owns
+  it from there. `find_or_provision_anon/3` delegates here with `false`.
+  """
+  @spec find_or_provision_anon(String.t(), String.t(), String.t() | nil, boolean()) ::
+          {:ok, Visitor.t()} | {:error, :network_unconfigured | Ecto.Changeset.t()}
+  def find_or_provision_anon(nick, network_slug, ip, incognito)
+      when is_binary(nick) and is_binary(network_slug) and is_boolean(incognito) do
     case Networks.get_network_by_slug(network_slug) do
       {:ok, %Networks.Network{id: network_id}} ->
         case resolve_identity_by_nick(nick, network_id) do
           %Visitor{} = existing -> maybe_refresh_ip(existing, ip)
-          nil -> create_anon(nick, network_id, ip)
+          nil -> create_anon(nick, network_id, ip, incognito)
         end
 
       {:error, :not_found} ->
@@ -140,26 +177,46 @@ defmodule Grappa.Visitors do
   # rolls back the bare row — no orphan identity-less visitor is left
   # behind. The `(visitor_id, network_id)` + folded-nick partial unique
   # indexes (phase 4b) are the collision guards.
-  @spec create_anon(String.t(), pos_integer(), String.t() | nil) ::
+  @spec create_anon(String.t(), pos_integer(), String.t() | nil, boolean()) ::
           {:ok, Visitor.t()} | {:error, Ecto.Changeset.t()}
-  defp create_anon(nick, network_id, ip) do
-    expires_at = DateTime.add(DateTime.utc_now(), @anon_ttl_seconds, :second)
+  defp create_anon(nick, network_id, ip, incognito) do
+    ttl_seconds = if incognito, do: @incognito_linger_seconds, else: @anon_ttl_seconds
+    expires_at = DateTime.add(DateTime.utc_now(), ttl_seconds, :second)
 
     Repo.transaction(fn ->
       with {:ok, visitor} <-
-             %{expires_at: expires_at, ip: ip} |> Visitor.create_changeset() |> Repo.insert(),
+             %{expires_at: expires_at, ip: ip, incognito: incognito}
+             |> Visitor.create_changeset()
+             |> Repo.insert(),
            {:ok, _} <-
              Credentials.upsert_visitor_credential(visitor.id, network_id, %{
                nick: nick,
                sasl_user: nick,
                auth_method: :none
-             }) do
+             }),
+           {:ok, _} <- seed_incognito_upload_ttl(visitor, incognito) do
         visitor
       else
         {:error, changeset} -> Repo.rollback(changeset)
       end
     end)
   end
+
+  # #363 — a fresh incognito session seeds its OWN upload-TTL preference to a
+  # gentle 1h default so an attachment does not silently outlive the ephemeral
+  # session by the full 24h anon default. Seeded here — the single
+  # fresh-provision door, inside the same transaction so it rolls back with the
+  # row — and NEVER on an existing-row re-login (incognito is a fresh-session
+  # choice, mirroring the `incognito` flag itself). It is a default, not a cap:
+  # the holder raises it up to the 72h ladder from the drawer and the server
+  # leaves them be (vjt 2026-07-26). Non-incognito provisions leave the pref
+  # unset and fall through to the standard 24h upload default.
+  @spec seed_incognito_upload_ttl(Visitor.t(), boolean()) ::
+          {:ok, term()} | {:error, Ecto.Changeset.t()}
+  defp seed_incognito_upload_ttl(_, false), do: {:ok, :not_incognito}
+
+  defp seed_incognito_upload_ttl(%Visitor{id: id}, true),
+    do: UserSettings.put_upload_ttl_seconds({:visitor, id}, @incognito_upload_ttl_seconds)
 
   @doc """
   #211 phase 7 — resolve the visitor's `(visitor_id, network_id)`
@@ -304,6 +361,14 @@ defmodule Grappa.Visitors do
           Credentials.visitor_registered?(visitor.id) ->
             {:ok, visitor}
 
+          # #363 incognito — the Reaper reconcile (`slide_incognito_lingers/1`)
+          # owns the linger TTL while a browser socket is connected; touch must
+          # NOT slide it to +48h or the 1h linger is defeated. Still gate reads
+          # once the window has elapsed (mirrors the anon `:expired` semantics).
+          # Extracted to keep this cond ≤2 levels deep (Credo Refactor.Nesting).
+          visitor.incognito ->
+            incognito_read_gate(visitor)
+
           # Anon + still-live — slide the TTL (cadence-gated).
           DateTime.compare(exp, DateTime.utc_now()) == :gt ->
             maybe_bump(visitor)
@@ -315,6 +380,19 @@ defmodule Grappa.Visitors do
             {:error, :expired}
         end
     end
+  end
+
+  # #363 — an incognito visitor's TTL is owned by the Reaper reconcile
+  # (`slide_incognito_lingers/1`) while a browser socket is connected; touch
+  # never slides it. It still gates reads once the linger has elapsed (mirrors
+  # the anon `:expired` semantic — an elapsed row is dead to reads until the
+  # Reaper collects it). Extracted from `touch/1`'s cond so the nesting stays
+  # ≤2 deep.
+  @spec incognito_read_gate(Visitor.t()) :: {:ok, Visitor.t()} | {:error, :expired}
+  defp incognito_read_gate(%Visitor{expires_at: exp} = visitor) do
+    if DateTime.compare(exp, DateTime.utc_now()) == :gt,
+      do: {:ok, visitor},
+      else: {:error, :expired}
   end
 
   # #211 phase 7 — reached only from `touch/1` AFTER the `expires_at: nil`
@@ -510,6 +588,40 @@ defmodule Grappa.Visitors do
       )
 
     Repo.all(query)
+  end
+
+  @doc """
+  #363 — the Reaper reconcile primitive. Slides the linger TTL of every
+  incognito visitor in `connected_visitor_ids` (the set holding a live
+  browser socket, computed by `Grappa.Visitors.Reaper` from
+  `Grappa.WSPresence`) forward to `now + @incognito_linger_seconds`.
+
+  Disconnected incognito visitors are deliberately NOT refreshed: their TTL
+  winds down and `list_expired/0` collects them ~1h after the last socket
+  dropped, with the full FK ON DELETE CASCADE wipe. A reconnect re-populates
+  the connected set, so the next reconcile slides the TTL back out — the
+  deletion is cancelled with no explicit "reconnected" event.
+
+  Set-based `update_all`, filtered to `incognito == true` so a non-incognito
+  id in the list is a no-op. This deliberately BYPASSES the
+  `touch_changeset/2` monotonicity guard (it is a plain UPDATE, not a
+  changeset): correct here, because a while-connected reconcile only ever
+  moves the TTL forward. Returns the number of rows slid. An empty
+  connected set slides nothing.
+  """
+  @spec slide_incognito_lingers([Ecto.UUID.t()]) :: non_neg_integer()
+  def slide_incognito_lingers(connected_visitor_ids) when is_list(connected_visitor_ids) do
+    now = DateTime.utc_now()
+    target = DateTime.add(now, @incognito_linger_seconds, :second)
+
+    query =
+      from(v in Visitor,
+        where: v.incognito == true and v.id in ^connected_visitor_ids
+      )
+
+    {count, _} = Repo.update_all(query, set: [expires_at: target, updated_at: now])
+
+    count
   end
 
   @doc """

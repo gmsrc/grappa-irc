@@ -46,11 +46,19 @@ defmodule Grappa.Visitors.Reaper do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.AdminEvents, Grappa.Networks, Grappa.Session, Grappa.Visitors, Grappa.Visitors.Visitor]
+    deps: [
+      Grappa.AdminEvents,
+      Grappa.Networks,
+      Grappa.Session,
+      Grappa.Subject,
+      Grappa.Visitors,
+      Grappa.Visitors.Visitor,
+      Grappa.WSPresence
+    ]
 
   use GenServer
 
-  alias Grappa.{AdminEvents, Session, Visitors}
+  alias Grappa.{AdminEvents, Session, Subject, Visitors, WSPresence}
   alias Grappa.AdminEvents.Wire, as: AdminWire
   alias Grappa.Networks.{Credential, Credentials}
 
@@ -80,6 +88,7 @@ defmodule Grappa.Visitors.Reaper do
   """
   @spec sweep() :: {:ok, non_neg_integer()}
   def sweep do
+    reconcile_incognito_lingers()
     expired = Visitors.list_expired()
 
     deleted =
@@ -108,6 +117,32 @@ defmodule Grappa.Visitors.Reaper do
       end)
 
     {:ok, deleted}
+  end
+
+  # #363 — before enumerating expiries, refresh the linger TTL of every
+  # incognito visitor that still holds a live browser socket. `WSPresence` is
+  # the authoritative "a browser is connected" signal (the visitor
+  # `Session.Server` outlives the socket, so process liveness is NOT the
+  # signal): its `user_name` set carries one subject label per connected
+  # subject. Decode each via `Grappa.Subject.from_label/1` — the #413 SSOT
+  # for the `"user → user.name, visitor → "visitor:" <> id"` routing codec —
+  # rather than re-stating the `"visitor:"` prefix here (a hand-rolled decode
+  # would silently fork from the codec if the label scheme ever changes). The
+  # generator pattern keeps only `{:visitor, id}` labels; account names decode
+  # to `{:user, name}` and drop out. Sliding these forward BEFORE
+  # `list_expired/0` reads keeps a connected incognito visitor out of the
+  # sweep; a disconnected one is left to elapse and is collected below.
+  # Non-incognito ids in the set are a no-op inside
+  # `slide_incognito_lingers/1`.
+  @spec reconcile_incognito_lingers() :: :ok
+  defp reconcile_incognito_lingers do
+    connected_visitor_ids =
+      for label <- WSPresence.list_user_names(),
+          {:visitor, id} <- [Subject.from_label(label)],
+          do: id
+
+    _ = Visitors.slide_incognito_lingers(connected_visitor_ids)
+    :ok
   end
 
   # Representative (identity-anchor) nick for the reap event label, read

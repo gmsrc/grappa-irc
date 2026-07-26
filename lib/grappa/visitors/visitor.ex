@@ -68,6 +68,7 @@ defmodule Grappa.Visitors.Visitor do
           id: Ecto.UUID.t() | nil,
           expires_at: DateTime.t() | nil,
           ip: String.t() | nil,
+          incognito: boolean() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -77,6 +78,11 @@ defmodule Grappa.Visitors.Visitor do
   schema "visitors" do
     field :expires_at, :utc_datetime_usec
     field :ip, :string
+    # #363 — ephemeral "incognito" session: born with a short linger TTL that
+    # the Reaper reconcile slides forward only while a browser socket is
+    # connected, so it self-deletes ~1h after the last disconnect. See
+    # `Grappa.Visitors.find_or_provision_anon/4` + `slide_incognito_lingers/1`.
+    field :incognito, :boolean, default: false
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -98,7 +104,7 @@ defmodule Grappa.Visitors.Visitor do
   @spec create_changeset(map()) :: Ecto.Changeset.t()
   def create_changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:expires_at, :ip])
+    |> cast(attrs, [:expires_at, :ip, :incognito])
     |> validate_required([:expires_at])
     |> validate_change(:expires_at, &validate_future_expires_at/2)
   end

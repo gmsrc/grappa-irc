@@ -120,6 +120,23 @@ defmodule Grappa.Visitors.LoginTest do
       stop_visitor_session(v.id, network.id)
     end
 
+    test "#363 incognito login provisions the visitor with incognito=true + a ~1h linger TTL" do
+      {server, port} = start_server()
+      {network, _} = setup_visitor_network(port)
+
+      task = Task.async(fn -> Login.login(login_input(%{incognito: true}), []) end)
+
+      :ok = await_handshake(server)
+      feed_001(server, "vjt")
+
+      assert {:ok, %{visitor: %Visitor{} = v}} = Task.await(task, 10_000)
+      assert v.incognito == true
+      # born with the short linger window, deliberately not the 48h anon TTL
+      assert DateTime.diff(v.expires_at, DateTime.utc_now()) < 2 * 3600
+
+      stop_visitor_session(v.id, network.id)
+    end
+
     test "fresh-nick login with ident + realname persists them and emits them in USER (#152)" do
       {server, port} = start_server()
       {network, _} = setup_visitor_network(port)

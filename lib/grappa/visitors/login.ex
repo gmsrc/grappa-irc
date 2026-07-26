@@ -153,7 +153,13 @@ defmodule Grappa.Visitors.Login do
           # zero enabled → `:network_unconfigured`; more than one enabled
           # with no slug → `:network_ambiguous` (cic gains the picker in
           # phase 6 before a 2nd network is expected).
-          optional(:network) => String.t() | nil
+          optional(:network) => String.t() | nil,
+          # #363 — optional ephemeral-session flag. Absent (today's default)
+          # → an ordinary 48h anon session. Present + true → a fresh anon row
+          # is provisioned incognito (short linger TTL, Reaper-reconciled).
+          # Applied only on FRESH provision (case 1); mirrors the `:network`
+          # optional-key pattern (read via `Map.get`, no head-pattern change).
+          optional(:incognito) => boolean()
         }
 
   @type result :: %{visitor: Visitor.t(), token: Ecto.UUID.t()}
@@ -329,7 +335,12 @@ defmodule Grappa.Visitors.Login do
     with :ok <- Grappa.Admission.check_capacity(capacity_input),
          :ok <- Grappa.Admission.verify_captcha(input.captcha_token, input.ip),
          {:ok, visitor} <-
-           Visitors.find_or_provision_anon(input.nick, network.slug, input.ip) do
+           Visitors.find_or_provision_anon(
+             input.nick,
+             network.slug,
+             input.ip,
+             Map.get(input, :incognito, false)
+           ) do
       case continue_case_1(visitor, network, input, timeouts) do
         {:ok, _} = ok ->
           :ok = NetworkCircuit.record_success(network.id)

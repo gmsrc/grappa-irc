@@ -105,12 +105,17 @@ defmodule GrappaWeb.AuthController do
     # #211 phase 3 — optional target network slug. Absent (today's cic)
     # → Login defaults to the sole `visitor_enabled` network.
     network = Map.get(params, "network")
+    # #363 — ephemeral "incognito" session. Coerced to a strict boolean at
+    # the boundary: only a literal JSON `true` arms it (a stray string, nil,
+    # or absence → an ordinary persistent session). Visitor-path only —
+    # `nick_login` forwards it to `visitor_login`; the account path ignores it.
+    incognito = Map.get(params, "incognito") == true
 
     with :ok <- validate_captcha_token(captcha_token),
          :ok <- validate_password(password) do
       case IdentifierClassifier.classify(sanitize_identifier(id)) do
         {:email, email} -> mode1_login(conn, email, password)
-        {:nick, nick} -> nick_login(conn, nick, password, captcha_token, identity, network)
+        {:nick, nick} -> nick_login(conn, nick, password, captcha_token, identity, network, incognito)
         {:error, :malformed} -> {:error, :malformed_nick}
       end
     else
@@ -315,12 +320,15 @@ defmodule GrappaWeb.AuthController do
           String.t() | nil,
           String.t() | nil,
           %{ident: String.t() | nil, realname: String.t() | nil},
-          String.t() | nil
+          String.t() | nil,
+          boolean()
         ) :: Plug.Conn.t() | {:error, term()}
-  defp nick_login(conn, nick, password, captcha_token, identity, network) do
+  defp nick_login(conn, nick, password, captcha_token, identity, network, incognito) do
     case Accounts.get_user_by_name(nick) do
+      # #363 — incognito is a visitor-only session flag; an existing account
+      # logging in is never ephemeral, so the account path drops it.
       %Accounts.User{} -> account_login(conn, nick, password)
-      nil -> visitor_login(conn, nick, password, captcha_token, identity, network)
+      nil -> visitor_login(conn, nick, password, captcha_token, identity, network, incognito)
     end
   end
 
@@ -412,7 +420,7 @@ defmodule GrappaWeb.AuthController do
   # entry-point bypassed the `login/2` shape — the validate_captcha_token
   # plug only fires once on the `login/2` call, so the captcha boundary
   # and the upstream verify call must both consume the same value.
-  defp visitor_login(conn, nick, password, captcha_token, identity, network) do
+  defp visitor_login(conn, nick, password, captcha_token, identity, network, incognito) do
     input = %{
       nick: nick,
       password: password,
@@ -424,7 +432,9 @@ defmodule GrappaWeb.AuthController do
       captcha_token: captcha_token,
       client_id: conn.assigns[:current_client_id],
       # #211 phase 3 — optional target network (nil = sole enabled).
-      network: network
+      network: network,
+      # #363 — ephemeral-session flag; applied only on FRESH provision.
+      incognito: incognito
     }
 
     case Login.login(input, []) do

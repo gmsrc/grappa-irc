@@ -138,6 +138,33 @@ defmodule Grappa.Visitors.ReaperTest do
     end
   end
 
+  describe "incognito linger reconcile (#363)" do
+    test "does NOT reap a CONNECTED incognito visitor past its TTL — reconcile slides it forward" do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      _ = network_fixture(slug: slug)
+      {:ok, ghost} = Visitors.find_or_provision_anon("ghost", slug, nil, true)
+      # wind the linger into the past — a disconnected incognito would be reaped
+      expire(ghost)
+
+      # …but this one has a live browser socket, so the reconcile refreshes it
+      :ok = Grappa.WSPresence.register("visitor:#{ghost.id}", self())
+
+      assert {:ok, 0} = Reaper.sweep()
+      assert reloaded = Repo.reload(ghost)
+      assert DateTime.compare(reloaded.expires_at, DateTime.utc_now()) == :gt
+    end
+
+    test "reaps a DISCONNECTED incognito visitor past its TTL (no live socket)" do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      _ = network_fixture(slug: slug)
+      {:ok, ghost} = Visitors.find_or_provision_anon("ghost", slug, nil, true)
+      expire(ghost)
+
+      assert {:ok, 1} = Reaper.sweep()
+      refute Repo.reload(ghost)
+    end
+  end
+
   describe "GenServer tick" do
     test "scheduled tick fires sweep" do
       slug = "azzurra-#{System.unique_integer([:positive])}"

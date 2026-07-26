@@ -10,7 +10,7 @@ defmodule Grappa.VisitorsTest do
   import Ecto.Query
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, Networks, Themes, Visitors}
+  alias Grappa.{Accounts, Networks, Themes, UserSettings, Visitors}
   alias Grappa.Accounts.Session
   alias Grappa.Networks.Credentials
   alias Grappa.Session.Backoff
@@ -27,6 +27,14 @@ defmodule Grappa.VisitorsTest do
 
   @network "azzurra"
   @ttl_anon 48 * 3600
+  # #363 incognito — the linger window: an incognito visitor born with a
+  # short TTL that the Reaper reconcile slides forward only while a browser
+  # socket is connected, so it elapses ~1h after the last disconnect.
+  @ttl_incognito 3600
+  # #363 incognito — the gentle upload-expiry default seeded onto a fresh
+  # incognito session's OWN upload-TTL pref (shortest ladder rung, 1h). A
+  # separate clock from the linger even though both are 3600 today.
+  @seeded_incognito_upload_ttl 3600
 
   # #211 phase 7 — `find_or_provision_anon/3` resolves the network by slug
   # to bind the anon credential, so the slug MUST have a `networks` row.
@@ -109,6 +117,73 @@ defmodule Grappa.VisitorsTest do
       {:ok, v2} = Visitors.find_or_provision_anon("vjt-ipc", @network, nil)
       assert v2.id == v1.id
       assert v2.ip == "1.2.3.4"
+    end
+
+    test "arity/3 provisions a non-incognito session" do
+      assert {:ok, %Visitor{incognito: false}} =
+               Visitors.find_or_provision_anon("plain", @network, "1.2.3.4")
+    end
+  end
+
+  describe "find_or_provision_anon/4 (#363 incognito)" do
+    test "incognito: true sets the flag + a ~1h linger TTL (not the 48h anon TTL)", %{
+      network: net
+    } do
+      assert {:ok, %Visitor{} = v} =
+               Visitors.find_or_provision_anon("ghost", @network, "1.2.3.4", true)
+
+      assert v.incognito == true
+      # identity still lives on the anon credential (no password)
+      assert nick_of(v) == "ghost"
+      assert is_nil(password_of(v, net.id))
+      # born with the SHORT linger window, deliberately not the 48h anon TTL
+      assert DateTime.diff(v.expires_at, DateTime.utc_now()) in (@ttl_incognito - 5)..(@ttl_incognito + 5)
+    end
+
+    test "incognito: false is byte-identical to the ordinary 48h anon session" do
+      assert {:ok, %Visitor{} = v} =
+               Visitors.find_or_provision_anon("normal", @network, "1.2.3.4", false)
+
+      assert v.incognito == false
+      assert DateTime.diff(v.expires_at, DateTime.utc_now()) in (@ttl_anon - 5)..(@ttl_anon + 5)
+    end
+
+    test "the incognito flag is only set on FRESH provision, never flipped on an existing row" do
+      # A returning nick whose row already exists keeps its persistence
+      # semantics — incognito is a fresh-session choice, not a retroactive
+      # conversion (which would delete data the holder never opted to lose).
+      {:ok, first} = Visitors.find_or_provision_anon("returning", @network, "1.2.3.4", false)
+      {:ok, second} = Visitors.find_or_provision_anon("returning", @network, "1.2.3.4", true)
+
+      assert second.id == first.id
+      assert second.incognito == false
+    end
+
+    test "incognito: true seeds a gentle 1h upload-TTL preference on the fresh session" do
+      # #363 — an incognito session's attachments default to the shortest
+      # ladder rung (1h) instead of the 24h anon default, seeded as the
+      # visitor's OWN pref so cic bootstraps it into `expire=`. It is a
+      # default, not a cap: the holder can still raise it (no server clamp).
+      {:ok, v} = Visitors.find_or_provision_anon("ghost-ul", @network, "1.2.3.4", true)
+
+      assert UserSettings.get_upload_ttl_seconds({:visitor, v.id}) ==
+               @seeded_incognito_upload_ttl
+    end
+
+    test "incognito: false leaves the upload-TTL preference unset (standard default applies)" do
+      {:ok, v} = Visitors.find_or_provision_anon("normal-ul", @network, "1.2.3.4", false)
+
+      assert UserSettings.get_upload_ttl_seconds({:visitor, v.id}) == nil
+    end
+
+    test "the upload-TTL seed does NOT fire on an existing-row re-login as incognito" do
+      # Mirror of the flag's fresh-only rule: a returning row keeps whatever
+      # pref it had; re-login with incognito: true must not retro-seed it.
+      {:ok, first} = Visitors.find_or_provision_anon("returning-ul", @network, "1.2.3.4", false)
+      {:ok, second} = Visitors.find_or_provision_anon("returning-ul", @network, "1.2.3.4", true)
+
+      assert second.id == first.id
+      assert UserSettings.get_upload_ttl_seconds({:visitor, second.id}) == nil
     end
   end
 
@@ -277,6 +352,56 @@ defmodule Grappa.VisitorsTest do
 
       assert {:ok, %Visitor{}} = Visitors.touch(anon.id)
       assert Repo.reload!(anon).expires_at == before
+    end
+
+    test "#363 incognito visitor → no-op {:ok, visitor}, TTL NOT slid to 48h" do
+      # touch must not push an incognito TTL out to +48h — that would defeat
+      # the 1h linger. The Reaper reconcile owns the incognito clock while a
+      # browser socket is connected; touch just leaves it alone.
+      {:ok, v} = Visitors.find_or_provision_anon("ghost", @network, "1.2.3.4", true)
+      before = v.expires_at
+
+      assert {:ok, %Visitor{}} = Visitors.touch(v.id)
+      assert DateTime.compare(Repo.reload!(v).expires_at, before) == :eq
+    end
+
+    test "#363 incognito visitor past its linger → {:error, :expired} (no resurrection)" do
+      {:ok, v} = Visitors.find_or_provision_anon("ghost2", @network, "1.2.3.4", true)
+      past = DateTime.add(DateTime.utc_now(), -1, :minute)
+      query = from(x in Visitor, where: x.id == ^v.id)
+      Repo.update_all(query, set: [expires_at: past])
+
+      assert {:error, :expired} = Visitors.touch(v.id)
+    end
+  end
+
+  describe "slide_incognito_lingers/1 (#363 reconcile)" do
+    test "slides a connected incognito visitor's TTL forward to ~now+1h" do
+      {:ok, v} = Visitors.find_or_provision_anon("conn-ghost", @network, "1.2.3.4", true)
+      # wind the linger down close to expiry, as if it had been disconnected
+      near = DateTime.add(DateTime.utc_now(), 5, :minute)
+      query = from(x in Visitor, where: x.id == ^v.id)
+      Repo.update_all(query, set: [expires_at: near])
+
+      assert 1 == Visitors.slide_incognito_lingers([v.id])
+
+      assert DateTime.diff(Repo.reload!(v).expires_at, DateTime.utc_now()) in (@ttl_incognito - 5)..(@ttl_incognito + 5)
+    end
+
+    test "leaves a connected NON-incognito visitor untouched" do
+      {:ok, v} = Visitors.find_or_provision_anon("conn-normal", @network, "1.2.3.4", false)
+      before = v.expires_at
+
+      assert 0 == Visitors.slide_incognito_lingers([v.id])
+      assert DateTime.compare(Repo.reload!(v).expires_at, before) == :eq
+    end
+
+    test "leaves a DISCONNECTED incognito visitor untouched (absent from the connected set)" do
+      {:ok, v} = Visitors.find_or_provision_anon("gone-ghost", @network, "1.2.3.4", true)
+      before = v.expires_at
+
+      assert 0 == Visitors.slide_incognito_lingers([])
+      assert DateTime.compare(Repo.reload!(v).expires_at, before) == :eq
     end
   end
 
