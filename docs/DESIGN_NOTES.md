@@ -18723,3 +18723,68 @@ Decisions (with vjt):
   longer the type *source*.
 
 No deploy change beyond the code + the cic bundle.
+
+## 2026-07-26 — #410 leaf-enum codegen consolidation (theme-1 partial cut)
+
+#410 spun out of the #369 architecture review as "finish the half-adopted
+wire codegen migration." Its own text warned six #369 findings failed
+hand-verification; verifying at the source before building overturned two of
+them and re-scoped the rest.
+
+**Source verification (the issue as a lead list, not gospel).**
+- *"~8-10 Wire modules still `kind: String.t()`"* — FALSE. Zero modules.
+  Every `kind:` discriminator is already an atom / atom-union / remote-ref
+  (batch-3 + priors did this). The only textual match was a COMMENT in
+  `scrollback/wire.ex`.
+- *"generated unions exist but nothing imports them"* — PARTIAL. The three
+  auto-emitted `WireXEvent` discriminated unions had 0 consumers, and four
+  leaf-enum consts were orphaned; but Themes/SessionLog/ServerSettings types
+  and the `ERROR_TOKENS_*` consts (via #411) ARE imported.
+- *api.ts ~90 hand-mirrors* (97 `export type`), *narrowers ~1400 lines*
+  (`wireNarrow.ts` 982 + `friendly*Error` 477 = 1459), *10 AdminWire modules
+  outside the glob* (`lib/grappa/**/wire.ex` matches only literal `wire.ex`,
+  never `admin_wire.ex`) — all CONFIRMED.
+- *scrollback `meta` crosses as `Record<string, unknown>`* — CONFIRMED but
+  DELIBERATE. `Scrollback.Meta.t/0` is `%{optional(atom-union) => term()}`,
+  and `meta.ex` explicitly documents that a per-kind discriminated union "is
+  the schema's job, not this map's." NOT overturned — a documented design
+  decision, out of scope.
+
+**Why a partial cut.** "Total consistency or nothing" forbids a half
+migration, and the real remainder (unimported event unions + 97 api.ts
+struct mirrors + 1459 narrower lines + the AdminWire glob) is 2–3 large
+independent seams — not one coherent round. The complete seam that DOES fit
+is the LEAF-enum axis: the closed-set scalar enums cic hand-mirrored in
+parallel with the codegen `as const` arrays. This finishes the #411
+consolidation pattern (which did the same for `ERROR_TOKENS`) for the seven
+remaining leaf enums, to total consistency on that axis.
+
+**The seam (what landed).** Value sets were verified byte-identical at the
+source BEFORE any swap (the #372/#411 "never merge distinct sets" rule):
+- Runtime allowlists derive from the generated const — `VALID_MESSAGE_KINDS`
+  (`SCROLLBACK_MESSAGE_KIND`, deleting the hand `Record<MessageKind,true>`
+  exhaustiveness map — codegen now guarantees completeness), `narrowSeverity`
+  (`WINDOW_COUNTS_SEVERITY`), `VALID_SESSION_LOG_EVENTS` (`SESSION_LOG_EVENT`),
+  and the AdminCredentials auth-method dropdown (`IRCAUTH_FSMAUTH_METHOD`).
+- The five api.ts hand literal unions become re-exports of the generated
+  type: `MessageKind`, `ConnectionState`, `ServicesFlavor`, `DirectoryStatus`,
+  `ServerReplySource`. The now-tautological enum equality asserts in
+  `wireTypesAssert.ts` were removed (an alias can't drift from its own
+  source); struct mirrors keep their pins.
+
+**Convention (propagate this).** Runtime CONSTS are referenced by their
+generated SCREAMING name directly (matching #411's `ERROR_TOKENS_*`).
+Pervasive domain TYPES are re-exported under the DOMAIN name
+(`export type MessageKind = ScrollbackMessageKind`), not the leaky codegen
+alias, per "no leaky abstractions" — one source, familiar call sites. A
+struct-FIELD enum (e.g. `active_host`) has no standalone codegen const, so it
+keeps the `Record<Field,true>` exhaustiveness guard.
+
+**Out of scope (tracked, not done).** The two event-discriminator consts
+(`ADMIN_EVENTS_WIRE_EVENT_KIND`, `SESSION_WIRE_WIRE_EVENT_KIND`) belong to a
+future discriminated-union adoption epic; the ~92 api.ts struct mirrors +
+the AdminWire glob widen belong to a struct-mirror epic; `meta` stays a
+deliberate open map. `CredentialConnectionStateRequest` (`connected|parked`,
+a narrower REQUEST subset) is deliberately NOT merged into
+`ConnectionState`. cic-only: `wireTypes.ts` unchanged, no server `@type`
+touched, wire bytes identical.
