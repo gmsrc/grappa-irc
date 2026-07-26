@@ -1795,6 +1795,12 @@ static void seed_state(struct app *app) {
     if (app->network_count == 0) die("no networks available");
 
     for (size_t i = 0; i < app->network_count; i++) {
+        /* Every network gets a $server window, not just a network with no
+         * channels. It is where server replies land — MOTD, LUSERS, WHOIS,
+         * LINKS, connection-state transitions — and previously those had
+         * nowhere network-scoped to go, so a network with one channel had
+         * its server output land in the channel or nowhere at all. */
+        add_window_ex(app, app->networks[i].slug, "$server", false);
         char *slug = url_encode(app->networks[i].slug);
         char *path = xasprintf("/networks/%s/channels", slug);
         free(slug);
@@ -1803,7 +1809,7 @@ static void seed_state(struct app *app) {
         if (ch.status >= 200 && ch.status < 300) parse_channels(app, app->networks[i].slug, ch.body, ch.body_len);
         free(ch.body);
     }
-    if (app->window_count == 0) add_window(app, app->networks[0].slug, "$server");
+    if (app->window_count) app->current = 0;
 }
 
 static void fetch_scrollback(struct app *app, struct window *w) {
@@ -2111,6 +2117,276 @@ static void copy_members_from_wire(struct app *app, const char *network, const c
     set_window_members(app, network, channel, members, n);
 }
 
+/* ── Reply cards ───────────────────────────────────────────────────────
+ *
+ * Every one of these is a reply to something the user typed. Shottino
+ * pushed the request upstream and then dropped the bundle that came back,
+ * so /whois, /who, /names, /lusers, /banlist, /links, /motd, /info and
+ * /version were all write-only verbs: they did something on the server and
+ * showed the user nothing.
+ *
+ * They render into the $server window of the network that answered, which
+ * is where a terminal client conventionally puts server output — and,
+ * unlike the global log, keeps one network's MOTD out of another's.
+ */
+
+/* One card row, scoped to a network's $server window. */
+static void card(struct app *app, const char *network, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
+static void card(struct app *app, const char *network, const char *fmt, ...) {
+    char body[MAX_LINE];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(body, sizeof(body), fmt, ap);
+    va_end(ap);
+    log_line(app, "[%s/$server] %s", network, body);
+}
+
+/* Skip a NULL/empty field rather than printing "(null)" or a blank row —
+ * a WHOIS against a hidden user is mostly empty and should read as short,
+ * not as a wall of dashes. */
+static void card_field(struct app *app, const char *network, const char *label, const char *value) {
+    if (value && value[0]) card(app, network, "  %-12s %s", label, value);
+}
+
+static void render_whois(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.whois.network;
+    card(app, net, "--- WHOIS %s", ev->u.whois.target);
+    if (ev->u.whois.user || ev->u.whois.host) {
+        card(app, net, "  %-12s %s@%s", "user", ev->u.whois.user ? ev->u.whois.user : "?",
+             ev->u.whois.host ? ev->u.whois.host : "?");
+    }
+    card_field(app, net, "realname", ev->u.whois.realname);
+    card_field(app, net, "account", ev->u.whois.account);
+    if (ev->u.whois.server) {
+        card(app, net, "  %-12s %s%s%s", "server", ev->u.whois.server,
+             ev->u.whois.server_info ? " — " : "",
+             ev->u.whois.server_info ? ev->u.whois.server_info : "");
+    }
+    card_field(app, net, "modes", ev->u.whois.umodes);
+    card_field(app, net, "away", ev->u.whois.away_message);
+    card_field(app, net, "actually", ev->u.whois.actually_host);
+    card_field(app, net, "ip", ev->u.whois.actually_ip);
+
+    if (ev->u.whois.has_idle) {
+        long s = ev->u.whois.idle_seconds;
+        card(app, net, "  %-12s %ldh %ldm %lds", "idle", s / 3600, (s % 3600) / 60, s % 60);
+    }
+    if (ev->u.whois.has_signon) {
+        time_t t = (time_t)ev->u.whois.signon;
+        struct tm tm;
+        char when[64];
+        localtime_r(&t, &tm);
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &tm);
+        card(app, net, "  %-12s %s", "signon", when);
+    }
+
+    /* Flags collapse onto one line — nine separate "yes" rows would bury
+     * the fields that carry actual information. */
+    char flags[256] = "";
+    size_t w = 0;
+    const struct { bool on; const char *name; } flag_list[] = {
+        {ev->u.whois.is_operator, "operator"},
+        {ev->u.whois.is_admin, "admin"},
+        {ev->u.whois.is_services_admin, "services-admin"},
+        {ev->u.whois.is_helper, "helper"},
+        {ev->u.whois.is_chanop, "chanop"},
+        {ev->u.whois.is_registered, "registered"},
+        {ev->u.whois.using_ssl || ev->u.whois.secure, "secure"},
+        {ev->u.whois.is_agent, "agent"},
+        {ev->u.whois.is_java, "java"},
+    };
+    for (size_t i = 0; i < sizeof(flag_list) / sizeof(flag_list[0]); i++) {
+        if (!flag_list[i].on) continue;
+        int n = snprintf(flags + w, sizeof(flags) - w, "%s%s", w ? ", " : "", flag_list[i].name);
+        if (n > 0 && (size_t)n < sizeof(flags) - w) w += (size_t)n;
+    }
+    card_field(app, net, "flags", flags);
+    card_field(app, net, "oper", ev->u.whois.oper_text);
+    card_field(app, net, "cipher", ev->u.whois.secure_cipher);
+    card_field(app, net, "certfp", ev->u.whois.certfp);
+
+    if (ev->u.whois.has_channels && ev->u.whois.channel_count) {
+        /* Channels wrap across rows instead of one row each — an active
+         * user is in dozens and would otherwise fill the buffer. */
+        char line[MAX_LINE] = "";
+        size_t lw = 0;
+        bool first_row = true;
+        for (size_t i = 0; i < ev->u.whois.channel_count; i++) {
+            const char *ch = wire_string_at(ev->u.whois.channels, i);
+            if (!ch) continue;
+            if (lw && lw + strlen(ch) + 1 >= 68) {
+                /* Only the first row carries the label; continuation rows
+                 * align under it so the block reads as one field. */
+                card(app, net, "  %-12s %s", first_row ? "channels" : "", line);
+                first_row = false;
+                line[0] = '\0';
+                lw = 0;
+            }
+            int n = snprintf(line + lw, sizeof(line) - lw, "%s%s", lw ? " " : "", ch);
+            if (n > 0 && (size_t)n < sizeof(line) - lw) lw += (size_t)n;
+        }
+        if (lw) card(app, net, "  %-12s %s", first_row ? "channels" : "", line);
+    }
+    for (size_t i = 0; i < ev->u.whois.extra_count; i++) {
+        struct wire_whois_extra x;
+        if (wire_whois_extra_at(ev->u.whois.extra_lines, i, &x))
+            card(app, net, "  %-12s %s", "", x.text);
+    }
+}
+
+static void render_whowas(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.whowas.network;
+    if (ev->u.whowas.not_found) {
+        card(app, net, "--- WHOWAS %s: no such nick in history", ev->u.whowas.target);
+        return;
+    }
+    card(app, net, "--- WHOWAS %s", ev->u.whowas.target);
+    if (ev->u.whowas.user || ev->u.whowas.host)
+        card(app, net, "  %-12s %s@%s", "user", ev->u.whowas.user ? ev->u.whowas.user : "?",
+             ev->u.whowas.host ? ev->u.whowas.host : "?");
+    card_field(app, net, "realname", ev->u.whowas.realname);
+    card_field(app, net, "server", ev->u.whowas.server);
+    card_field(app, net, "last seen", ev->u.whowas.logoff_time);
+}
+
+static void render_who(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.who_reply.network;
+    card(app, net, "--- WHO %s (%zu)", ev->u.who_reply.target, ev->u.who_reply.user_count);
+    for (size_t i = 0; i < ev->u.who_reply.user_count; i++) {
+        struct wire_who_user u;
+        if (!wire_who_user_at(ev->u.who_reply.users, i, &u)) continue;
+        card(app, net, "  %-16s %-4s %s@%s%s%s", u.nick, u.modes ? u.modes : "",
+             u.user ? u.user : "?", u.host ? u.host : "?", u.realname ? " — " : "",
+             u.realname ? u.realname : "");
+    }
+    if (ev->u.who_reply.user_count == 0) card(app, net, "  (no matches)");
+}
+
+static void render_names(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.names_reply.network;
+    card(app, net, "--- NAMES %s (%zu)", ev->u.names_reply.channel,
+         ev->u.names_reply.member_count);
+    /* Wrapped columns, sigils resolved from this network's PREFIX. */
+    char line[MAX_LINE] = "";
+    size_t lw = 0;
+    for (size_t i = 0; i < ev->u.names_reply.member_count; i++) {
+        struct wire_member m;
+        if (!wire_member_at(ev->u.names_reply.members, i, &m)) continue;
+        char modes[8] = "";
+        for (size_t j = 0, w = 0; j < m.mode_count && w + 1 < sizeof(modes); j++) {
+            const char *mode = wire_string_at(m.modes, j);
+            if (mode && mode[0]) { modes[w++] = mode[0]; modes[w] = '\0'; }
+        }
+        char sigil = member_sigil(app, net, modes);
+        char entry[MAX_CHANNEL + 2];
+        snprintf(entry, sizeof(entry), "%c%s", sigil ? sigil : ' ', m.nick);
+        if (lw && lw + strlen(entry) + 1 >= 70) {
+            card(app, net, "  %s", line);
+            line[0] = '\0';
+            lw = 0;
+        }
+        int n = snprintf(line + lw, sizeof(line) - lw, "%s%s", lw ? " " : "", entry);
+        if (n > 0 && (size_t)n < sizeof(line) - lw) lw += (size_t)n;
+    }
+    if (lw) card(app, net, "  %s", line);
+    /* NAMES doubles as a roster refresh for the channel's member pane. */
+    copy_members_from_wire(app, net, ev->u.names_reply.channel, ev->u.names_reply.members,
+                           ev->u.names_reply.member_count);
+}
+
+static void render_lusers(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.lusers.network;
+    card(app, net, "--- LUSERS");
+    const struct { int idx; const char *label; long value; } rows[] = {
+        {LUSERS_TOTAL_USERS, "users", ev->u.lusers.total_users},
+        {LUSERS_INVISIBLE, "invisible", ev->u.lusers.invisible},
+        {LUSERS_OPERATORS, "operators", ev->u.lusers.operators},
+        {LUSERS_SERVERS, "servers", ev->u.lusers.servers},
+        {LUSERS_UNKNOWN_CONNECTIONS, "unknown", ev->u.lusers.unknown_connections},
+        {LUSERS_CHANNELS_FORMED, "channels", ev->u.lusers.channels_formed},
+        {LUSERS_LOCAL_CLIENTS, "local", ev->u.lusers.local_clients},
+        {LUSERS_LOCAL_SERVERS, "local srv", ev->u.lusers.local_servers},
+        {LUSERS_CURRENT_LOCAL, "cur local", ev->u.lusers.current_local},
+        {LUSERS_MAX_LOCAL, "max local", ev->u.lusers.max_local},
+        {LUSERS_CURRENT_GLOBAL, "cur global", ev->u.lusers.current_global},
+        {LUSERS_MAX_GLOBAL, "max global", ev->u.lusers.max_global},
+    };
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        /* An absent count renders as an em dash rather than 0 — "we were
+         * not told" and "there are none" are different facts. */
+        if (ev->u.lusers.has[rows[i].idx]) card(app, net, "  %-12s %ld", rows[i].label, rows[i].value);
+        else card(app, net, "  %-12s —", rows[i].label);
+    }
+}
+
+static void render_banlist(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.banlist.network;
+    card(app, net, "--- BANLIST %s (%zu)", ev->u.banlist.channel, ev->u.banlist.entry_count);
+    for (size_t i = 0; i < ev->u.banlist.entry_count; i++) {
+        struct wire_banlist_entry b;
+        if (!wire_banlist_entry_at(ev->u.banlist.entries, i, &b)) continue;
+        char when[64] = "";
+        if (b.set_ts) {
+            /* set_ts is a unix-second STRING on the wire. */
+            time_t t = (time_t)strtol(b.set_ts, NULL, 10);
+            if (t > 0) {
+                struct tm tm;
+                localtime_r(&t, &tm);
+                strftime(when, sizeof(when), "%Y-%m-%d", &tm);
+            }
+        }
+        card(app, net, "  %-32s %s%s%s", b.mask, b.setter ? b.setter : "?", when[0] ? " " : "",
+             when);
+    }
+    if (ev->u.banlist.entry_count == 0) card(app, net, "  (no bans set)");
+}
+
+static void render_links(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.links.network;
+    card(app, net, "--- LINKS (%zu)", ev->u.links.entry_count);
+    if (ev->u.links.entry_count == 0) {
+        /* An empty topology is the restricted/hidden signal, not an error
+         * — say so rather than leaving a bare count of zero. */
+        card(app, net, "  (topology hidden or restricted by the server)");
+        return;
+    }
+    for (size_t i = 0; i < ev->u.links.entry_count; i++) {
+        struct wire_links_entry l;
+        if (!wire_links_entry_at(ev->u.links.entries, i, &l)) continue;
+        /* Indent by hop count so the tree shape is visible in a terminal
+         * the way cicchetto's radial map shows it graphically. */
+        int depth = l.has_hopcount && l.hopcount > 0 && l.hopcount < 16 ? (int)l.hopcount : 0;
+        card(app, net, "  %*s%s%s%s", depth * 2, "", l.server, l.description ? " — " : "",
+             l.description ? l.description : "");
+    }
+}
+
+static void render_server_reply(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.server_reply.network;
+    const char *label = ev->u.server_reply.source == REPLY_INFO
+                            ? "INFO"
+                            : (ev->u.server_reply.source == REPLY_VERSION ? "VERSION" : "MOTD");
+    card(app, net, "--- %s", label);
+    for (size_t i = 0; i < ev->u.server_reply.line_count; i++) {
+        const char *line = wire_string_at(ev->u.server_reply.lines, i);
+        if (line) card(app, net, "  %s", line);
+    }
+}
+
+static void render_channel_modes(struct app *app, const struct wire_event *ev) {
+    char modes[128] = "+";
+    size_t w = 1;
+    for (size_t i = 0; i < ev->u.channel_modes.mode_count && w + 1 < sizeof(modes); i++) {
+        const char *m = wire_string_at(ev->u.channel_modes.modes, i);
+        if (m && m[0]) { modes[w++] = m[0]; modes[w] = '\0'; }
+    }
+    if (w == 1) return; /* no modes set — nothing worth a row */
+    log_line(app, "[%s/%s] --- channel modes %s", ev->u.channel_modes.network,
+             ev->u.channel_modes.channel, modes);
+}
+
 static void handle_wire_event(struct app *app, const struct wire_event *ev) {
     switch (ev->kind) {
     case WIRE_MESSAGE:
@@ -2278,27 +2554,52 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
                  ev->u.invite_ack.peer, ev->u.invite_ack.channel);
         break;
 
+    /* ── Reply cards ────────────────────────────────────────────────── */
+    case WIRE_WHOIS_BUNDLE:   render_whois(app, ev); break;
+    case WIRE_WHOWAS_BUNDLE:  render_whowas(app, ev); break;
+    case WIRE_WHO_REPLY:      render_who(app, ev); break;
+    case WIRE_NAMES_REPLY:    render_names(app, ev); break;
+    case WIRE_LUSERS_BUNDLE:  render_lusers(app, ev); break;
+    case WIRE_BANLIST_BUNDLE: render_banlist(app, ev); break;
+    case WIRE_LINKS_BUNDLE:   render_links(app, ev); break;
+    case WIRE_SERVER_REPLY:   render_server_reply(app, ev); break;
+    case WIRE_CHANNEL_MODES_CHANGED: render_channel_modes(app, ev); break;
+
+    case WIRE_PRESENCE_CHANGED: {
+        /* A watched nick coming or going. `initial` marks the snapshot
+         * edge the server sends on (re)subscribe — reporting those would
+         * announce "bob is online" for everyone on the list at every
+         * reconnect, so they seed state silently. */
+        if (ev->u.presence_changed.initial) break;
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_id_locked(app, ev->u.presence_changed.network_id);
+        const char *slug = n ? n->slug : NULL;
+        pthread_mutex_unlock(&app->lock);
+        if (slug)
+            card(app, slug, "--- %s is now %s", ev->u.presence_changed.nick,
+                 ev->u.presence_changed.online ? "online" : "offline");
+        break;
+    }
+
+    case WIRE_PRESENCE_ERROR: {
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_id_locked(app, ev->u.presence_error.network_id);
+        const char *slug = n ? n->slug : NULL;
+        pthread_mutex_unlock(&app->lock);
+        if (slug) card(app, slug, "--- watch list full: %s", ev->u.presence_error.detail);
+        break;
+    }
+
     case WIRE_READ_CURSOR_SET:
     case WIRE_WINDOW_COUNTS:
-    case WIRE_CHANNEL_MODES_CHANGED:
     case WIRE_CHANNEL_CREATED:
     case WIRE_CHANNELS_CHANGED:
     case WIRE_MENTIONS_BUNDLE:
     case WIRE_NOTIFY_LIST:
-    case WIRE_PRESENCE_CHANGED:
-    case WIRE_PRESENCE_ERROR:
     case WIRE_PRESENCE_SNAPSHOT:
     case WIRE_SUPPORTED_UMODES_CHANGED:
-    case WIRE_WHOIS_BUNDLE:
-    case WIRE_NAMES_REPLY:
-    case WIRE_WHO_REPLY:
-    case WIRE_SERVER_REPLY:
     case WIRE_BUNDLE_HASH:
     case WIRE_SERVER_SETTINGS_CHANGED:
-    case WIRE_LUSERS_BUNDLE:
-    case WIRE_WHOWAS_BUNDLE:
-    case WIRE_BANLIST_BUNDLE:
-    case WIRE_LINKS_BUNDLE:
     case WIRE_ARCHIVE_CHANGED:
     case WIRE_ARCHIVE_PURGED:
     case WIRE_DIRECTORY_PROGRESS:
