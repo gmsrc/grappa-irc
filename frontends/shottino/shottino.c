@@ -3480,16 +3480,22 @@ static void ws_pump(struct app *app) {
  * an image stay blank in its model, so it leaves them alone.
  *
  * Caller holds app->lock. */
-static void draw_inline_media(struct inline_media *m, int y, int x, int max_rows) {
+static void draw_inline_media(struct inline_media *m, int y, int x, int max_rows,
+                              int max_cols) {
     if (m->state != IM_READY || m->rows <= 0) return;
+    /* Clamp BOTH axes. The cell box was fitted when the row was first
+     * measured; a terminal resize since then leaves it stale, and an
+     * image that overruns its box writes over the member pane or past
+     * the scroll region. */
     int rows = m->rows > max_rows ? max_rows : m->rows;
-    if (rows <= 0) return;
+    int cols = m->cols > max_cols ? max_cols : m->cols;
+    if (rows <= 0 || cols <= 0) return;
 
     if (m->rgb) {
         /* Half blocks: two image rows per cell, upper glyph in the top
          * pixel's colour over the bottom pixel's. */
         for (int r = 0; r < rows; r++) {
-            for (int c = 0; c < m->cols; c++) {
+            for (int c = 0; c < cols; c++) {
                 const unsigned char *top = m->rgb + (((size_t)(r * 2) * m->cols) + c) * 3;
                 const unsigned char *bot = m->rgb + (((size_t)(r * 2 + 1) * m->cols) + c) * 3;
                 long tv = ((long)top[0] << 16) | ((long)top[1] << 8) | top[2];
@@ -3507,7 +3513,7 @@ static void draw_inline_media(struct inline_media *m, int y, int x, int max_rows
         /* Reserve the cells so ncurses does not paint over the picture,
          * then place it. Re-emitted only when the position changed. */
         for (int r = 0; r < rows; r++)
-            for (int c = 0; c < m->cols; c++) mvaddch(y + r, x + c, ' ');
+            for (int c = 0; c < cols; c++) mvaddch(y + r, x + c, ' ');
         if (!m->drawn || m->drawn_y != y || m->drawn_x != x) {
             refresh();
             printf("\033[%d;%dH", y + 1, x + 1); /* 1-based cursor address */
@@ -3518,6 +3524,32 @@ static void draw_inline_media(struct inline_media *m, int y, int x, int max_rows
             m->drawn_x = x;
         }
     }
+}
+
+/* Rows a message's image adds, by state.
+ *
+ * ONE definition, used by BOTH the measuring pass (which sizes the scroll
+ * region) and the draw pass (which consumes the rows). They disagreed:
+ * measuring reserved the full picture height for an image that was still
+ * LOADING, while drawing spent a single line on the placeholder. That
+ * inflated total_visible_lines, which inflated the scroll offset, which
+ * made the draw loop skip rows that should have been on screen — a chat
+ * window that goes blank and stays blank while a decode is slow or
+ * wedged. Two numbers that must agree belong in one function.
+ *
+ * Caller holds app->lock, which draw() holds for the whole frame, so a
+ * worker cannot flip the state between the two passes. */
+static int media_extra_rows(const struct inline_media *m) {
+    if (!m) return 0;
+    switch (m->state) {
+    case IM_READY:
+        return m->rows;
+    case IM_IDLE:     /* promoted to FETCHING by the draw pass */
+    case IM_FETCHING: /* "[loading image…]" */
+    case IM_FAILED:   /* "[image could not be decoded…]" */
+        return 1;
+    }
+    return 0;
 }
 
 /* One-character marker for a non-joined window state. A joined window (or
@@ -3738,12 +3770,19 @@ static void draw(struct app *app) {
     size_t visible[LOG_LINES];
     int heights[LOG_LINES];
     size_t visible_count = 0;
+    static int text_heights[LOG_LINES];
     int total_visible_lines = 0;
     for (size_t i = 0; i < app->log_count; i++) {
         if (strncmp(app->log[i], "[", 1) != 0 || strncmp(app->log[i], wanted_prefix, strlen(wanted_prefix)) == 0) {
             visible[visible_count] = i;
             heights[visible_count] = message_display_lines(app->log[i], main_w - 2);
             if (heights[visible_count] < 1) heights[visible_count] = 1;
+            /* The TEXT height, kept apart from the total below. Conflating
+             * the two put the image after text+image rows instead of
+             * after the text, and double-counted it in used_lines — which
+             * pushed later rows past the scroll region and over the input
+             * box, leaving the client looking dead. */
+            text_heights[visible_count] = heights[visible_count];
             /* An image reserves rows UNDER its message line. The height is
              * known before the picture is decoded (the cell box is chosen
              * from the available width), so the layout does not jump when
@@ -3759,7 +3798,7 @@ static void draw(struct app *app) {
                      * close enough that the reserved box rarely changes. */
                     media_fit_cells(4, 3, main_w - 4, box_rows, &m->cols, &m->rows);
                 }
-                if (m->state != IM_FAILED) heights[visible_count] += m->rows;
+                heights[visible_count] += media_extra_rows(m);
             }
             total_visible_lines += heights[visible_count];
             visible_count++;
@@ -3781,7 +3820,7 @@ static void draw(struct app *app) {
             continue;
         }
         int available = scroll_h - used_lines;
-        int draw_lines = heights[vi];
+        int draw_lines = text_heights[vi];
         if (draw_lines > available) draw_lines = available;
         if (draw_lines <= 0) break;
         int msg_y = scroll_y + used_lines;
@@ -3826,16 +3865,20 @@ static void draw(struct app *app) {
             }
             int img_y = msg_y + draw_lines;
             int room = scroll_y + scroll_h - img_y;
-            if (m->state == IM_READY && room > 0) {
-                draw_inline_media(m, img_y, main_x + 2, room);
-                used_lines += m->rows < room ? m->rows : room;
-            } else if (m->state == IM_FETCHING && room > 0) {
-                draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM, "  [loading image…]");
-                used_lines += 1;
-            } else if (m->state == IM_FAILED && room > 0) {
-                draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM,
-                          "  [image could not be decoded — /open to view externally]");
-                used_lines += 1;
+            /* Spend exactly what the measuring pass reserved, clamped to
+             * the room actually left. */
+            int want = media_extra_rows(m);
+            int spend = want < room ? want : room;
+            if (spend > 0) {
+                if (m->state == IM_READY) {
+                    draw_inline_media(m, img_y, main_x + 2, spend, main_w - 4);
+                } else if (m->state == IM_FAILED) {
+                    draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM,
+                              "  [image could not be decoded — /open to view externally]");
+                } else {
+                    draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM, "  [loading image…]");
+                }
+                used_lines += spend;
             }
         }
         used_lines += draw_lines;
