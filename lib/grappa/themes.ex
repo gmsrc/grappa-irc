@@ -53,9 +53,9 @@ defmodule Grappa.Themes do
       Grappa.Subject,
       Grappa.Sys.HardenedCmd,
       Grappa.Uploads,
-      Grappa.UserSettings
+      Grappa.UserSettings,
+      Grappa.Visitors.Visitor
     ],
-    dirty_xrefs: [Grappa.Visitors.Visitor],
     exports: [Theme, TokenModel, Wire]
 
   import Ecto.Query

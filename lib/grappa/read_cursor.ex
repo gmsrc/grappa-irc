@@ -66,16 +66,15 @@ defmodule Grappa.ReadCursor do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.IRC, Grappa.PubSub, Grappa.Repo, Grappa.Scrollback],
+    deps: [Grappa.Accounts, Grappa.IRC, Grappa.PubSub, Grappa.Repo, Grappa.Scrollback, Grappa.Visitors.Visitor],
     # `Networks.Network` is referenced ONLY as a schema — the
     # `belongs_to :network` FK association + the `join: n in Network`
     # slug lookup in `bulk_for_subject/1` (field access, no Networks
     # context call). Demoted from a real dep to a struct-only dirty xref
     # (#373) so `Session → ReadCursor → Networks → Session` doesn't close
     # once Session depends on ReadCursor for `rename_dm_peer/4`; mirrors
-    # `Grappa.Scrollback` / `Grappa.QueryWindows`. `Visitors.Visitor` is
-    # the `belongs_to :visitor` FK, same rationale.
-    dirty_xrefs: [Grappa.Networks.Network, Grappa.Visitors.Visitor],
+    # `Grappa.Scrollback` / `Grappa.QueryWindows`.
+    dirty_xrefs: [Grappa.Networks.Network],
     exports: [Cursor, Wire]
 
   import Ecto.Query

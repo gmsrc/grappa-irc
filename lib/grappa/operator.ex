@@ -48,8 +48,11 @@ defmodule Grappa.Operator do
 
   Deps cover the three lib/ contexts whose live state the verbs read or
   mutate. The `Reaper` module sits in its own top-level boundary
-  (`Grappa.Visitors.Reaper`) so it shows up explicitly in the dep list.
-  `Registry` is Erlang stdlib — no boundary entry needed.
+  (`Grappa.Visitors.Reaper`) so it shows up explicitly in the dep list;
+  the `Visitor` schema likewise sits in its own top-level boundary
+  (`Grappa.Visitors.Visitor`, #415) — the verbs match `%Visitor{}` and
+  spec `Visitor.t()`. `Registry` is Erlang stdlib — no boundary entry
+  needed.
   """
 
   use Boundary,
@@ -66,7 +69,8 @@ defmodule Grappa.Operator do
       # orchestrator, same as Bootstrap + NetworksController.
       Grappa.SpawnOrchestrator,
       Grappa.Visitors,
-      Grappa.Visitors.Reaper
+      Grappa.Visitors.Reaper,
+      Grappa.Visitors.Visitor
     ]
 
   alias Grappa.{

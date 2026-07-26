@@ -73,9 +73,9 @@ defmodule Grappa.Vhosts do
       Grappa.OutboundV6Pool,
       Grappa.Repo,
       Grappa.Subject,
-      Grappa.UserSettings
+      Grappa.UserSettings,
+      Grappa.Visitors.Visitor
     ],
-    dirty_xrefs: [Grappa.Visitors.Visitor],
     exports: [Vhost, Grant, AdminWire]
 
   import Ecto.Query

@@ -76,9 +76,9 @@ defmodule Grappa.Push do
       Grappa.Scrollback,
       Grappa.Subject,
       Grappa.UserSettings,
+      Grappa.Visitors.Visitor,
       Grappa.WSPresence
     ],
-    dirty_xrefs: [Grappa.Visitors.Visitor],
     exports: [BadgeSource, Payload, Sender, Subscription, Triggers]
 
   import Ecto.Query

@@ -46,7 +46,7 @@ defmodule Grappa.Visitors.Reaper do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.AdminEvents, Grappa.Networks, Grappa.Session, Grappa.Visitors]
+    deps: [Grappa.AdminEvents, Grappa.Networks, Grappa.Session, Grappa.Visitors, Grappa.Visitors.Visitor]
 
   use GenServer
 

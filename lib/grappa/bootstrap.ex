@@ -149,7 +149,8 @@ defmodule Grappa.Bootstrap do
       Grappa.Session,
       Grappa.SpawnOrchestrator,
       Grappa.Vhosts,
-      Grappa.Visitors
+      Grappa.Visitors,
+      Grappa.Visitors.Visitor
     ]
 
   use Task, restart: :transient

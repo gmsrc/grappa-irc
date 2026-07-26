@@ -52,6 +52,7 @@ defmodule GrappaWeb do
         Grappa.Vhosts,
         Grappa.Visitors,
         Grappa.Visitors.ShareTokens,
+        Grappa.Visitors.Visitor,
         Grappa.WindowCounts,
         Grappa.WSPresence,
         GrappaWeb.BodyLimit

@@ -30,8 +30,7 @@ defmodule Grappa.Subject do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts],
-    dirty_xrefs: [Grappa.Visitors.Visitor]
+    deps: [Grappa.Accounts, Grappa.Visitors.Visitor]
 
   import Ecto.Query
 

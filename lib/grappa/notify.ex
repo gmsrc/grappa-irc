@@ -76,13 +76,12 @@ defmodule Grappa.Notify do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.IRC, Grappa.PubSub, Grappa.Repo, Grappa.Subject],
+    deps: [Grappa.Accounts, Grappa.IRC, Grappa.PubSub, Grappa.Repo, Grappa.Subject, Grappa.Visitors.Visitor],
     # Networks.Network is an FK-reference-only xref (belongs_to + the
     # existence pre-check), NOT a full dep: a `deps:` edge would close
     # the cycle Session -> Notify -> Networks -> LiveIntrospection ->
     # Session (Session reads the notify list at the end-of-MOTD arm).
-    # Same treatment as Visitors.Visitor here and in QueryWindows.
-    dirty_xrefs: [Grappa.Networks.Network, Grappa.Visitors.Visitor],
+    dirty_xrefs: [Grappa.Networks.Network],
     exports: [Entry, Wire]
 
   import Ecto.Query

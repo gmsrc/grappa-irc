@@ -33,23 +33,18 @@ defmodule Grappa.Scrollback do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.IRC, Grappa.Repo],
+    deps: [Grappa.Accounts, Grappa.IRC, Grappa.Repo, Grappa.Visitors.Visitor],
     # `Networks.Network` is referenced by `Scrollback.Message` (the
     # `belongs_to :network` association) and `Scrollback.Wire` (the
     # `%Network{slug: _}` pattern that A1+A26 made the wire-shape
-    # contract). `Visitors.Visitor` is referenced by `Scrollback.Message`
-    # (the Task 4 `belongs_to :visitor` association). Declaring those
-    # refs as dirty xrefs lets two cycle inversions land without
-    # transitive cycles: Cluster 2's Networks → Session (which would
-    # close `Scrollback → Networks → Session → Scrollback`) and the
-    # visitor-auth cluster's Visitors → Networks (which would close
-    # `Scrollback → Visitors → Networks → Scrollback` and
-    # `Scrollback → Visitors → Networks → Session → Scrollback`).
-    # The struct-only nature of both deps means we lose Boundary
-    # checks on a use case Boundary couldn't help with anyway
-    # (struct field access doesn't go through any function call we'd
-    # want to gate); the cost is intentional.
-    dirty_xrefs: [Grappa.Networks.Network, Grappa.Visitors.Visitor],
+    # contract). Declaring that ref a dirty xref lets Cluster 2's
+    # Networks → Session cycle inversion land without a transitive cycle
+    # (which would otherwise close
+    # `Scrollback → Networks → Session → Scrollback`). The struct-only
+    # nature of the dep means we lose Boundary checks on a use case
+    # Boundary couldn't help with anyway (struct field access doesn't go
+    # through any function call we'd want to gate); the cost is intentional.
+    dirty_xrefs: [Grappa.Networks.Network],
     exports: [Message, Wire]
 
   import Ecto.Query

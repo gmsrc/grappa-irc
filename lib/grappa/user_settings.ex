@@ -74,8 +74,7 @@ defmodule Grappa.UserSettings do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.IRC, Grappa.Repo, Grappa.Subject],
-    dirty_xrefs: [Grappa.Visitors.Visitor],
+    deps: [Grappa.Accounts, Grappa.IRC, Grappa.Repo, Grappa.Subject, Grappa.Visitors.Visitor],
     exports: [Settings]
 
   import Ecto.Query

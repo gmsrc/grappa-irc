@@ -15,7 +15,7 @@ defmodule Grappa.ChannelDirectory do
     # `Grappa.IRC` — `Wire.mark_featured/2` folds directory names via
     # `Identifier.canonical_channel/1` (rfc1459, #364) to key them against
     # the canonical featured set.
-    deps: [Grappa.Accounts, Grappa.IRC, Grappa.Repo, Grappa.Subject],
+    deps: [Grappa.Accounts, Grappa.IRC, Grappa.Repo, Grappa.Subject, Grappa.Visitors.Visitor],
     # `Networks.Network` is referenced ONLY by `Entry`'s
     # `belongs_to :network` (struct/schema access — no `Grappa.Networks`
     # function call anywhere in this boundary). A full `Grappa.Networks`
@@ -23,11 +23,11 @@ defmodule Grappa.ChannelDirectory do
     # `ChannelDirectory → Networks → Session → ChannelDirectory` the moment
     # `Session.Server` drives the refresh lifecycle (#84 —
     # `replace_start/2` / `ingest/3` / `finalize/2`). Mirror of the
-    # `Networks.Network` dirty_xref in `Grappa.Scrollback` (and the
-    # `Visitors.Visitor` one beside it): schema-only access whose Boundary
-    # checks we lose on a use case Boundary couldn't gate anyway (struct
-    # field access goes through no function we'd want to police). Intentional.
-    dirty_xrefs: [Grappa.Networks.Network, Grappa.Visitors.Visitor],
+    # `Networks.Network` dirty_xref in `Grappa.Scrollback`: schema-only
+    # access whose Boundary checks we lose on a use case Boundary couldn't
+    # gate anyway (struct field access goes through no function we'd want
+    # to police). Intentional.
+    dirty_xrefs: [Grappa.Networks.Network],
     exports: [Entry, Wire]
 
   import Ecto.Query

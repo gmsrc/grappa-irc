@@ -62,9 +62,10 @@ defmodule Grappa.Visitors do
       Grappa.Session,
       Grappa.SpawnOrchestrator,
       Grappa.Subject,
-      Grappa.Themes
+      Grappa.Themes,
+      Grappa.Visitors.Visitor
     ],
-    exports: [AdminWire, Login, SessionPlan, Visitor, Wire]
+    exports: [AdminWire, Login, SessionPlan, Wire]
 
   import Ecto.Query
 

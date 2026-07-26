@@ -17,7 +17,7 @@ defmodule Grappa.AuthFixtures do
   """
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.Networks, Grappa.Repo, Grappa.Session, Grappa.Visitors]
+    deps: [Grappa.Accounts, Grappa.Networks, Grappa.Repo, Grappa.Session, Grappa.Visitors, Grappa.Visitors.Visitor]
 
   alias Grappa.{Accounts, Accounts.Session, Accounts.User, Networks, Repo}
   alias Grappa.Networks.{Credential, Credentials, Network, Server, Servers, SessionPlan}

@@ -81,9 +81,9 @@ defmodule Grappa.QueryWindows do
     * `Grappa.Accounts` (via `User` association — FK reference only).
     * `Grappa.PubSub` — `Topic.user/1` for the `query_windows_list` broadcast.
 
-  Plus two struct-only **dirty xrefs** (schema refs, not real deps — see
-  the `use Boundary` note): `Grappa.Networks.Network` and
-  `Grappa.Visitors.Visitor`, each a `belongs_to` FK association.
+  Plus one struct-only **dirty xref** (schema ref, not a real dep — see
+  the `use Boundary` note): `Grappa.Networks.Network`, a `belongs_to` FK
+  association.
 
   The `Window` schema module is internal; callers receive `%Window{}`
   structs by type but MUST NOT alias or import the schema module
@@ -92,7 +92,7 @@ defmodule Grappa.QueryWindows do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.IRC, Grappa.PubSub, Grappa.Repo, Grappa.Subject],
+    deps: [Grappa.Accounts, Grappa.IRC, Grappa.PubSub, Grappa.Repo, Grappa.Subject, Grappa.Visitors.Visitor],
     # `Networks.Network` is referenced ONLY as a schema — the
     # `belongs_to :network` association + the FK-existence `Repo.exists?`
     # query in `check_exists/4`. Declared a dirty xref (NOT a real dep),
@@ -101,7 +101,7 @@ defmodule Grappa.QueryWindows do
     # `Session → QueryWindows → Networks → Session` once #373 made
     # Session depend on QueryWindows (for `rename/4` on a peer NICK).
     # The struct-only reference carries no behaviour Boundary could gate.
-    dirty_xrefs: [Grappa.Networks.Network, Grappa.Visitors.Visitor],
+    dirty_xrefs: [Grappa.Networks.Network],
     exports: [Window, Wire]
 
   import Ecto.Query

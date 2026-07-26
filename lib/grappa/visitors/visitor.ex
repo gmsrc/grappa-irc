@@ -44,7 +44,22 @@ defmodule Grappa.Visitors.Visitor do
     system user (`Grappa.Themes.rehome_visitor_published_to_system/1`, run
     inside `Grappa.Visitors.delete/1`'s txn BEFORE the delete) so gallery
     contributions survive — #299.
+
+  ## Boundary
+
+  `top_level?: true` — the identity schema opts OUT of `Grappa.Visitors`'s
+  orchestration boundary into its own leaf boundary (`deps: []`). The many
+  contexts that reference `%Visitor{}` / `Visitor.t()` in a
+  `belongs_to :visitor` FK or a `{:visitor, _}` subject type may now depend
+  on it WITHOUT taking a dep on the heavy `Grappa.Visitors` orchestration
+  verbs (a `Grappa.Visitors` edge would close cycles via
+  Accounts/Networks/Themes/Subject). #415 — this retired the twelve
+  `dirty_xrefs: [Grappa.Visitors.Visitor]` waivers. Mirror of the
+  `Grappa.Visitors.Reaper` / `Grappa.Visitors.ShareTokens` top-level
+  carve-outs.
   """
+
+  use Boundary, top_level?: true, deps: []
 
   use Ecto.Schema
   import Ecto.Changeset

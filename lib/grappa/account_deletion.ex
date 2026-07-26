@@ -53,7 +53,7 @@ defmodule Grappa.AccountDeletion do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.Networks, Grappa.Session, Grappa.Visitors]
+    deps: [Grappa.Accounts, Grappa.Networks, Grappa.Session, Grappa.Visitors, Grappa.Visitors.Visitor]
 
   alias Grappa.{Accounts, Session, Visitors}
   alias Grappa.Accounts.User
