@@ -49,6 +49,7 @@ defmodule Grappa.Networks do
       Grappa.Repo,
       Grappa.Scrollback,
       Grappa.Session,
+      Grappa.Subject,
       Grappa.Vault,
       Grappa.Vhosts,
       Grappa.Wire.Time
@@ -836,12 +837,16 @@ defmodule Grappa.Networks do
   defp subject_of(%Credential{visitor_id: vid}) when is_binary(vid), do: {:visitor, vid}
 
   # The user-rooted PubSub topic segment for a credential's subject —
-  # `user.name` for users, `"visitor:" <> visitor_id` for visitors
-  # (the SAME label `Session`/`UserSocket`/`Visitors.SessionPlan` use).
-  # A visitor needs no `%Visitor{}` load — the id alone builds the label.
+  # the shared `Grappa.Subject.label/1` codec (#413): `user.name` for
+  # users, `"visitor:" <> visitor_id` for visitors (the SAME label
+  # `UserSocket`/`Visitors.SessionPlan`/`GrappaWeb.Subject` use). A
+  # visitor needs no `%Visitor{}` load — the id alone builds the label.
   @spec subject_label_of(Credential.t()) :: String.t()
-  defp subject_label_of(%Credential{user: %User{name: name}}) when is_binary(name), do: name
-  defp subject_label_of(%Credential{visitor_id: vid}) when is_binary(vid), do: "visitor:" <> vid
+  defp subject_label_of(%Credential{user: %User{name: name}}) when is_binary(name),
+    do: Grappa.Subject.label({:user, name})
+
+  defp subject_label_of(%Credential{visitor_id: vid}) when is_binary(vid),
+    do: Grappa.Subject.label({:visitor, vid})
 
   # Preload the network (both subjects) + the User struct (user
   # credentials only — a visitor credential needs no struct load; its

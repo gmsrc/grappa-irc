@@ -20,19 +20,6 @@ defmodule GrappaWeb.Subject do
   alias Grappa.Accounts.User
   alias Grappa.Visitors.Visitor
 
-  # Single source of the visitor topic-label prefix (bucket I web/S7).
-  # `topic_label/1` builds it, `from_topic_label/1` strips it — both
-  # reference this one literal so the load-bearing routing invariant
-  # ("user → `user.name`, visitor → `"visitor:" <> id`") can never fork
-  # between the producing and consuming directions.
-  #
-  # Scope note: this single-sources the WEB boundary. The `Grappa` core
-  # boundary derives the same label independently (`Networks`,
-  # `Visitors.SessionPlan`) — it MUST, since the Boundary graph runs
-  # web → core and `GrappaWeb.Subject` is unreachable from core. A
-  # label-shape change touches both this module and the core sites.
-  @visitor_prefix "visitor:"
-
   @typedoc "Web-layer subject — carries the loaded struct."
   @type t :: {:user, User.t()} | {:visitor, Visitor.t()}
 
@@ -46,14 +33,16 @@ defmodule GrappaWeb.Subject do
 
   @doc """
   Derive the user_name segment of a `Grappa.PubSub.Topic` from a
-  web-layer subject (bucket I web/S7 — single source).
+  web-layer subject.
 
-  Users map to their bare `user.name`; visitors map to
-  `"visitor:" <> visitor.id`. This MUST match the `:user_name` assign
-  `GrappaWeb.UserSocket.connect/3` installs at connect time — every
-  cross-device broadcast (`ReadCursor.broadcast_set/5`, archive
-  invalidations, `notify_list`, …) routes on the topic built from this
-  label, so a mismatch would silently miss the subject's own topic.
+  Extracts the label parts from the loaded struct (`user.name` /
+  `visitor.id`) and delegates the encoding to the shared
+  `Grappa.Subject.label/1` codec (#413) — this module no longer keeps
+  a parallel `"visitor:"` prefix. Every cross-device broadcast
+  (`ReadCursor.broadcast_set/5`, archive invalidations, `notify_list`,
+  …) routes on the topic built from this label; one codec shared with
+  the core sites is what stops the producing and consuming sides from
+  drifting.
 
   A `nil` user name is an invariant violation (an authenticated user
   always has a name; the schema types the field nilable only for the
@@ -62,22 +51,23 @@ defmodule GrappaWeb.Subject do
   the boundary-rejection rule.
   """
   @spec topic_label(t()) :: String.t()
-  def topic_label({:user, %User{name: name}}) when is_binary(name), do: name
-  def topic_label({:visitor, %Visitor{id: id}}) when is_binary(id), do: @visitor_prefix <> id
+  def topic_label({:user, %User{name: name}}) when is_binary(name),
+    do: Grappa.Subject.label({:user, name})
+
+  def topic_label({:visitor, %Visitor{id: id}}) when is_binary(id),
+    do: Grappa.Subject.label({:visitor, id})
 
   @doc """
-  Classify a topic-label string back into its subject discriminant —
-  the inverse of `topic_label/1` on the label alone (bucket I web/S7).
+  Classify a topic-label string back into its subject-label parts —
+  delegates to the shared `Grappa.Subject.from_label/1` codec (#413),
+  the inverse of `topic_label/1` on the label alone.
 
   `"visitor:" <> id` decodes to `{:visitor, id}`; any other string is a
   `{:user, name}`. Returns the classified *label* parts, NOT a loaded
   subject: the user branch yields the bare name for the caller to
   DB-resolve (a deleted-row race is that caller's concern, e.g.
-  `GrappaWeb.GrappaChannel.resolve_subject/1`). Sharing the
-  `@visitor_prefix` with `topic_label/1` is the whole point — the
-  producing and consuming sides can never disagree on the prefix.
+  `GrappaWeb.GrappaChannel.resolve_subject/1`).
   """
-  @spec from_topic_label(String.t()) :: {:user, String.t()} | {:visitor, String.t()}
-  def from_topic_label(@visitor_prefix <> id), do: {:visitor, id}
-  def from_topic_label(name) when is_binary(name), do: {:user, name}
+  @spec from_topic_label(String.t()) :: Grappa.Subject.label_parts()
+  defdelegate from_topic_label(label), to: Grappa.Subject, as: :from_label
 end

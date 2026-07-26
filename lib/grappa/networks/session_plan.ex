@@ -71,7 +71,15 @@ defmodule Grappa.Networks.SessionPlan do
 
   @spec build_plan(User.t(), Network.t(), Credential.t(), Server.t()) :: Session.start_opts()
   defp build_plan(%User{} = user, %Network{} = network, %Credential{} = cred, %Server{} = server) do
-    base = base_plan({:user, user.id}, user.name, cred, network, server, cred.nick)
+    base =
+      base_plan(
+        {:user, user.id},
+        Grappa.Subject.label({:user, user.name}),
+        cred,
+        network,
+        server,
+        cred.nick
+      )
 
     Map.merge(base, %{
       # Opaque callback injected so Session.Server can transition the

@@ -61,6 +61,7 @@ defmodule Grappa.Visitors do
       Grappa.Repo,
       Grappa.Session,
       Grappa.SpawnOrchestrator,
+      Grappa.Subject,
       Grappa.Themes
     ],
     exports: [AdminWire, Login, SessionPlan, Visitor, Wire]
@@ -541,7 +542,7 @@ defmodule Grappa.Visitors do
         now = DateTime.utc_now()
 
         Logger.error("visitor permanently rejected — expiring row",
-          user: "visitor:" <> visitor.id,
+          user: Grappa.Subject.label({:visitor, visitor.id}),
           reason: inspect(reason)
         )
 

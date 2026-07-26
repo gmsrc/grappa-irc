@@ -120,7 +120,7 @@ defmodule Grappa.Visitors.SessionPlan do
     base =
       NetworksSessionPlan.base_plan(
         {:visitor, visitor.id},
-        "visitor:" <> visitor.id,
+        Grappa.Subject.label({:visitor, visitor.id}),
         credential,
         network,
         server,
