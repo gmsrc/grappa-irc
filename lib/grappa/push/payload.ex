@@ -1,7 +1,9 @@
 defmodule Grappa.Push.Payload do
   @moduledoc """
   Builds a Web Push notification payload from a persisted scrollback
-  message. Push notifications cluster B4 (2026-05-14).
+  message (`build/3`) or from a `/notify` watch-list presence
+  transition (`build_presence/3`, #378). Push notifications cluster
+  B4 (2026-05-14).
 
   ## Documented exception to the wire-shape rule
 
@@ -34,6 +36,19 @@ defmodule Grappa.Push.Payload do
   For DMs, the dm peer is `sender` (inbound DM the recipient sees).
   For channel rows, the dm peer is the channel name itself.
 
+  Presence payloads (#378) use `"<network_slug>:presence:<folded_nick>"`
+  instead. The `presence:` infix keeps the two namespaces DISJOINT: a
+  bare-nick presence tag would collide with the DM tag for that same
+  nick, so alice's DM banner and alice's presence banner would coalesce
+  and overwrite each other. `:` is excluded from both `nickname` and
+  `chanstring` in RFC 2812, so no legal `build/3` tag can ever contain
+  the infix. The nick is folded (`Identifier.canonical_nick/1`, #121)
+  so `alice[m]` and `alice{m}` share one banner and an online banner
+  replaces the stale offline one for the same nick — free OS-level
+  flap coalescing for a SINGLE nick over time. It does NOT bound a
+  burst: N distinct nicks transitioning at once are N distinct tags
+  and therefore N distinct banners (see #378 §5).
+
   ## URL — deep-link
 
   Format: `/?network=<slug>&channel=<percent-encoded>`. The format is
@@ -55,6 +70,7 @@ defmodule Grappa.Push.Payload do
   trivial to test.
   """
 
+  alias Grappa.IRC.Identifier
   alias Grappa.Scrollback.Message
 
   @typedoc """
@@ -104,6 +120,35 @@ defmodule Grappa.Push.Payload do
       body: body,
       tag: "#{network_slug}:#{dedup_key}",
       url: build_url(network_slug, deep_link_target)
+    }
+  end
+
+  @doc """
+  Builds a notification payload for a `/notify` presence transition
+  (#378).
+
+  Pure function of its three arguments — deliberately NOT
+  subject-aware, unlike the message path's `Triggers.build_payload/4`
+  wrapper. `badge` is omitted: `Push.BadgeSource.count/1` counts
+  unread MESSAGES, and a presence transition creates none, so stamping
+  the current count would attach a stale, causally-unrelated number
+  and cost a DB read per transition. An absent `badge` leaves the icon
+  untouched (`service-worker.ts` `applyIconBadge`).
+
+  The deep-link targets the watched nick's query window. Tapping the
+  banner therefore OPENS that window (cic's `routePushTarget` calls
+  `openQueryWindowState`, which upserts a `query_windows` row and
+  broadcasts to every device) — a write, not just a selection. Kept
+  deliberately: "they're online, say hi" is the intended action.
+  """
+  @spec build_presence(nick :: String.t(), :online | :offline, network_slug :: String.t()) :: t()
+  def build_presence(nick, presence, network_slug)
+      when is_binary(nick) and presence in [:online, :offline] and is_binary(network_slug) do
+    %{
+      title: "#{nick} is #{presence}",
+      body: "on #{network_slug}",
+      tag: "#{network_slug}:presence:#{Identifier.canonical_nick(nick)}",
+      url: build_url(network_slug, nick)
     }
   end
 

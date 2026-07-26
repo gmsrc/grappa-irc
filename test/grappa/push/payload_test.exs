@@ -5,6 +5,7 @@ defmodule Grappa.Push.PayloadTest do
   Pure function under test — no DB, `async: true` safe.
   """
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Grappa.Push.Payload
   alias Grappa.Scrollback.Message
@@ -107,5 +108,95 @@ defmodule Grappa.Push.PayloadTest do
       base = Payload.build(msg(channel: "#sniffo"), "libera", "vjt")
       assert Payload.put_badge(base, 0).badge == 0
     end
+  end
+
+  describe "build_presence/3 — #378 /notify presence transition" do
+    test "online copy" do
+      payload = Payload.build_presence("alice", :online, "azzurra")
+      assert payload.title == "alice is online"
+      assert payload.body == "on azzurra"
+    end
+
+    test "offline copy" do
+      payload = Payload.build_presence("alice", :offline, "azzurra")
+      assert payload.title == "alice is offline"
+      assert payload.body == "on azzurra"
+    end
+
+    test "title preserves the upstream nick casing, tag folds it" do
+      payload = Payload.build_presence("Alice", :online, "azzurra")
+      assert payload.title == "Alice is online"
+      assert payload.tag == "azzurra:presence:alice"
+    end
+
+    test "tag folds rfc1459 bracket chars so one identity gets one banner (#121)" do
+      # bahamut folds [ ] \ ~ -> { } | ^ — both spellings are ONE identity.
+      assert Payload.build_presence("alice[m]", :online, "azzurra").tag ==
+               Payload.build_presence("alice{m}", :online, "azzurra").tag
+    end
+
+    test "online and offline share a tag so the newer banner replaces the stale one" do
+      assert Payload.build_presence("alice", :online, "azzurra").tag ==
+               Payload.build_presence("alice", :offline, "azzurra").tag
+    end
+
+    test "url deep-links the raw nick, which cic parses as a query window" do
+      assert Payload.build_presence("alice", :online, "azzurra").url ==
+               "/?network=azzurra&channel=alice"
+    end
+
+    test "url percent-encodes a non-ASCII nick" do
+      assert Payload.build_presence("café", :online, "azzurra").url ==
+               "/?network=azzurra&channel=caf%C3%A9"
+    end
+
+    test "omits :badge — a presence flip creates no unread message" do
+      payload = Payload.build_presence("alice", :online, "azzurra")
+      refute Map.has_key?(payload, :badge)
+      assert Enum.sort(Map.keys(payload)) == [:body, :tag, :title, :url]
+    end
+  end
+
+  describe "build_presence/3 tag disjointness — the coalescing hazard" do
+    # A BARE-nick presence tag would equal the DM tag for that same nick, so
+    # alice's DM banner and alice's presence banner would coalesce and
+    # overwrite each other. The `presence:` infix prevents it, and `:` is
+    # legal in neither `nickname` nor `chanstring` (RFC 2812) — so this is a
+    # property of the grammars, not of one hand-picked example.
+    property "never collides with a DM or channel message tag on the same network" do
+      check all(
+              nick <- nick_gen(),
+              chan <- channel_gen(),
+              slug <- slug_gen(),
+              presence <- StreamData.member_of([:online, :offline])
+            ) do
+        presence_tag = Payload.build_presence(nick, presence, slug).tag
+
+        # own_nick "vjt" makes channel: "vjt" the inbound-DM shape.
+        refute presence_tag == Payload.build(msg(channel: "vjt", sender: nick), slug, "vjt").tag
+        refute presence_tag == Payload.build(msg(channel: chan, sender: nick), slug, "vjt").tag
+      end
+    end
+  end
+
+  # RFC 2812 nickname: letter/special then letter/digit/special/-, where
+  # `special` is the fold-relevant bracket set [ ] \ ` _ ^ { | }.
+  defp nick_gen do
+    StreamData.string(Enum.concat([?a..?z, ?A..?Z, ?0..?9, [?[, ?], ?\\, ?^, ?{, ?|, ?}, ?-]]),
+      min_length: 1,
+      max_length: 12
+    )
+  end
+
+  @channel_chars Enum.concat([?a..?z, ?A..?Z, ?0..?9, [?-, ?_]])
+
+  defp channel_gen do
+    @channel_chars
+    |> StreamData.string(min_length: 1, max_length: 12)
+    |> StreamData.map(&("#" <> &1))
+  end
+
+  defp slug_gen do
+    StreamData.string(Enum.concat([?a..?z, ?0..?9, [?-]]), min_length: 1, max_length: 10)
   end
 end

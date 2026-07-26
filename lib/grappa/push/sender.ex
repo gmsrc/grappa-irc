@@ -144,6 +144,13 @@ defmodule Grappa.Push.Sender do
              | {:encrypt_error, term()}
              | term()}
 
+  @typedoc """
+  Which trigger class produced a push (#378) — stamped on the
+  `[:grappa, :push, :send, :*]` telemetry metadata so a presence burst
+  is distinguishable from message traffic.
+  """
+  @type push_class :: :message | :presence
+
   @doc """
   Fans out `payload` to every push subscription belonging to `subject`.
 
@@ -161,9 +168,23 @@ defmodule Grappa.Push.Sender do
   Empty subscription list short-circuits to `:ok` without emitting
   start/stop telemetry — emitting a zero-count send_event would just
   generate noise in the per-subject dashboard.
+
+  `class` (#378) tags the telemetry metadata with which trigger class
+  produced the push. Without it a presence-push storm is invisible:
+  every existing metric counts sends per subject with no way to tell a
+  watch-list burst from ordinary message traffic, so #378's "revisit
+  the burst decision with production evidence" could never trigger.
+  Defaults to `:message` — the only class before #378, and the shape
+  every existing caller and test already emits.
   """
   @spec send_to_subject(Subject.t(), payload()) :: :ok
   def send_to_subject({_, _} = subject, payload) when is_map(payload) do
+    send_to_subject(subject, payload, :message)
+  end
+
+  @spec send_to_subject(Subject.t(), payload(), push_class()) :: :ok
+  def send_to_subject({_, _} = subject, payload, class)
+      when is_map(payload) and class in [:message, :presence] do
     case Push.list_for_subject(subject) do
       [] ->
         :ok
@@ -172,7 +193,7 @@ defmodule Grappa.Push.Sender do
         :telemetry.execute(
           [:grappa, :push, :send, :start],
           %{count: length(subs)},
-          %{subject: subject}
+          %{subject: subject, class: class}
         )
 
         started_at = System.monotonic_time(:millisecond)
@@ -196,7 +217,7 @@ defmodule Grappa.Push.Sender do
         :telemetry.execute(
           [:grappa, :push, :send, :stop],
           %{success: success, gone: gone, error: error, duration_ms: duration_ms},
-          %{subject: subject, count: length(subs)}
+          %{subject: subject, count: length(subs), class: class}
         )
 
         :ok
