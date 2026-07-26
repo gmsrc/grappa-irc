@@ -34,6 +34,12 @@
 #include <sys/stat.h>
 #include <limits.h>
 
+#include "alias.h"
+#include "json.h"
+#include "mirc.h"
+#include "termcolor.h"
+#include "wire.h"
+
 #define MAX_TOKEN 4096
 #define MAX_SUBJECT 512
 #define MAX_NETWORKS 32
@@ -129,17 +135,69 @@ struct network {
     int id;
     char slug[MAX_SLUG];
     char nick[MAX_CHANNEL];
+    /* ISUPPORT PREFIX, as parallel arrays: prefix_letters[i] is the mode
+     * letter whose sigil is prefix_sigils[i], highest rank first. Empty
+     * until the network sends 005, so the draw path falls back to the
+     * conventional (qaohv) mapping rather than showing nothing. */
+    char prefix_letters[16];
+    char prefix_sigils[16];
+    size_t prefix_count;
+    /* Live per-session state mirrored off the user topic. */
+    char umodes[32];
+    bool away;
+    char away_reason[MAX_LINE];
+    wire_connection_state conn_state;
+    bool conn_known;
+    bool connecting;
+};
+
+/* Server-owned window state. Grappa owns this state machine; shottino
+ * MIRRORS it and never originates a transition — same contract cicchetto
+ * is held to. Adding a state here without a server change would be a
+ * parallel client-side state machine, which is exactly what the project
+ * invariant forbids.
+ *
+ *   pending  — JOIN sent, no terminal reply yet
+ *   invited  — inbound INVITE we did not request; not joined, greyed
+ *   joined   — in the channel
+ *   failed   — JOIN rejected (reason + numeric explain why)
+ *   kicked   — removed by an op (by + reason)
+ *   parked   — the network itself is not connected
+ */
+enum window_state {
+    WS_UNKNOWN = 0,
+    WS_PENDING,
+    WS_INVITED,
+    WS_JOINED,
+    WS_FAILED,
+    WS_KICKED,
+    WS_PARKED
+};
+
+struct member {
+    char nick[MAX_CHANNEL];
+    char modes[8]; /* mode letters (o, v, h...) — sigil resolved at draw */
 };
 
 struct window {
     char network[MAX_SLUG];
     char channel[MAX_CHANNEL];
     char topic[MAX_TOPIC];
-    char members[512][MAX_CHANNEL];
+    struct member members[512];
     size_t member_count;
     long last_id;
     unsigned unread;
     bool joined_ws;
+    /* Mirrored window state + the metadata that explains a terminal one,
+     * so the status line can say WHY a tab is dead rather than just
+     * greying it. */
+    enum window_state state;
+    char state_detail[MAX_LINE];
+    long failure_numeric;
+    /* Server-owned read cursor for this (subject, network, channel). */
+    long last_read_id;
+    unsigned mentions;
+    wire_counts_severity severity;
 };
 
 enum job_kind {
@@ -151,7 +209,8 @@ enum job_kind {
     JOB_NETWORK_STATE,
     JOB_TOPIC,
     JOB_MEMBERS,
-    JOB_CLOSE_QUERY
+    JOB_CLOSE_QUERY,
+    JOB_READ_CURSOR
 };
 
 struct job {
@@ -167,6 +226,7 @@ struct seen_message {
     char network[MAX_SLUG];
     char channel[MAX_CHANNEL];
 };
+
 
 struct pending_echo {
     unsigned long id;
@@ -208,6 +268,10 @@ struct app {
     char *log[LOG_LINES];
     bool log_mentions[LOG_LINES];
     bool log_pending[LOG_LINES];
+    /* Scrollback id per log row (0 = not a scrollback message). Lets the
+     * unread divider be placed at the exact row the server's read cursor
+     * points at, rather than guessed from position. */
+    long log_ids[LOG_LINES];
     size_t log_count;
     struct pending_echo pending[256];
     size_t pending_count;
@@ -223,12 +287,22 @@ struct app {
     char input[MAX_LINE];
     size_t input_len;
     char last_url[MAX_LINE];
+    /* Most recent IMAGE/VIDEO link, for keyboard-driven /preview. */
+    char last_media_url[MAX_LINE];
+    bool last_media_is_video;
     char hover_url[MAX_LINE];
     struct link_region link_regions[MAX_LINK_REGIONS];
     size_t link_region_count;
     char history[INPUT_HISTORY][MAX_LINE];
     size_t history_count;
     size_t history_pos;
+    struct alias_table aliases;
+    /* Mouse tracking preference. OFF by default: tracking necessarily
+     * suppresses the terminal's own copy/paste selection, and for a
+     * terminal client selection matters far more day-to-day than
+     * click-to-preview — which `/preview` provides from the keyboard
+     * anyway. `/mouse on` opts back in. */
+    bool mouse_enabled;
     bool running;
     pthread_mutex_t lock;
     pthread_mutex_t jobs_lock;
@@ -242,6 +316,10 @@ struct app {
     bool ws_connected;
     unsigned long ws_ref;
     time_t next_heartbeat;
+    /* Reconnect state: current backoff in seconds (0 = healthy) and the
+     * earliest time the next attempt may run. */
+    int ws_backoff;
+    time_t ws_retry_at;
     SSL_CTX *ssl_ctx;
 };
 
@@ -306,11 +384,13 @@ static void log_line(struct app *app, const char *fmt, ...) {
         memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
         memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
         memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
+        memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
         app->log_count--;
     }
     app->log[app->log_count] = s;
     app->log_mentions[app->log_count] = false;
     app->log_pending[app->log_count] = false;
+    app->log_ids[app->log_count] = 0;
     app->log_count++;
     pthread_mutex_unlock(&app->lock);
 }
@@ -334,11 +414,13 @@ static void log_line_mention(struct app *app, bool mention, const char *fmt, ...
         memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
         memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
         memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
+        memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
         app->log_count--;
     }
     app->log[app->log_count] = s;
     app->log_mentions[app->log_count] = mention;
     app->log_pending[app->log_count] = false;
+    app->log_ids[app->log_count] = 0;
     app->log_count++;
     pthread_mutex_unlock(&app->lock);
 }
@@ -356,11 +438,13 @@ static void add_pending_echo(struct app *app, const char *network, const char *c
         memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
         memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
         memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
+        memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
         app->log_count--;
     }
     app->log[app->log_count] = line;
     app->log_mentions[app->log_count] = false;
     app->log_pending[app->log_count] = true;
+    app->log_ids[app->log_count] = 0;
     app->log_count++;
     if (app->pending_count < sizeof(app->pending) / sizeof(app->pending[0])) {
         struct pending_echo *p = &app->pending[app->pending_count++];
@@ -426,15 +510,20 @@ static bool has_matching_confirmed_line(struct app *app, const char *network, co
     return found;
 }
 
-static void clear_panel_lines(struct app *app) {
+/* Caller holds app->lock. */
+static void clear_panel_lines_locked(struct app *app) {
     for (size_t i = 0; i < app->panel_line_count; i++) free(app->panel_lines[i]);
     app->panel_line_count = 0;
 }
 
 static void panel_line(struct app *app, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
+/* Appends one panel row. Takes the lock itself: panel population runs on
+ * the command thread and issues blocking HTTP between rows, so it cannot
+ * hold the lock across the whole build — the draw thread would stall for
+ * the duration of every request. Locking per row means a panel paints
+ * progressively instead, which is also the better behaviour. */
 static void panel_line(struct app *app, const char *fmt, ...) {
-    if (app->panel_line_count == PANEL_LINES) return;
     va_list ap;
     va_start(ap, fmt);
     va_list ap2;
@@ -446,7 +535,10 @@ static void panel_line(struct app *app, const char *fmt, ...) {
     if (!s) return;
     vsnprintf(s, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
-    app->panel_lines[app->panel_line_count++] = s;
+    pthread_mutex_lock(&app->lock);
+    if (app->panel_line_count < PANEL_LINES) app->panel_lines[app->panel_line_count++] = s;
+    else free(s);
+    pthread_mutex_unlock(&app->lock);
 }
 
 static int hexval(char c) {
@@ -763,25 +855,32 @@ static char *decode_chunked(const char *body, size_t len, size_t *out_len) {
     return out;
 }
 
-static struct http_response http_request(struct app *app, const char *method, const char *path, const char *body) {
+/* Generalised request: an explicit content type and an explicit body
+ * length, so a body containing NUL bytes (a file upload) survives. The
+ * JSON wrapper below is the common case and keeps its old signature. */
+static struct http_response http_request_raw(struct app *app, const char *method, const char *path,
+                                             const char *body, size_t body_len,
+                                             const char *content_type) {
     struct tls_conn conn;
     if (!conn_open(app, &conn)) die("failed to connect to %s:%s", app->url.host, app->url.port);
-    size_t body_len = body ? strlen(body) : 0;
     char auth[MAX_TOKEN + 64] = "";
     if (app->token[0]) snprintf(auth, sizeof(auth), "Authorization: Bearer %s\r\n", app->token);
-    char *req = xasprintf(
+    char *head = xasprintf(
         "%s %s HTTP/1.1\r\n"
         "Host: %s\r\n"
         "User-Agent: shottino/0.1\r\n"
         "Accept: application/json\r\n"
-        "Content-Type: application/json\r\n"
+        "Content-Type: %s\r\n"
         "%s"
         "Connection: close\r\n"
-        "Content-Length: %zu\r\n\r\n"
-        "%s",
-        method, path, app->url.host, auth, body_len, body ? body : "");
-    if (!conn_write_all(&conn, req, strlen(req))) die("HTTP write failed");
-    free(req);
+        "Content-Length: %zu\r\n\r\n",
+        method, path, app->url.host, content_type, auth, body_len);
+    bool ok = conn_write_all(&conn, head, strlen(head));
+    free(head);
+    /* Body written separately — it is binary and must not go through a
+     * format string. */
+    if (ok && body_len) ok = conn_write_all(&conn, body, body_len);
+    if (!ok) die("HTTP write failed");
     size_t raw_len = 0;
     char *raw = read_all(&conn, &raw_len);
     conn_close(&conn);
@@ -809,97 +908,69 @@ static struct http_response http_request(struct app *app, const char *method, co
     return (struct http_response){ .status = status, .body = payload, .body_len = payload_len };
 }
 
-static bool json_find_string(const char *json, const char *key, char *out, size_t out_sz) {
-    char needle[128];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char *p = strstr(json, needle);
-    if (!p) return false;
-    p = strchr(p + strlen(needle), ':');
-    if (!p) return false;
-    p++;
-    while (isspace((unsigned char)*p)) p++;
-    if (*p != '"') return false;
-    p++;
-    size_t w = 0;
-    while (*p && *p != '"') {
-        char c = *p++;
-        if (c == '\\') {
-            c = *p++;
-            switch (c) {
-            case 'n': c = '\n'; break;
-            case 'r': c = '\r'; break;
-            case 't': c = '\t'; break;
-            case 'b': c = '\b'; break;
-            case 'f': c = '\f'; break;
-            case 'u':
-                if (strlen(p) >= 4) p += 4;
-                c = '?';
-                break;
-            default: break;
-            }
-        }
-        if (w + 1 < out_sz) out[w++] = c;
-    }
-    if (out_sz) out[w] = 0;
-    return true;
+static struct http_response http_request(struct app *app, const char *method, const char *path, const char *body) {
+    return http_request_raw(app, method, path, body, body ? strlen(body) : 0, "application/json");
 }
 
-static bool json_find_int(const char *json, const char *key, int *out) {
-    char needle[128];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char *p = strstr(json, needle);
-    if (!p) return false;
-    p = strchr(p + strlen(needle), ':');
-    if (!p) return false;
-    p++;
-    while (isspace((unsigned char)*p)) p++;
-    if (!isdigit((unsigned char)*p) && *p != '-') return false;
-    *out = atoi(p);
-    return true;
+/* Read one top-level string out of a small REST response body.
+ *
+ * Replaces the old `json_find_string`, which searched for a key ANYWHERE
+ * in the buffer at ANY depth and decoded `\uXXXX` as a literal '?'. Here
+ * the lookup is anchored to the top-level object and the shared reader
+ * does the unescaping, so a token containing a non-ASCII character is no
+ * longer silently corrupted. */
+static bool json_top_string(const char *body, size_t len, const char *key, char *out,
+                            size_t out_sz) {
+    json_doc *doc = json_parse(body, len, NULL, 0);
+    if (!doc) return false;
+    const char *s = NULL;
+    bool found = json_str_req(json_root(doc), key, &s);
+    if (found) snprintf(out, out_sz, "%s", s);
+    json_free(doc);
+    return found;
 }
 
-static bool json_find_long(const char *json, const char *key, long *out) {
-    char needle[128];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char *p = strstr(json, needle);
-    if (!p) return false;
-    p = strchr(p + strlen(needle), ':');
-    if (!p) return false;
-    p++;
-    while (isspace((unsigned char)*p)) p++;
-    if (!isdigit((unsigned char)*p) && *p != '-') return false;
-    *out = strtol(p, NULL, 10);
-    return true;
+/* Thin wrapper: parse the body, hand the root to the tested resolver in
+ * wire.[ch]. The shape handling lives there so it is covered by tests —
+ * this used to read only the ROOT, which broke login (the subject is
+ * nested under `subject` there, flat only on /me). */
+static void parse_subject(const char *json, size_t len, char *out, size_t out_sz) {
+    if (out_sz) out[0] = '\0';
+    json_doc *doc = json_parse(json, len, NULL, 0);
+    if (!doc) return;
+    wire_subject_key(json_root(doc), out, out_sz);
+    json_free(doc);
 }
 
-static void parse_subject(const char *json, char *out, size_t out_sz) {
-    char kind[64] = "";
-    char name[256] = "";
-    char id[256] = "";
-    json_find_string(json, "kind", kind, sizeof(kind));
-    if (strcmp(kind, "visitor") == 0) {
-        json_find_string(json, "id", id, sizeof(id));
-        snprintf(out, out_sz, "visitor:%s", id);
-    } else {
-        if (!json_find_string(json, "name", name, sizeof(name))) json_find_string(json, "identifier", name, sizeof(name));
-        snprintf(out, out_sz, "%s", name);
-    }
-}
-
-static void parse_networks(struct app *app, const char *json) {
+static void parse_networks(struct app *app, const char *json, size_t len) {
     app->network_count = 0;
-    const char *p = json;
-    while ((p = strstr(p, "\"slug\"")) && app->network_count < MAX_NETWORKS) {
+    json_doc *doc = json_parse(json, len, NULL, 0);
+    if (!doc) return;
+    const json_value *list = json_root(doc);
+    for (size_t i = 0; i < json_len(list) && app->network_count < MAX_NETWORKS; i++) {
+        const json_value *row = json_at(list, i);
+        const char *slug = json_string(json_get(row, "slug"));
+        if (!slug || !slug[0]) continue;
         struct network *n = &app->networks[app->network_count];
         memset(n, 0, sizeof(*n));
-        const char *obj = p;
-        while (obj > json && *obj != '{') obj--;
-        json_find_int(obj, "id", &n->id);
-        json_find_string(obj, "slug", n->slug, sizeof(n->slug));
-        json_find_string(obj, "nick", n->nick, sizeof(n->nick));
-        if (n->slug[0]) app->network_count++;
-        p += 6;
+        long id = 0;
+        json_long(json_get(row, "id"), &id);
+        n->id = (int)id;
+        snprintf(n->slug, sizeof(n->slug), "%s", slug);
+        const char *nick = json_string(json_get(row, "nick"));
+        if (nick) snprintf(n->nick, sizeof(n->nick), "%s", nick);
+        /* The listing carries the DB-canonical connection state; seeding
+         * it here means a parked network is greyed from the first frame
+         * rather than only after its first state-change event. */
+        const char *state = json_string(json_get(row, "connection_state"));
+        n->conn_known = true;
+        if (state && strcmp(state, "connected") == 0) n->conn_state = CONN_CONNECTED;
+        else if (state && strcmp(state, "parked") == 0) n->conn_state = CONN_PARKED;
+        else if (state && strcmp(state, "failed") == 0) n->conn_state = CONN_FAILED;
+        else n->conn_known = false;
+        app->network_count++;
     }
+    json_free(doc);
 }
 
 static void add_window_ex(struct app *app, const char *network, const char *channel, bool focus) {
@@ -948,13 +1019,15 @@ static void remove_window(struct app *app, const char *network, const char *chan
     pthread_mutex_unlock(&app->lock);
 }
 
-static void parse_channels(struct app *app, const char *network, const char *json) {
-    const char *p = json;
-    while ((p = strstr(p, "\"name\""))) {
-        char name[MAX_CHANNEL] = "";
-        if (json_find_string(p, "name", name, sizeof(name)) && name[0]) add_window(app, network, name);
-        p += 6;
+static void parse_channels(struct app *app, const char *network, const char *json, size_t len) {
+    json_doc *doc = json_parse(json, len, NULL, 0);
+    if (!doc) return;
+    const json_value *list = json_root(doc);
+    for (size_t i = 0; i < json_len(list); i++) {
+        const char *name = json_string(json_get(json_at(list, i), "name"));
+        if (name && name[0]) add_window(app, network, name);
     }
+    json_free(doc);
 }
 
 static void enqueue_fetch(struct app *app, const char *network, const char *channel);
@@ -967,36 +1040,56 @@ static const char *network_slug_by_id(struct app *app, int id) {
     return NULL;
 }
 
-static void apply_query_windows_list(struct app *app, const char *json) {
-    const char *p = strstr(json, "\"windows\"");
-    if (!p) return;
-    while ((p = strchr(p, '"'))) {
-        p++;
-        if (!isdigit((unsigned char)*p)) continue;
-        int network_id = atoi(p);
-        const char *slug = network_slug_by_id(app, network_id);
-        const char *next_key = strchr(p, ']');
-        if (!slug || !next_key) continue;
-        const char *q = p;
-        while ((q = strstr(q, "\"target_nick\"")) && q < next_key) {
-            char nick[MAX_CHANNEL] = "";
-            if (json_find_string(q, "target_nick", nick, sizeof(nick)) && nick[0]) {
-                add_window_ex(app, slug, nick, false);
-                enqueue_fetch(app, slug, nick);
-                if (app->ws_connected) {
-                    char *topic = xasprintf("grappa:user:%s/network:%s/channel:%s", app->subject, slug, nick);
-                    ws_join(app, topic);
-                    free(topic);
-                }
+/* Open a DM window per query the server knows about.
+ *
+ * The payload is a map keyed by NICK whose values are arrays of
+ * {network_id, target_nick, opened_at}. The old reader scanned the raw
+ * buffer for `"target_nick"` between bracket positions and read the
+ * network id by assuming the first digit after a quote belonged to the
+ * key — which broke as soon as a nick contained a digit or the encoder
+ * reordered keys. The authoritative id lives on each ENTRY, so that is
+ * where it is read from now. */
+static void apply_query_windows(struct app *app, const struct wire_event *ev) {
+    const json_value *windows = ev->u.query_windows.windows;
+    for (size_t i = 0; i < ev->u.query_windows.nick_count; i++) {
+        const json_value *entries = json_value_at(windows, i);
+        for (size_t j = 0; j < json_len(entries); j++) {
+            const json_value *entry = json_at(entries, j);
+            long network_id = 0;
+            const char *nick = NULL;
+            if (!json_long_req(entry, "network_id", &network_id)) continue;
+            if (!json_str_req(entry, "target_nick", &nick)) continue;
+            const char *slug = network_slug_by_id(app, (int)network_id);
+            if (!slug || !nick[0]) continue;
+            add_window_ex(app, slug, nick, false);
+            enqueue_fetch(app, slug, nick);
+            if (app->ws_connected) {
+                char *topic = xasprintf("grappa:user:%s/network:%s/channel:%s", app->subject, slug, nick);
+                ws_join(app, topic);
+                free(topic);
             }
-            q += 13;
         }
-        p = next_key + 1;
     }
 }
 
+static void enqueue_read_cursor(struct app *app, const char *network, const char *channel,
+                                long message_id);
+
+/* Focus landed on a window: clear its local badge AND tell the server how
+ * far we have read, so the cursor follows the user to their other
+ * devices. The HTTP write is queued rather than done inline — this runs
+ * on the UI thread, holding the app lock, and a blocking POST here would
+ * stall every keystroke. */
 static void clear_current_unread_locked(struct app *app) {
-    if (app->current < app->window_count) app->windows[app->current].unread = 0;
+    if (app->current >= app->window_count) return;
+    struct window *w = &app->windows[app->current];
+    w->unread = 0;
+    w->mentions = 0;
+    w->severity = COUNTS_NONE;
+    if (w->last_id > w->last_read_id) {
+        w->last_read_id = w->last_id;
+        enqueue_read_cursor(app, w->network, w->channel, w->last_id);
+    }
 }
 
 static void clear_active_window_log(struct app *app) {
@@ -1027,20 +1120,32 @@ static void clear_active_window_log(struct app *app) {
     pthread_mutex_unlock(&app->lock);
 }
 
-static void set_window_members(struct app *app, const char *network, const char *channel, char members[][MAX_CHANNEL], size_t count) {
+static void set_window_members(struct app *app, const char *network, const char *channel, const struct member *members, size_t count) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
         if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
             app->windows[i].member_count = count > 512 ? 512 : count;
-            for (size_t j = 0; j < app->windows[i].member_count; j++) {
-                memcpy(app->windows[i].members[j], members[j], MAX_CHANNEL);
-                app->windows[i].members[j][MAX_CHANNEL - 1] = 0;
-            }
+            for (size_t j = 0; j < app->windows[i].member_count; j++) app->windows[i].members[j] = members[j];
             break;
         }
     }
     pthread_mutex_unlock(&app->lock);
 }
+
+/* Rank a member for roster ordering: ops first, then halfops, voiced,
+ * plain. Mode LETTERS come off the wire (o/h/v), not sigils — the sigil is
+ * a display concern resolved from the network's ISUPPORT PREFIX map. */
+static int member_rank(const char *modes) {
+    if (strchr(modes, 'q') || strchr(modes, 'a') || strchr(modes, 'o')) return 0;
+    if (strchr(modes, 'h')) return 1;
+    if (strchr(modes, 'v')) return 2;
+    return 3;
+}
+
+/* Sigil for the highest-ranked mode a member holds. Defaults match the
+ * near-universal PREFIX=(qaohv)~&@%+ ordering; a network that advertises
+ * something else is handled by isupport_prefix below. */
+static char member_sigil(struct app *app, const char *network, const char *modes);
 
 static void maybe_mark_unread(struct app *app, const char *network, const char *channel, bool live) {
     if (!live || !network[0] || !channel[0]) return;
@@ -1054,39 +1159,15 @@ static void maybe_mark_unread(struct app *app, const char *network, const char *
     pthread_mutex_unlock(&app->lock);
 }
 
-static void apply_topic_event(struct app *app, const char *json) {
-    char network[MAX_SLUG] = "";
-    char channel[MAX_CHANNEL] = "";
-    char text[MAX_TOPIC] = "";
-    json_find_string(json, "network", network, sizeof(network));
-    json_find_string(json, "channel", channel, sizeof(channel));
-    const char *topic = strstr(json, "\"topic\"");
-    if (topic) json_find_string(topic, "text", text, sizeof(text));
-    if (!network[0] || !channel[0]) return;
+static void set_window_topic(struct app *app, const char *network, const char *channel, const char *text) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
         if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
-            snprintf(app->windows[i].topic, sizeof(app->windows[i].topic), "%s", text[0] ? text : "no topic set");
+            snprintf(app->windows[i].topic, sizeof(app->windows[i].topic), "%s", text && text[0] ? text : "no topic set");
             break;
         }
     }
     pthread_mutex_unlock(&app->lock);
-}
-
-static void apply_members_seeded_event(struct app *app, const char *json) {
-    char network[MAX_SLUG] = "";
-    char channel[MAX_CHANNEL] = "";
-    char members[512][MAX_CHANNEL];
-    size_t count = 0;
-    json_find_string(json, "network", network, sizeof(network));
-    json_find_string(json, "channel", channel, sizeof(channel));
-    const char *p = json;
-    while ((p = strstr(p, "\"nick\"")) && count < 512) {
-        char nick[MAX_CHANNEL] = "";
-        if (json_find_string(p, "nick", nick, sizeof(nick)) && nick[0]) snprintf(members[count++], MAX_CHANNEL, "%s", nick);
-        p += 6;
-    }
-    if (network[0] && channel[0]) set_window_members(app, network, channel, members, count);
 }
 
 static void remember_url(struct app *app, const char *body);
@@ -1094,24 +1175,64 @@ static bool message_mentions_me(struct app *app, const char *network, const char
 static bool nick_case_equal(const char *a, const char *b);
 static const char *own_nick_for_network(struct app *app, const char *network);
 
-static void log_message_json(struct app *app, const char *json, bool live) {
-    long id = 0;
-    long server_time = 0;
-    char network[MAX_SLUG] = "";
-    char channel[MAX_CHANNEL] = "";
-    char sender[MAX_CHANNEL] = "";
-    char body[MAX_LINE] = "";
-    char kind[64] = "";
-    const char *msg = strstr(json, "\"message\"");
-    if (msg) json = msg;
-    json_find_long(json, "id", &id);
-    json_find_long(json, "server_time", &server_time);
-    json_find_string(json, "network", network, sizeof(network));
-    json_find_string(json, "channel", channel, sizeof(channel));
-    json_find_string(json, "sender", sender, sizeof(sender));
-    json_find_string(json, "body", body, sizeof(body));
-    json_find_string(json, "kind", kind, sizeof(kind));
-    if (!body[0]) return;
+/* Render one scrollback row.
+ *
+ * Presence kinds (join/part/quit/nick_change/mode/kick/topic/server_event)
+ * carry a NULL body — the event IS the row. The old reader bailed on an
+ * empty body, so shottino showed no joins, parts, quits or nick changes at
+ * all; they were parsed and thrown away. Each kind now gets its own line
+ * shape, marked with a leading sigil so presence noise is visually
+ * separable from conversation. */
+static void format_presence_line(wire_message_kind kind, const char *sender, const char *body,
+                                 char *out, size_t out_sz) {
+    switch (kind) {
+    case MSG_JOIN:
+        snprintf(out, out_sz, "--> %s has joined", sender);
+        break;
+    case MSG_PART:
+        if (body && body[0]) snprintf(out, out_sz, "<-- %s has left (%s)", sender, body);
+        else snprintf(out, out_sz, "<-- %s has left", sender);
+        break;
+    case MSG_QUIT:
+        if (body && body[0]) snprintf(out, out_sz, "<-- %s has quit (%s)", sender, body);
+        else snprintf(out, out_sz, "<-- %s has quit", sender);
+        break;
+    case MSG_NICK_CHANGE:
+        snprintf(out, out_sz, "--- %s is now known as %s", sender, body ? body : "?");
+        break;
+    case MSG_MODE:
+        snprintf(out, out_sz, "--- %s sets mode %s", sender, body ? body : "");
+        break;
+    case MSG_KICK:
+        snprintf(out, out_sz, "<-- %s was kicked%s%s", body ? body : "?", sender[0] ? " by " : "",
+                 sender[0] ? sender : "");
+        break;
+    case MSG_TOPIC:
+        if (body && body[0]) snprintf(out, out_sz, "--- %s changed the topic to: %s", sender, body);
+        else snprintf(out, out_sz, "--- %s cleared the topic", sender);
+        break;
+    case MSG_SERVER_EVENT:
+        snprintf(out, out_sz, "--- %s", body ? body : "");
+        break;
+    default:
+        out[0] = '\0';
+        break;
+    }
+}
+
+static void render_message(struct app *app, const struct wire_scrollback_message *m, bool live) {
+    long id = m->id;
+    long server_time = m->server_time;
+    const char *network = m->network;
+    const char *channel = m->channel;
+    const char *sender = m->sender ? m->sender : "";
+    const char *body = m->body ? m->body : "";
+
+    /* A conversation row with no body is nothing to show; a PRESENCE row
+     * with no body is the whole point, so only the former is dropped. */
+    bool conversational =
+        m->kind == MSG_PRIVMSG || m->kind == MSG_NOTICE || m->kind == MSG_ACTION;
+    if (conversational && !body[0]) return;
 
     char display_channel[MAX_CHANNEL];
     snprintf(display_channel, sizeof(display_channel), "%s", channel);
@@ -1148,17 +1269,38 @@ static void log_message_json(struct app *app, const char *json, bool live) {
     }
     pthread_mutex_unlock(&app->lock);
     remember_url(app, body);
-    maybe_mark_unread(app, network, display_channel, live);
-    bool mention = message_mentions_me(app, network, sender, body);
+    /* Presence rows are ambient: they must not bump the unread badge or
+     * they drown the count that signals someone actually spoke. */
+    if (conversational) maybe_mark_unread(app, network, display_channel, live);
+    bool mention = conversational && message_mentions_me(app, network, sender, body);
     char clock[16];
     time_t ts = server_time > 100000000000L ? (time_t)(server_time / 1000) : time(NULL);
     struct tm tm;
     localtime_r(&ts, &tm);
     strftime(clock, sizeof(clock), "%H:%M", &tm);
-    if (strcmp(kind, "action") == 0) log_line_mention(app, mention, "[%s/%s] %s * %s %s", network, display_channel, clock, sender, body);
-    else log_line_mention(app, mention, "[%s/%s] %s <%s> %s", network, display_channel, clock, sender, body);
+    switch (m->kind) {
+    case MSG_ACTION:
+        log_line_mention(app, mention, "[%s/%s] %s * %s %s", network, display_channel, clock, sender, body);
+        break;
+    case MSG_NOTICE:
+        log_line_mention(app, mention, "[%s/%s] %s -%s- %s", network, display_channel, clock, sender, body);
+        break;
+    case MSG_PRIVMSG:
+        log_line_mention(app, mention, "[%s/%s] %s <%s> %s", network, display_channel, clock, sender, body);
+        break;
+    default: {
+        char line[MAX_LINE];
+        format_presence_line(m->kind, sender, m->body, line, sizeof(line));
+        if (line[0]) log_line_mention(app, false, "[%s/%s] %s %s", network, display_channel, clock, line);
+        break;
+    }
+    }
 
     pthread_mutex_lock(&app->lock);
+    /* Stamp the row just appended with its scrollback id, so the unread
+     * divider lands on the exact row the server's cursor names rather
+     * than being guessed from position. */
+    if (app->log_count > 0) app->log_ids[app->log_count - 1] = id;
     if (!app->scrollback_pinned) app->scrollback_offset = 0;
     pthread_mutex_unlock(&app->lock);
 }
@@ -1249,19 +1391,59 @@ static bool message_mentions_me(struct app *app, const char *network, const char
 static void remember_url(struct app *app, const char *body) {
     const char *url = find_url(body);
     if (!url) return;
+    char token[MAX_LINE];
+    copy_url_token(url, token, sizeof(token));
+    enum media_kind kind = media_kind_of(token);
     pthread_mutex_lock(&app->lock);
-    copy_url_token(url, app->last_url, sizeof(app->last_url));
+    snprintf(app->last_url, sizeof(app->last_url), "%s", token);
+    /* Tracked separately from last_url so `/preview` targets the last
+     * IMAGE OR VIDEO rather than whatever link happened to arrive most
+     * recently — a plain link after a picture must not shadow it. This is
+     * what makes previews reachable without the mouse. */
+    if (kind != MEDIA_NONE) {
+        snprintf(app->last_media_url, sizeof(app->last_media_url), "%s", token);
+        app->last_media_is_video = (kind == MEDIA_VIDEO);
+    }
     pthread_mutex_unlock(&app->lock);
 }
 
-static void parse_messages(struct app *app, const char *json) {
-    const char *p = json;
-    while ((p = strstr(p, "\"body\""))) {
-        const char *obj = p;
-        while (obj > json && *obj != '{') obj--;
-        log_message_json(app, obj, false);
-        p += 6;
+/* Echo the row POST /messages just created (a single object, not a page). */
+static void render_created_message(struct app *app, const char *json, size_t len) {
+    char err[160];
+    json_doc *doc = json_parse(json, len, err, sizeof(err));
+    if (!doc) return;
+    struct wire_scrollback_message m;
+    if (wire_narrow_message(json_root(doc), &m)) render_message(app, &m, false);
+    json_free(doc);
+}
+
+/* Ingest a REST scrollback page.
+ *
+ * Two fixes over the previous reader. It located rows by scanning for
+ * `"body"` and then walking BACKWARDS to the nearest `{` — which lands
+ * inside `meta` whenever meta is non-empty, and misses any row whose body
+ * is null (every join/part/quit). And it appended in buffer order: the
+ * endpoint returns DESC (newest first, `Scrollback.fetch/6`), so replayed
+ * scrollback rendered upside down. cicchetto reverses on ingestion; this
+ * now does the same. */
+static void parse_messages(struct app *app, const char *json, size_t len) {
+    char err[160];
+    json_doc *doc = json_parse(json, len, err, sizeof(err));
+    if (!doc) {
+        log_line(app, "malformed scrollback response: %s", err);
+        return;
     }
+    const json_value *list = json_root(doc);
+    if (json_type_of(list) != JSON_ARRAY) {
+        json_free(doc);
+        return;
+    }
+    size_t n = json_len(list);
+    for (size_t i = n; i > 0; i--) {
+        struct wire_scrollback_message m;
+        if (wire_narrow_message(json_at(list, i - 1), &m)) render_message(app, &m, false);
+    }
+    json_free(doc);
 }
 
 static void draw_fill(int y, int x, int n, int pair) {
@@ -1305,36 +1487,168 @@ static int wrapped_text_lines(const char *s, int width) {
     return lines;
 }
 
+/* Wrapped height of a body, measured on its VISIBLE text.
+ *
+ * Control bytes occupy no cells, so measuring the raw string over-counts
+ * the height of any formatted message — the layout then reserves rows the
+ * text does not fill, leaving gaps in the scrollback. Strip first when the
+ * body carries formatting; skip the copy when it does not. */
+static int wrapped_text_lines_visible(const char *s, int width) {
+    if (!mirc_has_formatting(s)) return wrapped_text_lines(s, width);
+    char stripped[MAX_LINE * 2];
+    mirc_strip(s, stripped, sizeof(stripped));
+    return wrapped_text_lines(stripped, width);
+}
+
+/* ── mIRC colour → terminal colour ─────────────────────────────────────
+ *
+ * mIRC's palette is 99 RGB values and \x04 can name any RGB at all;
+ * terminals offer 8, 16 or 256 indexed colours. Everything is therefore
+ * mapped to the nearest xterm-256 index (or nearest basic-16 on a poorer
+ * terminal), which is what every other terminal IRC client does and works
+ * without requiring can_change_color().
+ *
+ * Colour PAIRS are the scarce resource: ncurses wants a pair per (fg, bg)
+ * combination and a terminal typically offers 256. They are allocated
+ * lazily from a pool above the theme's fixed pairs and cached, so a
+ * channel full of colourful bots settles on a small working set instead
+ * of exhausting the table on the first screenful. */
+#define CP_MIRC_BASE 40
+
+static struct {
+    short fg;
+    short bg;
+    short pair;
+} mirc_pairs[216];
+static size_t mirc_pair_count;
+static short mirc_pair_next = CP_MIRC_BASE;
+static short mirc_pair_limit;
+
+static void mirc_colors_init(void) {
+    /* Leave headroom below the cap: exhausting COLOR_PAIRS makes
+     * init_pair fail silently and text renders in the last pair set. */
+    mirc_pair_limit = (short)(COLOR_PAIRS > 256 ? 256 : COLOR_PAIRS);
+    if (mirc_pair_limit > (short)(CP_MIRC_BASE + 216)) mirc_pair_limit = CP_MIRC_BASE + 216;
+}
+
+/* Quantisation lives in termcolor.[ch]; the choice of WHICH quantiser is
+ * a curses-runtime question (COLORS), so it stays here. */
+static short mirc_terminal_color(long rgb) {
+    if (rgb < 0) return -1;
+    return (short)(COLORS >= 256 ? termcolor_xterm256(rgb) : termcolor_basic8(rgb));
+}
+
+/* Resolve a run's colour spec to an RGB, or -1 for "inherit". */
+static long mirc_run_rgb(int value, bool is_rgb) {
+    if (value == MIRC_COLOR_DEFAULT) return -1;
+    return is_rgb ? (long)value : mirc_palette_rgb(value);
+}
+
+/* A colour pair for (fg, bg), reusing one if already allocated. Returns 0
+ * (meaning "use the caller's pair") when the pool is exhausted or the run
+ * asks for no colour at all. */
+static int mirc_pair_for(long fg_rgb, long bg_rgb, int fallback_pair) {
+    if (fg_rgb < 0 && bg_rgb < 0) return fallback_pair;
+    if (!has_colors()) return fallback_pair;
+    short fg = fg_rgb < 0 ? (short)-1 : mirc_terminal_color(fg_rgb);
+    short bg = bg_rgb < 0 ? (short)-1 : mirc_terminal_color(bg_rgb);
+    for (size_t i = 0; i < mirc_pair_count; i++)
+        if (mirc_pairs[i].fg == fg && mirc_pairs[i].bg == bg) return mirc_pairs[i].pair;
+    if (mirc_pair_next >= mirc_pair_limit || mirc_pair_count >= 216) return fallback_pair;
+    short pair = mirc_pair_next++;
+    if (init_pair(pair, fg, bg) == ERR) return fallback_pair;
+    mirc_pairs[mirc_pair_count].fg = fg;
+    mirc_pairs[mirc_pair_count].bg = bg;
+    mirc_pairs[mirc_pair_count].pair = pair;
+    mirc_pair_count++;
+    return pair;
+}
+
+static attr_t mirc_run_attrs(const struct mirc_run *r, attr_t base) {
+    attr_t a = base;
+    if (r->bold) a |= A_BOLD;
+    if (r->underline) a |= A_UNDERLINE;
+    if (r->reverse) a |= A_REVERSE;
+    /* ncurses has no strikethrough and A_ITALIC is not universal; both
+     * degrade to dim rather than being dropped, so the emphasis survives
+     * even where the exact style cannot. */
+    if (r->italic || r->strikethrough) a |= A_DIM;
+    return a;
+}
+
 static void draw_wrapped_text(int y, int x, int width, int max_lines, int pair, attr_t attrs, const char *s) {
     if (width <= 0 || max_lines <= 0) return;
     int line = 0;
     int col = 0;
-    attron(COLOR_PAIR(pair) | attrs);
-    move(y, x);
-    for (const char *p = s; *p && line < max_lines; p++) {
-        if (*p == '\r') {
-            if (p[1] == '\n') p++;
-            line++;
-            col = 0;
-            if (line < max_lines) move(y + line, x);
-            continue;
+
+    /* Fast path: the overwhelming majority of messages carry no control
+     * bytes, and parsing runs for them would be pure overhead. */
+    if (!mirc_has_formatting(s)) {
+        attron(COLOR_PAIR(pair) | attrs);
+        move(y, x);
+        for (const char *p = s; *p && line < max_lines; p++) {
+            if (*p == '\r') {
+                if (p[1] == '\n') p++;
+                line++;
+                col = 0;
+                if (line < max_lines) move(y + line, x);
+                continue;
+            }
+            if (*p == '\n') {
+                line++;
+                col = 0;
+                if (line < max_lines) move(y + line, x);
+                continue;
+            }
+            if (col >= width) {
+                line++;
+                col = 0;
+                if (line >= max_lines) break;
+                move(y + line, x);
+            }
+            addch((unsigned char)*p);
+            col++;
         }
-        if (*p == '\n') {
-            line++;
-            col = 0;
-            if (line < max_lines) move(y + line, x);
-            continue;
-        }
-        if (col >= width) {
-            line++;
-            col = 0;
-            if (line >= max_lines) break;
-            move(y + line, x);
-        }
-        addch((unsigned char)*p);
-        col++;
+        attroff(COLOR_PAIR(pair) | attrs);
+        return;
     }
-    attroff(COLOR_PAIR(pair) | attrs);
+
+    struct mirc_run runs[MIRC_MAX_RUNS];
+    size_t nruns = mirc_parse(s, runs, MIRC_MAX_RUNS);
+    move(y, x);
+    for (size_t i = 0; i < nruns && line < max_lines; i++) {
+        const struct mirc_run *r = &runs[i];
+        long fg = mirc_run_rgb(r->fg, r->fg_is_rgb);
+        long bg = mirc_run_rgb(r->bg, r->bg_is_rgb);
+        int run_pair = mirc_pair_for(fg, bg, pair);
+        attr_t run_attrs = mirc_run_attrs(r, attrs);
+        attron(COLOR_PAIR(run_pair) | run_attrs);
+        for (size_t k = 0; k < r->len && line < max_lines; k++) {
+            char ch = r->text[k];
+            if (ch == '\r') {
+                if (k + 1 < r->len && r->text[k + 1] == '\n') k++;
+                line++;
+                col = 0;
+                if (line < max_lines) move(y + line, x);
+                continue;
+            }
+            if (ch == '\n') {
+                line++;
+                col = 0;
+                if (line < max_lines) move(y + line, x);
+                continue;
+            }
+            if (col >= width) {
+                line++;
+                col = 0;
+                if (line >= max_lines) break;
+                move(y + line, x);
+            }
+            addch((unsigned char)ch);
+            col++;
+        }
+        attroff(COLOR_PAIR(run_pair) | run_attrs);
+    }
 }
 
 static int message_display_lines(const char *line, int width) {
@@ -1345,9 +1659,9 @@ static int message_display_lines(const char *line, int width) {
         int body_x = (int)strlen(prefix) + (int)strlen(nick) + 3;
         int body_w = width - body_x;
         if (body_w < 12) body_w = width > 12 ? width - 2 : width;
-        return wrapped_text_lines(body, body_w);
+        return wrapped_text_lines_visible(body, body_w);
     }
-    return wrapped_text_lines(line, width);
+    return wrapped_text_lines_visible(line, width);
 }
 
 static void draw_message_line(int y, int x, int width, int max_lines, const char *line, bool mention_row, bool pending_row) {
@@ -1450,53 +1764,299 @@ static const char *panel_name(enum panel_kind panel) {
     return "chat";
 }
 
+/* ── Panels ────────────────────────────────────────────────────────────
+ *
+ * All three of these used to print a paragraph describing what the panel
+ * would eventually show ("This panel shell is wired; ... is the next REST
+ * pass"). They read the real endpoints now.
+ *
+ * Panel population does HTTP, so it must NOT hold app->lock — a blocking
+ * request under the lock freezes the whole UI, including the draw thread.
+ * Rows are gathered first and installed at the end. */
+
+/* Format a byte count for a table cell. */
+static void human_bytes(long bytes, char *out, size_t out_sz) {
+    static const char *const unit[] = {"B", "KB", "MB", "GB", "TB"};
+    double v = (double)bytes;
+    size_t u = 0;
+    while (v >= 1024.0 && u + 1 < sizeof(unit) / sizeof(unit[0])) {
+        v /= 1024.0;
+        u++;
+    }
+    if (u == 0) snprintf(out, out_sz, "%ld %s", bytes, unit[u]);
+    else snprintf(out, out_sz, "%.1f %s", v, unit[u]);
+}
+
+/* Format a unix-second or ISO-8601 timestamp for a table cell. */
+static void human_time(const json_value *v, char *out, size_t out_sz) {
+    long secs = 0;
+    if (json_long(v, &secs) && secs > 0) {
+        time_t t = secs > 100000000000L ? (time_t)(secs / 1000) : (time_t)secs;
+        struct tm tm;
+        localtime_r(&t, &tm);
+        strftime(out, out_sz, "%Y-%m-%d %H:%M", &tm);
+        return;
+    }
+    const char *s = json_string(v);
+    /* ISO-8601 truncated to minutes — the seconds and zone are noise in
+     * a fixed-width table. */
+    if (s) snprintf(out, out_sz, "%.16s", s);
+    else snprintf(out, out_sz, "—");
+}
+
+/* GET a path and hand the parsed document to `render`. Centralises the
+ * error reporting so a failing tab says WHICH call failed and why rather
+ * than rendering as mysteriously empty. */
+static void panel_fetch(struct app *app, const char *label, const char *path,
+                        void (*render)(struct app *, const json_value *)) {
+    struct http_response r = http_request(app, "GET", path, NULL);
+    if (r.status < 200 || r.status >= 300) {
+        panel_line(app, "  %s: HTTP %d%s%.80s", label, r.status, r.body ? " — " : "",
+                   r.body ? r.body : "");
+        free(r.body);
+        return;
+    }
+    json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+    if (!doc) {
+        panel_line(app, "  %s: malformed response", label);
+        free(r.body);
+        return;
+    }
+    render(app, json_root(doc));
+    json_free(doc);
+    free(r.body);
+}
+
+/* Some admin endpoints answer with a bare array, others with a named
+ * envelope. Accept either rather than guessing wrong and showing empty. */
+static const json_value *rows_of(const json_value *root, const char *key) {
+    if (json_type_of(root) == JSON_ARRAY) return root;
+    const json_value *v = json_get(root, key);
+    if (json_type_of(v) == JSON_ARRAY) return v;
+    v = json_get(root, "data");
+    return json_type_of(v) == JSON_ARRAY ? v : NULL;
+}
+
+static void render_archive_rows(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "archive");
+    size_t n = json_len(rows);
+    panel_line(app, "  %-28s %-8s %8s  %s", "TARGET", "KIND", "ROWS", "LAST ACTIVITY");
+    for (size_t i = 0; i < n; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *target = json_string(json_get(e, "target"));
+        const char *kind = json_string(json_get(e, "kind"));
+        long count = 0;
+        json_long(json_get(e, "row_count"), &count);
+        char when[32];
+        human_time(json_get(e, "last_activity"), when, sizeof(when));
+        if (target)
+            panel_line(app, "  %-28s %-8s %8ld  %s", target, kind ? kind : "?", count, when);
+    }
+    if (n == 0) panel_line(app, "  (nothing archived on this network)");
+}
+
+static void render_admin_users(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "users");
+    size_t n = json_len(rows);
+    panel_line(app, "  users (%zu)", n);
+    panel_line(app, "    %-24s %-6s %s", "NAME", "ADMIN", "ID");
+    for (size_t i = 0; i < n && i < 50; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *name = json_string(json_get(e, "name"));
+        const char *id = json_string(json_get(e, "id"));
+        bool is_admin = json_bool(json_get(e, "is_admin"), false);
+        if (name)
+            panel_line(app, "    %-24s %-6s %.8s", name, is_admin ? "yes" : "no", id ? id : "");
+    }
+    if (n > 50) panel_line(app, "    ... %zu more", n - 50);
+}
+
+static void render_admin_sessions(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "sessions");
+    size_t n = json_len(rows);
+    panel_line(app, "  sessions (%zu)", n);
+    /* DB state and live pid are separate sources of truth and are allowed
+     * to disagree; showing both (with an explicit "—" for a missing live
+     * state) is the honesty signal that something diverged. */
+    panel_line(app, "    %-18s %-16s %-12s %s", "NETWORK", "NICK", "DB STATE", "LIVE");
+    for (size_t i = 0; i < n && i < 50; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *net = json_string(json_get(e, "network_slug"));
+        const char *nick = json_string(json_get(e, "nick"));
+        const char *db = json_string(json_get(e, "connection_state"));
+        const json_value *live = json_get(e, "live_state");
+        const char *live_s = json_string(live);
+        panel_line(app, "    %-18s %-16s %-12s %s", net ? net : "?", nick ? nick : "?",
+                   db ? db : "?", live_s ? live_s : "—");
+    }
+    if (n > 50) panel_line(app, "    ... %zu more", n - 50);
+}
+
+static void render_admin_visitors(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "visitors");
+    size_t n = json_len(rows);
+    panel_line(app, "  visitors (%zu)", n);
+    for (size_t i = 0; i < n && i < 30; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *nick = json_string(json_get(e, "nick"));
+        char when[32];
+        human_time(json_get(e, "expires_at"), when, sizeof(when));
+        if (nick) panel_line(app, "    %-20s expires %s", nick, when);
+    }
+    if (n > 30) panel_line(app, "    ... %zu more", n - 30);
+}
+
+static void render_admin_uploads(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "uploads");
+    size_t n = json_len(rows);
+    long total = 0;
+    for (size_t i = 0; i < n; i++) {
+        long sz = 0;
+        json_long(json_get(json_at(rows, i), "byte_size"), &sz);
+        total += sz;
+    }
+    char human[32];
+    human_bytes(total, human, sizeof(human));
+    panel_line(app, "  uploads (%zu, %s total)", n, human);
+}
+
+static void render_admin_networks(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "networks");
+    size_t n = json_len(rows);
+    panel_line(app, "  networks (%zu)", n);
+    panel_line(app, "    %-18s %-8s %s", "SLUG", "ID", "SERVICES");
+    for (size_t i = 0; i < n && i < 30; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *slug = json_string(json_get(e, "slug"));
+        long id = 0;
+        json_long(json_get(e, "id"), &id);
+        const char *flavor = json_string(json_get(e, "services_flavor"));
+        if (slug) panel_line(app, "    %-18s %-8ld %s", slug, id, flavor ? flavor : "—");
+    }
+}
+
+static void render_settings_caps(struct app *app, const json_value *root) {
+    const json_value *up = json_get(root, "upload");
+    if (!up) up = root;
+    const char *host = json_string(json_get(up, "active_host"));
+    panel_line(app, "  upload host      %s", host ? host : "—");
+    const struct { const char *key; const char *label; } caps[] = {
+        {"image_per_file_cap_bytes", "image cap"},
+        {"video_per_file_cap_bytes", "video cap"},
+        {"document_per_file_cap_bytes", "document cap"},
+        {"audio_per_file_cap_bytes", "audio cap"},
+        {"global_cap_bytes", "global cap"},
+    };
+    for (size_t i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
+        long v = 0;
+        if (json_long(json_get(up, caps[i].key), &v)) {
+            char human[32];
+            human_bytes(v, human, sizeof(human));
+            panel_line(app, "  %-16s %s", caps[i].label, human);
+        }
+    }
+}
+
+static void render_notify_rows(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "notify");
+    size_t n = json_len(rows);
+    panel_line(app, "  watched nicks (%zu)", n);
+    for (size_t i = 0; i < n && i < 30; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *nick = json_string(json_get(e, "nick"));
+        const char *presence = json_string(json_get(e, "presence"));
+        if (nick) panel_line(app, "    %-20s %s", nick, presence ? presence : "unknown");
+    }
+    if (n == 0) panel_line(app, "    (none — /notify <nick> to add)");
+}
+
 static void open_panel(struct app *app, enum panel_kind panel) {
+    /* Snapshot what the fetches need, then release the lock: everything
+     * below blocks on HTTP. */
     pthread_mutex_lock(&app->lock);
-    clear_panel_lines(app);
+    clear_panel_lines_locked(app);
     app->panel = panel;
     struct window current = app->windows[app->current];
+    size_t window_count = app->window_count;
+    size_t alias_count = app->aliases.count;
+    /* Snapshot the network table too — the event thread mutates it. */
+    struct network nets[MAX_NETWORKS];
+    size_t net_count = app->network_count;
+    for (size_t i = 0; i < net_count; i++) nets[i] = app->networks[i];
+    pthread_mutex_unlock(&app->lock);
+
     panel_line(app, "%s", panel_name(panel));
     panel_line(app, "%s", "");
+
     switch (panel) {
-    case PANEL_ARCHIVE:
-        panel_line(app, "Archive panel for network: %s", current.network);
+    case PANEL_ARCHIVE: {
+        panel_line(app, "archive — %s", current.network);
         panel_line(app, "%s", "");
-        panel_line(app, "Planned parity commands:");
-        panel_line(app, "  /archive                 open this panel");
-        panel_line(app, "  /archive open <target>   open archived scrollback target");
-        panel_line(app, "  /archive purge <target>  delete archived scrollback target");
+        char *slug = url_encode(current.network);
+        char *path = xasprintf("/networks/%s/archive", slug);
+        free(slug);
+        panel_fetch(app, "archive", path, render_archive_rows);
+        free(path);
         panel_line(app, "%s", "");
-        panel_line(app, "Server endpoint: GET /networks/%s/archive", current.network);
-        panel_line(app, "This panel shell is wired; archive row fetching is the next REST pass.");
+        panel_line(app, "  /archive open <target>   re-open an archived window");
+        panel_line(app, "  /archive purge <target>  delete its scrollback (irreversible)");
         break;
+    }
+
     case PANEL_SETTINGS:
-        panel_line(app, "Settings panel");
+        panel_line(app, "connection");
+        panel_line(app, "  server         %s", app->url.base);
+        panel_line(app, "  subject        %s", app->subject);
+        panel_line(app, "  websocket      %s", app->ws_connected ? "connected" : "reconnecting");
+        panel_line(app, "  windows        %zu", window_count);
+        panel_line(app, "  aliases        %zu", alias_count);
         panel_line(app, "%s", "");
-        panel_line(app, "Server: %s", app->url.base);
-        panel_line(app, "Subject: %s", app->subject);
-        panel_line(app, "WebSocket: %s", app->ws_connected ? "connected" : "offline");
-        panel_line(app, "Windows: %zu", app->window_count);
+        panel_line(app, "networks");
+        for (size_t i = 0; i < net_count; i++) {
+            struct network *n = &nets[i];
+            panel_line(app, "  %-16s %-10s nick %s%s%s", n->slug,
+                       n->conn_known ? wire_connection_state_name(n->conn_state) : "unknown",
+                       n->nick[0] ? n->nick : "—", n->umodes[0] ? " +" : "",
+                       n->umodes[0] ? n->umodes : "");
+        }
         panel_line(app, "%s", "");
-        panel_line(app, "Local keys:");
-        panel_line(app, "  PgUp/PgDn scroll chat buffer");
-        panel_line(app, "  Ctrl-N/Ctrl-P cycle windows");
-        panel_line(app, "  Tab complete, Up/Down input history");
-        panel_line(app, "  Click image/video links to preview (needs chafa+ffmpeg)");
-        panel_line(app, "  Esc or /chat returns to chat");
+        {
+            char *nslug = url_encode(current.network);
+            char *npath = xasprintf("/networks/%s/notify", nslug);
+            free(nslug);
+            panel_fetch(app, "notify", npath, render_notify_rows);
+            free(npath);
+        }
+        panel_line(app, "%s", "");
+        panel_line(app, "server settings");
+        panel_fetch(app, "settings", "/api/server-settings", render_settings_caps);
+        panel_line(app, "%s", "");
+        panel_line(app, "keys");
+        panel_line(app, "  PgUp/PgDn scroll   End bottom   Ctrl-N/Ctrl-P cycle windows");
+        panel_line(app, "  Tab complete       Up/Down history   Esc or /chat returns to chat");
+        panel_line(app, "  click a media link to preview it in the terminal");
         break;
+
     case PANEL_ADMIN:
-        panel_line(app, "Admin panel");
+        panel_line(app, "admin");
         panel_line(app, "%s", "");
-        panel_line(app, "Admin REST surfaces available in grappa:");
-        panel_line(app, "  /admin/me /admin/visitors /admin/sessions /admin/networks");
-        panel_line(app, "  /admin/users /admin/credentials /admin/settings /admin/uploads");
+        /* Every tab is fetched independently and reports its own failure,
+         * so a 403 on one (a non-admin subject, or a resource missing
+         * from the proxy allowlist) does not blank the whole panel. */
+        panel_fetch(app, "sessions", "/admin/sessions", render_admin_sessions);
         panel_line(app, "%s", "");
-        panel_line(app, "This terminal panel shell is wired; admin tables/actions are the next REST pass.");
+        panel_fetch(app, "users", "/admin/users", render_admin_users);
+        panel_line(app, "%s", "");
+        panel_fetch(app, "networks", "/admin/networks", render_admin_networks);
+        panel_line(app, "%s", "");
+        panel_fetch(app, "visitors", "/admin/visitors", render_admin_visitors);
+        panel_line(app, "%s", "");
+        panel_fetch(app, "uploads", "/admin/uploads", render_admin_uploads);
         break;
+
     case PANEL_CHAT:
         break;
     }
-    pthread_mutex_unlock(&app->lock);
 }
 
 static int split_message_line(const char *line, char *prefix, size_t prefix_sz, char *nick, size_t nick_sz, const char **body) {
@@ -1539,8 +2099,8 @@ static bool login(struct app *app, const char *identifier, const char *password)
         free(r.body);
         return false;
     }
-    if (!json_find_string(r.body, "token", app->token, sizeof(app->token))) die("login response missing token");
-    parse_subject(r.body, app->subject, sizeof(app->subject));
+    if (!json_top_string(r.body, r.body_len, "token", app->token, sizeof(app->token))) die("login response missing token");
+    parse_subject(r.body, r.body_len, app->subject, sizeof(app->subject));
     if (!app->subject[0]) die("login response missing subject");
     free(r.body);
     return true;
@@ -1593,7 +2153,7 @@ static void save_token(struct app *app, const char *path) {
 static bool validate_saved_token(struct app *app) {
     struct http_response me = http_request(app, "GET", "/me", NULL);
     bool ok = me.status >= 200 && me.status < 300;
-    if (ok) parse_subject(me.body, app->subject, sizeof(app->subject));
+    if (ok) parse_subject(me.body, me.body_len, app->subject, sizeof(app->subject));
     free(me.body);
     return ok && app->subject[0];
 }
@@ -1635,8 +2195,8 @@ static bool consume_share(struct app *app, const char *share_token) {
         free(r.body);
         return false;
     }
-    if (!json_find_string(r.body, "token", app->token, sizeof(app->token))) die("share consume response missing token");
-    parse_subject(r.body, app->subject, sizeof(app->subject));
+    if (!json_top_string(r.body, r.body_len, "token", app->token, sizeof(app->token))) die("share consume response missing token");
+    parse_subject(r.body, r.body_len, app->subject, sizeof(app->subject));
     if (!app->subject[0]) die("share consume response missing subject");
     free(r.body);
     return true;
@@ -1680,20 +2240,39 @@ static void seed_state(struct app *app) {
 
     struct http_response nets = http_request(app, "GET", "/networks", NULL);
     if (nets.status < 200 || nets.status >= 300) die("GET /networks failed HTTP %d: %s", nets.status, nets.body);
-    parse_networks(app, nets.body);
+    parse_networks(app, nets.body, nets.body_len);
     free(nets.body);
     if (app->network_count == 0) die("no networks available");
 
     for (size_t i = 0; i < app->network_count; i++) {
+        /* Every network gets a $server window, not just a network with no
+         * channels. It is where server replies land — MOTD, LUSERS, WHOIS,
+         * LINKS, connection-state transitions — and previously those had
+         * nowhere network-scoped to go, so a network with one channel had
+         * its server output land in the channel or nowhere at all. */
+        add_window_ex(app, app->networks[i].slug, "$server", false);
         char *slug = url_encode(app->networks[i].slug);
         char *path = xasprintf("/networks/%s/channels", slug);
         free(slug);
         struct http_response ch = http_request(app, "GET", path, NULL);
         free(path);
-        if (ch.status >= 200 && ch.status < 300) parse_channels(app, app->networks[i].slug, ch.body);
+        if (ch.status >= 200 && ch.status < 300) parse_channels(app, app->networks[i].slug, ch.body, ch.body_len);
         free(ch.body);
     }
-    if (app->window_count == 0) add_window(app, app->networks[0].slug, "$server");
+    /* Land on a real conversation, not on $server.
+     *
+     * $server is READ-ONLY by server contract — `validate_post_target_name/1`
+     * rejects it with :bad_request — so focusing it at startup meant the
+     * first thing a user typed came back as a bare "send failed HTTP 400".
+     * Prefer the first channel or query; fall back to $server only when
+     * there is genuinely nothing else, which is the case it exists for. */
+    app->current = 0;
+    for (size_t i = 0; i < app->window_count; i++) {
+        if (strcmp(app->windows[i].channel, "$server") != 0) {
+            app->current = i;
+            break;
+        }
+    }
 }
 
 static void fetch_scrollback(struct app *app, struct window *w) {
@@ -1704,7 +2283,7 @@ static void fetch_scrollback(struct app *app, struct window *w) {
     free(chan);
     struct http_response r = http_request(app, "GET", path, NULL);
     free(path);
-    if (r.status >= 200 && r.status < 300) parse_messages(app, r.body);
+    if (r.status >= 200 && r.status < 300) parse_messages(app, r.body, r.body_len);
     else log_line(app, "GET messages failed HTTP %d", r.status);
     free(r.body);
 }
@@ -1717,7 +2296,7 @@ static void fetch_scrollback_target(struct app *app, const char *network, const 
     free(chan);
     struct http_response r = http_request(app, "GET", path, NULL);
     free(path);
-    if (r.status >= 200 && r.status < 300) parse_messages(app, r.body);
+    if (r.status >= 200 && r.status < 300) parse_messages(app, r.body, r.body_len);
     else log_line(app, "GET messages failed HTTP %d", r.status);
     free(r.body);
 }
@@ -1739,22 +2318,52 @@ static char *base64_encode(const unsigned char *buf, size_t len) {
     return out;
 }
 
+/* base64url (RFC 4648 §5): standard base64 with `-`/`_` substituted for
+ * `+`/`/` and the `=` padding stripped. Phoenix's websocket transport
+ * expects the bearer in exactly this form, and phoenix.js builds it the
+ * same way (btoa, the two substitutions, then strip padding). */
+static char *base64url_encode(const unsigned char *buf, size_t len) {
+    char *b64 = base64_encode(buf, len);
+    for (char *p = b64; *p; p++) {
+        if (*p == '+') *p = '-';
+        else if (*p == '/') *p = '_';
+    }
+    size_t n = strlen(b64);
+    while (n > 0 && b64[n - 1] == '=') b64[--n] = '\0';
+    return b64;
+}
+
 static bool ws_connect(struct app *app) {
     if (!conn_open(app, &app->ws)) return false;
     unsigned char nonce[16];
     RAND_bytes(nonce, sizeof(nonce));
     char *key = base64_encode(nonce, sizeof(nonce));
-    char *tok = url_encode(app->token);
+
+    /* The bearer rides the Sec-WebSocket-Protocol SUBPROTOCOL, never the
+     * upgrade URL.
+     *
+     * #95 introduced this path — a `?token=…` query string is visible in
+     * nginx access logs before redaction — and kept the query-string
+     * bearer as a fallback. #202 (2026-07-19) DROPPED that fallback:
+     * `UserSocket.connect/3` now reads the token ONLY from
+     * `connect_info.auth_token`, which Phoenix decodes from
+     * `base64url.bearer.phx.<base64url(token)>`.
+     *
+     * Shottino was still sending `?token=…` with no subprotocol, so every
+     * handshake since #202 landed was rejected before it reached the
+     * channel. That is what "websocket unavailable" was reporting. */
+    char *tok_b64 = base64url_encode((const unsigned char *)app->token, strlen(app->token));
     char *req = xasprintf(
-        "GET /socket/websocket?token=%s&vsn=2.0.0 HTTP/1.1\r\n"
+        "GET /socket/websocket?vsn=2.0.0 HTTP/1.1\r\n"
         "Host: %s\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Key: %s\r\n"
         "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Protocol: base64url.bearer.phx.%s\r\n"
         "User-Agent: shottino/0.1\r\n\r\n",
-        tok, app->url.host, key);
-    free(tok);
+        app->url.host, key, tok_b64);
+    free(tok_b64);
     free(key);
     if (!conn_write_all(&app->ws, req, strlen(req))) {
         free(req);
@@ -1766,12 +2375,29 @@ static bool ws_connect(struct app *app) {
     while (len + 1 < sizeof(hdr)) {
         char c;
         ssize_t n = conn_read(&app->ws, &c, 1);
-        if (n <= 0) return false;
+        if (n <= 0) {
+            log_line(app, "websocket handshake: connection closed before a reply");
+            return false;
+        }
         hdr[len++] = c;
         hdr[len] = 0;
         if (strstr(hdr, "\r\n\r\n")) break;
     }
-    if (!strstr(hdr, " 101 ")) return false;
+    if (!strstr(hdr, " 101 ")) {
+        /* Report WHAT the server said. "websocket unavailable" with no
+         * status is what made this bug take a server-side code read to
+         * diagnose: a 403 (bad/expired bearer) and a 404 (wrong path, or
+         * a proxy not forwarding /socket) are entirely different repairs
+         * and looked identical from here. */
+        char status[128] = "";
+        const char *eol = strstr(hdr, "\r\n");
+        size_t status_len = eol ? (size_t)(eol - hdr) : len;
+        if (status_len >= sizeof(status)) status_len = sizeof(status) - 1;
+        memcpy(status, hdr, status_len);
+        status[status_len] = '\0';
+        log_line(app, "websocket handshake rejected: %s", status[0] ? status : "(no status line)");
+        return false;
+    }
     int flags = fcntl(app->ws.fd, F_GETFL, 0);
     fcntl(app->ws.fd, F_SETFL, flags | O_NONBLOCK);
     app->ws_connected = true;
@@ -1921,8 +2547,824 @@ static int ws_read_frame(struct app *app, char **out) {
     return 1;
 }
 
+/* ── Typed wire-event handling ─────────────────────────────────────────
+ *
+ * One narrow, one dispatch. Every arm receives a fully-validated event, so
+ * no handler re-reads the raw frame and none can half-apply a malformed
+ * payload. A kind shottino does not consume falls through silently: a
+ * version-skewed server WILL push events this build has never heard of,
+ * and that is not an error worth a line in the user's chat buffer. */
+
+static struct network *network_by_slug_locked(struct app *app, const char *slug) {
+    for (size_t i = 0; i < app->network_count; i++)
+        if (strcmp(app->networks[i].slug, slug) == 0) return &app->networks[i];
+    return NULL;
+}
+
+static struct network *network_by_id_locked(struct app *app, long id) {
+    for (size_t i = 0; i < app->network_count; i++)
+        if (app->networks[i].id == (int)id) return &app->networks[i];
+    return NULL;
+}
+
+/* Caller holds app->lock. The draw path is already inside the lock, so
+ * the locking wrapper below would self-deadlock there — hence the split. */
+static char member_sigil_locked(struct app *app, const char *network, const char *modes) {
+    /* Conventional fallback, used until the network sends its 005. */
+    static const char fallback_letters[] = "qaohv";
+    static const char fallback_sigils[] = "~&@%+";
+    struct network *n = network_by_slug_locked(app, network);
+    if (n && n->prefix_count) {
+        for (size_t i = 0; i < n->prefix_count; i++)
+            if (strchr(modes, n->prefix_letters[i])) return n->prefix_sigils[i];
+        return 0;
+    }
+    for (size_t i = 0; fallback_letters[i]; i++)
+        if (strchr(modes, fallback_letters[i])) return fallback_sigils[i];
+    return 0;
+}
+
+static char member_sigil(struct app *app, const char *network, const char *modes) {
+    pthread_mutex_lock(&app->lock);
+    char sigil = member_sigil_locked(app, network, modes);
+    pthread_mutex_unlock(&app->lock);
+    return sigil;
+}
+
+static void set_window_state(struct app *app, const char *network, const char *channel,
+                            enum window_state state, const char *detail, long numeric) {
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) {
+        if (strcmp(app->windows[i].network, network) == 0 &&
+            strcmp(app->windows[i].channel, channel) == 0) {
+            app->windows[i].state = state;
+            snprintf(app->windows[i].state_detail, sizeof(app->windows[i].state_detail), "%s",
+                     detail ? detail : "");
+            app->windows[i].failure_numeric = numeric;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
+static void copy_members_from_wire(struct app *app, const char *network, const char *channel,
+                                   const json_value *list, size_t count) {
+    struct member members[512];
+    size_t n = count > 512 ? 512 : count;
+    for (size_t i = 0; i < n; i++) {
+        struct wire_member wm;
+        if (!wire_member_at(list, i, &wm)) continue;
+        snprintf(members[i].nick, sizeof(members[i].nick), "%s", wm.nick);
+        members[i].modes[0] = '\0';
+        for (size_t j = 0, w = 0; j < wm.mode_count && w + 1 < sizeof(members[i].modes); j++) {
+            const char *mode = wire_string_at(wm.modes, j);
+            if (mode && mode[0]) {
+                members[i].modes[w++] = mode[0];
+                members[i].modes[w] = '\0';
+            }
+        }
+    }
+    set_window_members(app, network, channel, members, n);
+}
+
+/* ── Reply cards ───────────────────────────────────────────────────────
+ *
+ * Every one of these is a reply to something the user typed. Shottino
+ * pushed the request upstream and then dropped the bundle that came back,
+ * so /whois, /who, /names, /lusers, /banlist, /links, /motd, /info and
+ * /version were all write-only verbs: they did something on the server and
+ * showed the user nothing.
+ *
+ * They render into the $server window of the network that answered, which
+ * is where a terminal client conventionally puts server output — and,
+ * unlike the global log, keeps one network's MOTD out of another's.
+ */
+
+/* One card row, scoped to a network's $server window. */
+static void card(struct app *app, const char *network, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
+static void card(struct app *app, const char *network, const char *fmt, ...) {
+    char body[MAX_LINE];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(body, sizeof(body), fmt, ap);
+    va_end(ap);
+    log_line(app, "[%s/$server] %s", network, body);
+}
+
+/* Skip a NULL/empty field rather than printing "(null)" or a blank row —
+ * a WHOIS against a hidden user is mostly empty and should read as short,
+ * not as a wall of dashes. */
+static void card_field(struct app *app, const char *network, const char *label, const char *value) {
+    if (value && value[0]) card(app, network, "  %-12s %s", label, value);
+}
+
+static void render_whois(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.whois.network;
+    card(app, net, "--- WHOIS %s", ev->u.whois.target);
+    if (ev->u.whois.user || ev->u.whois.host) {
+        card(app, net, "  %-12s %s@%s", "user", ev->u.whois.user ? ev->u.whois.user : "?",
+             ev->u.whois.host ? ev->u.whois.host : "?");
+    }
+    card_field(app, net, "realname", ev->u.whois.realname);
+    card_field(app, net, "account", ev->u.whois.account);
+    if (ev->u.whois.server) {
+        card(app, net, "  %-12s %s%s%s", "server", ev->u.whois.server,
+             ev->u.whois.server_info ? " — " : "",
+             ev->u.whois.server_info ? ev->u.whois.server_info : "");
+    }
+    card_field(app, net, "modes", ev->u.whois.umodes);
+    card_field(app, net, "away", ev->u.whois.away_message);
+    card_field(app, net, "actually", ev->u.whois.actually_host);
+    card_field(app, net, "ip", ev->u.whois.actually_ip);
+
+    if (ev->u.whois.has_idle) {
+        long s = ev->u.whois.idle_seconds;
+        card(app, net, "  %-12s %ldh %ldm %lds", "idle", s / 3600, (s % 3600) / 60, s % 60);
+    }
+    if (ev->u.whois.has_signon) {
+        time_t t = (time_t)ev->u.whois.signon;
+        struct tm tm;
+        char when[64];
+        localtime_r(&t, &tm);
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &tm);
+        card(app, net, "  %-12s %s", "signon", when);
+    }
+
+    /* Flags collapse onto one line — nine separate "yes" rows would bury
+     * the fields that carry actual information. */
+    char flags[256] = "";
+    size_t w = 0;
+    const struct { bool on; const char *name; } flag_list[] = {
+        {ev->u.whois.is_operator, "operator"},
+        {ev->u.whois.is_admin, "admin"},
+        {ev->u.whois.is_services_admin, "services-admin"},
+        {ev->u.whois.is_helper, "helper"},
+        {ev->u.whois.is_chanop, "chanop"},
+        {ev->u.whois.is_registered, "registered"},
+        {ev->u.whois.using_ssl || ev->u.whois.secure, "secure"},
+        {ev->u.whois.is_agent, "agent"},
+        {ev->u.whois.is_java, "java"},
+    };
+    for (size_t i = 0; i < sizeof(flag_list) / sizeof(flag_list[0]); i++) {
+        if (!flag_list[i].on) continue;
+        int n = snprintf(flags + w, sizeof(flags) - w, "%s%s", w ? ", " : "", flag_list[i].name);
+        if (n > 0 && (size_t)n < sizeof(flags) - w) w += (size_t)n;
+    }
+    card_field(app, net, "flags", flags);
+    card_field(app, net, "oper", ev->u.whois.oper_text);
+    card_field(app, net, "cipher", ev->u.whois.secure_cipher);
+    card_field(app, net, "certfp", ev->u.whois.certfp);
+
+    if (ev->u.whois.has_channels && ev->u.whois.channel_count) {
+        /* Channels wrap across rows instead of one row each — an active
+         * user is in dozens and would otherwise fill the buffer. */
+        char line[MAX_LINE] = "";
+        size_t lw = 0;
+        bool first_row = true;
+        for (size_t i = 0; i < ev->u.whois.channel_count; i++) {
+            const char *ch = wire_string_at(ev->u.whois.channels, i);
+            if (!ch) continue;
+            if (lw && lw + strlen(ch) + 1 >= 68) {
+                /* Only the first row carries the label; continuation rows
+                 * align under it so the block reads as one field. */
+                card(app, net, "  %-12s %s", first_row ? "channels" : "", line);
+                first_row = false;
+                line[0] = '\0';
+                lw = 0;
+            }
+            int n = snprintf(line + lw, sizeof(line) - lw, "%s%s", lw ? " " : "", ch);
+            if (n > 0 && (size_t)n < sizeof(line) - lw) lw += (size_t)n;
+        }
+        if (lw) card(app, net, "  %-12s %s", first_row ? "channels" : "", line);
+    }
+    for (size_t i = 0; i < ev->u.whois.extra_count; i++) {
+        struct wire_whois_extra x;
+        if (wire_whois_extra_at(ev->u.whois.extra_lines, i, &x))
+            card(app, net, "  %-12s %s", "", x.text);
+    }
+}
+
+static void render_whowas(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.whowas.network;
+    if (ev->u.whowas.not_found) {
+        card(app, net, "--- WHOWAS %s: no such nick in history", ev->u.whowas.target);
+        return;
+    }
+    card(app, net, "--- WHOWAS %s", ev->u.whowas.target);
+    if (ev->u.whowas.user || ev->u.whowas.host)
+        card(app, net, "  %-12s %s@%s", "user", ev->u.whowas.user ? ev->u.whowas.user : "?",
+             ev->u.whowas.host ? ev->u.whowas.host : "?");
+    card_field(app, net, "realname", ev->u.whowas.realname);
+    card_field(app, net, "server", ev->u.whowas.server);
+    card_field(app, net, "last seen", ev->u.whowas.logoff_time);
+}
+
+static void render_who(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.who_reply.network;
+    card(app, net, "--- WHO %s (%zu)", ev->u.who_reply.target, ev->u.who_reply.user_count);
+    for (size_t i = 0; i < ev->u.who_reply.user_count; i++) {
+        struct wire_who_user u;
+        if (!wire_who_user_at(ev->u.who_reply.users, i, &u)) continue;
+        card(app, net, "  %-16s %-4s %s@%s%s%s", u.nick, u.modes ? u.modes : "",
+             u.user ? u.user : "?", u.host ? u.host : "?", u.realname ? " — " : "",
+             u.realname ? u.realname : "");
+    }
+    if (ev->u.who_reply.user_count == 0) card(app, net, "  (no matches)");
+}
+
+static void render_names(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.names_reply.network;
+    card(app, net, "--- NAMES %s (%zu)", ev->u.names_reply.channel,
+         ev->u.names_reply.member_count);
+    /* Wrapped columns, sigils resolved from this network's PREFIX. */
+    char line[MAX_LINE] = "";
+    size_t lw = 0;
+    for (size_t i = 0; i < ev->u.names_reply.member_count; i++) {
+        struct wire_member m;
+        if (!wire_member_at(ev->u.names_reply.members, i, &m)) continue;
+        char modes[8] = "";
+        for (size_t j = 0, w = 0; j < m.mode_count && w + 1 < sizeof(modes); j++) {
+            const char *mode = wire_string_at(m.modes, j);
+            if (mode && mode[0]) { modes[w++] = mode[0]; modes[w] = '\0'; }
+        }
+        char sigil = member_sigil(app, net, modes);
+        char entry[MAX_CHANNEL + 2];
+        snprintf(entry, sizeof(entry), "%c%s", sigil ? sigil : ' ', m.nick);
+        if (lw && lw + strlen(entry) + 1 >= 70) {
+            card(app, net, "  %s", line);
+            line[0] = '\0';
+            lw = 0;
+        }
+        int n = snprintf(line + lw, sizeof(line) - lw, "%s%s", lw ? " " : "", entry);
+        if (n > 0 && (size_t)n < sizeof(line) - lw) lw += (size_t)n;
+    }
+    if (lw) card(app, net, "  %s", line);
+    /* NAMES doubles as a roster refresh for the channel's member pane. */
+    copy_members_from_wire(app, net, ev->u.names_reply.channel, ev->u.names_reply.members,
+                           ev->u.names_reply.member_count);
+}
+
+static void render_lusers(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.lusers.network;
+    card(app, net, "--- LUSERS");
+    const struct { int idx; const char *label; long value; } rows[] = {
+        {LUSERS_TOTAL_USERS, "users", ev->u.lusers.total_users},
+        {LUSERS_INVISIBLE, "invisible", ev->u.lusers.invisible},
+        {LUSERS_OPERATORS, "operators", ev->u.lusers.operators},
+        {LUSERS_SERVERS, "servers", ev->u.lusers.servers},
+        {LUSERS_UNKNOWN_CONNECTIONS, "unknown", ev->u.lusers.unknown_connections},
+        {LUSERS_CHANNELS_FORMED, "channels", ev->u.lusers.channels_formed},
+        {LUSERS_LOCAL_CLIENTS, "local", ev->u.lusers.local_clients},
+        {LUSERS_LOCAL_SERVERS, "local srv", ev->u.lusers.local_servers},
+        {LUSERS_CURRENT_LOCAL, "cur local", ev->u.lusers.current_local},
+        {LUSERS_MAX_LOCAL, "max local", ev->u.lusers.max_local},
+        {LUSERS_CURRENT_GLOBAL, "cur global", ev->u.lusers.current_global},
+        {LUSERS_MAX_GLOBAL, "max global", ev->u.lusers.max_global},
+    };
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        /* An absent count renders as an em dash rather than 0 — "we were
+         * not told" and "there are none" are different facts. */
+        if (ev->u.lusers.has[rows[i].idx]) card(app, net, "  %-12s %ld", rows[i].label, rows[i].value);
+        else card(app, net, "  %-12s —", rows[i].label);
+    }
+}
+
+static void render_banlist(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.banlist.network;
+    card(app, net, "--- BANLIST %s (%zu)", ev->u.banlist.channel, ev->u.banlist.entry_count);
+    for (size_t i = 0; i < ev->u.banlist.entry_count; i++) {
+        struct wire_banlist_entry b;
+        if (!wire_banlist_entry_at(ev->u.banlist.entries, i, &b)) continue;
+        char when[64] = "";
+        if (b.set_ts) {
+            /* set_ts is a unix-second STRING on the wire. */
+            time_t t = (time_t)strtol(b.set_ts, NULL, 10);
+            if (t > 0) {
+                struct tm tm;
+                localtime_r(&t, &tm);
+                strftime(when, sizeof(when), "%Y-%m-%d", &tm);
+            }
+        }
+        card(app, net, "  %-32s %s%s%s", b.mask, b.setter ? b.setter : "?", when[0] ? " " : "",
+             when);
+    }
+    if (ev->u.banlist.entry_count == 0) card(app, net, "  (no bans set)");
+}
+
+static void render_links(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.links.network;
+    card(app, net, "--- LINKS (%zu)", ev->u.links.entry_count);
+    if (ev->u.links.entry_count == 0) {
+        /* An empty topology is the restricted/hidden signal, not an error
+         * — say so rather than leaving a bare count of zero. */
+        card(app, net, "  (topology hidden or restricted by the server)");
+        return;
+    }
+    for (size_t i = 0; i < ev->u.links.entry_count; i++) {
+        struct wire_links_entry l;
+        if (!wire_links_entry_at(ev->u.links.entries, i, &l)) continue;
+        /* Indent by hop count so the tree shape is visible in a terminal
+         * the way cicchetto's radial map shows it graphically. */
+        int depth = l.has_hopcount && l.hopcount > 0 && l.hopcount < 16 ? (int)l.hopcount : 0;
+        card(app, net, "  %*s%s%s%s", depth * 2, "", l.server, l.description ? " — " : "",
+             l.description ? l.description : "");
+    }
+}
+
+static void render_server_reply(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.server_reply.network;
+    const char *label = ev->u.server_reply.source == REPLY_INFO
+                            ? "INFO"
+                            : (ev->u.server_reply.source == REPLY_VERSION ? "VERSION" : "MOTD");
+    card(app, net, "--- %s", label);
+    for (size_t i = 0; i < ev->u.server_reply.line_count; i++) {
+        const char *line = wire_string_at(ev->u.server_reply.lines, i);
+        if (line) card(app, net, "  %s", line);
+    }
+}
+
+static void render_channel_modes(struct app *app, const struct wire_event *ev) {
+    char modes[128] = "+";
+    size_t w = 1;
+    for (size_t i = 0; i < ev->u.channel_modes.mode_count && w + 1 < sizeof(modes); i++) {
+        const char *m = wire_string_at(ev->u.channel_modes.modes, i);
+        if (m && m[0]) { modes[w++] = m[0]; modes[w] = '\0'; }
+    }
+    if (w == 1) return; /* no modes set — nothing worth a row */
+    log_line(app, "[%s/%s] --- channel modes %s", ev->u.channel_modes.network,
+             ev->u.channel_modes.channel, modes);
+}
+
+/* ── Server-owned read state ───────────────────────────────────────────
+ *
+ * The cursor is `last_read_message_id` per (subject, network, channel)
+ * and it lives on the SERVER — that is a project invariant, not a cache.
+ * It is what makes "where I left off" survive a restart and stay
+ * consistent across devices. Shottino tracked unread as a purely local
+ * counter, so reading a channel on the phone left it bold here forever,
+ * and restarting reset every window to zero unread regardless of truth.
+ *
+ * `read_cursor_set` carries no channel: it is scoped by the per-channel
+ * topic it arrives on. Rather than thread topic identity through the
+ * dispatcher, the cursor is matched to the window that has actually seen
+ * that id — ids are globally unique, so at most one window matches. */
+static void apply_read_cursor(struct app *app, long last_read_id) {
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) {
+        if (app->windows[i].last_id >= last_read_id && last_read_id > app->windows[i].last_read_id) {
+            app->windows[i].last_read_id = last_read_id;
+            /* Everything up to the cursor is read by definition. */
+            if (app->windows[i].last_id <= last_read_id) app->windows[i].unread = 0;
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Publish the cursor for the focused window. Called when focus lands on a
+ * window that has unread rows — the settle cadence is deliberately "on
+ * focus change", not per keystroke, so a scroll through history does not
+ * write a row per frame. */
+static void push_read_cursor(struct app *app, const char *network, const char *channel,
+                             long message_id) {
+    if (message_id <= 0) return;
+    char *net = url_encode(network);
+    char *chan = url_encode(channel);
+    char *path = xasprintf("/networks/%s/channels/%s/read-cursor", net, chan);
+    char *body = xasprintf("{\"message_id\":%ld}", message_id);
+    free(net);
+    free(chan);
+    struct http_response r = http_request(app, "POST", path, body);
+    /* The server clamps monotonically, so an older id is refused rather
+     * than moving the cursor backwards; that is not an error worth
+     * reporting. A genuine failure is. */
+    if (r.status >= 400 && r.status != 409)
+        log_line(app, "read-cursor failed HTTP %d: %.120s", r.status, r.body ? r.body : "");
+    free(path);
+    free(body);
+    free(r.body);
+}
+
+static void handle_wire_event(struct app *app, const struct wire_event *ev) {
+    switch (ev->kind) {
+    case WIRE_MESSAGE:
+        render_message(app, &ev->u.message, true);
+        break;
+
+    case WIRE_TOPIC_CHANGED:
+        set_window_topic(app, ev->u.topic_changed.network, ev->u.topic_changed.channel,
+                         ev->u.topic_changed.text);
+        break;
+
+    case WIRE_MEMBERS_SEEDED:
+        copy_members_from_wire(app, ev->u.members_seeded.network, ev->u.members_seeded.channel,
+                               ev->u.members_seeded.members, ev->u.members_seeded.member_count);
+        set_window_state(app, ev->u.members_seeded.network, ev->u.members_seeded.channel,
+                         WS_JOINED, NULL, 0);
+        break;
+
+    case WIRE_QUERY_WINDOWS_LIST:
+        apply_query_windows(app, ev);
+        break;
+
+    /* ── Window state: mirrored, never originated ───────────────────── */
+    case WIRE_WINDOW_PENDING:
+        add_window_ex(app, ev->u.window_open.network, ev->u.window_open.channel, false);
+        set_window_state(app, ev->u.window_open.network, ev->u.window_open.channel, WS_PENDING,
+                         NULL, 0);
+        break;
+
+    case WIRE_WINDOW_INVITED:
+        /* An INVITE we did not ask for: open a greyed, not-joined tab so
+         * the invitation is visible without silently joining. */
+        add_window_ex(app, ev->u.window_open.network, ev->u.window_open.channel, false);
+        set_window_state(app, ev->u.window_open.network, ev->u.window_open.channel, WS_INVITED,
+                         NULL, 0);
+        log_line(app, "[%s/%s] --- you were invited to %s", ev->u.window_open.network,
+                 ev->u.window_open.channel, ev->u.window_open.channel);
+        break;
+
+    case WIRE_JOINED:
+        set_window_state(app, ev->u.window_state.network, ev->u.window_state.channel, WS_JOINED,
+                         NULL, 0);
+        break;
+
+    case WIRE_JOIN_FAILED:
+        set_window_state(app, ev->u.window_state.network, ev->u.window_state.channel, WS_FAILED,
+                         ev->u.window_state.reason,
+                         ev->u.window_state.has_numeric ? ev->u.window_state.numeric : 0);
+        log_line(app, "[%s/%s] --- cannot join %s%s%s", ev->u.window_state.network,
+                 ev->u.window_state.channel, ev->u.window_state.channel,
+                 ev->u.window_state.reason ? ": " : "",
+                 ev->u.window_state.reason ? ev->u.window_state.reason : "");
+        break;
+
+    case WIRE_KICKED:
+        set_window_state(app, ev->u.window_state.network, ev->u.window_state.channel, WS_KICKED,
+                         ev->u.window_state.reason, 0);
+        log_line(app, "[%s/%s] <-- you were kicked from %s%s%s%s%s", ev->u.window_state.network,
+                 ev->u.window_state.channel, ev->u.window_state.channel,
+                 ev->u.window_state.by ? " by " : "",
+                 ev->u.window_state.by ? ev->u.window_state.by : "",
+                 ev->u.window_state.reason ? ": " : "",
+                 ev->u.window_state.reason ? ev->u.window_state.reason : "");
+        break;
+
+    /* ── Identity + session state ───────────────────────────────────── */
+    case WIRE_OWN_NICK_CHANGED: {
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_id_locked(app, ev->u.own_nick.network_id);
+        const char *slug = n ? n->slug : NULL;
+        if (n) snprintf(n->nick, sizeof(n->nick), "%s", ev->u.own_nick.nick);
+        pthread_mutex_unlock(&app->lock);
+        if (slug) log_line(app, "[%s/$server] --- you are now known as %s", slug, ev->u.own_nick.nick);
+        break;
+    }
+
+    case WIRE_AWAY_CONFIRMED: {
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_slug_locked(app, ev->u.away_confirmed.network);
+        if (n) n->away = ev->u.away_confirmed.away;
+        pthread_mutex_unlock(&app->lock);
+        log_line(app, "[%s/$server] --- you are now %s", ev->u.away_confirmed.network,
+                 ev->u.away_confirmed.away ? "away" : "back");
+        break;
+    }
+
+    case WIRE_PEER_AWAY:
+        log_line(app, "[%s/%s] --- %s is away: %s", ev->u.peer_away.network, ev->u.peer_away.peer,
+                 ev->u.peer_away.peer, ev->u.peer_away.message);
+        break;
+
+    case WIRE_UMODE_CHANGED: {
+        char modes[32] = "";
+        size_t w = 0;
+        for (size_t i = 0; i < ev->u.umodes.mode_count && w + 1 < sizeof(modes); i++) {
+            const char *m = wire_string_at(ev->u.umodes.modes, i);
+            if (m && m[0]) modes[w++] = m[0];
+        }
+        modes[w] = '\0';
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_id_locked(app, ev->u.umodes.network_id);
+        const char *slug = n ? n->slug : NULL;
+        if (n) snprintf(n->umodes, sizeof(n->umodes), "%s", modes);
+        pthread_mutex_unlock(&app->lock);
+        if (slug) log_line(app, "[%s/$server] --- your user modes are +%s", slug, modes);
+        break;
+    }
+
+    case WIRE_ISUPPORT_CHANGED: {
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_id_locked(app, ev->u.isupport.network_id);
+        if (n) {
+            size_t count = json_len(ev->u.isupport.prefix);
+            if (count > sizeof(n->prefix_letters)) count = sizeof(n->prefix_letters);
+            n->prefix_count = 0;
+            for (size_t i = 0; i < count; i++) {
+                const char *letter = json_key_at(ev->u.isupport.prefix, i);
+                const char *sigil = json_string(json_value_at(ev->u.isupport.prefix, i));
+                if (letter && letter[0] && sigil && sigil[0]) {
+                    n->prefix_letters[n->prefix_count] = letter[0];
+                    n->prefix_sigils[n->prefix_count] = sigil[0];
+                    n->prefix_count++;
+                }
+            }
+        }
+        pthread_mutex_unlock(&app->lock);
+        break;
+    }
+
+    case WIRE_CONNECTION_STATE_CHANGED: {
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_slug_locked(app, ev->u.connection_state.network_slug);
+        if (n) {
+            n->conn_state = ev->u.connection_state.state;
+            n->conn_known = true;
+            snprintf(n->nick, sizeof(n->nick), "%s", ev->u.connection_state.nick);
+        }
+        /* A parked/failed network's windows are all dead — mark them so
+         * the sidebar greys the whole network, not just the tab that
+         * happened to receive a terminal event. */
+        if (ev->u.connection_state.state != CONN_CONNECTED) {
+            for (size_t i = 0; i < app->window_count; i++)
+                if (strcmp(app->windows[i].network, ev->u.connection_state.network_slug) == 0)
+                    app->windows[i].state = WS_PARKED;
+        }
+        pthread_mutex_unlock(&app->lock);
+        log_line(app, "[%s/$server] --- network %s -> %s%s%s", ev->u.connection_state.network_slug,
+                 wire_connection_state_name(ev->u.connection_state.from),
+                 wire_connection_state_name(ev->u.connection_state.to),
+                 ev->u.connection_state.reason ? ": " : "",
+                 ev->u.connection_state.reason ? ev->u.connection_state.reason : "");
+        break;
+    }
+
+    case WIRE_CONNECTION_PROGRESS: {
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_slug_locked(app, ev->u.connection_progress.network);
+        if (n) n->connecting = !ev->u.connection_progress.connected;
+        pthread_mutex_unlock(&app->lock);
+        break;
+    }
+
+    case WIRE_INVITE_ACK:
+        log_line(app, "[%s/$server] --- invited %s to %s", ev->u.invite_ack.network,
+                 ev->u.invite_ack.peer, ev->u.invite_ack.channel);
+        break;
+
+    /* ── Reply cards ────────────────────────────────────────────────── */
+    case WIRE_WHOIS_BUNDLE:   render_whois(app, ev); break;
+    case WIRE_WHOWAS_BUNDLE:  render_whowas(app, ev); break;
+    case WIRE_WHO_REPLY:      render_who(app, ev); break;
+    case WIRE_NAMES_REPLY:    render_names(app, ev); break;
+    case WIRE_LUSERS_BUNDLE:  render_lusers(app, ev); break;
+    case WIRE_BANLIST_BUNDLE: render_banlist(app, ev); break;
+    case WIRE_LINKS_BUNDLE:   render_links(app, ev); break;
+    case WIRE_SERVER_REPLY:   render_server_reply(app, ev); break;
+    case WIRE_CHANNEL_MODES_CHANGED: render_channel_modes(app, ev); break;
+
+    case WIRE_PRESENCE_CHANGED: {
+        /* A watched nick coming or going. `initial` marks the snapshot
+         * edge the server sends on (re)subscribe — reporting those would
+         * announce "bob is online" for everyone on the list at every
+         * reconnect, so they seed state silently. */
+        if (ev->u.presence_changed.initial) break;
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_id_locked(app, ev->u.presence_changed.network_id);
+        const char *slug = n ? n->slug : NULL;
+        pthread_mutex_unlock(&app->lock);
+        if (slug)
+            card(app, slug, "--- %s is now %s", ev->u.presence_changed.nick,
+                 ev->u.presence_changed.online ? "online" : "offline");
+        break;
+    }
+
+    case WIRE_PRESENCE_ERROR: {
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_id_locked(app, ev->u.presence_error.network_id);
+        const char *slug = n ? n->slug : NULL;
+        pthread_mutex_unlock(&app->lock);
+        if (slug) card(app, slug, "--- watch list full: %s", ev->u.presence_error.detail);
+        break;
+    }
+
+    case WIRE_READ_CURSOR_SET:
+        /* Read state is server-owned per (subject, network, channel), so
+         * marking a window read on one device must move the divider on
+         * every other. The payload carries no channel — it is scoped by
+         * the per-channel topic it arrives on — so it is applied to the
+         * window whose last_id brackets the cursor. */
+        apply_read_cursor(app, ev->u.read_cursor.last_read_message_id);
+        break;
+
+    case WIRE_WINDOW_COUNTS: {
+        /* Server-authoritative counts REPLACE the local tally. The server
+         * knows about messages this client never received (it was
+         * offline) and about reads from other devices; a locally
+         * incremented badge drifts from the truth in both directions. */
+        pthread_mutex_lock(&app->lock);
+        for (size_t i = 0; i < app->window_count; i++) {
+            if (strcmp(app->windows[i].channel, ev->u.window_counts.channel) != 0) continue;
+            app->windows[i].unread = (unsigned)ev->u.window_counts.messages;
+            app->windows[i].mentions = (unsigned)ev->u.window_counts.mentions;
+            app->windows[i].severity = ev->u.window_counts.severity;
+        }
+        pthread_mutex_unlock(&app->lock);
+        break;
+    }
+
+    case WIRE_MENTIONS_BUNDLE: {
+        /* Everything that mentioned you while you were away, replayed in
+         * one card so the catch-up is not a hunt through N channels. */
+        const char *net = ev->u.mentions_bundle.network;
+        if (ev->u.mentions_bundle.message_count == 0) break;
+        card(app, net, "--- %zu mention%s while away%s%s", ev->u.mentions_bundle.message_count,
+             ev->u.mentions_bundle.message_count == 1 ? "" : "s",
+             ev->u.mentions_bundle.away_reason ? ": " : "",
+             ev->u.mentions_bundle.away_reason ? ev->u.mentions_bundle.away_reason : "");
+        for (size_t i = 0; i < ev->u.mentions_bundle.message_count; i++) {
+            struct wire_mention m;
+            if (!wire_mention_at(ev->u.mentions_bundle.messages, i, &m)) continue;
+            char clock[16];
+            time_t ts = m.server_time > 100000000000L ? (time_t)(m.server_time / 1000)
+                                                      : (time_t)m.server_time;
+            struct tm tm;
+            localtime_r(&ts, &tm);
+            strftime(clock, sizeof(clock), "%H:%M", &tm);
+            card(app, net, "  %s %-14s <%s> %.*s", clock, m.channel, m.sender, 60,
+                 m.body ? m.body : "");
+        }
+        break;
+    }
+
+    /* A /list scan runs in the background and can take a while on a
+     * large network; without these the user types /list, sees an empty
+     * cache, and has no idea a scan is running. */
+    case WIRE_DIRECTORY_PROGRESS:
+        card(app, ev->u.directory.network, "--- channel scan: %ld so far", ev->u.directory.count);
+        break;
+
+    case WIRE_DIRECTORY_COMPLETE:
+        card(app, ev->u.directory.network, "--- channel scan complete: %ld channels — /list to browse",
+             ev->u.directory.count);
+        break;
+
+    case WIRE_DIRECTORY_FAILED:
+        card(app, ev->u.directory.network, "--- channel scan failed: %s", ev->u.directory.reason);
+        break;
+
+    case WIRE_CHANNEL_CREATED:
+    case WIRE_CHANNELS_CHANGED:
+    case WIRE_NOTIFY_LIST:
+    case WIRE_PRESENCE_SNAPSHOT:
+    case WIRE_SUPPORTED_UMODES_CHANGED:
+    case WIRE_BUNDLE_HASH:
+    case WIRE_SERVER_SETTINGS_CHANGED:
+    case WIRE_ARCHIVE_CHANGED:
+    case WIRE_ARCHIVE_PURGED:
+    case WIRE_UNKNOWN:
+        /* Narrowed but not yet rendered — landing here is deliberate, not
+         * a gap in the switch. Each becomes a card or a store update in a
+         * later commit; listing them explicitly means -Wswitch flags the
+         * NEXT kind the server adds instead of it silently vanishing. */
+        break;
+    }
+}
+
+static void handle_ws_frame(struct app *app, const char *frame) {
+    char err[160];
+    json_doc *doc = json_parse(frame, strlen(frame), err, sizeof(err));
+    if (!doc) {
+        log_line(app, "malformed websocket frame: %s", err);
+        return;
+    }
+    struct wire_frame f;
+    if (!wire_frame_split(json_root(doc), &f)) {
+        json_free(doc);
+        return;
+    }
+    if (strcmp(f.event, "phx_reply") == 0) {
+        if (json_str_is(json_get(f.payload, "status"), "error"))
+            log_line(app, "channel join error: %.200s", frame);
+    } else if (strcmp(f.event, "event") == 0) {
+        struct wire_event ev;
+        if (wire_narrow(f.payload, &ev)) handle_wire_event(app, &ev);
+    }
+    json_free(doc);
+}
+
+/* ── Reconnect + backfill ──────────────────────────────────────────────
+ *
+ * A dropped socket used to be terminal: ws_pump logged "websocket
+ * disconnected", cleared the flag, and nothing ever set it again. The
+ * client stayed up looking connected-ish while receiving nothing — the
+ * worst failure shape, because the user has no reason to distrust what
+ * they see. A laptop suspend or a brief network blip ended the session.
+ *
+ * Reconnect is exponential with a cap and jitter. Jitter matters: without
+ * it, every client that a bouncer restart knocked offline comes back in
+ * lockstep and does it again on the next failure.
+ *
+ * Reconnecting is only half the job. PubSub broadcast is fire-and-forget,
+ * so anything sent during the gap is GONE — rejoining the topics does not
+ * replay it. Each window therefore refetches from the last id it saw
+ * (`?after=`), which is exactly what cicchetto's reconnect backfill does.
+ * Without this the client silently misses every message in the gap, which
+ * is worse than a visible disconnect. */
+#define WS_BACKOFF_MIN 1
+#define WS_BACKOFF_MAX 60
+
+static void ws_schedule_retry(struct app *app) {
+    if (app->ws_backoff == 0) app->ws_backoff = WS_BACKOFF_MIN;
+    else {
+        app->ws_backoff *= 2;
+        if (app->ws_backoff > WS_BACKOFF_MAX) app->ws_backoff = WS_BACKOFF_MAX;
+    }
+    /* Up to 25% jitter, so a fleet of clients does not resynchronise on a
+     * server restart and thunder back together. */
+    unsigned char r = 0;
+    RAND_bytes(&r, 1);
+    int jitter = (int)((unsigned)app->ws_backoff * r / (255 * 4));
+    app->ws_retry_at = time(NULL) + app->ws_backoff + jitter;
+}
+
+/* Pull anything that arrived while the socket was down. Uses `?after=<id>`
+ * (ascending, per Scrollback.fetch_after) rather than re-reading the tail,
+ * so a long gap is filled completely instead of to an arbitrary depth. */
+static void backfill_window(struct app *app, const char *network, const char *channel,
+                            long after_id) {
+    char *net = url_encode(network);
+    char *chan = url_encode(channel);
+    char *path = xasprintf("/networks/%s/channels/%s/messages?after=%ld", net, chan, after_id);
+    free(net);
+    free(chan);
+    struct http_response r = http_request(app, "GET", path, NULL);
+    free(path);
+    if (r.status >= 200 && r.status < 300) {
+        /* This endpoint answers ASCENDING, unlike the DESC tail fetch, so
+         * rows are rendered in array order rather than reversed. */
+        json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+        const json_value *list = json_root(doc);
+        size_t n = json_len(list);
+        for (size_t i = 0; i < n; i++) {
+            struct wire_scrollback_message m;
+            if (wire_narrow_message(json_at(list, i), &m)) render_message(app, &m, false);
+        }
+        if (n) log_line(app, "[%s/%s] --- %zu message%s recovered", network, channel, n,
+                        n == 1 ? "" : "s");
+        json_free(doc);
+    }
+    free(r.body);
+}
+
+static void ws_backfill_all(struct app *app) {
+    /* Snapshot the window list under the lock; the HTTP calls must not
+     * hold it (they block for as long as the server takes). */
+    struct { char network[MAX_SLUG]; char channel[MAX_CHANNEL]; long last_id; } snap[MAX_WINDOWS];
+    size_t count;
+    pthread_mutex_lock(&app->lock);
+    count = app->window_count;
+    for (size_t i = 0; i < count; i++) {
+        snprintf(snap[i].network, sizeof(snap[i].network), "%s", app->windows[i].network);
+        snprintf(snap[i].channel, sizeof(snap[i].channel), "%s", app->windows[i].channel);
+        snap[i].last_id = app->windows[i].last_id;
+    }
+    pthread_mutex_unlock(&app->lock);
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(snap[i].channel, "$server") == 0) continue; /* no scrollback */
+        /* last_id 0 means this window never saw a message; a full tail
+         * fetch is the right recovery there, not an ?after=0 flood. */
+        if (snap[i].last_id > 0) backfill_window(app, snap[i].network, snap[i].channel, snap[i].last_id);
+        else fetch_scrollback_target(app, snap[i].network, snap[i].channel);
+    }
+}
+
+/* Attempt one reconnect if the backoff timer has expired. */
+static void ws_try_reconnect(struct app *app) {
+    time_t now = time(NULL);
+    if (now < app->ws_retry_at) return;
+
+    conn_close(&app->ws);
+    if (!ws_connect(app)) {
+        ws_schedule_retry(app);
+        log_line(app, "reconnect failed; retrying in %ds", (int)(app->ws_retry_at - now));
+        return;
+    }
+    app->ws_backoff = 0;
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) app->windows[i].joined_ws = false;
+    pthread_mutex_unlock(&app->lock);
+    ws_join_topics(app);
+    log_line(app, "websocket reconnected");
+    ws_backfill_all(app);
+}
+
 static void ws_pump(struct app *app) {
-    if (!app->ws_connected) return;
+    if (!app->ws_connected) {
+        ws_try_reconnect(app);
+        return;
+    }
     time_t now = time(NULL);
     if (now >= app->next_heartbeat) {
         char ref[32];
@@ -1937,18 +3379,47 @@ static void ws_pump(struct app *app) {
         int r = ws_read_frame(app, &frame);
         if (r == 0) break;
         if (r < 0) {
-            log_line(app, "websocket disconnected");
             conn_close(&app->ws);
             app->ws_connected = false;
+            ws_schedule_retry(app);
+            log_line(app, "websocket disconnected; reconnecting in %ds",
+                     (int)(app->ws_retry_at - time(NULL)));
             break;
         }
-        if (strstr(frame, "\"event\"") && strstr(frame, "\"kind\":\"message\"")) log_message_json(app, frame, true);
-        else if (strstr(frame, "\"event\"") && strstr(frame, "\"kind\":\"topic_changed\"")) apply_topic_event(app, frame);
-        else if (strstr(frame, "\"event\"") && strstr(frame, "\"kind\":\"members_seeded\"")) apply_members_seeded_event(app, frame);
-        else if (strstr(frame, "\"event\"") && strstr(frame, "\"kind\":\"query_windows_list\"")) apply_query_windows_list(app, frame);
-        else if (strstr(frame, "\"phx_reply\"") && strstr(frame, "\"status\":\"error\"")) log_line(app, "channel join error: %.200s", frame);
+        handle_ws_frame(app, frame);
         free(frame);
     }
+}
+
+/* One-character marker for a non-joined window state. A joined window (or
+ * one whose state the server has not told us yet) gets a blank, so only
+ * genuinely-abnormal windows draw the eye. */
+static char window_state_mark(enum window_state state) {
+    switch (state) {
+    case WS_PENDING: return '.';
+    case WS_INVITED: return '?';
+    case WS_FAILED:  return '!';
+    case WS_KICKED:  return 'x';
+    case WS_PARKED:  return '~';
+    case WS_JOINED:
+    case WS_UNKNOWN: return ' ';
+    }
+    return ' ';
+}
+
+/* Human-readable reason a window is in its current state, for the status
+ * line. Returns NULL when there is nothing worth saying. */
+static const char *window_state_label(enum window_state state) {
+    switch (state) {
+    case WS_PENDING: return "joining";
+    case WS_INVITED: return "invited — /join to accept";
+    case WS_FAILED:  return "join failed";
+    case WS_KICKED:  return "kicked";
+    case WS_PARKED:  return "network parked";
+    case WS_JOINED:
+    case WS_UNKNOWN: return NULL;
+    }
+    return NULL;
 }
 
 /* Record the screen rectangle of a media link so a later mouse event can map
@@ -1998,7 +3469,7 @@ static void draw(struct app *app) {
     if (topic_text_w < topic_prefix_w + 8) topic_prefix_w = 0;
     int topic_wrap_w = topic_text_w - topic_prefix_w;
     if (topic_wrap_w < 1) topic_wrap_w = 1;
-    int topic_h = wrapped_text_lines(topic_text, topic_wrap_w);
+    int topic_h = wrapped_text_lines_visible(topic_text, topic_wrap_w);
     int max_topic_h = compose_y - topic_y - 1;
     if (max_topic_h < 1) max_topic_h = 1;
     if (topic_h > max_topic_h) topic_h = max_topic_h;
@@ -2018,8 +3489,15 @@ static void draw(struct app *app) {
     attroff(COLOR_PAIR(CP_BORDER));
 
     draw_text(0, 1, side - 2, CP_ACCENT, A_BOLD, "shottino");
-    draw_text(1, 1, side - 2, app->ws_connected ? CP_MUTED : CP_ERROR, 0,
-              "%s", app->ws_connected ? "ws" : "offline");
+    if (app->ws_connected) {
+        draw_text(1, 1, side - 2, CP_MUTED, 0, "ws");
+    } else {
+        /* Count down to the next attempt. "offline" alone reads as a dead
+         * end; the countdown says recovery is in progress. */
+        long wait = (long)(app->ws_retry_at - time(NULL));
+        if (wait < 0) wait = 0;
+        draw_text(1, 1, side - 2, CP_ERROR, A_BOLD, "retry %lds", wait);
+    }
 
     char last_net[MAX_SLUG] = "";
     int y = 3;
@@ -2032,10 +3510,24 @@ static void draw(struct app *app) {
         }
         bool selected = i == app->current;
         bool unread = app->windows[i].unread > 0;
-        int pair = selected ? CP_SELECTED : (unread ? CP_ACCENT : CP_ALT);
+        /* A not-joined window is greyed and marked. cicchetto renders the
+         * same states as greyed synthetic rows; the sigil is the terminal
+         * equivalent of its badge, so a dead tab reads as dead at a glance
+         * instead of looking like an ordinary empty channel. */
+        char state_mark = window_state_mark(win->state);
+        bool dead = state_mark != ' ';
+        int pair = selected ? CP_SELECTED : (unread ? CP_ACCENT : (dead ? CP_MUTED : CP_ALT));
         draw_fill(y, 0, side, pair);
         draw_text(y, 1, 2, pair, (selected || unread) ? A_BOLD : 0, "%2zu", i + 1);
-        if (unread) draw_text(y, 4, side - 5, pair, A_BOLD, "%s [%u]", win->channel, app->windows[i].unread);
+        if (dead) draw_text(y, 4, side - 5, pair, A_DIM, "%c%s", state_mark, win->channel);
+        else if (win->mentions > 0) {
+            /* A mention outranks a plain-message count: it is the reason
+             * to look now rather than later, so it gets its own colour
+             * and marker instead of being folded into one number. */
+            draw_text(y, 4, side - 5, selected ? pair : CP_MENTION, A_BOLD, "%s (%u)",
+                      win->channel, win->mentions);
+        }
+        else if (unread) draw_text(y, 4, side - 5, pair, A_BOLD, "%s [%u]", win->channel, app->windows[i].unread);
         else draw_text(y, 4, side - 5, pair, selected ? A_BOLD : 0, "%s", win->channel);
         y++;
     }
@@ -2087,6 +3579,7 @@ static void draw(struct app *app) {
     if ((int)app->scrollback_offset > max_offset) app->scrollback_offset = (size_t)max_offset;
     int skip_lines = max_offset - (int)app->scrollback_offset;
     int used_lines = 0;
+    bool divider_drawn = false;
     for (size_t vi = 0; vi < visible_count; vi++) {
         if (skip_lines >= heights[vi]) {
             skip_lines -= heights[vi];
@@ -2102,6 +3595,24 @@ static void draw(struct app *app) {
         if (draw_lines > available) draw_lines = available;
         if (draw_lines <= 0) break;
         int msg_y = scroll_y + used_lines;
+        /* Unread divider: drawn once, immediately above the first row the
+         * server's cursor says has not been read. It is deliberately
+         * anchored to the CURSOR rather than to "where I was scrolled
+         * last", so it means the same thing here as on every other device
+         * attached to this session. */
+        if (!divider_drawn && w->last_read_id > 0 && app->log_ids[i] > w->last_read_id &&
+            used_lines + 1 < scroll_h) {
+            attron(COLOR_PAIR(CP_ERROR) | A_BOLD);
+            mvhline(msg_y, main_x + 1, ACS_HLINE, main_w - 2);
+            mvprintw(msg_y, main_x + 3, " unread ");
+            attroff(COLOR_PAIR(CP_ERROR) | A_BOLD);
+            divider_drawn = true;
+            used_lines += 1;
+            msg_y += 1;
+            available -= 1;
+            if (draw_lines > available) draw_lines = available;
+            if (draw_lines <= 0) break;
+        }
         draw_message_line(msg_y, main_x + 1, main_w - 2, draw_lines, app->log[i], app->log_mentions[i], app->log_pending[i]);
         const char *msg_url = find_url(app->log[i]);
         enum media_kind mk = msg_url ? media_kind_of(msg_url) : MEDIA_NONE;
@@ -2115,18 +3626,37 @@ static void draw(struct app *app) {
         skip_lines = 0;
     }
 
-    draw_text(compose_y, main_x + 1, main_w - 2, CP_MUTED, 0,
-              "[%s] PgUp/PgDn scroll | End bottom | Tab complete | Up/Down history | /open | /exit%s",
-              w->channel, app->scrollback_pinned ? " | scrolled" : "");
+    /* A window in a terminal state says WHY on the status line — the
+     * sidebar sigil says "dead", this says "kicked by op: flooding". */
+    const char *state_label = window_state_label(w->state);
+    if (state_label) {
+        draw_text(compose_y, main_x + 1, main_w - 2, CP_ERROR, A_BOLD, "[%s] %s%s%s%s",
+                  w->channel, state_label, w->state_detail[0] ? ": " : "", w->state_detail,
+                  app->scrollback_pinned ? " | scrolled" : "");
+    } else {
+        draw_text(compose_y, main_x + 1, main_w - 2, CP_MUTED, 0,
+                  "[%s] PgUp/PgDn scroll | End bottom | Tab complete | Up/Down history | /open | /exit%s",
+                  w->channel, app->scrollback_pinned ? " | scrolled" : "");
+    }
     int cursor_y = input_y;
     int cursor_x = main_x + 2;
     draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input, &cursor_y, &cursor_x);
 
+    /* The member pane used to render three lines of prose describing what
+     * a member pane would show. It shows the members now: ops first, then
+     * halfops, voiced, plain — each with the sigil its network actually
+     * advertises via ISUPPORT PREFIX, nick-coloured to match scrollback. */
     if (members) {
-        draw_text(0, members_x + 1, members - 2, CP_ACCENT, A_BOLD, "members");
-        draw_text(2, members_x + 1, members - 2, CP_MUTED, 0, "topic/modes/member");
-        draw_text(3, members_x + 1, members - 2, CP_MUTED, 0, "snapshots mirror");
-        draw_text(4, members_x + 1, members - 2, CP_MUTED, 0, "member side pane");
+        draw_text(0, members_x + 1, members - 2, CP_ACCENT, A_BOLD, "members %zu", w->member_count);
+        int my = 2;
+        for (size_t i = 0; i < w->member_count && my < rows - 1; i++, my++) {
+            char sigil = member_sigil_locked(app, w->network, w->members[i].modes);
+            int pair = nick_pair(w->members[i].nick);
+            if (sigil) draw_text(my, members_x + 1, members - 2, pair, A_BOLD, "%c%s", sigil, w->members[i].nick);
+            else draw_text(my, members_x + 1, members - 2, pair, 0, " %s", w->members[i].nick);
+        }
+        if (w->member_count == 0)
+            draw_text(2, members_x + 1, members - 2, CP_MUTED, 0, "(not seeded)");
     }
 
     move(cursor_y, cursor_x);
@@ -2146,7 +3676,7 @@ static void send_message(struct app *app, const char *body) {
     free(escaped);
     struct http_response r = http_request(app, "POST", path, json);
     if (r.status < 200 || r.status >= 300) log_line(app, "send failed HTTP %d: %.200s", r.status, r.body);
-    else if (r.status == 201) log_message_json(app, r.body, false);
+    else if (r.status == 201) render_created_message(app, r.body, r.body_len);
     free(path);
     free(json);
     free(r.body);
@@ -2163,7 +3693,7 @@ static void send_message_target(struct app *app, const char *network, const char
     free(escaped);
     struct http_response r = http_request(app, "POST", path, json);
     if (r.status < 200 || r.status >= 300) log_line(app, "send failed HTTP %d: %.200s", r.status, r.body);
-    else if (r.status == 201) log_message_json(app, r.body, false);
+    else if (r.status == 201) render_created_message(app, r.body, r.body_len);
     free(path);
     free(json);
     free(r.body);
@@ -2228,54 +3758,61 @@ static void list_members_target(struct app *app, const char *network, const char
     if (r.status == 204) {
         log_line(app, "members for %s are not seeded yet", channel);
     } else if (r.status >= 200 && r.status < 300) {
-        struct member_row { char nick[MAX_CHANNEL]; char modes[32]; int rank; } rows[512];
-        size_t count = 0;
-        const char *p = r.body;
-        while ((p = strstr(p, "\"nick\"")) && count < 512) {
-            char nick[MAX_CHANNEL] = "";
-            char modes[32] = "";
-            if (json_find_string(p, "nick", nick, sizeof(nick)) && nick[0]) {
-                const char *m = strstr(p, "\"modes\"");
-                if (m) {
-                    char *w = modes;
-                    const char *end = strchr(m, ']');
-                    while ((m = strchr(m, '"')) && (!end || m < end) && (size_t)(w - modes) + 2 < sizeof(modes)) {
-                        m++;
-                        if (*m && *m != 'm') *w++ = *m;
-                        m++;
-                    }
-                    *w = 0;
-                }
-                snprintf(rows[count].nick, sizeof(rows[count].nick), "%s", nick);
-                snprintf(rows[count].modes, sizeof(rows[count].modes), "%s", modes);
-                rows[count].rank = strchr(modes, '@') ? 0 : (strchr(modes, '%') ? 1 : (strchr(modes, '+') ? 2 : 3));
-                count++;
-            }
-            p += 6;
+        /* The previous reader scanned for `"nick"` / `"modes"` and copied
+         * every character following a quote that was not 'm' — an attempt
+         * to skip the literal key "modes" that also mangled any mode
+         * letter 'm' and any nick containing a quote. Parse properly. */
+        char err[160];
+        json_doc *doc = json_parse(r.body, r.body_len, err, sizeof(err));
+        /* This endpoint answers with an ENVELOPE — `{"members": [...]}`
+         * (`Session.Wire.members_index/1`) — unlike the messages and
+         * channels endpoints, which return a bare array. Accept either:
+         * assuming a bare array here made every /members call report
+         * "malformed response". */
+        const json_value *root = json_root(doc);
+        const json_value *list = root;
+        if (json_type_of(root) == JSON_OBJECT) list = json_get(root, "members");
+        if (!doc || json_type_of(list) != JSON_ARRAY) {
+            log_line(app, "members %s: malformed response (%s)", channel, doc ? "not a list" : err);
+            json_free(doc);
+            free(path);
+            free(r.body);
+            return;
         }
+        struct member rows[512];
+        size_t count = 0;
+        for (size_t i = 0; i < json_len(list) && count < 512; i++) {
+            const json_value *m = json_at(list, i);
+            const char *nick = NULL;
+            if (!json_str_req(m, "nick", &nick)) continue;
+            snprintf(rows[count].nick, sizeof(rows[count].nick), "%s", nick);
+            rows[count].modes[0] = '\0';
+            const json_value *modes = json_get(m, "modes");
+            for (size_t j = 0, w = 0; j < json_len(modes) && w + 1 < sizeof(rows[count].modes); j++) {
+                const char *mode = json_string(json_at(modes, j));
+                if (mode && mode[0]) {
+                    rows[count].modes[w++] = mode[0];
+                    rows[count].modes[w] = '\0';
+                }
+            }
+            count++;
+        }
+        json_free(doc);
         for (size_t i = 0; i < count; i++) {
             for (size_t j = i + 1; j < count; j++) {
-                if (rows[j].rank < rows[i].rank || (rows[j].rank == rows[i].rank && strcasecmp(rows[j].nick, rows[i].nick) < 0)) {
-                    struct member_row tmp = rows[i]; rows[i] = rows[j]; rows[j] = tmp;
+                int ri = member_rank(rows[i].modes), rj = member_rank(rows[j].modes);
+                if (rj < ri || (rj == ri && strcasecmp(rows[j].nick, rows[i].nick) < 0)) {
+                    struct member tmp = rows[i]; rows[i] = rows[j]; rows[j] = tmp;
                 }
             }
         }
-        pthread_mutex_lock(&app->lock);
-        for (size_t wi = 0; wi < app->window_count; wi++) {
-            if (strcmp(app->windows[wi].network, network) == 0 && strcmp(app->windows[wi].channel, channel) == 0) {
-                app->windows[wi].member_count = count > 512 ? 512 : count;
-                for (size_t mi = 0; mi < app->windows[wi].member_count; mi++) {
-                    memcpy(app->windows[wi].members[mi], rows[mi].nick, MAX_CHANNEL);
-                    app->windows[wi].members[mi][MAX_CHANNEL - 1] = 0;
-                }
-                break;
-            }
-        }
-        pthread_mutex_unlock(&app->lock);
+        set_window_members(app, network, channel, rows, count);
         log_line(app, "members %s (%zu):", channel, count);
         for (size_t i = 0; i < count; i++) {
-            const char *label = rows[i].rank == 0 ? "op" : (rows[i].rank == 1 ? "halfop" : (rows[i].rank == 2 ? "voice" : "user"));
-            log_line(app, "  %-6s %-3s %s", label, rows[i].modes[0] ? rows[i].modes : "-", rows[i].nick);
+            int rank = member_rank(rows[i].modes);
+            const char *label = rank == 0 ? "op" : (rank == 1 ? "halfop" : (rank == 2 ? "voice" : "user"));
+            char sigil = member_sigil(app, network, rows[i].modes);
+            log_line(app, "  %-6s %c%s", label, sigil ? sigil : ' ', rows[i].nick);
         }
         if (count == 0) log_line(app, "members %s: (none)", channel);
     } else {
@@ -2429,6 +3966,9 @@ static void *worker_main(void *arg) {
         case JOB_FETCH:
             fetch_scrollback_target(app, job.network, job.channel);
             break;
+        case JOB_READ_CURSOR:
+            push_read_cursor(app, job.network, job.channel, strtol(job.arg1, NULL, 10));
+            break;
         case JOB_SEND: {
             send_message_target(app, job.network, job.channel, job.arg1);
             break;
@@ -2460,6 +4000,18 @@ static void *worker_main(void *arg) {
         }
     }
     return NULL;
+}
+
+/* Queue a read-cursor publish. Deliberately fire-and-forget: the cursor
+ * is advisory catch-up state, and a failed write costs a stale divider,
+ * not a lost message. */
+static void enqueue_read_cursor(struct app *app, const char *network, const char *channel,
+                                long message_id) {
+    struct job job = { .kind = JOB_READ_CURSOR };
+    snprintf(job.network, sizeof(job.network), "%s", network);
+    snprintf(job.channel, sizeof(job.channel), "%s", channel);
+    snprintf(job.arg1, sizeof(job.arg1), "%ld", message_id);
+    enqueue_job(app, job);
 }
 
 static void enqueue_fetch(struct app *app, const char *network, const char *channel) {
@@ -2615,7 +4167,7 @@ static void complete_input(struct app *app) {
         const char *current_network = app->window_count > 0 ? app->windows[app->current].network : "";
         if (app->window_count > 0) {
             struct window *w = &app->windows[app->current];
-            for (size_t i = 0; i < w->member_count; i++) add_completion_candidate(candidates, &matches, w->members[i], stem);
+            for (size_t i = 0; i < w->member_count; i++) add_completion_candidate(candidates, &matches, w->members[i].nick, stem);
         }
         for (size_t i = 0; i < app->window_count; i++) {
             const char *name = app->windows[i].channel;
@@ -2759,11 +4311,46 @@ static void wait_for_dismiss_key(void) {
 /* Mouse motion/button reporting escapes. Enabled while shottino owns the
  * screen; disabled around the preview (so frame bytes aren't read as a
  * dismiss key) and at shutdown. */
+/* Mouse tracking is what makes click-to-preview work — and it is also
+ * what stops the terminal doing its own text selection, because the
+ * terminal hands motion/button events to us instead of acting on them.
+ * Nothing the application can do restores native selection while tracking
+ * is on: the only fix is to turn it off, which is why this is toggleable
+ * from `/mouse` rather than being unconditional.
+ *
+ * `app->mouse_enabled` is the user's PREFERENCE; this function is the
+ * mechanism. The two are separate because the media-preview path disables
+ * tracking around a full-screen preview and must restore whatever the
+ * user chose, not force it back on. */
 static void mouse_reporting(bool on) {
     fputs(on ? "\033[?1000h\033[?1003h\033[?1006h"
              : "\033[?1006l\033[?1003l\033[?1000l",
           stdout);
     fflush(stdout);
+}
+
+/* Apply the user's preference. Used everywhere tracking is (re-)asserted
+ * so a `/mouse off` is never silently undone by a preview or a resize.
+ *
+ * BOTH halves are required, and sending only the escape sequences (as the
+ * first attempt at this did) does not work: ncurses OWNS the mouse mode
+ * once `mousemask()` is set non-zero, and re-emits the enable sequence on
+ * its own schedule, so a raw `\033[?1000l` is silently undone and
+ * selection never comes back. Clearing the mask is what actually makes
+ * ncurses stop; the raw sequences then mop up 1003/1006, which it does
+ * not consistently manage. */
+static void mouse_apply(struct app *app) {
+    if (app->mouse_enabled) {
+        mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
+        mouseinterval(0);
+        mouse_reporting(true);
+    } else {
+        mousemask(0, NULL);
+        mouse_reporting(false);
+    }
+    /* ncurses buffers its own output; without this the mode change does
+     * not reach the terminal until the next unrelated repaint. */
+    refresh();
 }
 
 /* Full-screen modal media preview. Both images and videos are normalized to a
@@ -2772,10 +4359,59 @@ static void mouse_reporting(bool on) {
  * (Kitty > iTerm2 > Sixel > symbols). Falls back to xdg-open when either tool
  * is absent or the frame extraction fails. Blocks until a key is pressed; the
  * caller's next draw() repaints the chat, clearing the preview. */
+/* Built-in preview path: ffmpeg decodes straight to raw RGB at the exact
+ * cell grid, and we draw it ourselves. This is what makes a preview work
+ * with NO chafa installed at all — previously a missing chafa meant no
+ * preview, just an external browser launch. */
+static bool preview_builtin(const char *url, const char *dir, int cols, int rows,
+                            term_color_depth depth) {
+    /* Two source pixels per cell row, so ask ffmpeg for double height.
+     * `format=rgb24` before scale keeps the pixel layout predictable
+     * regardless of the source's colour space. */
+    int px_w = cols;
+    int px_h = rows * 2;
+    if (px_w < 2 || px_h < 2) return false;
+
+    char raw[PATH_MAX];
+    snprintf(raw, sizeof(raw), "%s/frame.rgb", dir);
+    /* Fit inside the grid preserving aspect, then pad to the exact size so
+     * the raw buffer length is known up front. */
+    char scale[192];
+    snprintf(scale, sizeof(scale), "thumbnail,scale=%d:%d:force_original_aspect_ratio=decrease,"
+                                   "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
+             px_w, px_h, px_w, px_h);
+    char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
+                    "-i", (char *)url, "-vf", scale, "-frames:v", "1",
+                    "-f", "rawvideo", "-pix_fmt", "rgb24", raw, NULL};
+    if (run_cmd(argv, false) != 0) return false;
+
+    size_t want = (size_t)px_w * (size_t)px_h * 3;
+    unsigned char *buf = malloc(want);
+    if (!buf) return false;
+    FILE *f = fopen(raw, "rb");
+    if (!f) {
+        free(buf);
+        return false;
+    }
+    size_t got = fread(buf, 1, want, f);
+    fclose(f);
+    unlink(raw);
+    if (got != want) {
+        free(buf);
+        return false;
+    }
+    termcolor_render_rgb(buf, px_w, px_h, depth, stdout);
+    free(buf);
+    return true;
+}
+
 static void preview_media(struct app *app, const char *url, bool is_video) {
     if (!url || !url[0]) return;
-    if (!tool_on_path("chafa") || !tool_on_path("ffmpeg")) {
-        log_line(app, "preview needs 'chafa' + 'ffmpeg' on PATH — opening externally");
+    /* ffmpeg is the only hard requirement: it is what fetches and decodes
+     * the media. chafa is now optional — without it we draw the frame
+     * ourselves as coloured half-blocks. */
+    if (!tool_on_path("ffmpeg")) {
+        log_line(app, "preview needs 'ffmpeg' on PATH — opening externally");
         open_external_url(app, url);
         return;
     }
@@ -2789,21 +4425,29 @@ static void preview_media(struct app *app, const char *url, bool is_video) {
     char png[PATH_MAX];
     snprintf(png, sizeof(png), "%s/frame.png", dir);
 
-    /* ffmpeg fetches + decodes the URL and writes one representative frame.
-     * The thumbnail filter picks a non-leader frame for video and is a no-op
-     * pass-through for a still image, so one pipeline covers both (and avoids a
-     * black first frame for an extensionless video URL). rw_timeout bounds a
-     * stalled network fetch (microseconds). */
-    char *ff_argv[] = {"ffmpeg", "-y", "-loglevel", "error",
-                       "-rw_timeout", "15000000", "-i", (char *)url,
-                       "-vf", "thumbnail", "-frames:v", "1", png, NULL};
-    int rc = run_cmd(ff_argv, false);
-    if (rc != 0 || access(png, R_OK) != 0) {
-        log_line(app, "preview: could not fetch/decode media (ffmpeg rc=%d) — opening externally", rc);
-        open_external_url(app, url);
-        unlink(png);
-        rmdir(dir);
-        return;
+    bool have_chafa = tool_on_path("chafa");
+    bool graphics = termcolor_has_graphics();
+    term_color_depth depth = termcolor_detect_depth();
+
+    /* Only the chafa path needs a PNG; the built-in renderer decodes
+     * straight to raw RGB later, at the exact cell grid. */
+    if (have_chafa) {
+        /* ffmpeg fetches + decodes the URL and writes one representative frame.
+         * The thumbnail filter picks a non-leader frame for video and is a no-op
+         * pass-through for a still image, so one pipeline covers both (and avoids a
+         * black first frame for an extensionless video URL). rw_timeout bounds a
+         * stalled network fetch (microseconds). */
+        char *ff_argv[] = {"ffmpeg", "-y", "-loglevel", "error",
+                           "-rw_timeout", "15000000", "-i", (char *)url,
+                           "-vf", "thumbnail", "-frames:v", "1", png, NULL};
+        int rc = run_cmd(ff_argv, false);
+        if (rc != 0 || access(png, R_OK) != 0) {
+            log_line(app, "preview: could not fetch/decode media (ffmpeg rc=%d) — opening externally", rc);
+            open_external_url(app, url);
+            unlink(png);
+            rmdir(dir);
+            return;
+        }
     }
 
     struct winsize ws = {0};
@@ -2826,11 +4470,49 @@ static void preview_media(struct app *app, const char *url, bool is_video) {
     printf("preview: %.*s\r\n", url_w, url);
     fflush(stdout);
 
-    char *chafa_argv[] = {"chafa", "--clear", "--size", size_arg, png, NULL};
-    run_cmd(chafa_argv, true);
+    const char *how = NULL;
+    if (have_chafa) {
+        /* chafa auto-detects a graphics protocol, but on a terminal with
+         * none it must be told to render SYMBOLS explicitly — otherwise a
+         * conservative detection can leave the preview blank. Colour
+         * count is pinned to what the terminal actually has so the art is
+         * as colourful as the terminal allows and no more. */
+        const char *colors = depth == TERM_COLOR_TRUE  ? "full"
+                             : depth == TERM_COLOR_256 ? "256"
+                             : depth == TERM_COLOR_8   ? "16"
+                                                       : "none";
+        if (graphics) {
+            char *argv[] = {"chafa", "--clear", "--size", size_arg, png, NULL};
+            run_cmd(argv, true);
+            how = "image";
+        } else {
+            char *argv[] = {"chafa", "--clear", "--format", "symbols", "--colors",
+                            (char *)colors, "--symbols", "block+border+space",
+                            "--size", size_arg, png, NULL};
+            run_cmd(argv, true);
+            how = depth == TERM_COLOR_NONE ? "ascii" : "colour ascii";
+        }
+    } else {
+        /* No chafa: draw it ourselves. */
+        if (preview_builtin(url, dir, term_cols, term_rows - 2, depth)) {
+            how = depth == TERM_COLOR_NONE ? "ascii" : "colour ascii";
+        } else {
+            /* Decode failed with no fallback renderer left — restore the
+             * screen before handing off, or the terminal is left in the
+             * half-torn-down state this branch was entered with. */
+            reset_prog_mode();
+            clearok(stdscr, TRUE);
+            refresh();
+            mouse_apply(app);
+            log_line(app, "preview: could not decode media — opening externally");
+            open_external_url(app, url);
+            rmdir(dir);
+            return;
+        }
+    }
 
-    printf("\033[%d;1H[ %s — press any key to return ]", term_rows,
-           is_video ? "video frame" : "image");
+    printf("\033[%d;1H[ %s%s — press any key to return ]", term_rows,
+           is_video ? "video frame, " : "", how);
     fflush(stdout);
     wait_for_dismiss_key();
 
@@ -2847,14 +4529,19 @@ static void preview_media(struct app *app, const char *url, bool is_video) {
     reset_prog_mode();
     clearok(stdscr, TRUE);
     refresh();
-    mouse_reporting(true);
+    mouse_apply(app);
 }
 
 static void show_help(struct app *app) {
     log_line(app, "commands: /help /archive /settings /admin /chat /exit /quit /window N [/w N, /win N] /join #chan [/j] /part /close /clear /msg nick text /query nick [/q nick] /me text");
-    log_line(app, "network: /connect slug /disconnect [slug] [reason] /nick nick /away [reason]");
-    log_line(app, "info: /topic [text|-delete] /members [/users] /whois nick /whowas nick /who [#chan] /names [#chan] /lusers /watch add|del|list pattern");
-    log_line(app, "ops: /op nicks /deop nicks /voice nicks /devoice nicks /kick nick [reason] /ban mask /unban mask /banlist /invite nick");
+    log_line(app, "network: /connect slug /disconnect [slug] [reason] /nick nick /away [reason] /umode +modes /mode [#chan] +modes [params]");
+    log_line(app, "info: /topic [text|-delete] /members [/users] /whois nick /whowas nick /who [#chan] /names [#chan] /lusers /list [-refresh|query] /links /motd /info /version /stats [q] /rehash [opt]");
+    log_line(app, "ops: /op nicks /deop nicks /voice nicks /devoice nicks /kick nick [reason] /kb nick [reason] /ban mask /unban mask /banlist /invite nick");
+    log_line(app, "watch: /notify [nick...|del nick|list] watches PEOPLE; /hilight pattern, /dehilight pattern watch WORDS (/watch add|del|list is the older spelling)");
+    log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
+    log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
+    log_line(app, "terminal: mouse tracking is OFF by default so the terminal keeps its own copy/paste selection; /mouse on enables click-to-preview (and suppresses selection), /mouse off restores it");
+    log_line(app, "media: /preview shows the last image/video link without needing the mouse; /open opens the last link externally");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
 
@@ -2918,12 +4605,12 @@ static void mint_share_link(struct app *app) {
     }
     char token[MAX_TOKEN];
     char expires[64] = "";
-    if (!json_find_string(r.body, "token", token, sizeof(token))) {
+    if (!json_top_string(r.body, r.body_len, "token", token, sizeof(token))) {
         log_line(app, "/share: response missing token");
         free(r.body);
         return;
     }
-    json_find_string(r.body, "expires_at", expires, sizeof(expires));
+    json_top_string(r.body, r.body_len, "expires_at", expires, sizeof(expires));
     free(r.body);
     char *enc = url_encode(token);
     snprintf(app->last_url, sizeof(app->last_url), "%s/share/%s", app->url.base, enc);
@@ -2933,7 +4620,382 @@ static void mint_share_link(struct app *app) {
     free(enc);
 }
 
-static void handle_command(struct app *app, char *line) {
+static void handle_command_dispatch(struct app *app, char *line);
+
+/* ── /upload ───────────────────────────────────────────────────────────
+ *
+ * Posts a local file to grappa's upload surface and sends the resulting
+ * URL to the current window as TEXT. That is the whole model: IRC stays
+ * text, the URL is a clickable link, and the 📸 prefix matches what
+ * cicchetto ships so the two clients produce identical wire bytes.
+ * Nothing is rendered inline in scrollback. */
+static const char *mime_for_path(const char *path) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) return "application/octet-stream";
+    struct { const char *ext; const char *mime; } table[] = {
+        {"png", "image/png"},   {"jpg", "image/jpeg"},  {"jpeg", "image/jpeg"},
+        {"gif", "image/gif"},   {"webp", "image/webp"}, {"mp4", "video/mp4"},
+        {"webm", "video/webm"}, {"mov", "video/quicktime"}, {"mp3", "audio/mpeg"},
+        {"ogg", "audio/ogg"},   {"opus", "audio/opus"}, {"wav", "audio/wav"},
+        {"flac", "audio/flac"}, {"pdf", "application/pdf"}, {"txt", "text/plain"},
+    };
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
+        if (strcasecmp(dot + 1, table[i].ext) == 0) return table[i].mime;
+    return "application/octet-stream";
+}
+
+static void upload_command(struct app *app, const char *path) {
+    while (*path == ' ') path++;
+    if (!*path) {
+        log_line(app, "/upload requires a file path");
+        return;
+    }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        log_line(app, "/upload: cannot open %s", path);
+        return;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        log_line(app, "/upload: cannot size %s", path);
+        return;
+    }
+    long size = ftell(f);
+    rewind(f);
+    /* Bounded so a mistyped path at a huge file cannot exhaust memory
+     * before the server's cap ever sees it. */
+    if (size < 0 || size > 64L * 1024 * 1024) {
+        fclose(f);
+        log_line(app, "/upload: %s is too large (%ld bytes)", path, size);
+        return;
+    }
+    char *data = malloc((size_t)size);
+    if (!data) {
+        fclose(f);
+        log_line(app, "/upload: out of memory");
+        return;
+    }
+    size_t got = fread(data, 1, (size_t)size, f);
+    fclose(f);
+    if (got != (size_t)size) {
+        free(data);
+        log_line(app, "/upload: short read on %s", path);
+        return;
+    }
+
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    const char *boundary = "----shottino7RcH2mQx";
+    char *head = xasprintf("--%s\r\n"
+                           "Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+                           "Content-Type: %s\r\n\r\n",
+                           boundary, base, mime_for_path(path));
+    char *tail = xasprintf("\r\n--%s--\r\n", boundary);
+    size_t hlen = strlen(head), tlen = strlen(tail);
+    size_t total = hlen + got + tlen;
+    char *body = malloc(total);
+    if (!body) {
+        free(head); free(tail); free(data);
+        log_line(app, "/upload: out of memory");
+        return;
+    }
+    memcpy(body, head, hlen);
+    memcpy(body + hlen, data, got);
+    memcpy(body + hlen + got, tail, tlen);
+    free(head);
+    free(tail);
+    free(data);
+
+    char ctype[128];
+    snprintf(ctype, sizeof(ctype), "multipart/form-data; boundary=%s", boundary);
+    log_line(app, "uploading %s (%ld bytes)...", base, size);
+    struct http_response r = http_request_raw(app, "POST", "/api/uploads", body, total, ctype);
+    free(body);
+
+    if (r.status < 200 || r.status >= 300) {
+        log_line(app, "/upload failed HTTP %d: %.200s", r.status, r.body ? r.body : "");
+        free(r.body);
+        return;
+    }
+    char url[MAX_LINE] = "";
+    if (!json_top_string(r.body, r.body_len, "url", url, sizeof(url)) || !url[0]) {
+        log_line(app, "/upload: response missing url");
+        free(r.body);
+        return;
+    }
+    free(r.body);
+
+    /* The server may answer with a path rather than an absolute URL;
+     * make it absolute so the link is clickable from any client. */
+    char message[MAX_LINE];
+    if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0)
+        snprintf(message, sizeof(message), "📸 %s", url);
+    else
+        snprintf(message, sizeof(message), "📸 %s%s", app->url.base, url);
+
+    const char *network = app->windows[app->current].network;
+    const char *channel = app->windows[app->current].channel;
+    add_pending_echo(app, network, channel, own_nick_for_network(app, network), message);
+    enqueue_send(app, network, channel, message);
+}
+
+/* ── /archive open|purge ───────────────────────────────────────────────
+ * `open` re-opens an archived window locally and pulls its scrollback
+ * back; `purge` is the DESTRUCTIVE delete of that target's history and
+ * requires the target to be named explicitly — there is deliberately no
+ * "purge everything" form. */
+static void archive_command(struct app *app, const char *rest) {
+    while (*rest == ' ') rest++;
+    const char *network = app->windows[app->current].network;
+
+    if (strncmp(rest, "open ", 5) == 0) {
+        const char *target = rest + 5;
+        while (*target == ' ') target++;
+        if (!*target) {
+            log_line(app, "/archive open requires a target");
+            return;
+        }
+        add_window_ex(app, network, target, true);
+        enqueue_fetch(app, network, target);
+        log_line(app, "reopened archived window %s", target);
+        return;
+    }
+
+    if (strncmp(rest, "purge ", 6) == 0) {
+        const char *target = rest + 6;
+        while (*target == ' ') target++;
+        if (!*target) {
+            log_line(app, "/archive purge requires a target");
+            return;
+        }
+        char *slug = url_encode(network);
+        char *tgt = url_encode(target);
+        char *path = xasprintf("/networks/%s/archive/%s", slug, tgt);
+        free(slug);
+        free(tgt);
+        struct http_response r = http_request(app, "DELETE", path, NULL);
+        free(path);
+        if (r.status >= 200 && r.status < 300) log_line(app, "purged archived scrollback for %s", target);
+        else log_line(app, "/archive purge failed HTTP %d: %.200s", r.status, r.body ? r.body : "");
+        free(r.body);
+        return;
+    }
+
+    log_line(app, "/archive [open <target>|purge <target>]");
+}
+
+/* ── Services shortcuts ────────────────────────────────────────────────
+ * /cs /ns /ms /os /hs /rs → the conventional service nicks. Keyed on the
+ * first letter, which is unambiguous across the six. */
+static const char *service_for_shortcut(char c) {
+    switch (c) {
+    case 'c': return "ChanServ";
+    case 'n': return "NickServ";
+    case 'm': return "MemoServ";
+    case 'o': return "OperServ";
+    case 'h': return "HelpServ";
+    case 'r': return "RootServ";
+    default:  return "NickServ";
+    }
+}
+
+/* ── /notify — presence watch list ─────────────────────────────────────
+ * A REST resource (GET/POST/DELETE /notify), NOT the `watchlist` push,
+ * which is the separate keyword-highlight list. Sharing the irssi verb
+ * names between two different server stores is a real trap: /notify
+ * watches PEOPLE, /hilight watches WORDS. */
+static void notify_command(struct app *app, const char *rest) {
+    while (*rest == ' ') rest++;
+    /* The watch list is per-network (it maps to that session's
+     * MONITOR/WATCH registration upstream), so every call is scoped to
+     * the active window's network. */
+    char *slug = url_encode(app->windows[app->current].network);
+    if (!*rest || strcmp(rest, "list") == 0) {
+        char *path = xasprintf("/networks/%s/notify", slug);
+        struct http_response r = http_request(app, "GET", path, NULL);
+        free(path);
+        if (r.status < 200 || r.status >= 300) {
+            log_line(app, "/notify failed HTTP %d", r.status);
+        } else {
+            json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+            const json_value *list = json_root(doc);
+            log_line(app, "--- watched nicks (%zu)", json_len(list));
+            for (size_t i = 0; i < json_len(list); i++) {
+                const json_value *row = json_at(list, i);
+                const char *nick = json_string(json_get(row, "nick"));
+                const char *presence = json_string(json_get(row, "presence"));
+                if (nick) log_line(app, "  %-20s %s", nick, presence ? presence : "unknown");
+            }
+            if (json_len(list) == 0) log_line(app, "  (none — /notify <nick> to add)");
+            json_free(doc);
+        }
+        free(r.body);
+        free(slug);
+        return;
+    }
+    if (strncmp(rest, "del ", 4) == 0 || strncmp(rest, "-", 1) == 0) {
+        const char *nick = rest[0] == '-' ? rest + 1 : rest + 4;
+        while (*nick == ' ') nick++;
+        char *enc = url_encode(nick);
+        char *path = xasprintf("/networks/%s/notify/%s", slug, enc);
+        free(enc);
+        struct http_response r = http_request(app, "DELETE", path, NULL);
+        free(path);
+        if (r.status >= 200 && r.status < 300) log_line(app, "no longer watching %s", nick);
+        else log_line(app, "/notify del failed HTTP %d", r.status);
+        free(r.body);
+        free(slug);
+        return;
+    }
+    /* Bare nicks (possibly several) are an add. */
+    char nicks_json[MAX_LINE];
+    char *arr = json_array_words(rest);
+    snprintf(nicks_json, sizeof(nicks_json), "{\"nicks\":%s}", arr);
+    free(arr);
+    char *add_path = xasprintf("/networks/%s/notify", slug);
+    struct http_response r = http_request(app, "POST", add_path, nicks_json);
+    free(add_path);
+    if (r.status >= 200 && r.status < 300) log_line(app, "watching %s", rest);
+    else log_line(app, "/notify failed HTTP %d: %.200s", r.status, r.body);
+    free(r.body);
+    free(slug);
+}
+
+/* ── /list — channel directory ─────────────────────────────────────────
+ * A full LIST is expensive on a large network, so grappa runs it as a
+ * background scan (POST .../directory/refresh) that reports progress via
+ * directory_* events, and serves the result from a cached table. Bare
+ * /list reads the cache; `/list -refresh` starts a new scan. */
+static void directory_command(struct app *app, const char *rest) {
+    while (*rest == ' ') rest++;
+    const char *network = app->windows[app->current].network;
+    char *slug = url_encode(network);
+    if (strcmp(rest, "-refresh") == 0) {
+        char *path = xasprintf("/networks/%s/directory/refresh", slug);
+        free(slug);
+        struct http_response r = http_request(app, "POST", path, "{}");
+        free(path);
+        if (r.status >= 200 && r.status < 300) log_line(app, "scanning %s channel list...", network);
+        else log_line(app, "/list refresh failed HTTP %d: %.200s", r.status, r.body);
+        free(r.body);
+        return;
+    }
+    char *path;
+    if (*rest) {
+        char *q = url_encode(rest);
+        path = xasprintf("/networks/%s/directory?q=%s", slug, q);
+        free(q);
+    } else {
+        path = xasprintf("/networks/%s/directory", slug);
+    }
+    free(slug);
+    struct http_response r = http_request(app, "GET", path, NULL);
+    free(path);
+    if (r.status < 200 || r.status >= 300) {
+        log_line(app, "/list failed HTTP %d: %.200s", r.status, r.body);
+        free(r.body);
+        return;
+    }
+    json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+    /* The endpoint may answer with a bare array or an envelope carrying
+     * the rows plus scan metadata; accept either rather than guessing. */
+    const json_value *root = json_root(doc);
+    const json_value *rows = json_type_of(root) == JSON_ARRAY ? root : json_get(root, "channels");
+    if (!rows) rows = json_get(root, "entries");
+    size_t n = json_len(rows);
+    log_line(app, "--- channel directory %s (%zu)", network, n);
+    for (size_t i = 0; i < n; i++) {
+        const json_value *row = json_at(rows, i);
+        const char *name = json_string(json_get(row, "name"));
+        const char *topic = json_string(json_get(row, "topic"));
+        long users = 0;
+        json_long(json_get(row, "users"), &users);
+        if (name) log_line(app, "  %-28s %4ld  %.80s", name, users, topic ? topic : "");
+    }
+    if (n == 0) log_line(app, "  (empty — /list -refresh to scan)");
+    json_free(doc);
+    free(r.body);
+}
+
+/* ── User-defined aliases ──────────────────────────────────────────────
+ * Grammar mirrors cicchetto's: $1..$9 positional (missing → empty), $*
+ * all args, and an implicit verbatim append when the expansion holds no
+ * placeholder. An alias may shadow any builtin except /alias and /unalias
+ * (#427); expansion is depth-bounded so `/alias a /a` cannot spin. */
+/* Alias storage + expansion live in alias.[ch] — pure, and tested there.
+ * These wrappers only add the app lock and the user-facing log lines. */
+
+static void alias_command(struct app *app, const char *rest) {
+    while (*rest == ' ') rest++;
+    if (!*rest) {
+        pthread_mutex_lock(&app->lock);
+        size_t count = app->aliases.count;
+        log_line(app, "--- aliases (%zu)", count);
+        for (size_t i = 0; i < count; i++)
+            log_line(app, "  /%-12s %s", app->aliases.entries[i].name,
+                     app->aliases.entries[i].expansion);
+        pthread_mutex_unlock(&app->lock);
+        if (count == 0) log_line(app, "  (none — /alias <name> <expansion>)");
+        return;
+    }
+    const char *sp = strchr(rest, ' ');
+    if (!sp) {
+        log_line(app, "/alias requires <name> <expansion>");
+        return;
+    }
+    char name[ALIAS_MAX_NAME];
+    size_t nlen = (size_t)(sp - rest);
+    if (nlen >= sizeof(name)) nlen = sizeof(name) - 1;
+    memcpy(name, rest, nlen);
+    name[nlen] = '\0';
+    const char *expansion = sp + 1;
+    while (*expansion == ' ') expansion++;
+
+    pthread_mutex_lock(&app->lock);
+    alias_set_result res = alias_set(&app->aliases, name, expansion);
+    pthread_mutex_unlock(&app->lock);
+    switch (res) {
+    case ALIAS_SET_OK:
+        log_line(app, "alias /%s = %s", name, expansion);
+        break;
+    case ALIAS_SET_NON_SHADOWABLE:
+        log_line(app, "/alias: /%s can't be aliased — it's needed to manage aliases", name);
+        break;
+    case ALIAS_SET_FULL:
+        log_line(app, "/alias: table full (%d)", ALIAS_MAX_ENTRIES);
+        break;
+    case ALIAS_SET_INVALID:
+        log_line(app, "/alias requires <name> <expansion>");
+        break;
+    }
+}
+
+static void alias_remove(struct app *app, const char *name) {
+    while (*name == ' ') name++;
+    pthread_mutex_lock(&app->lock);
+    bool found = alias_unset(&app->aliases, name);
+    pthread_mutex_unlock(&app->lock);
+    if (found) log_line(app, "alias /%s removed", name);
+    else log_line(app, "/unalias: no such alias: %s", name);
+}
+
+static void handle_command(struct app *app, const char *input) {
+    /* Alias expansion happens BEFORE dispatch, so an expanded alias flows
+     * through the ordinary command path and cannot reach a second, parallel
+     * implementation. Bounded so a self-referential alias terminates.
+     *
+     * Works on a LOCAL copy: internal callers pass string literals
+     * (`handle_command(app, "/close")`), and the dispatcher itself splits
+     * arguments in place with `*sp = 0`. Writing through to the caller's
+     * buffer would be undefined behaviour for those. */
+    char line[MAX_LINE];
+    pthread_mutex_lock(&app->lock);
+    alias_expand(&app->aliases, input, line, sizeof(line));
+    pthread_mutex_unlock(&app->lock);
+    handle_command_dispatch(app, line);
+}
+
+static void handle_command_dispatch(struct app *app, char *line) {
     if (strcmp(line, "/quit") == 0) {
         logout_grappa(app);
         app->running = false;
@@ -2943,18 +5005,57 @@ static void handle_command(struct app *app, char *line) {
         show_help(app);
     } else if (strncmp(line, "/help ", 6) == 0) {
         show_command_help(app, line + 6);
+    } else if (strncmp(line, "/mouse", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) {
+        /* Mouse tracking and the terminal's own text selection are mutually
+         * exclusive — while shottino is tracking, the terminal forwards
+         * button/motion events here instead of selecting. Shift-drag
+         * overrides tracking in most terminals, but that is a workaround,
+         * not a setting, so this makes the trade explicit and switchable. */
+        const char *rest = line + 6;
+        while (*rest == ' ') rest++;
+        bool want = app->mouse_enabled;
+        if (!*rest) want = !app->mouse_enabled;
+        else if (strcmp(rest, "on") == 0) want = true;
+        else if (strcmp(rest, "off") == 0) want = false;
+        else {
+            log_line(app, "/mouse [on|off] — bare /mouse toggles");
+            return;
+        }
+        app->mouse_enabled = want;
+        mouse_apply(app);
+        if (want)
+            log_line(app, "mouse tracking ON — click media links to preview; "
+                          "terminal text selection is suppressed (Shift-drag usually still works)");
+        else
+            log_line(app, "mouse tracking OFF — select and copy with the mouse as usual; "
+                          "click-to-preview is disabled until /mouse on");
     } else if (strcmp(line, "/chat") == 0) {
         pthread_mutex_lock(&app->lock);
         app->panel = PANEL_CHAT;
         pthread_mutex_unlock(&app->lock);
     } else if (strcmp(line, "/archive") == 0) {
         open_panel(app, PANEL_ARCHIVE);
+    } else if (strncmp(line, "/archive ", 9) == 0) {
+        archive_command(app, line + 9);
     } else if (strcmp(line, "/settings") == 0) {
         open_panel(app, PANEL_SETTINGS);
     } else if (strcmp(line, "/admin") == 0) {
         open_panel(app, PANEL_ADMIN);
     } else if (strcmp(line, "/share") == 0) {
         mint_share_link(app);
+    } else if (strcmp(line, "/preview") == 0) {
+        /* The keyboard route to click-to-preview. With mouse tracking off
+         * by default (so the terminal keeps its own selection), this is
+         * how the preview stays reachable — the feature is not gated on
+         * surrendering copy/paste. */
+        char url[MAX_LINE];
+        bool is_video;
+        pthread_mutex_lock(&app->lock);
+        snprintf(url, sizeof(url), "%s", app->last_media_url);
+        is_video = app->last_media_is_video;
+        pthread_mutex_unlock(&app->lock);
+        if (!url[0]) log_line(app, "/preview: no image or video link seen yet in this session");
+        else preview_media(app, url, is_video);
     } else if (strcmp(line, "/open") == 0) {
         open_external_url(app, app->last_url);
     } else if (strcmp(line, "/clear") == 0) {
@@ -3152,8 +5253,148 @@ static void handle_command(struct app *app, char *line) {
         char *payload = xasprintf("{\"network_id\":%d,\"modes\":\"%s\"}", current_network_id(app), modes);
         ws_push_user(app, "umode", payload);
         free(modes); free(payload);
-    } else if (strncmp(line, "/mode ", 6) == 0) {
-        log_line(app, "/mode is available through /quote MODE ... in this build");
+    } else if (strncmp(line, "/mode", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) {
+        /* The server has taken a structured `mode` verb since before this
+         * client existed — {network_id, target, modes, params}. The old
+         * body told the user to fall back to `/quote MODE`, which skipped
+         * the server's validation and its channel_modes_changed
+         * broadcast. Grammar mirrors cicchetto's:
+         *   /mode                → show current channel's modes
+         *   /mode +ns            → apply to the current channel
+         *   /mode #chan +ns      → apply to a named channel
+         *   /mode +k secret      → mode letters plus positional params
+         */
+        char *rest = line + 5;
+        while (*rest == ' ') rest++;
+        char target[MAX_CHANNEL];
+        snprintf(target, sizeof(target), "%s", current_channel(app));
+        if (*rest == '#' || *rest == '&' || *rest == '+' || *rest == '!') {
+            char *sp = strchr(rest, ' ');
+            if (sp) {
+                *sp = 0;
+                snprintf(target, sizeof(target), "%s", rest);
+                rest = sp + 1;
+                while (*rest == ' ') rest++;
+            } else {
+                snprintf(target, sizeof(target), "%s", rest);
+                rest += strlen(rest);
+            }
+        }
+        if (!target[0] || strcmp(target, "$server") == 0) {
+            log_line(app, "/mode needs a channel; use /mode #chan +modes from a server window");
+        } else {
+            /* Split "+k secret" into the mode string and its params. */
+            char modes[128] = "";
+            char *sp = strchr(rest, ' ');
+            const char *params_src = "";
+            if (sp) { *sp = 0; params_src = sp + 1; }
+            snprintf(modes, sizeof(modes), "%s", rest);
+            char *tgt = json_escape(target);
+            char *mds = json_escape(modes);
+            char *params = json_array_words(params_src);
+            char *payload = xasprintf(
+                "{\"network_id\":%d,\"target\":\"%s\",\"modes\":\"%s\",\"params\":%s}",
+                current_network_id(app), tgt, mds, params);
+            ws_push_user(app, "mode", payload);
+            free(tgt); free(mds); free(params); free(payload);
+        }
+    } else if (strcmp(line, "/links") == 0) {
+        char *payload = xasprintf("{\"network_id\":%d}", current_network_id(app));
+        ws_push_user(app, "links", payload);
+        free(payload);
+    } else if (strcmp(line, "/motd") == 0 || strcmp(line, "/info") == 0 ||
+               strcmp(line, "/version") == 0) {
+        /* All three answer with a `server_reply` bundle discriminated by
+         * source, so one arm covers them. */
+        char *payload = xasprintf("{\"network_id\":%d}", current_network_id(app));
+        ws_push_user(app, line + 1, payload);
+        free(payload);
+    } else if (strncmp(line, "/stats", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) {
+        /* STATS has no structured verb; it rides `raw`, as in cicchetto.
+         * Trailing args are omitted rather than sent empty so the frame
+         * stays positionally valid. */
+        const char *rest = line + 6;
+        while (*rest == ' ') rest++;
+        char frame[MAX_LINE];
+        if (*rest) snprintf(frame, sizeof(frame), "STATS %s", rest);
+        else snprintf(frame, sizeof(frame), "STATS");
+        char *raw = json_escape(frame);
+        char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", current_network_id(app), raw);
+        ws_push_user(app, "raw", payload);
+        free(raw); free(payload);
+    } else if (strncmp(line, "/rehash", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
+        const char *rest = line + 7;
+        while (*rest == ' ') rest++;
+        char frame[MAX_LINE];
+        if (*rest) snprintf(frame, sizeof(frame), "REHASH %s", rest);
+        else snprintf(frame, sizeof(frame), "REHASH");
+        char *raw = json_escape(frame);
+        char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", current_network_id(app), raw);
+        ws_push_user(app, "raw", payload);
+        free(raw); free(payload);
+    } else if (strncmp(line, "/kb ", 4) == 0 || strncmp(line, "/kickban ", 9) == 0) {
+        /* Kick + ban as one verb. Banning FIRST is deliberate: kick then
+         * ban leaves a window in which the user can rejoin ahead of the
+         * ban landing. */
+        char *rest = strchr(line + 1, ' ');
+        rest++;
+        while (*rest == ' ') rest++;
+        char *sp = strchr(rest, ' ');
+        if (sp) *sp = 0;
+        if (!*rest) {
+            log_line(app, "/kb requires <nick> [reason]");
+        } else {
+            char mask[MAX_CHANNEL + 8];
+            snprintf(mask, sizeof(mask), "%s!*@*", rest);
+            char *emask = json_escape(mask);
+            char *ban_extra = xasprintf("\"mask\":\"%s\"", emask);
+            push_simple_channel_action(app, "ban", ban_extra);
+            free(emask); free(ban_extra);
+            char *nick = json_escape(rest);
+            char *reason = json_escape(sp ? sp + 1 : "");
+            char *kick_extra = xasprintf("\"nick\":\"%s\",\"reason\":\"%s\"", nick, reason);
+            push_simple_channel_action(app, "kick", kick_extra);
+            free(nick); free(reason); free(kick_extra);
+        }
+    } else if (strncmp(line, "/cs ", 4) == 0 || strncmp(line, "/ns ", 4) == 0 ||
+               strncmp(line, "/ms ", 4) == 0 || strncmp(line, "/os ", 4) == 0 ||
+               strncmp(line, "/hs ", 4) == 0 || strncmp(line, "/rs ", 4) == 0 ||
+               strcmp(line, "/cs") == 0 || strcmp(line, "/ns") == 0 ||
+               strcmp(line, "/ms") == 0 || strcmp(line, "/os") == 0 ||
+               strcmp(line, "/hs") == 0 || strcmp(line, "/rs") == 0) {
+        /* Services shortcuts: /<x>s <cmd> is a PRIVMSG to the service. A
+         * BARE /<x>s sends HELP, which is what cicchetto's services modal
+         * opens with. */
+        const char *service = service_for_shortcut(line[1]);
+        const char *rest = line[3] ? line + 4 : "";
+        while (*rest == ' ') rest++;
+        const char *body = *rest ? rest : "HELP";
+        const char *network = app->windows[app->current].network;
+        query_window(app, service);
+        add_pending_echo(app, network, service, own_nick_for_network(app, network), body);
+        enqueue_send(app, network, service, body);
+    } else if (strncmp(line, "/notify", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
+        notify_command(app, line + 7);
+    } else if (strncmp(line, "/hilight ", 9) == 0 || strncmp(line, "/dehilight ", 11) == 0) {
+        /* Keyword highlights are a DIFFERENT list from /notify's presence
+         * watch — same irssi naming, separate server stores. */
+        bool remove = line[1] == 'd';
+        const char *rest = strchr(line + 1, ' ') + 1;
+        while (*rest == ' ') rest++;
+        char *pat = json_escape(rest);
+        char *payload = xasprintf("{\"action\":\"%s\",\"pattern\":\"%s\"}", remove ? "del" : "add", pat);
+        ws_push_user(app, "watchlist", payload);
+        free(pat); free(payload);
+    } else if (strncmp(line, "/alias", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) {
+        alias_command(app, line + 6);
+    } else if (strncmp(line, "/unalias ", 9) == 0) {
+        alias_remove(app, line + 9);
+    } else if (strncmp(line, "/upload ", 8) == 0) {
+        upload_command(app, line + 8);
+    } else if (strcmp(line, "/upload") == 0) {
+        log_line(app, "/upload <path> — send a local file and post its link");
+    } else if (strcmp(line, "/list") == 0 || strncmp(line, "/list ", 6) == 0) {
+        directory_command(app, line[5] ? line + 6 : "");
     } else if (strncmp(line, "/watch ", 7) == 0 || strncmp(line, "/highlight ", 11) == 0) {
         char *rest = strchr(line + 1, ' ');
         char action[16] = "list";
@@ -3174,7 +5415,7 @@ static void handle_command(struct app *app, char *line) {
             enqueue_fetch(app, app->windows[app->current].network, app->windows[app->current].channel);
         }
     } else {
-        log_line(app, "unknown command; supported verbs include /join /part /msg /query /me /nick /away /whois /whowas /who /names /lusers /op /deop /voice /devoice /kick /ban /unban /banlist /invite /quote /oper /watch /share /disconnect /connect /window /quit");
+        log_line(app, "unknown command: %.40s — /help lists every verb", line);
     }
 }
 
@@ -3190,8 +5431,19 @@ static void handle_enter(struct app *app) {
     else {
         const char *network = app->windows[app->current].network;
         const char *channel = app->windows[app->current].channel;
-        add_pending_echo(app, network, channel, own_nick_for_network(app, network), line);
-        enqueue_send(app, network, channel, line);
+        /* $server is read-only by server contract, so say so HERE rather
+         * than firing a request that can only come back 400. The client
+         * knows the rule; making the user decode an HTTP status to learn
+         * it is the failure this replaces. Commands still work from a
+         * $server window — only a bare PRIVMSG has nowhere to go. */
+        if (strcmp(channel, "$server") == 0) {
+            log_line(app, "[%s/$server] --- the server window is read-only — "
+                          "switch to a channel, or use /msg <nick> <text> or /join #chan",
+                     network);
+        } else {
+            add_pending_echo(app, network, channel, own_nick_for_network(app, network), line);
+            enqueue_send(app, network, channel, line);
+        }
     }
 }
 
@@ -3238,13 +5490,14 @@ static void event_loop(struct app *app) {
     setlocale(LC_ALL, "");
     initscr();
     init_theme();
+    /* After init_theme: the mIRC pair pool sits above the theme's fixed
+     * pairs and needs COLORS/COLOR_PAIRS, which start_color() populates. */
+    mirc_colors_init();
     cbreak();
     noecho();
     keypad(stdscr, TRUE);
     timeout(50);
-    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
-    mouseinterval(0);
-    mouse_reporting(true);
+    mouse_apply(app);
     app->running = true;
     while (app->running) {
         ws_pump(app);
@@ -3292,10 +5545,39 @@ static void event_loop(struct app *app) {
     endwin();
 }
 
+/* Usage text, written to `out` so `--help` can go to stdout and exit 0
+ * while a usage ERROR goes to stderr and exits 2 — the distinction every
+ * other CLI makes, and the one that lets a packaging smoke test tell
+ * "the binary runs" apart from "the binary is broken". */
+static void print_usage(FILE *out, const char *prog) {
+    fprintf(out, "usage: %s [--auto|--user|--visitor] https://grappa.example.net IDENTIFIER PASSWORD\n", prog);
+    fprintf(out, "       %s --user --login-email user@example.net https://grappa.example.net PASSWORD\n", prog);
+    fprintf(out, "       %s --share https://grappa.example.net/share/<token>\n", prog);
+    fprintf(out, "\n");
+    fprintf(out, "  --auto           let the server classify the identifier (default)\n");
+    fprintf(out, "  --user           registered-user login; a plain account name becomes\n");
+    fprintf(out, "                   name@shottino.local\n");
+    fprintf(out, "  --visitor        visitor nick flow\n");
+    fprintf(out, "  --login-email E  use E as the grappa login identifier; the IRC nick comes\n");
+    fprintf(out, "                   from the network credential, not from the email\n");
+    fprintf(out, "  --share URL      consume a visitor session-share link (mint one with /share);\n");
+    fprintf(out, "                   both host and token are read from the URL\n");
+    fprintf(out, "  --help, -h       show this help and exit\n");
+    fprintf(out, "\nOnce connected, /help lists every command.\n");
+}
+
 int main(int argc, char **argv) {
     const char *mode = "auto";
     const char *login_override = NULL;
     int argi = 1;
+    /* Checked before the option loop so --help works from any position and
+     * never requires the other arguments to be present. */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(stdout, argv[0]);
+            return 0;
+        }
+    }
     while (argi < argc && strncmp(argv[argi], "--", 2) == 0) {
         if (strcmp(argv[argi], "--user") == 0) mode = "user";
         else if (strcmp(argv[argi], "--visitor") == 0) mode = "visitor";
@@ -3321,12 +5603,9 @@ int main(int argc, char **argv) {
     bool share_mode = strcmp(mode, "share") == 0;
     int expected = share_mode ? 1 : (login_override ? 2 : 3);
     if (argc - argi != expected) {
-        fprintf(stderr, "usage: %s [--auto|--user|--visitor] https://grappa.example.net IDENTIFIER PASSWORD\n", argv[0]);
-        fprintf(stderr, "       %s --user --login-email user@example.net https://grappa.example.net PASSWORD\n", argv[0]);
-        fprintf(stderr, "       %s --share https://grappa.example.net/share/<token>\n", argv[0]);
-        fprintf(stderr, "       --user turns plain account names into name@shottino.local for grappa registered-user login\n");
-        fprintf(stderr, "       --login-email uses EMAIL as the grappa login identifier; IRC nick comes from grappa credentials\n");
-        fprintf(stderr, "       --share consumes a visitor session-share link (mint one with /share); host + token come from the URL\n");
+        /* Usage ERROR: stderr + exit 2. One definition of the text,
+         * shared with --help, so the two cannot drift. */
+        print_usage(stderr, argv[0]);
         return 2;
     }
 
@@ -3339,6 +5618,7 @@ int main(int argc, char **argv) {
     pthread_mutex_init(&app->jobs_lock, NULL);
     pthread_cond_init(&app->jobs_cond, NULL);
     app->ws.fd = -1;
+    app->mouse_enabled = false;
     char *share_base = NULL, *share_token = NULL;
     const char *server_url;
     if (share_mode) {
@@ -3390,8 +5670,13 @@ int main(int argc, char **argv) {
         ws_join_topics(app);
         log_line(app, "websocket connected");
     } else {
-        startup("websocket unavailable; continuing with REST");
-        log_line(app, "websocket unavailable; REST send/fetch still works");
+        /* Arm the retry timer rather than settling permanently into
+         * REST-only mode: a server still coming up is the common cause of
+         * a failed first connect, and it will be ready in seconds. */
+        ws_schedule_retry(app);
+        startup("websocket unavailable; will retry");
+        log_line(app, "websocket unavailable; retrying in %ds (REST send/fetch still works)",
+                 (int)(app->ws_retry_at - time(NULL)));
     }
     startup("starting background worker");
     pthread_create(&app->worker, NULL, worker_main, app);

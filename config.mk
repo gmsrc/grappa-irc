@@ -3,5 +3,5 @@ PREFIX := /usr/local
 BINDIR := /usr/local/bin
 CC := cc
 PKG_CONFIG := pkg-config
-CFLAGS_DEPS := -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=600   -pthread
-LDLIBS_DEPS := -lncursesw -ltinfo  -lssl -lcrypto  -pthread
+CFLAGS_DEPS := -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=600  -pthread
+LDLIBS_DEPS := -lncursesw -ltinfo -lssl -lcrypto -pthread

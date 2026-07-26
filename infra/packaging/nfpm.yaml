@@ -22,17 +22,26 @@ vendor: "Marcello Barnaba"
 homepage: "https://github.com/vjt/grappa-irc"
 license: "MIT"
 description: |
-  Always-on IRC bouncer with a REST + Phoenix Channels API and a bundled
-  irssi-shaped web PWA (cicchetto).
+  Always-on IRC bouncer with a REST + Phoenix Channels API, a bundled
+  irssi-shaped web PWA (cicchetto), and a terminal client (shottino).
   One supervised OTP process per (user, network); sqlite-backed
   scrollback. Ships a self-contained Erlang/OTP release and self-serves
   the web frontend, so nginx is recommended for TLS but not required.
+  The terminal client installs as /usr/bin/shottino and talks to the
+  same REST + Channels API as the web frontend.
 
 # Runtime shared libraries the bundled ERTS + crypto/exiftool paths need.
 # The mix release bundles ERTS itself; these are the system libs it links.
+#
+# libncursesw6 is for SHOTTINO, and is NOT the same package as
+# libncurses6: the client links libncursesw.so.6 (the WIDE build, because
+# it is UTF-8 end to end) while the narrow libncurses6 above is what ERTS
+# wants. Debian ships them separately, so depending on only one leaves the
+# other's consumer with a "cannot open shared object file" at exec time.
 depends:
   - libssl3
   - libncurses6
+  - libncursesw6
   - libstdc++6
   - libgcc-s1
   - ca-certificates
@@ -50,6 +59,20 @@ contents:
   # The mix release (self-contained ERTS + compiled app + boot scripts).
   - src: ./staging/usr/lib/grappa
     dst: /usr/lib/grappa
+
+  # shottino — the terminal client (frontends/shottino), compiled by
+  # build.sh into the staging tree.
+  #
+  # Ships in the SAME package as the bouncer rather than a separate
+  # grappa-shottino: it is one ~180 KB binary whose runtime deps (libssl3,
+  # libncurses6) are ALREADY in `depends` above for the bundled ERTS, so
+  # splitting it would add a package to maintain and buy nothing. It is a
+  # client for THIS server; installing grappa and getting a way to talk to
+  # it is the expected shape.
+  - src: ./staging/usr/bin/shottino
+    dst: /usr/bin/shottino
+    file_info:
+      mode: 0755
 
   # The built cicchetto SPA dist (CIC_DIST_ROOT points here). Read-only
   # static assets served by Plug.Static.

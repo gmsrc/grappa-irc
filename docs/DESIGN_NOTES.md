@@ -19726,3 +19726,239 @@ archive list share `.sidebar-network-section`, so e2e asserts BOTH coexist
 without the grouping rail forking — mentions row → 2px `border-left`, archived
 row → 0px (`:not(.sidebar-archive-list)` scoping). INC-2 is cic-only (no server
 change); rides the batch COLD deploy (cic bundle change).
+## 2026-07-26 — shottino brought to feature parity with cicchetto
+
+vjt asked for shottino (the C/ncurses terminal client under
+`frontends/shottino/`) to reach feature parity with cicchetto. Scope agreed
+up front: everything meaningful in a TTY. Excluded as inherently
+browser-only — PWA install / service worker, web push, the theme editor and
+background images, drag-drop upload + video transcode, pinch-zoom and swipe,
+QR, captcha, the CRT splash, the audio mini-player.
+
+### Why the substring dispatch had to go first
+
+Shottino consumed FOUR event kinds (`message`, `topic_changed`,
+`members_seeded`, `query_windows_list`), matched with
+`strstr(frame, "\"kind\":\"message\"")`, and pulled scalars with a
+`json_find_string` that scanned for a key ANYWHERE in the buffer at ANY
+depth. That is adequate for four flat payloads with unique key names and
+nothing else. It cannot express the rest of the surface: `message` nests an
+object, `query_windows_list` is a map keyed by nick, `whois_bundle` holds
+arrays, and sibling payloads reuse `network` / `channel` / `nick` at
+different depths. A key-anywhere scan silently reads the WRONG nesting
+level — no error, just a wrong value.
+
+So `json.[ch]` (arena-backed recursive descent, depth-bounded, escapes and
+surrogate pairs resolved at parse time) and `wire.[ch]` (typed narrowing for
+all ~50 kinds) came first. `wire.c` is a deliberate transliteration of
+cicchetto's `wireNarrow.ts` + `userTopic.ts` — same arms, same field order,
+same strictness — so the two can be diffed by eye when the server grows an
+arm. Narrowing is all-or-nothing per event and BORROWS from the json_doc
+(nothing allocates, nothing can leak).
+
+**Closed sets were verified against the SERVER typespecs, not transcribed
+from cic.** That caught `window_counts.severity`, which had been written as
+three plural values and is in fact four singular ones (`:mention`,
+`:message`, `:event`, `:none` per `Grappa.WindowCounts.severity/0`). A
+mismatch there silently degrades every window to `:none`.
+
+### Deliberate tolerances, reproduced and pinned
+
+Where the server contract tolerates a missing or garbled field, the C
+narrower reproduces the tolerance and a test pins it, because each one
+encodes a bug someone already paid for: `join_failed.numeric` nullable (cic
+S13 — requiring it dropped the whole reconnect "failed tab" snapshot);
+`read_cursor_set.badge_count` defaulting to 0 (the cursor sync is the
+load-bearing half); per-field coercion of `lusers` counts (a display-only
+card — one garbled count must not blow away eleven good ones); severity
+degrading to `:none`; upload host aliases degrading to empty rather than
+stranding the caps beside them.
+
+### Pre-existing bugs surfaced while replacing the readers
+
+- **REST scrollback rendered upside down.** `Scrollback.fetch/6` returns
+  DESC; cic reverses on ingestion and shottino never did, so every replayed
+  page read newest-first.
+- **The scrollback reader skipped presence rows entirely.** It found rows by
+  scanning for `"body"` then walking BACKWARDS to the nearest `{` — which
+  lands inside `meta` once meta is non-empty, and misses every row with a
+  null body (all joins/parts/quits). `render_message` had the same bail, so
+  shottino never displayed a join, part, quit or nick change at all.
+- The members reader copied every character after a quote that was not `m`
+  (an attempt to skip the literal key `"modes"`), mangling the mode letter m.
+- `query_windows_list` read the network id by assuming the first digit after
+  a quote belonged to the key — broken by any nick containing a digit.
+- `json_find_string` decoded every `\uXXXX` as a literal `?`.
+- `handle_command` mutated the string it was given, and internal callers
+  pass string literals (`handle_command(app, "/close")`).
+- A dropped websocket was **terminal**: it logged "websocket disconnected",
+  cleared the flag, and nothing ever set it again. The client stayed up
+  looking healthy while receiving nothing — the worst failure shape, since
+  the user has no reason to distrust what they see.
+
+### Reconnect needs backfill, not just reconnect
+
+PubSub broadcast is fire-and-forget, so anything sent during a WS gap is
+GONE — rejoining topics does not replay it. Each window refetches from its
+last seen id via `?after=` (ASC, unlike the DESC tail fetch). Without the
+backfill the client silently drops every message in the gap, which is
+strictly worse than a visible disconnect. Backoff carries jitter so a fleet
+knocked offline by a bouncer restart does not return in lockstep.
+
+### Media previews: no graphics protocol is not a refusal
+
+Previously a preview required a graphics protocol AND chafa, else
+`xdg-open` — which on a remote SSH session does nothing at all. The two
+capability axes (bitmap protocol; colour depth) are now probed separately.
+Without a protocol, the frame renders as coloured half-block character art:
+two vertically-adjacent pixels per cell, upper-half glyph in the top pixel's
+colour over the bottom pixel's, which doubles vertical resolution and is why
+it reads as a picture rather than as ASCII art. Below 256 colours it
+degrades to one averaged cell with a luminance ramp glyph. `ffmpeg` is the
+only hard dependency; chafa is used when present.
+
+**Truecolor is never guessed** — it requires an explicit `COLORTERM`
+advertisement, because emitting 24-bit escapes at a terminal that cannot
+parse them prints raw garbage at the user, a worse failure than rendering in
+256 colours.
+
+### Testing a C client
+
+Shottino shipped with no test target. The pure logic — JSON, wire narrowing,
+alias expansion, mIRC parsing, colour quantisation — is deliberately kept in
+modules free of app state and terminal state, so `make check` exercises them
+without a TTY. Suites build with ASan+UBSan: this is C, the parser walks
+attacker-shaped input off the network, and an arena overrun is exactly the
+class of bug that passes a plain assertion suite and corrupts the app hours
+later. ~5,000 assertions at the time of writing.
+
+`mirc.c` reproduces cic's lookahead rules exactly because that is where naive
+parsers go wrong and each mistake is visible on screen: a comma not followed
+by digits stays literal (`\x034,foo` is red `,foo`), a partial hex run is NOT
+consumed, and `\x0310` is colour 10 rather than colour 1 then "0".
+
+### Still not rendered
+
+`channel_created`, `channels_changed`, `notify_list`, `presence_snapshot`,
+`supported_umodes_changed`, `bundle_hash`, `server_settings_changed`,
+`archive_changed`, `archive_purged` are narrowed but not surfaced. They are
+listed explicitly in the dispatch switch rather than swept into a `default`
+arm, so `-Wswitch` flags the next kind the server adds instead of letting it
+vanish silently.
+
+## 2026-07-26 — shottino enters the deploy path (CI + distro packages)
+
+Follow-on to the parity work above. After it merged, vjt asked to "deploy"
+it, and the honest answer was that there was nothing to deploy: no path
+built, installed or served shottino. `deploy-m42.sh`, every
+`infra/freebsd/*.sh` jail script, `deploy.sh`, `deploy-cic.sh` and the
+nginx config all ignore `frontends/`. Deploying would have restarted the
+BEAM on live sessions to ship a byte-identical release.
+
+### Which surface is "the deploy path"
+
+Grappa has three, and a terminal client fits them differently:
+
+1. **the m42 bastille jail** (`deploy-m42.sh`) — the prod server;
+2. **distro packages** (`.deb` via nfpm, Arch via `makepkg`), published as
+   GitHub Release assets by `release.yml` on a `v*` tag;
+3. **CI** (`ci.yml`) on every push.
+
+(2) is the actual user-facing distribution path and is where the client
+belongs. (1) was deliberately NOT taken: the jail is FreeBSD, so a binary
+built there is the wrong platform for the Linux users who run shottino on
+their own machines, it only helps someone who SSHes into the jail, and
+putting a C compile in the prod server deploy path risks failing a SERVER
+deploy over a CLIENT compile error.
+
+### One package, not two
+
+shottino ships inside the main `grappa` package as `/usr/bin/shottino`
+rather than a separate `grappa-shottino`. It is one ~180 KB binary, its
+runtime libraries are already package dependencies for the bundled ERTS,
+and it is a client for the server just installed — a second package would
+add maintenance and buy nothing. Both formats build it from source so it
+links the build host's ncurses/openssl, the same constraint that makes
+the .deb a Debian artifact and not an .rpm.
+
+### Three latent breakages this surfaced
+
+Each would have shipped broken, and none was visible without actually
+tracing the dependency and version machinery:
+
+- **`libncurses6` ≠ `libncursesw6`.** The .deb depended on the narrow
+  ncurses (what ERTS wants); shottino links `libncursesw.so.6`, the WIDE
+  build, because the client is UTF-8 end to end. Debian ships them as
+  separate packages, so on a minimal system the client would have
+  installed and then failed at exec with "cannot open shared object
+  file". Both are now listed.
+- **`libncursesw5-dev` no longer exists.** The obvious build-dep name is a
+  transitional package with no candidate on current Debian/Ubuntu; both CI
+  jobs would have died at the apt step. `libncurses-dev` is what ships
+  `ncursesw.pc`, which is what `./configure` probes.
+- **`./configure` dirties a TRACKED file.** `config.mk` is committed
+  (despite saying "Generated by ./configure"), so running configure during
+  a package build leaves `git status --porcelain` non-empty —
+  and `Grappa.Version.derive/2` treats a dirty tree as unreleased,
+  appending `-<shortsha>` instead of the bare tag. That would have failed
+  `release.yml`'s own "reports the bare tag version" proof. The mix
+  release runs earlier so the CURRENT step order is accidentally safe;
+  depending on that silently is a trap for whoever reorders it next.
+  `build.sh` snapshots and restores `config.mk` around the build, under a
+  `trap` so it restores on a failed compile too.
+
+The tracked-generated-`config.mk` oddity is left as-is: untracking it is
+the arguably-correct fix but changes the workflow for anyone who builds
+without running `./configure` first, and that is a separate decision.
+
+### `--help`, because packaging needs a smoke test
+
+`release.yml` proves its artifacts rather than trusting them (the migrate
+count, the reported version). Extending that to shottino needed a way to
+ask a packaged binary whether it works — and shottino had no `--help` at
+all: every invocation without valid arguments printed usage to stderr and
+exited 2, indistinguishable from a broken binary. `--help` now writes to
+stdout and exits 0 while a usage ERROR stays on stderr with exit 2, both
+rendered from one shared function. The package jobs assert
+`/usr/bin/shottino --help` prints usage, which exercises the real dynamic
+links rather than just checking the file exists.
+
+`SKIP_SHOTTINO=1` opts the .deb build out (mirroring `SKIP_RELEASE` /
+`SKIP_CIC`); without the opt-out a failed client build fails the package
+build, because a package that silently ships without a binary it
+advertises is worse than one that refuses to build.
+
+## 2026-07-26 — shottino alias shadowing realigned to #427
+
+Caught while rebasing the shottino work onto upstream for the PR. The two
+landed the same day and crossed: shottino implemented #385 decision #3
+("builtins are never shadowed") while #427 reversed exactly that rule
+upstream (ruling vjt 2026-07-26 — an alias MAY shadow any verb except
+`/alias` and `/unalias`).
+
+Git rebased them cleanly, because the collision is SEMANTIC, not textual:
+cicchetto's rule lives in `slashCommands.ts` and shottino's in `alias.c`,
+so nothing conflicted and nothing warned. The result would have been two
+clients disagreeing about whether `/alias join …` is legal — a parity
+break in the one area the parity work exists to close, shipped silently.
+
+shottino now mirrors `isNonShadowableVerb`: a fixed two-name deny list,
+checked at BOTH define time and expansion, deliberately NOT the built-in
+verb list. Upstream's comment records why that distinction matters — the
+old gate tested the live DISPATCH set and so rejected every builtin, and
+reusing that list for the deny check reproduces the reject-everything
+behaviour the ruling reversed. The C twin has the same trap available
+(`alias_is_builtin` existed and was the obvious thing to reach for), so
+the built-in list was DELETED rather than left as a loaded footgun; it had
+no other consumer.
+
+The old test asserted the reversed decision, so it was rewritten rather
+than adjusted. A test that encodes a superseded ruling is worse than no
+test: it argues for the wrong behaviour to whoever reads it next.
+
+Note on the rebase itself: writing a test for "a shadowing alias expands"
+surfaced that aliasing `me` too makes the expansion re-expand (bounded,
+eight deep). That is correct given both aliases exist and matches cic's
+bounded `expandAlias`, but it made the assertion unreadable — the test
+now uses a fresh table whose expansion target is not itself aliased, and
+leaves the recursion case to the test that exists for it.

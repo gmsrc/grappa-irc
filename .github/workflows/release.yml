@@ -90,11 +90,17 @@ jobs:
       - name: Setup bun (cicchetto build)
         uses: oven-sh/setup-bun@v2
 
-      - name: Install media tools + sqlite (boot deps + migrate proof)
+      # pkg-config + the ncursesw/openssl headers are shottino's BUILD
+      # deps: build.sh compiles the terminal client into the staging tree
+      # and ./configure hard-fails without them. Omitting them would break
+      # the .deb build at packaging time — on a tag, which is the worst
+      # possible place to discover it.
+      - name: Install media tools + sqlite + shottino build deps
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            libimage-exiftool-perl ffmpeg sqlite3
+            libimage-exiftool-perl ffmpeg sqlite3 \
+            pkg-config libncurses-dev libssl-dev
 
       - name: Build the .deb
         run: infra/packaging/build.sh
@@ -123,6 +129,18 @@ jobs:
             echo "::error::packaged .deb reports '$got', expected bare '$want'"
             exit 1
           fi
+
+      # Same proof discipline as the migrate + version checks above: assert
+      # on the INSTALLED artifact, not on the build tree. `--help` exits 0
+      # without a server, a terminal or config, so it exercises the real
+      # dynamic links (libncursesw, libssl) that the package `depends` on.
+      - name: Prove the packaged shottino installed and runs
+        run: |
+          test -x /usr/bin/shottino || { echo "::error::/usr/bin/shottino missing from the .deb"; exit 1; }
+          /usr/bin/shottino --help > /tmp/shottino-help.txt
+          grep -q '^usage: ' /tmp/shottino-help.txt || {
+            echo "::error::shottino --help produced no usage output"; cat /tmp/shottino-help.txt; exit 1; }
+          echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v7
@@ -214,6 +232,16 @@ jobs:
             echo "::error::packaged Arch build reports '$got', expected bare '$want'"
             exit 1
           fi
+
+      # Mirror of the .deb proof — the Arch package is a SOURCE build, so
+      # this additionally confirms shottino compiled on the Arch toolchain
+      # (a newer gcc than the Debian one) and links that host's libs.
+      - name: Prove the packaged shottino installed and runs
+        run: |
+          test -x /usr/bin/shottino || { echo "::error::/usr/bin/shottino missing from the Arch package"; exit 1; }
+          /usr/bin/shottino --help | grep -q '^usage: ' || {
+            echo "::error::shottino --help produced no usage output"; exit 1; }
+          echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
 
       - name: Stage Arch artifacts (package + regenerated recipe metadata)
         run: |

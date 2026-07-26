@@ -106,6 +106,55 @@ jobs:
           files: ./cover/excoveralls.json
           fail_ci_if_error: false
 
+  # shottino is C, so none of the Elixir gates above say anything about it.
+  # Before this job nothing in CI compiled it at all: a change that broke
+  # the build (or the wire narrowers) reached main unnoticed and would
+  # first surface in the release workflow, on a tag, when the packages
+  # tried to build a client that no longer compiled.
+  #
+  # Deliberately its own job rather than a step on `test`: it shares no
+  # toolchain with the BEAM jobs (no Elixir, no deps cache), it runs in
+  # well under a minute, and a failure should read as "shottino broke"
+  # rather than as a red mark on the Elixir suite.
+  shottino:
+    name: shottino (build + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # The three things ./configure probes for. libncurses-dev is the
+      # package that ships ncursesw.pc — shottino links the WIDE build
+      # (it is UTF-8 end to end), and the old libncursesw5-dev name no
+      # longer exists on current Debian/Ubuntu.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            pkg-config libncurses-dev libssl-dev
+
+      - name: Configure
+        run: ./configure
+
+      # -Werror here but NOT in the shipped Makefile: a new warning must
+      # fail CI, while a user building from source on a newer compiler
+      # that emits some novel diagnostic should still get a client.
+      # CFLAGS_DEPS is re-appended because overriding CFLAGS drops the
+      # feature-test macros configure detected (strcasestr, cfmakeraw).
+      - name: Build (warnings are errors)
+        run: |
+          make -C frontends/shottino clean
+          make -C frontends/shottino \
+            CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -O2 $(sed -n 's/^CFLAGS_DEPS := //p' config.mk)"
+
+      # Suites build with ASan+UBSan (see the Makefile): this is C parsing
+      # attacker-shaped input off a websocket, and a leak or a one-past-
+      # the-end read in the arena is exactly what a plain assertion suite
+      # passes straight over.
+      - name: Tests (ASan + UBSan)
+        run: make -C frontends/shottino check
+
   dialyzer:
     name: dialyzer
     runs-on: ubuntu-latest
