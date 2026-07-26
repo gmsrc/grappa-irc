@@ -111,6 +111,12 @@ config :grappa, :persist_admin_events, false
 # sandbox connection that must be per-test allowed). Persistence tests
 # attach + Sandbox.allow/3 explicitly (test/grappa/session_log_persistence_test.exs).
 config :grappa, :attach_session_log_telemetry, false
+# #357 — DbLatency singleton attach OFF in test env. Not a sandbox concern
+# (the fold touches no Repo) but determinism: a global handler folding
+# every async test's `[:grappa, :repo, :query]` into the shared singleton
+# would make snapshot assertions flaky. Aggregation tests attach the
+# handler explicitly + drain via `reset/0` (test/grappa/db_latency_test.exs).
+config :grappa, :attach_db_latency_telemetry, false
 config :phoenix, :plug_init_mode, :runtime
 config :phoenix, :json_library, Jason
 

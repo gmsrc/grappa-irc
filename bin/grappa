@@ -82,6 +82,8 @@ declare -Ag VERBS=(
     [list-sessions]="rpc|Grappa.Operator.list_sessions_text!|rpc|inspect the live session registry"
     [list-credentials]="rpc|Grappa.Operator.list_credentials_text!|rpc|list cred bindings + state"
     [list-visitors]="rpc|Grappa.Operator.list_visitors_text!|rpc|list active visitor rows"
+    [db-latency]="rpc|Grappa.Operator.db_latency_text!|rpc|#357 SQLite write/query-latency aggregate"
+    [db-latency-reset]="rpc|Grappa.Operator.reset_db_latency!|rpc|zero db-latency counters (open a window)"
 
     [remote-shell]="attach|remote-shell|attach|iex --remsh against the live BEAM"
 

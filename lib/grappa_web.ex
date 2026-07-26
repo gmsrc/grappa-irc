@@ -21,6 +21,7 @@ defmodule GrappaWeb do
         Grappa.Cic.Bundle,
         Grappa.Cic.Wire,
         Grappa.ClientId,
+        Grappa.DbLatency,
         Grappa.Health,
         Grappa.HotReload,
         Grappa.IRC,

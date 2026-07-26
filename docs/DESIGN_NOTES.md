@@ -19296,3 +19296,93 @@ exercised by a normal commit; the first real tag cut is its end-to-end proof.
 It was validated statically here (shellcheck on the `run` blocks; the `.deb`
 build model proven by R1, the OTP-29 migrate by R2) — same honesty discipline
 as R1/R2, which documented what only a real runner exercises.
+---
+
+### 2026-07-26 — #357 D1-completion: an in-code telemetry handler (`Grappa.DbLatency`)
+
+**Why now.** D1 (2026-07-24, above) shipped the *emitters* but "no handler
+ships by default" — the eventual consumer is a Phase-5 PromEx exporter, so the
+spans emitted into the void. To sample, the operator hand-attached a forwarder
+over `rpc`; the 0.5.0 cold restart wiped it (verified live: the handler was
+gone). A hand-attach that evaporates at every restart is not infrastructure.
+This entry records making the consumer **permanent, in-code, boot-attached**:
+`Grappa.DbLatency`, a supervised singleton (mirrors the `AdminEvents` /
+`SessionLog` telemetry-sink pattern) that attaches at boot and survives every
+restart. This is D1-*completion* (make the D1 signals land somewhere durable),
+NOT D2 — the write-path fix is still deferred/HALT.
+
+**Spec reconciliation (challenge-the-spec).** The handler consumes **two**
+signal families, not just the D1 write-path spans:
+
+- **`[:grappa, :repo, :query]`** — Ecto's built-in per-query telemetry,
+  bucketed by `{source, op}` (op from the SQL keyword; `SELECT count(...)`
+  split from plain `SELECT`). This reproduces the **baseline table that gates
+  the FIX-B / #395 decision** ("is the badge / `count_after_split` path still a
+  top DB-time consumer under load?"). Reads dominate DB time — the 2026-07-26
+  baseline was `SELECT` 9809ms/24, `INSERT` 3925ms/36, `count_after_split`
+  2589ms/6 — so a *write-only* instrument literally could not answer the
+  question the issue asks. The D1-spans-only framing (in the working brief)
+  would have built the wrong thing; the authoritative issue comment named
+  `[:grappa, :repo, :query]`. Directions-over-code: follow the issue.
+- **The D1 write-path spans** (`persist.stop`, `send_privmsg.stop`,
+  `persist.contention`) — for the deferred "busier channel = slower send"
+  investigation. Folding them here too means that investigation is runnable
+  post-deploy *without* re-attaching by hand (the whole point).
+
+One handler, one supervised sink, two families — a superset that satisfies both
+the brief (D1 spans) and the issue (the query table). Not a metrics framework:
+it attaches to telemetry that already exists and folds measurements into small
+in-memory running counters (no Repo, no PubSub, no schema).
+
+**Cost profile (on record).** Unlike the sibling sinks it mirrors —
+`AdminEvents` / `SessionLog` attach to *low-frequency* events (admin actions,
+session lifecycle) — this handler attaches to `[:grappa, :repo, :query]`, a
+*per-query* event. So while attached (prod default) every DB query does one
+extra `GenServer.cast` into the aggregator. The cast runs in the emitter (incl.
+`Session.Server`'s loop for inserts) but is a single non-blocking message send;
+the fold is O(1) over a small bounded `{source, op}` keyset in the aggregator's
+own process, so at realistic bouncer query rates it is ~1% of a core and the
+mailbox stays near-empty — and a cast to a dead/restarting aggregator is a safe
+no-op, never blocking or crashing the emitter. It is nonetheless a genuinely
+different cost profile than the pattern it copies, hottest exactly during the
+"25s under load" sample; if it ever needs to go quiet it can be detached
+(`:telemetry.detach("grappa-db-latency")`) without restarting the node.
+
+**How to read the three write-path mechanisms apart (the investigation, deferred
+to post-deploy DAYTIME load — do NOT conclude from a green idle sample):**
+
+- **mechanism 1 (mailbox head-of-line):** `send_privmsg.mean_ms −
+  persist.mean_ms`. The send span is the total round-trip incl. mailbox wait;
+  persist is the pure insert. A large gap = the sender's own `handle_call`
+  queued behind a busy channel's synchronous inbound inserts.
+- **mechanism 2 (single-writer contention):** the `contention` row —
+  `queue_timeout` / `busy_locked` counts, and `dropped` (budget-exhausted rows).
+- **mechanism 3 (pure insert / index write-amplification):** the `persist`
+  row `mean_ms`, watched as the table grows.
+
+**Windowed sampling.** Counters are cumulative-since-boot / last `reset/0`. A
+25s under-load sample = `reset` → wait 25s → `snapshot`. The measurement MUST be
+taken under genuine daytime load: an idle sample returns a green number that
+proves nothing (the retracted "3.7x" figure — compare line-by-line against the
+baseline table, never a summary number).
+
+**Every door.** Both surfaces drive the same `snapshot/0` + `reset/0` (one
+feature, one code path): HTTP `GET /admin/db_latency` + `POST
+/admin/db_latency/reset` (`:admin_authn`-gated, on the nginx allowlist), and CLI
+`bin/grappa db-latency` / `db-latency-reset` (`Grappa.Operator`). This is the
+CLAUDE.md "debugging tools are infrastructure" rule — reusable, remote,
+tested, survives sessions.
+
+**Boot flag, not runtime config.** It's a supervised GenServer, so
+`attach_telemetry` is read at boot in `application.ex` and injected via
+`start_link` opts — never a runtime `Application.get_env` in a callback.
+`false` in test env keeps the global handler from folding every async test's
+queries into the shared singleton (determinism; unlike AdminEvents/SessionLog
+the reason is NOT sandbox ownership — the fold touches no Repo).
+
+**Cold-only, by nature.** A new supervised child is not picked up by a hot
+reload — it needs a full restart, so #357 rides a COLD deploy regardless. It
+touches only `config/test.exs` (prod config untouched). D2 remains HALT.
+
+Operator read-path documented in `docs/OPERATIONS.md` → Monitoring →
+"Write-latency diagnostics (#357)".

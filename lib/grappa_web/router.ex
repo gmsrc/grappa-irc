@@ -113,6 +113,13 @@ defmodule GrappaWeb.Router do
     post "/sessions/:id/reconnect", SessionsController, :reconnect
     delete "/sessions/:id", SessionsController, :delete
 
+    # #357 — SQLite write-latency / repo query-latency diagnostics. GET
+    # returns the cumulative aggregate table (`Grappa.DbLatency.snapshot/0`);
+    # POST reset zeroes the counters to open a fresh 25s sample window.
+    # Needs its own nginx allowlist alt (`db_latency`).
+    get "/db_latency", DbLatencyController, :index
+    post "/db_latency/reset", DbLatencyController, :reset
+
     # M-cluster M-5 (operator console networks pane):
     get "/networks", NetworksController, :index
     patch "/networks/:slug", NetworksController, :update

@@ -61,6 +61,9 @@ defmodule Grappa.Operator do
       Grappa.Accounts,
       Grappa.Admission,
       Grappa.AdminEvents,
+      # #357 — the `db-latency` / `db-latency-reset` verbs render the
+      # write-latency aggregate (same snapshot the admin GET renders).
+      Grappa.DbLatency,
       Grappa.LiveIntrospection,
       Grappa.Networks,
       Grappa.Session,
@@ -77,6 +80,7 @@ defmodule Grappa.Operator do
     Accounts,
     AdminEvents,
     Admission,
+    DbLatency,
     LiveIntrospection,
     Networks,
     Session,
@@ -779,6 +783,72 @@ defmodule Grappa.Operator do
     :ok
   end
 
+  @doc """
+  #357 — print the SQLite write-latency / repo query-latency aggregate as
+  tab-separated tables (`bin/grappa db-latency`). Renders the same
+  `Grappa.DbLatency.snapshot/0` the admin `GET /admin/db_latency` returns
+  (one feature, one code path, every door). Reset first
+  (`bin/grappa db-latency-reset`), wait the sample window (~25s under
+  load), then read — the counters are cumulative-since-reset.
+  """
+  @spec db_latency_text!() :: :ok
+  def db_latency_text! do
+    snapshot = DbLatency.snapshot()
+
+    IO.puts("# queries (repo.query) — desc by total_ms")
+    IO.puts(Enum.join(query_latency_columns(), "\t"))
+
+    Enum.each(snapshot.queries, fn row ->
+      IO.puts(
+        Enum.join(
+          [
+            to_string(row.source),
+            Atom.to_string(row.op),
+            Integer.to_string(row.n),
+            fmt_ms(row.total_ms),
+            fmt_ms(row.queue_ms),
+            fmt_ms(row.mean_ms)
+          ],
+          "\t"
+        )
+      )
+    end)
+
+    IO.puts("# spans (D1 write-path)")
+    IO.puts(Enum.join(span_latency_columns(), "\t"))
+    IO.puts(span_row_text("send_privmsg", snapshot.send_privmsg))
+    IO.puts(span_row_text("persist", snapshot.persist))
+
+    IO.puts("# contention")
+    IO.puts(Enum.join(contention_columns(), "\t"))
+    c = snapshot.contention
+
+    IO.puts(
+      Enum.join(
+        [
+          Integer.to_string(c.n),
+          Integer.to_string(c.queue_timeout),
+          Integer.to_string(c.busy_locked),
+          Integer.to_string(c.dropped)
+        ],
+        "\t"
+      )
+    )
+
+    :ok
+  end
+
+  @doc """
+  #357 — zero the `Grappa.DbLatency` counters (`bin/grappa
+  db-latency-reset`) to open a fresh sample window before `db-latency`.
+  """
+  @spec reset_db_latency!() :: :ok
+  def reset_db_latency! do
+    :ok = DbLatency.reset()
+    IO.puts("db_latency counters reset")
+    :ok
+  end
+
   ## Column headers
 
   defp visitor_columns,
@@ -789,6 +859,34 @@ defmodule Grappa.Operator do
 
   defp session_columns,
     do: ["subject_kind", "subject_id", "network_id", "pid", "alive", "mailbox_len", "memory_kb"]
+
+  defp query_latency_columns,
+    do: ["source", "op", "n", "total_ms", "queue_ms", "mean_ms"]
+
+  defp span_latency_columns,
+    do: ["span", "n", "total_ms", "mean_ms", "outcomes"]
+
+  defp contention_columns,
+    do: ["n", "queue_timeout", "busy_locked", "dropped"]
+
+  @spec span_row_text(String.t(), Grappa.DbLatency.span_row()) :: String.t()
+  defp span_row_text(label, %{n: n, total_ms: total, mean_ms: mean, outcomes: outcomes}) do
+    Enum.join(
+      [label, Integer.to_string(n), fmt_ms(total), fmt_ms(mean), fmt_outcomes(outcomes)],
+      "\t"
+    )
+  end
+
+  @spec fmt_ms(float()) :: String.t()
+  defp fmt_ms(ms) when is_float(ms), do: :erlang.float_to_binary(ms, decimals: 2)
+
+  @spec fmt_outcomes(%{atom() => non_neg_integer()}) :: String.t()
+  defp fmt_outcomes(outcomes) do
+    outcomes
+    |> Enum.map(fn {k, v} -> "#{k}=#{v}" end)
+    |> Enum.sort()
+    |> Enum.join(",")
+  end
 
   defp format_datetime(nil), do: ""
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)

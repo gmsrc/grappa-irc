@@ -920,25 +920,56 @@ mapped to the three mechanisms the issue traced:
     `Process.info(pid, :message_queue_len)` loop against the target session
     pid (from `list-sessions`).
 
-No telemetry handler ships by default (the Phase 5 PromEx exporter is the
-consumer), so these events are a **no-op ETS miss** in prod until you attach
-one. To sample live without the exporter, attach an ad-hoc forwarder in
-`bin/grappa remote-shell` and log durations:
+**The consumer ships in code (#357 D1-completion, 2026-07-26).** The D1 spans
+originally emitted into the void ("no handler by default" — the Phase-5 PromEx
+exporter is the eventual consumer), so sampling meant hand-attaching a forwarder
+over `rpc` that every restart wiped. That is now a **permanent, boot-attached,
+restart-surviving** handler: the supervised singleton `Grappa.DbLatency`. No
+hand-attach — read it through either door (both drive the same
+`Grappa.DbLatency.snapshot/0` + `reset/0`):
 
-```elixir
-:telemetry.attach_many(
-  "adhoc-357",
-  [
-    [:grappa, :scrollback, :persist, :stop],
-    [:grappa, :session, :send_privmsg, :stop],
-    [:grappa, :scrollback, :persist, :contention]
-  ],
-  fn event, meas, meta, _ -> IO.inspect({event, meas, meta}) end,
-  nil
-)
-# ... reproduce a busy-channel send ...
-:telemetry.detach("adhoc-357")
-```
+- **CLI:** `bin/grappa db-latency` (the aggregate as tab-separated tables) /
+  `bin/grappa db-latency-reset` (zero the counters).
+- **HTTP:** `GET /admin/db_latency` (JSON) / `POST /admin/db_latency/reset`
+  (`204`). `:admin_authn`-gated (admin bearer + `is_admin`); on the nginx
+  allowlist.
+
+The handler folds **two** signal families:
+
+- **`[:grappa, :repo, :query]`** (Ecto's per-query telemetry) into a
+  `{source, op}` table — `SELECT count(...)` split from plain `SELECT`. This is
+  the table that answers the **FIX-B / #395 gate** ("is the badge /
+  `count_after_split` path still a top DB-time consumer?"). Reads dominate DB
+  time, so this — not the write spans alone — is the measurement to compare
+  against the baseline.
+- **the D1 write-path spans** into `send_privmsg` / `persist` / `contention`
+  rows.
+
+**Taking a 25s under-load sample:** `bin/grappa db-latency-reset` → wait 25s
+**under genuine daytime load** → `bin/grappa db-latency`. Counters are
+cumulative-since-reset. An idle sample returns a green number that proves
+nothing (the retracted "3.7x" figure); **compare line-by-line against the
+baseline table, never a summary number**:
+
+| total | n | mean | what |
+|-------|---|------|------|
+| 9809ms | 24 | 409ms | scrollback `SELECT` |
+| 3925ms | 36 | 109ms | `INSERT`s |
+| 2589ms | 6 | 432ms | `count_after_split` (fold predicate) |
+
+(baseline: 19120ms of DB time in 25s, `queue_time` 1121ms — under real load,
+2026-07-26.)
+
+**Reading the three write-path mechanisms apart** (the deferred "busier channel
+= slower send" investigation — do NOT conclude from an idle sample):
+
+- **mechanism 1 (mailbox head-of-line):** `send_privmsg` `mean_ms` −
+  `persist` `mean_ms`. A large gap = the sender's own `handle_call` queued
+  behind a busy channel's synchronous inbound inserts.
+- **mechanism 2 (single-writer contention):** the `contention` row —
+  `queue_timeout` / `busy_locked` counts + `dropped`.
+- **mechanism 3 (pure insert / index write-amplification):** the `persist`
+  row `mean_ms`, watched as the table grows.
 
 WAL/lock corroboration (mechanism 2, out-of-band): grep prod logs for the
 `SQLite pool saturated` warning and busy/locked `%Exqlite.Error{}` lines during

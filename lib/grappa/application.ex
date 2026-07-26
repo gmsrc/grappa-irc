@@ -186,6 +186,23 @@ defmodule Grappa.Application do
         # (infrastructure). `attach_telemetry: false` in test env for the
         # same sandbox-ownership reason as AdminEvents.
         {Grappa.SessionLog, attach_telemetry: attach_session_log_telemetry?()},
+        # DbLatency (#357): singleton GenServer that attaches :telemetry
+        # handlers in init/1 and folds `[:grappa, :repo, :query]` +
+        # the D1 write-path spans into in-memory latency counters. The
+        # interim in-code consumer for the #357 spans (which "ship no
+        # handler by default") so the 25s-under-load sample survives a
+        # restart instead of being hand-attached over rpc and wiped by
+        # the next cold. Boot alongside the other telemetry sinks
+        # (AdminEvents / SessionLog) and BEFORE SessionSupervisor so the
+        # FIRST session's persist/send spans already have a handler; it
+        # holds no ETS/Registry/DB state of its own — the only ordering
+        # requirement is to EXIST before the emitters fire. Restart:
+        # :permanent (infrastructure). `attach_telemetry: false` in test
+        # env so the global handler doesn't fold every async test's
+        # queries into the shared singleton (per-test opt-in via manual
+        # attach); unlike AdminEvents/SessionLog it needs NO sandbox
+        # allow — the fold touches no Repo.
+        {Grappa.DbLatency, attach_telemetry: attach_db_latency_telemetry?()},
         # ShareTokens: ETS-backed one-shot set for visitor share-link
         # token redemption. Must come before Endpoint so the consume
         # controller never races a missing table. No upstream deps;
@@ -406,6 +423,16 @@ defmodule Grappa.Application do
   @spec attach_session_log_telemetry?() :: boolean()
   defp attach_session_log_telemetry?,
     do: Application.get_env(:grappa, :attach_session_log_telemetry, true)
+
+  # #357 — same test-env opt-out shape as the sinks above (read at boot,
+  # injected via start_link opts — never a runtime Application.get_env in
+  # a callback). Unlike them the reason is NOT sandbox ownership (DbLatency
+  # does no Repo work) but determinism: a global handler folding every
+  # async test's queries into the shared singleton would make snapshot
+  # assertions flaky. Defaults true — prod/dev attach at boot.
+  @spec attach_db_latency_telemetry?() :: boolean()
+  defp attach_db_latency_telemetry?,
+    do: Application.get_env(:grappa, :attach_db_latency_telemetry, true)
 
   @impl Application
   def config_change(changed, _, removed) do

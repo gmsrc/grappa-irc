@@ -17,9 +17,11 @@ defmodule Grappa.OperatorTest do
   import Grappa.AuthFixtures
 
   alias Grappa.Accounts.User
-  alias Grappa.{AdmissionStateHelpers, Operator, Session}
+  alias Grappa.{AdmissionStateHelpers, DbLatency, Operator, Session}
   alias Grappa.Networks.Credential
   alias Grappa.Visitors.Visitor
+
+  @db_latency_handler_id "grappa-db-latency"
 
   setup do
     AdmissionStateHelpers.reset_all()
@@ -285,6 +287,72 @@ defmodule Grappa.OperatorTest do
       lines = String.split(output, "\n", trim: true)
       assert length(lines) == 1
       assert hd(lines) =~ "subject_kind"
+    end
+  end
+
+  describe "db_latency_text!/0 (#357)" do
+    setup do
+      DbLatency.reset()
+
+      :ok =
+        :telemetry.attach_many(
+          @db_latency_handler_id,
+          [[:grappa, :repo, :query]],
+          &DbLatency.handle_telemetry/4,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(@db_latency_handler_id) end)
+      :ok
+    end
+
+    test "prints the section headers + a row for a consumed query" do
+      :telemetry.execute(
+        [:grappa, :repo, :query],
+        %{total_time: System.convert_time_unit(7, :millisecond, :native)},
+        %{source: "messages", query: ~s|INSERT INTO "messages" ("body") VALUES (?)|}
+      )
+
+      # Drain the cast before rendering.
+      _ = DbLatency.snapshot()
+
+      output = capture_io(fn -> assert :ok = Operator.db_latency_text!() end)
+
+      assert output =~ "# queries (repo.query)"
+      assert output =~ "source\top\tn\ttotal_ms"
+      assert output =~ "messages\tinsert\t1"
+      assert output =~ "# spans (D1 write-path)"
+      assert output =~ "# contention"
+    end
+  end
+
+  describe "reset_db_latency!/0 (#357)" do
+    test "zeroes the counters and confirms on stdout" do
+      :ok =
+        :telemetry.attach_many(
+          @db_latency_handler_id,
+          [[:grappa, :repo, :query]],
+          &DbLatency.handle_telemetry/4,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(@db_latency_handler_id) end)
+
+      :telemetry.execute(
+        [:grappa, :repo, :query],
+        %{total_time: System.convert_time_unit(3, :millisecond, :native)},
+        %{source: "messages", query: "SELECT 1"}
+      )
+
+      refute DbLatency.snapshot().queries == []
+
+      output = capture_io(fn -> assert :ok = Operator.reset_db_latency!() end)
+      assert output =~ "db_latency counters reset"
+
+      # Detach so the drain call below doesn't recapture the reset's own
+      # (already-drained) traffic; the empty snapshot is then unambiguous.
+      :telemetry.detach(@db_latency_handler_id)
+      assert DbLatency.snapshot().queries == []
     end
   end
 
