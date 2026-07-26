@@ -73,10 +73,35 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     return map;
   };
 
-  return { aliases, addAlias, delAlias, refreshAliases };
+  // #409 — edit one alias IN PLACE (name and/or expansion). ONE fresh-read-
+  // then-PUT of the whole map (same discipline as add/del, not two round-trips):
+  // a rename is drop-old-key + set-new-key in the SAME map before the PUT, so it
+  // is atomic and never leaves the old key stranded. Both names fold to the
+  // server's lowercase keying (matches addAlias's merge choke-point); when the
+  // name is unchanged this collapses to an expansion overwrite. The server
+  // validates + normalizes; the returned map is authoritative.
+  const editAlias = async (
+    oldName: string,
+    newName: string,
+    expansion: string,
+  ): Promise<Aliases> => {
+    const t = requireToken();
+    const current = await getAliases(t);
+    const next = { ...current };
+    const oldKey = oldName.toLowerCase();
+    const newKey = newName.toLowerCase();
+    if (oldKey !== newKey) delete next[oldKey];
+    next[newKey] = expansion;
+    const map = await putAliases(t, next);
+    setAliases(map);
+    return map;
+  };
+
+  return { aliases, addAlias, delAlias, editAlias, refreshAliases };
 });
 
 export const aliases = exports_.aliases;
 export const addAlias = exports_.addAlias;
 export const delAlias = exports_.delAlias;
+export const editAlias = exports_.editAlias;
 export const refreshAliases = exports_.refreshAliases;

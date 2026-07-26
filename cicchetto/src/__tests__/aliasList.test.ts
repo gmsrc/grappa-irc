@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addAlias, aliases, delAlias, refreshAliases } from "../lib/aliasList";
+import { addAlias, aliases, delAlias, editAlias, refreshAliases } from "../lib/aliasList";
 import { setToken } from "../lib/auth";
 
 // #385 — aliasList store. The compose expander reads its alias map from this
@@ -68,6 +68,54 @@ describe("aliasList store — #385", () => {
     // Merged under the lowercase key — overwrites, not a second `WII` key.
     const [, init] = spy.mock.calls[1] as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual({ aliases: { wii: "whois $1 $1" } });
+  });
+
+  // #409 — in-place edit. One fresh-read-then-PUT (same discipline as add/del),
+  // rename-aware: drop the old key, set the new one, PUT the whole map.
+  it("editAlias renames (drops old key, sets new) in ONE PUT, siblings preserved", async () => {
+    const spy = mockFetchSequence([
+      { aliases: { wii: "whois $1 $1", a: "join $*" } }, // GET — current server map
+      { aliases: { w: "whois $1", a: "join $*" } }, // PUT echo (normalized)
+    ]);
+
+    const map = await editAlias("wii", "w", "whois $1");
+    expect(map).toEqual({ w: "whois $1", a: "join $*" });
+    expect(aliases()).toEqual({ w: "whois $1", a: "join $*" });
+
+    // The PUT dropped `wii`, added `w`, and kept the sibling `a`.
+    const [, init] = spy.mock.calls[1] as [string, RequestInit];
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({
+      aliases: { w: "whois $1", a: "join $*" },
+    });
+  });
+
+  it("editAlias with an unchanged name overwrites the expansion (no duplicate key)", async () => {
+    const spy = mockFetchSequence([
+      { aliases: { wii: "old", a: "join $*" } }, // GET
+      { aliases: { wii: "whois $1 $1", a: "join $*" } }, // PUT echo
+    ]);
+
+    await editAlias("wii", "wii", "whois $1 $1");
+
+    const [, init] = spy.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      aliases: { wii: "whois $1 $1", a: "join $*" },
+    });
+  });
+
+  it("editAlias lowercases BOTH the old and new keys (case-insensitive names)", async () => {
+    const spy = mockFetchSequence([
+      { aliases: { wii: "old" } }, // GET
+      { aliases: { w: "whois $1" } }, // PUT echo
+    ]);
+
+    // Old typed as `WII`, new typed as `W` — both fold to lowercase so the old
+    // key is actually dropped and the new key is not a stray uppercase dupe.
+    await editAlias("WII", "W", "whois $1");
+
+    const [, init] = spy.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ aliases: { w: "whois $1" } });
   });
 
   it("delAlias fresh-reads then PUTs the map without the removed key", async () => {

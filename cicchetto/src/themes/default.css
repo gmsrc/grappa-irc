@@ -8328,6 +8328,23 @@ audio.media-viewer-media {
   flex-wrap: wrap;
 }
 
+/* #409 — in-place edit. The row's "edit" affordance mirrors the muted
+   text-button styling of × (remove); the inline edit form reuses the
+   two-field add-form layout (.aliases-add) so there is ONE alias-row shape
+   for add and edit. */
+.aliases-edit {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.25rem;
+  font: inherit;
+}
+
+.aliases-edit:hover {
+  color: var(--fg);
+}
+
 /* #247 — presence transition toasts. Fixed stack, bottom-right on
    desktop; self-expiring, click-to-dismiss. Deliberately quiet — the
    durable signal is the Watched panel dot, not this. */
