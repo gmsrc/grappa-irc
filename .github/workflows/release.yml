@@ -115,7 +115,9 @@ jobs:
       - name: Prove the artifact reports the bare tag version
         run: |
           want="${{ steps.ver.outputs.version }}"
-          got="$(sudo grappa eval 'Application.load(:grappa); IO.puts(Grappa.Version.current())' | tail -n1 | tr -d '\r')"
+          # Sentinel-prefix the printed version so a stray stdout line from the
+          # release boot can never be mistaken for it.
+          got="$(sudo grappa eval 'Application.load(:grappa); IO.puts("grappa-vsn=" <> Grappa.Version.current())' | grep '^grappa-vsn=' | tail -n1 | cut -d= -f2 | tr -d '\r')"
           echo "reported version: '$got' (want '$want')"
           if [ "$got" != "$want" ]; then
             echo "::error::packaged .deb reports '$got', expected bare '$want'"
@@ -136,7 +138,9 @@ jobs:
     steps:
       - name: Install the Arch build toolchain
         run: |
-          pacman -Sy --noconfirm --needed \
+          # -Syu (not -Sy): a partial upgrade against a half-synced db can
+          # pull incompatible versions on Arch. --needed skips already-present.
+          pacman -Syu --noconfirm --needed \
             base-devel git elixir bun namcap sqlite sudo
 
       - name: Checkout
@@ -169,10 +173,14 @@ jobs:
           # makepkg builds the mix release + cicchetto FROM THE TARBALL (no
           # .git → Grappa.Version reports the bare version). No
           # --warnings-as-errors: Elixir 1.20 warns from deps (see PKGBUILD).
+          # -s: makepkg installs any missing depends/makedepends via pacman
+          # (the builder has NOPASSWD sudo) rather than aborting the hard dep
+          # check — so a future `depends` entry not transitively present still
+          # builds. -f overwrites an existing package file.
           sudo -u builder bash -euo pipefail -c '
             updpkgsums
             makepkg --printsrcinfo > .SRCINFO
-            makepkg -f --noconfirm
+            makepkg -sf --noconfirm
           '
 
       - name: namcap the built package (advisory)
@@ -198,7 +206,9 @@ jobs:
       - name: Prove the artifact reports the bare tag version (tarball → no .git → bare)
         run: |
           want="${GITHUB_REF_NAME#v}"
-          got="$(grappa eval 'Application.load(:grappa); IO.puts(Grappa.Version.current())' | tail -n1 | tr -d '\r')"
+          # Sentinel-prefix the printed version so a stray stdout line from the
+          # release boot can never be mistaken for it.
+          got="$(grappa eval 'Application.load(:grappa); IO.puts("grappa-vsn=" <> Grappa.Version.current())' | grep '^grappa-vsn=' | tail -n1 | cut -d= -f2 | tr -d '\r')"
           echo "reported version: '$got' (want '$want')"
           if [ "$got" != "$want" ]; then
             echo "::error::packaged Arch build reports '$got', expected bare '$want'"
@@ -217,6 +227,9 @@ jobs:
         with:
           name: grappa-arch
           path: arch-out/*
+          # `.SRCINFO` is a dotfile; upload-artifact excludes hidden files by
+          # default, which would drop the recipe metadata the AUR push needs.
+          include-hidden-files: true
           if-no-files-found: error
 
   publish:
@@ -238,14 +251,21 @@ jobs:
           # exists, so fall back to uploading with --clobber. BUILD ≠ PUBLISH
           # TO AUR: the regenerated PKGBUILD/.SRCINFO ride along as assets for
           # a human to push to aur.archlinux.org — nothing here pushes there.
+          # Assets listed EXPLICITLY, not via `assets/grappa-arch/*`: the
+          # default GHA shell has dotglob off, so a bare glob would silently
+          # drop `.SRCINFO` (a dotfile) — the one file the AUR push needs.
           if ! gh release create "${GITHUB_REF_NAME}" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --title "grappa ${GITHUB_REF_NAME}" \
                 --generate-notes \
                 assets/grappa-deb/*.deb \
-                assets/grappa-arch/*; then
+                assets/grappa-arch/*.pkg.tar.zst \
+                assets/grappa-arch/PKGBUILD \
+                assets/grappa-arch/.SRCINFO; then
             gh release upload "${GITHUB_REF_NAME}" \
               --repo "${GITHUB_REPOSITORY}" --clobber \
               assets/grappa-deb/*.deb \
-              assets/grappa-arch/*
+              assets/grappa-arch/*.pkg.tar.zst \
+              assets/grappa-arch/PKGBUILD \
+              assets/grappa-arch/.SRCINFO
           fi

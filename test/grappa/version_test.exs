@@ -81,13 +81,20 @@ defmodule Grappa.VersionTest do
   end
 
   describe "base/0 + current/0 — version from the .app metadata (#419 R3)" do
-    test "base/0 returns the canonical vsn from the release .app resource (not a mix.exs read)" do
-      # The old design read @version from mix.exs at runtime via File.read!,
-      # which raises in a package (no mix.exs beside the BEAM). base/0 now
-      # returns the vsn OTP compiled into the .app from @version — the same
-      # canonical source, with no runtime filesystem access. Also confirms
-      # Application.spec(:grappa, :vsn) is populated for a started app.
-      assert Version.base() == to_string(Application.spec(:grappa, :vsn))
+    test "base/0 returns the .app vsn, which tracks the canonical @version in mix.exs" do
+      # base/0 returns the vsn OTP compiled into the .app from mix.exs
+      # @version at build — no runtime mix.exs read (that raised in a package).
+      # Cross-check the built metadata against the source declaration: reading
+      # mix.exs HERE is a build↔source verification in the test, not the
+      # runtime read the seam removed. Proves the .app vsn IS the declared
+      # @version (and that Application.spec/2 is populated for a started app).
+      source_version =
+        "mix.exs"
+        |> File.read!()
+        |> then(&Regex.run(~r/@version\s+"([^"]+)"/, &1))
+        |> List.last()
+
+      assert Version.base() == source_version
       assert Version.base() =~ ~r/^\d+\.\d+\.\d+/
     end
 
