@@ -83,6 +83,47 @@ const CASES: Array<{ code: string; matches: RegExp; info?: Record<string, unknow
   // 429 — visitor hit the 50-total owned-theme cap (distinct from the
   // daily rate_limited "try tomorrow" copy).
   { code: "theme_cap_reached", matches: /theme limit.*make room|make room/i },
+  // #411 D6b — the 23 previously-unmapped REST tokens. The client union is
+  // now the FULL `GrappaWeb.ErrorTokens.rest_error_token` set (generated),
+  // so `assertNever` forces an arm for every one — these matrix rows are the
+  // behavioural canary that the arm renders human copy, not a raw wire token.
+  // Product copy, vetted by vjt (issue #411 comment).
+  // Upload pipeline (#39 metadata, UX-6-B1 caps/MIME).
+  { code: "file_too_large", matches: /file is too large/i },
+  { code: "metadata_strip_failed", matches: /metadata.*wasn't uploaded|couldn't strip/i },
+  { code: "insufficient_storage", matches: /storage is full/i },
+  { code: "unsupported_media_type", matches: /file type isn't supported/i },
+  // Admin settings / vhost / admin-guard tokens.
+  { code: "invalid_setting", matches: /setting value isn't valid/i },
+  { code: "forbidden_vhost", matches: /vhost isn't available/i },
+  { code: "source_not_local", matches: /address this server can send from/i },
+  { code: "already_exists", matches: /already exists/i },
+  { code: "scrollback_present", matches: /saved history/i },
+  { code: "last_admin", matches: /remove the last admin/i },
+  // credentials_present carries credential_count; interpolated + fallback.
+  {
+    code: "credentials_present",
+    matches: /3 connected user/i,
+    info: { credential_count: 3 },
+  },
+  { code: "credentials_present", matches: /still has.*connected user/i },
+  // Login / registration tokens (#152 ident, #211 visitor networks, #40 nick).
+  { code: "malformed_nick", matches: /nickname isn't valid/i },
+  { code: "password_required", matches: /requires a password/i },
+  { code: "password_mismatch", matches: /password is incorrect/i },
+  { code: "network_not_visitor_enabled", matches: /isn't open to guests/i },
+  { code: "network_ambiguous", matches: /choose which network/i },
+  { code: "network_unconfigured", matches: /no network is available for guest/i },
+  { code: "session_plan_resolve_failed", matches: /isn't fully set up|server settings/i },
+  // anon_collision carries retry_after; interpolated + fallback.
+  { code: "anon_collision", matches: /try again in 30 seconds/i, info: { retry_after: 30 } },
+  { code: "anon_collision", matches: /taken right now/i },
+  // Visitor share-link consume (410 Gone).
+  { code: "share_token_expired", matches: /link has expired/i },
+  { code: "share_token_consumed", matches: /already been used/i },
+  // Shared transport tokens, REST side (channel side already mapped).
+  { code: "invalid_line", matches: /characters that aren't allowed/i },
+  { code: "body_too_large", matches: /too long to send/i },
 ];
 
 describe("friendlyApiError", () => {

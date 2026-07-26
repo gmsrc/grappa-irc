@@ -18579,3 +18579,81 @@ wipe). The allowlist did NOT become a general escape hatch: the
 two-direction fixture (ICC survives, EXIF GPS/Model die) is what proves it,
 exactly the discipline #39-round-2's Orientation entry established. No
 deploy change beyond the code; the strip runs on every image upload.
+
+## 2026-07-26 — #411 client error tokens: generate the full union + copy for every token (D6b)
+
+D6a (server) pinned the wire-error-token space in `GrappaWeb.ErrorTokens`
+(56 REST + 21 channel, drift-tested by AST-walking the emitters). D6b is
+the client half: cicchetto's `friendlyApiError.ts` / `friendlyChannelError.ts`
+previously hand-listed a **curated subset** (33 REST + 13 channel) and let
+the ~30 unmapped tokens fall through to the raw `<status> <code>` string in
+operator-visible banners. vjt's ruling (2026-07-26): *"ma certo che ogni
+cazzo di errore deve avere un copy"* — **full union, full exhaustiveness.**
+
+Counts verified at source (scripted set-difference, not trusted from the
+issue): 56 REST + 21 channel server tokens; 33 + 13 mapped client-side; **23
+unmapped REST + 8 unmapped channel = 31** new copy strings (product, vetted
+by vjt on issue #411 before ship).
+
+**Codegen (`mix grappa.gen_wire_types`).** The task already generated
+`wireTypes.ts` from `lib/grappa/**/wire.ex`; D6b:
+- **Glob widen** to also read `lib/grappa_web/error_tokens.ex`. ErrorTokens
+  lives in the web layer on purpose (HTTP/Channel wire tokens are not domain
+  data), so it sits outside the wire glob — a boundary-preserving source
+  widen, not a file move.
+- **Enum → `as const` array + derived type.** A **recursively-enum** `@type`
+  (a union whose every member is an atom literal ≠ nil/true/false OR a
+  same-module `user_type` ref to another enum) is emitted as
+  `export const SCREAMING = [...] as const;` +
+  `export type Alias = (typeof SCREAMING)[number];`. A composing enum
+  SPREADS the referenced enum's const (`[...SHARED_ERROR_TOKENS, "bad_request",
+  …]`), mirroring the Elixir `shared | specific` composition. This collapses
+  the client's three-parallel-structures (literal union + runtime narrowing
+  `Set` + `switch`) to ONE generated source: the union AND the `Set` both
+  derive from the array; only the `switch` (the copy — product) stays
+  hand-written, with `assertNever` turning any un-armed token into a `tsc`
+  error.
+
+**Why the rule is general, not scoped to ErrorTokens (10 unrelated types
+also reshaped).** The predicate is STRUCTURAL — "a union of atom-literals or
+enum-refs" — with no `if` on the module name, because a per-module special
+case is exactly the smell being removed. Consequence: **13** types now emit
+arrays (the 3 ErrorTokens types + 10 pre-existing pure atom-union enums:
+ChannelDirectoryStatus, IRCAuthFSMAuthMethod, NetworksCredentialConnectionState,
+NetworksNetworkServicesFlavor, ScrollbackMessageKind, SessionLogEvent,
+WindowCountsSeverity, AdminEventsWireEventKind, SessionWireWireEventKind,
+SessionWireServerReplySource). This is IDENTITY-INVARIANT:
+`(typeof ARR)[number]` is structurally identical to the old literal union, so
+every consumer typechecks unchanged (proven: `tsc` clean, 3327 vitest green).
+The reshape reaches both codegen paths (wire-module types AND external types
+referenced via `remote_type`) so there is no half-migration-by-location.
+Discriminated `WireXEvent` unions (map | map) are NOT enums (a map arm is not
+an atom/enum-ref) and stay plain.
+
+**Two guards** (vjt): (a) a cyclic enum reference RAISES loudly with the type
+names in the cycle (`enum_a → enum_b → enum_a`) rather than recursing forever
+— covered by `Grappa.WireCycleFixture`; (b) array element order is the
+declaration order (no sort/dedup) so regen output is byte-stable and diffs
+don't flicker.
+
+**Client rewrite.** `KnownApiErrorCode` / `KnownChannelErrorCode` (the
+hand-kept unions) are DELETED and replaced by the generated
+`ErrorTokensRestErrorToken` / `ErrorTokensChannelErrorToken` (real rename, no
+alias — two names for one thing is the half-migration CLAUDE.md forbids). The
+narrowing `Set` is built from the generated array. Both files' header
+comments are REWRITTEN: they used to defend the "curated subset + noisy
+fallback" design; that is deliberately overturned. The `!isKnownCode`
+fallback to `err.message` is no longer the designed home for un-localized
+tokens (there are none) — it is now a DRIFT guard (server ahead of the last
+codegen, or an off-contract string), kept loud.
+
+**`file_too_large` interpolation deferred.** It carries `max_bytes`, but a
+human size ("12 MB") needs a byte-formatter — held pending vjt's open
+decision on interpolation (issue #411). `anon_collision` (retry_after) and
+`credentials_present` (credential_count) DO interpolate: plain numbers,
+mirroring the existing `network_unreachable` pattern, no formatter needed.
+
+**e2e.** `issue411-error-copy.spec.ts` stubs `/auth/login` to return a
+previously-unmapped token (`password_mismatch`) and asserts the login error
+banner shows the human copy AND does NOT leak the raw wire token — the
+visible outcome, deterministic (no testnet, zero sessions provisioned).

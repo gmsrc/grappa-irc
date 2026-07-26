@@ -31,6 +31,17 @@ const CASES: Array<{ code: string; matches: RegExp }> = [
   // not_found".
   { code: "not_found", matches: /highlight list|not in your/i },
   { code: "save_failed", matches: /couldn't save|try again/i },
+  // #411 D6b — the 8 previously-unmapped channel tokens. The client union is
+  // now the FULL `GrappaWeb.ErrorTokens.channel_error_token` set (generated),
+  // so `assertNever` forces an arm for every one. Product copy (issue #411).
+  { code: "forbidden", matches: /not allowed to do that/i },
+  { code: "invalid_payload", matches: /request was malformed/i },
+  { code: "lookup_failed", matches: /couldn't look that up/i },
+  { code: "not_cached", matches: /don't have that user's details|run \/whois/i },
+  { code: "open_failed", matches: /couldn't open that conversation/i },
+  { code: "persist_failed", matches: /couldn't save that change/i },
+  { code: "unknown_event", matches: /action isn't supported/i },
+  { code: "unknown_topic", matches: /view isn't available/i },
 ];
 
 describe("friendlyChannelError", () => {

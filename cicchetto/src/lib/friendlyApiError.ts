@@ -1,4 +1,5 @@
 import { type ApiError, assertNever } from "./api";
+import { ERROR_TOKENS_REST_ERROR_TOKEN, type ErrorTokensRestErrorToken } from "./wireTypes";
 
 // U-3 (UD3): single closed-union typed-error → human copy module.
 // Pre-U-3 the mapping lived only in `Login.tsx`'s local `friendlyMessage`;
@@ -10,99 +11,39 @@ import { type ApiError, assertNever } from "./api";
 //
 // The match is on `err.code` only — the snake_case A7 envelope token
 // emitted by FallbackController (see `lib/grappa_web/controllers/
-// fallback_controller.ex` moduledoc). Adding a new server-side error
-// arm means: pick the snake_case token, add it to `KnownApiErrorCode`
-// below (the literal union), add a `case` in the switch, and ship
-// the vitest matrix below.
+// fallback_controller.ex` moduledoc).
 //
-// Cic M2 reviewer fix: `KnownApiErrorCode` is the literal-union of
-// every wire token cic knows how to localize. The switch narrows
-// `err.code` (a bare `string`) through `isKnownCode` and dispatches
-// against the union — adding a token to the union without a `case`
-// becomes a `tsc` failure via `assertNever`. Closed-union
-// exhaustiveness, enforced at compile time, mirroring the server-side
-// `@type capacity_error` discipline.
+// #411 D6b — the union AND the runtime narrowing Set are GENERATED, not
+// hand-listed. `ErrorTokensRestErrorToken` + `ERROR_TOKENS_REST_ERROR_TOKEN`
+// come from `mix grappa.gen_wire_types` reading
+// `GrappaWeb.ErrorTokens.rest_error_token` — the server's authoritative REST
+// wire-token set. This DELIBERATELY OVERTURNS the pre-#411 "curated subset +
+// noisy fallback" design this comment used to defend: there is no longer a
+// hand-picked subset of tokens "cic knows how to localize." The union is the
+// FULL server contract, so the ONLY hand-maintained structure left is the
+// switch below (the copy — which is product). Adding a server-side error now
+// means: the codegen widens the union, `assertNever` in the `default` arm
+// turns it into a `tsc` failure until you add a `case`, and you ship the
+// vitest matrix row. Three parallel structures (union + Set + switch)
+// collapsed to one generated source + one hand-written switch — no
+// half-migration. Ruling: "ogni cazzo di errore deve avere un copy" (#411).
 //
-// The `default` arm at the bare-string level falls back to
-// `err.message` — the ApiError's `<status> <code>` string — which is
-// loud enough that an unmapped arm is operator-visible (no silent
-// drop) while still being safer than leaking the wire token directly.
-// Tests in `__tests__/friendlyApiError.test.ts` enumerate every known
-// arm so a server-side rename surfaces here, not in a phantom UX bug.
+// The `!isKnownCode` fallback to `err.message` (the ApiError's
+// `<status> <code>` string) is NO LONGER the designed home for un-localized
+// tokens — there are none (full exhaustiveness). It is now a DRIFT guard: it
+// fires only if the server emits a token newer than the last codegen run (the
+// generated union is stale) or an off-contract string, and stays loud so that
+// drift is operator-visible rather than silently swallowed. Tests in
+// `__tests__/friendlyApiError.test.ts` enumerate every arm so a server-side
+// rename surfaces here, not in a phantom UX bug.
 
-export type KnownApiErrorCode =
-  | "invalid_credentials"
-  | "too_many_sessions"
-  | "network_busy"
-  | "network_unreachable"
-  | "connect_timeout"
-  | "welcome_timeout"
-  | "probe_timeout"
-  | "service_degraded"
-  | "captcha_failed"
-  | "captcha_required"
-  | "malformed_ident"
-  | "not_connected"
-  | "upstream_unreachable"
-  | "nick_in_use"
-  | "forbidden"
-  | "not_found"
-  | "bad_request"
-  | "internal"
-  | "unauthorized"
-  | "validation_failed"
-  | "cannot_disconnect_self"
-  | "rate_limited"
-  | "not_raster"
-  | "too_large"
-  | "ssrf_blocked"
-  | "fetch_failed"
-  | "image_reencode_failed"
-  | "too_many_attempts"
-  | "list_full"
-  | "session_timeout"
-  | "invalid_message"
-  | "already_attached"
-  | "theme_cap_reached";
+// The generated `ERROR_TOKENS_REST_ERROR_TOKEN` array is the single source
+// for both the compile-time union (via `wireTypes`) and this runtime
+// narrowing Set — no second hand-kept list to drift.
+const KNOWN_CODES: ReadonlySet<ErrorTokensRestErrorToken> = new Set(ERROR_TOKENS_REST_ERROR_TOKEN);
 
-const KNOWN_CODES: ReadonlySet<KnownApiErrorCode> = new Set<KnownApiErrorCode>([
-  "invalid_credentials",
-  "too_many_sessions",
-  "network_busy",
-  "network_unreachable",
-  "connect_timeout",
-  "welcome_timeout",
-  "probe_timeout",
-  "service_degraded",
-  "captcha_failed",
-  "captcha_required",
-  "malformed_ident",
-  "not_connected",
-  "upstream_unreachable",
-  "nick_in_use",
-  "forbidden",
-  "not_found",
-  "bad_request",
-  "internal",
-  "unauthorized",
-  "validation_failed",
-  "cannot_disconnect_self",
-  "rate_limited",
-  "not_raster",
-  "too_large",
-  "ssrf_blocked",
-  "fetch_failed",
-  "image_reencode_failed",
-  "too_many_attempts",
-  "list_full",
-  "session_timeout",
-  "invalid_message",
-  "already_attached",
-  "theme_cap_reached",
-]);
-
-function isKnownCode(code: string): code is KnownApiErrorCode {
-  return KNOWN_CODES.has(code as KnownApiErrorCode);
+function isKnownCode(code: string): code is ErrorTokensRestErrorToken {
+  return KNOWN_CODES.has(code as ErrorTokensRestErrorToken);
 }
 
 export function friendlyApiError(err: ApiError): string {
@@ -110,7 +51,7 @@ export function friendlyApiError(err: ApiError): string {
   return friendlyKnown(err, err.code);
 }
 
-function friendlyKnown(err: ApiError, code: KnownApiErrorCode): string {
+function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
   switch (code) {
     case "invalid_credentials":
       return "Invalid name or password.";
@@ -280,9 +221,114 @@ function friendlyKnown(err: ApiError, code: KnownApiErrorCode): string {
       // The server comment promises "a cap-specific 'delete a theme to make
       // room' hint (vs 'try tomorrow')" — distinct from `rate_limited`.
       return "You've reached your theme limit. Delete a theme to make room.";
+
+    // ── #411 D6b — the 23 previously-unmapped REST tokens (product copy,
+    //    vetted by vjt). Grouped by surface, same actionable-copy contract.
+
+    // Upload pipeline. `file_too_large` carries `max_bytes` on the wire, but
+    // rendering a human size ("12 MB") needs a byte-formatter — deferred
+    // pending vjt's decision on interpolation (#411 open decision 1). Plain
+    // copy for now; a formatter is a one-line swap if approved.
+    case "file_too_large":
+      return "That file is too large. Choose a smaller one.";
+    case "metadata_strip_failed":
+      // #39 — EXIF/QuickTime metadata strip failed; the upload is rejected
+      // fail-CLOSED (storing the original would leak GPS + device identity).
+      return "We couldn't strip that file's metadata, so it wasn't uploaded. Try a different file.";
+    case "insufficient_storage":
+      // UX-6-B1 — 507, the embedded uploader's global disk cap is full.
+      // Operator-action affordance, like `network_busy`.
+      return "Storage is full right now. Ask your operator to free up space.";
+    case "unsupported_media_type":
+      // UX-6-B1 — 415 MIME gate on `POST /api/uploads`. Distinct from
+      // `not_raster` (the theme-background raster gate).
+      return "That file type isn't supported.";
+    case "invalid_setting":
+      // UX-6-B1 — 422 admin `PUT /admin/settings` with an out-of-shape
+      // value. Carries the offending `field` (AdminSettingsTab highlights it).
+      return "That setting value isn't valid. Check it and try again.";
+    case "forbidden_vhost":
+      // #228 — a vhost selection outside the subject's allowed set (403).
+      return "That vhost isn't available to your account.";
+    case "source_not_local":
+      // #266 — admin set a per-network `source_address` the host can't
+      // bind/egress from (422). Distinct from `validation_failed` (bad IP shape).
+      return "That isn't an address this server can send from.";
+    case "already_exists":
+      // Admin bucket 1 — 409 duplicate slug (`POST /admin/networks`) or
+      // duplicate (host, port) (`POST /admin/networks/:id/servers`).
+      return "That already exists.";
+    case "scrollback_present":
+      // Admin bucket 1 — 409, `DELETE /admin/networks/:id` refuses when
+      // archival scrollback would be orphaned.
+      return "This network still has saved history. Clear it before deleting the network.";
+    case "last_admin":
+      // Admin bucket 2 — 422, demote/delete refused for the sole admin
+      // (would lock the deployment out of its own admin panel).
+      return "You can't remove the last admin.";
+    case "credentials_present": {
+      // Admin bucket 1 — 409, `DELETE /admin/networks/:id` with bound
+      // credentials. `credential_count` is threaded through the wire so the
+      // operator sees how many users to unbind first.
+      const n = err.info.credential_count;
+      return typeof n === "number"
+        ? `This network still has ${n} connected user(s). Disconnect them before deleting it.`
+        : "This network still has connected users. Disconnect them before deleting it.";
+    }
+    case "malformed_nick":
+      // L-web-1 / #40 — login nick failed `Identifier.valid_nick?/1` shape.
+      // Charset from `@nick_regex`: letters, digits, `- _ [ ] { } | \ \` ^`,
+      // ≤ 30 chars, not starting with a digit.
+      return "That nickname isn't valid. Use up to 30 letters, digits, or - _ [ ] { } | \\ ` ^, and don't start with a digit.";
+    case "password_required":
+      // 401 — the login/network requires a password and none was supplied.
+      return "This network requires a password.";
+    case "password_mismatch":
+      // 401 — the supplied password was wrong (distinct from
+      // `invalid_credentials`, the name-or-password oracle).
+      return "That password is incorrect.";
+    case "network_not_visitor_enabled":
+      // #211 phase 3 — 403, the network exists but is not in the visitor
+      // allowlist (admin has not opted it in).
+      return "This network isn't open to guests.";
+    case "network_ambiguous":
+      // #211 phase 3 — 400, more than one visitor network is enabled but
+      // the login named none. The picker must choose one.
+      return "Please choose which network to connect to.";
+    case "network_unconfigured":
+      // #211 phase 3 — 503, no network is configured/enabled for guests.
+      return "No network is available for guest access right now.";
+    case "session_plan_resolve_failed":
+      // U-0 — 500, the credential has no servers bound (operator misconfig);
+      // `SessionPlan.resolve/1` can't build a plan.
+      return "This network isn't fully set up. Ask your operator to check its server settings.";
+    case "anon_collision": {
+      // 409 — a visitor's chosen name is taken at login time. Carries
+      // `retry_after`; interpolate it like `network_unreachable`, with a
+      // graceful fallback when absent.
+      const retry = err.info.retry_after;
+      return typeof retry === "number"
+        ? `That name is taken right now. Try again in ${retry} seconds.`
+        : "That name is taken right now. Try again shortly.";
+    }
+    case "share_token_expired":
+      // 410 Gone — the visitor share link's TTL elapsed.
+      return "This share link has expired.";
+    case "share_token_consumed":
+      // 410 Gone — the visitor share link was already redeemed (one-shot).
+      return "This share link has already been used.";
+    case "invalid_line":
+      // Shared token, REST side — CRLF/NUL in an IRC-bound field (400).
+      // Mirrors the channel-side copy for the same token.
+      return "That contains characters that aren't allowed.";
+    case "body_too_large":
+      // Shared token, REST side — text payload over the byte cap (413).
+      // The wire carries `limit`; plain copy (no formatter needed).
+      return "That message is too long to send.";
+
     default:
       // Cic M2 reviewer fix: exhaustiveness assertion. Adding a token
-      // to `KnownApiErrorCode` without a `case` arm above becomes a
+      // to the generated union without a `case` arm above becomes a
       // tsc compile error here (the function-arg `code` is narrowed
       // to `never` only when every union member has been handled).
       return assertNever(code);

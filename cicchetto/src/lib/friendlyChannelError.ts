@@ -1,67 +1,44 @@
 import { assertNever, type ChannelPushError } from "./api";
+import { ERROR_TOKENS_CHANNEL_ERROR_TOKEN, type ErrorTokensChannelErrorToken } from "./wireTypes";
 
 // Issue #62: channel-push rejections (`ChannelPushError`) were swallowed by
 // compose.ts into a bare "send failed", hiding the real reason. The live
 // incident: a visitor's `/away` surfaced "Send failed" with no clue it was a
 // server rejection (`visitor_no_away`, since removed). This is the
 // channel-push sibling of `friendlyApiError` (REST): one closed-union
-// token → human copy module, with a loud fallback for unmapped arms
-// (`err.message` carries the raw `channel push error: <code>` string, so an
-// unmapped arm is operator-visible — no silent drop). Per
-// `feedback_no_localized_strings_server_side` cic owns the human copy for
-// every typed server error.
+// token → human copy module. Per `feedback_no_localized_strings_server_side`
+// cic owns the human copy for every typed server error.
 //
 // Codes are the `error:` wire tokens emitted by the user-level
-// `GrappaChannel.handle_in` arms that cicchetto pushes WITH a reply and
-// awaits: `away` set/unset (socket.ts `pushAwaySet` / `pushAwayUnset`);
-// since #154(1), the state-changing ops verbs (op/deop/voice/devoice/kick/
-// ban/unban/mode/umode) which now await via `pushUserChannelVerb`; and the
-// keyword-watchlist verbs `/hilight add|del` (socket.ts `pushWatchlistAdd` /
-// `pushWatchlistDel`, awaited via highlightList.ts in compose.ts). The ops
-// verbs route through `dispatch_subject_verb/3` (+ the `with_body_check`
-// wrapper for kick/umode/mode), whose `else` arms emit `invalid_channel`,
-// `invalid_nick`, `invalid_mask`, `invalid_line`, `no_session`,
-// `user_not_found`, `upstream_unavailable`, and `body_too_large`; the
-// watchlist verbs emit `not_found` (`/hilight del <missing pattern>` — an
-// ordinary user action) and `save_failed` (the user_settings DB write
-// failed). Adding a token: add it to the union, add a `case`, ship the
-// vitest arm. Tokens the server no longer emits (e.g. `visitor_no_away`)
-// MUST NOT be mapped — a dead arm is silent UX rot (see friendlyApiError's
-// `captcha_provider_unavailable` history). One arm, one contract.
+// `GrappaChannel.handle_in` arms (and `AdminChannel.join`) that cicchetto
+// pushes WITH a reply and awaits — `/away`, the ops verbs, the watchlist
+// verbs, `resolve_userhost`, `open_query_window`, topic set, etc.
+//
+// #411 D6b — the union AND the runtime narrowing Set are GENERATED, not
+// hand-listed. `ErrorTokensChannelErrorToken` + `ERROR_TOKENS_CHANNEL_ERROR_TOKEN`
+// come from `mix grappa.gen_wire_types` reading
+// `GrappaWeb.ErrorTokens.channel_error_token` — the server's authoritative
+// channel-push wire-token set. This DELIBERATELY OVERTURNS the pre-#411
+// "curated subset + loud fallback for unmapped arms" design this comment used
+// to defend: the union is the FULL server contract, so the ONLY hand-kept
+// structure left is the switch (the copy — product). Adding a server-side
+// token now: the codegen widens the union, `assertNever` in the `default` arm
+// forces a `case` at `tsc` time, and you ship the vitest row. Ruling: "ogni
+// cazzo di errore deve avere un copy" (#411). A token the server no longer
+// emits (e.g. `visitor_no_away`) drops out of the server type → out of the
+// generated union → its dead `case` becomes a `tsc` error, so dead arms
+// can't linger. The `!isKnownCode` fallback to `err.message` is now a DRIFT
+// guard (server ahead of codegen / off-contract string), not the home of
+// un-localized tokens. One arm, one contract.
 
-export type KnownChannelErrorCode =
-  | "no_session"
-  | "not_explicit"
-  | "network_not_found"
-  | "user_not_found"
-  | "invalid_reason"
-  | "invalid_channel"
-  | "invalid_nick"
-  | "invalid_mask"
-  | "invalid_line"
-  | "upstream_unavailable"
-  | "body_too_large"
-  | "not_found"
-  | "save_failed";
+// The generated `ERROR_TOKENS_CHANNEL_ERROR_TOKEN` array is the single source
+// for both the compile-time union and this runtime narrowing Set.
+const KNOWN_CODES: ReadonlySet<ErrorTokensChannelErrorToken> = new Set(
+  ERROR_TOKENS_CHANNEL_ERROR_TOKEN,
+);
 
-const KNOWN_CODES: ReadonlySet<KnownChannelErrorCode> = new Set<KnownChannelErrorCode>([
-  "no_session",
-  "not_explicit",
-  "network_not_found",
-  "user_not_found",
-  "invalid_reason",
-  "invalid_channel",
-  "invalid_nick",
-  "invalid_mask",
-  "invalid_line",
-  "upstream_unavailable",
-  "body_too_large",
-  "not_found",
-  "save_failed",
-]);
-
-function isKnownCode(code: string): code is KnownChannelErrorCode {
-  return KNOWN_CODES.has(code as KnownChannelErrorCode);
+function isKnownCode(code: string): code is ErrorTokensChannelErrorToken {
+  return KNOWN_CODES.has(code as ErrorTokensChannelErrorToken);
 }
 
 export function friendlyChannelError(err: ChannelPushError): string {
@@ -69,7 +46,7 @@ export function friendlyChannelError(err: ChannelPushError): string {
   return friendlyKnown(err.code);
 }
 
-function friendlyKnown(code: KnownChannelErrorCode): string {
+function friendlyKnown(code: ErrorTokensChannelErrorToken): string {
   switch (code) {
     case "no_session":
       // The `(subject, network)` has no live `Session.Server` — e.g. a
@@ -121,8 +98,42 @@ function friendlyKnown(code: KnownChannelErrorCode): string {
       // failed (`set_highlight_patterns` → `{:error, _}`). Rare (DB-side),
       // but a state-changing verb MUST NOT report a raw token.
       return "Couldn't save your highlight list — try again.";
+
+    // ── #411 D6b — the 8 previously-unmapped channel tokens (product copy,
+    //    vetted by vjt). Same actionable-copy contract as the REST sibling.
+    case "forbidden":
+      // Shared token, channel side — `GrappaChannel.join` authorize / the
+      // `AdminChannel` catch-all rejected the topic for this subject.
+      return "You're not allowed to do that.";
+    case "invalid_payload":
+      // A malformed `visibility` / `away` payload (non-boolean, bad
+      // `origin_window`) — a client bug, rejected at the boundary.
+      return "That request was malformed. Please try again.";
+    case "lookup_failed":
+      // `resolve_userhost` catch-all (e.g. the Session.Server mailbox timed
+      // out past the call deadline). Degrade to a typed retry, not a crash.
+      return "Couldn't look that up right now. Try again.";
+    case "not_cached":
+      // `resolve_userhost` miss — no cached userhost for that nick yet. The
+      // fail-closed signal cic surfaces as "run /whois first" (the mask
+      // builder needs the host).
+      return "We don't have that user's details yet — run /whois on them first.";
+    case "open_failed":
+      // `open_query_window` catch-all — the DM-window upsert failed.
+      return "Couldn't open that conversation. Try again.";
+    case "persist_failed":
+      // `topic_set` catch-all — the topic change couldn't be persisted.
+      return "Couldn't save that change. Try again.";
+    case "unknown_event":
+      // Terminal `handle_in` catch-all — an unknown frame name or a known
+      // event with a wrong-typed field (a client/version-mismatch bug).
+      return "That action isn't supported by the server.";
+    case "unknown_topic":
+      // `GrappaChannel.join` / `AdminChannel.join` on an unrecognized topic.
+      return "That view isn't available.";
+
     default:
-      // Exhaustiveness: adding a token to `KnownChannelErrorCode` without a
+      // Exhaustiveness: adding a token to the generated union without a
       // `case` arm narrows `code` to `never` only when every member is
       // handled, so this becomes a tsc compile error.
       return assertNever(code);
