@@ -69,12 +69,23 @@ describe("channelKey + decodeChannelKey round-trip", () => {
     });
   });
 
-  describe("canonicalChannel — sigil-aware lowercase", () => {
+  describe("canonicalChannel — sigil-aware rfc1459 fold", () => {
     it("lowercases sigil-prefixed channel names", () => {
       expect(canonicalChannel("#Chan")).toBe("#chan");
       expect(canonicalChannel("&LocalChan")).toBe("&localchan");
       expect(canonicalChannel("!SAFE")).toBe("!safe");
       expect(canonicalChannel("+Modeless")).toBe("+modeless");
+    });
+
+    it("folds the rfc1459 bracket range in sigil-channels (#412)", () => {
+      // bahamut CASEMAPPING=rfc1459 folds `[ ] \ ~` → `{ } | ^` in CHANNEL
+      // names too (server shares ONE fold_rfc1459 primitive between nicks
+      // and channels). A bare toLowerCase forks `#chan[1]` from the
+      // server's canonical `#chan{1}` — the exact silent window-fork the
+      // CLAUDE.md channel invariant forbids.
+      expect(canonicalChannel("#Chan[1]")).toBe("#chan{1}");
+      expect(canonicalChannel("#a\\b")).toBe("#a|b");
+      expect(canonicalChannel("#x~y")).toBe("#x^y");
     });
 
     it("leaves nicks unchanged", () => {

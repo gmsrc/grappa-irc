@@ -222,8 +222,15 @@ vi.mock("../lib/serviceModal", () => ({
 
 // #229 — nickEquals is used by the /mode <ownnick> self-nick gate. Real
 // impl is pinned in nickEquals.test.ts; here a boundary stub (rfc1459-ish
-// case-insensitive compare is enough for the dispatch tests).
-vi.mock("../lib/nickEquals", () => ({
+// case-insensitive compare is enough for the dispatch tests). #412 — the
+// spread of `importOriginal` is now MANDATORY for the whole file, not just
+// tab-completion: `channelKey.ts` imports `rfc1459Fold` from this module,
+// so every `channelKey(...)` fixture call would hit `undefined(...)` and
+// throw without the real export. Tab-completion additionally needs the
+// REAL `rfc1459Fold` (bracket range) — a stubbed fold would test the stub,
+// not the server-pinned fold. Only `nickEquals` stays overridden.
+vi.mock("../lib/nickEquals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/nickEquals")>()),
   nickEquals: (a: string, b: string) => a.toLowerCase() === b.toLowerCase(),
 }));
 
@@ -784,6 +791,17 @@ describe("compose tabComplete (members-only, irssi-exact)", () => {
     await setMembers(["bob"]);
     const compose = await import("../lib/compose");
     expect(compose.tabComplete(k, "al", 2, true)).toBeNull();
+  });
+
+  it("folds the rfc1459 bracket range on the prefix match (#412)", async () => {
+    // bahamut CASEMAPPING=rfc1459: `[`→`{`, so a member `Foo[1]` and the
+    // typed `foo{` are the SAME nick — completion MUST match. A bare
+    // toLowerCase leaves the bracket unfolded and the completion silently
+    // fails on the common `nick[away]` shape.
+    await setMembers(["Foo[1]"]);
+    const compose = await import("../lib/compose");
+    const r = compose.tabComplete(k, "foo{", 4, true);
+    expect(r?.newInput).toBe("Foo[1]: ");
   });
 
   it("appends ': ' at line start", async () => {

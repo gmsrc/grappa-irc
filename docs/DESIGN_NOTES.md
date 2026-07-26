@@ -18260,3 +18260,81 @@ Whether a rename-collision should instead be rejected/confirmed is a UX
 call left to a possible follow-up; the shipped behaviour keeps ONE map
 semantics across add and edit rather than introducing an edit-only
 client-side guard the server does not enforce.
+
+## #412 — client fold consolidation onto ONE rfc1459 primitive (2026-07-26)
+
+Filed (spun out of #369 theme 4) as: "client nick-fold is triplicated and
+the parity fixture is green while the ports disagree on bracket nicks."
+**Verified at source first — five of the issue's premises did not survive
+hand-verification** (the #369 review's stated failure rate; this is the
+sixth cluster to repeat it). What is actually true:
+
+- **The nick IDENTITY fold is NOT triplicated.** #364 S13 already
+  consolidated it onto the single `rfc1459Fold` (`nickEquals.ts`), the
+  faithful byte-level mirror of `Grappa.IRC.Identifier.canonical_nick/1`.
+  No partial-bracket fold exists anywhere in the tree.
+- **The shouldNotify NICK paths already AGREE with the server.** DM
+  whitelist folds via `rfc1459Fold` (= server `canonical_nick`); the
+  mention path uses a word-boundary `:caseless` regex with `Regex.escape`
+  on BOTH ports (`mentionMatch.ts` ↔ `Grappa.Mentions.mentioned?/3`), so
+  bracket chars are literals on both sides — a **deliberate, shared**
+  non-fold, not a divergence. (Folding bracket nicks in mention/highlight
+  matching would be a SERVER-owned change to `mentions.ex` touching both
+  ports; out of #412 scope.)
+- **`pushTriggers.shouldNotify` has NO live caller** — it exists only as
+  the foreground drift-guard against the shared truth-table. So the
+  divergence it hid had zero runtime blast radius *through that module*.
+
+**The real, fixture-hidden divergence was on the CHANNEL fold, and its
+root cause was a second client fold policy.** `channelKey.ts`'s
+`canonicalChannel` — the stated mirror of `canonical_channel/1` — used a
+bare `toLowerCase`, folding `A-Z` but NOT the four rfc1459 brackets
+`[ ] \ ~` → `{ } | ^`. bahamut folds channel names the same way it folds
+nicks (the server shares ONE `fold_rfc1459/1` primitive between
+`canonical_nick/1` and `canonical_channel/1`), so `#chan[1]` and
+`#chan{1}` are ONE channel to the ircd. The client's bare downcase forked
+them — the exact silent channel-fork the CLAUDE.md channel invariant
+forbids — across EVERY `canonicalChannel` call site: the composite window
+key (`channelKey`), the Phoenix topic segment (`socket.ts`), invite ack,
+and the shouldNotify channel-whitelist. `pushTriggers` compounded it by
+open-coding `message.channel.toLowerCase()` instead of calling
+`canonicalChannel` at all.
+
+**Fix — consolidate onto the ONE primitive, mirroring the server's shared
+fold.** `canonicalChannel` now calls `rfc1459Fold` (sigil-gated, exactly
+as the server sigil-gates `fold_rfc1459` in `canonical_channel/1`);
+`pushTriggers` now calls `canonicalChannel`; and the two other client
+folds that had drifted onto their own `toLowerCase` were routed through
+`rfc1459Fold` too:
+
+- **compose tab-completion** (`compose.ts`) — a REAL live bug: typing
+  `foo{` did not complete a member `Foo[1]`. RED-first in `compose.test.ts`
+  (the `nickEquals` mock there now spreads `importOriginal` so the test
+  exercises the REAL fold, not a lowercase stub).
+- **`nickColorIndex`** (`nickColor.ts`) — a NO-OP at the current palette
+  size, kept honest: djb2 `mod 16` collapses to `(5381 + Σ charcodes) mod
+  16` (33 ≡ 1 mod 16), and every rfc1459 shift is ±32 ≡ 0 mod 16, so a
+  bare downcase and the real fold produce the identical index — `Foo[1]`
+  and `foo{1}` ALREADY shared a color. The consolidation is future-proofing
+  (change the palette to weechat-10 / irssi-12 and the unfolded form WOULD
+  fork the hue) + removes an independent fold policy + corrects a comment
+  that falsely claimed "RFC 2812 §2.2 case-folding." No red-first was
+  possible; the regression test pins the identity-invariant directly
+  (orchestrator ruling: ship the no-op hygiene, TDD-without-RED granted
+  because the no-op is *proven*, not assumed).
+
+**Pin (non-comment drift gate).** The consolidation IS the pin: with every
+divergent client fold now routing through the single `rfc1459Fold`
+primitive (pinned by the enumerated `nickEquals.test.ts` table, the client
+twin of the server's `nick_fold_sql/1` migration pin), there is one fold to
+keep faithful, not four. On top of that the **shared golden**
+(`shouldNotifyTruthTable.json`, consumed by the vitest `pushTriggers.test`
+AND the ExUnit `should_notify_parity_test`) gained a bracket-CHANNEL row
+(`#Foo[1]` / whitelist `#foo{1}` / expected `true`) — RED-first proof: the
+client failed it under the old `toLowerCase` while the server (folding via
+`canonical_channel`) passed, so the RED was demonstrable cic-only via
+vitest, no server compile needed. `channelKey.test.ts` gained a direct
+bracket-fold row. All cic-only: zero server code changed; the server side
+of the shared golden was verified green by source-reading the parity
+harness (it reads prefs RAW from JSON and calls `should_notify?/4`, which
+folds the inbound channel via `canonical_channel`).

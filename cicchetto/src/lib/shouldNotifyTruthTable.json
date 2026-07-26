@@ -169,6 +169,25 @@
     "expected": true
   },
   {
+    "name": "channel: channel_messages_only folds the rfc1459 bracket range on channel (#412)",
+    "message": {
+      "kind": "privmsg",
+      "channel": "#Foo[1]",
+      "sender": "alice",
+      "body": "no mention here"
+    },
+    "own_nick": "vjt",
+    "prefs": {
+      "channel_messages_all": false,
+      "channel_messages_only": ["#foo{1}"],
+      "channel_mentions": false,
+      "private_messages_all": false,
+      "private_messages_only": []
+    },
+    "patterns": [],
+    "expected": true
+  },
+  {
     "name": "channel: channel_mentions + body mentions own_nick notifies",
     "message": {
       "kind": "privmsg",

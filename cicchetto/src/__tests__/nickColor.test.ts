@@ -38,6 +38,19 @@ describe("nickColorIndex", () => {
     expect(upper).toBe(lower);
   });
 
+  it("gives one color to rfc1459-equivalent nicks Foo[1] === foo{1} (#412)", () => {
+    // Identity-invariant guard, NOT a red-first bug repro: bahamut folds
+    // `[ ] \ ~` → `{ } | ^`, so Foo[1] and foo{1} are the SAME operator
+    // and MUST share a color. Honesty note — at NICK_PALETTE_SIZE = 16
+    // this ALSO held under the pre-#412 bare toLowerCase (djb2 mod 16
+    // collapses every ±32 rfc1459 shift to 0), so this can't fail today;
+    // it pins the invariant so a future palette-size change (weechat 10 /
+    // irssi 12, where 32 mod N ≠ 0) can't silently fork the hue.
+    expect(nickColorIndex("Foo[1]")).toBe(nickColorIndex("foo{1}"));
+    expect(nickColorIndex("a\\b")).toBe(nickColorIndex("a|b"));
+    expect(nickColorIndex("op~x")).toBe(nickColorIndex("op^x"));
+  });
+
   it("always returns an index in [0, NICK_PALETTE_SIZE)", () => {
     const nicks = ["vjt", "alice", "bob", "carol", "dave", "_", "x", "OperServ", "{user}", "💩"];
     for (const nick of nicks) {

@@ -23,7 +23,7 @@ import { clearMentionsBundle } from "./mentionsWindow";
 import { splitMessageLines } from "./messageLines";
 import { openModeModal } from "./modeModal";
 import { networkBySlug, networkIdBySlug, user } from "./networks";
-import { nickEquals } from "./nickEquals";
+import { nickEquals, rfc1459Fold } from "./nickEquals";
 import { ensureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 import { quitAll } from "./quit";
@@ -1118,14 +1118,17 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       typedWord = input.slice(start, cursor);
       if (typedWord.length === 0) return null;
       anchorStart = start;
-      prefix = typedWord.toLowerCase();
+      // rfc1459 fold (not a bare toLowerCase) so `foo{` completes a
+      // member `Foo[1]` — bahamut folds `[ ] \ ~` → `{ } | ^`, so those
+      // are the SAME nick. Mirror of `Grappa.IRC.Identifier.canonical_nick/1`.
+      prefix = rfc1459Fold(typedWord);
       // ": " only when the word is the first token on the line.
       suffix = input.slice(0, anchorStart).trim() === "" ? ": " : " ";
       oldEnd = cursor;
     }
 
     const matches = all
-      .filter((m) => m.nick.toLowerCase().startsWith(prefix))
+      .filter((m) => rfc1459Fold(m.nick).startsWith(prefix))
       .map((m) => m.nick)
       .sort((a, b) => a.localeCompare(b));
     if (matches.length === 0) return null;

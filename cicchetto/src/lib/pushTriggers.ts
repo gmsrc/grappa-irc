@@ -23,6 +23,7 @@
 // notify-match and the visual-match can never diverge again.
 
 import { type MessageKind, NOTIFY_KINDS } from "./api";
+import { canonicalChannel } from "./channelKey";
 import { matchesWatchlist } from "./mentionMatch";
 import { rfc1459Fold } from "./nickEquals";
 import type { NotificationPrefs } from "./userSettings";
@@ -48,7 +49,7 @@ export type ShouldNotifyMessage = {
  *   2. DM (channel === ownNick): private_messages_all OR
  *      rfc1459Fold(sender) in private_messages_only (mirrors the
  *      server's `canonical_nick(sender) in ...`).
- *   3. channel: channel_messages_all OR lower(channel) in
+ *   3. channel: channel_messages_all OR canonicalChannel(channel) in
  *      channel_messages_only OR (channel_mentions AND mention).
  */
 export function shouldNotify(
@@ -86,8 +87,15 @@ function channelMatch(
   patterns: string[],
 ): boolean {
   return (
+    // canonicalChannel (sigil-gated rfc1459 fold), NOT a bare toLowerCase,
+    // mirroring the server's `Identifier.canonical_channel(channel) in
+    // channel_messages_only` — the whitelist is stored channel-folded, and
+    // bahamut folds `[ ] \ ~` in channel names too, so `#chan[1]` and
+    // `#chan{1}` are ONE channel. A bare toLowerCase leaves the brackets
+    // unfolded and misses a whitelisted `#chan{1}` when the channel is
+    // `#chan[1]`.
     prefs.channel_messages_all ||
-    prefs.channel_messages_only.includes(message.channel.toLowerCase()) ||
+    prefs.channel_messages_only.includes(canonicalChannel(message.channel)) ||
     (prefs.channel_mentions && matchesWatchlist(message.body, ownNick, patterns))
   );
 }
