@@ -117,7 +117,8 @@ test("CP15 B6 — peer KICKs vjt; window flips to kicked, stays in active sideba
   // mounted with a "not joined" muted stub; the right-hand 14rem grid
   // column stayed reserved for nothing. Post-fix Shell.tsx omits the
   // `<MembersPane>` mount via the `isActiveChannelJoined()` predicate
-  // and adds `.shell-no-members` to collapse the column.
+  // and adds `.shell-no-members` to narrow the column to a thin rail (#71
+  // INC-2: the rail keeps the ActionCluster cog; it's no longer a full drop).
   await expect(membersPane).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator(".shell.shell-no-members, .shell-mobile")).toHaveCount(1);
 

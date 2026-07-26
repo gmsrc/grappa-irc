@@ -7,6 +7,7 @@ import { token } from "./lib/auth";
 import { awayByNetwork } from "./lib/awayStatus";
 import { type ChannelKey, channelKey, decodeChannelKey } from "./lib/channelKey";
 import { mentionCounts } from "./lib/mentions";
+import { mentionsBundleBySlug } from "./lib/mentionsWindow";
 import { channelsBySlug, isAdmin, networkBySlug, networks, user } from "./lib/networks";
 import { openQueryWindowState, queryWindowsByNetwork } from "./lib/queryWindows";
 import { reconnectingByNetwork } from "./lib/reconnectingStatus";
@@ -468,6 +469,36 @@ const Sidebar: Component<Props> = () => {
                     <span class="sidebar-channel-name">channels</span>
                   </button>
                 </li>
+
+                {/* #71 INC-2 — mentions row. Desktop replacement for the
+                  ShellChrome @ open-mentions button, which now stays MOBILE-only
+                  (mobile has no sidebar). Rendered ONLY when this network carries
+                  a mentions bundle (the "you were /away" snapshot) — nothing to
+                  open otherwise, the SAME gate the @ button used. A direct <li>
+                  of THIS network <ul>, so it inherits the per-network grouping
+                  rail exactly like a channel row (and unlike the archive <ul>,
+                  which shares .sidebar-network-section but is scoped OUT of the
+                  rail via :not(.sidebar-archive-list)). Selects the mentions
+                  pseudo-window (kind "mentions", empty channel name) through the
+                  same handleClick verb every row uses — one selection door. */}
+                <Show when={mentionsBundleBySlug()[network.slug]}>
+                  <li
+                    class="sidebar-mentions-row"
+                    classList={{ selected: isSelected(network.slug, "") }}
+                    data-testid={`sidebar-mentions-row-${network.slug}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleClick(network.slug, "", "mentions")}
+                      class="sidebar-window-btn"
+                    >
+                      <span class="sidebar-network-emoji" aria-hidden="true">
+                        @
+                      </span>
+                      <span class="sidebar-channel-name">mentions</span>
+                    </button>
+                  </li>
+                </Show>
 
                 {/* Channel windows */}
                 <For each={channelsBySlug()?.[network.slug] ?? []}>

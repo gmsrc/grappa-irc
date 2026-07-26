@@ -36,7 +36,7 @@ test("#217 — timestamp format defaults to seconds, toggles live from Settings,
   await expect(timeCell).toHaveText(HMS_RE);
 
   // Open Settings, confirm the with-seconds radio is the checked default.
-  await page.locator('[data-testid="shell-chrome-cog"]').click();
+  await page.locator('[data-testid="action-cluster-cog"]').click();
   await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
   await expect(page.getByTestId("time-format-hms")).toBeChecked();
 
@@ -55,6 +55,6 @@ test("#217 — timestamp format defaults to seconds, toggles live from Settings,
   await expect.poll(async () => await scrollbackLines(page).count()).toBeGreaterThan(0);
   await expect(await firstTimeCell(page)).toHaveText(HM_RE);
   // And the drawer reflects the persisted choice.
-  await page.locator('[data-testid="shell-chrome-cog"]').click();
+  await page.locator('[data-testid="action-cluster-cog"]').click();
   await expect(page.getByTestId("time-format-hm")).toBeChecked();
 });

@@ -44,7 +44,7 @@ async function openThemesSubPageMobile(page: PWPage): Promise<void> {
   await page.getByLabel(/open members sidebar/i).tap();
   const drawer = page.locator(".shell-members.open");
   await expect(drawer).toBeVisible({ timeout: 5_000 });
-  await drawer.locator("[data-testid='mobile-panel-settings']").tap();
+  await drawer.locator("[data-testid='action-cluster-cog']").tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await page.getByTestId("themes-settings-entry").tap();
   await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });

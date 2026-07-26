@@ -89,6 +89,7 @@ import { expect, test } from "../fixtures/test";
 import {
   closeMembersDrawer,
   loginAs,
+  openSettingsMobile,
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
@@ -178,10 +179,13 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
       NETWORK_NICK,
     );
 
-    // ─── Bucket L — settings cog always visible ──────────────────────
-    // On home (no network context) ShellChrome cog is rendered.
-    // Re-asserted on channel + admin below; here pins the home case.
-    await expect(page.getByTestId("shell-chrome-cog")).toBeVisible();
+    // ─── Bucket L — settings reachable from every window kind ─────────
+    // #71 INC-2 — on mobile the settings cog lives in the rail's
+    // ActionCluster (drawer). On non-channel windows the door to that rail is
+    // the ☰ rail opener in ShellChrome; assert IT is visible on home (the cog
+    // itself is behind the closed drawer). Re-asserted on channel + admin
+    // below; here pins the home case.
+    await expect(page.getByTestId("shell-chrome-rail-opener")).toBeVisible();
 
     // ─── Bucket A — channel case-insensitivity ────────────────────────
     // Focus the autojoin channel via the canonical (lowercase) name;
@@ -410,14 +414,14 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
     // Selection now stays on whatever the operator was viewing at
     // PART time (here: the `#ux4z-key-test` :failed pseudo-row,
     // because /join #ux4z-key-test in bucket F auto-focused it).
-    // On mobile + selectedChannel.kind === "channel", ShellChrome
-    // (which hosts the shell-chrome-cog testid) is suppressed per
-    // UX-5 BM — the cog lives in the members-drawer footer instead.
-    // Switch to the server window so the standalone ShellChrome
-    // re-mounts. This is the existing bucket-K route used above
-    // (line 295 `serverTab.tap()`), no new dependency.
+    // On mobile + selectedChannel.kind === "channel" the settings cog is
+    // reached via the TopicBar ☰; on a non-channel window via the ShellChrome
+    // ☰ rail opener. #71 INC-2 — the cog lives in the rail's ActionCluster in
+    // both cases. Switch to the server window (non-channel) and reach settings
+    // via the shared rail helper. This is the existing bucket-K route used
+    // above (line 295 `serverTab.tap()`), no new dependency.
     await sidebarWindow(page, NETWORK_SLUG, "Server").tap();
-    await page.getByTestId("shell-chrome-cog").tap();
+    await openSettingsMobile(page);
     const drawer = page.locator(".settings-drawer.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
     const ttlSelect = page.getByTestId("upload-ttl-select");
@@ -443,9 +447,10 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
         // post-login createEffect resolution.
         await page.getByTestId("settings-drawer-close").tap();
         await page.reload();
-        // Re-open drawer + assert the value persisted.
-        await page.getByTestId("shell-chrome-cog").tap();
-        await expect(drawer).toBeVisible({ timeout: 5_000 });
+        // Re-open drawer + assert the value persisted. #71 INC-2 — reach
+        // settings via the rail helper (cold-load lands on a non-channel
+        // window → ☰ rail opener → cog).
+        await openSettingsMobile(page);
         await expect(ttlSelect).toHaveValue(optionValues[0], { timeout: 5_000 });
         // Reset to default for cleanliness.
         await ttlSelect.selectOption("");
@@ -484,12 +489,13 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
     const adminPage = await context.newPage();
     const admin = getSeededAdmin();
     await loginAs(adminPage, admin, { noNetworks: true });
-    // ShellChrome cog visible for the home selection (bucket L: cog
-    // always visible — re-pinned for the admin-on-home case).
-    await expect(adminPage.getByTestId("shell-chrome-cog")).toBeVisible({
+    // #71 INC-2 — settings reachable for the home selection (bucket L). On
+    // mobile the door is the ☰ rail opener; assert it, then reach settings via
+    // the rail helper (admin-on-home case).
+    await expect(adminPage.getByTestId("shell-chrome-rail-opener")).toBeVisible({
       timeout: 10_000,
     });
-    await adminPage.getByTestId("shell-chrome-cog").tap();
+    await openSettingsMobile(adminPage);
     const adminDrawer = adminPage.locator(".settings-drawer.open");
     await expect(adminDrawer).toBeVisible({ timeout: 5_000 });
     // The "Admin Console" entry sets selection to kind=admin which
@@ -498,9 +504,10 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
     await expect(adminPage.getByTestId("admin-pane")).toBeVisible({
       timeout: 10_000,
     });
-    // ShellChrome cog STILL visible on the admin window (bucket L
-    // rule extends to the admin kind).
-    await expect(adminPage.getByTestId("shell-chrome-cog")).toBeVisible();
+    // Settings STILL reachable on the admin window (bucket L rule extends to
+    // the admin kind). #71 INC-2 — on mobile the door is the ☰ rail opener
+    // (admin is a non-channel kind, so ShellChrome renders it).
+    await expect(adminPage.getByTestId("shell-chrome-rail-opener")).toBeVisible();
     await adminPage.close();
   }
 });

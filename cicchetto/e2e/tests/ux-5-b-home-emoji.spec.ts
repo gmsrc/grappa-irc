@@ -30,8 +30,12 @@ test("ux-5-b — home sidebar row renders the 🏠 emoji icon", async ({ page })
 
   // Shell mounted; cold-load lands on home (UX-4 bucket B selection
   // default). The sidebar's home section is identity-scoped and always
-  // mounted regardless of network state.
-  await expect(page.getByTestId("shell-chrome")).toBeVisible({ timeout: 10_000 });
+  // mounted regardless of network state. #71 INC-2 removed the desktop
+  // ShellChrome row (cog moved to the permanent right rail), so anchor the
+  // "shell mounted" wait on the rail's ActionCluster cog.
+  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible({
+    timeout: 10_000,
+  });
 
   const homeEmoji = page.locator(".sidebar-home-section .sidebar-home-emoji");
   await expect(homeEmoji).toHaveCount(1);

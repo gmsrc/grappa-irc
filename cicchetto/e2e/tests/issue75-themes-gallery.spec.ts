@@ -31,7 +31,7 @@ async function openThemesSubPage(page: import("@playwright/test").Page): Promise
   // #299 — the footer 🎨 launcher was removed; themes is reached via the
   // cog (settings) → themes nav row now. Tapping the cog closes the members
   // drawer (mutex) and opens the settings drawer on its "main" page.
-  await drawer.locator("[data-testid='mobile-panel-settings']").tap();
+  await drawer.locator("[data-testid='action-cluster-cog']").tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await page.getByTestId("themes-settings-entry").tap();
   await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });

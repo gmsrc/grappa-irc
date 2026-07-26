@@ -22,7 +22,18 @@ import { isMobile } from "./lib/theme";
 //     Visibility-on-mobile predicate (no-network guard) lives in
 //     `lib/archiveContext.ts` so the mobile members-drawer launcher
 //     (Shell.tsx) uses the SAME rule.
-//   * Settings cog (⚙) — opens SettingsDrawer. Always visible.
+//   * Rail opener (☰) — #71 INC-2: was the settings cog. R1 moved the cog
+//     into the always-present right rail (ActionCluster), so on the mobile
+//     NON-channel windows (where this bar renders) the settings cog is
+//     reached by opening the rail. This button opens that rail (the same
+//     `.shell-members` drawer the channel-window TopicBar ☰ opens — ONE
+//     drawer, ONE glyph). The cog itself lives ONLY in the rail now.
+//
+// #71 INC-2 — ShellChrome is now MOBILE-ONLY: the desktop copy was removed
+// (its row freed the top for the topic; the cog moved to the permanent
+// desktop rail). It renders only in Shell.tsx's mobile branch, on
+// non-channel windows (channel windows get the TopicBar instead). The
+// `isMobile()` gates on the @/archive buttons are belt-and-suspenders.
 //
 // UX-5 bucket A (2026-05-19) — the left hamburger slot was dropped.
 //
@@ -39,9 +50,12 @@ import { isMobile } from "./lib/theme";
 
 export type Props = {
   /**
-   * Opens the SettingsDrawer. Required — the cog is always rendered.
+   * #71 INC-2 — opens the right rail (the `.shell-members` drawer that hosts
+   * the ActionCluster cog + monkey). Required — the rail opener is always
+   * rendered. Renamed from `onOpenSettings`: the cog moved into the rail, so
+   * this bar's button now opens the rail rather than the settings drawer.
    */
-  onOpenSettings: () => void;
+  onOpenRail: () => void;
 };
 
 const ShellChrome: Component<Props> = (props) => {
@@ -49,9 +63,12 @@ const ShellChrome: Component<Props> = (props) => {
   // consult? Derive the network from the current selection like the
   // archive button (`archiveSlugForSelection`), and render the button
   // ONLY when that network has a bundle — there's nothing to open
-  // otherwise. Not mobile-gated: unlike the archive drawer, the mentions
-  // panel has no desktop sidebar equivalent, so the button surfaces on
-  // both. `archiveSlugForSelection` returns null while the mentions panel
+  // otherwise. #71 INC-2 — now MOBILE-ONLY (see the `isMobile()` gate on
+  // the button below): on desktop the per-network Sidebar mentions row
+  // (Sidebar.tsx) is the re-open affordance, so the @ here would just
+  // duplicate it. Mobile has no sidebar, so the @ stays as the only
+  // mentions re-open door (auto-nav on bundle arrival covers the first
+  // open). `archiveSlugForSelection` returns null while the mentions panel
   // itself is open, which correctly hides the (redundant) re-open button.
   const mentionsOpenSlug = (): string | null => {
     const slug = archiveSlugForSelection();
@@ -62,7 +79,7 @@ const ShellChrome: Component<Props> = (props) => {
   return (
     <header class="shell-chrome" data-testid="shell-chrome">
       <span class="shell-chrome-spacer" />
-      <Show when={mentionsOpenSlug()}>
+      <Show when={isMobile() && mentionsOpenSlug()}>
         {(slug) => (
           <button
             type="button"
@@ -90,14 +107,18 @@ const ShellChrome: Component<Props> = (props) => {
           </button>
         )}
       </Show>
+      {/* #71 INC-2 — rail opener (☰). Opens the same `.shell-members` drawer
+          the channel-window TopicBar hamburger opens (paletto: ONE drawer, one
+          ☰ glyph across both openers). The settings cog it replaced now lives
+          in that rail's ActionCluster. */}
       <button
         type="button"
-        class="shell-chrome-btn shell-chrome-cog"
-        aria-label="open settings"
-        data-testid="shell-chrome-cog"
-        onClick={props.onOpenSettings}
+        class="shell-chrome-btn shell-chrome-rail-opener"
+        aria-label="open actions"
+        data-testid="shell-chrome-rail-opener"
+        onClick={props.onOpenRail}
       >
-        {"\u{2699}\u{FE0F}"}
+        {"\u{2630}"}
       </button>
     </header>
   );

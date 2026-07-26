@@ -16,10 +16,13 @@
 //     SettingsDrawer opens. Mutex enforced via `lib/mobilePanel.ts`.
 //   * Tapping the in-drawer archive launcher: drawer closes,
 //     ArchiveModal opens.
-//   * Mobile + home / mentions / admin / server: unchanged from UX-5 BT
-//     (standalone `.shell-chrome` row still holds archive + cog — there's
-//     no members hamburger on non-channel windows to host the launchers).
-//   * Desktop: unchanged — desktop members aside has no launcher footer.
+//   * Mobile + home / mentions / admin / server: the standalone `.shell-chrome`
+//     row stays, but #71 INC-2 turned its cog into the ☰ RAIL OPENER; the cog
+//     itself now lives in the rail's ActionCluster (drawer top). The in-drawer
+//     footer settings launcher was DEDUPED into that same ActionCluster.
+//   * Desktop: #71 INC-2 REMOVED the standalone `.shell-chrome` row (cog moved
+//     to the permanent right rail); the desktop members aside still has no
+//     launcher footer.
 //
 // jsdom doesn't compute layout / cascade `@media` — per
 // `feedback_cicchetto_browser_smoke` this layout fix MUST ship a
@@ -44,9 +47,12 @@ test("ux-5-bm desktop — members aside has NO launcher footer", async ({ page }
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
-  // Desktop chrome unchanged: standalone .shell-chrome row + .topic-bar.
-  await expect(page.locator(".shell-chrome")).toHaveCount(1);
+  // #71 INC-2 — desktop dropped the standalone .shell-chrome row (cog moved to
+  // the permanent right rail); .topic-bar stays and the cog is reachable in the
+  // rail's ActionCluster.
+  await expect(page.locator(".shell-chrome")).toHaveCount(0);
   await expect(page.locator(".topic-bar")).toHaveCount(1);
+  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible();
 
   // Negative-twin: desktop members aside does NOT carry the BM launcher
   // footer. Launcher footer is mobile-only.
@@ -81,14 +87,17 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
   await expect.poll(async () => await memberNames.count()).toBeGreaterThan(0);
   await expect(drawer).toContainText(NETWORK_NICK);
 
-  // Bottom-fixed launcher footer hosts BOTH settings + archive buttons.
+  // Bottom-fixed launcher footer hosts the archive launcher; #71 INC-2 moved
+  // the settings cog UP into the rail's ActionCluster (drawer top), so it's no
+  // longer a footer launcher.
   const launcherFooter = drawer.locator(".mobile-panel-actions");
   await expect(launcherFooter).toBeVisible();
-  await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(1);
+  await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
+  await expect(drawer.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
   await expect(launcherFooter.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
 
-  // Tap settings launcher → drawer closes, SettingsDrawer opens.
-  await launcherFooter.locator("[data-testid='mobile-panel-settings']").tap();
+  // Tap the ActionCluster cog (drawer top) → drawer closes, SettingsDrawer opens.
+  await drawer.locator("[data-testid='action-cluster-cog']").tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
 
@@ -129,6 +138,8 @@ test("@webkit ux-5-bm mobile-non-channel — standalone .shell-chrome row preser
   await expect(page.getByTestId("shell-chrome")).toBeVisible({ timeout: 10_000 });
   await expect(page.locator(".shell-chrome")).toHaveCount(1);
   await expect(page.locator(".topic-bar")).toHaveCount(0);
-  // Cog reachable via the standalone row.
-  await expect(page.locator(".shell-chrome [data-testid='shell-chrome-cog']")).toBeVisible();
+  // #71 INC-2 — the standalone row's button is now the ☰ RAIL OPENER (the cog
+  // moved into the rail it opens). Assert the opener is reachable here.
+  await expect(page.locator(".shell-chrome [data-testid='shell-chrome-rail-opener']")).toBeVisible();
+  await expect(page.locator(".shell-chrome [data-testid='shell-chrome-cog']")).toHaveCount(0);
 });

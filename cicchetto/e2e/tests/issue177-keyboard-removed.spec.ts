@@ -42,7 +42,7 @@ test.describe("issue #177 — custom on-screen IRC keyboard removed", () => {
     // (a) Settings no longer offers the IRC keyboard opt-in. Open the drawer
     // via the desktop cog; assert the toggle is ABSENT (this fails on pre-#177
     // code) paired with a stable positive twin so a testid typo can't green it.
-    await page.getByTestId("shell-chrome-cog").click();
+    await page.getByTestId("action-cluster-cog").click();
     const drawer = page.getByRole("dialog", { name: /settings/i });
     await expect(drawer).toHaveClass(/open/, { timeout: 5_000 });
     await expect(page.getByTestId("settings-drawer-close")).toBeVisible();

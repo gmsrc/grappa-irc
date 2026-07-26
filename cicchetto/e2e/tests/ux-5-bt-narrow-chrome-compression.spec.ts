@@ -52,26 +52,29 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.setTimeout(60_000);
 
-test("ux-5-bt desktop — chrome row + topic-bar SEPARATE; sidebar network-name bold + left-aligned", async ({
+test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sidebar network-name bold + left-aligned", async ({
   page,
 }) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 
-  // Cold-load lands on home. Chrome row mounted; no topic-bar yet.
-  await expect(page.getByTestId("shell-chrome")).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator(".shell-chrome")).toHaveCount(1);
+  // Cold-load lands on home. #71 INC-2 removed the desktop .shell-chrome row
+  // (cog moved to the permanent right rail); the rail's ActionCluster cog is
+  // the always-present desktop chrome affordance now.
+  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.locator(".shell-chrome")).toHaveCount(0);
 
-  // Switch to a joined channel — topic-bar mounts BELOW the chrome row
-  // (negative-twin for the mobile compression: desktop unchanged).
+  // Switch to a joined channel — topic-bar mounts (no chrome row above it on
+  // desktop anymore; the freed top is the topic's per INC-2).
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
-  await expect(page.locator(".shell-chrome")).toHaveCount(1);
+  await expect(page.locator(".shell-chrome")).toHaveCount(0);
   await expect(page.locator(".topic-bar")).toHaveCount(1);
-  // Cog must NOT be inside .topic-bar on desktop — keeps the two-row
-  // layout. Inline cog was mobile-channel-only pre-BM; BM dropped it
-  // entirely (now lives in the mobile members drawer footer).
+  // Cog must NOT be inside .topic-bar on desktop — it lives in the rail.
   await expect(page.locator(".topic-bar [data-testid='shell-chrome-cog']")).toHaveCount(0);
+  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible();
 
   // Sidebar network-name nit: header span computed weight is bold +
   // header button uses flex-start justification. getComputedStyle
@@ -113,12 +116,17 @@ test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (BM mo
   // they live in the members drawer footer as launchers now.
   await expect(page.locator(".topic-bar [data-testid='shell-chrome-cog']")).toHaveCount(0);
   await expect(page.locator(".topic-bar [data-testid='shell-chrome-archive']")).toHaveCount(0);
-  // Launchers exist inside the members drawer (see ux-5-bm spec for
-  // the full mutex contract). Verified here as a sanity link between
-  // the BT reclamation and the BM relocation.
+  // Launchers exist inside the members drawer (see ux-5-bm spec for the full
+  // mutex contract). Verified here as a sanity link between the BT reclamation
+  // and the BM relocation. #71 INC-2 moved the settings cog to the drawer-top
+  // ActionCluster, so assert THAT is present (the footer settings launcher is
+  // gone).
+  await expect(
+    page.locator(".shell-members [data-testid='action-cluster-cog']"),
+  ).toHaveCount(1);
   await expect(
     page.locator(".shell-members [data-testid='mobile-panel-settings']"),
-  ).toHaveCount(1);
+  ).toHaveCount(0);
 
   // #305 — the mobile members hamburger ADOPTS `.shell-chrome-btn` and so
   // sizes from the shared tokens: the tap target meets the 48px HIG floor

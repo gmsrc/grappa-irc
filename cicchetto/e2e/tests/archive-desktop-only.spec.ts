@@ -58,10 +58,11 @@ test("desktop — ShellChrome archive button is hidden across every window kind"
   await serverTab.click();
   await expect(page.getByTestId("shell-chrome-archive")).toHaveCount(0);
 
-  // Cog (the always-visible chrome button) is still there — proves the
-  // assertion above is the gate firing, not the chrome bar being
-  // missing wholesale.
-  await expect(page.getByTestId("shell-chrome-cog")).toBeVisible();
+  // Cog (the always-visible rail action; #71 INC-2 moved it from the
+  // ShellChrome bar into the permanent right rail) is still there — proves
+  // the assertion above is the gate firing, not the rail being missing
+  // wholesale.
+  await expect(page.getByTestId("action-cluster-cog")).toBeVisible();
 });
 
 test("desktop — sidebar archive rows inherit the canonical monospace style", async ({

@@ -19675,3 +19675,54 @@ proves a shadow takes effect end-to-end (`/whois`→`/me` renders an action row)
 + deny-list sticky-red + the binding condition (a shadowing alias stays
 removable from Settings → Alias). Rides the batch COLD deploy (cic bundle
 change).
+## 2026-07-26 — #71 INC-2 cic ActionCluster + permanent right rail (R1)
+
+INC-2 of the #71 chrome rework consolidates the window-action chrome into a
+single reusable `ActionCluster` and makes the right rail a PERMANENT surface.
+
+**R1 ruling (vjt, issue #71 comment 5084202718)** — REVERSED the earlier
+"cluster hangs off the collapsible members area." The right rail
+(`.shell-members`) is now a PERMANENT surface, decoupled from the members
+panel: `ActionCluster` (settings cog — always; presence 👁/🙈 monkey —
+channel-gated) is pinned at the TOP, `MembersPane` is conditional content
+below. The settings cog MUST be reachable from EVERY window kind
+(home/server/list/mentions/admin), so `.shell-no-members` no longer DROPS the
+right column — it NARROWS it to a thin rail (`grid-template-columns: … 1fr
+max-content`) that still shows the cluster. SCOPE NOW = buttons only; the rail
+is PREDISPOSED for future per-tab-kind context (server → /lusers, query →
+/whois) to graft as a SIBLING of the cluster inside `.shell-members` WITHOUT a
+rewrite — that content is NOT in scope.
+
+**Desktop shape:** the standalone `.shell-chrome` row was REMOVED on desktop
+(its cog moved to the rail), freeing the top; the topic strip claims it by
+raising the line-clamp to 3 lines / 4.5em (`@media (min-width:769px)`), the
+MOBILE base staying 2 lines / 3em. `ShellChrome` is now MOBILE-ONLY.
+
+**Opt A mobile opener (3 paletti, non-negotiable):** (1) ONE drawer/rail
+component for both paths — both openers toggle the same `.shell-members` +
+`membersOpen`. (2) IDENTICAL ☰ glyph (U+2630) in both openers. (3) e2e proves
+settings reachable on a NON-channel MOBILE window + archive/mentions rail
+non-regression. Mobile openers: channel windows → TopicBar hamburger
+(`aria-label="open members sidebar"`); non-channel windows → the ShellChrome
+`shell-chrome-rail-opener` ☰ (which REPLACED its old cog). The cog lives ONLY
+in the rail's ActionCluster; the old mobile members-footer settings cog was
+DEDUPED into it (drawer top). 2 taps to settings on non-channel tabs is
+ACCEPTED (low-frequency, no door disappears).
+
+**Q1 (settled):** the `@` open-mentions affordance → per-network DESKTOP
+Sidebar row (`sidebar-mentions-row-<slug>`, conditional on a mentions bundle,
+a direct `<li>` of the main network `<ul>` so it inherits the INC-1 grouping
+rail); `@` stays MOBILE-ONLY in ShellChrome (the only mobile re-open door;
+auto-nav on bundle arrival covers the first open). **Q2 (settled):** the
+presence 👁/🙈 monkey moved to the cluster on BOTH form factors, channel-gated,
+and was REMOVED from TopicBar ("one design").
+
+**Unchanged invariants:** NO away button (`/away` slash + 💤 badge); the mobile
+BottomBar STAYS (the `/invite` virtual channel is a LATER increment); NO left
+hamburger.
+
+**Guardrail (non-regression):** the new Sidebar mentions row and the existing
+archive list share `.sidebar-network-section`, so e2e asserts BOTH coexist
+without the grouping rail forking — mentions row → 2px `border-left`, archived
+row → 0px (`:not(.sidebar-archive-list)` scoping). INC-2 is cic-only (no server
+change); rides the batch COLD deploy (cic bundle change).

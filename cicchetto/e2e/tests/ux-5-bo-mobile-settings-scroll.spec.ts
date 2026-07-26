@@ -44,7 +44,7 @@
 // shape-agnostic CSS contract — registered vjt suffices.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { loginAs, openSettingsMobile, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -65,13 +65,10 @@ test("@webkit ux-5-bo — settings drawer asserts touch-action: pan-y + overscro
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 
-  // UX-5 bucket BM (2026-05-20) — `getByRole("button", { name: "open
-  // settings" })` is ambiguous because the BM mobile members drawer
-  // footer also has an `aria-label="open settings"` launcher button.
-  // Pin to the chrome cog testid — this test runs on home (no channel
-  // selected), where the standalone .shell-chrome row is the canonical
-  // path to settings.
-  await page.locator('[data-testid="shell-chrome-cog"]').tap();
+  // #71 INC-2 — on mobile home the settings cog lives in the rail's
+  // ActionCluster (drawer top); reach it via the shared helper: open the rail
+  // drawer (☰ rail opener on this non-channel window) → tap the cog.
+  await openSettingsMobile(page);
   const drawer = page.locator(".settings-drawer.open");
   await expect(drawer).toBeVisible({ timeout: 5_000 });
 
@@ -93,8 +90,8 @@ test("@webkit ux-5-bo — settings drawer has an internal scroll authority (over
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 
-  // Same BM ambiguity fix as above — pin to chrome cog testid.
-  await page.locator('[data-testid="shell-chrome-cog"]').tap();
+  // Same #71 INC-2 rail-drawer path as above.
+  await openSettingsMobile(page);
   const drawer = page.locator(".settings-drawer.open");
   await expect(drawer).toBeVisible({ timeout: 5_000 });
 

@@ -2,9 +2,14 @@ import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // UX-4 bucket L (2026-05-19) — ShellChrome unit tests.
-// Cluster-wide rule: settings cog visible from EVERY window kind. The
-// archive button is visible only when the selected window carries a
-// network context (channel/query/server); home/mentions/empty hide it.
+//
+// #71 INC-2 — ShellChrome is now MOBILE-ONLY and its old settings cog is
+// gone: R1 moved the cog into the permanent right rail (ActionCluster,
+// tested in ActionCluster.test.tsx), and this bar's right-edge button is
+// now the ☰ RAIL OPENER (`shell-chrome-rail-opener`, prop `onOpenRail`)
+// that opens that rail on non-channel mobile windows. The archive button
+// is visible only when the selected window carries a network context
+// (channel/query/server); home/mentions/empty hide it.
 //
 // UX-5 bucket A (2026-05-19) — the hamburger slot was dropped from
 // ShellChrome entirely. Pre-bucket the chrome rendered a hamburger
@@ -67,23 +72,32 @@ beforeEach(() => {
 });
 
 describe("ShellChrome (bucket L)", () => {
-  it("always renders the settings cog (no window selected)", () => {
-    const onOpenSettings = vi.fn();
-    render(() => <ShellChrome onOpenSettings={onOpenSettings} />);
-    const cog = screen.getByTestId("shell-chrome-cog");
-    expect(cog).toBeInTheDocument();
+  // #71 INC-2 — the cog left this bar for the rail; the always-present
+  // right-edge button is now the ☰ rail opener.
+  it("always renders the rail opener (no window selected)", () => {
+    render(() => <ShellChrome onOpenRail={vi.fn()} />);
+    const opener = screen.getByTestId("shell-chrome-rail-opener");
+    expect(opener).toBeInTheDocument();
   });
 
-  it("clicking the cog fires onOpenSettings", () => {
-    const onOpenSettings = vi.fn();
-    render(() => <ShellChrome onOpenSettings={onOpenSettings} />);
-    fireEvent.click(screen.getByTestId("shell-chrome-cog"));
-    expect(onOpenSettings).toHaveBeenCalled();
+  it("clicking the rail opener fires onOpenRail", () => {
+    const onOpenRail = vi.fn();
+    render(() => <ShellChrome onOpenRail={onOpenRail} />);
+    fireEvent.click(screen.getByTestId("shell-chrome-rail-opener"));
+    expect(onOpenRail).toHaveBeenCalled();
+  });
+
+  // #71 INC-2 — the cog no longer lives in ShellChrome (moved to the rail's
+  // ActionCluster). Guard against a regression that reintroduces it here.
+  it("does NOT render the settings cog (moved to the rail's ActionCluster)", () => {
+    render(() => <ShellChrome onOpenRail={vi.fn()} />);
+    expect(screen.queryByTestId("shell-chrome-cog")).toBeNull();
+    expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
   });
 
   it("UX-5 bucket A — does NOT render a hamburger button (slot dropped)", () => {
     mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
-    const { container } = render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+    const { container } = render(() => <ShellChrome onOpenRail={vi.fn()} />);
     expect(container.querySelectorAll(".shell-chrome-hamburger").length).toBe(0);
     expect(screen.queryByLabelText(/open channel sidebar/i)).toBeNull();
     expect(screen.queryByLabelText(/open members sidebar/i)).toBeNull();
@@ -92,43 +106,43 @@ describe("ShellChrome (bucket L)", () => {
   describe("archive button visibility (per window kind)", () => {
     it("hides archive button when no window is selected", () => {
       mockSelected = null;
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.queryByTestId("shell-chrome-archive")).not.toBeInTheDocument();
     });
 
     it("hides archive button when home window is selected", () => {
       mockSelected = { networkSlug: "home", channelName: "home", kind: "home" };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.queryByTestId("shell-chrome-archive")).not.toBeInTheDocument();
     });
 
     it("hides archive button when mentions window is selected", () => {
       mockSelected = { networkSlug: "freenode", channelName: "mentions", kind: "mentions" };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.queryByTestId("shell-chrome-archive")).not.toBeInTheDocument();
     });
 
     it("shows archive button when a channel window is selected", () => {
       mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.getByTestId("shell-chrome-archive")).toBeInTheDocument();
     });
 
     it("shows archive button when a query window is selected", () => {
       mockSelected = { networkSlug: "freenode", channelName: "alice", kind: "query" };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.getByTestId("shell-chrome-archive")).toBeInTheDocument();
     });
 
     it("shows archive button when a server window is selected", () => {
       mockSelected = { networkSlug: "freenode", channelName: "$server", kind: "server" };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.getByTestId("shell-chrome-archive")).toBeInTheDocument();
     });
 
     it("clicking archive button calls setArchiveModalNetwork with the selected window's slug", () => {
       mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       fireEvent.click(screen.getByTestId("shell-chrome-archive"));
       expect(mockSetArchiveModalNetwork).toHaveBeenCalledWith("freenode");
     });
@@ -147,19 +161,19 @@ describe("ShellChrome (bucket L)", () => {
 
     it("hides archive button on desktop even when a channel window is selected", () => {
       mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.queryByTestId("shell-chrome-archive")).toBeNull();
     });
 
     it("hides archive button on desktop even when a query window is selected", () => {
       mockSelected = { networkSlug: "freenode", channelName: "alice", kind: "query" };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.queryByTestId("shell-chrome-archive")).toBeNull();
     });
 
     it("hides archive button on desktop even when a server window is selected", () => {
       mockSelected = { networkSlug: "freenode", channelName: "$server", kind: "server" };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.queryByTestId("shell-chrome-archive")).toBeNull();
     });
   });
@@ -171,36 +185,41 @@ describe("ShellChrome (bucket L)", () => {
     it("shows the button when the selected network has a mentions bundle", () => {
       mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
       mentionsBundles.value = { freenode: {} };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.getByTestId("shell-chrome-mentions")).toBeInTheDocument();
     });
 
     it("hides the button when the selected network has no bundle", () => {
       mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
       mentionsBundles.value = {};
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.queryByTestId("shell-chrome-mentions")).toBeNull();
     });
 
     it("hides the button when no window carries a network context (home)", () => {
       mockSelected = { networkSlug: "home", channelName: "home", kind: "home" };
       mentionsBundles.value = { home: {} };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       expect(screen.queryByTestId("shell-chrome-mentions")).toBeNull();
     });
 
-    it("shows on desktop too (not mobile-gated like archive)", () => {
+    // #71 INC-2 — the @ open-mentions button is now MOBILE-ONLY. On desktop the
+    // per-network Sidebar mentions row (Sidebar.tsx) replaces it, so ShellChrome
+    // must NOT render the @ on desktop even when a bundle exists — else it would
+    // duplicate the sidebar row. Mobile has no sidebar, so the @ stays here as
+    // the only mentions re-open door (auto-nav on arrival covers the first open).
+    it("#71 INC-2 — hides the @ on desktop even with a bundle (sidebar row replaces it)", () => {
       mobileState.value = false;
       mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
       mentionsBundles.value = { freenode: {} };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
-      expect(screen.getByTestId("shell-chrome-mentions")).toBeInTheDocument();
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
+      expect(screen.queryByTestId("shell-chrome-mentions")).toBeNull();
     });
 
     it("clicking it opens the mentions pseudo-window for the selected network", () => {
       mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
       mentionsBundles.value = { freenode: {} };
-      render(() => <ShellChrome onOpenSettings={vi.fn()} />);
+      render(() => <ShellChrome onOpenRail={vi.fn()} />);
       fireEvent.click(screen.getByTestId("shell-chrome-mentions"));
       expect(mockSetSelectedChannel).toHaveBeenCalledWith({
         networkSlug: "freenode",

@@ -126,11 +126,13 @@ test("#188 — away mentions panel: grouped restyle, open-button, close-x, clear
     await expect(panel).toHaveCount(0);
     await expect(scrollbackLine(page, "privmsg", `ping in bofh ${runId}`).first()).toBeVisible();
 
-    // Open-button next to the cog re-opens the panel (item 6). It surfaces
-    // only because a bundle still exists for this network.
-    const openBtn = page.getByTestId("shell-chrome-mentions");
-    await expect(openBtn).toBeVisible();
-    await openBtn.click();
+    // #71 INC-2 (Q1) — on DESKTOP the @ open-mentions button was removed from
+    // ShellChrome; the per-network Sidebar mentions row is the re-open door
+    // now (conditional on a bundle existing for that network, like the archive
+    // list). It re-opens the panel (item 6).
+    const mentionsRow = page.getByTestId(`sidebar-mentions-row-${NETWORK_SLUG}`);
+    await expect(mentionsRow).toBeVisible();
+    await mentionsRow.click();
     await expect(panel).toBeVisible();
 
     // Close-x returns to the previous window (item 5).
@@ -138,11 +140,12 @@ test("#188 — away mentions panel: grouped restyle, open-button, close-x, clear
     await expect(panel).toHaveCount(0);
 
     // Clear-on-away lifecycle (item 7): going /away again drops the bundle,
-    // so the open-button (gated on bundle existence) disappears. We're back
-    // on the #bofh window (close-x restored it), which has a compose box.
-    await expect(openBtn).toBeVisible();
+    // so the Sidebar mentions row (gated on bundle existence) disappears.
+    // We're back on the #bofh window (close-x restored it), which has a
+    // compose box.
+    await expect(mentionsRow).toBeVisible();
     await composeSend(page, "/away second time");
-    await expect(openBtn).toHaveCount(0, { timeout: 5_000 });
+    await expect(mentionsRow).toHaveCount(0, { timeout: 5_000 });
   } finally {
     await peer.disconnect("bye");
   }

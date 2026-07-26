@@ -600,6 +600,39 @@ export async function composeSend(
   await expect(ta).toHaveValue("", { timeout: 5_000 });
 }
 
+// Mobile members/rail-drawer OPEN primitive (#71 INC-2).
+//
+// The `.shell-members` drawer is now the permanent right rail, reachable on
+// EVERY mobile window via one of two openers depending on window kind:
+//   * channel window → TopicBar hamburger (aria-label "open members sidebar")
+//   * non-channel window (home/server/mentions/admin) → ShellChrome rail
+//     opener (☰, testid `shell-chrome-rail-opener`)
+// Exactly one of the two is rendered per window, so probe for the TopicBar
+// hamburger first and fall back to the rail opener. `.click()` (DevTools
+// synthetic) over `.tap()` for the same WebKit synthesis-race reason as
+// closeMembersDrawer below.
+export async function openMembersDrawer(page: Page): Promise<void> {
+  const topicHamburger = page.getByLabel(/open members sidebar/i);
+  if ((await topicHamburger.count()) > 0) {
+    await topicHamburger.first().click();
+  } else {
+    await page.getByTestId("shell-chrome-rail-opener").click();
+  }
+  await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
+}
+
+// Mobile "reach the settings drawer" primitive (#71 INC-2).
+//
+// The settings cog moved out of the standalone chrome bar into the rail's
+// ActionCluster (pinned at the drawer top). So opening settings on mobile is
+// now a two-step door: open the rail drawer, then tap the cog. The mobilePanel
+// mutex swaps the members drawer for the `.settings-drawer` on tap.
+export async function openSettingsMobile(page: Page): Promise<void> {
+  await openMembersDrawer(page);
+  await page.getByTestId("action-cluster-cog").click();
+  await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
+}
+
 // Mobile members-drawer close primitive.
 //
 // `.shell-drawer-backdrop` is `position: fixed; inset: 0` (full

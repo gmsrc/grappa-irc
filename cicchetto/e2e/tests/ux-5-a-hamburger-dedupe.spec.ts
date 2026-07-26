@@ -40,9 +40,12 @@ test("ux-5-a desktop — ZERO chrome hamburgers; TopicBar hamburger CSS-hidden o
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 
-  // Cold-load lands on home (UX-4 bucket B). Chrome bar mounted;
-  // hamburger DOM count is ZERO end-to-end.
-  await expect(page.getByTestId("shell-chrome")).toBeVisible({ timeout: 10_000 });
+  // Cold-load lands on home (UX-4 bucket B). #71 INC-2 removed the desktop
+  // ShellChrome row; the permanent rail's ActionCluster cog is the load
+  // anchor. Hamburger DOM count is ZERO end-to-end.
+  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible({
+    timeout: 10_000,
+  });
   await expect(page.locator(".shell-chrome-hamburger")).toHaveCount(0);
   // Belt-and-suspenders: no aria-labelled chrome hamburger either.
   await expect(page.getByLabel(/open channel sidebar/i)).toHaveCount(0);
@@ -58,8 +61,9 @@ test("ux-5-a desktop — ZERO chrome hamburgers; TopicBar hamburger CSS-hidden o
   await expect(page.locator(".topic-bar-hamburger")).toHaveCount(1);
   await expect(page.locator(".topic-bar-hamburger")).not.toBeVisible();
 
-  // Settings cog still always reachable (UX-4 bucket L rule survives).
-  await expect(page.getByTestId("shell-chrome-cog")).toBeVisible();
+  // Settings cog still always reachable (UX-4 bucket L rule survives) —
+  // #71 INC-2 relocated it to the permanent rail's ActionCluster.
+  await expect(page.getByTestId("action-cluster-cog")).toBeVisible();
 });
 
 test("@webkit ux-5-a mobile — exactly ONE visible hamburger (TopicBar members) on channel; ZERO on home", async ({

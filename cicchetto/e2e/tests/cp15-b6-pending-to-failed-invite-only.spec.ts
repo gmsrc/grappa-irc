@@ -101,8 +101,9 @@ test("CP15 B6 — /join transitions pending → failed for invite-only channel; 
   // MembersPane is suppressed entirely for non-joined states (post
   // cic-members-panel-scope-fix 2026-05-08): failed / kicked / parked
   // channels carry no member-list-shaped UI, so the right-hand pane
-  // doesn't mount. The desktop grid collapses via .shell-no-members
-  // (CSS column reclamation). Pre-fix this test asserted the
+  // doesn't mount. The desktop grid narrows the right column to a thin rail
+  // via .shell-no-members (#71 INC-2: was a full column drop; now the rail
+  // keeps the ActionCluster cog). Pre-fix this test asserted the
   // "not joined" muted stub, which Shell rendered unconditionally —
   // that was the buggy behavior surfaced during cluster #4 smoke.
   await expect(page.locator(".shell-members .members-pane")).toHaveCount(0, { timeout: 5_000 });

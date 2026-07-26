@@ -10,12 +10,10 @@ import {
   topicByChannel,
 } from "./lib/channelTopic";
 import { friendlyError } from "./lib/friendlyError";
-import { membersByChannel } from "./lib/members";
 import { mircPlainText } from "./lib/mircFormat";
 import { openModeModal } from "./lib/modeModal";
 import { networkIdBySlug } from "./lib/networks";
 import { createOverlayLock } from "./lib/overlayScrollLock";
-import { channelPresenceVisible, setChannelPresencePref } from "./lib/presenceFilter";
 import { pushChannelTopicClear } from "./lib/socket";
 import { windowIsJoined } from "./lib/windowState";
 import { MircBody } from "./MircText";
@@ -225,20 +223,11 @@ const TopicBar: Component<Props> = (props) => {
     }
   };
 
-  // #222 — per-channel join/part/quit/nick-change suppression toggle.
-  // The button flips the CURRENTLY EFFECTIVE visibility and always writes
-  // an EXPLICIT pref ("show"/"hide"), which by the precedence rule WINS
-  // over the size default. So one tap pins the channel regardless of its
-  // member count. Reading `channelPresenceVisible` (which tracks the pref
-  // signal) here keeps the label/icon reactive to the toggle. The member
-  // count feeds the size-default arm for a channel with no explicit pref
-  // yet (the icon reflects what the operator currently sees).
-  const memberCount = (): number => (membersByChannel()[key()] ?? []).length;
-  const presenceShown = (): boolean => channelPresenceVisible(key(), memberCount());
-  const togglePresence = (): void => {
-    // Explicit-wins: write the opposite of what is currently effective.
-    setChannelPresencePref(key(), presenceShown() ? "hide" : "show");
-  };
+  // #71 INC-2 — the per-channel presence-filter toggle (👁/🙈, #222) MOVED OUT
+  // of the topic bar into the right-rail ActionCluster (channel-gated). Q2
+  // ruling: "one design" wants that toggle in the action cluster on both form
+  // factors, and a topic bar is not a per-window action surface. See
+  // ActionCluster.tsx for the (verbatim) presence-toggle logic.
 
   // #219-general — the topic modal covers the ScrollbackPane (fixed
   // full-viewport `.topic-modal-backdrop`). Register it with the shared
@@ -349,28 +338,8 @@ const TopicBar: Component<Props> = (props) => {
           </Show>
         </span>
       </button>
-      {/* #222 — per-channel presence-filter toggle. Suppresses (or
-          re-shows) join/part/quit/nick-change rows for THIS channel; the
-          choice is an explicit client pref that WINS over the large-channel
-          size default and persists in localStorage. A <button> not a
-          <span> — a static element with onClick trips biome's
-          noStaticElementInteractions (#220) and loses keyboard access. */}
-      <button
-        type="button"
-        class="topic-bar-presence-toggle shell-chrome-btn"
-        classList={{ "presence-hidden": !presenceShown() }}
-        data-testid="presence-toggle"
-        aria-pressed={!presenceShown()}
-        title={
-          presenceShown()
-            ? "Hide join/part/quit for this channel"
-            : "Show join/part/quit for this channel"
-        }
-        aria-label="filter join/part/quit signalling"
-        onClick={togglePresence}
-      >
-        {presenceShown() ? "👁" : "🙈"}
-      </button>
+      {/* #71 INC-2 — the presence-filter toggle (👁/🙈) moved to the right-rail
+          ActionCluster (channel-gated). It is no longer rendered here. */}
       {/* Members hamburger only when actively joined. Parked / failed
           / kicked channels have stale or absent member lists; the
           right pane is suppressed in Shell.tsx for the same reason —

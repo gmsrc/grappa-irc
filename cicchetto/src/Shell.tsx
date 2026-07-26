@@ -4,12 +4,12 @@ import {
   createMemo,
   createSignal,
   Match,
-  on,
   onCleanup,
   Show,
   Switch,
 } from "solid-js";
 import { Portal } from "solid-js/web";
+import ActionCluster from "./ActionCluster";
 import AdminPane from "./AdminPane";
 import ArchiveModal from "./ArchiveModal";
 import AudioMiniPlayer from "./AudioMiniPlayer";
@@ -147,6 +147,19 @@ const Shell: Component = () => {
   // branch begins mounting, no concurrent owner-tree mutation.
   const isAdminPaneVisible = createMemo(() => selectedChannel()?.kind === "admin" && isAdmin());
   const selKind = createMemo(() => selectedChannel()?.kind ?? null);
+
+  // #71 INC-2 — the channel context the right-rail ActionCluster's presence
+  // toggle (👁/🙈) needs. The monkey is CHANNEL-GATED: non-null only on a
+  // channel window (any channel — the toggle writes a pref that persists to
+  // reconnect, so it's meaningful on parked channels too, matching the old
+  // TopicBar placement). null ⇒ the cluster renders the cog only. Shared by
+  // both the desktop rail mount and the mobile drawer mount.
+  const railChannel = createMemo((): { networkSlug: string; channelName: string } | null => {
+    const sel = selectedChannel();
+    return sel && sel.kind === "channel"
+      ? { networkSlug: sel.networkSlug, channelName: sel.channelName }
+      : null;
+  });
 
   // UX-6 bucket A — refcounted overlay scroll-lock for the two
   // Shell-owned mobile overlays (members drawer + AdminPane). The
@@ -403,21 +416,17 @@ const Shell: Component = () => {
     void loadUploadTtlSeconds(t);
   });
 
-  // Auto-close the members drawer when the active selection no longer
-  // has a member-list-shaped UI (DM, server, mentions, parked/failed/
-  // kicked channel). Otherwise the open-state lingers and the next
-  // joined-channel selection re-opens the drawer immediately, fighting
-  // user intent. defer: true skips the initial run (no drawer to close
-  // before any user interaction).
-  createEffect(
-    on(
-      isActiveChannelJoined,
-      (joined) => {
-        if (!joined) setMembersOpen(false);
-      },
-      { defer: true },
-    ),
-  );
+  // #71 INC-2 — the "auto-close the members drawer on a non-joined-channel
+  // selection" effect was REMOVED. R1 makes the right rail (this same
+  // `.shell-members` drawer on mobile) a PERMANENT surface reachable from
+  // EVERY window kind — the cog lives in it, so it MUST be openable on
+  // non-channel windows (home/server/list/mentions/admin). Force-closing it
+  // whenever `isActiveChannelJoined()` is false directly contradicts that. On
+  // desktop the effect was already a visual no-op (the members pane is a grid
+  // column; `membersOpen`/`.open` have no desktop CSS and the TopicBar
+  // hamburger is CSS-hidden there, so membersOpen never toggled). The drawer
+  // still closes via the opener toggle, the backdrop, the mutex helpers, and
+  // MembersPane's onMemberSelect.
 
   // UX-4 bucket B (2026-05-18) — cold-load default lands on the
   // `$home` window. Fires after `user()` (the /me resource) resolves.
@@ -594,18 +603,13 @@ const Shell: Component = () => {
           </Show>
 
           <section class="shell-main">
-            {/* UX-4 bucket L (2026-05-19) — ShellChrome is always
-                rendered, regardless of selected window kind. Cluster-
-                wide rule: settings cog MUST be reachable from every
-                window (channel / query / server / home / mentions /
-                admin / empty). Pre-bucket the cog lived inside
-                TopicBar (channel-kind only) + per-branch fallbacks.
-
-                UX-5 bucket A (2026-05-19) — hamburger prop dropped.
-                Desktop sidebar is always visible (no toggle); the
-                mobile members drawer is opened by TopicBar's own
-                hamburger (channel-window-only). */}
-            <ShellChrome onOpenSettings={() => setSettingsOpen(true)} />
+            {/* #71 INC-2 (R1) — the always-present desktop ShellChrome row was
+                REMOVED. Its settings cog moved into the permanent right rail
+                (the ActionCluster mounted in `.shell-members` below), which is
+                reachable from every window kind — so the "cog reachable from
+                every window" rule the row used to satisfy now holds via the
+                rail. Removing the row frees the top of `.shell-main` for the
+                topic (the raised topic clamp, default.css). */}
             {/* #134 — the Switch fallback only renders when
                 selectedChannel() is null, i.e. the cold-load window
                 before the auto-select effect lands on $home. That IS the
@@ -708,13 +712,22 @@ const Shell: Component = () => {
             </Switch>
           </section>
 
+          {/* #71 INC-2 (R1) — the right rail is now PERMANENT (decoupled from
+              the members panel). `.shell-no-members` no longer drops this
+              column; it narrows it to fit the ActionCluster (default.css), so
+              the cog is reachable on every window kind. The ActionCluster
+              (cog + channel-gated monkey) is pinned at the top; MembersPane is
+              conditional content below (a future increment turns the rail into
+              the per-tab-kind context surface — lusers/whois — grafting as a
+              SIBLING of the cluster; NOT in scope now). */}
           <aside class="shell-members" classList={{ open: membersOpen() }}>
             {/* UX-5 bucket BS — drag handle on the inner edge of the
                 right (members) sidebar. Mounted unconditionally even
                 when isActiveChannelJoined() is false (the column
-                collapses via .shell-no-members in CSS); the handle is
+                narrows via .shell-no-members in CSS); the handle is
                 inside the aside so it's hidden together. */}
             <ResizeHandle side="right" />
+            <ActionCluster onOpenSettings={() => setSettingsOpen(true)} channel={railChannel()} />
             <Show when={isActiveChannelJoined() && selectedChannel()}>
               {(sel) => (
                 <MembersPane networkSlug={sel().networkSlug} channelName={sel().channelName} />
@@ -787,16 +800,21 @@ const Shell: Component = () => {
         </Show>
 
         <section class="shell-main">
-          {/* Mobile-non-channel windows (home / mentions / admin /
-              server) render the standalone .shell-chrome row for
-              archive + cog. Mobile-channel suppresses this row
-              entirely — UX-5 bucket BM moved the archive + cog to the
-              members drawer footer below (see `.shell-members` aside),
-              so the channel scrollback reclaims the ~32px the chrome
-              row used to steal above. Earlier history of this surface
+          {/* Mobile-non-channel windows (home / mentions / admin / server /
+              list) render the standalone .shell-chrome row. #71 INC-2 (R1):
+              its settings cog became the ☰ RAIL OPENER — the cog itself moved
+              into the rail (the `.shell-members` drawer's ActionCluster). This
+              is the opener for non-channel windows (channel windows open the
+              same drawer via the TopicBar hamburger — ONE drawer, one ☰ glyph,
+              per the Opt-A ruling). Mobile-channel still suppresses this row so
+              the scrollback reclaims the ~32px. Earlier history of this surface
               in the bucket commits (UX-4 L, UX-5 A, UX-5 BT, UX-5 BM). */}
           <Show when={selectedChannel()?.kind !== "channel"}>
-            <ShellChrome onOpenSettings={() => setSettingsOpen(true)} />
+            <ShellChrome
+              onOpenRail={() =>
+                toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
+              }
+            />
           </Show>
           {/* #134 — CRT loading splash (mobile). Same loading-only
               contract as desktop: the fallback is the cold-load state. */}
@@ -915,7 +933,19 @@ const Shell: Component = () => {
             `archiveModalNetwork()` — renders nothing when closed. */}
         <ArchiveModal />
 
+        {/* #71 INC-2 (R1) — the mobile members drawer IS the right rail. It is
+            reachable on EVERY window (channel: TopicBar ☰; non-channel:
+            ShellChrome ☰ above — ONE drawer). The ActionCluster (cog +
+            channel-gated monkey) is pinned at the TOP; the footer's settings
+            cog was DEDUPED into it (per the ruling). MembersPane is conditional
+            content in the middle; the footer keeps the nav launchers. */}
         <aside class="shell-members" classList={{ open: membersOpen() }}>
+          <ActionCluster
+            onOpenSettings={() =>
+              openSettingsPanel({ membersOpen, setMembersOpen, setSettingsOpen })
+            }
+            channel={railChannel()}
+          />
           <Show when={isActiveChannelJoined() && selectedChannel()}>
             {(sel) => (
               <MembersPane
@@ -994,15 +1024,11 @@ const Shell: Component = () => {
                 </button>
               )}
             </Show>
-            <button
-              type="button"
-              class="shell-chrome-btn shell-chrome-cog"
-              aria-label="open settings"
-              data-testid="mobile-panel-settings"
-              onClick={() => openSettingsPanel({ membersOpen, setMembersOpen, setSettingsOpen })}
-            >
-              {"\u{2699}\u{FE0F}"}
-            </button>
+            {/* #71 INC-2 (R1) — the footer settings cog was DEDUPED into the
+                ActionCluster at the TOP of this drawer (the ruling: the footer
+                cog "confluisce nell'ActionCluster in cima al drawer"). The rail
+                is the single home of the cog now; the footer keeps only the
+                window-nav launchers (home / list / themes / admin / archive). */}
             {/* #75/#332 — themes launcher: opens the settings drawer directly on
                 the themes gallery sub-page (openThemesPanel deep-links via
                 settingsNav). #299 removed this (footer overflowed at 5 buttons,

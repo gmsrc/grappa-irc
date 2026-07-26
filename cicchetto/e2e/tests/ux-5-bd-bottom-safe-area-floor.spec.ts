@@ -40,7 +40,7 @@
 // drop the env() arm still fail loud.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { loginAs, openSettingsMobile, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -110,7 +110,9 @@ test("@webkit ux-5-bd — .settings-drawer computed padding-bottom >= 1.5rem flo
   // bug fix targets. Reads root font-size dynamically so a future
   // `:root { font-size: }` change doesn't silently invalidate the
   // assertion (today the browser default 16px applies).
-  await page.locator('[data-testid="shell-chrome-cog"]').tap();
+  // #71 INC-2 — settings cog now in the rail's ActionCluster; open it via the
+  // shared helper (☰ rail opener → cog) on this mobile home window.
+  await openSettingsMobile(page);
   const drawer = page.locator(".settings-drawer.open");
   await expect(drawer).toBeVisible({ timeout: 5_000 });
 

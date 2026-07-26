@@ -100,11 +100,13 @@ test.describe("#299 — footer admin reachable (themes launcher removed)", () =>
     await expect(footer).toBeVisible();
 
     // #332 restored the themes launcher and #361 added the 📇 list launcher;
-    // the footer is SIX buttons and the row `flex-wrap`s so overflow doesn't
-    // clip admin (the #299 regression this spec still guards, now via wrap
-    // instead of removal).
+    // #71 INC-2 then moved the settings cog to the rail (drawer top), so the
+    // footer is FIVE buttons and the row `flex-wrap`s so overflow doesn't clip
+    // admin (the #299 regression this spec still guards, now via wrap instead
+    // of removal).
     await expect(footer.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
-    await expect(footer.locator(".shell-chrome-btn")).toHaveCount(6);
+    await expect(footer.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
+    await expect(footer.locator(".shell-chrome-btn")).toHaveCount(5);
 
     // Admin is present AND a proper ≥44px tap target (not clipped off-screen).
     const adminBtn = footer.locator("[data-testid='mobile-panel-admin']");
@@ -131,9 +133,10 @@ test.describe("#299 — footer admin reachable (themes launcher removed)", () =>
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     const drawer = await openMobileFooter(page);
-    // Cog closes the members drawer (mutex) + opens the settings drawer on
-    // its "main" page, which hosts the themes nav row.
-    await drawer.locator("[data-testid='mobile-panel-settings']").tap();
+    // #71 INC-2 — the cog moved to the ActionCluster at the drawer TOP. Tapping
+    // it closes the members drawer (mutex) + opens the settings drawer on its
+    // "main" page, which hosts the themes nav row.
+    await drawer.locator("[data-testid='action-cluster-cog']").tap();
     await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
     // #299 item 3 — the legacy auto/mirc-light/irssi-dark radio selector is
     // gone from the settings main page (superseded by the gallery).

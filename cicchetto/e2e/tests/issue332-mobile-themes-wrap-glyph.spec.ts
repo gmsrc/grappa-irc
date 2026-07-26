@@ -18,13 +18,16 @@
 //      (iPhone-15 at 393px still fits 5 tap targets on one row, so this is
 //      the contract guard; the actual wrap engages on narrower devices —
 //      see TESTING.md on asserting the layout contract, not device pixels.)
-//   3. The settings launcher renders the ⚙️ emoji (U+2699 U+FE0F), not the
-//      bare ⚙ (U+2699) glyph that rendered too small.
+//   3. The settings cog renders the ⚙️ emoji (U+2699 U+FE0F), not the bare ⚙
+//      (U+2699) glyph that rendered too small. #71 INC-2 moved that cog OUT of
+//      the footer into the rail's ActionCluster at the drawer top; the emoji
+//      contract is unchanged, so this outcome now asserts `action-cluster-cog`.
 //
-// The "admin stays reachable with 5 buttons" invariant is owned by
+// The "admin stays reachable" invariant is owned by
 // issue299-footer-admin-reachable (repurposed for #332). Here vjt is base
-// (non-admin): themes is not admin-gated, so we get the launcher + a
-// 4-button footer (home / archive / settings / themes) without promoting.
+// (non-admin): themes is not admin-gated, so we get the launcher + a footer of
+// home / list / archive / themes (settings cog moved to the rail) without
+// promoting.
 
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
@@ -79,8 +82,10 @@ test.describe("#332 — mobile themes launcher + footer wrap + ⚙️ emoji", ()
     const flexWrap = await footer.evaluate((el) => getComputedStyle(el).flexWrap);
     expect(flexWrap).toBe("wrap");
 
-    // Base vjt (non-admin) in a channel: home / archive / settings / themes.
+    // Base vjt (non-admin) in a channel: home / list / archive / themes (#71
+    // INC-2 moved the settings cog to the rail, so it's no longer here).
     await expect(footer.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
+    await expect(footer.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
 
     // Every launcher must stay within the viewport (never clipped off-screen
     // — the failure mode #299 fixed by removal and #332 by wrapping).
@@ -92,7 +97,7 @@ test.describe("#332 — mobile themes launcher + footer wrap + ⚙️ emoji", ()
     }
   });
 
-  test("@webkit settings launcher renders the ⚙️ emoji, not the bare ⚙ glyph", async ({
+  test("@webkit settings cog renders the ⚙️ emoji, not the bare ⚙ glyph", async ({
     page,
   }) => {
     await loginAs(page, getSeededVjt());
@@ -100,7 +105,10 @@ test.describe("#332 — mobile themes launcher + footer wrap + ⚙️ emoji", ()
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     const drawer = await openMobileFooter(page);
-    const settingsBtn = drawer.locator(".mobile-panel-actions [data-testid='mobile-panel-settings']");
+    // #71 INC-2 — the settings cog moved from the footer launcher to the
+    // ActionCluster at the drawer top; the ⚙️ emoji-presentation contract
+    // rides with it.
+    const settingsBtn = drawer.locator("[data-testid='action-cluster-cog']");
     await expect(settingsBtn).toHaveText(SETTINGS_COG_EMOJI);
   });
 });

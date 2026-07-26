@@ -678,8 +678,13 @@ describe("Shell — three-pane integration", () => {
       mobileState.value = false;
       selectionState.setSelSig({ networkSlug: "$home", channelName: "$home", kind: "home" });
       const { container } = render(() => <Shell />);
+      // #71 INC-2 — desktop has no ShellChrome row anymore; the permanent rail
+      // (ActionCluster) is present on every desktop window, home included, so
+      // anchor the wait on its cog.
       await waitFor(() => {
-        expect(container.querySelector("[data-testid='shell-chrome']")).toBeInTheDocument();
+        expect(
+          container.querySelector(".shell-members [data-testid='action-cluster-cog']"),
+        ).toBeInTheDocument();
       });
       expect(container.querySelectorAll(".shell-chrome-hamburger").length).toBe(0);
       expect(container.querySelectorAll(".topic-bar-hamburger").length).toBe(0);
@@ -841,8 +846,14 @@ describe("Shell — mobile layout (isMobile = true)", () => {
   // right edge now hosts ONLY the hamburger. Mutex `members | settings
   // | archive | none` enforced via lib/mobilePanel.ts. Non-channel
   // mobile windows (home / mentions / admin / server) STILL keep the
-  // standalone `.shell-chrome` row (no members drawer to host the
-  // launchers). Desktop is unchanged on every window kind.
+  // standalone `.shell-chrome` row — but on those it's now the ☰ RAIL
+  // OPENER (#71 INC-2), not a cog, and it opens the same members drawer.
+  //
+  // #71 INC-2 (R1) — DESKTOP changed: the standalone `.shell-chrome` row was
+  // REMOVED (the cog moved to the permanent right rail's ActionCluster,
+  // freeing the top for the topic). The desktop cases below assert the new
+  // shape (no chrome row; cog in `.shell-members`). The mobile footer's
+  // settings cog was DEDUPED into the drawer-top ActionCluster too.
   describe("UX-5 buckets BT + BM — narrow-mode chrome+topic compression", () => {
     it("mobile channel window: NO standalone .shell-chrome row; topic-bar hosts ONLY hamburger (no cog, no archive inline)", async () => {
       mobileState.value = true;
@@ -860,15 +871,19 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       expect(container.querySelector(".topic-bar .topic-bar-hamburger")).not.toBeNull();
     });
 
-    it("mobile channel window: launcher footer in .shell-members hosts settings + archive + themes launchers (network context present)", async () => {
+    it("mobile channel window: settings cog at drawer TOP (ActionCluster); footer hosts archive + themes but NOT settings", async () => {
       mobileState.value = true;
       selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
       const { container } = render(() => <Shell />);
       await waitFor(() => {
         expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeInTheDocument();
       });
+      // #71 INC-2 — the footer settings cog was DEDUPED into the ActionCluster
+      // pinned at the TOP of the drawer (the ruling: one home for the cog).
+      const aside = container.querySelector(".shell-members");
+      expect(aside?.querySelector("[data-testid='action-cluster-cog']")).not.toBeNull();
       const footer = container.querySelector(".shell-members .mobile-panel-actions");
-      expect(footer?.querySelector("[data-testid='mobile-panel-settings']")).not.toBeNull();
+      expect(footer?.querySelector("[data-testid='mobile-panel-settings']")).toBeNull();
       expect(footer?.querySelector("[data-testid='mobile-panel-archive']")).not.toBeNull();
       // #332 — the 🎨 themes launcher was restored to the mobile footer
       // (removed by #299). It deep-links to the settings drawer's themes
@@ -887,14 +902,19 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       expect(container.querySelector(".topic-bar")).toBeNull();
     });
 
-    it("desktop channel window: standalone .shell-chrome row STAYS; NO launcher footer inside members aside", async () => {
+    it("#71 INC-2 — desktop channel window: NO .shell-chrome row (removed); cog lives in the permanent rail; NO launcher footer", async () => {
       mobileState.value = false;
       selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
       const { container } = render(() => <Shell />);
       await waitFor(() => {
         expect(container.querySelector(".topic-bar")).toBeInTheDocument();
       });
-      expect(container.querySelector(".shell-chrome")).not.toBeNull();
+      // INC-2 (R1) removed the desktop ShellChrome row — its cog moved to the
+      // permanent right rail's ActionCluster, freeing the top for the topic.
+      expect(container.querySelector(".shell-chrome")).toBeNull();
+      expect(
+        container.querySelector(".shell-members [data-testid='action-cluster-cog']"),
+      ).not.toBeNull();
       // Desktop topic-bar must NOT inline the chrome buttons.
       expect(container.querySelector(".topic-bar [data-testid='shell-chrome-cog']")).toBeNull();
       // BM: desktop members aside has NO launcher footer (mobile-only).

@@ -97,6 +97,14 @@ vi.mock("../lib/mentions", () => ({
   setServerMention: vi.fn(),
 }));
 
+// #71 INC-2 — the desktop mentions sidebar row is conditional on a
+// per-network mentions bundle (the "you were /away" snapshot) existing.
+// Mutable holder so a test can populate a bundle for a slug; default empty.
+let mockMentionsBundles: Record<string, unknown> = {};
+vi.mock("../lib/mentionsWindow", () => ({
+  mentionsBundleBySlug: () => mockMentionsBundles,
+}));
+
 vi.mock("../lib/channelKey", () => ({
   channelKey: (slug: string, name: string) => `${slug} ${name}`,
   decodeChannelKey: (key: string) => {
@@ -212,6 +220,7 @@ beforeEach(() => {
   mockNetworkConnectionState = {};
   mockNetworkConnectionReason = {};
   mockAwayByNetwork = {};
+  mockMentionsBundles = {};
   adminHolder.value = false;
   // #71 INC-1 — default logged-in user so the own-nick footer renders; the
   // logged-out test flips this to null.
@@ -1005,6 +1014,55 @@ describe("Sidebar", () => {
         networkSlug: "freenode",
         channelName: LIST_WINDOW_NAME,
         kind: "list",
+      });
+    });
+  });
+
+  // #71 INC-2 — desktop mentions sidebar row. Replaces the ShellChrome @
+  // open-mentions button on desktop (that button now stays mobile-only, since
+  // mobile has no sidebar). The row is a per-network <li> INSIDE the main
+  // .sidebar-network-section <ul> — so it inherits the grouping rail like a
+  // channel row (guardrail 1: it SHARES the .sidebar-network-section DOM with
+  // the archive list, which does NOT get the rail) — conditional on that
+  // network carrying a mentions bundle. Clicking selects the mentions
+  // pseudo-window (kind "mentions", empty channel name), the SAME selection
+  // verb the @ button and the userTopic auto-focus use.
+  describe("#71 INC-2 — mentions sidebar row", () => {
+    it("renders a mentions row for a network WITH a mentions bundle", () => {
+      mockMentionsBundles = { freenode: { network_slug: "freenode", messages: [] } };
+      const { container } = render(() => <Sidebar />);
+      const row = container.querySelector('[data-testid="sidebar-mentions-row-freenode"]');
+      expect(row).not.toBeNull();
+      expect(row?.textContent).toContain("mentions");
+    });
+
+    it("does NOT render a mentions row when the network has no bundle", () => {
+      mockMentionsBundles = {};
+      const { container } = render(() => <Sidebar />);
+      expect(container.querySelector('[data-testid="sidebar-mentions-row-freenode"]')).toBeNull();
+    });
+
+    it("mentions row is a direct <li> of the main .sidebar-network-section <ul> (rail like a channel, NOT the archive list)", () => {
+      mockMentionsBundles = { freenode: { network_slug: "freenode", messages: [] } };
+      const { container } = render(() => <Sidebar />);
+      const row = container.querySelector('[data-testid="sidebar-mentions-row-freenode"]');
+      const ul = row?.closest("ul");
+      expect(ul?.classList.contains("sidebar-network-section")).toBe(true);
+      expect(ul?.classList.contains("sidebar-archive-list")).toBe(false);
+    });
+
+    it("clicking the mentions row selects the mentions window (kind mentions, empty channel)", () => {
+      mockMentionsBundles = { freenode: { network_slug: "freenode", messages: [] } };
+      const { container } = render(() => <Sidebar />);
+      const btn = container.querySelector(
+        '[data-testid="sidebar-mentions-row-freenode"] button',
+      ) as HTMLElement | null;
+      expect(btn).not.toBeNull();
+      fireEvent.click(btn as HTMLElement);
+      expect(selMod.setSelectedChannel).toHaveBeenCalledWith({
+        networkSlug: "freenode",
+        channelName: "",
+        kind: "mentions",
       });
     });
   });

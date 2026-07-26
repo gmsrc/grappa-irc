@@ -110,11 +110,14 @@ test.describe("UX-6-C — admin launcher in mobile drawer footer", () => {
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
 
-    // BM launcher footer has the new admin button alongside settings +
-    // archive. Order doesn't matter, just presence.
+    // BM launcher footer has the new admin button alongside archive. #71
+    // INC-2 moved the settings cog OUT of the footer into the rail's
+    // ActionCluster at the drawer TOP — assert it there. Order doesn't
+    // matter, just presence.
     const launcherFooter = drawer.locator(".mobile-panel-actions");
     await expect(launcherFooter).toBeVisible();
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(1);
+    await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
+    await expect(drawer.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
 
@@ -147,9 +150,11 @@ test.describe("UX-6-C — admin launcher in mobile drawer footer", () => {
 
     const launcherFooter = drawer.locator(".mobile-panel-actions");
     await expect(launcherFooter).toBeVisible();
-    // Positive twin so a testid typo can't silently green both
-    // halves of the gate.
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(1);
+    // Positive twin so a testid typo can't silently green both halves of the
+    // gate. #71 INC-2 — the settings cog moved to the rail's ActionCluster at
+    // the drawer top; use it as the positive twin (the footer no longer has a
+    // settings launcher).
+    await expect(drawer.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
   });
 

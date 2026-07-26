@@ -3,20 +3,21 @@
 // On the mobile narrow layout there was no way back to the home window
 // (desktop has the sidebar home link). This adds a 🏠 launcher to the
 // `.mobile-panel-actions` footer, LEFT-aligned, alongside archive /
-// settings / admin — and enlarges ALL those launchers to ≥44px tap
-// targets. (#299 removed the #75 themes launcher from this footer — five
-// buttons overflowed on narrow devices and clipped admin. #332 (P0, vjt)
-// RESTORED the 🎨 themes launcher, and #361 added the 📇 list launcher: the
-// footer is now SIX — home / list / settings / themes / admin / archive
+// admin — and enlarges ALL those launchers to ≥44px tap targets. (#299
+// removed the #75 themes launcher from this footer — five buttons
+// overflowed on narrow devices and clipped admin. #332 (P0, vjt) RESTORED
+// the 🎨 themes launcher, and #361 added the 📇 list launcher; #71 INC-2 then
+// DEDUPED the footer settings cog into the rail's ActionCluster at the drawer
+// TOP, so the footer is now FIVE — home / list / themes / admin / archive
 // (archive moved to the END by #361) — and the overflow is handled by
 // `flex-wrap` on `.mobile-panel-actions` instead of dropping a button, so
 // nothing clips. This spec's launcher-count assertions moved 4 → 5 (#332)
-// → 6 (#361).)
+// → 6 (#361) → 5 (#71 INC-2, settings cog moved to the rail).)
 //
 // This spec drives the real mobile layout (@webkit / iPhone 15): open
-// the hamburger, assert all 6 launchers are present and each ≥44px, tap
+// the hamburger, assert all 5 launchers are present and each ≥44px, tap
 // home and assert the drawer closes and the HOME window renders. The
-// 6-launcher count needs the admin button present, so vjt is temporarily
+// 5-launcher count needs the admin button present, so vjt is temporarily
 // promoted to admin (mirrors ux-6-c-mobile-admin-launcher), then reverted
 // in afterEach so the shared stack baseline is restored.
 
@@ -98,21 +99,26 @@ test.describe("#291 — mobile home button in drawer footer", () => {
     await expect(launcherFooter).toBeVisible();
 
     // All launchers present. #332 RESTORED the #75 themes button and #361
-    // added the 📇 list launcher, so an admin in a channel sees SIX: home
-    // (#291), list (#361), settings, themes (#332), admin, archive — with
-    // archive moved to the END by #361. The themes launcher deep-links to
-    // the settings drawer's themes sub-page (covered by issue332 spec); the
-    // list launcher opens the $list directory (covered by issue361 spec).
+    // added the 📇 list launcher; #71 INC-2 moved the settings cog to the rail
+    // (drawer top), so an admin in a channel sees FIVE in the footer: home
+    // (#291), list (#361), themes (#332), admin, archive — with archive moved
+    // to the END by #361. The themes launcher deep-links to the settings
+    // drawer's themes sub-page (covered by issue332 spec); the list launcher
+    // opens the $list directory (covered by issue361 spec). The settings cog
+    // now lives in the ActionCluster at the drawer TOP (assert it there).
     await expect(launcherFooter.locator("[data-testid='mobile-panel-home']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-list']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
     await expect(launcherFooter.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
+    // #71 INC-2 — settings cog is NO LONGER in the footer; it's in the rail's
+    // ActionCluster at the drawer top.
+    await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
+    await expect(drawer.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
 
     // Every launcher is a proper mobile tap target (≥44px, #291).
     const buttons = launcherFooter.locator(".shell-chrome-btn");
-    await expect(buttons).toHaveCount(6);
+    await expect(buttons).toHaveCount(5);
     const count = await buttons.count();
     for (let i = 0; i < count; i++) {
       const box = await buttons.nth(i).boundingBox();
