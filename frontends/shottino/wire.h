@@ -489,6 +489,14 @@ enum {
     LUSERS_MAX_GLOBAL
 };
 
+/* Narrow a bare scrollback row.
+ *
+ * The same row shape arrives two ways: nested under `message` in a WS
+ * event, and as an element of the REST scrollback page. Exported so both
+ * paths share ONE definition of what a scrollback row is, rather than the
+ * REST side growing a second, drifting reader. */
+bool wire_narrow_message(const json_value *row, struct wire_scrollback_message *out);
+
 /* Narrow one event payload. Returns false (leaving `*ev` untouched) when
  * the payload is malformed OR the kind is one shottino does not consume —
  * the caller treats both as "drop", exactly like cic's default-null arm. */

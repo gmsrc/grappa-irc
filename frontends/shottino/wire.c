@@ -228,7 +228,7 @@ static bool validate_map_of_arrays(const json_value *map, bool (*check)(const js
 
 /* ── Sub-narrowers shared across arms ─────────────────────────────────── */
 
-static bool narrow_scrollback_message(const json_value *m, struct wire_scrollback_message *out) {
+bool wire_narrow_message(const json_value *m, struct wire_scrollback_message *out) {
     if (json_type_of(m) != JSON_OBJECT) return false;
     struct wire_scrollback_message s = {0};
     if (!json_long_req(m, "id", &s.id)) return false;
@@ -312,7 +312,7 @@ bool wire_narrow(const json_value *p, struct wire_event *ev) {
 
     switch (kind) {
     case WIRE_MESSAGE:
-        if (!narrow_scrollback_message(json_get(p, "message"), &e.u.message)) return false;
+        if (!wire_narrow_message(json_get(p, "message"), &e.u.message)) return false;
         break;
 
     case WIRE_TOPIC_CHANGED: {
