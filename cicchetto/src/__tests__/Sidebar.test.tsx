@@ -14,6 +14,16 @@ const adminHolder = vi.hoisted(() => ({ value: false }));
 // and the tuple it passes to the predicate).
 const isActiveSelectionMock = vi.hoisted(() => vi.fn<(next: unknown) => boolean>());
 
+// #71 INC-1 — own-nick footer reads `user()` for the `me != null` guard in
+// `ownNickForNetwork`. Mutable holder so the logged-out test can flip it null
+// (same lazy-read pattern as mockNetworkConnectionState / mockAwayByNetwork).
+let mockUser: { kind: "user" | "visitor"; [k: string]: unknown } | null = {
+  kind: "user",
+  id: "u-1",
+  name: "vjt",
+  is_admin: false,
+};
+
 vi.mock("../lib/networks", () => ({
   networks: () => [
     {
@@ -61,6 +71,8 @@ vi.mock("../lib/networks", () => ({
   // UX-4 bucket N — Sidebar imports `isAdmin` to gate the new admin
   // row. Default false; tests for the admin row flip the holder.
   isAdmin: () => adminHolder.value,
+  // #71 INC-1 — Sidebar imports `user` for the own-nick footer's me-guard.
+  user: () => mockUser,
 }));
 
 vi.mock("../lib/selection", () => ({
@@ -106,21 +118,29 @@ vi.mock("../lib/queryWindows", () => ({
   setQueryWindowsByNetwork: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => ({
-  postPart: vi.fn().mockResolvedValue(undefined),
-  listArchive: vi.fn(),
-  // UX-4 bucket D — disconnectNetwork in lib/windowClose hits patchNetwork
-  // (registered branch) or quitAll → patchNetwork (visitor branch). Real
-  // windowClose is intentionally NOT mocked so the close-button wiring is
-  // tested end-to-end; mock patchNetwork to silence the network call.
-  patchNetwork: vi.fn().mockResolvedValue({}),
-  // 2026-06-01 (unread-badges-from-cursor cluster, bucket B2):
-  // selection.ts now imports isContentKind from api.ts for the badge
-  // memo derivation. Any test importing selection (directly or
-  // transitively) needs the classifier in its api mock.
-  isContentKind: (k: string) => k === "privmsg" || k === "notice" || k === "action",
-  isPresenceKind: (k: string) => !(k === "privmsg" || k === "notice" || k === "action"),
-}));
+vi.mock("../lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/api")>();
+  return {
+    postPart: vi.fn().mockResolvedValue(undefined),
+    listArchive: vi.fn(),
+    // UX-4 bucket D — disconnectNetwork in lib/windowClose hits patchNetwork
+    // (registered branch) or quitAll → patchNetwork (visitor branch). Real
+    // windowClose is intentionally NOT mocked so the close-button wiring is
+    // tested end-to-end; mock patchNetwork to silence the network call.
+    patchNetwork: vi.fn().mockResolvedValue({}),
+    // 2026-06-01 (unread-badges-from-cursor cluster, bucket B2):
+    // selection.ts now imports isContentKind from api.ts for the badge
+    // memo derivation. Any test importing selection (directly or
+    // transitively) needs the classifier in its api mock.
+    isContentKind: (k: string) => k === "privmsg" || k === "notice" || k === "action",
+    isPresenceKind: (k: string) => !(k === "privmsg" || k === "notice" || k === "action"),
+    // #71 INC-1 — the own-nick footer sources the per-network nick via the
+    // canonical helper (CLAUDE.md "what is my nick on THIS network"). Use the
+    // REAL implementation (pure: `net.nick` guarded on `me != null`) — "use
+    // production code in tests", never re-implement the guard.
+    ownNickForNetwork: actual.ownNickForNetwork,
+  };
+});
 
 vi.mock("../lib/archive", () => ({
   archivedBySlug: () => ({
@@ -193,6 +213,9 @@ beforeEach(() => {
   mockNetworkConnectionReason = {};
   mockAwayByNetwork = {};
   adminHolder.value = false;
+  // #71 INC-1 — default logged-in user so the own-nick footer renders; the
+  // logged-out test flips this to null.
+  mockUser = { kind: "user", id: "u-1", name: "vjt", is_admin: false };
   // #243 — default "not the active window" so existing click tests (which
   // just assert setSelectedChannel) never trip the scroll-to-bottom branch.
   isActiveSelectionMock.mockReturnValue(false);
@@ -797,10 +820,18 @@ describe("Sidebar", () => {
       expect(headers[0]?.textContent).toContain("freenode");
     });
 
-    it("network header row renders the ⚙️ emoji prefix", () => {
+    // #71 INC-1 — the leading ⚙️ is REMOVED from the network-header row.
+    // It made the server line read reverse-indented relative to the channels
+    // under it (issue #71 "server row affordance"). The slug now leads the
+    // row; the row is distinguished as the group parent by weight/background
+    // (CSS), not a leading glyph. The 📇 channels row keeps its own emoji —
+    // this assertion is scoped to the network-header <li> only.
+    it("network header row no longer renders a leading ⚙️ emoji (#71 reverse-indent fix)", () => {
       const { container } = render(() => <Sidebar />);
-      const emoji = container.querySelector("li.sidebar-network-header .sidebar-network-emoji");
-      expect(emoji?.textContent).toBe("⚙️");
+      const header = container.querySelector("li.sidebar-network-header");
+      expect(header).not.toBeNull();
+      expect(header?.querySelector(".sidebar-network-emoji")).toBeNull();
+      expect(header?.textContent).toContain("freenode");
     });
 
     it("clicking the network header row selects the server window", () => {
@@ -972,6 +1003,35 @@ describe("Sidebar", () => {
         channelName: LIST_WINDOW_NAME,
         kind: "list",
       });
+    });
+  });
+
+  // #71 INC-1 — own-nick footer. The operator's own IRC nick was shown
+  // NOWHERE in the UI (issue #71 "Show the user's own nick"). Surface it
+  // per-network, IRC-style, sourced from the canonical
+  // `ownNickForNetwork(net, me)` helper so the DISPLAY can never drift from
+  // the routing/self-detection nick (the `displayNick` per-network footgun
+  // documented at length in api.ts). Per-network — not a single global
+  // footer — so it degrades correctly to the multi-network case: each
+  // network group states who you are on THAT network.
+  describe("#71 INC-1 — own-nick footer", () => {
+    it("renders the operator's own nick for the network, sourced from ownNickForNetwork", () => {
+      const { container } = render(() => <Sidebar />);
+      const footer = container.querySelector('[data-testid="sidebar-own-nick-freenode"]');
+      expect(footer).not.toBeNull();
+      expect(footer?.textContent).toContain("vjt");
+    });
+
+    it("hides the own-nick footer when logged out (ownNickForNetwork → null on null me)", () => {
+      mockUser = null;
+      const { container } = render(() => <Sidebar />);
+      expect(container.querySelector('[data-testid="sidebar-own-nick-freenode"]')).toBeNull();
+    });
+
+    it("own-nick footer is a display element, not a selectable window row (no .sidebar-window-btn)", () => {
+      const { container } = render(() => <Sidebar />);
+      const footer = container.querySelector('[data-testid="sidebar-own-nick-freenode"]');
+      expect(footer?.querySelector(".sidebar-window-btn")).toBeNull();
     });
   });
 });

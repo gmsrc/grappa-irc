@@ -1201,10 +1201,12 @@ html.resize-dragging * {
    `justify-content: space-between` (line 313-327) which floated the
    network slug toward the middle of the row when the right cluster
    (away badge / unread counts) was thin or absent. Header rows now
-   read as a header — slug left-anchored against the ⚙️ emoji. The
-   slug `<span class="sidebar-channel-name">` itself gets
-   `font-weight: bold` (rule below) for visual scannability — the
-   network name is the primary identifier per section.
+   read as a header — slug left-anchored at the row edge. (#71 INC-1
+   removed the leading ⚙️ network-emoji this comment used to reference;
+   the slug now leads the row directly.) The slug
+   `<span class="sidebar-channel-name">` itself gets `font-weight: bold`
+   (rule below) for visual scannability — the network name is the
+   primary identifier per section.
 
    UX-5 bucket BH (2026-05-19) — the legacy `<section class="sidebar-network">`
    wrapper was killed; the per-network `<ul>` now carries the
@@ -1371,6 +1373,70 @@ html.resize-dragging * {
 
 .sidebar-channel-name.pending {
   font-style: italic;
+}
+
+/* #71 INC-1 — distinguish the network header as the group PARENT (issue #71
+   "give the network header a different background / weight so it's clearly
+   the parent, not a sibling of the channels"). Bold + accent were already
+   there (UX-5 BT); add a faint background bar on the header <li> so it reads
+   as the section parent. Placed on the <li> (not the button) so the button's
+   :hover / .selected background still layers on top — putting it on the
+   button would out-specify the :hover rule and kill header hover feedback.
+   The tint is a neutral translucent overlay that works on both light and
+   dark themes without introducing a new token. */
+.sidebar-network-section li.sidebar-network-header {
+  background: rgba(128, 128, 128, 0.1);
+}
+
+/* #71 INC-1 — per-network grouping rail. A vertical line tying a network's
+   list / channel / pseudo / query rows to their header (issue #71
+   "per-network grouping rail ... spanning all of a network's channels and
+   queries"). Scoped to the MAIN per-network <ul>: the archive <ul> shares
+   the .sidebar-network-section class (see Sidebar.tsx archive block) so it's
+   excluded via :not(.sidebar-archive-list), and the header <li> is the
+   parent the rail hangs FROM, so it's excluded too. The paired button rule
+   trims the base 1.5rem padding-left back to 0.75rem so the rail's margin
+   restores the original text indent instead of stacking on top of it —
+   scoped identically so the archive rows keep their own indent untouched. */
+.sidebar-network-section:not(.sidebar-archive-list) > li:not(.sidebar-network-header) {
+  margin-left: 0.85rem;
+  border-left: 2px solid var(--border);
+}
+
+.sidebar-network-section:not(.sidebar-archive-list)
+  > li:not(.sidebar-network-header)
+  .sidebar-window-btn {
+  padding-left: 0.75rem;
+}
+
+/* #71 INC-1 — own-nick footer (per network). The operator's IRC nick was
+   shown nowhere; surface it as a quiet identity line at the bottom of each
+   network group, below the grouping rail. Muted frame + 👤 so it reads as
+   "who you are here" without competing with the window rows; the nick itself
+   is accent + bold (stable identity, NOT the per-nick hash colour a peer
+   gets). Non-interactive — identity, not a selectable row. */
+.sidebar-own-nick {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 1rem 0.4rem 0.75rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.sidebar-own-nick-emoji {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.sidebar-own-nick-name {
+  overflow: hidden;
+  color: var(--accent);
+  font-weight: bold;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* CP15 B5 — compose box greyed when the selected window is in a

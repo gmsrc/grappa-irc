@@ -1,13 +1,13 @@
 import { type Component, createSignal, For, Show } from "solid-js";
 import CloseButton from "./CloseButton";
 import InlineConfirmButton from "./InlineConfirmButton";
-import { deleteArchiveEntry } from "./lib/api";
+import { deleteArchiveEntry, ownNickForNetwork } from "./lib/api";
 import { loadArchive, visibleArchiveForNetwork } from "./lib/archive";
 import { token } from "./lib/auth";
 import { awayByNetwork } from "./lib/awayStatus";
 import { type ChannelKey, channelKey, decodeChannelKey } from "./lib/channelKey";
 import { mentionCounts } from "./lib/mentions";
-import { channelsBySlug, isAdmin, networkBySlug, networks } from "./lib/networks";
+import { channelsBySlug, isAdmin, networkBySlug, networks, user } from "./lib/networks";
 import { openQueryWindowState, queryWindowsByNetwork } from "./lib/queryWindows";
 import { reconnectingByNetwork } from "./lib/reconnectingStatus";
 import { requestScrollToBottom } from "./lib/scrollToBottomCommand";
@@ -352,9 +352,14 @@ const Sidebar: Component<Props> = () => {
                     onClick={() => handleClick(network.slug, SERVER_WINDOW_NAME, "server")}
                     class="sidebar-window-btn"
                   >
-                    <span class="sidebar-network-emoji" aria-hidden="true">
-                      ⚙️
-                    </span>
+                    {/* #71 INC-1 — the leading ⚙️ network-emoji is REMOVED.
+                      It made the server line read reverse-indented against the
+                      channels below (issue #71 "server row affordance"). The
+                      slug now leads the row; the header is distinguished as the
+                      group parent by weight + background (CSS), and a per-network
+                      grouping rail ties the channels to it. The settings cog is
+                      NOT here — it lives in the right-bar action cluster (INC-2 /
+                      brief comment 5083762039). */}
                     <span
                       class="sidebar-channel-name"
                       title={
@@ -611,6 +616,28 @@ const Sidebar: Component<Props> = () => {
                   }}
                 </For>
               </ul>
+
+              {/* #71 INC-1 — own-nick footer. Surfaces the operator's IRC
+                nick on THIS network — previously shown nowhere in the UI
+                (issue #71 "Show the user's own nick"). Rendered per-network
+                (last element of each group, below the grouping rail) so it
+                degrades correctly to multi-network: each group states who you
+                are on that network. Sourced from the canonical
+                `ownNickForNetwork(net, me)` so the DISPLAY can never drift
+                from the self-detection / DM-routing nick (the `displayNick`
+                per-network footgun documented in api.ts). Non-interactive —
+                identity, not a window row (no `.sidebar-window-btn`). Hidden
+                when `me` is null (logged out) — the helper returns null. */}
+              <Show when={ownNickForNetwork(network, user())}>
+                {(nick) => (
+                  <div class="sidebar-own-nick" data-testid={`sidebar-own-nick-${network.slug}`}>
+                    <span class="sidebar-own-nick-emoji" aria-hidden="true">
+                      👤
+                    </span>
+                    <span class="sidebar-own-nick-name">{nick()}</span>
+                  </div>
+                )}
+              </Show>
 
               {/* CP15 B4 — Archive section, collapsed by default. Lazy fetch
                 on first expand via the toggle event; entries clickable to
