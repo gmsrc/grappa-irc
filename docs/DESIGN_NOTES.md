@@ -18471,3 +18471,25 @@ keyboard; long-press does not select-all), both proven red before the
 one-line exclude change (short tap: `defaultPrevented` was false; long-press:
 `addRange` was called once). cic-only, zero server code. Device-verify on a
 real phone post-ship (jsdom can't exercise the real iOS keyboard).
+
+## #339 — tap-target e2e asserts hardened against WebKit sub-pixel rounding (2026-07-26)
+
+`issue291-mobile-home-button.spec.ts` flaked on the `webkit-iphone-15`
+project: `expect(box.width).toBeGreaterThanOrEqual(44)` received
+`43.99998474` (= 44 − ~1.5e-5). The CSS is correct; WebKit's `boundingBox()`
+returns a sub-pixel value on the iPhone-15 device-scale-factor, and a bare
+`>= 44` has no tolerance for that floating-point boundary.
+
+**Fix (test robustness, not product).** Round to the CSS pixel the design
+targets: `expect(Math.round(box.dim)).toBeGreaterThanOrEqual(44)`. This was
+already the house pattern (`issue299-theme-cards`,
+`issue299-footer-admin-reachable`, `issue361-mobile-list-launcher` all used
+`Math.round`); the fix converges the three laggards still on a bare `>= 44`
+— issue291, issue204 (connect-button height), names143 (close-× target) —
+onto it, per the issue's "fix the class, not just this line."
+
+**Still capable of failing (the constraint).** `Math.round(px) >= 44`
+tolerates ONLY the ±0.5px rounding band: a genuinely short tap-target
+(< 43.5px) still rounds below 44 and fails (a broken 40px button →
+`Math.round(40) = 40 < 44` → red). It is not a loosening. e2e-only; the
+behavioural gate is the playwright integration run, not `bun run check`.

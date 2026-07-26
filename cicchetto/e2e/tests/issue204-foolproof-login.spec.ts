@@ -167,6 +167,8 @@ test.describe("#204 foolproof login @webkit mobile", () => {
     // Connect is comfortably tall (≥44px) — the tap-target contract from
     // the CSS, asserted on the rendered box rather than the declared rule.
     const connectBox = await page.getByRole("button", { name: /^connect$/i }).boundingBox();
-    expect(connectBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+    // #339 — round to the CSS pixel (WebKit sub-pixel rounding can shave
+    // ~1.5e-5px off a 44px target); a null box still fails via `?? 0`.
+    expect(Math.round(connectBox?.height ?? 0)).toBeGreaterThanOrEqual(44);
   });
 });

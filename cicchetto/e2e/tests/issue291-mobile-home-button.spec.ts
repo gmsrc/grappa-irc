@@ -117,8 +117,14 @@ test.describe("#291 — mobile home button in drawer footer", () => {
     for (let i = 0; i < count; i++) {
       const box = await buttons.nth(i).boundingBox();
       if (box === null) throw new Error(`launcher ${i} has no bounding box`);
-      expect(box.width).toBeGreaterThanOrEqual(MIN_TAP_TARGET_PX);
-      expect(box.height).toBeGreaterThanOrEqual(MIN_TAP_TARGET_PX);
+      // #339 — round to the CSS pixel the design targets. WebKit's
+      // boundingBox() can return a sub-pixel value (43.99998 = 44 − ~1.5e-5)
+      // on the iPhone-15 device-scale-factor, which a bare `>= 44` flakes on.
+      // Math.round tolerates ONLY that ±0.5px rounding band — a genuinely
+      // short tap-target (< 43.5) still fails. Matches the house pattern
+      // (issue299 / issue361).
+      expect(Math.round(box.width)).toBeGreaterThanOrEqual(MIN_TAP_TARGET_PX);
+      expect(Math.round(box.height)).toBeGreaterThanOrEqual(MIN_TAP_TARGET_PX);
     }
 
     // Tap home → drawer closes (mutex) + the HOME window renders.

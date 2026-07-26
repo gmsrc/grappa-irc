@@ -79,7 +79,9 @@ test("#143 — NamesModal close × is a 44px Apple-HIG tap target (#133)", async
   const box = await modal.getByLabel("close names").boundingBox();
   expect(box).not.toBeNull();
   if (box) {
-    expect(box.width).toBeGreaterThanOrEqual(44);
-    expect(box.height).toBeGreaterThanOrEqual(44);
+    // #339 — round to the CSS pixel (WebKit sub-pixel rounding); still fails
+    // a genuinely short tap-target (< 43.5).
+    expect(Math.round(box.width)).toBeGreaterThanOrEqual(44);
+    expect(Math.round(box.height)).toBeGreaterThanOrEqual(44);
   }
 });
