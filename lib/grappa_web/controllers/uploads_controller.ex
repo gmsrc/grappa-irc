@@ -36,12 +36,17 @@ defmodule GrappaWeb.UploadsController do
        `Grappa.Uploads.create/3`.
 
   Response: 201 with `%{slug, url, expires_at}` (url absolute, via
-  Endpoint.url/0).
+  Endpoint.url/0). Since #418 the `url` carries the media type as a file
+  extension — `/uploads/<slug>.<ext>` (ext from `Grappa.Uploads.MimeExt`) —
+  so the cic viewer reads the type from the URL, not a message-body emoji.
 
-  ## GET /uploads/:slug (public, NO auth)
+  ## GET /uploads/:slug[.ext] (public, NO auth)
 
   Streams the file via `Plug.Conn.send_file/5`. Validates slug shape
-  + row + on-disk file. Any failure → 404 with no oracle.
+  + row + on-disk file. Any failure → 404 with no oracle. The optional
+  type extension (#418) is advisory: `show/2` strips it before the slug
+  lookup and serves the authoritative `row.mime` — a lying `.html`/`.svg`
+  cannot change the served type (and `nosniff` below pins it).
   Cache-Control short to allow CDN/browser reuse of the immediate
   fetch without staleness on TTL expiry.
 

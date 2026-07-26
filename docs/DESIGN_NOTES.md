@@ -18657,3 +18657,69 @@ mirroring the existing `network_unreachable` pattern, no formatter needed.
 previously-unmapped token (`password_mismatch`) and asserts the login error
 banner shows the human copy AND does NOT leak the raw wire token — the
 visible outcome, deterministic (no testnet, zero sessions provisioned).
+---
+
+## Upload URLs carry the media type in the extension (#418, 2026-07-26)
+
+Upload URLs were minted extensionless — `/uploads/<slug>` — so the in-app
+media viewer had no type signal ON the URL. To decide image vs video vs
+audio it sniffed a 📸/🎬/🎵 **emoji prefix out of the PRIVMSG body**
+(`uploadOrchestrator` mints `📸 <url>`; `mediaLink.ts` read the emoji from
+the text run immediately before the URL). The type was carried by
+*presentation text* — the fragile part: any copy/locale change, a relay
+bridge splitting the emoji and URL across mIRC formatting runs
+(`\x0304📸\x03 https://…`), a user pasting the bare URL, or an alias
+expansion severed the signal, and the failure was **silent** (the viewer
+just guessed wrong). Spun out of #112.
+
+**Durable fix: encode the type in the URL** — `/uploads/<slug>.<ext>`.
+The type becomes intrinsic to the URL; the emoji survives only as a
+**legacy fallback** for extensionless links already in scrollback.
+
+Decisions (with vjt):
+- **Two pipelines, one touched.** This is the `UploadsController` /
+  `Grappa.Uploads` *upload* path (#75/UX-6-B). The built-in wallpaper
+  catalog (`BuiltinBackgrounds`, static WebP) and the user-*upload* theme
+  background re-host (`BackgroundImage`, PNG) are separate; neither is in
+  scope. Theme-background URLs stay extensionless and keep working (they
+  are CSS `background-image`, not viewer links) — `show/2` still serves a
+  bare slug.
+- **Dedicated `Grappa.Uploads.MimeExt` SSOT**, NOT an extension of
+  `MetadataStrip.@exiftool_exts`. That map means "extensions exiftool can
+  strip" (image/video only) — a different domain. Widening it to
+  audio/docs would be the shared-structure-with-a-flag boundary violation
+  CLAUDE.md rejects. `public_url/2` reads `MimeExt` via the context
+  delegate `Uploads.ext_for/1`; an unmapped MIME degrades to an
+  extensionless URL (today's behaviour, never a crash), and a lockstep
+  test fails CI if a MIME is added to the accept-allowlist without an
+  extension.
+- **Extension is advisory at GET.** `show/2` strips it before the slug
+  lookup and serves the authoritative `row.mime` as Content-Type — the
+  slug is the access token, the extension a client-side type hint. Validating
+  the extension against the mime was rejected: it adds a 404 surface and
+  breaks old links if a mime ever changes. Safe because a lying
+  `.html`/`.svg` can't change the served type AND `X-Content-Type-Options:
+  nosniff` (already on every served path — 200/206/416, S5) blocks any
+  browser MIME-sniff. A base32 slug never contains a dot, so
+  `String.split(slug, ".", parts: 2) |> hd()` recovers it; legacy
+  extensionless links strip to themselves; Range serving is undisturbed.
+- **Faithful extensions, not lying containers.** `image/apng → .apng`,
+  `audio/aac → .aac` — the alternative (apng→png, aac→m4a) would mint a
+  URL that misdescribes the file to save two client-side lines. Instead
+  cic *learned* them: `EXTENSION_KIND` gained `apng`/`aac`.
+- **Cross-language contract, pinned both sides.** Every viewer-relevant
+  extension `MimeExt` can mint (image/video/audio) MUST be classified by
+  cic's `EXTENSION_KIND`. Server side: the lockstep test. cic side: the
+  "server-mintable viewer extensions" drift-guard test names the server
+  SSOT module as the source. This is the SAME drift class as the emoji it
+  replaces — merely relocated to the `MimeExt ↔ EXTENSION_KIND` seam — and
+  the hand-list is a residual (accepted) drift vector: the automated
+  cross-language fix is a **#411 codegen follow-up**, not bolted on here
+  (server owns `mime→ext`; cic owns the *viewer-relevant subset* decision —
+  📄 docs are excluded by the viewer, a cic-domain call, so a single
+  codegen artifact would couple two domains and is deferred deliberately).
+- **Emoji kept** on the wire as a plain-IRC-client affordance (a bare
+  irssi shows `📸 https://…`) and the legacy fallback — it is simply no
+  longer the type *source*.
+
+No deploy change beyond the code + the cic bundle.
