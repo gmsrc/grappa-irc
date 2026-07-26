@@ -209,7 +209,8 @@ enum job_kind {
     JOB_NETWORK_STATE,
     JOB_TOPIC,
     JOB_MEMBERS,
-    JOB_CLOSE_QUERY
+    JOB_CLOSE_QUERY,
+    JOB_READ_CURSOR
 };
 
 struct job {
@@ -267,6 +268,10 @@ struct app {
     char *log[LOG_LINES];
     bool log_mentions[LOG_LINES];
     bool log_pending[LOG_LINES];
+    /* Scrollback id per log row (0 = not a scrollback message). Lets the
+     * unread divider be placed at the exact row the server's read cursor
+     * points at, rather than guessed from position. */
+    long log_ids[LOG_LINES];
     size_t log_count;
     struct pending_echo pending[256];
     size_t pending_count;
@@ -370,11 +375,13 @@ static void log_line(struct app *app, const char *fmt, ...) {
         memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
         memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
         memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
+        memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
         app->log_count--;
     }
     app->log[app->log_count] = s;
     app->log_mentions[app->log_count] = false;
     app->log_pending[app->log_count] = false;
+    app->log_ids[app->log_count] = 0;
     app->log_count++;
     pthread_mutex_unlock(&app->lock);
 }
@@ -398,11 +405,13 @@ static void log_line_mention(struct app *app, bool mention, const char *fmt, ...
         memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
         memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
         memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
+        memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
         app->log_count--;
     }
     app->log[app->log_count] = s;
     app->log_mentions[app->log_count] = mention;
     app->log_pending[app->log_count] = false;
+    app->log_ids[app->log_count] = 0;
     app->log_count++;
     pthread_mutex_unlock(&app->lock);
 }
@@ -420,11 +429,13 @@ static void add_pending_echo(struct app *app, const char *network, const char *c
         memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
         memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
         memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
+        memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
         app->log_count--;
     }
     app->log[app->log_count] = line;
     app->log_mentions[app->log_count] = false;
     app->log_pending[app->log_count] = true;
+    app->log_ids[app->log_count] = 0;
     app->log_count++;
     if (app->pending_count < sizeof(app->pending) / sizeof(app->pending[0])) {
         struct pending_echo *p = &app->pending[app->pending_count++];
@@ -1040,8 +1051,24 @@ static void apply_query_windows(struct app *app, const struct wire_event *ev) {
     }
 }
 
+static void enqueue_read_cursor(struct app *app, const char *network, const char *channel,
+                                long message_id);
+
+/* Focus landed on a window: clear its local badge AND tell the server how
+ * far we have read, so the cursor follows the user to their other
+ * devices. The HTTP write is queued rather than done inline — this runs
+ * on the UI thread, holding the app lock, and a blocking POST here would
+ * stall every keystroke. */
 static void clear_current_unread_locked(struct app *app) {
-    if (app->current < app->window_count) app->windows[app->current].unread = 0;
+    if (app->current >= app->window_count) return;
+    struct window *w = &app->windows[app->current];
+    w->unread = 0;
+    w->mentions = 0;
+    w->severity = COUNTS_NONE;
+    if (w->last_id > w->last_read_id) {
+        w->last_read_id = w->last_id;
+        enqueue_read_cursor(app, w->network, w->channel, w->last_id);
+    }
 }
 
 static void clear_active_window_log(struct app *app) {
@@ -1249,6 +1276,10 @@ static void render_message(struct app *app, const struct wire_scrollback_message
     }
 
     pthread_mutex_lock(&app->lock);
+    /* Stamp the row just appended with its scrollback id, so the unread
+     * divider lands on the exact row the server's cursor names rather
+     * than being guessed from position. */
+    if (app->log_count > 0) app->log_ids[app->log_count - 1] = id;
     if (!app->scrollback_pinned) app->scrollback_offset = 0;
     pthread_mutex_unlock(&app->lock);
 }
@@ -2528,6 +2559,55 @@ static void render_channel_modes(struct app *app, const struct wire_event *ev) {
              ev->u.channel_modes.channel, modes);
 }
 
+/* ── Server-owned read state ───────────────────────────────────────────
+ *
+ * The cursor is `last_read_message_id` per (subject, network, channel)
+ * and it lives on the SERVER — that is a project invariant, not a cache.
+ * It is what makes "where I left off" survive a restart and stay
+ * consistent across devices. Shottino tracked unread as a purely local
+ * counter, so reading a channel on the phone left it bold here forever,
+ * and restarting reset every window to zero unread regardless of truth.
+ *
+ * `read_cursor_set` carries no channel: it is scoped by the per-channel
+ * topic it arrives on. Rather than thread topic identity through the
+ * dispatcher, the cursor is matched to the window that has actually seen
+ * that id — ids are globally unique, so at most one window matches. */
+static void apply_read_cursor(struct app *app, long last_read_id) {
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) {
+        if (app->windows[i].last_id >= last_read_id && last_read_id > app->windows[i].last_read_id) {
+            app->windows[i].last_read_id = last_read_id;
+            /* Everything up to the cursor is read by definition. */
+            if (app->windows[i].last_id <= last_read_id) app->windows[i].unread = 0;
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Publish the cursor for the focused window. Called when focus lands on a
+ * window that has unread rows — the settle cadence is deliberately "on
+ * focus change", not per keystroke, so a scroll through history does not
+ * write a row per frame. */
+static void push_read_cursor(struct app *app, const char *network, const char *channel,
+                             long message_id) {
+    if (message_id <= 0) return;
+    char *net = url_encode(network);
+    char *chan = url_encode(channel);
+    char *path = xasprintf("/networks/%s/channels/%s/read-cursor", net, chan);
+    char *body = xasprintf("{\"message_id\":%ld}", message_id);
+    free(net);
+    free(chan);
+    struct http_response r = http_request(app, "POST", path, body);
+    /* The server clamps monotonically, so an older id is refused rather
+     * than moving the cursor backwards; that is not an error worth
+     * reporting. A genuine failure is. */
+    if (r.status >= 400 && r.status != 409)
+        log_line(app, "read-cursor failed HTTP %d: %.120s", r.status, r.body ? r.body : "");
+    free(path);
+    free(body);
+    free(r.body);
+}
+
 static void handle_wire_event(struct app *app, const struct wire_event *ev) {
     switch (ev->kind) {
     case WIRE_MESSAGE:
@@ -2732,10 +2812,56 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
     }
 
     case WIRE_READ_CURSOR_SET:
-    case WIRE_WINDOW_COUNTS:
+        /* Read state is server-owned per (subject, network, channel), so
+         * marking a window read on one device must move the divider on
+         * every other. The payload carries no channel — it is scoped by
+         * the per-channel topic it arrives on — so it is applied to the
+         * window whose last_id brackets the cursor. */
+        apply_read_cursor(app, ev->u.read_cursor.last_read_message_id);
+        break;
+
+    case WIRE_WINDOW_COUNTS: {
+        /* Server-authoritative counts REPLACE the local tally. The server
+         * knows about messages this client never received (it was
+         * offline) and about reads from other devices; a locally
+         * incremented badge drifts from the truth in both directions. */
+        pthread_mutex_lock(&app->lock);
+        for (size_t i = 0; i < app->window_count; i++) {
+            if (strcmp(app->windows[i].channel, ev->u.window_counts.channel) != 0) continue;
+            app->windows[i].unread = (unsigned)ev->u.window_counts.messages;
+            app->windows[i].mentions = (unsigned)ev->u.window_counts.mentions;
+            app->windows[i].severity = ev->u.window_counts.severity;
+        }
+        pthread_mutex_unlock(&app->lock);
+        break;
+    }
+
+    case WIRE_MENTIONS_BUNDLE: {
+        /* Everything that mentioned you while you were away, replayed in
+         * one card so the catch-up is not a hunt through N channels. */
+        const char *net = ev->u.mentions_bundle.network;
+        if (ev->u.mentions_bundle.message_count == 0) break;
+        card(app, net, "--- %zu mention%s while away%s%s", ev->u.mentions_bundle.message_count,
+             ev->u.mentions_bundle.message_count == 1 ? "" : "s",
+             ev->u.mentions_bundle.away_reason ? ": " : "",
+             ev->u.mentions_bundle.away_reason ? ev->u.mentions_bundle.away_reason : "");
+        for (size_t i = 0; i < ev->u.mentions_bundle.message_count; i++) {
+            struct wire_mention m;
+            if (!wire_mention_at(ev->u.mentions_bundle.messages, i, &m)) continue;
+            char clock[16];
+            time_t ts = m.server_time > 100000000000L ? (time_t)(m.server_time / 1000)
+                                                      : (time_t)m.server_time;
+            struct tm tm;
+            localtime_r(&ts, &tm);
+            strftime(clock, sizeof(clock), "%H:%M", &tm);
+            card(app, net, "  %s %-14s <%s> %.*s", clock, m.channel, m.sender, 60,
+                 m.body ? m.body : "");
+        }
+        break;
+    }
+
     case WIRE_CHANNEL_CREATED:
     case WIRE_CHANNELS_CHANGED:
-    case WIRE_MENTIONS_BUNDLE:
     case WIRE_NOTIFY_LIST:
     case WIRE_PRESENCE_SNAPSHOT:
     case WIRE_SUPPORTED_UMODES_CHANGED:
@@ -3043,6 +3169,13 @@ static void draw(struct app *app) {
         draw_fill(y, 0, side, pair);
         draw_text(y, 1, 2, pair, (selected || unread) ? A_BOLD : 0, "%2zu", i + 1);
         if (dead) draw_text(y, 4, side - 5, pair, A_DIM, "%c%s", state_mark, win->channel);
+        else if (win->mentions > 0) {
+            /* A mention outranks a plain-message count: it is the reason
+             * to look now rather than later, so it gets its own colour
+             * and marker instead of being folded into one number. */
+            draw_text(y, 4, side - 5, selected ? pair : CP_MENTION, A_BOLD, "%s (%u)",
+                      win->channel, win->mentions);
+        }
         else if (unread) draw_text(y, 4, side - 5, pair, A_BOLD, "%s [%u]", win->channel, app->windows[i].unread);
         else draw_text(y, 4, side - 5, pair, selected ? A_BOLD : 0, "%s", win->channel);
         y++;
@@ -3095,6 +3228,7 @@ static void draw(struct app *app) {
     if ((int)app->scrollback_offset > max_offset) app->scrollback_offset = (size_t)max_offset;
     int skip_lines = max_offset - (int)app->scrollback_offset;
     int used_lines = 0;
+    bool divider_drawn = false;
     for (size_t vi = 0; vi < visible_count; vi++) {
         if (skip_lines >= heights[vi]) {
             skip_lines -= heights[vi];
@@ -3110,6 +3244,24 @@ static void draw(struct app *app) {
         if (draw_lines > available) draw_lines = available;
         if (draw_lines <= 0) break;
         int msg_y = scroll_y + used_lines;
+        /* Unread divider: drawn once, immediately above the first row the
+         * server's cursor says has not been read. It is deliberately
+         * anchored to the CURSOR rather than to "where I was scrolled
+         * last", so it means the same thing here as on every other device
+         * attached to this session. */
+        if (!divider_drawn && w->last_read_id > 0 && app->log_ids[i] > w->last_read_id &&
+            used_lines + 1 < scroll_h) {
+            attron(COLOR_PAIR(CP_ERROR) | A_BOLD);
+            mvhline(msg_y, main_x + 1, ACS_HLINE, main_w - 2);
+            mvprintw(msg_y, main_x + 3, " unread ");
+            attroff(COLOR_PAIR(CP_ERROR) | A_BOLD);
+            divider_drawn = true;
+            used_lines += 1;
+            msg_y += 1;
+            available -= 1;
+            if (draw_lines > available) draw_lines = available;
+            if (draw_lines <= 0) break;
+        }
         draw_message_line(msg_y, main_x + 1, main_w - 2, draw_lines, app->log[i], app->log_mentions[i], app->log_pending[i]);
         const char *msg_url = find_url(app->log[i]);
         enum media_kind mk = msg_url ? media_kind_of(msg_url) : MEDIA_NONE;
@@ -3456,6 +3608,9 @@ static void *worker_main(void *arg) {
         case JOB_FETCH:
             fetch_scrollback_target(app, job.network, job.channel);
             break;
+        case JOB_READ_CURSOR:
+            push_read_cursor(app, job.network, job.channel, strtol(job.arg1, NULL, 10));
+            break;
         case JOB_SEND: {
             send_message_target(app, job.network, job.channel, job.arg1);
             break;
@@ -3487,6 +3642,18 @@ static void *worker_main(void *arg) {
         }
     }
     return NULL;
+}
+
+/* Queue a read-cursor publish. Deliberately fire-and-forget: the cursor
+ * is advisory catch-up state, and a failed write costs a stale divider,
+ * not a lost message. */
+static void enqueue_read_cursor(struct app *app, const char *network, const char *channel,
+                                long message_id) {
+    struct job job = { .kind = JOB_READ_CURSOR };
+    snprintf(job.network, sizeof(job.network), "%s", network);
+    snprintf(job.channel, sizeof(job.channel), "%s", channel);
+    snprintf(job.arg1, sizeof(job.arg1), "%ld", message_id);
+    enqueue_job(app, job);
 }
 
 static void enqueue_fetch(struct app *app, const char *network, const char *channel) {
