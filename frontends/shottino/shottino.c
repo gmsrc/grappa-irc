@@ -501,15 +501,20 @@ static bool has_matching_confirmed_line(struct app *app, const char *network, co
     return found;
 }
 
-static void clear_panel_lines(struct app *app) {
+/* Caller holds app->lock. */
+static void clear_panel_lines_locked(struct app *app) {
     for (size_t i = 0; i < app->panel_line_count; i++) free(app->panel_lines[i]);
     app->panel_line_count = 0;
 }
 
 static void panel_line(struct app *app, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
+/* Appends one panel row. Takes the lock itself: panel population runs on
+ * the command thread and issues blocking HTTP between rows, so it cannot
+ * hold the lock across the whole build — the draw thread would stall for
+ * the duration of every request. Locking per row means a panel paints
+ * progressively instead, which is also the better behaviour. */
 static void panel_line(struct app *app, const char *fmt, ...) {
-    if (app->panel_line_count == PANEL_LINES) return;
     va_list ap;
     va_start(ap, fmt);
     va_list ap2;
@@ -521,7 +526,10 @@ static void panel_line(struct app *app, const char *fmt, ...) {
     if (!s) return;
     vsnprintf(s, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
-    app->panel_lines[app->panel_line_count++] = s;
+    pthread_mutex_lock(&app->lock);
+    if (app->panel_line_count < PANEL_LINES) app->panel_lines[app->panel_line_count++] = s;
+    else free(s);
+    pthread_mutex_unlock(&app->lock);
 }
 
 static int hexval(char c) {
@@ -1732,53 +1740,299 @@ static const char *panel_name(enum panel_kind panel) {
     return "chat";
 }
 
+/* ── Panels ────────────────────────────────────────────────────────────
+ *
+ * All three of these used to print a paragraph describing what the panel
+ * would eventually show ("This panel shell is wired; ... is the next REST
+ * pass"). They read the real endpoints now.
+ *
+ * Panel population does HTTP, so it must NOT hold app->lock — a blocking
+ * request under the lock freezes the whole UI, including the draw thread.
+ * Rows are gathered first and installed at the end. */
+
+/* Format a byte count for a table cell. */
+static void human_bytes(long bytes, char *out, size_t out_sz) {
+    static const char *const unit[] = {"B", "KB", "MB", "GB", "TB"};
+    double v = (double)bytes;
+    size_t u = 0;
+    while (v >= 1024.0 && u + 1 < sizeof(unit) / sizeof(unit[0])) {
+        v /= 1024.0;
+        u++;
+    }
+    if (u == 0) snprintf(out, out_sz, "%ld %s", bytes, unit[u]);
+    else snprintf(out, out_sz, "%.1f %s", v, unit[u]);
+}
+
+/* Format a unix-second or ISO-8601 timestamp for a table cell. */
+static void human_time(const json_value *v, char *out, size_t out_sz) {
+    long secs = 0;
+    if (json_long(v, &secs) && secs > 0) {
+        time_t t = secs > 100000000000L ? (time_t)(secs / 1000) : (time_t)secs;
+        struct tm tm;
+        localtime_r(&t, &tm);
+        strftime(out, out_sz, "%Y-%m-%d %H:%M", &tm);
+        return;
+    }
+    const char *s = json_string(v);
+    /* ISO-8601 truncated to minutes — the seconds and zone are noise in
+     * a fixed-width table. */
+    if (s) snprintf(out, out_sz, "%.16s", s);
+    else snprintf(out, out_sz, "—");
+}
+
+/* GET a path and hand the parsed document to `render`. Centralises the
+ * error reporting so a failing tab says WHICH call failed and why rather
+ * than rendering as mysteriously empty. */
+static void panel_fetch(struct app *app, const char *label, const char *path,
+                        void (*render)(struct app *, const json_value *)) {
+    struct http_response r = http_request(app, "GET", path, NULL);
+    if (r.status < 200 || r.status >= 300) {
+        panel_line(app, "  %s: HTTP %d%s%.80s", label, r.status, r.body ? " — " : "",
+                   r.body ? r.body : "");
+        free(r.body);
+        return;
+    }
+    json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+    if (!doc) {
+        panel_line(app, "  %s: malformed response", label);
+        free(r.body);
+        return;
+    }
+    render(app, json_root(doc));
+    json_free(doc);
+    free(r.body);
+}
+
+/* Some admin endpoints answer with a bare array, others with a named
+ * envelope. Accept either rather than guessing wrong and showing empty. */
+static const json_value *rows_of(const json_value *root, const char *key) {
+    if (json_type_of(root) == JSON_ARRAY) return root;
+    const json_value *v = json_get(root, key);
+    if (json_type_of(v) == JSON_ARRAY) return v;
+    v = json_get(root, "data");
+    return json_type_of(v) == JSON_ARRAY ? v : NULL;
+}
+
+static void render_archive_rows(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "archive");
+    size_t n = json_len(rows);
+    panel_line(app, "  %-28s %-8s %8s  %s", "TARGET", "KIND", "ROWS", "LAST ACTIVITY");
+    for (size_t i = 0; i < n; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *target = json_string(json_get(e, "target"));
+        const char *kind = json_string(json_get(e, "kind"));
+        long count = 0;
+        json_long(json_get(e, "row_count"), &count);
+        char when[32];
+        human_time(json_get(e, "last_activity"), when, sizeof(when));
+        if (target)
+            panel_line(app, "  %-28s %-8s %8ld  %s", target, kind ? kind : "?", count, when);
+    }
+    if (n == 0) panel_line(app, "  (nothing archived on this network)");
+}
+
+static void render_admin_users(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "users");
+    size_t n = json_len(rows);
+    panel_line(app, "  users (%zu)", n);
+    panel_line(app, "    %-24s %-6s %s", "NAME", "ADMIN", "ID");
+    for (size_t i = 0; i < n && i < 50; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *name = json_string(json_get(e, "name"));
+        const char *id = json_string(json_get(e, "id"));
+        bool is_admin = json_bool(json_get(e, "is_admin"), false);
+        if (name)
+            panel_line(app, "    %-24s %-6s %.8s", name, is_admin ? "yes" : "no", id ? id : "");
+    }
+    if (n > 50) panel_line(app, "    ... %zu more", n - 50);
+}
+
+static void render_admin_sessions(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "sessions");
+    size_t n = json_len(rows);
+    panel_line(app, "  sessions (%zu)", n);
+    /* DB state and live pid are separate sources of truth and are allowed
+     * to disagree; showing both (with an explicit "—" for a missing live
+     * state) is the honesty signal that something diverged. */
+    panel_line(app, "    %-18s %-16s %-12s %s", "NETWORK", "NICK", "DB STATE", "LIVE");
+    for (size_t i = 0; i < n && i < 50; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *net = json_string(json_get(e, "network_slug"));
+        const char *nick = json_string(json_get(e, "nick"));
+        const char *db = json_string(json_get(e, "connection_state"));
+        const json_value *live = json_get(e, "live_state");
+        const char *live_s = json_string(live);
+        panel_line(app, "    %-18s %-16s %-12s %s", net ? net : "?", nick ? nick : "?",
+                   db ? db : "?", live_s ? live_s : "—");
+    }
+    if (n > 50) panel_line(app, "    ... %zu more", n - 50);
+}
+
+static void render_admin_visitors(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "visitors");
+    size_t n = json_len(rows);
+    panel_line(app, "  visitors (%zu)", n);
+    for (size_t i = 0; i < n && i < 30; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *nick = json_string(json_get(e, "nick"));
+        char when[32];
+        human_time(json_get(e, "expires_at"), when, sizeof(when));
+        if (nick) panel_line(app, "    %-20s expires %s", nick, when);
+    }
+    if (n > 30) panel_line(app, "    ... %zu more", n - 30);
+}
+
+static void render_admin_uploads(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "uploads");
+    size_t n = json_len(rows);
+    long total = 0;
+    for (size_t i = 0; i < n; i++) {
+        long sz = 0;
+        json_long(json_get(json_at(rows, i), "byte_size"), &sz);
+        total += sz;
+    }
+    char human[32];
+    human_bytes(total, human, sizeof(human));
+    panel_line(app, "  uploads (%zu, %s total)", n, human);
+}
+
+static void render_admin_networks(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "networks");
+    size_t n = json_len(rows);
+    panel_line(app, "  networks (%zu)", n);
+    panel_line(app, "    %-18s %-8s %s", "SLUG", "ID", "SERVICES");
+    for (size_t i = 0; i < n && i < 30; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *slug = json_string(json_get(e, "slug"));
+        long id = 0;
+        json_long(json_get(e, "id"), &id);
+        const char *flavor = json_string(json_get(e, "services_flavor"));
+        if (slug) panel_line(app, "    %-18s %-8ld %s", slug, id, flavor ? flavor : "—");
+    }
+}
+
+static void render_settings_caps(struct app *app, const json_value *root) {
+    const json_value *up = json_get(root, "upload");
+    if (!up) up = root;
+    const char *host = json_string(json_get(up, "active_host"));
+    panel_line(app, "  upload host      %s", host ? host : "—");
+    const struct { const char *key; const char *label; } caps[] = {
+        {"image_per_file_cap_bytes", "image cap"},
+        {"video_per_file_cap_bytes", "video cap"},
+        {"document_per_file_cap_bytes", "document cap"},
+        {"audio_per_file_cap_bytes", "audio cap"},
+        {"global_cap_bytes", "global cap"},
+    };
+    for (size_t i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
+        long v = 0;
+        if (json_long(json_get(up, caps[i].key), &v)) {
+            char human[32];
+            human_bytes(v, human, sizeof(human));
+            panel_line(app, "  %-16s %s", caps[i].label, human);
+        }
+    }
+}
+
+static void render_notify_rows(struct app *app, const json_value *root) {
+    const json_value *rows = rows_of(root, "notify");
+    size_t n = json_len(rows);
+    panel_line(app, "  watched nicks (%zu)", n);
+    for (size_t i = 0; i < n && i < 30; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *nick = json_string(json_get(e, "nick"));
+        const char *presence = json_string(json_get(e, "presence"));
+        if (nick) panel_line(app, "    %-20s %s", nick, presence ? presence : "unknown");
+    }
+    if (n == 0) panel_line(app, "    (none — /notify <nick> to add)");
+}
+
 static void open_panel(struct app *app, enum panel_kind panel) {
+    /* Snapshot what the fetches need, then release the lock: everything
+     * below blocks on HTTP. */
     pthread_mutex_lock(&app->lock);
-    clear_panel_lines(app);
+    clear_panel_lines_locked(app);
     app->panel = panel;
     struct window current = app->windows[app->current];
+    size_t window_count = app->window_count;
+    size_t alias_count = app->aliases.count;
+    /* Snapshot the network table too — the event thread mutates it. */
+    struct network nets[MAX_NETWORKS];
+    size_t net_count = app->network_count;
+    for (size_t i = 0; i < net_count; i++) nets[i] = app->networks[i];
+    pthread_mutex_unlock(&app->lock);
+
     panel_line(app, "%s", panel_name(panel));
     panel_line(app, "%s", "");
+
     switch (panel) {
-    case PANEL_ARCHIVE:
-        panel_line(app, "Archive panel for network: %s", current.network);
+    case PANEL_ARCHIVE: {
+        panel_line(app, "archive — %s", current.network);
         panel_line(app, "%s", "");
-        panel_line(app, "Planned parity commands:");
-        panel_line(app, "  /archive                 open this panel");
-        panel_line(app, "  /archive open <target>   open archived scrollback target");
-        panel_line(app, "  /archive purge <target>  delete archived scrollback target");
+        char *slug = url_encode(current.network);
+        char *path = xasprintf("/networks/%s/archive", slug);
+        free(slug);
+        panel_fetch(app, "archive", path, render_archive_rows);
+        free(path);
         panel_line(app, "%s", "");
-        panel_line(app, "Server endpoint: GET /networks/%s/archive", current.network);
-        panel_line(app, "This panel shell is wired; archive row fetching is the next REST pass.");
+        panel_line(app, "  /archive open <target>   re-open an archived window");
+        panel_line(app, "  /archive purge <target>  delete its scrollback (irreversible)");
         break;
+    }
+
     case PANEL_SETTINGS:
-        panel_line(app, "Settings panel");
+        panel_line(app, "connection");
+        panel_line(app, "  server         %s", app->url.base);
+        panel_line(app, "  subject        %s", app->subject);
+        panel_line(app, "  websocket      %s", app->ws_connected ? "connected" : "reconnecting");
+        panel_line(app, "  windows        %zu", window_count);
+        panel_line(app, "  aliases        %zu", alias_count);
         panel_line(app, "%s", "");
-        panel_line(app, "Server: %s", app->url.base);
-        panel_line(app, "Subject: %s", app->subject);
-        panel_line(app, "WebSocket: %s", app->ws_connected ? "connected" : "offline");
-        panel_line(app, "Windows: %zu", app->window_count);
+        panel_line(app, "networks");
+        for (size_t i = 0; i < net_count; i++) {
+            struct network *n = &nets[i];
+            panel_line(app, "  %-16s %-10s nick %s%s%s", n->slug,
+                       n->conn_known ? wire_connection_state_name(n->conn_state) : "unknown",
+                       n->nick[0] ? n->nick : "—", n->umodes[0] ? " +" : "",
+                       n->umodes[0] ? n->umodes : "");
+        }
         panel_line(app, "%s", "");
-        panel_line(app, "Local keys:");
-        panel_line(app, "  PgUp/PgDn scroll chat buffer");
-        panel_line(app, "  Ctrl-N/Ctrl-P cycle windows");
-        panel_line(app, "  Tab complete, Up/Down input history");
-        panel_line(app, "  Click image/video links to preview (needs chafa+ffmpeg)");
-        panel_line(app, "  Esc or /chat returns to chat");
+        {
+            char *nslug = url_encode(current.network);
+            char *npath = xasprintf("/networks/%s/notify", nslug);
+            free(nslug);
+            panel_fetch(app, "notify", npath, render_notify_rows);
+            free(npath);
+        }
+        panel_line(app, "%s", "");
+        panel_line(app, "server settings");
+        panel_fetch(app, "settings", "/api/server-settings", render_settings_caps);
+        panel_line(app, "%s", "");
+        panel_line(app, "keys");
+        panel_line(app, "  PgUp/PgDn scroll   End bottom   Ctrl-N/Ctrl-P cycle windows");
+        panel_line(app, "  Tab complete       Up/Down history   Esc or /chat returns to chat");
+        panel_line(app, "  click a media link to preview it in the terminal");
         break;
+
     case PANEL_ADMIN:
-        panel_line(app, "Admin panel");
+        panel_line(app, "admin");
         panel_line(app, "%s", "");
-        panel_line(app, "Admin REST surfaces available in grappa:");
-        panel_line(app, "  /admin/me /admin/visitors /admin/sessions /admin/networks");
-        panel_line(app, "  /admin/users /admin/credentials /admin/settings /admin/uploads");
+        /* Every tab is fetched independently and reports its own failure,
+         * so a 403 on one (a non-admin subject, or a resource missing
+         * from the proxy allowlist) does not blank the whole panel. */
+        panel_fetch(app, "sessions", "/admin/sessions", render_admin_sessions);
         panel_line(app, "%s", "");
-        panel_line(app, "This terminal panel shell is wired; admin tables/actions are the next REST pass.");
+        panel_fetch(app, "users", "/admin/users", render_admin_users);
+        panel_line(app, "%s", "");
+        panel_fetch(app, "networks", "/admin/networks", render_admin_networks);
+        panel_line(app, "%s", "");
+        panel_fetch(app, "visitors", "/admin/visitors", render_admin_visitors);
+        panel_line(app, "%s", "");
+        panel_fetch(app, "uploads", "/admin/uploads", render_admin_uploads);
         break;
+
     case PANEL_CHAT:
         break;
     }
-    pthread_mutex_unlock(&app->lock);
 }
 
 static int split_message_line(const char *line, char *prefix, size_t prefix_sz, char *nick, size_t nick_sz, const char **body) {
@@ -4226,6 +4480,51 @@ static void mint_share_link(struct app *app) {
 
 static void handle_command_dispatch(struct app *app, char *line);
 
+/* ── /archive open|purge ───────────────────────────────────────────────
+ * `open` re-opens an archived window locally and pulls its scrollback
+ * back; `purge` is the DESTRUCTIVE delete of that target's history and
+ * requires the target to be named explicitly — there is deliberately no
+ * "purge everything" form. */
+static void archive_command(struct app *app, const char *rest) {
+    while (*rest == ' ') rest++;
+    const char *network = app->windows[app->current].network;
+
+    if (strncmp(rest, "open ", 5) == 0) {
+        const char *target = rest + 5;
+        while (*target == ' ') target++;
+        if (!*target) {
+            log_line(app, "/archive open requires a target");
+            return;
+        }
+        add_window_ex(app, network, target, true);
+        enqueue_fetch(app, network, target);
+        log_line(app, "reopened archived window %s", target);
+        return;
+    }
+
+    if (strncmp(rest, "purge ", 6) == 0) {
+        const char *target = rest + 6;
+        while (*target == ' ') target++;
+        if (!*target) {
+            log_line(app, "/archive purge requires a target");
+            return;
+        }
+        char *slug = url_encode(network);
+        char *tgt = url_encode(target);
+        char *path = xasprintf("/networks/%s/archive/%s", slug, tgt);
+        free(slug);
+        free(tgt);
+        struct http_response r = http_request(app, "DELETE", path, NULL);
+        free(path);
+        if (r.status >= 200 && r.status < 300) log_line(app, "purged archived scrollback for %s", target);
+        else log_line(app, "/archive purge failed HTTP %d: %.200s", r.status, r.body ? r.body : "");
+        free(r.body);
+        return;
+    }
+
+    log_line(app, "/archive [open <target>|purge <target>]");
+}
+
 /* ── Services shortcuts ────────────────────────────────────────────────
  * /cs /ns /ms /os /hs /rs → the conventional service nicks. Keyed on the
  * first letter, which is unambiguous across the six. */
@@ -4248,8 +4547,14 @@ static const char *service_for_shortcut(char c) {
  * watches PEOPLE, /hilight watches WORDS. */
 static void notify_command(struct app *app, const char *rest) {
     while (*rest == ' ') rest++;
+    /* The watch list is per-network (it maps to that session's
+     * MONITOR/WATCH registration upstream), so every call is scoped to
+     * the active window's network. */
+    char *slug = url_encode(app->windows[app->current].network);
     if (!*rest || strcmp(rest, "list") == 0) {
-        struct http_response r = http_request(app, "GET", "/notify", NULL);
+        char *path = xasprintf("/networks/%s/notify", slug);
+        struct http_response r = http_request(app, "GET", path, NULL);
+        free(path);
         if (r.status < 200 || r.status >= 300) {
             log_line(app, "/notify failed HTTP %d", r.status);
         } else {
@@ -4266,19 +4571,21 @@ static void notify_command(struct app *app, const char *rest) {
             json_free(doc);
         }
         free(r.body);
+        free(slug);
         return;
     }
     if (strncmp(rest, "del ", 4) == 0 || strncmp(rest, "-", 1) == 0) {
         const char *nick = rest[0] == '-' ? rest + 1 : rest + 4;
         while (*nick == ' ') nick++;
         char *enc = url_encode(nick);
-        char *path = xasprintf("/notify/%s", enc);
+        char *path = xasprintf("/networks/%s/notify/%s", slug, enc);
         free(enc);
         struct http_response r = http_request(app, "DELETE", path, NULL);
         free(path);
         if (r.status >= 200 && r.status < 300) log_line(app, "no longer watching %s", nick);
         else log_line(app, "/notify del failed HTTP %d", r.status);
         free(r.body);
+        free(slug);
         return;
     }
     /* Bare nicks (possibly several) are an add. */
@@ -4286,10 +4593,13 @@ static void notify_command(struct app *app, const char *rest) {
     char *arr = json_array_words(rest);
     snprintf(nicks_json, sizeof(nicks_json), "{\"nicks\":%s}", arr);
     free(arr);
-    struct http_response r = http_request(app, "POST", "/notify", nicks_json);
+    char *add_path = xasprintf("/networks/%s/notify", slug);
+    struct http_response r = http_request(app, "POST", add_path, nicks_json);
+    free(add_path);
     if (r.status >= 200 && r.status < 300) log_line(app, "watching %s", rest);
     else log_line(app, "/notify failed HTTP %d: %.200s", r.status, r.body);
     free(r.body);
+    free(slug);
 }
 
 /* ── /list — channel directory ─────────────────────────────────────────
@@ -4442,6 +4752,8 @@ static void handle_command_dispatch(struct app *app, char *line) {
         pthread_mutex_unlock(&app->lock);
     } else if (strcmp(line, "/archive") == 0) {
         open_panel(app, PANEL_ARCHIVE);
+    } else if (strncmp(line, "/archive ", 9) == 0) {
+        archive_command(app, line + 9);
     } else if (strcmp(line, "/settings") == 0) {
         open_panel(app, PANEL_SETTINGS);
     } else if (strcmp(line, "/admin") == 0) {
