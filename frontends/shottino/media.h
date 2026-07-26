@@ -90,4 +90,16 @@ bool media_emit_sixel(const unsigned char *rgb, int w, int h, FILE *out);
  * squashed. */
 void media_fit_cells(int img_w, int img_h, int max_cols, int max_rows, int *cols, int *rows);
 
+/* True when `url` points at this deployment's own upload store: its host
+ * equals `connect_host` or one of the `n_aliases` server-provided host
+ * aliases (#324), AND its path is under /uploads/. The shottino twin of
+ * cic's mediaLink.ts — both clients MUST agree on what is first-party
+ * (one feature, one rule, every door). Host match is case-insensitive
+ * and ignores scheme + port (aliases are bare hostnames; prod has minted
+ * http:// under an https deployment). A NULL/empty alias list is the
+ * restrictive fallback: only `connect_host` matches, never "any
+ * /uploads/ host" — in doubt, do not treat as first-party. */
+bool media_url_is_first_party(const char *url, const char *connect_host,
+                              const char *const *aliases, size_t n_aliases);
+
 #endif /* SHOTTINO_MEDIA_H */

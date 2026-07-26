@@ -355,3 +355,36 @@ void media_fit_cells(int img_w, int img_h, int max_cols, int max_rows, int *cols
     if (cols) *cols = c;
     if (rows) *rows = r;
 }
+
+static bool media_host_eq_ci(const char *host, size_t host_len, const char *cand) {
+    return cand && strlen(cand) == host_len && strncasecmp(host, cand, host_len) == 0;
+}
+
+bool media_url_is_first_party(const char *url, const char *connect_host,
+                              const char *const *aliases, size_t n_aliases) {
+    if (!url) return false;
+    const char *p;
+    if (strncasecmp(url, "https://", 8) == 0) p = url + 8;
+    else if (strncasecmp(url, "http://", 7) == 0) p = url + 7;
+    else return false; /* find_url only yields http(s), but be explicit */
+
+    /* Host runs to the first '/', ':', '?' or '#'. */
+    const char *host = p;
+    while (*p && *p != '/' && *p != ':' && *p != '?' && *p != '#') p++;
+    size_t host_len = (size_t)(p - host);
+    if (host_len == 0) return false;
+
+    /* Skip an optional :port so `p` lands on the path (not the port or a
+     * query), then require the path itself to be under /uploads/ — a '/'
+     * inside a query string must not count. */
+    if (*p == ':') {
+        p++;
+        while (*p && *p != '/' && *p != '?' && *p != '#') p++;
+    }
+    if (strncmp(p, "/uploads/", 9) != 0) return false;
+
+    if (media_host_eq_ci(host, host_len, connect_host)) return true;
+    for (size_t i = 0; i < n_aliases; i++)
+        if (media_host_eq_ci(host, host_len, aliases[i])) return true;
+    return false;
+}

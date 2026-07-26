@@ -283,6 +283,36 @@ TEST(cell_fitting_corrects_aspect) {
     media_fit_cells(100, 100, 80, 24, NULL, NULL); /* must not crash */
 }
 
+/* #451/#324 — first-party classification decides which media auto-renders
+ * inline (grappa's own upload store) vs stays click-to-preview (any other
+ * peer URL). MUST match cic's mediaLink.ts: host in {connect host} ∪
+ * server alias set AND path under /uploads/, case-insensitive host,
+ * scheme- and port-agnostic. A foreign host with a /uploads/ path is NOT
+ * first-party (that is the whole point of the H1 fix), and an empty alias
+ * list falls back restrictively to the connect host alone. */
+TEST(first_party_url_classification) {
+    const char *aliases[] = {"irc.sindro.me", "irc.sniffo.org"};
+
+    /* Connect host + /uploads/ path. */
+    CHECK(media_url_is_first_party("https://irc.example/uploads/a.png", "irc.example", NULL, 0));
+    /* An alias host counts (the #324 multi-alias deployment). */
+    CHECK(media_url_is_first_party("https://irc.sniffo.org/uploads/x.jpg", "irc.sindro.me", aliases, 2));
+    /* Case-insensitive host, scheme- and port-agnostic. */
+    CHECK(media_url_is_first_party("http://IRC.EXAMPLE:8080/uploads/x", "irc.example", NULL, 0));
+
+    /* A foreign host is NOT first-party even with a /uploads/ path — H1. */
+    CHECK(!media_url_is_first_party("https://evil.example/uploads/x.png", "irc.example", aliases, 2));
+    /* Right host, wrong path. */
+    CHECK(!media_url_is_first_party("https://irc.example/pub/x.png", "irc.example", NULL, 0));
+    /* Non-http(s) scheme is never first-party. */
+    CHECK(!media_url_is_first_party("file:///uploads/x", "irc.example", NULL, 0));
+    /* Restrictive fallback: no aliases → only the connect host matches. */
+    CHECK(!media_url_is_first_party("https://irc.sniffo.org/uploads/x", "irc.sindro.me", NULL, 0));
+    /* Degenerate inputs. */
+    CHECK(!media_url_is_first_party(NULL, "irc.example", NULL, 0));
+    CHECK(!media_url_is_first_party("https:///uploads/x", "irc.example", NULL, 0)); /* empty host */
+}
+
 int main(void) {
     RUN(da1_sixel_parsing);
     RUN(env_detection);
@@ -295,5 +325,6 @@ int main(void) {
     RUN(sixel_rejects_bad_input);
     RUN(sixel_dims_overflow_guard);
     RUN(cell_fitting_corrects_aspect);
+    RUN(first_party_url_classification);
     return test_report();
 }

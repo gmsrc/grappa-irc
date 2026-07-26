@@ -20095,3 +20095,52 @@ constructors are reliable where webkit's are not
 drag, native momentum) is a device call the maintainer dogfoods post-deploy;
 synthetic events cannot drive real pixel-scroll. INC-A is cic-only (no server
 change); rides the batch COLD deploy (cic bundle change).
+
+### 2026-07-26 — #451: shottino inline-media first-party classification mirrors cic (one rule, both clients)
+
+nextime's PR#451 lifts shottino's text-only rule to render images inline
+(sixel/iTerm2/kitty, or colour half-block art). A pre-merge security review
+flagged (H1) that the PR auto-fetched and auto-decoded ANY peer `http(s)` URL
+through ffmpeg the moment a row scrolled on screen, default-on — a passive
+tracking-pixel plus an ffmpeg-CVE-surface exposure to untrusted remote bytes.
+vjt's ruling: **auto-render inline only for first-party grappa `/uploads/`
+links; every other peer URL stays click-to-preview (user-initiated).**
+
+**Decision — first-party is a host-SET test, not a single host.** The obvious
+rule "URL host == the host shottino connected to + `/uploads/` path" is wrong on
+a multi-alias deployment. `UploadsController.public_url/2` mints the link with
+`GrappaWeb.Endpoint.url()` (PHX_HOST), but `Grappa.HttpHosts` (#324) is real and
+deployed: one bouncer + upload store answers under several hostname aliases
+(e.g. `irc.sindro.me` AND `irc.sniffo.org`). A link minted under one alias can
+reach a client connected via another, and single-host matching would then NEVER
+classify a genuine first-party upload — silently defeating the whole feature
+while satisfying its letter. It would also create TWO different definitions of
+"first-party" in two clients of the same server, which CLAUDE.md forbids (one
+feature / one code path / every door; implement once, reuse everywhere).
+
+cic already solved exactly this in `cicchetto/src/lib/mediaLink.ts`: a media
+link is same-deployment when its host is in {page-origin host} ∪ the
+server-provided `http_host_aliases` set AND its path is under `/uploads/`
+(host-equality, scheme- and port-agnostic). The alias set is server-provided,
+single source of truth — `Grappa.ServerSettings.public_view/0` →
+`ServerSettings.Wire` `http_host_aliases`, derived at boot from the same
+`PHX_HOST` + `EXTRA_CHECK_ORIGINS` that build the Endpoint's `check_origin` gate.
+
+shottino now mirrors that rule exactly: it retains `http_host_aliases` at boot
+from the `/api/server-settings` payload it already fetches, and classifies via a
+pure, tested `media_url_is_first_party(url, connect_host, aliases, n)` in
+`media.c` (the shottino twin of `mediaLink.ts`; exposed for tests like
+`media_da1_has_sixel`). One definition of "first-party" now lives in BOTH clients
+rather than two divergent ones. **Fallback is restrictive:** if the alias set is
+unavailable at boot (fetch fails / field absent) only the connect host is
+first-party — in doubt, nothing auto-fetches.
+
+The other three review-ruling changes shipped in the same batch:
+`-protocol_whitelist file,crypto,tcp,tls,http,https` on every ffmpeg argv
+(bounds the fetch to the protocols it needs; blocks the concat/hls/rtp/data
+demuxers a crafted response could otherwise reach); a size_t-overflow guard
+(`media_sixel_dims_ok/2`) on the sixel encoder's intermediate buffers (#451 L1,
+defensive — unreachable via the terminal-bounded callers but the encoder is a
+public tested API); and the trivial `Makefile` union with #446's `http.c/.h`
+`decode_chunked` extraction. shottino native `make check` (ASan+UBSan) green.
+Rides the batch COLD deploy (server + cic bundle).

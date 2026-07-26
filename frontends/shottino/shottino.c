@@ -66,6 +66,9 @@
  * pool indices the decode job otherwise receives. */
 #define MEDIA_SLOT_PREVIEW (-2)
 #define INLINE_MAX_ROWS 14
+/* #451/#324 — cap on the deployment's HTTP host aliases retained from
+ * /api/server-settings for first-party media classification. */
+#define MAX_HTTP_ALIASES 16
 
 enum color_pair {
     CP_MAIN = 1,
@@ -345,6 +348,13 @@ struct app {
     int log_media[LOG_LINES];
     media_protocol proto;           /* detected once, before ncurses */
     bool inline_media_enabled;
+    /* #451/#324 — this deployment's HTTP host aliases (from
+     * /api/server-settings). With app->url.host they define which
+     * /uploads/ links are first-party and may auto-render inline; every
+     * other peer URL stays click-to-preview. Empty = restrictive (only
+     * the connect host). The shottino twin of cic's mediaLink.ts set. */
+    char http_host_aliases[MAX_HTTP_ALIASES][256];
+    size_t http_host_alias_count;
     char history[INPUT_HISTORY][MAX_LINE];
     size_t history_count;
     size_t history_pos;
@@ -1202,6 +1212,17 @@ static bool message_mentions_me(struct app *app, const char *network, const char
 static bool nick_case_equal(const char *a, const char *b);
 static const char *own_nick_for_network(struct app *app, const char *network);
 
+/* Adapter: classify `url` against this deployment's host set (connect
+ * host + server aliases). The classification LOGIC is the tested pure
+ * media_url_is_first_party in media.c; this only marshals app state to it
+ * (the 2-D alias store into a pointer array). */
+static bool url_is_first_party(struct app *app, const char *url) {
+    const char *ptrs[MAX_HTTP_ALIASES];
+    for (size_t i = 0; i < app->http_host_alias_count; i++)
+        ptrs[i] = app->http_host_aliases[i];
+    return media_url_is_first_party(url, app->url.host, ptrs, app->http_host_alias_count);
+}
+
 /* Render one scrollback row.
  *
  * Presence kinds (join/part/quit/nick_change/mode/kick/topic/server_event)
@@ -1355,7 +1376,12 @@ static void render_message(struct app *app, const struct wire_scrollback_message
             char tok[MAX_LINE];
             copy_url_token(u, tok, sizeof(tok));
             enum media_kind mk = media_kind_of(tok);
-            if (mk != MEDIA_NONE)
+            /* #451: auto-render inline ONLY for first-party /uploads/
+             * links — grappa's own store (host in {connect host} ∪ the
+             * server alias set, the same rule as cic's mediaLink.ts).
+             * Every other peer http(s) URL stays click-to-preview: no
+             * automatic ffmpeg fetch on scroll (the H1 fix). */
+            if (mk != MEDIA_NONE && url_is_first_party(app, tok))
                 app->log_media[app->log_count - 1] =
                     media_claim_locked(app, tok, mk == MEDIA_VIDEO);
         }
@@ -5971,6 +5997,35 @@ static void print_usage(FILE *out, const char *prog) {
     fprintf(out, "\nOnce connected, /help lists every command.\n");
 }
 
+/* #451/#324 — retain the deployment's HTTP host aliases at boot from the
+ * same /api/server-settings payload cic reads (ServerSettings.public_view
+ * → http_host_aliases). Used with app->url.host to classify first-party
+ * /uploads/ links for inline auto-render. On any failure the set stays
+ * empty, which is the restrictive fallback: only the connect host is
+ * first-party. Fetched BEFORE the first scrollback render so seeded rows
+ * classify correctly. */
+static void load_http_host_aliases(struct app *app) {
+    app->http_host_alias_count = 0;
+    struct http_response r = http_request(app, "GET", "/api/server-settings", NULL);
+    if (r.status >= 200 && r.status < 300 && r.body) {
+        json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+        if (doc) {
+            const json_value *list = json_get(json_root(doc), "http_host_aliases");
+            if (list)
+                for (size_t i = 0; i < json_len(list) &&
+                                   app->http_host_alias_count < MAX_HTTP_ALIASES;
+                     i++) {
+                    const char *h = json_string(json_at(list, i));
+                    if (h && h[0])
+                        snprintf(app->http_host_aliases[app->http_host_alias_count++],
+                                 sizeof(app->http_host_aliases[0]), "%s", h);
+                }
+            json_free(doc);
+        }
+    }
+    free(r.body);
+}
+
 int main(int argc, char **argv) {
     const char *mode = "auto";
     const char *login_override = NULL;
@@ -6074,6 +6129,11 @@ int main(int argc, char **argv) {
      * first screenful used to come up pictureless. */
     app->proto = media_detect(STDIN_FILENO, 120);
     startup("terminal graphics: %s", media_protocol_name(app->proto));
+    /* Retain the deployment's upload host set BEFORE any scrollback
+     * renders, so first-party /uploads/ links classify from frame one. */
+    load_http_host_aliases(app);
+    startup("first-party upload hosts: %s + %zu alias(es)", app->url.host,
+            app->http_host_alias_count);
     seed_state(app);
     startup("loading initial scrollback for %zu windows", app->window_count);
     for (size_t i = 0; i < app->window_count; i++) fetch_scrollback(app, &app->windows[i]);
