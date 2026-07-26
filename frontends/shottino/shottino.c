@@ -294,6 +294,10 @@ struct app {
     size_t history_count;
     size_t history_pos;
     struct alias_table aliases;
+    /* Mouse tracking preference. ON by default so click-to-preview works
+     * out of the box; `/mouse off` trades it for the terminal's own text
+     * selection, which tracking necessarily suppresses. */
+    bool mouse_enabled;
     bool running;
     pthread_mutex_t lock;
     pthread_mutex_t jobs_lock;
@@ -2239,7 +2243,20 @@ static void seed_state(struct app *app) {
         if (ch.status >= 200 && ch.status < 300) parse_channels(app, app->networks[i].slug, ch.body, ch.body_len);
         free(ch.body);
     }
-    if (app->window_count) app->current = 0;
+    /* Land on a real conversation, not on $server.
+     *
+     * $server is READ-ONLY by server contract — `validate_post_target_name/1`
+     * rejects it with :bad_request — so focusing it at startup meant the
+     * first thing a user typed came back as a bare "send failed HTTP 400".
+     * Prefer the first channel or query; fall back to $server only when
+     * there is genuinely nothing else, which is the case it exists for. */
+    app->current = 0;
+    for (size_t i = 0; i < app->window_count; i++) {
+        if (strcmp(app->windows[i].channel, "$server") != 0) {
+            app->current = i;
+            break;
+        }
+    }
 }
 
 static void fetch_scrollback(struct app *app, struct window *w) {
@@ -4278,12 +4295,27 @@ static void wait_for_dismiss_key(void) {
 /* Mouse motion/button reporting escapes. Enabled while shottino owns the
  * screen; disabled around the preview (so frame bytes aren't read as a
  * dismiss key) and at shutdown. */
+/* Mouse tracking is what makes click-to-preview work — and it is also
+ * what stops the terminal doing its own text selection, because the
+ * terminal hands motion/button events to us instead of acting on them.
+ * Nothing the application can do restores native selection while tracking
+ * is on: the only fix is to turn it off, which is why this is toggleable
+ * from `/mouse` rather than being unconditional.
+ *
+ * `app->mouse_enabled` is the user's PREFERENCE; this function is the
+ * mechanism. The two are separate because the media-preview path disables
+ * tracking around a full-screen preview and must restore whatever the
+ * user chose, not force it back on. */
 static void mouse_reporting(bool on) {
     fputs(on ? "\033[?1000h\033[?1003h\033[?1006h"
              : "\033[?1006l\033[?1003l\033[?1000l",
           stdout);
     fflush(stdout);
 }
+
+/* Apply the user's preference. Used everywhere tracking is (re-)asserted
+ * so a `/mouse off` is never silently undone by a preview or a resize. */
+static void mouse_apply(struct app *app) { mouse_reporting(app->mouse_enabled); }
 
 /* Full-screen modal media preview. Both images and videos are normalized to a
  * single PNG frame by ffmpeg (which also does the network fetch + decode),
@@ -4435,7 +4467,7 @@ static void preview_media(struct app *app, const char *url, bool is_video) {
             reset_prog_mode();
             clearok(stdscr, TRUE);
             refresh();
-            mouse_reporting(true);
+            mouse_apply(app);
             log_line(app, "preview: could not decode media — opening externally");
             open_external_url(app, url);
             rmdir(dir);
@@ -4461,7 +4493,7 @@ static void preview_media(struct app *app, const char *url, bool is_video) {
     reset_prog_mode();
     clearok(stdscr, TRUE);
     refresh();
-    mouse_reporting(true);
+    mouse_apply(app);
 }
 
 static void show_help(struct app *app) {
@@ -4472,6 +4504,7 @@ static void show_help(struct app *app) {
     log_line(app, "watch: /notify [nick...|del nick|list] watches PEOPLE; /hilight pattern, /dehilight pattern watch WORDS (/watch add|del|list is the older spelling)");
     log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
     log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
+    log_line(app, "terminal: /mouse [on|off] — turn off to restore the terminal's own copy/paste selection (disables click-to-preview)");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
 
@@ -4935,6 +4968,30 @@ static void handle_command_dispatch(struct app *app, char *line) {
         show_help(app);
     } else if (strncmp(line, "/help ", 6) == 0) {
         show_command_help(app, line + 6);
+    } else if (strncmp(line, "/mouse", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) {
+        /* Mouse tracking and the terminal's own text selection are mutually
+         * exclusive — while shottino is tracking, the terminal forwards
+         * button/motion events here instead of selecting. Shift-drag
+         * overrides tracking in most terminals, but that is a workaround,
+         * not a setting, so this makes the trade explicit and switchable. */
+        const char *rest = line + 6;
+        while (*rest == ' ') rest++;
+        bool want = app->mouse_enabled;
+        if (!*rest) want = !app->mouse_enabled;
+        else if (strcmp(rest, "on") == 0) want = true;
+        else if (strcmp(rest, "off") == 0) want = false;
+        else {
+            log_line(app, "/mouse [on|off] — bare /mouse toggles");
+            return;
+        }
+        app->mouse_enabled = want;
+        mouse_apply(app);
+        if (want)
+            log_line(app, "mouse tracking ON — click media links to preview; "
+                          "terminal text selection is suppressed (Shift-drag usually still works)");
+        else
+            log_line(app, "mouse tracking OFF — select and copy with the mouse as usual; "
+                          "click-to-preview is disabled until /mouse on");
     } else if (strcmp(line, "/chat") == 0) {
         pthread_mutex_lock(&app->lock);
         app->panel = PANEL_CHAT;
@@ -5324,8 +5381,19 @@ static void handle_enter(struct app *app) {
     else {
         const char *network = app->windows[app->current].network;
         const char *channel = app->windows[app->current].channel;
-        add_pending_echo(app, network, channel, own_nick_for_network(app, network), line);
-        enqueue_send(app, network, channel, line);
+        /* $server is read-only by server contract, so say so HERE rather
+         * than firing a request that can only come back 400. The client
+         * knows the rule; making the user decode an HTTP status to learn
+         * it is the failure this replaces. Commands still work from a
+         * $server window — only a bare PRIVMSG has nowhere to go. */
+        if (strcmp(channel, "$server") == 0) {
+            log_line(app, "[%s/$server] --- the server window is read-only — "
+                          "switch to a channel, or use /msg <nick> <text> or /join #chan",
+                     network);
+        } else {
+            add_pending_echo(app, network, channel, own_nick_for_network(app, network), line);
+            enqueue_send(app, network, channel, line);
+        }
     }
 }
 
@@ -5381,7 +5449,7 @@ static void event_loop(struct app *app) {
     timeout(50);
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
     mouseinterval(0);
-    mouse_reporting(true);
+    mouse_apply(app);
     app->running = true;
     while (app->running) {
         ws_pump(app);
@@ -5502,6 +5570,7 @@ int main(int argc, char **argv) {
     pthread_mutex_init(&app->jobs_lock, NULL);
     pthread_cond_init(&app->jobs_cond, NULL);
     app->ws.fd = -1;
+    app->mouse_enabled = true;
     char *share_base = NULL, *share_token = NULL;
     const char *server_url;
     if (share_mode) {

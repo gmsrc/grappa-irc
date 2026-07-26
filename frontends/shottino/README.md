@@ -125,8 +125,12 @@ Media link previews:
   `chafa` is used when installed but is not needed.
 - Sixel support cannot be probed reliably. Set `SHOTTINO_GRAPHICS=1` to force
   the bitmap path on a terminal you know supports it.
-- While shottino runs, mouse reporting is enabled, which suppresses the
-  terminal's native text selection (Shift-drag still works in most terminals).
+- While shottino runs, mouse tracking is enabled, which necessarily suppresses
+  the terminal's own text selection: the terminal forwards button and motion
+  events to shottino instead of selecting. **`/mouse off` turns tracking off and
+  gives selection back** (click-to-preview stops working until `/mouse on`).
+  Shift-drag overrides tracking in most terminals if you only need it
+  occasionally.
 
 ## Commands
 
