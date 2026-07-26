@@ -38,8 +38,17 @@ description: |
 # it is UTF-8 end to end) while the narrow libncurses6 above is what ERTS
 # wants. Debian ships them separately, so depending on only one leaves the
 # other's consumer with a "cannot open shared object file" at exec time.
+# libssl3t64 | libssl3: Debian's 64-bit time_t transition renamed the
+# OpenSSL runtime package `libssl3` -> `libssl3t64` on Ubuntu 24.04 (noble)
+# and forward, WITHOUT a `Provides: libssl3` on the new package — the
+# pre-t64 names are being decrufted from the archive, so a hard-coded
+# `libssl3` dependency is UNINSTALLABLE there. That matters directly: the
+# release job builds AND `apt install`s the .deb on ubuntu-latest, which is
+# noble. The alternation resolves libssl3t64 on noble/trixie and falls back
+# to libssl3 on bookworm and pre-t64 Ubuntu. Same libssl.so.3 SONAME either
+# way, so the bundled ERTS + shottino link the same lib regardless.
 depends:
-  - libssl3
+  - libssl3t64 | libssl3
   - libncurses6
   - libncursesw6
   - libstdc++6

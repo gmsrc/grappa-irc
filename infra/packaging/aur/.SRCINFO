@@ -1,6 +1,6 @@
 pkgbase = grappa
 	pkgdesc = Always-on IRC bouncer with a REST + Phoenix Channels API and a bundled web PWA (cicchetto)
-	pkgver = 0.5.0
+	pkgver = 0.6.0
 	pkgrel = 1
 	url = https://github.com/vjt/grappa-irc
 	install = grappa.install
@@ -17,7 +17,7 @@ pkgbase = grappa
 	optdepends = nginx: TLS + static reverse proxy (recommended, not required)
 	options = !strip
 	options = !debug
-	source = grappa-0.5.0.tar.gz::https://github.com/vjt/grappa-irc/archive/refs/tags/v0.5.0.tar.gz
+	source = grappa-0.6.0.tar.gz::https://github.com/vjt/grappa-irc/archive/refs/tags/v0.6.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = grappa

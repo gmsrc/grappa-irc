@@ -21,7 +21,7 @@
 # automated from here, no AUR credentials live in this tree. See README.md.
 
 pkgname=grappa
-pkgver=0.5.0
+pkgver=0.6.0
 pkgrel=1
 pkgdesc="Always-on IRC bouncer with a REST + Phoenix Channels API, a bundled web PWA (cicchetto) and a terminal client (shottino)"
 arch=('x86_64')
