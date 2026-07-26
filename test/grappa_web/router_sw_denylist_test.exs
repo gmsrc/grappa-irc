@@ -29,13 +29,24 @@ defmodule GrappaWeb.RouterSwDenylistTest do
   #     to index.html is the desired behaviour.
   #   - "/healthz" — single GET; load-balancer probe; if a probe URL
   #     opens in a browser tab the SPA shell is harmless.
+  #   - "/*path" (#399) — the embedded-frontend SPA history-mode
+  #     fallback (`GrappaWeb.SpaController.index/2`). This IS the shell;
+  #     the cic SW SHOULD serve the shell for a client-side route, same
+  #     as "/". Denylisting it would break offline navigation — the
+  #     opposite of what a denylist entry is for.
+  #   - "/service-worker.js" (#399) — the SW script itself, served by
+  #     the BEAM with no-cache (nginx `= /service-worker.js` parity).
+  #     Never a top-level navigation (the browser script-fetches it for
+  #     registration, which the nav handler ignores), so it needs no
+  #     denylist entry; the "." in the filename would also break the
+  #     denylist's `[A-Za-z0-9_-]+` token match.
   #
   # async: true — pure file reads + module reflection, no shared
   # state.
   use ExUnit.Case, async: true
 
   @sw_path "cicchetto/src/service-worker.ts"
-  @whitelist ["/", "/healthz"]
+  @whitelist ["/", "/healthz", "/*path", "/service-worker.js"]
 
   describe "SW denylist ⊇ router top-level scopes" do
     test "every router top-level prefix appears in the SW denylist" do

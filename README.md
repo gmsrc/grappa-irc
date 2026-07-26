@@ -121,6 +121,8 @@ Boot-time verbs run as mix tasks in the container; live-state verbs attach to th
 
 **Self-hosting?** [`INSTALL.md`](INSTALL.md) is the one-command Docker install — `scripts/quickstart.sh` generates every secret, builds, brings up the full stack (bouncer + PWA + nginx), and waits until `/healthz` is green. It also covers exposing it with TLS (Caddy / nginx / mkcert). The workflow below is the **operator / hot-deploy path** used for the production host.
 
+**The release serves its own frontend.** Phoenix's embedded web server publishes the built cicchetto bundle (`CIC_DIST_ROOT`, default `runtime/cicchetto-dist`) and streams uploads, so a plain `bin/grappa start` on an HTTP port gives a working instance — nginx stays **recommended**, not **required**. This is what makes a native (non-Docker) `systemd` / `rc.d` install stand up on its own; see `docs/OPERATIONS.md` for the release path. One caveat: nginx also supplies the Content-Security-Policy + security headers (`infra/snippets/security-headers.conf`), and that CSP is the load-bearing defense for the localStorage bearer token — the embedded server does **not** set them. So if you terminate TLS some other way (Caddy, a cloud LB), still front grappa with a reverse proxy that ships those headers; a plain-HTTP self-serve is fine for LAN / trusted-network use, not for a public deployment.
+
 ```sh
 git clone https://github.com/vjt/grappa-irc /srv/grappa && cd /srv/grappa
 cp .env.example .env

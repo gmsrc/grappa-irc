@@ -17953,3 +17953,84 @@ the extraction: inbound fires the window push with the row's window ctx;
 outbound and join_failed fire none. Flip any `push:` flag and a test
 fails. Full `check.sh` green: 4259 tests / 0 failures, Dialyzer 0, Credo
 clean.
+## 2026-07-26 — Self-hosting Part 1: the release self-serves its own frontend (GH #399)
+
+**Problem.** The release could not serve its own frontend. The endpoint had no
+`Plug.Static`; `config/runtime.exs` documents that nginx terminates TLS and
+fronts the app in our own deployment. Fine for the m42 jail, but a self-hoster
+who installs the release gets a running BEAM and a blank page — nothing
+publishes the cicchetto bundle. (The issue also named "the uploads directory,"
+but that was already false: uploads are served by `UploadsController.show/2` via
+`send_file` with Range support, under the BEAM the whole time — nginx merely
+proxies `/uploads/*` to it, never serving from disk. So Part 1 is ONLY the SPA
+bundle.) This is the prerequisite for Part 2 packaging (deb/rpm/Arch/AUR): you
+cannot ship an installable package of something that does not stand up on its
+own. Scope decided per channel: Part 1 now, Part 2 a separate batch.
+
+**Serve from the existing `runtime/cicchetto-dist` anchor, not `priv/static`.**
+cic already builds (Vite, `base=/`, same-origin relative REST/WS) into
+`runtime/cicchetto-dist` — the ONE dir `Grappa.Cic.Bundle` already live-reads
+for the version hash AND that every deploy substrate (docker `cicchetto-build`,
+FreeBSD `jail_cic_build.sh`, linux `cic_build.sh`) writes AND that nginx fronts
+(symlinked docroot). Moving the build output into `priv/static` (the
+Phoenix-canonical "bake into the release tarball" path) would have rippled
+across four nginx configs, `Bundle`, every deploy script, the compose mounts,
+and the e2e `nginx-test.conf` — a large, risky change to prod deploy machinery
+for no Part-1 benefit. Instead: make the dist path the single boot-configurable
+root and point BOTH the `Plug.Static` serving and the `Bundle` live-read at it.
+Blast radius: the endpoint + one config knob + a `Bundle` refactor; nginx,
+deploy scripts, compose, and e2e are ALL untouched. "Embedded web server serves
+the frontend" is satisfied by Bandit serving it — the bytes need not live inside
+the release tarball; the *deployment* is self-sufficient without nginx.
+
+**One source of truth for WHERE the dist lives.** `Grappa.Cic.Bundle.root/0`
+(boot `:persistent_term`, default the compile-time `runtime/cicchetto-dist`
+anchor) is now read by (a) the endpoint's `Plug.Static` + SPA fallback and (b)
+the hash/version live-read. `boot/1` is called from `Grappa.Application.start/2`
+with `Application.get_env(:grappa, :cic_dist_root)`, which `config/runtime.exs`
+derives from `CIC_DIST_ROOT` (default `runtime/cicchetto-dist`, resolved against
+the process CWD like `UPLOADS_STORAGE_ROOT`). A packaged install (Part 2) sets
+`CIC_DIST_ROOT` to its data dir. Same CLAUDE.md boundary pattern as
+`Grappa.Uploads.boot/1` + `Grappa.HttpHosts.boot/1`.
+
+**Replicating nginx's two location rules on the BEAM.** The endpoint gains a
+runtime-configured `Plug.Static` (cached-opts keyed on the resolved root, same
+plug shape as the `:session` runtime-salt plug) serving the vite top-level set
+(`assets/`, `backgrounds/`, `fonts/`, `icon*`, `manifest.webmanifest`) — placed
+before Telemetry/Parsers so a static HIT sends+halts and a MISS falls through
+untouched (nginx-fronted prod, where these never reach the BEAM, is unaffected).
+`index.html` and `service-worker.js` are EXCLUDED from the `:only` allowlist so
+they fall through to two router routes (`GrappaWeb.SpaController`): a `GET
+/*path` catch-all (LAST scope, so every explicit API/admin/uploads/healthz/push
+route wins by being registered earlier; `/socket` is intercepted in the
+Endpoint) that serves `index.html` for a browser navigation (nginx `try_files
+$uri /index.html`), and a `GET /service-worker.js` route that adds
+`Cache-Control: no-cache` (nginx `= /service-worker.js`) so a PWA update is
+never pinned by a stale SW. The catch-all serves the shell only when the client
+Accepts HTML (`text/html` / `*/*` / empty) — an API client hitting an unknown
+path still gets a JSON 404, so the SPA never masks a real API 404. Bundle absent
+(dev/CI before a build, or a release deployed without one) → an honest 404, never
+a 500. `@cic_static_only` is kept in lockstep with the actual build output: a NEW
+root-level public asset must be added there or it falls through to the SPA
+fallback instead of serving as its own bytes.
+
+**Known Part-1 gap (deferred, nginx-recommended-not-required posture).**
+BEAM-served responses do not carry the nginx CSP + security headers
+(`infra/snippets/security-headers.conf`). For production hardening a self-hoster
+still fronts with nginx (or Caddy); the embedded server is the
+plain-HTTP-works-out-of-the-box path, not the hardened one. Lifting CSP onto the
+BEAM responses is a hardening follow-up, not a prerequisite for a working
+self-hosted instance.
+
+**Minor nginx-parity divergence (code-review LOW, accepted).** A request for a
+NONEXISTENT static file under an allowlisted prefix (`/assets/x.js`,
+`/backgrounds/x.webp`, `/fonts/x.woff2`, or a root `*.map`) misses `Plug.Static`,
+falls through to the SPA catch-all, and — for a browser `*/*` Accept — serves
+`index.html` (200) rather than the `try_files $uri =404` clean 404 nginx gives.
+It only bites a MIS-deployed dist (a correctly built dist references only files
+it emitted, written together under `--emptyOutDir`, so there is no stale-hash
+window on the self-serve path). Left as-is deliberately: the obvious fix — 404
+any catch-all path with a file extension — would misclassify a client-side SPA
+route that happens to contain a dot, trading a harmless divergence for a new
+real failure mode. nginx-fronted prod is unaffected (nginx `=404`s these before
+the BEAM sees them).

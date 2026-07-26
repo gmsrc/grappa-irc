@@ -84,6 +84,15 @@ config :grappa,
          __DIR__
        )
 
+# #399 — point the embedded-frontend serving at a committed fixture
+# bundle (a Vite-shaped index.html + assets/ + backgrounds/ +
+# service-worker.js + manifest) so the SPA-serving + Bundle live-read
+# tests run against a stable, real on-disk dist without needing a cic
+# build. `Grappa.Cic.Bundle.boot/1` stashes this at app start.
+config :grappa,
+       :cic_dist_root,
+       Path.expand("../test/support/fixtures/cic_dist", __DIR__)
+
 # M-11 — AdminEvents telemetry attach disabled in test env. The global
 # `:telemetry.attach_many/4` handler routes every admission event from
 # every async test pid to the AdminEvents singleton; the singleton's

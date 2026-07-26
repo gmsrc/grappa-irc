@@ -7,6 +7,7 @@ defmodule Grappa.Application do
       Grappa.Admission,
       Grappa.AdminEvents,
       Grappa.Bootstrap,
+      Grappa.Cic.Bundle,
       Grappa.Health,
       Grappa.HttpHosts,
       Grappa.Net.PtrCache,
@@ -87,6 +88,13 @@ defmodule Grappa.Application do
     # page origin). Boot-time read of `Application.get_env/2` is the
     # CLAUDE.md-designated boundary (mirrors `Grappa.Uploads.boot/1`).
     :ok = Grappa.HttpHosts.boot(http_host_aliases())
+
+    # #399: stash the built cicchetto SPA dist root in `:persistent_term`
+    # so the endpoint's `Plug.Static` + SPA history-fallback and
+    # `Grappa.Cic.Bundle`'s hash/version live-read resolve against ONE
+    # root lock-free. Boot-time read of `Application.get_env/2` is the
+    # CLAUDE.md-designated boundary (mirrors `Grappa.Uploads.boot/1`).
+    :ok = Grappa.Cic.Bundle.boot(cic_dist_root())
 
     # Child order is load-bearing — see CLAUDE.md "Don't touch supervision
     # tree ordering casually." Each comment below documents the WHY so a
@@ -342,6 +350,16 @@ defmodule Grappa.Application do
   # reads from `:persistent_term`.
   defp uploads_storage_root do
     Application.fetch_env!(:grappa, :uploads_storage_root)
+  end
+
+  # #399: the built cicchetto SPA dist root. Configured via
+  # `:grappa, :cic_dist_root` in `config/config.exs` (base default) /
+  # `config/runtime.exs` (prod, `CIC_DIST_ROOT`) / `config/test.exs`
+  # (fixture bundle). Read at boot only (here + `Grappa.Cic.Bundle.boot/1`);
+  # the runtime path reads from `:persistent_term`. Mirrors
+  # `uploads_storage_root/0`.
+  defp cic_dist_root do
+    Application.fetch_env!(:grappa, :cic_dist_root)
   end
 
   # #324 — the deployment's HTTP host aliases, boot-derived in

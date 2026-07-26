@@ -411,4 +411,21 @@ defmodule GrappaWeb.Router do
       post "/channels/:channel_id/read-cursor/force", TestReadCursorController, :force
     end
   end
+
+  # #399 — embedded-frontend serving. Replicates nginx's `= /service-
+  # worker.js` (no-cache) + `location / { try_files $uri /index.html; }`
+  # (SPA history-mode fallback) so the BEAM self-serves the cicchetto
+  # bundle without nginx. MUST be the LAST scope: the `/*path` glob
+  # catches every GET not matched by an explicit route above (all
+  # API/admin/uploads/healthz/push routes win by being registered
+  # earlier; `/socket` is intercepted in the Endpoint), and the
+  # Endpoint's `Plug.Static` already served the real asset files before
+  # the router ran. `pipe_through []` — the SPA shell is public and must
+  # not go through the `:api` JSON content-negotiation.
+  scope "/", GrappaWeb do
+    pipe_through []
+
+    get "/service-worker.js", SpaController, :service_worker
+    get "/*path", SpaController, :index
+  end
 end

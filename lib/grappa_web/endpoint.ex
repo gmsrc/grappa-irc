@@ -38,6 +38,22 @@ defmodule GrappaWeb.Endpoint do
   @session_key "_grappa_key"
   @session_persistent_term_key {__MODULE__, :session_opts}
 
+  # #399 — cached `Plug.Static` opts (keyed on the resolved dist root).
+  @cic_static_persistent_term_key {__MODULE__, :cic_static_opts}
+
+  # Top-level entries the vite build emits at the dist root (`base=/`),
+  # matched on the FIRST path segment: the hashed `assets/` chunks +
+  # everything copied verbatim from `cicchetto/public/` (`backgrounds/`,
+  # `fonts/`, `icon*.{svg,png}`) + the pwa-plugin `manifest.webmanifest`.
+  # Kept in lockstep with the actual build output — a NEW root-level
+  # public asset MUST be added here or it falls through to the SPA
+  # fallback (served as index.html for a browser navigation) instead of
+  # as its own bytes. `index.html` (SPA fallback route) and
+  # `service-worker.js` (dedicated no-cache route) are deliberately OUT
+  # so they fall through to the router.
+  @cic_static_only ~w(assets backgrounds fonts manifest.webmanifest
+                      icon.svg icon-192.png icon-512.png)
+
   # #95 — accept the bearer via the `Sec-WebSocket-Protocol` subprotocol
   # (`auth_token: true`) so it no longer has to ride `?token=` on the WS
   # upgrade URL (pre-redaction URL exposure). Phoenix decodes the
@@ -85,6 +101,23 @@ defmodule GrappaWeb.Endpoint do
   plug GrappaWeb.Plugs.RemoteIpFromProxy,
     headers: ~w[x-forwarded-for x-real-ip]
 
+  # #399 — self-serve the built cicchetto SPA static assets from the
+  # embedded web server so a plain `bin/grappa start` on an HTTP port
+  # yields a working instance without nginx in front (nginx stays
+  # RECOMMENDED for TLS + static fronting in production, not required).
+  # Runtime-configured (`Grappa.Cic.Bundle.root/0`, boot `:persistent_term`)
+  # via the same cached-opts pattern as the `:session` plug below —
+  # `Plug.Static` init compiles the `:only` matcher, so we cache the opts
+  # keyed on the resolved root and rebuild only when it changes (boot /
+  # tests). Placed BEFORE Telemetry/Parsers/Session/Router: a static HIT
+  # sends + halts, skipping body parsing and the router; a MISS falls
+  # through untouched (so nginx-fronted prod, where these paths never
+  # reach the BEAM, is unaffected). `index.html` is served by the SPA
+  # history-fallback route and `service-worker.js` by a dedicated
+  # no-cache route (nginx parity) — both EXCLUDED from `:only` here so
+  # they fall through to the router.
+  plug :serve_cic_static
+
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
   # Multipart :length default is 8_000_000 bytes — below the 10MB
@@ -105,6 +138,29 @@ defmodule GrappaWeb.Endpoint do
   plug Plug.Head
   plug :session
   plug GrappaWeb.Router
+
+  # #399 — serve the built cic SPA static assets from the runtime-
+  # resolved dist root. Same cached-opts pattern as `session/2`:
+  # `Plug.Static.init/1` compiles the `:only` matcher, so cache the opts
+  # keyed on the current root + rebuild only when it changes (a boot
+  # `Grappa.Cic.Bundle.boot/1`, or a test pointing at a different dist).
+  defp serve_cic_static(conn, _) do
+    Plug.Static.call(conn, cached_cic_static_opts())
+  end
+
+  defp cached_cic_static_opts do
+    root = Grappa.Cic.Bundle.root()
+
+    case :persistent_term.get(@cic_static_persistent_term_key, nil) do
+      {^root, opts} ->
+        opts
+
+      _ ->
+        opts = Plug.Static.init(at: "/", from: root, only: @cic_static_only)
+        :persistent_term.put(@cic_static_persistent_term_key, {root, opts})
+        opts
+    end
+  end
 
   # Custom session plug that reads `signing_salt` at runtime from
   # `:grappa, __MODULE__, :session_signing_salt`. Cached after first

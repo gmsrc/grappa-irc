@@ -4,6 +4,17 @@ config :grappa,
   ecto_repos: [Grappa.Repo],
   generators: [timestamp_type: :utc_datetime_usec]
 
+# #399 — where the built cicchetto SPA dist lives. The endpoint's
+# `Plug.Static` + SPA history-fallback and `Grappa.Cic.Bundle`'s
+# hash/version live-read both resolve against this ONE root, so the
+# embedded web server self-serves the frontend (a plain
+# `bin/grappa start` works without nginx). Base default is the
+# `runtime/cicchetto-dist` build anchor (dev inherits); `config/test.exs`
+# points at a committed fixture bundle; `config/runtime.exs` (prod) reads
+# `CIC_DIST_ROOT` so a packaged install (deb/rpm/Arch) can relocate it.
+# Read ONCE at boot into `:persistent_term` via `Grappa.Cic.Bundle.boot/1`.
+config :grappa, :cic_dist_root, Path.expand("../runtime/cicchetto-dist", __DIR__)
+
 # Visitor-auth cluster (Phase 4) defaults. W3 `max_visitors_per_ip` is
 # the per-source-IP active-visitor cap, read via `Application.compile_env/2`
 # from `Grappa.Visitors.Login` — `config/test.exs` overrides it to 2 for

@@ -102,6 +102,12 @@ services:
       # so the existing host volume covers it). Override only if
       # disk-policy requires a separate volume.
       UPLOADS_STORAGE_ROOT: ${UPLOADS_STORAGE_ROOT:-/app/runtime/uploads}
+      # #399: the built cicchetto SPA dist the embedded web server
+      # self-serves (Plug.Static + SPA history-fallback). Defaults to the
+      # bind-mounted `runtime/cicchetto-dist` (the same dir nginx fronts),
+      # so grappa self-serves the frontend if nginx is absent. Override
+      # only for a relocated dist.
+      CIC_DIST_ROOT: ${CIC_DIST_ROOT:-/app/runtime/cicchetto-dist}
       # Optional, prod-tunable. Real defaults here (NOT ${VAR:-}, which
       # forwards "" and crashes String.to_integer/1 at boot) so a .env
       # override propagates AND an unset var lands a valid value — same

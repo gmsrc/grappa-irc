@@ -102,6 +102,18 @@ if config_env() == :prod do
 
   config :grappa, :uploads_storage_root, uploads_storage_root
 
+  # #399 — the built cicchetto SPA dist the embedded web server
+  # self-serves (Plug.Static + SPA history-fallback). Defaults to the
+  # `runtime/cicchetto-dist` build anchor (resolved against the process
+  # CWD, like UPLOADS_STORAGE_ROOT above — systemd/rc.d run with
+  # WorkingDirectory at the repo root); a packaged install (deb/rpm/Arch)
+  # sets CIC_DIST_ROOT to an absolute data path. Stashed into
+  # `:persistent_term` via Grappa.Cic.Bundle.boot/1 at app start.
+  cic_dist_root =
+    System.get_env("CIC_DIST_ROOT") || "runtime/cicchetto-dist"
+
+  config :grappa, :cic_dist_root, cic_dist_root
+
   config :grappa, Grappa.Repo,
     database: database_path,
     # SQLite is single-writer at the file level. `pool_size: 10` is a
