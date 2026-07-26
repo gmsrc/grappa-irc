@@ -37,6 +37,7 @@
 #include "alias.h"
 #include "json.h"
 #include "mirc.h"
+#include "termcolor.h"
 #include "wire.h"
 
 #define MAX_TOKEN 4096
@@ -1467,36 +1468,11 @@ static void mirc_colors_init(void) {
     if (mirc_pair_limit > (short)(CP_MIRC_BASE + 216)) mirc_pair_limit = CP_MIRC_BASE + 216;
 }
 
-/* Nearest xterm-256 index for an RGB value: the 6x6x6 colour cube and the
- * 24-step grey ramp, whichever is closer. */
-static short rgb_to_xterm256(long rgb) {
-    int r = (int)((rgb >> 16) & 0xff), g = (int)((rgb >> 8) & 0xff), b = (int)(rgb & 0xff);
-    /* Grey ramp (232-255) wins for near-neutral colours; the cube's grey
-     * axis is coarse and would visibly tint them. */
-    int max = r > g ? (r > b ? r : b) : (g > b ? g : b);
-    int min = r < g ? (r < b ? r : b) : (g < b ? g : b);
-    if (max - min < 16) {
-        int level = (r + g + b) / 3;
-        if (level < 8) return 16;
-        if (level > 238) return 231;
-        return (short)(232 + (level - 8) / 10);
-    }
-    int qr = (r * 5 + 127) / 255, qg = (g * 5 + 127) / 255, qb = (b * 5 + 127) / 255;
-    return (short)(16 + 36 * qr + 6 * qg + qb);
-}
-
-/* Nearest of the basic 8 for terminals without a 256-colour palette. */
-static short rgb_to_basic8(long rgb) {
-    int r = (int)((rgb >> 16) & 0xff), g = (int)((rgb >> 8) & 0xff), b = (int)(rgb & 0xff);
-    int bit = (r > 127 ? 1 : 0) | (g > 127 ? 2 : 0) | (b > 127 ? 4 : 0);
-    static const short map[8] = {COLOR_BLACK, COLOR_RED,     COLOR_GREEN, COLOR_YELLOW,
-                                 COLOR_BLUE,  COLOR_MAGENTA, COLOR_CYAN,  COLOR_WHITE};
-    return map[bit];
-}
-
+/* Quantisation lives in termcolor.[ch]; the choice of WHICH quantiser is
+ * a curses-runtime question (COLORS), so it stays here. */
 static short mirc_terminal_color(long rgb) {
     if (rgb < 0) return -1;
-    return COLORS >= 256 ? rgb_to_xterm256(rgb) : rgb_to_basic8(rgb);
+    return (short)(COLORS >= 256 ? termcolor_xterm256(rgb) : termcolor_basic8(rgb));
 }
 
 /* Resolve a run's colour spec to an RGB, or -1 for "inherit". */
@@ -3823,10 +3799,59 @@ static void mouse_reporting(bool on) {
  * (Kitty > iTerm2 > Sixel > symbols). Falls back to xdg-open when either tool
  * is absent or the frame extraction fails. Blocks until a key is pressed; the
  * caller's next draw() repaints the chat, clearing the preview. */
+/* Built-in preview path: ffmpeg decodes straight to raw RGB at the exact
+ * cell grid, and we draw it ourselves. This is what makes a preview work
+ * with NO chafa installed at all — previously a missing chafa meant no
+ * preview, just an external browser launch. */
+static bool preview_builtin(const char *url, const char *dir, int cols, int rows,
+                            term_color_depth depth) {
+    /* Two source pixels per cell row, so ask ffmpeg for double height.
+     * `format=rgb24` before scale keeps the pixel layout predictable
+     * regardless of the source's colour space. */
+    int px_w = cols;
+    int px_h = rows * 2;
+    if (px_w < 2 || px_h < 2) return false;
+
+    char raw[PATH_MAX];
+    snprintf(raw, sizeof(raw), "%s/frame.rgb", dir);
+    /* Fit inside the grid preserving aspect, then pad to the exact size so
+     * the raw buffer length is known up front. */
+    char scale[192];
+    snprintf(scale, sizeof(scale), "thumbnail,scale=%d:%d:force_original_aspect_ratio=decrease,"
+                                   "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
+             px_w, px_h, px_w, px_h);
+    char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
+                    "-i", (char *)url, "-vf", scale, "-frames:v", "1",
+                    "-f", "rawvideo", "-pix_fmt", "rgb24", raw, NULL};
+    if (run_cmd(argv, false) != 0) return false;
+
+    size_t want = (size_t)px_w * (size_t)px_h * 3;
+    unsigned char *buf = malloc(want);
+    if (!buf) return false;
+    FILE *f = fopen(raw, "rb");
+    if (!f) {
+        free(buf);
+        return false;
+    }
+    size_t got = fread(buf, 1, want, f);
+    fclose(f);
+    unlink(raw);
+    if (got != want) {
+        free(buf);
+        return false;
+    }
+    termcolor_render_rgb(buf, px_w, px_h, depth, stdout);
+    free(buf);
+    return true;
+}
+
 static void preview_media(struct app *app, const char *url, bool is_video) {
     if (!url || !url[0]) return;
-    if (!tool_on_path("chafa") || !tool_on_path("ffmpeg")) {
-        log_line(app, "preview needs 'chafa' + 'ffmpeg' on PATH — opening externally");
+    /* ffmpeg is the only hard requirement: it is what fetches and decodes
+     * the media. chafa is now optional — without it we draw the frame
+     * ourselves as coloured half-blocks. */
+    if (!tool_on_path("ffmpeg")) {
+        log_line(app, "preview needs 'ffmpeg' on PATH — opening externally");
         open_external_url(app, url);
         return;
     }
@@ -3840,21 +3865,29 @@ static void preview_media(struct app *app, const char *url, bool is_video) {
     char png[PATH_MAX];
     snprintf(png, sizeof(png), "%s/frame.png", dir);
 
-    /* ffmpeg fetches + decodes the URL and writes one representative frame.
-     * The thumbnail filter picks a non-leader frame for video and is a no-op
-     * pass-through for a still image, so one pipeline covers both (and avoids a
-     * black first frame for an extensionless video URL). rw_timeout bounds a
-     * stalled network fetch (microseconds). */
-    char *ff_argv[] = {"ffmpeg", "-y", "-loglevel", "error",
-                       "-rw_timeout", "15000000", "-i", (char *)url,
-                       "-vf", "thumbnail", "-frames:v", "1", png, NULL};
-    int rc = run_cmd(ff_argv, false);
-    if (rc != 0 || access(png, R_OK) != 0) {
-        log_line(app, "preview: could not fetch/decode media (ffmpeg rc=%d) — opening externally", rc);
-        open_external_url(app, url);
-        unlink(png);
-        rmdir(dir);
-        return;
+    bool have_chafa = tool_on_path("chafa");
+    bool graphics = termcolor_has_graphics();
+    term_color_depth depth = termcolor_detect_depth();
+
+    /* Only the chafa path needs a PNG; the built-in renderer decodes
+     * straight to raw RGB later, at the exact cell grid. */
+    if (have_chafa) {
+        /* ffmpeg fetches + decodes the URL and writes one representative frame.
+         * The thumbnail filter picks a non-leader frame for video and is a no-op
+         * pass-through for a still image, so one pipeline covers both (and avoids a
+         * black first frame for an extensionless video URL). rw_timeout bounds a
+         * stalled network fetch (microseconds). */
+        char *ff_argv[] = {"ffmpeg", "-y", "-loglevel", "error",
+                           "-rw_timeout", "15000000", "-i", (char *)url,
+                           "-vf", "thumbnail", "-frames:v", "1", png, NULL};
+        int rc = run_cmd(ff_argv, false);
+        if (rc != 0 || access(png, R_OK) != 0) {
+            log_line(app, "preview: could not fetch/decode media (ffmpeg rc=%d) — opening externally", rc);
+            open_external_url(app, url);
+            unlink(png);
+            rmdir(dir);
+            return;
+        }
     }
 
     struct winsize ws = {0};
@@ -3877,11 +3910,49 @@ static void preview_media(struct app *app, const char *url, bool is_video) {
     printf("preview: %.*s\r\n", url_w, url);
     fflush(stdout);
 
-    char *chafa_argv[] = {"chafa", "--clear", "--size", size_arg, png, NULL};
-    run_cmd(chafa_argv, true);
+    const char *how = NULL;
+    if (have_chafa) {
+        /* chafa auto-detects a graphics protocol, but on a terminal with
+         * none it must be told to render SYMBOLS explicitly — otherwise a
+         * conservative detection can leave the preview blank. Colour
+         * count is pinned to what the terminal actually has so the art is
+         * as colourful as the terminal allows and no more. */
+        const char *colors = depth == TERM_COLOR_TRUE  ? "full"
+                             : depth == TERM_COLOR_256 ? "256"
+                             : depth == TERM_COLOR_8   ? "16"
+                                                       : "none";
+        if (graphics) {
+            char *argv[] = {"chafa", "--clear", "--size", size_arg, png, NULL};
+            run_cmd(argv, true);
+            how = "image";
+        } else {
+            char *argv[] = {"chafa", "--clear", "--format", "symbols", "--colors",
+                            (char *)colors, "--symbols", "block+border+space",
+                            "--size", size_arg, png, NULL};
+            run_cmd(argv, true);
+            how = depth == TERM_COLOR_NONE ? "ascii" : "colour ascii";
+        }
+    } else {
+        /* No chafa: draw it ourselves. */
+        if (preview_builtin(url, dir, term_cols, term_rows - 2, depth)) {
+            how = depth == TERM_COLOR_NONE ? "ascii" : "colour ascii";
+        } else {
+            /* Decode failed with no fallback renderer left — restore the
+             * screen before handing off, or the terminal is left in the
+             * half-torn-down state this branch was entered with. */
+            reset_prog_mode();
+            clearok(stdscr, TRUE);
+            refresh();
+            mouse_reporting(true);
+            log_line(app, "preview: could not decode media — opening externally");
+            open_external_url(app, url);
+            rmdir(dir);
+            return;
+        }
+    }
 
-    printf("\033[%d;1H[ %s — press any key to return ]", term_rows,
-           is_video ? "video frame" : "image");
+    printf("\033[%d;1H[ %s%s — press any key to return ]", term_rows,
+           is_video ? "video frame, " : "", how);
     fflush(stdout);
     wait_for_dismiss_key();
 
