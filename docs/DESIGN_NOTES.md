@@ -18034,3 +18034,77 @@ any catch-all path with a file extension — would misclassify a client-side SPA
 route that happens to contain a dot, trading a harmless divergence for a new
 real failure mode. nginx-fronted prod is unaffected (nginx `=404`s these before
 the BEAM sees them).
+
+## 2026-07-26 — #369 batch 6 / D6a: wire error-token SSOT + drift gate (A6)
+
+The 2026-07-20 architecture review (A6) measured a live drift in the
+web-layer error surface. There was NO enumeration of the
+`%{error: "<token>"}` wire space: 56 REST + 21 channel tokens were
+hard-coded inline across five files, `FallbackController.call/2`'s
+`@spec` listed the INPUT atoms (not the wire strings — 11 of them BEND,
+e.g. `:ip_cap_exceeded → "too_many_sessions"`, `{:start_failed, _} →
+"upstream_unreachable"`), and the cicchetto client hand-maintained a
+parallel `KnownApiErrorCode` / `KnownChannelErrorCode` union + `Set` +
+`assertNever` switch that drifted (23 unmapped REST + 8 unmapped channel
+tokens; the `invalid_line` / `body_too_large` REST copies mapped only
+channel-side, so their REST siblings fell through to the raw wire token).
+
+**The split (vjt-ruled).** The full A6 fix — server enum + `gen_wire_types`
+codegen + GENERATED client unions — is ~11+ files, two transports, a new
+codegen capability (the client has union + Set + switch, not just a
+union), and ~30 unwritten client copy arms if the full union is forced.
+That is too big for one clean batch, so it split at a clean seam: **D6a
+(this batch) = the SERVER-side single source of truth + the gate that
+keeps it honest; D6b (later) = the codegen wiring + client generated
+unions**. D6a leaves no half-migration — a complete server enumeration +
+drift gate, with the client untouched (exactly as it is today); D6b is
+purely additive on top.
+
+**D6a — `GrappaWeb.ErrorTokens`.** `rest_error_token` / `channel_error_token`
+are atom unions whose members ARE the wire strings (the WIRE side of the
+11 bends, not the internal atoms). The four transport-shared tokens
+(`not_found`, `forbidden`, `invalid_line`, `body_too_large`) are factored
+into `shared_error_token` and referenced by BOTH — declared ONCE, since
+the *missing* shared declaration is the root cause of the cross-transport
+`invalid_line` / `body_too_large` drift. These `@type`s are the intended
+D6b codegen source (the S14 atom-union discipline, batch 3's mechanism).
+The module lives in the web layer (`GrappaWeb`, not `lib/grappa`) because
+wire tokens are a web concern — a consequence D6b inherits: the codegen
+glob is `lib/grappa/**/wire.ex`, so D6b must widen the glob or add a
+marker attribute to reach it (an open D6b decision, same as A5's
+glob-vs-marker choice).
+
+**The gate — derive, don't duplicate.** `error_tokens_drift_test.exs`
+keeps the SSOT honest by DERIVING the emitted set from source (a
+hand-kept second list is the exact parallel structure that drifts — the
+`env_registry_drift_test` precedent). It AST-walks every
+`lib/grappa_web/**/*.ex` emitter — `json(%{error: "..."})` for REST,
+`{:error, %{error: "..."}}` for channel — via `Code.string_to_quoted!` +
+`Macro.prewalk`, so `@moduledoc` / comment prose mentioning
+`error: "..."` never counts (only real call/tuple nodes do; pipes are not
+desugared by `string_to_quoted`, so the piped `json(%{...})` map is the
+sole arg). It asserts declared == emitted in BOTH directions
+(emitted-but-undeclared AND declared-but-unemitted). No emitter allowlist:
+the glob IS the derivation, so a NEW emitter file is covered
+automatically — proven live when #399's `spa_controller.ex` merged mid-batch
+and its `json(%{error: "not_found"})` was already accounted for (a shared
+token), keeping the gate green with zero edits. Compile-gated emitters
+(`if Mix.env() in [...]` wrapping the whole module, e.g.
+`TestResetSubjectController` which "literally does not exist in the prod
+release") are skipped so the SSOT stays a truthful picture of the PRODUCT
+wire contract, not whatever the `:test` build happens to compile. Gate
+verified load-bearing RED by dropping one token per transport.
+
+**Also — token rename.** The lone non-snake_case token, the channel
+`"unknown topic"` (with a SPACE, emitted by `GrappaChannel.join`'s
+unknown-shape arm and `AdminChannel.join`'s catch-all), was renamed to
+`"unknown_topic"` so it conforms to the A7 convention and enumerates as a
+clean `:unknown_topic` atom. Behaviour-preserving: cic's
+`friendlyChannelError` never mapped it (it falls through to the raw
+message either way).
+
+Full `check.sh` green post-rebase onto #399: 4277 tests / 0 failures,
+Dialyzer 0, Credo clean, Sobelow clean. 10x code-reviewer APPROVE
+(SSOT complete + exact, gate load-bearing both directions + non-vacuous,
+rename behaviour-safe; no half-migration). HELD — no push, no deploy
+(batching).
