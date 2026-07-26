@@ -1074,6 +1074,19 @@ describe("SettingsDrawer (#460 — settings index)", () => {
     ]);
   });
 
+  it("every index nav row carries a non-empty subtitle (self-explaining index)", async () => {
+    const { container } = wrap(true);
+    // Wait for the async vhost row so all eight rows are present.
+    await waitFor(() => screen.getByTestId("vhost-settings-entry"));
+    const rows = Array.from(container.querySelectorAll(".settings-nav-row"));
+    expect(rows.length).toBe(8);
+    for (const row of rows) {
+      const subtitle = row.querySelector(".settings-nav-row-subtitle");
+      expect(subtitle).not.toBeNull();
+      expect((subtitle?.textContent ?? "").trim().length).toBeGreaterThan(0);
+    }
+  });
+
   it("tapping the display row opens the display sub-page; back returns to the index", () => {
     wrap(true);
     openSub("display-settings-entry");

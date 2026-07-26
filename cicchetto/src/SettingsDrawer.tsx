@@ -688,7 +688,12 @@ const SettingsDrawer: Component<Props> = (props) => {
               data-testid="general-settings-entry"
               onClick={() => setSettingsPage("general")}
             >
-              <span class="settings-nav-row-label">general</span>
+              <span class="settings-nav-row-text">
+                <span class="settings-nav-row-label">general</span>
+                <span class="settings-nav-row-subtitle">
+                  upload retention and per-network identity
+                </span>
+              </span>
               <span class="settings-nav-row-chevron" aria-hidden="true">
                 ›
               </span>
@@ -702,7 +707,10 @@ const SettingsDrawer: Component<Props> = (props) => {
             data-testid="display-settings-entry"
             onClick={() => setSettingsPage("display")}
           >
-            <span class="settings-nav-row-label">display</span>
+            <span class="settings-nav-row-text">
+              <span class="settings-nav-row-label">display</span>
+              <span class="settings-nav-row-subtitle">text size, timestamps, colored nicklist</span>
+            </span>
             <span class="settings-nav-row-chevron" aria-hidden="true">
               ›
             </span>
@@ -717,7 +725,10 @@ const SettingsDrawer: Component<Props> = (props) => {
             data-testid="themes-settings-entry"
             onClick={() => setSettingsPage("themes")}
           >
-            <span class="settings-nav-row-label">themes</span>
+            <span class="settings-nav-row-text">
+              <span class="settings-nav-row-label">themes</span>
+              <span class="settings-nav-row-subtitle">browse and apply color themes</span>
+            </span>
             <span class="settings-nav-row-chevron" aria-hidden="true">
               ›
             </span>
@@ -731,7 +742,10 @@ const SettingsDrawer: Component<Props> = (props) => {
             data-testid="push-settings-entry"
             onClick={() => setSettingsPage("push")}
           >
-            <span class="settings-nav-row-label">notifications</span>
+            <span class="settings-nav-row-text">
+              <span class="settings-nav-row-label">notifications</span>
+              <span class="settings-nav-row-subtitle">push permission and per-trigger alerts</span>
+            </span>
             <span class="settings-nav-row-chevron" aria-hidden="true">
               ›
             </span>
@@ -747,7 +761,10 @@ const SettingsDrawer: Component<Props> = (props) => {
             data-testid="watchlists-settings-entry"
             onClick={() => setSettingsPage("watchlists")}
           >
-            <span class="settings-nav-row-label">watch lists</span>
+            <span class="settings-nav-row-text">
+              <span class="settings-nav-row-label">watch lists</span>
+              <span class="settings-nav-row-subtitle">presence notify and keyword highlight</span>
+            </span>
             <span class="settings-nav-row-chevron" aria-hidden="true">
               ›
             </span>
@@ -762,7 +779,10 @@ const SettingsDrawer: Component<Props> = (props) => {
             data-testid="aliases-settings-entry"
             onClick={() => setSettingsPage("aliases")}
           >
-            <span class="settings-nav-row-label">aliases</span>
+            <span class="settings-nav-row-text">
+              <span class="settings-nav-row-label">aliases</span>
+              <span class="settings-nav-row-subtitle">your own slash-command shortcuts</span>
+            </span>
             <span class="settings-nav-row-chevron" aria-hidden="true">
               ›
             </span>
@@ -777,7 +797,10 @@ const SettingsDrawer: Component<Props> = (props) => {
             data-testid="perform-settings-entry"
             onClick={() => setSettingsPage("perform")}
           >
-            <span class="settings-nav-row-label">on-connect commands</span>
+            <span class="settings-nav-row-text">
+              <span class="settings-nav-row-label">on-connect commands</span>
+              <span class="settings-nav-row-subtitle">raw IRC commands run on connect</span>
+            </span>
             <span class="settings-nav-row-chevron" aria-hidden="true">
               ›
             </span>
@@ -794,7 +817,10 @@ const SettingsDrawer: Component<Props> = (props) => {
               data-testid="vhost-settings-entry"
               onClick={enterVhostPage}
             >
-              <span class="settings-nav-row-label">source address (vhost)</span>
+              <span class="settings-nav-row-text">
+                <span class="settings-nav-row-label">source address (vhost)</span>
+                <span class="settings-nav-row-subtitle">the address you connect from</span>
+              </span>
               <span class="settings-nav-row-chevron" aria-hidden="true">
                 ›
               </span>

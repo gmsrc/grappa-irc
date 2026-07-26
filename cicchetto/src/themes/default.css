@@ -5543,6 +5543,26 @@ html.resize-dragging * {
   color: var(--muted);
 }
 
+/* #460 — the main settings page is an INDEX; each nav row stacks a label over
+ * a muted ≤2-line subtitle describing the sub-page it opens, so the index is
+ * self-explaining rather than a bare list of names. The text stacks in a
+ * column that takes the available width (min-width:0 so a long subtitle wraps
+ * instead of shoving the chevron off-row); the chevron stays right-aligned.
+ * Subtitle sizing lifts the `.settings-share-button-subtitle` idiom. */
+.settings-nav-row-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+  text-align: left;
+}
+
+.settings-nav-row-subtitle {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
 /* #335/#333 — the ONE titled "section" idiom across every settings surface:
  * a muted uppercase heading + a stacked body. The BASE is transparent
  * (heading + body, no card chrome) — the shape the vhost in-pool/out-of-pool
