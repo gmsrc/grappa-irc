@@ -19466,3 +19466,131 @@ serves the auto-unset path).
 
 **Cold deploy.** Two new columns → migration → COLD (already the COLD
 batch plan for the night).
+
+---
+
+## 2026-07-26 — #378 Web Push for `/notify` presence transitions
+
+Follow-up to #247 (the `/notify` watch list) and the B4 push cluster. A
+watched nick coming online or going offline now fires an OS-level push
+when the PWA is closed, gated by two new `notification_prefs` booleans.
+
+**Both prefs default OFF.** The original design defaulted
+`presence_online: true`, framed as an "intended opt-out rollout". That
+does not survive contact with `read_bool/3`: a stored prefs map written
+by a user who *deliberately* configured push is byte-indistinguishable
+from one that was never touched, so there is no way to default-on for
+"new" users only. Flipping it on would override an explicitly-expressed
+preference — and the first remedy an annoyed user reaches for (open
+Settings in an already-open tab, save) lands on the `cast_bools`
+deploy-skew 422. Default-off makes the checkboxes the opt-in and costs
+nothing; #247's Watched panel already advertises the feature.
+
+**`@prefs_trigger_keys` is now a proper subset of `@prefs_bool_keys`.**
+They held character-identical lists until this change. The presence keys
+stay out of the trigger list because `ensure_at_least_one_trigger/2`
+exists to reject a prefs map that would silently mute every *message*
+push; a default-true presence key in that list would let a user uncheck
+all three message triggers and still validate. Accepted consequence:
+presence-only push is unrepresentable — at least one message trigger must
+stay on. Both attributes carry a why-comment and a test pins the subset
+relation, because the apparent duplication reads like something to tidy
+up. cic mirrors this with `MessageNotificationPrefs`, a `Pick` of the
+five message keys, so the message predicate does not require prefs it
+never reads.
+
+**Tag namespacing.** Presence payloads use
+`"<slug>:presence:<folded_nick>"`. A bare-nick tag would equal the DM tag
+for that same nick (`build/3` writes `"<slug>:<channel_or_dm_peer>"`), so
+alice's DM banner and alice's presence banner would coalesce and
+overwrite each other. `:` is excluded from both `nickname` and
+`chanstring` in RFC 2812, which makes disjointness a property of the
+grammars rather than of one example — hence a StreamData property over
+generated nicks and channels, not a single `Alice[m]` case.
+
+**Dispatch lives in `Session.Server`, not `Session.Persistor`.**
+`Persistor` was extracted (#369 A3) precisely to own post-persist push
+obligations and close the direct `Server → Push` edge. A presence report
+persists nothing, so routing it through `Persistor` would mean inventing
+a fake persist path. The edge re-opens, narrowly: one call in the
+`presence_changed` arm, beside the broadcast it mirrors. The ctx map is
+built inline rather than shared with `Persistor`'s copy — the two live in
+different modules and derive from different sources (`state` vs
+`session_ctx()`), so a shared four-key helper would buy nothing.
+
+`Push` also owns its own `presence_kind()` instead of aliasing
+`Session.Presence.change_kind()`: `Presence` is not exported from the
+`Grappa.Session` boundary, and `Push` cannot dep `Session` because
+`Session` already deps `Push`. Two atoms beat either fix.
+
+**A rename is not a departure (`Presence.forget/2`).** A watched nick
+renaming makes upstream emit `RPL_LOGOFF` for the *old* nick; against
+`:online` that classifies as a genuine `:transition`, so the push would
+read "alice is offline" for someone who merely renamed — and if a
+different person then takes the freed nick, the follow-on `600` announces
+"alice is online" about a stranger. #247 accepted nick-keyed presence as
+a documented limitation for a status *dot*; an OS banner makes an
+identity assertion and cannot shrug it off. The `peer_nick_renamed` arm
+now resets the entry to `:unknown` (not `untrack/2`, which is
+`/notify del`'s job), so the imminent report classifies `:initial`:
+silent, and the dot still repaints. The watch *entry* deliberately does
+not follow the rename — presence is nick-keyed by #247's design, and
+`notify_entries` stays outside the #373 rename-migration set. Boundary
+limit unchanged: IRC delivers a NICK only to channel-sharing peers.
+
+**Bursts: N transitions produce N pushes. Accepted, no machinery.** The
+original design claimed three layers bounded the noise, the load-bearing
+one being "the OS coalesces successive banners under the shared per-nick
+tag". That argument does not reach the case it names: a netsplit is N
+*distinct* nicks, and the tag is per-nick, so 40 watched nicks on the
+split side are 40 tags and 40 banners. Coalescing solves one nick
+flapping over *time*, which is a different problem. The other stated
+layer — `presence_offline` defaulting off — mutes the split but not the
+*heal*, which is the `presence_online` direction.
+
+What actually bounds it: the storm requires a *remote* leaf to split
+while grappa's own uplink stays up (grappa's own reconnect re-seeds the
+map wholesale, so every post-reconnect report is `:initial` and silent),
+plus a chunk of the watch list living on that leaf; the 64-entry cap per
+(subject, network); and both prefs defaulting off. Realistic lists are
+far under the cap. A per-nick debounce or a batching effect is heavier
+than the residual problem, so v1 ships without one — but the *reason* is
+now stated honestly, because a wrong reason is what the next person
+builds on.
+
+**Known limitation, stated not fixed:** the presence map dies with the
+process, so transitions that happen while grappa is reconnecting classify
+`:initial` and never push. The delivery guarantee is "only while the
+session stayed continuously connected" — every deploy and backoff cycle
+opens a hole. Fixing it needs a restart-surviving last-known map (the
+`Session.Backoff` ETS-above-the-supervisor pattern). Deliberately out of
+scope; it would also re-arm the burst risk above.
+
+**Telemetry, ~10 lines, and the point of them.** `Sender.send_to_subject/3`
+stamps `class: :message | :presence` on the send telemetry. The burst
+decision above is explicitly deferred "pending production evidence", and
+before this there was no mechanism to *produce* that evidence — every
+metric counted sends per subject with no way to separate a watch-list
+storm from ordinary traffic. A revisit clause with no instrument is
+unfalsifiable.
+
+**Tapping the banner writes server state.** The deep link targets the
+watched nick's query window, and cic's `routePushTarget` does not merely
+select — it calls `openQueryWindowState`, which upserts a `query_windows`
+row and broadcasts to every device. So an accidental lockscreen tap mints
+durable cross-device state for a conversation that never happened. Kept:
+"they're online, say hi" is the intended action and the window is what
+you would open next. Recorded because it is a decision, not a free ride.
+
+**Drift gate.** The payload and prefs cross into TypeScript with no
+codegen behind them (`gen_wire_types --check` covers `wireTypes.ts`
+only; `notification_prefs` passes through `UserSettingsJSON` as an opaque
+map). Both ports now read one fixture, `pushParityFixture.json`, on the
+`should_notify_parity_test.exs` model. A hand-copied payload literal in a
+vitest test — the obvious first reach — is *not* a gate: if
+`build_presence/3` changed, the literal would not move and both suites
+would stay green.
+
+**HOT deploy.** No migration (JSON keys in the existing `data` map
+column), no `Session.Server` state-shape change, prefs read per-dispatch
+inside the spawned Task.
