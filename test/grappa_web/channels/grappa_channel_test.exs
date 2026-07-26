@@ -2344,28 +2344,28 @@ defmodule GrappaWeb.GrappaChannelTest do
     end
 
     test "rejects malformed network suffix" do
-      assert {:error, %{error: "unknown topic"}} =
+      assert {:error, %{error: "unknown_topic"}} =
                "vjt"
                |> build_socket()
                |> subscribe_and_join("grappa:user:vjt/network:azzurra/wrong:foo", %{})
     end
 
     test "rejects empty network slug after network: prefix" do
-      assert {:error, %{error: "unknown topic"}} =
+      assert {:error, %{error: "unknown_topic"}} =
                "vjt"
                |> build_socket()
                |> subscribe_and_join("grappa:user:vjt/network:", %{})
     end
 
     test "rejects empty channel name after channel: prefix" do
-      assert {:error, %{error: "unknown topic"}} =
+      assert {:error, %{error: "unknown_topic"}} =
                "vjt"
                |> build_socket()
                |> subscribe_and_join("grappa:user:vjt/network:azzurra/channel:", %{})
     end
 
     test "rejects empty user segment" do
-      assert {:error, %{error: "unknown topic"}} =
+      assert {:error, %{error: "unknown_topic"}} =
                "vjt"
                |> build_socket()
                |> subscribe_and_join("grappa:user:", %{})

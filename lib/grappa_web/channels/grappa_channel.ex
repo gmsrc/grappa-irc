@@ -6,7 +6,7 @@ defmodule GrappaWeb.GrappaChannel do
 
   1. Parse the topic via `Grappa.PubSub.Topic.parse/1`. Unknown
      shapes (including the Phase 1 `grappa:network:...` shape, which
-     sub-task 2h removed) get `{:error, %{error: "unknown topic"}}`.
+     sub-task 2h removed) get `{:error, %{error: "unknown_topic"}}`.
   2. Cross-user authz: every Grappa topic is rooted in a user_name.
      If `socket.assigns.user_name` does not match the topic's
      embedded user, return `{:error, %{error: "forbidden"}}`. This
@@ -238,7 +238,7 @@ defmodule GrappaWeb.GrappaChannel do
       Process.send_after(self(), {:after_join, parsed}, 0)
       {:ok, join_reply(parsed), socket}
     else
-      :error -> {:error, %{error: "unknown topic"}}
+      :error -> {:error, %{error: "unknown_topic"}}
       {:error, :forbidden} -> {:error, %{error: "forbidden"}}
     end
   end

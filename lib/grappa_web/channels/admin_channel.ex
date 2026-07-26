@@ -71,7 +71,7 @@ defmodule GrappaWeb.AdminChannel do
     end
   end
 
-  def join(_, _, _), do: {:error, %{error: "unknown topic"}}
+  def join(_, _, _), do: {:error, %{error: "unknown_topic"}}
 
   @impl Phoenix.Channel
   def handle_info(:after_join, socket) do
