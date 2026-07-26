@@ -101,3 +101,61 @@ describe("MircText linkPolicy (#220)", () => {
     });
   });
 });
+
+// #455 — textual emphasis markers (*bold*, _underline_, /italic/) rendered
+// client-side, markers kept visible, as a display-only layer over the
+// linkified run text. Composition with linkify (URLs untouched) and with
+// wire mIRC formatting is the crux; copy fidelity is a guarantee, asserted.
+describe("MircText textual emphasis markers (#455)", () => {
+  it("renders *word* as a .scrollback-mirc-bold span with the asterisks kept", () => {
+    const { container } = render(() => <MircBody body="a *bold* b" />);
+    const span = container.querySelector(".scrollback-mirc-bold");
+    expect(span).not.toBeNull();
+    expect(span?.textContent).toBe("*bold*");
+  });
+
+  it("renders _word_ as a .scrollback-mirc-underline span with the underscores kept", () => {
+    const { container } = render(() => <MircBody body="a _und_ b" />);
+    const span = container.querySelector(".scrollback-mirc-underline");
+    expect(span).not.toBeNull();
+    expect(span?.textContent).toBe("_und_");
+  });
+
+  it("renders /word/ as a .scrollback-mirc-italic span with the slashes kept", () => {
+    const { container } = render(() => <MircBody body="a /it/ b" />);
+    const span = container.querySelector(".scrollback-mirc-italic");
+    expect(span).not.toBeNull();
+    expect(span?.textContent).toBe("/it/");
+  });
+
+  it("does NOT emphasize _ or / inside a URL — the anchor text stays intact", () => {
+    const body = "see https://ex.com/a/b_c/d here";
+    const { container } = render(() => <MircBody body={body} />);
+    const link = container.querySelector(".scrollback-link") as HTMLAnchorElement;
+    expect(link.textContent).toBe("https://ex.com/a/b_c/d");
+    expect(container.querySelector(".scrollback-mirc-italic")).toBeNull();
+    expect(container.querySelector(".scrollback-mirc-underline")).toBeNull();
+  });
+
+  it("leaves a filesystem path /usr/bin/ literal (no italic span)", () => {
+    const { container } = render(() => <MircBody body="run /usr/bin/ now" />);
+    expect(container.querySelector(".scrollback-mirc-italic")).toBeNull();
+  });
+
+  it("preserves copy-paste fidelity — rendered text equals the source verbatim", () => {
+    const body = "a *bold* _under_ /it/ https://ex.com/a_b/c end";
+    const { container } = render(() => <MircBody body={body} />);
+    // Markers stay visible and nothing is inserted, so the DOM text
+    // content (what window.getSelection() returns) is the source string.
+    expect(container.textContent).toBe(body);
+  });
+
+  it("composes with wire mIRC bold — control byte stripped, marker kept visible", () => {
+    // \x02 = wire bold toggle around the whole "hi *x* there"; the marker
+    // pass also finds *x*. The rendered text drops the control byte and
+    // keeps the asterisks.
+    const { container } = render(() => <MircBody body={"\x02hi *x* there\x02"} />);
+    expect(container.textContent).toBe("hi *x* there");
+    expect(container.querySelector(".scrollback-mirc-bold")).not.toBeNull();
+  });
+});

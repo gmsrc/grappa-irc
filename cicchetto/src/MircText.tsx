@@ -1,5 +1,6 @@
 import { type Component, For, type JSX } from "solid-js";
 import { playAudio } from "./lib/audioPlayer";
+import { splitEmphasis } from "./lib/emphasisMarkers";
 import { linkify } from "./lib/linkify";
 import { classifyMediaLink, sameHostHref } from "./lib/mediaLink";
 import { openMediaViewer } from "./lib/mediaViewer";
@@ -41,6 +42,35 @@ import { serverSettings } from "./lib/serverSettings";
 //                     deferred to the modal (which renders MircBody at
 //                     the default "navigate").
 export type LinkPolicy = "navigate" | "link-wins" | "surface-wins";
+
+// #455 — the textual-emphasis layer. Runs over a single linkify TEXT
+// segment (never a URL — so `_`/`/` inside a link are structurally out of
+// reach) and splits it into emphasis sub-runs, keeping the marker chars
+// visible. The emphasis attributes OR onto the run's own mIRC attributes:
+// an emphasis span reuses the SAME `.scrollback-mirc-*` classes, so a
+// bold/italic/underline that lands inside an already-formatted run is
+// simply absorbed (wire formatting stays authoritative). An unstyled
+// sub-run renders as a bare text node — no wrapper span, no DOM churn on
+// the common no-marker path, and the concatenated text content stays
+// byte-identical to the source (copy-paste fidelity).
+const renderEmphasis = (text: string): JSX.Element => (
+  <For each={splitEmphasis(text)}>
+    {(span) => {
+      if (!span.bold && !span.italic && !span.underline) return span.text;
+      return (
+        <span
+          classList={{
+            "scrollback-mirc-bold": span.bold,
+            "scrollback-mirc-italic": span.italic,
+            "scrollback-mirc-underline": span.underline,
+          }}
+        >
+          {span.text}
+        </span>
+      );
+    }}
+  </For>
+);
 
 // CP13 S10: render an IRC body string with mIRC formatting expanded into
 // per-run <span> elements. Plain text (no control chars) collapses into a
@@ -86,7 +116,7 @@ const renderRun = (run: Run, linkPolicy: LinkPolicy): JSX.Element => {
     >
       <For each={segments}>
         {(seg, i) => {
-          if (seg.type !== "url") return seg.value;
+          if (seg.type !== "url") return renderEmphasis(seg.value);
           // Media-link cluster (2026-06-11): same-origin media URLs get
           // a click intercept → in-app viewer modal (lib/mediaViewer),
           // because in-PWA-scope links navigate the iOS standalone

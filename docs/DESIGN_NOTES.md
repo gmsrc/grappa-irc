@@ -20182,3 +20182,73 @@ would have to redo it into the full-map shape regardless — so localStorage-for
 section + the reactive signal module) survives #449 untouched; only the
 persistence backend moves later, in lockstep with its neighbours. Nothing was
 pre-built toward #449 (speculative). Ships COLD (cic bundle).
+### 2026-07-26 — #455: textual emphasis markers (*bold* _underline_ /italic/) as a display-only cic layer
+
+irssi/mIRC-era plain-text emphasis rendered client-side: `*word*` → bold,
+`_word_` → underline, `/word/` → italic. **Purely display-time — zero wire
+bytes.** The message is sent and stored verbatim; the server, the IRC parser
+and the scrollback store are untouched (the one-parser invariant holds — this
+is not IRC parsing, it is cosmetic decoration over already-parsed text). And
+**the markers are NOT stripped:** they stay visible and are styled together
+with the text they wrap (`*word*` renders bold *including* the asterisks). This
+is decoration, not Markdown compilation — which is what makes copy-paste round-
+trip the original bytes for free.
+
+**Where it hooks in — a second layer over the linkified run text, not the wire
+runs.** `mircFormat.parseMircFormat` expands the wire control bytes into typed
+`Run`s; `MircText.renderRun` then `linkify()`s each run's text into ordered
+`text`/`url` segments. The new pure tokenizer `lib/emphasisMarkers.ts`
+(`splitEmphasis`) runs **only over the `text` segments**, called from the
+text-segment branch of `renderRun` (previously a bare `return seg.value`). This
+placement is load-bearing: `_` and `/` are pervasive inside URLs
+(`https://x.com/a/b_c`) and `host.tld/path` shapes, so the marker pass MUST run
+*after* linkify and never over a `url` segment — which composes for free
+because linkify already returns the segment list. Emphasis attributes reuse the
+existing `.scrollback-mirc-bold/-italic/-underline` classes and OR onto the
+run's own mIRC attributes (wire formatting stays authoritative; a bold that
+lands inside an already-bold run is simply absorbed). Because the transform
+lives in the shared renderer, **every `MircBody` consumer** (scrollback, topic
+bar, whois/cards, directory, modals) inherits it — one code path, every door.
+
+**The three matching rules (the false-positive guards).** A naive pair-matcher
+is useless on IRC because paths and identifiers are full of `_`/`/`. A marker
+pair is a span only when ALL hold:
+  - **(a) opener at a left word boundary** — preceded by start-of-string,
+    whitespace, or an opening bracket `([{`, AND immediately followed by a
+    non-whitespace char. Kills `snake_case` (opener after a letter), `2*3*4`
+    (after a digit), `2 * 3 * 4` and the `* bullet` line (opener followed by a
+    space).
+  - **(b) closer at a right word boundary** — followed by end-of-string,
+    whitespace, terminal punctuation `.,!?;:)]}`, or another marker char (so
+    `*bold _und_*` cross-type nesting closes cleanly), AND immediately preceded
+    by a non-whitespace char.
+  - **(c) content non-empty AND free of the same marker char.** This is the
+    rule that kills `/usr/bin/` and `__init__` **by construction** rather than
+    with a blacklist of known bad shapes: the closer search stops at the FIRST
+    marker after the opener, so a path's inner slash is either taken as the
+    (nearest) closer or it aborts the opener — a path can never emphasize.
+
+**Non-greedy — nearest valid closer.** The closer is the nearest valid marker,
+never the farthest, so `he said *hi* and *bye*` is two spans, not one
+sentence-long bold. Rules (c) and non-greedy reinforce each other: a greedy
+match would swallow an inner marker into the content, which (c) forbids.
+
+**Cross-type nesting — three independent passes, per-character mask.** Each of
+the three markers is matched independently over the original text (marker chars
+included in its ranges), then a per-character boolean mask per attribute is
+coalesced into sub-runs — so partially overlapping spans (`*a _b* c_`) compose
+as the per-char union. Consequence accepted (recorded, not a bug): **zero-gap
+adjacency `*_word_*` is bold-only** — the inner `_` opener is preceded by `*`,
+which is not a left word boundary (rule a); a space-separated `*bold _und_*`
+nests correctly. And `/word/`-bare (no inner slash) DOES italicize even when it
+was meant as a regex — inherent to the `/` marker, an accepted risk.
+
+**Testing.** The tokenizer is exhaustively unit-tested
+(`src/__tests__/emphasisMarkers.test.ts`) including the two-independent-pairs
+non-greedy case per marker, the path/identifier/bullet false positives, the
+cross-type nesting, and the copy-fidelity invariant (span-text concatenation ==
+input). Render composition (URLs untouched, wire mIRC compose, DOM copy
+fidelity) is covered in `MircText.test.tsx`; the wire→render pipeline is locked
+end-to-end by `e2e/tests/issue455-emphasis-markers.spec.ts` (mirror of
+`cp13-s10-mirc-bold`, chromium). cic-only, no server change — rides a COLD
+deploy (cic bundle change).
