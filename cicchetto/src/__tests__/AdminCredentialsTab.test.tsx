@@ -147,6 +147,22 @@ describe("AdminCredentialsTab — bind flow", () => {
       );
     });
   });
+
+  // #410 LOCK — the auth-method dropdown enumerates the closed
+  // IRC.Auth.FSM auth_method set (value + ORDER, since <For> renders in
+  // array order). Pins the option list so the swap of the local
+  // AUTH_METHODS literal to the generated IRCAUTH_FSMAUTH_METHOD const
+  // stays identical; a server-side reorder/rename regenerates
+  // wireTypes.ts and fails HERE rather than silently reshuffling the
+  // dropdown.
+  it("renders the auth-method dropdown with the closed method set in order", async () => {
+    render(() => <AdminCredentialsTab />);
+    const select = (await screen.findByTestId(
+      "admin-credentials-bind-auth-method",
+    )) as HTMLSelectElement;
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).toEqual(["auto", "sasl", "server_pass", "nickserv_identify", "none"]);
+  });
 });
 
 describe("AdminCredentialsTab — edit flow", () => {

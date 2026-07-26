@@ -474,6 +474,44 @@ describe("narrowChannelEvent (bucket G H4+U3)", () => {
       ).toBeNull();
     });
   });
+
+  // #267 — window_counts severity is narrowed to the closed
+  // WindowCountsSeverity set, defaulting to "none" for an unknown /
+  // missing value (a bad severity must never null the whole event —
+  // the counts are the load-bearing part). #410 LOCK: pins the value
+  // set + the "none" default so the swap of `SEVERITIES` to the
+  // generated `WINDOW_COUNTS_SEVERITY` const stays behaviour-identical.
+  describe("kind: window_counts — severity narrowing (#267)", () => {
+    const base = {
+      kind: "window_counts",
+      channel: "#italia",
+      messages: 3,
+      mentions: 2,
+      events: 1,
+    };
+
+    it("passes every valid severity through verbatim", () => {
+      for (const sev of ["mention", "message", "event", "none"]) {
+        const out = narrowChannelEvent({ ...base, severity: sev });
+        expect(out?.kind).toBe("window_counts");
+        if (out?.kind === "window_counts") {
+          expect(out.severity, `severity=${sev}`).toBe(sev);
+        }
+      }
+    });
+
+    it("defaults an unknown severity to 'none' (never nulls the event)", () => {
+      const out = narrowChannelEvent({ ...base, severity: "catastrophic" });
+      expect(out?.kind).toBe("window_counts");
+      if (out?.kind === "window_counts") expect(out.severity).toBe("none");
+    });
+
+    it("defaults a missing severity to 'none'", () => {
+      const out = narrowChannelEvent(base);
+      expect(out?.kind).toBe("window_counts");
+      if (out?.kind === "window_counts") expect(out.severity).toBe("none");
+    });
+  });
 });
 
 // REV-A H1 (codebase-review-2026-05-22) — shared narrower for
