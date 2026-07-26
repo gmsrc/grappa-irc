@@ -747,10 +747,12 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
         return renderRawEvent(meta, msg, bareSenderSpan, handlers);
       }
       // Defensive: a :server_event row with no raw_verb is a server
-      // bug, but render the body so it isn't invisible.
+      // bug, but render the body so it isn't invisible. Server-generated
+      // → the #455 marker layer stays OFF here, like the sibling ERROR /
+      // generic-numeric arms (only the wire mIRC layer renders).
       return (
         <span class="scrollback-body">
-          *** {bareSenderSpan(msg.sender)} <MircBody body={msg.body ?? ""} emphasis />
+          *** {bareSenderSpan(msg.sender)} <MircBody body={msg.body ?? ""} />
         </span>
       );
     }
