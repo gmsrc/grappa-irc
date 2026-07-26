@@ -36,6 +36,7 @@
 
 #include "alias.h"
 #include "json.h"
+#include "mirc.h"
 #include "wire.h"
 
 #define MAX_TOKEN 4096
@@ -1422,36 +1423,193 @@ static int wrapped_text_lines(const char *s, int width) {
     return lines;
 }
 
+/* Wrapped height of a body, measured on its VISIBLE text.
+ *
+ * Control bytes occupy no cells, so measuring the raw string over-counts
+ * the height of any formatted message — the layout then reserves rows the
+ * text does not fill, leaving gaps in the scrollback. Strip first when the
+ * body carries formatting; skip the copy when it does not. */
+static int wrapped_text_lines_visible(const char *s, int width) {
+    if (!mirc_has_formatting(s)) return wrapped_text_lines(s, width);
+    char stripped[MAX_LINE * 2];
+    mirc_strip(s, stripped, sizeof(stripped));
+    return wrapped_text_lines(stripped, width);
+}
+
+/* ── mIRC colour → terminal colour ─────────────────────────────────────
+ *
+ * mIRC's palette is 99 RGB values and \x04 can name any RGB at all;
+ * terminals offer 8, 16 or 256 indexed colours. Everything is therefore
+ * mapped to the nearest xterm-256 index (or nearest basic-16 on a poorer
+ * terminal), which is what every other terminal IRC client does and works
+ * without requiring can_change_color().
+ *
+ * Colour PAIRS are the scarce resource: ncurses wants a pair per (fg, bg)
+ * combination and a terminal typically offers 256. They are allocated
+ * lazily from a pool above the theme's fixed pairs and cached, so a
+ * channel full of colourful bots settles on a small working set instead
+ * of exhausting the table on the first screenful. */
+#define CP_MIRC_BASE 40
+
+static struct {
+    short fg;
+    short bg;
+    short pair;
+} mirc_pairs[216];
+static size_t mirc_pair_count;
+static short mirc_pair_next = CP_MIRC_BASE;
+static short mirc_pair_limit;
+
+static void mirc_colors_init(void) {
+    /* Leave headroom below the cap: exhausting COLOR_PAIRS makes
+     * init_pair fail silently and text renders in the last pair set. */
+    mirc_pair_limit = (short)(COLOR_PAIRS > 256 ? 256 : COLOR_PAIRS);
+    if (mirc_pair_limit > (short)(CP_MIRC_BASE + 216)) mirc_pair_limit = CP_MIRC_BASE + 216;
+}
+
+/* Nearest xterm-256 index for an RGB value: the 6x6x6 colour cube and the
+ * 24-step grey ramp, whichever is closer. */
+static short rgb_to_xterm256(long rgb) {
+    int r = (int)((rgb >> 16) & 0xff), g = (int)((rgb >> 8) & 0xff), b = (int)(rgb & 0xff);
+    /* Grey ramp (232-255) wins for near-neutral colours; the cube's grey
+     * axis is coarse and would visibly tint them. */
+    int max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    int min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    if (max - min < 16) {
+        int level = (r + g + b) / 3;
+        if (level < 8) return 16;
+        if (level > 238) return 231;
+        return (short)(232 + (level - 8) / 10);
+    }
+    int qr = (r * 5 + 127) / 255, qg = (g * 5 + 127) / 255, qb = (b * 5 + 127) / 255;
+    return (short)(16 + 36 * qr + 6 * qg + qb);
+}
+
+/* Nearest of the basic 8 for terminals without a 256-colour palette. */
+static short rgb_to_basic8(long rgb) {
+    int r = (int)((rgb >> 16) & 0xff), g = (int)((rgb >> 8) & 0xff), b = (int)(rgb & 0xff);
+    int bit = (r > 127 ? 1 : 0) | (g > 127 ? 2 : 0) | (b > 127 ? 4 : 0);
+    static const short map[8] = {COLOR_BLACK, COLOR_RED,     COLOR_GREEN, COLOR_YELLOW,
+                                 COLOR_BLUE,  COLOR_MAGENTA, COLOR_CYAN,  COLOR_WHITE};
+    return map[bit];
+}
+
+static short mirc_terminal_color(long rgb) {
+    if (rgb < 0) return -1;
+    return COLORS >= 256 ? rgb_to_xterm256(rgb) : rgb_to_basic8(rgb);
+}
+
+/* Resolve a run's colour spec to an RGB, or -1 for "inherit". */
+static long mirc_run_rgb(int value, bool is_rgb) {
+    if (value == MIRC_COLOR_DEFAULT) return -1;
+    return is_rgb ? (long)value : mirc_palette_rgb(value);
+}
+
+/* A colour pair for (fg, bg), reusing one if already allocated. Returns 0
+ * (meaning "use the caller's pair") when the pool is exhausted or the run
+ * asks for no colour at all. */
+static int mirc_pair_for(long fg_rgb, long bg_rgb, int fallback_pair) {
+    if (fg_rgb < 0 && bg_rgb < 0) return fallback_pair;
+    if (!has_colors()) return fallback_pair;
+    short fg = fg_rgb < 0 ? (short)-1 : mirc_terminal_color(fg_rgb);
+    short bg = bg_rgb < 0 ? (short)-1 : mirc_terminal_color(bg_rgb);
+    for (size_t i = 0; i < mirc_pair_count; i++)
+        if (mirc_pairs[i].fg == fg && mirc_pairs[i].bg == bg) return mirc_pairs[i].pair;
+    if (mirc_pair_next >= mirc_pair_limit || mirc_pair_count >= 216) return fallback_pair;
+    short pair = mirc_pair_next++;
+    if (init_pair(pair, fg, bg) == ERR) return fallback_pair;
+    mirc_pairs[mirc_pair_count].fg = fg;
+    mirc_pairs[mirc_pair_count].bg = bg;
+    mirc_pairs[mirc_pair_count].pair = pair;
+    mirc_pair_count++;
+    return pair;
+}
+
+static attr_t mirc_run_attrs(const struct mirc_run *r, attr_t base) {
+    attr_t a = base;
+    if (r->bold) a |= A_BOLD;
+    if (r->underline) a |= A_UNDERLINE;
+    if (r->reverse) a |= A_REVERSE;
+    /* ncurses has no strikethrough and A_ITALIC is not universal; both
+     * degrade to dim rather than being dropped, so the emphasis survives
+     * even where the exact style cannot. */
+    if (r->italic || r->strikethrough) a |= A_DIM;
+    return a;
+}
+
 static void draw_wrapped_text(int y, int x, int width, int max_lines, int pair, attr_t attrs, const char *s) {
     if (width <= 0 || max_lines <= 0) return;
     int line = 0;
     int col = 0;
-    attron(COLOR_PAIR(pair) | attrs);
-    move(y, x);
-    for (const char *p = s; *p && line < max_lines; p++) {
-        if (*p == '\r') {
-            if (p[1] == '\n') p++;
-            line++;
-            col = 0;
-            if (line < max_lines) move(y + line, x);
-            continue;
+
+    /* Fast path: the overwhelming majority of messages carry no control
+     * bytes, and parsing runs for them would be pure overhead. */
+    if (!mirc_has_formatting(s)) {
+        attron(COLOR_PAIR(pair) | attrs);
+        move(y, x);
+        for (const char *p = s; *p && line < max_lines; p++) {
+            if (*p == '\r') {
+                if (p[1] == '\n') p++;
+                line++;
+                col = 0;
+                if (line < max_lines) move(y + line, x);
+                continue;
+            }
+            if (*p == '\n') {
+                line++;
+                col = 0;
+                if (line < max_lines) move(y + line, x);
+                continue;
+            }
+            if (col >= width) {
+                line++;
+                col = 0;
+                if (line >= max_lines) break;
+                move(y + line, x);
+            }
+            addch((unsigned char)*p);
+            col++;
         }
-        if (*p == '\n') {
-            line++;
-            col = 0;
-            if (line < max_lines) move(y + line, x);
-            continue;
-        }
-        if (col >= width) {
-            line++;
-            col = 0;
-            if (line >= max_lines) break;
-            move(y + line, x);
-        }
-        addch((unsigned char)*p);
-        col++;
+        attroff(COLOR_PAIR(pair) | attrs);
+        return;
     }
-    attroff(COLOR_PAIR(pair) | attrs);
+
+    struct mirc_run runs[MIRC_MAX_RUNS];
+    size_t nruns = mirc_parse(s, runs, MIRC_MAX_RUNS);
+    move(y, x);
+    for (size_t i = 0; i < nruns && line < max_lines; i++) {
+        const struct mirc_run *r = &runs[i];
+        long fg = mirc_run_rgb(r->fg, r->fg_is_rgb);
+        long bg = mirc_run_rgb(r->bg, r->bg_is_rgb);
+        int run_pair = mirc_pair_for(fg, bg, pair);
+        attr_t run_attrs = mirc_run_attrs(r, attrs);
+        attron(COLOR_PAIR(run_pair) | run_attrs);
+        for (size_t k = 0; k < r->len && line < max_lines; k++) {
+            char ch = r->text[k];
+            if (ch == '\r') {
+                if (k + 1 < r->len && r->text[k + 1] == '\n') k++;
+                line++;
+                col = 0;
+                if (line < max_lines) move(y + line, x);
+                continue;
+            }
+            if (ch == '\n') {
+                line++;
+                col = 0;
+                if (line < max_lines) move(y + line, x);
+                continue;
+            }
+            if (col >= width) {
+                line++;
+                col = 0;
+                if (line >= max_lines) break;
+                move(y + line, x);
+            }
+            addch((unsigned char)ch);
+            col++;
+        }
+        attroff(COLOR_PAIR(run_pair) | run_attrs);
+    }
 }
 
 static int message_display_lines(const char *line, int width) {
@@ -1462,9 +1620,9 @@ static int message_display_lines(const char *line, int width) {
         int body_x = (int)strlen(prefix) + (int)strlen(nick) + 3;
         int body_w = width - body_x;
         if (body_w < 12) body_w = width > 12 ? width - 2 : width;
-        return wrapped_text_lines(body, body_w);
+        return wrapped_text_lines_visible(body, body_w);
     }
-    return wrapped_text_lines(line, width);
+    return wrapped_text_lines_visible(line, width);
 }
 
 static void draw_message_line(int y, int x, int width, int max_lines, const char *line, bool mention_row, bool pending_row) {
@@ -2858,7 +3016,7 @@ static void draw(struct app *app) {
     if (topic_text_w < topic_prefix_w + 8) topic_prefix_w = 0;
     int topic_wrap_w = topic_text_w - topic_prefix_w;
     if (topic_wrap_w < 1) topic_wrap_w = 1;
-    int topic_h = wrapped_text_lines(topic_text, topic_wrap_w);
+    int topic_h = wrapped_text_lines_visible(topic_text, topic_wrap_w);
     int max_topic_h = compose_y - topic_y - 1;
     if (max_topic_h < 1) max_topic_h = 1;
     if (topic_h > max_topic_h) topic_h = max_topic_h;
@@ -4471,6 +4629,9 @@ static void event_loop(struct app *app) {
     setlocale(LC_ALL, "");
     initscr();
     init_theme();
+    /* After init_theme: the mIRC pair pool sits above the theme's fixed
+     * pairs and needs COLORS/COLOR_PAIRS, which start_color() populates. */
+    mirc_colors_init();
     cbreak();
     noecho();
     keypad(stdscr, TRUE);
