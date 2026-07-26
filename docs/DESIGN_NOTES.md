@@ -19091,3 +19091,41 @@ verbatim projection of the store, so the store-level assertion IS the
 display-order assertion — a Playwright reconnect-race e2e would only add
 timing flakiness (WS-vs-REST resolution order) for no extra coverage of the
 root cause.
+## 2026-07-26 — #411 follow-up: `file_too_large` names the cap in human bytes
+
+vjt's verdict on the D6b copy set: the 31 strings ship as-is, `malformed_nick`
+keeps its explicit charset, `already_exists` stays generic. The ONE structural
+change is that `file_too_large` (413 upload cap) must interpolate its wire field
+`max_bytes` in HUMAN units — the D6b arm had rendered plain copy pending a byte
+formatter (the deferred "open decision 1"). `max_bytes` reaches
+`ApiError.info` via `readError`'s generic sibling-spread (`api.ts`), the same
+path as `credential_count`/`retry_after`; the server key is confirmed
+`max_bytes` at `FallbackController` (413 arm).
+
+**New `cicchetto/src/lib/formatBytes.ts`** — a human byte-size formatter
+(base-1024; "bytes"/"byte"/KB/MB/GB/TB). Rounding mirrors the upload
+orchestrator's `mbLabel`: exact or ≥ 10 → whole number, else one decimal; a
+rounding-to-1024 boundary promotes to the next unit ("1 MB", not "1024 KB");
+non-finite/negative floors to "0 bytes". Own vitest over every edge vjt named
+(0, singular byte, sub-KB, fractional, ≥10 drop-decimal, boundary promote,
+huge/TB-clamp, defensive floor).
+
+**Deliberate two-formatter split (NOT a drift bug).** `mbLabel`
+(`uploadOrchestrator.ts`) stays MB-only because it also drives the "X of Y"
+upload-progress line, where a unit that flips KB→MB→GB as the counter climbs
+reads worse — a fixed-units contract. `formatBytes` is the adaptive one-shot
+label. Two presentation contracts, not duplicated logic ("reuse the verbs, not
+the nouns"); both base-1024 so a whole-MB cap (all production defaults) agrees
+across surfaces. The `friendlyApiError` `file_too_large` arm is the GENERAL
+typed-error surface (a #411 drift-guard — live uploads render their own 413 via
+`uploadOrchestrator`'s `httpUploadMessage`, MB-spelled, and never route through
+`friendlyApiError`), so the two never both render for one event today. The
+split is documented at the arm; unifying the live upload cap spelling to
+`formatBytes` (which would change user-visible upload copy only for admin-set
+non-whole-MB caps) is a separate decision, deliberately NOT bundled here.
+
+**Interpolation.** The arm renders `formatBytes(max_bytes)` guarded on
+finite-and-positive (not a bare `typeof` — a NaN/0 cap is not a real limit, so
+it falls back to the vetted capless copy rather than render "0 bytes"),
+mirroring `credentials_present` / `anon_collision`. The friendlyApiError matrix
+grows a cap row beside the fallback row, same shape as those siblings.
