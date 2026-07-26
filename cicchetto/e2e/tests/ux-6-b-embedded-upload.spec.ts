@@ -70,7 +70,9 @@ test("UX-6-B — picker → privacy modal (embedded) → upload → 📸 link �
   // access token, so we can GET it directly to verify the round trip.
   const text = await row.first().textContent();
   if (!text) throw new Error("expected scrollback row text");
-  const match = text.match(/(https?:\/\/[^\s]+\/uploads\/[a-z2-7]{26})/);
+  // #418: the URL carries a type extension (`/uploads/<slug>.<ext>`) — the
+  // anchor href is the full extensioned URL, so capture the extension too.
+  const match = text.match(/(https?:\/\/[^\s]+\/uploads\/[a-z2-7]{26}(?:\.[a-z0-9]+)?)/);
   if (!match) throw new Error(`expected uploads URL in row text: ${text}`);
   const url = match[1];
 

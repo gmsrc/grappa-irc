@@ -84,7 +84,10 @@ export async function uploadViaPicker(
   expect(uploadRes.status()).toBe(201);
   const body = (await uploadRes.json()) as UploadResponse;
   expect(body.slug).toMatch(/^[a-z2-7]{26}$/);
-  expect(body.url).toMatch(/\/uploads\/[a-z2-7]{26}$/);
+  // #418: the URL now carries the media type as a file extension
+  // (`/uploads/<slug>.<ext>`, ext from Grappa.Uploads.MimeExt). Every
+  // accepted MIME maps (lockstep), so an embedded upload always has one.
+  expect(body.url).toMatch(/\/uploads\/[a-z2-7]{26}\.[a-z0-9]+$/);
 
   await expect(modal).toBeHidden({ timeout: 5_000 });
   return body;

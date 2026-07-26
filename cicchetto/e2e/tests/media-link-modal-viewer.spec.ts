@@ -170,14 +170,14 @@ test("viewer load states: failure text on unfetchable media, spinner until bytes
   const viewer = page.getByRole("dialog", { name: "Media viewer" });
 
   // Phase 1 — unfetchable media: failure text, no forever-spinner.
-  await page.route(`**/uploads/${slug}`, (route) => route.abort());
+  await page.route(`**/uploads/${slug}*`, (route) => route.abort());
   await link.click();
   await expect(viewer).toBeVisible({ timeout: 5_000 });
   await expect(viewer.getByText(/failed to load/i)).toBeVisible({ timeout: 5_000 });
   await expect(viewer.getByRole("status")).toBeHidden();
   await viewer.getByRole("button", { name: "Close media viewer" }).click();
   await expect(viewer).toBeHidden({ timeout: 5_000 });
-  await page.unroute(`**/uploads/${slug}`);
+  await page.unroute(`**/uploads/${slug}*`);
 
   // Phase 2 — hold the media response open until the spinner has been
   // asserted: a gate, not a sleep (fixed delays race the assertion and
@@ -186,7 +186,7 @@ test("viewer load states: failure text on unfetchable media, spinner until bytes
   const mediaGate = new Promise<void>((resolve) => {
     releaseMedia = resolve;
   });
-  await page.route(`**/uploads/${slug}`, async (route) => {
+  await page.route(`**/uploads/${slug}*`, async (route) => {
     await mediaGate;
     await route.continue();
   });

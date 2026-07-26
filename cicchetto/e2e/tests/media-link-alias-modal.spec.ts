@@ -57,7 +57,10 @@ async function aliasModalJourney(page: Page): Promise<void> {
   // Compose a body carrying the slug under the SERVER-ADVERTISED alias
   // host (a host that is NOT the page origin). Pre-#324 this fell back
   // to the plain anchor.
-  const aliasUrl = `https://${ALIAS_B_HOST}/uploads/${slug}`;
+  // #418: the minted URL now carries a type extension. Build the alias
+  // link by host-swapping the real `url` (keeping the `.<ext>`), so the
+  // re-rooted click resolves back to `url` on the page origin.
+  const aliasUrl = url.replace(new URL(url).host, ALIAS_B_HOST);
   await composeSend(page, `📸 ${aliasUrl}`);
 
   const { link } = await mediaScrollbackRow(page, "📸", ALIAS_B_HOST);
