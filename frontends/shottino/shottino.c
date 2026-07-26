@@ -2292,22 +2292,52 @@ static char *base64_encode(const unsigned char *buf, size_t len) {
     return out;
 }
 
+/* base64url (RFC 4648 §5): standard base64 with `-`/`_` substituted for
+ * `+`/`/` and the `=` padding stripped. Phoenix's websocket transport
+ * expects the bearer in exactly this form, and phoenix.js builds it the
+ * same way (btoa, the two substitutions, then strip padding). */
+static char *base64url_encode(const unsigned char *buf, size_t len) {
+    char *b64 = base64_encode(buf, len);
+    for (char *p = b64; *p; p++) {
+        if (*p == '+') *p = '-';
+        else if (*p == '/') *p = '_';
+    }
+    size_t n = strlen(b64);
+    while (n > 0 && b64[n - 1] == '=') b64[--n] = '\0';
+    return b64;
+}
+
 static bool ws_connect(struct app *app) {
     if (!conn_open(app, &app->ws)) return false;
     unsigned char nonce[16];
     RAND_bytes(nonce, sizeof(nonce));
     char *key = base64_encode(nonce, sizeof(nonce));
-    char *tok = url_encode(app->token);
+
+    /* The bearer rides the Sec-WebSocket-Protocol SUBPROTOCOL, never the
+     * upgrade URL.
+     *
+     * #95 introduced this path — a `?token=…` query string is visible in
+     * nginx access logs before redaction — and kept the query-string
+     * bearer as a fallback. #202 (2026-07-19) DROPPED that fallback:
+     * `UserSocket.connect/3` now reads the token ONLY from
+     * `connect_info.auth_token`, which Phoenix decodes from
+     * `base64url.bearer.phx.<base64url(token)>`.
+     *
+     * Shottino was still sending `?token=…` with no subprotocol, so every
+     * handshake since #202 landed was rejected before it reached the
+     * channel. That is what "websocket unavailable" was reporting. */
+    char *tok_b64 = base64url_encode((const unsigned char *)app->token, strlen(app->token));
     char *req = xasprintf(
-        "GET /socket/websocket?token=%s&vsn=2.0.0 HTTP/1.1\r\n"
+        "GET /socket/websocket?vsn=2.0.0 HTTP/1.1\r\n"
         "Host: %s\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Key: %s\r\n"
         "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Protocol: base64url.bearer.phx.%s\r\n"
         "User-Agent: shottino/0.1\r\n\r\n",
-        tok, app->url.host, key);
-    free(tok);
+        app->url.host, key, tok_b64);
+    free(tok_b64);
     free(key);
     if (!conn_write_all(&app->ws, req, strlen(req))) {
         free(req);
@@ -2319,12 +2349,29 @@ static bool ws_connect(struct app *app) {
     while (len + 1 < sizeof(hdr)) {
         char c;
         ssize_t n = conn_read(&app->ws, &c, 1);
-        if (n <= 0) return false;
+        if (n <= 0) {
+            log_line(app, "websocket handshake: connection closed before a reply");
+            return false;
+        }
         hdr[len++] = c;
         hdr[len] = 0;
         if (strstr(hdr, "\r\n\r\n")) break;
     }
-    if (!strstr(hdr, " 101 ")) return false;
+    if (!strstr(hdr, " 101 ")) {
+        /* Report WHAT the server said. "websocket unavailable" with no
+         * status is what made this bug take a server-side code read to
+         * diagnose: a 403 (bad/expired bearer) and a 404 (wrong path, or
+         * a proxy not forwarding /socket) are entirely different repairs
+         * and looked identical from here. */
+        char status[128] = "";
+        const char *eol = strstr(hdr, "\r\n");
+        size_t status_len = eol ? (size_t)(eol - hdr) : len;
+        if (status_len >= sizeof(status)) status_len = sizeof(status) - 1;
+        memcpy(status, hdr, status_len);
+        status[status_len] = '\0';
+        log_line(app, "websocket handshake rejected: %s", status[0] ? status : "(no status line)");
+        return false;
+    }
     int flags = fcntl(app->ws.fd, F_GETFL, 0);
     fcntl(app->ws.fd, F_SETFL, flags | O_NONBLOCK);
     app->ws_connected = true;
