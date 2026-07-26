@@ -125,6 +125,16 @@ defmodule Grappa.Networks.SessionPlan do
       last_joined_persister: fn channels ->
         Credentials.update_last_joined_channels(user.id, cred.network_id, channels)
       end,
+      # GH #417 — persist/restore the EXPLICIT away across crash / respawn /
+      # upstream reconnect (user-only; the visitor plan omits both). The
+      # persister is a Boundary-clean closure (mirror of
+      # `last_joined_persister`); `restored_away` threads the DB snapshot
+      # (`away_reason` / `away_since`) into `Session.Server.init/1`, which
+      # seeds `away_state` and re-emits `AWAY :<reason>` upstream at 001.
+      away_persister: fn reason, since ->
+        Credentials.update_away(user.id, cred.network_id, reason, since)
+      end,
+      restored_away: restored_away(cred),
       # Re-resolve the plan from the DB on every `Session.Server.init/1`
       # invocation — both first boot AND `:transient` restart.
       # `DynamicSupervisor` caches the spawn-time child spec; without
@@ -155,6 +165,17 @@ defmodule Grappa.Networks.SessionPlan do
       end
     })
   end
+
+  # GH #417 — the away snapshot read back from the credential's away_reason /
+  # away_since columns. `{reason, since}` when an explicit away was persisted
+  # (both columns set); nil otherwise. `Session.Server.init/1` seeds
+  # `away_state` from it via `AwayState.restore_explicit/2`.
+  @spec restored_away(Credential.t()) :: {String.t(), DateTime.t()} | nil
+  defp restored_away(%Credential{away_reason: reason, away_since: %DateTime{} = since})
+       when is_binary(reason),
+       do: {reason, since}
+
+  defp restored_away(%Credential{}), do: nil
 
   @doc """
   #211 phase 3 — the shared fields-only plan builder for BOTH subjects.

@@ -6761,6 +6761,103 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # #417 — the behavioral core: an explicit away persisted in the DB is
+    # restored into a freshly-spawned session AND re-emitted upstream at
+    # 001, so a crash / `:transient` respawn / upstream reconnect no longer
+    # silently drops it. Seeding the DB then spawning is a faithful stand-in
+    # for the supervisor respawn (a new process whose init re-resolves the
+    # plan from the DB via SessionPlan.resolve).
+    test "explicit away persisted in DB is restored + re-sent upstream at 001 (#417)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+
+      # Seed the DB exactly as a prior live session would have on
+      # `/away :lunch`. `away_since` is the ORIGINAL away-start; the restore
+      # must preserve it verbatim (mentions-window honesty).
+      since = DateTime.utc_now()
+      :ok = Credentials.update_away(user.id, network.id, "lunch", since)
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      # User-visible behaviour: other IRC users must see us away again, so
+      # the bouncer re-emits AWAY :lunch to the (fresh, away-forgetting)
+      # upstream at 001 RPL_WELCOME.
+      assert {:ok, "AWAY :lunch\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY"), 1_000)
+
+      # The in-memory away state is restored with the ORIGINAL window —
+      # started_at preserved verbatim (the re-send must not reset it).
+      away = :sys.get_state(pid).away_state
+      assert away.state == :away_explicit
+      assert away.reason == "lunch"
+      assert away.started_at == since
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "set_explicit_away persists away_reason + away_since to the credential (#417)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      # GenServer.call returns only after the synchronous persist, so the DB
+      # is written by the time set_explicit_away/3 replies :ok.
+      :ok = Session.set_explicit_away({:user, user.id}, network.id, "afk")
+
+      cred = Credentials.get_credential!(user, network)
+      assert cred.away_reason == "afk"
+      assert %DateTime{} = cred.away_since
+      # The persisted started_at IS the live away window (same source).
+      assert cred.away_since == :sys.get_state(pid).away_state.started_at
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "unset_explicit_away clears the persisted away (#417)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      :ok = Session.set_explicit_away({:user, user.id}, network.id, "gone")
+      assert Credentials.get_credential!(user, network).away_reason == "gone"
+
+      :ok = Session.unset_explicit_away({:user, user.id}, network.id)
+
+      cred = Credentials.get_credential!(user, network)
+      assert cred.away_reason == nil
+      assert cred.away_since == nil
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "set_auto_away does NOT persist — auto-away re-derives from WSPresence (#417)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      :ok = Session.set_auto_away({:user, user.id}, network.id)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :auto"), 1_000)
+
+      # Auto-away is a pure function of WSPresence — it must NEVER touch the
+      # persisted columns (explicit-only). A crash re-derives it from
+      # presence, so persisting would duplicate derivable state.
+      cred = Credentials.get_credential!(user, network)
+      assert cred.away_reason == nil
+      assert cred.away_since == nil
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "unset_explicit_away issues bare AWAY and transitions to :present" do
       {server, port} = start_server_with_001()
       {user, network, _} = setup_user_and_network(port)

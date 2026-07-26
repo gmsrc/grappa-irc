@@ -19386,3 +19386,83 @@ touches only `config/test.exs` (prod config untouched). D2 remains HALT.
 
 Operator read-path documented in `docs/OPERATIONS.md` → Monitoring →
 "Write-latency diagnostics (#357)".
+
+## 2026-07-26 — #417 explicit AWAY survives crash/reconnect (Ecto-persisted)
+
+**Problem.** `Grappa.Session.AwayState` lived only in `Session.Server`
+GenServer state (`away_state: AwayState.new()` at boot). A crash +
+`:transient` respawn — or an upstream TCP reconnect within the same
+process — dropped it silently: the user believes they are away, the
+server does not, and nothing says so (the REV-E gap documented inline at
+`server.ex` `maybe_log_send_failure/2`). CLAUDE.md: "anything that must
+survive a crash goes in Ecto, not GenServer state."
+
+**Ruling (vjt, 2026-07-26, #grappa).** PERSIST via Ecto, not a cheap
+"AWAY was lost on reconnect" hint.
+
+**What is persisted — explicit only, never auto.** Two away states
+exist: `:away_explicit` (user `/away :reason`) and `:away_auto`
+(WSPresence debounce when every web client backgrounds / disconnects).
+Only `:away_explicit` is persisted. `:away_auto` is a *pure function of
+WSPresence*: on restart it re-derives itself (clients still gone → the
+debounce re-fires; clients back → `:present`). Persisting it would
+duplicate derivable state (Design-discipline rule 1). Explicit away is
+genuine, non-derivable user intent → it must persist.
+
+**Storage.** Two nullable columns on `network_credentials`, twins of the
+`connection_state_reason` / `connection_state_changed_at` pair:
+`away_reason :string` and `away_since :utc_datetime_usec`. Both nil ⟺
+not away. Scope: **USER credentials only** — the `away_persister`
+closure is injected by `Networks.SessionPlan.resolve/1` and left nil for
+visitors (mirrors `last_joined_persister` + the mentions-bundle, both
+user-only; visitor sessions are ephemeral — no persisted scrollback, no
+bundle). The migration is nullable, no backfill (existing rows read nil
+== "not away").
+
+**Lifecycle — when the persisted away is CLEARED:**
+
+- **Explicit `/back` (bare `/away`, `unset_explicit_away`)** → clears
+  (`away_reason` / `away_since` → NULL). The only in-session clear.
+- **Crash / restart / upstream reconnect** → does NOT clear. That is the
+  whole point — it survives.
+- **Credential unbind (row deletion)** → the columns go with the row; no
+  special handling.
+- **Auto-away set/unset** → NEVER touches the columns (never persisted).
+- **Deliberate park (`/disconnect`, `/quit` → `:parked`)** → **PENDING
+  vjt product ruling.** Question: is an away set today re-emitted at a
+  `/connect` three days later? It is a product choice, not a correctness
+  one — both answers use the same two columns; the only difference is
+  whether `Networks.disconnect/2` NULLs the row in the same transition.
+  Wired as the last switch once vjt answers. **[AWAITING RULING]**
+
+**Re-send upstream on reconnect (not local-only).** A restored-away
+session re-sends `AWAY :<reason>` upstream at `001 RPL_WELCOME`
+(`maybe_resend_away/1`, sibling to the autojoin fire in the numeric-1
+pipeline). Rationale: a fresh upstream connection is NOT-away on the
+ircd side (it forgot); a local-only reflection would mean other users
+PRIVMSGing you get no `301 RPL_AWAY` — an away that is true only for
+you, i.e. a lie, not a simplification. This also closes the
+same-process reconnect gap: in-memory away (explicit OR auto) was never
+re-asserted to the fresh ircd connection before, so `maybe_resend_away/1`
+re-emits for any non-`:present` state.
+
+**The mentions window is preserved.** `away_since` is restored verbatim
+into `AwayState.started_at` (via `AwayState.restore_explicit/2`), so the
+mentions-bundle shown at `/back` spans the honest window (original
+away-start → back), not a reconnect-truncated one that under-counts the
+pre-crash mentions. `maybe_resend_away/1` is a *pure wire re-emit* — it
+does NOT call the `AwayState` mutator, so `started_at` is never reset by
+the re-send.
+
+**Persist path.** Twin of the `last_joined_persister` pattern: an opaque
+`away_persister` closure `(reason, since) -> :ok | {:error, _}` injected
+via the plan (Boundary-clean — Session cannot alias Networks), called
+fire-and-forget with a `Logger.warning` on failure (the next transition
+overwrites; a missing snapshot only forces the next restart to boot
+`:present`). Hooked at `set_explicit_away_internal` (persist reason +
+started_at) and the explicit `unset_explicit_away` handle_call arms
+(persist NULL) — NOT in the shared `unset_away_internal` (which also
+serves the auto-unset path).
+
+**Cold deploy.** Two new columns → migration → COLD (already the COLD
+batch plan for the night).

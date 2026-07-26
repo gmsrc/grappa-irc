@@ -157,6 +157,8 @@ defmodule Grappa.Networks.Credential do
           connection_state: connection_state() | nil,
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: DateTime.t() | nil,
+          away_reason: String.t() | nil,
+          away_since: DateTime.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -227,6 +229,19 @@ defmodule Grappa.Networks.Credential do
     field :connection_state, Ecto.Enum, values: @connection_states, default: :connected
     field :connection_state_reason, :string
     field :connection_state_changed_at, :utc_datetime
+
+    # GH #417 — persisted EXPLICIT away so it survives a session crash /
+    # `:transient` respawn / upstream reconnect. Both nil ⟺ not away.
+    # Twin of the connection_state_reason/_changed_at pair above.
+    # `away_reason` is re-emitted `AWAY :<reason>` upstream at 001 on
+    # reconnect; `away_since` is the original away-start, restored verbatim
+    # so the mentions-bundle window at `/back` stays honest. Only
+    # `:away_explicit` is persisted (auto-away re-derives from WSPresence).
+    # `:utc_datetime_usec` matches `AwayState.started_at`'s usec precision.
+    # Written via the narrow `away_changeset/3` (never the wide changeset).
+    # See DESIGN_NOTES 2026-07-26 #417.
+    field :away_reason, :string
+    field :away_since, :utc_datetime_usec
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -624,6 +639,32 @@ defmodule Grappa.Networks.Credential do
     credential
     |> cast(%{last_joined_channels: canonical}, [:last_joined_channels])
     |> validate_length(:last_joined_channels, max: @last_joined_channels_max)
+  end
+
+  @doc """
+  GH #417 — narrow changeset for the persisted EXPLICIT away snapshot.
+  `reason` + `since` are set together (`/away :reason`) or both nil
+  (`/back`); no other field is touched (mirror of the narrow-changeset
+  convention — `last_joined_channels_changeset/2`, `password_changeset/2`).
+  Routing this through the wide `changeset/2` would re-run every unrelated
+  validator (`validate_password_for_auth_method`, `put_encrypted_password`,
+  the `unique_constraint`s) on a per-`/away` write.
+
+  `away_reason` gets the same `safe_line_token/2` wire-hygiene guard as
+  the wide changeset applies to `:realname` / `:password`: the stored
+  reason is re-interpolated into `AWAY :<reason>` at reconnect, so a
+  CR/LF/NUL byte would split or truncate the outbound frame. The
+  `Session.set_explicit_away/3` facade already guards user input, so this
+  is defense-in-depth — the OTHER door into the reason column. A reason
+  is rest-of-line (spaces legal), so `safe_line_token/2` (rejects only
+  CR/LF/NUL) is the correct guard, not the strict token.
+  """
+  @spec away_changeset(t(), String.t() | nil, DateTime.t() | nil) :: Ecto.Changeset.t()
+  def away_changeset(%__MODULE__{} = credential, reason, since)
+      when (is_binary(reason) and is_struct(since, DateTime)) or (is_nil(reason) and is_nil(since)) do
+    credential
+    |> cast(%{away_reason: reason, away_since: since}, [:away_reason, :away_since])
+    |> validate_change(:away_reason, &Identity.safe_line_token/2)
   end
 
   defp validate_autojoin_channels(field, list) when is_list(list) do

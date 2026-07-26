@@ -312,6 +312,28 @@ defmodule Grappa.Session.Server do
   @type last_joined_persister :: ([String.t()] -> :ok | {:error, term()})
 
   @typedoc """
+  GH #417 — opaque closure that persists the EXPLICIT away snapshot to the
+  producing context (Networks), forwarding `(reason, since)` to
+  `Grappa.Networks.Credentials.update_away/4`. `(nil, nil)` clears it on
+  `/back`. Boundary-clean for the same reason as `last_joined_persister`:
+  Networks already deps Session, so the reverse edge cannot be expressed
+  without closing a cycle. Called fire-and-forget from
+  `set_explicit_away_internal/3` + the explicit `unset_explicit_away`
+  handle_call arms; a `{:error, _}` is logged, not retried (the next away
+  transition overwrites). `nil` on state = no persister injected (visitor
+  sessions — away is not persisted for the ephemeral subject).
+  """
+  @type away_persister :: (String.t() | nil, DateTime.t() | nil -> :ok | {:error, term()})
+
+  @typedoc """
+  GH #417 — the away snapshot `SessionPlan.resolve/1` read back from the
+  credential's `away_reason` / `away_since` columns, threaded into
+  `init/1` opts. `{reason, since}` seeds `:away_explicit` (via
+  `AwayState.restore_explicit/2`); `nil` boots `:present`.
+  """
+  @type restored_away :: {String.t(), DateTime.t()} | nil
+
+  @typedoc """
   Opaque function-reference indirection that lets `Session.Server`
   ask the producing context (Networks / Visitors) "re-resolve the
   fresh plan from the DB" without statically aliasing either module.
@@ -433,6 +455,10 @@ defmodule Grappa.Session.Server do
           optional(:credential_committer) => credential_committer(),
           optional(:registration_committer) => registration_committer(),
           optional(:last_joined_persister) => last_joined_persister(),
+          # GH #417 — persist/restore the EXPLICIT away across crash/reconnect.
+          # User-only (visitor plans omit both).
+          optional(:away_persister) => away_persister(),
+          optional(:restored_away) => restored_away(),
           optional(:query_window_open?) => EventRouter.query_window_open?(),
           optional(:refresh_plan) => refresh_plan_check(),
           # #100 sustained-reconnect reset gate — test seam. Production
@@ -525,6 +551,9 @@ defmodule Grappa.Session.Server do
           credential_committer: credential_committer() | nil,
           registration_committer: registration_committer() | nil,
           last_joined_persister: last_joined_persister() | nil,
+          # GH #417 — persister for the EXPLICIT away snapshot; nil for
+          # visitor sessions (away not persisted for the ephemeral subject).
+          away_persister: away_persister() | nil,
           query_window_open?: EventRouter.query_window_open?(),
           ghost_recovery: GhostRecovery.t() | nil,
           ghost_timer: reference() | nil,
@@ -877,6 +906,8 @@ defmodule Grappa.Session.Server do
       credential_committer: Map.get(opts, :credential_committer),
       registration_committer: Map.get(opts, :registration_committer),
       last_joined_persister: Map.get(opts, :last_joined_persister),
+      # GH #417 — persister for the EXPLICIT away snapshot (nil for visitors).
+      away_persister: Map.get(opts, :away_persister),
       # #400 — open-query-window predicate EventRouter consults to re-key a
       # services-sender NOTICE/PRIVMSG onto the service's own query window
       # when the operator has one open (else `$server`, today's behaviour).
@@ -887,7 +918,11 @@ defmodule Grappa.Session.Server do
       query_window_open?: Map.get(opts, :query_window_open?, &QueryWindows.open?/3),
       ghost_recovery: nil,
       ghost_timer: nil,
-      away_state: AwayState.new(),
+      # GH #417 — restore a persisted EXPLICIT away (crash/respawn/reconnect)
+      # from the plan; boots `:present` on first connect / when nothing was
+      # persisted. The `AWAY :<reason>` is re-emitted upstream at 001 by
+      # `maybe_resend_away/1` (the ircd connection is fresh and away-blind).
+      away_state: restore_away_state(Map.get(opts, :restored_away)),
       auto_away_timer: nil,
       caps_active: MapSet.new(),
       labels_pending: %{},
@@ -1661,6 +1696,10 @@ defmodule Grappa.Session.Server do
   def handle_call({:unset_explicit_away, origin_window}, _, %{away_state: %AwayState{state: :away_explicit}} = state) do
     {label, next_state} = prepare_label(state, origin_window)
     final_state = unset_away_internal(next_state, label)
+    # GH #417 — `/back` clears the persisted away (only here + the bare arm
+    # below, NOT in the shared unset_away_internal which also serves the
+    # auto-unset path).
+    persist_away_clear(final_state)
     {:reply, :ok, final_state}
   end
 
@@ -1672,6 +1711,8 @@ defmodule Grappa.Session.Server do
 
   def handle_call({:unset_explicit_away}, _, %{away_state: %AwayState{state: :away_explicit}} = state) do
     next_state = unset_away_internal(state, nil)
+    # GH #417 — `/back` clears the persisted away (see origin_window arm).
+    persist_away_clear(next_state)
     {:reply, :ok, next_state}
   end
 
@@ -2206,6 +2247,9 @@ defmodule Grappa.Session.Server do
     state =
       state
       |> run_perform_and_identify()
+      # GH #417 — re-assert any active away to the fresh (away-blind) upstream
+      # connection before autojoin. No-op when :present.
+      |> maybe_resend_away()
       |> maybe_autojoin_or_defer()
       |> maybe_fire_notify()
 
@@ -4762,6 +4806,77 @@ defmodule Grappa.Session.Server do
   # S3.2 — away state internal helpers
   # ---------------------------------------------------------------------------
 
+  # GH #417 — seed the initial away_state from the plan's restored snapshot.
+  # `{reason, since}` (an EXPLICIT away read back from the credential's
+  # away_reason/away_since columns) rebuilds `:away_explicit` with the
+  # ORIGINAL window; nil (first connect, nothing persisted, or a visitor
+  # session whose plan never carries it) boots `:present`. Only explicit
+  # away is ever persisted — auto-away re-derives from WSPresence.
+  @spec restore_away_state(restored_away()) :: AwayState.t()
+  defp restore_away_state({reason, %DateTime{} = since}) when is_binary(reason),
+    do: AwayState.restore_explicit(reason, since)
+
+  defp restore_away_state(nil), do: AwayState.new()
+
+  # GH #417 — at 001 RPL_WELCOME, re-assert any active away to the FRESH
+  # upstream connection (which starts away-blind — the ircd forgot across
+  # the crash/respawn/reconnect). Covers a DB-restored explicit away AND an
+  # in-memory away (explicit OR auto) that a same-process reconnect would
+  # otherwise silently drop upstream. Pure wire re-emit: it does NOT call an
+  # `AwayState` mutator, so `started_at` is preserved (the mentions window
+  # must not collapse to reconnect-time). No-op when `:present`. Sibling to
+  # `maybe_autojoin_or_defer/1` in the numeric-1 pipeline.
+  @spec maybe_resend_away(t()) :: t()
+  defp maybe_resend_away(state) do
+    case AwayState.state_of(state.away_state) do
+      :present ->
+        state
+
+      _ ->
+        maybe_log_send_failure(
+          "resend_away",
+          Client.send_away(state.client, AwayState.reason(state.away_state))
+        )
+
+        state
+    end
+  end
+
+  # GH #417 — persist the current EXPLICIT away (reason + original
+  # started_at) via the injected closure. Twin of `persist_last_joined/4`:
+  # fire-and-forget, `{:error, _}` logged not retried (the next transition
+  # overwrites; a lost snapshot only boots the next restart `:present`).
+  @spec persist_away_explicit(t()) :: :ok
+  defp persist_away_explicit(state) do
+    call_away_persister(
+      state,
+      AwayState.reason(state.away_state),
+      AwayState.started_at(state.away_state)
+    )
+  end
+
+  # GH #417 — clear the persisted away on explicit `/back`. Called only from
+  # the `unset_explicit_away` handle_call arms (NOT the shared
+  # `unset_away_internal`, which also serves the auto-unset path — auto-away
+  # is never persisted, so it must never write here).
+  @spec persist_away_clear(t()) :: :ok
+  defp persist_away_clear(state), do: call_away_persister(state, nil, nil)
+
+  @spec call_away_persister(t(), String.t() | nil, DateTime.t() | nil) :: :ok
+  defp call_away_persister(%{away_persister: nil}, _, _), do: :ok
+
+  defp call_away_persister(%{away_persister: fun}, reason, since)
+       when is_function(fun, 2) do
+    case fun.(reason, since) do
+      :ok ->
+        :ok
+
+      {:error, reason_err} ->
+        Logger.warning("away persist failed", reason: inspect(reason_err))
+        :ok
+    end
+  end
+
   # Set explicit away: unconditional, always wins. Issues `AWAY :<reason>`
   # upstream. The `AwayState` mutator records started_at + reason so
   # Mentions aggregation (S3.5) has the precise window.
@@ -4772,7 +4887,12 @@ defmodule Grappa.Session.Server do
   @spec set_explicit_away_internal(t(), String.t(), String.t() | nil) :: t()
   defp set_explicit_away_internal(state, reason, nil) when is_binary(reason) do
     maybe_log_send_failure("set_explicit_away", Client.send_away(state.client, reason))
-    %{state | away_state: AwayState.set_explicit_away(state.away_state, reason)}
+    next = %{state | away_state: AwayState.set_explicit_away(state.away_state, reason)}
+    # GH #417 — persist so the away survives a crash/respawn/reconnect. Runs
+    # regardless of the wire send outcome above: a dead-socket send fails but
+    # the persisted snapshot still re-emits at the next 001.
+    persist_away_explicit(next)
+    next
   end
 
   defp set_explicit_away_internal(state, reason, label)
@@ -4782,7 +4902,9 @@ defmodule Grappa.Session.Server do
       Client.send_line(state.client, "@label=#{label} AWAY :#{reason}\r\n")
     )
 
-    %{state | away_state: AwayState.set_explicit_away(state.away_state, reason)}
+    next = %{state | away_state: AwayState.set_explicit_away(state.away_state, reason)}
+    persist_away_explicit(next)
+    next
   end
 
   # Set auto-away: only when not already `:away_explicit` (caller guards).

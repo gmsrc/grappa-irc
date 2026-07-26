@@ -164,6 +164,22 @@ defmodule Grappa.Session.AwayState do
   end
 
   @doc """
+  GH #417 — rebuilds an `:away_explicit` struct from a PERSISTED snapshot,
+  stamping `started_at` to the ORIGINAL away-start `since` (NOT now, unlike
+  `set_explicit_away/2`). Called by `Session.Server.do_init/1` when
+  `SessionPlan.resolve/1` restored an away from the credential's
+  `away_reason` / `away_since` columns, so a crash / `:transient` respawn /
+  upstream reconnect resumes the exact window the user set — the
+  mentions-bundle aggregation at `/back` then spans the honest period, not
+  a reconnect-truncated one. Only explicit away is ever persisted, so this
+  has no auto-away counterpart.
+  """
+  @spec restore_explicit(String.t(), DateTime.t()) :: t()
+  def restore_explicit(reason, %DateTime{} = since) when is_binary(reason) do
+    %__MODULE__{state: :away_explicit, started_at: since, reason: reason}
+  end
+
+  @doc """
   Transitions to `:away_auto`, recording the fixed
   `auto_away_reason/0` constant and stamping `started_at` to now.
   Called by `Session.Server.set_auto_away_internal/1` after the

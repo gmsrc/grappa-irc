@@ -285,6 +285,38 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
+  GH #417 — persist the user's EXPLICIT away snapshot on the
+  `(user_id, network_id)` credential so it survives a session crash /
+  `:transient` respawn / upstream reconnect. `reason` + `since` set the
+  pair (`/away :reason`); both nil clears it (`/back`). Twin of
+  `update_last_joined_channels/3`: narrow changeset, keyed by subject +
+  network, `{:error, :not_found}` when the credential was unbound between
+  the away transition and now (race tolerated — a stopped session's late
+  persist is a harmless no-op).
+
+  `Session.Server` calls this fire-and-forget via the injected
+  `away_persister` closure (Boundary-clean — Session cannot alias
+  Networks), logging but not retrying on `{:error, _}`: the next away
+  transition overwrites, and a lost snapshot only forces the next restart
+  to boot `:present`.
+  """
+  @spec update_away(Ecto.UUID.t(), pos_integer(), String.t() | nil, DateTime.t() | nil) ::
+          :ok | {:error, :not_found | Ecto.Changeset.t()}
+  def update_away(user_id, network_id, reason, since)
+      when is_binary(user_id) and is_integer(network_id) do
+    case Repo.get_by(Credential, user_id: user_id, network_id: network_id) do
+      nil ->
+        {:error, :not_found}
+
+      %Credential{} = cred ->
+        case Repo.update(Credential.away_changeset(cred, reason, since)) do
+          {:ok, _} -> :ok
+          {:error, changeset} -> {:error, changeset}
+        end
+    end
+  end
+
+  @doc """
   #211 phase 4c — visitor twin of `update_last_joined_channels/3`, keyed on
   `(visitor_id, network_id)`.
 

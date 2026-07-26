@@ -161,6 +161,11 @@ defmodule Grappa.Session do
           optional(:credential_committer) => Server.credential_committer(),
           optional(:registration_committer) => Server.registration_committer(),
           optional(:last_joined_persister) => Server.last_joined_persister(),
+          # GH #417 — persist/restore the EXPLICIT away across crash/reconnect
+          # (user-only; the visitor plan omits both). Kept in sync with the
+          # `Grappa.Session.Server.start_opts/0` twin.
+          optional(:away_persister) => Server.away_persister(),
+          optional(:restored_away) => Server.restored_away(),
           optional(:refresh_plan) => Server.refresh_plan_check(),
           # GH #189 — on-connect perform list + its `$oper_pass` secret,
           # decrypted plaintext from the credential (nil when unset). Set by
