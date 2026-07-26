@@ -300,6 +300,10 @@ struct app {
     bool ws_connected;
     unsigned long ws_ref;
     time_t next_heartbeat;
+    /* Reconnect state: current backoff in seconds (0 = healthy) and the
+     * earliest time the next attempt may run. */
+    int ws_backoff;
+    time_t ws_retry_at;
     SSL_CTX *ssl_ctx;
 };
 
@@ -2639,8 +2643,117 @@ static void handle_ws_frame(struct app *app, const char *frame) {
     json_free(doc);
 }
 
+/* ── Reconnect + backfill ──────────────────────────────────────────────
+ *
+ * A dropped socket used to be terminal: ws_pump logged "websocket
+ * disconnected", cleared the flag, and nothing ever set it again. The
+ * client stayed up looking connected-ish while receiving nothing — the
+ * worst failure shape, because the user has no reason to distrust what
+ * they see. A laptop suspend or a brief network blip ended the session.
+ *
+ * Reconnect is exponential with a cap and jitter. Jitter matters: without
+ * it, every client that a bouncer restart knocked offline comes back in
+ * lockstep and does it again on the next failure.
+ *
+ * Reconnecting is only half the job. PubSub broadcast is fire-and-forget,
+ * so anything sent during the gap is GONE — rejoining the topics does not
+ * replay it. Each window therefore refetches from the last id it saw
+ * (`?after=`), which is exactly what cicchetto's reconnect backfill does.
+ * Without this the client silently misses every message in the gap, which
+ * is worse than a visible disconnect. */
+#define WS_BACKOFF_MIN 1
+#define WS_BACKOFF_MAX 60
+
+static void ws_schedule_retry(struct app *app) {
+    if (app->ws_backoff == 0) app->ws_backoff = WS_BACKOFF_MIN;
+    else {
+        app->ws_backoff *= 2;
+        if (app->ws_backoff > WS_BACKOFF_MAX) app->ws_backoff = WS_BACKOFF_MAX;
+    }
+    /* Up to 25% jitter, so a fleet of clients does not resynchronise on a
+     * server restart and thunder back together. */
+    unsigned char r = 0;
+    RAND_bytes(&r, 1);
+    int jitter = (int)((unsigned)app->ws_backoff * r / (255 * 4));
+    app->ws_retry_at = time(NULL) + app->ws_backoff + jitter;
+}
+
+/* Pull anything that arrived while the socket was down. Uses `?after=<id>`
+ * (ascending, per Scrollback.fetch_after) rather than re-reading the tail,
+ * so a long gap is filled completely instead of to an arbitrary depth. */
+static void backfill_window(struct app *app, const char *network, const char *channel,
+                            long after_id) {
+    char *net = url_encode(network);
+    char *chan = url_encode(channel);
+    char *path = xasprintf("/networks/%s/channels/%s/messages?after=%ld", net, chan, after_id);
+    free(net);
+    free(chan);
+    struct http_response r = http_request(app, "GET", path, NULL);
+    free(path);
+    if (r.status >= 200 && r.status < 300) {
+        /* This endpoint answers ASCENDING, unlike the DESC tail fetch, so
+         * rows are rendered in array order rather than reversed. */
+        json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+        const json_value *list = json_root(doc);
+        size_t n = json_len(list);
+        for (size_t i = 0; i < n; i++) {
+            struct wire_scrollback_message m;
+            if (wire_narrow_message(json_at(list, i), &m)) render_message(app, &m, false);
+        }
+        if (n) log_line(app, "[%s/%s] --- %zu message%s recovered", network, channel, n,
+                        n == 1 ? "" : "s");
+        json_free(doc);
+    }
+    free(r.body);
+}
+
+static void ws_backfill_all(struct app *app) {
+    /* Snapshot the window list under the lock; the HTTP calls must not
+     * hold it (they block for as long as the server takes). */
+    struct { char network[MAX_SLUG]; char channel[MAX_CHANNEL]; long last_id; } snap[MAX_WINDOWS];
+    size_t count;
+    pthread_mutex_lock(&app->lock);
+    count = app->window_count;
+    for (size_t i = 0; i < count; i++) {
+        snprintf(snap[i].network, sizeof(snap[i].network), "%s", app->windows[i].network);
+        snprintf(snap[i].channel, sizeof(snap[i].channel), "%s", app->windows[i].channel);
+        snap[i].last_id = app->windows[i].last_id;
+    }
+    pthread_mutex_unlock(&app->lock);
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(snap[i].channel, "$server") == 0) continue; /* no scrollback */
+        /* last_id 0 means this window never saw a message; a full tail
+         * fetch is the right recovery there, not an ?after=0 flood. */
+        if (snap[i].last_id > 0) backfill_window(app, snap[i].network, snap[i].channel, snap[i].last_id);
+        else fetch_scrollback_target(app, snap[i].network, snap[i].channel);
+    }
+}
+
+/* Attempt one reconnect if the backoff timer has expired. */
+static void ws_try_reconnect(struct app *app) {
+    time_t now = time(NULL);
+    if (now < app->ws_retry_at) return;
+
+    conn_close(&app->ws);
+    if (!ws_connect(app)) {
+        ws_schedule_retry(app);
+        log_line(app, "reconnect failed; retrying in %ds", (int)(app->ws_retry_at - now));
+        return;
+    }
+    app->ws_backoff = 0;
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) app->windows[i].joined_ws = false;
+    pthread_mutex_unlock(&app->lock);
+    ws_join_topics(app);
+    log_line(app, "websocket reconnected");
+    ws_backfill_all(app);
+}
+
 static void ws_pump(struct app *app) {
-    if (!app->ws_connected) return;
+    if (!app->ws_connected) {
+        ws_try_reconnect(app);
+        return;
+    }
     time_t now = time(NULL);
     if (now >= app->next_heartbeat) {
         char ref[32];
@@ -2655,9 +2768,11 @@ static void ws_pump(struct app *app) {
         int r = ws_read_frame(app, &frame);
         if (r == 0) break;
         if (r < 0) {
-            log_line(app, "websocket disconnected");
             conn_close(&app->ws);
             app->ws_connected = false;
+            ws_schedule_retry(app);
+            log_line(app, "websocket disconnected; reconnecting in %ds",
+                     (int)(app->ws_retry_at - time(NULL)));
             break;
         }
         handle_ws_frame(app, frame);
@@ -2763,8 +2878,15 @@ static void draw(struct app *app) {
     attroff(COLOR_PAIR(CP_BORDER));
 
     draw_text(0, 1, side - 2, CP_ACCENT, A_BOLD, "shottino");
-    draw_text(1, 1, side - 2, app->ws_connected ? CP_MUTED : CP_ERROR, 0,
-              "%s", app->ws_connected ? "ws" : "offline");
+    if (app->ws_connected) {
+        draw_text(1, 1, side - 2, CP_MUTED, 0, "ws");
+    } else {
+        /* Count down to the next attempt. "offline" alone reads as a dead
+         * end; the countdown says recovery is in progress. */
+        long wait = (long)(app->ws_retry_at - time(NULL));
+        if (wait < 0) wait = 0;
+        draw_text(1, 1, side - 2, CP_ERROR, A_BOLD, "retry %lds", wait);
+    }
 
     char last_net[MAX_SLUG] = "";
     int y = 3;
@@ -4501,8 +4623,13 @@ int main(int argc, char **argv) {
         ws_join_topics(app);
         log_line(app, "websocket connected");
     } else {
-        startup("websocket unavailable; continuing with REST");
-        log_line(app, "websocket unavailable; REST send/fetch still works");
+        /* Arm the retry timer rather than settling permanently into
+         * REST-only mode: a server still coming up is the common cause of
+         * a failed first connect, and it will be ready in seconds. */
+        ws_schedule_retry(app);
+        startup("websocket unavailable; will retry");
+        log_line(app, "websocket unavailable; retrying in %ds (REST send/fetch still works)",
+                 (int)(app->ws_retry_at - time(NULL)));
     }
     startup("starting background worker");
     pthread_create(&app->worker, NULL, worker_main, app);
