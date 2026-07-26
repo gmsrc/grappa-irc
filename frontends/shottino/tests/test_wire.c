@@ -825,7 +825,92 @@ TEST(kind_names_are_total) {
     CHECK_STR(wire_kind_name(WIRE_UNKNOWN), "unknown");
 }
 
+/* The subject key, against the THREE real response shapes.
+ *
+ * Regression pin: login and share-consume NEST the subject under
+ * `subject` while /me is flat. A reader anchored only to the root
+ * resolves login to an empty subject and the client dies with "login
+ * response missing subject" — which is exactly what shipped. */
+TEST(subject_key_shapes) {
+    char err[160], key[256];
+
+    /* POST /auth/login — nested user subject. */
+    const char *login =
+        "{\"token\":\"SFMyNTY.abc\",\"subject\":{\"kind\":\"user\","
+        "\"id\":\"u-1\",\"name\":\"nextime\"}}";
+    json_doc *d = json_parse(login, strlen(login), err, sizeof(err));
+    CHECK(d != NULL);
+    CHECK(wire_subject_key(json_root(d), key, sizeof(key)));
+    CHECK_STR(key, "nextime");
+    json_free(d);
+
+    /* POST /auth/share/consume — nested visitor subject. */
+    const char *consume =
+        "{\"token\":\"tok\",\"subject\":{\"kind\":\"visitor\","
+        "\"id\":\"v-42\",\"registered\":false}}";
+    d = json_parse(consume, strlen(consume), err, sizeof(err));
+    CHECK(wire_subject_key(json_root(d), key, sizeof(key)));
+    CHECK_STR(key, "visitor:v-42");
+    json_free(d);
+
+    /* GET /me — FLAT user subject (the subject IS the document). */
+    const char *me =
+        "{\"kind\":\"user\",\"id\":\"u-1\",\"name\":\"nextime\","
+        "\"badge_count\":0}";
+    d = json_parse(me, strlen(me), err, sizeof(err));
+    CHECK(wire_subject_key(json_root(d), key, sizeof(key)));
+    CHECK_STR(key, "nextime");
+    json_free(d);
+
+    /* GET /me — FLAT visitor subject. */
+    const char *me_v = "{\"kind\":\"visitor\",\"id\":\"v-42\"}";
+    d = json_parse(me_v, strlen(me_v), err, sizeof(err));
+    CHECK(wire_subject_key(json_root(d), key, sizeof(key)));
+    CHECK_STR(key, "visitor:v-42");
+    json_free(d);
+
+    /* `identifier` is accepted as a fallback name. */
+    const char *ident = "{\"kind\":\"user\",\"identifier\":\"someone\"}";
+    d = json_parse(ident, strlen(ident), err, sizeof(err));
+    CHECK(wire_subject_key(json_root(d), key, sizeof(key)));
+    CHECK_STR(key, "someone");
+    json_free(d);
+}
+
+/* An unresolvable subject must FAIL rather than yield a half-formed key:
+ * "visitor:" or "" would be used verbatim as a PubSub topic. */
+TEST(subject_key_refuses_half_formed) {
+    char err[160], key[256];
+    const char *cases[] = {
+        "{\"token\":\"t\"}",                                  /* no subject at all */
+        "{\"token\":\"t\",\"subject\":{}}",                    /* empty subject   */
+        "{\"kind\":\"visitor\"}",                             /* visitor, no id  */
+        "{\"kind\":\"visitor\",\"id\":\"\"}",                 /* visitor, empty  */
+        "{\"kind\":\"user\"}",                                /* user, no name   */
+        "{\"kind\":\"user\",\"name\":\"\"}",                  /* user, empty     */
+        "{\"subject\":{\"kind\":\"user\",\"name\":\"\"}}",    /* nested, empty   */
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        json_doc *d = json_parse(cases[i], strlen(cases[i]), err, sizeof(err));
+        CHECK(d != NULL);
+        CHECK(!wire_subject_key(json_root(d), key, sizeof(key)));
+        CHECK_STR(key, ""); /* and never a partial key */
+        json_free(d);
+    }
+    /* A non-object `subject` falls back to the root rather than crashing. */
+    const char *odd = "{\"subject\":\"nope\",\"kind\":\"user\",\"name\":\"bob\"}";
+    json_doc *d = json_parse(odd, strlen(odd), err, sizeof(err));
+    CHECK(wire_subject_key(json_root(d), key, sizeof(key)));
+    CHECK_STR(key, "bob");
+    json_free(d);
+
+    CHECK(!wire_subject_key(NULL, key, sizeof(key)));
+    CHECK(!wire_subject_key(NULL, NULL, 0));
+}
+
 int main(void) {
+    RUN(subject_key_shapes);
+    RUN(subject_key_refuses_half_formed);
     RUN(message);
     RUN(message_rejects_bad_shapes);
     RUN(every_message_kind_round_trips);

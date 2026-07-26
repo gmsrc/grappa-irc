@@ -921,22 +921,15 @@ static bool json_top_string(const char *body, size_t len, const char *key, char 
     return found;
 }
 
+/* Thin wrapper: parse the body, hand the root to the tested resolver in
+ * wire.[ch]. The shape handling lives there so it is covered by tests —
+ * this used to read only the ROOT, which broke login (the subject is
+ * nested under `subject` there, flat only on /me). */
 static void parse_subject(const char *json, size_t len, char *out, size_t out_sz) {
+    if (out_sz) out[0] = '\0';
     json_doc *doc = json_parse(json, len, NULL, 0);
-    if (!doc) {
-        snprintf(out, out_sz, "%s", "");
-        return;
-    }
-    const json_value *root = json_root(doc);
-    const char *kind = json_string(json_get(root, "kind"));
-    if (kind && strcmp(kind, "visitor") == 0) {
-        const char *id = json_string(json_get(root, "id"));
-        snprintf(out, out_sz, "visitor:%s", id ? id : "");
-    } else {
-        const char *name = json_string(json_get(root, "name"));
-        if (!name) name = json_string(json_get(root, "identifier"));
-        snprintf(out, out_sz, "%s", name ? name : "");
-    }
+    if (!doc) return;
+    wire_subject_key(json_root(doc), out, out_sz);
     json_free(doc);
 }
 
@@ -3738,7 +3731,14 @@ static void list_members_target(struct app *app, const char *network, const char
          * letter 'm' and any nick containing a quote. Parse properly. */
         char err[160];
         json_doc *doc = json_parse(r.body, r.body_len, err, sizeof(err));
-        const json_value *list = json_root(doc);
+        /* This endpoint answers with an ENVELOPE — `{"members": [...]}`
+         * (`Session.Wire.members_index/1`) — unlike the messages and
+         * channels endpoints, which return a bare array. Accept either:
+         * assuming a bare array here made every /members call report
+         * "malformed response". */
+        const json_value *root = json_root(doc);
+        const json_value *list = root;
+        if (json_type_of(root) == JSON_OBJECT) list = json_get(root, "members");
         if (!doc || json_type_of(list) != JSON_ARRAY) {
             log_line(app, "members %s: malformed response (%s)", channel, doc ? "not a list" : err);
             json_free(doc);

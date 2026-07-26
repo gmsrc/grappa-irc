@@ -2,6 +2,7 @@
  * the corresponding narrower in cicchetto's wireNarrow.ts / userTopic.ts. */
 #include "wire.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* ── Closed-set lookups ───────────────────────────────────────────────── */
@@ -227,6 +228,26 @@ static bool validate_map_of_arrays(const json_value *map, bool (*check)(const js
 }
 
 /* ── Sub-narrowers shared across arms ─────────────────────────────────── */
+
+bool wire_subject_key(const json_value *root, char *out, size_t out_sz) {
+    if (!out || out_sz == 0) return false;
+    out[0] = '\0';
+    const json_value *subj = json_get(root, "subject");
+    if (json_type_of(subj) != JSON_OBJECT) subj = root;
+
+    const char *kind = json_string(json_get(subj, "kind"));
+    if (kind && strcmp(kind, "visitor") == 0) {
+        const char *id = json_string(json_get(subj, "id"));
+        if (!id || !id[0]) return false;
+        snprintf(out, out_sz, "visitor:%s", id);
+        return true;
+    }
+    const char *name = json_string(json_get(subj, "name"));
+    if (!name) name = json_string(json_get(subj, "identifier"));
+    if (!name || !name[0]) return false;
+    snprintf(out, out_sz, "%s", name);
+    return true;
+}
 
 bool wire_narrow_message(const json_value *m, struct wire_scrollback_message *out) {
     if (json_type_of(m) != JSON_OBJECT) return false;

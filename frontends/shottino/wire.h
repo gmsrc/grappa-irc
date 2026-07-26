@@ -489,6 +489,28 @@ enum {
     LUSERS_MAX_GLOBAL
 };
 
+/* Resolve the PubSub subject key from an auth or profile response.
+ *
+ * Not a Phoenix event, but the same job as everything else here: server
+ * JSON in, a typed value out — and it lives beside the narrowers so it is
+ * testable without a terminal, which is what this function most needed.
+ *
+ * TWO wire shapes, and both must be read:
+ *
+ *   POST /auth/login          → {token, subject: {kind, id, name}}
+ *   POST /auth/share/consume  → {token, subject: {kind, id, ...}}
+ *   GET  /me                  → {kind, id, name, ...}   (subject FLAT)
+ *
+ * Login and share-consume are credential EXCHANGES, so they wrap the
+ * subject in an envelope beside the token; `/me` IS the subject, so its
+ * fields sit at the root. This prefers the nested object and falls back
+ * to the root, covering all three without a per-call-site flag.
+ *
+ * Writes an empty string and returns false when the subject cannot be
+ * resolved, so a caller reports "missing subject" rather than proceeding
+ * with a half-formed key like "visitor:" that would become a topic. */
+bool wire_subject_key(const json_value *root, char *out, size_t out_sz);
+
 /* Narrow a bare scrollback row.
  *
  * The same row shape arrives two ways: nested under `message` in a WS
