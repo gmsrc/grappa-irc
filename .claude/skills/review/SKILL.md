@@ -10,7 +10,7 @@ Full protocol at `docs/reviewing.md`.
 
 ## Argument: `codebase`
 
-Line-level scan. 8 parallel background agents, one per scope:
+Line-level scan. 9 parallel background agents, one per scope:
 
 | Agent | Scope |
 |-------|-------|
@@ -18,10 +18,11 @@ Line-level scan. 8 parallel background agents, one per scope:
 | persistence/ | `lib/grappa/scrollback*`, `lib/grappa/{accounts,networks,query_windows,user_settings,visitors}*`, `priv/repo/migrations/`, `lib/grappa/repo.ex`, `lib/grappa/vault.ex`. **Explicit SQLite angle**: WAL + `journal_mode` + `busy_timeout` + `synchronous` configuration in `config/runtime.exs`; `foreign_keys` pragma per-connection vs migration-time; `defer_foreign_keys` (CP19 lesson — see `feedback_*` memories); index coverage vs hot read patterns (Scrollback page query, query_windows list, last_joined_channels boot read); JSON `:map` column patterns vs custom Ecto types (`Grappa.Scrollback.Meta` reference); transaction granularity (long-running writes vs Session.Server message ingest hot path); connection pool sizing for single-writer SQLite reality; schema_migrations consistency + idempotency; Cloak.Vault encrypted-at-rest column types; sqlite-specific quirks (no native datetime, ISO-8601 string convention) |
 | lifecycle/ | `lib/grappa/{application,bootstrap,config,release,repo,session,version,cic,spawn_orchestrator,admission}*`, `lib/grappa/session/`, `lib/grappa/admission/` |
 | web/ | `lib/grappa_web/` (endpoint, router, controllers, channels, plugs, JSON views) |
-| cicchetto/ | `cicchetto/src/**`, `cicchetto/{tsconfig.json,vite.config.ts,vitest.config.ts,biome.json,package.json,index.html}`, `cicchetto/public/{manifest.json,sw.js,icon*}` |
+| cicchetto/ | `cicchetto/src/**`, `cicchetto/{tsconfig.json,vite.config.ts,vitest.config.ts,biome.json,package.json,index.html}`, `cicchetto/public/{manifest.json,sw.js,icon*}`. **`cicchetto/src/themes/*.css` is IN scope and must be read** — `default.css` is the single largest file in the repo (9022 lines) and was materially unreviewed for most of this skill's history: it fell inside the `src/**` glob while appearing nowhere in the checklist below. See the CSS lens in the cicchetto agent's list. |
 | cross-module | Patterns across all server modules: `Application.{get,put}_env` outside boot path, `String.to_atom/1`, default arguments via `\\`, `Logger` inline-interpolation vs allowlisted KV, bare `catch _, _` / `rescue _`, Boundary annotations + violations, migration ordering/idempotency, inter-context call discipline, `@spec` coverage on public context functions, structured-event PubSub topic naming consistency. **NO infra in this scope** — Docker/scripts split out below. |
 | docker | **DEDICATED simplification-focused review.** Files: `Dockerfile`, `compose.yaml`, `compose.override.yaml.example`, all `scripts/*.sh` (especially `_lib.sh`, `deploy.sh`, `deploy-cic.sh`, `mix.sh`, `iex.sh`, `test.sh`, `integration.sh`, `bun.sh`, `register-dns.sh`, `monitor.sh`, `observer.sh`, `healthcheck.sh`, `db.sh`), `infra/nginx.conf`, `.env.example`, `.dockerignore`. **Primary lens: SIMPLIFICATION**. What can be removed, collapsed, made standard? Single-stage vs multi-stage tradeoffs (CP23 S1 collapsed to single-stage); profile usage (`--profile prod` for nginx + cicchetto-build); named volumes vs bind mounts (UID drop trap memory); image size; healthcheck adequacy; oneshot semantics (`compose up --wait` oneshot-exit-trap memory); cicchetto-build oneshot pipeline; deploy.sh hot-vs-cold preflight regex coverage (long-lived GenServer enumeration, defstruct detection); script duplication vs `_lib.sh` reuse; worktree-awareness invariants; UID/cache layout consistency across mix.sh + bun.sh; bash 4+ assumption documentation. Treat the Docker substrate as a product surface, not glue. |
 | cross-surface | **DEDICATED grappa↔cicchetto consistency review.** Reads BOTH sides: `lib/grappa/{accounts,networks,scrollback,query_windows,user_settings}/wire.ex` + `lib/grappa_web/{controllers,channels}/**` + `cicchetto/src/lib/{api,socket,subscribe,auth,messages,*Store,windowState,channelClient,messageClient}.ts` + `cicchetto/src/components/**`. Look for: wire-shape drift (server Wire field exists, cic type missing or narrower); event-name divergence (server emits `kind: "joined"` but cic dispatcher branches on `"join"`); error-shape inconsistency (FallbackController response shape vs cic `readError` parsing); REST-vs-Channel contract divergence for the same domain entity; auth-flow seams (server admission decisions ↔ cic login UX, capability checks); time-stamp format consistency (ISO-8601 vs epoch ms); naming conventions (snake_case server JSON vs camelCase cic types — boundary clarity); version/bundle-hash protocol (server emits `bundle_hash`, cic compares — verify hash field shape); state-mirror discipline (cic windowState reads server `window_states`; CLAUDE.md "cic NEVER originates state" — flag any optimistic client state); duplicated logic (parsing/validation in cic that the server already enforces, or vice versa); things that should be SHARED (a single source of truth for the closed `MessageKind` set, network `connection_state` enum, etc.) but are restated independently. Output should highlight unification opportunities. |
+| consistency | **DEDICATED sibling-divergence + stale-premise review. Reads PATTERNS, not a directory.** Every other agent reads the files in its scope and judges each one on its own terms; this agent judges files *against each other*, because a whole class of defect is invisible from inside any single file. Three jobs, full-repo (server + cicchetto + CSS): **(1) Instance families.** Enumerate every use of a shared component / helper / rule, then diff the treatment across instances. When N-1 members got a fix, an override or a guard and one did not, that one is the finding. Canonical case: three `InlineConfirmButton`s live in the settings drawer; `quit` and the vhost reconnect each got a size + colour override, the identity apply button never did, so it silently kept the compact reddish base. Each diff was correct in isolation; only the family read exposes it. **(2) Stale premises.** Comments that assert a fact — "users have passwords, no per-network identity editor", "a visitor is effectively single-network", "nothing publishes the uploads" — are claims with an expiry date. Re-derive each against today's code and flag the ones that stopped being true. A gate justified by a dead premise is a bug wearing a rationale. **(3) Silent narrowing.** Heuristics that pick one row out of N without telling the user: `reduce`-to-lowest-id "anchor" selections, `List.first`, `hd/1`, `|> Enum.at(0)` on collections that can legitimately hold more than one member. Ask what the user believes they just changed versus what actually changed. Report the *family*, not one member — the fix is usually "make the whole family share one definition". |
 
 Each agent MUST read EVERY file in scope + `CLAUDE.md` + the active
 checkpoint under `docs/checkpoints/` + `docs/DESIGN_NOTES.md`. The
@@ -125,6 +126,17 @@ What the cicchetto/ agent looks for (TypeScript/SolidJS/PWA-specific):
   intent (shell-cache only, no API/WS); cache-bump on deploy
   (`Cache-Control: no-cache` from nginx OR versioned SW filename);
   `index.html` includes the manifest link.
+- CSS (`cicchetto/src/themes/*.css`) — a first-class product surface, not
+  decoration, and the least-reviewed file in the repo. Look for: rules for
+  one surface scattered across distant bands of the file (locality, which
+  is what lets sibling instances drift apart unnoticed); per-instance
+  overrides re-declaring the same escape from a shared base, where one
+  shared class belongs; controls below the iOS 44pt tap-target minimum;
+  hardcoded colours where a theme var exists (the #75 gallery layers inline
+  vars over these blocks, so a literal silently wins over a user's theme);
+  `!important` (there are 2 in the whole file — treat any new one as a
+  finding); dead selectors matching no markup; base rules whose semantics
+  every consumer must override to be usable.
 - Build + tooling drift: `tsconfig.json` strict flags pinned;
   `package.json` ↔ `bun.lock` sync; Vite base/root/outDir match
   nginx + compose.yaml (--profile prod) expectations; `vite-plugin-solid` is
@@ -162,6 +174,12 @@ The Docker agent owns infra (Dockerfile / compose / scripts / nginx /
 .env.example) — **do NOT duplicate** that scope from cross-module.
 The cross-surface agent owns server↔client wire/event/error/auth/state
 consistency — **do NOT duplicate** that scope either.
+
+The consistency agent owns divergence *within* one side (instance families,
+stale premises, silent narrowing) — **do NOT duplicate** it from the scope
+agents. The split is the axis, not the files: cross-surface asks "do the two
+sides agree?", consistency asks "do the members of this family on ONE side
+agree with each other?". Both may legitimately read the same file.
 
 ## Argument: `architecture`
 
