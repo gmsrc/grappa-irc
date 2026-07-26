@@ -75,9 +75,16 @@ defmodule Grappa.Scrollback.Meta do
                                                                   absent for plain senders / DMs /
                                                                   $server. :topic carries %{}.)
       :notice                       →  %{} OR %{sender_prefix: "@" | "%" | "+"}
-                                    OR %{numeric: 1..999, severity: :ok | :error}
+                                    OR %{numeric: 1..999, severity: :ok | :error,
+                                         raw_params: [String.t()]}
                                                                  (server numerics route to :notice
-                                                                  via NumericRouter; bare NOTICE has %{})
+                                                                  via NumericRouter; since #424 the
+                                                                  generic persist path also keeps the
+                                                                  FULL param list in raw_params — body
+                                                                  is only the trailing param, so
+                                                                  middle-param numerics (STATS) would
+                                                                  otherwise lose their payload; bare
+                                                                  NOTICE has %{})
                                     OR %{raw_verb: String.t(), raw_sender: String.t() | nil,
                                          raw_params: [String.t()]}
                                                                  (no-silent-drops B6.1 — flat

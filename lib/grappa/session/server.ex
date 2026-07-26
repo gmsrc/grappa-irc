@@ -2593,7 +2593,14 @@ defmodule Grappa.Session.Server do
           if is_binary(trailing) do
             channel = routing_to_channel(routing)
             severity = NumericRouter.severity(numeric_code)
-            meta = %{numeric: numeric_code, severity: severity}
+            # #424 — `body` is only the TRAILING param, but many numerics carry
+            # their payload in the MIDDLE params (STATS: `213 <nick> C <host>
+            # <*> <server> <port> <class>` → without this, only the trailing
+            # class letter reaches the DB and host/server/port are lost). Keep
+            # the full param list in `raw_params`, mirroring EventRouter's
+            # `persist_raw_event/3`, so cic can render the whole reply. Fixes
+            # the CLASS (every middle-param numeric), not just the STATS example.
+            meta = %{numeric: numeric_code, severity: severity, raw_params: msg.params}
 
             attrs =
               Session.put_subject_id(

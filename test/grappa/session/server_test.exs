@@ -8123,9 +8123,12 @@ defmodule Grappa.Session.ServerTest do
 
   describe "CP13 — numeric routing persists :notice rows with meta" do
     # NumericRouter routes the numeric to a window; Session.Server persists
-    # the trailing text as a `:notice` row carrying meta=%{numeric, severity}
-    # in that window's scrollback. Pre-CP13 this path broadcast a
-    # `numeric_routed` ephemeral event; CP13 makes it durable + replayable.
+    # the trailing text as a `:notice` row carrying
+    # meta=%{numeric, severity, raw_params} in that window's scrollback
+    # (raw_params added #424 — body is only the trailing param, so the full
+    # param list rides in meta for numerics whose payload is in the middle
+    # params). Pre-CP13 this path broadcast a `numeric_routed` ephemeral
+    # event; CP13 makes it durable + replayable.
 
     test "404 ERR_CANNOTSENDTOCHAN persists on the channel with severity :error" do
       {server, port} = start_server()
@@ -8143,7 +8146,7 @@ defmodule Grappa.Session.ServerTest do
         body: "Cannot send to channel",
         channel: "#sniffo",
         network: network.slug,
-        meta: %{numeric: 404, severity: :error}
+        meta: %{numeric: 404, severity: :error, raw_params: ["vjt", "#sniffo", "Cannot send to channel"]}
       )
 
       [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil)
@@ -8178,7 +8181,7 @@ defmodule Grappa.Session.ServerTest do
         kind: :notice,
         channel: "$server",
         network: network.slug,
-        meta: %{numeric: 421, severity: :error}
+        meta: %{numeric: 421, severity: :error, raw_params: ["vjt", "BLEH", "Unknown command"]}
       )
 
       [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
@@ -8204,7 +8207,7 @@ defmodule Grappa.Session.ServerTest do
         kind: :notice,
         channel: "ghost",
         network: network.slug,
-        meta: %{numeric: 401, severity: :error}
+        meta: %{numeric: 401, severity: :error, raw_params: ["vjt", "ghost", "No such nick/channel"]}
       )
 
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -8236,6 +8239,58 @@ defmodule Grappa.Session.ServerTest do
       # MOTD path persists with empty meta — confirms it came from the
       # delegated handler, not the routed path (which would set numeric+severity).
       assert row.meta == %{}
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "STATS reply (213 RPL_STATSCLINE) preserves EVERY middle param in meta.raw_params (#424)" do
+      # 213 ∈ @active_numerics (211–219) → routes to {:server, nil} and, with
+      # no delegated STATS bundle handler, falls through to the generic numeric
+      # persist. STATS carries its payload in the MIDDLE params:
+      #   213 <nick> C <host> <*> <server> <port> <class>
+      # Pre-#424 the generic path stored only `body: List.last(params)` (the
+      # trailing class letter) and DROPPED every middle param — host/server/
+      # port lost on the way to the DB. The fix persists the full param list in
+      # `meta.raw_params`, mirroring EventRouter's `persist_raw_event/3`, so cic
+      # can render the whole reply. This is the CLASS fix (every middle-param
+      # numeric), not just the STATS example.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+
+      topic = Topic.channel(user.name, network.slug, "$server")
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, topic)
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      IRCServer.feed(
+        server,
+        ":irc.test.org 213 vjt C 192.168.1.1 * irc.hub.test.org 6667 10\r\n"
+      )
+
+      # Barrier: the persisted :notice row broadcasts on the $server topic.
+      assert_message_event(
+        kind: :notice,
+        channel: "$server",
+        network: network.slug
+      )
+
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
+      assert row.kind == :notice
+      assert row.meta.numeric == 213
+
+      # The bug: without raw_params, only the trailing "10" survives. The fix
+      # persists the FULL param list — every middle param (host/*/server/port)
+      # preserved, not just the trailing class letter.
+      assert row.meta.raw_params == [
+               "vjt",
+               "C",
+               "192.168.1.1",
+               "*",
+               "irc.hub.test.org",
+               "6667",
+               "10"
+             ]
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
