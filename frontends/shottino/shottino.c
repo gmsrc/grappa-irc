@@ -4982,25 +4982,61 @@ static void handle_command_dispatch(struct app *app, char *line);
  * text, the URL is a clickable link, and the 📸 prefix matches what
  * cicchetto ships so the two clients produce identical wire bytes.
  * Nothing is rendered inline in scrollback. */
+/* Declared MIME per extension.
+ *
+ * The server validates against a CLOSED allowlist
+ * (`UploadsController.@mime_categories`) and trusts what we declare, so
+ * this table must mirror it: a type it does not list is a 415, and a type
+ * we mislabel is a 415 the user cannot act on. Kept in the same order as
+ * the server's map so the two can be diffed.
+ *
+ * Deliberately ABSENT: ogg and opus. The server does not accept them
+ * (Safari support is patchy, so they were left out on purpose) and
+ * claiming a MIME it will reject only converts a clear local message into
+ * a confusing server error. */
 static const char *mime_for_path(const char *path) {
     const char *dot = strrchr(path, '.');
-    if (!dot) return "application/octet-stream";
-    struct { const char *ext; const char *mime; } table[] = {
+    if (!dot) return NULL;
+    static const struct { const char *ext; const char *mime; } table[] = {
+        /* image */
         {"png", "image/png"},   {"jpg", "image/jpeg"},  {"jpeg", "image/jpeg"},
-        {"gif", "image/gif"},   {"webp", "image/webp"}, {"mp4", "video/mp4"},
-        {"webm", "video/webm"}, {"mov", "video/quicktime"}, {"mp3", "audio/mpeg"},
-        {"ogg", "audio/ogg"},   {"opus", "audio/opus"}, {"wav", "audio/wav"},
-        {"flac", "audio/flac"}, {"pdf", "application/pdf"}, {"txt", "text/plain"},
+        {"gif", "image/gif"},   {"webp", "image/webp"}, {"apng", "image/apng"},
+        /* video */
+        {"mp4", "video/mp4"},   {"mov", "video/quicktime"}, {"webm", "video/webm"},
+        /* document */
+        {"pdf", "application/pdf"}, {"txt", "text/plain"},
+        {"odt", "application/vnd.oasis.opendocument.text"},
+        {"ods", "application/vnd.oasis.opendocument.spreadsheet"},
+        {"docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+        {"xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        /* audio */
+        {"mp3", "audio/mpeg"},  {"m4a", "audio/mp4"},   {"m4r", "audio/mp4"},
+        {"aac", "audio/aac"},   {"wav", "audio/wav"},   {"flac", "audio/flac"},
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
         if (strcasecmp(dot + 1, table[i].ext) == 0) return table[i].mime;
-    return "application/octet-stream";
+    return NULL; /* unsupported — refused locally, see upload_command */
 }
 
 static void upload_command(struct app *app, const char *path) {
     while (*path == ' ') path++;
     if (!*path) {
         log_line(app, "/upload requires a file path");
+        return;
+    }
+    /* Refuse an unsupported type HERE. The server would answer 415, and
+     * "HTTP 415" tells the user nothing about which types it takes. */
+    const char *mime = mime_for_path(path);
+    if (!mime) {
+        log_line(app, "/upload: unsupported file type — images (png jpg gif webp apng), "
+                      "video (mp4 mov webm), audio (mp3 m4a aac wav flac), "
+                      "documents (pdf txt odt ods docx xlsx)");
+        return;
+    }
+    /* Same read-only rule as a typed message: the link would be posted to
+     * the current window, and $server rejects a PRIVMSG. */
+    if (strcmp(app->windows[app->current].channel, "$server") == 0) {
+        log_line(app, "/upload: the server window is read-only — switch to a channel or query first");
         return;
     }
     FILE *f = fopen(path, "rb");
@@ -5042,7 +5078,7 @@ static void upload_command(struct app *app, const char *path) {
     char *head = xasprintf("--%s\r\n"
                            "Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
                            "Content-Type: %s\r\n\r\n",
-                           boundary, base, mime_for_path(path));
+                           boundary, base, mime);
     char *tail = xasprintf("\r\n--%s--\r\n", boundary);
     size_t hlen = strlen(head), tlen = strlen(tail);
     size_t total = hlen + got + tlen;
