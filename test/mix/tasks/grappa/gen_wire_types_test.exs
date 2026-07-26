@@ -74,6 +74,24 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
       assert GenWireTypes.render_type({:remote_type, [], [mod, :connection_state_event]}) ==
                "NetworksWireConnectionStateEvent"
     end
+
+    # #428 — `Grappa.Networks.Servers.AdminWire.t` types its `port` field as
+    # `:inet.port_number()`, an ERLANG remote type (bare-atom module, not an
+    # Elixir module). Routing it through render_alias_name/Module.split crashed
+    # with "expected an Elixir module, got: :inet" the moment the glob widened
+    # to collect admin_wire. A JSON port is a number on the wire.
+    test "renders :inet.port_number() Erlang remote-type as number" do
+      assert GenWireTypes.render_type({:remote_type, [], [:inet, :port_number]}) == "number"
+    end
+
+    # #428 — an Erlang remote type we don't know how to serialize is a HOLE in
+    # the gate: emitting `unknown` would silently defeat the codegen's purpose.
+    # Raise loudly with the type name so the boundary decision is forced.
+    test "raises loudly on an unmapped Erlang remote-type" do
+      assert_raise RuntimeError, ~r/unmapped Erlang remote type/, fn ->
+        GenWireTypes.render_type({:remote_type, [], [:gen_tcp, :socket]})
+      end
+    end
   end
 
   describe "fixture module emission" do
@@ -220,6 +238,61 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
       assert err.message =~ "cyclic enum reference"
       assert err.message =~ "enum_a"
       assert err.message =~ "enum_b"
+    end
+  end
+
+  # #428 — the source glob was `lib/grappa/**/wire.ex`, which matched ONLY
+  # files named exactly `wire.ex` and silently skipped the 10 `admin_wire.ex`
+  # modules. A glob that skips modules is worse than no glob: it LOOKS like
+  # coverage. Widened to `lib/grappa/**/*wire.ex` so every `*wire.ex` module
+  # (user-facing `wire.ex` AND operator-facing `admin_wire.ex`) is a codegen
+  # source, making tsc a real cross-language gate over the whole Wire surface.
+  describe "admin_wire glob coverage (#428)" do
+    test "the widened glob reaches admin_wire.ex modules in a full generate/0 run" do
+      full = GenWireTypes.generate()
+
+      # A representative spread of the previously-uncovered admin_wire modules:
+      # a top-level one, a deeply-nested one, and one with multiple @types.
+      assert full =~ "// === Grappa.Accounts.AdminWire ==="
+      assert full =~ "// === Grappa.Vhosts.AdminWire ==="
+      assert full =~ "// === Grappa.Admission.NetworkCircuit.AdminWire ==="
+    end
+
+    test "an admin_wire @type renders under its module-prefixed alias" do
+      output = GenWireTypes.render_module_for_test(Grappa.Accounts.AdminWire)
+      assert output =~ ~s(export type AccountsAdminWireT = {)
+      assert output =~ ~s(  is_admin: boolean;)
+      assert output =~ ~s(  live_session_count: number;)
+    end
+
+    test "an admin_wire multi-@type module emits every exported type" do
+      output = GenWireTypes.render_module_for_test(Grappa.Vhosts.AdminWire)
+      assert output =~ ~s(export type VhostsAdminWireVhostJson = {)
+      assert output =~ ~s(export type VhostsAdminWireGrantJson = {)
+    end
+  end
+
+  # #428 — a codegen that emits two `export type Foo`/`export const FOO` lines
+  # for the same identifier produces a wireTypes.ts that fails `tsc` (duplicate
+  # identifier) — the exact drift the gate is meant to prevent. The union
+  # auto-emitter names a module's event union off its SECOND path segment
+  # (`WireNetworksEvent` for both `Networks.Wire` and `Networks.AdminWire`), so
+  # widening the glob to admin_wire introduces a latent collision surface. This
+  # invariant test catches ANY duplicate export (union or otherwise) at codegen
+  # time, loudly, before it reaches the TS compiler.
+  describe "global export uniqueness (#428)" do
+    test "generate/0 emits no duplicate exported identifiers" do
+      full = GenWireTypes.generate()
+
+      names =
+        ~r/^export (?:type|const) (\w+)/m
+        |> Regex.scan(full, capture: :all_but_first)
+        |> List.flatten()
+
+      dups = names -- Enum.uniq(names)
+
+      assert dups == [],
+             "gen_wire_types emitted duplicate exported identifiers: #{inspect(Enum.uniq(dups))}"
     end
   end
 

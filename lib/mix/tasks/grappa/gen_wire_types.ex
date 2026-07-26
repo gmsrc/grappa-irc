@@ -2,8 +2,9 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   @shortdoc "Generate cicchetto/src/lib/wireTypes.ts from Grappa.*.Wire typespecs"
 
   @moduledoc """
-  Walks every module under `lib/grappa/**/wire.ex`, parses `@type`
-  declarations via Code.Typespec.fetch_types/1, emits a single
+  Walks every module under `lib/grappa/**/*wire.ex` (both the user-facing
+  `wire.ex` modules and the operator-facing `admin_wire.ex` modules), parses
+  `@type` declarations via Code.Typespec.fetch_types/1, emits a single
   deterministic TypeScript file at `cicchetto/src/lib/wireTypes.ts`.
 
   ## Usage
@@ -74,7 +75,12 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   use Mix.Task
 
   @output_path "cicchetto/src/lib/wireTypes.ts"
-  @wire_glob "lib/grappa/**/wire.ex"
+  # #428 — `**/wire.ex` matched ONLY files named exactly `wire.ex`, silently
+  # skipping the 10 `admin_wire.ex` modules. `**/*wire.ex` catches every
+  # `*wire.ex` (`wire.ex` + `admin_wire.ex` + any future `*_wire.ex`) so the
+  # generated mirror is exhaustive over the whole Wire surface — a glob that
+  # skips modules looks like coverage but isn't a real gate.
+  @wire_glob "lib/grappa/**/*wire.ex"
 
   # #411 D6b — the wire-token error space (`GrappaWeb.ErrorTokens`) is the
   # codegen source for the cicchetto client's error unions, but it lives in
@@ -277,7 +283,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     """
     // GENERATED FILE — DO NOT EDIT
     // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-    // Source: lib/grappa/**/wire.ex + lib/grappa_web/error_tokens.ex
+    // Source: lib/grappa/**/*wire.ex + lib/grappa_web/error_tokens.ex
 
     #{body}
     """
@@ -612,9 +618,13 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   defp do_render({:remote_type, _, [Ecto.UUID, :t]}), do: "string"
 
   defp do_render({:remote_type, _, [mod, type]}) when is_atom(mod) and is_atom(type) do
-    alias_name = render_alias_name(mod, type)
-    register_external_ref(mod, type, alias_name)
-    alias_name
+    if elixir_module?(mod) do
+      alias_name = render_alias_name(mod, type)
+      register_external_ref(mod, type, alias_name)
+      alias_name
+    else
+      render_erlang_remote_type(mod, type)
+    end
   end
 
   # User-defined type (within same module) — emitted at its source
@@ -668,7 +678,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
 
   defp register_external_ref(mod, type, alias_name) do
     # Skip refs that already render via wire-module emission. If `mod`
-    # is under `lib/grappa/**/wire.ex`, its types are emitted in their
+    # is under `lib/grappa/**/*wire.ex`, its types are emitted in their
     # own module section.
     if wire_module?(mod) do
       :ok
@@ -679,11 +689,17 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     end
   end
 
+  # #428 — a module is emitted in its own section iff its file matched the
+  # `**/*wire.ex` glob, i.e. its leaf module segment ends in "Wire" ("Wire"
+  # OR "AdminWire"). Was a strict `== "Wire"` check, which treated every
+  # `admin_wire.ex` module as external — so once the glob widened to collect
+  # them, a wire→admin_wire (or admin_wire→admin_wire) remote_type ref would
+  # double-emit (once in the module section, once in "External types").
+  # `ends_with?("Wire")` matches the glob exactly. Schema/struct modules
+  # (Credential, Network, SessionEntry, …) don't end in "Wire", so genuine
+  # external refs still route to the External section.
   defp wire_module?(mod) do
-    case mod |> Module.split() |> List.last() do
-      "Wire" -> true
-      _ -> false
-    end
+    mod |> Module.split() |> List.last() |> String.ends_with?("Wire")
   end
 
   defp flatten_union({:|, _, [l, r]}, acc), do: flatten_union(l, flatten_union(r, acc))
@@ -704,6 +720,26 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
 
   defp camelize(snake) do
     snake |> String.split("_") |> Enum.map_join("", &String.capitalize/1)
+  end
+
+  # #428 — Elixir module atoms are `:"Elixir.Foo.Bar"`; Erlang module atoms
+  # are bare (`:inet`, `:gen_tcp`). Only the former can go through
+  # `Module.split/1` — the latter must route to render_erlang_remote_type/2.
+  defp elixir_module?(mod) when is_atom(mod) do
+    String.starts_with?(Atom.to_string(mod), "Elixir.")
+  end
+
+  # #428 — an ERLANG remote type inside a Wire typespec (e.g.
+  # `Networks.Servers.AdminWire.t`'s `port: :inet.port_number()`). Map the
+  # ones that appear in JSON wire shapes to their concrete TS scalar; RAISE
+  # loudly on any other so an unmapped Erlang type is a hard codegen error,
+  # never a silent `unknown` hole that defeats the cross-language gate.
+  defp render_erlang_remote_type(:inet, :port_number), do: "number"
+
+  defp render_erlang_remote_type(mod, type) do
+    raise "gen_wire_types: unmapped Erlang remote type #{inspect(mod)}.#{type}() in a Wire " <>
+            "typespec — add a render_erlang_remote_type/2 clause (JSON wire shapes must map " <>
+            "to a concrete TS type)"
   end
 
   defp render_kind_union(mod, typedefs) do

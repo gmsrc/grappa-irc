@@ -1,6 +1,6 @@
 // GENERATED FILE — DO NOT EDIT
 // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-// Source: lib/grappa/**/wire.ex + lib/grappa_web/error_tokens.ex
+// Source: lib/grappa/**/*wire.ex + lib/grappa_web/error_tokens.ex
 
 // === External types (referenced by Wire modules) ===
 
@@ -15,6 +15,8 @@ export const IRCAUTH_FSMAUTH_METHOD = [
   "none",
 ] as const;
 export type IRCAuthFSMAuthMethod = (typeof IRCAUTH_FSMAUTH_METHOD)[number];
+
+export type LiveIntrospectionSessionEntryDegradedField = "joined_channels";
 
 export type NetworksCredentialAuthMethod = IRCAuthFSMAuthMethod;
 
@@ -54,6 +56,17 @@ export type SessionLogEvent = (typeof SESSION_LOG_EVENT)[number];
 
 export const WINDOW_COUNTS_SEVERITY = ["mention", "message", "event", "none"] as const;
 export type WindowCountsSeverity = (typeof WINDOW_COUNTS_SEVERITY)[number];
+
+// === Grappa.Accounts.AdminWire ===
+
+export type AccountsAdminWireT = {
+  id: string;
+  name: string;
+  is_admin: boolean;
+  inserted_at: string;
+  updated_at: string;
+  live_session_count: number;
+};
 
 // === Grappa.Accounts.Wire ===
 
@@ -384,6 +397,16 @@ export type AdminEventsWireEvent =
   | AdminEventsWireCredentialUnboundEvent
   | AdminEventsWireLoginThrottledEvent;
 
+// === Grappa.Admission.NetworkCircuit.AdminWire ===
+
+export type AdmissionNetworkCircuitAdminWireT = {
+  state: string;
+  failure_count: number;
+  window_start_ms: number;
+  cooled_at_ms: number;
+  retry_after_seconds: number;
+};
+
 // === Grappa.ChannelDirectory.Wire ===
 
 export type ChannelDirectoryWireEntry = {
@@ -409,6 +432,89 @@ export type CicWireBundleHashPayload = {
   version?: string;
 };
 
+// === Grappa.LiveIntrospection.AdminWire ===
+
+export type LiveIntrospectionAdminWireLiveStateJson = {
+  alive: boolean;
+  pid_inspect: string;
+  mailbox_len: number;
+  memory_bytes: number;
+  joined_channels: string[] | null;
+  introspection_degraded: LiveIntrospectionSessionEntryDegradedField[];
+};
+
+export type LiveIntrospectionAdminWireT = {
+  subject_kind: "user" | "visitor";
+  subject_id: string;
+  subject_label: string | null;
+  last_seen_at: string | null;
+  network_id: number;
+  live_state: LiveIntrospectionAdminWireLiveStateJson;
+};
+
+// === Grappa.Networks.AdminWire ===
+
+export type NetworksAdminWireT = {
+  id: number;
+  slug: string;
+  services_flavor: NetworksNetworkServicesFlavor | null;
+  visitor_enabled: boolean;
+  visitor_autoconnect: boolean;
+  max_concurrent_visitor_sessions: number | null;
+  max_concurrent_user_sessions: number | null;
+  max_per_ip: number | null;
+  inserted_at: string;
+  updated_at: string;
+};
+
+// === Grappa.Networks.Credentials.AdminWire ===
+
+export type NetworksCredentialsAdminWireLiveStateJson = {
+  alive: boolean;
+  pid_inspect: string;
+  mailbox_len: number;
+  memory_bytes: number;
+  joined_channels: string[] | null;
+  introspection_degraded: LiveIntrospectionSessionEntryDegradedField[];
+};
+
+export type NetworksCredentialsAdminWireT = {
+  user_id: string;
+  network_id: number;
+  network_slug: string;
+  nick: string;
+  ident: string | null;
+  realname: string | null;
+  sasl_user: string | null;
+  auth_method: NetworksCredentialAuthMethod;
+  auth_command_template: string | null;
+  autojoin_channels: string[];
+  last_joined_channels: string[];
+  connection_state: NetworksCredentialConnectionState;
+  connection_state_reason: string | null;
+  connection_state_changed_at: string | null;
+  inserted_at: string;
+  updated_at: string;
+  live_state: NetworksCredentialsAdminWireLiveStateJson | null;
+};
+
+export const NETWORKS_CREDENTIALS_ADMIN_WIRE_SESSION_ACTION = ["left_alone", "stopped"] as const;
+export type NetworksCredentialsAdminWireSessionAction =
+  (typeof NETWORKS_CREDENTIALS_ADMIN_WIRE_SESSION_ACTION)[number];
+
+// === Grappa.Networks.FeaturedChannels.AdminWire ===
+
+export type NetworksFeaturedChannelsAdminWireT = {
+  id: number;
+  network_id: number;
+  name: string;
+  description: string | null;
+  position: number;
+  enabled: boolean;
+  inserted_at: string;
+  updated_at: string;
+};
+
 // === Grappa.Networks.FeaturedChannels.Wire ===
 
 export type NetworksFeaturedChannelsWireLink = {
@@ -418,6 +524,21 @@ export type NetworksFeaturedChannelsWireLink = {
 
 export type NetworksFeaturedChannelsWireIndexPayload = {
   channels: NetworksFeaturedChannelsWireLink[];
+};
+
+// === Grappa.Networks.Servers.AdminWire ===
+
+export type NetworksServersAdminWireT = {
+  id: number;
+  network_id: number;
+  host: string;
+  port: number;
+  tls: boolean;
+  priority: number;
+  enabled: boolean;
+  source_address: string | null;
+  inserted_at: string;
+  updated_at: string;
 };
 
 // === Grappa.Networks.Wire ===
@@ -1040,6 +1161,15 @@ export type SessionLogWireListResult = {
   session_log: SessionLogWireT[];
 };
 
+// === Grappa.SubjectSearch.AdminWire ===
+
+export type SubjectSearchAdminWireResultJson = {
+  type: string;
+  id: string;
+  network: string | null;
+  nick: string;
+};
+
 // === Grappa.Themes.Wire ===
 
 export type ThemesWireT = {
@@ -1053,6 +1183,52 @@ export type ThemesWireT = {
   mine: boolean;
   payload: Record<string, unknown>;
   inserted_at: string;
+};
+
+// === Grappa.Vhosts.AdminWire ===
+
+export type VhostsAdminWireVhostJson = {
+  id: number;
+  address: string;
+  in_pool: boolean;
+  generally_available: boolean;
+  inserted_at: string;
+  updated_at: string;
+};
+
+export type VhostsAdminWireGrantJson = {
+  id: number;
+  vhost_id: number;
+  subject_type: string;
+  subject_id: string;
+};
+
+// === Grappa.Visitors.AdminWire ===
+
+export type VisitorsAdminWireLiveStateJson = {
+  alive: boolean;
+  pid_inspect: string;
+  mailbox_len: number;
+  memory_bytes: number;
+  joined_channels: string[] | null;
+  introspection_degraded: LiveIntrospectionSessionEntryDegradedField[];
+};
+
+export type VisitorsAdminWireNetworkJson = {
+  network_slug: string;
+  network_id: number;
+  nick: string;
+  connection_state: NetworksCredentialConnectionState;
+  live_state: VisitorsAdminWireLiveStateJson | null;
+};
+
+export type VisitorsAdminWireT = {
+  id: string;
+  expires_at: string | null;
+  identified: boolean;
+  ip: string | null;
+  inserted_at: string;
+  networks: VisitorsAdminWireNetworkJson[];
 };
 
 // === Grappa.Visitors.Wire ===
