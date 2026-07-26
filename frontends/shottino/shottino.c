@@ -5382,10 +5382,39 @@ static void event_loop(struct app *app) {
     endwin();
 }
 
+/* Usage text, written to `out` so `--help` can go to stdout and exit 0
+ * while a usage ERROR goes to stderr and exits 2 — the distinction every
+ * other CLI makes, and the one that lets a packaging smoke test tell
+ * "the binary runs" apart from "the binary is broken". */
+static void print_usage(FILE *out, const char *prog) {
+    fprintf(out, "usage: %s [--auto|--user|--visitor] https://grappa.example.net IDENTIFIER PASSWORD\n", prog);
+    fprintf(out, "       %s --user --login-email user@example.net https://grappa.example.net PASSWORD\n", prog);
+    fprintf(out, "       %s --share https://grappa.example.net/share/<token>\n", prog);
+    fprintf(out, "\n");
+    fprintf(out, "  --auto           let the server classify the identifier (default)\n");
+    fprintf(out, "  --user           registered-user login; a plain account name becomes\n");
+    fprintf(out, "                   name@shottino.local\n");
+    fprintf(out, "  --visitor        visitor nick flow\n");
+    fprintf(out, "  --login-email E  use E as the grappa login identifier; the IRC nick comes\n");
+    fprintf(out, "                   from the network credential, not from the email\n");
+    fprintf(out, "  --share URL      consume a visitor session-share link (mint one with /share);\n");
+    fprintf(out, "                   both host and token are read from the URL\n");
+    fprintf(out, "  --help, -h       show this help and exit\n");
+    fprintf(out, "\nOnce connected, /help lists every command.\n");
+}
+
 int main(int argc, char **argv) {
     const char *mode = "auto";
     const char *login_override = NULL;
     int argi = 1;
+    /* Checked before the option loop so --help works from any position and
+     * never requires the other arguments to be present. */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(stdout, argv[0]);
+            return 0;
+        }
+    }
     while (argi < argc && strncmp(argv[argi], "--", 2) == 0) {
         if (strcmp(argv[argi], "--user") == 0) mode = "user";
         else if (strcmp(argv[argi], "--visitor") == 0) mode = "visitor";
@@ -5411,12 +5440,9 @@ int main(int argc, char **argv) {
     bool share_mode = strcmp(mode, "share") == 0;
     int expected = share_mode ? 1 : (login_override ? 2 : 3);
     if (argc - argi != expected) {
-        fprintf(stderr, "usage: %s [--auto|--user|--visitor] https://grappa.example.net IDENTIFIER PASSWORD\n", argv[0]);
-        fprintf(stderr, "       %s --user --login-email user@example.net https://grappa.example.net PASSWORD\n", argv[0]);
-        fprintf(stderr, "       %s --share https://grappa.example.net/share/<token>\n", argv[0]);
-        fprintf(stderr, "       --user turns plain account names into name@shottino.local for grappa registered-user login\n");
-        fprintf(stderr, "       --login-email uses EMAIL as the grappa login identifier; IRC nick comes from grappa credentials\n");
-        fprintf(stderr, "       --share consumes a visitor session-share link (mint one with /share); host + token come from the URL\n");
+        /* Usage ERROR: stderr + exit 2. One definition of the text,
+         * shared with --help, so the two cannot drift. */
+        print_usage(stderr, argv[0]);
         return 2;
     }
 

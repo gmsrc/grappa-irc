@@ -23,7 +23,7 @@
 pkgname=grappa
 pkgver=0.5.0
 pkgrel=1
-pkgdesc="Always-on IRC bouncer with a REST + Phoenix Channels API and a bundled web PWA (cicchetto)"
+pkgdesc="Always-on IRC bouncer with a REST + Phoenix Channels API, a bundled web PWA (cicchetto) and a terminal client (shottino)"
 arch=('x86_64')
 url="https://github.com/vjt/grappa-irc"
 license=('MIT')
@@ -80,6 +80,18 @@ build() {
 	cd cicchetto
 	bun install --frozen-lockfile
 	bun run build
+	cd ..
+
+	# shottino — the terminal client (frontends/shottino). Source-built
+	# here like everything else in this recipe, so it links the user's own
+	# ncurses/openssl. Its runtime libs are already in `depends` for the
+	# bundled ERTS, so it adds no new dependency; the C toolchain and
+	# pkgconf come from base-devel, which makepkg assumes.
+	echo "==> shottino (terminal client)"
+	./configure --prefix=/usr
+	make -C frontends/shottino
+	# `make check` is NOT run here: the suites build with ASan/UBSan, which
+	# is a CI gate (ci.yml), not something to impose on a user's rebuild.
 }
 
 package() {
@@ -102,6 +114,12 @@ package() {
 		"${pkgdir}/usr/share/grappa/gen-secrets.sh"
 	install -Dm755 infra/packaging/grappa-wrapper.sh \
 		"${pkgdir}/usr/bin/grappa"
+
+	# shottino — terminal client for this server. Same package as the
+	# bouncer for the same reason as the .deb: one small binary, no new
+	# dependency, and a client for the server you just installed.
+	install -Dm755 frontends/shottino/shottino \
+		"${pkgdir}/usr/bin/shottino"
 	install -Dm644 infra/packaging/README.md \
 		"${pkgdir}/usr/share/doc/grappa/README.md"
 

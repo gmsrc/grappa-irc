@@ -5,6 +5,12 @@ Standalone Linux terminal client for grappa's REST + Phoenix Channels surface.
 Shottino is intentionally a terminal facade over grappa's JSON API. It does not
 parse IRC and does not connect to upstream IRC servers.
 
+## Install from a package
+
+Shottino ships in grappa's distro packages as `/usr/bin/shottino` — on a host
+with the `.deb` or the Arch package installed there is nothing to build. To
+build it from source instead, read on.
+
 ## Build
 
 ```sh
@@ -40,7 +46,7 @@ deliberately kept free of app state and terminal state so they can be tested
 without a TTY. Suites build with ASan and UBSan; override `SANITIZE=` on a
 toolchain without the sanitizer runtime.
 
-## Install
+## Install from source
 
 ```sh
 ./configure --prefix=/usr/local

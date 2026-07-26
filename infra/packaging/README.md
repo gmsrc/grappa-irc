@@ -18,6 +18,7 @@ per-distro ERTS build) are tracked follow-ups — see **Deferred** below.
 | `/usr/lib/grappa/`                     | the mix release (self-contained ERTS + compiled app)       |
 | `/usr/lib/grappa/bin/grappa`           | the release boot script                                    |
 | `/usr/bin/grappa`                      | operator CLI wrapper (sources env, drops to `grappa` user) |
+| `/usr/bin/shottino`                    | terminal client (`frontends/shottino`), built from source  |
 | `/usr/share/grappa/cicchetto-dist/`    | built SPA (`CIC_DIST_ROOT`), served by the BEAM            |
 | `/usr/share/grappa/grappa.env.example` | env template                                               |
 | `/usr/share/grappa/gen-secrets.sh`     | openssl secret generator                                   |
@@ -27,6 +28,29 @@ per-distro ERTS build) are tracked follow-ups — see **Deferred** below.
 
 The `grappa` system user (nologin, home `/var/lib/grappa`) is created by
 the package.
+
+### The terminal client
+
+`shottino` (`frontends/shottino`, C + ncurses) ships in the SAME package
+as the bouncer rather than a separate `grappa-shottino`. It is one
+~180 KB binary, and its runtime libraries are already package
+dependencies for the bundled ERTS — the only addition is `libncursesw6`,
+which is NOT the same Debian package as the `libncurses6` ERTS wants
+(shottino links the WIDE build because it is UTF-8 end to end). Splitting
+it into its own package would add a second thing to maintain and buy
+nothing: it is a client for the server you just installed.
+
+Both packages build it from source so it links the build host's
+ncurses/openssl, the same constraint that governs the ERTS payload.
+`SKIP_SHOTTINO=1` opts the `.deb` build out; without that opt-out a
+failed client build FAILS the package build, because a package that
+silently ships without a binary it advertises is worse than one that
+refuses to build.
+
+`build.sh` snapshots and restores `config.mk` around `./configure`:
+that file is tracked, and leaving it modified makes the tree dirty, which
+`Grappa.Version` reads as unreleased (`-<shortsha>` instead of the bare
+tag) and would fail the release workflow's version proof.
 
 ## Building the `.deb`
 

@@ -95,6 +95,66 @@ rm -rf "${STAGING}/usr/lib/grappa"
 mkdir -p "${STAGING}/usr/lib/grappa"
 cp -a "${REL_DIR}/." "${STAGING}/usr/lib/grappa/"
 
+# ── shottino (terminal client) ─────────────────────────────────────────────
+# The C client ships in the same package as the bouncer. Its runtime deps
+# (ncursesw, libssl) are ALREADY in nfpm.yaml's `depends` — the bundled ERTS
+# links the same two — so shipping it costs one ~180 KB binary and adds no
+# new dependency.
+#
+# Built here rather than shipped prebuilt because it links the BUILD host's
+# ncurses/openssl, exactly like the ERTS payload. That is the same
+# constraint that makes this a valid .deb and not a valid .rpm.
+#
+# SKIP_SHOTTINO=1 opts out (mirrors SKIP_RELEASE / SKIP_CIC). Without the
+# opt-out a build failure FAILS the package build: a package that silently
+# ships without a binary it advertises is worse than one that refuses to
+# build.
+SHOTTINO_BIN="${STAGING}/usr/bin/shottino"
+if [ "${SKIP_SHOTTINO:-}" != "1" ]; then
+	say "building shottino → ${SHOTTINO_BIN}"
+	# ./configure rewrites ${REPO_ROOT}/config.mk, which is a TRACKED file.
+	# Leaving it modified makes `git status --porcelain` non-empty, and
+	# Grappa.Version treats a dirty tree as unreleased — it appends
+	# -<shortsha> instead of reporting the bare tag, which would fail the
+	# release workflow's version proof. The mix release runs earlier so
+	# the CURRENT step order happens to be safe, but silently depending on
+	# that ordering is a trap for whoever reorders this next. Snapshot and
+	# restore so the build leaves the tree exactly as it found it.
+	cfg="${REPO_ROOT}/config.mk"
+	cfg_backup=""
+	if [ -f "${cfg}" ]; then
+		cfg_backup="$(mktemp)"
+		cp -a "${cfg}" "${cfg_backup}"
+	fi
+	restore_config_mk() {
+		if [ -n "${cfg_backup}" ] && [ -f "${cfg_backup}" ]; then
+			mv -f "${cfg_backup}" "${cfg}"
+		fi
+	}
+	# Restore on ANY exit path, including a failed compile below.
+	trap restore_config_mk EXIT
+	(
+		cd "${REPO_ROOT}"
+		# configure probes ncursesw + openssl through pkg-config and writes
+		# config.mk, which the Makefile reads. It fails loudly on a missing
+		# dep rather than producing a half-linked binary.
+		./configure --prefix=/usr
+		make -C frontends/shottino clean
+		make -C frontends/shottino
+	)
+	mkdir -p "${STAGING}/usr/bin"
+	install -m 0755 "${REPO_ROOT}/frontends/shottino/shottino" "${SHOTTINO_BIN}"
+	# Prove the staged artifact RUNS before packaging it. `--help` needs no
+	# server, no terminal and no config, so it exercises the dynamic links
+	# for real instead of just asserting the file exists.
+	"${SHOTTINO_BIN}" --help >/dev/null 2>&1 || die "staged shottino does not run (link error?)"
+	[ -x "${SHOTTINO_BIN}" ] || die "shottino missing at ${SHOTTINO_BIN}"
+	# Put config.mk back now that the compile is done, and drop the trap so
+	# it cannot fire twice.
+	restore_config_mk
+	trap - EXIT
+fi
+
 # ── nfpm ───────────────────────────────────────────────────────────────────
 nfpm_bin="${NFPM_BIN:-}"
 if [ -z "${nfpm_bin}" ]; then
