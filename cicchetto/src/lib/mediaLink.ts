@@ -50,30 +50,29 @@
 //    prevent. Schemes other than http/https (linkify also admits ftp)
 //    are excluded.
 //
-// ## Known limitation — emoji split across mIRC runs
+// 2. LEGACY own upload URL (`/uploads/<26-char-base32-slug>`, NO
+//    extension — mirrors Grappa.Uploads @slug_regex) + trailing 📸/🎬/🎵
+//    in the text immediately preceding the URL → image/video/audio. This
+//    is the FALLBACK for links minted before #418: the slug carried no
+//    extension, so the emoji prefix was the only type signal on the wire.
+//    📄 documents are deliberately excluded: rendering a PDF needs
+//    <embed>/<iframe>, which the design rejects (X-Frame-Options /
+//    frame-src). No emoji → null (type unknowable; anchor default stands).
+// 3. Same-origin URL with an image/video/audio file EXTENSION → kind by
+//    extension (EXTENSION_KIND). Since #418 this is the PRIMARY path for
+//    own-upload URLs, which the server now mints as `/uploads/<slug>.<ext>`
+//    (extension from Grappa.Uploads.MimeExt) — the type is intrinsic to
+//    the URL and the emoji is NOT consulted here. Also covers any other
+//    same-origin direct-served media.
 //
-// The 📸/🎬/🎵 signal is read from the text segment immediately preceding
-// the URL within ONE mIRC formatting run. A body that interleaves
-// control codes between emoji and URL (`\x0304📸\x03 https://…`, e.g.
-// a colorizing relay bridge) splits them into separate runs and the
-// link silently falls back to the plain anchor — the standalone
-// navigate-in-place behavior returns for those rows. cic's own mints
-// are always plain `📸 <url>`, so the real-world surface today is
-// zero. The durable fix is server-side: mint `/uploads/<slug>.<ext>`
-// so the URL itself carries the type — recorded in todo, not worth a
-// control-char-tolerant scan here.
-// 2. Own upload URL (`/uploads/<26-char-base32-slug>` — mirrors
-//    Grappa.Uploads @slug_regex) + trailing 📸/🎬/🎵 in the text
-//    immediately preceding the URL → image/video/audio. The slug carries
-//    no extension, so the uploadOrchestrator's emoji prefix is the only
-//    type signal on the wire. 📄 documents are deliberately excluded:
-//    rendering a PDF needs <embed>/<iframe>, which the design rejects
-//    (X-Frame-Options / frame-src). No emoji → null (type unknowable;
-//    anchor default stands).
-// 3. Same-origin URL with an image/video/audio file extension →
-//    kind by extension. No such URLs exist in grappa today (uploads
-//    are slug-only), but the rule costs one map lookup and covers any
-//    future same-origin direct-served media.
+// ## Why the URL extension is the durable fix (#418)
+//
+// Before #418 the emoji (rule 2) was the SOLE type signal, carried by
+// presentation text: any copy/locale/relay/alias-expansion change to how
+// the message was composed — or a control code split between the emoji
+// and the URL across mIRC runs (`\x0304📸\x03 https://…`) — severed it
+// silently and the viewer guessed wrong. Encoding the type in the URL
+// makes rule 3 authoritative; rule 2 survives only for historical rows.
 //
 // IRC stays text-only: this module changes what a CLICK does, not what
 // scrollback renders. No previews, no on-arrival rendering — the
@@ -95,6 +94,14 @@ const EMOJI_KIND: Record<string, MediaKind> = {
   "🎵": "audio",
 };
 
+// Same-origin file extension → media kind. Since #418 the server mints
+// own-upload URLs as `/uploads/<slug>.<ext>` (extension from
+// Grappa.Uploads.MimeExt, lib/grappa/uploads/mime_ext.ex), so this table
+// is the PRIMARY type source for uploads — the emoji is now only a
+// fallback for legacy extensionless links. CROSS-LANGUAGE CONTRACT: every
+// viewer-relevant extension MimeExt can mint (image/video/audio) MUST be
+// present here, or a fresh upload loses its in-app viewer. Pinned by the
+// "server-mintable viewer extensions" test in mediaLink.test.ts.
 const EXTENSION_KIND: Record<string, MediaKind> = {
   png: "image",
   jpg: "image",
@@ -103,6 +110,7 @@ const EXTENSION_KIND: Record<string, MediaKind> = {
   webp: "image",
   avif: "image",
   svg: "image",
+  apng: "image", // #418 — server MimeExt mints image/apng → .apng
   mp4: "video",
   webm: "video",
   mov: "video",
@@ -111,6 +119,7 @@ const EXTENSION_KIND: Record<string, MediaKind> = {
   ogg: "audio",
   oga: "audio",
   m4a: "audio",
+  aac: "audio", // #418 — server MimeExt mints audio/aac → .aac
   opus: "audio",
   flac: "audio",
   wav: "audio",

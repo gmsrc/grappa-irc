@@ -54,7 +54,8 @@ defmodule GrappaWeb.UploadsControllerTest do
 
       assert is_binary(slug)
       assert Uploads.valid_slug?(slug)
-      assert String.ends_with?(url, "/uploads/" <> slug)
+      # #418: the URL now carries the media type as `.<ext>` (image/png → .png).
+      assert String.ends_with?(url, "/uploads/#{slug}.png")
       assert {:ok, _, _} = DateTime.from_iso8601(expires_at)
     end
 
@@ -642,6 +643,109 @@ defmodule GrappaWeb.UploadsControllerTest do
 
       conn = get(conn, "/uploads/" <> row.slug)
       assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+  end
+
+  describe "POST /api/uploads — public URL carries a type extension (#418)" do
+    # The URL now encodes the media type as `/uploads/<slug>.<ext>` so the
+    # cic viewer reads the type from the URL, not a fragile 📸/🎬 emoji in
+    # the message body. The extension comes from Grappa.Uploads.MimeExt.
+    test "image/png upload → url ends with .png", %{conn: conn} do
+      {_, session} = user_and_session([])
+      upload = upload_fixture("shot.png", "image/png", Grappa.UploadFixtures.bytes(:gps_png))
+
+      conn = conn |> put_bearer(session.id) |> post("/api/uploads", %{"file" => upload})
+
+      %{"slug" => slug, "url" => url} = json_response(conn, 201)
+      assert String.ends_with?(url, "/uploads/#{slug}.png")
+    end
+
+    test "video/mp4 upload → url ends with .mp4", %{conn: conn} do
+      {_, session} = user_and_session([])
+      upload = upload_fixture("clip.mp4", "video/mp4", Grappa.UploadFixtures.bytes(:gps_mp4))
+
+      conn = conn |> put_bearer(session.id) |> post("/api/uploads", %{"file" => upload})
+
+      %{"slug" => slug, "url" => url} = json_response(conn, 201)
+      assert String.ends_with?(url, "/uploads/#{slug}.mp4")
+    end
+
+    test "text/plain upload → url ends with .txt", %{conn: conn} do
+      {_, session} = user_and_session([])
+      upload = upload_fixture("notes.txt", "text/plain", "plain text body")
+
+      conn = conn |> put_bearer(session.id) |> post("/api/uploads", %{"file" => upload})
+
+      %{"slug" => slug, "url" => url} = json_response(conn, 201)
+      assert String.ends_with?(url, "/uploads/#{slug}.txt")
+    end
+
+    test "audio/aac upload → url ends with .aac (faithful extension, #418 Q5)", %{conn: conn} do
+      {_, session} = user_and_session([])
+      upload = upload_fixture("clip.aac", "audio/aac", "AAC-FAKE-BYTES")
+
+      conn = conn |> put_bearer(session.id) |> post("/api/uploads", %{"file" => upload})
+
+      %{"slug" => slug, "url" => url} = json_response(conn, 201)
+      assert String.ends_with?(url, "/uploads/#{slug}.aac")
+    end
+  end
+
+  describe "GET /uploads/<slug>.<ext> — advisory type extension (#418)" do
+    test "200 serves the bytes for an extensioned upload URL", %{conn: conn, root: root} do
+      input = Grappa.UploadFixtures.bytes(:gps_png)
+      slug = uploaded_slug(conn, "img.png", "image/png", input)
+
+      get_conn = get(Phoenix.ConnTest.build_conn(), "/uploads/#{slug}.png")
+
+      assert response(get_conn, 200) == File.read!(Uploads.storage_path(root, slug))
+      assert [ct] = get_resp_header(get_conn, "content-type")
+      assert ct =~ "image/png"
+    end
+
+    test "legacy extensionless URL still 200s (existing scrollback links)", %{conn: conn} do
+      slug = uploaded_slug(conn, "img.png", "image/png", Grappa.UploadFixtures.bytes(:gps_png))
+
+      get_conn = get(Phoenix.ConnTest.build_conn(), "/uploads/" <> slug)
+
+      assert response(get_conn, 200)
+    end
+
+    test "a LYING extension is ignored — content-type stays row.mime + nosniff (Q2/S5)",
+         %{conn: conn} do
+      # The extension is advisory: /uploads/<slug>.html for an image row is
+      # served as image/png (row.mime), NEVER text/html. nosniff pins the
+      # browser to the declared type so a `.html` (or `.svg`) URL can't be
+      # MIME-sniffed into a script-executable response on the app origin —
+      # the stored-XSS vector the advisory-extension decision would reopen
+      # if the header were absent.
+      slug = uploaded_slug(conn, "img.png", "image/png", Grappa.UploadFixtures.bytes(:gps_png))
+
+      get_conn = get(Phoenix.ConnTest.build_conn(), "/uploads/#{slug}.html")
+
+      assert response(get_conn, 200)
+      assert [ct] = get_resp_header(get_conn, "content-type")
+      assert ct =~ "image/png"
+      refute ct =~ "text/html"
+      assert get_resp_header(get_conn, "x-content-type-options") == ["nosniff"]
+    end
+
+    test "404 no-oracle for an extensioned URL on an unknown slug", %{conn: conn} do
+      conn = get(conn, "/uploads/#{String.duplicate("a", 26)}.png")
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+
+    test "Range serving is undisturbed by the extension → 206 + nosniff", %{conn: conn} do
+      slug = uploaded_slug(conn, "doc.txt", "text/plain", "0123456789ABCDEF")
+
+      get_conn =
+        Phoenix.ConnTest.build_conn()
+        |> put_req_header("range", "bytes=0-3")
+        |> get("/uploads/#{slug}.txt")
+
+      assert response(get_conn, 206) == "0123"
+      assert get_resp_header(get_conn, "content-range") == ["bytes 0-3/16"]
+      assert get_resp_header(get_conn, "x-content-type-options") == ["nosniff"]
     end
   end
 

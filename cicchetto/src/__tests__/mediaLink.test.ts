@@ -218,6 +218,73 @@ describe("classifyMediaLink", () => {
       expect(classifyMediaLink("", "", ORIGIN, NO_ALIASES)).toBeNull();
     });
   });
+
+  describe("own upload URLs with a type extension (#418 — extension is the type source)", () => {
+    it("extensioned upload URL classifies by extension with no emoji", () => {
+      expect(classifyMediaLink(`${UPLOAD_URL}.png`, "", ORIGIN, NO_ALIASES)).toEqual({
+        kind: "image",
+        href: `${UPLOAD_URL}.png`,
+      });
+    });
+
+    it("extension WINS over a mismatched emoji (emoji is no longer the type source)", () => {
+      // A body that still prepends the wrong emoji must classify by the
+      // URL extension: emoji says image, .mp4 says video → video.
+      expect(classifyMediaLink(`${UPLOAD_URL}.mp4`, "📸 ", ORIGIN, NO_ALIASES)?.kind).toBe("video");
+    });
+
+    it("extensioned apng upload URL classifies as image", () => {
+      expect(classifyMediaLink(`${UPLOAD_URL}.apng`, "", ORIGIN, NO_ALIASES)?.kind).toBe("image");
+    });
+
+    it("extensioned aac upload URL classifies as audio", () => {
+      expect(classifyMediaLink(`${UPLOAD_URL}.aac`, "", ORIGIN, NO_ALIASES)?.kind).toBe("audio");
+    });
+
+    it("legacy extensionless upload URL still uses the emoji fallback", () => {
+      expect(classifyMediaLink(UPLOAD_URL, "📸 ", ORIGIN, NO_ALIASES)).toEqual({
+        kind: "image",
+        href: UPLOAD_URL,
+      });
+    });
+
+    it("extensioned upload URL on an advertised alias re-roots onto the page origin (#324)", () => {
+      expect(
+        classifyMediaLink(`https://${ALIAS_B}/uploads/${SLUG}.png`, "", ORIGIN, WITH_ALIAS_B),
+      ).toEqual({ kind: "image", href: `${UPLOAD_URL}.png` });
+    });
+  });
+
+  // Cross-language contract pin (#418). The server mints /uploads/<slug>.<ext>
+  // with the extension from Grappa.Uploads.MimeExt (lib/grappa/uploads/mime_ext.ex).
+  // EVERY viewer-relevant extension that map can mint (image/video/audio) MUST be
+  // classified here by EXTENSION_KIND, or a fresh upload loses its in-app viewer.
+  // Keep in sync with the image/video/audio rows of MimeExt.ext_for/1. Document
+  // types (pdf/txt/odt/ods/docx/xlsx) are deliberately NOT viewer-relevant and
+  // are excluded, mirroring the server map's doc rows.
+  describe("server-mintable viewer extensions are all classified (#418 drift guard)", () => {
+    const SERVER_VIEWER_EXTS: ReadonlyArray<[string, "image" | "video" | "audio"]> = [
+      ["png", "image"],
+      ["jpg", "image"],
+      ["gif", "image"],
+      ["webp", "image"],
+      ["apng", "image"],
+      ["mp4", "video"],
+      ["mov", "video"],
+      ["webm", "video"],
+      ["mp3", "audio"],
+      ["m4a", "audio"],
+      ["aac", "audio"],
+      ["wav", "audio"],
+      ["flac", "audio"],
+    ];
+
+    for (const [ext, kind] of SERVER_VIEWER_EXTS) {
+      it(`.${ext} (server MimeExt) classifies as ${kind}`, () => {
+        expect(classifyMediaLink(`${UPLOAD_URL}.${ext}`, "", ORIGIN, NO_ALIASES)?.kind).toBe(kind);
+      });
+    }
+  });
 });
 
 // Review fix (2026-06-11): `sameHostHref` is the extracted host-match +

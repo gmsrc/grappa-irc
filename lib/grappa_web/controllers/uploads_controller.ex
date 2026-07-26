@@ -160,7 +160,7 @@ defmodule GrappaWeb.UploadsController do
       |> put_status(:created)
       |> json(%{
         slug: row.slug,
-        url: public_url(row.slug),
+        url: public_url(row.slug, row.mime),
         expires_at: DateTime.to_iso8601(row.expires_at)
       })
     end
@@ -173,7 +173,7 @@ defmodule GrappaWeb.UploadsController do
   @doc false
   @spec show(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def show(conn, %{"slug" => slug}) when is_binary(slug) do
-    with {:ok, row} <- Uploads.get_by_slug(slug, DateTime.utc_now()),
+    with {:ok, row} <- Uploads.get_by_slug(strip_ext(slug), DateTime.utc_now()),
          path = Uploads.storage_path(storage_root(), row.slug),
          {:ok, %File.Stat{size: size}} <- File.stat(path) do
       conn
@@ -343,7 +343,28 @@ defmodule GrappaWeb.UploadsController do
     }
   end
 
-  defp public_url(slug), do: GrappaWeb.Endpoint.url() <> "/uploads/" <> slug
+  # #418: append the MIME's canonical extension so the URL carries the
+  # media type (the cic viewer reads the type from the URL, not a fragile
+  # 📸/🎬 emoji in the message body). An unmapped MIME degrades to an
+  # extensionless URL — today's behaviour, never a crash.
+  defp public_url(slug, mime) do
+    base = GrappaWeb.Endpoint.url() <> "/uploads/" <> slug
+
+    case Uploads.ext_for(mime) do
+      {:ok, ext} -> base <> "." <> ext
+      :error -> base
+    end
+  end
+
+  # #418: the public URL now carries a type extension (`/uploads/<slug>.<ext>`).
+  # The slug IS the access token; the extension is an advisory type hint for
+  # the client and is IGNORED here — we look up by the bare slug and serve the
+  # stored `row.mime` as the authoritative Content-Type. A base32 slug never
+  # contains a dot, so the first dot-delimited segment is always the slug; a
+  # legacy extensionless link strips to itself. A lying `.html`/`.svg`
+  # extension therefore can't change the served type — and `nosniff` (show/2)
+  # additionally blocks any browser MIME-sniff of the declared type.
+  defp strip_ext(slug), do: slug |> String.split(".", parts: 2) |> hd()
 
   defp disposition_header(%{original_filename: nil}), do: "inline"
 

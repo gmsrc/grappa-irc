@@ -143,6 +143,16 @@ defmodule Grappa.Uploads do
   def valid_slug?(_), do: false
 
   @doc """
+  The canonical file extension for an accepted upload MIME as
+  `{:ok, ext}` (no leading dot), or `:error` for an unmapped MIME.
+  `UploadsController.public_url/2` uses it to mint `/uploads/<slug>.<ext>`
+  so the URL carries the media type (#418). Single source of truth:
+  `Grappa.Uploads.MimeExt`.
+  """
+  @spec ext_for(term()) :: {:ok, String.t()} | :error
+  defdelegate ext_for(mime), to: __MODULE__.MimeExt
+
+  @doc """
   Compose the on-disk path for a slug. Validates the slug shape at
   the boundary — any non-conforming string raises so the caller
   can't smuggle a `..` traversal through.
