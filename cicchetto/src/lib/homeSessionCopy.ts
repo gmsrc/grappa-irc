@@ -65,9 +65,14 @@ export function homeSessionLifetime(
     // Registration is identity-wide (`visitor_registered?/1` is true iff ANY
     // network holds a credential with a committed secret). Naming a SPECIFIC
     // "nick on network" is only honest when the visitor is on exactly one
-    // network — then that network must be the registered one. With zero or
+    // network — then that network MUST be the registered one, so naming can't
+    // misattribute: a registered credential keeps its network in the attached
+    // list (a park does NOT delete the credential, and parked/failed rows still
+    // render), so `registered === true` implies ≥1 attached network is the
+    // registered one; with exactly one attached, that's it. With zero or
     // several networks we keep the ∞ claim but drop the per-network naming
-    // (a second, anon network would make "registered on <it>" a lie).
+    // (with several, a second anon network would make "registered on <it>" a
+    // lie — we can't tell which is registered client-side).
     const only = networks.length === 1 ? networks[0] : undefined;
     const naming = only ? ` as ${only.nick} on ${only.slug}` : "";
     return {

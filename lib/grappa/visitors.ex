@@ -302,7 +302,9 @@ defmodule Grappa.Visitors do
 
   Distinct from `commit_password/3`, which is the `+r`-gated promotion
   verb: `+r` PROVES the nick is identified, so it may safely promote the
-  identity to permanent (`expires_at = NULL`). A `SET PASSWD` carries NO
+  identity to permanent (#211 phase 7 — permanence is DERIVED from the
+  credential via `Credentials.visitor_registered?/1`; `expires_at` is
+  untouched, NOT cleared to NULL). A `SET PASSWD` carries NO
   such proof — services reject it unless the nick is already
   registered/identified — so an optimistic commit MUST NOT promote. This
   function is therefore IDENTITY-GATED PER-NETWORK: it rotates the password
