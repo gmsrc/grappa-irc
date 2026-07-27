@@ -1,30 +1,32 @@
-// UX-6 bucket C (2026-05-21) — admin launcher button in the mobile
-// drawer footer (vjt iPhone-dogfood Bug 3).
+// UX-6 bucket C (2026-05-21) → #473 — admin launcher button in the rail
+// actions drawer (vjt iPhone-dogfood Bug 3).
 //
-// Pre-bucket the mobile launcher footer (UX-5 BM) hosted only the
-// settings cog + archive button. Admins on mobile had to open the
-// LEFT sidebar drawer (BottomBar hamburger left) and scroll to the
-// 🔧 sidebar admin row to reach AdminPane — one extra step over
-// desktop's single sidebar click. Bucket adds a 4th launcher button
-// gated on `isAdmin()`, mirroring the Sidebar admin row gate
-// (single source of truth shared with SettingsDrawer admin entry).
-// Tap dispatches selection-driven navigation to the $admin window
-// — same handler shape as Sidebar admin row.
+// UX-6-C added an admin launcher gated on `isAdmin()`, mirroring the Sidebar
+// admin row gate (single source of truth shared with the SettingsDrawer admin
+// entry). Tap dispatches selection-driven navigation to the $admin window —
+// same handler shape as the Sidebar admin row.
+//
+// #473 folded every rail affordance into ONE `.rail-actions` drawer at the
+// bottom of `.shell-members`, present on BOTH desktop and mobile and on EVERY
+// window kind. The admin launcher keeps its `mobile-panel-admin` testid and its
+// `isAdmin()` gate. Crucially the DESKTOP rail — which pre-#473 had only a cog
+// and the denoise monkey — now hosts the SAME window-nav launchers (including
+// admin) as mobile, so the old "desktop has no launcher footer" premise is
+// dead (see the desktop test below).
 //
 // Three-class parity matrix per `feedback_e2e_user_class_parity_matrix`:
-// admin-gated is the EXEMPT shape — only ONE class (admin user) sees
-// the surface. The spec still asserts the OPPOSITE polarity for the
-// non-admin case so a future is_admin gate regression can't silently
-// reveal the admin launcher to non-admins.
+// admin-gated is the EXEMPT shape — only ONE class (admin user) sees the
+// surface. The spec still asserts the OPPOSITE polarity for the non-admin case
+// so a future is_admin gate regression can't silently reveal the admin
+// launcher to non-admins.
 //
 // Seed shape: this spec promotes the seeded `vjt` user to admin via
-// `PATCH /admin/users/:id` (using the seeded admin-vjt bearer token)
-// at test start, then reverts in afterAll. Reason: admin-vjt has no
-// network bind in the seeder (intentional — m9b-admin-sessions-actions
-// hardcodes session count = 2 and would break if admin-vjt had a
-// bind). vjt has the bind + autojoined #bofh; promoting it
-// temporarily gives the full surface (admin gate + joined channel +
-// drawer hamburger) without ripple-affecting other specs.
+// `PATCH /admin/users/:id` (using the seeded admin-vjt bearer token) at test
+// start, then reverts in afterEach. Reason: admin-vjt has no network bind in
+// the seeder (intentional — m9b-admin-sessions-actions hardcodes session count
+// = 2 and would break if admin-vjt had a bind). vjt has the bind + autojoined
+// #bofh; promoting it temporarily gives the full surface (admin gate + joined
+// channel + rail drawer) without ripple-affecting other specs.
 
 import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
@@ -77,7 +79,7 @@ async function setAdminFlag(
   }
 }
 
-test.describe("UX-6-C — admin launcher in mobile drawer footer", () => {
+test.describe("UX-6-C / #473 — admin launcher in the rail actions drawer", () => {
   let vjtUserId: string;
 
   test.beforeAll(async () => {
@@ -94,7 +96,7 @@ test.describe("UX-6-C — admin launcher in mobile drawer footer", () => {
     await setAdminFlag(admin.token, vjtUserId, false);
   });
 
-  test("@webkit admin on mobile — drawer launcher footer hosts admin button; tap opens AdminPane", async ({
+  test("@webkit admin on mobile — rail actions drawer hosts admin button; tap opens AdminPane", async ({
     page,
   }) => {
     const admin = getSeededAdmin();
@@ -110,30 +112,30 @@ test.describe("UX-6-C — admin launcher in mobile drawer footer", () => {
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
 
-    // BM launcher footer has the new admin button alongside archive. #71
-    // INC-2 moved the settings cog OUT of the footer into the rail's
-    // ActionCluster at the drawer TOP — assert it there. Order doesn't
-    // matter, just presence.
-    const launcherFooter = drawer.locator(".mobile-panel-actions");
-    await expect(launcherFooter).toBeVisible();
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
-    await expect(drawer.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
+    // #473 — the `.rail-actions` drawer hosts the admin button alongside the
+    // settings cog + archive (the cog folded into the rail here, was the #71
+    // top ActionCluster). Order doesn't matter, just presence. No
+    // `mobile-panel-settings` button ever existed — the cog is
+    // `action-cluster-cog`.
+    const rail = drawer.locator(".rail-actions");
+    await expect(rail).toBeVisible();
+    await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+    await expect(rail.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
+    await expect(rail.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
 
     // Tap admin launcher → drawer closes (mutex with settings/archive),
     // AdminPane mounts. Selection-driven: Shell's
     // `<Show when={sel.kind === "admin" && isAdmin()}>` flips true
     // when the click handler calls setSelectedChannel with
     // $admin/$admin/admin.
-    await launcherFooter.locator("[data-testid='mobile-panel-admin']").tap();
+    await rail.locator("[data-testid='mobile-panel-admin']").tap();
     await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
     const pane = page.getByTestId("admin-pane");
     await expect(pane).toBeVisible({ timeout: 5_000 });
     await expect(pane.getByRole("heading", { name: /admin console/i })).toBeVisible();
   });
 
-  test("@webkit non-admin on mobile — drawer launcher footer hides the admin button", async ({
+  test("@webkit non-admin on mobile — rail actions drawer hides the admin button", async ({
     page,
   }) => {
     // No promote: vjt stays non-admin for this arm. Per the gate
@@ -148,17 +150,17 @@ test.describe("UX-6-C — admin launcher in mobile drawer footer", () => {
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
 
-    const launcherFooter = drawer.locator(".mobile-panel-actions");
-    await expect(launcherFooter).toBeVisible();
+    const rail = drawer.locator(".rail-actions");
+    await expect(rail).toBeVisible();
     // Positive twin so a testid typo can't silently green both halves of the
-    // gate. #71 INC-2 — the settings cog moved to the rail's ActionCluster at
-    // the drawer top; use it as the positive twin (the footer no longer has a
-    // settings launcher).
-    await expect(drawer.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
+    // gate. #473 — the always-present settings cog lives in the rail; use it as
+    // the positive twin (proves the rail rendered) while the admin button is
+    // absent for a non-admin.
+    await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+    await expect(rail.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
   });
 
-  test("desktop admin — members aside has NO launcher footer, so no admin button there either", async ({
+  test("desktop admin — members rail hosts the RailActions admin button (retired mobile footer is gone)", async ({
     page,
   }) => {
     const admin = getSeededAdmin();
@@ -168,14 +170,23 @@ test.describe("UX-6-C — admin launcher in mobile drawer footer", () => {
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
 
-    // Desktop: BM launcher footer is mobile-only — the whole footer
-    // is absent. Admin entry on desktop lives on the Sidebar admin
-    // row (UX-4 bucket N) + SettingsDrawer admin entry (M-7); no
-    // launcher button.
-    await expect(page.locator(".shell-members .mobile-panel-actions")).toHaveCount(0);
-    await expect(page.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
-    // Sidebar admin row is the desktop affordance — confirm it's
-    // present (positive twin) so the gate is genuinely active.
+    // #473 — the rail actions drawer is PERMANENT on every window kind and on
+    // BOTH form factors, so the desktop members rail now hosts the SAME
+    // RailActions launchers as mobile — including the isAdmin()-gated admin
+    // button the desktop rail never had before ("a cog and a monkey"). This
+    // repurposes the old dead premise (which asserted desktop had NO launcher
+    // footer, hence no admin button there): assert the rail IS present and the
+    // admin button lives in it on desktop.
+    await expect(page.locator(".shell-members .rail-actions")).toBeVisible();
+    await expect(
+      page.locator(".shell-members .rail-actions [data-testid='mobile-panel-admin']"),
+    ).toHaveCount(1);
+    // The retired mobile-only `.mobile-panel-actions` footer is gone entirely —
+    // guard that the migration left no stray footer anywhere.
+    await expect(page.locator(".mobile-panel-actions")).toHaveCount(0);
+    // The Sidebar admin row is still the desktop sidebar affordance (unchanged
+    // by #473) — confirm it's present (positive twin) so both desktop admin
+    // doors are covered.
     await expect(page.getByTestId("sidebar-admin-row")).toBeVisible();
   });
 });

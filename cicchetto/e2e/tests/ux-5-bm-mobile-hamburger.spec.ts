@@ -1,34 +1,35 @@
-// UX-5 bucket BM — mobile-channel hamburger compress.
+// UX-5 bucket BM → #473 — mobile-channel hamburger compress, now over
+// the RailActions drawer.
 //
-// Pre-bucket (post-UX-5-BT) mobile-channel `.topic-bar` row holds THREE
-// affordances on the right edge: members hamburger (☰), archive (📂),
-// settings cog (⚙). vjt 2026-05-19 dogfood: three buttons crowd the
-// narrow row; collapse them behind the existing hamburger.
+// HISTORY: BM collapsed the crowded mobile-channel `.topic-bar` right edge
+// (☰ + 📂 + ⚙) behind the hamburger, moving archive + cog into a bottom-fixed
+// `.mobile-panel-actions` launcher footer inside the mobile members drawer.
+// #473 retired that footer: EVERY rail affordance now lives in `.rail-actions`,
+// the ONE labelled action drawer pinned at the bottom of `.shell-members`,
+// mounted on BOTH desktop and mobile and on EVERY window kind. The footer is
+// gone; `.rail-actions` is the rail on every form factor.
 //
-// Post-bucket end state:
-//   * Mobile + channel `.topic-bar`: archive + cog buttons NOT inline
-//     anymore — only the members hamburger remains.
+// Post-#473 end state (this spec's contract):
+//   * Mobile + channel `.topic-bar`: archive + cog NOT inline — only the
+//     members hamburger (☰) remains on the right edge.
 //   * Tapping the hamburger opens `.shell-members.open` as before.
-//   * Inside the open members drawer: bottom-fixed `.mobile-panel-actions`
-//     footer holds two launcher buttons — settings + archive (when
-//     network context exists).
-//   * Tapping the in-drawer settings launcher: drawer closes,
-//     SettingsDrawer opens. Mutex enforced via `lib/mobilePanel.ts`.
-//   * Tapping the in-drawer archive launcher: drawer closes,
-//     ArchiveModal opens.
+//   * Inside the open drawer: `.rail-actions` holds every affordance —
+//     home / rooms / themes / archive / settings (cog) / admin / denoise.
+//     Settings is the `action-cluster-cog` row; archive is `mobile-panel-archive`.
+//   * Tapping the settings cog: drawer closes, SettingsDrawer opens.
+//     Tapping archive: drawer closes, ArchiveModal opens. Mutex
+//     (members | settings | archive | none) enforced via `lib/mobilePanel.ts`.
 //   * Mobile + home / mentions / admin / server: the standalone `.shell-chrome`
-//     row stays, but #71 INC-2 turned its cog into the ☰ RAIL OPENER; the cog
-//     itself now lives in the rail's ActionCluster (drawer top). The in-drawer
-//     footer settings launcher was DEDUPED into that same ActionCluster.
+//     row stays, but #71 INC-2 turned its button into the ☰ RAIL OPENER; the
+//     cog + archive live in the rail it opens (#473).
 //   * Desktop: #71 INC-2 REMOVED the standalone `.shell-chrome` row (cog moved
-//     to the permanent right rail); the desktop members aside still has no
-//     launcher footer.
+//     to the permanent right rail); #473 — the `.rail-actions` drawer IS present
+//     on the desktop members aside now (one rail on both form factors).
 //
 // jsdom doesn't compute layout / cascade `@media` — per
 // `feedback_cicchetto_browser_smoke` this layout fix MUST ship a
-// Playwright e2e. Mobile arm pins the new hamburger-as-only-button
-// contract + drawer launcher contract + mutex. Desktop arm pins the
-// negative-twin (desktop members aside has NO launcher footer).
+// Playwright e2e. Mobile arm pins the hamburger-as-only-button contract +
+// the rail drawer contract + mutex. Desktop arm pins the rail's presence.
 //
 // Parity matrix per `feedback_e2e_user_class_parity_matrix`: UI shape
 // contract, subject-shape-agnostic. Registered seed suffices.
@@ -41,7 +42,7 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.setTimeout(60_000);
 
-test("ux-5-bm desktop — members aside has NO launcher footer", async ({ page }) => {
+test("ux-5-bm desktop — members aside carries the RailActions drawer", async ({ page }) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
@@ -49,14 +50,18 @@ test("ux-5-bm desktop — members aside has NO launcher footer", async ({ page }
 
   // #71 INC-2 — desktop dropped the standalone .shell-chrome row (cog moved to
   // the permanent right rail); .topic-bar stays and the cog is reachable in the
-  // rail's ActionCluster.
+  // rail's RailActions drawer.
   await expect(page.locator(".shell-chrome")).toHaveCount(0);
   await expect(page.locator(".topic-bar")).toHaveCount(1);
   await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible();
 
-  // Negative-twin: desktop members aside does NOT carry the BM launcher
-  // footer. Launcher footer is mobile-only.
-  await expect(page.locator(".shell-members .mobile-panel-actions")).toHaveCount(0);
+  // #473 — the members aside DOES carry the `.rail-actions` drawer now (the
+  // retired mobile-only `.mobile-panel-actions` footer became one rail present
+  // on both form factors). Assert it's here, hosting the always-on cog +
+  // archive rows.
+  const rail = page.locator(".shell-members .rail-actions");
+  await expect(rail).toHaveCount(1);
+  await expect(rail.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
 });
 
 test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer hosts settings+archive launchers; mutex enforced", async ({
@@ -68,10 +73,14 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
 
   // Topic-bar compression contract: hamburger is the ONLY affordance on
-  // the right edge. archive + cog NOT inline anymore.
+  // the right edge. The cog + archive are NOT inline — they live in the rail
+  // drawer. Assert their LIVE testids (`action-cluster-cog` / `mobile-panel-archive`,
+  // #473) are absent from the topic-bar; the retired `shell-chrome-cog` /
+  // `shell-chrome-archive` are gone from the DOM entirely, so pointing at them
+  // would be vacuous.
   await expect(page.locator(".topic-bar [aria-label='open members sidebar']")).toHaveCount(1);
-  await expect(page.locator(".topic-bar [data-testid='shell-chrome-cog']")).toHaveCount(0);
-  await expect(page.locator(".topic-bar [data-testid='shell-chrome-archive']")).toHaveCount(0);
+  await expect(page.locator(".topic-bar [data-testid='action-cluster-cog']")).toHaveCount(0);
+  await expect(page.locator(".topic-bar [data-testid='mobile-panel-archive']")).toHaveCount(0);
 
   // Standalone .shell-chrome row STAYS absent on mobile-channel (UX-5 BT
   // contract preserved — BM doesn't reintroduce it).
@@ -87,17 +96,17 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
   await expect.poll(async () => await memberNames.count()).toBeGreaterThan(0);
   await expect(drawer).toContainText(NETWORK_NICK);
 
-  // Bottom-fixed launcher footer hosts the archive launcher; #71 INC-2 moved
-  // the settings cog UP into the rail's ActionCluster (drawer top), so it's no
-  // longer a footer launcher.
-  const launcherFooter = drawer.locator(".mobile-panel-actions");
-  await expect(launcherFooter).toBeVisible();
-  await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
-  await expect(drawer.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
-  await expect(launcherFooter.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
+  // #473 — the `.rail-actions` drawer hosts every affordance, including the
+  // settings cog (`action-cluster-cog`) and the archive launcher
+  // (`mobile-panel-archive`). Supersedes the retired `.mobile-panel-actions`
+  // footer (whose `mobile-panel-settings` launcher no longer exists at all).
+  const rail = drawer.locator(".rail-actions");
+  await expect(rail).toBeVisible();
+  await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+  await expect(rail.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
 
-  // Tap the ActionCluster cog (drawer top) → drawer closes, SettingsDrawer opens.
-  await drawer.locator("[data-testid='action-cluster-cog']").tap();
+  // Tap the rail's settings cog → drawer closes, SettingsDrawer opens.
+  await rail.locator("[data-testid='action-cluster-cog']").tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
 
@@ -110,7 +119,7 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
 
   // Tap archive launcher → drawer closes, ArchiveModal opens.
   await page
-    .locator(".shell-members.open .mobile-panel-actions [data-testid='mobile-panel-archive']")
+    .locator(".shell-members.open .rail-actions [data-testid='mobile-panel-archive']")
     .tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator(".archive-modal")).toBeVisible({ timeout: 5_000 });
@@ -139,7 +148,10 @@ test("@webkit ux-5-bm mobile-non-channel — standalone .shell-chrome row preser
   await expect(page.locator(".shell-chrome")).toHaveCount(1);
   await expect(page.locator(".topic-bar")).toHaveCount(0);
   // #71 INC-2 — the standalone row's button is now the ☰ RAIL OPENER (the cog
-  // moved into the rail it opens). Assert the opener is reachable here.
+  // moved into the rail it opens). Assert the opener is reachable here, and that
+  // the cog is NOT in the chrome bar — it lives in the rail's RailActions drawer
+  // now (#473). The retired `shell-chrome-cog` testid is gone from the DOM, so
+  // assert against the LIVE `action-cluster-cog` to keep the check meaningful.
   await expect(page.locator(".shell-chrome [data-testid='shell-chrome-rail-opener']")).toBeVisible();
-  await expect(page.locator(".shell-chrome [data-testid='shell-chrome-cog']")).toHaveCount(0);
+  await expect(page.locator(".shell-chrome [data-testid='action-cluster-cog']")).toHaveCount(0);
 });

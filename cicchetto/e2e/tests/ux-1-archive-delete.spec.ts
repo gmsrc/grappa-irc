@@ -3,9 +3,9 @@
 // Validates the full UX-1 surface in a real browser:
 //   1. PART a seeded channel → server emits :parted → channel drops out
 //      of the active sidebar list.
-//   2. Expand the per-network Archive <details> → archive populates →
-//      PARTed channel appears as an archive entry with a × delete
-//      affordance.
+//   2. Open the grouped ArchiveModal + expand the network's group →
+//      the group lazy-loads → PARTed channel appears as an archive
+//      entry with a × delete affordance.
 //   3. Click × → InlineConfirmButton arms (label flips to "really
 //      delete?").
 //   4. Click again → DELETE /networks/:slug/archive/:target fires →
@@ -28,7 +28,13 @@
 // scrollback.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  expandArchiveGroup,
+  loginAs,
+  openArchive,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -55,32 +61,22 @@ test("UX-1 — × on archive entry confirms + deletes scrollback permanently", a
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 5_000 });
 
-  // Expand the per-network Archive <details>.
-  //
-  // UX-5 BH (2026-05-19): the `<details class="sidebar-archive">`
-  // was lifted out of the killed `<section class="sidebar-network">`
-  // wrapper; it's now a flat sibling of the per-network `<ul>` inside
-  // the `<For>`. Spec pre-UX-7-D used a descendant-of-<ul> locator
-  // which silently broke at BH (the spec was failing baseline since
-  // 2026-05-19; surfaced + fixed in UX-7-D 2026-05-22).
-  // xpath sibling-axis matches the working sister specs
-  // (cp15-b6-part-archive-rejoin — the consolidated archive lifecycle spec) and is
-  // forward-compat against multi-network seeds.
-  const networkSection = page.locator(".sidebar-network-section", {
-    has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
-  });
-  const archiveSection = networkSection.locator(
-    "xpath=following-sibling::details[@class=\"sidebar-archive\"][1]",
-  );
-  await archiveSection.locator("summary").click();
-  await expect(archiveSection).toHaveAttribute("open", "");
+  // Open the grouped ArchiveModal — the ONE archive surface post-#473,
+  // replacing the retired desktop Sidebar `<details class="sidebar-archive">`.
+  // openArchive taps the always-on rail archive button (mobile-panel-archive)
+  // in `.rail-actions`; expandArchiveGroup expands the seeded network's
+  // collapsible group, whose `<details onToggle>` lazy-loads its archive
+  // rows (loadArchive). Both are viewport-aware page-object helpers so this
+  // spec stays layout-agnostic.
+  await openArchive(page);
+  const group = await expandArchiveGroup(page, NETWORK_SLUG);
 
-  const archivedEntry = archiveSection.locator("button.sidebar-window-btn", { hasText: CHANNEL });
+  const archivedEntry = group.locator(".archive-modal-row", { hasText: CHANNEL });
   await expect(archivedEntry).toHaveCount(1, { timeout: 5_000 });
 
-  // The delete button is testId-scoped and lives next to the row's
-  // window button. Idle label is `×`; armed label is `really delete?`.
-  const deleteButton = page.getByTestId(`archive-delete-${NETWORK_SLUG}-${CHANNEL}`);
+  // The delete button is the row's InlineConfirmButton — testId-scoped per
+  // (slug, target). Idle label is `×`; armed label is `really delete?`.
+  const deleteButton = page.getByTestId(`archive-modal-delete-${NETWORK_SLUG}-${CHANNEL}`);
   await expect(deleteButton).toHaveCount(1);
   await expect(deleteButton).toHaveText("×");
 
@@ -89,7 +85,8 @@ test("UX-1 — × on archive entry confirms + deletes scrollback permanently", a
   await expect(deleteButton).toHaveText("really delete?", { timeout: 2_000 });
 
   // Second click confirms → DELETE fires → server broadcasts
-  // archive_changed → cic re-fetches → entry vanishes.
+  // archive_changed → cic re-fetches archive → the row vanishes from the
+  // modal group.
   await deleteButton.click();
   await expect(archivedEntry).toHaveCount(0, { timeout: 5_000 });
 

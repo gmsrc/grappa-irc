@@ -624,7 +624,7 @@ export async function openMembersDrawer(page: Page): Promise<void> {
 // Mobile "reach the settings drawer" primitive (#71 INC-2).
 //
 // The settings cog moved out of the standalone chrome bar into the rail's
-// ActionCluster (pinned at the drawer top). So opening settings on mobile is
+// RailActions drawer (#473). So opening settings on mobile is
 // now a two-step door: open the rail drawer, then tap the cog. The mobilePanel
 // mutex swaps the members drawer for the `.settings-drawer` on tap.
 export async function openSettingsMobile(page: Page): Promise<void> {
@@ -660,7 +660,7 @@ export type SettingsSection =
 // silently breaks every copy at once.
 //
 // The cog (aria-label "open settings" / action-cluster-cog) lives in the rail's
-// ActionCluster: on desktop the rail is always on screen, so tap the cog
+// RailActions drawer: on desktop the rail is always on screen, so tap the cog
 // directly; on mobile the rail is a collapsed drawer, so reveal it first
 // (openSettingsMobile = open rail → tap cog). Re-navigating an already-open
 // drawer is a no-op on the open step and assumes it is on the main index.
@@ -715,6 +715,41 @@ export async function closeMembersDrawer(page: Page): Promise<void> {
     .locator(".shell-drawer-backdrop.open")
     .click({ position: { x: 20, y: 200 } });
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
+}
+
+// #473 — reach the grouped ArchiveModal (viewport-aware), the SINGLE archive
+// door on both form factors. Supersedes the three retired openers: the desktop
+// Sidebar `<details class="sidebar-archive">`, the mobile
+// `.mobile-panel-actions` footer chip, and the ShellChrome
+// `shell-chrome-archive` button. The archive button (mobile-panel-archive)
+// lives in the RailActions rail: on desktop the rail is always on screen so tap
+// it directly; on mobile the rail is a collapsed drawer so reveal it first
+// (open rail → tap archive), exactly like openSettingsSection. The button is
+// always shown (not selection-gated), so this works on every window kind
+// including home/admin/mentions. Returns the modal dialog locator so callers
+// scope assertions to it. Re-opening an already-open modal is a no-op.
+export async function openArchive(page: Page): Promise<Locator> {
+  if ((await page.locator(".archive-modal").count()) === 0) {
+    if (isMobileViewport(page)) {
+      await openMembersDrawer(page);
+    }
+    await page.getByTestId("mobile-panel-archive").click();
+  }
+  const modal = page.locator(".archive-modal");
+  await expect(modal).toBeVisible({ timeout: 5_000 });
+  return modal;
+}
+
+// #473 — expand a network's collapsible archive group inside the modal,
+// triggering its lazy row load (the `<details onToggle>` fires
+// loadArchive(slug)). Mirrors the retired Sidebar `<details>` expand. Returns
+// the `<details>` group locator so callers scope row/delete assertions to it.
+export async function expandArchiveGroup(page: Page, networkSlug: string): Promise<Locator> {
+  const group = page.getByTestId(`archive-modal-group-${networkSlug}`);
+  await expect(group).toBeVisible({ timeout: 5_000 });
+  await group.locator("summary.archive-modal-group-summary").click();
+  await expect(group).toHaveAttribute("open", "");
+  return group;
 }
 
 // Dispatch a synthetic touch drag on `.compose-box textarea` from

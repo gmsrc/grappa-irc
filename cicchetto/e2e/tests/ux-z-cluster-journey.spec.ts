@@ -11,11 +11,13 @@
 //     contains `env(` and `safe-area-inset-top`. Runs FIRST (pre-PART,
 //     pre-modal) so the empty-toolbar is surfaceable via the BUG5a
 //     contract (PART → setSelectedChannel(null) → empty stub).
-//   * UX-2 ShellChrome archive button (post UX-4 bucket L migration) —
-//     after PARTing seeded channel, archive button appears top-right in
-//     `.shell-chrome`; tap opens ArchiveModal. Originally a per-network
-//     `.bottom-bar-archive-chip`; bucket L (commit 17aefeb) moved it
-//     into the always-visible ShellChrome bar.
+//   * UX-2 archive surface (#473 rework) — after PARTing seeded channel,
+//     open the archive via the always-on RailActions archive button in the
+//     rail drawer (mobile: open rail → tap archive; openArchive helper).
+//     The grouped ArchiveModal shows every network as a collapsible group;
+//     expand the seeded network to reveal the archived row. Supersedes the
+//     ShellChrome `shell-chrome-archive` button (removed #473) and the
+//     earlier per-network `.bottom-bar-archive-chip`.
 //   * UX-1 archive delete × + permanent scrollback drop — inside the
 //     modal, tap × (arms confirm), tap again (DELETE fires →
 //     `archive_changed` broadcast → entry gone from modal).
@@ -41,7 +43,13 @@
 // loop and drive them; today the test is honestly "registered only."
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  expandArchiveGroup,
+  loginAs,
+  openArchive,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -53,7 +61,7 @@ test.afterEach(async () => {
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
-test("@webkit UX-Z cluster — Dynamic Island clearance + BottomBar archive chip + delete (registered class)", async ({
+test("@webkit UX-Z cluster — Dynamic Island clearance + RailActions archive + delete (registered class)", async ({
   page,
 }) => {
   const vjt = getSeededVjt();
@@ -107,29 +115,23 @@ test("@webkit UX-Z cluster — Dynamic Island clearance + BottomBar archive chip
   // entry to render in the modal.
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 
-  // ── UX-2 — ShellChrome archive button surfaces post-PART ──
+  // ── UX-2 — archive opened via the always-on RailActions button (#473) ──
   //
-  // The PART above moved #bofh into archive. BottomBar's eager
-  // archive load was dropped by UX-4 bucket L; archive is now opened
-  // via the always-visible ShellChrome top-right button, which
-  // resolves the network from `selectedChannel()`. After the PART,
-  // bucket E's close-watcher redirects selection away from the
-  // closed channel (home/server depending on MRU). The
-  // ShellChrome archive button only renders when the selected
-  // window carries a network context — channel / query / server.
-  // Tap the network's $server tab so the button surfaces.
-  const serverTab = sidebarWindow(page, NETWORK_SLUG, "Server");
-  await serverTab.tap();
+  // The PART above moved #bofh into archive. #473 removed the ShellChrome
+  // archive button; archive is now reached from the always-on archive button
+  // in the RailActions rail drawer, reachable on EVERY window kind (not
+  // selection-gated). After the PART bucket E's close-watcher lands selection
+  // on a non-channel window (home/server) — openArchive opens the rail (via
+  // the ShellChrome ☰ rail opener on non-channel windows) and taps archive.
+  const modal = await openArchive(page);
+  // Plain "Archive" header — the grouped modal spans all networks (no more
+  // "Archive — <slug>").
+  await expect(modal.locator(".archive-modal-header h2")).toHaveText("Archive");
 
-  const archiveBtn = page.getByTestId("shell-chrome-archive");
-  await expect(archiveBtn).toBeVisible({ timeout: 10_000 });
-  await archiveBtn.tap();
-
-  const modal = page.locator(".archive-modal");
-  await expect(modal).toBeVisible({ timeout: 5_000 });
-  await expect(modal.locator(".archive-modal-header h2")).toContainText(NETWORK_SLUG);
-
-  const row = modal.locator(".archive-modal-row", { hasText: CHANNEL });
+  // Expand the seeded network's collapsible group (lazy row load) and find
+  // the archived #bofh row within it.
+  const group = await expandArchiveGroup(page, NETWORK_SLUG);
+  const row = group.locator(".archive-modal-row", { hasText: CHANNEL });
   await expect(row).toHaveCount(1);
 
   // ── UX-1 — delete × confirms + drops entry + scrollback ──

@@ -1,35 +1,45 @@
-// #332 (P0, vjt) — mobile: restore the 🎨 themes launcher under the right
-// (members) sidebar, wrap the footer launchers instead of clipping, and
-// swap the settings glyph for the ⚙️ emoji.
+// #332 → #473 — the themes launcher in the RailActions drawer.
 //
-// Three visible outcomes, one @webkit / iPhone-15 spec (the launcher
-// footer is mobile-only, hosted inside the open members drawer):
+// HISTORY: #332 restored the 🎨 themes launcher under the members sidebar
+// as one of several buttons in a HORIZONTAL, mobile-only `.mobile-panel-actions`
+// footer that `flex-wrap`ped narrow buttons down to glyph-only when the row
+// ran out of width. #473 retired that footer entirely: every rail affordance
+// now lives in `.rail-actions`, a VERTICAL, full-width, single-column list
+// (`flex-direction: column`) mounted at the bottom of `.shell-members` on BOTH
+// desktop and mobile and on EVERY window kind. Each row shows its glyph AND a
+// text label side by side; the list never wraps, so a button never collapses
+// to glyph-only.
 //
-//   1. The themes launcher is back (removed by #299) and DEEP-LINKS: tap
-//      it → members drawer closes (mutex) → settings drawer opens directly
-//      on the THEMES sub-page (the gallery), not the flat "main" page.
-//      This exercises the one-shot `requestSettingsPage`/
-//      `consumePendingSettingsPage` hand-off (lib/settingsNav.ts) the
-//      launcher uses to open + jump in one tap.
-//   2. The footer `flex-wrap`s: with the 5th (themes) button back, the row
-//      wraps to a new line on narrow devices instead of pushing the admin
-//      launcher off-screen (the #299 clip). We assert the CSS contract
-//      (`flex-wrap: wrap`) plus every launcher staying in the viewport.
-//      (iPhone-15 at 393px still fits 5 tap targets on one row, so this is
-//      the contract guard; the actual wrap engages on narrower devices —
-//      see TESTING.md on asserting the layout contract, not device pixels.)
+// The old "wrap to glyph" premise is therefore DEAD — the rail cannot wrap and
+// the themes button always shows its "themes" label. This spec is repurposed to
+// pin the NEW reality of the themes launcher in the rail:
+//
+//   1. The themes launcher DEEP-LINKS: tap it → members drawer closes (mutex) →
+//      settings drawer opens directly on the THEMES gallery sub-page (not the
+//      flat main index). Exercises openThemesPanel's settingsNav hand-off.
+//   2. The themes launcher is a FULL-WIDTH row (the #473 shape that superseded
+//      the wrap-to-glyph footer): the rail is a `flex-direction: column` list,
+//      and the themes row shows BOTH its 🎨 glyph and its "themes" text label
+//      with neither clipped, spanning the rail width — never a narrow glyph
+//      button.
 //   3. The settings cog renders the ⚙️ emoji (U+2699 U+FE0F), not the bare ⚙
-//      (U+2699) glyph that rendered too small. #71 INC-2 moved that cog OUT of
-//      the footer into the rail's ActionCluster at the drawer top; the emoji
-//      contract is unchanged, so this outcome now asserts `action-cluster-cog`.
+//      (U+2699) glyph that rendered too small (#332 item 3). #71 INC-2 moved
+//      the cog into the rail's ActionCluster; #473 folded that into RailActions,
+//      so the emoji contract now rides the `action-cluster-cog` row's icon span.
+//      jsdom can't render emoji presentation, so this browser e2e is the only
+//      guard for the glyph choice (the RailActions unit test asserts the label,
+//      not the exact icon codepoint).
 //
-// The "admin stays reachable" invariant is owned by
-// issue299-footer-admin-reachable (repurposed for #332). Here vjt is base
-// (non-admin): themes is not admin-gated, so we get the launcher + a footer of
-// home / list / archive / themes (settings cog moved to the rail) without
-// promoting.
+// The rail is present on both form factors, but this spec stays @webkit /
+// iPhone-15: the drawer-open flow (tap hamburger → drawer slides in) is the
+// mobile path, and it exercises the touch chain a real iOS user produces.
 
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  loginAs,
+  openMembersDrawer,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import {
   AUTOJOIN_CHANNELS,
   NETWORK_NICK,
@@ -40,26 +50,20 @@ import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SETTINGS_COG_EMOJI = "\u{2699}\u{FE0F}"; // ⚙️ — the emoji-presentation cog (#332 item 3)
+const THEMES_GLYPH = "\u{1F3A8}"; // 🎨 — the themes launcher glyph
 
 test.setTimeout(60_000);
 
-async function openMobileFooter(page: import("@playwright/test").Page) {
-  await page.getByLabel(/open members sidebar/i).tap();
-  const drawer = page.locator(".shell-members.open");
-  await expect(drawer).toBeVisible({ timeout: 5_000 });
-  return drawer;
-}
-
-test.describe("#332 — mobile themes launcher + footer wrap + ⚙️ emoji", () => {
+test.describe("#332/#473 — rail themes launcher: full-width labelled row + deep-link + ⚙️ cog emoji", () => {
   test("@webkit themes launcher deep-links to the themes gallery sub-page", async ({ page }) => {
     await loginAs(page, getSeededVjt());
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
-    const drawer = await openMobileFooter(page);
-    const footer = drawer.locator(".mobile-panel-actions");
-    const themesBtn = footer.locator("[data-testid='mobile-panel-themes']");
-    await expect(themesBtn).toHaveCount(1);
+    await openMembersDrawer(page);
+    const rail = page.locator(".shell-members.open .rail-actions");
+    const themesBtn = rail.locator("[data-testid='mobile-panel-themes']");
+    await expect(themesBtn).toBeVisible();
 
     // Tap themes → members drawer closes (mutex) AND the settings drawer
     // opens straight on the themes gallery (deep-link), NOT the main page.
@@ -69,46 +73,58 @@ test.describe("#332 — mobile themes launcher + footer wrap + ⚙️ emoji", ()
     await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });
   });
 
-  test("@webkit footer flex-wraps and keeps every launcher in the viewport", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
-    await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
-
-    const drawer = await openMobileFooter(page);
-    const footer = drawer.locator(".mobile-panel-actions");
-    await expect(footer).toBeVisible();
-
-    // CSS contract: the row wraps rather than overflow-clipping (#332 item 2).
-    const flexWrap = await footer.evaluate((el) => getComputedStyle(el).flexWrap);
-    expect(flexWrap).toBe("wrap");
-
-    // Base vjt (non-admin) in a channel: home / list / archive / themes (#71
-    // INC-2 moved the settings cog to the rail, so it's no longer here).
-    await expect(footer.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
-    await expect(footer.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
-
-    // Every launcher must stay within the viewport (never clipped off-screen
-    // — the failure mode #299 fixed by removal and #332 by wrapping).
-    const buttons = footer.locator(".shell-chrome-btn");
-    const count = await buttons.count();
-    expect(count).toBeGreaterThanOrEqual(4);
-    for (let i = 0; i < count; i++) {
-      await expect(buttons.nth(i)).toBeInViewport();
-    }
-  });
-
-  test("@webkit settings cog renders the ⚙️ emoji, not the bare ⚙ glyph", async ({
+  test("@webkit themes launcher is a full-width row showing both its glyph and 'themes' label", async ({
     page,
   }) => {
     await loginAs(page, getSeededVjt());
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
-    const drawer = await openMobileFooter(page);
-    // #71 INC-2 — the settings cog moved from the footer launcher to the
-    // ActionCluster at the drawer top; the ⚙️ emoji-presentation contract
-    // rides with it.
-    const settingsBtn = drawer.locator("[data-testid='action-cluster-cog']");
-    await expect(settingsBtn).toHaveText(SETTINGS_COG_EMOJI);
+    await openMembersDrawer(page);
+    const rail = page.locator(".shell-members.open .rail-actions");
+    await expect(rail).toBeVisible();
+
+    // #473 CSS contract: the rail is a vertical single-column list that never
+    // wraps (superseding the horizontal `.mobile-panel-actions` flex-wrap
+    // footer that clipped buttons to glyph-only). This is the direct
+    // replacement for the retired `flex-wrap: wrap` assertion.
+    const flexDirection = await rail.evaluate((el) => getComputedStyle(el).flexDirection);
+    expect(flexDirection).toBe("column");
+
+    // The themes launcher shows BOTH its 🎨 glyph and its "themes" text label —
+    // no wrap-to-glyph, no clipped label.
+    const themesBtn = rail.locator("[data-testid='mobile-panel-themes']");
+    await expect(themesBtn).toBeVisible();
+    const themesIcon = themesBtn.locator(".rail-action-icon");
+    const themesLabel = themesBtn.locator(".rail-action-label");
+    await expect(themesIcon).toHaveText(THEMES_GLYPH);
+    await expect(themesLabel).toHaveText("themes");
+    // Both parts must stay within the viewport (never clipped off-screen — the
+    // failure mode #299 fixed by removal and #473 by the full-width column).
+    await expect(themesIcon).toBeInViewport();
+    await expect(themesLabel).toBeInViewport();
+
+    // Full-width row (not a narrow glyph button): the button spans essentially
+    // the whole rail width (only the rail's own padding shaves the edges).
+    const railBox = await rail.boundingBox();
+    const btnBox = await themesBtn.boundingBox();
+    if (railBox === null || btnBox === null) throw new Error("rail/themes button has no box");
+    expect(btnBox.width).toBeGreaterThanOrEqual(railBox.width * 0.8);
+  });
+
+  test("@webkit settings cog renders the ⚙️ emoji, not the bare ⚙ glyph", async ({ page }) => {
+    await loginAs(page, getSeededVjt());
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
+
+    await openMembersDrawer(page);
+    // #71 INC-2 + #473 — the settings cog lives in the rail's RailActions
+    // drawer; its label row now carries a "settings" text label next to the
+    // glyph, so scope the emoji assertion to the icon span (the button's full
+    // text is "⚙️settings"). The ⚙️ emoji-presentation contract rides the icon.
+    const cogIcon = page.locator(
+      ".shell-members.open [data-testid='action-cluster-cog'] .rail-action-icon",
+    );
+    await expect(cogIcon).toHaveText(SETTINGS_COG_EMOJI);
   });
 });

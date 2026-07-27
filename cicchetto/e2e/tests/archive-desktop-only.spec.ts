@@ -1,26 +1,37 @@
-// Post-bundle desktop fix (2026-05-31) — archive surface on desktop.
+// Desktop archive surface — real-browser-only guarantees (#473 rework).
 //
-// Two regressions captured here that jsdom unit tests can't see:
+// #473 folded the three pre-existing archive openers (the desktop Sidebar
+// `<details class="sidebar-archive">`, the mobile `.mobile-panel-actions`
+// footer chip, and the mobile-only ShellChrome `shell-chrome-archive` 📂
+// button) into ONE grouped `ArchiveModal`, opened by the always-on
+// `mobile-panel-archive` button in the permanent RailActions rail. This spec
+// captures the two behaviours a jsdom unit test proves only structurally but a
+// real browser confirms against the live layout:
 //
-//   1. ShellChrome's `[data-testid="shell-chrome-archive"]` (the
-//      top-right 📂 button) is MOBILE-ONLY. On desktop the Sidebar
-//      already exposes parked rows inline via
-//      `<details class="sidebar-archive">`, so the chrome button is
-//      redundant noise. Pre-fix it rendered on desktop too.
-//   2. Sidebar's archive `<ul>` was missing the `sidebar-network-section`
-//      class. The canonical row style in `themes/default.css` L505 is
-//      `.sidebar-network-section li .sidebar-window-btn`; without that
-//      class the UA defaults bled through (white background, system
-//      serif font). The unit test catches the class string; only a real
-//      browser confirms `getComputedStyle` resolves to monospace +
-//      transparent bg.
+//   1. The rail archive button is present on desktop across EVERY window kind
+//      and, when tapped, opens the grouped modal (the desktop archive door
+//      exists and is wired — pre-#473 the ShellChrome button was mobile-only
+//      and there was no universal desktop opener; now the rail is permanent so
+//      the button is reachable everywhere).
+//   2. An archived row's entry `<button>` resolves `font-family` to the
+//      canonical monospace stack (`--font-mono`). The pre-#473 regression this
+//      guarded (a Sidebar archive `<ul>` missing the canonical row-style class,
+//      so rows fell back to the UA-default serif) now lives on
+//      `.archive-modal-entry-btn`; only getComputedStyle in a real browser
+//      confirms the resolved stack.
 //
-// Desktop-only spec (no `@webkit` tag) — runs on the chromium project,
-// which uses `devices["Desktop Chrome"]` (1280×720 viewport, well above
-// the (max-width: 768px) mobile breakpoint).
+// Desktop-only spec (no `@webkit` tag) — runs on the chromium project, which
+// uses `devices["Desktop Chrome"]` (1280×720 viewport, well above the
+// (max-width: 768px) mobile breakpoint).
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  expandArchiveGroup,
+  loginAs,
+  openArchive,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -32,92 +43,75 @@ test.afterEach(async () => {
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
-test("desktop — ShellChrome archive button is hidden across every window kind", async ({
+test("desktop — rail archive button is present across every window kind and opens the grouped modal", async ({
   page,
 }) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 
-  // The button must stay hidden on every selection kind a desktop user
-  // can land on: home (post-login default), then a channel, query is
-  // covered transitively (same predicate, same gate), and the server
-  // tab (the only kind that, on mobile, surfaces the button — verifies
-  // the desktop gate is universal, not selection-shape dependent).
+  // The archive button is an always-on rail action (NOT selection-gated), so
+  // it must be reachable on every selection kind a desktop user can land on:
+  // home (post-login default), then a channel, and the server tab (the kind
+  // that, pre-#473, surfaced the retired mobile ShellChrome button — proving
+  // the rail button is universal, not selection-shape dependent). Query is
+  // covered transitively (same always-on rail).
+  const archiveBtn = page.getByTestId("mobile-panel-archive");
 
   // Home selection (post-login).
-  await expect(page.getByTestId("shell-chrome-archive")).toHaveCount(0);
+  await expect(archiveBtn).toBeVisible();
 
   // Channel selection.
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1);
-  await expect(page.getByTestId("shell-chrome-archive")).toHaveCount(0);
+  await expect(archiveBtn).toBeVisible();
 
-  // Server tab selection — on mobile this is where the button surfaces
-  // (UX-2 spec). On desktop, still gone.
+  // Server tab selection.
   const serverTab = sidebarWindow(page, NETWORK_SLUG, "Server");
   await serverTab.click();
-  await expect(page.getByTestId("shell-chrome-archive")).toHaveCount(0);
+  await expect(archiveBtn).toBeVisible();
 
-  // Cog (the always-visible rail action; #71 INC-2 moved it from the
-  // ShellChrome bar into the permanent right rail) is still there — proves
-  // the assertion above is the gate firing, not the rail being missing
-  // wholesale.
-  await expect(page.getByTestId("action-cluster-cog")).toBeVisible();
+  // Positive proof the button is wired to the grouped modal (not merely
+  // present): tapping it opens the ArchiveModal dialog with its title.
+  const modal = await openArchive(page);
+  await expect(modal).toBeVisible();
+  await expect(modal.locator("#archive-modal-title")).toHaveText("Archive");
 });
 
-test("desktop — sidebar archive rows inherit the canonical monospace style", async ({
+test("desktop — archive modal rows inherit the canonical monospace style", async ({
   page,
 }) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 
-  // Two-part proof, both observable in a real browser only:
-  //
-  //   (a) The archive `<ul>` carries the `sidebar-network-section`
-  //       class. Pre-fix the class was missing so the canonical row
-  //       selector `.sidebar-network-section li .sidebar-window-btn`
-  //       (default.css L505) never matched archive rows. The unit
-  //       test asserts the JSX class string; here we read the live
-  //       built DOM class.
-  //
-  //   (b) An archive row's `<button>` resolves `font-family` to a
-  //       monospace stack via the canonical selector. Pre-fix it
-  //       resolved to the UA default (system serif). Asserting on
-  //       an archive row specifically (not a joined sidebar row)
-  //       avoids the `.selected` overrides that flip `background`
-  //       for the focused channel.
+  // Real-browser-only proof: an archived row's entry `<button>` resolves
+  // `font-family` to the monospace stack via `.archive-modal-entry-btn`
+  // (`font-family: var(--font-mono)`). Pre-#473 the equivalent Sidebar archive
+  // `<ul>` was missing the canonical row-style gating class, so rows resolved
+  // to the UA default (system serif). A unit test asserts the JSX class
+  // string; here we read the live built DOM's computed value.
 
-  // PART so a channel lands in the archive (the fixture seed leaves
-  // #bofh joined; partChannel server-side broadcast moves it).
+  // PART so a channel lands in the archive (the fixture seed leaves #bofh
+  // joined; partChannel's server-side broadcast moves it into the archive).
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 5_000 });
 
-  // Expand the per-network Archive <details>.
-  const networkSection = page.locator(".sidebar-network-section", {
-    has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
-  });
-  const archiveSection = networkSection.locator(
-    "xpath=following-sibling::details[@class=\"sidebar-archive\"][1]",
-  );
-  await archiveSection.locator("summary").click();
-  await expect(archiveSection).toHaveAttribute("open", "");
+  // Open the grouped modal and expand this network's group (triggers the lazy
+  // row load).
+  await openArchive(page);
+  const group = await expandArchiveGroup(page, NETWORK_SLUG);
 
-  // (a) — live DOM class on the archive ul.
-  const archiveUl = archiveSection.locator("ul.sidebar-archive-list");
-  await expect(archiveUl).toHaveCount(1);
-  await expect(archiveUl).toHaveClass(/sidebar-network-section/);
-
-  // (b) — computed font-family on an archive row's button matches
-  // the canonical monospace stack. Pre-fix this resolved to UA-default
-  // serif because the ul lacked the gating class.
-  const archivedBtn = archiveSection.locator("button.sidebar-window-btn", { hasText: CHANNEL });
+  const archivedRow = group.locator(".archive-modal-row", { hasText: CHANNEL });
+  await expect(archivedRow).toHaveCount(1, { timeout: 5_000 });
+  const archivedBtn = archivedRow.locator(".archive-modal-entry-btn");
   await expect(archivedBtn).toHaveCount(1, { timeout: 5_000 });
-  // The sidebar archive list re-renders on any window-state WS event
-  // (an intervening spec's JOIN/PART broadcast), replacing the button
-  // node. A one-shot `.evaluate(getComputedStyle)` can grab the node
-  // mid-swap — after it detaches, `getComputedStyle` on a disconnected
-  // element resolves `fontFamily` to "" (the flake). Poll + re-query
-  // each tick so a transient detach is retried; the contract asserted
+
+  // Computed font-family on the archived row's button matches the canonical
+  // monospace stack. The modal list re-renders on any window-state /
+  // archive_changed WS event (an intervening spec's JOIN/PART broadcast),
+  // replacing the button node. A one-shot `.evaluate(getComputedStyle)` can
+  // grab the node mid-swap — after it detaches, `getComputedStyle` on a
+  // disconnected element resolves `fontFamily` to "" (the flake). Poll +
+  // re-query each tick so a transient detach is retried; the contract asserted
   // (monospace stack) is unchanged.
   await expect
     .poll(

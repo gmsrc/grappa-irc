@@ -18,7 +18,12 @@
 // breakpoint), same gate as archive-desktop-only.spec.ts.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  expandArchiveGroup,
+  loginAs,
+  openArchive,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -60,12 +65,14 @@ test.describe("#71 INC-1 — sidebar hierarchy", () => {
 
   // Non-regression, computed-style (real browser only): the per-network
   // grouping rail is a `border-left` on every non-header row of the MAIN
-  // per-network <ul>. The ARCHIVE <ul> SHARES the `.sidebar-network-section`
-  // class, so the rail rule is scoped `:not(.sidebar-archive-list)`. A unit
-  // test asserts the class-string scoping; only getComputedStyle in a real
-  // browser proves the archived rows do NOT inherit the rail. Live channel
-  // row → 2px rail; archived row → 0px (no rail).
-  test("desktop — grouping rail on live rows but NOT archive rows (shared .sidebar-network-section)", async ({
+  // per-network <ul>. A live channel row → 2px rail. #473 moved the archive OUT
+  // of the Sidebar into the grouped ArchiveModal, so the archive <ul> no longer
+  // shares `.sidebar-network-section` (the old rail rule needed a
+  // `:not(.sidebar-archive-list)` carve-out — both are gone); a parted channel
+  // now LEAVES the <ul> for the modal, where it stays reachable. A unit test
+  // asserts the class-string scoping; only getComputedStyle in a real browser
+  // proves the live row carries the rail.
+  test("desktop — grouping rail on live sidebar rows; parted channel moves to the archive modal", async ({
     page,
   }) => {
     const vjt = getSeededVjt();
@@ -83,31 +90,17 @@ test.describe("#71 INC-1 — sidebar hierarchy", () => {
       )
       .toBe("2px");
 
-    // PART #bofh so it lands in the archive <ul> (which shares
-    // .sidebar-network-section). The archived row MUST NOT inherit the rail.
+    // PART #bofh → it leaves the main network <ul> (no longer a sidebar row)
+    // and lands in the archive, which is now the grouped ArchiveModal (#473),
+    // NOT a sidebar `<details>`.
     await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
     await expect(liveRow).toHaveCount(0, { timeout: 5_000 });
 
-    const networkSection = page.locator(".sidebar-network-section", {
-      has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
-    });
-    const archiveSection = networkSection.locator(
-      'xpath=following-sibling::details[@class="sidebar-archive"][1]',
-    );
-    await archiveSection.locator("summary").click();
-    await expect(archiveSection).toHaveAttribute("open", "");
-
-    const archivedRow = archiveSection.locator("li.sidebar-archive-row", { hasText: CHANNEL });
+    // Reachable in the modal: open it and expand this network's group (triggers
+    // the lazy row load).
+    await openArchive(page);
+    const group = await expandArchiveGroup(page, NETWORK_SLUG);
+    const archivedRow = group.locator(".archive-modal-row", { hasText: CHANNEL });
     await expect(archivedRow).toHaveCount(1, { timeout: 5_000 });
-    // Poll + re-query: the archive list re-renders on any intervening
-    // window-state WS event, and getComputedStyle on a mid-swap detached
-    // node resolves to "" (the archive-desktop-only.spec.ts flake).
-    await expect
-      .poll(
-        async () =>
-          await archivedRow.evaluate((el) => getComputedStyle(el).borderLeftWidth).catch(() => ""),
-        { timeout: 5_000, message: "archived row must NOT inherit the grouping rail" },
-      )
-      .toBe("0px");
   });
 });

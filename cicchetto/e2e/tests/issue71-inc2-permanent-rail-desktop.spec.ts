@@ -7,13 +7,16 @@
 //
 // Two desktop-visible guarantees a jsdom unit test proves structurally but
 // only a real browser confirms against the live layout:
-//   1. Guardrail 1 (non-regression): the NEW per-network Sidebar mentions row
-//      and the EXISTING archive list COEXIST without the per-network grouping
-//      rail forking. The mentions row is a direct <li> of the main network
-//      <ul>, so it inherits the 2px `border-left` rail exactly like a channel
-//      row; the archive <ul> shares `.sidebar-network-section` but is scoped
-//      OUT (`:not(.sidebar-archive-list)`), so archived rows stay 0px. Both
-//      must render together after a return-from-away bundle + a PART.
+//   1. Guardrail 1 (non-regression): the per-network Sidebar mentions row wears
+//      the 2px grouping rail (it is a direct <li> of the main network <ul>, so
+//      it inherits the `border-left` rail exactly like a channel row), and
+//      PARTing a channel into the archive does NOT fork or drop that rail. #473
+//      moved the archive OUT of the Sidebar into the grouped ArchiveModal, so
+//      the archive <ul> no longer shares `.sidebar-network-section` (the old
+//      rail rule needed a `:not(.sidebar-archive-list)` carve-out — both are
+//      gone). The parted window is now reachable in the modal, and the sidebar
+//      rail must survive its departure from the <ul>. Both must hold after a
+//      return-from-away bundle + a PART.
 //   2. The cog is reachable in the permanent rail on a NON-channel window
 //      (home), and clicking it opens the settings drawer (R1's "cog on every
 //      window kind").
@@ -25,7 +28,9 @@
 import { expect, test } from "../fixtures/test";
 import {
   composeSend,
+  expandArchiveGroup,
   loginAs,
+  openArchive,
   scrollbackLine,
   selectChannel,
   sidebarWindow,
@@ -127,43 +132,36 @@ test.describe("#71 INC-2 — permanent right rail (desktop)", () => {
         .toBe("2px");
 
       // PART #bofh (server-side REST, no compose needed — the mentions window
-      // has no ComposeBox) → it lands in the archive <ul>, which shares
-      // `.sidebar-network-section` but is scoped OUT of the rail rule.
+      // has no ComposeBox) → the channel leaves the main network <ul> and moves
+      // into the archive (now the grouped ArchiveModal, #473 — no longer an
+      // inline Sidebar `<details class="sidebar-archive">`).
       await partChannel(vjt.token, NETWORK_SLUG, CHANNEL_A);
       await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL_A)).toHaveCount(0, { timeout: 5_000 });
 
-      const networkSection = page.locator(".sidebar-network-section", {
-        has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
-      });
-      const archiveSection = networkSection.locator(
-        'xpath=following-sibling::details[@class="sidebar-archive"][1]',
-      );
-      await archiveSection.locator("summary").click();
-      await expect(archiveSection).toHaveAttribute("open", "");
-
-      const archivedRow = archiveSection.locator("li.sidebar-archive-row", { hasText: CHANNEL_A });
-      await expect(archivedRow).toHaveCount(1, { timeout: 5_000 });
-      await expect
-        .poll(
-          async () =>
-            await archivedRow
-              .evaluate((el) => getComputedStyle(el).borderLeftWidth)
-              .catch(() => ""),
-          { timeout: 5_000, message: "archived row must NOT inherit the grouping rail" },
-        )
-        .toBe("0px");
-
-      // Coexistence: the mentions row STILL carries the rail while the archive
-      // row (both under the shared `.sidebar-network-section` class) does not —
-      // the non-regression this guardrail exists to catch.
+      // Coexistence — the non-regression this guardrail exists to catch: the
+      // mentions row STILL carries its 2px grouping rail after the parted
+      // channel left the <ul>. Moving a window into the archive must not fork or
+      // drop the per-network grouping rail. Poll + re-query: the sidebar
+      // re-renders on window-state WS events, and getComputedStyle on a
+      // detached mid-swap node resolves to "".
       await expect(mentionsRow).toBeVisible();
       await expect
         .poll(
           async () =>
             await mentionsRow.evaluate((el) => getComputedStyle(el).borderLeftWidth).catch(() => ""),
-          { timeout: 5_000, message: "mentions row rail must survive the archive coexistence" },
+          { timeout: 5_000, message: "mentions row rail must survive the archive move" },
         )
         .toBe("2px");
+
+      // The parted channel is reachable in the grouped ArchiveModal (#473 —
+      // archive is one modal opened from the always-on RailActions button, not
+      // the retired Sidebar `<details class="sidebar-archive">`). Expanding the
+      // network's group triggers the lazy row load.
+      const modal = await openArchive(page);
+      await expect(modal).toBeVisible();
+      const group = await expandArchiveGroup(page, NETWORK_SLUG);
+      const archivedRow = group.locator(".archive-modal-row", { hasText: CHANNEL_A });
+      await expect(archivedRow).toHaveCount(1, { timeout: 5_000 });
     } finally {
       await peer.disconnect("bye");
     }

@@ -24,15 +24,17 @@
 //     `font-weight: bold` + the header `.sidebar-window-btn` uses
 //     `justify-content: flex-start` so the slug is left-anchored.
 //
-// UX-5 bucket BM (2026-05-20) — three buttons on the narrow row was
-// still crowded (vjt 2026-05-19 dogfood, follow-up). BM moved archive
-// + cog OUT of the topic-bar inline slot and into a bottom-fixed
-// launcher footer inside the mobile members drawer. The mobile arm
-// below pins the BM post-state: cog + archive NOT inline anymore;
-// only the hamburger survives on the topic-bar's right edge. The
-// "no standalone .shell-chrome row on mobile-channel" contract from
-// BT still holds — that part is BT's reclamation, BM moved buttons
-// elsewhere without bringing the chrome row back.
+// UX-5 bucket BM (2026-05-20) → #473 — three buttons on the narrow row
+// was still crowded (vjt 2026-05-19 dogfood, follow-up). BM moved archive
+// + cog OUT of the topic-bar inline slot into a launcher footer inside the
+// mobile members drawer; #473 retired that footer for `.rail-actions`, the
+// ONE labelled action drawer at the bottom of `.shell-members` (present on
+// both form factors, every window kind). The mobile arm below pins the
+// post-state: cog + archive NOT inline in the topic-bar anymore; only the
+// hamburger survives on its right edge, and the cog + archive live in the
+// rail drawer. The "no standalone .shell-chrome row on mobile-channel"
+// contract from BT still holds — that part is BT's reclamation; the buttons
+// just moved into the rail without bringing the chrome row back.
 //
 // jsdom doesn't compute layout / cascade `@media` — per
 // `feedback_cicchetto_browser_smoke` this CSS-driven layout fix MUST
@@ -72,8 +74,10 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
   await expect(page.locator(".shell-chrome")).toHaveCount(0);
   await expect(page.locator(".topic-bar")).toHaveCount(1);
-  // Cog must NOT be inside .topic-bar on desktop — it lives in the rail.
-  await expect(page.locator(".topic-bar [data-testid='shell-chrome-cog']")).toHaveCount(0);
+  // Cog must NOT be inside .topic-bar on desktop — it lives in the rail. Assert
+  // the LIVE `action-cluster-cog` testid is absent from the topic-bar (the
+  // retired `shell-chrome-cog` is gone from the DOM, so it would be vacuous).
+  await expect(page.locator(".topic-bar [data-testid='action-cluster-cog']")).toHaveCount(0);
   await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible();
 
   // Sidebar network-name nit: header span computed weight is bold +
@@ -92,7 +96,7 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
   expect(headerBtnJustify).toBe("flex-start");
 });
 
-test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (BM moved chrome buttons into members drawer footer)", async ({
+test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 moved chrome buttons into the RailActions drawer)", async ({
   page,
 }) => {
   const vjt = getSeededVjt();
@@ -112,21 +116,23 @@ test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (BM mo
   // mobile-channel branch; .topic-bar IS mounted.
   await expect(page.locator(".topic-bar")).toHaveCount(1);
   await expect(page.locator(".shell-chrome")).toHaveCount(0);
-  // BM contract: cog + archive NO LONGER inline in .topic-bar —
-  // they live in the members drawer footer as launchers now.
-  await expect(page.locator(".topic-bar [data-testid='shell-chrome-cog']")).toHaveCount(0);
-  await expect(page.locator(".topic-bar [data-testid='shell-chrome-archive']")).toHaveCount(0);
-  // Launchers exist inside the members drawer (see ux-5-bm spec for the full
-  // mutex contract). Verified here as a sanity link between the BT reclamation
-  // and the BM relocation. #71 INC-2 moved the settings cog to the drawer-top
-  // ActionCluster, so assert THAT is present (the footer settings launcher is
-  // gone).
+  // #473 contract: cog + archive NO LONGER inline in .topic-bar — they live in
+  // the `.rail-actions` drawer now. Assert their LIVE testids (`action-cluster-cog`
+  // / `mobile-panel-archive`) are absent from the topic-bar (the retired
+  // `shell-chrome-cog` / `shell-chrome-archive` are gone from the DOM, so
+  // pointing at them would be vacuous).
+  await expect(page.locator(".topic-bar [data-testid='action-cluster-cog']")).toHaveCount(0);
+  await expect(page.locator(".topic-bar [data-testid='mobile-panel-archive']")).toHaveCount(0);
+  // The affordances live inside the members drawer's `.rail-actions` drawer (see
+  // ux-5-bm spec for the full mutex contract). Verified here as a sanity link
+  // between the BT reclamation and the #473 relocation: the cog + archive rows
+  // are present in the rail.
   await expect(
-    page.locator(".shell-members [data-testid='action-cluster-cog']"),
+    page.locator(".shell-members .rail-actions [data-testid='action-cluster-cog']"),
   ).toHaveCount(1);
   await expect(
-    page.locator(".shell-members [data-testid='mobile-panel-settings']"),
-  ).toHaveCount(0);
+    page.locator(".shell-members .rail-actions [data-testid='mobile-panel-archive']"),
+  ).toHaveCount(1);
 
   // #305 — the mobile members hamburger ADOPTS `.shell-chrome-btn` and so
   // sizes from the shared tokens: the tap target meets the 48px HIG floor

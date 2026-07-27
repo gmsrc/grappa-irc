@@ -1,28 +1,27 @@
-// #299 item 6 → superseded by #332 — footer admin reachable WITH the #75
-// themes launcher present.
+// #299 item 6 → #332 → #473 — admin reachable from the rail actions drawer,
+// with every launcher present.
 //
-// History: #75 added a 🎨 themes launcher to the mobile drawer footer,
-// taking it to FIVE buttons (home / archive / settings / themes / admin).
-// On narrow devices the fifth button overflowed and clipped the
+// History: #75 added a 🎨 themes launcher to the mobile drawer footer, taking
+// it to five buttons; on narrow devices the fifth overflowed and clipped the
 // high-frequency admin launcher off-screen (vjt 2026-07-18 dogfood). #299
-// (Opt A) fixed the clip by REMOVING the themes launcher. #332 (P0, vjt)
-// reversed that trade: the themes launcher is RESTORED, and the overflow is
-// now handled the right way — `flex-wrap` on `.mobile-panel-actions`
-// (default.css) wraps a 5th button to a new row instead of clipping admin.
+// removed themes to fix the clip; #332 restored it and switched the footer to
+// `flex-wrap` so overflow wrapped instead of clipping. #473 retired that
+// mobile-only `.mobile-panel-actions` footer entirely: every affordance now
+// lives in ONE `.rail-actions` drawer at the bottom of `.shell-members`, a flex
+// COLUMN on both desktop and mobile — rows stack, so the clip-vs-wrap problem
+// this spec was born from cannot recur.
 //
-// So the invariant this spec guards — "admin stays reachable" — is
-// unchanged; only the mechanism flipped (button-removal → flex-wrap). It
+// The invariant this spec guards — "admin stays reachable" — is unchanged. It
 // drives the real mobile layout (@webkit / iPhone 15) and proves:
-//   (a) the footer holds FIVE buttons with the themes launcher PRESENT,
-//   (b) admin is present, ≥44px, and TAPPABLE (renders the AdminPane — i.e.
-//       not clipped off-screen even with the 5th button back), and
+//   (a) the rail hosts the full launcher set (themes PRESENT),
+//   (b) admin is present, ≥44px, and TAPPABLE (renders the AdminPane), and
 //   (c) themes is still reachable via the cog → themes nav row.
-// The themes launcher's own deep-link behaviour is owned by the issue332
-// spec; here it's just the 5th button that must not strand admin.
+// The themes launcher's own deep-link behaviour is owned by the issue332 spec;
+// here it's just one of the rail buttons that must not strand admin.
 //
-// vjt (admin-by-seed can drift under the shared stack) is explicitly
-// promoted to admin for the admin-launcher assertions, then reverted in
-// afterEach so the shared baseline is restored (mirrors #291).
+// vjt (admin-by-seed can drift under the shared stack) is explicitly promoted
+// to admin for the admin-launcher assertions, then reverted in afterEach so the
+// shared baseline is restored (mirrors #291).
 
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
@@ -69,14 +68,17 @@ async function setAdminFlag(adminToken: string, userId: string, isAdmin: boolean
   }
 }
 
-async function openMobileFooter(page: import("@playwright/test").Page) {
+// Open the mobile members/rail drawer via the TopicBar hamburger (present on
+// the channel windows these tests drive) and return the drawer locator so
+// callers can scope to the `.rail-actions` cluster inside it.
+async function openRailDrawer(page: import("@playwright/test").Page) {
   await page.getByLabel(/open members sidebar/i).tap();
   const drawer = page.locator(".shell-members.open");
   await expect(drawer).toBeVisible({ timeout: 5_000 });
   return drawer;
 }
 
-test.describe("#299 — footer admin reachable (themes launcher removed)", () => {
+test.describe("#299 — admin reachable from the rail actions drawer", () => {
   let vjtUserId: string;
 
   test.beforeAll(async () => {
@@ -87,7 +89,7 @@ test.describe("#299 — footer admin reachable (themes launcher removed)", () =>
     await setAdminFlag(getSeededAdmin().token, vjtUserId, false);
   });
 
-  test("@webkit footer holds themes launcher; admin still present, ≥44px, and tappable", async ({
+  test("@webkit rail holds themes launcher; admin still present, ≥44px, and tappable", async ({
     page,
   }) => {
     await setAdminFlag(getSeededAdmin().token, vjtUserId, true);
@@ -95,21 +97,22 @@ test.describe("#299 — footer admin reachable (themes launcher removed)", () =>
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
-    const drawer = await openMobileFooter(page);
-    const footer = drawer.locator(".mobile-panel-actions");
-    await expect(footer).toBeVisible();
+    const drawer = await openRailDrawer(page);
+    const rail = drawer.locator(".rail-actions");
+    await expect(rail).toBeVisible();
 
-    // #332 restored the themes launcher and #361 added the 📇 list launcher;
-    // #71 INC-2 then moved the settings cog to the rail (drawer top), so the
-    // footer is FIVE buttons and the row `flex-wrap`s so overflow doesn't clip
-    // admin (the #299 regression this spec still guards, now via wrap instead
-    // of removal).
-    await expect(footer.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
-    await expect(footer.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
-    await expect(footer.locator(".shell-chrome-btn")).toHaveCount(5);
+    // #473 — every launcher lives in the ONE `.rail-actions` drawer. An admin
+    // on a channel window sees SEVEN: home, rooms, themes, archive, settings
+    // (cog), admin, denoise. The themes launcher is PRESENT (its clip-vs-wrap
+    // history is moot now the rail is a flex column). The settings cog folded
+    // into the rail with the `action-cluster-cog` testid (no
+    // `mobile-panel-settings` button ever existed).
+    await expect(rail.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
+    await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+    await expect(rail.locator(".shell-chrome-btn")).toHaveCount(7);
 
-    // Admin is present AND a proper ≥44px tap target (not clipped off-screen).
-    const adminBtn = footer.locator("[data-testid='mobile-panel-admin']");
+    // Admin is present AND a proper ≥44px tap target.
+    const adminBtn = rail.locator("[data-testid='mobile-panel-admin']");
     await expect(adminBtn).toHaveCount(1);
     const box = await adminBtn.boundingBox();
     if (box === null) throw new Error("admin launcher has no bounding box");
@@ -126,16 +129,16 @@ test.describe("#299 — footer admin reachable (themes launcher removed)", () =>
   });
 
   test("@webkit themes still reachable via the cog → themes nav row", async ({ page }) => {
-    // Themes is not admin-gated — base vjt reaches it. Proves the removed
-    // footer launcher didn't strand the themes sub-page.
+    // Themes is not admin-gated — base vjt reaches it. Proves the rail's cog →
+    // themes nav row reaches the themes sub-page (no launcher stranded it).
     await loginAs(page, getSeededVjt());
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
-    const drawer = await openMobileFooter(page);
-    // #71 INC-2 — the cog moved to the ActionCluster at the drawer TOP. Tapping
-    // it closes the members drawer (mutex) + opens the settings drawer on its
-    // "main" page, which hosts the themes nav row.
+    const drawer = await openRailDrawer(page);
+    // #473 — the cog lives in the `.rail-actions` drawer. Tapping it closes the
+    // members drawer (mutex) + opens the settings drawer on its "main" page,
+    // which hosts the themes nav row.
     await drawer.locator("[data-testid='action-cluster-cog']").tap();
     await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
     // #299 item 3 — the legacy auto/mirc-light/irssi-dark radio selector is

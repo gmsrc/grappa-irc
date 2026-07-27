@@ -16,6 +16,12 @@
 // key → pseudo-row vanishes; archive filter releases → archive entry
 // appears. One window, one surface throughout the dismiss cycle.
 //
+// #473: the archive surface is now the grouped `ArchiveModal` (opened
+// from the always-on RailActions button), NOT the retired inline
+// Sidebar `<details class="sidebar-archive">`. The dedup contract is
+// unchanged — this spec counts each surface independently: the sidebar
+// `<li>` pseudo-row vs the modal's `.archive-modal-row`.
+//
 // Server-side: `apply_effects([{:join_failed, ...}], state)` emits an
 // `archive_changed` event on `Topic.user/1` so cic's `archivedBySlug`
 // cache refreshes the moment the pseudo-row is dismissed — operator
@@ -32,7 +38,9 @@
 import { test, expect } from "../fixtures/test";
 import {
   composeSend,
+  expandArchiveGroup,
   loginAs,
+  openArchive,
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
@@ -74,22 +82,19 @@ test("UX-5 BK — /join +k without key shows ONE pseudo-row (closeable); × dism
   // user-topic.
   await composeSend(page, `/join ${KEYED_CHANNEL}`);
 
-  // sidebarWindow() matches by `<li hasText:windowName>` which
-  // includes archive rows (`.sidebar-archive-row` is also a <li>).
-  // Scope the assertions to the active sidebar by excluding the
-  // archive row class — this matters because BK's whole point is
-  // "active OR archive, never both" so we need a way to count each
-  // surface independently. CSS `:not()` is the only correct filter
-  // here: Playwright's `hasNot` filters by SUBTREE presence, which
-  // doesn't match self-class — the archive row IS the .sidebar-
-  // archive-row element, not an ancestor of it.
+  // The pseudo-row is a plain <li> in the per-network sidebar section.
+  // #473 moved the archive OUT of the Sidebar into the grouped
+  // ArchiveModal, so a sidebar `li` lookup no longer double-matches an
+  // archive row (the pre-#473 `:not(.sidebar-archive-row)` carve-out is
+  // gone) — a plain `li` hasText match uniquely resolves the active /
+  // pseudo row. BK's "active OR archive, never both" contract is verified
+  // by counting each surface independently: this sidebar `<li>` vs the
+  // modal's `.archive-modal-row` below.
   const activeRow = page
     .locator(".sidebar-network-section", {
       has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
     })
-    .locator("li:not(.sidebar-archive-row)", { hasText: KEYED_CHANNEL });
-  const archiveSection = page.locator(".sidebar-archive").first();
-  const archiveRow = archiveSection.locator(".sidebar-archive-row", { hasText: KEYED_CHANNEL });
+    .locator("li", { hasText: KEYED_CHANNEL });
 
   // Wait on the typed `join_failed` arrival: sidebar pseudo-row
   // greyed class is the post-flip sentinel.
@@ -102,18 +107,23 @@ test("UX-5 BK — /join +k without key shows ONE pseudo-row (closeable); × dism
 
   // BK invariant: the row has an aria-labeled × button (pre-BK the
   // pseudo-row was uncloseable; this is the primary fix). Use the
-  // ARIA label from the pseudo-row's onClick handler directly — the
-  // generic sidebarCloseButton helper would also match the archive
-  // row's × button once that surfaces post-dismiss.
+  // ARIA label from the pseudo-row's onClick handler directly.
   const closeBtn = activeRow.getByLabel(`Close ${KEYED_CHANNEL}`);
   await expect(closeBtn).toBeVisible();
 
-  // Archive view dedup: while the pseudo-row exists, the archive
-  // section MUST NOT also list the channel. visibleArchiveForNetwork
-  // filters anything in windowStateByChannel for the slug. Toggle
-  // the archive details open to materialize its body.
-  await archiveSection.locator("summary").click();
-  await expect(archiveRow).toHaveCount(0);
+  // Archive-view dedup: while the pseudo-row exists, the archive MUST NOT
+  // also list the channel. visibleArchiveForNetwork filters anything in
+  // windowStateByChannel for the slug. #473 — the archive is the grouped
+  // ArchiveModal now; open it and expand the network's group (lazy load),
+  // assert the channel is absent, then CLOSE the modal so the pseudo-row's
+  // × (behind the overlay) is reachable for the dismiss step.
+  {
+    const modal = await openArchive(page);
+    const group = await expandArchiveGroup(page, NETWORK_SLUG);
+    await expect(group.locator(".archive-modal-row", { hasText: KEYED_CHANNEL })).toHaveCount(0);
+    await page.getByLabel("close archive").click();
+    await expect(modal).toHaveCount(0, { timeout: 5_000 });
+  }
 
   // Click × → setParted drops the windowState key → pseudo-row
   // vanishes from the active sidebar.
@@ -121,10 +131,20 @@ test("UX-5 BK — /join +k without key shows ONE pseudo-row (closeable); × dism
   await expect(activeRow).toHaveCount(0, { timeout: 5_000 });
 
   // After dismiss the archive filter releases. The server-side
-  // archive_changed broadcast triggered loadArchive on user-topic;
-  // the archive row for KEYED_CHANNEL must now appear under the
-  // sibling archive details (still expanded from the toggle above).
-  await expect(archiveRow).toHaveCount(1, { timeout: 10_000 });
+  // archive_changed broadcast triggered a re-fetch of archivedBySlug; the
+  // archive row for KEYED_CHANNEL must now appear in the modal. Re-open +
+  // re-expand (the modal unmounts on close, so the lazy load re-fires on
+  // this fresh expand), then close it so the happy-path sidebar
+  // interactions below aren't behind the overlay.
+  {
+    const modal = await openArchive(page);
+    const group = await expandArchiveGroup(page, NETWORK_SLUG);
+    await expect(group.locator(".archive-modal-row", { hasText: KEYED_CHANNEL })).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    await page.getByLabel("close archive").click();
+    await expect(modal).toHaveCount(0, { timeout: 5_000 });
+  }
 
   // Negative twin / happy path: a successful /join still produces an
   // active sidebar entry (proves the fix didn't break the success
@@ -148,7 +168,7 @@ test("UX-5 BK — /join +k without key shows ONE pseudo-row (closeable); × dism
     .locator(".sidebar-network-section", {
       has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
     })
-    .locator("li:not(.sidebar-archive-row)", { hasText: HAPPY_CHANNEL });
+    .locator("li", { hasText: HAPPY_CHANNEL });
   await expect(happyRow).toHaveCount(1, { timeout: 10_000 });
   // Happy row is NOT greyed (live joined window).
   await expect(happyRow.locator(".sidebar-window-greyed")).toHaveCount(0);

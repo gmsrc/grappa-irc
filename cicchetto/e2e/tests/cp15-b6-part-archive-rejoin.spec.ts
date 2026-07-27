@@ -8,19 +8,22 @@
 // Asserts the full archive lifecycle:
 //   1. PART a joined channel (#bofh, the seeded autojoin) → :parted
 //      effect → channel leaves active sidebar + appears in Archive.
-//   2. Expand Archive <details> → archive REST fetch → entry visible.
+//   2. Open the grouped ArchiveModal + expand the network's group →
+//      lazy archive REST fetch → entry visible.
 //   3. Click archive entry → ScrollbackPane opens for the parted
-//      channel (read-only window — TopicBar still shows the name).
+//      channel (read-only window — TopicBar still shows the name) and
+//      the modal closes.
 //   4. Type `/join #bofh` in compose → state goes pending → joined.
 //      Sidebar entry returns to the active section (channelsBySlug
-//      branch); archive entry MUST disappear in the same tick (BUG-A
-//      regression guard — the cic-side `visibleArchiveForNetwork`
+//      branch); the archive entry MUST NOT re-appear in the archive
+//      (BUG-A regression guard — the cic-side `visibleArchiveForNetwork`
 //      filter mirrors server-side `Scrollback.list_archive/3`'s
 //      active_keyset exclusion at render time, so a re-JOINed channel
-//      never duplicates between Active + Archive sections).
-//   5. $server-never-archived invariant (folded from b4): even with
-//      the network archive section open, no "Server" entry appears
-//      there — `Scrollback.list_archive/3` filters $server out
+//      never duplicates between Active + Archive). Re-opening the modal
+//      after the re-JOIN shows the row is gone.
+//   5. $server-never-archived invariant (folded from b4): even with the
+//      network archive group open + populated, no "$server" entry
+//      appears there — `Scrollback.list_archive/3` filters $server out
 //      regardless of active_keyset.
 //
 // Cleanup: re-JOIN (assertion path itself) leaves #bofh in the
@@ -30,7 +33,9 @@
 import { test, expect } from "../fixtures/test";
 import {
   composeSend,
+  expandArchiveGroup,
   loginAs,
+  openArchive,
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
@@ -61,32 +66,23 @@ test("CP15 B6 — PART → archive → re-join: row moves from active to archive
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 5_000 });
 
-  // Expand Archive <details> → loadArchive fires on the open
-  // transition → archivedBySlug populates → the parted channel
-  // appears as a clickable entry.
-  //
-  // UX-5 BH (2026-05-19): `.sidebar-network` renamed to
-  // `.sidebar-network-section`; legacy `<h3>` per-network header
-  // dropped in UX-4 bucket C — `.sidebar-network-header` is the
-  // post-C row. Archive `<details>` lifted out of the killed
-  // `<section>` wrapper; it's now a flat sibling of the per-network
-  // `<ul>` inside the `<For>`. Scoped via xpath sibling axis for
-  // forward-compat against multi-network seeds.
-  const networkSection = page.locator(".sidebar-network-section", {
-    has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
-  });
-  const archiveSection = networkSection.locator("xpath=following-sibling::details[@class=\"sidebar-archive\"][1]");
-  await archiveSection.locator("summary").click();
-  await expect(archiveSection).toHaveAttribute("open", "");
-  const archivedEntry = archiveSection.locator("button.sidebar-window-btn", {
-    hasText: CHANNEL,
-  });
+  // Open the grouped ArchiveModal + expand the network's group. The
+  // group's `<details onToggle>` lazy-loads its archive rows (loadArchive
+  // fires on the open transition), exactly like the retired Sidebar
+  // `<details class="sidebar-archive">`. archivedBySlug populates → the
+  // parted channel appears as a clickable entry. openArchive/
+  // expandArchiveGroup are viewport-aware page-object helpers so the spec
+  // stays layout-agnostic.
+  await openArchive(page);
+  const group = await expandArchiveGroup(page, NETWORK_SLUG);
+  const archivedEntry = group.locator(".archive-modal-row", { hasText: CHANNEL });
   await expect(archivedEntry).toHaveCount(1, { timeout: 5_000 });
 
-  // Click archive row → ScrollbackPane opens for the parted channel.
-  // TopicBar still carries the channel name as the read-only window's
-  // header.
-  await archivedEntry.click();
+  // Click the archive entry → setSelectedChannel opens the parted channel
+  // (read-only window) and closes the modal. TopicBar still carries the
+  // channel name as the read-only window's header.
+  await archivedEntry.locator(".archive-modal-entry-btn").click();
+  await expect(page.locator(".archive-modal")).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator(".topic-bar")).toContainText(CHANNEL, { timeout: 5_000 });
 
   // Re-JOIN via /join in compose. setPending fires synchronously +
@@ -98,42 +94,41 @@ test("CP15 B6 — PART → archive → re-join: row moves from active to archive
   await composeSend(page, `/join ${CHANNEL}`);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1, { timeout: 5_000 });
 
-  // BUG-A regression guard: the archive entry MUST vanish from the
-  // archive section the moment the channel re-enters channelsBySlug.
-  // Without the visibleArchiveForNetwork filter (e3934b0), the row
-  // would dup-render in both Active + Archive.
-  await expect(
-    archiveSection.locator("button.sidebar-window-btn", { hasText: CHANNEL }),
-  ).toHaveCount(0, { timeout: 5_000 });
-
-  // Final state sanity: members snapshot lands → MembersPane shows
-  // the joined branch with vjt-grappa as @ founder.
+  // Final state sanity: members snapshot lands → MembersPane shows the
+  // joined branch with vjt-grappa as @ founder. Asserted BEFORE re-opening
+  // the modal so its backdrop doesn't cover the rail's members pane.
   const membersPane = page.locator(".members-pane");
   await expect(membersPane.locator("li", { hasText: NETWORK_NICK })).toBeVisible({
     timeout: 5_000,
   });
 
+  // BUG-A regression guard: a re-JOINed channel MUST NOT appear in the
+  // archive. The cic-side visibleArchiveForNetwork render-time filter
+  // (e3934b0) mirrors server-side Scrollback.list_archive/3's active_keyset
+  // exclusion, so the channel never duplicates between Active + Archive.
+  // The entry-click above closed the modal, so re-open it + re-expand the
+  // group; the row is gone even though its archive rows still exist
+  // server-side.
+  await openArchive(page);
+  const regroup = await expandArchiveGroup(page, NETWORK_SLUG);
+  await expect(regroup.locator(".archive-modal-row", { hasText: CHANNEL })).toHaveCount(0, {
+    timeout: 5_000,
+  });
+
   // $server-never-archived invariant (folded from cp15-b4 2026-05-26):
-  // The Archive section MUST NOT contain a "Server" entry, regardless
-  // of active_keyset state — Scrollback.list_archive/3 filters $server
-  // out unconditionally. Pin the rule here so a future regression
-  // in that filter surfaces in e2e too.
-  //
-  // We've already re-JOINed #bofh so the archive section is now empty
-  // for this network. Re-PART then re-open to verify the rule with a
-  // populated archive too. Use `=== null` for the open-attr check —
-  // HTML boolean attributes return "" (empty string, falsy in JS!) when
-  // present, so `!getAttribute("open")` would always be truthy and
-  // toggle a previously-open section closed.
+  // the archive group MUST NOT contain a "$server" entry, regardless of
+  // active_keyset state — Scrollback.list_archive/3 filters $server out
+  // unconditionally. Pin the rule here so a future regression in that
+  // filter surfaces in e2e too. Verify with a POPULATED group: re-PART
+  // #bofh with the modal still open — the archive_changed broadcast
+  // reactively refreshes the already-expanded group (loadArchive re-fires),
+  // so #bofh reappears WITHOUT re-expanding, while $server never does.
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 5_000 });
-  if ((await archiveSection.getAttribute("open")) === null) {
-    await archiveSection.locator("summary").click();
-  }
-  await expect(archiveSection).toHaveAttribute("open", "");
-  await expect(
-    archiveSection.locator("button.sidebar-window-btn", { hasText: "Server" }),
-  ).toHaveCount(0);
+  await expect(regroup.locator(".archive-modal-row", { hasText: CHANNEL })).toHaveCount(1, {
+    timeout: 5_000,
+  });
+  await expect(regroup.locator(".archive-modal-row", { hasText: "$server" })).toHaveCount(0);
 
   // Restore seed state for downstream specs.
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);

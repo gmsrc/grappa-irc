@@ -1,25 +1,26 @@
-// #291 — mobile home button in the hamburger drawer footer.
+// #291 — home launcher (return to the home window) in the rail actions drawer.
 //
 // On the mobile narrow layout there was no way back to the home window
-// (desktop has the sidebar home link). This adds a 🏠 launcher to the
-// `.mobile-panel-actions` footer, LEFT-aligned, alongside archive /
-// admin — and enlarges ALL those launchers to ≥44px tap targets. (#299
-// removed the #75 themes launcher from this footer — five buttons
-// overflowed on narrow devices and clipped admin. #332 (P0, vjt) RESTORED
-// the 🎨 themes launcher, and #361 added the 📇 list launcher; #71 INC-2 then
-// DEDUPED the footer settings cog into the rail's ActionCluster at the drawer
-// TOP, so the footer is now FIVE — home / list / themes / admin / archive
-// (archive moved to the END by #361) — and the overflow is handled by
-// `flex-wrap` on `.mobile-panel-actions` instead of dropping a button, so
-// nothing clips. This spec's launcher-count assertions moved 4 → 5 (#332)
-// → 6 (#361) → 5 (#71 INC-2, settings cog moved to the rail).)
+// (desktop has the sidebar home link). #291 added a 🏠 launcher alongside the
+// other window-nav / own-signal launchers, and enlarged every launcher to a
+// ≥44px tap target.
 //
-// This spec drives the real mobile layout (@webkit / iPhone 15): open
-// the hamburger, assert all 5 launchers are present and each ≥44px, tap
-// home and assert the drawer closes and the HOME window renders. The
-// 5-launcher count needs the admin button present, so vjt is temporarily
-// promoted to admin (mirrors ux-6-c-mobile-admin-launcher), then reverted
-// in afterEach so the shared stack baseline is restored.
+// #473 folded EVERY rail affordance into ONE `.rail-actions` drawer at the
+// bottom of `.shell-members` — present on BOTH desktop and mobile and on
+// EVERY window kind. It supersedes the retired mobile-only
+// `.mobile-panel-actions` footer AND the post-#71 top ActionCluster: the
+// settings cog + denoise toggle now live in the rail too. So an admin on a
+// channel window sees SEVEN buttons — home, rooms (📇 $list), themes, archive,
+// settings (cog), admin, denoise — each keeping its testid (the $list launcher
+// is labelled "rooms" but keeps `mobile-panel-list`; the cog keeps
+// `action-cluster-cog`).
+//
+// This spec drives the real mobile layout (@webkit / iPhone 15): open the
+// drawer, assert the home launcher is present with its sibling launchers,
+// assert each is a ≥44px tap target, tap home and assert the drawer closes and
+// the HOME window renders. The full button set needs the admin launcher, so
+// vjt is temporarily promoted to admin (mirrors ux-6-c-mobile-admin-launcher),
+// then reverted in afterEach so the shared stack baseline is restored.
 
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
@@ -66,7 +67,7 @@ async function setAdminFlag(adminToken: string, userId: string, isAdmin: boolean
   }
 }
 
-test.describe("#291 — mobile home button in drawer footer", () => {
+test.describe("#291 — home launcher in the rail actions drawer", () => {
   let vjtUserId: string;
 
   test.beforeAll(async () => {
@@ -79,7 +80,7 @@ test.describe("#291 — mobile home button in drawer footer", () => {
     await setAdminFlag(admin.token, vjtUserId, false);
   });
 
-  test("@webkit home launcher: all footer buttons ≥44px, tap returns to home", async ({
+  test("@webkit home launcher: all rail buttons ≥44px, tap returns to home", async ({
     page,
   }) => {
     const admin = getSeededAdmin();
@@ -90,35 +91,39 @@ test.describe("#291 — mobile home button in drawer footer", () => {
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
-    // Open the mobile hamburger → members drawer (hosts the footer).
+    // Open the mobile hamburger → members drawer (hosts the rail).
     await page.getByLabel(/open members sidebar/i).tap();
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
 
-    const launcherFooter = drawer.locator(".mobile-panel-actions");
-    await expect(launcherFooter).toBeVisible();
+    const rail = drawer.locator(".rail-actions");
+    await expect(rail).toBeVisible();
 
-    // All launchers present. #332 RESTORED the #75 themes button and #361
-    // added the 📇 list launcher; #71 INC-2 moved the settings cog to the rail
-    // (drawer top), so an admin in a channel sees FIVE in the footer: home
-    // (#291), list (#361), themes (#332), admin, archive — with archive moved
-    // to the END by #361. The themes launcher deep-links to the settings
-    // drawer's themes sub-page (covered by issue332 spec); the list launcher
-    // opens the $list directory (covered by issue361 spec). The settings cog
-    // now lives in the ActionCluster at the drawer TOP (assert it there).
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-home']")).toHaveCount(1);
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-list']")).toHaveCount(1);
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
-    // #71 INC-2 — settings cog is NO LONGER in the footer; it's in the rail's
-    // ActionCluster at the drawer top.
-    await expect(launcherFooter.locator("[data-testid='mobile-panel-settings']")).toHaveCount(0);
-    await expect(drawer.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+    // #473 — every rail affordance folded into the ONE `.rail-actions` drawer:
+    // the window-nav launchers (home / rooms / admin), the own-signal launchers
+    // (themes / archive), the settings cog (was the #71 top ActionCluster) and
+    // the channel-gated denoise toggle. An admin on a channel window sees the
+    // full set. testids are unchanged — the 📇 $list launcher keeps
+    // `mobile-panel-list` (labelled "rooms" now; opens the directory, covered
+    // by issue361), themes deep-links the settings themes sub-page (covered by
+    // issue332), and the cog keeps `action-cluster-cog`.
+    await expect(rail.locator("[data-testid='mobile-panel-home']")).toHaveCount(1);
+    await expect(rail.locator("[data-testid='mobile-panel-list']")).toHaveCount(1);
+    await expect(rail.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
+    await expect(rail.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
+    await expect(rail.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
+    // #473 — the settings cog folded INTO the rail (was a separate top
+    // ActionCluster post-#71); it's now one of the rail buttons.
+    await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+    // #473 — denoise (presence toggle) is channel-gated and shows on this
+    // channel window (it too folded into the rail).
+    await expect(rail.locator("[data-testid='presence-toggle']")).toHaveCount(1);
 
-    // Every launcher is a proper mobile tap target (≥44px, #291).
-    const buttons = launcherFooter.locator(".shell-chrome-btn");
-    await expect(buttons).toHaveCount(5);
+    // Every launcher is a proper mobile tap target (≥44px, #291). Seven buttons
+    // for an admin on a channel window: home, rooms, themes, archive, settings
+    // (cog), admin, denoise.
+    const buttons = rail.locator(".shell-chrome-btn");
+    await expect(buttons).toHaveCount(7);
     const count = await buttons.count();
     for (let i = 0; i < count; i++) {
       const box = await buttons.nth(i).boundingBox();
@@ -134,7 +139,7 @@ test.describe("#291 — mobile home button in drawer footer", () => {
     }
 
     // Tap home → drawer closes (mutex) + the HOME window renders.
-    await launcherFooter.locator("[data-testid='mobile-panel-home']").tap();
+    await rail.locator("[data-testid='mobile-panel-home']").tap();
     await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
     await expect(page.locator(".home-pane-registered").first()).toBeVisible({ timeout: 5_000 });
   });

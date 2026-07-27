@@ -9,17 +9,19 @@
 //      a row keyed on peer's nick.
 //   3. Vjt clicks × on the query window → closeQueryWindowState fires
 //      → the window leaves queryWindowsByNetwork.
-//   4. Expand Archive <details> → loadArchive fetches the per-network
-//      list → the peer entry shows up under Archive (kind: "query").
-//   5. Click the archived entry → setSelectedChannel(kind: "query")
-//      moves focus, but the window is NOT yet revived
-//      (openQueryWindowState wasn't called by the archive click —
-//      the click is a navigate-to-history affordance, not a revive).
-//   6. Vjt types `/msg peer hi-again` in compose → /msg arm calls
-//      openQueryWindowState → window re-enters queryWindowsByNetwork
-//      AND visibleArchiveForNetwork's render-time filter drops the
-//      peer entry from the archive list (active/archive boundary
-//      restored). The window appears in the active query section.
+//   4. Open the grouped ArchiveModal + expand the network's group →
+//      lazy loadArchive fetches the per-network list → the peer entry
+//      shows up as a group row (kind: "query").
+//   5. Click the archived entry → REVIVE. Under #473 a query-kind row
+//      calls openQueryWindowState (re-subscribing cic to the peer's
+//      per-channel topic) AND setSelectedChannel, then closes the modal.
+//      The DM window becomes LIVE again (re-enters queryWindowsByNetwork
+//      + subscribed) — the click IS the revive (the pre-#473 "navigate
+//      to history, revive only on a following /msg" two-step is gone).
+//   6. visibleArchiveForNetwork's render-time filter drops the peer from
+//      the archive the moment it re-enters queryWindowsByNetwork
+//      (active/archive boundary restored) — re-opening the modal shows
+//      the peer row is gone.
 //
 // Peer setup: a single IrcPeer instance stays connected for the
 // duration so vjt's PRIVMSGs land on a real upstream nick that
@@ -27,16 +29,20 @@
 // row persists server-side regardless of peer activity — the row
 // is created at PRIVMSG send-time on the bouncer's IRC client).
 //
-// CHANNEL CLEANUP: closeQueryWindowState is the only persistent
-// effect; afterEach drops it explicitly so subsequent specs don't
-// inherit the window. Peer disconnect cleans the upstream nick.
+// CHANNEL CLEANUP: PEER_NICK is randomised per run, so the revived query
+// window (left open by step 5's revive) can't collide with any other
+// spec — afterEach only disconnects the upstream peer, which cleans the
+// upstream nick. No explicit window close needed.
 
 import { test, expect } from "../fixtures/test";
 import {
   composeSend,
+  expandArchiveGroup,
   loginAs,
+  openArchive,
   selectChannel,
   waitForDmListenerReady,
+  waitForQueryWindowReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
@@ -53,7 +59,7 @@ test.afterEach(async () => {
   }
 });
 
-test("CP15 B6 — /msg peer + close → archive entry; revive via /msg drops the archive entry", async ({
+test("CP15 B6 — /msg peer + close → archive entry; clicking the archive row revives the query + drops the archive entry", async ({
   page,
 }) => {
   // Peer must be online so the upstream PRIVMSG target exists
@@ -116,44 +122,46 @@ test("CP15 B6 — /msg peer + close → archive entry; revive via /msg drops the
   await queryRow.locator(".sidebar-close").click();
   await expect(queryRow).toHaveCount(0, { timeout: 15_000 });
 
-  // Expand Archive — loadArchive fires on toggle; the per-network
-  // archive REST query returns the peer entry (has scrollback row,
-  // not in active query set). Archive `<details>` lifted out of
-  // the killed `<section>` wrapper in BH; flat sibling of the
-  // per-network `<ul>`. Scoped via xpath sibling axis for forward-
-  // compat against multi-network seeds.
-  const networkSection = page.locator(".sidebar-network-section", {
-    has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
-  });
-  const archiveSection = networkSection.locator("xpath=following-sibling::details[@class=\"sidebar-archive\"][1]");
-  await archiveSection.locator("summary").click();
-  await expect(archiveSection).toHaveAttribute("open", "");
-  const archivedEntry = archiveSection.locator("button.sidebar-window-btn", {
-    hasText: PEER_NICK,
-  });
+  // Open the grouped ArchiveModal + expand the network's group. The
+  // group's `<details onToggle>` lazily fires loadArchive; the per-network
+  // archive query returns the peer entry (has a scrollback row, not in the
+  // active query set). openArchive/expandArchiveGroup are viewport-aware
+  // page-object helpers replacing the retired Sidebar
+  // `<details class="sidebar-archive">`.
+  await openArchive(page);
+  const group = await expandArchiveGroup(page, NETWORK_SLUG);
+  const archivedEntry = group.locator(".archive-modal-row", { hasText: PEER_NICK });
   await expect(archivedEntry).toHaveCount(1, { timeout: 15_000 });
 
-  // Click the archive entry — focus moves to the query window for
-  // history viewing. NB: this does NOT call openQueryWindowState
-  // by design; the click is "view history", not "revive". The
-  // window is selected for read-only inspection until the user
-  // sends.
-  await archivedEntry.click();
+  // Click the archived query entry → REVIVE. Under #473 a query-kind row
+  // calls openQueryWindowState (re-subscribing cic to the peer's
+  // per-channel topic) AND setSelectedChannel, then closes the modal —
+  // the click IS the revive (the pre-#473 "view history, revive only on a
+  // following /msg" two-step is gone).
+  await archivedEntry.locator(".archive-modal-entry-btn").click();
 
-  // Revive via /msg — the /msg arm calls openQueryWindowState which
-  // adds the entry back to queryWindowsByNetwork. The render-time
-  // visibleArchiveForNetwork filter then excludes the peer entry
-  // from the archive section on the next reactive flush.
-  await composeSend(page, `/msg ${PEER_NICK} hi-again`);
+  // Modal closes on select.
+  await expect(page.locator(".archive-modal")).toHaveCount(0, { timeout: 5_000 });
 
-  // Active query row reappears.
+  // Revival outcome 1 — the active query row reappears in the sidebar
+  // (the window re-entered queryWindowsByNetwork).
   await expect(queryRow).toHaveCount(1, { timeout: 15_000 });
 
-  // Archive entry dedup: must vanish on the same tick the query
-  // re-enters queryWindowsByNetwork. This is the live-state filter
-  // contract — without it the peer would dup-render (Active +
-  // Archive) until next archive REST refetch.
-  await expect(
-    archiveSection.locator("button.sidebar-window-btn", { hasText: PEER_NICK }),
-  ).toHaveCount(0, { timeout: 15_000 });
+  // Revival outcome 2 — the window is LIVE again, i.e. cic re-subscribed
+  // to the peer's per-channel topic (openQueryWindowState → server
+  // query_window_opened → subscribe loop joins → __cic_queryWindowReady
+  // stamped). Without the subscribe, server NOTICEs (e.g. a 401 for this
+  // peer) would drop on the floor and the operator would see no feedback.
+  await waitForQueryWindowReady(page, NETWORK_SLUG, PEER_NICK);
+
+  // Archive dedup guard: a revived query MUST NOT still appear in the
+  // archive. visibleArchiveForNetwork's render-time filter excludes the
+  // peer the moment it re-enters queryWindowsByNetwork (and list_archive's
+  // active_keyset excludes it server-side too). The select above closed
+  // the modal, so re-open it + re-expand the group; the peer row is gone.
+  await openArchive(page);
+  const regroup = await expandArchiveGroup(page, NETWORK_SLUG);
+  await expect(regroup.locator(".archive-modal-row", { hasText: PEER_NICK })).toHaveCount(0, {
+    timeout: 15_000,
+  });
 });

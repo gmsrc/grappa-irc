@@ -6,7 +6,7 @@
 // indicator strip) on devices where `env(safe-area-inset-bottom)` is
 // 0 (non-notched iPhone, iPad). Pre-BD floors:
 //
-//   * `.shell-members` ~:285 — `padding-bottom: env(safe-area-inset-bottom)` NO floor (BM `.mobile-panel-actions` launcher footer's only bottom inset)
+//   * `.shell-members` ~:285 — `padding-bottom: env(safe-area-inset-bottom)` NO floor (the `.rail-actions` drawer's only bottom inset — #473; was BM's `.mobile-panel-actions` footer)
 //   * `.settings-drawer` ~:1382 — `padding: ... max(1rem, env(safe-area-inset-bottom))`
 //   * `.archive-modal` ~:2490 — `padding: ... max(0.75rem, env(safe-area-inset-bottom))`
 //   * `.image-upload-modal` ~:1187 — flat `padding: 1.5rem` (NO inset at all — worst)
@@ -140,14 +140,14 @@ test("@webkit ux-5-bd — .archive-modal computed padding-bottom >= 1.5rem floor
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 
-  // ArchiveModal launcher lives in BM members-drawer footer on mobile-
-  // channel. Mirror BO's path: select a channel, open drawer, tap
-  // archive launcher.
+  // #473 — the ArchiveModal launcher lives in the `.rail-actions` drawer inside
+  // the members aside (superseding BM's `.mobile-panel-actions` footer chip).
+  // On mobile-channel: select a channel, open the drawer, tap the archive row.
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
   await page
-    .locator(".shell-members.open [data-testid='mobile-panel-archive']")
+    .locator(".shell-members.open .rail-actions [data-testid='mobile-panel-archive']")
     .tap();
   const modal = page.locator(".archive-modal");
   await expect(modal).toBeVisible({ timeout: 5_000 });
@@ -180,10 +180,11 @@ test("@webkit ux-5-bd — .shell-members padding-bottom uses 1.5rem env() floor 
 
   // .shell-members uses split longhand (`padding-top` + `padding-bottom`)
   // not the shorthand — needs the longhand read. Reviewer MED-1 catch:
-  // the BM `.mobile-panel-actions` launcher footer hosts archive +
-  // settings buttons and relies entirely on the aside's inset for
+  // the `.rail-actions` drawer (#473; was BM's `.mobile-panel-actions`
+  // footer) sits at the BOTTOM of the aside (`margin-top: auto`) hosting the
+  // cog + archive + themes rows, and relies entirely on the aside's inset for
   // bottom clearance; pre-BD `padding-bottom: env(...)` was 0px on
-  // non-notched iPhones leaving the launcher row cramped under Safari
+  // non-notched iPhones leaving the bottom launcher row cramped under Safari
   // chrome.
   const pad = await readDeclaredCssValue(page, ".shell-members", "padding-bottom");
   expect(pad).not.toBeNull();
