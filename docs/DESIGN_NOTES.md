@@ -21020,3 +21020,64 @@ CLAUDE.md "don't duplicate state that already exists — derive it" rule with
 teeth: every parallel structure needs housekeeping that will drift. Any new
 archive-visibility or sidebar-projection consumer MUST reuse
 `pseudoChannelsForNetwork`, never re-walk raw `windowStateByChannel`.
+
+---
+
+### 2026-07-27 — #487 — member context menu must clamp/flip into the viewport
+
+**Problem (Sonic, #grappa):** right-clicking a member near the bottom of the
+page opened `UserContextMenu` partly below the fold — the tail items
+(kick/ban/whois/query) were unclickable. `UserContextMenu` positioned itself at
+the raw `{clientX, clientY}` with no clamp (`top: ${y}px; left: ${x}px`), and
+all 8 items stay in the DOM even when disabled, so the menu has a constant
+non-trivial height. The header comment even flagged the gap ("No viewport-flip
+logic here … expected to be addressed in browser smoke") — never followed up.
+
+**Both axes overflow, confirmed empirically not assumed.** The issue flagged X
+overflow as *unverified*. It is real: the desktop members pane is the rightmost
+`14rem` grid column and the menu (`min-width: 8rem`) grows rightward from the
+click, so it clears the right edge for clicks in the right half of the pane. The
+RED e2e run measured it directly (menu ~197px tall; the raw placement overflowed
+both edges). So the fix is symmetric — one 1D primitive applied to X and Y.
+
+**Design — a measured flip/clamp with a pure seam.** `lib/menuPosition.ts`
+exports `placeAxis(click, size, viewport)`: keep the click coord when the menu
+fits after it; **flip** before the click when it would overflow the far edge
+(pointer stays on the menu edge, like a native context menu); **clamp** to the
+last fully-visible coord when a flip would underflow the origin; **pin to 0**
+when the menu is bigger than the viewport (a CSS `max-height` +
+`overflow-y:auto` fallback then scrolls it). `computeMenuPosition` applies it to
+both axes. It is a PURE fn so the arithmetic is unit-testable without a real
+viewport — jsdom returns 0-sized `getBoundingClientRect`, so an in-jsdom
+placement assertion would be hollow. This is the same "extract the decision into
+a pure exported fn, prove wiring in a real browser" split used for the touch
+gestures. `UserContextMenu` measures its rendered box in a `createEffect` (not
+`onMount` — a right-click on another nick while the menu is open reuses the
+component via MembersPane's `<Show>`, so onMount alone would strand the coords),
+feeds it to the seam, and is opacity-gated until measured so the pre-measure
+frame never flashes off-screen. The fix serves BOTH mount sites (MembersPane +
+ScrollbackPane) — one code path.
+
+**The clamp reads the VISUAL viewport, not `window.innerHeight`.** Caught in
+code review: the CSS fallback uses `var(--viewport-height)`, which
+`viewportHeight.ts` derives from `window.visualViewport`, while the first cut of
+the JS read `window.innerHeight`. Those diverge on mobile — the on-screen
+keyboard shrinks `visualViewport.height` but leaves `innerHeight` full-screen —
+so a long-press (via ScrollbackPane) with the keyboard up would place the menu
+under the keyboard, defeating the fix on the exact mobile path the comment
+advertised. The JS now reads `window.visualViewport?.{width,height}` (falling
+back to `window.inner*`), matching the CSS cap and the app-wide viewport
+primitive. No offset handling — consistent with `viewportHeight.ts`, which sizes
+the whole shell off `visualViewport.height` without it. Playwright equalizes the
+two metrics, so the keyboard-up divergence is a **device-dogfood** item, not an
+e2e one.
+
+**Proof:** `menuPosition.test.ts` pins the flip/clamp arithmetic (every branch +
+the exact-boundary cases); `e2e/tests/issue487-context-menu-viewport-clamp.spec.ts`
+proves the visible placement in a real browser viewport — desktop both-axes
+flip, short-viewport Y flip, and the `max-height` scroll fallback — each with an
+anti-hollow-green precondition asserting the raw placement WOULD have overflowed.
+The lesson: a jsdom "green" spec proves nothing about placement; the pure-fn
+seam + a real-viewport e2e is the honest split, and a positioning clamp MUST use
+the same visible-area metric (visual viewport) end-to-end (JS + CSS) or the two
+silently disagree where it matters (keyboard up).
