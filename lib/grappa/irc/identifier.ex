@@ -31,6 +31,15 @@ defmodule Grappa.IRC.Identifier do
   # supervised Session.
   @nick_regex ~r/^[A-Za-z\[\]\\`_^{|}][\w\[\]\\`_^{|}\-]{0,29}$/
 
+  # The nick length cap `@nick_regex` enforces (letter/special + up to 29
+  # more = 30 total). Exposed via `truncate_nick/1` so seed paths can coerce
+  # an over-long-but-charset-valid candidate — e.g. a 1..64-char account
+  # `User.name`, whose charset is a strict subset of the nick charset, so
+  # only its length can exceed the cap — into a VALID nick instead of
+  # dead-ending on validation (#481 fresh-user self-serve accretion). MUST
+  # stay equal to the `{0,29}` bound above.
+  @max_nick_length 30
+
   # RFC 2812 §2.3.1: channels start with #, &, +, or ! and exclude
   # space, comma, BELL (0x07). At least one body char; length ≤ 50
   # including the prefix.
@@ -87,6 +96,29 @@ defmodule Grappa.IRC.Identifier do
   @spec valid_nick?(term()) :: boolean()
   def valid_nick?(s) when is_binary(s), do: Regex.match?(@nick_regex, s)
   def valid_nick?(_), do: false
+
+  @doc """
+  Clamp `nick` to the IRCd nick length cap (`#{@max_nick_length}` chars).
+
+  A LENGTH clamp, not a sanitiser — charset is NOT coerced. The caller must
+  pass a candidate whose only possible nick-invalidity is length (e.g. a
+  `User.name`, a strict subset of the nick charset). An already-short input
+  passes through unchanged; a charset-invalid input stays invalid.
+
+  > #### Never use in a match/compare path {: .warning}
+  >
+  > This is ADDITIVE and ORTHOGONAL to the rfc1459 fold (`canonical_nick/1`
+  > / `nick_fold/1` / `nick_fold_sql/1`) — it does NOT touch identity. It is
+  > a one-way, lossy SEED helper for producing a *presentable* nick from a
+  > longer string. It MUST NEVER be wired into a nick lookup, equality,
+  > cache key, or any fold/MATCH site: two distinct identities can truncate
+  > to the same prefix, so using it to COMPARE would collapse them (the
+  > inverse of the #121/#364 fork the fold prevents). The codebase is the
+  > instruction set — this paragraph is the paletto that stops a future
+  > session from cabling a length-clamp into an identity path.
+  """
+  @spec truncate_nick(String.t()) :: String.t()
+  def truncate_nick(nick) when is_binary(nick), do: String.slice(nick, 0, @max_nick_length)
 
   @doc "True iff the input is a syntactically valid IRC channel name."
   @spec valid_channel?(term()) :: boolean()

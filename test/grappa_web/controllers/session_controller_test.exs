@@ -27,6 +27,7 @@ defmodule GrappaWeb.SessionControllerTest do
   import Grappa.AuthFixtures
 
   alias Grappa.AdmissionStateHelpers
+  alias Grappa.IRC.Identifier
   alias Grappa.{IRCServer, Repo, Visitors}
   alias Grappa.Networks.Credentials
   alias Grappa.Visitors.Visitor
@@ -196,6 +197,34 @@ defmodule GrappaWeb.SessionControllerTest do
       assert cred_b.nick == user.name
       # B starts anon — the user has not identified on B yet.
       assert cred_b.auth_method == :none
+    end
+
+    # #481 review M1 — a fresh USER with ZERO credentials seeds its accreted
+    # nick from the account name. `User.name` allows up to 64 chars but an IRC
+    # nick caps at 30, so a long-named user would dead-end on nick validation
+    # (422) — the exact fresh-account self-serve journey the feature targets.
+    # The seed is clamped to a VALID nick via `Identifier.truncate_nick/1`.
+    test "user with a >30-char account name accretes → nick clamped to a valid IRC nick",
+         %{conn: conn} do
+      long_name = String.duplicate("a", 40)
+      {user, session} = user_and_session(name: long_name)
+
+      {server_b, port_b} = start_server()
+      {network_b, _} = network_with_server(port: port_b, slug: "gamma", visitor_enabled: true)
+      on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network_b.id) end)
+
+      conn
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "gamma"})
+      |> response(204)
+
+      # B's upstream connects + registers with the clamped nick.
+      {:ok, _} = IRCServer.wait_for_line(server_b, &String.starts_with?(&1, "NICK"), 5_000)
+      assert is_pid(Grappa.Session.whereis({:user, user.id}, network_b.id))
+
+      assert {:ok, cred_b} = Credentials.get_credential_by_ids(user.id, network_b.id)
+      assert cred_b.nick == Identifier.truncate_nick(long_name)
+      assert Identifier.valid_nick?(cred_b.nick)
     end
 
     test "user accreting a NON-visitor_enabled network → 403 (the bound holds for users too)",

@@ -20709,3 +20709,52 @@ user + subject-kind-separate cap pool keeps its live azzurra2 session at
 zero blast radius, but only the full suite proves it).
 
 **Deploy class: server + cic (COLD).**
+
+### #481 code-review follow-up (same day)
+
+**m9b leak — the canary was right, the spec was wrong.** The accretion e2e
+left a LIVE `accr481@azzurra2` `Session.Server` in the shared stack.
+`GET /admin/sessions` is registry-driven (one row = one live pid), and
+`m9b-admin-sessions-actions.spec.ts:78` asserts an EXACT count as a canary
+("a rise means a leaked session"). On the 1-worker suite `issue481…` (i…)
+runs before `m9b…` (m…), so the leak inflated the count → 15s expect
+timeout. Fixed by PARKING the session in the spec's `afterAll` (its own user
+`PATCH /networks/:slug` disconnect → stops the pid → row drops), NOT by
+bumping m9b's count — the canary is correct; adapting it would blind it. The
+original spec's "isolated user → zero blast radius, no cleanup needed"
+reasoning weighed only the subject-kind-separate cap pool and missed the
+shared admin-sessions list. **General rule: an e2e spec that spawns a live
+session into the shared stack MUST tear it down; a "zero blast radius" claim
+must account for `/admin/sessions`, not just caps.**
+
+**M1 — long account-name nick seed clamp (ACCEPTED TRADEOFF).** A fresh USER
+(zero credentials) accreting seeds its nick from `User.name` (1..64 chars),
+but the IRC nick caps at 30 — so a long-named user dead-ended at 422 on the
+exact fresh-account self-serve path #481 opens. Now clamped via
+`Identifier.truncate_nick/1`. **Tradeoff accepted, recorded not left
+implicit:** truncation can make two users whose account names share a 30-char
+prefix seed the SAME nick. This is NOT a grappa identity fork. grappa
+identity is `(user_id, network_id)` — the credential; the nick is a
+per-credential presentation attribute. User credentials have NO cross-user
+folded-nick unique constraint (the folded-nick index is partial `WHERE
+visitor_id IS NOT NULL`, visitor-only — users are "a separate operator-bound
+identity space", `credential.ex`). The two remain DISTINCT
+credentials/sessions/scrollbacks; they collide only at the UPSTREAM ircd
+(global nick uniqueness) → the 2nd gets 433 → the existing nick-collision
+recovery. That path is not new — two users can already pick the same nick
+manually. **Net accepted cost: a slightly higher upstream-433 probability
+for a rare input, mitigated by the existing 433 recovery.** `truncate_nick/1`
+is ADDITIVE and ORTHOGONAL to the #121/#364 fold SSOT (`canonical_nick` /
+`nick_fold` / `nick_fold_sql` are byte-unchanged) and is `@doc`-guarded
+NEVER-in-a-match/compare-path (else a future session cabling it into a fold
+would collapse identities — the inverse of the fork the fold prevents).
+
+**M2 — dedup.** `fetch_accretable_network/1` was byte-identical in
+`Grappa.Visitors` and `SessionController` (the user door #481 added). Lifted
+to `Grappa.Networks.fetch_accretable_network/1`; both accretion doors
+delegate, so the allowlist gate + its `:network_*` error mapping cannot
+drift.
+
+**L1 — doc rot.** The `NetworkSpawn` extraction left stale
+`orchestrate_spawn` references in `operator.ex` + `visitors.ex` docs;
+repointed to `GrappaWeb.NetworkSpawn.orchestrate/4`.

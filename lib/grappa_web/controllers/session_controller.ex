@@ -48,6 +48,7 @@ defmodule GrappaWeb.SessionController do
   use GrappaWeb, :controller
 
   alias Grappa.Accounts.User
+  alias Grappa.IRC.Identifier
   alias Grappa.{Networks, Visitors}
   alias Grappa.Networks.{Credential, Credentials, Network, SessionPlan}
   alias Grappa.Visitors.Visitor
@@ -158,8 +159,16 @@ defmodule GrappaWeb.SessionController do
           {String.t(), String.t() | nil, String.t() | nil}
   defp user_identity_seed(%User{name: name} = user) do
     case Credentials.representative_user_credential(user.id) do
-      {:ok, %Credential{nick: nick, ident: ident, realname: realname}} -> {nick, ident, realname}
-      {:error, :not_found} -> {name, nil, nil}
+      {:ok, %Credential{nick: nick, ident: ident, realname: realname}} ->
+        {nick, ident, realname}
+
+      # No prior credential — seed from the account name. `User.name` allows
+      # up to 64 chars but an IRC nick caps at 30, and the name charset is a
+      # strict subset of the nick charset, so a clamp (not a sanitise) yields
+      # a valid nick; without it a long-named user dead-ends on validation.
+      # Per-network identity is editable afterwards (#476).
+      {:error, :not_found} ->
+        {Identifier.truncate_nick(name), nil, nil}
     end
   end
 
