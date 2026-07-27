@@ -20537,6 +20537,14 @@ the shape carved into `CLIENT_PROTOCOL.md` as documented truth. The issue
 itself says we copy the contract SHAPE, not the code — and casing is
 idiom, not shape. Recorded here so the divergence reads as a decision, not
 an oversight. (vjt owns the issue and was told.)
+`issue71-inc2-permanent-rail-desktop.spec.ts` was the regression proof AT FIX TIME:
+red pre-fix (2-3/3), green post-fix, full `scripts/integration.sh` 522/522.
+**⚠️ SUPERSEDED by the #473 e2e migration (2026-07-27):** that migration retired the
+Sidebar `<details class="sidebar-archive">` this guardrail observed, and the
+replacement (`openArchive + expandArchiveGroup`) no longer detects this race — a
+sensitivity test proved guardrail-1 stays GREEN with the fix reverted. The
+deterministic proof is now the server-side ExUnit test. See "#473 relocated the
+archive-race regression proof to a server-side test" below.
 
 ## 2026-07-27 — #476 (+ #478): per-network identity editor for BOTH subjects; lowest-id anchor retired
 
@@ -20904,3 +20912,43 @@ per-network `$list` window; archive does not (it shows all networks).
    modal — redundant with the rail's always-on archive button, reachable via the
    same ☰ rail opener. ShellChrome keeps the @ mentions button (still uses
    `archiveContext.archiveSlugForSelection` for its network derivation).
+
+## 2026-07-27 — #473 relocated the archive-race regression proof to a server-side test (guardrail-1 no longer detects it)
+
+The #459 fix above named `issue71-inc2-permanent-rail-desktop` guardrail-1 as its
+e2e regression proof. The #473 e2e migration — which retired the Sidebar
+`<details class="sidebar-archive">` the guardrail observed — **hollowed that
+proof.** This was PROVEN by a sensitivity (mutation) test, not assumed:
+
+- Revert a1e19731 locally, rebuild the e2e backend, run the MIGRATED guardrail-1
+  in isolation → it PASSES green with the race reintroduced. Confound excluded:
+  the reverted `server.ex` was compiled into the backend (compiled-beam mtime >
+  revert mtime; `_build` is worktree-local via the e2e compose `../..:/app`).
+- WHY it went blind: pre-migration the guardrail observed the Sidebar `<details>`,
+  which auto-refreshed on the racy `archive_changed → loadArchive` — the exact path
+  the race corrupts. The migration replaced that with `openArchive +
+  expandArchiveGroup`, whose `<details onToggle>` fires a FRESH `loadArchive` AFTER
+  the PART has already applied. That fresh fetch reads a correct active-keyset and
+  REPAIRS the symptom, so the test can never observe the stale fetch. A manual
+  re-expand hides the defect — which is exactly why it passes.
+- `cp15-b6-part-archive-rejoin`'s `$server`-invariant step structurally exercises
+  the racy path (re-PART with the group already open → reactive auto-refresh, no
+  re-expand) but ALSO passes green with the fix reverted: the REST-PART race window
+  is narrow (the `send_part` cast usually applies before cic's `GET /archive`
+  round-trips), so an e2e is timing-flaky here — and a flaky detector is not a
+  regression proof.
+
+**The live, deterministic regression proof is server-side**, unaffected by any
+e2e migration: `Grappa.Session.ServerTest` → `test "send_part broadcasts
+archive_changed on the user topic post-cleanup"` (the `#459` describe block). It
+calls `Session.send_part/3` directly and `assert_receive`s the `archive_changed`
+broadcast on the user topic. Pre-fix the broadcast lived in the controller, so the
+session emits nothing → `assert_receive` times out → RED (mutation-verified: `1
+test, 1 failure`, 3.1s, deterministic). Post-fix the session emits it → GREEN.
+
+This is the correct layer: the fix is server-side broadcast ordering, so its proof
+is a server-side ExUnit assertion, not a timing-dependent e2e. **Do not treat the
+`issue71-inc2` / `cp15-b6` archive specs as the race detector — they are feature
+coverage of the archive UI, and the archive-race regression is guarded by the
+server-side test.** A future refactor that touches the PART→archive broadcast must
+keep that ExUnit test green; the e2e specs will not catch a reintroduction.
