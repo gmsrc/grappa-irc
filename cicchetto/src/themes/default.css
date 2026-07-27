@@ -1122,14 +1122,21 @@ html.resize-dragging * {
 /* #207 — per-banner × dismiss affordance. Sits at the far right of the slot
    (the message's `flex: 1 1 auto` pushes it there; when an action button is
    also present the × follows it). A borderless square so it reads as a close
-   glyph, not a second action button. Generous hit target for touch. */
+   glyph, not a second action button.
+
+   #459 — hit area bumped to the 44px HIG / 48dp Material minimum tap target.
+   The box MUST be absolute px, NOT rem: the app's root font-size is 14px (see
+   `:root --font-size`), so the old `1.75rem` resolved to ~24.5px — well under
+   the minimum, on a control that lives in the top corner where thumbs are
+   least accurate. The glyph stays optically the same (`font-size: 1.25rem`);
+   only the box grows. Applies to EVERY banner's ×, not just push-optin's. */
 .error-banner-dismiss {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 44px;
+  height: 44px;
   padding: 0;
   background: transparent;
   color: #fff;

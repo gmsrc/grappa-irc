@@ -7,6 +7,7 @@ import {
   getVapidPublicKey,
   listPushDevices,
   postPushSubscription,
+  pushAvailable,
   type SubscriptionId,
   vapidKeyToUint8Array,
 } from "../lib/push";
@@ -357,5 +358,67 @@ describe("listPushDevices", () => {
       new Response(JSON.stringify({}), { status: 200 }),
     );
     expect(await listPushDevices("token")).toEqual([]);
+  });
+});
+
+// #459 — pushAvailable(): the ONE synchronous capability gate reused by both
+// the login opt-in banner (errorBanners) and the settings master toggle.
+// Synchronous is load-bearing: the banner's [of course!] click calls
+// Notification.requestPermission() before its first await, and a Safari
+// permission prompt requires the user gesture — an async availability probe
+// would spend the gesture. iOS Web Push fires ONLY for a home-screen-installed
+// (standalone) PWA, so on iOS the gate additionally requires isStandalonePwa().
+describe("pushAvailable — synchronous capability gate (#459)", () => {
+  const stubEnv = (over: Record<string, unknown> = {}): void => {
+    vi.stubGlobal("Notification", { permission: "default", requestPermission: vi.fn() });
+    vi.stubGlobal("PushManager", function PushManager() {});
+    vi.stubGlobal("navigator", {
+      serviceWorker: {},
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0",
+      maxTouchPoints: 0,
+      ...over,
+    });
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false })),
+    );
+  };
+
+  it("is true on a desktop browser with Notification + serviceWorker + PushManager", () => {
+    stubEnv();
+    expect(pushAvailable()).toBe(true);
+  });
+
+  it("is false when Notification is absent", () => {
+    stubEnv();
+    vi.stubGlobal("Notification", undefined);
+    expect(pushAvailable()).toBe(false);
+  });
+
+  it("is false when navigator.serviceWorker is absent", () => {
+    stubEnv({ serviceWorker: undefined });
+    expect(pushAvailable()).toBe(false);
+  });
+
+  it("is false when PushManager is absent", () => {
+    stubEnv();
+    vi.stubGlobal("PushManager", undefined);
+    expect(pushAvailable()).toBe(false);
+  });
+
+  it("is false on iOS Safari in a browser tab (not installed to home screen)", () => {
+    stubEnv({
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit Safari",
+      standalone: false,
+    });
+    expect(pushAvailable()).toBe(false);
+  });
+
+  it("is true on iOS ONLY when installed as a standalone PWA", () => {
+    stubEnv({
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit Safari",
+      standalone: true,
+    });
+    expect(pushAvailable()).toBe(true);
   });
 });

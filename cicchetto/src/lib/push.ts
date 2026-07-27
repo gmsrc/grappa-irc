@@ -20,8 +20,35 @@
 // bytes; localStorage is the authoritative cache.
 
 import { ApiError, readError } from "./api";
+import { isIos, isStandalonePwa } from "./platform";
 
 const VAPID_PUBLIC_KEY_STORAGE_KEY = "cic.vapidPublicKey";
+
+/**
+ * #459 — THE single, synchronous "can push actually be delivered here?" gate,
+ * reused by both the login opt-in banner (`lib/pushOptin.ts`) and the settings
+ * master toggle. One home, imported by both, so the two surfaces can never
+ * disagree on availability.
+ *
+ * MUST stay synchronous: the banner's `[of course!]` handler calls
+ * `enablePush` — which calls `Notification.requestPermission()` before its
+ * first `await` — straight from the click, and Safari (desktop AND iOS) requires
+ * a user gesture for that prompt. An async availability probe would resolve on a
+ * later microtask, after the gesture is spent, and the prompt would silently
+ * fail. So this probes only synchronously-readable capabilities.
+ *
+ * True when the three Web Push primitives are present AND, on iOS, the app is
+ * an installed (home-screen / standalone) PWA — iOS Web Push fires ONLY for
+ * standalone PWAs, never for a Safari browser tab. Everywhere else (desktop
+ * Chromium, Android tab) a plain tab suffices.
+ */
+export function pushAvailable(): boolean {
+  if (typeof Notification === "undefined") return false;
+  if (typeof navigator === "undefined" || navigator.serviceWorker === undefined) return false;
+  if (typeof PushManager === "undefined") return false;
+  if (isIos()) return isStandalonePwa();
+  return true;
+}
 
 /**
  * Fetches the server's VAPID public key, returning the cached value

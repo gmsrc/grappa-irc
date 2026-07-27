@@ -138,6 +138,9 @@ vi.mock("../lib/push", () => ({
   disablePush: vi.fn().mockResolvedValue(true),
   listPushDevices: vi.fn().mockResolvedValue([]),
   deletePushSubscription: vi.fn().mockResolvedValue(undefined),
+  // #459 — the toggle now gates on availability up-front; default available so
+  // the existing enable/disable tests exercise the live toggle path.
+  pushAvailable: vi.fn(() => true),
 }));
 
 vi.mock("../lib/userSettings", async () => {
@@ -359,6 +362,23 @@ describe("SettingsDrawer notifications section", () => {
     await waitFor(() => {
       expect(push.enablePush).toHaveBeenCalledWith("test-bearer");
     });
+  });
+
+  // #459 — availability discovered up-front: on a platform that cannot deliver
+  // push (no Push API / iOS browser tab) the toggle is disabled and a hint
+  // explains why, instead of the old click-then-fail `unsupported` banner.
+  it("disables the master toggle and shows a hint when push is unavailable", async () => {
+    const push = await import("../lib/push");
+    vi.mocked(push.pushAvailable).mockReturnValue(false);
+    try {
+      wrap(true);
+      openSub("push-settings-entry");
+      const toggle = screen.getByTestId("push-master-toggle") as HTMLInputElement;
+      expect(toggle.disabled).toBe(true);
+      expect(screen.getByTestId("push-unavailable")).toBeInTheDocument();
+    } finally {
+      vi.mocked(push.pushAvailable).mockReturnValue(true);
+    }
   });
 
   it("toggling a pref checkbox calls putNotificationPrefs", async () => {

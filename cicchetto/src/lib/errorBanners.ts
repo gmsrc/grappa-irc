@@ -1,6 +1,7 @@
 import { createSignal, untrack } from "solid-js";
 import { performRefresh, refreshBannerMessage, shouldShowRefreshBanner } from "./bundleHash";
 import { isOffline } from "./connectivity";
+import { acceptPushOptin, shouldShowPushOptinBanner } from "./pushOptin";
 import { shouldShowBanner, socketHealth } from "./socketHealth";
 import { shouldShowSwRegBanner, swRegistration } from "./swRegistration";
 
@@ -31,7 +32,13 @@ import { shouldShowSwRegBanner, swRegistration } from "./swRegistration";
 // stays the single owner of the SW-registration state (derive, don't duplicate)
 // and captures the error name+message as the #181 diagnostic lever.
 
-export const BANNER_SOURCES = ["connectivity", "ws", "sw-registration", "bundle-refresh"] as const;
+export const BANNER_SOURCES = [
+  "connectivity",
+  "ws",
+  "sw-registration",
+  "bundle-refresh",
+  "push-optin",
+] as const;
 export type BannerSource = (typeof BANNER_SOURCES)[number];
 
 export const BANNER_SEVERITIES = ["error", "warn", "info"] as const;
@@ -141,6 +148,21 @@ export function activeBanners(): BannerEntry[] {
       severity: "info",
       message: refreshBannerMessage(),
       actionHint: { label: "Refresh", onAction: () => void performRefresh() },
+    });
+  }
+
+  // #459 — push opt-in offer. LAST in the stack: an offer never outranks a
+  // fault ("you are disconnected") or an update prompt. Gated + actioned by
+  // pushOptin.ts (the source owner); the registry only projects the gate into
+  // an info entry and wires [of course!] to the accept verb. The × is the
+  // decline — routed by the owner (ErrorBanners.tsx) to declinePushOptin so it
+  // PERSISTS, unlike the episode-scoped dismiss the fault sources use.
+  if (shouldShowPushOptinBanner()) {
+    entries.push({
+      source: "push-optin",
+      severity: "info",
+      message: "Enable push notifications?",
+      actionHint: { label: "of course!", onAction: () => void acceptPushOptin() },
     });
   }
 

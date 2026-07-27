@@ -26,6 +26,7 @@ import {
   enablePush,
   listPushDevices,
   type PushDeviceSummary,
+  pushAvailable,
   type SubscriptionId,
 } from "./lib/push";
 import { reconnectConnectedNetworks } from "./lib/reconnect";
@@ -1196,6 +1197,12 @@ const SettingsDrawer: Component<Props> = (props) => {
                 <input
                   type="checkbox"
                   checked={pushEnabled()}
+                  // #459 — discover unavailability UP-FRONT (same
+                  // `pushAvailable()` gate as the login opt-in banner) instead
+                  // of only after the click surfaces enablePush's `unsupported`
+                  // arm. A disabled toggle over a dead capability reads as
+                  // honest; the hint below says why.
+                  disabled={!pushAvailable()}
                   onChange={(e) => {
                     void onMasterToggle((e.currentTarget as HTMLInputElement).checked);
                   }}
@@ -1203,6 +1210,12 @@ const SettingsDrawer: Component<Props> = (props) => {
                 />
                 enable browser notifications
               </label>
+              <Show when={!pushAvailable()}>
+                <p class="push-banner" role="status" data-testid="push-unavailable">
+                  Push notifications aren't available in this browser. On iOS, install Cicchetto to
+                  your home screen first.
+                </p>
+              </Show>
               <Show when={pushBanner() !== null}>
                 <p class="push-banner" role="alert" data-testid="push-banner">
                   {pushBanner()}

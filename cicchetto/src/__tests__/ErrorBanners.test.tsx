@@ -4,6 +4,7 @@ import ErrorBanners from "../ErrorBanners";
 import { shouldShowRefreshBanner } from "../lib/bundleHash";
 import { __setConnectivityForTests } from "../lib/connectivity";
 import { __resetDismissedForTests } from "../lib/errorBanners";
+import { acceptPushOptin, declinePushOptin, shouldShowPushOptinBanner } from "../lib/pushOptin";
 import {
   __resetSocketHealthForTests,
   ERROR_THRESHOLD,
@@ -23,7 +24,17 @@ vi.mock("../lib/bundleHash", () => ({
   performRefresh: vi.fn(),
 }));
 
+// #459 — push opt-in is owned by pushOptin.ts; mock it so the owner's WIRING is
+// testable here (gate → slot, [of course!] → accept, × → PERSISTENT decline).
+// The effect of those verbs is unit-tested in pushOptin.test.ts.
+vi.mock("../lib/pushOptin", () => ({
+  shouldShowPushOptinBanner: vi.fn(() => false),
+  acceptPushOptin: vi.fn(),
+  declinePushOptin: vi.fn(),
+}));
+
 const mockShouldShowRefresh = vi.mocked(shouldShowRefreshBanner);
+const mockShouldShowPushOptin = vi.mocked(shouldShowPushOptinBanner);
 
 // #119 — unified stacked error-banner owner. Renders every active source as a
 // distinct `.error-banner[data-source=...]` slot inside ONE fixed flex-column
@@ -40,6 +51,7 @@ describe("ErrorBanners", () => {
     __setConnectivityForTests(true);
     __resetDismissedForTests();
     mockShouldShowRefresh.mockReturnValue(false);
+    mockShouldShowPushOptin.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -47,6 +59,7 @@ describe("ErrorBanners", () => {
     __setConnectivityForTests(true);
     __resetDismissedForTests();
     mockShouldShowRefresh.mockReturnValue(false);
+    mockShouldShowPushOptin.mockReturnValue(false);
   });
 
   it("renders nothing when every source is healthy", () => {
@@ -117,5 +130,42 @@ describe("ErrorBanners", () => {
     recordSocketOpen();
     tripWs();
     expect(container.querySelector('.error-banner[data-source="ws"]')).not.toBeNull();
+  });
+});
+
+// #459 — the push opt-in banner: [of course!] runs the accept verb; × runs the
+// PERSISTENT decline (declinePushOptin), NOT the episode-scoped dismiss the
+// fault sources use. This is the ONE source-specific wiring in the owner.
+describe("ErrorBanners push-optin (#459)", () => {
+  beforeEach(() => {
+    __resetSocketHealthForTests();
+    __setConnectivityForTests(true);
+    __resetDismissedForTests();
+    mockShouldShowRefresh.mockReturnValue(false);
+    mockShouldShowPushOptin.mockReturnValue(false);
+    vi.mocked(acceptPushOptin).mockClear();
+    vi.mocked(declinePushOptin).mockClear();
+  });
+
+  it("runs acceptPushOptin when [of course!] is clicked", () => {
+    mockShouldShowPushOptin.mockReturnValue(true);
+    const { container } = render(() => <ErrorBanners />);
+    const action = container.querySelector<HTMLButtonElement>(
+      '.error-banner[data-source="push-optin"] .error-banner-action',
+    );
+    expect(action).not.toBeNull();
+    if (action) fireEvent.click(action);
+    expect(vi.mocked(acceptPushOptin)).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the PERSISTENT declinePushOptin (not the episode dismiss) when × is clicked", () => {
+    mockShouldShowPushOptin.mockReturnValue(true);
+    const { container } = render(() => <ErrorBanners />);
+    const close = container.querySelector<HTMLButtonElement>(
+      '.error-banner[data-source="push-optin"] .error-banner-dismiss',
+    );
+    expect(close).not.toBeNull();
+    if (close) fireEvent.click(close);
+    expect(vi.mocked(declinePushOptin)).toHaveBeenCalledTimes(1);
   });
 });

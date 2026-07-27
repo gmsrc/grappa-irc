@@ -20287,3 +20287,63 @@ consumer too — `ServerReplyModal.test.tsx` proves a MOTD line with
 `e2e/tests/issue455-emphasis-markers.spec.ts` (scrollback = an ON surface;
 mirror of `cp13-s10-mirc-bold`, chromium). cic-only, no server change — rides a
 COLD deploy (cic bundle change).
+
+## 2026-07-27 — #459: push opt-in banner on login (offer once, in the banner region)
+
+Push notifications were reachable only from settings, so nobody found them. #459
+offers them once, on login, in the existing top-banner region — no new chrome.
+
+**`pushAvailable()` — one synchronous capability gate (`lib/push.ts`).** The
+single "can push actually be delivered here?" predicate, reused by BOTH the
+opt-in banner and the settings master toggle so the two surfaces can never
+disagree. It MUST stay synchronous: `[of course!]` calls `enablePush`, which
+calls `Notification.requestPermission()` before its first `await`, straight from
+the click — Safari (desktop + iOS) requires a user gesture for that prompt, and
+an async availability probe would resolve after the gesture is spent. True when
+`Notification` + `navigator.serviceWorker` + `PushManager` are present AND, on
+iOS, the app is an installed standalone PWA (iOS Web Push fires ONLY for
+installed PWAs, never a Safari tab).
+
+**`lib/pushOptin.ts` — the source owner (mirrors `swRegistration.ts`).** The
+registry (`errorBanners.ts`) only asks `shouldShowPushOptinBanner()` and wires
+the two verbs; the owner holds all push-optin state (derive, don't duplicate).
+The gate is `pushAvailable() && Notification.permission === "default" &&
+!declined` — `granted` has nothing to ask, `denied` is unrecoverable from the
+page (the browser blocks re-prompting) so a dead button would be worse than
+silence. Two-tier hide, deliberately distinct so "this session" and "forever"
+never drift: a reactive SESSION signal (`hidden`) drops the banner the instant
+the user acts, and a PERSISTED localStorage flag (`cic.pushOptinDeclined`,
+per-browser — it shadows a per-browser permission, so unlike #449 it does NOT
+sync server-side) survives reloads.
+
+**The two correctness rules (from the issue).** (1) `[of course!]` IS the
+gesture: `acceptPushOptin` reads the bearer from the signal SYNCHRONOUSLY and
+calls `enablePush` before any await, then hides for the session once the attempt
+settles (any outcome — a grant/deny makes the gate false anyway; a dismissed OS
+prompt leaves `default`, so a session-only hide re-offers next login instead of
+nagging within this one). (2) `×` must NEVER call `requestPermission`: the prompt
+is one-shot per origin, so a decline must leave the origin at `default` so the
+settings toggle still works later. `declinePushOptin` only persists + hides.
+
+**One source-specific branch, no `BannerEntry` change.** push-optin's `×` is a
+PERSISTENT decline (owner localStorage), unlike the fault sources' episode-scoped
+dismissed-set (which re-arms when the fault recurs). Since push-optin is an
+*offer*, not a *fault*, its dismiss semantics genuinely differ — so
+`ErrorBanners.tsx` routes push-optin's `onDismiss` to `declinePushOptin` and
+everything else to `dismissBanner`. `BannerEntry` keeps its one-action-plus-
+dismiss shape (the issue's explicit constraint). The entry is ordered LAST in the
+stack: an offer never outranks a fault or an update prompt.
+
+**Settings toggle gates on `pushAvailable()` up-front.** Previously the toggle
+discovered `enablePush`'s `unsupported` arm only after the click; now it renders
+disabled with an explanatory hint when push can't be delivered here. Lives in the
+#460 push SUB-PAGE (the drawer is now index + sub-pages).
+
+**`×` tap target bumped to 44px (`.error-banner-dismiss`).** For EVERY banner,
+not just push-optin's. The box MUST be absolute px, not rem: the root font-size
+is 14px, so the old `1.75rem` resolved to ~24.5px — under the 44px HIG / 48dp
+Material minimum, on a control in the top corner where thumbs are least
+accurate. Glyph stays optically the same (`font-size: 1.25rem`); only the box
+grows.
+
+cic-only, no server change — rides a COLD deploy (cic bundle change).

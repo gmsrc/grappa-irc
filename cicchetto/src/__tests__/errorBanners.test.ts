@@ -14,6 +14,7 @@ import {
   sanitizeBanners,
   visibleBanners,
 } from "../lib/errorBanners";
+import { acceptPushOptin, shouldShowPushOptinBanner } from "../lib/pushOptin";
 import {
   __resetSocketHealthForTests,
   ERROR_THRESHOLD,
@@ -40,7 +41,18 @@ vi.mock("../lib/bundleHash", () => ({
   performRefresh: vi.fn(),
 }));
 
+// #459 — the push opt-in source is owned by pushOptin.ts (gate + accept/decline
+// verbs). Mock it here exactly as bundleHash is mocked: the registry's job is
+// only to project the gate into an entry and wire the accept verb; the gate's
+// own 3-part logic is unit-tested in pushOptin.test.ts.
+vi.mock("../lib/pushOptin", () => ({
+  shouldShowPushOptinBanner: vi.fn(() => false),
+  acceptPushOptin: vi.fn(),
+  declinePushOptin: vi.fn(),
+}));
+
 const mockShouldShowRefresh = vi.mocked(shouldShowRefreshBanner);
+const mockShouldShowPushOptin = vi.mocked(shouldShowPushOptinBanner);
 
 // #119 — unified stacked error-banner registry. `activeBanners()` is a
 // DERIVATION over the source signals (socketHealth, connectivity,
@@ -59,6 +71,7 @@ describe("errorBanners registry", () => {
     __resetSwRegistrationForTests();
     __resetDismissedForTests();
     mockShouldShowRefresh.mockReturnValue(false);
+    mockShouldShowPushOptin.mockReturnValue(false);
   });
 
   it("is empty when every source is healthy", () => {
@@ -206,6 +219,7 @@ describe("errorBanners dismiss", () => {
     __resetSwRegistrationForTests();
     __resetDismissedForTests();
     mockShouldShowRefresh.mockReturnValue(false);
+    mockShouldShowPushOptin.mockReturnValue(false);
   });
 
   it("visibleBanners equals activeBanners when nothing is dismissed", () => {
@@ -260,5 +274,50 @@ describe("errorBanners dismiss", () => {
     rearmDismissed(activeBanners());
     expect(isDismissed("ws")).toBe(true);
     expect(visibleBanners().some((e) => e.source === "ws")).toBe(false);
+  });
+});
+
+// #459 — push opt-in offer. An info banner on login (below every fault source)
+// with an [of course!] action that runs the enable dance; the gate + verbs are
+// owned by pushOptin.ts (mocked above), the registry only projects + wires.
+describe("errorBanners push-optin (#459)", () => {
+  beforeEach(() => {
+    __resetSocketHealthForTests();
+    __setConnectivityForTests(true);
+    __resetSwRegistrationForTests();
+    __resetDismissedForTests();
+    mockShouldShowRefresh.mockReturnValue(false);
+    mockShouldShowPushOptin.mockReturnValue(false);
+  });
+
+  it("emits a 'push-optin' info entry with an actionHint when the gate is open", () => {
+    mockShouldShowPushOptin.mockReturnValue(true);
+    const entry = activeBanners().find((e) => e.source === "push-optin");
+    expect(entry).toBeDefined();
+    expect(entry?.severity).toBe("info");
+    expect(entry?.actionHint?.label).toBeTruthy();
+    expect(typeof entry?.actionHint?.onAction).toBe("function");
+  });
+
+  it("wires the actionHint onAction to acceptPushOptin", () => {
+    mockShouldShowPushOptin.mockReturnValue(true);
+    const entry = activeBanners().find((e) => e.source === "push-optin");
+    entry?.actionHint?.onAction();
+    expect(vi.mocked(acceptPushOptin)).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits push-optin when the gate is closed", () => {
+    mockShouldShowPushOptin.mockReturnValue(false);
+    expect(activeBanners().some((e) => e.source === "push-optin")).toBe(false);
+  });
+
+  it("orders push-optin LAST — an offer never outranks a fault or an update prompt", () => {
+    __setConnectivityForTests(false);
+    recordSwRegError({ name: "SecurityError", message: "denied" });
+    mockShouldShowRefresh.mockReturnValue(true);
+    mockShouldShowPushOptin.mockReturnValue(true);
+    const sources = activeBanners().map((e) => e.source);
+    expect(sources.indexOf("push-optin")).toBe(sources.length - 1);
+    expect(sources.indexOf("push-optin")).toBeGreaterThan(sources.indexOf("bundle-refresh"));
   });
 });

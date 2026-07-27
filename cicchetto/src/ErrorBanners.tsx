@@ -7,6 +7,7 @@ import {
   sanitizeBanners,
   visibleBanners,
 } from "./lib/errorBanners";
+import { declinePushOptin } from "./lib/pushOptin";
 
 // #119 — unified stacked error-banner owner.
 //
@@ -45,7 +46,20 @@ const ErrorBanners: Component = () => {
           semantic form of role="region" (biome a11y/useSemanticElements). */}
       <section class="error-banners" aria-label="Connection and app status">
         <For each={banners()}>
-          {(entry) => <BannerSlot entry={entry} onDismiss={() => dismissBanner(entry.source)} />}
+          {(entry) => (
+            <BannerSlot
+              entry={entry}
+              // #459 — push-optin's × is a PERSISTENT decline (localStorage, via
+              // its owner) so the offer never returns; the fault sources use the
+              // episode-scoped dismissed-set (returns when the fault recurs).
+              // The one source-specific branch: push-optin is an offer, not a
+              // fault, so its dismiss semantics genuinely differ. (BannerEntry
+              // stays unchanged — #459 keeps its one-action-plus-dismiss shape.)
+              onDismiss={() =>
+                entry.source === "push-optin" ? declinePushOptin() : dismissBanner(entry.source)
+              }
+            />
+          )}
         </For>
       </section>
     </Show>
