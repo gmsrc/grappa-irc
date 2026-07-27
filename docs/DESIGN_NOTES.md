@@ -20537,3 +20537,65 @@ the shape carved into `CLIENT_PROTOCOL.md` as documented truth. The issue
 itself says we copy the contract SHAPE, not the code — and casing is
 idiom, not shape. Recorded here so the divergence reads as a decision, not
 an oversight. (vjt owns the issue and was told.)
+
+## 2026-07-27 — #476 (+ #478): per-network identity editor for BOTH subjects; lowest-id anchor retired
+
+**Why.** Ruling E (above) shipped the subject-agnostic server door
+(`PATCH /networks/:slug/identity`) but DEFERRED the cic USER editor UI:
+"the user credential's ident/realname aren't yet on a cic-readable wire
+shape … the visitor editor keeps `PATCH /me/identity`." Phase 7 then
+retired `PATCH /me/identity` and converged both subjects onto the
+per-network `GET /networks` rows (each row carries `nick/ident/realname`).
+That left the cic editor's `isVisitor()` gate a pure relic (#461 audit):
+the door, both wire types, and the network rows were already
+subject-agnostic — only the client hid the editor from users on a premise
+that no longer held. #476 lands the deferred piece; the two doors have
+already converged, so this is CIC-ONLY (no server change).
+
+**The fix — one editor, both subjects, selected-network-driven.** The
+identity `<Show>` gate flips from `isVisitor()` to `hasNetworks()` — the
+REAL precondition (you can't edit identity for a network you don't hold).
+The editor targets the SELECTED network row, defaulting to the
+currently-focused network (`selectedChannel().networkSlug`, falling back
+to `list[0]`), with an in-editor `<select>` to switch when the subject
+holds more than one network; a single network renders a STATIC label
+(`settings-identity-network-label`), not a pointless one-option dropdown.
+Seed discipline: the target latches once per open (`identitySeeded`) and
+the field-seed effect tracks ONLY the slug (`on(selectedIdentitySlug)`),
+so a background `/networks` refetch re-rendering the same target never
+clobbers in-progress typing; both reset on close. Apply is unchanged —
+`updateIdentity(slug, {nick, ident, realname})` → the same door, bouncing
+the live session.
+
+**Union-note — `mutateNetworkNick` un-gated.** It dropped its
+`kind === "user"` gate: both subject variants now carry a per-network
+nick, so `own_nick_changed` must patch a VISITOR row too (the gate had
+stranded the DM-listener's own-nick after a visitor per-network rename).
+
+**#478 (fused, separate commit) — lowest-id "anchor" pick retired.** The
+delete-account confirmation nick came from `visitorAnchorNick`, which
+scanned the visitor's rows and picked the LOWEST-ID one — an arbitrary
+"anchor" relic from when a multi-network visitor had no way to say which
+network's nick represented it. The #476 editor already killed that pick
+for the editor (it targets the SELECTED row); #478 completes it for the
+delete-confirm path. Renamed `visitorAnchorNick` → `visitorNetworkNick(net)`
+— takes the network the UI targets and returns its nick, keeping the
+`kind === "visitor"` narrow (a user row → null; users confirm by account
+name). `deleteConfirmationText` passes `selectedIdentityNetwork()`, so the
+confirm nick follows the same network the editor shows. Both #476 and #478
+close at merge.
+
+**e2e — apply-and-restore on the seeded USER vjt** (the coverage gap:
+issue152 drives the editor as a VISITOR; nothing proved it for a USER).
+`issue476-user-identity-editor.spec.ts` changes vjt's per-network nick
+THROUGH the editor and asserts the change applied LIVE — the "Identity
+applied." banner, the `/networks` row's live nick flipping, and vjt's new
+nick in `#bofh` members after the reconnect+autojoin — then restores
+`vjt-grappa` in a finally. The restore is LOAD-BEARING: `resetSubject`
+(the wrapped-test teardown) restores autojoin + scrollback but NOT the
+nick. Non-destructive is not non-asserting — the visible outcome is
+asserted; the restore just keeps downstream specs on the seeded baseline.
+Playwright `workers:1`/`fullyParallel:false` → serial → the window can't
+race a parallel vjt spec.
+
+**Deploy class: COLD** (cic bundle only; no server change).
