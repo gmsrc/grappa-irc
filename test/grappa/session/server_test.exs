@@ -4440,6 +4440,54 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "archive_changed broadcast on user-initiated PART (#459)" do
+    # #459 — a user closing a channel (REST DELETE /networks/:slug/
+    # channels/:chan → `Session.send_part` cast) MUST emit archive_changed
+    # from the SESSION, after `PartCleanup` has eagerly dropped the channel
+    # from the active set. cic's archive_changed → GET /archive refetch then
+    # reads the post-PART keyset, so the just-closed channel is archive-
+    # eligible (`list_archive/3` excludes only still-active targets).
+    #
+    # Pre-#459 the ONLY archive_changed came from the CONTROLLER and fired
+    # BEFORE this cast applied (`send_part` is a cast — async): the refetch
+    # saw the channel still in `Session.list_channels`, excluded it from the
+    # archive, and the closed channel silently failed to surface in the
+    # archive section. That is both the issue71-inc2 guardrail-1 flake AND a
+    # real user-visible defect (archive-already-open case never self-heals).
+    # The broadcast belongs to the session's PART application, not the
+    # controller's optimistic pre-cast fire — symmetric with the
+    # channels_changed heartbeat emitted right beside it in the cast handler.
+
+    test "send_part broadcasts archive_changed on the user topic post-cleanup" do
+      {server, port} = start_server(welcome_handler())
+
+      {user, network, _} =
+        setup_user_and_network(port, %{autojoin_channels: ["#existing"]})
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      IRCServer.feed(server, ":grappa-test!u@h JOIN :#existing\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "event", payload: %{kind: :channels_changed}},
+                     1_000
+
+      slug = network.slug
+      :ok = Grappa.Session.send_part({:user, user.id}, network.id, "#existing")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :archive_changed, network_slug: ^slug}
+                     },
+                     1_000
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "notify_pid/notify_ref synchronous login readiness (Task 8)" do
     # Task 8 / W5 — Visitors.Login (Task 9) blocks the synchronous
     # POST /auth/login until upstream registration completes. The

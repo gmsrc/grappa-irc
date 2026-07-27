@@ -2030,6 +2030,26 @@ defmodule Grappa.Session.Server do
     state = PartCleanup.cleanup_local(state, channel)
     broadcast_channels_changed(state)
 
+    # #459 — emit archive_changed from the SESSION, here, once cleanup_local
+    # has dropped the channel from the active set (state.members →
+    # `Session.list_channels`). cic's archive_changed → GET /archive refetch
+    # then reads the POST-PART keyset, so the just-closed channel is
+    # archive-eligible (`list_archive/3` excludes only still-active targets).
+    #
+    # Pre-#459 the ONLY archive_changed came from the CONTROLLER
+    # (`ChannelsController.delete/2`) and fired BEFORE this cast applied —
+    # `Session.send_part` is a cast, so the controller's broadcast raced ahead
+    # of the eager cleanup. The refetch it triggered saw the channel STILL in
+    # `Session.list_channels`, excluded it from the archive, and (with no
+    # ordering guard in cic's `loadArchive`) that stale response could win —
+    # the closed channel silently missing from the archive section. Root of
+    # the issue71-inc2 guardrail-1 flake AND a real user-visible defect
+    # (archive-already-open never self-heals). Unconditional, like
+    # `broadcast_channels_changed` above: covers a live-joined PART AND a PART
+    # of a not-live-joined stale-autojoin channel (no self-PART echo → the
+    # `{:parted}` effect never fires for those, so it cannot own this).
+    broadcast_archive_changed(state)
+
     # #87 — persist the post-PART rejoin snapshot too. `broadcast_channels_changed/1`
     # above is UNCONDITIONAL (it forces cic's `GET /channels` refetch even on a
     # no-op eager wipe), but the `last_joined_channels` snapshot must only follow
@@ -3411,12 +3431,14 @@ defmodule Grappa.Session.Server do
       )
   end
 
-  # UX-5 bucket BK (2026-05-19): every `apply_effects` arm that creates
-  # archive-eligible scrollback content (`:join_failed`, `:kicked`,
-  # `:parted`) calls this so cic's `archivedBySlug` cache refreshes
-  # without waiting for a manual archive-section toggle. Symmetric with
-  # `ArchiveController.broadcast_archive_changed/2`'s envelope; single
-  # source of truth for the broadcast shape. Without this, the operator
+  # UX-5 bucket BK (2026-05-19) + #459: the `:join_failed` and `:kicked`
+  # apply_effects arms and the `handle_cast({:send_part, _})` cast handler
+  # each call this when a channel becomes archive-eligible, so cic's
+  # `archivedBySlug` cache refreshes without waiting for a manual
+  # archive-section toggle. (The `:parted` arm deliberately does NOT — it
+  # is the upstream-echo tail of a send_part the cast already broadcast
+  # for.) The broadcast shape's single source of truth is
+  # `Grappa.Scrollback.Wire.archive_changed_payload/1`. Without this, the operator
   # dismisses a pseudo-row via the Sidebar × and the archive section
   # stays empty until they toggle it open. The cic-side handler is
   # `userTopic.ts`'s `archive_changed` arm — idempotent `loadArchive`
@@ -3859,14 +3881,15 @@ defmodule Grappa.Session.Server do
   # (absence is the signal).
   #
   # No `archive_changed` broadcast here (unlike the BK :join_failed /
-  # :kicked arms): every PART path that reaches this arm is preceded
-  # by `ChannelsController.delete/2`'s eager `broadcast_archive_changed`
-  # at the REST boundary, OR by the eager PartCleanup path that fires
-  # `channels_changed` (which triggers cic to refetch). Broadcasting
-  # again here would double-fire (idempotent on cic but adds noise to
-  # e2e specs that count archive rows post-PART). Phase 6 listener-
-  # facade self-PART (or any future non-REST entry point) will need
-  # its own broadcast at its boundary.
+  # :kicked arms): this arm is the upstream-echo tail of a self-PART that
+  # `handle_cast({:send_part, _})` already handled eagerly — that path ran
+  # `PartCleanup.cleanup_local` and fired BOTH `channels_changed` AND
+  # `archive_changed` (#459) the moment the channel left the active set.
+  # Broadcasting again here would double-fire (idempotent on cic but adds
+  # noise to e2e specs that count archive rows post-PART). A future
+  # non-REST entry point (Phase 6 listener-facade self-PART) that reaches
+  # this arm WITHOUT passing through the cast handler will need its own
+  # broadcast at its boundary.
   defp apply_effects([{:parted, channel} | rest], state) do
     state = %{state | window_state: WindowState.set_parted(state.window_state, channel)}
 

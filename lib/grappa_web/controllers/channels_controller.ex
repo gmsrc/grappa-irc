@@ -43,9 +43,6 @@ defmodule GrappaWeb.ChannelsController do
 
   alias Grappa.Accounts.User
   alias Grappa.Networks.{Credentials, Network}
-  alias Grappa.PubSub
-  alias Grappa.PubSub.Topic
-  alias Grappa.Scrollback.Wire, as: ScrollbackWire
   alias Grappa.{Session, Visitors}
   alias GrappaWeb.{BodyLimit, Subject}
 
@@ -209,13 +206,13 @@ defmodule GrappaWeb.ChannelsController do
     with :ok <- validate_channel_name(channel),
          :ok <- remove_from_autojoin(conn.assigns.current_subject, network, channel),
          :ok <- Session.send_part(subject, network.id, channel) do
-      # UX-3 Z2 (2026-05-18): closing a channel makes its scrollback
-      # archive-eligible (list_archive/3 excludes joined channels via
-      # the `active_keyset`). Without this broadcast, connected cic
-      # tabs only learn the new archive entry exists on next page
-      # reload — chip count + sidebar archive section stay stale.
-      _ = broadcast_archive_changed(conn.assigns.current_subject, network.slug)
-
+      # #459 — archive_changed is broadcast by the SESSION when `send_part`
+      # applies the PART (drops the channel from the active set), NOT here.
+      # This action used to fire it optimistically right after the async cast,
+      # before the PART applied, so cic's GET /archive refetch read a stale
+      # (still-active) keyset and dropped the just-closed channel from the
+      # archive (issue71-inc2 guardrail-1 flake + a real user-visible
+      # stale-archive defect). See `Session.Server.handle_cast({:send_part, _})`.
       conn
       |> put_status(:accepted)
       |> json(%{ok: true})
@@ -267,22 +264,6 @@ defmodule GrappaWeb.ChannelsController do
       {:error, _} = err ->
         err
     end
-  end
-
-  # UX-3 Z2 — the user-rooted topic label comes from
-  # `Subject.topic_label/1`, the single source of the "user →
-  # `user.name`, visitor → `"visitor:" <> id`" invariant (bucket I
-  # web/S7). cic's userTopic dispatcher (case "archive_changed")
-  # re-fetches `loadArchive(slug)` so chip count + sidebar archive
-  # section update without waiting for a page reload.
-  @spec broadcast_archive_changed(Subject.t(), String.t()) :: :ok | {:error, term()}
-  defp broadcast_archive_changed(subject, network_slug) do
-    label = Subject.topic_label(subject)
-
-    PubSub.broadcast_event(
-      Topic.user(label),
-      ScrollbackWire.archive_changed_payload(network_slug)
-    )
   end
 
   @doc """

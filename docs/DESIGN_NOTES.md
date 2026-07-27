@@ -20390,3 +20390,57 @@ occasionally loses the archive row. Pre-existing: the main red run 30243573035
 failed exactly the thirteen #460 specs and neither this nor `ux-z-cluster`.
 `ux-z-cluster` (a separate file from the repaired `ios-z-cluster`) was a
 full-suite cascade — 3/3 green in isolation. Neither is a branch regression.
+
+## 2026-07-27 — #71 INC-2 guardrail-1 "flake" was a PART→archive broadcast race (fixed server-side)
+
+The `issue71-inc2-permanent-rail-desktop` guardrail-1 failure logged just above as
+a "known e2e flake … SQLite `database is locked` … write contention occasionally
+loses the archive row" was misdiagnosed on two counts. It is now root-caused and
+fixed. **Supersedes that note.**
+
+**It is not SQLite contention.** The only `database is locked` in a full run is
+boot-time: one pool connection races `Repo` creation + the `Init` migration on a
+fresh DB (`db_conn_N failed to connect`), on a test that then passes — zero
+runtime lock near the guardrail. The Playwright suite is `workers: 1,
+fullyParallel: false` (strictly serial), so there is no cross-spec parallel load
+to induce contention either.
+
+**It is a real, user-visible product race in the PART → archive refresh, and it
+is pre-existing** — guardrail-1 fails 3/3 at the pre-#459 commit 4f92f97f (2/3 on
+main); the green main runs before it were the lucky side of a timing race, not
+evidence of health. Mechanism:
+
+- `ChannelsController.delete/2` did `remove_autojoin → Session.send_part →
+  broadcast archive_changed`. `send_part` is a **cast** (async), so the controller
+  broadcast `archive_changed` BEFORE the PART applied in the session.
+- cic's `archive_changed → loadArchive → GET /archive`; `ArchiveController` builds
+  the active-keyset from the LIVE `Session.list_channels`, which still held the
+  channel pre-PART, so `Scrollback.list_archive/3` EXCLUDED the just-closed
+  channel → a stale (missing) archive.
+- cic's `loadArchive` is last-write-wins with no ordering guard, so that stale
+  fetch could clobber a later correct one.
+- The `{:parted}` apply_effects arm did NOT broadcast `archive_changed` (only
+  `:join_failed` / `:kicked` did), and a PART of a not-live-joined stale-autojoin
+  channel produces no `{:parted}` at all — so nothing corrected the stale fetch.
+
+User impact (independent of the test): with the archive section already open,
+closing a channel refetches an archive that omits the just-closed channel, and it
+stays missing until a manual re-expand or reload.
+
+**Fix (server-only → HOT-deployable, no cic bundle).** The `archive_changed`
+broadcast now belongs to the session, not the controller:
+
+- `Session.Server.handle_cast({:send_part, _})` fires `broadcast_archive_changed`
+  right after `PartCleanup.cleanup_local` + `broadcast_channels_changed` — once
+  the channel has already left the active set (correct timing), and
+  UNCONDITIONALLY (covers a live-joined PART AND a not-live-joined stale-autojoin
+  PART, which the `{:parted}` effect never sees). Chosen over the `{:parted}` arm
+  precisely because that arm never runs for the not-joined case.
+- `ChannelsController.delete/2` no longer broadcasts — so there is now exactly ONE
+  `archive_changed` per PART, at the right time, with no concurrent fetch to
+  clobber. No cic change was needed; a client-side `loadArchive` ordering guard
+  was deliberately left out (it would pull the cic bundle into the deploy and is
+  unnecessary once the double-fire is gone).
+
+`issue71-inc2-permanent-rail-desktop.spec.ts` is UNTOUCHED — it is the regression
+proof: red pre-fix (2-3/3), green post-fix, full `scripts/integration.sh` 522/522.
