@@ -20843,3 +20843,64 @@ BOTH fixes on one tree — #495 (this) + ba4dc179 (on #473). That is why
 #495's proof is the vitest detector, not cp15-b6-e2e on the #495 branch.
 
 **Deploy class: COLD** (cic bundle only; no server change).
+## 2026-07-27 — #473 one RailActions drawer + one grouped ArchiveModal (supersedes the #71 INC-2 split surfaces)
+
+#71 INC-2 left the rail affordances split across THREE surfaces, and archive
+across THREE entry points. #473 collapses each into ONE.
+
+**The rail: one component, both form factors.** `RailActions.tsx` is now the
+single labelled-button drawer, pinned at the bottom of `.shell-members` and
+mounted UNCHANGED by both branches of Shell's `isMobile()` split. It carries
+every affordance — home · rooms · themes · archive · settings · admin · denoise
+— each with its NAME as visible text beside the glyph (the bare emoji had to be
+guessed; `denoise` in particular never had a name in the UI). It supersedes the
+two post-#71 split surfaces: the desktop-only top `ActionCluster` (cog + denoise
+— "a cog and a monkey", the desktop rail never got the window-nav launchers) and
+the mobile-only `.mobile-panel-actions` footer (home / rooms / themes / admin /
+archive). `ActionCluster.tsx` is DELETED. Gating is CAPABILITY-only now, not
+form-factor: rooms needs a network context, admin needs `isAdmin()`, denoise is
+channel-gated; everything else is always shown. The mobilePanel mutex helpers
+(members | settings | archive | none) are the single shared path on both form
+factors — on the permanent desktop rail the drawer-closing arm is a harmless
+no-op (`.shell-members` is a grid child, always visible), so ONE handler set is
+correct everywhere.
+
+**Archive: one grouped, collapsible modal.** `ArchiveModal.tsx` is now the SOLE
+archive surface on BOTH form factors, opened from an always-on RailActions
+archive button. It renders EVERY network as a collapsible `<details>` group,
+lazy-loading each group's rows on expand (`onToggle → loadArchive(slug)`). It
+supersedes THREE prior surfaces: the desktop Sidebar `<details
+class="sidebar-archive">`, the mobile `.mobile-panel-actions` footer chip (a
+single-network modal), and the ShellChrome standalone archive button. The store
+flag changed from a per-network slug (`archiveModalNetwork`, which doubled as the
+open flag back when the modal showed one network) to a boolean
+(`archiveModalOpen`), still inside `identityScopedStore` so token rotation closes
+any open modal alongside the `archivedBySlug` flush. The slug-scoped
+`archive_changed → loadArchive(payload.network_slug)` refresh path is unchanged
+by the boolean model — a delete in one group refetches exactly that slug.
+
+**Archive is ALWAYS shown in the rail (like settings), NOT selection-gated.**
+The old mobile footer chip gated on the current selection's network
+(`archiveSlugForSelection()`). Under the single-surface ruling that would leave
+archive UNREACHABLE from home / mentions / admin (no network → null), so the
+button is unconditional. `rooms` stays selection-gated because it navigates to a
+per-network `$list` window; archive does not (it shows all networks).
+
+**Two design forks, resolved:**
+
+1. **"no empty group" vs LAZY contradict.** Under lazy load you cannot know a
+   network's emptiness without loading it, so hiding empty headers would
+   deadlock. RESOLVED: render a `<details>` header for EVERY network always;
+   load rows on expand. An expanded group that has actually loaded and is empty
+   shows an inline "no archived windows" — but ONLY once loaded: the banner is
+   gated on the slug key being present in `archivedBySlug`, so an in-flight group
+   renders nothing rather than flashing a false "no archived windows" before its
+   rows arrive (matching the retired Sidebar `<details>`, which showed an empty
+   list during load). This is a faithful port of the per-network `<details>` the
+   ruling said to preserve.
+
+2. **The ShellChrome standalone archive button (📂) was REMOVED.** It was a
+   THIRD archive entry point (mobile non-channel windows) opening a per-network
+   modal — redundant with the rail's always-on archive button, reachable via the
+   same ☰ rail opener. ShellChrome keeps the @ mentions button (still uses
+   `archiveContext.archiveSlugForSelection` for its network derivation).
