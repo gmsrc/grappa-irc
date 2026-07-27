@@ -39,7 +39,7 @@ import {
   confirmModal,
   confirmModalYes,
   loginAs,
-  openSettingsMobile,
+  openSettingsSection,
   selectChannel,
   sidebarCloseButton,
   sidebarWindow,
@@ -142,11 +142,13 @@ test("@webkit iOS-Z cluster — viewport + safe-area + close× + font-size", asy
     ).toHaveCount(0);
 
     // iOS-4 — font-size XL persists across reload. #71 INC-2 — the settings
-    // cog lives in the rail's ActionCluster now; reach it via the shared helper
+    // cog lives in the rail's ActionCluster now; #460 moved font size into the
+    // display sub-page. openSettingsSection reaches it via the shared helper
     // (open the rail drawer via whichever ☰ opener this window kind renders →
-    // tap the cog). The closeBtn tap above removed the active channel tab, so
-    // the operator is on a non-channel window (rail opener ☰ path).
-    await openSettingsMobile(page);
+    // tap the cog → display sub-page). The closeBtn tap above removed the
+    // active channel tab, so the operator is on a non-channel window (rail
+    // opener ☰ path).
+    await openSettingsSection(page, "display");
     await expect(page.locator('[data-testid="font-size-M"]')).toBeChecked();
     await page.locator('[data-testid="font-size-XL"]').tap();
     await expect(page.locator('[data-testid="font-size-XL"]')).toBeChecked();
@@ -159,8 +161,9 @@ test("@webkit iOS-Z cluster — viewport + safe-area + close× + font-size", asy
 
     await page.reload();
     // #71 INC-2 — after reload the cold-load lands on a non-channel window;
-    // reach settings via the rail helper (☰ rail opener → cog).
-    await openSettingsMobile(page);
+    // reach settings via the rail helper (☰ rail opener → cog → display
+    // sub-page, #460).
+    await openSettingsSection(page, "display");
     await expect(page.locator('[data-testid="font-size-XL"]')).toBeChecked();
     const reloadedSize = await page.evaluate(() =>
       getComputedStyle(document.documentElement)

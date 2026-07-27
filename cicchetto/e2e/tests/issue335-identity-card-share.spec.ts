@@ -24,6 +24,7 @@
 // Desktop chromium (untagged): the drawer + modal are layout-agnostic and
 // navigator.share is a JS API, not a touch gesture.
 
+import { openSettingsSection } from "../fixtures/cicchettoPage";
 import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -65,14 +66,17 @@ test.describe("#335 — visitor identity card + share section + native share", (
       await page.getByLabel(/open settings/i).click();
       await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
 
-      // #335.1 identity still carded; #392 dropped the share wrapper card —
-      // the share entry is now a bare button.
-      await expect(page.getByTestId("settings-section-identity")).toBeVisible();
+      // #392 dropped the share wrapper card — the share entry is now a bare
+      // button, and #460 keeps it on the drawer's main index.
       await expect(page.getByTestId("settings-section-share")).toHaveCount(0);
       await expect(page.getByTestId("share-session-entry")).toBeVisible();
-      // The identity inputs live inside the carded section.
+
+      // #335.1 identity still carded — #460 moved it one tap deeper into the
+      // general sub-page. The identity inputs live inside the carded section.
+      const generalPage = await openSettingsSection(page, "general");
+      await expect(generalPage.getByTestId("settings-section-identity")).toBeVisible();
       await expect(
-        page.locator("[data-testid='settings-section-identity'] #settings-nick"),
+        generalPage.locator("[data-testid='settings-section-identity'] #settings-nick"),
       ).toBeVisible();
     } finally {
       await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});

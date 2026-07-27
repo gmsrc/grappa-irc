@@ -17,7 +17,12 @@
 // the roster, so there is a stable `.members-pane .member-name .nick-text` to
 // assert on regardless of the autojoin op-race.
 
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  closeSettings,
+  loginAs,
+  openSettingsSection,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -51,10 +56,9 @@ test("#443 — colored nicklist off by default, toggles live from Settings, pers
   // No inline `color` in the style attribute.
   await expect(ownNickText(page)).not.toHaveAttribute("style", /color/);
 
-  // Open Settings; the toggle lives in the display-options section and is
-  // unchecked by default (current behavior).
-  await page.locator('[data-testid="action-cluster-cog"]').click();
-  await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
+  // Open Settings → display sub-page (#460); the toggle lives in the display
+  // options section and is unchecked by default (current behavior).
+  await openSettingsSection(page, "display");
   await expect(page.getByTestId("colored-nicklist-toggle")).not.toBeChecked();
 
   // Flip it ON — the OPEN members pane must re-render LIVE (signal-backed, no
@@ -66,8 +70,10 @@ test("#443 — colored nicklist off by default, toggles live from Settings, pers
   const computed = await ownNickText(page).evaluate((el) => getComputedStyle(el).color);
   expect(computed).toMatch(/^rgba?\(/);
 
-  // Close the drawer; the applied color sticks.
-  await page.getByTestId("settings-drawer-done").click();
+  // Close the drawer; the applied color sticks. closeSettings uses the header
+  // × — #460's "done" footer button lives on the main index only, and we are
+  // on the display sub-page.
+  await closeSettings(page);
   await expect(ownNickText(page)).toHaveAttribute("style", /color/);
 
   // Persistence: a full reload restores the stored preference (colored ON).
@@ -76,6 +82,6 @@ test("#443 — colored nicklist off by default, toggles live from Settings, pers
   await expect(ownNickText(page)).toHaveAttribute("style", /color/);
 
   // And the drawer reflects the persisted choice.
-  await page.locator('[data-testid="action-cluster-cog"]').click();
+  await openSettingsSection(page, "display");
   await expect(page.getByTestId("colored-nicklist-toggle")).toBeChecked();
 });

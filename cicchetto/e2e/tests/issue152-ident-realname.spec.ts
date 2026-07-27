@@ -23,7 +23,12 @@
 //      AND rejoins the channel (the visitor can speak in it again).
 
 import { expect, test } from "../fixtures/test";
-import { composeSend, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
+import {
+  composeSend,
+  openSettingsSection,
+  selectChannel,
+  waitForUserTopicReady,
+} from "../fixtures/cicchettoPage";
 import { adminDeleteVisitor } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededAdmin } from "../fixtures/seedData";
@@ -112,8 +117,9 @@ test("issue #152 — login-Advanced ident + settings live-apply reach upstream",
     await identWitness1;
 
     // ----- (2) SETTINGS LIVE-APPLY: change the ident, reconnect ---------
-    await page.getByLabel(/open settings/i).click();
-    const identInput = page.getByLabel(/^ident$/i);
+    // #460 — identity lives in the general settings sub-page now.
+    const generalPage = await openSettingsSection(page, "general");
+    const identInput = generalPage.getByLabel(/^ident$/i);
     await expect(identInput).toBeVisible({ timeout: 10_000 });
     // Editor seeds from /me with the login ident.
     await expect(identInput).toHaveValue(loginIdent);

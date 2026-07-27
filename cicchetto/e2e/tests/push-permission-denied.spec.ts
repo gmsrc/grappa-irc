@@ -21,7 +21,7 @@
 // current B5 plan calls out the denied path specifically.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openSettingsSection, sidebarWindow } from "../fixtures/cicchettoPage";
 import { resetPushSubscriptions, stubPushManagerDenied } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -46,8 +46,8 @@ test("push permission denied — toggle stays OFF, banner explains", async ({ pa
   // — check() is idempotent and may loop if cic flips the bound
   // signal back to false (the permission_denied arm sets
   // pushEnabled(false) immediately, and check() would retry).
-  await page.locator('[aria-label="open settings"]').click();
-  const toggle = page.locator('[data-testid="push-master-toggle"]');
+  const pushPage = await openSettingsSection(page, "push");
+  const toggle = pushPage.getByTestId("push-master-toggle");
   await expect(toggle).toBeVisible();
   await toggle.click();
 

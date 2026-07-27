@@ -27,7 +27,7 @@
 
 import type { BrowserContext } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
 import { resetPushCatcher, resetPushSubscriptions } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -125,8 +125,8 @@ test("silent drop → controllerchange re-subscribes with supersedes; device lis
   await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
 
   // Enable push: toggle → subscribe (endpoint A) → POST → device list = 1.
-  await page.locator('[aria-label="open settings"]').click();
-  const toggle = page.locator('[data-testid="push-master-toggle"]');
+  const pushPage = await openSettingsSection(page, "push");
+  const toggle = pushPage.getByTestId("push-master-toggle");
   await expect(toggle).toBeVisible();
   await toggle.click();
   await expect(page.locator('[data-testid="devices-list"] li')).toHaveCount(1, { timeout: 5_000 });

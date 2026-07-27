@@ -35,6 +35,7 @@
 // cicchettoPage.ts — push specs use both.
 
 import { type BrowserContext, type Page, expect } from "@playwright/test";
+import { openSettingsSection } from "./cicchettoPage";
 
 const PUSH_CATCHER_URL = process.env.E2E_PUSH_CATCHER_URL ?? "http://push-catcher:3000";
 
@@ -433,9 +434,10 @@ export async function enablePushFromSettings(
   // private_messages_all=true (matches cic's DEFAULT_NOTIFICATION_PREFS).
   await resetNotificationPrefs(opts.token);
   // Caller is responsible for navigation (loginAs etc.). We just
-  // open the SettingsDrawer + flip the master toggle.
-  await page.locator('[aria-label="open settings"]').click();
-  const toggle = page.locator('[data-testid="push-master-toggle"]');
+  // open the SettingsDrawer, navigate into the #460 push sub-page, and
+  // flip the master toggle.
+  const pushPage = await openSettingsSection(page, "push");
+  const toggle = pushPage.getByTestId("push-master-toggle");
   await expect(toggle).toBeVisible();
   // click() not check() — see push-install-toggle-subscribe.spec.ts moduledoc for
   // why .check() is unsafe under cic's signal-controlled toggle.

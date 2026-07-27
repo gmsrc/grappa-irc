@@ -20347,3 +20347,36 @@ accurate. Glyph stays optically the same (`font-size: 1.25rem`); only the box
 grows.
 
 cic-only, no server change — rides a COLD deploy (cic bundle change).
+
+## 2026-07-27 — settings-drawer e2e page-object (openSettingsSection + closeSettings), #460 follow-up
+
+#460 turned the settings drawer's main page into an INDEX of nav rows, each
+pushing into a dedicated `<name>-subpage`. Thirteen e2e specs opened the drawer
+expecting a control directly visible (the push master toggle, the timestamp
+format radios, the visitor identity card) and broke: those controls now live one
+tap deeper, behind a `<name>-settings-entry` row. The break reached main because
+a scoped `--grep` pass masked the full-suite red (the #268 rule).
+
+**One page-object door, not thirteen hand-rolled navigations** — copy-paste of
+the open-then-navigate is exactly what let the break reach main.
+`openSettingsSection(page, section)` (`cicchetto/e2e/fixtures/cicchettoPage.ts`)
+opens the drawer viewport-aware (desktop cog directly; mobile via the rail's
+ActionCluster / `openSettingsMobile`), clicks `<section>-settings-entry`, asserts
+`<section>-subpage`, and returns the sub-page locator. Every repaired spec — plus
+the shared `enablePushFromSettings` helper — routes through it.
+
+**The exit needed a counterpart.** `settings-drawer-done` moved INSIDE
+`<Show when={settingsPage() === "main"}>` (main index only), so a spec left on a
+sub-page by openSettingsSection could no longer reach it — `locator.click` timed
+out waiting for `settings-drawer-done`. The header × (`settings-drawer-close`)
+fires the SAME `props.onClose` and is rendered on every page, so
+`closeSettings(page)` clicks it and asserts the drawer closed. Rule: to leave the
+drawer from anywhere, use `closeSettings` (×), never the main-only "done".
+
+**Known e2e flake, NOT a regression.** `issue71-inc2-permanent-rail-desktop`
+guardrail 1 (archived `#bofh` row present) failed 1-of-3 in isolation (2/3 green)
+with `Exqlite ... database is locked` in the log — SQLite write contention
+occasionally loses the archive row. Pre-existing: the main red run 30243573035
+failed exactly the thirteen #460 specs and neither this nor `ux-z-cluster`.
+`ux-z-cluster` (a separate file from the repaired `ios-z-cluster`) was a
+full-suite cascade — 3/3 green in isolation. Neither is a branch regression.

@@ -6,7 +6,13 @@
 // Desktop project (untagged → chromium). Uses the seeded #bofh scrollback so
 // there is always at least one message row carrying a `.scrollback-time` cell.
 
-import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  closeSettings,
+  loginAs,
+  openSettingsSection,
+  scrollbackLines,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -35,9 +41,9 @@ test("#217 — timestamp format defaults to seconds, toggles live from Settings,
   const timeCell = await firstTimeCell(page);
   await expect(timeCell).toHaveText(HMS_RE);
 
-  // Open Settings, confirm the with-seconds radio is the checked default.
-  await page.locator('[data-testid="action-cluster-cog"]').click();
-  await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
+  // Open Settings → display sub-page (#460), confirm the with-seconds radio
+  // is the checked default.
+  await openSettingsSection(page, "display");
   await expect(page.getByTestId("time-format-hms")).toBeChecked();
 
   // Switch to no-seconds — the OPEN scrollback must re-render live (signal-
@@ -45,8 +51,10 @@ test("#217 — timestamp format defaults to seconds, toggles live from Settings,
   await page.getByTestId("time-format-hm").click();
   await expect(await firstTimeCell(page)).toHaveText(HM_RE);
 
-  // Close the drawer, the row keeps the chosen format.
-  await page.getByTestId("settings-drawer-done").click();
+  // Close the drawer, the row keeps the chosen format. closeSettings uses the
+  // header × — #460's "done" footer button lives on the main index only, and
+  // we are on the display sub-page.
+  await closeSettings(page);
   await expect(await firstTimeCell(page)).toHaveText(HM_RE);
 
   // Persistence: a full reload restores the stored preference (no-seconds).
@@ -55,6 +63,6 @@ test("#217 — timestamp format defaults to seconds, toggles live from Settings,
   await expect.poll(async () => await scrollbackLines(page).count()).toBeGreaterThan(0);
   await expect(await firstTimeCell(page)).toHaveText(HM_RE);
   // And the drawer reflects the persisted choice.
-  await page.locator('[data-testid="action-cluster-cog"]').click();
+  await openSettingsSection(page, "display");
   await expect(page.getByTestId("time-format-hm")).toBeChecked();
 });

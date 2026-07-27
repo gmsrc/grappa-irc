@@ -22,7 +22,7 @@
 //   * No banner (banner is the unhappy-path surface).
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
 import {
   pushCatcherEndpoint,
   resetPushCatcher,
@@ -59,8 +59,8 @@ test("master toggle enables push: subscribe → POST /push/subscriptions → dev
     { timeout: 5_000 },
   );
 
-  await page.locator('[aria-label="open settings"]').click();
-  const toggle = page.locator('[data-testid="push-master-toggle"]');
+  const pushPage = await openSettingsSection(page, "push");
+  const toggle = pushPage.getByTestId("push-master-toggle");
   await expect(toggle).toBeVisible();
   await toggle.click();
 

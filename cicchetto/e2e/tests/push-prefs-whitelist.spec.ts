@@ -25,7 +25,7 @@
 // this spec covers the UI → REST → server eval roundtrip.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
@@ -64,8 +64,9 @@ test("notification_prefs whitelist: messages in allow-list push, messages elsewh
   // rather than POSTing /me/settings/notification-prefs directly —
   // that proves the cic UI's commit hooks (`commitChannelsOnly`,
   // togglePref) flow into the same persisted state Triggers reads.
-  // enablePushFromSettings closes the drawer; reopen for prefs edit.
-  await page.locator('[aria-label="open settings"]').click();
+  // enablePushFromSettings closes the drawer; reopen on the push sub-page
+  // (#460) for prefs edit.
+  await openSettingsSection(page, "push");
   const channelAll = page.locator('[data-testid="pref-channel-all"]');
   if (await channelAll.isChecked()) await channelAll.uncheck();
   const channelMentions = page.locator('[data-testid="pref-channel-mentions"]');

@@ -633,6 +633,67 @@ export async function openSettingsMobile(page: Page): Promise<void> {
   await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
 }
 
+// The settings sub-sections reachable through `openSettingsSection`. Each one
+// has BOTH a `<name>-settings-entry` nav row on the #460 index AND a dedicated
+// `<name>-subpage` marker. "themes" is the deliberate exception: it has a
+// `themes-settings-entry` row but no `themes-subpage` marker (its gallery uses
+// its own testids), so it is not reachable here — drive themes via its own
+// idiom.
+export type SettingsSection =
+  | "general"
+  | "display"
+  | "push"
+  | "watchlists"
+  | "aliases"
+  | "perform"
+  | "vhost";
+
+// Open the settings drawer (viewport-aware) and navigate into `section`'s
+// sub-page, returning the sub-page section locator so callers scope assertions
+// to it.
+//
+// #460 turned the drawer main page into an INDEX of nav rows: a control that
+// used to be inline (a push toggle, the timestamp format, the identity card)
+// now lives one tap deeper, behind its `<section>-settings-entry` row. This is
+// the SINGLE door every spec uses to reach a settings control — never
+// hand-roll the open-then-navigate, or the next IA reshuffle (like #460)
+// silently breaks every copy at once.
+//
+// The cog (aria-label "open settings" / action-cluster-cog) lives in the rail's
+// ActionCluster: on desktop the rail is always on screen, so tap the cog
+// directly; on mobile the rail is a collapsed drawer, so reveal it first
+// (openSettingsMobile = open rail → tap cog). Re-navigating an already-open
+// drawer is a no-op on the open step and assumes it is on the main index.
+export async function openSettingsSection(
+  page: Page,
+  section: SettingsSection,
+): Promise<Locator> {
+  if ((await page.locator(".settings-drawer.open").count()) === 0) {
+    if (isMobileViewport(page)) {
+      await openSettingsMobile(page);
+    } else {
+      await page.getByTestId("action-cluster-cog").click();
+      await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
+    }
+  }
+  await page.getByTestId(`${section}-settings-entry`).click();
+  const subpage = page.getByTestId(`${section}-subpage`);
+  await expect(subpage).toBeVisible({ timeout: 10_000 });
+  return subpage;
+}
+
+// Close the settings drawer from ANY page — the exit counterpart to
+// openSettingsSection. #460 moved the "done" footer button onto the main index
+// only, so a spec sitting on a sub-page (where openSettingsSection leaves it)
+// can no longer reach it. The header × (settings-drawer-close) fires the SAME
+// onClose verb as "done" and is rendered on every page, so it is the one close
+// door. Owning the exit here — not re-deriving it in each spec — keeps the next
+// IA reshuffle a one-line change, the same reason the open path is centralized.
+export async function closeSettings(page: Page): Promise<void> {
+  await page.getByTestId("settings-drawer-close").click();
+  await expect(page.locator(".settings-drawer.open")).toHaveCount(0, { timeout: 5_000 });
+}
+
 // Mobile members-drawer close primitive.
 //
 // `.shell-drawer-backdrop` is `position: fixed; inset: 0` (full
