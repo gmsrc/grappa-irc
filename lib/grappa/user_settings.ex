@@ -120,6 +120,14 @@ defmodule Grappa.UserSettings do
       is deliberately excluded — it is per-DEVICE (vjt, #449) and stays
       client-local (`cicchetto/src/lib/fontSize.ts`).
   """
+  # `time_format` + the presence values are closed sets ("hms"|"hm",
+  # "show"|"hide"), but they stay `String.t()` on PURPOSE: Elixir typespecs
+  # have no string-literal type, and they must remain wire strings (JSON, the
+  # `:map` round-trip, `String.to_atom/1` banned). Introducing atoms only here
+  # would be half-migrated vs the sibling string-keyed wire types
+  # (notification_prefs, aliases). The closed set is enforced at the boundary
+  # by `@display_time_formats` / `@display_presence_values` + the changeset —
+  # that IS the CLAUDE.md "reject unknown values at the boundary" contract.
   @type display_prefs :: %{
           time_format: String.t(),
           colored_nicklist: boolean(),
