@@ -13,9 +13,12 @@ defmodule Grappa.Visitors do
     * `commit_password/2` — atomic password write. Two triggers in
       `Grappa.Session.Server`: the +r MODE observation (IDENTIFY/REGISTER
       rendezvous), and the #131 optimistic on-send commit of an
-      in-session `SET PASSWD` (no +r fires for a password change). Clears
-      `expires_at` to NULL — NickServ-identified visitors persist forever
-      (operator-driven deletion is the only removal path).
+      in-session `SET PASSWD` (no +r fires for a password change). #211
+      phase 7 — does NOT clear `expires_at`: registration permanence is
+      DERIVED from the credentials (`Credentials.visitor_registered?/1`),
+      which short-circuits `touch/1` to a no-op, so a registered visitor
+      simply stops sliding its TTL (operator-driven deletion is the only
+      removal path).
     * `touch/1` — sliding-TTL bump on user-initiated REST/WS verbs,
       ≥1h cadence. No-op if <1h since last bump (W9).
     * `count_active_for_ip/1` — per-IP cap check primitive (W3).
@@ -43,10 +46,14 @@ defmodule Grappa.Visitors do
   ## TTL cadence
 
   Anon TTL is 48h sliding (`touch/1` on user-initiated REST/WS verbs,
-  ≥1h cadence per W9). NickServ-identified visitors (`password_encrypted`
-  set) have no expiry — `commit_password/2` writes `expires_at = NULL`
-  and `touch/1` is a no-op for them. Inbound-IRC events and idle
-  WebSocket heartbeats do NOT bump the TTL.
+  ≥1h cadence per W9). REGISTERED visitors (holding ≥1 NickServ credential
+  — `Credentials.visitor_registered?/1`) have no expiry: `touch/1`
+  short-circuits to a no-op for them, so their `expires_at` stops sliding
+  and the Reaper never sweeps the row. #211 phase 7 — permanence is DERIVED
+  from the credentials, NOT a `visitors.expires_at`-nil flag:
+  `commit_password/3` no longer clears it, and a legacy pre-phase-7
+  permanent row (`expires_at IS NULL`) short-circuits first. Inbound-IRC
+  events and idle WebSocket heartbeats do NOT bump the TTL.
   """
 
   use Boundary,

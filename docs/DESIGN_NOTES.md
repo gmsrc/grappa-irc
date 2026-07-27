@@ -21204,3 +21204,60 @@ specs were NOT weakened.
      hazard is latent in every optimistic + full-replace-reconcile synced-pref
      module (notification-prefs, aliases, customTheme) — fixed here for the
      three display prefs; the siblings are a noted follow-up.
+
+---
+
+## 2026-07-28 — #496 home-pane rework: honest per-subject session copy + Map hidden behind a flag
+
+The home pane is the first thing a non-technical visitor sees. Three changes,
+all cic-side except a source-of-truth doc fix.
+
+**Per-subject session-lifetime copy is cic-owned AND honest to the server**
+(`cicchetto/src/lib/homeSessionCopy.ts`, a pure fn — no-localized-strings-server-
+side: the server hands cic `me.kind` + `me.registered` + per-network
+`{slug, nick}`, cic writes the words). The three audience truths, each verified
+against the code so the copy can't drift into a promise the server doesn't keep:
+- **unregistered visitor** — 48h sliding inactivity TTL (`Grappa.Visitors
+  @anon_ttl_seconds = 48 * 3600`); on expiry the row + scrollback CASCADE away.
+- **registered visitor** — no expiry: `Credentials.visitor_registered?/1`
+  (≥1 credential with a committed NickServ secret) short-circuits
+  `Visitors.touch/1`. DERIVED, not an `expires_at = NULL` flag.
+- **registered user** — the IRC connection is kept up indefinitely, but the
+  per-DEVICE auth session slides **7 days** of inactivity (`Grappa.Accounts
+  @idle_timeout_seconds = 7 * 24 * 3600`). A flat *"your session never expires"*
+  would be FALSE; the copy names the 7-day device-login fact explicitly. This is
+  the load-bearing honesty point of the whole issue.
+
+**Registered-visitor naming is guarded.** `me.registered` is identity-wide (true
+iff ANY network holds a registered credential), and `HomeNetworkRow` carries NO
+per-network registered flag. So the ∞ claim keys on `me.registered`, but
+"registered as `<nick>` on `<network>`" is only rendered when the visitor is on
+**exactly one** network — then that network must be the registered one. Zero or
+several networks → the ∞ claim stays, the per-network naming drops (a second,
+anon network would make "registered on it" a lie). This kept #496 cic-only: the
+data cic already has is sufficient for honest copy; no server fork for a
+per-network registered field.
+
+**The 🗺 Map (per-network LINKS/topology) button is HIDDEN, not deleted**
+(`SHOW_NETWORK_MAP = false` in `HomePane.tsx`). `/links` is unreliable; the
+button + its `onTopology` wiring stay in the tree so the return is a one-line
+flag flip once `/links` is fixed — archaeology-free.
+
+**Verification is the pure-fn + parity-matrix split**
+(`feedback_e2e_user_class_parity_matrix`): `homeSessionCopy.test.ts` pins the
+exact strings + every branch (the correctness SSOT jsdom CAN prove);
+`e2e/tests/issue496-home-restyle.spec.ts` loops the three subject kinds and
+proves cic RENDERS the right branch + hides the Map control in a real browser.
+The registered-visitor render is seeded by a `page.route` overlay that flips the
+server-derived `registered` boolean on an otherwise-real `/me` (real token, real
+`home_data.networks`); that the server DERIVES `registered` from the credentials
+is covered server-side (`visitor_registered?/1`), so the overlay is a render
+proof, not a hollow green — a full real NickServ registration (~90s, services-
+flaky) has no place in the ship-gate suite for a display assertion.
+
+**Source-of-truth doc fix:** `lib/grappa/visitors.ex`'s *moduledoc* (the
+`commit_password` bullet + the "TTL cadence" section) still described the
+pre-phase-7 `expires_at = NULL` mechanism, even though the per-function
+docstrings (`commit_password/3`, `touch/1`) were already phase-7-correct. Aligned
+the moduledoc to the derived-permanence reality so code and its top-level doc
+agree — this issue's copy is derived from exactly that mechanism.
