@@ -533,6 +533,23 @@ defmodule GrappaWeb.UserSettingsControllerTest do
                "presence_filter" => %{"libera #bofh" => "hide"}
              }
     end
+
+    test "carries persisted:false when never written (seed-up discriminator)", %{conn: conn} do
+      conn = get(conn, "/me/settings/display-prefs")
+      assert %{"persisted" => false} = json_response(conn, 200)
+    end
+
+    test "carries persisted:true after a write", %{conn: conn, user: user} do
+      {:ok, _} =
+        UserSettings.put_display_prefs({:user, user.id}, %{
+          "time_format" => "hm",
+          "colored_nicklist" => false,
+          "presence_filter" => %{}
+        })
+
+      conn = get(conn, "/me/settings/display-prefs")
+      assert %{"persisted" => true} = json_response(conn, 200)
+    end
   end
 
   describe "PUT /me/settings/display-prefs — happy path" do
@@ -560,6 +577,11 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       stored = UserSettings.get_display_prefs({:user, user.id})
       assert stored.time_format == "hm"
       assert stored.presence_filter == %{"libera #cat" => "show"}
+    end
+
+    test "PUT response carries persisted:true", %{conn: conn} do
+      conn = put(conn, "/me/settings/display-prefs", %{"display_prefs" => default_display_prefs_wire()})
+      assert %{"persisted" => true} = json_response(conn, 200)
     end
 
     test "tri-state survives the HTTP round-trip — unset stays ABSENT (NON-NEGOTIABLE)",

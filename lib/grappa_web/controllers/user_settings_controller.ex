@@ -186,13 +186,19 @@ defmodule GrappaWeb.UserSettingsController do
 
   @doc """
   `GET /me/settings/display-prefs` — return the subject's server-backed
-  display preferences (#449): `{"display_prefs": {...}}`. Falls back to
-  defaults when the subject has never persisted them.
+  display preferences (#449): `{"display_prefs": {...}, "persisted": bool}`.
+  Falls back to defaults when the subject has never persisted them; the
+  `persisted` flag lets the client tell "never written" from "written ==
+  defaults" so its seed-up-once never clobbers another device's config.
   """
   @spec show_display_prefs(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def show_display_prefs(conn, _) do
     subject = Subject.from_assigns(conn.assigns)
-    render(conn, :display_prefs, prefs: UserSettings.get_display_prefs(subject))
+
+    render(conn, :display_prefs,
+      prefs: UserSettings.get_display_prefs(subject),
+      persisted: UserSettings.display_prefs_persisted?(subject)
+    )
   end
 
   @doc """
@@ -212,7 +218,9 @@ defmodule GrappaWeb.UserSettingsController do
     subject = Subject.from_assigns(conn.assigns)
 
     with {:ok, _} <- UserSettings.put_display_prefs(subject, prefs) do
-      render(conn, :display_prefs, prefs: UserSettings.get_display_prefs(subject))
+      # The write just merged a well-formed blob, so it is persisted by
+      # definition — no redundant re-query of display_prefs_persisted?/1.
+      render(conn, :display_prefs, prefs: UserSettings.get_display_prefs(subject), persisted: true)
     end
   end
 

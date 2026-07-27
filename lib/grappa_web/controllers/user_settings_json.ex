@@ -48,9 +48,15 @@ defmodule GrappaWeb.UserSettingsJSON do
           aliases: %{String.t() => String.t()}
         }
 
-  @typedoc "Wire shape for the display_prefs envelope (#449)."
+  @typedoc """
+  Wire shape for the display_prefs envelope (#449). `persisted` is the
+  seed-up discriminator: `false` means the subject has never written a
+  well-formed blob (client pushes its local values up), `true` means the
+  server carries prefs (server wins). Additive per #447 — old clients ignore it.
+  """
   @type display_prefs_response :: %{
-          display_prefs: UserSettings.display_prefs()
+          display_prefs: UserSettings.display_prefs(),
+          persisted: boolean()
         }
 
   @doc "Renders the `:notification_prefs` action — GET/PUT 200 response shape."
@@ -86,8 +92,9 @@ defmodule GrappaWeb.UserSettingsJSON do
   end
 
   @doc "Renders the `:display_prefs` action — GET/PUT 200 response shape (#449)."
-  @spec display_prefs(%{prefs: UserSettings.display_prefs()}) :: display_prefs_response()
-  def display_prefs(%{prefs: prefs}) do
-    %{display_prefs: prefs}
+  @spec display_prefs(%{prefs: UserSettings.display_prefs(), persisted: boolean()}) ::
+          display_prefs_response()
+  def display_prefs(%{prefs: prefs, persisted: persisted}) do
+    %{display_prefs: prefs, persisted: persisted}
   end
 end

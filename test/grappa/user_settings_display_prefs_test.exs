@@ -113,6 +113,55 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # display_prefs_persisted?/1 — seed-up discriminator (#449 Fork B)
+  # ---------------------------------------------------------------------------
+  #
+  # get_display_prefs/1 always returns a complete shape from defaults, so the
+  # GET payload alone cannot tell "never written" from "written == defaults".
+  # The client's seed-up-once needs that distinction: absent ⇒ push local;
+  # present ⇒ server wins. This predicate is the explicit, additive signal.
+  # Mirrors get_display_prefs/1's own map guard: a malformed (non-map) blob
+  # counts as NOT persisted, so the client seeds up and the row self-heals.
+
+  describe "display_prefs_persisted?/1" do
+    test "false when no settings row exists" do
+      refute UserSettings.display_prefs_persisted?({:user, Ecto.UUID.generate()})
+    end
+
+    test "false when the row exists but has no display_prefs key" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo"])
+
+      refute UserSettings.display_prefs_persisted?({:user, user.id})
+    end
+
+    test "true after a put_display_prefs/2 write" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.put_display_prefs({:user, user.id}, valid_wire())
+
+      assert UserSettings.display_prefs_persisted?({:user, user.id})
+    end
+
+    test "false when the stored value is malformed (not a map) — self-heals to seed-up" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+
+      settings
+      |> Settings.changeset(%{data: Map.put(settings.data, "display_prefs", "garbage")})
+      |> Repo.update!()
+
+      refute UserSettings.display_prefs_persisted?({:user, user.id})
+    end
+
+    test "true for a visitor subject after a write (visitor parity)" do
+      visitor = visitor_fixture()
+      {:ok, _} = UserSettings.put_display_prefs({:visitor, visitor.id}, valid_wire())
+
+      assert UserSettings.display_prefs_persisted?({:visitor, visitor.id})
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # put_display_prefs/2 — validate + normalize + merge-preserve
   # ---------------------------------------------------------------------------
 

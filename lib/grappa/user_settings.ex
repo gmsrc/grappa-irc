@@ -59,7 +59,9 @@ defmodule Grappa.UserSettings do
   | `"aliases"`            | `%{String.t() =>       | `get_aliases/1`,                |
   |                        | String.t()}`           | `set_aliases/2` (#385)          |
   | `"display_prefs"`      | `display_prefs()`      | `get_display_prefs/1`,          |
-  |                        |                        | `put_display_prefs/2` (#449)    |
+  |                        |                        | `put_display_prefs/2`,          |
+  |                        |                        | `display_prefs_persisted?/1`    |
+  |                        |                        | (#449)                          |
 
   ## Boundary
 
@@ -726,6 +728,27 @@ defmodule Grappa.UserSettings do
           %{} = stored -> merge_display_with_defaults(stored)
           _ -> default_display_prefs()
         end
+    end
+  end
+
+  @doc """
+  Whether `subject` has ever persisted a well-formed `display_prefs` blob.
+
+  `get_display_prefs/1` always returns a complete shape from defaults, so the
+  GET payload alone cannot tell "never written" from "written == defaults".
+  The client's seed-up-once (#449 Fork B) needs that distinction: absent ⇒
+  push the local values up (never clobber another device's config); present ⇒
+  the server wins. This predicate is the explicit, additive signal the
+  controller surfaces as `persisted` in the wire envelope.
+
+  Mirrors `get_display_prefs/1`'s own map guard: a malformed (non-map) stored
+  value counts as NOT persisted, so the client seeds up and the row self-heals.
+  """
+  @spec display_prefs_persisted?(Subject.t()) :: boolean()
+  def display_prefs_persisted?({_, _} = subject) do
+    case fetch_existing_or_nil(subject) do
+      %Settings{data: data} -> is_map(data[@display_prefs_key])
+      nil -> false
     end
   end
 
