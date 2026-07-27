@@ -3948,6 +3948,14 @@ html.resize-dragging * {
   flex-direction: column;
   min-width: 8rem;
   box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.3);
+  /* #487 — fallback for a menu taller than the viewport (short mobile
+     viewport, on-screen keyboard up → --viewport-height shrinks). The JS
+     flip/clamp (lib/menuPosition.ts) pins an oversized menu to the top edge;
+     this caps it to the viewport height and scrolls the overflow so every
+     item stays reachable. --viewport-height mirrors the mobile shell's
+     keyboard-aware height (main.tsx); 100vh is the desktop fallback. */
+  max-height: var(--viewport-height, 100vh);
+  overflow-y: auto;
 }
 
 .context-menu-item {

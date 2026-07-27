@@ -1,5 +1,6 @@
-import { type Component, createEffect, For, onCleanup } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup } from "solid-js";
 import { Portal } from "solid-js/web";
+import { computeMenuPosition } from "./lib/menuPosition";
 import { canonicalQueryNick, openQueryWindowState } from "./lib/queryWindows";
 import { setSelectedChannel } from "./lib/selection";
 import {
@@ -22,10 +23,19 @@ import {
 // Ban mask uses the `nick!*@*` fallback (WHOIS-cache mask derivation is
 // deferred per spec #3 note; see commit body for gap flag).
 //
-// Positioning: absolute at {x, y} from right-click. No viewport-flip logic
-// here — the CSS positions from the backdrop's top-left so coordinates are
-// already client-relative. Overflow handling is expected to be addressed in
-// browser smoke; jsdom doesn't give real viewport dimensions.
+// Positioning (#487): measured flip/clamp so the menu always opens fully
+// inside the viewport. After render we measure the menu box
+// (getBoundingClientRect) and feed it + window.innerWidth/innerHeight to the
+// pure `computeMenuPosition` seam (lib/menuPosition.ts): the menu FLIPS above/
+// left of the click when it would overflow the far edge (pointer stays on the
+// menu edge, like a native context menu), CLAMPS when a flip would underflow,
+// and pins to the edge — with the CSS `max-height` + `overflow-y:auto` fallback
+// below — when it is taller than the viewport (short mobile viewport, keyboard
+// up). The arithmetic is unit-tested without a real viewport
+// (menuPosition.test.ts); the visible placement is proven in the Playwright
+// e2e (issue487-context-menu-viewport-clamp.spec.ts) since jsdom gives no real
+// viewport dimensions. Opacity-gated until measured so the pre-measure frame
+// never flashes off-screen.
 //
 // Close: backdrop click OR Escape keydown fires `onClose`.
 
@@ -122,6 +132,39 @@ const UserContextMenu: Component<Props> = (props) => {
     props.onClose();
   };
 
+  // #487 — measured viewport clamp/flip. Start at the raw click point, then
+  // correct once the rendered menu box can be measured. `createEffect` (not
+  // `onMount`) re-measures + repositions when `props.position` changes — a
+  // right-click on another nick while the menu is still open reuses this
+  // component (MembersPane's <Show> keeps it mounted), so onMount alone would
+  // strand the menu at the first click's coords. Opacity-gated so the
+  // pre-measure frame never flashes off-screen at the raw click point.
+  let menuRef: HTMLDivElement | undefined;
+  const [placement, setPlacement] = createSignal({
+    top: props.position.y,
+    left: props.position.x,
+  });
+  const [placed, setPlaced] = createSignal(false);
+
+  createEffect(() => {
+    // Track the click position so a re-open at new coords re-runs this.
+    const clickX = props.position.x;
+    const clickY = props.position.y;
+    if (!menuRef) return;
+    const rect = menuRef.getBoundingClientRect();
+    setPlacement(
+      computeMenuPosition({
+        clickX,
+        clickY,
+        menuWidth: rect.width,
+        menuHeight: rect.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      }),
+    );
+    setPlaced(true);
+  });
+
   return (
     // Portal to <body> so the fixed-position menu + backdrop are never
     // trapped inside a scrollback-pane stacking context. #75's background
@@ -139,8 +182,14 @@ const UserContextMenu: Component<Props> = (props) => {
         onClick={props.onClose}
       />
       <div
+        ref={menuRef}
         class="context-menu"
-        style={{ position: "fixed", top: `${props.position.y}px`, left: `${props.position.x}px` }}
+        style={{
+          position: "fixed",
+          top: `${placement().top}px`,
+          left: `${placement().left}px`,
+          opacity: placed() ? "1" : "0",
+        }}
         role="menu"
       >
         <For each={items()}>
