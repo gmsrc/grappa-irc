@@ -301,6 +301,48 @@ describe("archive.visibleArchiveForNetwork", () => {
     ]);
   });
 
+  // cp15-b6 (#473) — a STALE `:joined` windowState must NOT hide an
+  // archived channel. On a re-PART the user-topic `channels_changed`
+  // (drops the channel from channelsBySlug) and the per-channel PART
+  // message (fires setParted, clearing windowState) have NO cross-topic
+  // ordering guarantee at the WS edge: channels_changed can land first,
+  // leaving windowState[ch]="joined" (stale) while channelsBySlug has
+  // already dropped it. `:joined` is a LIVE-ROW state — covered by the
+  // channelsBySlug filter, NOT a pseudo-row — so `pseudoChannelsForNetwork`
+  // excludes it (its documented ghost-row guard). This filter MUST mirror
+  // that exclusion; otherwise a just-archived, genuinely-parted channel
+  // is wrongly suppressed from an OPEN ArchiveModal — the intermittent
+  // cp15-b6 re-PART-while-open flake (server returns the row, the modal
+  // renders 0 for the whole assert window).
+  it("does NOT hide an archived channel whose windowState is a stale :joined (re-PART transient)", async () => {
+    vi.doMock("../lib/networks", () => ({
+      // channels_changed already dropped #bofh from the live set.
+      channelsBySlug: () => ({ freenode: [] }),
+    }));
+    vi.doMock("../lib/queryWindows", () => ({
+      queryWindowsByNetwork: () => ({}),
+    }));
+    vi.doMock("../lib/windowState", () => ({
+      // setParted has NOT yet fired for the re-PART — the stale
+      // per-channel `:joined` lingers in the map.
+      windowStateByChannel: () => ({ "freenode #bofh": "joined" }),
+    }));
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.listArchive).mockResolvedValue([
+      { target: "#bofh", kind: "channel", last_activity: 200, row_count: 203 },
+    ]);
+
+    const archive = await import("../lib/archive");
+    await archive.loadArchive("freenode");
+
+    // The server placed #bofh in the archive (it IS parted) and it is not
+    // in channelsBySlug — the stale `:joined` must NOT suppress it.
+    expect(archive.visibleArchiveForNetwork("freenode", 1)).toEqual([
+      { target: "#bofh", kind: "channel", last_activity: 200, row_count: 203 },
+    ]);
+  });
+
   // BK regression: windowStateByChannel keys for OTHER networks must NOT
   // affect this network's archive view. The pseudoNames Set is scoped
   // by slug via decodeChannelKey.

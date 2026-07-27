@@ -1,12 +1,11 @@
 import { createSignal } from "solid-js";
 import { type ArchiveEntry, listArchive } from "./api";
 import { token } from "./auth";
-import { type ChannelKey, decodeChannelKey } from "./channelKey";
 import { identityScopedStore } from "./identityScopedStore";
 import { channelsBySlug } from "./networks";
 import { normalizeNick } from "./nickEquals";
+import { pseudoChannelsForNetwork } from "./pseudoChannels";
 import { queryWindowsByNetwork } from "./queryWindows";
-import { windowStateByChannel } from "./windowState";
 
 // Per-network archive store. Source-of-truth for cic's per-network
 // Archive collapsible groups in `ArchiveModal` (#473; pre-#473 this
@@ -120,16 +119,28 @@ export const setArchiveModalOpen = exports_.setArchiveModalOpen;
 // survives JOIN echoes; re-JOIN of an archived channel would otherwise
 // dup the row in active + archive sections.
 //
-// UX-5 bucket BK (2026-05-19): ALSO exclude anything in
-// `windowStateByChannel` for the slug. Pseudo-rows (pending/failed/
-// kicked/parked rendered via Sidebar.pseudoChannelsForNetwork) carry
-// scrollback persisted by Session.Server's `:join_failed` arm, so
-// without this filter a failed JOIN appears in BOTH the active sidebar
-// (pseudo-row) AND the archive section (notice row qualifies as
-// archived because the channel isn't in Session.list_channels). One
-// window, one surface. Operator clicks × on the pseudo-row → forceParted
-// drops the windowState key → this filter releases → archive shows
-// the row.
+// UX-5 bucket BK (2026-05-19): ALSO exclude anything shown as a
+// pseudo-row for this network — a failed/kicked/pending/invited/parked
+// window carries scrollback (Session.Server's `:join_failed` arm etc.)
+// that qualifies as archived because the channel isn't in
+// Session.list_channels, so without this filter it appears in BOTH the
+// active sidebar (pseudo-row) AND the archive. One window, one surface.
+// Operator clicks × on the pseudo-row → forceParted drops the windowState
+// key → this filter releases → archive shows the row.
+//
+// cp15-b6 (#473): this MUST reuse the ONE shared pseudo-row projection
+// `pseudoChannelsForNetwork` (#71 INC-3), NOT re-derive it from raw
+// windowState. The earlier hand-written copy diverged — it counted
+// `:joined` as a pseudo-row, but `:joined` is a LIVE-ROW state the
+// shared projection deliberately EXCLUDES (its documented ghost-row
+// guard). On a re-PART the user-topic `channels_changed` and the
+// per-channel PART message have no cross-topic ordering guarantee at the
+// WS edge: `channels_changed` can drop the channel from `channelsBySlug`
+// while windowState still carries a stale `:joined`, and the raw-
+// windowState copy then hid the just-archived channel from an OPEN
+// ArchiveModal (the intermittent re-PART-while-open flake — the server
+// returned the row, the modal rendered 0). One source of truth for
+// "which pseudo-rows exist" is the fix.
 export function visibleArchiveForNetwork(slug: string, networkId: number): ArchiveEntry[] {
   const entries = archivedBySlug()[slug] ?? [];
   if (entries.length === 0) return entries;
@@ -145,12 +156,12 @@ export function visibleArchiveForNetwork(slug: string, networkId: number): Archi
   const liveQueries = new Set(
     (queryWindowsByNetwork()[networkId] ?? []).map((qw) => normalizeNick(qw.targetNick)),
   );
-  const pseudoNames = new Set<string>();
-  for (const key of Object.keys(windowStateByChannel())) {
-    const decoded = decodeChannelKey(key as ChannelKey);
-    if (decoded === null || decoded.slug !== slug) continue;
-    pseudoNames.add(normalizeNick(decoded.name));
-  }
+  // Reuse the ONE shared pseudo-row projection — folding its names
+  // (rfc1459, #372) for the archive's own compare. See the block comment
+  // above for why this MUST NOT re-derive from raw windowState.
+  const pseudoNames = new Set(
+    pseudoChannelsForNetwork(slug, networkId).map((row) => normalizeNick(row.name)),
+  );
   return entries.filter((entry) => {
     const folded = normalizeNick(entry.target);
     if (pseudoNames.has(folded)) return false;
