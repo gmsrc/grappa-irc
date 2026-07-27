@@ -189,15 +189,16 @@ const exports = identityScopedStore((onIdentityChange) => {
   // DM-listener and query-window loops see the correct own-nick
   // without waiting for the next GET /networks refetch.
   //
-  // Bucket F H4: only `UserNetwork` rows carry a `nick` field. A
-  // visitor row with the matching id is left untouched — visitors
-  // can't issue NICK upstream (the visitor IS the nick) so the
-  // `own_nick_changed` event for a visitor's network is a server
-  // contract violation we tolerate by no-op'ing.
+  // #476 union-note — BOTH subjects carry a per-network `nick` (the visitor
+  // row converged onto the user twin, ruling A; #211 phase 7 gave a visitor
+  // real per-network identity that CAN change via the identity editor). The
+  // retired `kind === "user"` gate no-op'd a visitor's `own_nick_changed`,
+  // stranding the DM-listener's own-nick after a visitor per-network rename.
+  // Patch by id regardless of kind — `nick` is present on either variant.
   const mutateNetworkNick = (networkId: number, nick: string): void => {
     mutateNetworksResource((prev) => {
       if (!prev) return prev;
-      return prev.map((n) => (n.id === networkId && n.kind === "user" ? { ...n, nick } : n));
+      return prev.map((n) => (n.id === networkId ? { ...n, nick } : n));
     });
   };
 

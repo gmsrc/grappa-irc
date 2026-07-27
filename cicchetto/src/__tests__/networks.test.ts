@@ -192,6 +192,46 @@ describe("networks resources", () => {
     if (out?.kind === "user") expect(out.nick).toBe("grappa");
   });
 
+  // #476 union-note — BOTH subjects carry a per-network `nick` (the visitor
+  // row converged onto the user twin, ruling A), so `own_nick_changed` must
+  // patch a VISITOR row too. The retired `kind === "user"` gate no-op'd it,
+  // stranding the DM-listener's own-nick after a visitor per-network rename.
+  it("mutateNetworkNick updates the nick for a matching VISITOR network id", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.listNetworks).mockResolvedValue([
+      {
+        kind: "visitor",
+        id: 7,
+        slug: "azzurra",
+        nick: "anon123",
+        connection_state: "connected",
+        connection_state_reason: null,
+        connection_state_changed_at: null,
+        inserted_at: "x",
+        updated_at: "y",
+      },
+    ]);
+    vi.mocked(api.listChannels).mockResolvedValue([]);
+    vi.mocked(api.me).mockResolvedValue({
+      kind: "visitor",
+      id: "v1",
+      expires_at: "2099-01-01T00:00:00Z",
+      registered: true,
+    });
+    vi.mocked(api.listMessages).mockResolvedValue([]);
+    const networks = await import("../lib/networks");
+    await vi.waitFor(() => expect(networks.networks()?.length).toBe(1));
+    const initial = networks.networks()?.[0];
+    expect(initial?.kind).toBe("visitor");
+    if (initial?.kind === "visitor") expect(initial.nick).toBe("anon123");
+    // Simulate own_nick_changed for the visitor's network.
+    networks.mutateNetworkNick(7, "anon456");
+    const updated = networks.networks()?.[0];
+    expect(updated?.kind).toBe("visitor");
+    if (updated?.kind === "visitor") expect(updated.nick).toBe("anon456");
+  });
+
   // bnd-A2: slug→id / slug→Network helpers backed by createMemo Map.
   // Replaces 14× `networks()?.find((n) => n.slug === slug)?.id` literal
   // duplicates across compose.ts. Memo recomputes when networks() updates,

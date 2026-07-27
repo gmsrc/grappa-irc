@@ -4,6 +4,7 @@ import {
   createEffect,
   createSignal,
   For,
+  on,
   onCleanup,
   onMount,
   Show,
@@ -30,6 +31,7 @@ import {
   type SubscriptionId,
 } from "./lib/push";
 import { reconnectConnectedNetworks } from "./lib/reconnect";
+import { selectedChannel } from "./lib/selection";
 import { consumePendingSettingsPage, type SettingsSubPage } from "./lib/settingsNav";
 import { openShareModal } from "./lib/shareModal";
 import { getTimeFormat, setTimeFormat, type TimeFormatKey } from "./lib/timeFormat";
@@ -223,18 +225,25 @@ const SettingsDrawer: Component<Props> = (props) => {
   // is `quit`). The `visitorConnected()` accessor (read the singular /me
   // `connected` scalar) went with them — the scalar is dropped from /me.
 
-  // #211 phase 7 — per-network identity editor (nick + ident + realname),
+  // #476 / #478 — per-network identity editor (nick + ident + realname),
   // live-applied via PATCH /networks/:slug/identity → internal reconnect.
-  // A visitor is multi-network with no identity-wide nick, so the editor
-  // targets the visitor's ANCHOR network (lowest-id row) — the minimal
-  // viable per-network editor. The text shadows seed from that network's
-  // GET /networks row on drawer open; a save PATCHes then refetches /me +
-  // /networks. A 422 (bad nick/ident) surfaces inline via `identityError`.
-  const visitorAnchor = (): Network | null => {
-    const list = networks() ?? [];
-    return list
-      .filter((n) => n.kind === "visitor")
-      .reduce<Network | null>((lo, n) => (lo == null || n.id < lo.id ? n : lo), null);
+  // Available to BOTH subjects: the visitor-only gate was a retired-premise
+  // relic ("users have no per-network identity"). A user carries per-network
+  // identity on its GET /networks rows too (both subjects converged, ruling
+  // A). The editor targets the SELECTED network row, defaulting to the
+  // currently-focused network, with a picker to switch when the subject holds
+  // more than one — killing the #211-phase-7 lowest-id "anchor" pick (#478).
+  // The text shadows seed from the selected row on open; a save PATCHes then
+  // refetches. A 422 (bad nick/ident) surfaces inline via `identityError`.
+  const identityNetworks = (): Network[] => networks() ?? [];
+  const hasNetworks = (): boolean => identityNetworks().length > 0;
+
+  const [selectedIdentitySlug, setSelectedIdentitySlug] = createSignal<string | null>(null);
+  // The network row the editor currently targets: the explicitly-selected
+  // slug, else the first row (a stable fallback until the open-seed lands).
+  const selectedIdentityNetwork = (): Network | null => {
+    const list = identityNetworks();
+    return list.find((n) => n.slug === selectedIdentitySlug()) ?? list[0] ?? null;
   };
 
   const [nickText, setNickText] = createSignal("");
@@ -248,39 +257,54 @@ const SettingsDrawer: Component<Props> = (props) => {
   // (session bounces), so it gets the same confirm gate as quit.
   const [identityArmed, setIdentityArmed] = createSignal(false);
 
-  // Seed the identity fields from the visitor's ANCHOR network row ONCE per
-  // open-session — on the open transition, or (if /networks hadn't loaded
-  // yet at open) the first time the anchor resolves while open.
-  // `identitySeeded` latches after the first seed so a later refetch never
-  // clobbers the visitor's in-progress typing. Reset on close (see the
+  // Default the editor's target ONCE per open-session: the currently-focused
+  // network (if it resolves to one of the subject's rows), else the first
+  // row. `identitySeeded` latches so a later /networks refetch never re-picks
+  // the target out from under an in-progress edit. Reset on close (see the
   // close effect).
   const [identitySeeded, setIdentitySeeded] = createSignal(false);
   createEffect(() => {
     if (!props.open || identitySeeded()) return;
-    if (getSubject()?.kind !== "visitor") return;
-    const anchor = visitorAnchor();
-    if (anchor) {
-      setNickText(anchor.nick);
-      setIdentText(anchor.ident ?? "");
-      setRealnameText(anchor.realname ?? "");
-      setIdentitySeeded(true);
-    }
+    const list = identityNetworks();
+    const focusedSlug = selectedChannel()?.networkSlug ?? null;
+    const defaultNet = list.find((n) => n.slug === focusedSlug) ?? list[0];
+    if (!defaultNet) return;
+    setSelectedIdentitySlug(defaultNet.slug);
+    setIdentitySeeded(true);
   });
+
+  // (Re-)seed the text fields whenever the TARGET network changes — the
+  // initial default above, or a manual pick from the selector. `on` tracks
+  // ONLY the slug, so a /networks refetch of the same target doesn't re-fire
+  // and clobber in-progress typing. Clears transient save state on switch.
+  createEffect(
+    on(selectedIdentitySlug, (slug) => {
+      if (slug === null) return;
+      const net = identityNetworks().find((n) => n.slug === slug);
+      if (!net) return;
+      setNickText(net.nick);
+      setIdentText(net.ident ?? "");
+      setRealnameText(net.realname ?? "");
+      setIdentityArmed(false);
+      setIdentitySaved(false);
+      setIdentityError(null);
+    }),
+  );
 
   const onSaveIdentity = async () => {
     setIdentityArmed(false);
     setIdentityError(null);
     setIdentitySaved(false);
-    const anchor = visitorAnchor();
-    if (!anchor) return;
+    const net = selectedIdentityNetwork();
+    if (!net) return;
     setIdentitySaving(true);
     try {
       // Send all three fields; blank ident/realname clears back to the
-      // server default (ident → nick, realname → "Grappa Visitor"). Empty
+      // server default (ident → nick, realname → the subject default). Empty
       // string is a legitimate "unset" intent here — the settings editor is
       // the canonical edit surface, so it owns the full value including
       // clear. Nick is required (the credential can't be nickless).
-      await updateIdentity(anchor.slug, {
+      await updateIdentity(net.slug, {
         nick: nickText(),
         ident: identText(),
         realname: realnameText(),
@@ -306,12 +330,14 @@ const SettingsDrawer: Component<Props> = (props) => {
       setDeleteOpen(false);
       // #152 — disarm the identity apply + clear transient save state so a
       // reopened drawer never sits one tap from a reconnect or shows a
-      // stale "applied"/error banner. Reset the seed latch so the next
-      // open re-seeds the fields from the (now-current) /me values.
+      // stale "applied"/error banner. Reset the seed latch + selected target
+      // so the next open re-defaults to the (now-current) focused network and
+      // re-seeds the fields from its /networks row.
       setIdentityArmed(false);
       setIdentitySaved(false);
       setIdentityError(null);
       setIdentitySeeded(false);
+      setSelectedIdentitySlug(null);
       // #282 — clear a stale reconnect error so a reopened drawer that
       // re-enters the vhost sub-page never strands the previous failure.
       setReconnectError(null);
@@ -615,15 +641,16 @@ const SettingsDrawer: Component<Props> = (props) => {
     setSettingsPage("vhost");
   };
 
-  // #460 — the general sub-page is conditionally composed (upload retention is
-  // host-gated, per-network identity is visitor-gated), so its index subtitle
-  // names ONLY the children the current subject will actually see — honest, and
+  // #460 / #476 — the general sub-page is conditionally composed (upload
+  // retention is host-gated, per-network identity is network-gated — shown to
+  // BOTH subjects whenever a network row exists), so its index subtitle names
+  // ONLY the children the current subject will actually see — honest, and
   // consistent with the row's own reactive OR-gate. At least one part is always
   // present (the row is gated on the OR of the two), so it is never empty.
   const generalSubtitle = (): string => {
     const parts: string[] = [];
     if (activeHost().ttlOptions.length > 0) parts.push("upload retention");
-    if (isVisitor()) parts.push("per-network identity");
+    if (hasNetworks()) parts.push("per-network identity");
     return parts.join(" and ");
   };
 
@@ -691,10 +718,10 @@ const SettingsDrawer: Component<Props> = (props) => {
               (notifications), watch lists, aliases, on-connect commands,
               source address (LAST). */}
 
-          {/* general — upload retention (host-gated) + visitor identity
-              (visitor-gated). The row is gated on the OR of its children so it
-              never opens an empty page. */}
-          <Show when={activeHost().ttlOptions.length > 0 || isVisitor()}>
+          {/* general — upload retention (host-gated) + per-network identity
+              (network-gated, both subjects — #476). The row is gated on the OR
+              of its children so it never opens an empty page. */}
+          <Show when={activeHost().ttlOptions.length > 0 || hasNetworks()}>
             <button
               type="button"
               class="settings-nav-row"
@@ -979,19 +1006,49 @@ const SettingsDrawer: Component<Props> = (props) => {
               </fieldset>
             </Show>
 
-            {/* #211 phase 7 — per-network visitor identity editor (targets
-              the anchor network). Saving PATCHes /networks/:slug/identity
-              which live-applies via internal reconnect (the session bounces
-              + rejoins). The confirm-armed save communicates the reconnect
-              cost; a 422 renders inline. */}
+            {/* #476 / #478 — per-network identity editor, both subjects. It
+              targets the SELECTED network row (focused-network default), with a
+              picker when the subject holds more than one — the retired lowest-id
+              anchor is gone. Saving PATCHes /networks/:slug/identity which
+              live-applies via internal reconnect (the session bounces +
+              rejoins). The confirm-armed save communicates the reconnect cost;
+              a 422 renders inline. Gated on hasNetworks() — you can't edit
+              identity for a network you don't hold. */}
             {/* #335 — identity sits inside a titled .settings-section card. */}
-            <Show when={isVisitor()}>
+            <Show when={hasNetworks()}>
               <div
                 class="settings-section settings-section-card"
                 data-testid="settings-section-identity"
               >
                 <h4 class="settings-section-heading">identity</h4>
                 <div class="settings-identity" data-testid="settings-identity">
+                  {/* #476 — which network this identity edits. A picker when
+                      there's more than one; a static label otherwise (a
+                      single-option dropdown would be pointless chrome). */}
+                  <label for="settings-identity-network">Network</label>
+                  <Show
+                    when={identityNetworks().length > 1}
+                    fallback={
+                      <span
+                        class="settings-identity-network-name"
+                        data-testid="settings-identity-network-label"
+                      >
+                        {selectedIdentityNetwork()?.slug ?? "—"}
+                      </span>
+                    }
+                  >
+                    <select
+                      id="settings-identity-network"
+                      data-testid="settings-identity-network-select"
+                      value={selectedIdentityNetwork()?.slug ?? ""}
+                      onChange={(e) => setSelectedIdentitySlug(e.currentTarget.value)}
+                    >
+                      <For each={identityNetworks()}>
+                        {(net) => <option value={net.slug}>{net.slug}</option>}
+                      </For>
+                    </select>
+                  </Show>
+
                   <label for="settings-nick">Nick</label>
                   <input
                     id="settings-nick"

@@ -133,6 +133,17 @@ vi.mock("../lib/networks", () => ({
   },
 }));
 
+// #476 — the per-network identity editor defaults its target to the
+// currently-focused network. The drawer reads `selectedChannel()` from
+// lib/selection to resolve that default; a mutable holder lets a test pin
+// the focused network (or null for "no focus → first network").
+const selectedChannelHolder = vi.hoisted(() => ({
+  current: null as { networkSlug: string; channelName: string; kind: string } | null,
+}));
+vi.mock("../lib/selection", () => ({
+  selectedChannel: () => selectedChannelHolder.current,
+}));
+
 vi.mock("../lib/push", () => ({
   enablePush: vi.fn().mockResolvedValue({ status: "enabled", subscriptionId: "sub-1" }),
   disablePush: vi.fn().mockResolvedValue(true),
@@ -234,6 +245,7 @@ beforeEach(() => {
   meHolder.current = null;
   uploadTtlHolder.current = null;
   subjectHolder.current = null;
+  selectedChannelHolder.current = null;
 });
 
 describe("SettingsDrawer", () => {
@@ -844,7 +856,7 @@ describe("SettingsDrawer (#126 — registered-visitor lifecycle verbs)", () => {
     expect(screen.queryByText(/^log out$/i)).toBeNull();
   });
 
-  it("#211 phase 7 — identity editor seeds from the anchor network row, two-tap apply calls api.updateNetworkIdentity", async () => {
+  it("#211 phase 7 — identity editor seeds from the selected (only) network row, two-tap apply calls api.updateNetworkIdentity", async () => {
     const api = await import("../lib/api");
     meHolder.current = {
       kind: "visitor",
@@ -897,7 +909,7 @@ describe("SettingsDrawer (#126 — registered-visitor lifecycle verbs)", () => {
     });
   });
 
-  it("#152 — identity editor is NOT shown for a user subject", () => {
+  it("#476 — identity editor IS shown for a user subject (visitor-gate relic removed)", () => {
     meHolder.current = {
       kind: "user",
       id: "u1",
@@ -906,11 +918,30 @@ describe("SettingsDrawer (#126 — registered-visitor lifecycle verbs)", () => {
       inserted_at: "2026-06-29T00:00:00Z",
     };
     subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
+    // A user carries per-network identity on the GET /networks rows (both
+    // subjects converged, ruling A). Seed a single USER network row.
+    networksHolder.current = [
+      {
+        kind: "user" as const,
+        id: 1,
+        slug: "bahamut-test",
+        nick: "vjt-grappa",
+        ident: "grp" as string | null,
+        realname: "Real Name" as string | null,
+        connection_state: "connected" as const,
+        connection_state_reason: null as string | null,
+        connection_state_changed_at: null as string | null,
+        inserted_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
     wrap(true);
-    // #460 — identity lives in the general sub-page now; for a user subject it
-    // is still withheld there (visitor-gated). Navigate in, then assert absent.
+    // #476 — the visitor-only gate (retired premise: "users have no
+    // per-network identity") is gone; the editor shows for a user too, seeded
+    // from the user's network row.
     openSub("general-settings-entry");
-    expect(screen.queryByTestId("settings-identity")).toBeNull();
+    expect(screen.getByTestId("settings-section-identity")).toBeInTheDocument();
+    expect((screen.getByLabelText(/^nick$/i) as HTMLInputElement).value).toBe("vjt-grappa");
   });
 });
 
@@ -1107,10 +1138,11 @@ describe("SettingsDrawer (#460 — settings index)", () => {
     }
   });
 
-  it("the general subtitle names only upload retention for a non-visitor (no false identity promise)", () => {
-    // null subject (loading / user-like): the general page shows only the
-    // host-gated upload retention — identity is visitor-gated — so the
-    // subtitle must NOT promise identity the subject will never see.
+  it("#476 — the general subtitle omits identity when there are no networks (no false promise)", () => {
+    // No networks (loading / empty-bind account): the general page shows only
+    // the host-gated upload retention — identity needs a network row to edit —
+    // so the subtitle must NOT promise identity the subject can't reach.
+    networksHolder.current = [];
     wrap(true);
     const sub = screen
       .getByTestId("general-settings-entry")
@@ -1119,8 +1151,26 @@ describe("SettingsDrawer (#460 — settings index)", () => {
     expect(sub?.textContent).not.toContain("identity");
   });
 
-  it("the general subtitle names identity too for a visitor (both children visible)", () => {
-    subjectHolder.current = { kind: "visitor", id: "v1", nick: "alice" };
+  it("#476 — the general subtitle names per-network identity whenever there are networks (any subject)", () => {
+    // The editor is subject-agnostic now (visitor-gate relic removed); the
+    // subtitle promises identity for a USER with a network too, driven by the
+    // presence of a Network row, not the subject class.
+    subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
+    networksHolder.current = [
+      {
+        kind: "user" as const,
+        id: 1,
+        slug: "bahamut-test",
+        nick: "vjt-grappa",
+        ident: null as string | null,
+        realname: null as string | null,
+        connection_state: "connected" as const,
+        connection_state_reason: null as string | null,
+        connection_state_changed_at: null as string | null,
+        inserted_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
     wrap(true);
     const sub = screen
       .getByTestId("general-settings-entry")
@@ -1152,6 +1202,21 @@ describe("SettingsDrawer (#460 — settings index)", () => {
 
   it("tapping the general row opens the general sub-page (visitor: identity + upload retention); back returns", () => {
     subjectHolder.current = { kind: "visitor", id: "v1", nick: "alice" };
+    networksHolder.current = [
+      {
+        kind: "visitor" as const,
+        id: 1,
+        slug: "azzurra",
+        nick: "alice",
+        ident: null as string | null,
+        realname: null as string | null,
+        connection_state: "connected" as const,
+        connection_state_reason: null as string | null,
+        connection_state_changed_at: null as string | null,
+        inserted_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
     wrap(true);
     openSub("general-settings-entry");
     expect(screen.getByTestId("settings-section-identity")).toBeInTheDocument();
@@ -1180,5 +1245,114 @@ describe("SettingsDrawer (#460 — settings index)", () => {
     expect(screen.getByTestId("share-session-entry")).toBeInTheDocument();
     expect(screen.getByTestId("quit-irc-btn")).toBeInTheDocument();
     expect(screen.getByTestId("settings-drawer-done")).toBeInTheDocument();
+  });
+});
+
+// #476 / #478 — the per-network identity editor is available to BOTH subjects
+// (the visitor-only gate was a relic of the retired "users have no per-network
+// identity" premise) and targets the SELECTED network row rather than the
+// lowest-id "anchor" (the #478 relic). A row-factory keeps the many-network
+// fixtures readable.
+describe("SettingsDrawer (#476/#478 — per-network identity, both subjects)", () => {
+  type Kind = "user" | "visitor";
+  const netRow = (
+    kind: Kind,
+    id: number,
+    slug: string,
+    nick: string,
+    ident = "",
+    realname = "",
+  ) => ({
+    kind,
+    id,
+    slug,
+    nick,
+    ident: (ident === "" ? null : ident) as string | null,
+    realname: (realname === "" ? null : realname) as string | null,
+    connection_state: "connected" as const,
+    connection_state_reason: null as string | null,
+    connection_state_changed_at: null as string | null,
+    inserted_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  });
+
+  const seedUser = () => {
+    meHolder.current = {
+      kind: "user",
+      id: "u1",
+      name: "alice",
+      is_admin: false,
+      inserted_at: "2026-06-29T00:00:00Z",
+    };
+    subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
+  };
+
+  it("#476 — a single network renders a static network label, not a selector", () => {
+    seedUser();
+    networksHolder.current = [netRow("user", 1, "bahamut-test", "vjt-grappa", "grp", "Real")];
+    wrap(true);
+    openSub("general-settings-entry");
+    expect(screen.queryByTestId("settings-identity-network-select")).toBeNull();
+    expect(screen.getByTestId("settings-identity-network-label")).toHaveTextContent("bahamut-test");
+  });
+
+  it("#476/#478 — >1 network renders a selector; picking one re-seeds fields + targets it on apply", async () => {
+    const api = await import("../lib/api");
+    seedUser();
+    networksHolder.current = [
+      netRow("user", 1, "azzurra", "nick-a", "id-a", "Real A"),
+      netRow("user", 2, "libera", "nick-b", "id-b", "Real B"),
+    ];
+    // No focus → default to the FIRST network (azzurra), NOT a lowest-id anchor
+    // decision baked into a helper — the selector owns the choice now.
+    wrap(true);
+    openSub("general-settings-entry");
+    const select = screen.getByTestId("settings-identity-network-select") as HTMLSelectElement;
+    expect(select).toBeInTheDocument();
+    expect(select.value).toBe("azzurra");
+    const nick = screen.getByLabelText(/^nick$/i) as HTMLInputElement;
+    expect(nick.value).toBe("nick-a");
+
+    // Switch target → fields re-seed from the newly-selected row.
+    fireEvent.change(select, { target: { value: "libera" } });
+    expect(nick.value).toBe("nick-b");
+    expect((screen.getByLabelText(/^ident$/i) as HTMLInputElement).value).toBe("id-b");
+    expect((screen.getByLabelText(/real name/i) as HTMLInputElement).value).toBe("Real B");
+
+    // Apply PATCHes the SELECTED network's slug (libera), not the first.
+    const applyBtn = screen.getByTestId("settings-identity-apply");
+    fireEvent.click(applyBtn);
+    fireEvent.click(applyBtn);
+    await waitFor(() => {
+      expect(api.updateNetworkIdentity).toHaveBeenCalledWith("test-bearer", "libera", {
+        nick: "nick-b",
+        ident: "id-b",
+        realname: "Real B",
+      });
+    });
+  });
+
+  it("#476 — the editor defaults its target to the currently-focused network", () => {
+    seedUser();
+    networksHolder.current = [
+      netRow("user", 1, "azzurra", "nick-a"),
+      netRow("user", 2, "libera", "nick-b"),
+    ];
+    selectedChannelHolder.current = { networkSlug: "libera", channelName: "#x", kind: "channel" };
+    wrap(true);
+    openSub("general-settings-entry");
+    const select = screen.getByTestId("settings-identity-network-select") as HTMLSelectElement;
+    expect(select.value).toBe("libera");
+    expect((screen.getByLabelText(/^nick$/i) as HTMLInputElement).value).toBe("nick-b");
+  });
+
+  it("#476 — general sub-page hides identity entirely when there are no networks", () => {
+    meHolder.current = null;
+    subjectHolder.current = null;
+    networksHolder.current = [];
+    wrap(true);
+    // The general row still opens (upload retention is host-gated, present).
+    openSub("general-settings-entry");
+    expect(screen.queryByTestId("settings-section-identity")).toBeNull();
   });
 });
