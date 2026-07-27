@@ -371,6 +371,47 @@ describe("HomePane", () => {
     });
   });
 
+  // #481 — the "available to connect" self-serve tier opens to BOTH
+  // subjects (the visitor-only premise was a #461 relic). The section is
+  // already subject-agnostic in the render; these pin that a USER sees +
+  // one-taps it, and that the empty-networks copy stops telling a user to
+  // "ask the operator" when they can self-connect an available network.
+  describe("#481 — self-serve tier open to both subjects", () => {
+    const userHome = (available: { slug: string }[]): HomeDataLocal => ({
+      networks: [],
+      available_networks: available,
+    });
+
+    it("USER subject sees + one-taps the available section (POST /session/networks)", async () => {
+      userMock.mockReturnValue({ kind: "user", id: "u1", name: "vjt" });
+      homeDataMock.mockReturnValue(userHome([{ slug: "libera" }]));
+      render(() => <HomePane />);
+
+      const connectBtn = screen.getByTestId("home-available-connect-libera");
+      fireEvent.click(connectBtn);
+
+      await waitFor(() => expect(addNetworkMock).toHaveBeenCalledWith("test-token", "libera"));
+      expect(patchNetworkMock).not.toHaveBeenCalled();
+    });
+
+    it("USER with zero networks + available ones is guided to the picker, NOT 'ask the operator'", () => {
+      userMock.mockReturnValue({ kind: "user", id: "u1", name: "vjt" });
+      homeDataMock.mockReturnValue(userHome([{ slug: "libera" }]));
+      render(() => <HomePane />);
+
+      expect(screen.getByText(/pick a network below/i)).toBeInTheDocument();
+      expect(screen.queryByText(/No networks bound/i)).toBeNull();
+    });
+
+    it("USER with zero networks AND no available ones still sees 'ask the operator'", () => {
+      userMock.mockReturnValue({ kind: "user", id: "u1", name: "vjt" });
+      homeDataMock.mockReturnValue(userHome([]));
+      render(() => <HomePane />);
+
+      expect(screen.getByText(/No networks bound/i)).toBeInTheDocument();
+    });
+  });
+
   describe("registered branch (homeData() !== null)", () => {
     const TWO_NETWORKS = {
       networks: [

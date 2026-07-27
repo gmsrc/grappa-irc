@@ -254,18 +254,19 @@ export type ServicesFlavor = NetworksNetworkServicesFlavor;
 // `HomePaneRegistered` reads ONLY these fields.
 export type HomeNetworkRow = NetworksWireHomeNetworkRow;
 
-// #211 phase 6 — a network AVAILABLE for a visitor to connect on-demand
-// (`visitor_enabled − attached`). Rendered on the shared home page's
-// "available to connect" section (ruling C). Users get an empty list.
+// #211 phase 6 / #481 — a network AVAILABLE for a subject to connect
+// on-demand (`visitor_enabled − attached`). Rendered on the shared home
+// page's "available to connect" section (ruling C). #481 populates it for
+// BOTH subjects (was visitor-only).
 // Mirror of server-side `Grappa.Networks.Wire.available_network_row/0`.
 export type AvailableNetworkRow = NetworksWireAvailableNetworkRow;
 
 // UX-4 bucket B / #211 phase 6 — `home_data` envelope. Populated for
 // BOTH subjects now (ruling A — the user + visitor home pages are the
 // SAME data-driven component). `networks` = attached; `available_networks`
-// = the visitor on-demand-connect tier (empty for users). Nested (NOT
-// flat) so future home cards land as sibling keys without touching every
-// caller.
+// = the on-demand self-serve tier — populated for BOTH subjects (#481).
+// Nested (NOT flat) so future home cards land as sibling keys without
+// touching every caller.
 export type HomeData = NetworksWireHomeData;
 
 export type MeResponse =

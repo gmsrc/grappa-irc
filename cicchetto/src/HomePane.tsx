@@ -437,16 +437,29 @@ const HomePaneBody: Component = () => {
         when={rows().length > 0}
         fallback={
           <p class="muted" data-testid="home-networks-empty">
+            {/* #481 — when there are networks to self-connect (available
+                to BOTH subjects now), guide to the picker below instead of
+                telling a user to "ask the operator": that copy is a #461
+                relic when the user can one-tap connect. Only a subject with
+                NO available networks falls back to the per-subject dead-end
+                copy (visitor mid-connect vs user operator-bind hint). */}
             <Show
-              when={visitor()}
+              when={available().length > 0}
               fallback={
-                <>
-                  No networks bound. Ask the operator to bind one via{" "}
-                  <code>bin/grappa bind-network</code>.
-                </>
+                <Show
+                  when={visitor()}
+                  fallback={
+                    <>
+                      No networks bound. Ask the operator to bind one via{" "}
+                      <code>bin/grappa bind-network</code>.
+                    </>
+                  }
+                >
+                  Connecting…
+                </Show>
               }
             >
-              Connecting… pick a network below to get started.
+              Pick a network below to get started.
             </Show>
           </p>
         }
