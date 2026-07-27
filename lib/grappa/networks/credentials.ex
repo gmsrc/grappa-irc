@@ -448,6 +448,32 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
+  #481 — the USER twin of `representative_visitor_credential/1`: the
+  identity-anchor credential (lowest `network_id`) a user already holds,
+  used to SEED a self-serve network accretion so a new network starts on
+  the same nick/ident/realname the user carries elsewhere (identity
+  continuity, mirror of `Visitors.accrete_network/3`'s seed). `{:error,
+  :not_found}` when the user holds no credential yet — the accretion caller
+  falls back to `user.name` (users always have a canonical account name,
+  unlike visitors whose identity lives only on credentials).
+  """
+  @spec representative_user_credential(Ecto.UUID.t()) ::
+          {:ok, Credential.t()} | {:error, :not_found}
+  def representative_user_credential(user_id) when is_binary(user_id) do
+    query =
+      from(c in Credential,
+        where: c.user_id == ^user_id,
+        order_by: [asc: c.network_id],
+        limit: 1
+      )
+
+    case Repo.one(query) do
+      %Credential{} = c -> {:ok, c}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  @doc """
   #211 phase 7 — batched representative-nick lookup:
   `[visitor_id] → %{visitor_id => nick}`. One query regardless of input
   size, for admin listings that resolve N visitor session labels without

@@ -55,6 +55,7 @@ defmodule GrappaWeb.NetworksController do
   alias Grappa.{Networks, Session}
   alias Grappa.Networks.{Credential, Credentials, SessionPlan}
   alias Grappa.Visitors.Visitor
+  alias GrappaWeb.{NetworkSpawn, Subject}
 
   require Logger
 
@@ -319,7 +320,7 @@ defmodule GrappaWeb.NetworksController do
     # tolerates the duplicate broadcast since `connection_state_changed`
     # is idempotent at the wire-edge.
     with {:ok, plan} <- resolve_plan(subject, credential, conn.assigns.network),
-         {:ok, _} <- orchestrate_spawn(conn, subject, credential, plan),
+         {:ok, _} <- NetworkSpawn.orchestrate(conn, subject, credential, plan),
          {:ok, updated_cred} <- Networks.connect(credential) do
       {:ok, updated_cred}
     end
@@ -367,81 +368,6 @@ defmodule GrappaWeb.NetworksController do
     end
   end
 
-  # Call the orchestrator with the cred's network_id + computed plan +
-  # capacity inputs. Subject-polymorphic (phase 6): the flow discriminant
-  # is `:patch_network_connect` for users, `:visitor_reconnect` for
-  # visitors (so the #171 per-IP cap tags the right subject_kind); the
-  # `requesting_subject` self-exclusion keeps the caller's own live
-  # browser session from counting against the cap on the respawn. Returns
-  # the orchestrator's typed error atom verbatim so FallbackController's
-  # existing T31 clauses pick up the 503 mapping unchanged.
-  @spec orchestrate_spawn(
-          Plug.Conn.t(),
-          GrappaWeb.Subject.t(),
-          Credential.t(),
-          Session.start_opts()
-        ) :: {:ok, pid()} | {:error, term()}
-  defp orchestrate_spawn(conn, subject, credential, plan) do
-    network_id = credential.network_id
-    session_subject = to_session_subject(subject)
-
-    capacity_input = %{
-      network_id: network_id,
-      # #171: raw conn here (no pre-formatted input.ip like login has), so
-      # format through the canonical `RemoteIP.format/1` — the SAME
-      # formatter user login stores in accounts_sessions.ip, or the per-IP
-      # count would silently miss the stored rows.
-      source_ip: GrappaWeb.RemoteIP.format(conn),
-      flow: connect_flow(subject),
-      # UX-5 bucket BC (2026-05-19): the requesting subject IS the subject
-      # the spawn is for. Self-exclusion in the per-IP cap keeps it from
-      # counting the caller's own active browser accounts_session against
-      # them on the T32 park → /connect respawn path.
-      requesting_subject: session_subject
-    }
-
-    case Grappa.SpawnOrchestrator.spawn(session_subject, network_id, plan, capacity_input) do
-      {:ok, :spawned, pid} ->
-        {:ok, pid}
-
-      {:ok, :already_started, pid} ->
-        {:ok, pid}
-
-      {:ok, :ignored} ->
-        # `Session.Server.init/1` short-circuited because the
-        # credential row was unbound between this controller's
-        # admission check and the spawn. Surface as :not_found so the
-        # operator sees the same `404` a missing credential would give.
-        Logger.warning(
-          "PATCH /connect: subject row gone mid-spawn #{inspect(session_subject)}",
-          network_id: network_id
-        )
-
-        {:error, :not_found}
-
-      {:error, reason} = err ->
-        Logger.warning(
-          "PATCH /connect: session spawn rejected #{inspect(session_subject)}",
-          network_id: network_id,
-          error: inspect(reason)
-        )
-
-        err
-    end
-  end
-
-  @spec to_session_subject(GrappaWeb.Subject.t()) :: Session.subject()
-  defp to_session_subject({:user, %User{id: id}}), do: {:user, id}
-  defp to_session_subject({:visitor, %Visitor{id: id}}), do: {:visitor, id}
-
-  # U-2: the network-total cap atom is subject-keyed via the flow. A
-  # user connect is `:patch_network_connect`; a visitor connect reuses
-  # the `:visitor_reconnect` flow (subject_kind :visitor) so the cap +
-  # circuit gate the right pool.
-  @spec connect_flow(GrappaWeb.Subject.t()) :: Grappa.Admission.flow()
-  defp connect_flow({:user, _}), do: :patch_network_connect
-  defp connect_flow({:visitor, _}), do: :visitor_reconnect
-
   # ---------------------------------------------------------------------------
   # PATCH /networks/:network_id/identity helpers (#211 phase 6, ruling E)
   # ---------------------------------------------------------------------------
@@ -477,7 +403,7 @@ defmodule GrappaWeb.NetworksController do
   @spec live_apply_identity(GrappaWeb.Subject.t(), Grappa.Networks.Network.t(), Credential.t()) ::
           :ok
   defp live_apply_identity(subject, %{id: network_id} = network, credential) do
-    session_subject = to_session_subject(subject)
+    session_subject = Subject.to_session(subject)
 
     with pid when is_pid(pid) <- Session.whereis(session_subject, network_id),
          {:ok, plan} <- resolve_plan(subject, credential, network) do
@@ -507,17 +433,18 @@ defmodule GrappaWeb.NetworksController do
     end
   end
 
-  # Mirror of `orchestrate_spawn/4`'s capacity_input for the identity
-  # bounce. `requesting_subject` self-excludes the caller's own session
-  # from the per-IP cap on the respawn.
+  # Mirror of `NetworkSpawn.orchestrate/4`'s capacity_input for the
+  # identity bounce (reconnect/5, not spawn/4). `requesting_subject`
+  # self-excludes the caller's own session from the per-IP cap on the
+  # respawn.
   @spec identity_capacity_input(GrappaWeb.Subject.t(), integer()) :: Grappa.Admission.capacity_input()
   defp identity_capacity_input(subject, network_id) do
-    session_subject = to_session_subject(subject)
+    session_subject = Subject.to_session(subject)
 
     %{
       network_id: network_id,
       source_ip: nil,
-      flow: connect_flow(subject),
+      flow: Subject.connect_flow(subject),
       requesting_subject: session_subject
     }
   end

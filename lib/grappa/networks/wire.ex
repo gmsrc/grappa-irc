@@ -172,12 +172,14 @@ defmodule Grappa.Networks.Wire do
         }
 
   @typedoc """
-  #211 phase 6: a network AVAILABLE for a visitor to connect on-demand —
-  `visitor_enabled` MINUS the visitor's already-attached set. Rendered on
-  the (now-shared) home page's "available to connect" section (ruling C:
-  "home page shows connected + available"). Users get an empty list
-  (they bind via the operator surface, not self-service). Just the slug —
-  the connect action POSTs it to `/session/networks`.
+  #211 phase 6 / #481: a network AVAILABLE for a subject to connect
+  on-demand — `visitor_enabled` MINUS the subject's already-attached set.
+  Rendered on the (shared) home page's "available to connect" section
+  (ruling C: "home page shows connected + available"). #481 populates it
+  for BOTH subjects (was visitor-only); `visitor_enabled` is the
+  operator-approved self-serve allowlist, a property of the network, so
+  the same bound admits users. Just the slug — the connect action POSTs it
+  to `/session/networks`.
   """
   @type available_network_row :: %{slug: String.t()}
 

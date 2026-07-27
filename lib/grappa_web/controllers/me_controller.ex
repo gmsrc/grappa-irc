@@ -106,9 +106,10 @@ defmodule GrappaWeb.MeController do
   lists every credential's `(slug, nick, connection_state, ...)` so cic's
   HomePane renders the networks pane without a second REST round-trip;
   the per-row live nick is resolved via `Networks.resolve_network_nick/2`
-  (same lookup `GET /networks` uses). `available_networks` is the visitor
-  on-demand-connect tier (`visitor_enabled − attached`; empty for users).
-  Built via `Networks.home_data_for_{user,visitor}/1`.
+  (same lookup `GET /networks` uses). `available_networks` is the on-demand
+  self-serve tier (`visitor_enabled − attached`) — populated for BOTH
+  subjects (#481; was visitor-only). Built via
+  `Networks.home_data_for_{user,visitor}/1`.
 
   Live updates land via the `connection_state_changed` typed event
   on `Topic.user/1` (REV-J M15 folded the prior

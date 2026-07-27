@@ -534,22 +534,40 @@ defmodule Grappa.Networks do
   `%{networks: [...], available_networks: []}` per
   `Networks.Wire.home_data/2`.
 
-  Per-row nick is resolved live via `resolve_network_nick/2`. Users get
-  an EMPTY `available_networks` — they bind networks via the operator
-  credential surface, not the visitor on-demand-connect tier (ruling C).
+  Per-row nick is resolved live via `resolve_network_nick/2`.
 
-  #211 phase 6 — visitors now ALSO get a populated `home_data` (via
+  #211 phase 6 — visitors ALSO get a populated `home_data` (via
   `home_data_for_visitor/1`); the two home pages are the SAME
   data-driven component (ruling A).
+
+  #481 — users ALSO get a populated `available_networks` (the retired
+  "users get an EMPTY list, ruling C" premise was a #461 relic). Both
+  subjects share the on-demand-connect tier: every `visitor_enabled`
+  network MINUS the ones already attached. `visitor_enabled` is the
+  operator-approved self-serve allowlist — a property of the NETWORK, not
+  visitor identity — so the same bound applies to users. (The
+  `visitor_enabled` NAME is now a misnomer; rename is schema+wire-touching
+  and deferred — see DESIGN_NOTES 2026-07-27.) This is the byte-for-byte
+  twin of `home_data_for_visitor/1`'s available computation; the two
+  functions differ only in HOW they list attached credentials.
   """
   @spec home_data_for_user(User.t()) :: Wire.home_data()
   def home_data_for_user(%User{id: user_id} = user) do
-    pairs =
-      user
-      |> Credentials.list_credentials_for_user()
-      |> Enum.map(fn cred -> {cred, resolve_network_nick({:user, user_id}, cred)} end)
+    credentials = Credentials.list_credentials_for_user(user)
 
-    Wire.home_data(pairs, [])
+    pairs =
+      Enum.map(credentials, fn cred ->
+        {cred, resolve_network_nick({:user, user_id}, cred)}
+      end)
+
+    attached_slugs = MapSet.new(credentials, fn cred -> cred.network.slug end)
+
+    available_slugs =
+      list_visitor_enabled()
+      |> Enum.map(& &1.slug)
+      |> Enum.reject(&MapSet.member?(attached_slugs, &1))
+
+    Wire.home_data(pairs, available_slugs)
   end
 
   @doc """

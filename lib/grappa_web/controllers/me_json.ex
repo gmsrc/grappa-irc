@@ -61,7 +61,7 @@ defmodule GrappaWeb.MeJSON do
   `connection_state_changed` typed event payload's `:network` key exactly
   (REV-J M15 fold), so cic patches `home_data.networks` slots in-place
   from live updates without re-fetching `GET /me`. `available_networks`
-  is the visitor on-demand-connect tier (empty for users).
+  is the on-demand self-serve tier — populated for BOTH subjects (#481).
   """
   alias Grappa.Accounts.{User, Wire}
   alias Grappa.Networks.Wire, as: NetworksWire

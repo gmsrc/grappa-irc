@@ -32,6 +32,22 @@ defmodule GrappaWeb.Subject do
   def to_session({:visitor, %Visitor{id: id}}), do: {:visitor, id}
 
   @doc """
+  Map a web-layer subject to the `Grappa.Admission.flow/0` used when
+  spawning/reconnecting that subject's upstream from a runtime web
+  surface. U-2: the network-total cap atom + circuit are subject-keyed
+  via the flow. A user connect/accretion is `:patch_network_connect`; a
+  visitor connect reuses `:visitor_reconnect` (subject_kind `:visitor`) so
+  the cap gates the right pool.
+
+  Single source for the two web spawn surfaces — `GrappaWeb.NetworkSpawn`
+  (PATCH /networks/:id connect + POST /session/networks user accretion,
+  #481) and `NetworksController`'s identity-bounce reconnect.
+  """
+  @spec connect_flow(t()) :: Grappa.Admission.flow()
+  def connect_flow({:user, _}), do: :patch_network_connect
+  def connect_flow({:visitor, _}), do: :visitor_reconnect
+
+  @doc """
   Derive the user_name segment of a `Grappa.PubSub.Topic` from a
   web-layer subject.
 
