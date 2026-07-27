@@ -69,6 +69,7 @@ import NamesModal from "./NamesModal";
 import NextActiveButton from "./NextActiveButton";
 import PresenceToasts from "./PresenceToasts";
 import PrivacyModal from "./PrivacyModal";
+import RailActions from "./RailActions";
 import RegistrationWizardModal from "./RegistrationWizardModal";
 import ResizeHandle from "./ResizeHandle";
 import ScrollbackPane from "./ScrollbackPane";
@@ -729,12 +730,20 @@ const Shell: Component = () => {
                 narrows via .shell-no-members in CSS); the handle is
                 inside the aside so it's hidden together. */}
             <ResizeHandle side="right" />
-            <ActionCluster onOpenSettings={() => setSettingsOpen(true)} channel={railChannel()} />
             <Show when={isActiveChannelJoined() && selectedChannel()}>
               {(sel) => (
                 <MembersPane networkSlug={sel().networkSlug} channelName={sel().channelName} />
               )}
             </Show>
+            {/* #473 — the ONE unified rail action drawer, floored at the bottom
+                (CSS `.rail-actions { margin-top: auto }`). Supersedes the desktop
+                top ActionCluster (cog + denoise) and, crucially, brings the
+                window-nav launchers (home / rooms / themes / admin) the desktop
+                rail never had — the desktop rail was "a cog and a monkey" (#473).
+                The mobile drawer mounts the SAME component (below). Archive is
+                held pending the desktop-surface ruling; until then desktop
+                archive stays the Sidebar `<details>`. */}
+            <RailActions setters={{ membersOpen, setMembersOpen, setSettingsOpen }} />
           </aside>
 
           <SettingsDrawer

@@ -979,6 +979,13 @@ html.overlay-open #root > div {
   border-left: 1px solid var(--border);
   background: var(--bg-alt);
   overflow-y: auto;
+  /* #473 — flex column so the `.rail-actions` drawer floors at the bottom of
+     the rail (via `margin-top: auto`) with the members list above it, on the
+     desktop rail too. The mobile `.shell-members` override (~:4159) already
+     declares this; lifting it to the base rule makes the bottom-pinned drawer
+     behave identically on both form factors (issue #473's core goal). */
+  display: flex;
+  flex-direction: column;
   /* #205 — safe-area insets removed from the base rule and relocated to
      the mobile `.shell-members` override (~:2969). On desktop the members
      aside is a grid CHILD of `.shell`, which now insets the whole
@@ -1534,6 +1541,67 @@ html.resize-dragging * {
   border-bottom: 1px solid var(--border);
   background: var(--bg-alt);
   flex-shrink: 0;
+}
+
+/* #473 — the ONE unified rail action drawer. A VERTICAL column of labelled
+   buttons (glyph + text name) pinned at the BOTTOM of `.shell-members`, mounted
+   identically on the desktop rail and the mobile drawer. Vertical + full-width
+   rows fill the desktop rail without looking sparse and, on a narrow phone
+   drawer, stack cleanly instead of wrapping a horizontal glyph row (the
+   #299/#332 clip-then-wrap churn the old `.mobile-panel-actions` footer fought).
+   `margin-top: auto` floors it in the flex-column rail regardless of how tall
+   the members list above is; `border-top` separates it from that list (or the
+   empty rail) above. Supersedes `.action-cluster` (top) + `.mobile-panel-actions`
+   (mobile footer). */
+.rail-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-alt);
+  flex-shrink: 0;
+}
+
+/* Each rail action is a full-width row: glyph then name, left-aligned. Adopts
+   `.shell-chrome-btn` (base chrome + size tokens: border, hover, mono font) via
+   its className; these overrides turn the square icon button into a wide
+   labelled row. The tap floor (min-height) is inherited from `.shell-chrome-btn`
+   — on mobile the drawer bumps it to var(--tap-min) below. */
+.rail-actions .rail-action {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
+}
+
+.rail-action-icon {
+  flex: none;
+  font-size: var(--chrome-icon-size);
+  line-height: 1;
+}
+
+.rail-action-label {
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  line-height: 1;
+  color: inherit;
+}
+
+/* #222/#473 — the denoise (presence-filter) toggle keeps its accent when the
+   channel is filtered (rows suppressed), matching the former
+   `.action-cluster-presence-toggle` treatment. `flex: none` on the row is not
+   wanted here (rows are full-width), so only the accent state is bespoke. The
+   0,3,0 hover rule preserves the accent on hover (see the #305 note on the old
+   toggle) — `.shell-chrome-btn:hover` would otherwise flip it to var(--fg). */
+.rail-action-presence-toggle.presence-hidden {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.rail-action-presence-toggle.presence-hidden:hover {
+  color: var(--accent);
 }
 
 /* #275 — channel name + modes stacked in ONE width-capped clickable box.
