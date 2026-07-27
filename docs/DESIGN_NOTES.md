@@ -20599,3 +20599,113 @@ Playwright `workers:1`/`fullyParallel:false` → serial → the window can't
 race a parallel vjt spec.
 
 **Deploy class: COLD** (cic bundle only; no server change).
+
+## 2026-07-27 — #481: the "available to connect" self-serve tier opens to BOTH subjects (last #461 relic)
+
+**Why.** Fourth and last relic from the #461 audit. Product ruling (per
+chan): *"anche quella è un relic, visitor possono avere multiple network se
+sono abilitate."* Unlike its three siblings (#476/#477/#478 — client-side
+un-gates), the visitor-only premise here was enforced in THREE independent
+places, so deleting only the visible one produces an empty section:
+
+  1. **Server payload empty by construction** — `Networks.home_data_for_user/1`
+     ended in `Wire.home_data(pairs, [])` (hardcoded empty `available_networks`).
+  2. **Server write verb 403s users** — `POST /session/networks` →
+     `SessionController.add_network/2` gated by `require_visitor/1`.
+  3. **Client section** — already subject-agnostic in the render (gated only
+     on a non-empty list), so gate 3 was the SYMPTOM; gates 1+2 the relic.
+
+**Is `visitor_enabled` the right bound, or a lying name? BOTH.** Challenged
+before building (per CLAUDE.md). Read the code: `visitor_enabled` is an
+OPERATOR admission decision about the NETWORK (default `false`, "play safe",
+admin opts a network into the self-serve tier; read at request time as an
+"allowlist"), and it sits alongside `max_concurrent_user_sessions` (default
+3) — the network model already contemplates users connecting. So the flag
+means *"operator-approved for the on-demand self-serve tier"* — a property
+of the network, agnostic to who connects. The BOUND is therefore CORRECT
+for both subjects (it stops a user self-attaching an operator-private
+network). The NAME (`visitor_enabled` / `list_visitor_enabled` /
+`get_visitor_enabled_network_by_slug` / `:network_not_visitor_enabled`) is a
+#461-family misnomer post-#481. **Rename is schema- AND wire-touching** (DB
+column + the `:network_not_visitor_enabled` #411-generated error token → cic
+copy), so it is DEFERRED — flagged by vjt, his to schedule. Recorded here
+(the durable record) rather than propagated silently or in an issue comment
+that dies when #481 closes.
+
+**Design — narrow the union at the door, reuse the spawn VERB not the visitor
+NOUN.** `home_data_for_user/1` now computes `available_networks` the
+byte-for-byte twin way `home_data_for_visitor/1` does (`list_visitor_enabled()`
+minus attached slugs). `add_network/2` narrows on the `:authn` subject:
+
+  * visitor → `Visitors.accrete_network/3` (unchanged — the visitor context
+    is allowed to dep `SpawnOrchestrator` and spawns its own upstream);
+  * user → `add_user_network/3` in the controller: fetch the allowlisted
+    network → idempotency guard (409) → bind a USER credential → resolve the
+    user `SessionPlan` → spawn.
+
+The user branch does NOT route through the visitor-typed `accrete_network/3`
+(a shared data model with a subject type-flag would be a boundary violation,
+CLAUDE.md 6.6). It reuses the shared spawn framework instead.
+
+**Boundary — why the user spawn is web-orchestrated.** `Grappa.Networks`
+must NOT dep `SpawnOrchestrator` (the `Networks → Admission → Networks`
+cycle), so a user network-attach-and-spawn cannot be a Networks context fn.
+The web layer is the sanctioned place (it already orchestrates the user
+PATCH-connect spawn). Extracted the shared glue into `GrappaWeb.NetworkSpawn.orchestrate/4`
+(capacity_input + `SpawnOrchestrator.spawn` + the `:ignored`→`:not_found`
+mapping), now used by BOTH the connect path (`NetworksController`) and
+accretion (`SessionController`), so the two doors cannot drift on the #171
+per-IP / network-total caps. The subject→flow codec moved to
+`GrappaWeb.Subject.connect_flow/1` (SSOT for spawn + identity-bounce).
+
+**The per-IP cap worry (issue's open point) — resolved by reuse.** The user
+branch spawns with the SAME capacity path as user PATCH-connect (`flow:
+:patch_network_connect` → per-IP + network-total caps), so it is NOT the one
+unbounded network-spawn verb. `:login_fresh` is visitor-only (subject_kind
+`:visitor`); `:patch_network_connect` is the only user runtime-connect flow.
+
+**Identity seed.** A user's new self-serve credential seeds nick/ident/realname
+from `Credentials.representative_user_credential/1` (the twin of the visitor
+helper — lowest-`network_id` credential, identity continuity), falling back
+to `user.name` when the user holds none yet (users always have a canonical
+account name; per-network identity is editable afterwards via #476). Binds
+ANON (`auth_method: :none`) — a fresh upstream the user hasn't identified on.
+
+**cic — honest empty-state (the one real client delta).** The available
+SECTION already rendered subject-agnostically, so it needed no change. But
+in an env with `visitor_enabled` networks a fresh USER with zero attached
+networks would otherwise see "No networks bound. Ask the operator to bind
+one via bin/grappa bind-network" ABOVE a one-tap picker — contradictory /
+dishonest copy, itself a #481 relic. Fix: when `available_networks` is
+non-empty, both subjects are guided to the picker ("Pick a network below to
+get started."); only a subject with NO available networks falls back to the
+per-subject dead-end copy (visitor "Connecting…" vs user operator-bind hint).
+
+**#405 e2e contract shift.** `issue405-fresh-account-journey` pinned the
+fresh USER "ask the operator" empty-state as the #404 proof (bare account
+name → user, not guest). Post-#481 that USER lands on the shared self-serve
+picker (the seeded stack has azzurra/azzurra2/azzurra3 `visitor_enabled`),
+so the empty-state TEXT no longer discriminates user from guest. The #404
+proof was re-anchored on the ROBUST discriminators it always had —
+visitor-welcome-block absent + `grappa-subject` kind:"user" — plus the
+positive proof that the user reaches the self-serve section. The "ask the
+operator" assertion was updated, not deleted around (it was a #481 relic in
+that env).
+
+**e2e — full-live, dedicated user (`issue481-user-accretion.spec.ts`).** B
+(browser render-only) was rejected: the updated #405 spec ALREADY proves a
+real USER sees the self-serve section, so B added near-zero. Only a live
+one-tap proves the FEATURE — that the user's tap CONNECTS. No existing
+seeded user is safe for a live accrete (vjt/fresh405/wiz/m9b each assert
+their own network set → cross-spec pollution), so a dedicated `accr481`
+user (NO bind) was seeded (compose.yaml + seedData `ACCRETE_*` +
+globalSetup). It one-taps azzurra2 (→ solanum/bahamut-test2, an INDEPENDENT
+nick namespace, so the shared-leaf 433 trap never fires on the fresh dial);
+the visible outcome is azzurra2's sidebar network header appearing LIVE (it
+was AVAILABLE, not attached, at login → its appearance = the accretion
+connected it). The seed is SHARED e2e infra, so the ship gate is the FULL
+`scripts/integration.sh` green, not the spec alone (a dedicated isolated
+user + subject-kind-separate cap pool keeps its live azzurra2 session at
+zero blast radius, but only the full suite proves it).
+
+**Deploy class: server + cic (COLD).**
