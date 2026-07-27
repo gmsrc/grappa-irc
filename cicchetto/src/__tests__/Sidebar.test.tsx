@@ -192,11 +192,16 @@ vi.mock("../lib/awayStatus", () => ({
 
 let mockWindowState: Record<string, string> = {};
 
-const setPartedMock = vi.fn();
+const forcePartedMock = vi.fn();
 
 vi.mock("../lib/windowState", () => ({
   windowStateByChannel: () => mockWindowState,
-  setParted: (...args: unknown[]) => setPartedMock(...args),
+  // #495 split: the × path (windowClose.ts closeChannelWindow /
+  // dismissPseudoWindow) now drops the key via forceParted — the
+  // UNCONDITIONAL user-close verb — not setParted (the echo-safe verb
+  // guarded against a stale own-PART echo). windowClose imports
+  // forceParted, so the mock must provide it or the × handler throws.
+  forceParted: (...args: unknown[]) => forcePartedMock(...args),
 }));
 
 import * as apiMod from "../lib/api";
@@ -734,7 +739,7 @@ describe("Sidebar", () => {
   // UX-5 bucket BK (2026-05-19) — pseudo-rows are closeable via ×.
   // Pre-BK the pseudo-row was uncloseable + the same window also showed
   // in archive (one window, two surfaces — vjt dogfood bug).
-  // Post-BK: × fires setParted (drops windowStateByChannel key) →
+  // Post-BK: × fires forceParted (drops windowStateByChannel key) →
   // row vanishes; visibleArchiveForNetwork's pseudo-name filter releases
   // and the archive section shows the row. If the closed pseudo-row WAS
   // the selected window, selection redirects to $server.
@@ -760,12 +765,12 @@ describe("Sidebar", () => {
       expect(closeBtn).toBeInTheDocument();
     });
 
-    it("clicking × on a failed pseudo-row calls setParted with the channelKey", () => {
+    it("clicking × on a failed pseudo-row calls forceParted with the channelKey", () => {
       mockWindowState = { "freenode #it-opers": "failed" };
       render(() => <Sidebar />);
       const closeBtn = screen.getByLabelText("Close #it-opers");
       fireEvent.click(closeBtn);
-      expect(setPartedMock).toHaveBeenCalledWith("freenode #it-opers");
+      expect(forcePartedMock).toHaveBeenCalledWith("freenode #it-opers");
     });
 
     it("clicking × on the selected pseudo-row redirects selection to $server", () => {
@@ -783,7 +788,7 @@ describe("Sidebar", () => {
         channelName: "$server",
         kind: "server",
       });
-      expect(setPartedMock).toHaveBeenCalledWith("freenode #it-opers");
+      expect(forcePartedMock).toHaveBeenCalledWith("freenode #it-opers");
     });
 
     it("clicking × on a non-selected pseudo-row does NOT redirect selection", () => {
@@ -799,7 +804,7 @@ describe("Sidebar", () => {
       const closeBtn = screen.getByLabelText("Close #it-opers");
       fireEvent.click(closeBtn);
       expect(selMod.setSelectedChannel).not.toHaveBeenCalled();
-      expect(setPartedMock).toHaveBeenCalledWith("freenode #it-opers");
+      expect(forcePartedMock).toHaveBeenCalledWith("freenode #it-opers");
     });
   });
 
