@@ -7788,6 +7788,31 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   opacity: 0.85;
 }
 
+/* #496 — one-line intros that precede a list (networks / available /
+   featured), giving each section a plain-language lead instead of a bare
+   list. Muted + slightly smaller so they read as guidance, not headings. */
+.home-pane-section-intro {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.9em;
+}
+
+.home-pane-featured-intro {
+  margin: 0.5rem 0 0.3rem 0;
+  font-size: 0.85em;
+}
+
+/* #496 — the honest per-subject session-lifetime line, rendered as a small
+   left-accented callout under the welcome copy so the ∞ / 48h / 7-day truth
+   reads as a deliberate note rather than more body text. */
+.home-pane-session {
+  margin: 0.25rem 0 0 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid var(--accent);
+  background: var(--bg-alt);
+  border-radius: 0 3px 3px 0;
+  font-size: 0.9em;
+}
+
 .home-pane-network-slug {
   font-weight: bold;
   color: var(--accent);
@@ -8154,6 +8179,19 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   justify-content: flex-end;
   gap: 0.5rem;
   flex: 0 0 auto;
+}
+
+/* #496 — shared chip geometry so the per-network controls (📝 Register nick,
+   Disconnect, Reconnect, and the flag-hidden 🗺 Map) present UNIFORMLY: one
+   height, one min-width, centered labels. Colour/emphasis stays per-variant
+   in the rules below (accent-filled primary vs subdued-outline secondary). */
+.home-pane-network-action {
+  min-height: 2rem;
+  min-width: 6.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 
 .home-pane-network-reconnect {

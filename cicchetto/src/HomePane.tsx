@@ -12,6 +12,13 @@ import { token } from "./lib/auth";
 import { channelKey } from "./lib/channelKey";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { homeData } from "./lib/home";
+import {
+  HOME_ALWAYS_ON_COPY,
+  HOME_NETWORKS_INTRO_COPY,
+  homeFeaturedIntroCopy,
+  homeSessionLifetime,
+  type SessionLifetimeCopy,
+} from "./lib/homeSessionCopy";
 import { networkIdBySlug, refetchNetworks, refetchUser, user } from "./lib/networks";
 import { flavorForSlug, registerableFlavor } from "./lib/registrationTemplates";
 import { openRegistrationWizard } from "./lib/registrationWizard";
@@ -24,17 +31,23 @@ import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
 import { windowStateByChannel } from "./lib/windowState";
 import NickText from "./NickText";
 
+// #496 — the per-network 🗺 Map (LINKS/topology) control is HIDDEN until
+// `/links` is fixed (the topology bundle it opens is unreliable). Gated, NOT
+// deleted: flip this to `true` to restore the button and its `onTopology`
+// wiring the moment `/links` lands. The button JSX + handler stay in the tree
+// so the return is a one-line flag flip, not an archaeology exercise.
+const SHOW_NETWORK_MAP = false;
+
 // #85 — operator-curated featured channels for a network, fetched on
 // home DISPLAY (component mount / slug change) so an operator config
 // edit lands on the next render without a /me re-fetch or PubSub push.
 // Click: not joined → JOIN then focus (intent follows the tap, mirroring
 // compose.ts /join); already joined → focus only (#125 tap-already-
 // joined). Join errors surface inline — never silently swallowed.
-// `heading` (optional) renders a section title ABOVE the list, gated on
-// the same has-links condition so an empty featured list shows no
-// dangling heading. Registered rows (ConnectedRow / DisconnectedRow) omit
-// it — the network card already labels the context; #135's visitor
-// landing passes it to title the featured section.
+// #496 — an explanatory intro line (`homeFeaturedIntroCopy`) precedes the
+// list, gated on the same has-links condition so an empty featured list
+// shows neither the intro nor a dangling heading. `heading` (optional) still
+// renders a section title ABOVE the list for callers that title the section.
 const FeaturedLinks: Component<{ slug: string; heading?: string }> = (props) => {
   const [error, setError] = createSignal<string | null>(null);
   const [links] = createResource(
@@ -74,6 +87,7 @@ const FeaturedLinks: Component<{ slug: string; heading?: string }> = (props) => 
   return (
     <Show when={(links() ?? []).length > 0}>
       <Show when={props.heading}>{(h) => <h3 class="home-pane-section-title">{h()}</h3>}</Show>
+      <p class="home-pane-featured-intro muted">{homeFeaturedIntroCopy(props.slug)}</p>
       <ul class="home-pane-featured" data-testid={`home-featured-${props.slug}`}>
         <For each={links()}>
           {(link) => (
@@ -107,17 +121,22 @@ const FeaturedLinks: Component<{ slug: string; heading?: string }> = (props) => 
 // A: "the user + visitor home pages are the SAME"). Off `homeData()`
 // (populated for both since phase 6):
 //
+//   * welcome copy — the always-on value prop (#496), shown to EVERYONE
+//     (both subjects): the connection lives on the server, so reopening the
+//     app is enough to be back in the conversation.
+//   * per-subject session-lifetime line (#496) — the honest ∞ / 48h / 7-day
+//     truth for the current subject (see `homeSessionLifetime`).
 //   * networks list — one row per attached network with click-to-jump
 //     (connected) / [Reconnect] chip (parked/failed). NO compose box
 //     (home is a view, not a chat).
-//   * available-to-connect section (visitors only — `available_networks`
-//     is empty for users) — one-tap connect an on-demand
-//     `visitor_enabled` network via `POST /session/networks`.
-//   * welcome copy (visitors only) — orientation for a guest session.
+//   * available-to-connect section — one-tap connect an on-demand
+//     `visitor_enabled` network via `POST /session/networks` (#481: both
+//     subjects; empty for a fully-bound user).
 //
-// Help-text + button labels live entirely in this file per the
-// no-localized-strings-server-side rule. The server-side envelope
-// carries structured data only (slug, nick, atom states).
+// Help-text + button labels live entirely in cic (the `homeSessionCopy`
+// module + this file) per the no-localized-strings-server-side rule. The
+// server-side envelope carries structured data only (slug, nick, atom
+// states, the `registered` boolean).
 //
 // Click semantics:
 //   * :connected row → jump to that network's $server window. Useful
@@ -127,31 +146,31 @@ const FeaturedLinks: Component<{ slug: string; heading?: string }> = (props) => 
 //     2026-05-19) — a typed chip surfaces the action + inline
 //     `friendlyApiError` text on failure (feedback_silent_retry_anti_pattern).
 
-// #211 phase 6 — visitor welcome + orientation copy (guest sessions are
-// ephemeral). Rendered above the networks list ONLY for visitor subjects
-// (users get straight to their networks). Static cic-side string
-// (operator-editable per-network welcome is #136, out of scope).
-const HomeVisitorWelcome: Component = () => (
-  <section class="home-pane-section home-pane-welcome" data-testid="home-visitor-welcome">
+// #496 — the welcome section: the always-on value prop (universal) followed
+// by the honest per-subject session-lifetime line. Rendered for BOTH subjects
+// (the guest-orientation copy folded into the per-subject line). `session` is
+// null only in the (unreachable-here) no-`/me` window; the block still shows
+// the always-on prose.
+const HomeWelcome: Component<{ session: SessionLifetimeCopy | null }> = (props) => (
+  <section class="home-pane-section home-pane-welcome" data-testid="home-welcome">
     <h2 class="home-pane-title">Welcome to Grappa</h2>
-    <p>
-      Grappa is an always-on IRC bouncer. Pick a channel and start talking — while your session
-      stays open the bouncer keeps you connected, so you can close this tab and reopen it right
-      where you left off.
-    </p>
-    <p class="muted">
-      You're here as a guest. A visitor session is ephemeral: when it expires, its scrollback goes
-      with it — nothing is kept for a guest nick.
-    </p>
+    <p>{HOME_ALWAYS_ON_COPY}</p>
+    <Show when={props.session}>
+      {(s) => (
+        <p class="home-pane-session muted" data-testid={s().testid}>
+          {s().text}
+        </p>
+      )}
+    </Show>
   </section>
 );
 
 // #211 phase 6 (ruling C) — "available to connect" section: the
-// `visitor_enabled` networks the visitor hasn't attached yet. One-tap
+// `visitor_enabled` networks the subject hasn't attached yet. One-tap
 // connect POSTs to `/session/networks` (accretion) → the network spawns
 // + appears in the networks list on the next /me/networks refetch. Empty
-// for users (`available_networks` is `[]`), so the whole section is gated
-// on a non-empty list.
+// for a fully-bound subject (`available_networks` is `[]`), so the whole
+// section is gated on a non-empty list.
 const AvailableNetworks: Component<{ available: AvailableNetworkRow[] }> = (props) => {
   const [error, setError] = createSignal<string | null>(null);
   const [connecting, setConnecting] = createSignal<string | null>(null);
@@ -182,6 +201,9 @@ const AvailableNetworks: Component<{ available: AvailableNetworkRow[] }> = (prop
     <Show when={props.available.length > 0}>
       <section class="home-pane-section home-pane-available-section" data-testid="home-available">
         <h3 class="home-pane-section-title">Available to connect</h3>
+        <p class="home-pane-section-intro muted">
+          Tap a network to connect and start chatting on it.
+        </p>
         <ul class="home-pane-available">
           <For each={props.available}>
             {(net) => (
@@ -209,9 +231,9 @@ const AvailableNetworks: Component<{ available: AvailableNetworkRow[] }> = (prop
   );
 };
 
-// Is the current subject a visitor? Drives the visitor-only welcome copy
-// + the available-networks section (users get neither). Reads the /me
-// resource, not the static subject, so a mid-session refetch is honoured.
+// Is the current subject a visitor? Drives the available-networks section
+// visitor-share gate. Reads the /me resource, not the static subject, so a
+// mid-session refetch is honoured.
 function isVisitorSubject(): boolean {
   const m = user();
   return m?.kind === "visitor";
@@ -259,6 +281,7 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
   // onDisconnect — the canonical error-surfacing door is the /links slash
   // command in the compose box; a rejected push (e.g. no live session) just
   // leaves the modal unopened rather than crashing the row.
+  // #496 — invoked only when `SHOW_NETWORK_MAP` is flipped back on.
   const onTopology = () => {
     onJump();
     const id = networkIdBySlug(props.row.slug);
@@ -291,11 +314,12 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
     const umodes = id === undefined ? [] : umodesForNetwork(id);
     return !umodes.includes("r");
   };
-  // #392 — the row is a heading/separator: the network title (name + nick +
-  // state, clickable → jump-to-$server) on the left, a right-side action area
-  // holding the per-network 📝 Register nick launcher + Disconnect. The
-  // prominent 📇 Browse channels CTA sits BELOW the heading, above the
-  // operator-featured channels.
+  // #496 — the row breathes: a heading with the network title (slug + nick +
+  // state, clickable → jump-to-$server) on the left and a UNIFORM action area
+  // on the right (📝 Register nick + Disconnect, sharing the
+  // `home-pane-network-action` chip class). The prominent 📇 Browse channels
+  // CTA + the operator-featured channels sit BELOW the heading. The 🗺 Map
+  // control is flag-hidden (SHOW_NETWORK_MAP) until /links is fixed.
   return (
     <li class="home-pane-network-row home-pane-network-row-connected">
       <div class="home-pane-network-heading">
@@ -308,25 +332,27 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
           <Show when={canRegister()}>
             <button
               type="button"
-              class="home-pane-network-register"
+              class="home-pane-network-action home-pane-network-register"
               data-testid={`home-register-nick-${props.row.slug}`}
               onClick={() => openRegistrationWizard(props.row.slug)}
             >
               📝 Register nick
             </button>
           </Show>
+          <Show when={SHOW_NETWORK_MAP}>
+            <button
+              type="button"
+              class="home-pane-network-action home-pane-network-topology"
+              data-testid={`home-topology-${props.row.slug}`}
+              aria-label={`Network map for ${props.row.slug}`}
+              onClick={onTopology}
+            >
+              🗺 Map
+            </button>
+          </Show>
           <button
             type="button"
-            class="home-pane-network-topology"
-            data-testid={`home-topology-${props.row.slug}`}
-            aria-label={`Network map for ${props.row.slug}`}
-            onClick={onTopology}
-          >
-            🗺 Map
-          </button>
-          <button
-            type="button"
-            class="home-pane-network-disconnect"
+            class="home-pane-network-action home-pane-network-disconnect"
             aria-label={`Disconnect ${props.row.slug}`}
             onClick={onDisconnect}
           >
@@ -379,8 +405,8 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
         "home-pane-network-row-failed": props.row.connection_state === "failed",
       }}
     >
-      {/* #392 — same heading/separator shape as ConnectedRow: static title
-          (name + nick + state) on the left, Reconnect in the right action
+      {/* #496 — same heading/separator shape as ConnectedRow: static title
+          (slug + nick + state) on the left, Reconnect in the uniform action
           area. Reason + inline error sit below the heading; no Browse (a
           parked/failed network has no live session to /LIST). */}
       <div class="home-pane-network-heading">
@@ -392,7 +418,7 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
         <div class="home-pane-network-actions">
           <button
             type="button"
-            class="home-pane-network-reconnect"
+            class="home-pane-network-action home-pane-network-reconnect"
             disabled={pending()}
             aria-label={`Reconnect ${props.row.slug}`}
             onClick={() => void onReconnect()}
@@ -416,66 +442,74 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
 
 // The unified home body — renders for BOTH subjects off `homeData()`
 // (populated for both since phase 6). `homeData()` is non-null here (the
-// top-level `HomePane` gates on it). Visitor extras (welcome copy +
-// available-to-connect) are gated on `isVisitorSubject()`; the networks
-// list + reconnect/jump rows are identical for both subjects.
+// top-level `HomePane` gates on it). The welcome + per-subject session line
+// (#496) and the networks list are identical for both subjects; visitor-only
+// extras (the share-session button) stay gated on `isVisitorSubject()`.
 const HomePaneBody: Component = () => {
   const rows = () => homeData()?.networks ?? [];
   const available = () => homeData()?.available_networks ?? [];
   const visitor = () => isVisitorSubject();
   // #363 — an incognito session is ephemeral, so share-session is disabled.
   const incognito = () => isIncognitoSession();
+  // #496 — the honest per-subject session-lifetime copy. `user()` is non-null
+  // here (HomePane gates on `homeData()`, which derives from the same /me
+  // resource); the null-guard keeps the type total.
+  const session = (): SessionLifetimeCopy | null => {
+    const m = user();
+    return m ? homeSessionLifetime(m, rows()) : null;
+  };
 
   return (
     <div class="home-pane home-pane-registered">
-      <Show when={visitor()}>
-        <HomeVisitorWelcome />
-      </Show>
+      <HomeWelcome session={session()} />
 
-      <h2 class="home-pane-title">Networks</h2>
-      <Show
-        when={rows().length > 0}
-        fallback={
-          <p class="muted" data-testid="home-networks-empty">
-            {/* #481 — when there are networks to self-connect (available
-                to BOTH subjects now), guide to the picker below instead of
-                telling a user to "ask the operator": that copy is a #461
-                relic when the user can one-tap connect. Only a subject with
-                NO available networks falls back to the per-subject dead-end
-                copy (visitor mid-connect vs user operator-bind hint). */}
-            <Show
-              when={available().length > 0}
-              fallback={
-                <Show
-                  when={visitor()}
-                  fallback={
-                    <>
-                      No networks bound. Ask the operator to bind one via{" "}
-                      <code>bin/grappa bind-network</code>.
-                    </>
-                  }
-                >
-                  Connecting…
-                </Show>
+      <section class="home-pane-section home-pane-networks-section">
+        <h2 class="home-pane-title">Networks</h2>
+        <Show
+          when={rows().length > 0}
+          fallback={
+            <p class="muted" data-testid="home-networks-empty">
+              {/* #481 — when there are networks to self-connect (available
+                  to BOTH subjects now), guide to the picker below instead of
+                  telling a user to "ask the operator": that copy is a #461
+                  relic when the user can one-tap connect. Only a subject with
+                  NO available networks falls back to the per-subject dead-end
+                  copy (visitor mid-connect vs user operator-bind hint). */}
+              <Show
+                when={available().length > 0}
+                fallback={
+                  <Show
+                    when={visitor()}
+                    fallback={
+                      <>
+                        No networks bound. Ask the operator to bind one via{" "}
+                        <code>bin/grappa bind-network</code>.
+                      </>
+                    }
+                  >
+                    Connecting…
+                  </Show>
+                }
+              >
+                Pick a network below to get started.
+              </Show>
+            </p>
+          }
+        >
+          <p class="home-pane-section-intro muted">{HOME_NETWORKS_INTRO_COPY}</p>
+          <ul class="home-pane-networks">
+            <For each={rows()}>
+              {(row) =>
+                row.connection_state === "connected" ? (
+                  <ConnectedRow row={row} />
+                ) : (
+                  <DisconnectedRow row={row} />
+                )
               }
-            >
-              Pick a network below to get started.
-            </Show>
-          </p>
-        }
-      >
-        <ul class="home-pane-networks">
-          <For each={rows()}>
-            {(row) =>
-              row.connection_state === "connected" ? (
-                <ConnectedRow row={row} />
-              ) : (
-                <DisconnectedRow row={row} />
-              )
-            }
-          </For>
-        </ul>
-      </Show>
+            </For>
+          </ul>
+        </Show>
+      </section>
 
       <AvailableNetworks available={available()} />
 

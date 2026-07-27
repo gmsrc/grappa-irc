@@ -320,22 +320,42 @@ describe("HomePane", () => {
       available_networks: available,
     });
 
-    it("renders the welcome + orientation copy for a visitor subject (#135)", () => {
+    it("renders the always-on welcome + the guest (48h) session line for a visitor (#135/#496)", () => {
       userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest" });
       homeDataMock.mockReturnValue(visitorHome([]));
       render(() => <HomePane />);
 
-      // Stable phrases the #135 visitor-home e2e also pins.
+      // #496 — the always-on value prop (stable phrase the #135 e2e also pins).
       expect(screen.getByText(/Welcome to Grappa/i)).toBeInTheDocument();
-      expect(screen.getByText(/always-on IRC bouncer/i)).toBeInTheDocument();
+      expect(screen.getByText(/keeps you connected to IRC/i)).toBeInTheDocument();
+      // An UNREGISTERED visitor sees the honest 48h-inactivity line.
+      const guest = screen.getByTestId("home-session-visitor-guest");
+      expect(guest).toHaveTextContent(/48 hours/i);
     });
 
-    it("does NOT render the welcome copy for a USER subject", () => {
+    it("renders the registered (∞) session line naming nick+network for a registered visitor (#496)", () => {
+      userMock.mockReturnValue({ kind: "visitor", id: "v1", registered: true });
+      homeDataMock.mockReturnValue(visitorHome([]));
+      render(() => <HomePane />);
+
+      const reg = screen.getByTestId("home-session-visitor-registered");
+      expect(reg).toHaveTextContent(/indefinitely/i);
+      // Exactly one network (azzurra/guest) → named honestly.
+      expect(reg).toHaveTextContent(/azzurra/);
+    });
+
+    it("renders the always-on welcome + the USER (7-day) session line for a USER subject (#496)", () => {
+      // #496 — the welcome is shown to EVERYONE now (was visitor-only). A user
+      // gets the always-on prop + the honest 7-day DEVICE-login line, never the
+      // guest 48h line.
       userMock.mockReturnValue({ kind: "user", id: "u1", name: "vjt" });
       homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
       render(() => <HomePane />);
 
-      expect(screen.queryByText(/Welcome to Grappa/i)).toBeNull();
+      expect(screen.getByText(/Welcome to Grappa/i)).toBeInTheDocument();
+      const userSession = screen.getByTestId("home-session-user");
+      expect(userSession).toHaveTextContent(/7 days/i);
+      expect(screen.queryByTestId("home-session-visitor-guest")).toBeNull();
     });
 
     it("shows available-to-connect networks; click one-taps accretion (POST /session/networks)", async () => {
@@ -608,41 +628,20 @@ describe("HomePane", () => {
       expect(setSelectedChannelMock).not.toHaveBeenCalled();
     });
 
-    // #238 — per-network 🗺 Map button. Jumps to the network's $server window
-    // (so the network-scoped LinksModal shows THIS net's topology when the
-    // bundle arrives) THEN pushes LINKS. Fire-and-forget behind the modal (the
-    // canonical error door is the /links slash command) — NOT a REST call.
-    it(":connected row 'Map' button jumps to $server then pushes LINKS (#238)", () => {
+    // #496 — the per-network 🗺 Map button is HIDDEN behind `SHOW_NETWORK_MAP`
+    // until `/links` is fixed. The #238 onTopology wiring (jump-to-$server +
+    // pushLinks) stays in the source so a one-line flag flip restores it, but
+    // no Map control renders on any row. (The pushLinks boundary + LinksModal
+    // behaviour stay covered by their own tests / the /links slash command.)
+    it(":connected row does NOT render the 🗺 Map button (#496 — flag-hidden)", () => {
       homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
       networkIdBySlugMock.mockReturnValue(7);
       render(() => <HomePane />);
 
-      const mapBtn = screen.getByRole("button", { name: /network map for azzurra/i });
-      fireEvent.click(mapBtn);
-
-      // The jump lands on the network's $server window...
-      expect(setSelectedChannelMock).toHaveBeenCalledWith({
-        networkSlug: "azzurra",
-        channelName: "$server",
-        kind: "server",
-      });
-      // ...and LINKS is pushed bare (no mask) for the resolved network id.
-      expect(pushLinksMock).toHaveBeenCalledWith(7, null);
-      // A UI shortcut — no REST call.
-      expect(patchNetworkMock).not.toHaveBeenCalled();
-    });
-
-    // #238 — with no live session (networkIdBySlug → undefined) the Map button
-    // still jumps but skips the push rather than calling pushLinks(undefined).
-    it(":connected row 'Map' button skips the push when the network id is unknown (#238)", () => {
-      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
-      networkIdBySlugMock.mockReturnValue(undefined);
-      render(() => <HomePane />);
-
-      fireEvent.click(screen.getByRole("button", { name: /network map for azzurra/i }));
-
-      expect(setSelectedChannelMock).toHaveBeenCalled();
-      expect(pushLinksMock).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: /network map for azzurra/i })).toBeNull();
+      expect(screen.queryByTestId("home-topology-azzurra")).toBeNull();
+      // The other row controls stay present (uniform action area intact).
+      expect(screen.getByRole("button", { name: /disconnect azzurra/i })).toBeInTheDocument();
     });
 
     it(":connected row Disconnect is identical for a VISITOR subject (#283 single path)", () => {

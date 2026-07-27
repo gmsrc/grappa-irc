@@ -70,8 +70,10 @@ async function expectUserHomeSelfServe(page: Page): Promise<void> {
   await expect(empty).not.toContainText(/Connecting/i);
   // The self-serve "available to connect" section renders for a USER now.
   await expect(page.getByTestId("home-available")).toBeVisible();
-  // A guest session would render the visitor welcome block; a user must not.
-  await expect(page.getByTestId("home-visitor-welcome")).toHaveCount(0);
+  // #496 — a user sees the always-on welcome + the USER (7-day) session line,
+  // never the guest (48h) session line.
+  await expect(page.getByTestId("home-session-user")).toBeVisible();
+  await expect(page.getByTestId("home-session-visitor-guest")).toHaveCount(0);
   // Direct: the account is bound to a USER subject, not a visitor. Pre-#404
   // a bare account name silently minted a visitor here.
   const subjectKind = await page.evaluate(() => {

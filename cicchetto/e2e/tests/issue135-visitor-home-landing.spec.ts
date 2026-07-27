@@ -97,8 +97,10 @@ test("issue #135 — visitor home shows welcome + featured + a directory link", 
     await page.goto("/");
     await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
 
-    // (1) Welcome / orientation copy — stable phrase shared with the unit.
-    await expect(page.getByText(/always-on IRC bouncer/i)).toBeVisible({ timeout: 10_000 });
+    // (1) Welcome / orientation copy — the #496 always-on value prop (stable
+    // phrase shared with the HomePane unit) + the honest guest 48h session line.
+    await expect(page.getByText(/keeps you connected to IRC/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("home-session-visitor-guest")).toContainText(/48 hours/i);
 
     // (2) Featured-channels list for the visitor's network. The <ul>
     // testid renders inside the connected network's row (phase 6 — the
