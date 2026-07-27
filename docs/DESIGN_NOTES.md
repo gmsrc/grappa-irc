@@ -21165,3 +21165,42 @@ banned; atoms only here would be half-migrated vs notification_prefs/aliases).
 The closed set is enforced by module constants + the changeset — the "reject
 unknown at the boundary" contract. A code comment records this so it is not
 "fixed" later.
+
+**Two boot-sync regressions the e2e caught (fixed before merge).** Moving a
+localStorage-only pref onto a boot-time server round-trip introduces two hazard
+classes the client-only version never had. Both were caught by unchanged e2e
+specs (crt-splash-font, issue222-presence-filter) and fixed in cic CODE — the
+specs were NOT weakened.
+
+  1. **A cosmetic boot fetch must never kill the session.**
+     `mountDisplayPrefsSync` fires `GET/PUT /me/settings/display-prefs` on every
+     `token()` presence (login, reload, cold load). Those fetches routed their
+     401 through the shared `readError` decoder, which fires the module-global
+     `on401Handler` (the dead-token handler that CLEARS the token). So a VALID
+     session hitting a *transient* 401 on a cosmetic pref got logged straight
+     out. Fix: `readError(res, fireDeadTokenHandler = true)` gates ONLY the
+     on401 side effect; `getDisplayPrefs`/`putDisplayPrefs` pass `false` (still
+     throw the decoded error → coordinator keeps its boot cache, but never clear
+     the token). On-demand settings verbs keep the handler — a 401 while the
+     user is actively in Settings genuinely means the session is dead. **Sibling
+     gap:** `customTheme`'s boot `GET /me/theme` (#75) fires on401 the same way
+     (the crt-splash spec stubs it for exactly this reason) — same class, filed
+     as follow-up, deliberately out of #449's scope.
+
+  2. **An optimistic write must survive a reload before the server ACKs it.**
+     A `syncedSet*` applies optimistically (signal + localStorage) and fires a
+     fire-and-forget PUT. If the PUT is not ACKed before a reload (navigation
+     aborts it / offline / CPU starvation), the next reconcile's
+     `applyServerPrefs` — a FULL replace that rewrites the signal AND the
+     localStorage boot cache — clobbered the just-set pref with the stale server
+     value: the pref vanished for good. On main (localStorage-only) it always
+     survived a reload. Fix: a DURABLE `unsynced` marker in localStorage (set
+     before the PUT, cleared on its success); while set, the reconcile PUSHES
+     local up (the existing seed-up path) instead of letting the server win, so
+     an in-flight write is never lost. Once ACKed, the marker clears and
+     server-wins resumes so a genuine cross-device change still propagates. Same
+     family as the cross-account seed-up leak above: the local cache is a WRITE
+     source, so it needs a sync-status marker, not blind server-wins. This
+     hazard is latent in every optimistic + full-replace-reconcile synced-pref
+     module (notification-prefs, aliases, customTheme) — fixed here for the
+     three display prefs; the siblings are a noted follow-up.
