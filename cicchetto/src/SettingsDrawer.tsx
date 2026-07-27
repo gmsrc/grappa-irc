@@ -121,10 +121,11 @@ const SettingsDrawer: Component<Props> = (props) => {
   // tab signal. cic never originates vhost state — the sub-page reads
   // `vhostView` + reports changes up via the same save-on-change PUT flow.
   const [settingsPage, setSettingsPage] = createSignal<SettingsSubPage>("main");
-  // Visitor-only gate for the identity + share-session sections. #392 — the
-  // share entry now opens a Shell-mounted MODAL (openShareModal), still
-  // visitor-only. Hidden for user subjects entirely — users have passwords,
-  // no per-network identity editor, no session to share.
+  // Visitor-only gate for the share-session section. #392 — the share entry
+  // opens a Shell-mounted MODAL (openShareModal), visitor-only (a user has no
+  // portable session to share). #476 — the identity editor is NO LONGER gated
+  // here: it moved to hasNetworks() (both subjects carry per-network identity
+  // on their /networks rows), so isVisitor now guards ONLY share-session.
   const isVisitor = (): boolean => getSubject()?.kind === "visitor";
   const isUser = (): boolean => getSubject()?.kind === "user";
   // #363 — an incognito (ephemeral) visitor session must not be portable, so
@@ -1025,8 +1026,15 @@ const SettingsDrawer: Component<Props> = (props) => {
                 <div class="settings-identity" data-testid="settings-identity">
                   {/* #476 — which network this identity edits. A picker when
                       there's more than one; a static label otherwise (a
-                      single-option dropdown would be pointless chrome). */}
-                  <label for="settings-identity-network">Network</label>
+                      single-option dropdown would be pointless chrome). The
+                      `for` associates only with the picker branch — in the
+                      static-label case the <select> isn't rendered, so a bare
+                      `for` would dangle at a nonexistent control (a11y). */}
+                  <label
+                    for={identityNetworks().length > 1 ? "settings-identity-network" : undefined}
+                  >
+                    Network
+                  </label>
                   <Show
                     when={identityNetworks().length > 1}
                     fallback={
@@ -1038,9 +1046,13 @@ const SettingsDrawer: Component<Props> = (props) => {
                       </span>
                     }
                   >
+                    {/* Lock the target while an apply is in flight — the save
+                        captured a specific network; switching mid-reconnect
+                        would surface its result banner under the wrong row. */}
                     <select
                       id="settings-identity-network"
                       data-testid="settings-identity-network-select"
+                      disabled={identitySaving()}
                       value={selectedIdentityNetwork()?.slug ?? ""}
                       onChange={(e) => setSelectedIdentitySlug(e.currentTarget.value)}
                     >

@@ -114,21 +114,39 @@ const networksHolder = vi.hoisted(() => ({
       updated_at: "2026-01-01T00:00:00Z",
     },
   ] as unknown[],
+  // #476 — a REACTIVE bump so a test can simulate a live `/networks` refetch
+  // (production `networks()` is a createResource; here it's a stubbed getter).
+  // Wired by the async mock factory below to a Solid signal. Tests that set
+  // `.current` before wrap() never call this and see no behaviour change;
+  // the no-clobber test mutates `.current` then bump()s to re-fire the
+  // component's effects, so it can prove a refetch does NOT overwrite an
+  // in-progress edit (rather than passing vacuously against a dead getter).
+  bump: null as null | (() => void),
 }));
-vi.mock("../lib/networks", () => ({
-  user: () => meHolder.current,
-  // #211 phase 7 — the identity editor + delete-confirm read the visitor's
-  // network rows (anchor nick + per-network ident/realname seed). Stub a
-  // single azzurra visitor row so the editor has an anchor to target.
-  networks: () => networksHolder.current,
-  // #126 — disconnect/reconnect refetch /me; the drawer imports this via
-  // lib/lifecycle. Stub so the import resolves + the verb is observable.
-  refetchUser: vi.fn(),
-  isAdmin: () => {
-    const u = meHolder.current;
-    return u?.kind === "user" && u.is_admin === true;
-  },
-}));
+vi.mock("../lib/networks", async () => {
+  const { createSignal } = await import("solid-js");
+  const [refetchVersion, setRefetchVersion] = createSignal(0);
+  networksHolder.bump = () => setRefetchVersion((v) => v + 1);
+  return {
+    user: () => meHolder.current,
+    // #211 phase 7 — the identity editor + delete-confirm read the visitor's
+    // network rows (anchor nick + per-network ident/realname seed). Stub a
+    // single azzurra visitor row so the editor has an anchor to target.
+    // Reading `refetchVersion()` makes every tracked consumer re-run on
+    // bump() — the reactive twin of a live resource refetch.
+    networks: () => {
+      refetchVersion();
+      return networksHolder.current;
+    },
+    // #126 — disconnect/reconnect refetch /me; the drawer imports this via
+    // lib/lifecycle. Stub so the import resolves + the verb is observable.
+    refetchUser: vi.fn(),
+    isAdmin: () => {
+      const u = meHolder.current;
+      return u?.kind === "user" && u.is_admin === true;
+    },
+  };
+});
 
 // #476 — the per-network identity editor defaults its target to the
 // currently-focused network. The drawer reads `selectedChannel()` from
@@ -1351,6 +1369,32 @@ describe("SettingsDrawer (#476/#478 — per-network identity, both subjects)", (
     // The general row still opens (upload retention is host-gated, present).
     openSub("general-settings-entry");
     expect(screen.queryByTestId("settings-section-identity")).toBeNull();
+  });
+
+  it("#476 — a same-target /networks refetch does not clobber an in-progress nick edit", () => {
+    // The load-bearing reason the re-seed effect uses on(selectedIdentitySlug)
+    // (slug-only tracking) + the identitySeeded latch: a background /networks
+    // refetch of the SAME target must not overwrite half-typed fields. A naive
+    // createEffect tracking networks() would re-seed on every refetch and this
+    // test would go red — which is exactly the regression it guards.
+    seedUser();
+    networksHolder.current = [netRow("user", 1, "bahamut-test", "vjt-grappa", "grp", "Real")];
+    wrap(true);
+    openSub("general-settings-entry");
+    const nick = screen.getByLabelText(/^nick$/i) as HTMLInputElement;
+    expect(nick.value).toBe("vjt-grappa");
+
+    // User starts editing the nick.
+    fireEvent.input(nick, { target: { value: "half-typed" } });
+    expect(nick.value).toBe("half-typed");
+
+    // A live /networks refetch lands for the SAME slug with a different
+    // server-side nick — the exact race the design survives.
+    networksHolder.current = [netRow("user", 1, "bahamut-test", "server-renamed", "grp", "Real")];
+    networksHolder.bump?.();
+
+    // The edit is preserved: the refetch did NOT re-seed the field.
+    expect(nick.value).toBe("half-typed");
   });
 
   it("#478 — visitor delete-confirm uses the SELECTED network's nick, not the lowest-id anchor", () => {
