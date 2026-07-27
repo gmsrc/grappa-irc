@@ -294,6 +294,15 @@ defmodule GrappaWeb.Router do
     get "/me/settings/aliases", UserSettingsController, :show_aliases
     put "/me/settings/aliases", UserSettingsController, :update_aliases
 
+    # #449 — server-backed display preferences (timestamp format, colored
+    # nicklist, per-channel presence filter) so a single account converges
+    # its UI across devices. Full-map PUT wrapped under `display_prefs`;
+    # tri-state presence pins (show/hide/unset) survive verbatim. Both
+    # subjects (user + visitor). Rides the existing `/me` nginx allowlist
+    # (no proxy change), like the sibling settings endpoints.
+    get "/me/settings/display-prefs", UserSettingsController, :show_display_prefs
+    put "/me/settings/display-prefs", UserSettingsController, :update_display_prefs
+
     # Visitor session-sharing mint — visitor-only (users get 403).
     # Returns a short-TTL Phoenix-signed token + ISO8601 expires_at.
     # The cic SPA wraps the token in a shareable URL; the consume

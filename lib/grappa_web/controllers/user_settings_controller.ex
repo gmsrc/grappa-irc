@@ -184,6 +184,40 @@ defmodule GrappaWeb.UserSettingsController do
 
   def update_aliases(_, _), do: {:error, :bad_request}
 
+  @doc """
+  `GET /me/settings/display-prefs` — return the subject's server-backed
+  display preferences (#449): `{"display_prefs": {...}}`. Falls back to
+  defaults when the subject has never persisted them.
+  """
+  @spec show_display_prefs(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def show_display_prefs(conn, _) do
+    subject = Subject.from_assigns(conn.assigns)
+    render(conn, :display_prefs, prefs: UserSettings.get_display_prefs(subject))
+  end
+
+  @doc """
+  `PUT /me/settings/display-prefs` — replace the subject's display prefs.
+  Body: `{"display_prefs": {"time_format": ..., "colored_nicklist": ...,
+  "presence_filter": {...}}}` (wrapped so an empty/cleared object is
+  distinguishable from a malformed body). Full-map PUT, no PATCH/diff.
+
+  Validation (closed sets, tri-state presence values, DOS bounds) lives in
+  `Grappa.UserSettings.put_display_prefs/2`; 422 + `field_errors.display_prefs`
+  on rejection. The tri-state (`show`/`hide`/unset) round-trips verbatim —
+  unset is the ABSENCE of a channel key and is never flattened server-side.
+  """
+  @spec update_display_prefs(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t()}
+  def update_display_prefs(conn, %{"display_prefs" => prefs}) when is_map(prefs) do
+    subject = Subject.from_assigns(conn.assigns)
+
+    with {:ok, _} <- UserSettings.put_display_prefs(subject, prefs) do
+      render(conn, :display_prefs, prefs: UserSettings.get_display_prefs(subject))
+    end
+  end
+
+  def update_display_prefs(_, _), do: {:error, :bad_request}
+
   # Builds the render assigns for the vhost view — allowed set (each option
   # marked in_pool + granted + a resolved rDNS name), current selection.
   # `granted` reflects a real per-subject grant row, NOT allow-set

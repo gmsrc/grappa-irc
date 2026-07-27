@@ -58,6 +58,8 @@ defmodule Grappa.UserSettings do
   |                        |                        | `put_theme_pair/3` (#358)       |
   | `"aliases"`            | `%{String.t() =>       | `get_aliases/1`,                |
   |                        | String.t()}`           | `set_aliases/2` (#385)          |
+  | `"display_prefs"`      | `display_prefs()`      | `get_display_prefs/1`,          |
+  |                        |                        | `put_display_prefs/2` (#449)    |
 
   ## Boundary
 
@@ -103,6 +105,25 @@ defmodule Grappa.UserSettings do
           private_messages_only: [String.t()]
         }
 
+  @typedoc """
+  Per-subject display preferences (#449) — server-backed so a single account
+  converges its UI across devices.
+
+    * `time_format` — `"hms"` (with seconds, the default) or `"hm"`.
+    * `colored_nicklist` — per-nick colours in the members pane (default false).
+    * `presence_filter` — per-channel join/part/quit visibility pins,
+      `%{channel_key => "show" | "hide"}`. TRI-STATE: an unpinned channel is
+      ABSENT (cic follows the live member-count default). The server never
+      stores a third value and never coerces unset into a boolean. Font size
+      is deliberately excluded — it is per-DEVICE (vjt, #449) and stays
+      client-local (`cicchetto/src/lib/fontSize.ts`).
+  """
+  @type display_prefs :: %{
+          time_format: String.t(),
+          colored_nicklist: boolean(),
+          presence_filter: %{String.t() => String.t()}
+        }
+
   @notification_prefs_key "notification_prefs"
   @upload_ttl_seconds_key "upload_ttl_seconds"
   @vhost_selection_key "vhost_selection"
@@ -117,12 +138,27 @@ defmodule Grappa.UserSettings do
   # server validates only structural shape at this boundary.
   @aliases_key "aliases"
 
+  # #449 — server-backed display preferences (timestamp format, colored
+  # nicklist, per-channel presence filter). ONE JSON sub-object so a single
+  # account converges its UI across devices. TRI-STATE presence pins
+  # (show/hide/unset) MUST survive the round-trip: unset is the ABSENCE of a
+  # channel key, never a third value, never a boolean. Font size is excluded
+  # (per-DEVICE, vjt/#449) and stays client-local.
+  @display_prefs_key "display_prefs"
+  @display_time_formats ~w(hms hm)
+  @display_presence_values ~w(show hide)
+
   # Structural bounds for aliases — a user-writable JSON blob needs a boundary
   # or it becomes an unbounded storage/DOS vector (same rationale as
   # @upload_ttl_seconds_max). Generous enough that no real config hits them.
   @alias_name_max_bytes 32
   @alias_expansion_max_bytes 512
   @aliases_max_count 200
+
+  # Structural bounds for the #449 presence-filter map — a user-writable blob
+  # needs a boundary (same rationale as @aliases_max_count / @upload_ttl_seconds_max).
+  @presence_filter_max_count 2_000
+  @channel_key_max_bytes 256
 
   # Upper bound for upload_ttl_seconds: one year. Image hosts (litterbox,
   # 0x0.st) cap at days; nobody legitimately wants a year-long TTL token
@@ -655,6 +691,75 @@ defmodule Grappa.UserSettings do
   end
 
   # ---------------------------------------------------------------------------
+  # display_prefs accessors (#449 server-backed display preferences)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Default display preferences applied when a subject has no row OR the
+  `"display_prefs"` key is absent: `"hms"` timestamps, monochrome nicklist,
+  and an empty presence-filter map (every channel follows the size default).
+  """
+  @dialyzer {:nowarn_function, default_display_prefs: 0}
+  @spec default_display_prefs() :: display_prefs()
+  def default_display_prefs do
+    %{time_format: "hms", colored_nicklist: false, presence_filter: %{}}
+  end
+
+  @doc """
+  Returns the `display_prefs` map for `subject`, filling any missing key
+  from `default_display_prefs/0` so the shape is always complete.
+
+  Falls back to defaults when no row exists, the `"display_prefs"` key is
+  absent, or the stored value is malformed. Side-effect-free; reads string
+  keys (Ecto `:map` JSON round-trip). Defensively drops presence entries
+  whose value is not `"show"`/`"hide"` — the tri-state never surfaces a
+  third value to callers.
+  """
+  @spec get_display_prefs(Subject.t()) :: display_prefs()
+  def get_display_prefs({_, _} = subject) do
+    case fetch_existing_or_nil(subject) do
+      nil ->
+        default_display_prefs()
+
+      %Settings{data: data} ->
+        case data[@display_prefs_key] do
+          %{} = stored -> merge_display_with_defaults(stored)
+          _ -> default_display_prefs()
+        end
+    end
+  end
+
+  @doc """
+  Sets the `display_prefs` map for `subject`, preserving other `data` keys
+  (merge semantics). Full-map replace of the `display_prefs` sub-object — no
+  PATCH/diff (mirrors `put_notification_prefs/2`).
+
+  ## Validation (errors on the synthetic `:display_prefs` field → 422)
+
+    * `time_format` ∈ #{inspect(@display_time_formats)}.
+    * `colored_nicklist` is a boolean.
+    * `presence_filter` is a `%{channel_key => "show" | "hide"}` map. Any
+      other value (a boolean, a third state) is REJECTED — the tri-state's
+      unset is the ABSENCE of a key, never a stored value, so the server
+      must never accept nor emit a flattened form.
+    * Bounds: at most #{@presence_filter_max_count} pins, each key at most
+      #{@channel_key_max_bytes} bytes (DOS guard, like `@aliases_max_count`).
+
+  Accepts string- OR atom-keyed input (the wire is string-keyed); stores
+  string keys so reads are stable across the JSON round-trip.
+  """
+  @spec put_display_prefs(Subject.t(), map()) ::
+          {:ok, Settings.t()} | {:error, Ecto.Changeset.t()}
+  def put_display_prefs({_, _} = subject, prefs) when is_map(prefs) do
+    with {:ok, normalized} <- validate_and_normalize_display_prefs(prefs, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data = Map.put(settings.data, @display_prefs_key, normalized)
+      cs = Settings.changeset(settings, %{data: merged_data})
+      Repo.update(cs)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
 
@@ -959,5 +1064,123 @@ defmodule Grappa.UserSettings do
     %Settings{}
     |> Settings.changeset(attrs)
     |> Ecto.Changeset.add_error(:aliases, message)
+  end
+
+  # ---------------------------------------------------------------------------
+  # display_prefs helpers (#449)
+  # ---------------------------------------------------------------------------
+
+  # Read an atom-or-string key. Post-DB round-trip is string-keyed; a fresh
+  # atom-keyed in-memory map is possible from a test writer or an atom-keyed
+  # caller — mirror of the notification helpers' dual read.
+  defp display_fetch(prefs, key) when is_atom(key) do
+    Map.get(prefs, key, Map.get(prefs, Atom.to_string(key)))
+  end
+
+  # Fill each key from defaults; drop malformed presence entries so a caller
+  # never sees a third tri-state value (unset stays absent).
+  @spec merge_display_with_defaults(map()) :: display_prefs()
+  defp merge_display_with_defaults(stored) do
+    %{
+      time_format: read_display_time_format(stored),
+      colored_nicklist: read_display_bool(stored, :colored_nicklist, false),
+      presence_filter: read_presence_filter(stored)
+    }
+  end
+
+  defp read_display_time_format(stored) do
+    case display_fetch(stored, :time_format) do
+      v when v in @display_time_formats -> v
+      _ -> "hms"
+    end
+  end
+
+  defp read_display_bool(stored, key, default) do
+    case display_fetch(stored, key) do
+      v when is_boolean(v) -> v
+      _ -> default
+    end
+  end
+
+  defp read_presence_filter(stored) do
+    case display_fetch(stored, :presence_filter) do
+      %{} = pf ->
+        pf
+        |> Enum.filter(fn {k, v} -> is_binary(k) and v in @display_presence_values end)
+        |> Map.new()
+
+      _ ->
+        %{}
+    end
+  end
+
+  @spec validate_and_normalize_display_prefs(map(), Subject.t()) ::
+          {:ok, %{String.t() => term()}} | {:error, Ecto.Changeset.t()}
+  defp validate_and_normalize_display_prefs(prefs, subject) do
+    with {:ok, tf} <- fetch_display_time_format(prefs),
+         {:ok, cn} <- fetch_display_bool(prefs, :colored_nicklist),
+         {:ok, pf} <- fetch_presence_filter(prefs) do
+      {:ok, %{"time_format" => tf, "colored_nicklist" => cn, "presence_filter" => pf}}
+    else
+      {:error, message} -> {:error, display_prefs_changeset_error(message, subject)}
+    end
+  end
+
+  defp fetch_display_time_format(prefs) do
+    case display_fetch(prefs, :time_format) do
+      v when v in @display_time_formats -> {:ok, v}
+      _ -> {:error, "time_format must be one of #{inspect(@display_time_formats)}"}
+    end
+  end
+
+  defp fetch_display_bool(prefs, key) when is_atom(key) do
+    case display_fetch(prefs, key) do
+      v when is_boolean(v) -> {:ok, v}
+      _ -> {:error, "#{key} must be a boolean"}
+    end
+  end
+
+  defp fetch_presence_filter(prefs) do
+    case display_fetch(prefs, :presence_filter) do
+      %{} = pf -> normalize_presence_filter(pf)
+      _ -> {:error, "presence_filter must be a map"}
+    end
+  end
+
+  defp normalize_presence_filter(pf) do
+    entries = Map.to_list(pf)
+
+    if length(entries) > @presence_filter_max_count do
+      {:error, "too many presence pins (max #{@presence_filter_max_count})"}
+    else
+      validate_presence_entries(entries, %{})
+    end
+  end
+
+  # Collect-or-bail recursion (CLAUDE.md prefers this over reduce_while).
+  defp validate_presence_entries([], acc), do: {:ok, acc}
+
+  defp validate_presence_entries([{key, value} | rest], acc) do
+    cond do
+      not (is_binary(key) and byte_size(key) > 0) ->
+        {:error, "presence_filter keys must be non-empty strings"}
+
+      byte_size(key) > @channel_key_max_bytes ->
+        {:error, "presence_filter key too long (max #{@channel_key_max_bytes} bytes)"}
+
+      value not in @display_presence_values ->
+        {:error, ~s(presence_filter values must be "show" or "hide")}
+
+      true ->
+        validate_presence_entries(rest, Map.put(acc, key, value))
+    end
+  end
+
+  defp display_prefs_changeset_error(message, subject) do
+    attrs = Subject.put_subject_id(%{data: %{}}, subject)
+
+    %Settings{}
+    |> Settings.changeset(attrs)
+    |> Ecto.Changeset.add_error(:display_prefs, message)
   end
 end

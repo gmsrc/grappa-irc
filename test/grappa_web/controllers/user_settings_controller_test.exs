@@ -464,4 +464,196 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
     end
   end
+
+  # ===========================================================================
+  # display_prefs (#449) — server-backed display preferences, so one account
+  # converges its UI across devices. Wrapped-envelope endpoint mirroring
+  # aliases; full-map PUT, no PATCH/diff. Three prefs: time_format,
+  # colored_nicklist, presence_filter (per-channel tri-state map).
+  #
+  # A/B-INDEPENDENT core: font-size (Fork A, escalated to vjt) and the
+  # client-side seed-up-once migration (Fork B) are NOT exercised here.
+  # ===========================================================================
+
+  # The default display-prefs wire shape (string keys, as JSON delivers them).
+  defp default_display_prefs_wire do
+    %{
+      "time_format" => "hms",
+      "colored_nicklist" => false,
+      "presence_filter" => %{}
+    }
+  end
+
+  describe "GET /me/settings/display-prefs — auth gating" do
+    test "401 without bearer", %{conn: conn} do
+      conn = get(conn, "/me/settings/display-prefs")
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "200 defaults for a visitor subject — visitor parity", %{conn: conn} do
+      {_, session} = visitor_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> get("/me/settings/display-prefs")
+
+      assert %{"display_prefs" => prefs} = json_response(conn, 200)
+      assert prefs == default_display_prefs_wire()
+    end
+  end
+
+  describe "GET /me/settings/display-prefs — happy path" do
+    setup %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id), user: user}
+    end
+
+    test "returns defaults when never persisted", %{conn: conn} do
+      conn = get(conn, "/me/settings/display-prefs")
+      assert %{"display_prefs" => prefs} = json_response(conn, 200)
+      assert prefs == default_display_prefs_wire()
+    end
+
+    test "reflects the most-recent PUT", %{conn: conn, user: user} do
+      {:ok, _} =
+        UserSettings.put_display_prefs({:user, user.id}, %{
+          "time_format" => "hm",
+          "colored_nicklist" => true,
+          "presence_filter" => %{"libera #bofh" => "hide"}
+        })
+
+      conn = get(conn, "/me/settings/display-prefs")
+
+      assert %{"display_prefs" => prefs} = json_response(conn, 200)
+
+      assert prefs == %{
+               "time_format" => "hm",
+               "colored_nicklist" => true,
+               "presence_filter" => %{"libera #bofh" => "hide"}
+             }
+    end
+  end
+
+  describe "PUT /me/settings/display-prefs — happy path" do
+    setup %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id), user: user}
+    end
+
+    test "200 + persisted (wrapped body)", %{conn: conn, user: user} do
+      body = %{
+        "display_prefs" => %{
+          "time_format" => "hm",
+          "colored_nicklist" => true,
+          "presence_filter" => %{"libera #cat" => "show"}
+        }
+      }
+
+      conn = put(conn, "/me/settings/display-prefs", body)
+
+      assert %{"display_prefs" => returned} = json_response(conn, 200)
+      assert returned["time_format"] == "hm"
+      assert returned["colored_nicklist"] == true
+      assert returned["presence_filter"] == %{"libera #cat" => "show"}
+
+      stored = UserSettings.get_display_prefs({:user, user.id})
+      assert stored.time_format == "hm"
+      assert stored.presence_filter == %{"libera #cat" => "show"}
+    end
+
+    test "tri-state survives the HTTP round-trip — unset stays ABSENT (NON-NEGOTIABLE)",
+         %{conn: conn} do
+      # Only #a is pinned; #b is never mentioned (unset — follows the size
+      # default client-side). The server must not coerce #b into the map.
+      body = %{
+        "display_prefs" => %{
+          "time_format" => "hms",
+          "colored_nicklist" => false,
+          "presence_filter" => %{"n #a" => "hide"}
+        }
+      }
+
+      conn = put(conn, "/me/settings/display-prefs", body)
+
+      assert %{"display_prefs" => %{"presence_filter" => pf}} = json_response(conn, 200)
+      assert pf == %{"n #a" => "hide"}
+      refute Map.has_key?(pf, "n #b")
+    end
+
+    test "empty presence_filter clears all pins (full-map PUT semantics)", %{conn: conn, user: user} do
+      {:ok, _} =
+        UserSettings.put_display_prefs({:user, user.id}, %{
+          "time_format" => "hms",
+          "colored_nicklist" => false,
+          "presence_filter" => %{"n #a" => "hide"}
+        })
+
+      conn = put(conn, "/me/settings/display-prefs", %{"display_prefs" => default_display_prefs_wire()})
+
+      assert %{"display_prefs" => %{"presence_filter" => pf}} = json_response(conn, 200)
+      assert pf == %{}
+    end
+  end
+
+  describe "PUT /me/settings/display-prefs — validation + bad shape" do
+    setup %{conn: conn} do
+      {_, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id)}
+    end
+
+    test "422 + field_errors.display_prefs for an unknown time_format", %{conn: conn} do
+      body = %{"display_prefs" => Map.put(default_display_prefs_wire(), "time_format", "iso8601")}
+      conn = put(conn, "/me/settings/display-prefs", body)
+
+      assert %{"error" => "validation_failed", "field_errors" => fe} = json_response(conn, 422)
+      assert Map.has_key?(fe, "display_prefs")
+    end
+
+    test "422 for a presence value that is neither show nor hide", %{conn: conn} do
+      body = %{"display_prefs" => Map.put(default_display_prefs_wire(), "presence_filter", %{"n #a" => "maybe"})}
+      conn = put(conn, "/me/settings/display-prefs", body)
+
+      assert %{"error" => "validation_failed"} = json_response(conn, 422)
+    end
+
+    test "400 when the body has no display_prefs key", %{conn: conn} do
+      conn = put(conn, "/me/settings/display-prefs", %{"nope" => %{}})
+      assert json_response(conn, 400) == %{"error" => "bad_request"}
+    end
+
+    test "400 when display_prefs is not a map", %{conn: conn} do
+      conn = put(conn, "/me/settings/display-prefs", %{"display_prefs" => ["not", "a", "map"]})
+      assert json_response(conn, 400) == %{"error" => "bad_request"}
+    end
+  end
+
+  describe "PUT /me/settings/display-prefs — visitor parity + key isolation" do
+    test "200 + persisted for a visitor subject", %{conn: conn} do
+      {visitor, session} = visitor_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/display-prefs", %{
+          "display_prefs" => Map.put(default_display_prefs_wire(), "presence_filter", %{"n #v" => "hide"})
+        })
+
+      assert %{"display_prefs" => %{"presence_filter" => %{"n #v" => "hide"}}} = json_response(conn, 200)
+      assert UserSettings.get_display_prefs({:visitor, visitor.id}).presence_filter == %{"n #v" => "hide"}
+    end
+
+    test "highlight_patterns survives a display_prefs PUT", %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo", "bar"])
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/display-prefs", %{"display_prefs" => default_display_prefs_wire()})
+
+      assert json_response(conn, 200)
+      assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
+    end
+  end
 end
