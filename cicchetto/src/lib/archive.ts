@@ -20,7 +20,9 @@ import { windowStateByChannel } from "./windowState";
 //      rarely opens it.
 //   2. Re-loading the same slug is a deliberate refresh (no double-load
 //      gate like `members.loadedChannels`); the user re-expanding signals
-//      "give me the current state."
+//      "give me the current state." Concurrent loads for the same slug
+//      are ordering-guarded (see `loadSeq`): the last-STARTED fetch wins,
+//      so a stale response can't overwrite a fresher one.
 //   3. Identity rotation flushes the whole store via `clearArchive` —
 //      registered as the identityScopedStore reset (dup-A3 close).
 //
@@ -45,9 +47,21 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // identity's modal could linger on top of the new identity's shell.
   const [archiveModalOpen, setArchiveModalOpen] = createSignal<boolean>(false);
 
+  // Per-slug monotonic load sequence — guards `loadArchive` against
+  // out-of-order responses. Two `loadArchive(slug)` calls can be in
+  // flight at once (e.g. a group's `onToggle` fetch overlapping an
+  // `archive_changed`-driven refetch after a PART): without ordering, a
+  // stale response resolving last silently overwrites the fresh one,
+  // dropping a just-archived window from an OPEN modal (the cp15-b6
+  // re-PART-while-open race). The last-STARTED load wins — it reflects
+  // the most recent server state at fetch time — regardless of which
+  // response resolves first.
+  const loadSeq = new Map<string, number>();
+
   const clearArchive = (): void => {
     setArchivedBySlug({});
     setArchiveModalOpen(false);
+    loadSeq.clear();
   };
 
   // Identity-transition cleanup. A token rotation MUST flush the prior
@@ -58,11 +72,21 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const loadArchive = async (slug: string): Promise<void> => {
     const t = token();
     if (!t) return;
+    // Claim this slug's latest sequence BEFORE awaiting, so a later call
+    // started while our fetch is in flight can invalidate our response.
+    const seq = (loadSeq.get(slug) ?? 0) + 1;
+    loadSeq.set(slug, seq);
     try {
       const entries = await listArchive(t, slug);
+      // Drop a stale response: a newer loadArchive for this slug started
+      // while our fetch was in flight, so its result supersedes ours.
+      // Without this, a slow onToggle fetch (pre-PART state) resolving
+      // after an archive_changed refetch (post-PART) would erase the
+      // just-archived window from an open modal.
+      if (loadSeq.get(slug) !== seq) return;
       setArchivedBySlug((prev) => ({ ...prev, [slug]: entries }));
     } catch {
-      // Leave the prior entries (if any) in place. Sidebar's renderer
+      // Leave the prior entries (if any) in place. The renderer
       // tolerates an absent slug key as "not loaded yet"; a transient
       // failure shouldn't blank the user's previously-rendered list.
     }

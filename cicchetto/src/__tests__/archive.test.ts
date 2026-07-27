@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ArchiveEntry } from "../lib/api";
 
 vi.mock("../lib/api", () => ({
   listArchive: vi.fn(),
@@ -90,6 +91,46 @@ describe("archive.loadArchive", () => {
 
     expect(archive.archivedBySlug().freenode).toEqual([
       { target: "#a", kind: "channel", last_activity: 999, row_count: 5 },
+    ]);
+  });
+
+  it("drops a stale response that resolves AFTER a newer load (out-of-order guard)", async () => {
+    // Regression: two loadArchive(slug) calls overlap — the first (stale,
+    // pre-PART state) resolves LAST, the second (fresh, post-PART state)
+    // resolves FIRST. Without ordering the stale response overwrites the
+    // fresh one, erasing a just-archived window from an open modal (the
+    // cp15-b6 re-PART-while-open race). The last-STARTED load must win.
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+
+    let resolveStale!: (v: ArchiveEntry[]) => void;
+    let resolveFresh!: (v: ArchiveEntry[]) => void;
+    const stalePromise = new Promise<ArchiveEntry[]>((r) => {
+      resolveStale = r;
+    });
+    const freshPromise = new Promise<ArchiveEntry[]>((r) => {
+      resolveFresh = r;
+    });
+    vi.mocked(api.listArchive)
+      .mockReturnValueOnce(stalePromise) // call #1 — started first
+      .mockReturnValueOnce(freshPromise); // call #2 — started last, authoritative
+
+    const archive = await import("../lib/archive");
+    const stale = archive.loadArchive("freenode"); // seq 1
+    const fresh = archive.loadArchive("freenode"); // seq 2
+
+    // Fresh (call #2) resolves first → store reflects the post-PART set.
+    resolveFresh([{ target: "#bofh", kind: "channel", last_activity: 999, row_count: 5 }]);
+    await fresh;
+    expect(archive.archivedBySlug().freenode).toEqual([
+      { target: "#bofh", kind: "channel", last_activity: 999, row_count: 5 },
+    ]);
+
+    // Stale (call #1) resolves LAST → its result is dropped, store unchanged.
+    resolveStale([{ target: "#old", kind: "channel", last_activity: 100, row_count: 1 }]);
+    await stale;
+    expect(archive.archivedBySlug().freenode).toEqual([
+      { target: "#bofh", kind: "channel", last_activity: 999, row_count: 5 },
     ]);
   });
 });
