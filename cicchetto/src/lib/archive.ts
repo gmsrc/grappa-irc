@@ -9,13 +9,15 @@ import { queryWindowsByNetwork } from "./queryWindows";
 import { windowStateByChannel } from "./windowState";
 
 // Per-network archive store. Source-of-truth for cic's per-network
-// Archive collapsed-section in the Sidebar (CP15 B4).
+// Archive collapsible groups in `ArchiveModal` (#473; pre-#473 this
+// backed the Sidebar `<details>` archive section, CP15 B4).
 //
 // Lifecycle:
-//   1. On user expand of the per-network Archive `<details>`, Sidebar
-//      calls `loadArchive(slug)` which fetches GET /archive and writes
-//      the entries into `archivedBySlug()[slug]`. Lazy by design — the
-//      list can be O(hundreds) per network and the user rarely opens it.
+//   1. On user expand of a network's `<details>` group in ArchiveModal,
+//      its `onToggle` calls `loadArchive(slug)` which fetches GET /archive
+//      and writes the entries into `archivedBySlug()[slug]`. Lazy by
+//      design — the list can be O(hundreds) per network and the user
+//      rarely opens it.
 //   2. Re-loading the same slug is a deliberate refresh (no double-load
 //      gate like `members.loadedChannels`); the user re-expanding signals
 //      "give me the current state."
@@ -82,11 +84,11 @@ export const clearArchive = exports_.clearArchive;
 export const setArchiveModalOpen = exports_.setArchiveModalOpen;
 
 // UX-2 — shared archive-visibility filter. Pre-UX-2 lived inline in
-// `Sidebar.tsx` as `visibleArchiveForNetwork/2`. UX-2's mobile chip +
-// modal need the SAME filter (a re-JOINed channel or re-opened query
-// must not appear in either surface) — lifted here so the two
-// rendering surfaces share one verb. Sidebar still calls this; chip
-// gating + modal list both read through it.
+// `Sidebar.tsx` as `visibleArchiveForNetwork/2`; UX-2 lifted it here so
+// the (then-two) archive surfaces could share one verb. #473 collapsed
+// those surfaces into ONE — `ArchiveModal` is now the sole caller, using
+// it for each per-network group's list — but it stays a standalone verb
+// (a re-JOINed channel or re-opened query must not appear in the archive).
 //
 // CP15 B5 contract preserved: render-time derivation, backing
 // `archivedBySlug` cache untouched. Server-side `Scrollback.list_archive/3`

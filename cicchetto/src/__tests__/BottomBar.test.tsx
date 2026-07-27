@@ -88,8 +88,8 @@ vi.mock("../lib/archive", () => ({
   loadArchive: vi.fn().mockResolvedValue(undefined),
   clearArchive: vi.fn(),
   visibleArchiveForNetwork: () => [],
-  setArchiveModalNetwork: vi.fn(),
-  archiveModalNetwork: () => null,
+  setArchiveModalOpen: vi.fn(),
+  archiveModalOpen: () => false,
 }));
 
 import BottomBar from "../BottomBar";

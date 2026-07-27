@@ -2,6 +2,7 @@ import { type Component, createSignal, For, Show } from "solid-js";
 import InlineConfirmButton from "./InlineConfirmButton";
 import { deleteArchiveEntry } from "./lib/api";
 import {
+  archivedBySlug,
   archiveModalOpen,
   loadArchive,
   setArchiveModalOpen,
@@ -140,6 +141,14 @@ const ArchiveModal: Component = () => {
           <For each={networks() ?? []}>
             {(network) => {
               const entries = () => visibleArchiveForNetwork(network.slug, network.id);
+              // Rows load lazily on the group's first expand (onToggle →
+              // loadArchive). Distinguish "not loaded yet" (slug key absent
+              // from the store) from "loaded, genuinely empty" so an
+              // expanding group renders nothing while its fetch is in flight
+              // instead of flashing "no archived windows" (a false-empty)
+              // before the rows arrive — mirroring the retired Sidebar
+              // `<details>`, which rendered an empty list during load.
+              const loaded = () => archivedBySlug()[network.slug] !== undefined;
               return (
                 <details
                   class="archive-modal-group"
@@ -153,7 +162,11 @@ const ArchiveModal: Component = () => {
                   <summary class="archive-modal-group-summary">{network.slug}</summary>
                   <Show
                     when={entries().length > 0}
-                    fallback={<p class="archive-modal-empty muted">no archived windows</p>}
+                    fallback={
+                      <Show when={loaded()}>
+                        <p class="archive-modal-empty muted">no archived windows</p>
+                      </Show>
+                    }
                   >
                     <ul class="archive-modal-list">
                       <For each={entries()}>

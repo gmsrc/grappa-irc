@@ -46,25 +46,29 @@ vi.mock("../lib/auth", () => ({
   token: () => "test-token",
 }));
 
-const { mockOpen, mockEntries, setArchiveModalOpen, loadArchive } = vi.hoisted(() => ({
-  mockOpen: vi.fn<() => boolean>(() => false),
-  mockEntries: vi.fn<
-    (
-      slug: string,
-      id: number,
-    ) => Array<{
-      target: string;
-      kind: "channel" | "query";
-      last_activity: number;
-      row_count: number;
-    }>
-  >(() => []),
-  setArchiveModalOpen: vi.fn(),
-  loadArchive: vi.fn<(slug: string) => Promise<void>>().mockResolvedValue(undefined),
-}));
+const { mockOpen, mockEntries, mockArchivedBySlug, setArchiveModalOpen, loadArchive } = vi.hoisted(
+  () => ({
+    mockOpen: vi.fn<() => boolean>(() => false),
+    mockEntries: vi.fn<
+      (
+        slug: string,
+        id: number,
+      ) => Array<{
+        target: string;
+        kind: "channel" | "query";
+        last_activity: number;
+        row_count: number;
+      }>
+    >(() => []),
+    mockArchivedBySlug: vi.fn<() => Record<string, unknown[]>>(() => ({})),
+    setArchiveModalOpen: vi.fn(),
+    loadArchive: vi.fn<(slug: string) => Promise<void>>().mockResolvedValue(undefined),
+  }),
+);
 
 vi.mock("../lib/archive", () => ({
   archiveModalOpen: () => mockOpen(),
+  archivedBySlug: () => mockArchivedBySlug(),
   setArchiveModalOpen,
   loadArchive,
   visibleArchiveForNetwork: (slug: string, id: number) => mockEntries(slug, id),
@@ -72,12 +76,14 @@ vi.mock("../lib/archive", () => ({
 
 import ArchiveModal from "../ArchiveModal";
 import * as apiMod from "../lib/api";
+import * as qwMod from "../lib/queryWindows";
 import * as selMod from "../lib/selection";
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockOpen.mockReturnValue(false);
   mockEntries.mockReturnValue([]);
+  mockArchivedBySlug.mockReturnValue({});
 });
 
 describe("ArchiveModal (#473 grouped)", () => {
@@ -142,12 +148,25 @@ describe("ArchiveModal (#473 grouped)", () => {
     expect(screen.getByText("#bofh")).toBeInTheDocument();
   });
 
-  it("shows an empty banner in each group with no visible entries", () => {
+  it("shows an empty banner in each LOADED group with no visible entries", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockReturnValue([]);
+    // both groups fetched (present in archivedBySlug) but genuinely empty
+    mockArchivedBySlug.mockReturnValue({ freenode: [], libera: [] });
     render(() => <ArchiveModal />);
     // one per network group (both empty in this fixture)
     expect(screen.getAllByText("no archived windows").length).toBe(2);
+  });
+
+  it("does NOT show the empty banner for a group not yet loaded (no false-empty flash)", () => {
+    mockOpen.mockReturnValue(true);
+    mockEntries.mockReturnValue([]);
+    // nothing fetched yet — archivedBySlug has no keys, so a group about to
+    // lazy-load renders no banner (the retired Sidebar rendered an empty list
+    // during load, not the misleading "no archived windows").
+    mockArchivedBySlug.mockReturnValue({});
+    render(() => <ArchiveModal />);
+    expect(screen.queryByText("no archived windows")).toBeNull();
   });
 
   it("clicking the × close button calls setArchiveModalOpen(false)", () => {
@@ -204,6 +223,9 @@ describe("ArchiveModal (#473 grouped)", () => {
       channelName: "vjt-peer",
       kind: "query",
     });
+    // UX-3 Z — a re-opened archived DM MUST also re-subscribe to its
+    // per-channel topic, else server NOTICEs (e.g. 401) drop on the floor.
+    expect(qwMod.openQueryWindowState).toHaveBeenCalledWith(2, "vjt-peer", expect.any(String));
     expect(setArchiveModalOpen).toHaveBeenCalledWith(false);
   });
 

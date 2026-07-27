@@ -50,7 +50,7 @@ import { isMobile } from "./lib/theme";
 export type Props = {
   /**
    * #71 INC-2 — opens the right rail (the `.shell-members` drawer that hosts
-   * the ActionCluster cog + monkey). Required — the rail opener is always
+   * the RailActions labelled action drawer). Required — the rail opener is always
    * rendered. Renamed from `onOpenSettings`: the cog moved into the rail, so
    * this bar's button now opens the rail rather than the settings drawer.
    */
@@ -96,7 +96,7 @@ const ShellChrome: Component<Props> = (props) => {
       {/* #71 INC-2 — rail opener (☰). Opens the same `.shell-members` drawer
           the channel-window TopicBar hamburger opens (paletto: ONE drawer, one
           ☰ glyph across both openers). The settings cog it replaced now lives
-          in that rail's ActionCluster. */}
+          in that rail's RailActions drawer. */}
       <button
         type="button"
         class="shell-chrome-btn shell-chrome-rail-opener"

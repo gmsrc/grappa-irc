@@ -715,8 +715,9 @@ const Shell: Component = () => {
                 window-nav launchers (home / rooms / themes / admin) the desktop
                 rail never had — the desktop rail was "a cog and a monkey" (#473).
                 The mobile drawer mounts the SAME component (below). Archive is
-                held pending the desktop-surface ruling; until then desktop
-                archive stays the Sidebar `<details>`. */}
+                now a first-class always-on RailActions button opening the single
+                grouped ArchiveModal (mounted above) — the desktop Sidebar
+                `<details>` and the mobile footer chip it replaced are removed. */}
             <RailActions setters={{ membersOpen, setMembersOpen, setSettingsOpen }} />
           </aside>
 

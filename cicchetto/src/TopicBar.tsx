@@ -224,10 +224,11 @@ const TopicBar: Component<Props> = (props) => {
   };
 
   // #71 INC-2 — the per-channel presence-filter toggle (👁/🙈, #222) MOVED OUT
-  // of the topic bar into the right-rail ActionCluster (channel-gated). Q2
-  // ruling: "one design" wants that toggle in the action cluster on both form
+  // of the topic bar into the right-rail RailActions drawer (channel-gated). Q2
+  // ruling: "one design" wants that toggle in the rail drawer on both form
   // factors, and a topic bar is not a per-window action surface. See
-  // ActionCluster.tsx for the (verbatim) presence-toggle logic.
+  // RailActions.tsx for the (verbatim) presence-toggle logic (#473: folded in
+  // from the retired ActionCluster).
 
   // #219-general — the topic modal covers the ScrollbackPane (fixed
   // full-viewport `.topic-modal-backdrop`). Register it with the shared
@@ -339,7 +340,7 @@ const TopicBar: Component<Props> = (props) => {
         </span>
       </button>
       {/* #71 INC-2 — the presence-filter toggle (👁/🙈) moved to the right-rail
-          ActionCluster (channel-gated). It is no longer rendered here. */}
+          RailActions drawer (channel-gated). It is no longer rendered here. */}
       {/* Members hamburger only when actively joined. Parked / failed
           / kicked channels have stale or absent member lists; the
           right pane is suppressed in Shell.tsx for the same reason —
