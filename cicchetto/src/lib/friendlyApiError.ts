@@ -312,7 +312,10 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
       return "Please choose which network to connect to.";
     case "network_unconfigured":
       // #211 phase 3 — 503, no network is configured/enabled for guests.
-      return "No network is available for guest access right now.";
+      // #472 — this is a PERMANENT configuration state (an operator must opt a
+      // network in), not a transient outage; the copy says so plainly. The old
+      // "right now" wording read as a temporary blip that would clear itself.
+      return "Visitor access is disabled on this server.";
     case "session_plan_resolve_failed":
       // U-0 — 500, the credential has no servers bound (operator misconfig);
       // `SessionPlan.resolve/1` can't build a plan.

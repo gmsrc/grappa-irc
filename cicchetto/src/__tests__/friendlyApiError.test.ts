@@ -123,7 +123,9 @@ const CASES: Array<{ code: string; matches: RegExp; info?: Record<string, unknow
   { code: "password_mismatch", matches: /password is incorrect/i },
   { code: "network_not_visitor_enabled", matches: /isn't open to guests/i },
   { code: "network_ambiguous", matches: /choose which network/i },
-  { code: "network_unconfigured", matches: /no network is available for guest/i },
+  // #472 — permanent-config wording ("disabled on this server"), not the old
+  // transient-sounding "right now" copy.
+  { code: "network_unconfigured", matches: /visitor access is disabled on this server/i },
   { code: "session_plan_resolve_failed", matches: /isn't fully set up|server settings/i },
   // anon_collision carries retry_after; interpolated + fallback.
   { code: "anon_collision", matches: /try again in 30 seconds/i, info: { retry_after: 30 } },

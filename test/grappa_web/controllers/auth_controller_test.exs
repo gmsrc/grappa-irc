@@ -253,6 +253,19 @@ defmodule GrappaWeb.AuthControllerTest do
       assert json_response(conn, 400)["error"] == "malformed_nick"
     end
 
+    # #472 — a visitor login on a server with NO visitor_enabled network must
+    # return the designed 503 network_unconfigured, NOT an opaque 500 that is
+    # indistinguishable from a genuine crash. Both resolve lookups
+    # (`list_visitor_autoconnect` / `list_visitor_enabled`) come back empty —
+    # the state every fresh install starts in, and the #469 staging box that
+    # filed the bug. No IRCServer / probe: the empty lookups return in ~ms, so
+    # unlike the connect/welcome timeouts noted below this asserts cheaply at
+    # the controller (the login-level atom is already covered in login_test).
+    test "no visitor network configured → 503 network_unconfigured (#472)", %{conn: conn} do
+      conn = post(conn, "/auth/login", %{"identifier" => "ospite123"})
+      assert json_response(conn, 503)["error"] == "network_unconfigured"
+    end
+
     # #138 — mobile Chrome/Android soft keyboards inject a trailing space
     # (or other surrounding whitespace / non-printable control chars) into
     # the login field via autocapitalize/autocorrect/autofill. Pre-fix that
@@ -509,7 +522,9 @@ defmodule GrappaWeb.AuthControllerTest do
   # directly with compressed `:login_connect_timeout_ms` /
   # `:login_welcome_timeout_ms` opts — the controller-level roundtrip
   # would burn the full 35s production probe budget per run. 500
-  # :no_server / :network_unconfigured ditto.
+  # :no_server ditto. (`:network_unconfigured` is instant — the two empty
+  # lookups return in ~ms, no probe — so it is asserted at the controller
+  # above as its designed 503, not deferred to the login-level unit; #472.)
 
   describe "DELETE /auth/logout" do
     test "with valid Bearer revokes session and returns 204", %{conn: conn} do
