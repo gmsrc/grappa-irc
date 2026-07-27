@@ -621,14 +621,35 @@ export async function openMembersDrawer(page: Page): Promise<void> {
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
 }
 
-// Mobile "reach the settings drawer" primitive (#71 INC-2).
+// #500 — reveal the RailActions launcher menu, the SINGLE door to every rail
+// affordance (settings / archive / rooms / admin / home / themes / denoise).
+// #500 collapsed the always-expanded button column behind one launcher pinned at
+// the bottom of the rail; the buttons are not in the DOM until the launcher is
+// tapped. Viewport-aware: on mobile the rail is a collapsed drawer, so open it
+// first, then tap the launcher; on desktop the rail is always on screen, so tap
+// the launcher directly. Idempotent — a no-op if the menu is already open.
+// EVERY spec that reaches a rail action MUST go through here (directly or via
+// openArchive / openSettingsSection, which now do); tapping a rail button
+// without opening the launcher first finds nothing.
+export async function openRailMenu(page: Page): Promise<void> {
+  if ((await page.locator(".rail-actions-menu").count()) > 0) return;
+  if (isMobileViewport(page) && (await page.locator(".shell-members.open").count()) === 0) {
+    await openMembersDrawer(page);
+  }
+  await page.getByTestId("rail-actions-launcher").click();
+  await expect(page.locator(".rail-actions-menu")).toBeVisible({ timeout: 5_000 });
+}
+
+// Mobile "reach the settings drawer" primitive (#71 INC-2 → #500).
 //
 // The settings cog moved out of the standalone chrome bar into the rail's
-// RailActions drawer (#473). So opening settings on mobile is
-// now a two-step door: open the rail drawer, then tap the cog. The mobilePanel
-// mutex swaps the members drawer for the `.settings-drawer` on tap.
+// RailActions surface (#473), then behind the launcher menu (#500). So opening
+// settings on mobile is now: reveal the rail launcher menu (which opens the rail
+// drawer first on mobile), then tap the cog. The mobilePanel mutex swaps the
+// members drawer for the `.settings-drawer` on tap; the cog also closes the
+// launcher menu (#500).
 export async function openSettingsMobile(page: Page): Promise<void> {
-  await openMembersDrawer(page);
+  await openRailMenu(page);
   await page.getByTestId("action-cluster-cog").click();
   await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
 }
@@ -659,22 +680,19 @@ export type SettingsSection =
 // hand-roll the open-then-navigate, or the next IA reshuffle (like #460)
 // silently breaks every copy at once.
 //
-// The cog (aria-label "open settings" / action-cluster-cog) lives in the rail's
-// RailActions drawer: on desktop the rail is always on screen, so tap the cog
-// directly; on mobile the rail is a collapsed drawer, so reveal it first
-// (openSettingsMobile = open rail → tap cog). Re-navigating an already-open
-// drawer is a no-op on the open step and assumes it is on the main index.
+// The cog (aria-label "open settings" / action-cluster-cog) lives behind the
+// rail's RailActions launcher (#500): `openRailMenu` reveals the menu
+// (viewport-aware — it opens the rail drawer first on mobile), then the cog is
+// tapped. Re-navigating an already-open drawer is a no-op on the open step and
+// assumes it is on the main index.
 export async function openSettingsSection(
   page: Page,
   section: SettingsSection,
 ): Promise<Locator> {
   if ((await page.locator(".settings-drawer.open").count()) === 0) {
-    if (isMobileViewport(page)) {
-      await openSettingsMobile(page);
-    } else {
-      await page.getByTestId("action-cluster-cog").click();
-      await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
-    }
+    await openRailMenu(page);
+    await page.getByTestId("action-cluster-cog").click();
+    await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
   }
   await page.getByTestId(`${section}-settings-entry`).click();
   const subpage = page.getByTestId(`${section}-subpage`);
@@ -722,17 +740,15 @@ export async function closeMembersDrawer(page: Page): Promise<void> {
 // Sidebar `<details class="sidebar-archive">`, the mobile
 // `.mobile-panel-actions` footer chip, and the ShellChrome
 // `shell-chrome-archive` button. The archive button (mobile-panel-archive)
-// lives in the RailActions rail: on desktop the rail is always on screen so tap
-// it directly; on mobile the rail is a collapsed drawer so reveal it first
-// (open rail → tap archive), exactly like openSettingsSection. The button is
-// always shown (not selection-gated), so this works on every window kind
-// including home/admin/mentions. Returns the modal dialog locator so callers
-// scope assertions to it. Re-opening an already-open modal is a no-op.
+// lives behind the RailActions launcher (#500): `openRailMenu` reveals the menu
+// (viewport-aware — opens the rail drawer first on mobile), then the archive
+// button is tapped. The button is always shown (not selection-gated), so this
+// works on every window kind including home/admin/mentions. Returns the modal
+// dialog locator so callers scope assertions to it. Re-opening an already-open
+// modal is a no-op.
 export async function openArchive(page: Page): Promise<Locator> {
   if ((await page.locator(".archive-modal").count()) === 0) {
-    if (isMobileViewport(page)) {
-      await openMembersDrawer(page);
-    }
+    await openRailMenu(page);
     await page.getByTestId("mobile-panel-archive").click();
   }
   const modal = page.locator(".archive-modal");

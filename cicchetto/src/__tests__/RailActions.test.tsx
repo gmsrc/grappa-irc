@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetForTest as resetOverlayLock } from "../lib/overlayScrollLock";
 
 // #473 — RailActions is the ONE labelled button drawer at the bottom of the
 // members rail. It carries every rail affordance — home · rooms · themes ·
@@ -78,11 +79,32 @@ afterEach(() => {
   // togglePresence persists an explicit pref in localStorage — clear it so it
   // can't leak into sibling tests reading the same key.
   localStorage.clear();
+  // #500 — the launcher menu drives createOverlayLock (refcount + document
+  // touchmove listener); reset the module singleton so a leaked open menu
+  // can't bleed the refcount / listener into a sibling test.
+  resetOverlayLock();
 });
 
+// #500 — the launcher testid (the ONE permanently-pinned button) + a helper
+// that opens the collapsible menu. Every existing per-button assertion below
+// now goes THROUGH the launcher: the buttons are collapsed by default and only
+// reachable after a tap. That mirrors the e2e contract (open the launcher,
+// THEN assert the action is reachable + clickable) — proving the #500 bug is
+// fixed instead of photographing the old always-expanded layout.
+const LAUNCHER = "rail-actions-launcher";
+function openMenu(): void {
+  fireEvent.click(screen.getByTestId(LAUNCHER));
+}
+
+// #473 button-set + gating contract. Post-#500 every assertion goes THROUGH the
+// launcher: `openMenu()` expands the collapsible menu, THEN the button is
+// asserted reachable / clickable / gated. Opening first is load-bearing — with
+// the menu collapsed a gated button is absent too, so a bare queryByTestId
+// would pass trivially and prove nothing about the gate.
 describe("RailActions (#473)", () => {
   it("always renders the settings cog with the kept testid + aria-label", () => {
     render(() => <RailActions setters={setters} />);
+    openMenu();
     const cog = screen.getByTestId("action-cluster-cog");
     expect(cog).toBeInTheDocument();
     // Many e2e specs locate the cog via getByLabel(/open settings/i) — the
@@ -92,12 +114,14 @@ describe("RailActions (#473)", () => {
 
   it("clicking the cog routes through openSettingsPanel(setters)", () => {
     render(() => <RailActions setters={setters} />);
+    openMenu();
     fireEvent.click(screen.getByTestId("action-cluster-cog"));
     expect(openSettingsPanel).toHaveBeenCalledWith(setters);
   });
 
   it("renders home / themes always, each with an icon and a TEXT label", () => {
     render(() => <RailActions setters={setters} />);
+    openMenu();
     const home = screen.getByTestId("mobile-panel-home");
     const themes = screen.getByTestId("mobile-panel-themes");
     expect(home).toBeInTheDocument();
@@ -109,6 +133,7 @@ describe("RailActions (#473)", () => {
 
   it("the /list launcher is labelled 'rooms' but keeps the mobile-panel-list testid", () => {
     render(() => <RailActions setters={setters} />);
+    openMenu();
     const rooms = screen.getByTestId("mobile-panel-list");
     expect(rooms).toBeInTheDocument();
     expect(rooms).toHaveTextContent("rooms");
@@ -118,14 +143,18 @@ describe("RailActions (#473)", () => {
 
   it("home routes through openHomePanel; rooms through openListPanel", () => {
     render(() => <RailActions setters={setters} />);
+    // home is a navigation action → it closes the menu, so re-open for rooms.
+    openMenu();
     fireEvent.click(screen.getByTestId("mobile-panel-home"));
     expect(openHomePanel).toHaveBeenCalledTimes(1);
+    openMenu();
     fireEvent.click(screen.getByTestId("mobile-panel-list"));
     expect(openListPanel).toHaveBeenCalledTimes(1);
   });
 
   it("always renders the archive button with an icon and a TEXT label", () => {
     render(() => <RailActions setters={setters} />);
+    openMenu();
     const archive = screen.getByTestId("mobile-panel-archive");
     expect(archive).toBeInTheDocument();
     expect(archive).toHaveTextContent("archive");
@@ -139,12 +168,14 @@ describe("RailActions (#473)", () => {
     roomsSlugHolder.value = null;
     selHolder.value = null;
     render(() => <RailActions setters={setters} />);
+    openMenu();
     expect(screen.queryByTestId("mobile-panel-list")).toBeNull();
     expect(screen.getByTestId("mobile-panel-archive")).toBeInTheDocument();
   });
 
   it("clicking archive routes through openArchivePanel(setters)", () => {
     render(() => <RailActions setters={setters} />);
+    openMenu();
     fireEvent.click(screen.getByTestId("mobile-panel-archive"));
     expect(openArchivePanel).toHaveBeenCalledWith(setters);
   });
@@ -152,15 +183,18 @@ describe("RailActions (#473)", () => {
   it("gates rooms on a network context (archiveSlugForSelection null ⇒ hidden)", () => {
     roomsSlugHolder.value = null;
     render(() => <RailActions setters={setters} />);
+    openMenu();
     expect(screen.queryByTestId("mobile-panel-list")).toBeNull();
   });
 
   it("gates admin on isAdmin(): hidden when false, shown when true", () => {
     const { unmount } = render(() => <RailActions setters={setters} />);
+    openMenu();
     expect(screen.queryByTestId("mobile-panel-admin")).toBeNull();
     unmount();
     adminHolder.value = true;
     render(() => <RailActions setters={setters} />);
+    openMenu();
     const admin = screen.getByTestId("mobile-panel-admin");
     expect(admin).toBeInTheDocument();
     expect(admin).toHaveTextContent("admin");
@@ -169,12 +203,14 @@ describe("RailActions (#473)", () => {
   it("does NOT render the denoise toggle on a non-channel window (selection null)", () => {
     selHolder.value = null;
     render(() => <RailActions setters={setters} />);
+    openMenu();
     expect(screen.queryByTestId("presence-toggle")).toBeNull();
   });
 
   it("renders the channel-gated denoise toggle (with label) on a channel window", () => {
     selHolder.value = channelSel;
     render(() => <RailActions setters={setters} />);
+    openMenu();
     const toggle = screen.getByTestId("presence-toggle");
     expect(toggle).toBeInTheDocument();
     expect(toggle).toHaveTextContent("denoise");
@@ -184,10 +220,66 @@ describe("RailActions (#473)", () => {
   it("toggling denoise flips the .presence-hidden accent state (explicit pref wins)", () => {
     selHolder.value = channelSel;
     const { container } = render(() => <RailActions setters={setters} />);
+    // denoise is a state toggle, NOT a navigation action — it does NOT close the
+    // menu, so the toggle stays mounted and its accent flip is observable.
+    openMenu();
     const toggle = container.querySelector("[data-testid='presence-toggle']") as HTMLElement;
     expect(toggle).not.toHaveClass("presence-hidden");
     fireEvent.click(toggle);
     expect(toggle).toHaveClass("presence-hidden");
     expect(toggle).toHaveClass("shell-chrome-btn");
+  });
+});
+
+// #500 — the always-expanded button column became unreachable on a big channel
+// (desktop: it sat below the overflowing nick list; mobile: it ate the rail).
+// vjt's fix: collapse every action behind ONE launcher permanently pinned at
+// the bottom of the rail; tapping it expands the actions OVER the nick area.
+// One component, both form factors — the launcher is the only permanent row.
+describe("RailActions launcher (#500)", () => {
+  it("renders the pinned launcher; the action buttons are collapsed (absent) by default", () => {
+    selHolder.value = channelSel;
+    render(() => <RailActions setters={setters} />);
+    const launcher = screen.getByTestId("rail-actions-launcher");
+    expect(launcher).toBeInTheDocument();
+    // A11y: it advertises a menu it toggles, collapsed to start.
+    expect(launcher).toHaveAttribute("aria-haspopup", "menu");
+    expect(launcher).toHaveAttribute("aria-expanded", "false");
+    // The actions are NOT in the DOM while collapsed — that is the whole point:
+    // they cost no permanent vertical space beyond the single launcher row.
+    expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
+    expect(screen.queryByTestId("mobile-panel-home")).toBeNull();
+    expect(screen.queryByTestId("presence-toggle")).toBeNull();
+  });
+
+  it("tapping the launcher expands the menu and makes every action reachable", () => {
+    selHolder.value = channelSel;
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+    expect(screen.getByTestId("rail-actions-launcher")).toHaveAttribute("aria-expanded", "true");
+    // The collapsed actions are now reachable inside the expanded menu.
+    expect(screen.getByTestId("action-cluster-cog")).toBeInTheDocument();
+    expect(screen.getByTestId("mobile-panel-home")).toBeInTheDocument();
+    expect(screen.getByTestId("presence-toggle")).toBeInTheDocument();
+  });
+
+  it("clicking an action runs it AND closes the menu (reachable then works)", () => {
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId("action-cluster-cog"));
+    // The action fired through the shared mutex helper …
+    expect(openSettingsPanel).toHaveBeenCalledWith(setters);
+    // … and the menu collapsed again (single-shot, like every other overlay).
+    expect(screen.getByTestId("rail-actions-launcher")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
+  });
+
+  it("clicking the backdrop closes the menu without firing any action", () => {
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId("rail-actions-backdrop"));
+    expect(screen.getByTestId("rail-actions-launcher")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
+    expect(openSettingsPanel).not.toHaveBeenCalled();
   });
 });

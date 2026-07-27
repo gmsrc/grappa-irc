@@ -3,6 +3,16 @@ import { createSignal } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LIST_WINDOW_NAME } from "../lib/windowKinds";
 
+// #500 — RailActions collapsed every rail affordance behind ONE launcher, so a
+// rail action is reachable only after the launcher is tapped. Open it before
+// reaching any action; the menu buttons render synchronously (Solid <Show>), so
+// both screen- and container-scoped queries find them afterwards. This mirrors
+// the e2e contract (open launcher, THEN assert reachable) — the Shell-level
+// wiring these tests pin is proven THROUGH the real collapse, not around it.
+function openRailMenu(): void {
+  fireEvent.click(screen.getByTestId("rail-actions-launcher"));
+}
+
 // UX-4 bucket N (2026-05-19) — selection mock must use a REAL Solid
 // signal so Shell's reactive `<Show when={sel.kind === "admin" && isAdmin()}>`
 // re-runs when tests flip selection via `setSelectedChannel`. The
@@ -627,20 +637,27 @@ describe("Shell — three-pane integration", () => {
   it("clicking ⚙ opens SettingsDrawer (.open class)", async () => {
     selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
     const { container } = render(() => <Shell />);
+    // #500 — the cog is behind the rail launcher; open it, then reach the cog.
     await waitFor(() => {
-      expect(screen.getByLabelText(/open settings/i)).toBeInTheDocument();
+      expect(screen.getByTestId("rail-actions-launcher")).toBeInTheDocument();
     });
+    openRailMenu();
     fireEvent.click(screen.getByLabelText(/open settings/i));
     expect(container.querySelector(".settings-drawer")?.classList.contains("open")).toBe(true);
   });
 
-  it("empty-state renders the ⚙ settings button", () => {
+  it("empty-state: the rail launcher renders and reveals the ⚙ settings button", () => {
     render(() => <Shell />);
+    // #500 — the always-present affordance is now the launcher; the cog is
+    // reachable through it (settings must be reachable from every window kind).
+    expect(screen.getByTestId("rail-actions-launcher")).toBeInTheDocument();
+    openRailMenu();
     expect(screen.getByLabelText(/open settings/i)).toBeInTheDocument();
   });
 
   it("clicking empty-state ⚙ opens the settings drawer", () => {
     const { container } = render(() => <Shell />);
+    openRailMenu();
     fireEvent.click(screen.getByLabelText(/open settings/i));
     const settings = container.querySelector(".settings-drawer");
     expect(settings?.classList.contains("open")).toBe(true);
@@ -679,11 +696,11 @@ describe("Shell — three-pane integration", () => {
       selectionState.setSelSig({ networkSlug: "$home", channelName: "$home", kind: "home" });
       const { container } = render(() => <Shell />);
       // #71 INC-2 — desktop has no ShellChrome row anymore; the permanent rail
-      // (ActionCluster) is present on every desktop window, home included, so
-      // anchor the wait on its cog.
+      // is present on every desktop window, home included. #500 — its
+      // always-present affordance is the launcher, so anchor the wait on it.
       await waitFor(() => {
         expect(
-          container.querySelector(".shell-members [data-testid='action-cluster-cog']"),
+          container.querySelector(".shell-members [data-testid='rail-actions-launcher']"),
         ).toBeInTheDocument();
       });
       expect(container.querySelectorAll(".shell-chrome-hamburger").length).toBe(0);
@@ -877,15 +894,18 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       await waitFor(() => {
         expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
       });
-      // #473 — the cog + themes + archive launchers all fold into the ONE
-      // bottom RailActions drawer (no more top ActionCluster, no more
-      // nav-launcher footer). testids are kept where the button survives.
-      const drawer = container.querySelector(".shell-members .rail-actions");
-      expect(drawer?.querySelector("[data-testid='action-cluster-cog']")).not.toBeNull();
-      expect(drawer?.querySelector("[data-testid='mobile-panel-themes']")).not.toBeNull();
-      // #473 — archive folds INTO the drawer (was the held mobile-only footer,
-      // now deleted). The single grouped ArchiveModal is opened from here.
-      expect(drawer?.querySelector("[data-testid='mobile-panel-archive']")).not.toBeNull();
+      // #473 — the cog + themes + archive launchers all fold into the ONE rail
+      // surface (no more top ActionCluster, no more nav-launcher footer). #500 —
+      // they collapsed behind the launcher, so open it, then assert they are
+      // reachable inside the expanded menu. testids kept where the button
+      // survives.
+      openRailMenu();
+      const menu = container.querySelector(".shell-members .rail-actions-menu");
+      expect(menu?.querySelector("[data-testid='action-cluster-cog']")).not.toBeNull();
+      expect(menu?.querySelector("[data-testid='mobile-panel-themes']")).not.toBeNull();
+      // archive folds INTO the menu (was the held mobile-only footer, now
+      // deleted). The single grouped ArchiveModal is opened from here.
+      expect(menu?.querySelector("[data-testid='mobile-panel-archive']")).not.toBeNull();
       expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeNull();
     });
 
@@ -908,8 +928,11 @@ describe("Shell — mobile layout (isMobile = true)", () => {
         expect(container.querySelector(".topic-bar")).toBeInTheDocument();
       });
       // INC-2 (R1) removed the desktop ShellChrome row — its cog moved to the
-      // permanent right rail's ActionCluster, freeing the top for the topic.
+      // permanent right rail, freeing the top for the topic.
       expect(container.querySelector(".shell-chrome")).toBeNull();
+      // #500 — the cog + archive collapsed behind the launcher; open it, then
+      // assert they are reachable inside the rail.
+      openRailMenu();
       expect(
         container.querySelector(".shell-members [data-testid='action-cluster-cog']"),
       ).not.toBeNull();
@@ -949,8 +972,11 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       await waitFor(() => {
         expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
       });
-      const drawer = container.querySelector(".shell-members .rail-actions");
-      expect(drawer?.querySelector("[data-testid='mobile-panel-admin']")).not.toBeNull();
+      // #500 — admin collapsed behind the launcher; open it, then assert the
+      // capability-gated button is reachable in the menu.
+      openRailMenu();
+      const menu = container.querySelector(".shell-members .rail-actions-menu");
+      expect(menu?.querySelector("[data-testid='mobile-panel-admin']")).not.toBeNull();
     });
 
     it("non-admin user: the RailActions drawer does NOT render the admin button", async () => {
@@ -967,8 +993,13 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       await waitFor(() => {
         expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
       });
-      const drawer = container.querySelector(".shell-members .rail-actions");
-      expect(drawer?.querySelector("[data-testid='mobile-panel-admin']")).toBeNull();
+      // #500 — open the launcher FIRST: with the menu collapsed every button is
+      // absent, so the gate must be asserted with the menu OPEN (the other
+      // buttons present, admin absent) — else it would pass trivially.
+      openRailMenu();
+      const menu = container.querySelector(".shell-members .rail-actions-menu");
+      expect(menu?.querySelector("[data-testid='action-cluster-cog']")).not.toBeNull();
+      expect(menu?.querySelector("[data-testid='mobile-panel-admin']")).toBeNull();
     });
 
     it("admin tap: dispatches selection to $admin window (same handler as Sidebar admin row)", async () => {
@@ -982,14 +1013,16 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       };
       selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
       const { container } = render(() => <Shell />);
-      const btn = await waitFor(() => {
-        const b = container.querySelector<HTMLButtonElement>(
-          ".shell-members .rail-actions [data-testid='mobile-panel-admin']",
-        );
-        expect(b).not.toBeNull();
-        return b as HTMLButtonElement;
+      // #500 — open the launcher, then reach + tap the admin button in the menu.
+      await waitFor(() => {
+        expect(container.querySelector(".shell-members .rail-actions-launcher")).not.toBeNull();
       });
-      fireEvent.click(btn);
+      openRailMenu();
+      const btn = container.querySelector<HTMLButtonElement>(
+        ".shell-members .rail-actions-menu [data-testid='mobile-panel-admin']",
+      );
+      expect(btn).not.toBeNull();
+      fireEvent.click(btn as HTMLButtonElement);
       expect(selectionState.setSelectedChannelMock).toHaveBeenCalledWith({
         networkSlug: "$admin",
         channelName: "$admin",
@@ -1018,8 +1051,10 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       await waitFor(() => {
         expect(container.querySelector(".shell-members.open")).not.toBeNull();
       });
+      // #500 — inside the open drawer, open the launcher, then tap admin.
+      openRailMenu();
       const btn = container.querySelector<HTMLButtonElement>(
-        ".shell-members .rail-actions [data-testid='mobile-panel-admin']",
+        ".shell-members .rail-actions-menu [data-testid='mobile-panel-admin']",
       );
       expect(btn).not.toBeNull();
       fireEvent.click(btn as HTMLButtonElement);
@@ -1050,23 +1085,27 @@ describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () =
     await waitFor(() => {
       expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
     });
-    const drawer = container.querySelector(".shell-members .rail-actions");
+    // #500 — open the launcher, then assert rooms is reachable in the menu.
+    openRailMenu();
+    const menu = container.querySelector(".shell-members .rail-actions-menu");
     // #473 — relabelled "rooms" but testid stays mobile-panel-list.
-    expect(drawer?.querySelector("[data-testid='mobile-panel-list']")).not.toBeNull();
+    expect(menu?.querySelector("[data-testid='mobile-panel-list']")).not.toBeNull();
   });
 
   it("rooms tap: dispatches selection to the $list window for the active network", async () => {
     mobileState.value = true;
     selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
     const { container } = render(() => <Shell />);
-    const btn = await waitFor(() => {
-      const b = container.querySelector<HTMLButtonElement>(
-        ".shell-members .rail-actions [data-testid='mobile-panel-list']",
-      );
-      expect(b).not.toBeNull();
-      return b as HTMLButtonElement;
+    // #500 — open the launcher, then reach + tap rooms in the menu.
+    await waitFor(() => {
+      expect(container.querySelector(".shell-members .rail-actions-launcher")).not.toBeNull();
     });
-    fireEvent.click(btn);
+    openRailMenu();
+    const btn = container.querySelector<HTMLButtonElement>(
+      ".shell-members .rail-actions-menu [data-testid='mobile-panel-list']",
+    );
+    expect(btn).not.toBeNull();
+    fireEvent.click(btn as HTMLButtonElement);
     expect(selectionState.setSelectedChannelMock).toHaveBeenCalledWith({
       networkSlug: "freenode",
       channelName: LIST_WINDOW_NAME,
@@ -1088,8 +1127,10 @@ describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () =
     await waitFor(() => {
       expect(container.querySelector(".shell-members.open")).not.toBeNull();
     });
+    // #500 — inside the open drawer, open the launcher, then tap rooms.
+    openRailMenu();
     const btn = container.querySelector<HTMLButtonElement>(
-      ".shell-members .rail-actions [data-testid='mobile-panel-list']",
+      ".shell-members .rail-actions-menu [data-testid='mobile-panel-list']",
     );
     expect(btn).not.toBeNull();
     fireEvent.click(btn as HTMLButtonElement);
@@ -1114,8 +1155,12 @@ describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () =
     await waitFor(() => {
       expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
     });
-    const drawer = container.querySelector(".shell-members .rail-actions");
-    const order = Array.from(drawer?.querySelectorAll<HTMLElement>(".rail-action") ?? []).map((b) =>
+    // #500 — open the launcher; the actions live in the expanded menu now. The
+    // launcher itself also carries `.rail-action`, so scope the order query to
+    // the MENU to assert only the seven action buttons.
+    openRailMenu();
+    const menu = container.querySelector(".shell-members .rail-actions-menu");
+    const order = Array.from(menu?.querySelectorAll<HTMLElement>(".rail-action") ?? []).map((b) =>
       b.getAttribute("data-testid"),
     );
     // #473 — the drawer carries the launchers in the issue's order. Archive is
@@ -1166,7 +1211,9 @@ describe("Shell — M-7/N admin pane lifecycle", () => {
     // Pre-click — channel content visible, no admin pane.
     expect(container.querySelector(".admin-pane")).toBeNull();
     expect(container.querySelector(".scrollback-pane")).toBeInTheDocument();
-    // Open settings overlay → click admin console entry.
+    // Open settings overlay → click admin console entry. #500 — the cog is
+    // behind the rail launcher, so open it first.
+    openRailMenu();
     fireEvent.click(screen.getByLabelText(/open settings/i));
     const entry = await screen.findByTestId("admin-console-entry");
     fireEvent.click(entry);
