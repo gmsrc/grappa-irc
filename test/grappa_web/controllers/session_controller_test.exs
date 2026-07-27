@@ -200,7 +200,7 @@ defmodule GrappaWeb.SessionControllerTest do
 
     test "user accreting a NON-visitor_enabled network → 403 (the bound holds for users too)",
          %{conn: conn} do
-      {_user, session} = user_and_session()
+      {_, session} = user_and_session()
       # A network the operator did NOT opt into the self-serve tier.
       {_, _} = network_with_server(port: pick_unused_port(), slug: "locked", visitor_enabled: false)
 

@@ -47,14 +47,13 @@ defmodule GrappaWeb.SessionController do
   """
   use GrappaWeb, :controller
 
-  require Logger
-
   alias Grappa.Accounts.User
-  alias Grappa.Networks
+  alias Grappa.{Networks, Visitors}
   alias Grappa.Networks.{Credential, Credentials, Network, SessionPlan}
-  alias Grappa.Visitors
   alias Grappa.Visitors.Visitor
   alias GrappaWeb.NetworkSpawn
+
+  require Logger
 
   @doc """
   `POST /session/networks` — attach + spawn an available `visitor_enabled`
@@ -99,7 +98,7 @@ defmodule GrappaWeb.SessionController do
     end
   end
 
-  defp dispatch_accretion(_conn, _slug), do: {:error, :forbidden}
+  defp dispatch_accretion(_, _), do: {:error, :forbidden}
 
   # ---------------------------------------------------------------------------
   # User accretion (#481) — the user twin of `Visitors.accrete_network/3`.

@@ -22,11 +22,11 @@ defmodule GrappaWeb.NetworkSpawn do
   and accretion doors cannot drift on the #171 per-IP / network-total caps.
   """
 
-  require Logger
-
   alias Grappa.Networks.Credential
   alias Grappa.Session
   alias GrappaWeb.Subject
+
+  require Logger
 
   @doc """
   Admit + spawn `subject`'s upstream for `credential`'s network from the
