@@ -29,6 +29,7 @@
 
 import { expect, test } from "../fixtures/test";
 import {
+  closeArchive,
   expandArchiveGroup,
   loginAs,
   openArchive,
@@ -89,6 +90,12 @@ test("UX-1 — × on archive entry confirms + deletes scrollback permanently", a
   // modal group.
   await deleteButton.click();
   await expect(archivedEntry).toHaveCount(0, { timeout: 5_000 });
+
+  // Close the modal before touching the shell beneath it: the archive
+  // modal backdrop is a full-viewport scrim that intercepts pointer
+  // events, so the selectChannel below would hang on the backdrop until
+  // the test timeout (the pre-#473 Sidebar `<details>` had no backdrop).
+  await closeArchive(page);
 
   // Smoking gun: re-JOIN the channel and confirm scrollback is empty.
   // If the rows were still there, the next selectChannel would render

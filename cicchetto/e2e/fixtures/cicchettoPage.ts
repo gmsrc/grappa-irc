@@ -752,6 +752,20 @@ export async function expandArchiveGroup(page: Page, networkSlug: string): Promi
   return group;
 }
 
+// #473 — close the grouped ArchiveModal via its header × (the production
+// close affordance). A caller that interacts with the shell beneath the
+// modal (sidebar, scrollback, compose) MUST close first: the modal
+// backdrop (`.archive-modal-backdrop`) is a full-viewport scrim that
+// intercepts pointer events, so a click on anything under it hangs until
+// the test timeout. Waits for the modal to leave the DOM so the following
+// action isn't blocked by a lingering backdrop. No-op if already closed.
+export async function closeArchive(page: Page): Promise<void> {
+  const modal = page.locator(".archive-modal");
+  if ((await modal.count()) === 0) return;
+  await page.locator(".archive-modal-close").click();
+  await expect(modal).toHaveCount(0, { timeout: 5_000 });
+}
+
 // Dispatch a synthetic touch drag on `.compose-box textarea` from
 // (startX,startY) to (endX,endY). When `slowMs` > 0 a real delay separates
 // touchstart from touchmove/touchend so the ComposeBox handler's
