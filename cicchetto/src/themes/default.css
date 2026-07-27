@@ -847,12 +847,12 @@ html.overlay-open #root > div {
   }
 }
 
-/* #71 INC-2 — when the active window has no member-list-shaped UI (DM,
+/* #71 INC-2 / #473 — when the active window has no member-list-shaped UI (DM,
    server, mentions, home, parked/failed/kicked channel) the right rail
-   drops the MembersPane but KEEPS the ActionCluster (the cog is reachable
-   from every window kind — R1's permanent rail). So the column is no
-   longer suppressed: it narrows to `max-content`, wrapping the thin button
-   cluster instead of a 14rem members void. Was `… 1fr` (column dropped);
+   drops the MembersPane but KEEPS the RailActions drawer (the buttons are
+   reachable from every window kind — R1's permanent rail). So the column is no
+   longer suppressed: it narrows to `max-content`, sizing to the labelled
+   button drawer instead of a 14rem members void. Was `… 1fr` (column dropped);
    now `… 1fr max-content` (narrow rail stays). Mobile-only .shell-mobile
    is single-column so the modifier is a no-op there. */
 .shell.shell-no-members {
@@ -902,8 +902,8 @@ html.overlay-open #root > div {
   }
 
   .shell.shell-no-members {
-    /* #71 INC-2 — narrow rail stays (ActionCluster cog everywhere), not a
-       dropped column. Was `8rem 1fr`. */
+    /* #71 INC-2 / #473 — narrow rail stays (RailActions buttons everywhere),
+       not a dropped column. Was `8rem 1fr`. */
     grid-template-columns: 8rem 1fr max-content;
   }
 }
@@ -1495,54 +1495,6 @@ html.resize-dragging * {
   display: none; /* desktop: hidden; mobile media query un-hides */
 }
 
-/* #222 — per-channel presence-filter toggle (hide/show join/part/quit).
-   #71 INC-2 (R1): MOVED from the topic bar into the right-rail ActionCluster
-   (channel-gated), so the class was renamed `topic-bar-presence-toggle` →
-   `action-cluster-presence-toggle`. Visible wherever the rail shows a channel
-   window (desktop rail / mobile drawer).
-   #305 — ADOPTS `.shell-chrome-btn` (base chrome + size tokens) via its
-   className in ActionCluster.tsx, which fixes its sub-floor tap target (defect
-   2). The only bespoke bits are `flex: none` (never grow/shrink in the row) and
-   the `.presence-hidden` accent state (rows currently suppressed → accent so
-   the operator sees at a glance the channel is filtered). */
-.action-cluster-presence-toggle {
-  flex: none;
-}
-
-.action-cluster-presence-toggle.presence-hidden {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-/* #305 — a filtered toggle keeps its accent on hover. `.shell-chrome-btn:hover`
-   (0,2,0) is declared LATER than `.presence-hidden` (0,2,0) and would flip the
-   text to var(--fg) on hover, dropping the "channel is filtered" accent that
-   pre-#305 persisted (the old dedicated :hover lost to .presence-hidden). This
-   0,3,0 rule restores it — the border already stays accent (the base :hover
-   doesn't touch border-color). */
-.action-cluster-presence-toggle.presence-hidden:hover {
-  color: var(--accent);
-}
-
-/* #71 INC-2 (R1) — the right-rail action cluster container. A thin flex group
-   of buttons (cog always; channel-gated monkey). On the desktop rail it is a
-   toolbar pinned at the top of `.shell-members`; on the mobile drawer it sits
-   at the top of the same aside. Border-bottom separates it from the members
-   list (or the empty rail) below. FUTURE (not now): per-tab-kind context
-   (lusers/whois) grafts in as a SIBLING of this cluster inside `.shell-members`,
-   which is why the cluster owns only its own row, not the whole rail. */
-.action-cluster {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  padding: 0.5rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-alt);
-  flex-shrink: 0;
-}
-
 /* #473 — the ONE unified rail action drawer. A VERTICAL column of labelled
    buttons (glyph + text name) pinned at the BOTTOM of `.shell-members`, mounted
    identically on the desktop rail and the mobile drawer. Vertical + full-width
@@ -1567,8 +1519,9 @@ html.resize-dragging * {
 /* Each rail action is a full-width row: glyph then name, left-aligned. Adopts
    `.shell-chrome-btn` (base chrome + size tokens: border, hover, mono font) via
    its className; these overrides turn the square icon button into a wide
-   labelled row. The tap floor (min-height) is inherited from `.shell-chrome-btn`
-   — on mobile the drawer bumps it to var(--tap-min) below. */
+   labelled row. The tap floor is inherited from `.shell-chrome-btn`
+   (min-height: var(--chrome-tap-min) = 48px ABSOLUTE), a proper tap target on
+   both form factors that does NOT shrink with the user's font-size. */
 .rail-actions .rail-action {
   width: 100%;
   justify-content: flex-start;

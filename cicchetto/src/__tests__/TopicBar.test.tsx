@@ -589,7 +589,8 @@ describe("TopicBar", () => {
     it("#71 INC-2 — TopicBar no longer renders the presence toggle (moved to the rail)", () => {
       const { container } = render(() => <TopicBar {...baseProps()} />);
       expect(container.querySelector(".topic-bar-presence-toggle")).toBeNull();
-      expect(container.querySelector(".action-cluster-presence-toggle")).toBeNull();
+      // #473 — the toggle now lives in RailActions with the .rail-action-presence-toggle class.
+      expect(container.querySelector(".rail-action-presence-toggle")).toBeNull();
       expect(container.querySelector("[data-testid='presence-toggle']")).toBeNull();
     });
   });

@@ -871,24 +871,24 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       expect(container.querySelector(".topic-bar .topic-bar-hamburger")).not.toBeNull();
     });
 
-    it("mobile channel window: settings cog at drawer TOP (ActionCluster); footer hosts archive + themes but NOT settings", async () => {
+    it("#473 mobile channel window: cog + themes live in the RailActions drawer; footer is archive-only", async () => {
       mobileState.value = true;
       selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
       const { container } = render(() => <Shell />);
       await waitFor(() => {
-        expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeInTheDocument();
+        expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
       });
-      // #71 INC-2 — the footer settings cog was DEDUPED into the ActionCluster
-      // pinned at the TOP of the drawer (the ruling: one home for the cog).
-      const aside = container.querySelector(".shell-members");
-      expect(aside?.querySelector("[data-testid='action-cluster-cog']")).not.toBeNull();
+      // #473 — the cog + themes launcher fold into the ONE bottom RailActions
+      // drawer (no more top ActionCluster, no more nav-launcher footer). testids
+      // are kept where the button survives.
+      const drawer = container.querySelector(".shell-members .rail-actions");
+      expect(drawer?.querySelector("[data-testid='action-cluster-cog']")).not.toBeNull();
+      expect(drawer?.querySelector("[data-testid='mobile-panel-themes']")).not.toBeNull();
+      // #473 — archive is HELD in a mobile-only footer pending the desktop
+      // archive-surface ruling; it is NOT (yet) in the drawer.
       const footer = container.querySelector(".shell-members .mobile-panel-actions");
-      expect(footer?.querySelector("[data-testid='mobile-panel-settings']")).toBeNull();
       expect(footer?.querySelector("[data-testid='mobile-panel-archive']")).not.toBeNull();
-      // #332 — the 🎨 themes launcher was restored to the mobile footer
-      // (removed by #299). It deep-links to the settings drawer's themes
-      // sub-page; the footer `flex-wrap`s so it doesn't clip admin.
-      expect(footer?.querySelector("[data-testid='mobile-panel-themes']")).not.toBeNull();
+      expect(drawer?.querySelector("[data-testid='mobile-panel-archive']")).toBeNull();
     });
 
     it("mobile home window: standalone .shell-chrome row STAYS (no TopicBar / drawer to absorb buttons)", async () => {
@@ -930,8 +930,8 @@ describe("Shell — mobile layout (isMobile = true)", () => {
   // mirroring the Sidebar admin row gate (single source of truth).
   // Tap dispatches the same selection-driven admin window navigation
   // that Sidebar + SettingsDrawer entries use ($admin/$admin/admin).
-  describe("UX-6 bucket C — admin launcher button in mobile drawer footer", () => {
-    it("admin user: launcher footer hosts admin button alongside settings + archive", async () => {
+  describe("UX-6 bucket C / #473 — admin launcher button in the RailActions drawer", () => {
+    it("admin user: the RailActions drawer hosts the admin button", async () => {
       mobileState.value = true;
       userHolder.current = {
         kind: "user",
@@ -943,13 +943,13 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
       const { container } = render(() => <Shell />);
       await waitFor(() => {
-        expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeInTheDocument();
+        expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
       });
-      const footer = container.querySelector(".shell-members .mobile-panel-actions");
-      expect(footer?.querySelector("[data-testid='mobile-panel-admin']")).not.toBeNull();
+      const drawer = container.querySelector(".shell-members .rail-actions");
+      expect(drawer?.querySelector("[data-testid='mobile-panel-admin']")).not.toBeNull();
     });
 
-    it("non-admin user: launcher footer does NOT render the admin button", async () => {
+    it("non-admin user: the RailActions drawer does NOT render the admin button", async () => {
       mobileState.value = true;
       userHolder.current = {
         kind: "user",
@@ -961,10 +961,10 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
       const { container } = render(() => <Shell />);
       await waitFor(() => {
-        expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeInTheDocument();
+        expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
       });
-      const footer = container.querySelector(".shell-members .mobile-panel-actions");
-      expect(footer?.querySelector("[data-testid='mobile-panel-admin']")).toBeNull();
+      const drawer = container.querySelector(".shell-members .rail-actions");
+      expect(drawer?.querySelector("[data-testid='mobile-panel-admin']")).toBeNull();
     });
 
     it("admin tap: dispatches selection to $admin window (same handler as Sidebar admin row)", async () => {
@@ -980,7 +980,7 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       const { container } = render(() => <Shell />);
       const btn = await waitFor(() => {
         const b = container.querySelector<HTMLButtonElement>(
-          ".shell-members .mobile-panel-actions [data-testid='mobile-panel-admin']",
+          ".shell-members .rail-actions [data-testid='mobile-panel-admin']",
         );
         expect(b).not.toBeNull();
         return b as HTMLButtonElement;
@@ -1015,7 +1015,7 @@ describe("Shell — mobile layout (isMobile = true)", () => {
         expect(container.querySelector(".shell-members.open")).not.toBeNull();
       });
       const btn = container.querySelector<HTMLButtonElement>(
-        ".shell-members .mobile-panel-actions [data-testid='mobile-panel-admin']",
+        ".shell-members .rail-actions [data-testid='mobile-panel-admin']",
       );
       expect(btn).not.toBeNull();
       fireEvent.click(btn as HTMLButtonElement);
@@ -1038,25 +1038,26 @@ describe("Shell — mobile layout (isMobile = true)", () => {
 // de-emphasised trailing affordance; list joins home as a primary
 // window-nav launcher near the left). Selection-driven + mutex shape
 // mirror the home/admin launchers.
-describe("#361 — mobile list launcher in drawer footer", () => {
-  it("mobile channel: footer hosts the 📇 list launcher (network context present)", async () => {
+describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () => {
+  it("mobile channel: the drawer hosts the 📇 rooms launcher (network context present)", async () => {
     mobileState.value = true;
     selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
     const { container } = render(() => <Shell />);
     await waitFor(() => {
-      expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeInTheDocument();
+      expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
     });
-    const footer = container.querySelector(".shell-members .mobile-panel-actions");
-    expect(footer?.querySelector("[data-testid='mobile-panel-list']")).not.toBeNull();
+    const drawer = container.querySelector(".shell-members .rail-actions");
+    // #473 — relabelled "rooms" but testid stays mobile-panel-list.
+    expect(drawer?.querySelector("[data-testid='mobile-panel-list']")).not.toBeNull();
   });
 
-  it("list tap: dispatches selection to the $list window for the active network", async () => {
+  it("rooms tap: dispatches selection to the $list window for the active network", async () => {
     mobileState.value = true;
     selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
     const { container } = render(() => <Shell />);
     const btn = await waitFor(() => {
       const b = container.querySelector<HTMLButtonElement>(
-        ".shell-members .mobile-panel-actions [data-testid='mobile-panel-list']",
+        ".shell-members .rail-actions [data-testid='mobile-panel-list']",
       );
       expect(b).not.toBeNull();
       return b as HTMLButtonElement;
@@ -1069,7 +1070,7 @@ describe("#361 — mobile list launcher in drawer footer", () => {
     });
   });
 
-  it("list tap: closes the members drawer (mutex with settings/archive)", async () => {
+  it("rooms tap: closes the members drawer (mutex with settings/archive)", async () => {
     mobileState.value = true;
     selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
     const { container } = render(() => <Shell />);
@@ -1084,7 +1085,7 @@ describe("#361 — mobile list launcher in drawer footer", () => {
       expect(container.querySelector(".shell-members.open")).not.toBeNull();
     });
     const btn = container.querySelector<HTMLButtonElement>(
-      ".shell-members .mobile-panel-actions [data-testid='mobile-panel-list']",
+      ".shell-members .rail-actions [data-testid='mobile-panel-list']",
     );
     expect(btn).not.toBeNull();
     fireEvent.click(btn as HTMLButtonElement);
@@ -1095,24 +1096,38 @@ describe("#361 — mobile list launcher in drawer footer", () => {
     });
   });
 
-  it("footer order: archive renders LAST, after the list + every other launcher", async () => {
+  it("#473 drawer order: home · rooms · themes · settings · admin, with archive trailing in the held footer", async () => {
     mobileState.value = true;
+    userHolder.current = {
+      kind: "user",
+      id: "u1",
+      name: "vjt",
+      is_admin: true,
+      inserted_at: "x",
+    };
     selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
     const { container } = render(() => <Shell />);
     await waitFor(() => {
-      expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeInTheDocument();
+      expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
     });
-    const footer = container.querySelector(".shell-members .mobile-panel-actions");
-    const testids = Array.from(
-      footer?.querySelectorAll<HTMLElement>(".shell-chrome-btn") ?? [],
-    ).map((b) => b.getAttribute("data-testid"));
-    // Archive is the trailing affordance.
-    expect(testids[testids.length - 1]).toBe("mobile-panel-archive");
-    // List is present and sits ahead of archive (primary nav, near home).
-    expect(testids.indexOf("mobile-panel-list")).toBeGreaterThanOrEqual(0);
-    expect(testids.indexOf("mobile-panel-list")).toBeLessThan(
-      testids.indexOf("mobile-panel-archive"),
+    const drawer = container.querySelector(".shell-members .rail-actions");
+    const order = Array.from(drawer?.querySelectorAll<HTMLElement>(".rail-action") ?? []).map((b) =>
+      b.getAttribute("data-testid"),
     );
+    // #473 — the drawer carries the launchers in the issue's order (archive is
+    // HELD out; denoise is the channel-gated trailer, present on this channel
+    // window). testids kept where the button survives.
+    expect(order).toEqual([
+      "mobile-panel-home",
+      "mobile-panel-list",
+      "mobile-panel-themes",
+      "action-cluster-cog",
+      "mobile-panel-admin",
+      "presence-toggle",
+    ]);
+    // Archive is NOT in the drawer yet — it trails in the mobile-only held footer.
+    const footer = container.querySelector(".shell-members .mobile-panel-actions");
+    expect(footer?.querySelector("[data-testid='mobile-panel-archive']")).not.toBeNull();
   });
 });
 

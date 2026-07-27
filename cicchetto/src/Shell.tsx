@@ -9,7 +9,6 @@ import {
   Switch,
 } from "solid-js";
 import { Portal } from "solid-js/web";
-import ActionCluster from "./ActionCluster";
 import AdminPane from "./AdminPane";
 import ArchiveModal from "./ArchiveModal";
 import AudioMiniPlayer from "./AudioMiniPlayer";
@@ -33,16 +32,7 @@ import { getDraft, setDraft, tabComplete } from "./lib/compose";
 import { install, registerHandlers, uninstall } from "./lib/keybindings";
 import { loadLastFocused } from "./lib/lastFocusedChannel";
 import { mentionsBundleBySlug } from "./lib/mentionsWindow";
-import {
-  openAdminPanel,
-  openArchivePanel,
-  openHomePanel,
-  openListPanel,
-  openMembersPanel,
-  openSettingsPanel,
-  openThemesPanel,
-  toggleMembersPanel,
-} from "./lib/mobilePanel";
+import { openArchivePanel, openMembersPanel, toggleMembersPanel } from "./lib/mobilePanel";
 import { channelsBySlug, isAdmin, networkBySlug, networks, user } from "./lib/networks";
 import { nickEquals } from "./lib/nickEquals";
 import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
@@ -58,7 +48,6 @@ import {
   HOME_WINDOW_NAME,
   HOME_WINDOW_SLUG,
   kindHasScrollback,
-  LIST_WINDOW_NAME,
 } from "./lib/windowKinds";
 import { isActiveChannelJoined } from "./lib/windowState";
 import MediaViewerModal from "./MediaViewerModal";
@@ -150,19 +139,6 @@ const Shell: Component = () => {
   // branch begins mounting, no concurrent owner-tree mutation.
   const isAdminPaneVisible = createMemo(() => selectedChannel()?.kind === "admin" && isAdmin());
   const selKind = createMemo(() => selectedChannel()?.kind ?? null);
-
-  // #71 INC-2 — the channel context the right-rail ActionCluster's presence
-  // toggle (👁/🙈) needs. The monkey is CHANNEL-GATED: non-null only on a
-  // channel window (any channel — the toggle writes a pref that persists to
-  // reconnect, so it's meaningful on parked channels too, matching the old
-  // TopicBar placement). null ⇒ the cluster renders the cog only. Shared by
-  // both the desktop rail mount and the mobile drawer mount.
-  const railChannel = createMemo((): { networkSlug: string; channelName: string } | null => {
-    const sel = selectedChannel();
-    return sel && sel.kind === "channel"
-      ? { networkSlug: sel.networkSlug, channelName: sel.channelName }
-      : null;
-  });
 
   // UX-6 bucket A — refcounted overlay scroll-lock for the two
   // Shell-owned mobile overlays (members drawer + AdminPane). The
@@ -608,9 +584,9 @@ const Shell: Component = () => {
           <section class="shell-main">
             {/* #71 INC-2 (R1) — the always-present desktop ShellChrome row was
                 REMOVED. Its settings cog moved into the permanent right rail
-                (the ActionCluster mounted in `.shell-members` below), which is
-                reachable from every window kind — so the "cog reachable from
-                every window" rule the row used to satisfy now holds via the
+                (#473: the RailActions drawer mounted in `.shell-members` below),
+                which is reachable from every window kind — so the "cog reachable
+                from every window" rule the row used to satisfy now holds via the
                 rail. Removing the row frees the top of `.shell-main` for the
                 topic (the raised topic clamp, default.css). */}
             {/* #134 — the Switch fallback only renders when
@@ -717,12 +693,10 @@ const Shell: Component = () => {
 
           {/* #71 INC-2 (R1) — the right rail is now PERMANENT (decoupled from
               the members panel). `.shell-no-members` no longer drops this
-              column; it narrows it to fit the ActionCluster (default.css), so
-              the cog is reachable on every window kind. The ActionCluster
-              (cog + channel-gated monkey) is pinned at the top; MembersPane is
-              conditional content below (a future increment turns the rail into
-              the per-tab-kind context surface — lusers/whois — grafting as a
-              SIBLING of the cluster; NOT in scope now). */}
+              column; it narrows it to fit the rail buttons (default.css), so
+              they are reachable on every window kind. #473 — MembersPane is
+              conditional content at the top; the RailActions drawer (all the
+              labelled buttons) floors at the bottom. */}
           <aside class="shell-members" classList={{ open: membersOpen() }}>
             {/* UX-5 bucket BS — drag handle on the inner edge of the
                 right (members) sidebar. Mounted unconditionally even
@@ -833,8 +807,8 @@ const Shell: Component = () => {
           {/* Mobile-non-channel windows (home / mentions / admin / server /
               list) render the standalone .shell-chrome row. #71 INC-2 (R1):
               its settings cog became the ☰ RAIL OPENER — the cog itself moved
-              into the rail (the `.shell-members` drawer's ActionCluster). This
-              is the opener for non-channel windows (channel windows open the
+              into the rail (#473: the `.shell-members` drawer's RailActions).
+              This is the opener for non-channel windows (channel windows open the
               same drawer via the TopicBar hamburger — ONE drawer, one ☰ glyph,
               per the Opt-A ruling). Mobile-channel still suppresses this row so
               the scrollback reclaims the ~32px. Earlier history of this surface
@@ -963,19 +937,14 @@ const Shell: Component = () => {
             `archiveModalNetwork()` — renders nothing when closed. */}
         <ArchiveModal />
 
-        {/* #71 INC-2 (R1) — the mobile members drawer IS the right rail. It is
-            reachable on EVERY window (channel: TopicBar ☰; non-channel:
-            ShellChrome ☰ above — ONE drawer). The ActionCluster (cog +
-            channel-gated monkey) is pinned at the TOP; the footer's settings
-            cog was DEDUPED into it (per the ruling). MembersPane is conditional
-            content in the middle; the footer keeps the nav launchers. */}
+        {/* #473 — the mobile members drawer IS the right rail, reachable on
+            EVERY window (channel: TopicBar ☰; non-channel: ShellChrome ☰ above —
+            ONE drawer). It now mounts the SAME `RailActions` drawer as the
+            desktop rail: the post-#71 split (top ActionCluster cog + denoise,
+            plus this footer's window-nav launchers) folds into ONE bottom
+            drawer. Only `archive` stays in a mobile-only footer for now, pending
+            the desktop archive-surface ruling (see RailActions.tsx). */}
         <aside class="shell-members" classList={{ open: membersOpen() }}>
-          <ActionCluster
-            onOpenSettings={() =>
-              openSettingsPanel({ membersOpen, setMembersOpen, setSettingsOpen })
-            }
-            channel={railChannel()}
-          />
           <Show when={isActiveChannelJoined() && selectedChannel()}>
             {(sel) => (
               <MembersPane
@@ -985,130 +954,18 @@ const Shell: Component = () => {
               />
             )}
           </Show>
-          {/* UX-5 bucket BM (2026-05-20) — bottom-fixed launcher row
-              inside the mobile members drawer. Replaces the archive +
-              cog buttons that UX-5 BT inlined into the TopicBar; with
-              three affordances on a narrow row the chrome was getting
-              crowded (vjt 2026-05-19 dogfood). Mutex enforced via
-              lib/mobilePanel.ts: tapping settings/archive closes the
-              drawer before opening the launched surface, and the
-              hamburger's own toggle (toggleMembersPanel above) closes
-              the launched surfaces before opening the drawer.
-              Archive launcher renders only when there's a network
-              context — same `archiveSlugForSelection()` rule that
-              gates the standalone ShellChrome archive button. */}
+          {/* #473 — the ONE unified rail action drawer, floored at the bottom.
+              Same component + same handler set the desktop rail mounts (the
+              drawer-closing arm of the mobilePanel helpers is meaningful here on
+              mobile and a harmless no-op on the permanent desktop rail). */}
+          <RailActions setters={{ membersOpen, setMembersOpen, setSettingsOpen }} />
+          {/* #473 — archive HELD in a mobile-only footer. Its mobile behavior
+              (openArchivePanel → ArchiveModal) is INVARIANT across the pending
+              desktop archive-surface ruling, so it stays put, untouched. It
+              folds into RailActions (and gains its desktop surface) once the
+              ruling lands, at which point this footer is deleted. Same
+              `archiveSlugForSelection()` network-context gate as before. */}
           <footer class="mobile-panel-actions">
-            {/* #291 — home launcher. Mobile narrow layout has no other way
-                back to the home window (desktop has the sidebar home link).
-                Always visible, leftmost (footer left-aligns per #291);
-                selection-driven dispatch mirrors the admin launcher. */}
-            <button
-              type="button"
-              class="shell-chrome-btn shell-chrome-home"
-              aria-label="open home"
-              data-testid="mobile-panel-home"
-              onClick={() =>
-                openHomePanel({ membersOpen, setMembersOpen, setSettingsOpen }, () =>
-                  setSelectedChannel({
-                    networkSlug: HOME_WINDOW_SLUG,
-                    channelName: HOME_WINDOW_NAME,
-                    kind: "home",
-                  }),
-                )
-              }
-            >
-              {"\u{1F3E0}"}
-            </button>
-            {/* #361 — list launcher (channel directory / $list). The
-                mobile narrow layout had NO way to open the $list window
-                except typing `/list` — the desktop sidebar's 📇 $list row
-                has no mobile equivalent. Gated on the SAME network-context
-                predicate as the archive launcher (`archiveSlugForSelection`
-                — the shared "which network is this footer launcher active
-                for" accessor whose moduledoc anticipates reuse for new
-                window kinds). Selection-driven, mutex shape mirrors the
-                home/admin launchers: dispatch the same $list navigation the
-                desktop sidebar row uses, so DirectoryPane mounts and
-                auto-loads for the active network (no throttling change).
-                Positioned right after home — list joins home as a primary
-                window-nav launcher, while archive moves to the row's END
-                (below). */}
-            <Show when={archiveSlugForSelection()}>
-              {(slug) => (
-                <button
-                  type="button"
-                  class="shell-chrome-btn shell-chrome-list"
-                  aria-label="open channel list"
-                  data-testid="mobile-panel-list"
-                  onClick={() =>
-                    openListPanel({ membersOpen, setMembersOpen, setSettingsOpen }, () =>
-                      setSelectedChannel({
-                        networkSlug: slug(),
-                        channelName: LIST_WINDOW_NAME,
-                        kind: "list",
-                      }),
-                    )
-                  }
-                >
-                  {"\u{1F4C7}"}
-                </button>
-              )}
-            </Show>
-            {/* #71 INC-2 (R1) — the footer settings cog was DEDUPED into the
-                ActionCluster at the TOP of this drawer (the ruling: the footer
-                cog "confluisce nell'ActionCluster in cima al drawer"). The rail
-                is the single home of the cog now; the footer keeps only the
-                window-nav launchers (home / list / themes / admin / archive). */}
-            {/* #75/#332 — themes launcher: opens the settings drawer directly on
-                the themes gallery sub-page (openThemesPanel deep-links via
-                settingsNav). #299 removed this (footer overflowed at 5 buttons,
-                clipping admin); #332 (P0, vjt) restored it — the footer now
-                `flex-wrap`s (default.css `.mobile-panel-actions`), so a 5th
-                button wraps to a new row instead of clipping admin off-screen. */}
-            <button
-              type="button"
-              class="shell-chrome-btn shell-chrome-themes"
-              aria-label="open themes"
-              data-testid="mobile-panel-themes"
-              onClick={() => openThemesPanel({ membersOpen, setMembersOpen, setSettingsOpen })}
-            >
-              {"\u{1F3A8}"}
-            </button>
-            {/* UX-6 bucket C (2026-05-21) — admin launcher: admin
-                console. Visible only when `isAdmin()` is true (single
-                source of truth shared with Sidebar admin row +
-                SettingsDrawer admin entry). Selection-driven dispatch
-                mirrors the Sidebar handler — Shell mounts AdminPane on
-                `selectedChannel.kind === "admin"`. Mutex via
-                openAdminPanel: closes members/settings/archive before
-                navigating, same shape as openSettingsPanel /
-                openArchivePanel. */}
-            <Show when={isAdmin()}>
-              <button
-                type="button"
-                class="shell-chrome-btn shell-chrome-admin"
-                aria-label="open admin"
-                data-testid="mobile-panel-admin"
-                onClick={() =>
-                  openAdminPanel({ membersOpen, setMembersOpen, setSettingsOpen }, () =>
-                    setSelectedChannel({
-                      networkSlug: ADMIN_WINDOW_SLUG,
-                      channelName: ADMIN_WINDOW_NAME,
-                      kind: "admin",
-                    }),
-                  )
-                }
-              >
-                {"\u{1F527}"}
-              </button>
-            </Show>
-            {/* #361 — archive launcher moved to the END of the row. It was
-                slot 2 (right after home); the 📇 list launcher now takes
-                that slot as a primary window-nav affordance, and archive
-                — the de-emphasised "old windows" surface — trails last.
-                Renders only when there's a network context, same
-                `archiveSlugForSelection()` rule that gates the standalone
-                ShellChrome archive button. */}
             <Show when={archiveSlugForSelection()}>
               {(slug) => (
                 <button
