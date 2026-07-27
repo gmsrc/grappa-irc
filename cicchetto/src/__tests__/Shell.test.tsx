@@ -855,7 +855,7 @@ describe("Shell — mobile layout (isMobile = true)", () => {
   // shape (no chrome row; cog in `.shell-members`). The mobile footer's
   // settings cog was DEDUPED into the drawer-top ActionCluster too.
   describe("UX-5 buckets BT + BM — narrow-mode chrome+topic compression", () => {
-    it("mobile channel window: NO standalone .shell-chrome row; topic-bar hosts ONLY hamburger (no cog, no archive inline)", async () => {
+    it("mobile channel window: NO standalone .shell-chrome row; topic-bar hosts ONLY hamburger (no cog inline)", async () => {
       mobileState.value = true;
       selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
       const { container } = render(() => <Shell />);
@@ -864,31 +864,29 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       });
       // Standalone chrome row is NOT mounted in the channel-window branch.
       expect(container.querySelector(".shell-chrome")).toBeNull();
-      // BM: cog + archive are NO LONGER inline in the topic-bar.
+      // BM: the cog is NO LONGER inline in the topic-bar.
       expect(container.querySelector(".topic-bar [data-testid='shell-chrome-cog']")).toBeNull();
-      expect(container.querySelector(".topic-bar [data-testid='shell-chrome-archive']")).toBeNull();
       // Only the hamburger survives on the topic-bar's right edge.
       expect(container.querySelector(".topic-bar .topic-bar-hamburger")).not.toBeNull();
     });
 
-    it("#473 mobile channel window: cog + themes live in the RailActions drawer; footer is archive-only", async () => {
+    it("#473 mobile channel window: cog + themes + archive all live in the RailActions drawer; no footer", async () => {
       mobileState.value = true;
       selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
       const { container } = render(() => <Shell />);
       await waitFor(() => {
         expect(container.querySelector(".shell-members .rail-actions")).toBeInTheDocument();
       });
-      // #473 — the cog + themes launcher fold into the ONE bottom RailActions
-      // drawer (no more top ActionCluster, no more nav-launcher footer). testids
-      // are kept where the button survives.
+      // #473 — the cog + themes + archive launchers all fold into the ONE
+      // bottom RailActions drawer (no more top ActionCluster, no more
+      // nav-launcher footer). testids are kept where the button survives.
       const drawer = container.querySelector(".shell-members .rail-actions");
       expect(drawer?.querySelector("[data-testid='action-cluster-cog']")).not.toBeNull();
       expect(drawer?.querySelector("[data-testid='mobile-panel-themes']")).not.toBeNull();
-      // #473 — archive is HELD in a mobile-only footer pending the desktop
-      // archive-surface ruling; it is NOT (yet) in the drawer.
-      const footer = container.querySelector(".shell-members .mobile-panel-actions");
-      expect(footer?.querySelector("[data-testid='mobile-panel-archive']")).not.toBeNull();
-      expect(drawer?.querySelector("[data-testid='mobile-panel-archive']")).toBeNull();
+      // #473 — archive folds INTO the drawer (was the held mobile-only footer,
+      // now deleted). The single grouped ArchiveModal is opened from here.
+      expect(drawer?.querySelector("[data-testid='mobile-panel-archive']")).not.toBeNull();
+      expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeNull();
     });
 
     it("mobile home window: standalone .shell-chrome row STAYS (no TopicBar / drawer to absorb buttons)", async () => {
@@ -915,9 +913,15 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       expect(
         container.querySelector(".shell-members [data-testid='action-cluster-cog']"),
       ).not.toBeNull();
+      // #473 — archive folds into the desktop rail too (single archive
+      // surface on both form factors).
+      expect(
+        container.querySelector(".shell-members [data-testid='mobile-panel-archive']"),
+      ).not.toBeNull();
       // Desktop topic-bar must NOT inline the chrome buttons.
       expect(container.querySelector(".topic-bar [data-testid='shell-chrome-cog']")).toBeNull();
-      // BM: desktop members aside has NO launcher footer (mobile-only).
+      // #473 — the launcher footer is gone entirely (never mobile- nor
+      // desktop-mounted); archive is a first-class RailActions button now.
       expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeNull();
     });
   });
@@ -1096,7 +1100,7 @@ describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () =
     });
   });
 
-  it("#473 drawer order: home · rooms · themes · settings · admin, with archive trailing in the held footer", async () => {
+  it("#473 drawer order: home · rooms · themes · archive · settings · admin · denoise", async () => {
     mobileState.value = true;
     userHolder.current = {
       kind: "user",
@@ -1114,20 +1118,21 @@ describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () =
     const order = Array.from(drawer?.querySelectorAll<HTMLElement>(".rail-action") ?? []).map((b) =>
       b.getAttribute("data-testid"),
     );
-    // #473 — the drawer carries the launchers in the issue's order (archive is
-    // HELD out; denoise is the channel-gated trailer, present on this channel
-    // window). testids kept where the button survives.
+    // #473 — the drawer carries the launchers in the issue's order. Archive is
+    // now a first-class button (always-on, between themes and the cog); denoise
+    // is the channel-gated trailer, present on this channel window. testids kept
+    // where the button survives.
     expect(order).toEqual([
       "mobile-panel-home",
       "mobile-panel-list",
       "mobile-panel-themes",
+      "mobile-panel-archive",
       "action-cluster-cog",
       "mobile-panel-admin",
       "presence-toggle",
     ]);
-    // Archive is NOT in the drawer yet — it trails in the mobile-only held footer.
-    const footer = container.querySelector(".shell-members .mobile-panel-actions");
-    expect(footer?.querySelector("[data-testid='mobile-panel-archive']")).not.toBeNull();
+    // The mobile-only launcher footer is gone entirely.
+    expect(container.querySelector(".shell-members .mobile-panel-actions")).toBeNull();
   });
 });
 

@@ -293,33 +293,35 @@ describe("archive.visibleArchiveForNetwork", () => {
   });
 });
 
-// UX-2 — archiveModalNetwork signal opens / closes the mobile modal.
-// One slug at a time; `null` = closed. BottomBar's chip writes the
-// slug on tap; ArchiveModal's close affordances write `null`.
-describe("archive.archiveModalNetwork signal", () => {
-  it("defaults to null (modal closed at boot)", async () => {
+// #473 — archiveModalOpen is a boolean open/closed flag (superseding the
+// per-network slug signal `archiveModalNetwork`). The grouped ArchiveModal
+// now renders ALL networks as collapsible groups on both form factors, so
+// the modal no longer tracks a single network — only whether it is
+// visible. Lives inside identityScopedStore so token rotation closes it.
+describe("archive.archiveModalOpen signal", () => {
+  it("defaults to false (modal closed at boot)", async () => {
     const archive = await import("../lib/archive");
-    expect(archive.archiveModalNetwork()).toBeNull();
+    expect(archive.archiveModalOpen()).toBe(false);
   });
 
-  it("setArchiveModalNetwork(slug) opens for that network", async () => {
+  it("setArchiveModalOpen(true) opens the modal", async () => {
     const archive = await import("../lib/archive");
-    archive.setArchiveModalNetwork("freenode");
-    expect(archive.archiveModalNetwork()).toBe("freenode");
+    archive.setArchiveModalOpen(true);
+    expect(archive.archiveModalOpen()).toBe(true);
   });
 
-  it("setArchiveModalNetwork(null) closes", async () => {
+  it("setArchiveModalOpen(false) closes", async () => {
     const archive = await import("../lib/archive");
-    archive.setArchiveModalNetwork("freenode");
-    archive.setArchiveModalNetwork(null);
-    expect(archive.archiveModalNetwork()).toBeNull();
+    archive.setArchiveModalOpen(true);
+    archive.setArchiveModalOpen(false);
+    expect(archive.archiveModalOpen()).toBe(false);
   });
 
   it("clearArchive() ALSO closes the modal (identity rotation safety)", async () => {
     const archive = await import("../lib/archive");
-    archive.setArchiveModalNetwork("freenode");
-    expect(archive.archiveModalNetwork()).toBe("freenode");
+    archive.setArchiveModalOpen(true);
+    expect(archive.archiveModalOpen()).toBe(true);
     archive.clearArchive();
-    expect(archive.archiveModalNetwork()).toBeNull();
+    expect(archive.archiveModalOpen()).toBe(false);
   });
 });

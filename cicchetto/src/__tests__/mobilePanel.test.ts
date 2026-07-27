@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/archive", () => ({
-  setArchiveModalNetwork: vi.fn(),
+  setArchiveModalOpen: vi.fn(),
 }));
 
 beforeEach(() => {
@@ -9,10 +9,16 @@ beforeEach(() => {
 });
 
 // UX-5 bucket BM (2026-05-20) — mobile chrome panel mutex helpers.
-// Pre-bucket the three signals (membersOpen, settingsOpen,
-// archiveModalNetwork) were independent. The helpers below enforce
+// Pre-bucket the three signals (membersOpen, settingsOpen, the archive
+// modal flag) were independent. The helpers below enforce
 // `members | settings | archive | none` by closing siblings before
 // opening self. KISS: no new signal, just thin wrappers.
+//
+// #473 — the archive signal is now a boolean open/closed flag
+// (`setArchiveModalOpen`), not a per-network slug: the grouped
+// ArchiveModal shows every network at once, so closing it is
+// `setArchiveModalOpen(false)` and the archive launcher opens it with
+// `setArchiveModalOpen(true)` (no slug).
 
 describe("toggleMembersPanel", () => {
   it("opens members when closed; closes sibling panels", async () => {
@@ -26,7 +32,7 @@ describe("toggleMembersPanel", () => {
       setSettingsOpen,
     });
     expect(setSettingsOpen).toHaveBeenCalledWith(false);
-    expect(archive.setArchiveModalNetwork).toHaveBeenCalledWith(null);
+    expect(archive.setArchiveModalOpen).toHaveBeenCalledWith(false);
     expect(setMembersOpen).toHaveBeenCalledWith(true);
   });
 
@@ -42,7 +48,7 @@ describe("toggleMembersPanel", () => {
     });
     expect(setMembersOpen).toHaveBeenCalledWith(false);
     expect(setSettingsOpen).not.toHaveBeenCalled();
-    expect(archive.setArchiveModalNetwork).not.toHaveBeenCalled();
+    expect(archive.setArchiveModalOpen).not.toHaveBeenCalled();
   });
 });
 
@@ -58,28 +64,25 @@ describe("openSettingsPanel", () => {
       setSettingsOpen,
     });
     expect(setMembersOpen).toHaveBeenCalledWith(false);
-    expect(archive.setArchiveModalNetwork).toHaveBeenCalledWith(null);
+    expect(archive.setArchiveModalOpen).toHaveBeenCalledWith(false);
     expect(setSettingsOpen).toHaveBeenCalledWith(true);
   });
 });
 
-describe("openArchivePanel", () => {
-  it("opens archive for slug + closes members + closes settings", async () => {
+describe("openArchivePanel (#473)", () => {
+  it("opens the grouped archive modal + closes members + closes settings (no slug)", async () => {
     const archive = await import("../lib/archive");
     const { openArchivePanel } = await import("../lib/mobilePanel");
     const setMembersOpen = vi.fn();
     const setSettingsOpen = vi.fn();
-    openArchivePanel(
-      {
-        membersOpen: () => true,
-        setMembersOpen,
-        setSettingsOpen,
-      },
-      "freenode",
-    );
+    openArchivePanel({
+      membersOpen: () => true,
+      setMembersOpen,
+      setSettingsOpen,
+    });
     expect(setMembersOpen).toHaveBeenCalledWith(false);
     expect(setSettingsOpen).toHaveBeenCalledWith(false);
-    expect(archive.setArchiveModalNetwork).toHaveBeenCalledWith("freenode");
+    expect(archive.setArchiveModalOpen).toHaveBeenCalledWith(true);
   });
 });
 
@@ -105,7 +108,7 @@ describe("openAdminPanel", () => {
     );
     expect(setMembersOpen).toHaveBeenCalledWith(false);
     expect(setSettingsOpen).toHaveBeenCalledWith(false);
-    expect(archive.setArchiveModalNetwork).toHaveBeenCalledWith(null);
+    expect(archive.setArchiveModalOpen).toHaveBeenCalledWith(false);
     expect(navigate).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,17 +1,20 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// UX-2 (2026-05-17) — Mobile archive modal.
+// #473 — the ONE grouped archive modal (both form factors).
 //
-// Stateless w.r.t. open/closed — driven by `archiveModalNetwork()`
-// signal from `lib/archive.ts`. When the signal is non-null, the modal
-// renders a list of `visibleArchiveForNetwork(slug, id)` entries with
-// per-row InlineConfirmButton (UX-1's delete affordance) for each.
+// Driven by the boolean `archiveModalOpen()` signal (was the per-network
+// slug `archiveModalNetwork`). When open it renders EVERY network as a
+// collapsible `<details>` group; each group's rows come from
+// `visibleArchiveForNetwork(slug, id)` and are loaded LAZILY on the
+// group's first expand (the `<details onToggle>` fires `loadArchive`).
 //
-// Tests cover: closed-state (renders nothing), open with entries (list
-// + delete buttons), open with empty (empty banner), tap entry (selects
-// + closes), tap delete twice (arms + calls deleteArchiveEntry), tap
-// close × / backdrop (clears the signal).
+// Tests cover: closed-state (renders nothing), open (plain "Archive"
+// header + one group per network, collapsed), lazy-load-on-expand (NOT
+// eager on open), rows per group, empty-group banner, tap entry (selects
+// from its group's slug + closes), tap delete twice (arms + calls
+// deleteArchiveEntry), tap close × / backdrop (closes via
+// setArchiveModalOpen(false)).
 
 vi.mock("../lib/selection", () => ({
   setSelectedChannel: vi.fn(),
@@ -23,6 +26,10 @@ vi.mock("../lib/networks", () => ({
     { id: 1, slug: "freenode", inserted_at: "", updated_at: "" },
     { id: 2, slug: "libera", inserted_at: "", updated_at: "" },
   ],
+}));
+
+vi.mock("../lib/queryWindows", () => ({
+  openQueryWindowState: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
@@ -39,8 +46,8 @@ vi.mock("../lib/auth", () => ({
   token: () => "test-token",
 }));
 
-const { mockSlug, mockEntries, setArchiveModalNetwork, loadArchive } = vi.hoisted(() => ({
-  mockSlug: vi.fn<() => string | null>(() => null),
+const { mockOpen, mockEntries, setArchiveModalOpen, loadArchive } = vi.hoisted(() => ({
+  mockOpen: vi.fn<() => boolean>(() => false),
   mockEntries: vi.fn<
     (
       slug: string,
@@ -52,13 +59,13 @@ const { mockSlug, mockEntries, setArchiveModalNetwork, loadArchive } = vi.hoiste
       row_count: number;
     }>
   >(() => []),
-  setArchiveModalNetwork: vi.fn(),
+  setArchiveModalOpen: vi.fn(),
   loadArchive: vi.fn<(slug: string) => Promise<void>>().mockResolvedValue(undefined),
 }));
 
 vi.mock("../lib/archive", () => ({
-  archiveModalNetwork: () => mockSlug(),
-  setArchiveModalNetwork,
+  archiveModalOpen: () => mockOpen(),
+  setArchiveModalOpen,
   loadArchive,
   visibleArchiveForNetwork: (slug: string, id: number) => mockEntries(slug, id),
 }));
@@ -69,72 +76,110 @@ import * as selMod from "../lib/selection";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSlug.mockReturnValue(null);
+  mockOpen.mockReturnValue(false);
   mockEntries.mockReturnValue([]);
 });
 
-describe("ArchiveModal", () => {
-  it("renders nothing when archiveModalNetwork() is null", () => {
+describe("ArchiveModal (#473 grouped)", () => {
+  it("renders nothing when archiveModalOpen() is false", () => {
     const { container } = render(() => <ArchiveModal />);
     expect(container.querySelector(".archive-modal-backdrop")).toBeNull();
   });
 
-  it("renders the dialog with header containing the slug when modal is open", () => {
-    mockSlug.mockReturnValue("freenode");
+  it("renders the dialog with a plain 'Archive' header when open", () => {
+    mockOpen.mockReturnValue(true);
     render(() => <ArchiveModal />);
-    const header = screen.getByText(/Archive — freenode/);
-    expect(header).toBeInTheDocument();
+    expect(screen.getByText("Archive")).toBeInTheDocument();
   });
 
-  it("renders one row per visible archive entry", () => {
-    mockSlug.mockReturnValue("freenode");
-    mockEntries.mockReturnValue([
-      { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 },
-      { target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 },
-    ]);
+  it("renders one collapsible group per network, collapsed by default", () => {
+    mockOpen.mockReturnValue(true);
     const { container } = render(() => <ArchiveModal />);
-    const rows = container.querySelectorAll(".archive-modal-row");
-    expect(rows.length).toBe(2);
+    const groups = container.querySelectorAll("details.archive-modal-group");
+    expect(groups.length).toBe(2);
+    expect(screen.getByTestId("archive-modal-group-freenode")).toBeInTheDocument();
+    expect(screen.getByTestId("archive-modal-group-libera")).toBeInTheDocument();
+    for (const g of groups) expect((g as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it("shows each network's slug as its group summary", () => {
+    mockOpen.mockReturnValue(true);
+    render(() => <ArchiveModal />);
+    expect(screen.getByText("freenode")).toBeInTheDocument();
+    expect(screen.getByText("libera")).toBeInTheDocument();
+  });
+
+  it("does NOT eagerly load any network on open (lazy contract, trap #2)", () => {
+    mockOpen.mockReturnValue(true);
+    render(() => <ArchiveModal />);
+    expect(loadArchive).not.toHaveBeenCalled();
+  });
+
+  it("expanding a group calls loadArchive(slug) for THAT network only (lazy per group)", () => {
+    mockOpen.mockReturnValue(true);
+    render(() => <ArchiveModal />);
+    const group = screen.getByTestId("archive-modal-group-freenode") as HTMLDetailsElement;
+    group.open = true;
+    group.dispatchEvent(new Event("toggle"));
+    expect(loadArchive).toHaveBeenCalledWith("freenode");
+    expect(loadArchive).not.toHaveBeenCalledWith("libera");
+  });
+
+  it("renders one row per visible entry within its network group", () => {
+    mockOpen.mockReturnValue(true);
+    mockEntries.mockImplementation((slug) =>
+      slug === "freenode"
+        ? [
+            { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 },
+            { target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 },
+          ]
+        : [],
+    );
+    render(() => <ArchiveModal />);
+    const freenodeGroup = screen.getByTestId("archive-modal-group-freenode");
+    expect(freenodeGroup.querySelectorAll(".archive-modal-row").length).toBe(2);
     expect(screen.getByText("vjt-peer")).toBeInTheDocument();
     expect(screen.getByText("#bofh")).toBeInTheDocument();
   });
 
-  it("renders an empty banner when modal is open but entries are empty", () => {
-    mockSlug.mockReturnValue("freenode");
+  it("shows an empty banner in each group with no visible entries", () => {
+    mockOpen.mockReturnValue(true);
     mockEntries.mockReturnValue([]);
     render(() => <ArchiveModal />);
-    expect(screen.getByText("no archived windows")).toBeInTheDocument();
+    // one per network group (both empty in this fixture)
+    expect(screen.getAllByText("no archived windows").length).toBe(2);
   });
 
-  it("clicking the × close button calls setArchiveModalNetwork(null)", () => {
-    mockSlug.mockReturnValue("freenode");
+  it("clicking the × close button calls setArchiveModalOpen(false)", () => {
+    mockOpen.mockReturnValue(true);
     render(() => <ArchiveModal />);
-    const closeBtn = screen.getByLabelText("close archive");
-    fireEvent.click(closeBtn);
-    expect(setArchiveModalNetwork).toHaveBeenCalledWith(null);
+    fireEvent.click(screen.getByLabelText("close archive"));
+    expect(setArchiveModalOpen).toHaveBeenCalledWith(false);
   });
 
-  it("clicking the backdrop calls setArchiveModalNetwork(null)", () => {
-    mockSlug.mockReturnValue("freenode");
+  it("clicking the backdrop calls setArchiveModalOpen(false)", () => {
+    mockOpen.mockReturnValue(true);
     const { container } = render(() => <ArchiveModal />);
     const backdrop = container.querySelector(".archive-modal-backdrop") as HTMLElement;
     fireEvent.click(backdrop);
-    expect(setArchiveModalNetwork).toHaveBeenCalledWith(null);
+    expect(setArchiveModalOpen).toHaveBeenCalledWith(false);
   });
 
   it("clicking the dialog itself does NOT close (stopPropagation)", () => {
-    mockSlug.mockReturnValue("freenode");
+    mockOpen.mockReturnValue(true);
     const { container } = render(() => <ArchiveModal />);
     const dialog = container.querySelector(".archive-modal") as HTMLElement;
     fireEvent.click(dialog);
-    expect(setArchiveModalNetwork).not.toHaveBeenCalled();
+    expect(setArchiveModalOpen).not.toHaveBeenCalled();
   });
 
-  it("clicking an entry row selects the channel + closes the modal (channel kind)", () => {
-    mockSlug.mockReturnValue("freenode");
-    mockEntries.mockReturnValue([
-      { target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 },
-    ]);
+  it("clicking a channel entry selects it (from its group's slug) + closes", () => {
+    mockOpen.mockReturnValue(true);
+    mockEntries.mockImplementation((slug) =>
+      slug === "freenode"
+        ? [{ target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 }]
+        : [],
+    );
     render(() => <ArchiveModal />);
     fireEvent.click(screen.getByText("#bofh"));
     expect(selMod.setSelectedChannel).toHaveBeenCalledWith({
@@ -142,74 +187,41 @@ describe("ArchiveModal", () => {
       channelName: "#bofh",
       kind: "channel",
     });
-    expect(setArchiveModalNetwork).toHaveBeenCalledWith(null);
+    expect(setArchiveModalOpen).toHaveBeenCalledWith(false);
   });
 
-  it("clicking an entry row selects the channel + closes the modal (query kind)", () => {
-    mockSlug.mockReturnValue("freenode");
-    mockEntries.mockReturnValue([
-      { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 },
-    ]);
+  it("clicking a query entry selects it (from its group's slug) + closes", () => {
+    mockOpen.mockReturnValue(true);
+    mockEntries.mockImplementation((slug) =>
+      slug === "libera"
+        ? [{ target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 }]
+        : [],
+    );
     render(() => <ArchiveModal />);
     fireEvent.click(screen.getByText("vjt-peer"));
     expect(selMod.setSelectedChannel).toHaveBeenCalledWith({
-      networkSlug: "freenode",
+      networkSlug: "libera",
       channelName: "vjt-peer",
       kind: "query",
     });
-    expect(setArchiveModalNetwork).toHaveBeenCalledWith(null);
+    expect(setArchiveModalOpen).toHaveBeenCalledWith(false);
   });
 
-  it("first click on × delete arms (label flips to 'really delete?')", () => {
-    mockSlug.mockReturnValue("freenode");
-    mockEntries.mockReturnValue([
-      { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 },
-    ]);
+  it("first click on × delete arms; second calls deleteArchiveEntry with token + slug + target", async () => {
+    mockOpen.mockReturnValue(true);
+    mockEntries.mockImplementation((slug) =>
+      slug === "freenode"
+        ? [{ target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 }]
+        : [],
+    );
     render(() => <ArchiveModal />);
     const deleteBtn = screen.getByTestId("archive-modal-delete-freenode-vjt-peer");
     expect(deleteBtn.textContent).toBe("×");
     fireEvent.click(deleteBtn);
     expect(deleteBtn.textContent).toBe("really delete?");
     expect(apiMod.deleteArchiveEntry).not.toHaveBeenCalled();
-  });
-
-  it("second click on × delete calls deleteArchiveEntry with token + slug + target", async () => {
-    mockSlug.mockReturnValue("freenode");
-    mockEntries.mockReturnValue([
-      { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 },
-    ]);
-    render(() => <ArchiveModal />);
-    const deleteBtn = screen.getByTestId("archive-modal-delete-freenode-vjt-peer");
-    fireEvent.click(deleteBtn);
     fireEvent.click(deleteBtn);
     await new Promise((r) => setTimeout(r, 0));
     expect(apiMod.deleteArchiveEntry).toHaveBeenCalledWith("test-token", "freenode", "vjt-peer");
-  });
-});
-
-// BUGHUNT-1 B — seed Archive list on edge-trigger open.
-//
-// Root cause: mobile BottomBar chip opens the modal via
-// setArchiveModalNetwork but never calls loadArchive — only Sidebar's
-// <details> onToggle does. Modal renders "no archived windows" until
-// the user archives a new window (which fires archive_changed → cic
-// re-fetches and the bug appears fixed). Fix is a dedicated
-// createEffect inside ArchiveModal that fires loadArchive on
-// edge-trigger open.
-describe("ArchiveModal seed-on-open (BUGHUNT-1 B)", () => {
-  it("does not load anything while archiveModalNetwork() is null", () => {
-    mockSlug.mockReturnValue(null);
-    render(() => <ArchiveModal />);
-    expect(loadArchive).not.toHaveBeenCalled();
-  });
-
-  it("calls loadArchive(slug) when archiveModalNetwork() flips null → slug", async () => {
-    mockSlug.mockReturnValue("freenode");
-    render(() => <ArchiveModal />);
-    // createEffect runs eagerly on mount; the initial slug counts as
-    // an edge-trigger from null → "freenode".
-    await new Promise((r) => setTimeout(r, 0));
-    expect(loadArchive).toHaveBeenCalledWith("freenode");
-    expect(loadArchive).toHaveBeenCalledTimes(1);
   });
 });

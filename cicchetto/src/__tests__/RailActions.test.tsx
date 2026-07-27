@@ -3,13 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // #473 — RailActions is the ONE labelled button drawer at the bottom of the
 // members rail. It carries every rail affordance — home · rooms · themes ·
-// (archive, HELD) · settings · admin · denoise — each as an icon + TEXT label,
+// archive · settings · admin · denoise — each as an icon + TEXT label,
 // identical on desktop and mobile. It supersedes the two split surfaces
 // (#71 INC-2 ActionCluster at the top + the mobile `.mobile-panel-actions`
-// footer). Per-button gating that is about CAPABILITY, not form factor, stays:
-// admin is isAdmin()-gated, rooms needs a network context, denoise is
-// channel-gated. The mobile-only form-factor gates are dropped — desktop gets
-// the same set.
+// footer) AND the desktop Sidebar `<details>` archive. Per-button gating that
+// is about CAPABILITY, not form factor, stays: admin is isAdmin()-gated, rooms
+// needs a network context, denoise is channel-gated. Archive is ALWAYS shown
+// (like settings) — the grouped multi-network ArchiveModal must be reachable
+// from every window kind. The mobile-only form-factor gates are dropped —
+// desktop gets the same set.
 //
 // Store reads (selection, networks isAdmin, archiveContext) are mocked so the
 // gates are driven deterministically; the mobilePanel helpers are spied to
@@ -45,12 +47,14 @@ const openListPanel = vi.fn();
 const openThemesPanel = vi.fn();
 const openAdminPanel = vi.fn();
 const openSettingsPanel = vi.fn();
+const openArchivePanel = vi.fn();
 vi.mock("../lib/mobilePanel", () => ({
   openHomePanel: (...a: unknown[]) => openHomePanel(...a),
   openListPanel: (...a: unknown[]) => openListPanel(...a),
   openThemesPanel: (...a: unknown[]) => openThemesPanel(...a),
   openAdminPanel: (...a: unknown[]) => openAdminPanel(...a),
   openSettingsPanel: (...a: unknown[]) => openSettingsPanel(...a),
+  openArchivePanel: (...a: unknown[]) => openArchivePanel(...a),
 }));
 
 import RailActions from "../RailActions";
@@ -118,6 +122,31 @@ describe("RailActions (#473)", () => {
     expect(openHomePanel).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("mobile-panel-list"));
     expect(openListPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("always renders the archive button with an icon and a TEXT label", () => {
+    render(() => <RailActions setters={setters} />);
+    const archive = screen.getByTestId("mobile-panel-archive");
+    expect(archive).toBeInTheDocument();
+    expect(archive).toHaveTextContent("archive");
+    expect(archive).toHaveAttribute("aria-label", "open archive");
+  });
+
+  it("archive is NOT selection-gated: shown even with no network context", () => {
+    // rooms hides on a null slug, but archive stays — the grouped
+    // ArchiveModal is the single archive surface and must be reachable from
+    // home / mentions / admin (which have no network) too.
+    roomsSlugHolder.value = null;
+    selHolder.value = null;
+    render(() => <RailActions setters={setters} />);
+    expect(screen.queryByTestId("mobile-panel-list")).toBeNull();
+    expect(screen.getByTestId("mobile-panel-archive")).toBeInTheDocument();
+  });
+
+  it("clicking archive routes through openArchivePanel(setters)", () => {
+    render(() => <RailActions setters={setters} />);
+    fireEvent.click(screen.getByTestId("mobile-panel-archive"));
+    expect(openArchivePanel).toHaveBeenCalledWith(setters);
   });
 
   it("gates rooms on a network context (archiveSlugForSelection null ⇒ hidden)", () => {

@@ -150,23 +150,10 @@ vi.mock("../lib/api", async (importOriginal) => {
   };
 });
 
-vi.mock("../lib/archive", () => ({
-  archivedBySlug: () => ({
-    freenode: [
-      { target: "#sniffo", kind: "channel", last_activity: 200, row_count: 576 },
-      { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 8 },
-    ],
-  }),
-  loadArchive: vi.fn().mockResolvedValue(undefined),
-  clearArchive: vi.fn(),
-  visibleArchiveForNetwork: (slug: string) =>
-    slug === "freenode"
-      ? [
-          { target: "#sniffo", kind: "channel", last_activity: 200, row_count: 576 },
-          { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 8 },
-        ]
-      : [],
-}));
+// #473 — Sidebar no longer imports `../lib/archive` (the per-network
+// `<details>` archive section was removed; ArchiveModal is now the single
+// archive surface). The archive store mock + its `archiveMod` reference
+// went with the deleted "Archive section" describe.
 
 let mockSubject: { kind: "user" | "visitor"; [k: string]: unknown } | null = {
   kind: "user",
@@ -205,7 +192,6 @@ vi.mock("../lib/windowState", () => ({
 }));
 
 import * as apiMod from "../lib/api";
-import * as archiveMod from "../lib/archive";
 // #195 — the confirm-dialog store, imported STATICALLY so the test shares the
 // SAME module instance windowClose writes to on × click (a dynamic
 // `await import` would resolve a second instance under vitest's mocked graph
@@ -433,55 +419,15 @@ describe("Sidebar", () => {
     expect(apiMod.postPart).toHaveBeenCalledWith("tok", "freenode", "#italia");
   });
 
-  // CP15 B4 — Archive section per network. Collapsed by default
-  // (`<details>` without `open`), lazy-loaded on first expand
-  // (`loadArchive(slug)`), entries clickable → setSelectedChannel.
-  describe("Archive section", () => {
-    it("renders Archive <details> per network, collapsed by default", () => {
+  // #473 — the per-network Archive `<details>` section was REMOVED from the
+  // Sidebar (ArchiveModal is now the single archive surface, grouped per
+  // network). Its "Archive section" describe went with it; the grouped-modal
+  // coverage lives in ArchiveModal.test.tsx. Guard the removal:
+  describe("#473 — Sidebar no longer renders an inline archive section", () => {
+    it("does NOT render an Archive <details> in the sidebar", () => {
       render(() => <Sidebar />);
-      const archive = screen.getByText("Archive");
-      const details = archive.closest("details") as HTMLDetailsElement | null;
-      expect(details).toBeTruthy();
-      expect(details?.open).toBe(false);
-    });
-
-    it("renders one button per archived entry inside the network section", () => {
-      render(() => <Sidebar />);
-      // Both entries are rendered eagerly (the renderer reads from
-      // `archivedBySlug()` which the test mock pre-populates). Lazy
-      // FETCH still happens on expand; the renderer doesn't wait.
-      expect(screen.getByText("#sniffo")).toBeInTheDocument();
-      expect(screen.getByText("vjt-peer")).toBeInTheDocument();
-    });
-
-    it("expanding the Archive <details> calls loadArchive(slug)", () => {
-      render(() => <Sidebar />);
-      const archive = screen.getByText("Archive");
-      const details = archive.closest("details") as HTMLDetailsElement;
-      details.open = true;
-      // Solid handlers fire on the toggle event, not on the property set.
-      details.dispatchEvent(new Event("toggle"));
-      expect(archiveMod.loadArchive).toHaveBeenCalledWith("freenode");
-    });
-
-    it("clicking an archived channel entry sets selection with kind=channel", () => {
-      render(() => <Sidebar />);
-      fireEvent.click(screen.getByText("#sniffo"));
-      expect(selMod.setSelectedChannel).toHaveBeenCalledWith({
-        networkSlug: "freenode",
-        channelName: "#sniffo",
-        kind: "channel",
-      });
-    });
-
-    it("clicking an archived query entry sets selection with kind=query", () => {
-      render(() => <Sidebar />);
-      fireEvent.click(screen.getByText("vjt-peer"));
-      expect(selMod.setSelectedChannel).toHaveBeenCalledWith({
-        networkSlug: "freenode",
-        channelName: "vjt-peer",
-        kind: "query",
-      });
+      expect(screen.queryByText("Archive")).toBeNull();
+      expect(document.querySelector(".sidebar-archive")).toBeNull();
     });
   });
 
@@ -1047,13 +993,12 @@ describe("Sidebar", () => {
       expect(container.querySelector('[data-testid="sidebar-mentions-row-freenode"]')).toBeNull();
     });
 
-    it("mentions row is a direct <li> of the main .sidebar-network-section <ul> (rail like a channel, NOT the archive list)", () => {
+    it("mentions row is a direct <li> of the main .sidebar-network-section <ul> (rail like a channel)", () => {
       mockMentionsBundles = { freenode: { network_slug: "freenode", messages: [] } };
       const { container } = render(() => <Sidebar />);
       const row = container.querySelector('[data-testid="sidebar-mentions-row-freenode"]');
       const ul = row?.closest("ul");
       expect(ul?.classList.contains("sidebar-network-section")).toBe(true);
-      expect(ul?.classList.contains("sidebar-archive-list")).toBe(false);
     });
 
     it("clicking the mentions row selects the mentions window (kind mentions, empty channel)", () => {

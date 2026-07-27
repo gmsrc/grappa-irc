@@ -5,6 +5,7 @@ import { membersByChannel } from "./lib/members";
 import {
   type MobilePanelSetters,
   openAdminPanel,
+  openArchivePanel,
   openHomePanel,
   openListPanel,
   openSettingsPanel,
@@ -31,33 +32,35 @@ import {
 // sat at the bottom — desktop never got the second group at all (a cog and a
 // monkey). See issue #473.
 //
-// Buttons, in order: home · rooms · themes · [archive] · settings · admin ·
+// Buttons, in order: home · rooms · themes · archive · settings · admin ·
 // denoise. Each carries its NAME as visible text next to the glyph (#473: the
 // bare emoji had to be guessed / long-pressed; `denoise` in particular gives
 // the 👁/🙈 toggle a name it never had in the UI).
 //
 // Gating is CAPABILITY-only — the mobile-only form-factor gates are dropped:
-//   * home / themes / settings — always.
+//   * home / themes / settings / archive — always.
 //   * rooms — needs a network context (`archiveSlugForSelection()`, the shared
 //     "which network is this launcher active for" accessor).
 //   * admin — `isAdmin()` (single source of truth shared with the Sidebar admin
 //     row + SettingsDrawer admin entry).
 //   * denoise — channel-gated (a channel window is selected).
 //
-// The window-nav launchers (home / rooms / admin) and the own-signal launchers
-// (settings / themes) route through the SAME `lib/mobilePanel` mutex helpers
-// used before this change, so the members | settings | archive | none invariant
-// is untouched and the helpers stay the single mutex path. On the permanent
-// desktop rail the drawer-closing arm of those helpers is a harmless no-op
-// (`.shell-members` is a grid child, always visible; the `open` class only
-// drives the mobile `position: fixed` drawer) — so ONE handler set is correct
-// on both form factors.
+// #473 — `archive` is ALWAYS shown, like settings — NOT selection-gated. The
+// archive rework makes `ArchiveModal` the SINGLE archive surface, grouped
+// per network. Gating it on the current selection's network (as the old
+// mobile footer chip did) would leave that one surface UNREACHABLE from
+// home / mentions / admin (no network → `archiveSlugForSelection()` null),
+// which contradicts the ruling. rooms stays selection-gated because it
+// navigates to a per-network `$list` window; archive does not.
 //
-// NOTE (#473): the `archive` button is intentionally NOT rendered yet — its
-// desktop surface (mount ArchiveModal on desktop vs. keep the Sidebar
-// `<details>` archive) is an open ruling. It lands, folded into this drawer,
-// once that is decided. Everything else in the drawer is form-factor-agnostic
-// and independent of that choice.
+// The window-nav launchers (home / rooms / admin) and the own-signal launchers
+// (settings / themes / archive) route through the SAME `lib/mobilePanel` mutex
+// helpers used before this change, so the members | settings | archive | none
+// invariant is untouched and the helpers stay the single mutex path. On the
+// permanent desktop rail the drawer-closing arm of those helpers is a harmless
+// no-op (`.shell-members` is a grid child, always visible; the `open` class
+// only drives the mobile `position: fixed` drawer) — so ONE handler set is
+// correct on both form factors.
 
 export type Props = {
   /**
@@ -149,9 +152,23 @@ const RailActions: Component<Props> = (props) => {
         <span class="rail-action-label">themes</span>
       </button>
 
-      {/* #473 — `archive` button HELD: its desktop surface is an open ruling
-          (mount ArchiveModal on desktop vs. keep the Sidebar <details>).
-          Slots here, between themes and settings, once decided. */}
+      {/* #473 — archive launcher. ALWAYS shown (like settings), NOT
+          selection-gated: opens the ONE grouped ArchiveModal (all networks,
+          collapsible) via the shared archive mutex helper. testid kept as
+          `mobile-panel-archive` so the specs that pointed at the retired
+          mobile footer chip keep pointing at a real thing. */}
+      <button
+        type="button"
+        class="shell-chrome-btn rail-action rail-action-archive"
+        aria-label="open archive"
+        data-testid="mobile-panel-archive"
+        onClick={() => openArchivePanel(props.setters)}
+      >
+        <span class="rail-action-icon" aria-hidden="true">
+          {"\u{1F4C2}"}
+        </span>
+        <span class="rail-action-label">archive</span>
+      </button>
 
       {/* #71 INC-2 — settings cog. ALWAYS rendered; the cluster-wide "settings
           reachable from every window kind" rule. testid + aria-label kept

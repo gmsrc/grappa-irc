@@ -1,5 +1,4 @@
 import { type Component, Show } from "solid-js";
-import { setArchiveModalNetwork } from "./lib/archive";
 import { archiveSlugForSelection } from "./lib/archiveContext";
 import { mentionsBundleBySlug } from "./lib/mentionsWindow";
 import { setSelectedChannel } from "./lib/selection";
@@ -13,27 +12,27 @@ import { isMobile } from "./lib/theme";
 //
 // Slots (left → right):
 //   * Spacer — pushes the right group to the far right.
-//   * Archive button (📂) — opens ArchiveModal for the currently-
-//     selected window's network. MOBILE-ONLY: on desktop the
-//     Sidebar already exposes the parked/archived rows inline via
-//     `<details class="sidebar-archive">` (Sidebar.tsx ~L523),
-//     making this button redundant noise. The ArchiveModal itself
-//     remains for mobile where sidebar real estate is scarce.
-//     Visibility-on-mobile predicate (no-network guard) lives in
-//     `lib/archiveContext.ts` so the mobile members-drawer launcher
-//     (Shell.tsx) uses the SAME rule.
+//   * Mentions button (@) — MOBILE-ONLY re-open door for a network's
+//     "you were /away" bundle (desktop uses the Sidebar mentions row).
 //   * Rail opener (☰) — #71 INC-2: was the settings cog. R1 moved the cog
-//     into the always-present right rail (ActionCluster), so on the mobile
+//     into the always-present right rail (RailActions), so on the mobile
 //     NON-channel windows (where this bar renders) the settings cog is
 //     reached by opening the rail. This button opens that rail (the same
 //     `.shell-members` drawer the channel-window TopicBar ☰ opens — ONE
 //     drawer, ONE glyph). The cog itself lives ONLY in the rail now.
 //
+// #473 — the standalone archive button (📂) was REMOVED from this bar. It
+// was a THIRD archive entry point (mobile non-channel windows) that opened
+// a per-network modal; the archive rework makes the RailActions drawer's
+// always-on archive button the single archive door (reachable via this same
+// ☰ rail opener), so the inline button became redundant. `archiveContext`
+// still backs the @ mentions-slot network derivation below.
+//
 // #71 INC-2 — ShellChrome is now MOBILE-ONLY: the desktop copy was removed
 // (its row freed the top for the topic; the cog moved to the permanent
 // desktop rail). It renders only in Shell.tsx's mobile branch, on
 // non-channel windows (channel windows get the TopicBar instead). The
-// `isMobile()` gates on the @/archive buttons are belt-and-suspenders.
+// `isMobile()` gate on the @ button is belt-and-suspenders.
 //
 // UX-5 bucket A (2026-05-19) — the left hamburger slot was dropped.
 //
@@ -91,19 +90,6 @@ const ShellChrome: Component<Props> = (props) => {
             }
           >
             @
-          </button>
-        )}
-      </Show>
-      <Show when={isMobile() && archiveSlugForSelection()}>
-        {(slug) => (
-          <button
-            type="button"
-            class="shell-chrome-btn shell-chrome-archive"
-            aria-label="open archive"
-            data-testid="shell-chrome-archive"
-            onClick={() => setArchiveModalNetwork(slug())}
-          >
-            {"\u{1F4C2}"}
           </button>
         )}
       </Show>

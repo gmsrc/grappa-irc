@@ -1,4 +1,4 @@
-import { setArchiveModalNetwork } from "./archive";
+import { setArchiveModalOpen } from "./archive";
 import { requestSettingsPage } from "./settingsNav";
 
 // UX-5 bucket BM (2026-05-20) — mobile chrome panel mutex.
@@ -24,7 +24,7 @@ import { requestSettingsPage } from "./settingsNav";
 //     the small object passed at call-site. Avoids importing Shell's
 //     local createSignal accessors into a sibling module.
 //
-// `setArchiveModalNetwork` IS importable directly (lives in
+// `setArchiveModalOpen` IS importable directly (lives in
 // lib/archive.ts as a module-level export from the identityScopedStore
 // closure), so the archive arm doesn't need a thunk pass-through.
 //
@@ -48,7 +48,7 @@ export function toggleMembersPanel(setters: MobilePanelSetters): void {
     return;
   }
   setters.setSettingsOpen(false);
-  setArchiveModalNetwork(null);
+  setArchiveModalOpen(false);
   setters.setMembersOpen(true);
 }
 
@@ -60,13 +60,13 @@ export function toggleMembersPanel(setters: MobilePanelSetters): void {
 // as the toggle's open branch: close settings + archive first.
 export function openMembersPanel(setters: MobilePanelSetters): void {
   setters.setSettingsOpen(false);
-  setArchiveModalNetwork(null);
+  setArchiveModalOpen(false);
   setters.setMembersOpen(true);
 }
 
 export function openSettingsPanel(setters: MobilePanelSetters): void {
   setters.setMembersOpen(false);
-  setArchiveModalNetwork(null);
+  setArchiveModalOpen(false);
   setters.setSettingsOpen(true);
 }
 
@@ -78,15 +78,21 @@ export function openSettingsPanel(setters: MobilePanelSetters): void {
 // #332 restored it — see lib/settingsNav.ts.)
 export function openThemesPanel(setters: MobilePanelSetters): void {
   setters.setMembersOpen(false);
-  setArchiveModalNetwork(null);
+  setArchiveModalOpen(false);
   requestSettingsPage("themes");
   setters.setSettingsOpen(true);
 }
 
-export function openArchivePanel(setters: MobilePanelSetters, slug: string): void {
+// #473 — archive launcher, now folded into the RailActions drawer (was the
+// mobile-only `.mobile-panel-actions` footer). No slug argument any more: the
+// grouped `ArchiveModal` renders EVERY network as a collapsible group, so the
+// launcher just OPENS the one modal rather than targeting a single network.
+// Same own-signal shape as `openSettingsPanel` — close members + settings,
+// then flip the archive-open flag.
+export function openArchivePanel(setters: MobilePanelSetters): void {
   setters.setMembersOpen(false);
   setters.setSettingsOpen(false);
-  setArchiveModalNetwork(slug);
+  setArchiveModalOpen(true);
 }
 
 // #291 / UX-6-C / #361 — the three selection-driven "navigate to a window"
@@ -105,7 +111,7 @@ export function openArchivePanel(setters: MobilePanelSetters, slug: string): voi
 function openNavWindow(setters: MobilePanelSetters, navigate: () => void): void {
   setters.setMembersOpen(false);
   setters.setSettingsOpen(false);
-  setArchiveModalNetwork(null);
+  setArchiveModalOpen(false);
   navigate();
 }
 

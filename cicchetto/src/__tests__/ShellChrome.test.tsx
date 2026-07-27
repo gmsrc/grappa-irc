@@ -4,18 +4,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // UX-4 bucket L (2026-05-19) — ShellChrome unit tests.
 //
 // #71 INC-2 — ShellChrome is now MOBILE-ONLY and its old settings cog is
-// gone: R1 moved the cog into the permanent right rail (ActionCluster,
-// tested in ActionCluster.test.tsx), and this bar's right-edge button is
+// gone: R1 moved the cog into the permanent right rail (RailActions,
+// tested in RailActions.test.tsx), and this bar's right-edge button is
 // now the ☰ RAIL OPENER (`shell-chrome-rail-opener`, prop `onOpenRail`)
-// that opens that rail on non-channel mobile windows. The archive button
-// is visible only when the selected window carries a network context
-// (channel/query/server); home/mentions/empty hide it.
+// that opens that rail on non-channel mobile windows.
+//
+// #473 — the standalone archive button (📂) was REMOVED from ShellChrome.
+// It was a third archive entry point; archive now lives as an always-on
+// button in the RailActions drawer (reachable via this same ☰ opener), so
+// the inline button + its `setArchiveModalNetwork` wiring are gone. The @
+// mentions button remains (it derives its network via archiveContext).
 //
 // UX-5 bucket A (2026-05-19) — the hamburger slot was dropped from
 // ShellChrome entirely. Pre-bucket the chrome rendered a hamburger
 // that duplicated TopicBar's `.topic-bar-hamburger` on mobile and
 // toggled a no-op `.open` class on desktop. Hamburger-related tests
-// moved out; only the cog + archive-button surfaces remain.
+// moved out; only the rail opener + @ mentions surfaces remain.
 //
 // UX-5 bucket BM (2026-05-20) — the `ChromeButtons` named export was
 // dropped (BT introduced it for the mobile-channel `inlineChromeSlot`
@@ -23,11 +27,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // only consumer is gone and the export folded back into the default
 // ShellChrome body). The `describe("ChromeButtons inline export")`
 // block was deleted with the export.
-
-const mockSetArchiveModalNetwork = vi.fn();
-vi.mock("../lib/archive", () => ({
-  setArchiveModalNetwork: (...args: unknown[]) => mockSetArchiveModalNetwork(...args),
-}));
 
 // Selection is mocked per test. Returning null = empty (no window).
 let mockSelected: {
@@ -103,84 +102,18 @@ describe("ShellChrome (bucket L)", () => {
     expect(screen.queryByLabelText(/open members sidebar/i)).toBeNull();
   });
 
-  describe("archive button visibility (per window kind)", () => {
-    it("hides archive button when no window is selected", () => {
-      mockSelected = null;
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      expect(screen.queryByTestId("shell-chrome-archive")).not.toBeInTheDocument();
-    });
-
-    it("hides archive button when home window is selected", () => {
-      mockSelected = { networkSlug: "home", channelName: "home", kind: "home" };
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      expect(screen.queryByTestId("shell-chrome-archive")).not.toBeInTheDocument();
-    });
-
-    it("hides archive button when mentions window is selected", () => {
-      mockSelected = { networkSlug: "freenode", channelName: "mentions", kind: "mentions" };
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      expect(screen.queryByTestId("shell-chrome-archive")).not.toBeInTheDocument();
-    });
-
-    it("shows archive button when a channel window is selected", () => {
-      mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      expect(screen.getByTestId("shell-chrome-archive")).toBeInTheDocument();
-    });
-
-    it("shows archive button when a query window is selected", () => {
-      mockSelected = { networkSlug: "freenode", channelName: "alice", kind: "query" };
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      expect(screen.getByTestId("shell-chrome-archive")).toBeInTheDocument();
-    });
-
-    it("shows archive button when a server window is selected", () => {
-      mockSelected = { networkSlug: "freenode", channelName: "$server", kind: "server" };
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      expect(screen.getByTestId("shell-chrome-archive")).toBeInTheDocument();
-    });
-
-    it("clicking archive button calls setArchiveModalNetwork with the selected window's slug", () => {
-      mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      fireEvent.click(screen.getByTestId("shell-chrome-archive"));
-      expect(mockSetArchiveModalNetwork).toHaveBeenCalledWith("freenode");
-    });
+  // #473 — the standalone archive button was removed from ShellChrome (it
+  // was a third archive entry point). Guard against a regression that
+  // reintroduces it: it must never render, on any window kind or viewport.
+  it("does NOT render an archive button (#473 — archive lives in the RailActions drawer)", () => {
+    mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
+    render(() => <ShellChrome onOpenRail={vi.fn()} />);
+    expect(screen.queryByTestId("shell-chrome-archive")).toBeNull();
   });
 
-  // Post-bundle desktop fix — on desktop the archive button is
-  // suppressed: Sidebar's `<details class="sidebar-archive">` already
-  // exposes parked/archived rows inline so a separate chrome button
-  // is redundant. The mobile assertions above keep the rule that on
-  // narrow viewports the button surfaces (the sidebar is collapsed
-  // behind a drawer there).
-  describe("archive button visibility (desktop mode)", () => {
-    beforeEach(() => {
-      mobileState.value = false;
-    });
-
-    it("hides archive button on desktop even when a channel window is selected", () => {
-      mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      expect(screen.queryByTestId("shell-chrome-archive")).toBeNull();
-    });
-
-    it("hides archive button on desktop even when a query window is selected", () => {
-      mockSelected = { networkSlug: "freenode", channelName: "alice", kind: "query" };
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      expect(screen.queryByTestId("shell-chrome-archive")).toBeNull();
-    });
-
-    it("hides archive button on desktop even when a server window is selected", () => {
-      mockSelected = { networkSlug: "freenode", channelName: "$server", kind: "server" };
-      render(() => <ShellChrome onOpenRail={vi.fn()} />);
-      expect(screen.queryByTestId("shell-chrome-archive")).toBeNull();
-    });
-  });
-
-  // #188 item 6 — a button next to the cog opens the mentions panel. It
-  // derives the network from the current selection (like the archive
-  // button) and renders ONLY when that network has a bundle to consult.
+  // #188 item 6 — a button next to the rail opener opens the mentions
+  // panel. It derives the network from the current selection and renders
+  // ONLY when that network has a bundle to consult.
   describe("open-mentions button (#188)", () => {
     it("shows the button when the selected network has a mentions bundle", () => {
       mockSelected = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };

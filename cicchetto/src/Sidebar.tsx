@@ -1,16 +1,13 @@
-import { type Component, createSignal, For, Show } from "solid-js";
+import { type Component, For, Show } from "solid-js";
 import CloseButton from "./CloseButton";
-import InlineConfirmButton from "./InlineConfirmButton";
-import { deleteArchiveEntry, ownNickForNetwork } from "./lib/api";
-import { loadArchive, visibleArchiveForNetwork } from "./lib/archive";
-import { token } from "./lib/auth";
+import { ownNickForNetwork } from "./lib/api";
 import { awayByNetwork } from "./lib/awayStatus";
 import { channelKey } from "./lib/channelKey";
 import { mentionCounts } from "./lib/mentions";
 import { mentionsBundleBySlug } from "./lib/mentionsWindow";
 import { channelsBySlug, isAdmin, networkBySlug, networks, user } from "./lib/networks";
 import { pseudoChannelsForNetwork } from "./lib/pseudoChannels";
-import { openQueryWindowState, queryWindowsByNetwork } from "./lib/queryWindows";
+import { queryWindowsByNetwork } from "./lib/queryWindows";
 import { reconnectingByNetwork } from "./lib/reconnectingStatus";
 import { requestScrollToBottom } from "./lib/scrollToBottomCommand";
 import {
@@ -92,15 +89,6 @@ const NETWORK_GREYED_STATES = new Set(["parked", "failed"]);
 export type Props = Record<string, never>;
 
 const Sidebar: Component<Props> = () => {
-  // UX-1 (2026-05-17) — singleton armed-key for archive delete confirm.
-  // Mirrors AdminSessionsTab / AdminVisitorsTab — one armed row at a
-  // time across the WHOLE sidebar (across every network's archive
-  // section). Key shape: `"<slug> <target>"`. Space separator is safe
-  // here because network slugs and IRC targets cannot contain raw
-  // spaces (RFC 1459 section 2.2 + Networks.Network.changeset slug).
-  const [armedArchiveKey, setArmedArchiveKey] = createSignal<string | null>(null);
-  const archiveKey = (slug: string, target: string) => `${slug} ${target}`;
-
   const isSelected = (slug: string, name: string): boolean => {
     const s = selectedChannel();
     return s !== null && s.networkSlug === slug && s.channelName === name;
@@ -187,32 +175,6 @@ const Sidebar: Component<Props> = () => {
   const handleCloseNetwork = (slug: string) => {
     confirmDisconnectNetwork(slug);
   };
-
-  // UX-1 (2026-05-17) — confirmed delete of an archive entry. Both
-  // channel-shaped + query-shaped targets get the delete affordance
-  // per vjt scope decision. Server dispatches by sigil on its end;
-  // cic hands over the user-facing target string as-is. On success
-  // the server broadcasts `archive_changed` and the userTopic
-  // dispatcher re-fetches archivedBySlug for this network — no need
-  // for an optimistic mutation here.
-  const handleConfirmArchiveDelete = async (slug: string, target: string) => {
-    const t = token();
-    if (!t) return;
-    try {
-      await deleteArchiveEntry(t, slug, target);
-    } catch {
-      // Server-side delete failed (network blip, 4xx). Leave the row;
-      // the operator can retry. The InlineConfirmButton disarms on the
-      // next sibling arming or refresh. No toast — Sidebar is dense
-      // and a generic error wouldn't tell the user anything actionable.
-    } finally {
-      setArmedArchiveKey(null);
-    }
-  };
-
-  // Archive visibility filter is shared with BottomBar/ArchiveModal —
-  // see `lib/archive.ts` visibleArchiveForNetwork. Pre-UX-2 lived
-  // inline here.
 
   return (
     <>
@@ -410,9 +372,7 @@ const Sidebar: Component<Props> = () => {
                   a mentions bundle (the "you were /away" snapshot) — nothing to
                   open otherwise, the SAME gate the @ button used. A direct <li>
                   of THIS network <ul>, so it inherits the per-network grouping
-                  rail exactly like a channel row (and unlike the archive <ul>,
-                  which shares .sidebar-network-section but is scoped OUT of the
-                  rail via :not(.sidebar-archive-list)). Selects the mentions
+                  rail exactly like a channel row. Selects the mentions
                   pseudo-window (kind "mentions", empty channel name) through the
                   same handleClick verb every row uses — one selection door. */}
                 <Show when={mentionsBundleBySlug()[network.slug]}>
@@ -530,7 +490,7 @@ const Sidebar: Component<Props> = () => {
                         (via dismissPseudoWindow) → drops the windowState
                         key unconditionally → row vanishes;
                         visibleArchiveForNetwork's pseudo-name filter
-                        releases so the archive section shows the row
+                        releases so the archive modal shows the row
                         instead (single surface per window). */}
                       {/* #172: pseudo-row dismiss is a LOCAL projection clear
                         (forceParted), sidebar-only + desktop-only — the mobile
@@ -611,84 +571,12 @@ const Sidebar: Component<Props> = () => {
                 )}
               </Show>
 
-              {/* CP15 B4 — Archive section, collapsed by default. Lazy fetch
-                on first expand via the toggle event; entries clickable to
-                set selection. Channel kind keeps the channel-shaped name;
-                query kind opens the DM window for the target nick.
-
-                UX-5 BH (2026-05-19) — lifted out of the legacy
-                `<section class="sidebar-network">` wrapper that BH
-                killed; now a flat sibling of the per-network `<ul>`
-                inside the `<For>`. Per-network archive semantics
-                preserved (one `<details>` per network). */}
-              <details
-                class="sidebar-archive"
-                onToggle={(e) => {
-                  if ((e.currentTarget as HTMLDetailsElement).open) {
-                    void loadArchive(network.slug);
-                  }
-                }}
-              >
-                <summary>Archive</summary>
-                {/* UX-5 BH (post-bundle fix) — the canonical row style
-                    in `themes/default.css` is scoped to
-                    `.sidebar-network-section li .sidebar-window-btn`.
-                    Inheriting that class on the archive's inner `<ul>`
-                    restores monospace + dark-theme styling for archived
-                    rows (without it, the UA defaults bleed through —
-                    white background, system serif font, etc). */}
-                <ul class="sidebar-network-section sidebar-archive-list">
-                  <For each={visibleArchiveForNetwork(network.slug, network.id)}>
-                    {(entry) => {
-                      const key = archiveKey(network.slug, entry.target);
-                      return (
-                        <li class="sidebar-archive-row" data-window-name={entry.target}>
-                          <button
-                            type="button"
-                            class="sidebar-window-btn"
-                            onClick={() => {
-                              // UX-3 Z: re-open archived query window as live
-                              // so cic subscribes to the per-channel topic and
-                              // receives server broadcasts (NOTICE 401, etc.).
-                              // Idempotent — no-op if already open.
-                              if (entry.kind === "query") {
-                                openQueryWindowState(
-                                  network.id,
-                                  entry.target,
-                                  new Date().toISOString(),
-                                );
-                              }
-                              handleClick(
-                                network.slug,
-                                entry.target,
-                                entry.kind === "channel" ? "channel" : "query",
-                              );
-                            }}
-                          >
-                            {entry.kind === "query" ? (
-                              <NickText
-                                nick={entry.target}
-                                extraClass="sidebar-channel-name parted"
-                              />
-                            ) : (
-                              <span class="sidebar-channel-name parted">{entry.target}</span>
-                            )}
-                          </button>
-                          <InlineConfirmButton
-                            idleLabel="×"
-                            confirmLabel="really delete?"
-                            armed={armedArchiveKey() === key}
-                            onArm={() => setArmedArchiveKey(key)}
-                            onConfirm={() => handleConfirmArchiveDelete(network.slug, entry.target)}
-                            testId={`archive-delete-${network.slug}-${entry.target}`}
-                            extraClass="sidebar-archive-delete"
-                          />
-                        </li>
-                      );
-                    }}
-                  </For>
-                </ul>
-              </details>
+              {/* #473 — the per-network Archive `<details>` was REMOVED from
+                the Sidebar. `ArchiveModal` (opened from the RailActions drawer
+                archive button) is now the SINGLE archive surface on both form
+                factors, rendering every network as a collapsible group. The
+                per-network browsing the `<details>` provided is preserved there
+                (one group per network); see ArchiveModal.tsx. */}
             </>
           )}
         </For>

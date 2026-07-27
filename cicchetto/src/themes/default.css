@@ -1409,21 +1409,20 @@ html.resize-dragging * {
 /* #71 INC-1 — per-network grouping rail. A vertical line tying a network's
    list / channel / pseudo / query rows to their header (issue #71
    "per-network grouping rail ... spanning all of a network's channels and
-   queries"). Scoped to the MAIN per-network <ul>: the archive <ul> shares
-   the .sidebar-network-section class (see Sidebar.tsx archive block) so it's
-   excluded via :not(.sidebar-archive-list), and the header <li> is the
-   parent the rail hangs FROM, so it's excluded too. The paired button rule
-   trims the base 1.5rem padding-left back to 0.75rem so the rail's margin
-   restores the original text indent instead of stacking on top of it —
-   scoped identically so the archive rows keep their own indent untouched. */
-.sidebar-network-section:not(.sidebar-archive-list) > li:not(.sidebar-network-header) {
+   queries"). Scoped to the per-network <ul>; the header <li> is the parent
+   the rail hangs FROM, so it's excluded. The paired button rule trims the
+   base 1.5rem padding-left back to 0.75rem so the rail's margin restores the
+   original text indent instead of stacking on top of it.
+   #473 — the archive `<ul>` that used to share `.sidebar-network-section`
+   (needing a `:not(.sidebar-archive-list)` carve-out here) is GONE —
+   ArchiveModal owns archive now — so the exclusion was removed; it matched
+   nothing after the archive `<details>` left the Sidebar. */
+.sidebar-network-section > li:not(.sidebar-network-header) {
   margin-left: 0.85rem;
   border-left: 2px solid var(--border);
 }
 
-.sidebar-network-section:not(.sidebar-archive-list)
-  > li:not(.sidebar-network-header)
-  .sidebar-window-btn {
+.sidebar-network-section > li:not(.sidebar-network-header) .sidebar-window-btn {
   padding-left: 0.75rem;
 }
 
@@ -3601,36 +3600,10 @@ html.resize-dragging * {
   font-size: inherit;
 }
 
-/* UX-1 (2026-05-17) — Sidebar archive delete affordance. Borderless +
-   muted to keep the dense per-row Archive list calm; the InlineConfirmButton
-   base provides the .confirming red treatment when armed. The full-width
-   row gives the × a stable hit area on touch. */
-.sidebar-archive-row {
-  display: flex;
-  align-items: stretch;
-}
-
-.sidebar-archive-delete {
-  flex: 0 0 auto;
-  background: transparent;
-  color: var(--muted);
-  border: none;
-  padding: 0 0.5rem;
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
-  cursor: pointer;
-  line-height: 1;
-}
-
-.sidebar-archive-delete:hover {
-  color: var(--fg);
-  background: var(--border);
-}
-
-.sidebar-archive-delete.confirming {
-  color: #c00;
-  background: transparent;
-}
+/* #473 — the Sidebar `.sidebar-archive-row` / `.sidebar-archive-delete`
+   rules were removed with the Sidebar `<details class="sidebar-archive">`
+   archive section. ArchiveModal now owns archive; its rows use the
+   `.archive-modal-*` family (below). */
 
 /* M-cluster M-9b — admin Sessions tab. Same base as Visitors but
    wider (more columns) and with two action buttons per row. */
@@ -4137,10 +4110,10 @@ html.resize-dragging * {
        Pre-BV: `height: 100vh`. On iOS Safari the on-screen keyboard
        overlays the viewport without resizing CSS units (100vh/100dvh/
        100svh all lie about visible-area height while the keyboard is
-       up), so the drawer's `.mobile-panel-actions` launcher footer
-       (BM, ~:2238) ended up rendered under the keyboard whenever the
-       operator focused an input in a query/channel opened from the
-       drawer. `--viewport-height` is written from
+       up), so the drawer's bottom `.rail-actions` launcher row
+       (#473; was BM's `.mobile-panel-actions` footer) ended up rendered
+       under the keyboard whenever the operator focused an input in a
+       query/channel opened from the drawer. `--viewport-height` is written from
        `visualViewport.height` by `lib/viewportHeight.ts` (UX-3 PENT)
        and shrinks in lockstep with the keyboard. Fallback chain:
        `100dvh` for the brief boot window before the JS sets the var
@@ -4153,10 +4126,10 @@ html.resize-dragging * {
        insets: top notch/Dynamic-Island clearance + bottom home-indicator
        clearance. iOS-2 + UX-5 BD rationale (unchanged): BD bumped the
        bottom floor to 1.5rem (same root cause as the 3 modals) because
-       the `.mobile-panel-actions` launcher footer (~:2238) hosts archive
-       + settings buttons that relied on env(safe-area-inset-bottom)
-       alone — 0px on non-notched iPhones — leaving the row cramped under
-       Safari chrome / the gesture indicator. */
+       the bottom `.rail-actions` launcher row (#473; was BM's
+       `.mobile-panel-actions` footer) hosts buttons that relied on
+       env(safe-area-inset-bottom) alone — 0px on non-notched iPhones —
+       leaving the row cramped under Safari chrome / the gesture indicator. */
     padding-top: env(safe-area-inset-top);
     padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
     width: 80vw;
@@ -4171,12 +4144,12 @@ html.resize-dragging * {
        horizontal drag (back-swipe gesture) doesn't reveal chrome. */
     touch-action: pan-y;
     overscroll-behavior: contain;
-    /* UX-5 bucket BM (2026-05-20) — flex column so the
-       `.mobile-panel-actions` launcher footer pushes to the bottom of
-       the drawer while the inner `.members-pane` takes the remaining
-       vertical space. `overflow-y: auto` (base rule) is moved off the
-       aside onto `.members-pane` itself so the footer stays pinned
-       even when the members list is long enough to scroll. */
+    /* UX-5 bucket BM (2026-05-20) / #473 — flex column so the bottom
+       `.rail-actions` launcher row (was BM's `.mobile-panel-actions`
+       footer) pushes to the bottom of the drawer while the inner
+       `.members-pane` takes the remaining vertical space. `overflow-y: auto`
+       (base rule) is moved off the aside onto `.members-pane` itself so the
+       row stays pinned even when the members list is long enough to scroll. */
     display: flex;
     flex-direction: column;
     overflow-y: visible;
@@ -4234,52 +4207,12 @@ html.resize-dragging * {
     overscroll-behavior: contain;
   }
 
-  /* UX-5 bucket BM — bottom-fixed launcher footer inside the mobile
-     members drawer. Hosts archive + settings buttons that replace the
-     two UX-5 BT inline-into-topic-bar buttons (now dropped). The
-     buttons themselves reuse `.shell-chrome-btn` so their visual
-     treatment matches the standalone chrome row on mobile-non-channel
-     windows (same emoji glyphs, same hit area). The base
-     `.shell-members` rule applies the `padding-bottom: max(1.5rem,
-     env(safe-area-inset-bottom))` floor (UX-5 BD bumped from raw env
-     to give non-notched iOS thumb-clearance above Safari chrome), so
-     the footer relies on the aside's bottom inset for both
-     home-indicator clearance AND non-notched chrome clearance —
-     adding an extra `env(...)` here would double-pad on notched
-     devices (reviewer H1). */
-  .shell-mobile .mobile-panel-actions {
-    display: flex;
-    flex-direction: row;
-    /* #332 — wrap launchers to a new row instead of overflowing/clipping
-       when they exceed the drawer width. The footer holds 3–6 launchers
-       (home always; list/archive gated on network context, admin on
-       is_admin; #332 restored the themes button, #361 added the 📇 list
-       launcher) — on narrow devices 6 × 48px tap targets + gaps exceed the
-       row, so they must wrap, not push a button off-screen (the clip that
-       motivated #299's removal). Layout adapts to button count. */
-    flex-wrap: wrap;
-    /* #291 — left-align now that the home launcher is the leftmost,
-       always-present affordance (was flex-end when the row held only the
-       optional archive/settings/admin launchers). */
-    justify-content: flex-start;
-    gap: 0.5rem;
-    padding: 0.5rem;
-    border-top: 1px solid var(--border);
-    background: var(--bg-alt);
-    flex-shrink: 0;
-  }
-
-  /* #291 — enlarge ONLY the drawer-footer launchers to proper mobile tap
-     targets (Apple HIG 44px minimum). Scoped to `.mobile-panel-actions`
-     so the top ShellChrome bar's `.shell-chrome-btn` (same class) is
-     untouched. ABSOLUTE px, not rem: rem tracks the user's `--font-size`
-     text-size preference (14px default → 2.75rem is only 38.5px, and S=12px
-     would shrink it to 33px) — a tap target is a physical constraint that
-     must NOT shrink with the text size. */
-  .shell-mobile .mobile-panel-actions .shell-chrome-btn {
-    min-width: var(--tap-min);
-    min-height: var(--tap-min);
-  }
+  /* #473 — the mobile-only `.mobile-panel-actions` launcher footer was
+     REMOVED. Its launchers (home / rooms / themes / archive / admin) folded
+     into the ONE `.rail-actions` drawer mounted at the bottom of
+     `.shell-members` on both form factors (see the `.rail-actions` rules
+     above). The footer's bespoke wrap + tap-min rules went with it; the
+     rail rows adopt `.shell-chrome-btn`'s tap floor directly. */
 
   .shell-drawer-backdrop {
     position: fixed;
@@ -4649,6 +4582,26 @@ html.resize-dragging * {
 
 .archive-modal-close:hover {
   color: var(--fg);
+}
+
+/* #473 — per-network collapsible group inside the grouped ArchiveModal.
+   One `<details>` per network (the modal is the single archive surface on
+   both form factors; the summary is the network slug). Rows load lazily on
+   the group's first expand. The summary reads like a section header — accent
+   slug, comfortable tap height — and the disclosure caret comes from the UA
+   `<details>` default (no bespoke marker needed). */
+.archive-modal-group {
+  border-bottom: 1px solid var(--border);
+}
+
+.archive-modal-group-summary {
+  padding: 0.6rem 0.25rem;
+  color: var(--accent);
+  font-weight: bold;
+  cursor: pointer;
+  min-height: var(--tap-min); /* Apple HIG touch target */
+  display: flex;
+  align-items: center;
 }
 
 .archive-modal-list {

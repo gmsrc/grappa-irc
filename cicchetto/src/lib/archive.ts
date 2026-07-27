@@ -28,20 +28,24 @@ import { windowStateByChannel } from "./windowState";
 
 const exports_ = identityScopedStore((onIdentityChange) => {
   const [archivedBySlug, setArchivedBySlug] = createSignal<Record<string, ArchiveEntry[]>>({});
-  // UX-2 (2026-05-17) — modal-open signal for the mobile BottomBar
-  // archive chip. `null` = closed; a network slug = modal open for
-  // that network. One signal, not per-network state, because only one
-  // modal is visible at a time. Read by `ArchiveModal.tsx`; written by
-  // `BottomBar.tsx`'s chip click + the modal's close affordances.
+  // #473 — boolean open/closed flag for the ONE archive modal. Was the
+  // per-network slug signal `archiveModalNetwork` (UX-2): back then the
+  // modal showed a single network, so the slug doubled as the open flag.
+  // The archive rework makes `ArchiveModal` the SINGLE archive surface on
+  // both form factors, rendering EVERY network as a collapsible group, so
+  // the modal no longer tracks a network — only whether it is visible.
+  // Read by `ArchiveModal.tsx`; written by the `RailActions` archive
+  // button (via `mobilePanel.openArchivePanel`) + the modal's close
+  // affordances, and cleared by the mutex helpers in `mobilePanel.ts`.
   //
   // Lives INSIDE the identityScopedStore so token rotation closes any
   // open modal alongside `archivedBySlug` flush — otherwise a previous
   // identity's modal could linger on top of the new identity's shell.
-  const [archiveModalNetwork, setArchiveModalNetwork] = createSignal<string | null>(null);
+  const [archiveModalOpen, setArchiveModalOpen] = createSignal<boolean>(false);
 
   const clearArchive = (): void => {
     setArchivedBySlug({});
-    setArchiveModalNetwork(null);
+    setArchiveModalOpen(false);
   };
 
   // Identity-transition cleanup. A token rotation MUST flush the prior
@@ -64,18 +68,18 @@ const exports_ = identityScopedStore((onIdentityChange) => {
 
   return {
     archivedBySlug,
-    archiveModalNetwork,
+    archiveModalOpen,
     loadArchive,
     clearArchive,
-    setArchiveModalNetwork,
+    setArchiveModalOpen,
   };
 });
 
 export const archivedBySlug = exports_.archivedBySlug;
-export const archiveModalNetwork = exports_.archiveModalNetwork;
+export const archiveModalOpen = exports_.archiveModalOpen;
 export const loadArchive = exports_.loadArchive;
 export const clearArchive = exports_.clearArchive;
-export const setArchiveModalNetwork = exports_.setArchiveModalNetwork;
+export const setArchiveModalOpen = exports_.setArchiveModalOpen;
 
 // UX-2 — shared archive-visibility filter. Pre-UX-2 lived inline in
 // `Sidebar.tsx` as `visibleArchiveForNetwork/2`. UX-2's mobile chip +

@@ -25,14 +25,13 @@ import HomePane from "./HomePane";
 import LinksModal from "./LinksModal";
 import { jumpToNextActiveWindow, jumpToPrevActiveWindow } from "./lib/activeWindows";
 import { ownNickForNetwork } from "./lib/api";
-import { archiveSlugForSelection } from "./lib/archiveContext";
 import { token } from "./lib/auth";
 import { channelKey } from "./lib/channelKey";
 import { getDraft, setDraft, tabComplete } from "./lib/compose";
 import { install, registerHandlers, uninstall } from "./lib/keybindings";
 import { loadLastFocused } from "./lib/lastFocusedChannel";
 import { mentionsBundleBySlug } from "./lib/mentionsWindow";
-import { openArchivePanel, openMembersPanel, toggleMembersPanel } from "./lib/mobilePanel";
+import { openMembersPanel, toggleMembersPanel } from "./lib/mobilePanel";
 import { channelsBySlug, isAdmin, networkBySlug, networks, user } from "./lib/networks";
 import { nickEquals } from "./lib/nickEquals";
 import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
@@ -267,11 +266,6 @@ const Shell: Component = () => {
     if (!net) return null;
     return ownNickForNetwork(net, me);
   };
-
-  // UX-5 bucket BM (2026-05-20) — archive-launcher visibility in the
-  // mobile members drawer footer mirrors ShellChrome's archive gate
-  // (no archive on home / mentions / admin / pre-select). Predicate
-  // lives in `lib/archiveContext.ts` so both surfaces edit one rule.
 
   // C8.2 — click-to-context handler for MentionsWindow rows.
   // CP29 R-4: previously this called `setReadCursor(slug, ch, serverTime-1)`
@@ -559,6 +553,12 @@ const Shell: Component = () => {
           <RegistrationWizardModal />
           <ShareSessionModal />
           <ConfirmModal />
+          {/* #473 — ArchiveModal is the single archive surface on BOTH form
+              factors. Mounted here on desktop (was mobile-only); the desktop
+              Sidebar `<details class="sidebar-archive">` it replaces is
+              removed. Self-gated on `archiveModalOpen()` — renders nothing
+              when closed. Opened from the RailActions drawer archive button. */}
+          <ArchiveModal />
           <aside class="shell-sidebar">
             <Sidebar />
             {/* GH #235 — "jump to next active window" affordance, pinned
@@ -931,19 +931,19 @@ const Shell: Component = () => {
           <NextActiveButton variant="mobile" />
         </Show>
 
-        {/* UX-2 (2026-05-17) — Mobile archive overlay. Mounted ONLY
-            in the mobile branch (desktop uses Sidebar's per-network
-            `<details>` archive section instead). Self-gated on
-            `archiveModalNetwork()` — renders nothing when closed. */}
+        {/* #473 — ArchiveModal is the single archive surface on BOTH form
+            factors (also mounted in the desktop branch above). Opened from the
+            RailActions drawer archive button; self-gated on `archiveModalOpen()`
+            — renders nothing when closed. */}
         <ArchiveModal />
 
         {/* #473 — the mobile members drawer IS the right rail, reachable on
             EVERY window (channel: TopicBar ☰; non-channel: ShellChrome ☰ above —
-            ONE drawer). It now mounts the SAME `RailActions` drawer as the
-            desktop rail: the post-#71 split (top ActionCluster cog + denoise,
-            plus this footer's window-nav launchers) folds into ONE bottom
-            drawer. Only `archive` stays in a mobile-only footer for now, pending
-            the desktop archive-surface ruling (see RailActions.tsx). */}
+            ONE drawer). It mounts the SAME `RailActions` drawer as the desktop
+            rail: the post-#71 split (top ActionCluster cog + denoise, plus the
+            old footer's window-nav launchers AND its archive chip) folds into
+            ONE bottom drawer. The mobile-only `.mobile-panel-actions` footer is
+            gone — archive is now a first-class RailActions button. */}
         <aside class="shell-members" classList={{ open: membersOpen() }}>
           <Show when={isActiveChannelJoined() && selectedChannel()}>
             {(sel) => (
@@ -959,29 +959,6 @@ const Shell: Component = () => {
               drawer-closing arm of the mobilePanel helpers is meaningful here on
               mobile and a harmless no-op on the permanent desktop rail). */}
           <RailActions setters={{ membersOpen, setMembersOpen, setSettingsOpen }} />
-          {/* #473 — archive HELD in a mobile-only footer. Its mobile behavior
-              (openArchivePanel → ArchiveModal) is INVARIANT across the pending
-              desktop archive-surface ruling, so it stays put, untouched. It
-              folds into RailActions (and gains its desktop surface) once the
-              ruling lands, at which point this footer is deleted. Same
-              `archiveSlugForSelection()` network-context gate as before. */}
-          <footer class="mobile-panel-actions">
-            <Show when={archiveSlugForSelection()}>
-              {(slug) => (
-                <button
-                  type="button"
-                  class="shell-chrome-btn shell-chrome-archive"
-                  aria-label="open archive"
-                  data-testid="mobile-panel-archive"
-                  onClick={() =>
-                    openArchivePanel({ membersOpen, setMembersOpen, setSettingsOpen }, slug())
-                  }
-                >
-                  {"\u{1F4C2}"}
-                </button>
-              )}
-            </Show>
-          </footer>
         </aside>
 
         <SettingsDrawer
