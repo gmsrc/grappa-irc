@@ -19,16 +19,36 @@
 // pinned RED-first in test/grappa_web/controllers/session_controller_test.exs
 // + test/grappa/networks_test.exs; this is the real browser end-to-end.
 //
-// Isolation: `accr481` is used by NO other spec, so the live azzurra2
-// session it leaves has zero blast radius (the azzurra2 visitor-cap pool is
-// subject-kind-separate from this USER session, U-1 split). Non-destructive
-// → no cleanup needed.
+// Cleanup — the one-tap leaves a LIVE accr481@azzurra2 Session.Server. That
+// pid surfaces in GET /admin/sessions (registry-driven: one row = one live
+// pid — see GrappaWeb.Admin.SessionsController), which m9b's exact-count
+// canary reads (`toHaveCount(4)`, "a rise means a leaked session"). On the
+// 1-worker suite this file (i…) runs before m9b (m…), so a leaked session
+// inflates m9b's count and 15s-times-out its assertion. The subject-kind-
+// separate cap pool (U-1 split) bounds CAPACITY blast radius, NOT the shared
+// admin-sessions list — the original "zero blast radius, no cleanup needed"
+// reasoning weighed only the caps and missed the registry canary. So afterAll
+// PARKS accr481's azzurra2 session via its OWN user park verb (PATCH
+// /networks/:slug connection_state:"parked" → stops the pid → the row drops),
+// restoring the 4-row baseline. `accr481` is used by no other spec, so the
+// park has no cross-spec effect; the :parked credential it leaves lands only
+// on /admin/credentials (a<i: those specs run before this one).
 
 import { expect, test } from "@playwright/test";
 import { loginAs } from "../fixtures/cicchettoPage";
+import { patchNetworkConnectionState } from "../fixtures/grappaApi";
 import { ACCRETE_NETWORK_SLUG, getSeededAccreteUser } from "../fixtures/seedData";
 
 test.describe("#481 user self-serve accretion", () => {
+  // Park the live session this spec spawns so it does not leak into the
+  // shared /admin/sessions registry that m9b's exact-count canary reads.
+  test.afterAll(async () => {
+    const user = getSeededAccreteUser();
+    await patchNetworkConnectionState(user.token, ACCRETE_NETWORK_SLUG, {
+      connection_state: "parked",
+    });
+  });
+
   test("a USER one-taps an available network from home and it connects live", async ({ page }) => {
     const user = getSeededAccreteUser();
     // accr481 holds NO network → home renders the self-serve empty state
