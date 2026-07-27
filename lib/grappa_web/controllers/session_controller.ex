@@ -116,25 +116,11 @@ defmodule GrappaWeb.SessionController do
              | :resolve_failed
              | term()}
   defp add_user_network(conn, %User{} = user, slug) do
-    with {:ok, network} <- fetch_accretable_network(slug),
+    with {:ok, network} <- Networks.fetch_accretable_network(slug),
          :ok <- ensure_user_not_attached(user, network),
          {:ok, credential} <- bind_user_credential(user, network),
          {:ok, plan} <- resolve_user_plan(user, credential) do
       NetworkSpawn.orchestrate(conn, {:user, user}, credential, plan)
-    end
-  end
-
-  # Only a `visitor_enabled` (operator-approved self-serve) network may be
-  # accreted — the SAME runtime allowlist gate the visitor path uses. Typed
-  # errors so FallbackController surfaces 403 not-enabled vs unconfigured.
-  @spec fetch_accretable_network(String.t()) ::
-          {:ok, Network.t()}
-          | {:error, :network_not_visitor_enabled | :network_unconfigured}
-  defp fetch_accretable_network(slug) do
-    case Networks.get_visitor_enabled_network_by_slug(slug) do
-      {:ok, %Network{} = network} -> {:ok, network}
-      {:error, :not_visitor_enabled} -> {:error, :network_not_visitor_enabled}
-      {:error, :not_found} -> {:error, :network_unconfigured}
     end
   end
 

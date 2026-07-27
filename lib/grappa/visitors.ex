@@ -919,8 +919,8 @@ defmodule Grappa.Visitors do
   # public verbs were REMOVED with the retired `POST
   # /session/{disconnect,reconnect}` routes. Visitors now park/reconnect
   # each network via the subject-agnostic `PATCH /networks/:network_id`
-  # (`Networks.disconnect/2` / `connect/1` + the controller's
-  # `orchestrate_spawn`), exactly as users do — teardown is
+  # (`Networks.disconnect/2` / `connect/1` +
+  # `GrappaWeb.NetworkSpawn.orchestrate/4`), exactly as users do — teardown is
   # `Session.stop_session/3` (the shared core those verbs already wrapped).
   # #211 phase 7 — the visitor-only `PATCH /me/identity` live-apply
   # (`update_identity/2` + `maybe_reconnect_after_identity/1` +
@@ -977,7 +977,7 @@ defmodule Grappa.Visitors do
              | term()}
   def accrete_network(%Visitor{} = visitor, slug, source_ip)
       when is_binary(slug) and (is_binary(source_ip) or is_nil(source_ip)) do
-    with {:ok, network} <- fetch_accretable_network(slug),
+    with {:ok, network} <- Networks.fetch_accretable_network(slug),
          :ok <- ensure_not_attached(visitor, network),
          {:ok, _} <- attach_credential(visitor, network),
          {:ok, plan} <- resolve_accreted_plan(visitor, network) do
@@ -1065,20 +1065,6 @@ defmodule Grappa.Visitors do
       flow: :login_fresh,
       requesting_subject: {:visitor, id}
     }
-  end
-
-  # Only a `visitor_enabled` network may be accreted (the runtime
-  # allowlist gate — same readers `Login` uses). Distinct error tags so the
-  # controller surfaces 403 not-enabled vs 404/503 unconfigured.
-  @spec fetch_accretable_network(String.t()) ::
-          {:ok, Networks.Network.t()}
-          | {:error, :network_not_visitor_enabled | :network_unconfigured}
-  defp fetch_accretable_network(slug) do
-    case Networks.get_visitor_enabled_network_by_slug(slug) do
-      {:ok, %Networks.Network{} = network} -> {:ok, network}
-      {:error, :not_visitor_enabled} -> {:error, :network_not_visitor_enabled}
-      {:error, :not_found} -> {:error, :network_unconfigured}
-    end
   end
 
   # Idempotency guard: refuse a second accrete of a network the identity

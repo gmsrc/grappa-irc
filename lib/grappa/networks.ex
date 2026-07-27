@@ -243,6 +243,29 @@ defmodule Grappa.Networks do
   end
 
   @doc """
+  Look up an accretable network by slug and translate the raw lookup errors
+  into the self-serve accretion contract.
+
+  A network may be accreted (visitor OR user, #481) only when the operator
+  opted it into the `visitor_enabled` self-serve tier. Shared by BOTH
+  accretion doors — `Grappa.Visitors.accrete_network/3` and the user twin
+  `GrappaWeb.SessionController.add_user_network/3` — so the two cannot drift
+  on the allowlist gate or its error mapping (they were byte-identical
+  copies before this lift). The `:network_*` tags are the FallbackController
+  wire tokens: 403 not-enabled vs 404/503 unconfigured.
+  """
+  @spec fetch_accretable_network(String.t()) ::
+          {:ok, Network.t()}
+          | {:error, :network_not_visitor_enabled | :network_unconfigured}
+  def fetch_accretable_network(slug) when is_binary(slug) do
+    case get_visitor_enabled_network_by_slug(slug) do
+      {:ok, %Network{} = network} -> {:ok, network}
+      {:error, :not_visitor_enabled} -> {:error, :network_not_visitor_enabled}
+      {:error, :not_found} -> {:error, :network_unconfigured}
+    end
+  end
+
+  @doc """
   Strict-create sibling of `find_or_create_network/1` for the admin
   REST surface (`POST /admin/networks`, admin-panel bucket 1). Returns
   `{:error, :already_exists}` when the slug is taken — operator

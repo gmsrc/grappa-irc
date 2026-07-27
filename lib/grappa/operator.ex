@@ -587,7 +587,7 @@ defmodule Grappa.Operator do
   Reuses the connect core the visitor `PATCH /networks/:id` path drives —
   `Grappa.Visitors.SessionPlan.resolve/2` → `Grappa.SpawnOrchestrator.spawn/4`
   with the `:visitor_reconnect` flow (so the per-network + per-IP caps gate
-  the visitor pool, mirroring `NetworksController.orchestrate_spawn/4`). No
+  the visitor pool, mirroring `GrappaWeb.NetworkSpawn.orchestrate/4`). No
   verb is rebuilt here (CLAUDE.md "reuse the verbs, not the nouns"): this is
   the disconnect verb's sibling, one call up from the shared spawn.
 
