@@ -170,7 +170,12 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
     // home_data).
     const homePane = page.locator(".home-pane-registered");
     await expect(homePane).toBeVisible({ timeout: 10_000 });
-    await expect(homePane.locator(".home-pane-title")).toContainText("Networks");
+    // #496 — the home now shows an always-on welcome (its own `.home-pane-title`)
+    // to EVERY subject, so `.home-pane-title` is no longer unique. Scope to the
+    // networks section's title specifically (the new truth).
+    await expect(homePane.locator(".home-pane-networks-section .home-pane-title")).toContainText(
+      "Networks",
+    );
     const homeRow = homePane.locator(".home-pane-network-row", {
       hasText: NETWORK_SLUG,
     });
