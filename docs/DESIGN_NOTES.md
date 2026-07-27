@@ -21081,3 +21081,87 @@ The lesson: a jsdom "green" spec proves nothing about placement; the pure-fn
 seam + a real-viewport e2e is the honest split, and a positioning clamp MUST use
 the same visible-area metric (visual viewport) end-to-end (JS + CSS) or the two
 silently disagree where it matters (keyboard up).
+## 2026-07-27 — Server-backed display preferences (#449)
+
+Display prefs (timestamp format #217, colored nicklist #443, per-channel
+presence filter #222) were localStorage-only in cic, so they never converged
+across one account's devices — a desktop toggle stayed invisible on the same
+user's iOS PWA (reported by Hypnotize, #it-opers). Moved them onto a
+server-authoritative full-map endpoint, `GET/PUT /me/settings/display-prefs`
+(both subjects, rides the existing `/me` nginx allowlist — no proxy change).
+
+**Moduledoc-rule supersession.** The three owner modules' moduledocs previously
+declared "localStorage only — cic owns display prefs client-side" and cited
+`feedback_no_localized_strings_server_side`. That citation was a
+**mis-application**: that memory is about i18n (server emits structured data, cic
+localizes), NOT about where display-pref STATE lives. #449 rewrites all three
+moduledocs: server-backed via the coordinator; localStorage is now the
+offline/write-through boot cache (FOUC-free first paint), not the source of
+truth.
+
+**The sync shape is the THEME, not notification-prefs.** These are
+boot-APPLIED UI state, so `displayPrefs.ts` mirrors `customTheme.ts` (boot cache
+seeds signals synchronously → `mountDisplayPrefsSync` reconciles on login), NOT
+the notification-prefs "server-consumed-only, re-read on drawer open" shape. The
+three owner modules KEEP their signal + localStorage cache (no module collapse,
+YAGNI); the coordinator adds the round-trip on top. Apply and PUT are separate
+verbs — there is deliberately NO reactive-PUT effect, so a server-wins apply can
+never feed back into a PUT.
+
+**Tri-state contract (NON-NEGOTIABLE), end to end.** `presence_filter` values
+are `"show" | "hide"`; UNSET is the ABSENCE of a channel key, never a third
+value or a boolean. The server stores the map verbatim (both layers guard it)
+and `applyServerPrefs` does a FULL replace (not merge), so a channel the server
+does not pin returns to unset — absence round-trips as absence. The client keeps
+deriving the size default (`LARGE_CHANNEL_THRESHOLD`) for unset channels; the
+server has no concept of it.
+
+**Seed-up-once + the `persisted` flag (Fork B).** `get_display_prefs/1` always
+returns a complete shape from defaults, so the GET payload alone cannot tell
+"never written" from "written == defaults" — and the client's seed-up-once needs
+that distinction. A client-side "migrated" flag was rejected: a fresh browser
+with default-local would PUT defaults and clobber prefs another device already
+saved. So the discriminator lives on the SERVER:
+`UserSettings.display_prefs_persisted?/1` (an `is_map/1` guard over the stored
+value — absent OR malformed both count as not-persisted, so the client seeds up
+and a corrupt row self-heals), surfaced as `persisted` in the wire envelope
+(additive per #447 — new field, no `protocol_version` bump; a pre-#449 server
+omits it and the client treats absent as `false`, the safe seed-up direction).
+On login: `persisted` ⇒ server wins; `!persisted` ⇒ push the local values up
+once, preserving the reporter's existing config.
+
+**Clear-on-logout — the seed-up made the cache a WRITE source (code-review
+find).** The first cut kept the cache untouched on logout (display prefs are
+identity-agnostic habits). Code review caught that this, combined with the
+seed-up, LEAKS across accounts: on a shared browser (or the visitor→user
+upgrade) subject A's residual cache would seed up into never-persisted subject
+B's server account, sticky across B's devices. Keep-cache was safe while the
+cache was read-only; the seed-up promoted it to a write source. Fix:
+`mountDisplayPrefsSync` clears to defaults on the logout branch, in parity with
+`mountCustomThemeSync`. A logged-in reload never hits that branch (the auth
+signal already holds the stored token before the effect first runs), so the
+FOUC-free boot cache is preserved. **General lesson: the moment a client cache
+becomes an upload source, its cross-identity lifecycle stops being cosmetic —
+clear it on logout like account chrome.**
+
+**422 surfacing = `console.warn`, not a toast.** The inputs are all
+closed-set/client-validated (a `<select>`, a checkbox, a show/hide toggle), so a
+422 is only reachable at the DOS bounds (`@presence_filter_max_count` 2000 /
+`@channel_key_max_bytes` 256); the realistic PUT failure is network/401.
+`syncedSet*` is optimistic local + fire-and-forget PUT; on failure the optimistic
+value stays (no hard-revert, matching notification-prefs) and the next login GET
+reconciles. Building a toast for a can't-realistically-happen 422 would be
+overengineering.
+
+**Font size stays per-device (vjt ruling on Fork A).** Text size is the one
+genuinely per-DEVICE pref (phone ≠ desktop), so `cicchetto/src/lib/fontSize.ts`
+stays client-local and is NOT server-backed — the one display pref deliberately
+excluded from #449.
+
+**Server type note.** `time_format` + the presence values are closed sets but
+stay `String.t()` in `@type display_prefs` (Elixir typespecs have no
+string-literal type; the values must stay wire strings; `String.to_atom/1` is
+banned; atoms only here would be half-migrated vs notification_prefs/aliases).
+The closed set is enforced by module constants + the changeset — the "reject
+unknown at the boundary" contract. A code comment records this so it is not
+"fixed" later.
