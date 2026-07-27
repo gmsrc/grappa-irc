@@ -356,6 +356,15 @@ services:
         # globalSetup (fixtures/seedData.ts) — the spec drives the real login
         # itself; seeding a token here would defeat the point.
         mix grappa.create_user --name fresh405 --password test-password-not-secret
+        # #481 — dedicated user for the self-serve accretion e2e
+        # (issue481-user-accretion.spec.ts). NO bind_network: post-#481 a
+        # USER with zero networks sees the `visitor_enabled` self-serve tier
+        # on home and one-taps azzurra2 (solanum → independent namespace, no
+        # 433 trap) to connect it LIVE. Isolated (own user) so the live
+        # session it leaves on azzurra2 has zero blast radius on the other
+        # specs. Logged in + token-stashed by the runner's globalSetup
+        # (fixtures/seedData.ts ACCRETE_*), unlike fresh405.
+        mix grappa.create_user --name accr481 --password test-password-not-secret
     networks:
       grappa-e2e: {}
 

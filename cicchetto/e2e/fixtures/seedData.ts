@@ -88,6 +88,20 @@ export const M9B_VICTIM_PASSWORD = "test-password-not-secret";
 export const M9B_VICTIM_IDENTIFIER = "m9b-victim@grappa.test";
 export const M9B_VICTIM_NICK = "m9b-victim-grappa";
 
+// #481 — dedicated user for the self-serve accretion e2e. Created with NO
+// network bind: post-#481 a USER sees the `visitor_enabled` (operator-
+// approved) self-serve tier on home and can one-tap CONNECT one. The spec
+// logs in as this user (loginAs) and one-taps azzurra2 — SOLANUM, an
+// independent nick namespace, so the shared-leaf 433 trap
+// (feedback_e2e_multinet_live_needs_distinct_nicks) never fires — then
+// asserts it connects LIVE. ISOLATED (its own user) so the live session it
+// leaves on azzurra2 has zero blast radius: the azzurra2 visitor-cap pool
+// is subject-kind-separate from this USER session (U-1 split).
+export const ACCRETE_USER = "accr481";
+export const ACCRETE_PASSWORD = "test-password-not-secret";
+export const ACCRETE_IDENTIFIER = "accr481@grappa.test";
+export const ACCRETE_NETWORK_SLUG = "azzurra2";
+
 // GH #349 — dedicated user for the registration-wizard real-services
 // e2e. Bound to `azzurra-reg` (services_flavor=azzurra) with a FRESH
 // unregistered nick, so the "Register nick" button shows and the spec
@@ -121,6 +135,8 @@ const M9B_VICTIM_TOKEN_ENV_VAR = "E2E_M9B_VICTIM_TOKEN";
 const M9B_VICTIM_USER_ID_ENV_VAR = "E2E_M9B_VICTIM_USER_ID";
 const WIZ_TOKEN_ENV_VAR = "E2E_WIZ_TOKEN";
 const WIZ_SUBJECT_ENV_VAR = "E2E_WIZ_SUBJECT";
+const ACCRETE_TOKEN_ENV_VAR = "E2E_ACCRETE_TOKEN";
+const ACCRETE_SUBJECT_ENV_VAR = "E2E_ACCRETE_SUBJECT";
 
 export default async function globalSetup(): Promise<void> {
   const result = await loginWithRetry(VJT_IDENTIFIER, VJT_PASSWORD);
@@ -162,6 +178,13 @@ export default async function globalSetup(): Promise<void> {
   const wiz = await loginWithRetry(WIZ_IDENTIFIER, WIZ_PASSWORD);
   process.env[WIZ_TOKEN_ENV_VAR] = wiz.token;
   process.env[WIZ_SUBJECT_ENV_VAR] = JSON.stringify(wiz.subject);
+
+  // #481 — self-serve accretion user. NO network bind, so home shows the
+  // self-serve "available to connect" tier; the spec one-taps azzurra2 and
+  // asserts a LIVE connect.
+  const accrete = await loginWithRetry(ACCRETE_IDENTIFIER, ACCRETE_PASSWORD);
+  process.env[ACCRETE_TOKEN_ENV_VAR] = accrete.token;
+  process.env[ACCRETE_SUBJECT_ENV_VAR] = JSON.stringify(accrete.subject);
 }
 
 export function getSeededVjt(): SeededUser {
@@ -213,6 +236,24 @@ export function getSeededWizUser(): SeededUser {
     name: WIZ_USER,
     password: WIZ_PASSWORD,
     identifier: WIZ_IDENTIFIER,
+    token,
+    subjectJson,
+  };
+}
+
+// #481 — self-serve accretion user (token + subject) for loginAs.
+export function getSeededAccreteUser(): SeededUser {
+  const token = process.env[ACCRETE_TOKEN_ENV_VAR];
+  const subjectJson = process.env[ACCRETE_SUBJECT_ENV_VAR];
+  if (!token || !subjectJson) {
+    throw new Error(
+      `getSeededAccreteUser: ${ACCRETE_TOKEN_ENV_VAR}/${ACCRETE_SUBJECT_ENV_VAR} not set. Did playwright globalSetup run?`,
+    );
+  }
+  return {
+    name: ACCRETE_USER,
+    password: ACCRETE_PASSWORD,
+    identifier: ACCRETE_IDENTIFIER,
     token,
     subjectJson,
   };

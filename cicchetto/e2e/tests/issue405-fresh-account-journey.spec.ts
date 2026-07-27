@@ -8,12 +8,15 @@
 //
 //   1. The "empty shell, no way forward" the dogfood hit was a SYMPTOM of
 //      #404, not a missing feature. Pre-fix a bare account name minted a
-//      GUEST session, so HomePane rendered the VISITOR empty-state
-//      ("Connecting… pick a network below to get started.") with nothing
-//      below = a dead end. With #404 fixed the account lands on the USER
-//      empty-state that already exists in HomePane.tsx: "No networks
-//      bound. Ask the operator to bind one via bin/grappa bind-network."
-//      — the actionable contract this spec pins.
+//      GUEST session, so HomePane rendered a dead-end. With #404 fixed the
+//      account lands as a USER. #481 UPDATE — this stack has
+//      `visitor_enabled` networks, so a fresh USER now lands on the SAME
+//      self-serve "available to connect" picker a guest sees ("Pick a
+//      network below to get started."); the retired "No networks bound.
+//      Ask the operator…" copy would be a #461 relic when the user can
+//      one-tap connect. The #404 proof (USER not guest) therefore rests on
+//      the robust discriminators — welcome-block absent + grappa-subject
+//      kind:"user" — not the (now-shared) empty-state text.
 //   2. A fresh-account login mints NO Session.Server (there is no network
 //      to connect to) — only an accounts_sessions row — so, unlike a
 //      visitor login (feedback_e2e_real_login_poisons_shared_stack), a
@@ -41,21 +44,32 @@ async function loginViaForm(page: Page, identifier: string, password: string): P
   await page.getByRole("button", { name: /^connect$/i }).click();
 }
 
-// The visible + storage proof that the login bound a USER (not a guest):
-//   * HomePane renders the USER empty-networks copy (a guest renders the
-//     visitor "Connecting…" dead-end), AND
+// The visible + storage proof that the login bound a USER (not a guest).
+//
+// #481 UPDATE — the empty-state TEXT is no longer the user-vs-guest signal.
+// The seeded e2e stack has `visitor_enabled` networks (azzurra/azzurra2/
+// azzurra3), so post-#481 a fresh USER with no bind now sees the SAME
+// self-serve "available to connect" tier a guest does + the shared "Pick a
+// network below" copy. Telling this user to "ask the operator" while a
+// one-tap picker sits below would be a #461 relic, so that copy is gone
+// here. The #404 proof (USER not guest) now rests on the ROBUST
+// discriminators that never collided:
 //   * the visitor-only welcome block is absent, AND
-//   * the persisted `grappa-subject` is `kind: "user"`.
-// All three observe rendered DOM / real client state, not a WS frame
+//   * the persisted `grappa-subject` is `kind: "user"`, AND
+//   * the user reaches the self-serve picker (positive proof they are on
+//     the shared tier, not stranded on a guest dead-end).
+// All observe rendered DOM / real client state, not a WS frame
 // (feedback_e2e_visitor_members_list).
-async function expectUserHomeEmptyState(page: Page): Promise<void> {
+async function expectUserHomeSelfServe(page: Page): Promise<void> {
   const empty = page.getByTestId("home-networks-empty");
   await expect(empty).toBeVisible({ timeout: 15_000 });
-  // The actionable USER empty-networks contract (#405) — NOT the guest
-  // "Connecting… pick a network below" dead-end.
-  await expect(empty).toContainText(/No networks bound/i);
-  await expect(empty).toContainText("bin/grappa bind-network");
+  // #481 — with self-connectable networks available, the user is guided to
+  // the picker, NOT to "ask the operator" (the retired dead-end copy).
+  await expect(empty).toContainText(/pick a network below/i);
+  await expect(empty).not.toContainText(/No networks bound/i);
   await expect(empty).not.toContainText(/Connecting/i);
+  // The self-serve "available to connect" section renders for a USER now.
+  await expect(page.getByTestId("home-available")).toBeVisible();
   // A guest session would render the visitor welcome block; a user must not.
   await expect(page.getByTestId("home-visitor-welcome")).toHaveCount(0);
   // Direct: the account is bound to a USER subject, not a visitor. Pre-#404
@@ -77,18 +91,18 @@ test.describe("#405 fresh non-admin account first-login journey", () => {
     });
   });
 
-  test("bare account name logs in as a USER and shows the actionable empty-networks home", async ({
+  test("bare account name logs in as a USER and shows the self-serve home", async ({
     page,
   }) => {
     await loginViaForm(page, FRESH_USER, FRESH_PASSWORD);
-    await expectUserHomeEmptyState(page);
+    await expectUserHomeSelfServe(page);
   });
 
   test("logout then re-login still binds a USER (no silent guest on the second login)", async ({
     page,
   }) => {
     await loginViaForm(page, FRESH_USER, FRESH_PASSWORD);
-    await expectUserHomeEmptyState(page);
+    await expectUserHomeSelfServe(page);
 
     // Real logout: revoke the web session server-side (same-origin fetch,
     // so the page's already-trusted self-signed cert is reused) + clear
@@ -112,7 +126,7 @@ test.describe("#405 fresh non-admin account first-login journey", () => {
     // 409-collided with their own ghost; post-fix every login resolves to
     // the account.
     await loginViaForm(page, FRESH_USER, FRESH_PASSWORD);
-    await expectUserHomeEmptyState(page);
+    await expectUserHomeSelfServe(page);
   });
 });
 
@@ -128,6 +142,6 @@ test.describe("#405 fresh account @webkit mobile", () => {
 
   test("bare account name logs in as a USER on iPhone", async ({ page }) => {
     await loginViaForm(page, FRESH_USER, FRESH_PASSWORD);
-    await expectUserHomeEmptyState(page);
+    await expectUserHomeSelfServe(page);
   });
 });
