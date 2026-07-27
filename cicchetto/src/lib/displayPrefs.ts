@@ -44,6 +44,15 @@ import { type DisplayPrefs, getDisplayPrefs, putDisplayPrefs } from "./userSetti
 // channel key. `applyServerPrefs` does a FULL replace (not merge), so a channel
 // the server does not pin returns to unset — absence round-trips as absence.
 
+// The reset baseline — mirror of the server's `default_display_prefs/0`
+// (the authoritative default). Used by the logout clear so a logged-out
+// browser holds no subject's residual prefs.
+const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
+  time_format: "hms",
+  colored_nicklist: false,
+  presence_filter: {},
+};
+
 // Read the three owner modules into the wire shape (the seed-up + every PUT
 // body). Pure snapshot; no reactivity intended.
 export function buildWireMap(): DisplayPrefs {
@@ -67,14 +76,24 @@ export function applyServerPrefs(prefs: DisplayPrefs): void {
 // Reactive server sync — re-runs on every `token()` change (registered inside a
 // `createRoot` by main.tsx, mirroring `mountCustomThemeSync`). On login: GET,
 // then server-wins apply (`persisted`) OR seed-up PUT (`!persisted`). On
-// logout: NO-OP — display prefs are identity-agnostic habits, so the cache
-// persists untouched and the next login's GET reconciles (unlike the theme,
-// which is account chrome and clears on logout). An offline / transient failure
-// keeps the boot-cached apply + `console.warn`s for observability.
+// logout: CLEAR the cache back to defaults (parity with `mountCustomThemeSync`).
+// This is load-bearing, NOT cosmetic: keep-cache-on-logout was safe while the
+// cache was read-only display state, but the seed-up made it a WRITE source —
+// on a shared browser (or the visitor→user upgrade) subject B's never-persisted
+// login would `buildWireMap()` subject A's residual cache and PUT it onto B's
+// server account, sticky across B's devices. Clearing on logout means B seeds
+// up genuine defaults; A's own next login GET restores A from the server. A
+// logged-in reload never hits this branch (the auth signal already holds the
+// stored token before this effect first runs), so the FOUC-free boot cache is
+// preserved. An offline / transient failure keeps the boot-cached apply +
+// `console.warn`s for observability.
 export function mountDisplayPrefsSync(): void {
   createEffect(() => {
     const t = token();
-    if (!t) return;
+    if (!t) {
+      applyServerPrefs(DEFAULT_DISPLAY_PREFS);
+      return;
+    }
     void getDisplayPrefs(t)
       .then((resp) => {
         // Token rotated mid-flight — a later effect run owns the state now.

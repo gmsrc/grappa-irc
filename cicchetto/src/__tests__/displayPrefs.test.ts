@@ -161,12 +161,15 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
       { display_prefs: serverDefaults, persisted: true },
     );
 
+    // Real logged-in-boot order: the auth signal already holds the token before
+    // the effect first runs, so the logout-clear branch never fires and the
+    // boot-seeded local values are what seed up.
+    setToken(TOKEN);
     let dispose!: () => void;
     createRoot((d) => {
       dispose = d;
       mountDisplayPrefsSync();
     });
-    setToken(TOKEN);
     await flush();
 
     // A seed-up PUT fired carrying the LOCAL values (never the server default).
@@ -195,12 +198,14 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
     replacePresencePrefs({ [KEY_A]: "hide" });
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
 
+    // Real logged-in-boot order: token present before the effect first runs, so
+    // the failed GET falls through to the keep-boot-cache catch (not the clear).
+    setToken(TOKEN);
     let dispose!: () => void;
     createRoot((d) => {
       dispose = d;
       mountDisplayPrefsSync();
     });
-    setToken(TOKEN);
     await flush();
 
     // Boot-cached local values survive the failed refresh.
@@ -209,7 +214,7 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
     dispose();
   });
 
-  it("does nothing on logout (no fetch, cache kept)", async () => {
+  it("mounted logged-out: no fetch, and the cache is cleared to defaults", async () => {
     setTimeFormat("hm");
     const fetchMock = vi.spyOn(globalThis, "fetch");
 
@@ -218,11 +223,12 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
       dispose = d;
       mountDisplayPrefsSync();
     });
-    // token is already null (resetLocal) — logout path.
+    // token is already null (resetLocal) — the logged-out branch: no server
+    // round-trip, and the cache resets to defaults (no residual to seed up).
     await flush();
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(getTimeFormat()).toBe("hm");
+    expect(getTimeFormat()).toBe("hms");
     dispose();
   });
 });
@@ -264,5 +270,90 @@ describe("syncedSet* — optimistic local + full-map PUT", () => {
     expect(getColoredNicklist()).toBe(true);
     expect(getChannelPresencePref(KEY_A)).toBe("hide");
     expect(fetchMock).not.toHaveBeenCalled(); // no token → local-only
+  });
+});
+
+// S1 (review) — clear-on-logout so a shared browser / visitor→user upgrade can
+// NOT bleed subject A's residual local prefs into subject B's server account.
+// Keep-cache-on-logout was safe while the cache was read-only display state; the
+// seed-up made it a WRITE source, so a never-persisted next login would PUT the
+// prior subject's residual values. Parity with mountCustomThemeSync's clear.
+describe("mountDisplayPrefsSync — clear-on-logout (no cross-account bleed)", () => {
+  const DEFAULTS = { time_format: "hms", colored_nicklist: false, presence_filter: {} };
+
+  // Phase-mutable fetch stub: the GET body changes across A-login / B-login.
+  let getBody: unknown;
+  function installPhaseFetch(): ReturnType<typeof vi.fn> {
+    return vi.spyOn(globalThis, "fetch").mockImplementation((_url, init?: RequestInit) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      // The PUT body is echoed back persisted:true; the coordinator ignores it.
+      const body = method === "GET" ? getBody : { display_prefs: DEFAULTS, persisted: true };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    }) as unknown as ReturnType<typeof vi.fn>;
+  }
+
+  it("resets local prefs to defaults on logout", async () => {
+    const aPrefs = {
+      time_format: "hm",
+      colored_nicklist: true,
+      presence_filter: { [KEY_A]: "hide" },
+    };
+    getBody = { display_prefs: aPrefs, persisted: true };
+    installPhaseFetch();
+
+    let dispose!: () => void;
+    createRoot((d) => {
+      dispose = d;
+      mountDisplayPrefsSync();
+    });
+
+    setToken(TOKEN); // A logs in — server wins, A's prefs applied locally
+    await flush();
+    expect(getTimeFormat()).toBe("hm");
+
+    setToken(null); // A logs out
+    await flush();
+
+    expect(getTimeFormat()).toBe("hms");
+    expect(getColoredNicklist()).toBe(false);
+    expect(getAllPresencePrefs()).toEqual({});
+    dispose();
+  });
+
+  it("does NOT seed a prior subject's prefs into a never-persisted next login", async () => {
+    const aPrefs = {
+      time_format: "hm",
+      colored_nicklist: true,
+      presence_filter: { [KEY_A]: "hide" },
+    };
+    getBody = { display_prefs: aPrefs, persisted: true };
+    const fetchMock = installPhaseFetch();
+
+    let dispose!: () => void;
+    createRoot((d) => {
+      dispose = d;
+      mountDisplayPrefsSync();
+    });
+
+    setToken(TOKEN); // A logs in
+    await flush();
+    setToken(null); // A logs out — cache MUST clear
+    await flush();
+
+    // B is a never-persisted subject: GET → persisted:false → seed-up.
+    getBody = { display_prefs: DEFAULTS, persisted: false };
+    fetchMock.mockClear();
+    setToken("B-bearer");
+    await flush();
+
+    const putCall = fetchMock.mock.calls.find(
+      (c) => ((c[1] as RequestInit | undefined)?.method ?? "GET").toUpperCase() === "PUT",
+    );
+    expect(putCall).toBeDefined();
+    // The seed-up carries DEFAULTS, never A's residual "hm"/true/{#a:hide}.
+    expect(JSON.parse((putCall?.[1] as RequestInit).body as string)).toEqual({
+      display_prefs: DEFAULTS,
+    });
+    dispose();
   });
 });
