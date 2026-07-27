@@ -33,7 +33,11 @@ services:
 
   grappa:
     environment:
-      PHX_HOST: voygrappa.bad.ass
+      # MANDATORY in prod, NO default — set to YOUR public hostname
+      # (e.g. grappa.example.org). Left blank on purpose: config/runtime.exs
+      # RAISES at boot rather than mint dead upload links + reject WS
+      # handshakes for a copied-but-unedited value.
+      PHX_HOST: ""
       # EXTRA_CHECK_ORIGINS: WS `check_origin` extras AND (with PHX_HOST,
       # #324) the deployment's HTTP host-alias set — every hostname nginx
       # reverse-proxies to this ONE instance. List a sibling public vhost

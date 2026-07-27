@@ -223,7 +223,7 @@ if config_env() == :prod do
       raise """
       environment variable PHX_HOST is missing.
       Set it to the public hostname nginx serves the bouncer at
-      (e.g. PHX_HOST=grappa.bad.ass) — see .env.example.
+      (e.g. PHX_HOST=grappa.example.org) — see .env.example.
       """
 
   # `extra_origins` (hoisted to the top of this file, all envs) feeds

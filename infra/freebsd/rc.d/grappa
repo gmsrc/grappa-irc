@@ -21,7 +21,7 @@
 #   VAPID_PRIVATE_KEY=...
 #   GRAPPA_OUTBOUND_V6_POOL=2001:db8::1,2001:db8::2,...   # NDP keepalive only
 #   DATABASE_PATH=/home/grappa/grappa/runtime/grappa_prod.db
-#   PHX_HOST=grappa.bad.ass
+#   PHX_HOST=grappa.example.org
 #   PORT=4000
 #
 # Why a thin wrapper around `bin/grappa daemon` instead of `daemon(8)`:
