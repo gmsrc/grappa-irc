@@ -158,8 +158,16 @@ const UserContextMenu: Component<Props> = (props) => {
         clickY,
         menuWidth: rect.width,
         menuHeight: rect.height,
-        viewportWidth: window.innerWidth,
-        viewportHeight: window.innerHeight,
+        // Visual viewport (NOT window.innerWidth/Height) so the clamp shrinks
+        // with the on-screen keyboard — matching the CSS `max-height:
+        // var(--viewport-height)` fallback below and the app-wide
+        // viewportHeight.ts primitive (both derive from window.visualViewport).
+        // window.innerHeight stays full-screen while the keyboard is up, which
+        // would let the menu render under the keyboard (the #487 symptom, on
+        // mobile). Playwright equalizes innerHeight and visualViewport, so the
+        // keyboard-up divergence is a device-dogfood item, not an e2e one.
+        viewportWidth: window.visualViewport?.width ?? window.innerWidth,
+        viewportHeight: window.visualViewport?.height ?? window.innerHeight,
       }),
     );
     setPlaced(true);
