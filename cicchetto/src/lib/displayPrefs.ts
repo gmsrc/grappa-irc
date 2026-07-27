@@ -53,6 +53,35 @@ const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   presence_filter: {},
 };
 
+// #449 (issue222 regression fix) — the "unconfirmed local write" marker.
+//
+// A `syncedSet*` applies OPTIMISTICALLY to the owner module (signal +
+// localStorage) and fires a fire-and-forget PUT. If that PUT is not ACKed
+// before a reload (the navigation aborts it, offline, or CPU starvation), the
+// next reconcile's `applyServerPrefs` — a FULL replace that rewrites the signal
+// AND the localStorage boot cache — would CLOBBER the just-set pref with the
+// stale server value: the pref vanishes for good (the e2e caught the presence
+// join/part rows reappearing after reload). This flag is DURABLE (localStorage,
+// so it survives the reload): while set, the reconcile PUSHES the local state up
+// (the seed-up path) instead of letting the server win, so an in-flight write is
+// never lost. Cleared on the PUT's success (the server now holds it → server-
+// wins is safe again) and on logout (a logged-out browser holds no pending
+// write). Same family as the #449 cross-account seed-up leak: the local cache is
+// a WRITE source, so it needs a sync-status marker, not blind server-wins.
+const UNSYNCED_KEY = "cic.displayPrefs.unsynced";
+
+function markUnsynced(): void {
+  localStorage.setItem(UNSYNCED_KEY, "1");
+}
+
+function clearUnsynced(): void {
+  localStorage.removeItem(UNSYNCED_KEY);
+}
+
+function hasUnsyncedWrite(): boolean {
+  return localStorage.getItem(UNSYNCED_KEY) === "1";
+}
+
 // Read the three owner modules into the wire shape (the seed-up + every PUT
 // body). Pure snapshot; no reactivity intended.
 export function buildWireMap(): DisplayPrefs {
@@ -91,6 +120,7 @@ export function mountDisplayPrefsSync(): void {
   createEffect(() => {
     const t = token();
     if (!t) {
+      clearUnsynced(); // a logged-out browser holds no pending write
       applyServerPrefs(DEFAULT_DISPLAY_PREFS);
       return;
     }
@@ -98,16 +128,23 @@ export function mountDisplayPrefsSync(): void {
       .then((resp) => {
         // Token rotated mid-flight — a later effect run owns the state now.
         if (token() !== t) return;
-        if (resp.persisted) {
-          applyServerPrefs(resp.display_prefs); // server wins
+        // PUSH the LOCAL state up (never let the server clobber it) when either:
+        //   * an earlier `syncedSet*` write is still UNCONFIRMED (its PUT never
+        //     ACKed — e.g. a reload raced the fire-and-forget PUT). Without this
+        //     the full-replace below wipes the just-set pref for good (#222); OR
+        //   * the server has NEVER persisted (seed-up-once, Fork B): preserve
+        //     the config the operator already built on this device.
+        // buildWireMap carries the boot-cached local prefs; on success the
+        // server holds them, so the unsynced marker clears and server-wins
+        // resumes (a later cross-device change propagates normally).
+        if (hasUnsyncedWrite() || !resp.persisted) {
+          void putDisplayPrefs(t, buildWireMap())
+            .then(clearUnsynced)
+            .catch((e) => {
+              console.warn("displayPrefs: seed-up/re-push PUT failed", e);
+            });
         } else {
-          // Seed-up-once: the server has never persisted (or is a pre-#449
-          // build that omits `persisted`). Push the local values up so the
-          // operator's existing config survives + converges. Fire-and-forget;
-          // a failure just retries on the next login.
-          void putDisplayPrefs(t, buildWireMap()).catch((e) => {
-            console.warn("displayPrefs: seed-up PUT failed", e);
-          });
+          applyServerPrefs(resp.display_prefs); // server wins
         }
       })
       .catch((e) => {
@@ -127,9 +164,15 @@ export function mountDisplayPrefsSync(): void {
 function pushDisplayPrefs(): void {
   const t = token();
   if (!t) return;
-  void putDisplayPrefs(t, buildWireMap()).catch((e) => {
-    console.warn("displayPrefs: PUT failed", e);
-  });
+  // Mark the write UNCONFIRMED before the PUT so a reload racing this
+  // fire-and-forget request re-pushes local on reconcile instead of losing it
+  // to a stale server value (#222). Cleared once the server ACKs.
+  markUnsynced();
+  void putDisplayPrefs(t, buildWireMap())
+    .then(clearUnsynced)
+    .catch((e) => {
+      console.warn("displayPrefs: PUT failed", e);
+    });
 }
 
 // User-action setters — optimistic LOCAL set + full-map PUT. Call sites swap

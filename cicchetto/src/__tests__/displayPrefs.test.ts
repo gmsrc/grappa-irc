@@ -357,3 +357,94 @@ describe("mountDisplayPrefsSync — clear-on-logout (no cross-account bleed)", (
     dispose();
   });
 });
+
+// #449 (issue222 regression) — an optimistic syncedSet* whose PUT never ACKed
+// (e.g. a reload raced/aborted the fire-and-forget PUT) must NOT be clobbered by
+// the next reconcile. Pre-fix, `applyServerPrefs` did a FULL replace that
+// rewrote the signal AND the localStorage boot cache, so a stale server GET
+// (missing the just-set channel) WIPED the pref for good — the e2e caught the
+// join/part rows reappearing after reload. The fix: a durable "unsynced" flag
+// makes the reconcile PUSH the local state up (seed-up path) while a write is
+// unconfirmed, rather than letting the server value win.
+describe("mountDisplayPrefsSync — an unconfirmed local write survives a reload (issue222)", () => {
+  it("reconcile re-pushes the local pref (never clobbers) when the toggle PUT never ACKed", async () => {
+    setToken(TOKEN);
+    // 1. User toggles #a → hide, but the fire-and-forget PUT REJECTS (a reload
+    //    aborted it / offline). The write stays UNCONFIRMED.
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("PUT aborted by reload"));
+    syncedSetChannelPresencePref(KEY_A, "hide");
+    await flush();
+    expect(getChannelPresencePref(KEY_A)).toBe("hide"); // optimistic local applied
+
+    // 2. Reload: a fresh reconcile. GET returns persisted:true but WITHOUT #a
+    //    (the toggle PUT never landed → stale server). Capture the PUT bodies.
+    vi.restoreAllMocks();
+    const staleServer: DisplayPrefs = {
+      time_format: "hms",
+      colored_nicklist: false,
+      presence_filter: {},
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_u, init?: RequestInit) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      const body =
+        method === "GET"
+          ? { display_prefs: staleServer, persisted: true }
+          : { display_prefs: buildWireMap(), persisted: true };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    });
+
+    let dispose!: () => void;
+    createRoot((d) => {
+      dispose = d;
+      mountDisplayPrefsSync();
+    });
+    await flush();
+
+    // The pin is PRESERVED (the full-replace did NOT wipe it) ...
+    expect(getChannelPresencePref(KEY_A)).toBe("hide");
+    // ... and the reconcile RE-PUSHED the local state (seed-up), carrying #a.
+    const putCall = fetchMock.mock.calls.find(
+      (c) => ((c[1] as RequestInit | undefined)?.method ?? "GET").toUpperCase() === "PUT",
+    );
+    expect(putCall).toBeDefined();
+    expect(
+      JSON.parse((putCall?.[1] as RequestInit).body as string).display_prefs.presence_filter,
+    ).toEqual({ [KEY_A]: "hide" });
+    dispose();
+  });
+
+  it("after a CONFIRMED synced write, a later reconcile lets the server win (no permanent local pin)", async () => {
+    setToken(TOKEN);
+    // Toggle #a → hide with the PUT RESOLVING → the unsynced flag is cleared.
+    stubFetch(
+      { display_prefs: buildWireMap(), persisted: true },
+      { display_prefs: buildWireMap(), persisted: true },
+    );
+    syncedSetChannelPresencePref(KEY_A, "hide");
+    await flush();
+
+    // Reload: the server is now authoritative WITHOUT #a (another device unpinned
+    // it). Because the earlier write was CONFIRMED, server-wins must resume so the
+    // cross-device unpin propagates — the pin must NOT be re-pushed forever.
+    vi.restoreAllMocks();
+    const server: DisplayPrefs = {
+      time_format: "hms",
+      colored_nicklist: false,
+      presence_filter: {},
+    };
+    stubFetch(
+      { display_prefs: server, persisted: true },
+      { display_prefs: server, persisted: true },
+    );
+
+    let dispose!: () => void;
+    createRoot((d) => {
+      dispose = d;
+      mountDisplayPrefsSync();
+    });
+    await flush();
+
+    expect(getChannelPresencePref(KEY_A)).toBeUndefined(); // server won: #a dropped
+    dispose();
+  });
+});
