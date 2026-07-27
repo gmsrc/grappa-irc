@@ -57,13 +57,16 @@ vi.mock("../lib/queryWindows", () => ({
   closeQueryWindowState: vi.fn(),
 }));
 
-// windowClose imports setParted to clear the local windowState pseudo-
-// projection on channel close (#38). Mock it as a boundary spy — the
-// real windowState pulls in selection.ts (a heavy reactive chain this
-// unit doesn't need). setParted's own map-clearing outcome is covered
-// by its module; the e2e proves the full row-vanishes outcome.
+// windowClose imports forceParted to clear the local windowState pseudo-
+// projection on a USER close (#38, #71 INC-3) — the UNCONDITIONAL drop
+// that bypasses setParted's #495 stale-echo guard, so a deliberate × is
+// never a silent no-op (even mid-"pending"). Mock it as a boundary spy —
+// the real windowState pulls in selection.ts (a heavy reactive chain this
+// unit doesn't need). forceParted's own map-clearing outcome, including
+// clearing a "pending" key, is covered by windowState.test.ts; the e2e
+// proves the full row-vanishes outcome.
 vi.mock("../lib/windowState", () => ({
-  setParted: vi.fn(),
+  forceParted: vi.fn(),
 }));
 
 // dismissPseudoWindow (#71 INC-3) imports selection to redirect focus off a
@@ -110,7 +113,7 @@ describe("closeChannelWindow — channel close clears local windowState", () => 
     // Local side: clear the windowState pseudo-projection so the row
     // can't re-emerge as an orphaned greyed pseudo-row once
     // channelsBySlug drops the name.
-    expect(windowState.setParted).toHaveBeenCalledWith(channelKey("bahamut-test", "#k38"));
+    expect(windowState.forceParted).toHaveBeenCalledWith(channelKey("bahamut-test", "#k38"));
   });
   // closeChannelWindow shares the `if (!t) return` no-token idiom with
   // disconnectNetwork (whose dedicated test below exercises that guard).
@@ -216,13 +219,13 @@ describe("disconnectNetwork — registered-user branch", () => {
 // let the bucket-E watcher pick MRU). The $server-vs-MRU destination is a
 // deferred product choice (DESIGN_NOTES 2026-07-26 + follow-up issue).
 describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focused", () => {
-  it("clears the windowState entry via setParted", async () => {
+  it("clears the windowState entry via forceParted (unconditional user close)", async () => {
     selectedChannelMock.mockReturnValue(null);
     const windowState = await import("../lib/windowState");
     const { channelKey } = await import("../lib/channelKey");
     const { dismissPseudoWindow } = await import("../lib/windowClose");
     dismissPseudoWindow("freenode", "#inv");
-    expect(windowState.setParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
+    expect(windowState.forceParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
     expect(setSelectedChannelMock).not.toHaveBeenCalled();
   });
 
@@ -243,7 +246,7 @@ describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focuse
       channelName: SERVER_WINDOW_NAME,
       kind: "server",
     });
-    expect(windowState.setParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
+    expect(windowState.forceParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
   });
 
   it("does NOT redirect when a DIFFERENT window is focused (no focus steal)", async () => {

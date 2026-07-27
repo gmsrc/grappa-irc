@@ -526,13 +526,14 @@ const Sidebar: Component<Props> = () => {
                         left a sticky greyed row + a duplicate archive
                         entry (visibleArchiveForNetwork filtered only live
                         channelsBySlug/queryWindowsByNetwork, not
-                        windowStateByChannel). Now × calls setParted →
-                        drops the windowState key → row vanishes;
+                        windowStateByChannel). Now × calls forceParted
+                        (via dismissPseudoWindow) → drops the windowState
+                        key unconditionally → row vanishes;
                         visibleArchiveForNetwork's pseudo-name filter
                         releases so the archive section shows the row
                         instead (single surface per window). */}
                       {/* #172: pseudo-row dismiss is a LOCAL projection clear
-                        (setParted), sidebar-only + desktop-only — the mobile
+                        (forceParted), sidebar-only + desktop-only — the mobile
                         fat-finger problem never reaches it. It rides the same
                         <CloseButton> anyway (touch-gate is free; a desktop
                         mouse click stays instant) so every × is one code path

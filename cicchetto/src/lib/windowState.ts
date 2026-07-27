@@ -99,9 +99,14 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     setWindowKickedMetaByChannel((prev) => ({ ...prev, [key]: { by, reason } }));
   };
 
-  const setParted = (key: ChannelKey): void => {
-    // Absence is the projection — drop the entry from all three maps.
-    // Idempotent: parting an unknown key is a no-op.
+  // forceParted: the unconditional "absence is the projection" verb —
+  // drop the key from all three maps. Idempotent (parting an unknown key
+  // is a no-op). This is the USER-initiated close (windowClose.ts: the ×
+  // on a live tab or a non-joined pseudo-row), where the drop is FRESH
+  // intent and must always apply — even mid-"pending" — so a pseudo-row's
+  // × is never a silent no-op. The server-echo path uses setParted below,
+  // which guards against a stale echo.
+  const forceParted = (key: ChannelKey): void => {
     setWindowStateByChannel((prev) => {
       if (!(key in prev)) return prev;
       const { [key]: _drop, ...rest } = prev;
@@ -119,6 +124,24 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     });
   };
 
+  // setParted: the SERVER-echo projection of an own-PART (subscribe.ts's
+  // own-PART arm — the ONLY caller). #495 ordering guard: a "pending" key
+  // means a re-join is in flight (its optimistic window_pending already
+  // landed). A part echo arriving now is the STALE echo of an EARLIER part
+  // — an ircd round-trip that lost the race to the synchronous pending.
+  // Dropping the fresh pending would let the selection close-watcher
+  // misread the SELECTED window's live→dead flip as a genuine vanish and
+  // evict focus to $server. So a stale part on a "pending" key is a no-op;
+  // the genuine-part case leaves the key "joined", where the guard is
+  // inert. Same class as ba4dc179 (out-of-order event applied to fresh
+  // state). USER-initiated closes use forceParted (above), which bypasses
+  // this guard. KNOWN GAP + bounds (part→re-join→part-again fast):
+  // DESIGN_NOTES 2026-07-27 (#495).
+  const setParted = (key: ChannelKey): void => {
+    if (windowStateByChannel()[key] === "pending") return;
+    forceParted(key);
+  };
+
   return {
     windowStateByChannel,
     windowFailureByChannel,
@@ -129,6 +152,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     setFailed,
     setKicked,
     setParted,
+    forceParted,
   };
 });
 
@@ -141,6 +165,7 @@ export const setJoined = exports_.setJoined;
 export const setFailed = exports_.setFailed;
 export const setKicked = exports_.setKicked;
 export const setParted = exports_.setParted;
+export const forceParted = exports_.forceParted;
 
 // Render-time predicates for "show member-list-shaped UI?".
 //

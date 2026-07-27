@@ -5,7 +5,7 @@ import { requestConfirm } from "./confirmDialog";
 import { closeQueryWindowState } from "./queryWindows";
 import { selectedChannel, setSelectedChannel } from "./selection";
 import { SERVER_WINDOW_NAME } from "./windowKinds";
-import { setParted } from "./windowState";
+import { forceParted } from "./windowState";
 
 // Shared close-window helpers. Two call sites today: Sidebar × on
 // desktop, BottomBar × on mobile (iOS-3). Mirror the
@@ -29,15 +29,18 @@ export function closeChannelWindow(networkSlug: string, channelName: string): vo
   // broadcasts `channels_changed` → refetch), but for a channel the user
   // never actually joined — e.g. a +k autojoin entry that 475'd on
   // (re)connect — the upstream PART is a 442 no-op, so NO self-PART
-  // scrollback echo arrives. That echo (subscribe.ts) is the ONLY thing
-  // that calls `setParted`, so without clearing it here the non-`:joined`
+  // scrollback echo arrives. That echo (subscribe.ts) is the only OTHER
+  // window-state drop, so without clearing it here the non-`:joined`
   // windowState entry is orphaned and re-emerges as an un-dismissable
   // greyed pseudo-row (`Sidebar.pseudoChannelsForNetwork`) the instant
-  // `channelsBySlug` drops the name. `setParted` is idempotent with the
-  // echo for actually-joined channels, and clearing (vs. adding) a
-  // windowState key can only emit FEWER pseudo-rows — the opposite
-  // direction from the reverted PHASE-1.1 ghost-row regression.
-  setParted(channelKey(networkSlug, channelName));
+  // `channelsBySlug` drops the name. Use `forceParted` (not the echo's
+  // `setParted`): this is a USER close, fresh intent, so it must drop the
+  // key even mid-`pending` — the #495 stale-echo guard on `setParted` must
+  // NOT swallow a deliberate ×. Idempotent with the echo for
+  // actually-joined channels, and clearing (vs. adding) a windowState key
+  // can only emit FEWER pseudo-rows — the opposite direction from the
+  // reverted PHASE-1.1 ghost-row regression.
+  forceParted(channelKey(networkSlug, channelName));
 }
 
 export function closeQueryWindow(networkId: number, targetNick: string): void {
@@ -52,9 +55,12 @@ export function closeQueryWindow(networkId: number, targetNick: string): void {
 // setParted let the bucket-E close-watcher pick MRU, a per-surface
 // divergence the INC-3 review caught.
 //
-// UX-5 bucket BK — `setParted` is the "absence is the projection" verb: it
+// UX-5 bucket BK — `forceParted` is the "absence is the projection" verb: it
 // drops the key from all three windowState maps, so the pseudo-row vanishes
 // and (if it had scrollback) resurfaces in the archive section.
+// `forceParted` (not `setParted`): a × on a pseudo-row is a USER close, so
+// it must drop the key even when it is "pending" — the #495 stale-echo guard
+// on `setParted` must not swallow this deliberate dismissal.
 //
 // If the dismissed row IS the focused window, redirect to the network's
 // $server window FIRST, pre-empting the bucket-E watcher (which would
@@ -66,7 +72,7 @@ export function dismissPseudoWindow(networkSlug: string, name: string): void {
   if (sel !== null && sel.networkSlug === networkSlug && sel.channelName === name) {
     setSelectedChannel({ networkSlug, channelName: SERVER_WINDOW_NAME, kind: "server" });
   }
-  setParted(channelKey(networkSlug, name));
+  forceParted(channelKey(networkSlug, name));
 }
 
 // UX-4 bucket D — close the server window for a network by PARKING it.

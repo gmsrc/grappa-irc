@@ -20758,3 +20758,88 @@ drift.
 **L1 — doc rot.** The `NetworkSpawn` extraction left stale
 `orchestrate_spawn` references in `operator.ex` + `visitors.ex` docs;
 repointed to `GrappaWeb.NetworkSpawn.orchestrate/4`.
+---
+
+## #495 — stale own-PART echo strands focus on `$server` after a fast re-join (cic close-watcher false positive)
+
+**Symptom.** After PART `#bofh` → open the ArchiveModal → click the
+archived row → `/join #bofh`, the active window ends on the network
+`$server` console instead of the re-joined channel. `#bofh` IS joined
+(sidebar badge, live) but focus is stranded → the members-pane is absent.
+Surfaced as the `cp15-b6-part-archive-rejoin.spec.ts:55` members-pane
+assert — a false "flake": deterministic once the interleave is understood.
+
+**Confirmed mechanism (instrumented iso, not a hypothesis).** cic emits
+the re-join's optimistic `window_pending` (user-topic, synchronous on the
+`/join` command) FAST; the EARLIER part's `:parted` echo (an ircd
+round-trip) arrives LATE — ~3s on the fake-lagged testnet, but the delay
+is not the cause. By the time that stale `:parted` lands, the user has
+already re-selected AND re-joined `#bofh`, so `windowState[#bofh]` is
+`"pending"`. `channelsBySlug` has also not re-added `#bofh` yet (its own
+refetch lags). The stale `setParted` clears the windowState; the selection
+close-watcher (`selection.ts`, UX-4 bucket E) sees the SELECTED window
+flip `stillLive` true→false (`windowIsPresent` false + not in cbs,
+`wasLive` true) and evicts focus via `resolveFallbackWindow` → the
+`$server` console (no live MRU). The re-join's `joined` then re-adds
+`#bofh` live, but focus is already stranded (the watcher early-returns on
+`kind === "server"`). The delay MAGNITUDE is testnet fake-lag (makes it
+reliable in e2e); the ORDERING is structural — an optimistic
+`window_pending` racing an echoed `:parted` trips at any non-zero latency
+— so it is a real (if rarer) production bug, not a test artifact.
+
+**Fix — a windowState ordering guard, NOT a change to the watcher.** The
+close-watcher is CORRECT: evicting a live→dead selected window is right,
+and its stickiness on a GENUINE part is the desired behavior (a blanket
+"return-on-re-live" would regress focus on a netsplit/reconnect flap). The
+defect is the SPURIOUS live→dead flip caused by a stale event. So the
+own-PART echo projection becomes echo-safe: `windowState.setParted` (whose
+ONLY caller is `subscribe.ts`'s own-PART arm) is a no-op when the key is
+`"pending"` — a pending state means a re-join is in flight, so a part echo
+landing now is the stale echo of an EARLIER part the re-join supersedes.
+The genuine-part echo case leaves the key `"joined"`, where the guard is
+inert. USER-initiated closes (`windowClose.ts`: the × on a live tab or a
+non-joined pseudo-row) instead use a sibling `forceParted` verb that drops
+the key UNCONDITIONALLY — a deliberate × must never be swallowed, even
+mid-`pending` (the guard belongs to the ECHO, not to the verb: a shared
+guarded `setParted` would silently no-op a pseudo-row's × on a pending
+row). Stickiness and the netsplit behavior are untouched.
+
+**Same CLASS as ba4dc179 (#456 P1), different MECHANISM.** Both are
+out-of-order events applied to fresh state after a PART. ba4dc179
+(`loadArchive` response-sequencing) could use a per-slug monotonic
+sequence because cic controls BOTH racing operations (two `loadArchive`
+calls). Here the two racing things are DISTINCT server events on different
+topics (`window_pending` on the user-topic vs the `:parted` message on the
+per-channel topic) — cic cannot stamp a sequence both carry, so a
+state-machine guard (`pending` is not overridden by a part) is the right
+tool, not a seq counter. Server twin of the class: a1e19731.
+
+**KNOWN GAP (declared, not fixed).** part → re-join (pending) →
+part-again FAST: the SECOND, GENUINE part's echo can also land while the
+key is still `"pending"` and be dropped by the guard, leaving cic
+transiently `"joined"` while the server has parted — client/server
+divergence. It is BOUNDED: `channelsBySlug` (server-authoritative live
+list) still drops the channel, so the cbs-driven sidebar joined-row is
+correct. The divergence is confined to `windowStateByChannel`: the stuck
+`"pending"` key renders a `sidebar-window-pending` pseudo-row
+(`pseudoChannelsForNetwork` includes pending) and the close-watcher's
+`windowIsPresent` fallback keeps focus on it. It is RECOVERABLE — the
+pseudo-row's × (`forceParted`) drops
+it, a genuine re-join resolves it, and identity rotation clears the maps —
+but NOT by a WS reconnect: `push_window_state_if_known` only re-pushes
+state the server still HAS, and a parted channel has none (there is no
+`:parted` on the wire), so a reconnect does not clear a stuck `"pending"`.
+It is the strict INVERSE of the #495 bug (keep-too-long vs
+evict-too-eager) — less harmful (a ×-dismissable pending row vs a silent
+focus theft) — and needs a rapid part→rejoin→part triple the confirmed bug
+does not. A complete fix would need server-emitted per-event ordering (a
+generation/sequence the part carries), out of scope for #495.
+
+**Relationship to #456 / cp15-b6.** cp15-b6 asserts BOTH domains: the
+members-pane/focus assert (`:108`, #495) fires first, THEN the
+archive-list dedup + re-PART-while-open asserts (`:121`/`:135`, #456's
+`loadArchive` race, fixed by ba4dc179). The spec is fully green only with
+BOTH fixes on one tree — #495 (this) + ba4dc179 (on #473). That is why
+#495's proof is the vitest detector, not cp15-b6-e2e on the #495 branch.
+
+**Deploy class: COLD** (cic bundle only; no server change).

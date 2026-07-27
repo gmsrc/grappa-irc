@@ -1073,6 +1073,73 @@ describe("selection store", () => {
       expect(sel.selectedChannel()?.kind).toBe("channel");
       expect(sel.selectedChannel()?.networkSlug).toBe("freenode");
     });
+
+    it("#495: a STALE part echo landing after a re-join does NOT strand focus on $server", async () => {
+      // #495 regression, confirmed from the instrumented cp15-b6 iso.
+      // The user PARTs #bofh then re-joins it. The re-join's optimistic
+      // `window_pending` (user-topic) arrives FAST → windowState =
+      // "pending". The EARLIER part's `:parted` echo (an ircd round-trip)
+      // arrives LATE — after the re-join is already pending — and clears
+      // the windowState. channelsBySlug has ALSO not re-added #bofh yet
+      // (its own refetch lags), so the close-watcher sees the SELECTED
+      // window flip live→dead (present + inCbs both false, wasLive true)
+      // and evicts focus to the $server console. The re-join's `joined`
+      // then re-adds #bofh live, but focus is already stranded.
+      //
+      // This asserts the OUTCOME (focus survives on #bofh), NOT the
+      // guard's call-shape. The fix is a windowState ordering guard:
+      // `setParted` is a no-op while the key is "pending" (a re-join in
+      // flight), so a stale echo can't strand focus. The close-watcher
+      // and its CORRECT genuine-PART stickiness are left untouched.
+      vi.resetModules();
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      vi.mocked(api.listNetworks).mockResolvedValue([userNet("freenode", 1, "connected")]);
+      vi.mocked(api.listChannels)
+        .mockResolvedValueOnce([{ name: "#bofh", joined: true, source: "autojoin" }])
+        // The PART's channels_changed drops #bofh; the re-join's refetch
+        // has NOT re-added it when the stale `:parted` echo lands.
+        .mockResolvedValue([]);
+      const auth = await import("../lib/auth");
+      const sel = await import("../lib/selection");
+      const networks = await import("../lib/networks");
+      const windowState = await import("../lib/windowState");
+      const { channelKey } = await import("../lib/channelKey");
+      auth.setToken("tokE-495");
+      await vi.waitFor(() => {
+        expect(networks.channelsBySlug()?.freenode?.length).toBe(1);
+      });
+
+      const key = channelKey("freenode", "#bofh");
+
+      // #bofh joined + focused → the close-watcher arms wasLive=true.
+      windowState.setJoined(key);
+      sel.setSelectedChannel({ networkSlug: "freenode", channelName: "#bofh", kind: "channel" });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(sel.selectedChannel()?.channelName).toBe("#bofh");
+
+      // PART: channels_changed drops #bofh from cbs, but windowState is
+      // still "joined" (its :parted echo hasn't landed) → windowIsPresent
+      // keeps stillLive true → NO evict yet.
+      networks.refetchChannels();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(sel.selectedChannel()?.channelName).toBe("#bofh");
+
+      // Re-join: the optimistic window_pending → setPending (present again).
+      windowState.setPending(key);
+      await new Promise((r) => setTimeout(r, 20));
+
+      // STALE part echo lands NOW — after the re-join is pending, while
+      // cbs still lacks #bofh. Pre-fix this clears windowState and the
+      // watcher evicts to $server; post-fix setParted no-ops on "pending".
+      windowState.setParted(key);
+      await new Promise((r) => setTimeout(r, 20));
+
+      // The re-joined selection SURVIVES — no focus theft to $server.
+      expect(sel.selectedChannel()?.channelName).toBe("#bofh");
+      expect(sel.selectedChannel()?.kind).toBe("channel");
+      expect(sel.selectedChannel()?.networkSlug).toBe("freenode");
+    });
   });
 
   // #125 — the $list directory is a transient overlay with a close

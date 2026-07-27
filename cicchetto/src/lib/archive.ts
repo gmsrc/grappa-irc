@@ -97,7 +97,7 @@ export const setArchiveModalNetwork = exports_.setArchiveModalNetwork;
 // without this filter a failed JOIN appears in BOTH the active sidebar
 // (pseudo-row) AND the archive section (notice row qualifies as
 // archived because the channel isn't in Session.list_channels). One
-// window, one surface. Operator clicks × on the pseudo-row → setParted
+// window, one surface. Operator clicks × on the pseudo-row → forceParted
 // drops the windowState key → this filter releases → archive shows
 // the row.
 export function visibleArchiveForNetwork(slug: string, networkId: number): ArchiveEntry[] {

@@ -197,6 +197,51 @@ describe("windowState.setParted (absence is the projection)", () => {
 
     expect(ws.windowStateByChannel()[key]).toBeUndefined();
   });
+
+  it("does NOT clear a 'pending' key — a stale part echo after a re-join is dropped (#495)", async () => {
+    // #495 ordering guard. When the user PARTs then re-joins fast, the
+    // re-join's optimistic window_pending sets "pending" BEFORE the
+    // earlier part's `:parted` echo (an ircd round-trip) arrives. That
+    // stale echo must NOT clear the fresh pending — otherwise the
+    // selection close-watcher misreads the live→dead flip and evicts
+    // focus to $server (asserted end-to-end in selection.test.ts). The
+    // genuine-PART case leaves the key "joined" (see "removes the entry"
+    // above), where the guard is inert.
+    const ws = await import("../lib/windowState");
+    const key = channelKey("freenode", "#bofh");
+
+    ws.setPending(key);
+    ws.setParted(key);
+
+    expect(ws.windowStateByChannel()[key]).toBe("pending");
+  });
+});
+
+describe("windowState.forceParted (unconditional user-close drop)", () => {
+  it("drops a joined key like setParted", async () => {
+    const ws = await import("../lib/windowState");
+    const key = channelKey("freenode", "#grappa");
+
+    ws.setJoined(key);
+    ws.forceParted(key);
+
+    expect(ws.windowStateByChannel()[key]).toBeUndefined();
+  });
+
+  it("clears a 'pending' key too — a USER × bypasses the #495 stale-echo guard", async () => {
+    // Counterpart to setParted's #495 no-op: a DELIBERATE close
+    // (windowClose.ts closeChannelWindow / dismissPseudoWindow) must drop
+    // the key even mid-re-join, so a pending pseudo-row's × is never a
+    // silent no-op. If this regressed, setParted's guard would swallow the
+    // dismissal and strand an un-dismissable greyed row.
+    const ws = await import("../lib/windowState");
+    const key = channelKey("freenode", "#bofh");
+
+    ws.setPending(key);
+    ws.forceParted(key);
+
+    expect(ws.windowStateByChannel()[key]).toBeUndefined();
+  });
 });
 
 describe("windowState.setPending (operator clicked JOIN — optimistic visual feedback)", () => {
