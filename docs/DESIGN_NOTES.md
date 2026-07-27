@@ -20346,6 +20346,16 @@ Material minimum, on a control in the top corner where thumbs are least
 accurate. Glyph stays optically the same (`font-size: 1.25rem`); only the box
 grows.
 
+**e2e coverage (2026-07-27).** `push-459-optin-banner.spec.ts` (chromium, on the
+openSettingsSection page-object) pins the four user-facing outcomes: the banner
+appears on login when the gate is open; `[of course!]` runs the accept path (it
+invokes `Notification.requestPermission` — which `×` never does — and hides the
+banner WITHOUT persisting a decline); `×` declines and the banner stays gone
+across a reload (persisted); and the settings push sub-page renders the master
+toggle disabled + the "unavailable" hint when `PushManager` is absent. The gate
+is opened deterministically by stubbing `Notification.permission` to `"default"`
+(chromium headless reports `"denied"` for the getter otherwise).
+
 cic-only, no server change — rides a COLD deploy (cic bundle change).
 
 ## 2026-07-27 — settings-drawer e2e page-object (openSettingsSection + closeSettings), #460 follow-up
