@@ -20952,3 +20952,71 @@ is a server-side ExUnit assertion, not a timing-dependent e2e. **Do not treat th
 coverage of the archive UI, and the archive-race regression is guarded by the
 server-side test.** A future refactor that touches the PART→archive broadcast must
 keep that ExUnit test green; the e2e specs will not catch a reintroduction.
+
+## 2026-07-27 — #473 the archive-visibility filter MUST reuse the one pseudo-row projection (cp15-b6 flake root cause) + a loadArchive out-of-order guard
+
+The #473 e2e migration added a **re-PART-while-open** assert to `cp15-b6`
+(`:128`): archive a channel, re-JOIN it, then re-PART it with the grouped
+`ArchiveModal` still open, and assert the just-parted channel reappears in the
+modal. That assert is CORRECT — it exercises the reactive `archive_changed →
+loadArchive → visibleArchiveForNetwork` path with the modal already open (no
+manual re-expand to repair the symptom) — and it exposed TWO latent client-side
+divergences the pre-#473 specs never hit. main's `cp15-b6` is 10/10 in isolation
+precisely because it lacks this assert; the branch ran ~27% until both were
+fixed. Both fixes are client-only; the server was returning correct data
+throughout (trace-proven: `GET /archive` returned `#bofh` with `row_count: 203`
+while `GET /channels` correctly omitted it, yet the modal rendered 0 rows for the
+whole 5 s assert window — a client render/filter bug, not a server one).
+
+**1. `visibleArchiveForNetwork` re-derived "which pseudo-rows exist" by hand —
+the flake root cause (725b796c).** The filter hides an archived entry when the
+same window is already shown live: as a `liveChannels` row (`channelsBySlug`), a
+`liveQueries` row (`queryWindowsByNetwork`), or a **pseudo-row** (a
+pending/invited/failed/kicked/parked window that carries scrollback and so
+qualifies as archived because it isn't in `Session.list_channels`). One window,
+one surface. The pseudo-row set was built by hand-walking raw
+`windowStateByChannel()` — and that hand copy diverged from
+`pseudoChannelsForNetwork` (#71 INC-3), the ONE shared projection that renders
+the sidebar's pseudo-rows: the copy counted `:joined` as a pseudo-row, but
+`:joined` is a LIVE-ROW state (covered by `liveChannels`) that the shared
+projection **deliberately excludes** — its documented ghost-row guard. The
+divergence was invisible until a **cross-topic ordering** hazard surfaced it: on
+a re-PART, the user-topic `channels_changed` (drops the channel from
+`channelsBySlug`) and the per-channel `PART` message (`setParted` drops the
+`windowState` key) have NO ordering guarantee at the WS edge. `channels_changed`
+can land first — so `channelsBySlug` loses `#bofh` while `windowState` still
+carries a stale `:joined`. The hand copy then treated that stale `:joined` as a
+pseudo-row and suppressed the just-archived, genuinely-parted channel from the
+open modal. **Fix:** `visibleArchiveForNetwork` now reuses
+`pseudoChannelsForNetwork(slug, networkId)` and folds its names (rfc1459, #372)
+for its own compare — a single source of truth for "which pseudo-rows exist."
+The `channelKey` + `windowState` imports were dropped from `archive.ts`.
+Regression test (`archive.test.ts`): a stale `:joined` MUST NOT hide an
+archived, parted channel.
+
+**2. `loadArchive` overwrote `archivedBySlug[slug]` unconditionally — the client
+twin of the server race a1e19731 (ba4dc179).** The grouped `ArchiveModal` reacts
+to `archive_changed` while open (userTopic handler → `loadArchive(slug)` →
+`archivedBySlug` → `visibleArchiveForNetwork` recompute), so a PART with the
+modal open should reappear reactively. But two `loadArchive(slug)` calls can be
+in flight at once — a group's `onToggle` fetch overlapping an
+`archive_changed`-driven refetch after a PART — and the unconditional overwrite
+let a STALE response (pre-PART state, no `#bofh`) resolve last and erase the
+fresh one. **Fix:** a per-slug monotonic `loadSeq` claimed BEFORE the `await`;
+the last-STARTED load is authoritative (it reflects the most recent server state
+at fetch time) and any earlier fetch resolving after it is dropped. The
+`archive_changed` refetch (started after the `onToggle` fetch) thus always wins,
+so the re-PARTed window deterministically reappears. This is the client twin of
+the server-side fix a1e19731 (emit `archive_changed` from the PART cast, not the
+controller): both are ordering/staleness guards, NOT a wider tolerance.
+Regression test: a stale response resolving after a fresh one must not clobber
+the fresh set.
+
+**The durable lesson: ONE source of truth for "which pseudo-rows exist."** The
+hand-rolled `windowState` walk was the flake — a parallel derivation of state
+that `pseudoChannelsForNetwork` already computes, which drifted on exactly the
+state (`:joined`) the shared projection had already reasoned about. This is the
+CLAUDE.md "don't duplicate state that already exists — derive it" rule with
+teeth: every parallel structure needs housekeeping that will drift. Any new
+archive-visibility or sidebar-projection consumer MUST reuse
+`pseudoChannelsForNetwork`, never re-walk raw `windowStateByChannel`.
