@@ -21219,24 +21219,35 @@ side: the server hands cic `me.kind` + `me.registered` + per-network
 against the code so the copy can't drift into a promise the server doesn't keep:
 - **unregistered visitor** — 48h sliding inactivity TTL (`Grappa.Visitors
   @anon_ttl_seconds = 48 * 3600`); on expiry the row + scrollback CASCADE away.
-- **registered visitor** — no expiry: `Credentials.visitor_registered?/1`
-  (≥1 credential with a committed NickServ secret) short-circuits
-  `Visitors.touch/1`. DERIVED, not an `expires_at = NULL` flag.
+- **registered visitor** — TWO separate truths, both true today with NO server
+  change: (a) the identity + scrollback never expire —
+  `Credentials.visitor_registered?/1` (≥1 credential with a committed NickServ
+  secret) short-circuits `Visitors.touch/1` (DERIVED, not an `expires_at = NULL`
+  flag); (b) the per-DEVICE auth session STILL slides the SAME **7 days** as a
+  user's — `Accounts.authenticate/1` → `check_idle/1` is subject-blind, so a
+  registered visitor's bearer expires at 7 days exactly like a user's. The first
+  cut of the copy said *"your session stays connected indefinitely — it won't
+  expire while you're away"*, which was a LIE about the device bearer (caught in
+  review 2026-07-28): only the identity/history are ∞, the device login is not.
+  The shipped copy names BOTH truths.
 - **registered user** — the IRC connection is kept up indefinitely, but the
   per-DEVICE auth session slides **7 days** of inactivity (`Grappa.Accounts
   @idle_timeout_seconds = 7 * 24 * 3600`). A flat *"your session never expires"*
   would be FALSE; the copy names the 7-day device-login fact explicitly. This is
-  the load-bearing honesty point of the whole issue.
+  the load-bearing honesty point of the whole issue — the registered-visitor
+  branch shares it (same subject-blind 7-day bearer), NOT just the user branch.
 
 **Registered-visitor naming is guarded.** `me.registered` is identity-wide (true
 iff ANY network holds a registered credential), and `HomeNetworkRow` carries NO
-per-network registered flag. So the ∞ claim keys on `me.registered`, but
+per-network registered flag. So the both-truths line keys on `me.registered`, but
 "registered as `<nick>` on `<network>`" is only rendered when the visitor is on
 **exactly one** network — then that network must be the registered one. Zero or
-several networks → the ∞ claim stays, the per-network naming drops (a second,
+several networks → the line stays, the per-network naming drops (a second,
 anon network would make "registered on it" a lie). This kept #496 cic-only: the
 data cic already has is sufficient for honest copy; no server fork for a
-per-network registered field.
+per-network registered field. (A separate follow-up tracks whether 7 days is the
+right *product* promise for the device login — that's a session-policy decision
+for vjt, deliberately NOT bundled into this display P0.)
 
 **The 🗺 Map (per-network LINKS/topology) button is HIDDEN, not deleted**
 (`SHOW_NETWORK_MAP = false` in `HomePane.tsx`). `/links` is unreliable; the

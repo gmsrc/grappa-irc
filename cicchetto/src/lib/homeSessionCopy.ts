@@ -11,9 +11,15 @@ import type { HomeNetworkRow, MeResponse } from "./api";
 //   * unregistered visitor — 48h sliding inactivity TTL
 //     (`Grappa.Visitors @anon_ttl_seconds = 48 * 3600`); on expiry the row +
 //     its scrollback are CASCADE-deleted.
-//   * registered visitor — no expiry: `Credentials.visitor_registered?/1`
-//     (≥1 credential with a committed NickServ secret) short-circuits
-//     `Visitors.touch/1`. Derived, NOT an `expires_at = NULL` flag.
+//   * registered visitor — TWO separate truths, both true TODAY with NO
+//     server change: (a) the identity + scrollback never expire —
+//     `Credentials.visitor_registered?/1` (≥1 credential with a committed
+//     NickServ secret) short-circuits `Visitors.touch/1` (derived, NOT an
+//     `expires_at = NULL` flag); (b) the per-DEVICE auth session STILL slides
+//     the SAME 7-day idle window as a user's (`Accounts.authenticate/1` →
+//     `check_idle/1` is subject-blind). So the copy MUST name the 7-day device
+//     re-login just like the registered-user branch — a flat "won't expire
+//     while you're away" was a LIE about the device bearer.
 //   * registered user — the IRC connection is kept up indefinitely, but the
 //     per-DEVICE auth session slides 7 days of inactivity
 //     (`Grappa.Accounts @idle_timeout_seconds = 7 * 24 * 3600`). A flat
@@ -78,8 +84,9 @@ export function homeSessionLifetime(
     return {
       testid: "home-session-visitor-registered",
       text:
-        `You're registered${naming}, so your session stays connected indefinitely — ` +
-        "it won't expire while you're away.",
+        `You're registered${naming}, so your chat stays connected and your ` +
+        "history is kept for good. This device stays signed in for 7 days of " +
+        "inactivity; after that you'll sign back in, but nothing is lost.",
     };
   }
 

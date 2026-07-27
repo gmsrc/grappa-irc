@@ -3,13 +3,16 @@ import type { HomeNetworkRow, MeResponse } from "./api";
 import { HOME_ALWAYS_ON_COPY, homeSessionLifetime } from "./homeSessionCopy";
 
 // #496 — the home pane's per-subject session-lifetime copy is a PURE fn so
-// the three audience truths (unregistered visitor 48h / registered visitor ∞
-// / registered user ∞ + 7-day device login) are unit-testable without a real
-// DOM, and stay honest to the server:
+// the three audience truths (unregistered visitor 48h / registered visitor
+// ∞ identity + 7-day device login / registered user ∞ IRC + 7-day device
+// login) are unit-testable without a real DOM, and stay honest to the server:
 //   * unregistered visitor — `@anon_ttl_seconds` = 48h sliding TTL
 //     (Grappa.Visitors).
-//   * registered visitor — no expiry: `Credentials.visitor_registered?/1`
-//     short-circuits `Visitors.touch/1` (NOT an `expires_at = NULL` flag).
+//   * registered visitor — the identity + scrollback never expire
+//     (`Credentials.visitor_registered?/1` short-circuits `Visitors.touch/1`,
+//     NOT an `expires_at = NULL` flag), but the DEVICE auth session STILL
+//     slides the SAME 7 days as a user's (`Accounts.check_idle/1` is
+//     subject-blind) — so the copy names the 7-day device login too.
 //   * registered user — the IRC connection is ∞, but the DEVICE auth session
 //     slides 7 days (`Grappa.Accounts @idle_timeout_seconds = 7 * 24 * 3600`).
 // The rendered proof (per real subject) lives in the Playwright e2e
@@ -67,28 +70,39 @@ describe("homeSessionLifetime — registered user (∞ IRC + 7-day device login)
   });
 });
 
-describe("homeSessionLifetime — registered visitor (∞)", () => {
-  it("names nick + network when the visitor is on exactly one network", () => {
+describe("homeSessionLifetime — registered visitor (∞ identity + 7-day device login)", () => {
+  it("states BOTH truths + names nick + network on exactly one network", () => {
     const copy = homeSessionLifetime(visitorMe({ registered: true }), [row("azzurra", "alice")]);
     expect(copy.testid).toBe("home-session-visitor-registered");
-    expect(copy.text).toMatch(/indefinitely/i);
+    // Two truths, both true TODAY (no server change): the chat stays connected
+    // AND the per-DEVICE login slides 7 days (`Accounts.check_idle` is
+    // subject-blind, so a registered visitor's bearer expires at 7 days just
+    // like a user's).
+    expect(copy.text).toMatch(/connected/i);
+    expect(copy.text).toMatch(/7 days/i);
+    // Honest: NOT a flat "indefinitely"/"won't expire while away" — the device
+    // bearer DOES expire while away, only the identity + history are forever.
+    expect(copy.text).not.toMatch(/indefinitely|won't expire while/i);
     expect(copy.text).toContain("alice");
     expect(copy.text).toContain("azzurra");
   });
 
-  it("stays general (still ∞) with zero networks", () => {
+  it("still states both truths with zero networks (no per-network naming)", () => {
     const copy = homeSessionLifetime(visitorMe({ registered: true }), []);
     expect(copy.testid).toBe("home-session-visitor-registered");
-    expect(copy.text).toMatch(/indefinitely/i);
+    expect(copy.text).toMatch(/connected/i);
+    expect(copy.text).toMatch(/7 days/i);
   });
 
-  it("stays general (still ∞) with multiple networks — no false per-network claim", () => {
+  it("stays general with multiple networks — no false per-network claim", () => {
     const copy = homeSessionLifetime(visitorMe({ registered: true }), [
       row("azzurra", "alice"),
       row("libera", "bob"),
     ]);
     expect(copy.testid).toBe("home-session-visitor-registered");
-    expect(copy.text).toMatch(/indefinitely/i);
+    expect(copy.text).toMatch(/7 days/i);
+    expect(copy.text).not.toContain("azzurra");
+    expect(copy.text).not.toContain("libera");
   });
 });
 

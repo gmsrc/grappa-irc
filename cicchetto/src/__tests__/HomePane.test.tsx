@@ -333,13 +333,14 @@ describe("HomePane", () => {
       expect(guest).toHaveTextContent(/48 hours/i);
     });
 
-    it("renders the registered (∞) session line naming nick+network for a registered visitor (#496)", () => {
+    it("renders the registered session line (7-day device login) naming nick+network for a registered visitor (#496)", () => {
       userMock.mockReturnValue({ kind: "visitor", id: "v1", registered: true });
       homeDataMock.mockReturnValue(visitorHome([]));
       render(() => <HomePane />);
 
       const reg = screen.getByTestId("home-session-visitor-registered");
-      expect(reg).toHaveTextContent(/indefinitely/i);
+      // Honest both-truths line: identity ∞ but the DEVICE login slides 7 days.
+      expect(reg).toHaveTextContent(/7 days/i);
       // Exactly one network (azzurra/guest) → named honestly.
       expect(reg).toHaveTextContent(/azzurra/);
     });

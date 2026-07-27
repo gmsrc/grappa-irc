@@ -97,7 +97,9 @@ const SUBJECTS: SubjectCase[] = [
   {
     label: "registered visitor",
     sessionTestid: "home-session-visitor-registered",
-    factRe: /indefinitely/i,
+    // Honest both-truths copy: identity/history kept for good, but the DEVICE
+    // login still slides 7 days (Accounts.check_idle is subject-blind).
+    factRe: /kept for good/i,
     async arrive(page) {
       const admin = getSeededAdmin();
       const visitor = await mintVisitor(`i496r-${Date.now()}`);
