@@ -25,24 +25,45 @@ import { nickEquals, rfc1459Fold } from "./nickEquals";
 // leaves `[ ] \ ~` unfolded — harmless ONLY because at the current
 // palette size the fold happens to be invisible: see below. It is a
 // separate fold policy from the identity layer and was consolidated.)
-// Bucket count is `NICK_PALETTE_SIZE` (16) — xchat uses 16, weechat
-// 10, irssi 12; 16 was picked here to interpolate enough hues for
-// dense channels without overflowing the readability budget.
+// Bucket count is `NICK_PALETTE_SIZE` (32) — but the theme AUTHORS only
+// 16 hues. #444: a busy channel shows more than 16 nicks at once, so at
+// 16 buckets same-color collisions are a pigeonhole CERTAINTY (measured:
+// ~13.75 distinct colors at a 30-nick roster). The palette is the
+// ceiling, not the hash — no stateless per-nick function can beat 16
+// colors with 16 buckets. Doubling to 32 halves the collision rate.
 //
-// Subtlety worth pinning: at `NICK_PALETTE_SIZE = 16` the fold choice is
-// output-invisible — djb2 mod 16 collapses to `(5381 + Σ charcodes) mod
-// 16` (33 ≡ 1 mod 16), and every rfc1459 shift (`A-Z`, `[ ] \ ~`) is
-// ±32 ≡ 0 mod 16, so a bare downcase and the real fold produce the same
-// index. Folding here is future-proofing: change the palette to 10/12
-// (weechat/irssi) and the unfolded form WOULD fork `Foo[1]` from
-// `foo{1}`. The regression test pins the identity-invariant directly.
+// The 16 hand-picked xchat-style hues (`nick_0..15`) ARE the project
+// aesthetic and the closed server theme-token vocabulary
+// (`Grappa.Themes.TokenModel`, the theme editor, every saved DB theme).
+// Widening THAT would be a server contract change + a data migration
+// (COLD). Instead cic DERIVES buckets 16..31 from the theme's own 16 — a
+// tone shift toward `--fg` expressed in CSS `color-mix` (see
+// `themes/default.css`) — so the render palette is 32 while the server
+// stays at 16 tokens: cic-only, no migration, zero server change.
 //
-// The actual hue colors live in `cicchetto/src/themes/default.css`
-// as `--nick-color-0` through `--nick-color-15` under each
-// `:root[data-theme="..."]` block. Theme-aware by construction: the
-// helper produces a `var(--nick-color-N)` string; the theme owns the
-// hue. Switching themes re-renders the same nicks in a new palette
-// without touching this module.
+// Undefined-var safety (the thing that would break on a legacy theme):
+// `NickText` renders `color: var(--nick-color-N)` with NO fallback, so a
+// bucket with no `--nick-color-N` declaration is invalid-at-computed-
+// value-time and the nick silently inherits `--fg` (uncolored). The
+// derived 16..31 are therefore declared in the STYLESHEET (NOT set from
+// the JS token→var map, which only writes the payload's 16 keys) as
+// `color-mix(... var(--nick-color-k) ...)`. A custom theme overrides
+// `--nick-color-0..15` INLINE; the derived rule references them via
+// `var()`, so it recomputes against the active theme's colors — even a
+// legacy 16-key custom theme gets correct 16..31, never an undefined var.
+//
+// Hash honesty at 32: djb2 mod 32 keeps the SAME documented degeneracies
+// as mod 16 — 33 ≡ 1 (mod 32) so letter ORDER is invisible (anagrams
+// share a bucket), and every rfc1459 shift (`A-Z`, `[ ] \ ~`) is ±32 ≡ 0
+// (mod 32) so the fold is output-invisible here too. Per #444 the hash is
+// NOT the problem (its distribution was measured fine) and must not eat a
+// commit; the win is the doubled COLOR count via derivation. Folding is
+// still correct-by-construction (`Foo[1]`/`foo{1}` fold to one string →
+// one index at ANY N; the #412 regression test pins it).
+//
+// Theme-aware by construction: the helper produces a `var(--nick-color-N)`
+// string; the theme (or the derived rule) owns the hue. Switching themes
+// re-renders the same nicks in a new palette without touching this module.
 //
 // ## Scrollback sender prefix
 //
@@ -61,7 +82,7 @@ import { nickEquals, rfc1459Fold } from "./nickEquals";
 // padding-space (`memberSigil` returns " ") only makes sense in a
 // column layout where prefix-aligned glyphs share width.
 
-export const NICK_PALETTE_SIZE = 16;
+export const NICK_PALETTE_SIZE = 32;
 
 // djb2 hash, classic 5381 seed + 33 multiplier. Folded modulo
 // NICK_PALETTE_SIZE at the boundary; intermediate keeps full 32-bit
@@ -73,8 +94,8 @@ export const nickColorIndex = (nick: string): number => {
     hash = (Math.imul(hash, 33) + folded.charCodeAt(i)) | 0;
   }
   // `>>> 0` coerces to unsigned 32-bit so the modulo is always
-  // non-negative — `-1 % 16` is `-1` in JS, which would slot us
-  // outside the palette.
+  // non-negative — `-1 % NICK_PALETTE_SIZE` is `-1` in JS, which would
+  // slot us outside the palette.
   return (hash >>> 0) % NICK_PALETTE_SIZE;
 };
 

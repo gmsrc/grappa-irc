@@ -283,6 +283,52 @@
   --nick-color-15: #806020; /* bronze */
 }
 
+/*
+ * #444 — nick-color palette buckets 16..31, DERIVED (not authored).
+ *
+ * A busy channel shows more than 16 nicks at once, so at 16 buckets
+ * same-color collisions are a pigeonhole certainty. The palette is the
+ * ceiling, not the hash (see `lib/nickColor.ts`), so `NICK_PALETTE_SIZE`
+ * is 32. The theme still AUTHORS only 16 hues (`--nick-color-0..15`, the
+ * hand-picked xchat-style set above + every user theme + the server token
+ * model); widening THAT would be a server contract change + a data
+ * migration. Instead these 16 buckets are derived here in CSS from the
+ * theme's own 16 — a tone shift toward `--fg`.
+ *
+ * Why toward `--fg`, not white/black: `--fg` is legible on the theme's
+ * `--bg` by definition, so mixing toward it is polarity-safe on BOTH
+ * themes at once. On mirc-light (`--fg` black) the derived band goes
+ * DARKER — it can never whiten into illegibility on white; on irssi-dark
+ * (`--fg` light) it goes lighter — legible on black. One rule, both themes.
+ *
+ * Plain `:root` (not per-theme): the values reference `var(--nick-color-k)`,
+ * so they recompute against whatever `--nick-color-0..15` is in effect —
+ * the base `[data-theme]` block OR a custom theme's INLINE overrides
+ * (`customTheme.ts` writes only the payload's 16 keys inline; these 16
+ * stay stylesheet-declared). So even a legacy 16-key user theme resolves
+ * 16..31 correctly — never an undefined var, which would drop the nick to
+ * the inherited `--fg` (uncolored). Requires CSS `color-mix()` (Safari
+ * 16.2+, evergreen elsewhere).
+ */
+:root {
+  --nick-color-16: color-mix(in oklab, var(--nick-color-0), var(--fg) 38%);
+  --nick-color-17: color-mix(in oklab, var(--nick-color-1), var(--fg) 38%);
+  --nick-color-18: color-mix(in oklab, var(--nick-color-2), var(--fg) 38%);
+  --nick-color-19: color-mix(in oklab, var(--nick-color-3), var(--fg) 38%);
+  --nick-color-20: color-mix(in oklab, var(--nick-color-4), var(--fg) 38%);
+  --nick-color-21: color-mix(in oklab, var(--nick-color-5), var(--fg) 38%);
+  --nick-color-22: color-mix(in oklab, var(--nick-color-6), var(--fg) 38%);
+  --nick-color-23: color-mix(in oklab, var(--nick-color-7), var(--fg) 38%);
+  --nick-color-24: color-mix(in oklab, var(--nick-color-8), var(--fg) 38%);
+  --nick-color-25: color-mix(in oklab, var(--nick-color-9), var(--fg) 38%);
+  --nick-color-26: color-mix(in oklab, var(--nick-color-10), var(--fg) 38%);
+  --nick-color-27: color-mix(in oklab, var(--nick-color-11), var(--fg) 38%);
+  --nick-color-28: color-mix(in oklab, var(--nick-color-12), var(--fg) 38%);
+  --nick-color-29: color-mix(in oklab, var(--nick-color-13), var(--fg) 38%);
+  --nick-color-30: color-mix(in oklab, var(--nick-color-14), var(--fg) 38%);
+  --nick-color-31: color-mix(in oklab, var(--nick-color-15), var(--fg) 38%);
+}
+
 * {
   box-sizing: border-box;
 }

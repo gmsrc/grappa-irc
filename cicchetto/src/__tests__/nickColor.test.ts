@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ChannelMembers } from "../lib/memberTypes";
 import {
@@ -18,10 +19,17 @@ import {
 //   * case-insensitive (RFC 2812 §2.2; cic-side `nickEquals` rule)
 //   * in-bounds (0 ≤ index < NICK_PALETTE_SIZE)
 //
-// The CSS palette `--nick-color-0..15` lives in `themes/default.css`
-// and is theme-aware via the `:root[data-theme="..."]` selector. This
-// module is theme-AGNOSTIC — it produces a `var(--nick-color-N)`
-// string; theme blocks own the actual colors.
+// The CSS palette `--nick-color-0..{NICK_PALETTE_SIZE-1}` lives in
+// `themes/default.css` and is theme-aware via the `:root[data-theme="..."]`
+// selector. This module is theme-AGNOSTIC — it produces a
+// `var(--nick-color-N)` string; theme blocks own the actual colors.
+//
+// #444 — the palette is 32 buckets, of which the theme AUTHORS only 16
+// (`nick_0..15`, the hand-picked xchat-style hues, unchanged server-side);
+// cic DERIVES buckets 16..31 in CSS from those 16 (a tone shift), so the
+// render palette doubles with zero server / theme-token / migration change.
+// See the `widened palette (#444)` block below for the two invariants that
+// keep the derivation safe.
 
 describe("nickColorIndex", () => {
   it("returns the same index for the same nick across calls", () => {
@@ -84,9 +92,9 @@ describe("nickColorIndex", () => {
       "trent",
     ];
     const indices = new Set(nicks.map(nickColorIndex));
-    // 20 nicks across a 16-palette: pigeonhole forces some collisions,
-    // but a working hash should still bucket into at least 6 distinct
-    // indices. A pathologically bad hash (e.g. all → 0) would fail.
+    // 20 nicks across the 32-bucket palette: a working hash should still
+    // reach at least 6 distinct indices (loose sanity, NOT a uniformity or
+    // no-collision claim). A pathologically bad hash (e.g. all → 0) fails.
     expect(indices.size).toBeGreaterThanOrEqual(6);
   });
 
@@ -94,6 +102,43 @@ describe("nickColorIndex", () => {
     const idx = nickColorIndex("");
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(idx).toBeLessThan(NICK_PALETTE_SIZE);
+  });
+});
+
+// #444 — a busy channel shows more than 16 nicks at once, so at 16 buckets
+// same-colour collisions are a pigeonhole CERTAINTY (measured in the issue:
+// ~13.75 distinct colours at a 30-nick roster). The palette is the ceiling,
+// not the hash. cic doubles it to 32 by DERIVING buckets 16..31 from the
+// theme's own 16 hand-picked hues (a tone shift toward `--fg`, in CSS
+// `color-mix`), so the server theme vocabulary stays at 16 tokens (zero
+// server change, no migration) while the RENDER palette is 32. These tests
+// pin the two invariants that keep that safe.
+describe("widened palette (#444) — 32 render buckets, 16 CSS-derived", () => {
+  // vitest runs with cwd = the cicchetto/ root, so the theme file is a
+  // stable cwd-relative path (import.meta.url is mangled by the jsdom transform).
+  const css = readFileSync("src/themes/default.css", "utf8");
+
+  it("declares a CSS colour for EVERY bucket the hash can return (no undefined var)", () => {
+    // The undefined-var trap `NickText` would hit: it renders
+    // `color: var(--nick-color-N)` with NO fallback, so a bucket with no
+    // `--nick-color-N` declaration is invalid-at-computed-value-time and the
+    // nick silently inherits `--fg` (uncoloured). EVERY index in
+    // [0, NICK_PALETTE_SIZE) must have a declaration — asserted against the
+    // constant so a future resize can't outrun the CSS unnoticed.
+    const missing: number[] = [];
+    for (let i = 0; i < NICK_PALETTE_SIZE; i++) {
+      if (!css.includes(`--nick-color-${i}:`)) missing.push(i);
+    }
+    expect(missing, "buckets with no --nick-color-N declaration in themes/default.css").toEqual([]);
+  });
+
+  it("reaches buckets beyond the legacy ceiling over a realistic roster", () => {
+    // Proves the hash actually exercises the widened range — guards a forgotten
+    // constant bump or a mapping that can't reach the upper band. Deterministic
+    // (fixed corpus + pure hash), so it never flakes.
+    const roster = Array.from({ length: 400 }, (_, i) => `nick_${i}_azzurra`);
+    const maxIndex = Math.max(...roster.map(nickColorIndex));
+    expect(maxIndex).toBeGreaterThanOrEqual(NICK_PALETTE_SIZE / 2);
   });
 });
 
