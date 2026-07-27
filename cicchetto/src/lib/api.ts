@@ -347,8 +347,8 @@ export type MeResponse =
 // GET /networks rows), so the visitor branch returns the generic "Visitor"
 // label. For any per-network "what is my nick here" use
 // `ownNickForNetwork(net, me)`; for a visitor display label that needs a
-// concrete nick (delete-confirmation), resolve the anchor row's nick at the
-// call site via `visitorAnchorNick(networks)`.
+// concrete nick (delete-confirmation), resolve the SELECTED network row's
+// nick via `visitorNetworkNick(net)`.
 //
 // **WARNING** — for "what is my IRC nick on THIS network", use
 // `ownNickForNetwork(net, me)` instead. `displayNick(me)` returns
@@ -365,16 +365,15 @@ export function displayNick(me: MeResponse): string {
   return me.kind === "user" ? me.name : "Visitor";
 }
 
-// #211 phase 7 — a visitor's representative display nick: the anchor
-// (lowest-id) network row's nick, or null when the visitor holds no
-// networks. Used where a concrete visitor label is needed (the
-// SettingsDrawer delete-confirmation text) now that the subject carries no
-// identity-wide nick.
-export function visitorAnchorNick(networks: Network[]): string | null {
-  const anchor = networks
-    .filter((n) => n.kind === "visitor")
-    .reduce<Network | null>((lo, n) => (lo == null || n.id < lo.id ? n : lo), null);
-  return anchor?.nick ?? null;
+// #478 — a visitor's confirmation nick for a SPECIFIC network row. The
+// retired lowest-id "anchor" pick is gone: the caller passes the network the
+// UI targets (the focused/selected row) and this returns its nick, narrowed to
+// visitor rows (a user row → null; users confirm by account name via
+// `displayNick`). Used by the SettingsDrawer delete-confirmation gate now that
+// a visitor subject carries no identity-wide nick. `null` in → `null` out (the
+// button is withheld until /networks resolves).
+export function visitorNetworkNick(net: Network | null): string | null {
+  return net != null && net.kind === "visitor" ? net.nick : null;
 }
 
 // Per-network own IRC nick — the canonical answer to "which nick am I

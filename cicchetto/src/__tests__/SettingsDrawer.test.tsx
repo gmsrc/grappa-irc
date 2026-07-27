@@ -58,17 +58,14 @@ vi.mock("../lib/api", () => ({
   // The drawer imports ApiError for the identity-save catch (instanceof
   // narrowing). A minimal class stand-in keeps the import resolvable.
   ApiError: class ApiError extends Error {},
-  // #157 — the drawer derives the delete-account confirm text from
-  // displayNick(me) (user) / visitorAnchorNick(networks) (visitor).
+  // #157 / #478 — the drawer derives the delete-account confirm text from
+  // displayNick(me) (user) / visitorNetworkNick(selectedNetwork) (visitor).
+  // #478 retired the lowest-id "anchor" pick: the visitor's confirm nick is
+  // now the SELECTED network row's nick (kind==="visitor" narrow retained).
   displayNick: (me: { kind: "user"; name: string } | { kind: "visitor" }) =>
     me.kind === "user" ? me.name : "Visitor",
-  visitorAnchorNick: (nets: Array<{ kind: string; id: number; nick: string }>) =>
-    nets
-      .filter((n) => n.kind === "visitor")
-      .reduce<{ id: number; nick: string } | null>(
-        (lo, n) => (lo == null || n.id < lo.id ? n : lo),
-        null,
-      )?.nick ?? null,
+  visitorNetworkNick: (net: { kind: string; nick: string } | null) =>
+    net?.kind === "visitor" ? net.nick : null,
 }));
 
 // Issue #43 — "quit IRC" composite (park all user-networks + logout)
@@ -1354,5 +1351,28 @@ describe("SettingsDrawer (#476/#478 — per-network identity, both subjects)", (
     // The general row still opens (upload retention is host-gated, present).
     openSub("general-settings-entry");
     expect(screen.queryByTestId("settings-section-identity")).toBeNull();
+  });
+
+  it("#478 — visitor delete-confirm uses the SELECTED network's nick, not the lowest-id anchor", () => {
+    meHolder.current = {
+      kind: "visitor",
+      id: "v1",
+      nick: "ignored",
+      expires_at: "2099-01-01T00:00:00Z",
+      registered: true,
+    };
+    subjectHolder.current = { kind: "visitor", id: "v1", nick: "ignored", registered: true };
+    // Lowest-id would pick id=1 (nick-a). Focus id=2 (azzurra2 → nick-b): the
+    // confirm text must follow the SELECTION, proving the anchor pick is dead.
+    networksHolder.current = [
+      netRow("visitor", 1, "azzurra", "nick-a"),
+      netRow("visitor", 2, "azzurra2", "nick-b"),
+    ];
+    selectedChannelHolder.current = { networkSlug: "azzurra2", channelName: "#x", kind: "channel" };
+    wrap(true);
+    fireEvent.click(screen.getByTestId("delete-account-btn"));
+    const stub = screen.getByTestId("delete-account-modal-stub");
+    expect(stub).toHaveTextContent("nick-b");
+    expect(stub).not.toHaveTextContent("nick-a");
   });
 });

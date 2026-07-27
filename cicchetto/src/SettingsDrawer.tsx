@@ -12,7 +12,7 @@ import {
 import AliasSettings from "./AliasSettings";
 import DeleteAccountModal from "./DeleteAccountModal";
 import InlineConfirmButton from "./InlineConfirmButton";
-import { ApiError, displayNick, type Network, visitorAnchorNick } from "./lib/api";
+import { ApiError, displayNick, type Network, visitorNetworkNick } from "./lib/api";
 import { getSubject, token } from "./lib/auth";
 import { getColoredNicklist, setColoredNicklist } from "./lib/colorNicklist";
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
@@ -165,16 +165,17 @@ const SettingsDrawer: Component<Props> = (props) => {
     if (u.kind === "user") return u.is_admin === false;
     return u.registered === true;
   };
-  // The exact string the operator must type to arm deletion — account
-  // name (user) or the visitor's anchor-network nick (visitor). #211
-  // phase 7 — a visitor has no identity-wide nick, so use the anchor
-  // (lowest-id) network row's nick. Empty when /me or /networks hasn't
-  // loaded (the button is withheld in that state anyway).
+  // The exact string the operator must type to arm deletion — account name
+  // (user) or, for a visitor (no identity-wide nick), the SELECTED network
+  // row's nick. #478 — the retired lowest-id "anchor" pick is gone: the
+  // confirm nick follows the network the editor targets (focused-network
+  // default), keeping the kind==="visitor" narrow via `visitorNetworkNick`.
+  // Empty when /me or /networks hasn't loaded (the button is withheld then).
   const deleteConfirmationText = (): string => {
     const u = user();
     if (!u) return "";
     if (u.kind === "user") return displayNick(u);
-    return visitorAnchorNick(networks() ?? []) ?? "";
+    return visitorNetworkNick(selectedIdentityNetwork()) ?? "";
   };
   // Comma-separated UI shadows for the two whitelist text inputs — the
   // server stores normalized lists; cic edits are joined with ", " and
