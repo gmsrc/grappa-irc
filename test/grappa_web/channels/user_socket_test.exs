@@ -34,7 +34,7 @@ defmodule GrappaWeb.UserSocketTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, PubSub.Topic}
+  alias Grappa.{Accounts, Protocol, PubSub.Topic}
   alias GrappaWeb.UserSocket
 
   # #95 + #202 — the ONLY token source: the bearer arrives via
@@ -49,6 +49,19 @@ defmodule GrappaWeb.UserSocketTest do
   # rejected regardless of whether the query-string token is valid.
   defp connect_with_query_string(token) do
     Phoenix.ChannelTest.connect(UserSocket, %{"token" => token}, connect_info: %{})
+  end
+
+  # #447 — a connect declaring a wire protocol version via the
+  # `client_proto` query param (values arrive as strings, like real query
+  # params), with a valid bearer via the subprotocol.
+  defp connect_with_proto(client_proto, token) do
+    Phoenix.ChannelTest.connect(UserSocket, %{"client_proto" => client_proto}, connect_info: %{auth_token: token})
+  end
+
+  # #447 — same, but with NO token: proves the version gate runs BEFORE
+  # auth (a below-floor client is refused even with no/invalid credential).
+  defp connect_with_proto_no_token(client_proto) do
+    Phoenix.ChannelTest.connect(UserSocket, %{"client_proto" => client_proto}, connect_info: %{})
   end
 
   describe "connect/3" do
@@ -92,6 +105,90 @@ defmodule GrappaWeb.UserSocketTest do
       {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
 
       assert :error = connect_with_query_string(session.id)
+    end
+  end
+
+  # #447 — protocol-version handshake gate. A client declares the wire
+  # protocol it speaks via the `client_proto` query param; a client below
+  # `Grappa.Protocol.min_version/0` is refused with
+  # `{:error, :upgrade_required}` (→ the endpoint's error_handler emits a
+  # 426; the HTTP status itself is proven end-to-end in the issue447 e2e
+  # spec — `ChannelTest.connect/3` returns the raw `connect/3` value, not
+  # the transport's HTTP mapping). Absent/unparseable → current, the
+  # zero-behavior-change guarantee for cicchetto + shottino.
+  describe "connect/3 protocol-version gate (#447)" do
+    test "absent client_proto connects as before — zero-behavior-change guarantee" do
+      # THE contract for existing clients (cicchetto/shottino send no
+      # version): a connect with no client_proto param behaves exactly like
+      # the pre-#447 connect. Not a comment — a test.
+      user_name = "vjt-#{System.unique_integer([:positive])}"
+      {_, session} = user_and_session(name: user_name)
+
+      assert {:ok, socket} = connect_via_subprotocol(session.id)
+      assert socket.assigns.user_name == user_name
+    end
+
+    test "client_proto at the floor (min_version) connects" do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      assert {:ok, _} =
+               connect_with_proto(Integer.to_string(Protocol.min_version()), session.id)
+    end
+
+    test "client_proto ABOVE the server version still connects — no upper bound (additive-only)" do
+      # A newer client tolerates an older server (unknown-is-never-fatal),
+      # so the gate has no upper bound — only a floor.
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      assert {:ok, _} =
+               connect_with_proto(Integer.to_string(Protocol.version() + 100), session.id)
+    end
+
+    test "client_proto BELOW the floor is refused with {:error, :upgrade_required} (→ 426)" do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+      below = Integer.to_string(Protocol.min_version() - 1)
+
+      assert {:error, :upgrade_required} = connect_with_proto(below, session.id)
+    end
+
+    test "a parseable NEGATIVE client_proto is below the floor → refused (not 'current')" do
+      # A negative parses cleanly (`Integer.parse("-1") → {-1, ""}`), so it
+      # is a below-floor value, NOT the unparseable-means-current path — it
+      # 426s. Pins the narrative boundary flagged in review.
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      assert {:error, :upgrade_required} = connect_with_proto("-1", session.id)
+    end
+
+    test "the version gate runs BEFORE auth — below-floor is refused even with no token" do
+      # A too-old client gets :upgrade_required (426), NOT the :error (403)
+      # of an auth failure: it can't speak the protocol regardless of
+      # credentials, and the distinct status is the whole point of #447.
+      below = Integer.to_string(Protocol.min_version() - 1)
+
+      assert {:error, :upgrade_required} = connect_with_proto_no_token(below)
+    end
+
+    test "unparseable client_proto is treated as current (unknown-is-never-fatal)" do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      assert {:ok, _} = connect_with_proto("garbage", session.id)
+    end
+  end
+
+  # #447 — the custom error_handler wired into the endpoint's `websocket:`
+  # opts. Unit-proves the 426 BODY shape (status + JSON naming the floor);
+  # the end-to-end HTTP status over a real handshake is the issue447 e2e.
+  describe "handle_ws_error/2 (#447)" do
+    test ":upgrade_required → 426 with a snake_case body naming the floor" do
+      conn =
+        UserSocket.handle_ws_error(Plug.Test.conn(:get, "/socket/websocket"), :upgrade_required)
+
+      assert conn.status == 426
+      body = Jason.decode!(conn.resp_body)
+      assert body["error"] == "upgrade_required"
+      assert body["protocol_version"] == Protocol.version()
+      assert body["min_protocol_version"] == Protocol.min_version()
     end
   end
 

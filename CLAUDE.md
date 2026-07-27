@@ -139,6 +139,29 @@ Key invariants — break only with deliberate cause + DESIGN_NOTES entry:
 - **`CAP LS` + SASL is the only required upstream IRCv3 feature.**
   Everything else (`server-time`, `batch`, `labeled-response`, etc.) is
   opportunistic. Never assume upstream-side `CHATHISTORY` exists.
+- **The client-facing wire contract is versioned + additive-only (GH
+  #447).** `Grappa.Protocol` is the SSOT for the wire `protocol_version`
+  + `min_protocol_version` (DISTINCT from `Grappa.Version`, the software
+  release string — a client keys compatibility off `protocol_version`,
+  never the release string). **Additive-only:** new frame kinds, event
+  types, and fields may appear at ANY time WITHOUT a version bump; a
+  client MUST ignore verbs/fields it does not recognise
+  (unknown-is-never-fatal, BOTH directions — an unknown client verb
+  earns a non-fatal error frame and the socket stays open); existing
+  fields are NEVER repurposed or removed. Bump `protocol_version` ONLY
+  for a change the additive rule cannot express, and raise
+  `min_protocol_version` too when old clients can no longer be served —
+  the WS handshake then 426s a `?client_proto=` below the floor via the
+  endpoint `error_handler` (`UserSocket.handle_ws_error/2`); a below-min
+  return is `{:error, :upgrade_required}` (426), an auth failure is bare
+  `:error` (403), and the two MUST stay distinct. **Absent
+  `client_proto` = current** (existing clients untouched). Unauth `GET
+  /api/config` + the user-topic join reply publish the numbers. The
+  whole wire is **snake_case** without exception (verified vs
+  `cicchetto/src/lib/wireTypes.ts`) — a NEW field MUST be snake_case,
+  never camelCase, even when a spec says otherwise. Client-author
+  contract: `docs/CLIENT_PROTOCOL.md`; decisions + the deliberate
+  casing divergence from #447's text: DESIGN_NOTES 2026-07-27.
 - **Phoenix Channels is the streaming surface, not SSE.** Topics are
   user-rooted (per Phase 2 sub-task 2h, for cross-user authz at the
   routing layer):

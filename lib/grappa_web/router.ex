@@ -219,6 +219,20 @@ defmodule GrappaWeb.Router do
     get "/vapid-public-key", PushVapidController, :show
   end
 
+  # #447 — unauthenticated protocol + identity discovery. A third-party
+  # client hits this FIRST to learn protocol_version / min_protocol_version
+  # / server identity before authenticating or opening a WS, so it can
+  # fail cleanly instead of misparsing frames. No :authn (pre-auth by
+  # design; the payload carries no secrets). Rides the existing `api` alt
+  # in the nginx REST allowlist (`infra/snippets/locations-api.conf`) —
+  # same second-segment match as /api/uploads, so no proxy change was
+  # needed (verified against the snippet, not assumed).
+  scope "/api", GrappaWeb do
+    pipe_through :api
+
+    get "/config", ConfigController, :show
+  end
+
   scope "/", GrappaWeb do
     pipe_through [:api, :authn]
 

@@ -27,7 +27,25 @@ defmodule GrappaWeb.UserSocket do
   a one-deploy-cycle fallback so a stale bundle mid-cold-deploy still
   connected; #202 dropped it once prod telemetry showed sustained zero
   query-string auth. A bearer supplied via the query string is now
-  ignored entirely — `connect/3`'s `params` argument is unused.
+  ignored entirely — the token's ONLY source is the subprotocol.
+
+  ## Protocol-version handshake (#447)
+
+  `connect/3` runs a pre-auth protocol-version gate BEFORE auth. A client
+  MAY declare the wire protocol version it speaks via the `client_proto`
+  QUERY PARAM (`connect/3`'s `params` — no longer unused). Query param, not
+  subprotocol, because the version is PUBLIC discovery data (also at
+  `GET /api/config`), not a credential: the #95/#202 off-the-URL rule
+  applies only to the secret bearer, which keeps riding the subprotocol
+  exclusively — so the two channels stay orthogonal and never collide
+  (DESIGN_NOTES 2026-07-27).
+
+  A client declaring below `Grappa.Protocol.min_version/0` is refused with
+  `{:error, :upgrade_required}`, which the endpoint's custom `error_handler`
+  (`handle_ws_error/2`) turns into a clean `426 Upgrade Required` — NOT an
+  accepted socket fed frames it will mangle, and NOT the opaque 403 an auth
+  failure gets. Absent or unparseable → treated as current, so existing
+  clients keep working untouched.
 
   Every authenticated connect emits a `[:grappa, :ws, :connect]`
   telemetry counter (`%{count: 1}`, empty metadata) + a greppable Logger
@@ -80,14 +98,84 @@ defmodule GrappaWeb.UserSocket do
   channel "grappa:admin:events", GrappaWeb.AdminChannel
 
   @impl Phoenix.Socket
-  def connect(_, socket, connect_info) do
-    case extract_token(connect_info) do
-      {:ok, token} ->
-        authenticate_and_assign(token, socket)
-
-      :error ->
-        :error
+  def connect(params, socket, connect_info) do
+    # #447 — the protocol-version gate runs BEFORE auth: a client that
+    # cannot speak the wire protocol is refused regardless of whether its
+    # token is valid (a too-old client would only mangle the frames a
+    # successful auth unlocks). A below-floor client returns
+    # `{:error, :upgrade_required}` → the endpoint's custom `error_handler`
+    # (`handle_ws_error/2`) sends a clean 426; a bare `:error` (missing /
+    # bad token, or an absent-but-fine version) still gets the transport's
+    # own 403. The two failures stay distinct on the wire (426 vs 403).
+    with :ok <- check_protocol_version(params),
+         {:ok, token} <- extract_token(connect_info),
+         {:ok, socket} <- authenticate_and_assign(token, socket) do
+      {:ok, socket}
     end
+  end
+
+  # #447 — pre-auth protocol-version gate. A client MAY declare the wire
+  # protocol version it speaks via the `client_proto` QUERY PARAM on the WS
+  # upgrade URL. Query param (not subprotocol) is deliberate: the version
+  # is PUBLIC discovery data (also served unauth at `GET /api/config`), not
+  # a credential — the #95/#202 "keep it off the URL" rule applies only to
+  # the bearer, which is a secret and keeps riding `Sec-WebSocket-Protocol`
+  # exclusively. Two orthogonal channels, no collision with the token
+  # (query-vs-subprotocol ruling, DESIGN_NOTES 2026-07-27).
+  #
+  # A client declaring any parseable version BELOW
+  # `Grappa.Protocol.min_version/0` (a negative included — it is below any
+  # floor) is refused with `{:error, :upgrade_required}` (→ 426). Absent OR
+  # unparseable → treated as CURRENT: the server sends nothing new to a
+  # silent client, so
+  # cicchetto/shottino (which declare no version) keep working untouched —
+  # negotiation is opt-in on the client side. A version ABOVE what the
+  # server speaks is still accepted: additive-only means a newer client
+  # tolerates an older server (unknown-is-never-fatal), so there is no
+  # upper bound.
+  @spec check_protocol_version(map()) :: :ok | {:error, :upgrade_required}
+  defp check_protocol_version(%{"client_proto" => raw}) when is_binary(raw) do
+    case Integer.parse(raw) do
+      {version, ""} ->
+        if version < Grappa.Protocol.min_version() do
+          {:error, :upgrade_required}
+        else
+          :ok
+        end
+
+      _ ->
+        # Unparseable `client_proto` — a client bug, not a reason to refuse
+        # a socket that might otherwise work. Treat as current (silent),
+        # same as absent (unknown-is-never-fatal).
+        :ok
+    end
+  end
+
+  defp check_protocol_version(_), do: :ok
+
+  @doc false
+  # #447 — custom WS error_handler wired in `endpoint.ex`'s `socket`
+  # `websocket:` opts. Phoenix's WebSocket transport invokes this MFA ONLY
+  # when `connect/3` returns `{:error, reason}` (a bare `:error` still gets
+  # the transport's own 403). Today the sole `{:error, _}` `connect/3`
+  # returns is `:upgrade_required`, so this maps it to a clean 426 Upgrade
+  # Required with a JSON body naming the floor — a too-old client learns
+  # WHY the upgrade was refused (vs an opaque 403 auth failure). NO
+  # catch-all clause by design: a future new `{:error, reason}` with no
+  # clause here crashes loudly (per CLAUDE.md "no silent-swallow" — a net
+  # that absorbs an unknown reason hides the next bug).
+  @spec handle_ws_error(Plug.Conn.t(), :upgrade_required) :: Plug.Conn.t()
+  def handle_ws_error(conn, :upgrade_required) do
+    body =
+      Jason.encode!(%{
+        error: "upgrade_required",
+        protocol_version: Grappa.Protocol.version(),
+        min_protocol_version: Grappa.Protocol.min_version()
+      })
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(426, body)
   end
 
   # #95 + #202 — the bearer's ONLY source is the `Sec-WebSocket-Protocol`

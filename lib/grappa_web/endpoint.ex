@@ -74,9 +74,21 @@ defmodule GrappaWeb.Endpoint do
   # had retained as a one-deploy-cycle fallback: with prod telemetry
   # showing sustained zero query-string auth, the subprotocol is now the
   # SOLE bearer source and the token never rides the WS upgrade URL.
+  # #447 — a custom `error_handler` turns a `{:error, :upgrade_required}`
+  # return from `UserSocket.connect/3` (a client declaring a wire protocol
+  # below `Grappa.Protocol.min_version/0` via the `?client_proto=` query
+  # param) into a clean `426 Upgrade Required` instead of the transport's
+  # default opaque 403. `Phoenix.Socket.Transport.load_config/2` merges
+  # `websocket:` opts OVER the transport's `default_config/0`, so this key
+  # overrides the default `{Phoenix.Transports.WebSocket, :handle_error}`.
+  # It fires ONLY for `{:error, reason}` returns; a bare `:error` (auth
+  # failure) still gets the default 403, keeping the two failures distinct.
   socket "/socket", GrappaWeb.UserSocket,
     auth_token: true,
-    websocket: [connect_info: [:auth_token]],
+    websocket: [
+      connect_info: [:auth_token],
+      error_handler: {GrappaWeb.UserSocket, :handle_ws_error, []}
+    ],
     longpoll: false
 
   plug Plug.RequestId

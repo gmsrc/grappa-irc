@@ -42,7 +42,7 @@ defmodule GrappaWeb.GrappaChannelTest do
   import Grappa.AuthFixtures
 
   alias Grappa.IRCServer
-  alias Grappa.{Networks, QueryWindows, Repo, ScrollbackHelpers, Session, WSPresence}
+  alias Grappa.{Networks, Protocol, QueryWindows, Repo, ScrollbackHelpers, Session, WSPresence}
   alias Grappa.Networks.{Credentials, Servers}
   alias Grappa.PubSub.Topic
   alias Grappa.Scrollback.Wire
@@ -716,8 +716,13 @@ defmodule GrappaWeb.GrappaChannelTest do
              }
     end
 
-    test "user-level topic join returns an empty join reply (no cursor concept)" do
-      user_name = "rc-user-empty-#{System.unique_integer([:positive])}"
+    # #447 — the user topic is the FIRST topic cic joins, so its join reply
+    # is the "initial WS payload": it carries `protocol_version` (and only
+    # that — no per-channel cursor concept at the user level). Mirrors
+    # `GET /api/config` so a client that skipped the REST probe still learns
+    # the protocol on connect. Pre-#447 this reply was `%{}`.
+    test "user-level topic join reply carries protocol_version (initial WS payload)" do
+      user_name = "rc-user-proto-#{System.unique_integer([:positive])}"
       _ = user_fixture(name: user_name)
 
       topic = Topic.user(user_name)
@@ -727,7 +732,7 @@ defmodule GrappaWeb.GrappaChannelTest do
         |> build_socket()
         |> subscribe_and_join(topic, %{})
 
-      assert reply == %{}
+      assert reply == %{protocol_version: Protocol.version()}
     end
   end
 

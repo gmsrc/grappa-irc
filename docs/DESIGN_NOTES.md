@@ -20444,3 +20444,96 @@ broadcast now belongs to the session, not the controller:
 
 `issue71-inc2-permanent-rail-desktop.spec.ts` is UNTOUCHED — it is the regression
 proof: red pre-fix (2-3/3), green post-fix, full `scripts/integration.sh` 522/522.
+---
+
+## 2026-07-27 — #447 protocol version handshake + unauthenticated `/api/config` discovery + additive-only contract
+
+**Why.** grappa is REST-first and means to be spoken by clients we don't
+write (cicchetto + shottino are two; a third-party one is the point of the
+design). Nothing in the wire contract let such a client discover what it
+is talking to or fail cleanly when the server moves ahead of it: no
+version anywhere (neither REST nor the WS mount), no unauthenticated
+discovery endpoint (only `/healthz`, which says "alive" and nothing else),
+no written compatibility rule, no doc for client authors. Lifted —
+deliberately, with attribution — from
+[amiantos/lurker](https://github.com/amiantos/lurker) (MPL-2.0), an
+independently-built bouncer with the same "client never speaks IRC"
+premise; we copy the *contract shape*, not code.
+
+**Two numbers, one SSOT.** `Grappa.Protocol` (a standalone top-level
+boundary, twin of `Grappa.Version`) owns `version/0` (the wire protocol
+the server speaks) and `min_version/0` (the oldest client protocol still
+accepted). This is DISTINCT from `Grappa.Version` (the human-facing
+software release string / CTCP VERSION). A client keys compatibility off
+`protocol_version`; `version` is diagnostic only. Both start at 1.
+
+**Discovery — `GET /api/config`, unauthenticated.** `ConfigController`
+returns `%{server, version, protocol_version, min_protocol_version}`. No
+auth (a client hits it BEFORE authenticating), no secrets, a short
+`Cache-Control` (values only move on deploy). **nginx trap — verified,
+not assumed:** `/api/config` rides the existing `api` alt in the
+single-source REST allowlist regex
+(`^/(auth|me|networks|push|api|session|uploads|healthz|themes)(/|$)` in
+`infra/snippets/locations-api.conf`), the same second-segment match as
+`/api/uploads` — so NO nginx edit was needed, and the e2e nginx-test
+inherits it from the same snippet.
+
+**Handshake version signal — query param, not subprotocol.** The client
+declares its protocol via the `client_proto` QUERY PARAM on the WS upgrade
+URL (`UserSocket.connect/3`'s `params`, unused since #202). The
+alternative — riding the `Sec-WebSocket-Protocol` subprotocol like the
+bearer (#95) — was rejected. The decisive argument: #95/#202 moved the
+*token* off the URL because a **credential** in access logs is a bug; a
+protocol version is **public discovery data** (it is literally served
+unauth at `/api/config`), so the URL-exposure rule does not apply. Keeping
+the token in the subprotocol and the version in the query string leaves
+the two channels orthogonal, instead of forcing a hand-parse of a
+comma-joined subprotocol list that already carries the token plus
+`"phoenix"` — exactly the collision the issue warned against. `vsn` was
+also excluded as a name: that is phoenix's own transport-serializer
+version (V1/V2 JSON), a different concept.
+
+**426 Upgrade Required — a clean status, no hack.** A client declaring
+below `min_version` returns `{:error, :upgrade_required}` from
+`connect/3`. Phoenix's WebSocket transport maps a `{:error, reason}`
+connect result to a **configurable `error_handler` MFA** (a bare `:error`
+still gets the transport's own 403); `load_config/2` merges `websocket:`
+opts over `default_config/0`, so wiring
+`error_handler: {GrappaWeb.UserSocket, :handle_ws_error, []}` in the
+endpoint overrides the default handler and emits a real 426 with a
+JSON body naming the floor. Auth failures stay `:error` → 403, so the two
+rejections are DISTINCT on the wire (426 = "upgrade your client", 403 =
+"bad credential") — the part that would otherwise break in silence. The
+version gate runs BEFORE auth (a too-old client can't speak the protocol
+regardless of credentials). Absent OR unparseable `client_proto` → treated
+as current, so cicchetto + shottino (which send no version) keep working
+untouched. No upper bound — a newer client tolerates an older server
+(additive-only). `protocol_version` also rides the user-topic join reply
+(the first topic cic joins = the "initial WS payload") so a client that
+skipped the REST probe still learns it on connect.
+
+**Additive-only evolution (the contract).** New frame kinds, event types,
+and fields may appear at ANY time WITHOUT a version bump; a client MUST
+ignore verbs/fields it does not recognise (unknown-is-never-fatal, both
+directions — an unknown client verb earns a non-fatal error frame and the
+socket stays open). Existing fields are never repurposed or removed.
+`version/0` bumps ONLY for a change the additive rule cannot express (a
+field's meaning changes, a frame is withdrawn), and moves `min_version/0`
+too when old clients can no longer be served. Written for client authors
+in `docs/CLIENT_PROTOCOL.md` (lands after items 1–4) and enforced in
+review.
+
+**snake_case — deliberate divergence from the issue text.** The issue
+spells the fields `protocolVersion` / `minProtocolVersion` (camelCase),
+inherited from lurker's TypeScript idiom. We use **snake_case**
+(`protocol_version`, `min_protocol_version`, `server`, `version`) on all
+four surfaces (`/api/config` body, the 426 body, the initial WS payload,
+the tests). Rationale (a spec does not become correct by being written —
+CLAUDE.md "the spec inherited a bug"): the grappa wire is snake_case
+WITHOUT EXCEPTION — verified against `cicchetto/src/lib/wireTypes.ts`,
+which contains not a single camelCase key. A camelCase `/api/config` would
+be an isolated island AND the FIRST field a third-party author meets, plus
+the shape carved into `CLIENT_PROTOCOL.md` as documented truth. The issue
+itself says we copy the contract SHAPE, not the code — and casing is
+idiom, not shape. Recorded here so the divergence reads as a decision, not
+an oversight. (vjt owns the issue and was told.)

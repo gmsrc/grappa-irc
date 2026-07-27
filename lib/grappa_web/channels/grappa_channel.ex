@@ -281,9 +281,14 @@ defmodule GrappaWeb.GrappaChannel do
   # renders a zero badge instead of branching on null. The cursor remains
   # `nil` in that same fall-through; cic uses that as the "no cursor yet"
   # signal, not the count.
+  # `:protocol_version => 1` is the literal (not `pos_integer()`) so the
+  # spec matches `Grappa.Protocol.version/0`'s success typing under Dialyzer
+  # `:underspecs` — same constant-literal idiom as `Grappa.Protocol` itself.
+  # A protocol bump updates both specs (a deliberate, reviewed event).
   @spec join_reply(Topic.parsed()) :: %{
           optional(:read_cursor) => integer() | nil,
-          optional(:window_counts) => WindowCounts.t()
+          optional(:window_counts) => WindowCounts.t(),
+          optional(:protocol_version) => 1
         }
   defp join_reply({:channel, user_name, network_slug, channel}) do
     with {:ok, subject} <- resolve_subject(user_name),
@@ -313,6 +318,19 @@ defmodule GrappaWeb.GrappaChannel do
     else
       _ -> %{read_cursor: nil, window_counts: WindowCounts.zero()}
     end
+  end
+
+  # #447 — the user topic is the FIRST topic cic joins, so its join reply
+  # is the "initial WS payload": it carries `protocol_version`, the wire
+  # protocol the server speaks, mirroring `GET /api/config` so a client
+  # that skipped the REST probe still learns it on connect. Additive (a new
+  # field) — an existing client that ignores it is unaffected
+  # (unknown-is-never-fatal). The floor (`min_protocol_version`) is NOT
+  # here: a client already past the handshake was, by definition, at or
+  # above the floor, so it needs the floor only pre-connect (via /api/config
+  # + the 426 refusal), not after.
+  defp join_reply({:user, _}) do
+    %{protocol_version: Grappa.Protocol.version()}
   end
 
   defp join_reply(_), do: %{}
