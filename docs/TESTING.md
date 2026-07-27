@@ -242,6 +242,77 @@ The decision tree:
 `feedback_no_ci_retries_on_first_failure`. Reproduce locally with
 `--repeat-each` instead.
 
+## Five e2e gate traps that fake a green (or a red)
+
+These five each make a broken run *look* fine — or a fine run look
+broken. All bite the **local e2e loop** specifically; each was paid for
+the hard way on 2026-07-27.
+
+1. **`KEEP_STACK=1` reuses the OLD cic bundle — your fix isn't in it.**
+   The e2e stack serves a **pre-built** dist (`runtime/e2e/cicchetto-dist/`,
+   written once by the `cicchetto-build-test` oneshot as
+   `bun run build`), NOT the live `cicchetto/src`. A cic source fix is
+   therefore invisible until that bundle is rebuilt. `KEEP_STACK=1` skips
+   tear-down AND the rebuild, so every rerun keeps exercising the
+   **stale** dist and the fix looks dead. After ANY cic edit, drop
+   `KEEP_STACK` (or otherwise force the `cicchetto-build-test` oneshot to
+   re-run) so the served bundle contains your change. The tell: the
+   failing assertion is byte-identical across reruns even though you
+   changed the source. Same class as `feedback_hot_reload_bypasses_cic_bundle`
+   (a BEAM reload never rebuilds cic either).
+
+2. **`--repeat-each N` runs on ONE persistent stack — churn accumulates
+   upstream.** `--repeat-each` does not get a fresh testnet per
+   iteration; all N iterations share the single booted stack (one
+   `integration.sh` invocation = one `testnet up` … `down`). Reconnect /
+   session churn piles up across iterations and can knock over a spec
+   **earlier in the roster** than the one you are bisecting — so you
+   "reproduce" a failure that is really your own rerun pollution, not the
+   bug under investigation. When `--repeat-each` starts failing a
+   *different* spec than your target, tear the stack down and re-run
+   clean before trusting the result. See `feedback_recurring_e2e_not_flake`
+   + `feedback_cascade_poisoner_pattern`.
+
+3. **Read the Playwright SUMMARY, never the exit code — and run the long
+   gates DETACHED.** A Playwright run exited **rc 0 with a red test**
+   today: the process return code is not a truthful pass/fail signal.
+   Gate LANDED on the parsed summary line (`N passed`, `M failed`), never
+   on `$?`. Twin rule for the long gates (`integration.sh`,
+   `check.sh`): run them **detached** — `nohup … &` then `disown`, from
+   the **worktree ROOT** — and read the log. A foreground long gate can
+   be reaped by the harness mid-run, and the reap looks exactly like
+   infra death; the tell is a **missing rc / no summary line** (the run
+   was killed), NOT a red result. Sibling of
+   `feedback_bg_task_exit_code_masked_by_chain` (an `exit 0` that is
+   really a trailing `echo`); evidence bar is `feedback_landed_claim_evidence`.
+
+4. **`--project chromium` is NOT the ship gate — it drops every
+   `@webkit` spec.** The suite partitions across two Playwright projects;
+   `webkit-iphone-15` carries the `@webkit`-tagged specs that chromium
+   never collects (~419 tests chromium-only vs ~526+ for the full
+   two-project run). `--project chromium` is an **iso-rerun tool**, not a
+   green light. Before claiming a green e2e, **reconcile the collected
+   COUNT against the baseline** — a run that collected 419 when the
+   baseline is 526+ silently skipped 100+ specs. "N ≥ 1 collected" is a
+   smoke check that Playwright found *something*, NOT a check that it
+   collected the *right* set. See `feedback_e2e_user_class_parity_matrix`
+   + `feedback_playwright_webkit_not_ios_scroll`.
+
+5. **A fresh worktree's `cicchetto/e2e/infra` submodule is EMPTY, and
+   auto-init clones over SSH — which hangs.** Worktrees don't inherit
+   submodule checkouts, so `cicchetto/e2e/infra` is empty on first `up`.
+   Both `scripts/testnet.sh`'s auto-init AND
+   `git submodule update --init` re-clone it via **SSH**, which is
+   blocked in this environment (`feedback_git_push_via_gh_https_ssh_blocked`)
+   — the clone stalls with no output (hangs on the voyager host). Do NOT
+   re-clone; **rsync the already-checked-out submodule from the main
+   checkout** instead:
+
+   ```bash
+   rsync -a /Users/mbarnaba/code/grappa/cicchetto/e2e/infra/ \
+     <worktree>/cicchetto/e2e/infra/
+   ```
+
 ## Test isolation: the global `max_cases: 1` lane
 
 `config :ex_unit, max_cases: 1` in `config/test.exs` is **load-bearing**
@@ -281,7 +352,7 @@ These bite during cluster work; check the memory before re-investigating.
 ## When the test stack itself is broken
 
 * **`vendor/bats-core` not found** → `git submodule update --init vendor/bats-core`.
-* **`cicchetto/e2e/infra` empty (fresh git worktree — worktrees don't inherit submodules)** → now AUTO-initialised by `scripts/testnet.sh` on first `up`. Manual fallback if the auto-init fails: `git -C <worktree> submodule update --init cicchetto/e2e/infra`.
+* **`cicchetto/e2e/infra` empty (fresh git worktree — worktrees don't inherit submodules)** → `scripts/testnet.sh`'s auto-init AND `git submodule update --init` both re-clone over **SSH**, which is blocked here and hangs with no output. **Rsync it from the main checkout instead** — see trap 5 in "Five e2e gate traps that fake a green (or a red)".
 * **`runtime/e2e/{cicchetto-dist,grappa-runtime}` left ROOT-OWNED → next `testnet up` aborts** (symptoms: cicchetto-dist `AccessDenied`, sqlite `database_open_failed`, `"Pool overlaps with other one on this address space"`). A prior run can write these as uid 0 despite the `--user` drop; a plain `rm` can't clear them. Now AUTO-cleaned: `testnet.sh up`/`down` use `e2e_force_rm` (plain rm → non-interactive `sudo` for root-owned survivors; see `scripts/_lib.sh`). No passwordless sudo → it warns and you run `sudo rm -rf runtime/e2e/* cicchetto/e2e/test-results/*` by hand. **`git worktree remove` blocked** by root-owned `cicchetto/e2e/test-results/*` (Playwright writes failure artifacts as root, intentionally kept) → `sudo rm -rf <worktree-dir>` then `git worktree prune`.
 * **`services.hub conflicts with imported resource`** (compose config parse) → docker compose is too old for the `include:` + per-service override pattern. Install **v5.0.2** (the CI pin in `.github/workflows/integration.yml`) into `~/.docker/cli-plugins/docker-compose` — user-local, no sudo. Stock distro plugins (e.g. Debian's 2.26.1) reject it.
 * **`checking context: no permission to read .../nginx-certs/nginx.key`** (image build) → running e2e as a NON-root user: `nginx-cert-init` writes the key root-owned 0600, and the classic (non-buildx) builder tars the context as the invoking user. Fixed in-repo via `.dockerignore` exclusions (root + `cicchetto/e2e/`); if it recurs, a new build context is pulling in the cert dir — add it to that context's `.dockerignore`. CI builds as root so never hits this.
