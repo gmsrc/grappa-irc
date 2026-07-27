@@ -16,6 +16,7 @@ import "./lib/subscribe";
 import "./lib/userTopic";
 import { mountBadgeReconcile, mountBadgeSync } from "./lib/badge";
 import { applyCachedCustomTheme, mountCustomThemeSync } from "./lib/customTheme";
+import { mountDisplayPrefsSync } from "./lib/displayPrefs";
 import { isDocumentVisible } from "./lib/documentVisibility";
 import { applyFontSizeFromStorage } from "./lib/fontSize";
 import { installGlobalPaste } from "./lib/globalPaste";
@@ -75,6 +76,14 @@ createRoot(() => mountBadgeSync());
 // logout clear back to the base cascade. Own root (app-lifetime owner for
 // the createEffect), alongside the other createRoot-wired effects.
 createRoot(() => mountCustomThemeSync());
+
+// #449 — reconcile the server-backed display prefs (presence filter #222, time
+// format #217, colored nicklist #443) on every `token()` change: on login apply
+// the server's prefs (or seed up the local values if the server never
+// persisted), so a single account converges its UI across devices. Boot already
+// seeded each owner module's signal from localStorage (FOUC-free). Own root,
+// alongside the other createRoot-wired token effects.
+createRoot(() => mountDisplayPrefsSync());
 
 // PWA icon badge foreground reconcile (#badge-orphan, 2026-06-21) — the
 // SW push path (door #1) writes `setAppBadge` directly off-signal while

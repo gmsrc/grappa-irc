@@ -15,6 +15,8 @@
 // inline.
 
 import { ApiError, readError } from "./api";
+import type { PresencePref } from "./presenceFilter";
+import type { TimeFormatKey } from "./timeFormat";
 
 export type NotificationPrefs = {
   channel_messages_all: boolean;
@@ -224,4 +226,68 @@ export async function putAliases(token: string, aliases: Aliases): Promise<Alias
   if (!res.ok) throw await readError(res);
   const body = (await res.json()) as AliasesResponse;
   return body.aliases;
+}
+
+// ---------------------------------------------------------------------------
+// display_prefs — server-backed display preferences (#449).
+//
+// The presence filter (#222), timestamp format (#217), and colored nicklist
+// (#443) were localStorage-only, so they never converged across one account's
+// devices (a desktop toggle stayed invisible on the iOS PWA — reported by
+// Hypnotize). Move them onto a server-authoritative full-map path, but synced
+// like the THEME (`customTheme.ts`): boot-cached apply for a FOUC-free first
+// paint, then a login reconcile. The coordinator that owns the apply / seed-up
+// logic is `displayPrefs.ts`; this module is only the fetch pair.
+//
+// `persisted` is the seed-up discriminator (mirrors the server's
+// `display_prefs_persisted?/1`): `get_display_prefs/1` always returns a
+// complete shape from defaults, so `false` (never written) vs `true` (server
+// carries prefs) is the ONLY way the client can tell whether to push its local
+// values up or let the server win. Additive per #447 — a pre-#449 server omits
+// the field, so it is optional and the coordinator treats absent as `false`
+// (seed-up), which is the safe direction (never wipes another device's config).
+//
+// Tri-state (NON-NEGOTIABLE): `presence_filter` values are `"show" | "hide"`;
+// UNSET is the ABSENCE of a channel key, never a third value. The wire carries
+// exactly the pinned channels; the coordinator's `resolvePresenceVisible`
+// derives the size default for unset channels client-side.
+// ---------------------------------------------------------------------------
+
+export type DisplayPrefs = {
+  time_format: TimeFormatKey;
+  colored_nicklist: boolean;
+  presence_filter: Record<string, PresencePref>;
+};
+
+export type DisplayPrefsResponse = {
+  display_prefs: DisplayPrefs;
+  // Optional: a pre-#449 server omits it. Absent ⇒ treat as not-persisted.
+  persisted?: boolean;
+};
+
+export async function getDisplayPrefs(token: string): Promise<DisplayPrefsResponse> {
+  const res = await fetch("/me/settings/display-prefs", {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw await readError(res);
+  return (await res.json()) as DisplayPrefsResponse;
+}
+
+export async function putDisplayPrefs(
+  token: string,
+  prefs: DisplayPrefs,
+): Promise<DisplayPrefsResponse> {
+  const res = await fetch("/me/settings/display-prefs", {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ display_prefs: prefs }),
+  });
+  // #112 — route through the ONE error decoder (see the notification-prefs
+  // twin above): dedups `info.error` + fires the shared 401 handler, and
+  // carries `field_errors.display_prefs` on a 422 (DOS-bound rejection).
+  if (!res.ok) throw await readError(res);
+  return (await res.json()) as DisplayPrefsResponse;
 }

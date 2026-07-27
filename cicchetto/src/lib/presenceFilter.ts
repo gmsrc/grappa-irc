@@ -40,9 +40,21 @@ import type { ChannelKey } from "./channelKey";
 // makes `channelPresenceVisible` reactive: reading it inside the memo tracks
 // the signal, so toggling live re-filters the pane.
 //
-// localStorage only — per feedback_no_localized_strings_server_side, cic owns
-// UI/display preferences client-side; no server-side persistence, no wire
-// change (mirrors #217 timeFormat exactly).
+// ## Server-backed since #449 (localStorage is now the offline/write-through cache)
+//
+// This pref is one of the three server-backed display prefs (with #217 time
+// format + #443 colored nicklist), coordinated by `displayPrefs.ts` over
+// `PUT/GET /me/settings/display-prefs` so a single account converges its UI
+// across devices (the reporter's desktop toggle was invisible on the iOS PWA).
+// localStorage is no longer the source of truth — it is the boot/offline cache
+// that gives a FOUC-free first paint and survives an offline session; the
+// server wins on login (or is seeded up once when it has never persisted).
+// `setChannelPresencePref` / `clearChannelPresencePref` stay LOCAL-only (the
+// coordinator's `syncedSetChannelPresencePref` adds the PUT); `getAllPresencePrefs`
+// + `replacePresencePrefs` are the coordinator's whole-map read/apply seams.
+// (An earlier moduledoc cited `feedback_no_localized_strings_server_side` for
+// keeping this client-only — that was a mis-application: that memory is about
+// i18n, not display-pref persistence.)
 
 // "large" cutoff. Named constant, one-line tune. 50+ member channels drown
 // in J/P/Q; smaller channels keep them visible. A channel whose live member
@@ -132,6 +144,26 @@ export function clearChannelPresencePref(key: ChannelKey): void {
     persist(next);
     return next;
   });
+}
+
+// #449 — whole-map snapshot for the display-prefs coordinator's `buildWireMap`.
+// A shallow copy so a caller can't mutate the signal's backing map. Keys are
+// the opaque `ChannelKey` strings the server round-trips verbatim.
+export function getAllPresencePrefs(): Record<string, PresencePref> {
+  return { ...prefs() };
+}
+
+// #449 — whole-map local apply for the coordinator (`applyServerPrefs` on a
+// server-wins reconcile). Full replace, NOT merge: a channel absent from the
+// incoming map returns to unset (tri-state absence preserved end to end), so
+// the local map exactly mirrors the server's pinned set. Write-through to the
+// signal + localStorage; NO server PUT (the coordinator owns the round-trip).
+// Accepts plain string keys — the server sends `ChannelKey`-shaped strings it
+// built from `channelKey(slug, name)`; the branding is a client-only refinement.
+export function replacePresencePrefs(map: Record<string, PresencePref>): void {
+  const next = { ...map } as PrefMap;
+  persist(next);
+  setPrefs(next);
 }
 
 // THE PRECEDENCE RULE (the "tough" part). Pure + testable without the signal

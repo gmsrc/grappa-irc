@@ -26,9 +26,18 @@ import { createRoot, createSignal } from "solid-js";
 // `formatTimestamp` reactive: reading it inside a SolidJS render tracks the
 // signal, so changing the format live re-renders scrollback + mentions.
 //
-// localStorage only — per feedback_no_localized_strings_server_side, cic
-// owns UI/display preferences client-side; no server-side persistence, no
-// wire change (issue #217 is explicitly client-only).
+// ## Server-backed since #449 (localStorage is now the offline/write-through cache)
+//
+// This is one of the three server-backed display prefs (with #222 presence
+// filter + #443 colored nicklist), coordinated by `displayPrefs.ts` over
+// `GET/PUT /me/settings/display-prefs` so a single account converges its UI
+// across devices. localStorage is no longer the source of truth — it is the
+// boot/offline cache for a FOUC-free first paint; the server wins on login (or
+// is seeded up once when it has never persisted). `setTimeFormat` stays
+// LOCAL-only (signal + localStorage write-through); the coordinator's
+// `syncedSetTimeFormat` adds the PUT. (An earlier moduledoc cited
+// `feedback_no_localized_strings_server_side` — a mis-application: that memory
+// is about i18n, not display-pref persistence.)
 
 // "hms" = HH:MM:SS (with seconds, the #217 default); "hm" = HH:MM.
 export type TimeFormatKey = "hms" | "hm";

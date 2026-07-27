@@ -19,11 +19,16 @@ import { createRoot, createSignal } from "solid-js";
 // with `noColor` there is no per-nick inline color to reveal — the color
 // comes from the prop path, so the prop is what has to flip.
 //
-// localStorage only — cic owns UI/display preferences client-side; no
-// server-side persistence. #449 will move display prefs (presence filter,
-// timestamp format, this flag) to a server-backed full-map path so they
-// converge across devices; until then all three stay on localStorage, one
-// consistent pattern, migrated together.
+// ## Server-backed since #449 (localStorage is now the offline/write-through cache)
+//
+// This flag is one of the three server-backed display prefs (with #222
+// presence filter + #217 time format), coordinated by `displayPrefs.ts` over
+// `GET/PUT /me/settings/display-prefs` so a single account converges its UI
+// across devices. localStorage is no longer the source of truth — it is the
+// boot/offline cache for a FOUC-free first paint; the server wins on login (or
+// is seeded up once when it has never persisted). `setColoredNicklist` stays
+// LOCAL-only (signal + localStorage write-through); the coordinator's
+// `syncedSetColoredNicklist` adds the PUT.
 
 const STORAGE_KEY = "cicchetto.coloredNicklist";
 const DEFAULT_ON = false;

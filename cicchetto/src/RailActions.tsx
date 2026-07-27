@@ -1,6 +1,7 @@
 import { type Component, Show } from "solid-js";
 import { archiveSlugForSelection } from "./lib/archiveContext";
 import { channelKey } from "./lib/channelKey";
+import { syncedSetChannelPresencePref } from "./lib/displayPrefs";
 import { membersByChannel } from "./lib/members";
 import {
   type MobilePanelSetters,
@@ -12,7 +13,7 @@ import {
   openThemesPanel,
 } from "./lib/mobilePanel";
 import { isAdmin } from "./lib/networks";
-import { channelPresenceVisible, setChannelPresencePref } from "./lib/presenceFilter";
+import { channelPresenceVisible } from "./lib/presenceFilter";
 import { selectedChannel, setSelectedChannel } from "./lib/selection";
 import {
   ADMIN_WINDOW_NAME,
@@ -225,7 +226,8 @@ const RailActions: Component<Props> = (props) => {
           const memberCount = (): number => (membersByChannel()[key()] ?? []).length;
           const presenceShown = (): boolean => channelPresenceVisible(key(), memberCount());
           const togglePresence = (): void =>
-            setChannelPresencePref(key(), presenceShown() ? "hide" : "show");
+            // #449 — local apply + server PUT so the pin converges across devices.
+            syncedSetChannelPresencePref(key(), presenceShown() ? "hide" : "show");
           return (
             <button
               type="button"

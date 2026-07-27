@@ -14,7 +14,8 @@ import DeleteAccountModal from "./DeleteAccountModal";
 import InlineConfirmButton from "./InlineConfirmButton";
 import { ApiError, displayNick, type Network, visitorNetworkNick } from "./lib/api";
 import { getSubject, token } from "./lib/auth";
-import { getColoredNicklist, setColoredNicklist } from "./lib/colorNicklist";
+import { getColoredNicklist } from "./lib/colorNicklist";
+import { syncedSetColoredNicklist, syncedSetTimeFormat } from "./lib/displayPrefs";
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { detach, quit, updateIdentity } from "./lib/lifecycle";
@@ -34,7 +35,7 @@ import { reconnectConnectedNetworks } from "./lib/reconnect";
 import { selectedChannel } from "./lib/selection";
 import { consumePendingSettingsPage, type SettingsSubPage } from "./lib/settingsNav";
 import { openShareModal } from "./lib/shareModal";
-import { getTimeFormat, setTimeFormat, type TimeFormatKey } from "./lib/timeFormat";
+import { getTimeFormat, type TimeFormatKey } from "./lib/timeFormat";
 import { activeHost } from "./lib/uploadHost";
 import {
   loadUploadTtlSeconds,
@@ -192,14 +193,14 @@ const SettingsDrawer: Component<Props> = (props) => {
 
   const onTimeFormatChange = (e: Event) => {
     const value = (e.currentTarget as HTMLInputElement).value as TimeFormatKey;
-    setTimeFmt(value);
-    setTimeFormat(value);
+    setTimeFmt(value); // local signal for optimistic drawer UI
+    syncedSetTimeFormat(value); // #449 — local apply + server PUT (converges devices)
   };
 
   const onColoredNicklistChange = (e: Event) => {
     const on = (e.currentTarget as HTMLInputElement).checked;
-    setColoredNicklistSig(on);
-    setColoredNicklist(on);
+    setColoredNicklistSig(on); // local signal for optimistic drawer UI
+    syncedSetColoredNicklist(on); // #449 — local apply + server PUT
   };
 
   // #126 — detach: leave cic, KEEP the bouncer up. Persistent identities
