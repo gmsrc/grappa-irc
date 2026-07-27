@@ -1282,8 +1282,14 @@ export function setOn401Handler(fn: (() => void) | null): void {
 // error tokens to `ApiError.code` through the ONE decoder that also fires
 // the shared 401 dead-token handler — duplicating it would silently skip
 // the dead-token detection for those verbs.
-export async function readError(res: Response): Promise<ApiError> {
-  if (res.status === 401 && on401Handler !== null) on401Handler();
+//
+// `fireDeadTokenHandler` (default true) gates ONLY the on401 side effect, not
+// the decoding. Pass `false` for boot-APPLIED cosmetic fetches (#449
+// display-prefs sync fires on every token presence) whose transient 401 must
+// NEVER clear a valid session's token — they still throw the decoded `ApiError`
+// so the caller can keep its boot cache, but they do not log the user out.
+export async function readError(res: Response, fireDeadTokenHandler = true): Promise<ApiError> {
+  if (res.status === 401 && fireDeadTokenHandler && on401Handler !== null) on401Handler();
   let body: Record<string, unknown> = {};
   let code: string;
   try {

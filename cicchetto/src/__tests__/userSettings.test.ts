@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setOn401Handler } from "../lib/api";
 import {
   DEFAULT_NOTIFICATION_PREFS,
   getAliases,
+  getDisplayPrefs,
   getNotificationPrefs,
   getUploadTtlSeconds,
   putAliases,
+  putDisplayPrefs,
   putNotificationPrefs,
   putUploadTtlSeconds,
 } from "../lib/userSettings";
@@ -31,6 +34,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
+  setOn401Handler(null); // don't leak a spy handler into sibling tests
 });
 
 describe("DEFAULT_NOTIFICATION_PREFS", () => {
@@ -250,5 +254,50 @@ describe("putAliases", () => {
       status: 422,
       code: "validation_failed",
     });
+  });
+});
+
+// #449 — display-prefs are boot-APPLIED cosmetic state: `mountDisplayPrefsSync`
+// fires GET/PUT on EVERY token presence (login, reload, cold boot). A cosmetic
+// pref sync must NEVER be able to kill a valid session, so its 401 path is
+// ISOLATED from the shared dead-token handler: a transient 401 there throws a
+// normal error (the coordinator keeps the boot cache) but does NOT clear the
+// token. Contrast: on-demand settings verbs (notification-prefs, aliases, …)
+// keep the handler — a 401 while the user is actively in Settings genuinely
+// means the session is dead.
+describe("display-prefs fetches are isolated from the dead-token handler (#449)", () => {
+  const DP = { time_format: "hms", colored_nicklist: false, presence_filter: {} } as const;
+
+  it("getDisplayPrefs on 401 throws but does NOT fire the on401 dead-token handler", async () => {
+    const on401 = vi.fn();
+    setOn401Handler(on401);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 }),
+    );
+
+    await expect(getDisplayPrefs(TOKEN)).rejects.toBeDefined();
+    expect(on401).not.toHaveBeenCalled();
+  });
+
+  it("putDisplayPrefs on 401 throws but does NOT fire the on401 dead-token handler", async () => {
+    const on401 = vi.fn();
+    setOn401Handler(on401);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 }),
+    );
+
+    await expect(putDisplayPrefs(TOKEN, DP)).rejects.toBeDefined();
+    expect(on401).not.toHaveBeenCalled();
+  });
+
+  it("CONTRAST: an on-demand settings verb (notification-prefs PUT) DOES fire the handler on 401", async () => {
+    const on401 = vi.fn();
+    setOn401Handler(on401);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 }),
+    );
+
+    await expect(putNotificationPrefs(TOKEN, sample)).rejects.toBeDefined();
+    expect(on401).toHaveBeenCalledTimes(1);
   });
 });

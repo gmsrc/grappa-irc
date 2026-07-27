@@ -269,7 +269,11 @@ export async function getDisplayPrefs(token: string): Promise<DisplayPrefsRespon
   const res = await fetch("/me/settings/display-prefs", {
     headers: { authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw await readError(res);
+  // #449 — ISOLATED from the dead-token handler (`fireDeadTokenHandler: false`):
+  // this is a boot-APPLIED cosmetic fetch (`mountDisplayPrefsSync` fires it on
+  // every token presence), so a transient 401 must NOT log out a valid session.
+  // It still throws so the coordinator keeps its FOUC-free boot cache.
+  if (!res.ok) throw await readError(res, false);
   return (await res.json()) as DisplayPrefsResponse;
 }
 
@@ -285,9 +289,12 @@ export async function putDisplayPrefs(
     },
     body: JSON.stringify({ display_prefs: prefs }),
   });
-  // #112 — route through the ONE error decoder (see the notification-prefs
-  // twin above): dedups `info.error` + fires the shared 401 handler, and
-  // carries `field_errors.display_prefs` on a 422 (DOS-bound rejection).
-  if (!res.ok) throw await readError(res);
+  // #112 — route through the ONE error decoder (dedups `info.error`, carries
+  // `field_errors.display_prefs` on a 422 DOS-bound rejection). #449 — but
+  // ISOLATED from the dead-token handler (`fireDeadTokenHandler: false`): the
+  // synced PUT fires at boot (seed-up) and on every cosmetic toggle, so a
+  // transient 401 must NOT clear a valid session's token. Fire-and-forget
+  // callers already swallow the throw and keep the optimistic local state.
+  if (!res.ok) throw await readError(res, false);
   return (await res.json()) as DisplayPrefsResponse;
 }
