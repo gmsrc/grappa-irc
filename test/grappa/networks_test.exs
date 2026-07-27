@@ -918,12 +918,39 @@ defmodule Grappa.NetworksTest do
     end
   end
 
-  describe "home_data_for_user/1 (UX-4 B / #211 phase 6)" do
-    test "renders empty networks + empty available for a user with zero credentials" do
+  describe "home_data_for_user/1 (UX-4 B / #211 phase 6 / #481)" do
+    test "empty networks + all visitor_enabled available for a user with zero credentials" do
+      # #481 — users get the SAME on-demand-connect tier visitors do: the
+      # `visitor_enabled` (operator-approved self-serve) allowlist. A user
+      # with no credentials sees every enabled network as available.
+      {:ok, en} = Networks.create_network(%{slug: "en-#{u()}", visitor_enabled: true})
       user = user_fixture()
-      # Users get an EMPTY available_networks — they bind via the operator
-      # surface, not the visitor on-demand-connect tier (ruling C).
-      assert Networks.home_data_for_user(user) == %{networks: [], available_networks: []}
+
+      %{networks: rows, available_networks: available} = Networks.home_data_for_user(user)
+      assert rows == []
+      assert Enum.any?(available, &(&1.slug == en.slug))
+    end
+
+    test "available = visitor_enabled MINUS attached (#481 — twin of home_data_for_visitor)" do
+      {:ok, attached} = Networks.create_network(%{slug: "att-#{u()}", visitor_enabled: true})
+      {:ok, avail} = Networks.create_network(%{slug: "av-#{u()}", visitor_enabled: true})
+      # A NON-enabled network the operator bound must never appear in the
+      # available tier — the `visitor_enabled` bound holds for users too.
+      _ = network_fixture()
+
+      user = user_fixture()
+
+      {:ok, _} =
+        Credentials.bind_credential(user, attached, %{
+          nick: "vjt-#{u()}",
+          auth_method: :none,
+          autojoin_channels: []
+        })
+
+      %{networks: rows, available_networks: available} = Networks.home_data_for_user(user)
+
+      assert Enum.map(rows, & &1.slug) == [attached.slug]
+      assert Enum.map(available, & &1.slug) == [avail.slug]
     end
 
     test "renders one row per credential, alpha by slug (matches list_credentials_for_user)" do

@@ -7,8 +7,13 @@ defmodule GrappaWeb.SessionControllerTest do
   Phase 6 (ruling C follow-up 2) relaxed the gate to ANY visitor (anon
   OR registered) — the home-page "connect available network" affordance
   drives it, still bounded by the `visitor_enabled` allowlist + the #171
-  per-IP cap. A USER subject gets 403 (users bind via the operator
-  credential surface).
+  per-IP cap.
+
+  #481 opens the SAME self-serve tier to USER subjects (the visitor-only
+  premise was a #461 relic). A user one-taps an available network too; the
+  `visitor_enabled` (operator-approved) allowlist stays the bound. The user
+  branch binds a USER credential + spawns via the user connect capacity
+  path — NOT the visitor `accrete_network/3`.
 
   The #126 `POST /session/{disconnect,reconnect}` pair is RETIRED —
   visitors park/reconnect each network via the subject-agnostic
@@ -160,13 +165,62 @@ defmodule GrappaWeb.SessionControllerTest do
       |> json_response(400)
     end
 
-    test "user subject → 403", %{conn: conn} do
-      {_, session} = user_and_session()
+    # #481 — the self-serve tier opens to BOTH subjects (the visitor-only
+    # premise was a #461 relic). A USER one-taps an available network from
+    # the home page exactly as a visitor does, still bounded by the
+    # `visitor_enabled` (operator-approved) allowlist. The user branch binds
+    # a USER credential + spawns via the user connect capacity path (per-IP +
+    # network-total caps), NOT the visitor `accrete_network/3`.
+    test "user subject accretes an available network → 204 + binds user credential + spawns",
+         %{conn: conn} do
+      {user, session} = user_and_session()
+
+      {server_b, port_b} = start_server()
+      {network_b, _} = network_with_server(port: port_b, slug: "beta", visitor_enabled: true)
+      on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network_b.id) end)
 
       conn
       |> put_bearer(session.id)
       |> post("/session/networks", %{"network" => "beta"})
+      |> response(204)
+
+      # B's upstream connects + registers.
+      {:ok, _} = IRCServer.wait_for_line(server_b, &String.starts_with?(&1, "NICK"), 5_000)
+      assert is_pid(Grappa.Session.whereis({:user, user.id}, network_b.id))
+
+      # A USER credential (not a visitor one) was bound on B; a user with no
+      # prior credential seeds its nick from the account name.
+      assert {:ok, cred_b} = Credentials.get_credential_by_ids(user.id, network_b.id)
+      assert cred_b.user_id == user.id
+      assert is_nil(cred_b.visitor_id)
+      assert cred_b.nick == user.name
+      # B starts anon — the user has not identified on B yet.
+      assert cred_b.auth_method == :none
+    end
+
+    test "user accreting a NON-visitor_enabled network → 403 (the bound holds for users too)",
+         %{conn: conn} do
+      {_user, session} = user_and_session()
+      # A network the operator did NOT opt into the self-serve tier.
+      {_, _} = network_with_server(port: pick_unused_port(), slug: "locked", visitor_enabled: false)
+
+      conn
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "locked"})
       |> json_response(403)
+    end
+
+    test "user accreting a network they ALREADY hold → 409 already_attached", %{conn: conn} do
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: pick_unused_port(), slug: "held", visitor_enabled: true)
+
+      {:ok, _} =
+        Credentials.bind_credential(user, network, %{nick: "vjt", auth_method: :none, autojoin_channels: []})
+
+      conn
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "held"})
+      |> json_response(409)
     end
 
     # #211 phase 6 — accretion is anon-allowed now (ruling C follow-up 2:
