@@ -48,7 +48,7 @@ HTTP_BIND=0.0.0.0:8080 scripts/quickstart.sh   # all interfaces, port 8080
 2. Creates host-owned `runtime/` directories (sqlite DB, uploads, build
    output).
 3. Writes a `.env`: sets `MIX_ENV=prod`, your host UID/GID,
-   `PHX_HOST=localhost`, and the host port.
+   `PHX_HOST` (`localhost` unless you pass one), and the host port.
 4. Builds the image and fetches Elixir deps into the checkout.
 5. **Generates every secret** and writes them to `.env` —
    `SECRET_KEY_BASE`, `SECRET_SIGNING_SALT`, `GRAPPA_ENCRYPTION_KEY`, a
@@ -85,6 +85,46 @@ docker compose -f compose.yaml run --rm grappa \
 Then log in via the web UI. To connect the bouncer to an IRC network, see
 **"Bind a network"** in [README.md](README.md).
 
+## A throwaway box for testing (staging)
+
+To look at a change under a real hostname before it ships, hand the script
+the hostname and an account to seed. It comes up already connected, so the
+first login lands on a live session instead of an empty box:
+
+```sh
+PHX_HOST=grappa.example.org \
+SEED_USER=you SEED_AUTOJOIN='#grappa' \
+  scripts/quickstart.sh
+```
+
+`SEED_USER` is the switch — without it nothing is seeded. The rest is
+optional: `SEED_PASSWORD` (generated and printed when unset),
+`SEED_NETWORK` (default `azzurra`), `SEED_SERVER`
+(default `irc.azzurra.chat:6697`), `SEED_NICK` (default `$SEED_USER`),
+`SEED_AUTH` (`auto|sasl|server_pass|nickserv_identify|none`, default
+`none`), `SEED_NICK_PASSWORD` and `SEED_AUTOJOIN`. Re-running never
+clobbers a live box: an existing account or binding is reported and left
+alone.
+
+`PHX_HOST` is load-bearing — it is where upload links and origin checks
+come from. If you serve the box as `grappa.example.org` while `.env` still
+says something else, links point at the wrong host and nothing errors out.
+Pass it explicitly and it replaces whatever a previous run wrote.
+
+The stack still listens on plain HTTP on `HTTP_BIND`; that is the listener
+your own TLS front door proxies to. The script installs nothing on the
+host — it renders `runtime/nginx-frontend.conf` from the shipped example
+with your hostname, upstream and certificate paths filled in
+(`FRONTEND_SSL_CERT` / `FRONTEND_SSL_KEY` override the defaults under
+`/etc/ssl/grappa/`), and prints the path. Include it from your nginx.
+
+> Serving a staging box over plain HTTP under a real name looks like it
+> works and does not: off `localhost`, browsers refuse to register the
+> service worker without TLS — and refuse it behind an untrusted
+> certificate too. Push, offline and install then silently vanish, which
+> is usually the part you meant to test. Use mkcert on a LAN, ACME in
+> public.
+
 ## Managing the stack
 
 All commands run from the repo root. The `-f compose.yaml` flag keeps it
@@ -97,11 +137,40 @@ docker compose -f compose.yaml --profile prod logs -f grappa
 # Stop / start
 docker compose -f compose.yaml --profile prod down
 scripts/quickstart.sh                       # idempotent: brings it back up
-
-# Update to a newer checkout
-git pull
-docker compose -f compose.yaml --profile prod up -d --build
 ```
+
+### Updating an installed box
+
+```sh
+scripts/quickstart-update.sh                # pull, then update
+scripts/quickstart-update.sh --no-pull      # update from the working tree as-is
+```
+
+`quickstart.sh` never touches git — re-running it can only re-install what
+is already on disk. `deploy.sh` is the production path and its
+`require_main_checkout` guard refuses any checkout that is not the main one
+sitting on `main`, which rules out a staging box parked on a branch. This
+script covers the gap in between.
+
+It refuses before it touches anything: a missing `.env` (the box was never
+installed), no docker, not a git checkout, or — when pulling — a dirty
+tree, all abort with the reason. The pull is `--ff-only`, so a diverged
+branch stops the run rather than being merged by a script. Nothing in the
+stack has moved at that point. It then reads the diff to decide which of
+the expensive steps are actually needed:
+
+| Changed | Triggers |
+| --- | --- |
+| `Dockerfile`, `.dockerignore` | image rebuild |
+| `mix.lock`, `mix.exs` | `mix deps.get` |
+| `priv/repo/migrations/` | `mix ecto.migrate` |
+| `cicchetto/` | frontend bundle |
+
+Everything else is a plain recreate: the tree is bind-mounted into the
+container and the image is toolchain-only, so ordinary code changes compile
+at boot with no rebuild. The stack is then recreated (never hot-reloaded —
+a staging box exists to be restarted), `/healthz` is polled until it
+answers, and the URL is printed from `.env`.
 
 ## Exposing it beyond localhost (TLS)
 
