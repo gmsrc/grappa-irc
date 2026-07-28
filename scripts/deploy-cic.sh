@@ -50,18 +50,24 @@ touch runtime/cicchetto-dist/.gitkeep
 echo "Notifying grappa of new bundle hash..."
 # Container `curl` against loopback inside the grappa pod —
 # /admin/cic-bundle-changed is loopback-gated. Response body is the
-# new hash on success, empty on 204 (bundle file absent — shouldn't
-# happen post-build but the endpoint is safe). Routes through
-# `_lib.sh in_container` so the container-name lookup is shared with
-# every other operator surface (H27 from the 2026-05-22 codebase
-# review) — bare `docker exec grappa` assumed `container_name: grappa`
-# literally and was brittle to compose overrides.
+# new hash on success, empty on 204 (the BEAM could not READ the bundle
+# it was asked to broadcast). Routes through `_lib.sh in_container` so
+# the container-name lookup is shared with every other operator surface
+# (H27 from the 2026-05-22 codebase review) — bare `docker exec grappa`
+# assumed `container_name: grappa` literally and was brittle to compose
+# overrides.
 if ! hash="$(in_container curl -fsS -X POST http://localhost:4000/admin/cic-bundle-changed)"; then
     die "cic-bundle-changed POST failed — is grappa up? scripts/healthcheck.sh"
 fi
 
+# #526: an empty body is HTTP 204 — the server could not read the dist we
+# JUST built, so it broadcast NOTHING and no live client will see the
+# refresh banner. That is a FAILED deploy, not a success: the whole point
+# of this step is the broadcast. The old code printed a ✓ here, so the
+# 2026-07-28 prod incident (CIC_DIST_ROOT resolving to a path the BEAM's
+# CWD could not reach) degraded silently. Fail loud and name the fix.
 if [ -z "$hash" ]; then
-    echo "✓ cic dist built; server returned 204 (no bundle on disk?)"
-else
-    echo "✓ cic dist built + broadcast hash=$hash to all live user-topics"
+    die "cic-bundle-changed returned 204 (empty) — grappa built the dist but could NOT read it back to broadcast the hash, so NO refresh banner fired. Check that CIC_DIST_ROOT resolves to the dir the build wrote (runtime/cicchetto-dist). See issue #526."
 fi
+
+echo "✓ cic dist built + broadcast hash=$hash to all live user-topics"

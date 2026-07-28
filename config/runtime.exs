@@ -103,12 +103,22 @@ if config_env() == :prod do
   config :grappa, :uploads_storage_root, uploads_storage_root
 
   # #399 — the built cicchetto SPA dist the embedded web server
-  # self-serves (Plug.Static + SPA history-fallback). Defaults to the
-  # `runtime/cicchetto-dist` build anchor (resolved against the process
-  # CWD, like UPLOADS_STORAGE_ROOT above — systemd/rc.d run with
-  # WorkingDirectory at the repo root); a packaged install (deb/rpm/Arch)
+  # self-serves (Plug.Static + SPA history-fallback) AND re-reads to
+  # broadcast the refresh-banner hash (Grappa.Cic.Bundle). The relative
+  # default resolves against the BEAM's CWD, so it is ONLY correct where
+  # the CWD is the repo root: Docker (WORKDIR /app, and compose sets
+  # CIC_DIST_ROOT explicitly anyway) and native systemd
+  # (WorkingDirectory=<repo>). The FreeBSD jail is the exception —
+  # rc.d/grappa starts the release via `su -m grappa -c '.../bin/grappa
+  # daemon'` and sets NO WorkingDirectory, so the CWD is NOT the repo
+  # root; the jail MUST set an absolute CIC_DIST_ROOT in grappa.env
+  # (exactly like it already does for DATABASE_PATH / UPLOADS_STORAGE_ROOT
+  # for the same reason). Unset on the jail, the relative default missed
+  # the dist and /admin/cic-bundle-changed returned 204 with no banner
+  # broadcast — issue #526. A packaged install (deb/rpm/Arch) likewise
   # sets CIC_DIST_ROOT to an absolute data path. Stashed into
-  # `:persistent_term` via Grappa.Cic.Bundle.boot/1 at app start.
+  # `:persistent_term` via Grappa.Cic.Bundle.boot/1 at app start (boot
+  # time only — a change needs a BEAM restart, not a hot reload).
   cic_dist_root =
     System.get_env("CIC_DIST_ROOT") || "runtime/cicchetto-dist"
 

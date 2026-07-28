@@ -42,12 +42,21 @@ echo "[deploy-cic] vite build (cicchetto bundle)"
 
 echo "[deploy-cic] POST ${RELOAD_URL}"
 if hash=$(curl -fsS -X POST "${RELOAD_URL}"); then
+	# #526: an empty body is HTTP 204 — the BEAM built the dist but could
+	# NOT read it back to broadcast the hash, so NO refresh banner fired.
+	# That is a FAILED cic deploy, not a success (the broadcast IS the
+	# point). The old code printed a ✓ here, so the 2026-07-28 prod
+	# incident degraded silently: CIC_DIST_ROOT was unset in the jail env,
+	# so the relative default resolved against the BEAM's CWD (NOT the repo
+	# root — rc.d/grappa sets no WorkingDirectory) and File.read missed the
+	# dist nginx was serving fine. Fail loud and name the fix.
 	if [ -z "${hash}" ]; then
-		echo "[deploy-cic] ✓ cic dist built; server returned 204 (no bundle on disk?)"
+		echo "[deploy-cic] ERROR: /admin/cic-bundle-changed returned 204 (empty) — grappa built the dist but could NOT read it back to broadcast the hash, so NO refresh banner fired. Set CIC_DIST_ROOT=/home/grappa/grappa/runtime/cicchetto-dist in /usr/local/etc/grappa/grappa.env and COLD-restart the BEAM. See issue #526." >&2
+		exit 1
 	else
 		echo "[deploy-cic] ✓ cic dist built + broadcast hash=${hash} to all live user-topics"
 	fi
 else
-	echo "[deploy-cic] ERROR: POST /admin/cic-bundle-changed failed — is grappa up?"
+	echo "[deploy-cic] ERROR: POST /admin/cic-bundle-changed failed — is grappa up?" >&2
 	exit 1
 fi

@@ -22317,3 +22317,58 @@ capability turns into "the feature is broken".
 A test now runs the real ffmpeg over a generated GIF and a generated PNG — named
 without extensions, so only the decoder can answer — and skips rather than fails
 where ffmpeg is absent. Reinstating the URL guess fails it.
+---
+
+## 2026-07-28 — #526: the refresh banner that never fired (204 on the jail, and the ✓ that hid it)
+
+During a batched HOT cic deploy the bundle shipped fine — nginx served the new
+`index-<hash>.js` — but the refresh banner never appeared for already-connected
+clients. `infra/freebsd/jail_deploy_cic.sh` printed a ✓: the POST to
+`/admin/cic-bundle-changed` succeeded but returned **204 (empty body)**, so the
+BEAM broadcast no hash and no live client compared against its baked-in one.
+
+**Root cause — a #399 regression, config-shaped.** `AdminController.cic_bundle_changed/2`
+returns 204 exactly when `Grappa.Cic.Bundle.current_hash/0` is `nil`, i.e. when
+`File.read(CIC_DIST_ROOT <> "/index.html")` fails. #399 moved the dist path to a
+runtime knob (`config/runtime.exs`: `System.get_env("CIC_DIST_ROOT") ||
+"runtime/cicchetto-dist"`) whose **relative default resolves against the BEAM's
+CWD**. That is only the repo root under Docker (`WORKDIR /app`) and native systemd
+(`WorkingDirectory=<repo>`). On the FreeBSD jail it is NOT: `rc.d/grappa` starts
+the release with `su -m grappa -c '.../bin/grappa daemon'` and sets no
+WorkingDirectory, so the relative path missed the dist that nginx was serving
+correctly via its absolute symlink. The proof it was never CWD-safe on the jail:
+`grappa.env` already carries `DATABASE_PATH` and `UPLOADS_STORAGE_ROOT` as
+**absolute** paths for exactly this reason — #399 simply forgot to add
+`CIC_DIST_ROOT` to the same list. runtime.exs even *claimed* "systemd/rc.d run
+with WorkingDirectory at the repo root"; the rc.d half of that sentence was false.
+
+**Why it went unnoticed — the failure mode was a success message.** Both
+cic-deploy wrappers (`scripts/deploy-cic.sh`, `infra/freebsd/jail_deploy_cic.sh`)
+printed `✓ … server returned 204 (no bundle on disk?)` on the empty body. A cic
+deploy whose entire purpose is the live broadcast reporting ✓ on zero broadcast
+is a "log honesty" + "no silent-swallow at boundaries" violation: the operator
+must see the failure. The endpoint's 204 is *correct* (a web-only deploy
+legitimately has no bundle to compare), so the loud-fail belongs at the deploy
+script — which JUST built a bundle, so a 204 there is unambiguously a
+misconfiguration.
+
+**Fix (three parts, all consistency-driven).**
+1. `grappa.env.example` gains `CIC_DIST_ROOT=/home/grappa/grappa/runtime/cicchetto-dist`
+   under "Storage paths", next to the two paths already absolute for the same
+   CWD reason — "same problem, same solution", not a new pattern.
+2. Both wrappers treat an empty (204) response as a hard failure (non-zero exit)
+   that names 204 and points at `CIC_DIST_ROOT`. A bats test
+   (`deploy_worktree_guard_test.bats`) pins the contract for the Docker wrapper.
+3. runtime.exs's comment is corrected to tell the truth about each substrate.
+
+**Operator consequence.** `cic_dist_root` is read into `:persistent_term` at BEAM
+boot, so the live m42 env must add the var AND take a **COLD** deploy (restart)
+for it to land — a hot cic-only deploy keeps returning 204 until the restart.
+The now-loud wrappers make that state visible instead of silent.
+
+**Lesson.** A relative path default is a hidden dependency on the process CWD.
+When one substrate sets the CWD implicitly (systemd/Docker) and another does not
+(rc.d), the "sensible default" silently forks by substrate. Anchor
+substrate-varying paths absolutely at the boundary that knows the truth (the env
+file), and make the step whose whole point is a side effect FAIL when the side
+effect did not happen.

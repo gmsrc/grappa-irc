@@ -391,6 +391,24 @@ broadcasts the new bundle hash on every live user-topic; cic's
 hash baked into the page the browser loaded. Server deploys never
 auto-trigger a cic refresh.
 
+**`CIC_DIST_ROOT` must be set absolute on the jail (issue #526).** The
+BEAM reads the built `index.html` from `CIC_DIST_ROOT` (default
+`runtime/cicchetto-dist`, repo-root-relative) to compute the broadcast
+hash. That relative default only works where the process CWD is the repo
+root — true under Docker (`WORKDIR /app`) and native systemd
+(`WorkingDirectory=<repo>`), but NOT the jail: `rc.d/grappa` starts the
+release with `su -m grappa -c '.../bin/grappa daemon'` and sets no
+WorkingDirectory. So `grappa.env` MUST carry
+`CIC_DIST_ROOT=/home/grappa/grappa/runtime/cicchetto-dist` (absolute,
+alongside `DATABASE_PATH` / `UPLOADS_STORAGE_ROOT` for the same reason);
+unset, `/admin/cic-bundle-changed` returns **204** and no banner is ever
+broadcast even though nginx serves the fresh bundle fine. Both cic-deploy
+wrappers now treat a 204 as a hard failure (non-zero exit) instead of the
+old ✓, so this misconfiguration reddens the deploy instead of degrading
+silently. `cic_dist_root` is stashed in `:persistent_term` at BEAM boot,
+so a fresh `CIC_DIST_ROOT` only takes effect after a **COLD** deploy
+(BEAM restart) — a hot cic-only deploy will keep returning 204 until then.
+
 ### m42 (FreeBSD bastille jail) — host-side wrapper
 
 The `infra/freebsd/jail_*.sh` scripts run INSIDE the jail as root

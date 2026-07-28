@@ -13,10 +13,16 @@
 # BEAM stale. The fix asserts SRC_ROOT==REPO_ROOT and branch==main as the
 # FIRST step, before any pull/build.
 #
-# Scope: guard ordering. Runs the scripts against a throwaway repo + a real
-# `git worktree add` (so _lib.sh derives a genuine SRC_ROOT!=REPO_ROOT),
-# with `docker` stubbed on PATH. Asserts the guard fires before the
-# side-effect echo ("Pulling latest main..." / "Building cicchetto dist...").
+# Scope: guard ordering + the #526 loud-fail contract. Runs the scripts
+# against a throwaway repo + a real `git worktree add` (so _lib.sh derives
+# a genuine SRC_ROOT!=REPO_ROOT), with `docker` stubbed on PATH. Asserts
+# the guard fires before the side-effect echo ("Pulling latest main..." /
+# "Building cicchetto dist..."), AND that deploy-cic.sh treats an empty
+# (HTTP 204) bundle-hash response as a hard failure — see #526: the server
+# built the bundle but resolved the wrong CIC_DIST_ROOT, could not read
+# index.html, so the refresh-banner hash was never broadcast; the script's
+# empty-body branch printed a ✓ success and the silent degradation went
+# unnoticed. A cic deploy with zero broadcast is a FAILED deploy.
 
 setup() {
     DEPLOY_SH="$BATS_TEST_DIRNAME/../../scripts/deploy.sh"
@@ -123,4 +129,34 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"branch"* ]]
     [[ "$output" != *"Building cicchetto dist"* ]]
+}
+
+@test "deploy-cic.sh treats an empty (204) bundle-hash response as a hard failure" {
+    # #526: the server built + served the bundle (nginx), but resolved the
+    # wrong CIC_DIST_ROOT and could not read index.html — so
+    # /admin/cic-bundle-changed returned 204 (empty body) and the refresh
+    # banner was never broadcast. A cic deploy whose whole purpose is the
+    # live broadcast MUST NOT report ✓ on an empty response; it exits
+    # non-zero AND names 204 so the operator sees the degradation.
+    #
+    # Override the docker stub so the cic-bundle-changed POST returns an
+    # empty body (204), keeping the build + container-id lookups working so
+    # the script reaches the broadcast step.
+    cat > "$FAKE_DIR/docker" <<EOF
+#!/usr/bin/env bash
+args="\$*"
+case "\$args" in
+    *"ps -q grappa"*)      echo "fakecontainerid"; exit 0 ;;
+    *cic-bundle-changed*)  printf '%s' ''; exit 0 ;;
+    *)                     exit 0 ;;
+esac
+EOF
+    chmod +x "$FAKE_DIR/docker"
+
+    cd "$MAIN"
+    run "$MAIN/scripts/deploy-cic.sh"
+    [ "$status" -ne 0 ]
+    # Got past the guards + build — the failure is the empty broadcast.
+    [[ "$output" == *"Building cicchetto dist"* ]]
+    [[ "$output" == *"204"* ]]
 }
