@@ -2,7 +2,7 @@ import {
   deleteAccount as apiDeleteAccount,
   updateNetworkIdentity as apiUpdateNetworkIdentity,
 } from "./api";
-import { clearLocalAuth, getSubject, logout, token } from "./auth";
+import { clearLocalAuth, getSubject, isPersistentIdentity, logout, token } from "./auth";
 import { refetchUser } from "./networks";
 import { quitAll } from "./quit";
 
@@ -52,14 +52,14 @@ export async function detach(): Promise<void> {
 export async function quit(): Promise<void> {
   const subject = getSubject();
 
-  if (subject?.kind === "user") {
-    await quitAll(null);
-    return;
-  }
-
-  if (subject?.kind === "visitor" && subject.registered === true) {
-    // Registered visitor: park-all persists across reboot, then detach
-    // (which preserves the identity). Same nuclear path as a user's quit.
+  // #477 — the teardown path is a question of PERSISTENCE, not subject
+  // class: a user AND a registered visitor are BOTH persistent identities
+  // and take the SAME nuclear path (park all networks → detach; the parks
+  // persist across reboot, the row + scrollback survive). Only an ephemeral
+  // (anon) visitor — or the not-yet-loaded null subject — differs. Routing
+  // on the shared `isPersistentIdentity` predicate collapses the two
+  // hand-rolled class-branches that asked this one question.
+  if (isPersistentIdentity(subject)) {
     await quitAll(null);
     return;
   }

@@ -210,7 +210,14 @@ vi.mock("../lib/theme", () => ({
   prefersDark: () => false,
 }));
 
-vi.mock("../lib/auth", () => ({
+// Spread the real auth module (importOriginal — same pattern the
+// uploadOrchestrator mock below uses) so the pure `isPersistentIdentity`
+// predicate resolves for real: #477 routes SettingsDrawer.showDetach + the
+// quit path through it, and Shell renders SettingsDrawer, so a bare factory
+// mock lacking that export crashes the drawer the moment Shell mounts it.
+// Only the side-effecting exports are stubbed.
+vi.mock("../lib/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/auth")>()),
   logout: vi.fn().mockResolvedValue(undefined),
   token: () => tokenHolder.value,
   // Visitor session-sharing — SettingsDrawer reads `getSubject()` to

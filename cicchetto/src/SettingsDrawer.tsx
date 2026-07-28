@@ -13,7 +13,7 @@ import AliasSettings from "./AliasSettings";
 import DeleteAccountModal from "./DeleteAccountModal";
 import InlineConfirmButton from "./InlineConfirmButton";
 import { ApiError, displayNick, type Network, visitorNetworkNick } from "./lib/api";
-import { getSubject, token } from "./lib/auth";
+import { getSubject, isPersistentIdentity, token } from "./lib/auth";
 import { getColoredNicklist } from "./lib/colorNicklist";
 import { syncedSetColoredNicklist, syncedSetTimeFormat } from "./lib/displayPrefs";
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
@@ -128,27 +128,21 @@ const SettingsDrawer: Component<Props> = (props) => {
   // here: it moved to hasNetworks() (both subjects carry per-network identity
   // on their /networks rows), so isVisitor now guards ONLY share-session.
   const isVisitor = (): boolean => getSubject()?.kind === "visitor";
-  const isUser = (): boolean => getSubject()?.kind === "user";
   // #363 — an incognito (ephemeral) visitor session must not be portable, so
   // share-session is hidden for it. Reads the persisted subject (same source
   // as isVisitor); narrow on kind first — `incognito` lives only on the
-  // visitor variant (mirrors isRegisteredVisitor's shape).
+  // visitor variant.
   const isIncognito = (): boolean => {
     const s = getSubject();
     return s?.kind === "visitor" && s.incognito === true;
   };
-  // #126 — a registered (NickServ-identified) visitor is a PERSISTENT
-  // identity (`registered === true`, derived server-side from
-  // password_encrypted). It gets the persistent-identity verbs (detach +
-  // disconnect/reconnect), like a user; an ephemeral visitor gets only
-  // quit. The not-yet-loaded null subject falls through to quit-only too.
-  const isRegisteredVisitor = (): boolean => {
-    const s = getSubject();
-    return s?.kind === "visitor" && s.registered === true;
-  };
-  // detach is offered to every persistent identity (user + NickServ
-  // visitor); ephemeral visitors + the loading null-subject get only quit.
-  const showDetach = (): boolean => isUser() || isRegisteredVisitor();
+  // #126 / #477 — detach is offered to every PERSISTENT identity (a
+  // registered user OR a NickServ-identified visitor, `registered === true`
+  // derived server-side); an ephemeral visitor and the not-yet-loaded null
+  // subject get quit-only. Routed through the shared `isPersistentIdentity`
+  // predicate (lib/auth.ts) — the SAME persistence question `quit()` asks,
+  // so the drawer affordance and the teardown path can never drift apart.
+  const showDetach = (): boolean => isPersistentIdentity(getSubject());
   // "quit IRC" is destructive (parks every network, bouncer offline), so
   // it arms via the shared two-tap InlineConfirmButton. Parent owns the
   // armed flag per that component's contract.

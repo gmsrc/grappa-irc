@@ -17,7 +17,13 @@ const subjectHolder = vi.hoisted(() => ({
     | null,
 }));
 
-vi.mock("./auth", () => ({
+// Spread the REAL auth module so the pure `isPersistentIdentity` predicate
+// (which quit() now routes on) runs for real against the stubbed
+// getSubject — the whole point is to exercise the actual persistence
+// classification, not a re-implemented copy. Only the side-effecting
+// exports are stubbed.
+vi.mock("./auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth")>()),
   logout: vi.fn().mockResolvedValue(undefined),
   clearLocalAuth: vi.fn(),
   token: () => "test-bearer",

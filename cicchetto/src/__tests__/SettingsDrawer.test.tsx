@@ -32,7 +32,11 @@ const subjectHolder = vi.hoisted(() => ({
       }
     | null,
 }));
-vi.mock("../lib/auth", () => ({
+// Spread the REAL auth module so `showDetach`'s `isPersistentIdentity`
+// predicate runs for real against the stubbed getSubject (the drawer +
+// lib/lifecycle both route on it now). Only side-effecting exports stubbed.
+vi.mock("../lib/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/auth")>()),
   logout: vi.fn().mockResolvedValue(undefined),
   token: () => "test-bearer",
   getSubject: () => subjectHolder.current,

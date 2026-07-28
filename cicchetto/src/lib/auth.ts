@@ -141,6 +141,28 @@ export function getSubject(): api.Subject | null {
   return parsed;
 }
 
+// #477 — the ONE persistence predicate. A "persistent identity" is one
+// whose identity + scrollback SURVIVE a quit (the quitAll park-all → detach
+// path): a registered user, or a NickServ-identified visitor
+// (`registered === true`, derived server-side from password_encrypted).
+// The inverse — an ephemeral (anon) visitor, or the not-yet-loaded null
+// subject — is torn down by a bare logout (its anon row is purged
+// server-side). This collapses the class-branching quit()/showDetach used
+// to hand-roll (`kind === "user" || (visitor && registered)`): both asked
+// the SAME question — persistence, not class.
+//
+// SSOT for the persistence question only. It is DELIBERATELY narrow to
+// `Subject`: the "deletable account" gate (persistent AND non-admin, on the
+// `/me` resource) and the "is admin" gate are DIFFERENT verbs, not folded
+// in here — widening the signature to serve them would turn this into a
+// type-flag, the exact boundary violation CLAUDE.md's "reuse the verbs, not
+// the nouns" forbids.
+export function isPersistentIdentity(subject: api.Subject | null): boolean {
+  if (subject === null) return false;
+  if (subject.kind === "user") return true;
+  return subject.registered === true;
+}
+
 // C4 — server-side `UserSocket.assign_subject/2` sets
 // `socket.assigns.user_name = "visitor:" <> visitor.id` for visitor
 // sessions and `User.name` for user sessions. The Phoenix Channel
