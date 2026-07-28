@@ -773,15 +773,20 @@ defmodule GrappaWeb.AuthControllerTest do
       refute_receive {:DOWN, ^ref, :process, ^pid, _reason}, 500
       assert Grappa.Session.whereis({:user, user.id}, network.id) == pid
 
-      assert Registry.lookup(
-               Grappa.SessionRegistry,
-               SessionServer.registry_key({:user, user.id}, network.id)
-             ) == [{pid, nil}]
-
       # DB == live: the desync is gone — the credential is genuinely
       # :connected and backed by a live pid.
       cred = Repo.get_by(Credential, user_id: user.id, network_id: network.id)
       assert cred.connection_state == :connected
+
+      # #498 — the registry entry's VALUE now carries the session's live
+      # IRC nick (published by Session.Server.publish_live_nick/1 so
+      # current_nick/2 is a cheap ETS read, no GenServer round-trip). DETACH
+      # keeps the entry AND its live-nick value intact. No rename happens in
+      # this test, so the live nick equals the configured credential nick.
+      assert Registry.lookup(
+               Grappa.SessionRegistry,
+               SessionServer.registry_key({:user, user.id}, network.id)
+             ) == [{pid, cred.nick}]
     end
 
     test "user logout (DETACH) keeps ALL the user's bindings up (#126)", %{conn: conn} do
