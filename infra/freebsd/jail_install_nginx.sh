@@ -1,39 +1,31 @@
 #!/bin/sh
-# Install nginx config + snippets in jail, symlink cic dist, enable + start service.
+# Install nginx config + snippet in the jail, enable + start service.
 #
 # Invoke from m42 host:
 #   sudo bastille cmd grappa /home/grappa/grappa/infra/freebsd/jail_install_nginx.sh
 #
 # Idempotent — re-run after `git pull` to refresh nginx config.
+#
+# #485 made this jail nginx a DUMB reverse proxy: the BEAM self-serves the
+# SPA + static + PWA manifest and OWNS all security headers, so there is no
+# SPA symlink to maintain and no security-headers snippet to install — only
+# the substrate-agnostic proxy snippet.
+#
+# COORDINATION (#485): the security headers move from nginx into the BEAM in
+# ONE deploy. Run this in the SAME cold deploy as the release that ships
+# GrappaWeb.Plugs.SecurityHeaders — shipping the release first double-emits
+# the CSP (intersection footgun), shipping this first leaves a no-headers
+# window.
 
 set -eu
 
 REPO_ROOT="/home/grappa/grappa"
 NGINX_ETC="/usr/local/etc/nginx"
-# Shared with the Docker substrate (`compose.yaml` bind-mounts
-# `./runtime/cicchetto-dist`) so `Grappa.Cic.Bundle.@bundle_path`
-# reads the same anchor everywhere. jail_cic_build.sh writes here via
-# `npm run build -- --outDir ../runtime/cicchetto-dist`.
-CIC_DIST="${REPO_ROOT}/runtime/cicchetto-dist"
-# Jail-writable path — bastille thin-jail mounts /usr/share read-only,
-# so the Docker side's /usr/share/nginx/html convention is off-limits.
-# nginx.conf's `root` directive points here.
-SPA_LINK="/usr/local/www/cic"
 
-echo "[install_nginx] copying config + snippets"
+echo "[install_nginx] copying config + snippet"
 install -o root -g wheel -m 0644 "${REPO_ROOT}/infra/freebsd/nginx.conf" "${NGINX_ETC}/nginx.conf"
 mkdir -p "${NGINX_ETC}/snippets"
 install -o root -g wheel -m 0644 "${REPO_ROOT}/infra/snippets/locations-api.conf" "${NGINX_ETC}/snippets/locations-api.conf"
-install -o root -g wheel -m 0644 "${REPO_ROOT}/infra/snippets/security-headers.conf" "${NGINX_ETC}/snippets/security-headers.conf"
-
-echo "[install_nginx] linking SPA dist -> ${SPA_LINK}"
-if [ ! -d "${CIC_DIST}" ]; then
-	echo "[install_nginx] ERROR: ${CIC_DIST} not present — run jail_cic_build.sh first" >&2
-	exit 1
-fi
-mkdir -p "$(dirname "${SPA_LINK}")"
-rm -f "${SPA_LINK}"
-ln -sf "${CIC_DIST}" "${SPA_LINK}"
 
 echo "[install_nginx] nginx -t"
 nginx -t

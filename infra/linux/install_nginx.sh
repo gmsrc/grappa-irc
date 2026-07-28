@@ -23,15 +23,11 @@ LISTEN_ADDR="${LISTEN_ADDR:-0.0.0.0:80}"
 TRUSTED_UPSTREAM_CIDR="${TRUSTED_UPSTREAM_CIDR:-}"
 
 NGINX_ETC="/etc/nginx"
-# Shared anchor with every other substrate — Grappa.Cic.Bundle reads
-# runtime/cicchetto-dist regardless of which deploy path built it.
-CIC_DIST="${REPO_ROOT}/runtime/cicchetto-dist"
-SPA_LINK="/var/www/grappa/cic"
 
-if [ ! -d "${CIC_DIST}" ]; then
-	echo "[install_nginx] ERROR: ${CIC_DIST} not present — run cic_build.sh first" >&2
-	exit 1
-fi
+# #485 — this host's nginx is a dumb reverse proxy now (the BEAM self-serves
+# the SPA + owns all headers), so there is no cicchetto-dist symlink and no
+# security-headers snippet to install; only the substrate-agnostic proxy
+# snippet.
 
 echo "[install_nginx] rendering nginx.conf (listen=${LISTEN_ADDR})"
 if [ -n "${TRUSTED_UPSTREAM_CIDR}" ]; then
@@ -58,12 +54,6 @@ echo "[install_nginx] installing config + snippets"
 install -o root -g root -m 0644 "${tmp_conf}" "${NGINX_ETC}/nginx.conf"
 mkdir -p "${NGINX_ETC}/snippets"
 install -o root -g root -m 0644 "${REPO_ROOT}/infra/snippets/locations-api.conf" "${NGINX_ETC}/snippets/locations-api.conf"
-install -o root -g root -m 0644 "${REPO_ROOT}/infra/snippets/security-headers.conf" "${NGINX_ETC}/snippets/security-headers.conf"
-
-echo "[install_nginx] linking SPA dist -> ${SPA_LINK}"
-mkdir -p "$(dirname "${SPA_LINK}")"
-rm -f "${SPA_LINK}"
-ln -sf "${CIC_DIST}" "${SPA_LINK}"
 
 echo "[install_nginx] nginx -t"
 nginx -t

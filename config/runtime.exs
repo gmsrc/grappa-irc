@@ -8,8 +8,9 @@ import Config
 # file MUST appear in:
 #   * compose.yaml `environment:` block (so Docker propagates it)
 #   * .env.example with a comment describing the value (so operators know)
-#   * (when applicable) infra/nginx.conf CSP allowlist for any host
-#     this env var configures
+#   * (when applicable) the CSP allowlist in GrappaWeb.Plugs.SecurityHeaders
+#     for any host this env var configures (#485 moved the CSP off nginx
+#     into the app — the plug is the single source of truth now)
 # Drift in any of these breaks the deploy in a way only real-browser
 # e2e catches (per CP11 S22 deploy-time bug post-mortem).
 # ENFORCED by test/grappa/config/env_registry_drift_test.exs (#369 X1):
