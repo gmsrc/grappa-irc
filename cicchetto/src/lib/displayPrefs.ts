@@ -1,6 +1,6 @@
 import { createEffect } from "solid-js";
 import { token } from "./auth";
-import type { ChannelKey } from "./channelKey";
+import { type ChannelKey, decodeChannelKey } from "./channelKey";
 import { getColoredNicklist, setColoredNicklist } from "./colorNicklist";
 import {
   getAllPresencePrefs,
@@ -8,6 +8,7 @@ import {
   replacePresencePrefs,
   setChannelPresencePref,
 } from "./presenceFilter";
+import { loadInitialScrollback, purgeScrollback } from "./scrollback";
 import { getTimeFormat, setTimeFormat, type TimeFormatKey } from "./timeFormat";
 import { type DisplayPrefs, getDisplayPrefs, putDisplayPrefs } from "./userSettings";
 
@@ -191,4 +192,22 @@ export function syncedSetColoredNicklist(on: boolean): void {
 export function syncedSetChannelPresencePref(key: ChannelKey, pref: PresencePref): void {
   setChannelPresencePref(key, pref);
   pushDisplayPrefs();
+  // #458 — Option 1 filters join/part/quit/nick_change out of the REST page
+  // SERVER-SIDE when this channel's pref hides them (so `limit` counts VISIBLE
+  // rows, not raw ones). Its one accepted consequence: revealing presence needs
+  // rows the server never sent. So on "show" we purge the (filtered) page and
+  // cold-reload — the reload's fetch now re-includes presence. "hide" is free:
+  // the render filter simply drops rows already in the store, no refetch.
+  //
+  // The purge MUST precede the reload: loadInitialScrollback's load-once gate
+  // skips a key still in `loadedChannels`, and purge is what drops it. This
+  // hook lives in the coordinator (not RailActions) so every door onto the
+  // synced write refetches identically — "one feature, one code path".
+  if (pref === "show") {
+    const decoded = decodeChannelKey(key);
+    if (decoded) {
+      purgeScrollback(key);
+      void loadInitialScrollback(decoded.slug, decoded.name);
+    }
+  }
 }

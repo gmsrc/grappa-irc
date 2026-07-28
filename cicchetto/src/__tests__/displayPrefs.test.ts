@@ -16,8 +16,21 @@ import {
   getChannelPresencePref,
   replacePresencePrefs,
 } from "../lib/presenceFilter";
+import { loadInitialScrollback, purgeScrollback } from "../lib/scrollback";
 import { getTimeFormat, setTimeFormat } from "../lib/timeFormat";
 import type { DisplayPrefs } from "../lib/userSettings";
+
+// #458 — refetch-on-reveal. Option 1 filters presence rows out of the REST page
+// server-side when the channel's pref hides them, so `limit` counts VISIBLE rows.
+// The consequence: toggling a channel back to "show" needs rows the server never
+// sent. `syncedSetChannelPresencePref` therefore purges + cold-reloads the
+// channel on "show" (rows are missing) and does NOTHING extra on "hide" (the
+// render filter drops rows already in the store — no wasted fetch). Mock the
+// scrollback seams so the coordinator's decision is observable without a store.
+vi.mock("../lib/scrollback", async (importActual) => {
+  const actual = await importActual<typeof import("../lib/scrollback")>();
+  return { ...actual, purgeScrollback: vi.fn(), loadInitialScrollback: vi.fn() };
+});
 
 // #449 — server-backed display prefs coordinator. The three localStorage-only
 // prefs (presence filter #222, time format #217, colored nicklist #443) never
@@ -55,6 +68,11 @@ function stubFetch(getBody: unknown, putBody: unknown): void {
 }
 
 beforeEach(() => {
+  // Reset call history on the module-level scrollback mocks (vi.mock factory
+  // fns persist across the suite, so SHOW's purge/reload calls would otherwise
+  // bleed into the HIDE test's "not called" assertion). Clears history only —
+  // implementations survive.
+  vi.clearAllMocks();
   resetLocal();
 });
 
@@ -446,5 +464,48 @@ describe("mountDisplayPrefsSync — an unconfirmed local write survives a reload
 
     expect(getChannelPresencePref(KEY_A)).toBeUndefined(); // server won: #a dropped
     dispose();
+  });
+});
+
+// #458 — Option 1's accepted consequence: revealing presence needs rows the
+// server filtered out. The coordinator is the SSOT for the synced write, so the
+// refetch hook lives HERE (not in the UI toggle) — one code path for every door.
+describe("syncedSetChannelPresencePref — refetch on reveal (#458)", () => {
+  const asMock = (fn: unknown): ReturnType<typeof vi.fn> =>
+    fn as unknown as ReturnType<typeof vi.fn>;
+
+  it("SHOW purges the stale page then cold-reloads the channel", async () => {
+    setToken(TOKEN);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ display_prefs: buildWireMap(), persisted: true }), {
+        status: 200,
+      }),
+    );
+
+    syncedSetChannelPresencePref(KEY_A, "show");
+    await flush();
+
+    // Purge clears the filtered rows + the load-once gate; the cold-reload then
+    // re-fetches with presence NOW visible (the server re-includes them).
+    expect(asMock(purgeScrollback)).toHaveBeenCalledWith(KEY_A);
+    expect(asMock(loadInitialScrollback)).toHaveBeenCalledWith("n", "#a");
+    // Order is load-bearing: loadInitialScrollback's load-once gate SKIPS a key
+    // still in `loadedChannels`, so the purge (which drops the key) MUST run
+    // first — else the reload no-ops and the revealed rows never arrive.
+    const purgeOrder = asMock(purgeScrollback).mock.invocationCallOrder[0];
+    const loadOrder = asMock(loadInitialScrollback).mock.invocationCallOrder[0];
+    expect(purgeOrder).toBeDefined();
+    expect(loadOrder).toBeDefined();
+    if (purgeOrder !== undefined && loadOrder !== undefined) {
+      expect(purgeOrder).toBeLessThan(loadOrder);
+    }
+  });
+
+  it("HIDE does not refetch (the render filter drops rows already in the store)", async () => {
+    syncedSetChannelPresencePref(KEY_A, "hide");
+    await flush();
+
+    expect(asMock(purgeScrollback)).not.toHaveBeenCalled();
+    expect(asMock(loadInitialScrollback)).not.toHaveBeenCalled();
   });
 });
