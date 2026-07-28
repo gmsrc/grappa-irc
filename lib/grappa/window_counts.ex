@@ -39,16 +39,15 @@ defmodule Grappa.WindowCounts do
   event `:event`; else `:none`. The aggregate/overflow badge derives its
   colour from the max severity across hidden windows (client projection).
 
-  ## Reuse, off-Session own_nick
+  ## Reuse, explicit own_nick
 
   `snapshot/6` takes `own_nick` + `patterns` as explicit args — it does
   NOT reach into `Session.Server`. Callers resolve them the same way the
-  existing count doors do: the CONFIGURED credential nick (off-Session,
-  `Push.BadgeCount.configured_nick_windows/1`) for `/me`, the live
-  `state.nick` for the per-message push, and
-  `UserSettings.get_highlight_patterns/1` for patterns. Accepted
-  staleness after a `/nick` mirrors `BadgeCount` (see DESIGN_NOTES
-  2026-06-21).
+  existing count doors do: the LIVE nick (`Push.BadgeCount.live_nick_windows/1`,
+  a cheap `Registry` lookup) for `/me`, the live `state.nick` for the
+  per-message push, and `UserSettings.get_highlight_patterns/1` for
+  patterns. #498 converged the `/me` seed onto the live nick so the count
+  follows a `/nick` immediately (see DESIGN_NOTES 2026-07-28).
   """
 
   use Boundary,
@@ -164,10 +163,11 @@ defmodule Grappa.WindowCounts do
        per window, grouped by channel, exactly as `count_mentions/6` does
        per window.
 
-  `own_nicks` (`%{slug => {network_id, own_nick}}`, off-Session via
-  `Push.BadgeCount.configured_nick_windows/1`) and `patterns` (subject-wide
-  highlight list) are resolved ONCE by the caller and threaded in — same
-  off-Session stance as `snapshot/6`. A slug with no configured nick
+  `own_nicks` (`%{slug => {network_id, own_nick}}`, the LIVE nick via
+  `Push.BadgeCount.live_nick_windows/1`) and `patterns` (subject-wide
+  highlight list) are resolved ONCE by the caller and threaded in — #498
+  converged this onto the live nick (cheap `Registry` lookup) so the
+  mention fold follows a `/nick`. A slug with no resolvable nick
   (`nil` own_nick, unbound-but-retained network) folds to `mentions: 0`,
   the messages/events still counting — mirrors `snapshot/6`'s nil own_nick.
   """

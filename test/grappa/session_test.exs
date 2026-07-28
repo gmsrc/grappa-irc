@@ -195,10 +195,13 @@ defmodule Grappa.SessionTest do
   # caller. Pre-fix only `:exit, {:timeout, _}` was caught; a session
   # crashing mid-call (a visitor's 2nd-network session hitting a 433 nick
   # collision on a shared leaf, `{:client_exit, {:nick_rejected, _}}`)
-  # propagated the exit → `GET /networks` 500'd via
-  # `resolve_network_nick`'s `current_nick` call. A dead session looks
-  # like "no session" to callers.
-  describe "call_session callee-death handling (current_nick)" do
+  # propagated the exit → a `GET /networks`-class 500. A dead session
+  # looks like "no session" to callers. Exercised here via
+  # `list_channels/2` (a `call_session` caller); #498 moved `current_nick/2`
+  # itself OFF `call_session` onto a cheap `Registry` lookup, so it can no
+  # longer propagate a callee exit at all — but every other `call_session`
+  # consumer still relies on this catch.
+  describe "call_session callee-death handling" do
     test "a session that EXITS during the call surfaces as {:error, :no_session}" do
       # A throwaway process registered under the exact session key that
       # exits (abnormally) the instant it's called — the deterministic
@@ -214,9 +217,9 @@ defmodule Grappa.SessionTest do
           send(test_pid, :registered)
 
           receive do
-            {:"$gen_call", _, {:current_nick}} ->
+            {:"$gen_call", _, {:list_channels}} ->
               # Die WITHOUT replying — the caller's GenServer.call gets the
-              # callee's :DOWN → an :exit the fix must catch.
+              # callee's :DOWN → an :exit the catch must absorb.
               exit({:client_exit, {:nick_rejected, 433, "collision"}})
           after
             5_000 -> :ok
@@ -225,7 +228,7 @@ defmodule Grappa.SessionTest do
 
       assert_receive :registered, 1_000
 
-      assert {:error, :no_session} = Session.current_nick(subject, net_id)
+      assert {:error, :no_session} = Session.list_channels(subject, net_id)
     end
   end
 end

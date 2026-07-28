@@ -858,6 +858,17 @@ defmodule Grappa.Session do
   failed, or not yet bootstrapped — callers should fall back to the
   credential's configured nick in that case.
 
+  #498 — a CHEAP `Registry.lookup/2` read of the session's own registry
+  entry VALUE, NOT a `GenServer.call`. `Session.Server` mirrors `state.nick`
+  into its own SessionRegistry entry value on init + every reconcile/rename
+  (`publish_live_nick/1`), so this reader carries no per-call round-trip.
+  That is what lets the badge / `/me` unread seed / read-cursor settle
+  resolve own_nick through the ONE live-nick source on their hot path
+  without the per-network GenServer round-trip the old off-Session
+  configured-nick shortcut existed to avoid (DESIGN_NOTES 2026-07-28).
+  A live session always carries a binary value (seeded at init); an entry
+  whose value is not yet a binary is treated as no live nick → fall back.
+
   Exposed on the facade so `GrappaWeb.NetworksController.index` can
   advertise the real IRC nick to cicchetto without coupling the controller
   directly to Session.Server internals.
@@ -865,7 +876,10 @@ defmodule Grappa.Session do
   @spec current_nick(subject(), integer()) :: {:ok, String.t()} | {:error, :no_session}
   def current_nick(subject, network_id)
       when is_subject(subject) and is_integer(network_id) do
-    call_session(subject, network_id, {:current_nick})
+    case Registry.lookup(Grappa.SessionRegistry, Server.registry_key(subject, network_id)) do
+      [{_pid, nick}] when is_binary(nick) -> {:ok, nick}
+      _ -> {:error, :no_session}
+    end
   end
 
   @doc """

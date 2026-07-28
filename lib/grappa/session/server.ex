@@ -1034,6 +1034,11 @@ defmodule Grappa.Session.Server do
 
     emit_lifecycle(:spawned, state)
 
+    # #498 — seed the cheap live-nick copy with the initial (configured)
+    # nick so `current_nick/2` returns `{:ok, nick}` for a live session
+    # from the moment it registers, before any reconcile/rename.
+    :ok = publish_live_nick(state)
+
     {:ok, state, {:continue, {:start_client, client_opts(opts)}}}
   end
 
@@ -1770,15 +1775,6 @@ defmodule Grappa.Session.Server do
   def handle_call({:unset_auto_away}, _, state) do
     # :away_explicit or :present — no-op.
     {:reply, :ok, state}
-  end
-
-  # Returns the live IRC nick for this session — the nick that was
-  # actually registered with the upstream server (which may differ from
-  # the credential's configured nick after NickServ ghost recovery,
-  # nick collision suffixing, or an explicit /nick change). Public via
-  # `Grappa.Session.current_nick/2`.
-  def handle_call({:current_nick}, _, state) do
-    {:reply, {:ok, state.nick}, state}
   end
 
   # Returns a snapshot of currently-joined channels
@@ -3511,16 +3507,25 @@ defmodule Grappa.Session.Server do
     end
   end
 
-  # Broadcasts `own_nick_changed` on the user-level PubSub topic when the
-  # live IRC nick changes (NICK event, 001 RPL_WELCOME nick reconciliation).
-  # Cicchetto's userTopic handler updates the per-network nick in the
-  # networks store, which triggers reactive re-subscription to the correct
-  # own-nick DM topic. Without this broadcast, cicchetto subscribes to the
-  # CREDENTIAL nick (e.g. "grappa") while the live nick is "vjt-grappa" —
-  # inbound DMs are silently dropped.
+  # On a live-nick change (NICK event, 001 RPL_WELCOME reconciliation), two
+  # obligations fire together off the SAME trigger (`prev != next`) so
+  # neither can drift onto a nick change the other misses:
+  #   1. #498 — publish the new nick into this session's SessionRegistry
+  #      entry value so `Grappa.Session.current_nick/2` is a cheap ETS
+  #      lookup, not a GenServer.call. The badge / `/me` unread seed /
+  #      read-cursor settle resolve own_nick through it, so the notify count
+  #      follows the rename immediately instead of matching the stale
+  #      credential nick forever (the pre-#498 permanent staleness).
+  #   2. Broadcast `own_nick_changed` on the user topic — cicchetto's
+  #      userTopic handler updates the per-network nick, re-subscribing to
+  #      the correct own-nick DM topic (else DMs to the new nick drop).
+  # Publish BEFORE broadcast so a consumer reacting to the event reads the
+  # fresh registry value.
   @spec maybe_broadcast_own_nick_changed(t(), t()) :: :ok
   defp maybe_broadcast_own_nick_changed(%{nick: prev_nick}, %{nick: next_nick} = next_state)
        when prev_nick != next_nick do
+    :ok = publish_live_nick(next_state)
+
     :ok =
       Grappa.PubSub.broadcast_event(
         Topic.user(next_state.subject_label),
@@ -3529,6 +3534,29 @@ defmodule Grappa.Session.Server do
   end
 
   defp maybe_broadcast_own_nick_changed(_, _), do: :ok
+
+  # #498 — mirror `state.nick` into this session's own SessionRegistry entry
+  # value. The ONE writer of the cheap live-nick copy: it always writes
+  # `state.nick` (a copy, never a parallel computation) and is called at
+  # EXACTLY the points `state.nick` is set — `do_init/1` (initial) and
+  # `maybe_broadcast_own_nick_changed/2` (001 reconcile + self-NICK) — so
+  # the copy cannot fork from the authoritative nick (the identity-fork bug
+  # class #498 fixes). Runs in the process that OWNS the entry, so
+  # `Registry.update_value/3` is a direct ETS write with no message
+  # round-trip; on session crash the Registry drops the entry →
+  # `current_nick/2` reports `:no_session` → callers fall back to the
+  # credential nick. A `:error` return would mean the process is not
+  # registered under its own key — an impossible invariant break we let
+  # crash rather than silently swallow.
+  @spec publish_live_nick(t()) :: :ok
+  defp publish_live_nick(%{subject: subject, network_id: network_id, nick: nick}) do
+    {_new, _old} =
+      Registry.update_value(Grappa.SessionRegistry, registry_key(subject, network_id), fn _ ->
+        nick
+      end)
+
+    :ok
+  end
 
   # #336 — `Scrollback.persist_event/1` returns a closed error set
   # (`Scrollback.persist_error()`): an `%Ecto.Changeset{}` on validation

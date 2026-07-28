@@ -6297,12 +6297,19 @@ re-run `config.exs`, so `:badge_source` is briefly absent; `count/1` returns
 `nil` (not a crash, not a wrong `0`) and door #1 omits the badge field — the
 push still fires; badges resume once config is live.
 
-**own_nick is the configured nick, off-Session** — credential nick /
+**own_nick was the configured nick, off-Session — SUPERSEDED by #498
+(2026-07-28).** Originally the count read the credential nick /
 `visitor.nick` via `Networks.configured_nick_index/1`, NEVER live
 `Session.current_nick`: door #3 runs on every read-cursor settle, and a
-GenServer round-trip per network on that hot path is unacceptable (`/me`
-takes the same stance). Accepted staleness after `/nick` until the next
-reconnect rewrites the credential — bounded, self-correcting.
+GenServer round-trip per network on that hot path was unacceptable (`/me`
+took the same stance). The "accepted staleness after `/nick` until the
+next reconnect rewrites the credential — bounded, self-correcting" claim
+was WRONG: **nothing rewrites a user's credential nick** (only a manual
+settings edit does), so the staleness was PERMANENT — the count kept
+matching the OLD nick and stopped matching the new. #498 retired the
+tradeoff instead of picking a side: `current_nick/2` is now a cheap
+`SessionRegistry` value lookup (no round-trip), so all three doors read
+the LIVE nick via `Networks.live_nick_index/1`. See the 2026-07-28 entry.
 
 **Three doors, one signal.** (1) push payload gains `badge`; (2) `/me` gains
 `badge_count` (boot seed); (3) `read_cursor_set` gains `badge_count`
@@ -21818,3 +21825,95 @@ busy-retry discipline to the other write paths — defense-in-depth) and #518
 (DB-unavailable write surfaces a 500 instead of a clean 503). Empirical proof:
 with #498 rebased on top of #524, issue299 and m9b pass the full suite without the
 diagnostic serialization restored.
+## 2026-07-28 — notify/badge count follows the LIVE nick, not the configured one (#498)
+
+**Symptom (two reporters on #grappa).** After `/nick`, highlights /
+notification counts kept firing for the OLD nick and stopped for the new.
+
+**Root cause — one feature, two code paths (the shape CLAUDE.md forbids).**
+Two doors resolved own_nick from DIFFERENT sources:
+- Live push dispatch (`persistor.ex`) used `ctx.nick` — the LIVE session
+  nick, reconciled at 001 + updated on self-NICK. Correct.
+- Badge count + `/me` cold-load seed + read-cursor settle
+  (`BadgeCount` → `Networks.configured_nick_index/1`) used `c.nick`, the
+  CONFIGURED credential nick — deliberately off-Session to dodge a
+  per-network `GenServer.call` on those hot paths. Its docstring called the
+  post-`/nick` staleness "accepted ... until the next reconnect rewrites
+  the credential."
+
+The escape hatch never fires for users: `update_visitor_credential_nick/3`
+is visitor-only; self-NICK (`maybe_broadcast_own_nick_changed/2`) only
+broadcasts, never persists; reconnect READS `credential.nick` to connect,
+never writes it back. Only a manual settings edit
+(`update_credential_identity/2`) changes it. So the staleness was
+PERMANENT, and the worse half (new nick no longer counted) never healed.
+
+**Ruling — C-prime: dissolve the tradeoff, don't pick a side.**
+- (a) write the live nick INTO `credential.nick` on self-NICK — smallest
+  diff, but the credential nick is also the CONNECT nick, so a throwaway
+  `/nick` would silently change which nick the session reconnects with
+  (NickServ enforcement risk). Rejected: converges on the wrong source.
+- (b) add a separate `last_seen_nick` column — the issue's recommendation;
+  rejected: a THIRD source of truth (the exact fork we're fixing) AND a
+  migration (COLD; this fix is HOT).
+- (c) resolve the live nick through `Grappa.Session` at count time —
+  correct, but rejected for the per-network `GenServer.call` on the
+  settle/cold-load hot path (empirically real: #482 added ONE such call
+  to a snapshot path and reddened two timing specs the same week).
+- **(C-prime, chosen)** make the live nick CHEAP to read, THEN converge
+  everyone onto it. The perf note stays honest because we remove its
+  cause, not because we accept staleness.
+
+**Mechanism — the live nick in the SessionRegistry entry VALUE.**
+`Session.Server` already registers under
+`{:via, Registry, {SessionRegistry, {:session, subject, network_id}}}`.
+`publish_live_nick/1` mirrors `state.nick` into that entry's value via
+`Registry.update_value/3` — a direct ETS write from the owning process, no
+message round-trip. `Session.current_nick/2` becomes a `Registry.lookup`
+(binary value → `{:ok, nick}`; anything else → `{:error, :no_session}`).
+That makes `resolve_network_nick/2` (already the live-with-fallback SSOT
+behind `GET /networks` + `/me` per-row) cheap, so `BadgeCount` + `/me`
+seed + read-cursor settle converge onto it via the new subject-polymorphic
+`Networks.live_nick_index/1`. On session crash the Registry drops the
+entry → `:no_session` → callers fall back to `credential.nick`. No new
+persisted state, no migration → HOT.
+
+**ONE writer (or it forks — the very bug).** `publish_live_nick/1` always
+writes `state.nick` (a copy, never a parallel computation) at EXACTLY the
+points `state.nick` is set: `do_init/1` (initial) and the SINGLE chokepoint
+`maybe_broadcast_own_nick_changed/2` (001 reconcile + self-NICK, user AND
+visitor), which already fires on every nick change and now publishes the
+registry value BEFORE broadcasting `own_nick_changed` (so a consumer
+reacting to the event reads the fresh value). The dead
+`handle_call({:current_nick})` was deleted.
+
+**The match still folds (rfc1459).** #498 changed only the SOURCE of
+own_nick; the mention match stays in `Push.Triggers`/`Mentions` via
+`Identifier.canonical_nick`/`canonical_channel` (folds `[ ] \ ~`) — never a
+bare `downcase`/`==`.
+
+**Total convergence, no half-migration.** All three stale doors
+(`BadgeCount.count`, `MeController.build_unread_counts`,
+`ReadCursorController`) route through the renamed seam
+`BadgeCount.live_nick_windows/1` → `Networks.live_nick_index/1`; the two
+`configured_*_index/1` functions were DELETED (sole consumer was the badge)
+rather than left as a second, stale path.
+
+**e2e masking trap (why the naive spec is useless).** The per-channel WS
+snapshot (`grappa_channel` `push_channel_snapshot`) and the per-scrollback
+DM filter (`messages_controller`) ALREADY used `current_nick` (live), so a
+joined channel's sidebar mention badge is re-seeded live on its join reply
+— GREEN even before the fix. The client-side foreground title increment
+(`incrementBadge`) is already-correct too. The ONLY non-masked,
+server-sourced observable is the GLOBAL badge (`BadgeCount.count` via the
+`/me` seed / title mirror) when the mention landed while cic's socket was
+down (no client bump possible). `issue498-badge-follows-live-nick` uses the
+#267 WS-gap choreography: rename → drop socket → peer mentions the NEW nick
+→ reload → the server-sourced title badge reflects it. The exhaustive
+two-halves proof (new counted, old NOT) lives in the Elixir
+`BadgeCountLiveNickTest` (deterministic, no browser masking); the e2e is
+one real wiring witness.
+
+**Rule going forward.** Any NEW own-nick-keyed count MUST resolve through
+`live_nick_index/1` (or `current_nick/2` directly) — never re-introduce a
+configured-nick shortcut "for the hot path"; the hot path is now cheap.

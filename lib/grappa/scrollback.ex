@@ -611,8 +611,8 @@ defmodule Grappa.Scrollback do
   caller doesn't have a session; the channel-shape narrowing then
   applies. The Phoenix Channel `join_reply` path threads the live
   session nick when it can resolve one, `nil` otherwise; the `/me`
-  cold-load threads the configured credential nick (off-Session, via
-  `Push.BadgeCount.configured_nick_windows/1`).
+  cold-load threads the LIVE nick (via `Push.BadgeCount.live_nick_windows/1`,
+  a cheap `Registry` lookup — #498).
 
   Returns `0` for the past-tail case (`after_id >= max(id)`), `0` for
   the impossible-subject case (no rows match the subject + network),

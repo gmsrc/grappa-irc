@@ -76,11 +76,12 @@ defmodule GrappaWeb.MeController do
   only the credential row) and drops nil-cursor windows + all-nil slugs
   identically (`refute Map.has_key?`).
 
-  own_nick is still threaded per-network from the CONFIGURED credential
-  nick (off-Session `Push.BadgeCount.configured_nick_windows/1`; `nil` on
-  an unbound network → `mentions: 0`) for the mention fold — keeping the
-  /me path off `Grappa.Session` (a `GenServer.call` per network at
-  cold-load is unacceptable — DESIGN_NOTES 2026-06-21). **Behaviour change
+  own_nick is threaded per-network from the LIVE nick
+  (`Push.BadgeCount.live_nick_windows/1`; `nil` on an unbound network →
+  `mentions: 0`) for the mention fold. #498 converged this off the former
+  CONFIGURED-nick shortcut (which went permanently stale after a `/nick`)
+  now that `current_nick/2` is a cheap `Registry` lookup — no per-network
+  `GenServer.call` at cold-load (DESIGN_NOTES 2026-07-28). **Behaviour change
   (#396, user-visible):** the single COALESCE predicate no longer applies
   the old own-nick SELF-window narrowing (`channel == own AND dm_with ==
   own`), so a self (own-nick) window now counts rows that narrowing
@@ -93,10 +94,10 @@ defmodule GrappaWeb.MeController do
 
   Top-level `badge_count` — `Grappa.Push.BadgeCount.count/1` for the
   subject: the notify-worthy unread total (same predicate as Web Push),
-  capped at 99. Like `unread_counts` it is computed at boot and stays
-  OFF `Grappa.Session` (BadgeCount resolves own_nick from the configured
-  credential nick, not the live session nick), so `/me` remains a
-  Session-free path. cic seeds its icon-badge / `document.title` from it.
+  capped at 99. Like `unread_counts` it is computed at boot; #498 —
+  BadgeCount resolves own_nick from the LIVE nick via a cheap `Registry`
+  lookup (no per-network `GenServer.call`), so the count follows a `/nick`
+  immediately. cic seeds its icon-badge / `document.title` from it.
 
   ## home_data envelope (UX-4 bucket B)
 
@@ -233,11 +234,11 @@ defmodule GrappaWeb.MeController do
     # must still seed the envelope), and it drops nil-cursor windows +
     # all-nil slugs identically (`refute Map.has_key?`).
     #
-    # own_nick (off-Session `Push.BadgeCount.configured_nick_windows/1`;
+    # own_nick (LIVE nick via `Push.BadgeCount.live_nick_windows/1`;
     # `nil` for an unbound network → `mentions: 0`) and the subject-wide
     # highlight `patterns` (#267) are resolved ONCE here and threaded into
     # the bulk fold — the part of the old loop that was already right.
-    own_nicks = BadgeCount.configured_nick_windows(subject)
+    own_nicks = BadgeCount.live_nick_windows(subject)
     patterns = UserSettings.get_highlight_patterns(subject)
 
     WindowCounts.bulk_snapshot(subject, own_nicks, patterns)

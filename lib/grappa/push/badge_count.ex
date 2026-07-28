@@ -53,18 +53,21 @@ defmodule Grappa.Push.BadgeCount do
   predicate itself (`channel != own_nick`), so the tail needs no
   inbound/outbound split.
 
-  ## own_nick is the CONFIGURED nick, off-Session (load-bearing)
+  ## own_nick is the LIVE nick, via a cheap Registry lookup (#498)
 
   The mention branch of `should_notify?/4` needs the subject's IRC nick.
-  This module resolves it from the configured credential nick (users) /
-  `visitor.nick` (visitors) via `Networks.configured_nick_index/1` —
-  NEVER the live `Session.current_nick/2`. `count/1` runs on the
-  read-cursor settle hot path (door #3 fires on every focus-leave); a
-  GenServer round-trip per network there is unacceptable, and `/me`
-  already takes the same off-Session stance for its unread-count seed.
-  Accepted staleness: after a `/nick` rename the mention match uses the
-  configured nick until the next reconnect rewrites the credential. See
-  DESIGN_NOTES 2026-06-21.
+  This module resolves it via `Networks.live_nick_index/1`, which reads the
+  LIVE session nick through `Session.current_nick/2` — now a cheap
+  `Registry` value lookup, NOT a `GenServer.call`. `count/1` runs on the
+  read-cursor settle hot path (door #3 fires on every focus-leave), and the
+  `/me` unread-count seed shares the same resolver on cold-load; both are
+  hot enough that the ORIGINAL design read the configured credential nick
+  off-`Session` to dodge a per-network GenServer round-trip. But nothing
+  rewrites a user's credential nick after a `/nick`, so that shortcut went
+  permanently stale — matching the OLD nick and missing the new. Reading
+  the live nick is now free, so the count follows a rename immediately,
+  both halves. See DESIGN_NOTES 2026-07-28 (retiring the 2026-06-21
+  accepted-staleness tradeoff).
 
   ## Boundary — own boundary ABOVE Push, not inside it
 
@@ -79,10 +82,10 @@ defmodule Grappa.Push.BadgeCount do
   inverts cleanly: nothing in the lower layers references BadgeCount.
 
   #211 phase 6 — the visitor own-nick seed moved off `Grappa.Visitors`
-  (the singular `visitor.network_slug`/`visitor.nick` scalar) onto
-  `Networks.configured_visitor_nick_index/1` (per-credential, multi-
+  (the singular `visitor.network_slug`/`visitor.nick` scalar) onto the
+  subject-polymorphic `Networks.live_nick_index/1` (per-credential, multi-
   network). So this module no longer deps `Grappa.Visitors` at all — the
-  per-network CONFIGURED nick for BOTH subjects comes from `Networks`.
+  per-network LIVE nick for BOTH subjects comes from `Networks` (#498).
 
   Door #1 (the push-payload badge) is the one caller that lives BELOW
   this layer (`Session → Push.Triggers`). It reaches `count/1` through a
@@ -141,7 +144,7 @@ defmodule Grappa.Push.BadgeCount do
       cursors ->
         prefs = UserSettings.get_notification_prefs(subject)
         patterns = UserSettings.get_highlight_patterns(subject)
-        windows = configured_nick_windows(subject)
+        windows = live_nick_windows(subject)
 
         cursors
         |> flatten_entries(windows)
@@ -202,32 +205,23 @@ defmodule Grappa.Push.BadgeCount do
   end
 
   @doc """
-  `%{slug => {network_id, configured_own_nick}}` for the subject — the
-  per-network CONFIGURED IRC nick (credential nick for users,
-  `visitor.nick` for visitors), NEVER the live `Session.current_nick/2`.
+  `%{slug => {network_id, live_own_nick}}` for the subject — the per-network
+  LIVE IRC nick (live session nick, falling back to the configured
+  credential nick when no session is up), via `Networks.live_nick_index/1`.
 
-  The shared, off-Session own-nick resolver behind BOTH notify-count
-  doors: this module's badge count AND the `/me` unread-count seed
-  (`GrappaWeb.MeController.build_unread_counts/2`, S2 2026-07-08 review).
-  Both need each network's own-nick to narrow the own-nick query window
-  (`channel == own_nick`) so inbound DMs don't over-count — and both
-  deliberately stay off `Grappa.Session` (a `GenServer.call` per network
-  on the cold-load / settle hot path is unacceptable; see the moduledoc
-  "own_nick is the CONFIGURED nick" note + DESIGN_NOTES 2026-06-21).
-  Accepted staleness: after a `/nick` the count uses the configured nick
-  until the next reconnect rewrites the credential.
-
-    * Users: one joined credentials⋈networks query
-      (`Networks.configured_nick_index/1`).
-    * Visitors: the per-network CONFIGURED nick from each attached
-      credential (`Networks.configured_visitor_nick_index/1`) — #211
-      phase 6 made visitors multi-network, so the own-nick seed is now
-      keyed per-credential (was the single `visitor.network_slug`/
-      `visitor.nick` scalar), matching the user path shape.
+  The shared own-nick resolver behind BOTH notify-count doors: this
+  module's badge count AND the `/me` unread-count seed
+  (`GrappaWeb.MeController.build_unread_counts/2`, S2 2026-07-08 review),
+  plus the read-cursor settle recompute (`ReadCursorController`). All narrow
+  the own-nick query window (`channel == own_nick`) so inbound DMs don't
+  over-count, and all read the ONE live-nick source. #498 converged them
+  off the former off-`Session` CONFIGURED-nick shortcut — which went
+  permanently stale after a `/nick` (nothing rewrites a user's credential
+  nick) — now that `Session.current_nick/2` is a cheap `Registry` lookup
+  rather than a per-network `GenServer.call`. Subject-polymorphic (users +
+  #211-phase-6 multi-network visitors) via one credentials⋈networks query.
+  See the moduledoc + DESIGN_NOTES 2026-07-28.
   """
-  @spec configured_nick_windows(Subject.t()) :: %{String.t() => {integer(), String.t()}}
-  def configured_nick_windows({:user, user_id}), do: Networks.configured_nick_index(user_id)
-
-  def configured_nick_windows({:visitor, visitor_id}),
-    do: Networks.configured_visitor_nick_index(visitor_id)
+  @spec live_nick_windows(Subject.t()) :: %{String.t() => {integer(), String.t()}}
+  def live_nick_windows({_, _} = subject), do: Networks.live_nick_index(subject)
 end

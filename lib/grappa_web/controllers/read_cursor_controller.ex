@@ -141,7 +141,7 @@ defmodule GrappaWeb.ReadCursorController do
     # persist-arm push — gated on live WS presence, does its DB work in a
     # Task. own_nick resolves off-Session from the configured credential nick
     # (nil for an unbound-but-retained network), same stance as /me.
-    own_nick = configured_own_nick(subject, network.slug)
+    own_nick = live_own_nick(subject, network.slug)
 
     :ok =
       WindowCounts.PushSource.push(%{
@@ -162,12 +162,13 @@ defmodule GrappaWeb.ReadCursorController do
     :ok
   end
 
-  # Configured own-nick for `slug` (credential nick for users,
-  # `visitor.nick` for visitors), or `nil` when the subject holds no
-  # credential there — same off-Session resolver `/me` + `BadgeCount` use.
-  @spec configured_own_nick(Grappa.Session.subject(), String.t()) :: String.t() | nil
-  defp configured_own_nick(subject, slug) do
-    case Map.fetch(BadgeCount.configured_nick_windows(subject), slug) do
+  # Live own-nick for `slug` (live session nick, falling back to the
+  # credential nick when no session is up), or `nil` when the subject holds
+  # no credential there — the same live-nick resolver `/me` + `BadgeCount`
+  # use (#498; cheap `Registry` lookup, no per-network GenServer round-trip).
+  @spec live_own_nick(Grappa.Session.subject(), String.t()) :: String.t() | nil
+  defp live_own_nick(subject, slug) do
+    case Map.fetch(BadgeCount.live_nick_windows(subject), slug) do
       {:ok, {_, own_nick}} -> own_nick
       :error -> nil
     end

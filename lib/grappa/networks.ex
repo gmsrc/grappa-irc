@@ -415,66 +415,46 @@ defmodule Grappa.Networks do
   end
 
   @doc """
-  Returns `%{slug => {network_id, configured_nick}}` for every network
-  `user_id` holds a credential on.
+  Returns `%{slug => {network_id, live_nick}}` for every network `subject`
+  holds a credential on — the LIVE IRC nick (live session nick, falling
+  back to the configured `network_credentials.nick` when no session is up),
+  resolved through the ONE reader `resolve_network_nick/2`.
 
-  This is the CONFIGURED (`network_credentials.nick`) nick, NOT the live
-  Session nick — deliberately off-`Session.Server`. Sole consumer is
-  `Grappa.Push.BadgeCount`, whose count runs on the read-cursor settle
-  hot path (door #3); a `Session.current_nick/2` GenServer round-trip
-  per network there is unacceptable, and the badge's mention match only
-  needs an approximation of own_nick. Accepted staleness: after a
-  `/nick` rename the badge's mention match uses the configured nick
-  until the next reconnect rewrites the credential. Documented in
-  `BadgeCount`'s moduledoc + DESIGN_NOTES 2026-06-21.
+  #498 — the shared own-nick index behind BOTH notify-count doors:
+  `Grappa.Push.BadgeCount`'s badge count AND the `/me` unread-count seed
+  (`GrappaWeb.MeController.build_unread_counts/2`), plus the read-cursor
+  settle recompute. It USED to read the configured `c.nick` off-`Session`
+  to dodge a per-network `Session.current_nick/2` GenServer round-trip on
+  those hot paths — but nothing rewrites a user's credential nick after a
+  `/nick`, so the mention match went permanently stale (matched the old
+  nick, missed the new). `current_nick/2` is now a cheap `Registry` value
+  lookup (no round-trip), so converging on the live nick is free: the
+  count follows the rename immediately, both halves. See DESIGN_NOTES
+  2026-07-28 (which retires the 2026-06-21 accepted-staleness tradeoff).
 
-  Single joined query (credentials ⋈ networks); bounded by the user's
-  credential count (~tens). Mirrors `resolve_network_nick/2`'s
-  fallback branch (`cred.nick`) without the live lookup.
+  Subject-polymorphic (ruling E parity): the credential's XOR FK
+  (`user_id` / `visitor_id`) drives the `WHERE`. One credentials⋈networks
+  query, bounded by the subject's credential count (~tens), then a cheap
+  per-credential registry read.
   """
-  @spec configured_nick_index(Ecto.UUID.t()) :: %{String.t() => {integer(), String.t()}}
-  def configured_nick_index(user_id) when is_binary(user_id) do
-    query =
-      from(c in Credential,
-        join: n in Network,
-        on: n.id == c.network_id,
-        where: c.user_id == ^user_id,
-        select: {n.slug, c.network_id, c.nick}
-      )
-
-    query
+  @spec live_nick_index(Session.subject()) :: %{String.t() => {integer(), String.t()}}
+  def live_nick_index({:user, user_id} = subject) when is_binary(user_id) do
+    from(c in Credential, where: c.user_id == ^user_id, preload: :network)
     |> Repo.all()
-    |> Map.new(fn {slug, network_id, nick} -> {slug, {network_id, nick}} end)
+    |> nick_index(subject)
   end
 
-  @doc """
-  #211 phase 6 — visitor twin of `configured_nick_index/1`. Returns
-  `%{slug => {network_id, configured_nick}}` for every network a VISITOR
-  holds a credential on.
-
-  Made necessary by the multi-network visitor (phase 4c accretion): the
-  own-nick seed for `Grappa.Push.BadgeCount` + `/me` unread-counts is
-  now per-credential (was the single `visitor.network_slug`/
-  `visitor.nick` scalar the wire dropped this phase). Same shape + same
-  off-Session CONFIGURED-nick semantics as the user index: a single
-  joined credentials⋈networks query, `WHERE visitor_id ==` (subject-
-  blind-safe — never a user credential). Accepted staleness after a
-  `/nick` until reconnect rewrites the credential, exactly as the user
-  path.
-  """
-  @spec configured_visitor_nick_index(Ecto.UUID.t()) :: %{String.t() => {integer(), String.t()}}
-  def configured_visitor_nick_index(visitor_id) when is_binary(visitor_id) do
-    query =
-      from(c in Credential,
-        join: n in Network,
-        on: n.id == c.network_id,
-        where: c.visitor_id == ^visitor_id,
-        select: {n.slug, c.network_id, c.nick}
-      )
-
-    query
+  def live_nick_index({:visitor, visitor_id} = subject) when is_binary(visitor_id) do
+    from(c in Credential, where: c.visitor_id == ^visitor_id, preload: :network)
     |> Repo.all()
-    |> Map.new(fn {slug, network_id, nick} -> {slug, {network_id, nick}} end)
+    |> nick_index(subject)
+  end
+
+  @spec nick_index([Credential.t()], Session.subject()) :: %{String.t() => {integer(), String.t()}}
+  defp nick_index(credentials, subject) do
+    Map.new(credentials, fn cred ->
+      {cred.network.slug, {cred.network_id, resolve_network_nick(subject, cred)}}
+    end)
   end
 
   @doc """

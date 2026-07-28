@@ -23,8 +23,11 @@ defmodule Grappa.Push.BadgeCountTest do
 
   defp uniq, do: System.unique_integer([:positive])
 
-  # User + network + credential bound with `nick` so the off-Session
-  # own_nick resolution (`Networks.configured_nick_index/1`) has a row.
+  # User + network + credential bound with `nick`. These are pure
+  # DataCase tests with no live session, so the own_nick resolution
+  # (`Networks.live_nick_index/1`) falls back to this credential nick —
+  # exercising the no-session branch. The live-nick-after-/nick path has
+  # its own session-harness coverage in `badge_count_live_nick_test.exs`.
   defp user_ctx(nick \\ "vjt") do
     user = AuthFixtures.user_fixture()
     network = AuthFixtures.network_fixture()
@@ -268,7 +271,7 @@ defmodule Grappa.Push.BadgeCountTest do
     set_prefs(ctx.subject, channel_messages_all: true)
 
     # A second network with messages + cursor but NO credential bound —
-    # configured_nick_index won't carry its slug, so the fold drops it.
+    # live_nick_index won't carry its slug, so the fold drops it.
     other_net = AuthFixtures.network_fixture()
 
     {:ok, m1} =
