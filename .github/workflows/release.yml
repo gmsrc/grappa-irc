@@ -169,7 +169,7 @@ jobs:
           echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
 
       - name: Upload .deb artifact
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: grappa-deb
           path: dist/*.deb
@@ -288,7 +288,7 @@ jobs:
           cp infra/packaging/aur/PKGBUILD infra/packaging/aur/.SRCINFO arch-out/
 
       - name: Upload Arch artifacts
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: grappa-arch
           path: arch-out/*
@@ -314,7 +314,7 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Download built artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           path: assets
 
