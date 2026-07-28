@@ -280,9 +280,11 @@ describe("HomePane", () => {
 
       const btn = await screen.findByTestId("home-register-nick-azzurra");
       expect(btn).toBeInTheDocument();
-      // #392 — the launcher sits in the network heading's right-side action
-      // area (alongside Disconnect), NOT loose in the row body.
-      expect(btn.closest(".home-pane-network-actions")).not.toBeNull();
+      // #529 — Register nick is now paired with Browse channels in the CTA
+      // button row (same style, one pair), NOT a chip in the heading status
+      // area where Disconnect lives.
+      expect(btn.closest(".home-pane-network-cta")).not.toBeNull();
+      expect(btn.closest(".home-pane-network-status")).toBeNull();
       fireEvent.click(btn);
       expect(openRegistrationWizardMock).toHaveBeenCalledWith("azzurra");
     });
@@ -718,6 +720,105 @@ describe("HomePane", () => {
       render(() => <HomePane />);
 
       expect(screen.queryByTestId("home-share-session")).toBeNull();
+    });
+  });
+
+  // #529 — connected-row restyle. Four structural outcomes, asserted by
+  // role / pairing / grouping (the visible result), not by class names alone:
+  //   1. Register nick is paired with Browse channels as one button pair.
+  //   2. "Channels worth a look on <slug>:" is a real subsection heading.
+  //   3. Disconnect (and, symmetric, Reconnect) sits with the state label.
+  //   4. A horizontal rule precedes each network block.
+  describe("#529 connected-row restyle", () => {
+    const RESTYLE_NETWORKS: HomeDataLocal = {
+      networks: [
+        {
+          slug: "azzurra",
+          nick: "vjt",
+          connection_state: "connected",
+          connection_state_reason: null,
+          connection_state_changed_at: null,
+        },
+        {
+          slug: "freenode",
+          nick: "vjt-fn",
+          connection_state: "parked",
+          connection_state_reason: "manual disconnect",
+          connection_state_changed_at: null,
+        },
+      ],
+      available_networks: [],
+    };
+
+    it("pairs Register nick with Browse channels in one button pair (#529.1)", async () => {
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      flavorForSlugMock.mockReturnValue("azzurra");
+      networkIdBySlugMock.mockReturnValue(7);
+      umodesForNetworkMock.mockReturnValue([]);
+      render(() => <HomePane />);
+
+      const register = await screen.findByTestId("home-register-nick-azzurra");
+      const browse = screen.getByRole("button", { name: /browse channels/i });
+      // Same parent → side-by-side pair, Register to the right of Browse.
+      expect(register.parentElement).toBe(browse.parentElement);
+      expect(
+        browse.compareDocumentPosition(register) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      // Same visual weight → both carry the prominent browse style.
+      expect(browse).toHaveClass("home-pane-network-browse");
+      expect(register).toHaveClass("home-pane-network-browse");
+    });
+
+    it("renders the featured intro as a real subsection heading (#529.2)", async () => {
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      getFeaturedMock.mockResolvedValue([{ name: "#sniffo", description: null }]);
+      render(() => <HomePane />);
+
+      const heading = await screen.findByRole("heading", {
+        name: /channels worth a look on azzurra/i,
+      });
+      expect(heading).toBeInTheDocument();
+    });
+
+    it("groups Disconnect with the connection-state label (#529.3)", () => {
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      render(() => <HomePane />);
+
+      const disconnect = screen.getByRole("button", { name: /disconnect azzurra/i });
+      const status = disconnect.closest(".home-pane-network-status");
+      expect(status).not.toBeNull();
+      // The state label it acts on lives in the SAME group.
+      expect(status).toHaveTextContent(/connected/i);
+    });
+
+    it("groups Reconnect with the state label too — symmetric rows (#529.3)", () => {
+      homeDataMock.mockReturnValue(RESTYLE_NETWORKS);
+      render(() => <HomePane />);
+
+      const reconnect = screen.getByRole("button", { name: /reconnect freenode/i });
+      const status = reconnect.closest(".home-pane-network-status");
+      expect(status).not.toBeNull();
+      expect(status).toHaveTextContent(/parked/i);
+    });
+
+    it("precedes each network block with a horizontal rule (#529.4)", () => {
+      homeDataMock.mockReturnValue(RESTYLE_NETWORKS);
+      const { container } = render(() => <HomePane />);
+
+      const rows = container.querySelectorAll(".home-pane-network-row");
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        const sep = row.querySelector(".home-pane-network-separator");
+        expect(sep).not.toBeNull();
+        expect(sep?.tagName).toBe("HR");
+        // The rule OPENS the block: it is the row's first child, immediately
+        // before the heading (a TRAILING rule — the pre-#529 shape — would
+        // fail this while a bare count check would still pass).
+        expect(row.firstElementChild).toBe(sep);
+        expect(sep?.nextElementSibling).toHaveClass("home-pane-network-heading");
+      }
+      // …and each is a real <hr> (role=separator), both row types.
+      expect(screen.getAllByRole("separator")).toHaveLength(2);
     });
   });
 });

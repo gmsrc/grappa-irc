@@ -7853,21 +7853,26 @@ html.resize-dragging * {
   padding: 0;
 }
 
-/* #392 — each network is a heading/separator block: a title row (name +
-   nick + state; a button on connected rows for jump-to-$server, a static
-   block on parked/failed) with a right-side action area (📝 Register nick +
-   Disconnect / Reconnect), a prominent Browse CTA, then featured channels.
-   Consecutive blocks are divided by a rule. */
+/* #392/#529 — each network is a heading/separator block: a title row (name +
+   nick; state + its Disconnect/Reconnect action grouped on the right), a
+   paired Browse + Register CTA row, then featured channels. A horizontal rule
+   (.home-pane-network-separator, first child of each row) OPENS each block so
+   networks read as distinct blocks (was a trailing border-bottom pre-#529). */
 .home-pane-network-row {
-  margin: 0 0 1.25rem 0;
-  padding: 0 0 1.25rem 0;
-  border-bottom: 1px solid var(--border);
+  margin: 0;
+  padding: 0;
 }
 
-.home-pane-networks > .home-pane-network-row:last-child {
-  margin-bottom: 0;
-  padding-bottom: 0;
-  border-bottom: none;
+/* #529 — the per-network separator: a rule BEFORE each block. The first
+   block's rule doubles as the divider under the networks intro copy. */
+.home-pane-network-separator {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.25rem 0;
+}
+
+.home-pane-networks > .home-pane-network-row:first-child .home-pane-network-separator {
+  margin-top: 0.25rem;
 }
 
 .home-pane-network-heading {
@@ -7905,13 +7910,23 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   cursor: default;
 }
 
-/* #392 — Browse channels is the primary content CTA on a connected row:
-   accent-outlined + larger (was a tiny muted text link pre-#392). */
+/* #529 — Browse channels + Register nick pair up as ONE button row below the
+   heading. The container owns the top gap so both buttons align on one line
+   (wrapping on narrow widths). */
+.home-pane-network-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+}
+
+/* #392/#529 — the paired content CTAs (Browse + Register) share ONE style:
+   accent-outlined, bold, equal visual weight (a "button pair, not chip-next-
+   to-button"). Register carries this class too, so the two read as siblings. */
 .home-pane-network-browse {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  margin-top: 0.7rem;
   background: transparent;
   color: var(--accent);
   border: 1px solid var(--accent);
@@ -7956,9 +7971,15 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   font-size: 0.9em;
 }
 
-.home-pane-featured-intro {
-  margin: 0.5rem 0 0.3rem 0;
-  font-size: 0.85em;
+/* #529 — the featured-channels subsection heading (was a muted intro <p>
+   glued to the CTA buttons above). Real heading weight + a padding-top gap so
+   it reads as the title of the featured list, not more body copy. */
+.home-pane-featured-heading {
+  margin: 0 0 0.4rem 0;
+  padding-top: 1rem;
+  color: var(--fg);
+  font-size: 1rem;
+  font-weight: bold;
 }
 
 /* #496 — the honest per-subject session-lifetime line, rendered as a small
@@ -8329,10 +8350,11 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   margin-top: 0.5rem;
 }
 
-/* #392 — right-side action area in the network heading: the per-network
-   chips (📝 Register nick, Disconnect / Reconnect). Right-justified so the
-   network name reads as the heading and the actions trail it. */
-.home-pane-network-actions {
+/* #529 — the status group at the trailing edge of the network heading: the
+   connection-state label sits DIRECTLY beside the action it acts on
+   (Disconnect on connected rows, Reconnect on parked/failed). Grouping them
+   makes the button read as operating on the state next to it. */
+.home-pane-network-status {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -8393,25 +8415,6 @@ button.home-pane-network-title:hover .home-pane-network-slug {
 }
 
 .home-pane-network-disconnect:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-/* #349 — "Register nick" launcher on :connected home rows. Secondary
-   chip geometry (same as Disconnect), auto-hidden by its <Show> guard on
-   an unknown flavor or a live +r. */
-.home-pane-network-register {
-  background: transparent;
-  color: var(--fg-muted, var(--fg));
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 0.3rem 0.8rem;
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
-  cursor: pointer;
-}
-
-.home-pane-network-register:hover {
   border-color: var(--accent);
   color: var(--accent);
 }

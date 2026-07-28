@@ -89,7 +89,11 @@ const FeaturedLinks: Component<{ slug: string; heading?: string }> = (props) => 
   return (
     <Show when={(links() ?? []).length > 0}>
       <Show when={props.heading}>{(h) => <h3 class="home-pane-section-title">{h()}</h3>}</Show>
-      <p class="home-pane-featured-intro muted">{homeFeaturedIntroCopy(props.slug)}</p>
+      {/* #529 — the featured-channels subsection heading: real heading weight
+          + padding-top (was a muted <p> glued to the buttons above). h3 keeps
+          the established subsection level (matches the `heading`-prop path
+          above) rather than skipping a level down to h4. */}
+      <h3 class="home-pane-featured-heading">{homeFeaturedIntroCopy(props.slug)}</h3>
       <ul class="home-pane-featured" data-testid={`home-featured-${props.slug}`}>
         <For each={links()}>
           {(link) => (
@@ -316,31 +320,23 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
     const umodes = id === undefined ? [] : umodesForNetwork(id);
     return !umodes.includes("r");
   };
-  // #496 — the row breathes: a heading with the network title (slug + nick +
-  // state, clickable → jump-to-$server) on the left and a UNIFORM action area
-  // on the right (📝 Register nick + Disconnect, sharing the
-  // `home-pane-network-action` chip class). The prominent 📇 Browse channels
-  // CTA + the operator-featured channels sit BELOW the heading. The 🗺 Map
+  // #529 — the connected-row layout: a horizontal rule opens each network
+  // block; the heading carries the network title (slug + nick, clickable →
+  // jump-to-$server) on the left and a STATUS group (state label + the
+  // Disconnect action it acts on) on the right. The 📇 Browse channels +
+  // 📝 Register nick controls pair up as ONE button row (same style, same
+  // weight) below the heading, then the operator-featured channels. The 🗺 Map
   // control is flag-hidden (SHOW_NETWORK_MAP) until /links is fixed.
   return (
     <li class="home-pane-network-row home-pane-network-row-connected">
+      <hr class="home-pane-network-separator" />
       <div class="home-pane-network-heading">
         <button type="button" class="home-pane-network-title" onClick={onJump}>
           <span class="home-pane-network-slug">{props.row.slug}</span>
           <NickText nick={props.row.nick} extraClass="home-pane-network-nick" />
-          <span class="home-pane-network-state">{props.row.connection_state}</span>
         </button>
-        <div class="home-pane-network-actions">
-          <Show when={canRegister()}>
-            <button
-              type="button"
-              class="home-pane-network-action home-pane-network-register"
-              data-testid={`home-register-nick-${props.row.slug}`}
-              onClick={() => openRegistrationWizard(props.row.slug)}
-            >
-              📝 Register nick
-            </button>
-          </Show>
+        <div class="home-pane-network-status">
+          <span class="home-pane-network-state">{props.row.connection_state}</span>
           <Show when={SHOW_NETWORK_MAP}>
             <button
               type="button"
@@ -362,9 +358,23 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
           </button>
         </div>
       </div>
-      <button type="button" class="home-pane-network-browse" onClick={onBrowse}>
-        📇 Browse channels
-      </button>
+      <div class="home-pane-network-cta">
+        <button type="button" class="home-pane-network-browse" onClick={onBrowse}>
+          📇 Browse channels
+        </button>
+        <Show when={canRegister()}>
+          {/* #529 — same class as Browse so the pair reads as one button set
+              (equal weight); identified in tests by its data-testid. */}
+          <button
+            type="button"
+            class="home-pane-network-browse"
+            data-testid={`home-register-nick-${props.row.slug}`}
+            onClick={() => openRegistrationWizard(props.row.slug)}
+          >
+            📝 Register nick
+          </button>
+        </Show>
+      </div>
       <FeaturedLinks slug={props.row.slug} />
     </li>
   );
@@ -407,17 +417,20 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
         "home-pane-network-row-failed": props.row.connection_state === "failed",
       }}
     >
-      {/* #496 — same heading/separator shape as ConnectedRow: static title
-          (slug + nick + state) on the left, Reconnect in the uniform action
-          area. Reason + inline error sit below the heading; no Browse (a
-          parked/failed network has no live session to /LIST). */}
+      {/* #529 — same heading/separator shape as ConnectedRow: a horizontal
+          rule opens the block, a static title (slug + nick) on the left, and
+          a STATUS group pairing the state label with the Reconnect action it
+          acts on (symmetric with ConnectedRow's state + Disconnect). Reason +
+          inline error sit below the heading; no Browse/Register (a
+          parked/failed network has no live session to /LIST or register on). */}
+      <hr class="home-pane-network-separator" />
       <div class="home-pane-network-heading">
         <div class="home-pane-network-title home-pane-network-title-static">
           <span class="home-pane-network-slug">{props.row.slug}</span>
           <NickText nick={props.row.nick} extraClass="home-pane-network-nick" />
-          <span class="home-pane-network-state">{props.row.connection_state}</span>
         </div>
-        <div class="home-pane-network-actions">
+        <div class="home-pane-network-status">
+          <span class="home-pane-network-state">{props.row.connection_state}</span>
           <button
             type="button"
             class="home-pane-network-action home-pane-network-reconnect"

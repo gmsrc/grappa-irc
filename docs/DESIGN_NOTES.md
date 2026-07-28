@@ -22372,3 +22372,42 @@ When one substrate sets the CWD implicitly (systemd/Docker) and another does not
 substrate-varying paths absolutely at the boundary that knows the truth (the env
 file), and make the step whose whole point is a side effect FAIL when the side
 effect did not happen.
+
+---
+
+## 2026-07-28 — #529: the home connected-network row reads as blocks
+
+vjt's home-page restyle (cic-only, `HomePane.tsx` + `default.css`). Four moves,
+each turning a #392/#496-era layout choice into something that reads better on a
+phone:
+
+- **Browse channels + Register nick are one button pair.** #349 put Register as
+  a small secondary chip up in the heading's action area while Browse was a big
+  accent-outlined CTA below — two weights for two peers. Now both live in a
+  `.home-pane-network-cta` flex row and share `.home-pane-network-browse`, so
+  they're one set of equal-weight buttons. Register keeps its #349 two-signal
+  gate (`registerableFlavor` + no live `+r`); only its placement + style moved.
+- **"Channels worth a look on <slug>:" is a heading, not body copy.** It was a
+  muted `<p>` glued to the buttons above it; it's the title of the featured-list
+  subsection, so it's an `<h3>` (`.home-pane-featured-heading`) with real weight
+  and a `padding-top` gap. h3 (not h4) so the outline doesn't skip a level below
+  the "Networks" h2 / the `heading`-prop path that already uses h3.
+- **The state label and the button that acts on it are one group.** Disconnect
+  used to sit at the far right of the heading, away from the "connected" label.
+  The heading's trailing cluster is now `.home-pane-network-status` = state +
+  its action (Disconnect on connected rows, Reconnect on parked/failed). The
+  #283 `confirmDisconnectNetwork` path + `aria-label` are untouched — only the
+  DOM grouping changed. This kept ConnectedRow/DisconnectedRow symmetric: both
+  are `[title] … [state + action]`.
+- **A rule OPENS each block, it doesn't trail it.** Was a `border-bottom` on the
+  row (with a `:last-child` exception). Now a real `<hr class="home-pane-network-
+  separator">` is the first child of every row, so the networks read as distinct
+  blocks and the first rule doubles as the divider under the intro copy. An `<hr>`
+  (over a CSS border) is a genuine `role="separator"` element the jsdom unit test
+  can assert — the #529 test pins the rule's *position* (row first child, before
+  the heading), not just a count, so a regression back to a trailing rule fails.
+
+No server, no wire change — ships on a `--cic` bundle. Both themes inherit via
+the existing `--fg`/`--border`/`--accent` vars. The dead `.home-pane-network-
+register` / `.home-pane-network-actions` / `.home-pane-featured-intro` classes
+were removed, not left as drift.
