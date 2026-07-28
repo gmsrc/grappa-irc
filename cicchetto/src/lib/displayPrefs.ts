@@ -162,14 +162,19 @@ export function mountDisplayPrefsSync(): void {
 // observability for the offline / 401 / DOS-bound-422 paths. Reads `token()`
 // itself so call sites pass no token; a logged-out toggle is local-only and
 // converges on the next login.
-function pushDisplayPrefs(): void {
+// Returns a promise that resolves when the PUT settles (success OR handled
+// failure). Callers that must READ-THEIR-WRITE (the #458 reveal refetch) await
+// it; the fire-and-forget callers ignore it. The returned promise never
+// rejects — an offline/4xx PUT is caught here and logged, so a dependent
+// refetch still proceeds (degraded: local applied, server converges next login).
+function pushDisplayPrefs(): Promise<void> {
   const t = token();
-  if (!t) return;
+  if (!t) return Promise.resolve();
   // Mark the write UNCONFIRMED before the PUT so a reload racing this
   // fire-and-forget request re-pushes local on reconcile instead of losing it
   // to a stale server value (#222). Cleared once the server ACKs.
   markUnsynced();
-  void putDisplayPrefs(t, buildWireMap())
+  return putDisplayPrefs(t, buildWireMap())
     .then(clearUnsynced)
     .catch((e) => {
       console.warn("displayPrefs: PUT failed", e);
@@ -191,7 +196,7 @@ export function syncedSetColoredNicklist(on: boolean): void {
 
 export function syncedSetChannelPresencePref(key: ChannelKey, pref: PresencePref): void {
   setChannelPresencePref(key, pref);
-  pushDisplayPrefs();
+  const pushed = pushDisplayPrefs();
   // #458 — Option 1 filters join/part/quit/nick_change out of the REST page
   // SERVER-SIDE when this channel's pref hides them (so `limit` counts VISIBLE
   // rows, not raw ones). Its one accepted consequence: revealing presence needs
@@ -199,15 +204,22 @@ export function syncedSetChannelPresencePref(key: ChannelKey, pref: PresencePref
   // cold-reload — the reload's fetch now re-includes presence. "hide" is free:
   // the render filter simply drops rows already in the store, no refetch.
   //
-  // The purge MUST precede the reload: loadInitialScrollback's load-once gate
-  // skips a key still in `loadedChannels`, and purge is what drops it. This
-  // hook lives in the coordinator (not RailActions) so every door onto the
-  // synced write refetches identically — "one feature, one code path".
+  // The refetch MUST wait for the PUT to settle: the server resolves
+  // hide_presence from the PERSISTED pref, so a refetch racing the PUT could
+  // read a still-"hide" pref and return content-only rows — nothing to reveal
+  // (a nondeterministic silent failure). Awaiting `pushed` guarantees
+  // read-your-write. Within the refetch, the purge MUST precede the reload:
+  // loadInitialScrollback's load-once gate skips a key still in
+  // `loadedChannels`, and purge is what drops it. This hook lives in the
+  // coordinator (not RailActions) so every door onto the synced write refetches
+  // identically — "one feature, one code path".
   if (pref === "show") {
     const decoded = decodeChannelKey(key);
     if (decoded) {
-      purgeScrollback(key);
-      void loadInitialScrollback(decoded.slug, decoded.name);
+      void pushed.then(() => {
+        purgeScrollback(key);
+        void loadInitialScrollback(decoded.slug, decoded.name);
+      });
     }
   }
 }

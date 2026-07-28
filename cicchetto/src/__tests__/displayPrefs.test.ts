@@ -474,15 +474,32 @@ describe("syncedSetChannelPresencePref — refetch on reveal (#458)", () => {
   const asMock = (fn: unknown): ReturnType<typeof vi.fn> =>
     fn as unknown as ReturnType<typeof vi.fn>;
 
-  it("SHOW purges the stale page then cold-reloads the channel", async () => {
+  it("SHOW refetches only AFTER the persist PUT resolves, then purges before reloading", async () => {
     setToken(TOKEN);
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    // A PUT that stays pending until we resolve it, so we can observe whether the
+    // refetch fires BEFORE the pref is persisted. The server resolves
+    // hide_presence from the PERSISTED pref, so a refetch that races the PUT can
+    // read a still-"hide" pref and return content-only rows — nothing to reveal.
+    let resolvePut!: (r: Response) => void;
+    const putGate = new Promise<Response>((r) => {
+      resolvePut = r;
+    });
+    vi.spyOn(globalThis, "fetch").mockReturnValue(putGate);
+
+    syncedSetChannelPresencePref(KEY_A, "show");
+    await flush();
+
+    // PUT still in flight → the refetch MUST NOT have fired yet (read-your-write
+    // not yet guaranteed). This is the #458 race the fix closes.
+    expect(asMock(purgeScrollback)).not.toHaveBeenCalled();
+    expect(asMock(loadInitialScrollback)).not.toHaveBeenCalled();
+
+    // Persist lands → read-your-write is now safe → the refetch fires.
+    resolvePut(
       new Response(JSON.stringify({ display_prefs: buildWireMap(), persisted: true }), {
         status: 200,
       }),
     );
-
-    syncedSetChannelPresencePref(KEY_A, "show");
     await flush();
 
     // Purge clears the filtered rows + the load-once gate; the cold-reload then
