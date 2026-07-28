@@ -35,7 +35,13 @@
 # prompt (`Press up to edit` / `esc to interrupt`). Bare `…` is NOT busy.
 # Idle debounce: 5s re-capture confirms idle (transient tool-call gaps).
 #
-# Prompt detector: `Do you want to proceed?` AND a `1. Yes` numbered list.
+# Prompt detector: any `Do you want to …?` question AND a `1. Yes` numbered
+#   list. It was pinned to the literal `Do you want to proceed?`, which misses
+#   every file-scoped variant Claude Code actually asks — `Do you want to make
+#   this edit to SKILL.md?`, `…to create <file>?`. Those got classified IDLE,
+#   so a blocked worker looked merely quiet (caught on w2/#485, 2026-07-28).
+#   The `1. Yes` line is the real invariant of a permission modal; the question
+#   wording is not.
 # Picker detector: `↑/↓ to navigate` OR `Tab/Arrow keys to navigate` OR
 #   `Enter to select` lines.
 #
@@ -61,7 +67,7 @@ prompt_active=0
 picker_active=0
 state="idle"
 
-if echo "$tail" | grep -qE 'Do you want to proceed\?' \
+if echo "$tail" | grep -qE 'Do you want to .*\?' \
    && echo "$tail" | grep -qE '^[[:space:]]*[❯>]?[[:space:]]*1\.[[:space:]]+Yes'; then
   prompt_active=1
   state="prompt"
@@ -116,7 +122,7 @@ if [ "$state" = "idle" ] && [ "$prev_state" = "busy" ]; then
   sleep 5
   out2=$(tmux capture-pane -t "$pane" -p 2>/dev/null)
   tail2=$(echo "$out2" | tail -30)
-  if echo "$tail2" | grep -qE 'Do you want to proceed\?'; then
+  if echo "$tail2" | grep -qE 'Do you want to .*\?'; then
     state="prompt"
     prompt_active=1
   elif echo "$tail2" | grep -qE '↑/↓ to navigate|Tab/Arrow keys to navigate|Enter to select'; then
