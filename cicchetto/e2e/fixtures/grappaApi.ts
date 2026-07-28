@@ -464,6 +464,28 @@ export async function patchNetworkConnectionState(
   }
 }
 
+// #498 — self-serve accretion (`POST /session/networks`). Binds + spawns
+// the visitor_enabled `slug` for the authenticated subject, anon
+// (`auth_method: :none`), with the account name as the default nick. `204`
+// = newly bound; `409` already_attached is treated as success so callers
+// are `--repeat-each` idempotent (the credential already exists — a second
+// accrete is a no-op, not a failure). Any other status throws. Follow with
+// `patchNetworkConnectionState({connection_state: "connected"})` to
+// guarantee the session is live regardless of prior state.
+export async function accreteNetwork(token: string, slug: string): Promise<void> {
+  const url = `${GRAPPA_BASE_URL}/session/networks`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ network: slug }),
+  });
+  if (res.status === 204 || res.status === 409) return;
+  throw new Error(`accreteNetwork: ${slug} → ${res.status} ${await res.text()}`);
+}
+
 // Fetch `/me` and return the read-cursor for `(networkSlug, channel)`,
 // or `null` if no cursor has been set yet. Used by UX-6-K to assert
 // that cic's cursor POST landed server-side after focus-leave.

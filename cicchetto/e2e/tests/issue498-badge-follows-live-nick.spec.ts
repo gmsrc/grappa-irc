@@ -32,22 +32,41 @@
 //   GREEN after the fix: server counts against the LIVE nick → counted →
 //                        title badge increases.
 //
-// ## Dedicated-session isolation (NOT vjt)
+// ## Self-contained session (b-runtime, GH #498)
 //
 // The witness renames a session's LIVE nick — a destructive mutation of
-// server-side identity. It runs against a DEDICATED seeded user (i498-user,
-// its own nick + its own channel #i498), NEVER the shared vjt session:
-// renaming vjt's live nick mutates identity under every sibling spec on the
-// shared stack (the same #477-avoided class that stranded the quit-persist
-// e2e). The `finally` still renames back to `I498_NICK` — not for sibling
-// hygiene (nothing else uses this session) but so a `--repeat-each` rerun
-// starts from the credential-nick baseline the opening `expectOwnMember`
-// asserts.
+// server-side identity — so it must never touch the shared vjt session (the
+// #477-avoided destructive-on-shared-identity class). An earlier take
+// boot-seeded a dedicated live session; that put an i498 session in the
+// steady state that m9b (the leak canary) and u-z-cap (user-cap) assert
+// AFTER it, reddening BOTH the full suite and scoped `--grep m9b` iso
+// reruns (a fixture that only works at full-suite scope is not a fixture).
+//
+// So this spec is SELF-CONTAINED: it accretes its OWN session at runtime
+// and parks it on teardown — surviving scoped runs, `--repeat-each`, and
+// file reordering. bahamut-test is NOT visitor_enabled (no self-serve
+// accretion), so it accretes `azzurra`, which is visitor_enabled AND points
+// at the SAME leaf (bahamut-test:6667): the peer sees the session with no
+// extra wiring, and i498 consumes NO bahamut-test user-cap slot (u-z-cap
+// stays doubly safe). The anon accretion default nick is the account name
+// (`i498-user` = `I498_NICK`), unique across the seeded set → no shared-leaf
+// 433 autokill. The parked credential left on teardown has no live pid, so
+// it is invisible to every Registry-based session/capacity count guard.
 
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { assertMessagePersisted, restoreReadCursorToTail } from "../fixtures/grappaApi";
+import {
+  accreteNetwork,
+  assertMessagePersisted,
+  patchNetworkConnectionState,
+  restoreReadCursorToTail,
+} from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { getSeededI498User, I498_CHANNEL, I498_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import {
+  getSeededI498User,
+  I498_CHANNEL,
+  I498_NETWORK_SLUG,
+  I498_NICK,
+} from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
 const CHANNEL = I498_CHANNEL;
@@ -79,33 +98,72 @@ async function expectOwnMember(
   });
 }
 
+// Park the runtime-accreted azzurra session so it never sits in the steady
+// state m9b (leak canary) + u-z-cap (user-cap) assert AFTER this spec, and
+// so scoped `--grep m9b` reruns (where this spec never runs) start clean.
+// Parked → drops from the live Registry (no pid); the residual :parked
+// credential lands only on /admin/credentials, whose specs run before this
+// one (a<i). Runs once after all `--repeat-each` iterations.
+test.afterAll(async () => {
+  const user = getSeededI498User();
+  await patchNetworkConnectionState(user.token, I498_NETWORK_SLUG, {
+    connection_state: "parked",
+  });
+});
+
 test("#498 — a mention of the LIVE (renamed) nick lifts the server badge on cold-load", async ({
   page,
 }) => {
   const user = getSeededI498User();
   const runId = crypto.randomUUID().slice(0, 8);
   const newNick = `i498-${runId}`;
+  const seedBody = `#498 seed ${runId}`;
   const body = `${newNick}: ping while your socket is down`;
 
-  // Clean baseline: pin #i498's cursor to the tail so the one mention below
-  // is the ONLY post-cursor row it contributes to the global count.
-  await restoreReadCursorToTail(user.token, NETWORK_SLUG, CHANNEL);
+  // Self-contained session: accrete azzurra (204 first run; 409
+  // already-attached is idempotent for --repeat-each) then ensure it is
+  // LIVE. bahamut-test is not visitor_enabled; azzurra shares its leaf.
+  await accreteNetwork(user.token, I498_NETWORK_SLUG);
+  await patchNetworkConnectionState(user.token, I498_NETWORK_SLUG, {
+    connection_state: "connected",
+  });
 
   await loginAs(page, user);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: I498_NICK });
+
+  // Anon accretion autojoins nothing — join the witness channel at runtime.
+  // Focus the server window first so the compose box is available.
+  await selectChannel(page, I498_NETWORK_SLUG, SERVER_WINDOW);
+  await runCommand(page, `/join ${CHANNEL}`);
+  await selectChannel(page, I498_NETWORK_SLUG, CHANNEL, { ownNick: I498_NICK });
   await expectOwnMember(page, I498_NICK);
 
   const peer = await IrcPeer.connect({ nick: `i498p-${runId}` });
   try {
+    await peer.join(CHANNEL);
+
+    // Anchor the read cursor: BadgeCount skips windows with no cursor, and
+    // restoreReadCursorToTail is a no-op on an empty channel. So the peer
+    // seeds ONE non-mention row, we wait for it to persist, then pin the
+    // cursor to it — making the mention below the ONLY post-cursor row.
+    peer.privmsg(CHANNEL, seedBody);
+    await assertMessagePersisted({
+      token: user.token,
+      networkSlug: I498_NETWORK_SLUG,
+      channel: CHANNEL,
+      sender: `i498p-${runId}`,
+      body: seedBody,
+    });
+    await restoreReadCursorToTail(user.token, I498_NETWORK_SLUG, CHANNEL);
+
     // Rename. Gate on the member list showing the NEW nick — proof the
     // upstream NICK echo has been processed and the server's live nick (and
     // its registry copy) is now `newNick`.
     await runCommand(page, `/nick ${newNick}`);
     await expectOwnMember(page, newNick);
 
-    // Defocus so #bofh is not the active window (its badge would be
+    // Defocus so CHANNEL is not the active window (its badge would be
     // focus-zeroed) and reload won't auto-read it.
-    await selectChannel(page, NETWORK_SLUG, SERVER_WINDOW, { awaitWsReady: false });
+    await selectChannel(page, I498_NETWORK_SLUG, SERVER_WINDOW, { awaitWsReady: false });
     const before = await page.evaluate(TITLE_BADGE);
 
     // Drop + HOLD cic's socket so the mention below cannot trigger the
@@ -120,11 +178,10 @@ test("#498 — a mention of the LIVE (renamed) nick lifts the server badge on co
     await page.waitForFunction(() => window.__cic_socketHealth?.state().state !== "open");
 
     // Peer mentions the NEW nick while cic is confirmed offline.
-    await peer.join(CHANNEL);
     peer.privmsg(CHANNEL, body);
     await assertMessagePersisted({
       token: user.token,
-      networkSlug: NETWORK_SLUG,
+      networkSlug: I498_NETWORK_SLUG,
       channel: CHANNEL,
       sender: `i498p-${runId}`,
       body,
@@ -146,13 +203,12 @@ test("#498 — a mention of the LIVE (renamed) nick lifts the server badge on co
       })
       .toBeGreaterThan(before);
   } finally {
-    // Restore this dedicated session's live nick to its credential nick so a
+    // Restore this session's live nick to its credential nick so a
     // `--repeat-each` rerun starts from the baseline the opening
-    // `expectOwnMember(I498_NICK)` asserts. Not sibling hygiene (nothing else
-    // uses i498-user). Best-effort: the socket may be down after a failure,
-    // so guard the UI-driven rename-back.
+    // `expectOwnMember(I498_NICK)` asserts. Best-effort: the socket may be
+    // down after a failure, so guard the UI-driven rename-back.
     try {
-      await selectChannel(page, NETWORK_SLUG, CHANNEL, { awaitWsReady: false });
+      await selectChannel(page, I498_NETWORK_SLUG, CHANNEL, { awaitWsReady: false });
       await runCommand(page, `/nick ${I498_NICK}`);
       await expectOwnMember(page, I498_NICK);
     } catch {

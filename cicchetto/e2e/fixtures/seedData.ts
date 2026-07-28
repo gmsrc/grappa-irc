@@ -126,21 +126,28 @@ export const WIZ_NICK = "wiz-reg-nick";
 export const FRESH_USER = "fresh405";
 export const FRESH_PASSWORD = "test-password-not-secret";
 
-// #498 — dedicated user for the badge-follows-live-nick witness. Bound to
-// bahamut-test with its OWN nick (i498-grappa — a distinct leaf, so the
-// shared-leaf 433 autokill trap never fires,
-// feedback_e2e_multinet_live_needs_distinct_nicks) and its OWN autojoin
-// channel (#i498). The witness renames THIS session's live nick to prove
-// the server badge counts against the live nick, not the configured one;
-// renaming the SHARED vjt session would mutate identity under sibling specs
-// (the #477-avoided destructive-on-shared-identity class). Isolated like
-// wiz-test / accr481 / m9b-victim: zero blast radius on vjt + #bofh. Reuses
-// NETWORK_SLUG (bahamut-test) — same network, distinct user/nick/channel.
+// #498 — dedicated user for the badge-follows-live-nick witness
+// (b-runtime). The witness renames a session's LIVE nick — a destructive
+// mutation of server-side identity — so it never touches the shared vjt
+// session (#477-avoided class). The spec accretes its OWN session at
+// runtime and parks it on teardown, so it stays OUT of the steady state
+// m9b (leak canary) + u-z-cap (user-cap) assert AFTER it (a boot-live
+// session reddened both the full suite and scoped `--grep m9b` reruns).
+// bahamut-test is NOT visitor_enabled, so the spec accretes `azzurra` —
+// visitor_enabled AND pointing at the SAME leaf (bahamut-test:6667), so
+// the peer sees the session with no extra wiring and it consumes no
+// bahamut-test user-cap slot.
 export const I498_USER = "i498-user";
 export const I498_PASSWORD = "test-password-not-secret";
 export const I498_IDENTIFIER = "i498-user@grappa.test";
-export const I498_NICK = "i498-grappa";
+// The anon accretion default nick = the account name: user_identity_seed
+// falls back to `truncate_nick(name)` when the user holds no prior
+// credential. Unique across the seeded set → no shared-leaf 433 autokill.
+export const I498_NICK = "i498-user";
 export const I498_CHANNEL = "#i498";
+// #498 accretes `azzurra` (visitor_enabled, same leaf as bahamut-test),
+// NOT bahamut-test (not visitor_enabled → not self-serve-accretable).
+export const I498_NETWORK_SLUG = "azzurra";
 
 const TOKEN_ENV_VAR = "E2E_VJT_TOKEN";
 const SUBJECT_ENV_VAR = "E2E_VJT_SUBJECT";
@@ -204,8 +211,9 @@ export default async function globalSetup(): Promise<void> {
   process.env[ACCRETE_TOKEN_ENV_VAR] = accrete.token;
   process.env[ACCRETE_SUBJECT_ENV_VAR] = JSON.stringify(accrete.subject);
 
-  // #498 — badge-follows-live-nick witness user. Bound to bahamut-test; the
-  // spec logs in as this user and renames ITS live nick (never vjt's).
+  // #498 — badge-follows-live-nick witness user. Only the USER is seeded;
+  // the spec accretes its OWN azzurra session at runtime and renames ITS
+  // live nick (never vjt's). This login just stashes the bearer token.
   const i498 = await loginWithRetry(I498_IDENTIFIER, I498_PASSWORD);
   process.env[I498_TOKEN_ENV_VAR] = i498.token;
   process.env[I498_SUBJECT_ENV_VAR] = JSON.stringify(i498.subject);
