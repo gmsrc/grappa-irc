@@ -1928,6 +1928,25 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert_reply(ref, :error, %{error: "invalid_line"})
     end
 
+    # #513b — a 2nd /links while the 1st is still in flight is REFUSED (not
+    # clobbered) so the 1st bundle survives; the channel MUST surface the
+    # typed `links_in_flight` token (→ cic "network map already loading"),
+    # never the catch-all upstream_unavailable. The fake IRC server feeds no
+    # 365, so links_pending stays primed with a fresh requested_at and the 2nd
+    # push lands inside @links_stale_ms.
+    test "links: a 2nd request in flight is refused with links_in_flight", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      ref1 = push(socket, "links", %{"network_id" => network.id})
+      assert_reply(ref1, :ok)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "LINKS\r\n"), 1_000)
+
+      ref2 = push(socket, "links", %{"network_id" => network.id})
+      assert_reply(ref2, :error, %{error: "links_in_flight"})
+    end
+
     test "whois (REV-F H10): dead Session.Server socket → typed upstream_unavailable reply, Channel survives",
          %{socket: socket, network: network, user: user} do
       # REV-F (H10): `dispatch_subject_verb/3` (sister of `dispatch_ops_verb/3`)

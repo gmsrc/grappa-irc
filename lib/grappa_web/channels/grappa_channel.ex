@@ -1691,6 +1691,17 @@ defmodule GrappaWeb.GrappaChannel do
       {:error, :no_session} ->
         {:reply, {:error, %{error: "no_session"}}, socket}
 
+      # #513b — a 2nd /links issued while a FRESH request is still in flight
+      # is REFUSED, not clobbered (Session.Server gates re-priming of the
+      # links_pending accumulator on a monotonic `requested_at`), so the 1st
+      # bundle survives. Surface the typed `links_in_flight` token so cic
+      # shows "network map already loading" — routing it through the catch-all
+      # below would both lie (`upstream_unavailable`) and, per the
+      # ErrorTokensDrift pin, leave `channel_error_token/0` declaring a token
+      # nothing ever emits.
+      {:error, :links_in_flight} ->
+        {:reply, {:error, %{error: "links_in_flight"}}, socket}
+
       # REV-F (H10, originally REV-E HIGH-1): `Session.send_*` post-U-
       # cluster CAN return `{:error, :no_socket | :closed |
       # :inet.posix()}` once a dead-socket SEND fires (the
