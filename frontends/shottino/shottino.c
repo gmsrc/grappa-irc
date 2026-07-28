@@ -2741,7 +2741,25 @@ static void ws_push_user(struct app *app, const char *event, const char *payload
     free(frame);
 }
 
-static int current_network_id(struct app *app) {
+/* ── Which window am I typing into? ───────────────────────────────────
+ *
+ * ONE door, and it copies.
+ *
+ * `current_channel()` used to hand back a pointer straight into
+ * app->windows[app->current].channel, and every command handler read
+ * app->windows[app->current] directly. Neither holds the lock, and the
+ * focused window is not the command thread's private property: the
+ * socket thread renames windows, rewrites rosters and appends new ones,
+ * and `/win` itself moves app->current. A pointer into that array is
+ * only valid for as long as nobody touches it, which is not a guarantee
+ * anyone was making — the string could be rewritten between the call and
+ * the xasprintf that used it, and app->current could name a different
+ * window by the time the value landed in a payload.
+ *
+ * Copying under the lock costs two snprintfs and removes the whole
+ * class. The _locked forms are for the draw path, which holds the lock
+ * for its entire frame. */
+static int current_network_id_locked(struct app *app) {
     const char *slug = app->windows[app->current].network;
     for (size_t i = 0; i < app->network_count; i++) {
         if (strcmp(app->networks[i].slug, slug) == 0) return app->networks[i].id;
@@ -2749,8 +2767,30 @@ static int current_network_id(struct app *app) {
     return app->network_count > 0 ? app->networks[0].id : 0;
 }
 
-static const char *current_channel(struct app *app) {
-    return app->windows[app->current].channel;
+static int current_network_id(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    int id = current_network_id_locked(app);
+    pthread_mutex_unlock(&app->lock);
+    return id;
+}
+
+/* Copy the focused window's (network, channel) out. Either buffer may be
+ * NULL. Returns false — leaving the buffers empty — when there is no
+ * window, which a caller about to address one must check rather than
+ * sending a payload naming "". */
+static bool current_window_key(struct app *app, char *network, size_t net_sz, char *channel,
+                               size_t chan_sz) {
+    if (network && net_sz) network[0] = '\0';
+    if (channel && chan_sz) channel[0] = '\0';
+    pthread_mutex_lock(&app->lock);
+    bool have = app->window_count > 0 && app->current < app->window_count;
+    if (have) {
+        const struct window *w = &app->windows[app->current];
+        if (network && net_sz) snprintf(network, net_sz, "%s", w->network);
+        if (channel && chan_sz) snprintf(channel, chan_sz, "%s", w->channel);
+    }
+    pthread_mutex_unlock(&app->lock);
+    return have;
 }
 
 static void ws_join_topics(struct app *app) {
@@ -4510,7 +4550,9 @@ static void set_network_state(struct app *app, const char *network, const char *
 }
 
 static void set_nick(struct app *app, const char *nick) {
-    char *net = url_encode(app->windows[app->current].network);
+    char net_now[MAX_SLUG];
+    if (!current_window_key(app, net_now, sizeof(net_now), NULL, 0)) return;
+    char *net = url_encode(net_now);
     char *path = xasprintf("/networks/%s/nick", net);
     char *escaped = json_escape(nick);
     char *body = xasprintf("{\"nick\":\"%s\"}", escaped);
@@ -4618,8 +4660,10 @@ static void list_members_target(struct app *app, const char *network, const char
 }
 
 static void push_simple_channel_action(struct app *app, const char *event, const char *extra_json) {
+    char chan_now[MAX_CHANNEL];
+    if (!current_window_key(app, NULL, 0, chan_now, sizeof(chan_now))) return;
     int id = current_network_id(app);
-    char *channel = json_escape(current_channel(app));
+    char *channel = json_escape(chan_now);
     char *payload = extra_json
         ? xasprintf("{\"network_id\":%d,\"channel\":\"%s\",%s}", id, channel, extra_json)
         : xasprintf("{\"network_id\":%d,\"channel\":\"%s\"}", id, channel);
@@ -4647,18 +4691,21 @@ static char *json_array_words(const char *words) {
 }
 
 static void query_window(struct app *app, const char *target) {
+    char net_now[MAX_SLUG];
+    if (!current_window_key(app, net_now, sizeof(net_now), NULL, 0)) return;
     int id = current_network_id(app);
     char *t = json_escape(target);
     char *payload = xasprintf("{\"network_id\":%d,\"target_nick\":\"%s\"}", id, t);
     ws_push_user(app, "open_query_window", payload);
-    add_window(app, app->windows[app->current].network, target);
+    add_window(app, net_now, target);
     free(t);
     free(payload);
 }
 
 static void join_channel(struct app *app, const char *name) {
+    char join_net[MAX_SLUG];
     const char *net_slug = app->networks[0].slug;
-    if (app->window_count > 0) net_slug = app->windows[app->current].network;
+    if (current_window_key(app, join_net, sizeof(join_net), NULL, 0)) net_slug = join_net;
     char *net = url_encode(net_slug);
     char *path = xasprintf("/networks/%s/channels", net);
     char *escaped = json_escape(name);
@@ -5007,7 +5054,15 @@ static void complete_input(struct app *app) {
             add_completion_candidate(candidates, &matches, commands[i], stem);
         }
     } else {
-        const char *current_network = app->window_count > 0 ? app->windows[app->current].network : "";
+        /* Tab completion reads the roster, the window list, the network
+         * table AND the whole log — every one of them mutated by the
+         * socket thread. One critical section over the gather rather
+         * than a snapshot per table: the candidates only need to be
+         * consistent with each other, and this runs on a keystroke. */
+        char cur_net[MAX_SLUG];
+        current_window_key(app, cur_net, sizeof(cur_net), NULL, 0);
+        const char *current_network = cur_net;
+        pthread_mutex_lock(&app->lock);
         if (app->window_count > 0) {
             struct window *w = &app->windows[app->current];
             for (size_t i = 0; i < w->member_count; i++) add_completion_candidate(candidates, &matches, w->members[i].nick, stem);
@@ -5024,6 +5079,7 @@ static void complete_input(struct app *app) {
         for (size_t i = 0; i < app->log_count; i++) {
             collect_log_nick_candidate(app, candidates, &matches, app->log[i], stem);
         }
+        pthread_mutex_unlock(&app->lock);
     }
 
     if (matches == 1) {
@@ -5609,7 +5665,9 @@ static void upload_command(struct app *app, const char *path) {
     }
     /* Same read-only rule as a typed message: the link would be posted to
      * the current window, and $server rejects a PRIVMSG. */
-    if (strcmp(app->windows[app->current].channel, "$server") == 0) {
+    char up_net[MAX_SLUG], up_chan[MAX_CHANNEL];
+    if (!current_window_key(app, up_net, sizeof(up_net), up_chan, sizeof(up_chan)) ||
+        strcmp(up_chan, "$server") == 0) {
         log_line(app, "/upload: the server window is read-only — switch to a channel or query first");
         return;
     }
@@ -5700,10 +5758,8 @@ static void upload_command(struct app *app, const char *path) {
     else
         snprintf(message, sizeof(message), "📸 %s%s", app->url.base, url);
 
-    const char *network = app->windows[app->current].network;
-    const char *channel = app->windows[app->current].channel;
-    add_pending_echo(app, network, channel, own_nick_for_network(app, network), message);
-    enqueue_send(app, network, channel, message);
+    add_pending_echo(app, up_net, up_chan, own_nick_for_network(app, up_net), message);
+    enqueue_send(app, up_net, up_chan, message);
 }
 
 /* ── /archive open|purge ───────────────────────────────────────────────
@@ -5713,7 +5769,9 @@ static void upload_command(struct app *app, const char *path) {
  * "purge everything" form. */
 static void archive_command(struct app *app, const char *rest) {
     while (*rest == ' ') rest++;
-    const char *network = app->windows[app->current].network;
+    char net_buf[MAX_SLUG];
+    current_window_key(app, net_buf, sizeof(net_buf), NULL, 0);
+    const char *network = net_buf;
 
     if (strncmp(rest, "open ", 5) == 0) {
         const char *target = rest + 5;
@@ -5776,7 +5834,9 @@ static void notify_command(struct app *app, const char *rest) {
     /* The watch list is per-network (it maps to that session's
      * MONITOR/WATCH registration upstream), so every call is scoped to
      * the active window's network. */
-    char *slug = url_encode(app->windows[app->current].network);
+    char watch_net[MAX_SLUG];
+    current_window_key(app, watch_net, sizeof(watch_net), NULL, 0);
+    char *slug = url_encode(watch_net);
     if (!*rest || strcmp(rest, "list") == 0) {
         char *path = xasprintf("/networks/%s/notify", slug);
         struct http_response r = http_request(app, "GET", path, NULL);
@@ -5835,7 +5895,9 @@ static void notify_command(struct app *app, const char *rest) {
  * /list reads the cache; `/list -refresh` starts a new scan. */
 static void directory_command(struct app *app, const char *rest) {
     while (*rest == ' ') rest++;
-    const char *network = app->windows[app->current].network;
+    char dir_net[MAX_SLUG];
+    current_window_key(app, dir_net, sizeof(dir_net), NULL, 0);
+    const char *network = dir_net;
     char *slug = url_encode(network);
     if (strcmp(rest, "-refresh") == 0) {
         char *path = xasprintf("/networks/%s/directory/refresh", slug);
@@ -6090,20 +6152,19 @@ static void handle_command_dispatch(struct app *app, char *line) {
         }
     } else if (strncmp(line, "/join ", 6) == 0 && line[6]) {
         struct job job = { .kind = JOB_JOIN };
-        snprintf(job.network, sizeof(job.network), "%s", app->windows[app->current].network);
+        current_window_key(app, job.network, sizeof(job.network), NULL, 0);
         snprintf(job.channel, sizeof(job.channel), "%s", line + 6);
         enqueue_job(app, job);
     } else if (strncmp(line, "/j ", 3) == 0 && line[3]) {
         struct job job = { .kind = JOB_JOIN };
-        snprintf(job.network, sizeof(job.network), "%s", app->windows[app->current].network);
+        current_window_key(app, job.network, sizeof(job.network), NULL, 0);
         snprintf(job.channel, sizeof(job.channel), "%s", line + 3);
         enqueue_job(app, job);
     } else if (strcmp(line, "/part") == 0) {
         handle_command(app, "/close");
     } else if (strncmp(line, "/nick ", 6) == 0 && line[6]) {
         struct job job = { .kind = JOB_NICK };
-        snprintf(job.network, sizeof(job.network), "%s", app->windows[app->current].network);
-        snprintf(job.channel, sizeof(job.channel), "%s", app->windows[app->current].channel);
+        current_window_key(app, job.network, sizeof(job.network), job.channel, sizeof(job.channel));
         snprintf(job.arg1, sizeof(job.arg1), "%s", line + 6);
         enqueue_job(app, job);
     } else if (strncmp(line, "/msg ", 5) == 0) {
@@ -6113,10 +6174,11 @@ static void handle_command_dispatch(struct app *app, char *line) {
             *sp = 0;
             const char *target = line + 5;
             const char *body = sp + 1;
-            const char *network = app->windows[app->current].network;
+            char msg_net[MAX_SLUG];
+            if (!current_window_key(app, msg_net, sizeof(msg_net), NULL, 0)) return;
             query_window(app, target);
-            add_pending_echo(app, network, target, own_nick_for_network(app, network), body);
-            enqueue_send(app, app->windows[app->current].network, target, body);
+            add_pending_echo(app, msg_net, target, own_nick_for_network(app, msg_net), body);
+            enqueue_send(app, msg_net, target, body);
         }
     } else if (strcmp(line, "/query") == 0 || strcmp(line, "/q") == 0) {
         log_line(app, "/query requires a nick; use /query nick or /q nick");
@@ -6134,7 +6196,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
         struct job job = { .kind = JOB_NETWORK_STATE };
         snprintf(job.arg1, sizeof(job.arg1), "parked");
         if (!*rest) {
-            snprintf(job.network, sizeof(job.network), "%s", app->windows[app->current].network);
+            current_window_key(app, job.network, sizeof(job.network), NULL, 0);
             enqueue_job(app, job);
         }
         else {
@@ -6151,7 +6213,9 @@ static void handle_command_dispatch(struct app *app, char *line) {
     } else if (strncmp(line, "/away", 5) == 0) {
         char *rest = line + 5;
         while (*rest == ' ') rest++;
-        char *net = json_escape(app->windows[app->current].network);
+        char away_net[MAX_SLUG];
+        current_window_key(app, away_net, sizeof(away_net), NULL, 0);
+        char *net = json_escape(away_net);
         char *payload;
         if (*rest) {
             if (*rest == ':') rest++;
@@ -6179,36 +6243,40 @@ static void handle_command_dispatch(struct app *app, char *line) {
         ws_push_user(app, "lusers", payload);
         free(payload);
     } else if (strncmp(line, "/who", 4) == 0) {
-        const char *target = line[4] ? line + 5 : current_channel(app);
-        char *chan = json_escape(target && *target ? target : current_channel(app));
+        char chan_now[MAX_CHANNEL];
+        current_window_key(app, NULL, 0, chan_now, sizeof(chan_now));
+        const char *target = line[4] && line[5] ? line + 5 : chan_now;
+        char *chan = json_escape(*target ? target : chan_now);
         char *payload = xasprintf("{\"network_id\":%d,\"channel\":\"%s\"}", current_network_id(app), chan);
         ws_push_user(app, "who", payload);
         free(chan); free(payload);
     } else if (strncmp(line, "/names", 6) == 0) {
-        const char *target = line[6] ? line + 7 : current_channel(app);
-        char *chan = json_escape(target && *target ? target : current_channel(app));
-        char *origin = json_escape(current_channel(app));
+        char chan_now[MAX_CHANNEL];
+        current_window_key(app, NULL, 0, chan_now, sizeof(chan_now));
+        const char *target = line[6] && line[7] ? line + 7 : chan_now;
+        char *chan = json_escape(*target ? target : chan_now);
+        char *origin = json_escape(chan_now);
         char *payload = xasprintf("{\"network_id\":%d,\"channel\":\"%s\",\"origin_window\":\"%s\"}", current_network_id(app), chan, origin);
         ws_push_user(app, "names", payload);
         free(chan); free(origin); free(payload);
     } else if (strcmp(line, "/members") == 0 || strcmp(line, "/users") == 0) {
         struct job job = { .kind = JOB_MEMBERS };
-        snprintf(job.network, sizeof(job.network), "%s", app->windows[app->current].network);
-        snprintf(job.channel, sizeof(job.channel), "%s", app->windows[app->current].channel);
+        current_window_key(app, job.network, sizeof(job.network), job.channel, sizeof(job.channel));
         enqueue_job(app, job);
     } else if (strncmp(line, "/topic", 6) == 0) {
         const char *rest = line + 6;
         while (*rest == ' ') rest++;
         if (!*rest) {
-            char *chan = json_escape(current_channel(app));
+            char chan_now[MAX_CHANNEL];
+            current_window_key(app, NULL, 0, chan_now, sizeof(chan_now));
+            char *chan = json_escape(chan_now);
             char *payload = xasprintf("{\"network_id\":%d,\"channel\":\"%s\",\"origin_window\":\"%s\"}", current_network_id(app), chan, chan);
             ws_push_user(app, "names", payload);
             free(chan); free(payload);
-            log_line(app, "requested topic snapshot for %s", current_channel(app));
+            log_line(app, "requested topic snapshot for %s", chan_now);
         } else {
             struct job job = { .kind = JOB_TOPIC };
-            snprintf(job.network, sizeof(job.network), "%s", app->windows[app->current].network);
-            snprintf(job.channel, sizeof(job.channel), "%s", app->windows[app->current].channel);
+            current_window_key(app, job.network, sizeof(job.network), job.channel, sizeof(job.channel));
             snprintf(job.arg1, sizeof(job.arg1), "%s", strcmp(rest, "-delete") == 0 ? " " : rest);
             enqueue_job(app, job);
         }
@@ -6277,7 +6345,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
         char *rest = line + 5;
         while (*rest == ' ') rest++;
         char target[MAX_CHANNEL];
-        snprintf(target, sizeof(target), "%s", current_channel(app));
+        current_window_key(app, NULL, 0, target, sizeof(target));
         if (*rest == '#' || *rest == '&' || *rest == '+' || *rest == '!') {
             char *sp = strchr(rest, ' ');
             if (sp) {
@@ -6379,10 +6447,11 @@ static void handle_command_dispatch(struct app *app, char *line) {
         const char *rest = line[3] ? line + 4 : "";
         while (*rest == ' ') rest++;
         const char *body = *rest ? rest : "HELP";
-        const char *network = app->windows[app->current].network;
+        char svc_net[MAX_SLUG];
+        if (!current_window_key(app, svc_net, sizeof(svc_net), NULL, 0)) return;
         query_window(app, service);
-        add_pending_echo(app, network, service, own_nick_for_network(app, network), body);
-        enqueue_send(app, network, service, body);
+        add_pending_echo(app, svc_net, service, own_nick_for_network(app, svc_net), body);
+        enqueue_send(app, svc_net, service, body);
     } else if (strncmp(line, "/notify", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
         notify_command(app, line + 7);
     } else if (strncmp(line, "/hilight ", 9) == 0 || strncmp(line, "/dehilight ", 11) == 0) {
@@ -6417,14 +6486,28 @@ static void handle_command_dispatch(struct app *app, char *line) {
     } else if (strncmp(line, "/window ", 8) == 0 || strncmp(line, "/win ", 5) == 0 || strncmp(line, "/w ", 3) == 0) {
         const char *arg = line[2] == 'w' && line[3] == ' ' ? line + 3 : (line[4] == ' ' ? line + 5 : line + 8);
         int n = atoi(arg);
+        /* Focus moves under the lock, exactly as cycle_window does it:
+         * app->current, the unread reset and the window it names are one
+         * decision, and the socket thread is appending windows and
+         * rewriting rosters the whole time. The identity is copied out
+         * before the unlocked fetches use it. */
+        char win_net[MAX_SLUG] = "", win_chan[MAX_CHANNEL] = "";
+        bool moved = false;
+        pthread_mutex_lock(&app->lock);
         if (n > 0 && (size_t)n <= app->window_count) {
             app->current = (size_t)n - 1;
             clear_current_unread_locked(app);
             app->scrollback_offset = 0;
             app->scrollback_pinned = false;
             app->member_offset = 0;
-            enqueue_fetch(app, app->windows[app->current].network, app->windows[app->current].channel);
-            ensure_roster(app, app->windows[app->current].network, app->windows[app->current].channel);
+            snprintf(win_net, sizeof(win_net), "%s", app->windows[app->current].network);
+            snprintf(win_chan, sizeof(win_chan), "%s", app->windows[app->current].channel);
+            moved = true;
+        }
+        pthread_mutex_unlock(&app->lock);
+        if (moved) {
+            enqueue_fetch(app, win_net, win_chan);
+            ensure_roster(app, win_net, win_chan);
         }
     } else {
         log_line(app, "unknown command: %.40s — /help lists every verb", line);
@@ -6441,8 +6524,10 @@ static void handle_enter(struct app *app) {
     app->input[0] = 0;
     if (line[0] == '/') handle_command(app, line);
     else {
-        const char *network = app->windows[app->current].network;
-        const char *channel = app->windows[app->current].channel;
+        char send_net[MAX_SLUG], send_chan[MAX_CHANNEL];
+        if (!current_window_key(app, send_net, sizeof(send_net), send_chan, sizeof(send_chan))) return;
+        const char *network = send_net;
+        const char *channel = send_chan;
         /* $server is read-only by server contract, so say so HERE rather
          * than firing a request that can only come back 400. The client
          * knows the rule; making the user decode an HTTP status to learn

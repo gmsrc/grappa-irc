@@ -22013,3 +22013,31 @@ persisted (a fresh shottino starts restrictive) and turning it on prints what it
 costs, in the command's own output, rather than burying it in a manpage. The
 default is unchanged, which is the part that matters: the safe posture is what
 you get without asking, and the risky one is what you get after being told.
+
+## 2026-07-28 — shottino: "which window am I in" is one door, and it copies
+
+`/win` moved `app->current`, cleared the unread badge and read the window it
+landed on WITHOUT holding `app->lock`. The command thread is not the only writer:
+the socket thread appends windows, renames them, rewrites rosters, and the worker
+thread replaces member lists. But `/win` was one instance of a class —
+`current_channel()` handed callers a raw pointer into
+`app->windows[app->current].channel`, and ~20 command handlers read
+`app->windows[app->current]` directly. The string could be rewritten between the
+call and the `xasprintf` that consumed it, and `app->current` could name a
+different window by the time the value reached a payload. Nothing crashed loudly;
+it would mis-address a message under load, which is the worst way for this to
+fail.
+
+One door now: `current_window_key(app, net, sz, chan, sz)` copies the focused
+window's identity out under the lock (either buffer optional, false when there is
+no window — and it empties the buffers, so a caller that ignores the return sends
+nothing rather than stack garbage). `current_network_id()` locks internally;
+`current_network_id_locked()` is for the draw path, which holds the lock for its
+whole frame. Tab completion, which reads the roster, the window list, the network
+table and the entire log, takes ONE critical section over the gather — the
+candidates only need to be consistent with each other.
+
+Sequencing note: this landed BEFORE `/split` deliberately. Panes make "the
+current window" mean "the focused pane's window", and with every caller already
+going through one accessor that becomes a change in one function instead of forty
+call sites. Fixing the race first was cheaper than fixing it after.

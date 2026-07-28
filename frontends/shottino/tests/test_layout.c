@@ -300,6 +300,50 @@ TEST(roster_rows_count_the_muted_separator) {
     free(app);
 }
 
+/* The focused window's identity is COPIED out under the lock. Handing
+ * back a pointer into app->windows let the socket thread rewrite the
+ * string, or /win move app->current, between the call and the use. */
+TEST(current_window_key_copies_and_reports_absence) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    char net[MAX_SLUG], chan[MAX_CHANNEL];
+
+    /* No windows: false, and the buffers are emptied rather than left
+     * holding whatever the caller had on the stack — a caller that
+     * ignores the return must not send a payload naming garbage. */
+    snprintf(net, sizeof(net), "stale");
+    snprintf(chan, sizeof(chan), "#stale");
+    CHECK(!current_window_key(app, net, sizeof(net), chan, sizeof(chan)));
+    CHECK_STR(net, "");
+    CHECK_STR(chan, "");
+
+    add_test_window(app, "azzurra", "#one");
+    add_test_window(app, "azzurra", "#two");
+    app->current = 1;
+    CHECK(current_window_key(app, net, sizeof(net), chan, sizeof(chan)));
+    CHECK_STR(net, "azzurra");
+    CHECK_STR(chan, "#two");
+
+    /* It is a COPY: moving focus does not rewrite what the caller holds. */
+    app->current = 0;
+    CHECK_STR(chan, "#two");
+
+    /* Either buffer may be omitted. */
+    CHECK(current_window_key(app, NULL, 0, chan, sizeof(chan)));
+    CHECK_STR(chan, "#one");
+    CHECK(current_window_key(app, net, sizeof(net), NULL, 0));
+    CHECK_STR(net, "azzurra");
+
+    /* current is out of range (a window closed under us): reported as
+     * absent, not read past the end of the array. */
+    app->current = 7;
+    CHECK(!current_window_key(app, net, sizeof(net), chan, sizeof(chan)));
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
 int main(void) {
     FILE *sink = fopen("/dev/null", "w");
     if (!sink) {
@@ -323,6 +367,7 @@ int main(void) {
     RUN(roster_edits_keep_the_order_and_the_prefixes);
     RUN(muted_tier_needs_a_known_plus_m);
     RUN(roster_rows_count_the_muted_separator);
+    RUN(current_window_key_copies_and_reports_absence);
     endwin();
     fclose(sink);
     return test_report();
