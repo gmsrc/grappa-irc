@@ -7,15 +7,17 @@
 #   * `quickstart.sh` INSTALLS and `quickstart-update.sh` UPDATES; both
 #     end by printing a stop command, and both print it with the profile
 #     because without it the command is wrong.
-#   * The long-lived nginx sits behind the `prod` compose profile, so a
-#     plain `docker compose down` never considers it. It stays up, keeps
-#     the project network attached, and the down ends with
+#   * The prod-profile services (grappa + the cicchetto-build oneshot) sit
+#     behind the `prod` compose profile, so a plain `docker compose down`
+#     never considers them. They stay up, keep the project network
+#     attached, and the down ends with
 #
 #         Network <project>_grappa_internal  Resource is still in use
 #
 #     which reads like a docker glitch and is really "half your box is
 #     still running". The fix is one flag nobody remembers at the moment
-#     they need it.
+#     they need it. --remove-orphans also sweeps a stale grappa-nginx left
+#     by a pre-#485 (two-container) box.
 #
 # So: the same preflight and the same ownership guard as the other two,
 # then the down that actually finishes.
@@ -78,10 +80,12 @@ done
 if [ "$running" -eq 0 ]; then
   say "No grappa containers are up — collecting whatever is left"
 else
-  say "Stopping the stack (prod profile: grappa + nginx)"
+  say "Stopping the stack (prod profile: grappa + cicchetto-build)"
 fi
 
-down=("${COMPOSE[@]}" --profile prod down)
+# --remove-orphans: drop a stale grappa-nginx from a pre-#485 box (removed
+# from compose.yaml but not stopped by a plain down) so the network frees.
+down=("${COMPOSE[@]}" --profile prod down --remove-orphans)
 [ "$DROP_VOLUMES" -eq 1 ] && down+=(--volumes)
 "${down[@]}"
 

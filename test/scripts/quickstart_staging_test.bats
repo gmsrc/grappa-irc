@@ -28,8 +28,6 @@ setup() {
 services:
   grappa:
     container_name: grappa
-  nginx:
-    container_name: grappa-nginx
 EOF
 
     FAKE_DIR="$BATS_TEST_TMPDIR/fake"
@@ -108,24 +106,26 @@ EOF
 }
 
 @test "an explicitly passed HTTP_BIND wins over what .env already carries" {
-    # .env.example publishes on every interface; a fresh .env must not
-    # inherit that when the caller asked for a specific bind.
+    # .env.example publishes on loopback; a fresh .env must not inherit that
+    # when the caller asked for a specific bind. #485 — grappa is the
+    # LAN-facing service now, so this lands in GRAPPA_PUBLISH (host-side; no
+    # container-side :80 — compose appends :4000).
     HTTP_BIND=127.0.0.1:3100 run "$BOX/scripts/quickstart.sh"
     [ "$status" -eq 0 ]
-    [ "$(grep -c '^NGINX_PUBLISH=' "$BOX/.env")" -eq 1 ]
-    grep -qE '^NGINX_PUBLISH=127\.0\.0\.1:3100:80$' "$BOX/.env"
+    [ "$(grep -c '^GRAPPA_PUBLISH=' "$BOX/.env")" -eq 1 ]
+    grep -qE '^GRAPPA_PUBLISH=127\.0\.0\.1:3100$' "$BOX/.env"
 
     HTTP_BIND=127.0.0.1:3200 run "$BOX/scripts/quickstart.sh"
     [ "$status" -eq 0 ]
-    [ "$(grep -c '^NGINX_PUBLISH=' "$BOX/.env")" -eq 1 ]
-    grep -qE '^NGINX_PUBLISH=127\.0\.0\.1:3200:80$' "$BOX/.env"
+    [ "$(grep -c '^GRAPPA_PUBLISH=' "$BOX/.env")" -eq 1 ]
+    grep -qE '^GRAPPA_PUBLISH=127\.0\.0\.1:3200$' "$BOX/.env"
     [[ "$output" == *"http://127.0.0.1:3200/"* ]]
 }
 
-@test "a fresh .env does not inherit the example's all-interfaces publish" {
+@test "a fresh .env publishes grappa on the default HTTP_BIND, not the example's loopback:4000" {
     run "$BOX/scripts/quickstart.sh"
     [ "$status" -eq 0 ]
-    grep -qE '^NGINX_PUBLISH=127\.0\.0\.1:3000:80$' "$BOX/.env"
+    grep -qE '^GRAPPA_PUBLISH=127\.0\.0\.1:3000$' "$BOX/.env"
 }
 
 @test "a bind pinned by an earlier run is reported and proxied to, not silently replaced" {
@@ -134,7 +134,7 @@ EOF
 
     PHX_HOST=staging.example.org run "$BOX/scripts/quickstart.sh"
     [ "$status" -eq 0 ]
-    grep -qE '^NGINX_PUBLISH=127\.0\.0\.1:3100:80$' "$BOX/.env"
+    grep -qE '^GRAPPA_PUBLISH=127\.0\.0\.1:3100$' "$BOX/.env"
     [[ "$output" == *"http://127.0.0.1:3100/"* ]]
     grep -q 'server 127.0.0.1:3100;' "$BOX/runtime/nginx-frontend.conf"
 }
@@ -142,10 +142,11 @@ EOF
 @test "a bare-port publish from .env is normalised to loopback in output and upstream" {
     run "$BOX/scripts/quickstart.sh"   # creates .env
     [ "$status" -eq 0 ]
-    # Simulate the compose short form a hand-edited .env may carry.
-    grep -v '^NGINX_PUBLISH=' "$BOX/.env" > "$BOX/.env.tmp"
+    # Simulate the compose short form a hand-edited .env may carry (host
+    # side only — compose appends the container :4000).
+    grep -v '^GRAPPA_PUBLISH=' "$BOX/.env" > "$BOX/.env.tmp"
     mv "$BOX/.env.tmp" "$BOX/.env"
-    printf 'NGINX_PUBLISH=8080:80\n' >> "$BOX/.env"
+    printf 'GRAPPA_PUBLISH=8080\n' >> "$BOX/.env"
 
     PHX_HOST=staging.example.org run "$BOX/scripts/quickstart.sh"
     [ "$status" -eq 0 ]

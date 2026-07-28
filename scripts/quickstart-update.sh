@@ -44,6 +44,37 @@ say()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m  %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
+# #485 — a box created by a pre-change checkout has NGINX_PUBLISH=<host>:80
+# (the LAN-facing nginx container) and GRAPPA_PUBLISH=127.0.0.1:4000 (grappa
+# behind nginx, loopback). nginx is gone; grappa must take over that LAN
+# binding. Rewrite the operator's .env IN PLACE — mapping the container side
+# :80 → :4000 by stripping :80 (compose.yaml re-appends :4000) — so the box
+# comes back up on the same URL and port, with no hand edits. Deprecated
+# alias, honoured for this upgrade with a one-line warning.
+migrate_publish_env() {
+  grep -qE '^NGINX_PUBLISH=' .env || return 0
+
+  local old host_side cur
+  old="$(sed -n 's/^NGINX_PUBLISH=//p' .env | tail -n1)"
+  cur="$(sed -n 's/^GRAPPA_PUBLISH=//p' .env | tail -n1)"
+  host_side="${old%:80}"
+  [ -n "$host_side" ] || host_side="127.0.0.1:3000"   # malformed → sane LAN default
+
+  # Drop the deprecated var either way.
+  grep -vE '^NGINX_PUBLISH=' .env > .env.tmp && mv .env.tmp .env
+
+  if [ -z "$cur" ] || [ "$cur" = "127.0.0.1:4000" ]; then
+    # Absent, or the pre-change default (grappa behind nginx, loopback):
+    # grappa takes over the LAN binding nginx used to hold.
+    warn "NGINX_PUBLISH is deprecated (#485 dropped the nginx container). Rewriting .env: GRAPPA_PUBLISH=${host_side} (grappa serves directly now), removing NGINX_PUBLISH."
+    grep -vE '^GRAPPA_PUBLISH=' .env > .env.tmp && mv .env.tmp .env
+    printf 'GRAPPA_PUBLISH=%s\n' "$host_side" >> .env
+  else
+    # Operator deliberately set a non-default GRAPPA_PUBLISH — respect it.
+    warn "NGINX_PUBLISH is deprecated (#485) and was removed from .env. Your GRAPPA_PUBLISH=${cur} is kept — verify it publishes grappa where your TLS front door proxies."
+  fi
+}
+
 PULL=1
 case "${1:-}" in
   --no-pull) PULL=0 ;;
@@ -131,10 +162,21 @@ if [ -n "$changed" ]; then
   touched '^cicchetto/'                        && need_cic=1
 fi
 
+# ---- 2b. migrate a pre-#485 .env (drop the two-container topology) ------
+# Runs in BOTH branches below (an operator already on the post-change commit
+# may still carry an un-migrated .env). Idempotent — a no-op once
+# NGINX_PUBLISH is gone.
+migrate_publish_env
+
 # ---- 3. do only what the diff asked for --------------------------------
+# --remove-orphans is load-bearing on the #485 upgrade: removing the nginx
+# service from compose.yaml does NOT stop the container it created, and a
+# profile-gated `down` skips it — so grappa-nginx survives, keeps host port
+# 3000 bound, and the new single-container box fails to bind. --remove-orphans
+# sweeps it as part of the up.
 if [ -z "$changed" ]; then
   say "already up to date at $(git rev-parse --short HEAD) — ensuring the stack is up"
-  "${COMPOSE[@]}" --profile prod up -d
+  "${COMPOSE[@]}" --profile prod up -d --remove-orphans
 else
   say "Updating $(git rev-parse --short "$prev") → $(git rev-parse --short "$now")"
 
@@ -147,19 +189,19 @@ else
   [ "$need_migrate" -eq 1 ] && { say "new migrations — running ecto.migrate"; \
                                  "${COMPOSE[@]}" --profile prod run --rm --no-deps grappa mix ecto.migrate; }
 
-  say "Recreating grappa + nginx"
+  say "Recreating grappa"
   # --no-deps so compose does not drag the oneshot back in; it either ran
-  # above or had no reason to.
-  "${COMPOSE[@]}" --profile prod up -d --force-recreate --no-deps grappa nginx
+  # above or had no reason to. --remove-orphans sweeps a stale grappa-nginx.
+  "${COMPOSE[@]}" --profile prod up -d --force-recreate --no-deps --remove-orphans grappa
 fi
 
 # ---- 4. wait for health ------------------------------------------------
-# Probed from inside nginx, so it is independent of how the host port is
-# published. A recompile of the mounted tree happens on this boot, hence
-# the generous window.
+# Probed from inside grappa, so it is independent of how the host port is
+# published (#485 dropped the nginx container). A recompile of the mounted
+# tree happens on this boot, hence the generous window.
 say "Waiting for /healthz"
 deadline=$((SECONDS + 600))
-until "${COMPOSE[@]}" exec -T nginx wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1; do
+until "${COMPOSE[@]}" exec -T grappa curl -fsS http://localhost:4000/healthz >/dev/null 2>&1; do
   if [ "$SECONDS" -ge "$deadline" ]; then
     warn "stack did not become healthy in time. Inspect with:"
     warn "  ${COMPOSE[*]} --profile prod logs --tail=100 grappa"
@@ -172,11 +214,12 @@ printf '\n'
 # ---- 5. report ---------------------------------------------------------
 # Read the bind back out of .env rather than assuming a default: an
 # earlier run may have pinned it elsewhere, and printing a URL nobody
-# listens on is the #469 bug this box already had once.
-published="$(sed -n 's/^NGINX_PUBLISH=//p' .env | tail -n1)"
-published="${published%:80}"
+# listens on is the #469 bug this box already had once. #485 — grappa
+# publishes directly now, so read GRAPPA_PUBLISH (host-side; compose
+# appends the container :4000).
+published="$(sed -n 's/^GRAPPA_PUBLISH=//p' .env | tail -n1)"
 case "$published" in
-  '')            published="127.0.0.1:3000" ;;
+  '')            published="127.0.0.1:4000" ;;
   0.0.0.0:*)     published="127.0.0.1:${published##*:}" ;;
   '[::]:'*)      published="127.0.0.1:${published##*:}" ;;
   *:*)           ;;

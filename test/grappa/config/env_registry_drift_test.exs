@@ -42,6 +42,9 @@ defmodule Grappa.Config.EnvRegistryDriftTest do
 
   # Docker-orchestration vars: read by compose.yaml / .env.example to
   # drive the container runtime, NOT by the app. Allowed as extras.
+  # NGINX_PUBLISH is a DEPRECATED alias (#485 dropped the nginx container);
+  # compose.yaml no longer reads it, but it stays a commented note in
+  # .env.example for one release, so it must remain allowed here.
   @docker_orchestration MapSet.new([
                           "CONTAINER_UID",
                           "CONTAINER_GID",

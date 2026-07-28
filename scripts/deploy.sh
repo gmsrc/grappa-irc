@@ -240,19 +240,20 @@ docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa \
 echo "Running migrations..."
 docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa mix ecto.migrate
 
-# Bring up grappa + nginx. --no-deps avoids re-running cicchetto-build
-# (we just ran it above; compose's depends_on graph would otherwise try
-# again because `run --rm` removes the container).
-docker compose "${COMPOSE_ARGS[@]}" --profile prod up -d --force-recreate --no-deps grappa nginx
+# Bring up grappa. --no-deps avoids re-running cicchetto-build (we just ran
+# it above; compose's depends_on graph would otherwise try again because
+# `run --rm` removes the container). --remove-orphans sweeps a stale
+# grappa-nginx left by a pre-#485 (two-container) stack.
+docker compose "${COMPOSE_ARGS[@]}" --profile prod up -d --force-recreate --no-deps --remove-orphans grappa
 
-# Wait for /healthz via nginx, probed from INSIDE the nginx container
-# so the check is independent of host port binding. Cold-boot loop is
-# long because `mix phx.server` recompiles when bind-mounted source
-# has no `_build/${MIX_ENV}/` cached on host disk yet — first deploy
-# can take 2-3 minutes, subsequent deploys finish in 10-15s.
-echo "Waiting for /healthz via nginx..."
+# Wait for /healthz on grappa, probed from INSIDE the container so the
+# check is independent of host port binding (#485 dropped the nginx
+# container). Cold-boot loop is long because `mix phx.server` recompiles
+# when bind-mounted source has no `_build/${MIX_ENV}/` cached on host disk
+# yet — first deploy can take 2-3 minutes, subsequent finish in 10-15s.
+echo "Waiting for /healthz..."
 for i in $(seq 1 120); do
-    if docker compose "${COMPOSE_ARGS[@]}" exec -T nginx wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1; then
+    if docker compose "${COMPOSE_ARGS[@]}" exec -T grappa curl -fsS http://localhost:4000/healthz >/dev/null 2>&1; then
         echo "✓ cold-deploy complete (sessions reset, new container)"
         exit 0
     fi

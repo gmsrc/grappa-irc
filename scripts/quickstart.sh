@@ -2,8 +2,9 @@
 # grappa — one-command vanilla Docker install (full stack on localhost).
 #
 # Clones-and-goes: generates every secret, writes .env, builds the image,
-# runs migrations, brings up the full prod profile (bouncer + cicchetto
-# PWA behind nginx), and polls /healthz until the stack is green.
+# runs migrations, brings up the prod profile (a SINGLE grappa container —
+# the BEAM self-serves the cicchetto PWA, #485 dropped the nginx container)
+# plus the cicchetto-build oneshot, and polls /healthz until it is green.
 #
 # This is the STANDALONE install path — deliberately plain `docker
 # compose -f compose.yaml`, NO scripts/_lib.sh, NO compose.override.yaml,
@@ -20,7 +21,7 @@
 #
 # ---- Serving it under a real hostname (staging box) -------------------
 #
-# The stack's own nginx listens on plain HTTP on HTTP_BIND — that IS the
+# The grappa container listens on plain HTTP on HTTP_BIND — that IS the
 # listener you put your own TLS front door in front of. Nothing here
 # terminates TLS or installs a vhost on your host; the script only RENDERS
 # a ready-to-include front-door config from the shipped example, with your
@@ -67,8 +68,9 @@ cd "$REPO_ROOT"
 # compose invocation in this script reuses this array.
 COMPOSE=(docker compose -f compose.yaml)
 
-# Host port the PWA is served on (nginx → grappa). Loopback-only by
-# default; override before running to expose on a LAN IP. Same rule as
+# Host port the PWA is served on (grappa, directly — #485 dropped nginx).
+# Loopback-only by default; override before running to expose on a LAN IP.
+# Same rule as
 # PHX_HOST below: a value passed on this run must win over whatever a
 # previous run (or .env.example, which publishes on ALL interfaces) left
 # behind, otherwise the box quietly serves somewhere else than asked.
@@ -191,15 +193,16 @@ else
   PHX_HOST="$(sed -n 's/^PHX_HOST=//p' .env | tail -n1)"
   PHX_HOST="${PHX_HOST:-localhost}"
 fi
-set_env GRAPPA_PUBLISH 127.0.0.1:4000
+# #485 — grappa is the LAN-facing service now (no nginx in front), so it
+# publishes on HTTP_BIND. compose.yaml appends the container port (:4000),
+# so GRAPPA_PUBLISH carries only the host side (addr:port, or a bare port).
 if [ "$HTTP_BIND_EXPLICIT" -eq 1 ] || [ "$ENV_CREATED_NOW" -eq 1 ]; then
-  force_env NGINX_PUBLISH "${HTTP_BIND}:80"
+  force_env GRAPPA_PUBLISH "${HTTP_BIND}"
 else
-  set_env NGINX_PUBLISH "${HTTP_BIND}:80"
-  # Report (and proxy to) the port the stack will really publish, which an
-  # earlier run may have pinned elsewhere.
-  published="$(sed -n 's/^NGINX_PUBLISH=//p' .env | tail -n1)"
-  published="${published%:80}"
+  set_env GRAPPA_PUBLISH "${HTTP_BIND}"
+  # Report (and front-door proxy to) the host port the stack will really
+  # publish, which an earlier run may have pinned elsewhere.
+  published="$(sed -n 's/^GRAPPA_PUBLISH=//p' .env | tail -n1)"
   case "$published" in
     '')      ;;                                   # nothing pinned — keep ours
     *:*)     HTTP_BIND="$published" ;;            # addr:port, as-is
@@ -325,17 +328,20 @@ if ! "${COMPOSE[@]}" run --rm --no-deps -T grappa mix grappa.seed_themes; then
   warn "retry with: ${COMPOSE[*]} run --rm grappa mix grappa.seed_themes"
 fi
 
-# ---- 7. bring up the full stack ---------------------------------------
-say "Starting the stack (grappa + cicchetto build + nginx)"
-"${COMPOSE[@]}" --profile prod up -d
+# ---- 7. bring up the stack --------------------------------------------
+# --remove-orphans sweeps a stale grappa-nginx left by a pre-#485 box if
+# this install is re-run over one (the container was removed from
+# compose.yaml but keeps its host port bound otherwise).
+say "Starting the stack (grappa + cicchetto build)"
+"${COMPOSE[@]}" --profile prod up -d --remove-orphans
 
 # ---- 8. wait for health ----------------------------------------------
-# Probe /healthz via nginx from inside the container — independent of the
+# Probe /healthz on grappa from inside the container — independent of the
 # host port binding. First boot recompiles prod from the mounted tree, so
 # the window is generous.
 say "Waiting for /healthz (first boot compiles prod — up to ~10 min)"
 deadline=$((SECONDS + 600))
-until "${COMPOSE[@]}" exec -T nginx wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1; do
+until "${COMPOSE[@]}" exec -T grappa curl -fsS http://localhost:4000/healthz >/dev/null 2>&1; do
   if [ "$SECONDS" -ge "$deadline" ]; then
     warn "stack did not become healthy in time. Inspect with:"
     warn "  ${COMPOSE[*]} --profile prod logs --tail=200 grappa"

@@ -54,15 +54,13 @@ EOF
     mkdir -p "$UPSTREAM/scripts" "$UPSTREAM/cicchetto" \
              "$UPSTREAM/priv/repo/migrations"
     cp "$REPO_SRC/scripts/quickstart-update.sh" "$UPSTREAM/scripts/" 2>/dev/null || true
-    # The real compose.yaml pins container_name on both long-lived
-    # services; that pin is what makes two checkouts collide, so the
-    # fixture has to carry it.
+    # The real compose.yaml pins container_name on grappa; that pin is what
+    # makes two checkouts collide, so the fixture has to carry it (#485
+    # dropped the nginx service).
     cat > "$UPSTREAM/compose.yaml" <<'EOF'
 services:
   grappa:
     container_name: grappa
-  nginx:
-    container_name: grappa-nginx
 EOF
     printf 'FROM alpine\n'          > "$UPSTREAM/Dockerfile"
     printf '%%{}\n'                 > "$UPSTREAM/mix.lock"
@@ -79,7 +77,8 @@ EOF
     mkdir -p "$BOX/scripts"
     cp "$REPO_SRC/scripts/quickstart-update.sh" "$BOX/scripts/"
     # An installed box has a .env — its absence is what "never installed"
-    # means to this script.
+    # means to this script. This one predates #485 (carries NGINX_PUBLISH),
+    # so every run also exercises the in-place migration to GRAPPA_PUBLISH.
     cat > "$BOX/.env" <<'EOF'
 MIX_ENV=prod
 PHX_HOST=staging.example.org
@@ -204,7 +203,41 @@ upstream_commit() {
     upstream_commit "code" lib_a.ex 'defmodule A do def x, do: 5 end'
     run "$BOX/scripts/quickstart-update.sh"
     [ "$status" -eq 0 ]
+    # The default fixture .env predates #485; after the in-place migration
+    # GRAPPA_PUBLISH carries the same 3100 host port nginx used to publish.
     [[ "$output" == *"http://127.0.0.1:3100/"* ]]
+}
+
+@test "#485 — a pre-change .env is migrated in place: NGINX_PUBLISH → GRAPPA_PUBLISH, orphan swept" {
+    upstream_commit "code" lib_a.ex 'defmodule A do def x, do: 9 end'
+    run "$BOX/scripts/quickstart-update.sh"
+    [ "$status" -eq 0 ]
+
+    # The deprecated var is gone; grappa takes over the LAN binding nginx
+    # held, with the container-side :80 stripped (compose re-appends :4000).
+    ! grep -q '^NGINX_PUBLISH=' "$BOX/.env"
+    grep -qE '^GRAPPA_PUBLISH=127\.0\.0\.1:3100$' "$BOX/.env"
+    [[ "$output" == *"NGINX_PUBLISH is deprecated"* ]]
+
+    # The stale grappa-nginx is swept as part of the recreate.
+    grep -qE 'up .*--remove-orphans' "$ARGV_LOG"
+}
+
+@test "#485 — a deliberate non-default GRAPPA_PUBLISH is kept, only NGINX_PUBLISH is dropped" {
+    # An operator who exposed grappa directly pre-migration keeps their bind;
+    # only the deprecated NGINX_PUBLISH is removed.
+    cat > "$BOX/.env" <<'EOF'
+MIX_ENV=prod
+PHX_HOST=staging.example.org
+GRAPPA_PUBLISH=192.168.1.9:14000
+NGINX_PUBLISH=127.0.0.1:3100:80
+EOF
+    upstream_commit "code" lib_a.ex 'defmodule A do def x, do: 10 end'
+    run "$BOX/scripts/quickstart-update.sh"
+    [ "$status" -eq 0 ]
+
+    ! grep -q '^NGINX_PUBLISH=' "$BOX/.env"
+    grep -qE '^GRAPPA_PUBLISH=192\.168\.1\.9:14000$' "$BOX/.env"
 }
 
 @test "a box owned by another checkout is refused, and the owner is named" {

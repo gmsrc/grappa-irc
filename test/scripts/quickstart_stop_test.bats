@@ -3,16 +3,18 @@
 # Bats suite for scripts/quickstart-stop.sh — taking a quickstart box
 # down, the whole way down.
 #
-# Why this exists: the stack's long-lived nginx sits behind the `prod`
-# compose profile, so a plain `docker compose down` walks past it. The
-# container stays up, keeps the project network attached, and the down
-# ends with
+# Why this exists: the prod-profile services sit behind the `prod` compose
+# profile, so a plain `docker compose down` walks past them. Worse, a box
+# upgraded from the pre-#485 two-container topology has a stale grappa-nginx
+# (removed from compose.yaml but never stopped) that keeps the project
+# network attached, and the down ends with
 #
 #   Network <project>_grappa_internal  Resource is still in use
 #
 # leaving half a box running under a command that reads like it stopped
-# everything. This script is the one-liner nobody remembers, with the
-# same ownership guard the other two quickstart scripts carry.
+# everything. This script is the one-liner nobody remembers (`--profile prod
+# down --remove-orphans`), with the same ownership guard the other two
+# quickstart scripts carry.
 #
 # Scope: asserts WHICH docker invocations the script makes and what it
 # refuses to do. `docker` is stubbed on PATH — same recording shape as
@@ -49,30 +51,30 @@ EOF
     BOX="$BATS_TEST_TMPDIR/box"
     mkdir -p "$BOX/scripts"
     cp "$REPO_SRC/scripts/quickstart-stop.sh" "$BOX/scripts/"
-    # The real compose.yaml pins container_name on both long-lived
-    # services; that pin is what the ownership guard reads.
+    # The real compose.yaml pins container_name on grappa; that pin is what
+    # the ownership guard reads (#485 dropped the nginx service).
     cat > "$BOX/compose.yaml" <<'EOF'
 services:
   grappa:
     container_name: grappa
-  nginx:
-    container_name: grappa-nginx
 EOF
     cat > "$BOX/.env" <<'EOF'
 MIX_ENV=prod
 PHX_HOST=staging.example.org
-NGINX_PUBLISH=127.0.0.1:3100:80
+GRAPPA_PUBLISH=127.0.0.1:3100
 EOF
 }
 
-@test "it takes the prod profile down, not just the default one" {
+@test "it takes the prod profile down with --remove-orphans" {
     export FAKE_OWNER_DIR="$BOX"
     run "$BOX/scripts/quickstart-stop.sh"
     [ "$status" -eq 0 ]
 
-    # The bug this script exists for: without --profile prod the nginx
-    # container survives and the network refuses to go.
+    # The bug this script exists for: without --profile prod the prod
+    # services survive, and without --remove-orphans a stale grappa-nginx
+    # (pre-#485) keeps the network attached and the down fails.
     grep -qE 'docker compose .*--profile prod down' "$ARGV_LOG"
+    grep -qE 'down .*--remove-orphans' "$ARGV_LOG"
 }
 
 @test "it pins the committed compose file, ignoring any override" {
