@@ -61,7 +61,12 @@ export type LayoutOpts = {
   margin: number;
 };
 
-export const DEFAULT_LAYOUT_OPTS: LayoutOpts = { ringGap: 120, margin: 80 };
+// #238 fix — ringGap cut 120→72 so the parent→child edges read short instead
+// of stringy; paired with the bigger node radii in LinksModal.tsx (11/7 → 14/10)
+// this lifts the glyph-to-edge ratio from ~17:1 to ~7:1 (dots you can actually
+// hit, edges that don't dominate). margin unchanged — still clears the largest
+// glyph + its label at the outer ring.
+export const DEFAULT_LAYOUT_OPTS: LayoutOpts = { ringGap: 72, margin: 80 };
 
 // Internal tree node built before geometry is assigned.
 type TreeNode = {
@@ -271,4 +276,30 @@ export function clientToViewBox(
   fit: ViewBoxFit,
 ): { x: number; y: number } {
   return { x: (relX - fit.offsetX) / fit.scale, y: (relY - fit.offsetY) / fit.scale };
+}
+
+// #238 fix — bound the free-pan translate so the topology can't be dragged out
+// of view (the pre-fix free-pan let a drag fling the whole map off-screen). The
+// inner <g> transform is `translate(tx ty) scale(k)`, so content spanning
+// [0, span] in viewBox units maps to [tx, tx + k*span]; the <svg viewBox="0 0
+// width height"> under preserveAspectRatio="xMidYMid meet" always renders that
+// WHOLE square, so keeping [tx, tx + k*span] overlapping [0, span] keeps the map
+// framed. Pure viewBox math — no client box needed (meet guarantees the full
+// viewBox is on screen). Two regimes fall out of one clamp: the scaled content
+// SMALLER than the frame (k<1) stays fully inside; LARGER (k>1) pans only within
+// its overflow. `slack = span - k*span`: k<1 → slack>0 → t∈[0, slack]; k>1 →
+// slack<0 → t∈[slack, 0]; k==1 → t pinned to 0 (the map exactly fills the frame).
+export function clampPan(
+  tx: number,
+  ty: number,
+  k: number,
+  layout: { width: number; height: number },
+): { tx: number; ty: number } {
+  const axis = (t: number, span: number): number => {
+    const slack = span - k * span;
+    const lo = Math.min(0, slack);
+    const hi = Math.max(0, slack);
+    return Math.min(hi, Math.max(lo, t));
+  };
+  return { tx: axis(tx, layout.width), ty: axis(ty, layout.height) };
 }

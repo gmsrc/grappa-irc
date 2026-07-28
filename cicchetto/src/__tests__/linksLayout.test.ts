@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { LinksEntry } from "../lib/api";
-import { clientToViewBox, DEFAULT_LAYOUT_OPTS, radialLayout, viewBoxFit } from "../lib/linksLayout";
+import {
+  clampPan,
+  clientToViewBox,
+  DEFAULT_LAYOUT_OPTS,
+  radialLayout,
+  viewBoxFit,
+} from "../lib/linksLayout";
 
 // #238 — radialLayout is the PURE, DETERMINISTIC heart of the /links topology
 // map: parsed 364/365 `links_bundle` entries → a positioned radial tidy-tree.
@@ -329,5 +335,34 @@ describe("viewBoxFit + clientToViewBox (#238) — preserveAspectRatio=xMidYMid m
     const fit = viewBoxFit(0, 0, 0, 0);
     expect(fit.scale).toBe(1);
     expect(clientToViewBox(50, 50, fit)).toEqual({ x: 50, y: 50 });
+  });
+});
+
+describe("clampPan (#238 fix) — the map can't be dragged off-frame", () => {
+  const layout = { width: 600, height: 600 };
+
+  it("pins translate to the origin at k=1 (content exactly fills the frame)", () => {
+    // slack = 600 - 1*600 = 0 → the only legal translate is 0 on both axes, so a
+    // drag at neutral zoom snaps straight back (no pan is even possible).
+    expect(clampPan(120, -80, 1, layout)).toEqual({ tx: 0, ty: 0 });
+  });
+
+  it("keeps a zoomed-OUT map fully inside the frame (k<1 → t in [0, slack])", () => {
+    // slack = 600 - 0.5*600 = 300 → legal range [0, 300].
+    expect(clampPan(-100, 500, 0.5, layout)).toEqual({ tx: 0, ty: 300 });
+    // an in-range translate passes through untouched.
+    expect(clampPan(150, 200, 0.5, layout)).toEqual({ tx: 150, ty: 200 });
+  });
+
+  it("confines a zoomed-IN map to its overflow (k>1 → t in [slack, 0])", () => {
+    // slack = 600 - 2*600 = -600 → legal range [-600, 0].
+    expect(clampPan(100, -700, 2, layout)).toEqual({ tx: 0, ty: -600 });
+    // an in-range translate passes through untouched.
+    expect(clampPan(-300, -100, 2, layout)).toEqual({ tx: -300, ty: -100 });
+  });
+
+  it("clamps the two axes independently", () => {
+    // ty in range, tx over the high edge (k<1).
+    expect(clampPan(9999, 42, 0.5, layout)).toEqual({ tx: 300, ty: 42 });
   });
 });

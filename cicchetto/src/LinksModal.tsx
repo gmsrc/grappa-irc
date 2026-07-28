@@ -9,6 +9,7 @@ import {
   Show,
 } from "solid-js";
 import {
+  clampPan,
   clientToViewBox,
   DEFAULT_LAYOUT_OPTS,
   type LayoutNode,
@@ -43,6 +44,13 @@ import { MircBody } from "./MircText";
 
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 6;
+
+// #238 fix — node glyph radii (viewBox units), bumped from 11/7 so the dots read
+// against the shortened edges (ringGap cut in lib/linksLayout). LABEL_GAP is the
+// clearance between a glyph edge and its label so text never sits on the dot.
+const ROOT_RADIUS = 14;
+const NODE_RADIUS = 10;
+const LABEL_GAP = 4;
 // Above this node count, per-node labels are shown only for the root + the
 // hovered/selected node (avoids an unreadable label pile-up on large nets like
 // Libera). Pan+zoom + tap-to-inspect cover the rest.
@@ -120,13 +128,28 @@ const LinksModal: Component = () => {
     viewBoxFit(svgEl?.clientWidth ?? 0, svgEl?.clientHeight ?? 0, vbWidth, vbHeight);
 
   // Zoom around a fixed viewBox point (keeps that point under the cursor/pinch
-  // centre). worldPoint = (vbPoint - t)/k is invariant across the zoom.
-  const zoomAround = (vbx: number, vby: number, factor: number): void => {
+  // centre). worldPoint = (vbPoint - t)/k is invariant across the zoom. The
+  // resulting translate is clamped (clampPan) so a zoom near an edge can't leave
+  // the map off-frame — the layout dims are threaded in, same as the pan/wheel
+  // handlers already thread them.
+  const zoomAround = (
+    vbx: number,
+    vby: number,
+    factor: number,
+    vbWidth: number,
+    vbHeight: number,
+  ): void => {
     const oldK = k();
     const newK = Math.min(MAX_SCALE, Math.max(MIN_SCALE, oldK * factor));
     if (newK === oldK) return;
-    setTx(vbx - (newK / oldK) * (vbx - tx()));
-    setTy(vby - (newK / oldK) * (vby - ty()));
+    const clamped = clampPan(
+      vbx - (newK / oldK) * (vbx - tx()),
+      vby - (newK / oldK) * (vby - ty()),
+      newK,
+      { width: vbWidth, height: vbHeight },
+    );
+    setTx(clamped.tx);
+    setTy(clamped.ty);
     setK(newK);
   };
 
@@ -139,7 +162,7 @@ const LinksModal: Component = () => {
       e.clientY - rect.top,
       fitFor(vbWidth, vbHeight),
     );
-    zoomAround(p.x, p.y, e.deltaY < 0 ? 1.12 : 1 / 1.12);
+    zoomAround(p.x, p.y, e.deltaY < 0 ? 1.12 : 1 / 1.12, vbWidth, vbHeight);
   };
 
   const onPointerDown = (e: PointerEvent): void => {
@@ -169,17 +192,24 @@ const LinksModal: Component = () => {
           (a.y + b.y) / 2 - rect.top,
           fitFor(vbWidth, vbHeight),
         );
-        zoomAround(mid.x, mid.y, dist / pinchDist);
+        zoomAround(mid.x, mid.y, dist / pinchDist, vbWidth, vbHeight);
       }
       pinchDist = dist;
       return;
     }
 
     // Single-pointer drag → pan. Delta is a client-px vector; the viewBox is
-    // uniformly scaled, so divide by the fit scale (same factor both axes).
+    // uniformly scaled, so divide by the fit scale (same factor both axes). The
+    // new translate is clamped so the map cannot be dragged off-frame (#238 fix).
     const factor = 1 / fitFor(vbWidth, vbHeight).scale;
-    setTx(tx() + (cur.x - prev.x) * factor);
-    setTy(ty() + (cur.y - prev.y) * factor);
+    const clamped = clampPan(
+      tx() + (cur.x - prev.x) * factor,
+      ty() + (cur.y - prev.y) * factor,
+      k(),
+      { width: vbWidth, height: vbHeight },
+    );
+    setTx(clamped.tx);
+    setTy(clamped.ty);
   };
 
   const onPointerUp = (e: PointerEvent): void => {
@@ -231,7 +261,15 @@ const LinksModal: Component = () => {
                     type="button"
                     class="links-modal-zoom"
                     aria-label="zoom out"
-                    onClick={() => zoomAround(layout().width / 2, layout().height / 2, 1 / 1.3)}
+                    onClick={() =>
+                      zoomAround(
+                        layout().width / 2,
+                        layout().height / 2,
+                        1 / 1.3,
+                        layout().width,
+                        layout().height,
+                      )
+                    }
                   >
                     −
                   </button>
@@ -247,7 +285,15 @@ const LinksModal: Component = () => {
                     type="button"
                     class="links-modal-zoom"
                     aria-label="zoom in"
-                    onClick={() => zoomAround(layout().width / 2, layout().height / 2, 1.3)}
+                    onClick={() =>
+                      zoomAround(
+                        layout().width / 2,
+                        layout().height / 2,
+                        1.3,
+                        layout().width,
+                        layout().height,
+                      )
+                    }
                   >
                     +
                   </button>
@@ -358,11 +404,15 @@ const LinksModal: Component = () => {
                                 </title>
                                 <circle
                                   class="links-modal-dot"
-                                  r={node.isRoot ? 11 : 7}
+                                  r={node.isRoot ? ROOT_RADIUS : NODE_RADIUS}
                                   style={{ fill: depthColor(node.depth, layout().maxDepth) }}
                                 />
                                 <Show when={labelled()}>
-                                  <text class="links-modal-label" x={node.isRoot ? 0 : 11} y={-11}>
+                                  <text
+                                    class="links-modal-label"
+                                    x={node.isRoot ? 0 : NODE_RADIUS + LABEL_GAP}
+                                    y={-((node.isRoot ? ROOT_RADIUS : NODE_RADIUS) + LABEL_GAP)}
+                                  >
                                     {shortLabel(node.server)}
                                   </text>
                                 </Show>
