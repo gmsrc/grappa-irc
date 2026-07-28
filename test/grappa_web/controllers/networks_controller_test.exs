@@ -704,9 +704,10 @@ defmodule GrappaWeb.NetworksControllerTest do
       body = json_response(conn, 200)
       assert body["perform_list"] == nil
       assert body["oper_pass_set"] == false
+      assert body["nickserv_pass_set"] == false
     end
 
-    test "PUT sets the list + oper_pass → 200, persisted, oper_pass write-only", %{conn: conn} do
+    test "PUT sets the list + secrets → 200, persisted, secrets write-only", %{conn: conn} do
       vjt = user_fixture(name: "vjt-perfw-#{u()}")
       session = session_fixture(vjt)
       slug = "net-perfw-#{u()}"
@@ -719,19 +720,53 @@ defmodule GrappaWeb.NetworksControllerTest do
         |> put_req_header("content-type", "application/json")
         |> put("/networks/#{slug}/perform", %{
           perform_list: "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass",
-          oper_pass: "hunter2"
+          oper_pass: "hunter2",
+          nickserv_pass: "nspass"
         })
 
       body = json_response(conn, 200)
       assert body["perform_list"] == "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass"
       assert body["oper_pass_set"] == true
-      # The secret is write-only — never echoed back, in any field.
+      assert body["nickserv_pass_set"] == true
+      # The secrets are write-only — never echoed back, in any field.
       refute Map.has_key?(body, "oper_pass")
+      refute Map.has_key?(body, "nickserv_pass")
       refute body["perform_list"] =~ "hunter2"
+      refute body["perform_list"] =~ "nspass"
 
       {:ok, cred} = Credentials.get_credential(vjt, network)
       assert Credential.perform_list_text(cred) == "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass"
       assert Credential.upstream_oper_pass(cred) == "hunter2"
+      assert Credential.upstream_nickserv_pass(cred) == "nspass"
+    end
+
+    test "PUT with only nickserv_pass keeps the list, is write-only + persisted (#509)", %{
+      conn: conn
+    } do
+      vjt = user_fixture(name: "vjt-perfns-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-perfns-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      cred = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      # Seed a list first, then PUT nickserv_pass ALONE — the stored list must
+      # survive (leave-list-alone keep branch) while the secret is set.
+      {:ok, _} = Credentials.update_perform_list(cred, %{perform_list: "MODE vjt-irc +x"})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> put("/networks/#{slug}/perform", %{nickserv_pass: "ns-secret"})
+
+      body = json_response(conn, 200)
+      assert body["perform_list"] == "MODE vjt-irc +x"
+      assert body["nickserv_pass_set"] == true
+      refute Map.has_key?(body, "nickserv_pass")
+
+      {:ok, reloaded} = Credentials.get_credential(vjt, network)
+      assert Credential.perform_list_text(reloaded) == "MODE vjt-irc +x"
+      assert Credential.upstream_nickserv_pass(reloaded) == "ns-secret"
     end
 
     test "PUT with only perform_list leaves oper_pass unset", %{conn: conn} do

@@ -1204,6 +1204,166 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "$nickserv_pass decoupled from auth_method (#509)" do
+    # #509 — the credential's dedicated `nickserv_pass` field drives the built-in
+    # identify AND `$nickserv_pass` expansion on ANY auth method, so a
+    # :server_pass credential (password spent on PASS / hostmasking) can still
+    # identify. The autojoin +r gate (#347) follows the same rule.
+    defp put_nickserv_pass(credential, pass) do
+      {:ok, updated} =
+        credential
+        |> Grappa.Networks.Credential.perform_changeset(%{nickserv_pass: pass})
+        |> Repo.update()
+
+      updated
+    end
+
+    test "built-in identify fires from nickserv_pass on a :server_pass credential" do
+      {server, port} = start_server()
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :server_pass,
+          password: "server-pw",
+          autojoin_channels: []
+        })
+
+      cred = put_nickserv_pass(credential, "ns-secret")
+      pid = nickserv_plan(user, network, cred, 60_000)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      # No perform line consumed the variable → grappa's built-in identify fires
+      # from the dedicated field, even though auth_method is :server_pass.
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          server,
+          &(&1 == "PRIVMSG NickServ :IDENTIFY ns-secret\r\n"),
+          1_000
+        )
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "a :server_pass perform line expands $nickserv_pass and suppresses the built-in identify" do
+      {server, port} = start_server()
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :server_pass,
+          password: "server-pw",
+          autojoin_channels: []
+        })
+
+      cred =
+        credential
+        |> put_nickserv_pass("ns-secret")
+        |> put_perform_list("NS IDENTIFY $nickserv_pass")
+
+      pid = nickserv_plan(user, network, cred, 60_000)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      {:ok, _} =
+        IRCServer.wait_for_line(server, &(&1 == "NS IDENTIFY ns-secret\r\n"), 1_000)
+
+      # Consumed structurally → the built-in identify must NOT double-fire.
+      Process.sleep(150)
+      refute "PRIVMSG NickServ :IDENTIFY ns-secret\r\n" in IRCServer.sent_lines(server)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "the dedicated nickserv_pass field wins over the :nickserv_identify password" do
+      {server, port} = start_server()
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :nickserv_identify,
+          password: "identify-pw",
+          autojoin_channels: []
+        })
+
+      # BOTH sources present: the dedicated field must take precedence so an
+      # operator can override the login password with a distinct NickServ one.
+      cred = put_nickserv_pass(credential, "override-pw")
+      pid = nickserv_plan(user, network, cred, 60_000)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          server,
+          &(&1 == "PRIVMSG NickServ :IDENTIFY override-pw\r\n"),
+          1_000
+        )
+
+      Process.sleep(150)
+      refute "PRIVMSG NickServ :IDENTIFY identify-pw\r\n" in IRCServer.sent_lines(server)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "autojoin defers behind the +r gate for a :server_pass credential with nickserv_pass" do
+      {server, port} = start_server()
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :server_pass,
+          password: "server-pw",
+          autojoin_channels: ["#sniffo"]
+        })
+
+      cred = put_nickserv_pass(credential, "ns-secret")
+      pid = nickserv_plan(user, network, cred, 60_000)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      # An identify is expected (nickserv_pass set) → the JOIN must wait for +r,
+      # not race the identify on 001 (the #347 gate now covers :server_pass too).
+      Process.sleep(150)
+      refute Enum.any?(IRCServer.sent_lines(server), &String.starts_with?(&1, "JOIN"))
+
+      IRCServer.feed(server, ":irc.test.org MODE grappa-test :+r\r\n")
+
+      assert {:ok, "JOIN #sniffo\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "JOIN #sniffo\r\n"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test ":server_pass with NO nickserv secret still fires autojoin immediately on 001 (unregressed)" do
+      {server, port} = start_server()
+
+      {user, network, _} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :server_pass,
+          password: "server-pw",
+          autojoin_channels: ["#sniffo"]
+        })
+
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      # No identify expected → no defer; the JOIN lands on 001 as before #509.
+      assert {:ok, "JOIN #sniffo\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "JOIN #sniffo\r\n"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "presence arm at end-of-MOTD (#247)" do
     # The full 001 → 005 → 376 registration tail. The mechanism pick
     # needs the 005 tokens, so the arm rides 376/422 — NOT the 001

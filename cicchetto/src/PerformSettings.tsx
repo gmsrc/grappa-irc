@@ -13,14 +13,18 @@ import { networks } from "./lib/networks";
 // #385 aliases (the server has no slash interpreter; that's #288, out of
 // scope). The help blurb states this plainly so the honesty is in the UI,
 // not just the issue. `$nickserv_pass` / `$oper_pass` keep secrets out of
-// the text. The oper password is WRITE-ONLY: the server returns only whether
-// it is set, never the value; the input is leave-blank-to-keep, exactly like
-// a password field (mirrors AdminCredentialsTab's edit form).
+// the text. Both passwords are WRITE-ONLY: the server returns only whether each
+// is set, never the value; the inputs are leave-blank-to-keep, exactly like a
+// password field (mirrors AdminCredentialsTab's edit form). #509 gave
+// `$nickserv_pass` its own field, decoupled from auth_method, so it works even
+// when the credential's password is spent on PASS (server-password/hostmasking).
 
 const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
   const [listDraft, setListDraft] = createSignal("");
   const [operDraft, setOperDraft] = createSignal("");
   const [operSet, setOperSet] = createSignal(false);
+  const [nickservDraft, setNickservDraft] = createSignal("");
+  const [nickservSet, setNickservSet] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [saved, setSaved] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
@@ -33,6 +37,7 @@ const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
       .then((view) => {
         setListDraft(view.perform_list ?? "");
         setOperSet(view.oper_pass_set);
+        setNickservSet(view.nickserv_pass_set);
       })
       .catch((err) => setError(friendlyError(err)));
   });
@@ -44,18 +49,22 @@ const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
     setError(null);
     setBusy(true);
     try {
-      const body: { perform_list?: string; oper_pass?: string } = {
+      const body: { perform_list?: string; oper_pass?: string; nickserv_pass?: string } = {
         perform_list: listDraft(),
       };
-      // Leave-blank-to-keep: only send oper_pass when the user typed one, so
-      // saving the list alone never disturbs the stored secret.
+      // Leave-blank-to-keep: only send a secret when the user typed one, so
+      // saving the list alone never disturbs the stored secrets.
       const oper = operDraft();
       if (oper !== "") body.oper_pass = oper;
+      const nickserv = nickservDraft();
+      if (nickserv !== "") body.nickserv_pass = nickserv;
 
       const view = await putPerform(t, props.net.slug, body);
       setListDraft(view.perform_list ?? "");
       setOperSet(view.oper_pass_set);
       setOperDraft("");
+      setNickservSet(view.nickserv_pass_set);
+      setNickservDraft("");
       setSaved(true);
     } catch (err) {
       setError(friendlyError(err));
@@ -81,10 +90,32 @@ const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
             setSaved(false);
           }}
         />
-        <div class="perform-oper">
+        <div class="perform-secret">
           <input
             type="password"
-            class="perform-oper-input"
+            class="perform-secret-input"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck={false}
+            placeholder="new nickserv password (leave blank to keep)"
+            value={nickservDraft()}
+            data-testid={`perform-nickserv-${props.net.slug}`}
+            onInput={(e) => {
+              setNickservDraft(e.currentTarget.value);
+              setSaved(false);
+            }}
+          />
+          <span
+            class="perform-secret-status"
+            data-testid={`perform-nickserv-status-${props.net.slug}`}
+          >
+            {nickservSet() ? "nickserv pass: set" : "nickserv pass: not set"}
+          </span>
+        </div>
+        <div class="perform-secret">
+          <input
+            type="password"
+            class="perform-secret-input"
             autocapitalize="none"
             autocorrect="off"
             spellcheck={false}
@@ -96,7 +127,7 @@ const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
               setSaved(false);
             }}
           />
-          <span class="perform-oper-status" data-testid={`perform-oper-status-${props.net.slug}`}>
+          <span class="perform-secret-status" data-testid={`perform-oper-status-${props.net.slug}`}>
             {operSet() ? "oper pass: set" : "oper pass: not set"}
           </span>
         </div>
@@ -149,10 +180,10 @@ const PerformSettings: Component<{ onBack: () => void }> = (props) => {
           here. Write the wire command itself:{" "}
           <code>PRIVMSG NickServ :IDENTIFY $nickserv_pass</code>,{" "}
           <code>OPER myname $oper_pass</code>, <code>MODE mynick +x</code>. Use{" "}
-          <code>$nickserv_pass</code> and <code>$oper_pass</code> so passwords stay out of the text.{" "}
-          <code>$nickserv_pass</code> only expands when this network authenticates via NickServ
-          identify — on SASL or server-password networks it resolves to empty. Lines starting with{" "}
-          <code>#</code> are comments.
+          <code>$nickserv_pass</code> and <code>$oper_pass</code> so passwords stay out of the text
+          — each expands from its own write-only field below (leave blank to keep the stored value).{" "}
+          <code>$nickserv_pass</code> works on any network, including one whose password is already
+          spent on the server password. Lines starting with <code>#</code> are comments.
         </p>
         <Show
           when={(networks() ?? []).length > 0}

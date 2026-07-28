@@ -148,6 +148,8 @@ defmodule Grappa.Networks.Credential do
           password: String.t() | nil,
           oper_pass_encrypted: binary() | nil,
           oper_pass: String.t() | nil,
+          nickserv_pass_encrypted: binary() | nil,
+          nickserv_pass: String.t() | nil,
           perform_list_encrypted: binary() | nil,
           perform_list: String.t() | nil,
           auth_method: auth_method() | nil,
@@ -187,18 +189,24 @@ defmodule Grappa.Networks.Credential do
     field :password_encrypted, EncryptedBinary, redact: true
     field :password, :string, virtual: true, redact: true
 
-    # GH #189 — on-connect perform list + its `$oper_pass` secret. Both
-    # encrypted at rest (Cloak AES-GCM); `redact: true` so neither the
-    # decrypted-on-load `*_encrypted` value nor the input-only virtual leaks
-    # in `inspect/1` / Logger output. The perform list is encrypted (not a
-    # plain `:string`) because a user may paste a literal password into it —
-    # so the column IS a secret. The virtuals mirror `:password` above:
-    # input-only, copied into the encrypted column by the narrow
-    # `perform_changeset/2` only when otherwise valid. After `Repo.one!` the
-    # `*_encrypted` fields carry the DECRYPTED plaintext (see accessors
-    # `perform_list_text/1` / `upstream_oper_pass/1`).
+    # GH #189 — on-connect perform list + its `$oper_pass` secret. GH #509 adds
+    # the sibling `$nickserv_pass` secret. All three encrypted at rest (Cloak
+    # AES-GCM); `redact: true` so neither the decrypted-on-load `*_encrypted`
+    # value nor the input-only virtual leaks in `inspect/1` / Logger output. The
+    # perform list is encrypted (not a plain `:string`) because a user may paste
+    # a literal password into it — so the column IS a secret. The virtuals
+    # mirror `:password` above: input-only, copied into the encrypted column by
+    # the narrow `perform_changeset/2` only when otherwise valid. After
+    # `Repo.one!` the `*_encrypted` fields carry the DECRYPTED plaintext (see
+    # accessors `perform_list_text/1` / `upstream_oper_pass/1` /
+    # `upstream_nickserv_pass/1`).
     field :oper_pass_encrypted, EncryptedBinary, redact: true
     field :oper_pass, :string, virtual: true, redact: true
+    # GH #509 — the `$nickserv_pass` secret, decoupled from `auth_method` so a
+    # `:server_pass` credential (password spent on `PASS`) can still expand the
+    # variable / drive the built-in identify. See `upstream_nickserv_pass/1`.
+    field :nickserv_pass_encrypted, EncryptedBinary, redact: true
+    field :nickserv_pass, :string, virtual: true, redact: true
     field :perform_list_encrypted, EncryptedBinary, redact: true
     field :perform_list, :string, virtual: true, redact: true
     # No default: operators MUST pick the auth method explicitly. S29
@@ -517,30 +525,36 @@ defmodule Grappa.Networks.Credential do
   end
 
   @doc """
-  GH #189 — narrow changeset for the on-connect perform list + `$oper_pass`.
-  Casts the two virtual inputs, encrypts them into the sibling `*_encrypted`
-  columns, and touches nothing else (mirror of `password_changeset/2` and
-  `last_joined_channels_changeset/2` — the narrow-changeset convention).
+  GH #189 / #509 — narrow changeset for the on-connect perform list +
+  `$oper_pass` + `$nickserv_pass`. Casts the three virtual inputs, encrypts
+  them into the sibling `*_encrypted` columns, and touches nothing else (mirror
+  of `password_changeset/2` and `last_joined_channels_changeset/2` — the
+  narrow-changeset convention).
 
   `empty_values: []` keeps a blank `""` as a real change (default `cast/3`
   would drop it as "missing"), so the editor can CLEAR the perform list /
-  oper pass: `put_encrypted_perform_field/3` maps `""` → `nil` (stores SQL
-  NULL). Both fields are optional — an empty attrs map is a valid no-op.
+  oper pass / nickserv pass: `put_encrypted_perform_field/3` maps `""` → `nil`
+  (stores SQL NULL). All three fields are optional — an empty attrs map is a
+  valid no-op, and OMITTING a secret keeps the stored one (leave-blank-to-keep,
+  like a password field).
 
   The perform list may legitimately contain newlines (the line separator),
   so it is NOT run through `safe_line_token/2`; instead `validate_perform/2`
   rejects only NUL bytes and caps the byte size. Each individual expanded
   line is CR/LF/NUL-guarded at send time by `Grappa.IRC.Client`. `oper_pass`
-  IS a single-line secret, so it gets the full `safe_line_token/2` guard.
+  and `nickserv_pass` ARE single-line secrets, so they get the full
+  `safe_line_token/2` guard.
   """
   @spec perform_changeset(t(), map()) :: Ecto.Changeset.t()
   def perform_changeset(%__MODULE__{} = credential, attrs) when is_map(attrs) do
     credential
-    |> cast(attrs, [:perform_list, :oper_pass], empty_values: [])
+    |> cast(attrs, [:perform_list, :oper_pass, :nickserv_pass], empty_values: [])
     |> validate_change(:perform_list, &validate_perform/2)
     |> validate_change(:oper_pass, &Identity.safe_line_token/2)
+    |> validate_change(:nickserv_pass, &Identity.safe_line_token/2)
     |> put_encrypted_perform_field(:perform_list, :perform_list_encrypted)
     |> put_encrypted_perform_field(:oper_pass, :oper_pass_encrypted)
+    |> put_encrypted_perform_field(:nickserv_pass, :nickserv_pass_encrypted)
   end
 
   # NUL byte + byte-cap guard for the perform list. Allows newlines (the
@@ -755,6 +769,19 @@ defmodule Grappa.Networks.Credential do
   """
   @spec upstream_oper_pass(t()) :: binary() | nil
   def upstream_oper_pass(%__MODULE__{oper_pass_encrypted: pw}), do: pw
+
+  @doc """
+  GH #509 — returns the post-Cloak-load plaintext `$nickserv_pass` secret, or
+  `nil` when unset. Same accessor contract as `upstream_oper_pass/1`: the
+  `:nickserv_pass_encrypted` field name describes the on-disk representation;
+  after `Repo.one!` it carries the DECRYPTED plaintext. Threaded into the
+  connect plan by `Grappa.Networks.SessionPlan.base_plan/6` and consumed at 001
+  by `Grappa.Session.Server` — it is the FIRST source for `$nickserv_pass`
+  expansion and the built-in identify, falling back to the `:nickserv_identify`
+  upstream password only when this is `nil`.
+  """
+  @spec upstream_nickserv_pass(t()) :: binary() | nil
+  def upstream_nickserv_pass(%__MODULE__{nickserv_pass_encrypted: pw}), do: pw
 
   @doc """
   GH #189 — returns the post-Cloak-load plaintext on-connect perform list,

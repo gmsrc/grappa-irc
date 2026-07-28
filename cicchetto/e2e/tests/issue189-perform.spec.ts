@@ -21,13 +21,13 @@ const CHANNEL = "#bofh";
 
 test.setTimeout(90_000);
 
-// Reset the perform list to empty (clears both the list + the oper secret).
+// Reset the perform list to empty (clears the list + both secrets).
 // Idempotent pre-clean + finally cleanup.
 const clearPerform = (token: string): Promise<unknown> =>
   fetch(`${GRAPPA_BASE_URL}/networks/${NETWORK_SLUG}/perform`, {
     method: "PUT",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ perform_list: "", oper_pass: "" }),
+    body: JSON.stringify({ perform_list: "", oper_pass: "", nickserv_pass: "" }),
   }).catch(() => {});
 
 test("#189 — perform editor: nav row, save list + oper pass, round-trips against server", async ({
@@ -46,31 +46,37 @@ test("#189 — perform editor: nav row, save list + oper pass, round-trips again
 
     const list = page.getByTestId(`perform-list-${NETWORK_SLUG}`);
     const operStatus = page.getByTestId(`perform-oper-status-${NETWORK_SLUG}`);
+    const nickservStatus = page.getByTestId(`perform-nickserv-status-${NETWORK_SLUG}`);
 
-    // Freshly cleared: empty list, oper pass not set.
+    // Freshly cleared: empty list, neither secret set.
     await expect(list).toHaveValue("");
     await expect(operStatus).toHaveText(/not set/i);
+    await expect(nickservStatus).toHaveText(/not set/i);
 
-    // Fill the raw command list + an oper password, then save.
+    // Fill the raw command list + both secrets (#509 nickserv_pass), then save.
     await list.fill("MODE mynick +x\nWHOIS mynick");
     await page.getByTestId(`perform-oper-${NETWORK_SLUG}`).fill("hunter2");
+    await page.getByTestId(`perform-nickserv-${NETWORK_SLUG}`).fill("ns-secret");
     await page.getByTestId(`perform-save-${NETWORK_SLUG}`).click();
 
-    // Saved: the server echo flips oper_pass_set → "set" (cic never originates
+    // Saved: the server echo flips both *_pass_set → "set" (cic never originates
     // state — the status reflects the authoritative round-trip).
     await expect(operStatus).toHaveText(/: set/i, { timeout: 10_000 });
+    await expect(nickservStatus).toHaveText(/: set/i);
     await expect(page.getByTestId(`perform-saved-${NETWORK_SLUG}`)).toBeVisible();
 
     // Re-mount the sub-page (back → re-enter) → the list text persisted
-    // server-side and the secret stays "set" but is never surfaced as a value.
+    // server-side and both secrets stay "set" but are never surfaced as values.
     await page.getByTestId("perform-back").click();
     await page.getByTestId("perform-settings-entry").click();
     await expect(page.getByTestId(`perform-list-${NETWORK_SLUG}`)).toHaveValue(
       "MODE mynick +x\nWHOIS mynick",
     );
     await expect(page.getByTestId(`perform-oper-status-${NETWORK_SLUG}`)).toHaveText(/: set/i);
-    // The oper-pass input is write-only — never pre-filled with the secret.
+    await expect(page.getByTestId(`perform-nickserv-status-${NETWORK_SLUG}`)).toHaveText(/: set/i);
+    // The secret inputs are write-only — never pre-filled with the value.
     await expect(page.getByTestId(`perform-oper-${NETWORK_SLUG}`)).toHaveValue("");
+    await expect(page.getByTestId(`perform-nickserv-${NETWORK_SLUG}`)).toHaveValue("");
   } finally {
     await clearPerform(vjt.token);
   }

@@ -22094,3 +22094,69 @@ Ctrl-Alt-Up/Down is the pair documented as reliable. `/keys` echoes the code and
 keyname of whatever you press: which sequence a given terminal emits is not
 something to guess at across a bug report, and this is the same
 debugging-tools-are-infrastructure rule as the layout log.
+## 2026-07-28 — #509: `$nickserv_pass` decoupled from `auth_method` (its own credential field)
+
+**Problem.** `$nickserv_pass` in the on-connect perform list (#189) bound to
+`state.pending_password`, which is populated ONLY for
+`auth_method: :nickserv_identify`. On a network where the single credential
+`password` is spent on `PASS` (server-password / hostmasking), there was
+nowhere to store the NickServ password: the variable expanded to `""` and
+`IDENTIFY` reached the wire with no argument (`-NickServ- Syntax: IDENTIFY
+[nick] password`; session stuck `[Recognized]`, never `[Identified]`).
+Reported on #grappa by a self-hosting Azzurra user. `:auto` and a second
+credential are both non-workarounds (`:auto` leaves `pending_password` unbound;
+`(user_id, network_id)` is uniquely indexed).
+
+**Fix — the shape the reporter asked for.** A dedicated secret field on the
+credential, sibling to `oper_pass` (#189): `nickserv_pass_encrypted`
+(`EncryptedBinary, redact: true`) + `nickserv_pass` virtual, edited through the
+same narrow `perform_changeset/2` (leave-blank-to-keep, `""` clears), read via
+`upstream_nickserv_pass/1`, threaded through `SessionPlan.base_plan/6` →
+`Session.start_opts()` → `Session.Server` state. Cold deploy, one nullable
+column, no backfill — a `nil` field falls back to the old `:nickserv_identify`
+`pending_password`, so every existing setup is untouched.
+
+**Precedence + one effective secret.** `Session.Server.nickserv_secret/1` is the
+SSOT: the dedicated field WINS (any auth_method), else `pending_password`. One
+value drives BOTH the `$nickserv_pass` expansion AND the built-in identify, so
+the structural `consumed?` suppression signal stays honest whatever the source
+(a blank field is treated as absent so it never masks the fallback).
+
+**Built-in identify decoupled from auth_method (vjt, Option B).** `run` for a
+bare `nickserv_pass` field (no perform line) NOW fires grappa's built-in
+`PRIVMSG NickServ :IDENTIFY <secret>` even on `:server_pass` — `set the field →
+get identified`, no hand-written perform line required. `maybe_builtin_identify/3`
+keys on the effective secret, not `auth_method`; still suppressed when the
+perform list already consumed the variable. Chosen over the perform-line-only
+alternative because it matches the "decouple from auth_method" intent and makes
+the autojoin-defer trigger coherent (below). A `:sasl` credential with a
+separate `nickserv_pass` set will fire one redundant-but-harmless IDENTIFY — NOT
+special-cased (an exclusion list is banned; the rule stays total).
+
+**Autojoin defer follows (#347).** The #347 `+r` gate previously keyed on
+`auth_method == :nickserv_identify`. A `:server_pass` credential identifying
+from the field/perform list would otherwise JOIN on 001 and race the identify —
+the exact 477-on-`+R` failure #347 exists to prevent. `identify_expected?/1`
+now widens the trigger to "an identify is expected at all": dedicated
+`nickserv_pass` set OR `auth_method == :nickserv_identify`. This subsumes the
+"perform list consumed the variable" case (consumption REQUIRES an effective
+secret, which is exactly one of those two sources). We test the STABLE
+`auth_method` (the origin of `pending_password`) rather than `pending_password`
+itself, since `run_perform_and_identify/1` has already cleared it one-shot by
+the defer decision. `nickserv_pass` is persistent config (like `oper_pass`), NOT
+one-shot: it re-runs on a defensive re-welcome exactly as the whole perform list
+does, bounded by the same `+r` gate.
+
+**Wire.** Additive-only (#447): `perform_wire/1` gains `nickserv_pass_set`
+(write-only boolean, like `oper_pass_set`); the secret is never serialised.
+`PerformSettings.tsx` gains a second write-only input (the shared `.perform-secret`
+row, generalised from `.perform-oper`) and its blurb — which wrongly claimed
+`$nickserv_pass` "only expands … via NickServ identify" — is corrected.
+
+**Lesson (self-inflicted, caught by a concurrent baseline).** Adding
+`nickserv_pass:` to the plan map WITHOUT updating the closed `Session.start_opts()`
+type broke the `@spec` contract on `build_plan/4`, and Dialyzer pruned the
+`{:ok, _}` success path across the ENTIRE spawn/reconnect call graph — 45
+`pattern_match` errors in Bootstrap, Operator, Visitors, Login, admin
+controllers, session/networks controllers. ONE contract omission → 45 downstream
+dead-branch reports. A map's shape and its `@type` must change in the SAME edit.

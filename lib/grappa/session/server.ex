@@ -476,11 +476,13 @@ defmodule Grappa.Session.Server do
           # #347 deferred-autojoin fallback window — test seam. Production
           # omits it and inherits `@autojoin_defer_ms`.
           optional(:autojoin_defer_ms) => pos_integer(),
-          # GH #189 — on-connect perform list + its `$oper_pass` secret,
-          # decrypted plaintext from the credential (nil when unset). Run at
-          # 001 before the built-in identify and before autojoin.
+          # GH #189 / #509 — on-connect perform list + its `$oper_pass` /
+          # `$nickserv_pass` secrets, decrypted plaintext from the credential
+          # (nil when unset). Run at 001 before the built-in identify and before
+          # autojoin.
           optional(:perform_list) => String.t() | nil,
-          optional(:oper_pass) => String.t() | nil
+          optional(:oper_pass) => String.t() | nil,
+          optional(:nickserv_pass) => String.t() | nil
         }
 
   @type t :: %{
@@ -548,11 +550,15 @@ defmodule Grappa.Session.Server do
           pending_auth_timer: reference() | nil,
           pending_registration_secret: String.t() | nil,
           pending_password: String.t() | nil,
-          # GH #189 — the on-connect perform list (raw text) + its `$oper_pass`
-          # secret, decrypted plaintext threaded from the credential at boot.
-          # Read ONCE at 001 by `run_perform_and_identify/1`. nil when unset.
+          # GH #189 / #509 — the on-connect perform list (raw text) + its
+          # `$oper_pass` / `$nickserv_pass` secrets, decrypted plaintext threaded
+          # from the credential at boot. Read at 001 by
+          # `run_perform_and_identify/1` (+ `nickserv_pass` at the autojoin defer
+          # decision). nil when unset. `nickserv_pass` is persistent config (like
+          # `oper_pass`), NOT one-shot like `pending_password`.
           perform_list: String.t() | nil,
           oper_pass: String.t() | nil,
+          nickserv_pass: String.t() | nil,
           visitor_committer: visitor_committer() | nil,
           visitor_password_rotator: visitor_password_rotator() | nil,
           visitor_nick_persister: visitor_nick_persister() | nil,
@@ -929,6 +935,7 @@ defmodule Grappa.Session.Server do
       pending_password: pending_password_from_opts(opts),
       perform_list: Map.get(opts, :perform_list),
       oper_pass: Map.get(opts, :oper_pass),
+      nickserv_pass: Map.get(opts, :nickserv_pass),
       visitor_committer: Map.get(opts, :visitor_committer),
       visitor_password_rotator: Map.get(opts, :visitor_password_rotator),
       visitor_nick_persister: Map.get(opts, :visitor_nick_persister),
@@ -3032,16 +3039,25 @@ defmodule Grappa.Session.Server do
   # identify + autojoin in this ONE handler (not split across Client + Server)
   # makes their order deterministic rather than a cross-process race.
   #
-  # `$nickserv_pass` resolves to `state.pending_password` (the credential's
-  # upstream password for `:nickserv_identify`, nil otherwise). Cleared after
-  # this pass — one-shot, mirroring the old staging: a defensive re-welcome
-  # (a second 001 without an intervening crash) must not re-run against a
-  # stale secret.
+  # `$nickserv_pass` + the built-in identify resolve to `nickserv_secret/1`:
+  # the dedicated `nickserv_pass` field FIRST, else the `:nickserv_identify`
+  # `pending_password` (#509). `pending_password` is cleared after this pass —
+  # one-shot, mirroring the old staging: a defensive re-welcome (a second 001
+  # without an intervening crash) must not re-run against a stale secret. The
+  # `nickserv_pass` field is persistent config (re-resolved from the credential
+  # on every restart), so — exactly like the perform list + `$oper_pass` — it
+  # DOES re-run on such a re-welcome; that is consistent with the whole list
+  # re-running and is bounded by the downstream +r gate.
   @spec run_perform_and_identify(t()) :: t()
   defp run_perform_and_identify(state) do
+    # GH #509 — one effective secret drives BOTH the `$nickserv_pass` expansion
+    # and the built-in identify, so the `consumed?` suppression signal stays
+    # honest whatever the source.
+    effective_ns = nickserv_secret(state)
+
     %{lines: lines, consumed_nickserv_pass?: consumed?} =
       PerformList.expand(state.perform_list, %{
-        nickserv_pass: state.pending_password,
+        nickserv_pass: effective_ns,
         oper_pass: state.oper_pass
       })
 
@@ -3055,9 +3071,18 @@ defmodule Grappa.Session.Server do
 
     lines
     |> Enum.reduce(state, &send_perform_line(&2, &1))
-    |> maybe_builtin_identify(consumed?)
+    |> maybe_builtin_identify(effective_ns, consumed?)
     |> Map.put(:pending_password, nil)
   end
+
+  # GH #509 — the effective NickServ secret for `$nickserv_pass` expansion + the
+  # built-in identify. The dedicated `nickserv_pass` field WINS (any
+  # auth_method, so a `:server_pass` credential whose password is spent on PASS
+  # can still identify); the `:nickserv_identify` `pending_password` is the
+  # fallback. A blank field is treated as absent so it never masks the fallback.
+  @spec nickserv_secret(t()) :: String.t() | nil
+  defp nickserv_secret(%{nickserv_pass: pw}) when is_binary(pw) and pw != "", do: pw
+  defp nickserv_secret(%{pending_password: pw}), do: pw
 
   # Sends one expanded perform line through the outbound choke point: capture
   # any NickServ secret (stages the `+r` rendezvous), then `Client.send_raw`
@@ -3071,19 +3096,21 @@ defmodule Grappa.Session.Server do
     state
   end
 
-  # #189 — grappa's built-in NickServ IDENTIFY, sent AFTER the perform list.
-  # Suppressed when the perform list already consumed `$nickserv_pass` (the
-  # STRUCTURAL signal from the expander — never a scan of the line text) or
-  # for any non-`:nickserv_identify` plan / absent password. Routed through
-  # `send_perform_line/2` so it self-stages `pending_auth` via the choke point
-  # exactly like a user-typed identify.
-  @spec maybe_builtin_identify(t(), boolean()) :: t()
-  defp maybe_builtin_identify(%{auth_method: :nickserv_identify, pending_password: pw} = state, false)
-       when is_binary(pw) and pw != "" do
-    send_perform_line(state, "PRIVMSG NickServ :IDENTIFY #{pw}")
+  # #189 / #509 — grappa's built-in NickServ IDENTIFY, sent AFTER the perform
+  # list. Fires whenever an EFFECTIVE NickServ secret exists (`nickserv_secret/1`
+  # — the dedicated `nickserv_pass` field OR the `:nickserv_identify` password),
+  # decoupled from `auth_method` so a `:server_pass` credential whose password
+  # is spent on PASS can still identify (#509). Suppressed when the perform list
+  # already consumed `$nickserv_pass` (the STRUCTURAL signal from the expander —
+  # never a scan of the line text). Routed through `send_perform_line/2` so it
+  # self-stages `pending_auth` via the choke point exactly like a user-typed
+  # identify.
+  @spec maybe_builtin_identify(t(), String.t() | nil, boolean()) :: t()
+  defp maybe_builtin_identify(state, secret, false) when is_binary(secret) and secret != "" do
+    send_perform_line(state, "PRIVMSG NickServ :IDENTIFY #{secret}")
   end
 
-  defp maybe_builtin_identify(state, _), do: state
+  defp maybe_builtin_identify(state, _, _), do: state
 
   # Cancel-and-arm the timed `pending_auth` rendezvous slot. Latest-wins
   # serialization for concurrent IDENTIFYs is automatic via Session.Server
@@ -4516,33 +4543,58 @@ defmodule Grappa.Session.Server do
 
   defp maybe_request_chanserv_invite(state, _, _), do: state
 
-  # #347 — at 001, either fire the autojoin JOINs now or defer them.
+  # #347 / #509 — at 001, either fire the autojoin JOINs now or defer them.
   #
-  # `:nickserv_identify` sends IDENTIFY async at 001 and the upstream sets the
-  # self `+r` umode only AFTER 001/end-of-MOTD, so JOINing on 001 races the
-  # identify (+R channels 477-reject; ChanServ won't +o an unidentified user).
-  # For that method (with a non-empty autojoin set) arm the fallback timer and
-  # defer: the JOINs fire on the EARLIER of the +r self-MODE echo
+  # An identify is sent async at 001 whenever an effective NickServ secret
+  # exists, and the upstream sets the self `+r` umode only AFTER 001/end-of-MOTD,
+  # so JOINing on 001 races the identify (+R channels 477-reject; ChanServ won't
+  # +o an unidentified user). So whenever an identify is EXPECTED
+  # (`identify_expected?/1`) — with a non-empty autojoin set — arm the fallback
+  # timer and defer: the JOINs fire on the EARLIER of the +r self-MODE echo
   # (`fire_deferred_autojoin/1` via `:session_identity_changed, :acquired`) or
   # the `:autojoin_defer` timeout — no NickServ NOTICE-text parsing.
   #
-  # Every other method fires immediately, unchanged: SASL identifies BEFORE 001
-  # (so the 001 autojoin already sees +r), and `:none`/`:server_pass`/`:auto`
-  # have no identify step to wait on. An empty autojoin set also fires now (the
-  # loop is a no-op) rather than arming a pointless timer.
+  # #509 widened the trigger from `auth_method == :nickserv_identify` to "an
+  # identify is expected at all": a `:server_pass` credential with a dedicated
+  # `nickserv_pass` (whose password is spent on PASS) now identifies from the
+  # built-in / perform list too, and must get the SAME +r gate — otherwise the
+  # feature ships with the exact race #347 exists to prevent.
+  #
+  # Everything else fires immediately, unchanged: SASL identifies BEFORE 001 (so
+  # the 001 autojoin already sees +r), and `:none`/`:server_pass`/`:auto` with
+  # NO nickserv secret have no identify step to wait on. An empty autojoin set
+  # also fires now (the loop is a no-op) rather than arming a pointless timer.
   @spec maybe_autojoin_or_defer(t()) :: t()
-  defp maybe_autojoin_or_defer(%{auth_method: :nickserv_identify, autojoin: [_ | _]} = state) do
-    # Cancel + drain any prior fallback for the defensive re-welcome case (a
-    # second 001 without an intervening crash) so we never leak a stale fire —
-    # symmetric with the sibling `:connection_stable` timer armed just above in
-    # the numeric-1 handler. The latch already makes an orphaned timer a no-op,
-    # but re-arming cleanly keeps the two 001 timers on one pattern.
-    :ok = cancel_and_drain(state.autojoin_defer_timer, :autojoin_defer)
-    timer = Process.send_after(self(), :autojoin_defer, state.autojoin_defer_ms)
-    %{state | autojoin_defer_timer: timer}
+  defp maybe_autojoin_or_defer(%{autojoin: [_ | _]} = state) do
+    if identify_expected?(state) do
+      # Cancel + drain any prior fallback for the defensive re-welcome case (a
+      # second 001 without an intervening crash) so we never leak a stale fire —
+      # symmetric with the sibling `:connection_stable` timer armed just above in
+      # the numeric-1 handler. The latch already makes an orphaned timer a no-op,
+      # but re-arming cleanly keeps the two 001 timers on one pattern.
+      :ok = cancel_and_drain(state.autojoin_defer_timer, :autojoin_defer)
+      timer = Process.send_after(self(), :autojoin_defer, state.autojoin_defer_ms)
+      %{state | autojoin_defer_timer: timer}
+    else
+      fire_autojoin(state)
+    end
   end
 
   defp maybe_autojoin_or_defer(state), do: fire_autojoin(state)
+
+  # GH #347 / #509 — an identify is expected at 001 (so autojoin must wait for
+  # the +r echo) whenever an effective NickServ secret exists: the dedicated
+  # `nickserv_pass` field (any auth_method, #509) OR `:nickserv_identify` (whose
+  # `pending_password` was staged from the credential password). This subsumes
+  # the "perform list consumed `$nickserv_pass`" case — consumption requires an
+  # effective secret, which is exactly one of these two sources. We test the
+  # STABLE `auth_method` (the origin of `pending_password`) rather than
+  # `pending_password` itself, since `run_perform_and_identify/1` has already
+  # cleared it one-shot by the time this runs.
+  @spec identify_expected?(t()) :: boolean()
+  defp identify_expected?(%{nickserv_pass: pw}) when is_binary(pw) and pw != "", do: true
+  defp identify_expected?(%{auth_method: :nickserv_identify}), do: true
+  defp identify_expected?(_), do: false
 
   # Single funnel for the two deferred-autojoin triggers (#347): the +r
   # self-MODE echo and the `:autojoin_defer` fallback timer.

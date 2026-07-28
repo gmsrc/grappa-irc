@@ -8887,19 +8887,21 @@ audio.media-viewer-media {
   resize: vertical;
 }
 
-.perform-oper {
+/* #189 / #509 — one shared secret-input row, used for BOTH the `$oper_pass`
+   and `$nickserv_pass` write-only fields (leave-blank-to-keep). */
+.perform-secret {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   margin-top: 0.35rem;
 }
 
-.perform-oper-input {
+.perform-secret-input {
   flex: 1;
   min-width: 0;
 }
 
-.perform-oper-status {
+.perform-secret-status {
   color: var(--muted);
   font-size: 0.8rem;
   white-space: nowrap;

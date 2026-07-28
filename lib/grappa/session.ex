@@ -167,12 +167,16 @@ defmodule Grappa.Session do
           optional(:away_persister) => Server.away_persister(),
           optional(:restored_away) => Server.restored_away(),
           optional(:refresh_plan) => Server.refresh_plan_check(),
-          # GH #189 — on-connect perform list + its `$oper_pass` secret,
-          # decrypted plaintext from the credential (nil when unset). Set by
-          # `SessionPlan.base_plan/6` for BOTH subjects; run at 001 by
-          # `Session.Server` before the built-in identify and before autojoin.
+          # GH #189 / #509 — on-connect perform list + its `$oper_pass` /
+          # `$nickserv_pass` secrets, decrypted plaintext from the credential
+          # (nil when unset). Set by `SessionPlan.base_plan/6` for BOTH
+          # subjects; run at 001 by `Session.Server` before the built-in
+          # identify and before autojoin. `nickserv_pass` is the FIRST source
+          # for `$nickserv_pass` / the built-in identify, decoupled from
+          # `auth_method` (#509).
           optional(:perform_list) => String.t() | nil,
-          optional(:oper_pass) => String.t() | nil
+          optional(:oper_pass) => String.t() | nil,
+          optional(:nickserv_pass) => String.t() | nil
         }
 
   @doc """
