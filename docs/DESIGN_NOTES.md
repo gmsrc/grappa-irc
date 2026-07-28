@@ -23107,3 +23107,81 @@ asserts the migration count, the bare `X.Y.Z` (#391 clean-tag path; the `.rpm`
 builds in the `.git` checkout, unlike the tarball-built Arch pkg), and that
 shottino links Fedora's libs. Local static checks only: `sh -n`/`bash -n`,
 shellcheck, YAML parse.
+## 2026-07-28 — #485: one proxy, not two — headers move into the BEAM
+
+For most of grappa's life every substrate fronted the bouncer with an nginx
+that did three jobs: serve the cicchetto SPA statically, add the
+Content-Security-Policy + sibling security headers, and gate a REST/admin route
+allowlist. #399 had already taught the BEAM to self-serve the SPA (`Plug.Static`
++ the SPA history-fallback), which left nginx doing two things the app could do
+better. #485 finishes the collapse: **the BEAM owns the security headers, and
+every nginx that remains is a dumb reverse proxy.**
+
+**The plug is the sole header owner, on every substrate.**
+`GrappaWeb.Plugs.SecurityHeaders` emits the CSP + four siblings
+(`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`,
+`Permissions-Policy`); the CSP string is the `csp/0` accessor (SSOT for the
+CI drift test + any caller). It's wired `register_before_send/2` and placed
+BEFORE `:serve_cic_static`, so its callback runs LAST (before_send is LIFO) and
+the headers land on `Plug.Static` hits (which send + halt) and on error pages
+alike — the app-side equivalent of nginx's `add_header ... always`. This is
+strictly *more* coverage than the old snippet gave: an operator terminating TLS
+with their own front door previously got NO security headers at all, because
+ours only existed inside a container they were told to bypass.
+
+**Why the plug is sole owner and nginx must not re-assert.** Duplicate
+`Content-Security-Policy` headers are enforced by the browser as the
+**intersection** of all policies, not the union — so a proxy that also sends a
+CSP silently *tightens* it and breaks the very widgets the app allowlisted. One
+emitter is the only safe design. Every dumb-proxy config carries a comment
+saying so.
+
+**Dumb-proxy total.** `infra/snippets/locations-api.conf` collapsed to
+`location / → BEAM` + `location /socket → BEAM` (WS upgrade) +
+`client_max_body_size 128m`, shared by the three nginx substrates that survive:
+the m42 bastille jail (`infra/freebsd/nginx.conf`), the native-Linux systemd
+host (`infra/linux/nginx.conf`), and the e2e surface
+(`cicchetto/e2e/nginx-test.conf`, which still terminates TLS on :443 so the cic
+SW + Push get a secure context). The **Docker `--profile prod` nginx container
+was deleted entirely** — there the BEAM is published directly, the posture the
+single-container prod path always had.
+
+**The /admin route allowlist is gone (deliberate).** The old snippet listed
+every REST/admin resource so an unlisted route 404'd at the proxy before
+reaching Phoenix — and kept the loopback-only `/admin/reload` off the LAN. That
+defense now rests entirely on the BEAM gates: `Plugs.LoopbackOnly` (checks the
+REAL client IP via `RemoteIpFromProxy` — a remote hit through the dumb proxy
+arrives non-loopback and 403s), the `:admin_authn` pipeline (bearer +
+`is_admin`), and the port-publish posture. A new `/admin` route needs NO proxy
+edit now. The CLAUDE.md invariant that mandated the three-place allowlist edit
+was updated (vjt-approved) — the authority file no longer prescribes a workflow
+the code dropped.
+
+**128 MiB is the single body ceiling.** The nginx snippet's `client_max_body_size`
+was reconciled DOWN from 160m to match `Plug.Parsers`' 128 MiB multipart cap
+(the real policy lives in the BEAM's per-type admin caps; the edge number is
+belt-and-braces).
+
+**`GRAPPA_PUBLISH` is host-side (challenged the spec).** The issue's literal
+`3000:4000` port mapping contradicted grappa's existing publish convention
+(`compose.yaml` appends the container `:4000`; the operator supplies only the
+host side). The operator migration therefore *strips the trailing `:80`* from
+the old `NGINX_PUBLISH` onto `GRAPPA_PUBLISH`, so a box comes back on the same
+URL. `scripts/quickstart-update.sh` does this rewrite in place (deprecation
+warning, idempotent) and `--remove-orphans` sweeps the stale `grappa-nginx`
+container a `compose.yaml` service-removal leaves running.
+
+**m42 is ONE coordinated COLD deploy.** The release (ships the plug → BEAM
+starts emitting the CSP) and a re-run of `infra/freebsd/jail_install_nginx.sh`
+(installs the dumb-proxy config that no longer includes the header snippet) MUST
+land together. Release-first alone → prod double-emits the CSP → browser enforces
+the intersection → incident. Install-first alone → a zero-header window. The
+verify is `curl -sI https://irc.sindro.me/` showing EXACTLY ONE of each header,
+CSP byte-identical to the pre-#485 value.
+
+*Law: a security response emitted by an optional infrastructure layer protects
+only the deployments that happen to run that layer — and "optional" always means
+"some don't." Move the header the app must always send into the app; leave the
+proxy dumb. And when one header can come from two places, the browser's
+tie-break (CSP intersection) is a footgun, so make the app the sole emitter and
+say so at every proxy that could forget.*

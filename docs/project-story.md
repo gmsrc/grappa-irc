@@ -4529,3 +4529,61 @@ fan-out cost are independent problems; a hundred fast queries is still a hundred
 round trips, so prove the collapse with a query counter, not a wall-clock. And a
 predicate that special-cases one shape is where a fold bug hides — unifying the
 shapes is what drags it into the light.*
+
+## The front door that was protecting the wrong houses (#485)
+
+For as long as grappa had a web face, an nginx sat in front of it doing three
+jobs: it served the cicchetto bundle off disk, it stamped the
+Content-Security-Policy and its siblings onto every response, and it kept a
+hand-maintained allowlist of which routes were even allowed through. Three
+substrates each carried their own copy — the docker profile, the bastille jail,
+the e2e stack — and every new admin route meant editing a regex in a config file
+that the app's own router already knew the answer to.
+
+The CSP was the load-bearing piece. It is the realistic defense for a design
+that keeps the bearer token in `localStorage`: no third-party script runs, so
+nothing can read it. And it lived in a file called `security-headers.conf`,
+included by an nginx container. Which meant the protection existed exactly where
+grappa ran its own nginx — and nowhere else. An operator who terminated TLS with
+Caddy, or a cloud load balancer, or their own nginx, was told to point it at
+grappa's plain-HTTP port and got a service with no CSP at all. The header meant
+to be non-negotiable was, in practice, opt-in, and the opt was a container most
+self-hosters were being told to skip. #399 had already moved the SPA into the
+BEAM; the header was the last thing keeping nginx load-bearing, and it was
+keeping it load-bearing for the wrong reason.
+
+So #485 moved the header into the app. `GrappaWeb.Plugs.SecurityHeaders` emits
+the CSP + four siblings, registered `before_send` so it lands on the static-file
+hits and the error pages alike — the same "always" nginx promised, but now on
+every substrate, including the operator's own front door that never got it
+before. Every nginx that remained collapsed to a dumb proxy: forward `/` to the
+BEAM, forward `/socket` with the upgrade, cap the body at 128 MiB, and stamp
+nothing. The docker nginx container was deleted outright.
+
+The trap in doing this was the one the code comments now shout about. For a
+window during a naive deploy you'd have *two* things emitting a CSP — the old
+nginx snippet and the new plug — and a browser handed two Content-Security-Policy
+headers does not pick one or merge them: it enforces their **intersection**. Two
+correct-looking policies would silently combine into a third, tighter one that
+blocked the app's own widgets, and it would look like a code bug, not a
+double-header. That is why the m42 cutover is written down as a single
+coordinated cold deploy: the release that starts emitting the header and the
+nginx reinstall that stops emitting it have to land in the same breath. Ship the
+release alone and prod double-emits; ship the reinstall alone and there's a
+window with no header at all. The verification isn't "does the CSP look right,"
+it's "is there exactly one of it, byte-for-byte what it was before."
+
+Dropping the allowlist was the quiet win. Once nginx forwarded everything, a new
+admin route needed no proxy edit — the gate was the BEAM's all along:
+`LoopbackOnly` checks the real client IP (a remote request through the proxy
+arrives non-loopback and gets a 403), `:admin_authn` checks the bearer. The
+allowlist had been a second copy of a decision the router already owned, and
+every copy of a decision is a copy that drifts.
+
+*Law: a security response that only exists in an optional layer protects only the
+deployments that run that layer — and optional always means some don't. If a
+header must always be sent, the thing that must always run has to send it, and
+for grappa the only thing that always runs is grappa. Move it into the app, leave
+the proxy dumb — and when a browser's tie-break between two copies of a header is
+to take their intersection, one emitter isn't a preference, it's the only safe
+number.*

@@ -38,9 +38,10 @@ import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG, VJT_USER } from "./see
 // (compile-gated to dev/test Mix envs).
 const SEED_COUNT = 200;
 
-// `_cspGuard` (e2e CSP parity, 2026-06-11) — the e2e nginx serves the
-// REAL prod Content-Security-Policy (infra/snippets/
-// security-headers.conf via locations-api.conf, since 2026-05-22),
+// `_cspGuard` (e2e CSP parity, 2026-06-11) — the BEAM emits the REAL
+// prod Content-Security-Policy (GrappaWeb.Plugs.SecurityHeaders), and
+// since #485 the e2e nginx is a dumb proxy that forwards it byte-for-byte
+// (the header used to come from an nginx snippet; now grappa owns it),
 // but a CSP-blocked resource only fails a spec if the spec happens to
 // assert the blocked outcome. That's how the missing `media-src
 // blob:` shipped (6f3327c): the blocked duration probe degraded the
@@ -106,7 +107,7 @@ export const test = base.extend<{ _vjtReset: void; _cspGuard: void }>({
       baseExpect(
         violations,
         "CSP violations collected during the spec — a directive in " +
-          "infra/snippets/security-headers.conf blocks a resource this " +
+          "GrappaWeb.Plugs.SecurityHeaders blocks a resource this " +
           "journey needs (the prod-only 6f3327c bug class)",
       ).toEqual([]);
     },

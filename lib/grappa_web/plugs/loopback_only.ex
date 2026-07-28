@@ -4,13 +4,16 @@ defmodule GrappaWeb.Plugs.LoopbackOnly do
   a uniform 403 JSON body.
 
   Used to gate the admin reload endpoint (`POST /admin/reload`) so it's
-  only callable from inside the running container — `docker exec grappa
-  curl -X POST http://localhost:4000/admin/reload`. nginx (the only
-  LAN-facing service) doesn't proxy `/admin/*`, and grappa's compose
-  service publishes on `127.0.0.1:4000` by default + sits on the
-  `grappa_internal` bridge only — so the loopback gate is the third
-  layer of defense after compose port-publish defaults and nginx's
-  proxy allowlist.
+  only callable from inside the running container / jail — `docker exec
+  grappa curl -X POST http://localhost:4000/admin/reload` (or `bastille
+  cmd grappa ...`). **This gate is now the primary defense (GH #485).**
+  Since #485 every nginx substrate is a dumb reverse proxy that forwards
+  `/admin/*` unfiltered (the old proxy allowlist was deleted with the
+  nginx container), so nothing upstream drops a remote hit on
+  `/admin/reload` any more — this plug does, by checking the REAL client
+  IP. grappa's compose service also publishes on `127.0.0.1:4000` by
+  default + sits on the `grappa_internal` bridge only, so port-publish
+  defaults are the outer layer and this loopback gate is the inner one.
 
   Why a plug instead of an env-var bearer: stateless, no rotation
   ceremony, and matches the operator workflow (the reload trigger IS
@@ -31,9 +34,11 @@ defmodule GrappaWeb.Plugs.LoopbackOnly do
   (`sudo bastille cmd grappa`, `docker exec grappa`) already has
   root-equivalent access — they can kill the BEAM, drop sqlite,
   rewrite the codebase. POST /admin/reload is the least interesting
-  thing they could do. The defense at this layer is network
-  reachability (nginx doesn't proxy /admin/*, grappa binds 127.0.0.1
-  only), NOT input validation against an attacker with the keys.
+  thing they could do. The defense at this layer is the real-client-IP
+  check above (a remote request arrives through the dumb proxy with
+  `conn.remote_ip` rewritten to the actual client, which is not
+  loopback, so it 403s) plus the compose port-publish binding grappa to
+  `127.0.0.1` — NOT input validation against an attacker with the keys.
   See `RemoteIpFromProxy` moduledoc for the full trust matrix.
   """
   @behaviour Plug

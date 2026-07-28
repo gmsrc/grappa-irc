@@ -8,10 +8,11 @@ script, deploy class, or runtime knob.
 **Substrates — read this first.** Dev/test = Docker on the pi
 (`scripts/*.sh`; the container is the runtime). **Prod = the m42
 FreeBSD bastille jail** (`scripts/deploy-m42.sh`; operator section
-below). The Docker `--profile prod` stack is the full-stack compose
-profile (nginx + cic bundle — the name predates the jail move) used
-for dev, e2e, and self-hosters; it is NOT this project's production.
-Nothing production runs on the pi.
+below). The Docker `--profile prod` stack is a single long-lived
+grappa container (the `cicchetto-build` oneshot builds the SPA the BEAM
+self-serves — #485 dropped the in-stack nginx container) used for dev,
+e2e, and self-hosters; it is NOT this project's production. Nothing
+production runs on the pi.
 
 ## Operator dispatcher — `bin/grappa`
 
@@ -366,10 +367,14 @@ downtime):
 - `priv/repo/migrations/*` — hot path skips `mix ecto.migrate`;
   new tables/columns 500 on first query post-reload, Bootstrap
   crash-loops if it reads them.
-- `infra/nginx.conf`, `infra/freebsd/nginx.conf`, or
-  `infra/snippets/*` — hot path doesn't reload nginx; CSP
-  allowlist drift particularly bad (new captcha provider won't
-  take effect, cic widgets 404).
+- `infra/freebsd/nginx.conf`, `infra/linux/nginx.conf`, or
+  `infra/snippets/*` — hot path doesn't reload nginx. Since #485
+  these are DUMB reverse proxies (no headers, no allowlist), so a
+  change here is rare; when it happens, the hot BEAM swap won't
+  pick it up — reload nginx by hand or COLD-deploy. NOTE: the CSP
+  itself is NO LONGER here — it moved into the BEAM
+  (`GrappaWeb.Plugs.SecurityHeaders`), so a captcha-provider CSP
+  edit is now a code change (COLD), not an nginx reload.
 - `config/*.exs` (any) — SECRET_SIGNING_SALT motivation; runtime
   config is hot-safe via `runtime.exs` but compile-time
   `config.exs` requires a recompile boot.
@@ -753,22 +758,32 @@ the matching pre-migration SHA and cold-deploy it before starting. The
 `schema_migrations` head printed in step 3 is the authoritative check
 that the DB and the target code SHA agree on the migration set.
 
-## CSP / security headers (nginx-added, NOT Phoenix)
+## CSP / security headers (BEAM-emitted, NOT nginx — #485)
 
 The Content-Security-Policy + sibling security headers
-(`X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`,
-…) are added by **nginx**, sourced from
-**`infra/snippets/security-headers.conf`** (this repo — single source).
-That one file is BOTH Docker-mounted under `--profile prod` AND
-installed into the jail at
-`/usr/local/etc/nginx/snippets/security-headers.conf` by
-`jail_install_nginx.sh`. **Phoenix emits no CSP** — confirm with
-`curl -sD - http://127.0.0.1:4000/ -o /dev/null` inside the jail (no
-`content-security-policy` line). The jail nginx serves the cic bundle
-statically (`root /usr/local/www/cic`); the host m42 nginx
-(`/usr/local/etc/nginx/sites/irc.openssl.it`) only proxies and does
-NOT add the CSP. Prod hosts: **`irc.sniffo.org` / `irc.sindro.me`**
-(`irc.openssl.it` is the host vhost name + redirect).
+(`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`,
+`Permissions-Policy`) are emitted by the **BEAM**, from
+**`GrappaWeb.Plugs.SecurityHeaders`** — the single source of truth.
+The CSP string is the `csp/0` accessor; the plug registers via
+`register_before_send/2` so the headers land on `Plug.Static` hits
+(SPA shell + assets) and error pages alike. Before #485 these lived in
+an nginx snippet (`infra/snippets/security-headers.conf`, now deleted);
+they moved into the app so EVERY substrate — the Docker single
+container, the m42 jail behind its dumb proxy, an operator's own TLS
+front door — carries the same headers with no per-substrate config.
+
+**nginx MUST NOT re-assert them.** Every nginx substrate is a dumb
+reverse proxy now (`infra/snippets/locations-api.conf`,
+`location / → BEAM`); it emits none of these headers. If a proxy also
+sends a `Content-Security-Policy`, the browser enforces the
+**intersection** of all policies (not the union) — a prod-only footgun
+that silently tightens the CSP and breaks the widgets it drops. Confirm
+the BEAM emits them and nginx doesn't double them:
+`curl -sD - http://127.0.0.1:4000/ -o /dev/null` inside the jail shows
+exactly ONE `content-security-policy` line; through the public host it
+must still show exactly one, byte-identical. Prod hosts:
+**`irc.sniffo.org` / `irc.sindro.me`** (`irc.openssl.it` is the host
+vhost name + redirect).
 
 **Captcha inline-script gotcha (2026-06-06).** The Turnstile/hCaptcha
 loader `api.js` (allowed via its host in `script-src`) does not just
@@ -787,44 +802,61 @@ to add. (Aside: prod ships with captcha **disabled** —
 `grappa.env` has no `GRAPPA_CAPTCHA_*` → provider `disabled`; the
 widget only renders where a provider is enabled.)
 
-**Deploying a CSP/snippet change to the jail** — no BEAM or cic rebuild
-needed; push to origin first, then pull + install the one snippet +
-`nginx -t` + reload (reload only fires if the test passes):
+**Deploying a CSP change** — the CSP now lives in `SecurityHeaders`, so
+editing it is a **code change**: it ships in the release, COLD-deployed
+like any BEAM change (the running-module swap does update it, but treat
+a security-header change as COLD — verify explicitly). No nginx reload.
+Verify the live header:
 
 ```sh
-ssh m42 "sudo bastille cmd grappa su -l grappa -c 'cd /home/grappa/grappa && git pull --ff-only origin main'"
-ssh m42 "sudo bastille cmd grappa sh -c 'install -o root -g wheel -m 0644 \
-  /home/grappa/grappa/infra/snippets/security-headers.conf \
-  /usr/local/etc/nginx/snippets/security-headers.conf && nginx -t && service nginx reload'"
+ssh m42 "curl -fsSL -D - -o /dev/null https://irc.sniffo.org/ 2>&1 | grep -i content-security-policy"
 ```
 
-(or `jail_install_nginx.sh` for the full nginx config + all snippets +
-`nginx -t` + reload). Verify the live header:
+### m42: the #485 cutover is ONE coordinated COLD deploy
+
+The move off the two-container topology on the jail is a single COLD
+deploy that lands TWO changes at once, and they MUST land together:
+
+1. the **release** (ships `SecurityHeaders`, so the BEAM starts emitting
+   the CSP), and
+2. a re-run of **`infra/freebsd/jail_install_nginx.sh`** (installs the
+   dumb-proxy `nginx.conf` that no longer includes the header snippet).
+
+If (1) lands without (2), prod **double-emits** the CSP (old nginx
+snippet + new plug) and the browser enforces the intersection = an
+incident. If (2) lands without (1), there's a **zero-header window**
+(nginx stopped adding them, the BEAM isn't emitting them yet). Deploy
+both in the same COLD window, then verify **exactly ONE** of each header
+and that the CSP is byte-identical to the pre-#485 value:
 
 ```sh
-ssh m42 "curl -fsSL -D - -o /dev/null https://irc.sniffo.org/ 2>&1 | grep -i script-src"
+ssh m42 "curl -fsSL -D - -o /dev/null https://irc.sindro.me/ 2>&1 \
+  | grep -iE 'content-security-policy|x-frame-options|x-content-type|referrer-policy|permissions-policy'"
 ```
 
 ## Per-host compose overrides
 
 Committed `compose.yaml` ships deployment-agnostic defaults: grappa
-publishes on `127.0.0.1:4000` (loopback only); `--profile prod` adds
-nginx (default `3000:80` wildcard publish) + cicchetto-build oneshot.
+publishes on `${GRAPPA_PUBLISH:-127.0.0.1:4000}` (loopback only);
+`--profile prod` adds only the `cicchetto-build` oneshot (#485 dropped
+the in-stack nginx — the BEAM self-serves the SPA + owns its headers).
 Anyone can clone + `docker compose up`; nothing depends on a particular
 LAN, hostname, or vlan.
 
 Personal bindings (LAN/VLAN IP for inbound, `PHX_HOST`,
 `EXTRA_CHECK_ORIGINS`) live in gitignored `compose.override.yaml` —
-template at `compose.override.yaml.example` covers the
-"bind-grappa-to-LAN" + "bind-nginx-to-LAN-with-PHX_HOST" shapes.
-`scripts/_lib.sh` auto-detects it and appends as a second `-f` flag.
-Use `ports: !override` to drop+replace the base file's publish (NOT
-`!reset`, which drops without re-adding).
+template at `compose.override.yaml.example` covers the dev + prod
+"bind-grappa-to-LAN-with-PHX_HOST" shapes (both bind `grappa` directly
+now; there is no nginx service to bind). `scripts/_lib.sh` auto-detects
+it and appends as a second `-f` flag. Use `ports: !override` to
+drop+replace the base file's publish (NOT `!reset`, which drops without
+re-adding), or just set `GRAPPA_PUBLISH` in `.env`.
 
 When proposing a new IP-bound or hostname-pinned binding, put it in
-the override, NEVER in the committed base. Same for nginx.conf and
-the CSP snippet — `'self'` covers same-origin ws/wss automatically;
-don't hardcode hostnames there.
+the override, NEVER in the committed base. The CSP is host-agnostic —
+`'self'` covers same-origin ws/wss automatically, so
+`GrappaWeb.Plugs.SecurityHeaders` needs no per-host edit; don't
+hardcode hostnames in it.
 
 ## Runtime Data
 
@@ -960,8 +992,8 @@ hand-attach — read it through either door (both drive the same
 - **CLI:** `bin/grappa db-latency` (the aggregate as tab-separated tables) /
   `bin/grappa db-latency-reset` (zero the counters).
 - **HTTP:** `GET /admin/db_latency` (JSON) / `POST /admin/db_latency/reset`
-  (`204`). `:admin_authn`-gated (admin bearer + `is_admin`); on the nginx
-  allowlist.
+  (`204`). `:admin_authn`-gated (admin bearer + `is_admin`); reached
+  through the dumb proxy, no allowlist to maintain (#485).
 
 The handler folds **two** signal families:
 

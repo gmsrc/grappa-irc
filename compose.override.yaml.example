@@ -18,20 +18,23 @@
 
 services:
   # Dev shape — bind grappa to a LAN IP for testing from another device.
-  # Drop this block if you only ever run dev on loopback.
+  # Drop this block if you only ever run dev on loopback. (Simpler
+  # alternative: set GRAPPA_PUBLISH=192.168.53.12:4000 in .env — the
+  # committed compose.yaml already publishes `${GRAPPA_PUBLISH:-...}`.)
   # grappa:
   #   ports: !override
   #     - "192.168.53.12:4000:4000"
 
-  # Prod shape — bind nginx to your LAN/VLAN IP (default committed shape
-  # is wildcard :3000) and pin Phoenix's `check_origin` allowlist via
-  # PHX_HOST + EXTRA_CHECK_ORIGINS. Set MIX_ENV=prod in .env (or the
-  # invoking shell) so compose.yaml's `${MIX_ENV:-dev}` resolves to prod.
-  nginx:
-    ports: !override
-      - "192.168.53.12:80:80"
-
+  # Prod shape — since #485 there is NO nginx container: the BEAM serves
+  # the SPA + owns its security headers, so you bind GRAPPA directly.
+  # Publish it on your LAN/VLAN IP (or leave it loopback and front it
+  # with your OWN TLS reverse proxy) and pin Phoenix's `check_origin`
+  # allowlist via PHX_HOST + EXTRA_CHECK_ORIGINS. Set MIX_ENV=prod in
+  # .env (or the invoking shell) so compose.yaml's `${MIX_ENV:-dev}`
+  # resolves to prod.
   grappa:
+    ports: !override
+      - "192.168.53.12:4000:4000"
     environment:
       # MANDATORY in prod, NO default — set to YOUR public hostname
       # (e.g. grappa.example.org). Left blank on purpose: config/runtime.exs
@@ -39,10 +42,10 @@ services:
       # handshakes for a copied-but-unedited value.
       PHX_HOST: ""
       # EXTRA_CHECK_ORIGINS: WS `check_origin` extras AND (with PHX_HOST,
-      # #324) the deployment's HTTP host-alias set — every hostname nginx
-      # reverse-proxies to this ONE instance. List a sibling public vhost
-      # here (comma-separated) and cic's media-link viewer opens uploads
-      # minted under it too; no cic redeploy, no second list.
+      # #324) the deployment's HTTP host-alias set — every hostname your
+      # TLS front door proxies to this ONE instance. List a sibling public
+      # vhost here (comma-separated) and cic's media-link viewer opens
+      # uploads minted under it too; no cic redeploy, no second list.
       EXTRA_CHECK_ORIGINS: "http://192.168.53.12"
       # Push notifications cluster B2 (2026-05-14). Generate once per
       # deployment with `scripts/mix.sh grappa.gen_vapid` and paste

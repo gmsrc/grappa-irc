@@ -14,12 +14,12 @@
 // The full vertical reuses the UX-6-B embedded-upload journey (real
 // POST /api/uploads, real IRC echo, real bytes served back) and then
 // drives the NEW click path. This all runs under the REAL prod CSP —
-// the e2e nginx serves infra/snippets/security-headers.conf via the
-// locations-api.conf include chain (verified + pinned by
+// the BEAM emits it via GrappaWeb.Plugs.SecurityHeaders and the e2e
+// dumb proxy forwards it byte-for-byte (#485; verified + pinned by
 // nginx-csp-range-parity.spec.ts, e2e CSP parity 2026-06-11), and the
 // `_cspGuard` fixture fails any spec whose journey trips a
 // `securitypolicyviolation`. So `naturalWidth > 0` here proves both
-// that the bytes came through nginx AND that the CSP admits the
+// that the bytes came through the proxy AND that the CSP admits the
 // modal's media element.
 //
 // NOT covered here: the iOS-standalone x-safari-https href rewrite of

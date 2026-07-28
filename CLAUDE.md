@@ -477,12 +477,16 @@ not the surrounding code.**
   other subject shape — don't bypass it with per-controller checks or
   skip-the-plug shortcuts. Distinct from the loopback `:admin`
   pipeline (which gates `/admin/reload` + `/admin/cic-bundle-changed`
-  on `Plugs.LoopbackOnly`); same URL prefix, separate scopes. The
-  nginx allowlist lives in `infra/snippets/locations-api.conf` — the
-  single source of truth `include`d by every server block of both
-  `infra/nginx.conf` and the e2e `cicchetto/e2e/nginx-test.conf` — and
-  must list the new resource, or the route 404s at the proxy before
-  reaching Phoenix.
+  on `Plugs.LoopbackOnly`); same URL prefix, separate scopes.
+  **No nginx allowlist to maintain (GH #485).** Every nginx substrate
+  is a dumb reverse proxy now (`infra/snippets/locations-api.conf`,
+  `location / → BEAM`) — it forwards `/admin/*` unfiltered, so a new
+  `/admin` route needs NO proxy edit. The gate is BEAM-side only:
+  `:admin_authn` (bearer + `is_admin`) for the cic-facing routes and
+  `Plugs.LoopbackOnly` (real client IP via `RemoteIpFromProxy`) for the
+  loopback ones. The old snippet allowlist that used to keep new routes
+  from being auto-exposed through the proxy was deleted with the nginx
+  container in #485; the Docker single-container prod path never had one.
 
 ### Charset / wire-format rule
 

@@ -1,13 +1,20 @@
 # Installing grappa with Docker
 
-A self-hosted, full-stack install on a single host: the IRC bouncer, the
-`cicchetto` PWA, and an nginx front door — all in Docker, reachable at
-`http://localhost:3000`.
+A self-hosted install on a single host: one Docker container running the
+IRC bouncer, which also serves the `cicchetto` PWA and owns its own
+security headers — reachable at `http://localhost:3000`. (A one-shot
+build container compiles the PWA bundle and then exits; the long-lived
+container is just grappa.)
 
 This is the plain, no-frills path. It does not touch the operator deploy
 machinery (`scripts/deploy.sh`, `deploy-m42.sh`, per-host compose
 overrides) — those target a specific production host and are not needed
 to run grappa yourself.
+
+> **Upgrading an existing two-container box?** Older installs ran a
+> separate nginx front door alongside grappa. #485 removed it — the BEAM
+> now serves the SPA and emits the CSP itself. Jump to
+> [Upgrading from the two-container topology](#upgrading-from-the-two-container-topology).
 
 ## Prerequisites
 
@@ -55,7 +62,9 @@ HTTP_BIND=0.0.0.0:8080 scripts/quickstart.sh   # all interfaces, port 8080
    VAPID keypair (Web Push), and `RELEASE_COOKIE`. Already-set values are
    never overwritten, so re-running is safe.
 6. Runs database migrations.
-7. Brings up the full stack (`docker compose --profile prod up -d`).
+7. Brings up the stack (`docker compose --profile prod up -d`): the
+   one-shot `cicchetto-build` compiles the PWA bundle, then the single
+   long-lived grappa container comes up and self-serves it.
 8. Polls `/healthz` until the stack is green.
 
 > **Back up `GRAPPA_ENCRYPTION_KEY`** (in `.env`) somewhere safe. It
@@ -139,15 +148,17 @@ scripts/quickstart-stop.sh                  # takes the prod profile down too
 scripts/quickstart.sh                       # idempotent: brings it back up
 ```
 
-Use the script rather than a bare `docker compose down`: nginx lives
-behind the `prod` profile, so a down without `--profile prod` walks past
-it, leaves it running, and then fails to remove the project network with
-`Resource is still in use` — a half-stopped box under a command that
-reads like it stopped everything. `scripts/quickstart-stop.sh` also
-refuses to stop a box that belongs to a different checkout, and takes
-`--volumes` when you want the build caches gone as well. `runtime/` is a
-bind mount in the checkout, so no flag of this script can touch the
-database.
+Use the script rather than a bare `docker compose down`: the
+`cicchetto-build` one-shot lives behind the `prod` profile, so a down
+without `--profile prod` can walk past profile-gated services and leave
+the box half-stopped. The script also passes `--remove-orphans`, which
+sweeps a stale `grappa-nginx` container left behind by a pre-#485
+two-container box (removing the nginx service from `compose.yaml` does
+not stop the container it once created). `scripts/quickstart-stop.sh`
+also refuses to stop a box that belongs to a different checkout, and
+takes `--volumes` when you want the build caches gone as well.
+`runtime/` is a bind mount in the checkout, so no flag of this script
+can touch the database.
 
 ### Updating an installed box
 
@@ -181,6 +192,57 @@ container and the image is toolchain-only, so ordinary code changes compile
 at boot with no rebuild. The stack is then recreated (never hot-reloaded —
 a staging box exists to be restarted), `/healthz` is polled until it
 answers, and the URL is printed from `.env`.
+
+## Upgrading from the two-container topology
+
+Installs from before #485 ran **two** containers: grappa on loopback,
+and a `grappa-nginx` front door that served the PWA, added the security
+headers, and held the LAN-facing port. #485 collapsed that into one:
+
+- **The BEAM now serves the SPA and owns every security header**
+  (`GrappaWeb.Plugs.SecurityHeaders` — the CSP that guards the bearer
+  token is emitted in-app, not by nginx). The nginx **container** is
+  gone entirely.
+- **grappa takes over the LAN binding** nginx used to hold. The old
+  `.env` split the ports as `NGINX_PUBLISH=<host>:80` (LAN) +
+  `GRAPPA_PUBLISH=127.0.0.1:4000` (grappa behind nginx); the new box
+  has grappa alone on the published port.
+
+`scripts/quickstart-update.sh` does the migration for you — but the
+**very first** upgrade off a two-container box needs `git pull`
+**before** you run it, because the pre-change copy of the script still
+references the removed nginx service. So run the pull yourself once:
+
+```sh
+git pull --ff-only        # get the #485 script + compose first
+scripts/quickstart-update.sh --no-pull   # then let it migrate (it already pulled)
+```
+
+On that run the script:
+
+1. **Rewrites your `.env` in place** — drops the deprecated
+   `NGINX_PUBLISH`, and (unless you'd set a non-default `GRAPPA_PUBLISH`)
+   moves nginx's old host binding onto `GRAPPA_PUBLISH` by stripping the
+   `:80` container side, so the box comes back on the **same URL and
+   port** with no hand edits. It prints a one-line warning telling you
+   what it changed.
+2. **Sweeps the stale `grappa-nginx` container** with
+   `--remove-orphans` — removing the service from `compose.yaml` does
+   **not** stop the container it created, and a leftover `grappa-nginx`
+   would keep the host port bound and block the new single-container box
+   from binding it.
+
+**The one thing to check yourself:** if you front grappa with your own
+TLS reverse proxy (Caddy, nginx, a cloud LB), point it at grappa's
+published port now — **not** at the deleted nginx's port — and make sure
+it forwards grappa's headers untouched. It must **not** add a
+`Content-Security-Policy` of its own: duplicate CSP headers are enforced
+by the browser as their *intersection*, which silently tightens the
+policy and breaks the app. Verify exactly one of each header:
+
+```sh
+curl -sI https://your.host/ | grep -iE 'content-security-policy|x-frame-options'
+```
 
 ## Exposing it beyond localhost (TLS)
 
@@ -272,11 +334,15 @@ secrets exist.
 
 ## How it's wired
 
-One `grappa` container runs the Elixir/OTP bouncer (`mix phx.server`)
-against a sqlite database under `runtime/`. The `prod` profile adds an
-`nginx` front door that serves the cicchetto PWA (built once by a
-throwaway `cicchetto-build` container) and reverse-proxies the API +
-WebSocket to grappa. State that must survive a rebuild — the database,
-uploads — lives in `runtime/` on the host. See
+One long-lived `grappa` container runs the Elixir/OTP bouncer
+(`mix phx.server`) against a sqlite database under `runtime/`. It serves
+everything itself: the REST API, the WebSocket, the cicchetto PWA + its
+static assets (via `Plug.Static`, `CIC_DIST_ROOT`), and the
+Content-Security-Policy + sibling security headers
+(`GrappaWeb.Plugs.SecurityHeaders`). The `prod` profile adds one
+throwaway `cicchetto-build` container that compiles the PWA bundle into
+`runtime/cicchetto-dist` and exits — there is no nginx in the box (#485
+dropped it). State that must survive a rebuild — the database, uploads —
+lives in `runtime/` on the host. See
 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for the operator runbook and
 [CLAUDE.md](CLAUDE.md) for the architecture.

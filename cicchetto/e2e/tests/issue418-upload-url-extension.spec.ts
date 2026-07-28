@@ -14,9 +14,10 @@
 // into the body → real linkify → real classify → real viewer. NO seam
 // mocking (per feedback_recurring_e2e_not_flake).
 //
-// Runs under the real prod CSP (e2e nginx serves security-headers.conf);
+// Runs under the real prod CSP (the BEAM emits it via
+// GrappaWeb.Plugs.SecurityHeaders, forwarded by the e2e dumb proxy — #485);
 // the `_cspGuard` fixture fails on any securitypolicyviolation, so
-// naturalWidth > 0 proves the bytes came through nginx AT THE EXTENSIONED
+// naturalWidth > 0 proves the bytes came through AT THE EXTENSIONED
 // URL and the CSP admits the modal's <img>.
 //
 // Untagged → chromium project (the config's grepInvert keeps untagged

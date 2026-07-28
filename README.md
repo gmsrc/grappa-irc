@@ -119,9 +119,9 @@ Boot-time verbs run as mix tasks in the container; live-state verbs attach to th
 
 ### First deploy
 
-**Self-hosting?** [`INSTALL.md`](INSTALL.md) is the one-command Docker install — `scripts/quickstart.sh` generates every secret, builds, brings up the full stack (bouncer + PWA + nginx), and waits until `/healthz` is green. It also covers exposing it with TLS (Caddy / nginx / mkcert). The workflow below is the **operator / hot-deploy path** used for the production host.
+**Self-hosting?** [`INSTALL.md`](INSTALL.md) is the one-command Docker install — `scripts/quickstart.sh` generates every secret, builds, brings up the single grappa container, and waits until `/healthz` is green. It also covers exposing it with TLS (Caddy / nginx / mkcert). The workflow below is the **operator / hot-deploy path** used for the production host.
 
-**The release serves its own frontend.** Phoenix's embedded web server publishes the built cicchetto bundle (`CIC_DIST_ROOT`, default `runtime/cicchetto-dist`) and streams uploads, so a plain `bin/grappa start` on an HTTP port gives a working instance — nginx stays **recommended**, not **required**. This is what makes a native (non-Docker) `systemd` / `rc.d` install stand up on its own; see `docs/OPERATIONS.md` for the release path. One caveat: nginx also supplies the Content-Security-Policy + security headers (`infra/snippets/security-headers.conf`), and that CSP is the load-bearing defense for the localStorage bearer token — the embedded server does **not** set them. So if you terminate TLS some other way (Caddy, a cloud LB), still front grappa with a reverse proxy that ships those headers; a plain-HTTP self-serve is fine for LAN / trusted-network use, not for a public deployment.
+**The release serves its own frontend AND owns its security headers (#485).** Phoenix's embedded web server publishes the built cicchetto bundle (`CIC_DIST_ROOT`, default `runtime/cicchetto-dist`), streams uploads, and emits the Content-Security-Policy + sibling security headers itself (`GrappaWeb.Plugs.SecurityHeaders`, the single source of truth — `register_before_send` so static hits and error pages carry them too). So a plain `bin/grappa start` on an HTTP port is a complete, header-hardened instance — no nginx in the box, no separate proxy required for the CSP that guards the localStorage bearer token. This is what makes a native (non-Docker) `systemd` / `rc.d` install stand up on its own; see `docs/OPERATIONS.md` for the release path. If you terminate TLS some other way (Caddy, a cloud LB, nginx), that front door is **only** for TLS — configure it as a dumb reverse proxy and let it forward grappa's headers untouched; it must **not** re-assert a CSP of its own (duplicate `Content-Security-Policy` headers are enforced as the *intersection*, a prod-only footgun). A plain-HTTP self-serve is fine for LAN / trusted-network use; a public deployment still needs TLS in front for the service worker + push (browsers gate those on a secure context).
 
 ```sh
 git clone https://github.com/vjt/grappa-irc /srv/grappa && cd /srv/grappa
@@ -133,7 +133,7 @@ bin/grappa gen-encryption-key     # GRAPPA_ENCRYPTION_KEY — encrypts upstream 
 scripts/mix.sh phx.gen.secret     # SECRET_KEY_BASE
 scripts/mix.sh phx.gen.secret 32  # SECRET_SIGNING_SALT
 
-scripts/deploy.sh                 # build + start the full stack (nginx + cic bundle)
+scripts/deploy.sh                 # build the cic bundle + start the grappa container
 ```
 
 **Back up `GRAPPA_ENCRYPTION_KEY` separately — losing it means losing every stored upstream password.** On a fresh DB no IRC sessions spawn until you bind a network; Phoenix answers `/healthz` web-only.
@@ -158,7 +158,7 @@ Re-run `scripts/deploy.sh` and Bootstrap picks up the binding on boot — or att
 
 ### Admin console
 
-Operators get a multi-tab admin pane in cicchetto, gated on `User.is_admin` (REST `/admin/*` 403s for everyone else; nginx allowlists the path):
+Operators get a multi-tab admin pane in cicchetto, gated on `User.is_admin` (REST `/admin/*` 403s for everyone else, enforced BEAM-side by the `:admin_authn` pipeline):
 
 - **Visitors** — list visitor sessions; delete to free cap slots.
 - **Sessions** — every live `Session.Server` (user + visitor) with DB `connection_state` and live pid shown side by side; per-row disconnect (park) / terminate.
