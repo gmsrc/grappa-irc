@@ -439,25 +439,39 @@ defmodule Grappa.Networks do
   """
   @spec live_nick_index(Session.subject()) :: %{String.t() => {integer(), String.t()}}
   def live_nick_index({:user, user_id} = subject) when is_binary(user_id) do
-    query = from(c in Credential, where: c.user_id == ^user_id, preload: :network)
-
-    query
+    from(c in Credential,
+      join: n in Network,
+      on: n.id == c.network_id,
+      where: c.user_id == ^user_id,
+      select: {n.slug, c.network_id, c.nick}
+    )
     |> Repo.all()
     |> nick_index(subject)
   end
 
   def live_nick_index({:visitor, visitor_id} = subject) when is_binary(visitor_id) do
-    query = from(c in Credential, where: c.visitor_id == ^visitor_id, preload: :network)
-
-    query
+    from(c in Credential,
+      join: n in Network,
+      on: n.id == c.network_id,
+      where: c.visitor_id == ^visitor_id,
+      select: {n.slug, c.network_id, c.nick}
+    )
     |> Repo.all()
     |> nick_index(subject)
   end
 
-  @spec nick_index([Credential.t()], Session.subject()) :: %{String.t() => {integer(), String.t()}}
-  defp nick_index(credentials, subject) do
-    Map.new(credentials, fn cred ->
-      {cred.network.slug, {cred.network_id, resolve_network_nick(subject, cred)}}
+  # #498 — the single joined query returns exactly the three scalars the
+  # index needs (`{slug, network_id, configured_nick}`); the live nick is
+  # then resolved per row via a cheap `Registry` read (`live_nick_or/3`),
+  # falling back to the configured nick when no session is up. This is ONE
+  # DB query (was a `preload: :network` split into two) — the hot notify
+  # doors (#498) run `live_nick_index/1` on the per-message push path, so a
+  # second query per call was a real regression.
+  @spec nick_index([{String.t(), integer(), String.t()}], Session.subject()) ::
+          %{String.t() => {integer(), String.t()}}
+  defp nick_index(rows, subject) do
+    Map.new(rows, fn {slug, network_id, cred_nick} ->
+      {slug, {network_id, live_nick_or(subject, network_id, cred_nick)}}
     end)
   end
 
@@ -633,9 +647,21 @@ defmodule Grappa.Networks do
   """
   @spec resolve_network_nick(Session.subject(), Credential.t()) :: String.t()
   def resolve_network_nick(subject, %Credential{} = cred) do
-    case Session.current_nick(subject, cred.network_id) do
+    live_nick_or(subject, cred.network_id, cred.nick)
+  end
+
+  # #498 — the ONE live-or-fallback nick resolver: the live session nick (a
+  # cheap `Session.current_nick/2` Registry lookup), falling back to the
+  # configured credential nick when no session is up. Shared by
+  # `resolve_network_nick/2` (per `%Credential{}` — the /networks index +
+  # home_data) and `nick_index/2` (per query-row — `live_nick_index/1`'s
+  # single JOIN), so both read own_nick identically and `live_nick_index/1`
+  # needs no second (preload) query to carry a `%Credential{}` into it.
+  @spec live_nick_or(Session.subject(), integer(), String.t()) :: String.t()
+  defp live_nick_or(subject, network_id, cred_nick) do
+    case Session.current_nick(subject, network_id) do
       {:ok, nick} -> nick
-      {:error, :no_session} -> cred.nick
+      {:error, :no_session} -> cred_nick
     end
   end
 
