@@ -4,23 +4,18 @@
 // which ConnTest (Phoenix-level) is structurally blind to and which
 // unit suites green right through:
 //
-// 1. Security headers on the wire. The e2e nginx has served the real
-//    prod header set since 2026-05-22 (infra/snippets/
-//    security-headers.conf via locations-api.conf — the same files
-//    infra/nginx.conf and infra/freebsd/nginx.conf include), but
-//    nothing ASSERTED it, and two docs claimed the opposite while the
-//    `media-src blob:` hole (6f3327c) shipped under a green suite.
-//    This spec turns "does the e2e surface carry prod CSP?" from an
-//    archaeology question into a red/green one: if someone forks
-//    nginx-test.conf away from the shared snippets, or a directive
-//    that the media pipeline depends on disappears, this fails — on
-//    BOTH listeners (:80 legacy + :443 push surface), since each
-//    server block re-includes the snippet chain independently.
-//    Directive pins are the load-bearing subset, not the full header
-//    string: the full string lives in one snippet shared by all three
-//    substrates, and mirroring it here would just be a second copy to
-//    drift. (`securitypolicyviolation` enforcement coverage is the
-//    `_cspGuard` fixture's job — fixtures/test.ts.)
+// 1. Security headers on the wire. #485 moved the header set OFF nginx
+//    into the BEAM (GrappaWeb.Plugs.SecurityHeaders, the single owner);
+//    the e2e nginx is now a dumb proxy, so these headers arrive from
+//    grappa THROUGH the proxy, byte-identical to prod. This spec turns
+//    "does the e2e surface carry prod CSP?" from an archaeology question
+//    into a red/green one: if the plug drops a directive the media
+//    pipeline depends on, or the proxy strips it, this fails — on BOTH
+//    listeners (:80 legacy + :443 push surface). Directive pins are the
+//    load-bearing subset, not the full header string: the full string
+//    lives in the plug (one source), and mirroring it here would just be
+//    a second copy to drift. (`securitypolicyviolation` enforcement
+//    coverage is the `_cspGuard` fixture's job — fixtures/test.ts.)
 //
 // 2. Range round-trip THROUGH the proxy. Controller-side single-range
 //    206 landed 2026-06-10 (GrappaWeb.ByteRange — iOS Safari refuses

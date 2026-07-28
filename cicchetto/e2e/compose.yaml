@@ -403,6 +403,12 @@ services:
       # session.
       solanum-test2:
         condition: service_healthy
+      # #485 — grappa self-serves the SPA now (dumb-proxy nginx), so the
+      # built dist must exist before grappa boots. cicchetto-build-test is a
+      # oneshot; re-running its bun build is idempotent (unlike the seeder),
+      # so this dep is safe under scripts/integration.sh's `up --wait`.
+      cicchetto-build-test:
+        condition: service_completed_successfully
       # NOTE: deliberately NO `depends_on grappa-e2e-seeder
       # service_completed_successfully` here. With the dep declared,
       # `compose up grappa-test --wait` re-starts the (already-exited
@@ -431,9 +437,16 @@ services:
       # host UID via Docker Desktop's translation on macOS / direct
       # uid-match on Linux.
       - ../../runtime/e2e/grappa-runtime:/app/runtime
+      # #485 — the built SPA dist the BEAM self-serves (dumb-proxy nginx).
+      # Same host dir cicchetto-build-test writes + the runner's bundleSwap
+      # fixture mutates; RO here (grappa only reads it). NOT under /app/runtime
+      # (that mount point is overridden by grappa-runtime above).
+      - ../../runtime/e2e/cicchetto-dist:/app/cicchetto-dist:ro
     environment:
       MIX_ENV: dev
       ELIXIR_ERL_OPTIONS: "+fnu"
+      # #485 — self-serve the built SPA from the mounted dist (see volumes).
+      CIC_DIST_ROOT: /app/cicchetto-dist
       # Captcha disabled — the test suite drives signup directly via
       # mix tasks; the captcha gate is a separate spec when it lands.
       GRAPPA_CAPTCHA_PROVIDER: disabled
@@ -455,10 +468,10 @@ services:
     command: ["mix", "phx.server"]
     networks:
       grappa-e2e:
-        # Alias so nginx-test can reach us via the same `grappa`
-        # hostname the prod nginx.conf hardcodes — lets us reuse
-        # infra/nginx.conf verbatim (production fidelity), no e2e-
-        # specific nginx config drift.
+        # Alias so nginx-test can proxy to us via the `grappa` hostname the
+        # shared proxy snippet's upstream resolves — lets the e2e nginx reuse
+        # infra/snippets/locations-api.conf verbatim (#485 dumb proxy), no
+        # e2e-specific nginx config drift.
         aliases: [grappa, grappa-test]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:4000/healthz || exit 1"]
@@ -524,15 +537,15 @@ services:
     depends_on:
       grappa-test:
         condition: service_healthy
-      cicchetto-build-test:
-        condition: service_completed_successfully
       nginx-cert-init:
         condition: service_completed_successfully
+    # #485 — dumb reverse proxy: no dist mount (the BEAM self-serves the SPA
+    # now) and no cicchetto-build-test dep (moved to grappa-test, the new
+    # dist consumer). Just the proxy config + the shared snippet + TLS certs.
     volumes:
       - ./nginx-test.conf:/etc/nginx/nginx.conf:ro
       - ../../infra/snippets:/etc/nginx/snippets:ro
       - ./nginx-certs:/etc/nginx/certs:ro
-      - ../../runtime/e2e/cicchetto-dist:/usr/share/nginx/html:ro
     networks:
       grappa-e2e:
         aliases: [nginx-test]
@@ -582,10 +595,10 @@ services:
       - ./playwright-report:/work/playwright-report
       # UX-6-I.2 (2026-05-22) — real-bundle-swap fixture mounts the
       # cic dist tree RW so the swap fixture can rewrite index.html +
-      # drop a synthetic bundle B asset mid-spec. nginx-test mounts
-      # the same host path RO (line ~301); the host file is the single
-      # source of truth, both containers see the same bytes. See
-      # cicchetto/e2e/fixtures/bundleSwap.ts.
+      # drop a synthetic bundle B asset mid-spec. #485 — grappa-test
+      # mounts the same host path RO (it self-serves the SPA now); the
+      # host file is the single source of truth, both containers see the
+      # same bytes. See cicchetto/e2e/fixtures/bundleSwap.ts.
       - ../../runtime/e2e/cicchetto-dist:/work/dist-test
     working_dir: /work
     environment:
