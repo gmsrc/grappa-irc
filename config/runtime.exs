@@ -89,6 +89,46 @@ if phx_host do
   config :grappa, :http_host_aliases, http_host_aliases
 end
 
+# #399 / #485 — the built cicchetto SPA dist the embedded web server
+# self-serves (Plug.Static + SPA history-fallback) AND re-reads to
+# broadcast the refresh-banner hash (Grappa.Cic.Bundle). Stashed into
+# `:persistent_term` via Grappa.Cic.Bundle.boot/1 at app start (boot
+# time only — a change needs a BEAM restart, not a hot reload).
+# Defaults to the `runtime/cicchetto-dist` build anchor, resolved against
+# the BEAM's CWD (like UPLOADS_STORAGE_ROOT below). That relative default
+# is ONLY correct where the CWD is the repo root: Docker (WORKDIR /app,
+# and compose sets CIC_DIST_ROOT explicitly anyway) and native systemd
+# (WorkingDirectory=<repo>). The FreeBSD jail is the exception (#526) —
+# rc.d/grappa starts the release via `su -m grappa -c '.../bin/grappa
+# daemon'` and sets NO WorkingDirectory, so the CWD is NOT the repo root;
+# the jail MUST set an absolute CIC_DIST_ROOT in grappa.env (exactly like
+# it already does for DATABASE_PATH / UPLOADS_STORAGE_ROOT for the same
+# reason). Unset on the jail, the relative default missed the dist and
+# /admin/cic-bundle-changed returned 204 with no banner broadcast —
+# issue #526. A packaged install (deb/rpm/Arch) likewise sets
+# CIC_DIST_ROOT to an absolute data path.
+#
+# Broadened from prod-only (its #399 origin) to every env EXCEPT :test so
+# the e2e harness serves the SPA too: #485 made the e2e nginx a DUMB proxy,
+# so the BEAM — grappa-test, which runs MIX_ENV=dev — is now the ONLY thing
+# serving the SPA. With the read prod-gated, `:cic_dist_root` stayed unset
+# under MIX_ENV=dev, `Grappa.Cic.Bundle.root/0` fell back to the CWD default
+# `runtime/cicchetto-dist` (empty in the container; the dist is mounted at
+# CIC_DIST_ROOT=/app/cicchetto-dist), and every browser spec timed out on
+# an unserved SPA. Same broadening precedent as `extra_origins` +
+# `http_host_aliases` above. Empty / unset = the CWD default (local dev).
+#
+# :test is EXCLUDED on purpose: `config/test.exs` pins `:cic_dist_root` at
+# the committed fixture bundle, and runtime config runs LAST — so setting
+# it here would clobber the fixture and SpaServingTest would serve an empty
+# dist (the 7-failure regression this exclusion prevents).
+if config_env() != :test do
+  cic_dist_root =
+    System.get_env("CIC_DIST_ROOT") || "runtime/cicchetto-dist"
+
+  config :grappa, :cic_dist_root, cic_dist_root
+end
+
 if config_env() == :prod do
   database_path =
     System.get_env("DATABASE_PATH") ||
@@ -103,27 +143,9 @@ if config_env() == :prod do
 
   config :grappa, :uploads_storage_root, uploads_storage_root
 
-  # #399 — the built cicchetto SPA dist the embedded web server
-  # self-serves (Plug.Static + SPA history-fallback) AND re-reads to
-  # broadcast the refresh-banner hash (Grappa.Cic.Bundle). The relative
-  # default resolves against the BEAM's CWD, so it is ONLY correct where
-  # the CWD is the repo root: Docker (WORKDIR /app, and compose sets
-  # CIC_DIST_ROOT explicitly anyway) and native systemd
-  # (WorkingDirectory=<repo>). The FreeBSD jail is the exception —
-  # rc.d/grappa starts the release via `su -m grappa -c '.../bin/grappa
-  # daemon'` and sets NO WorkingDirectory, so the CWD is NOT the repo
-  # root; the jail MUST set an absolute CIC_DIST_ROOT in grappa.env
-  # (exactly like it already does for DATABASE_PATH / UPLOADS_STORAGE_ROOT
-  # for the same reason). Unset on the jail, the relative default missed
-  # the dist and /admin/cic-bundle-changed returned 204 with no banner
-  # broadcast — issue #526. A packaged install (deb/rpm/Arch) likewise
-  # sets CIC_DIST_ROOT to an absolute data path. Stashed into
-  # `:persistent_term` via Grappa.Cic.Bundle.boot/1 at app start (boot
-  # time only — a change needs a BEAM restart, not a hot reload).
-  cic_dist_root =
-    System.get_env("CIC_DIST_ROOT") || "runtime/cicchetto-dist"
-
-  config :grappa, :cic_dist_root, cic_dist_root
+  # NB: `:cic_dist_root` is derived ABOVE, hoisted out of this prod block
+  # (all envs except :test) since #485 — see the comment there, which
+  # folds in the #526 jail-CWD knowledge that used to live here.
 
   config :grappa, Grappa.Repo,
     database: database_path,
