@@ -1595,21 +1595,6 @@ html.resize-dragging * {
   overscroll-behavior: contain;
 }
 
-/* #500 — outside-click scrim. Transparent full-viewport catcher, one z-index
-   below the menu, mirroring `.context-menu-backdrop`. Rendered as a <button>
-   for a11y; click closes the menu (Escape closes via the shared overlay ESC
-   stack `createOverlayLock` registers). */
-.rail-actions-backdrop {
-  position: fixed;
-  inset: 0;
-  background: transparent;
-  z-index: 300;
-  border: none;
-  padding: 0;
-  margin: 0;
-  cursor: default;
-}
-
 /* #500 — the launcher carries the same `.rail-action` full-width row chrome
    (glyph + "actions" label, inherited flex-start). A caret (▸ rotating to ▾)
    trails the label as a lightweight "toggles a menu" affordance; `margin-left:

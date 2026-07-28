@@ -274,10 +274,13 @@ describe("RailActions launcher (#500)", () => {
     expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
   });
 
-  it("clicking the backdrop closes the menu without firing any action", () => {
+  it("an outside pointerdown closes the menu without firing any action", () => {
     render(() => <RailActions setters={setters} />);
     openMenu();
-    fireEvent.click(screen.getByTestId("rail-actions-backdrop"));
+    expect(screen.getByTestId("action-cluster-cog")).toBeInTheDocument();
+    // A pointerdown OUTSIDE the rail closes the menu (non-blocking dismiss) — the
+    // click still reaches its target, unlike a covering backdrop scrim.
+    fireEvent.pointerDown(document.body);
     expect(screen.getByTestId("rail-actions-launcher")).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
     expect(openSettingsPanel).not.toHaveBeenCalled();

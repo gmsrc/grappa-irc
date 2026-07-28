@@ -1,4 +1,4 @@
-import { type Component, createSignal, Show } from "solid-js";
+import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { archiveSlugForSelection } from "./lib/archiveContext";
 import { channelKey } from "./lib/channelKey";
 import { syncedSetChannelPresencePref } from "./lib/displayPrefs";
@@ -48,8 +48,11 @@ import {
 // ordered ESC-close stack (keybindings → runTopmostOverlayEscape), and the
 // refcount scroll-lock keeps the rail's `touch-action: pan-y` contract intact
 // while the menu overlays the members list on mobile (the exact #500 caveat).
-// Outside-click closes via a backdrop scrim, matching the modal family
-// (ArchiveModal / BanlistModal / UserContextMenu).
+// Outside-click closes via a NON-blocking document `pointerdown` listener — NOT
+// a covering backdrop scrim: a click outside the rail closes the menu AND still
+// reaches its target, so a tap on a sidebar channel / compose selects it in one
+// gesture. A full-viewport scrim (the modal family's idiom) would swallow that
+// first click — wrong for a lightweight rail popover.
 //
 // The six window/panel launchers close the menu after firing (single-shot, like
 // every overlay). `denoise` does NOT close it — it is a per-channel state toggle
@@ -99,33 +102,39 @@ const RailActions: Component<Props> = (props) => {
 
   // #500 — collapsible-menu open state (ephemeral UI-local, see moduledoc).
   const [open, setOpen] = createSignal(false);
-  // Reuse the shared overlay verb: Escape close + refcount scroll-lock (keeps
-  // the rail's touch-action/pan-y contract while the menu overlays the list).
-  createOverlayLock(
-    () => open(),
-    ".rail-actions-menu",
-    () => setOpen(false),
-  );
   const close = (): void => {
     setOpen(false);
   };
+  // Reuse the shared overlay verb: Escape close + refcount scroll-lock (keeps
+  // the rail's touch-action/pan-y contract while the menu overlays the list).
+  createOverlayLock(() => open(), ".rail-actions-menu", close);
+  // #500 — outside-click dismiss via a NON-blocking pointerdown listener (not a
+  // covering backdrop scrim): a click outside the rail closes the menu AND still
+  // reaches its target, so tapping a sidebar channel / compose / hamburger
+  // selects it in one gesture instead of being swallowed by a full-viewport
+  // scrim. `rootRef` is the `.rail-actions` box (launcher + menu live inside it),
+  // so clicks on the launcher/menu never self-close here — the launcher toggles,
+  // the action buttons call close() themselves. Registered only while open; the
+  // opening click already fired before the effect runs, so it can't self-close.
+  let rootRef: HTMLDivElement | undefined;
+  createEffect(() => {
+    if (!open()) return;
+    const onPointerDown = (e: PointerEvent): void => {
+      const target = e.target as Node | null;
+      if (rootRef && target && !rootRef.contains(target)) close();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    onCleanup(() => document.removeEventListener("pointerdown", onPointerDown, true));
+  });
 
   return (
     // biome-ignore lint/a11y/useSemanticElements: role="group" gives the button cluster an accessible name; biome suggests <fieldset>, a form-control grouping (needs <legend>, paints a border) — wrong for a rail toolbar of action buttons.
-    <div class="rail-actions" role="group" aria-label="window actions">
+    <div class="rail-actions" role="group" aria-label="window actions" ref={rootRef}>
       <Show when={open()}>
-        {/* #500 — backdrop scrim: outside-click closes. Rendered as a button for
-            a11y, like UserContextMenu / the modal family. */}
-        <button
-          type="button"
-          class="rail-actions-backdrop"
-          aria-label="Close menu"
-          data-testid="rail-actions-backdrop"
-          onClick={close}
-        />
         {/* #500 — the expanded menu overlays the nick area above the launcher.
             Holds every action, unchanged. `createOverlayLock` targets this
-            element's selector. */}
+            element's selector; outside-click dismiss is the pointerdown listener
+            above (no covering scrim). */}
         <div class="rail-actions-menu" role="menu">
           {/* #291 — home launcher. Always visible; leftmost/topmost. */}
           <button
