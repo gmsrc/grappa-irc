@@ -17,7 +17,7 @@ import { nickEquals } from "./nickEquals";
 import { isOperatorActionEcho } from "./operatorActionEcho";
 import { isOwnPresenceEvent } from "./ownPresenceEvent";
 import { setEnsureQueryTopicJoined } from "./queryTopicJoin";
-import { canonicalQueryNick, openQueryWindowState, queryWindowsByNetwork } from "./queryWindows";
+import { canonicalQueryNick, queryWindowsByNetwork } from "./queryWindows";
 import { applyJoinReply, applyReadCursorSet, renameReadCursorChannel } from "./readCursor";
 import { recordSeen } from "./reconnectBackfill";
 import { appendToScrollback, refreshScrollback, renameScrollbackKey } from "./scrollback";
@@ -608,11 +608,16 @@ createRoot(() => {
         case "message": {
           const message = payload.message;
           if (message.kind === "privmsg" || message.kind === "action") {
-            // DM (inbound or self-msg) — auto-open sender's query window
-            // and route to sender's scrollback key. For self-msg
-            // (sender = ownNick), this lands in the own-nick window;
-            // for inbound (sender = other), it lands in sender's window.
-            openQueryWindowState(networkId, message.sender, new Date().toISOString());
+            // DM (inbound or self-msg) — route to the sender's scrollback
+            // key. For self-msg (sender = ownNick) this lands in the own-nick
+            // window; for inbound (sender = other) in the sender's window.
+            //
+            // #422 Option B: cic does NOT open the query window here. The
+            // SERVER auto-opens it next to the persist (Session.Server →
+            // QueryWindows.open) and delivers it via the query_windows_list
+            // broadcast — "cic NEVER originates state". This arm is now a pure
+            // renderer: re-key + append + beep only.
+            //
             // #372: re-key on the CANONICAL peer, not the raw sender
             // casing. A service replying as `DebugServ` to a window the
             // user opened as `debugserv` must land in THAT window, not a
@@ -648,17 +653,18 @@ createRoot(() => {
             // case: the CTCP-VERSION-query visibility row (server-emitted
             // notice with body "CTCP VERSION query → grappa <vsn>"; the
             // CTCP reply itself is also a NOTICE so the inbound-side
-            // mirror is genuinely a notice, not a privmsg). Auto-open
-            // the sender's query window same as PRIVMSG/ACTION — the
-            // operator wants the same backgrounded-window-with-unread
-            // for ANY inbound DM-shaped traffic.
+            // mirror is genuinely a notice, not a privmsg). Same DM-shaped
+            // treatment as PRIVMSG/ACTION — the operator wants the same
+            // backgrounded-window-with-unread for ANY inbound DM-shaped
+            // traffic. #422 Option B: the SERVER auto-opens the window
+            // (delivered via query_windows_list); cic only re-keys + appends
+            // here (pure renderer), it does NOT originate the window.
             //
-            // sender !== ownNick guard: don't auto-open on our OWN
-            // outbound NOTICEs (they ride the topic too as fan-out
-            // echo). Service-to-self NOTICEs (NickServ etc.) never
-            // hit this branch — our server routes those to "$server"
-            // not the own-nick channel.
-            openQueryWindowState(networkId, message.sender, new Date().toISOString());
+            // sender !== ownNick guard: don't route our OWN outbound NOTICEs
+            // (they ride the topic too as fan-out echo). Service-to-self
+            // NOTICEs (NickServ etc.) never hit this branch — our server
+            // routes those to "$server" not the own-nick channel.
+            //
             // #372: canonical peer re-key — see the PRIVMSG/ACTION arm.
             const peer = canonicalQueryNick(networkId, message.sender);
             const senderKey = channelKey(slug, peer);

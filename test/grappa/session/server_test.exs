@@ -30,7 +30,7 @@ defmodule Grappa.Session.ServerTest do
   import Grappa.{AuthFixtures, MessageEventAssertions}
 
   alias Grappa.IRC.Message
-  alias Grappa.{IRCServer, PubSub.Topic, Repo, Scrollback, Session, WSPresence}
+  alias Grappa.{IRCServer, PubSub.Topic, QueryWindows, Repo, Scrollback, Session, WSPresence}
   alias Grappa.Networks.{Credentials, SessionPlan}
   alias Grappa.Session.{AwayState, Backoff, GhostRecovery, ISupport, Server, WindowState}
   alias Grappa.WindowCounts.PushSource
@@ -1646,6 +1646,135 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "inbound DM auto-opens the query window server-side (#422)" do
+    # #422 — an inbound DM must open its query window ON THE SERVER, next
+    # to the persist, so a bouncer session with NO browser attached still
+    # surfaces the conversation in the active window list (unread) at the
+    # next login rather than filing it silently in Archive. The discriminant
+    # is `attrs.dm_with != nil` — the SAME classifier (`Scrollback.dm_peer/4`)
+    # the persist already computed; services traffic re-keyed to `$server`
+    # carries `dm_with: nil` and MUST NOT mint a window.
+
+    test "inbound PRIVMSG to own nick opens a server-side query window + broadcasts the list" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      IRCServer.feed(server, ":alice!~a@host PRIVMSG vjt :hey there\r\n")
+
+      net_id = network.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :query_windows_list, windows: %{^net_id => entries}}
+                     },
+                     1_000
+
+      assert Enum.any?(entries, &(&1.target_nick == "alice"))
+
+      # DB truth: the row exists so the NEXT login (no live socket at
+      # arrival time) finds the peer in the active window list.
+      assert QueryWindows.open?({:user, user.id}, net_id, "alice")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "inbound peer NOTICE to own nick opens a server-side query window" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      IRCServer.feed(server, ":bob!~b@host NOTICE vjt :ping\r\n")
+
+      net_id = network.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :query_windows_list, windows: %{^net_id => entries}}
+                     },
+                     1_000
+
+      assert Enum.any?(entries, &(&1.target_nick == "bob"))
+      assert QueryWindows.open?({:user, user.id}, net_id, "bob")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "a services PRIVMSG to own nick does NOT open a query window (routes to $server)" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      IRCServer.feed(server, ":NickServ!serv@services PRIVMSG vjt :You are now identified\r\n")
+
+      # No query window minted for the service — the row re-keys to the
+      # synthetic `$server` window (dm_with: nil), so no broadcast + no row.
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :query_windows_list}
+                     },
+                     300
+
+      refute QueryWindows.open?({:user, user.id}, network.id, "NickServ")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "outbound DM (send_privmsg to a peer) opens the server-side query window" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+      net_id = network.id
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      # The operator DMs a NEW peer — with no browser attached (or another
+      # device connected), the window must still open server-side so
+      # self-msg + cross-device sessions converge without a reload.
+      assert {:ok, _} = Session.send_privmsg({:user, user.id}, net_id, "carol", "yo")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :query_windows_list, windows: %{^net_id => entries}}
+                     },
+                     1_000
+
+      assert Enum.any?(entries, &(&1.target_nick == "carol"))
+      assert QueryWindows.open?({:user, user.id}, net_id, "carol")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "outbound message to a CHANNEL does NOT open a query window" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+      net_id = network.id
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      assert {:ok, _} = Session.send_privmsg({:user, user.id}, net_id, "#sniffo", "hi all")
+
+      refute QueryWindows.open?({:user, user.id}, net_id, "#sniffo")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "PRIVMSG persistence + broadcast" do
     test "persists row and broadcasts canonical wire-shape event on PRIVMSG" do
       {server, port} = start_server()
@@ -1907,6 +2036,10 @@ defmodule Grappa.Session.ServerTest do
       pid = start_session_for(user, network)
       :ok = await_handshake(server)
 
+      net_id = network.id
+      topic = Topic.user(user.name)
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, topic)
+
       # The session processes its mailbox serially in arrival order, so
       # these two lines are fully applied before the NICK below: the peer
       # is in #sniffo (the only case IRC delivers a NICK) and the inbound
@@ -1914,11 +2047,20 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":Guest87449!~g@host JOIN #sniffo\r\n")
       IRCServer.feed(server, ":Guest87449!~g@host PRIVMSG #{own} :ciao\r\n")
 
-      # The operator opened a query window with the peer (cic pushes this).
-      {:ok, _} = Grappa.QueryWindows.open({:user, user.id}, network.id, "Guest87449", user.name)
-
-      topic = Topic.user(user.name)
-      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, topic)
+      # #422: the inbound DM ITSELF auto-opens the server-side query window
+      # (no cic `open_query_window` push — cic is a pure renderer). Wait for
+      # THAT broadcast first: it proves the window exists pre-rename AND
+      # deterministically drains it off the topic so it can't race into the
+      # rename assertion below (the socket→Client→session hop makes a bare
+      # mailbox flush insufficient).
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{
+                         kind: :query_windows_list,
+                         windows: %{^net_id => [%{target_nick: "Guest87449"}]}
+                       }
+                     },
+                     1_000
 
       # The peer renames.
       IRCServer.feed(server, ":Guest87449!~g@host NICK :NickTemporaneo\r\n")

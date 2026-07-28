@@ -2831,8 +2831,19 @@ defmodule Grappa.Session.Server do
     fragments = Grappa.IRC.LineSplit.split_privmsg_body(body, target, state.linelen)
 
     case persist_and_send_fragments(target, fragments, state, nil) do
-      {:ok, last_message} -> {:reply, {:ok, last_message}, state}
-      {:error, _} = err -> {:reply, err, state}
+      {:ok, last_message} ->
+        # #422: the operator's own outbound DM opens its server-side query
+        # window too — a self-msg or a DM sent from another device must
+        # surface the window in EVERY session without a reload (cic no
+        # longer originates the open). ONE open per send (not per fragment),
+        # ordered after the persist+broadcast so `query_windows_list` trails
+        # the row. Same `dm_eligible?` discriminant as the inbound arm: an
+        # outbound message to a channel is a no-op (window_key = target).
+        maybe_open_query_window(state, %{channel: target})
+        {:reply, {:ok, last_message}, state}
+
+      {:error, _} = err ->
+        {:reply, err, state}
     end
   end
 
@@ -3510,6 +3521,50 @@ defmodule Grappa.Session.Server do
     Logger.warning("scrollback row dropped: SQLite pool saturated — session continues", metadata)
   end
 
+  # #422 — a just-persisted DM (query-window) content row ensures its
+  # server-side query window exists, next to the persist, so a bouncer
+  # session with NO browser attached still surfaces the conversation in the
+  # active window list (unread) at the next login — not silently in Archive.
+  #
+  # The window key is `dm_with || channel`, mirroring `list_archive/3`'s
+  # `COALESCE(dm_with, channel)` grouping: an inbound PRIVMSG/ACTION to our
+  # nick persists at `channel = own_nick, dm_with = peer` (key = peer), while
+  # a nick-targeted peer NOTICE is re-keyed at `channel = sender, dm_with =
+  # nil` (key = sender) — both resolve to the peer. `Scrollback.dm_eligible?/1`
+  # is the SINGLE predicate deciding "is this a query window" (nick-shaped,
+  # NOT a channel, NOT `$server`), so services traffic re-keyed to `$server`
+  # (#400) mints NO window without re-deriving the carve-out here.
+  #
+  # `QueryWindows.open/4` is idempotent (rfc1459-fold unique index) and
+  # broadcasts `query_windows_list` on the user topic — ordered AFTER the
+  # row+message broadcast, preserving the #373 "history already landed"
+  # barrier. This makes the server the single origin of query-window state:
+  # cic's own-nick dm-listener drops its `openQueryWindowState` calls and
+  # becomes a pure renderer ("cic NEVER originates state"). A failed open
+  # logs + continues (mirrors the persist hardening — a query-window write
+  # must never disconnect the user).
+  @spec maybe_open_query_window(t(), map()) :: :ok
+  defp maybe_open_query_window(state, attrs) do
+    window_key = attrs[:dm_with] || attrs[:channel]
+
+    if is_binary(window_key) and Scrollback.dm_eligible?(window_key) do
+      case QueryWindows.open(state.subject, state.network_id, window_key, state.subject_label) do
+        {:ok, _} ->
+          :ok
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          Logger.error(
+            "query-window auto-open failed — session continues",
+            target: window_key,
+            network_id: state.network_id,
+            error: inspect(changeset.errors)
+          )
+      end
+    else
+      :ok
+    end
+  end
+
   @spec apply_effects([EventRouter.effect()], t()) :: t()
   defp apply_effects([], state), do: state
 
@@ -4102,7 +4157,10 @@ defmodule Grappa.Session.Server do
     # outbound / join_failed paths — the exact drift #369 A3 flagged.
     case Persistor.persist_and_broadcast(full_attrs, state, push: true) do
       {:ok, _} ->
-        :ok
+        # #422 — ordered AFTER the row/message broadcast so the
+        # `query_windows_list` broadcast is a truthful "history already
+        # landed" barrier (#373). No-op for non-DM rows (dm_with: nil).
+        maybe_open_query_window(state, attrs)
 
       {:error, reason} ->
         log_persist_failure(reason, command: kind, channel: attrs.channel)

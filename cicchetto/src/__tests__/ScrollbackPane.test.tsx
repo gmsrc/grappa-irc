@@ -843,9 +843,12 @@ describe("ScrollbackPane", () => {
     });
   });
 
-  // C7.1: Day-separator lines.
+  // C7.1: Day-separator lines. #422 Part 2: the FIRST rendered row now
+  // always carries a leading day-separator (labeled from its own
+  // `server_time`), so a window opened out of the Archive holding a single
+  // old message shows the date instead of a bare `HH:MM`.
   describe("day-separator lines (C7.1)", () => {
-    it("renders no day-separator when all messages are on the same day", () => {
+    it("renders a leading day-separator before the first row even when all messages share a day (#422)", () => {
       const sameDayMsgs: ScrollbackMessage[] = [
         {
           id: 1,
@@ -870,10 +873,40 @@ describe("ScrollbackPane", () => {
       ];
       setScrollback({ "freenode #grappa": sameDayMsgs });
       render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
-      expect(screen.queryByTestId("day-separator")).toBeNull();
+      // Exactly one separator (the leading one) — same-day rows add no more.
+      expect(screen.getAllByTestId("day-separator")).toHaveLength(1);
+      const sep = screen.getByTestId("day-separator");
+      expect(sep.textContent?.trim()).toBeTruthy();
+      // It precedes the first message row in DOM order.
+      const [firstLine] = screen.getAllByTestId("scrollback-line");
+      expect(firstLine).toBeDefined();
+      if (firstLine) {
+        expect(
+          sep.compareDocumentPosition(firstLine) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
     });
 
-    it("renders a day-separator between messages on different days", () => {
+    it("labels the leading separator from a lone archived message's day (#422 archive case)", () => {
+      const loneOldMsg: ScrollbackMessage[] = [
+        {
+          id: 1,
+          network: "freenode",
+          channel: "peer",
+          server_time: 1_700_000_000_000,
+          kind: "privmsg",
+          sender: "peer",
+          body: "old DM, no date before #422",
+          meta: {},
+        },
+      ];
+      setScrollback({ "freenode peer": loneOldMsg });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="peer" kind="query" />);
+      expect(screen.getAllByTestId("day-separator")).toHaveLength(1);
+      expect(screen.getByTestId("day-separator").textContent?.trim()).toBeTruthy();
+    });
+
+    it("renders a leading + a between separator for messages on different days", () => {
       const twoDayMsgs: ScrollbackMessage[] = [
         {
           id: 1,
@@ -898,8 +931,9 @@ describe("ScrollbackPane", () => {
       ];
       setScrollback({ "freenode #grappa": twoDayMsgs });
       render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      // #422: leading separator (day1) + the between separator (day2) = 2.
       const separators = screen.getAllByTestId("day-separator");
-      expect(separators).toHaveLength(1);
+      expect(separators).toHaveLength(2);
       expect(screen.getAllByTestId("scrollback-line")).toHaveLength(2);
     });
 
@@ -938,8 +972,9 @@ describe("ScrollbackPane", () => {
       ];
       setScrollback({ "freenode #grappa": threeDayMsgs });
       render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      // #422: leading separator + 2 between-day separators = 3.
       const separators = screen.getAllByTestId("day-separator");
-      expect(separators).toHaveLength(2);
+      expect(separators).toHaveLength(3);
     });
   });
 

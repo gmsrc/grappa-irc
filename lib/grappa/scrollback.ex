@@ -957,13 +957,24 @@ defmodule Grappa.Scrollback do
     end
   end
 
-  # `dm_eligible?/1` — true iff the target may carry DM rows.
-  # Derived from `target_kind/1` so the sigil rule is single-sourced
-  # (M7 2026-05-08): byte-equivalent to pre-M7 behaviour. The
-  # `$server` carve-out stays explicit (target_kind classifies it
-  # :query, but it can never carry DM history by intent doc).
-  defp dm_eligible?("$server"), do: false
-  defp dm_eligible?(name) when is_binary(name), do: target_kind(name) == :query
+  @doc """
+  True iff `target` may carry DM (query-window) rows — i.e. a nick-shaped
+  peer window, NOT a channel and NOT the synthetic `$server` pseudo-channel.
+
+  Derived from `target_kind/1` so the sigil rule is single-sourced
+  (M7 2026-05-08): byte-equivalent to pre-M7 behaviour. The `$server`
+  carve-out stays explicit (`target_kind/1` classifies it `:query`, but it
+  can never carry DM history by intent doc).
+
+  Public since #422: `Session.Server` uses it as the SINGLE predicate that
+  decides whether a just-persisted content row (window key
+  `dm_with || channel`, mirroring `list_archive/3`'s
+  `COALESCE(dm_with, channel)`) should auto-open a server-side query window
+  — so the "$server" carve-out is not re-derived at the auto-open site.
+  """
+  @spec dm_eligible?(String.t()) :: boolean()
+  def dm_eligible?("$server"), do: false
+  def dm_eligible?(name) when is_binary(name), do: target_kind(name) == :query
 
   # `where_dm_peer/2` — the SINGLE rfc1459-folded DM-peer match: "rows
   # belonging to the DM window whose peer folds to `folded_peer`". Shared

@@ -1204,7 +1204,12 @@ const ScrollbackPane: Component<Props> = (props) => {
         // unread-marker so the date label describes the first unread message's day.
         // (prevTime is already set to the last read message's time.)
       }
-      if (prevTime !== null && isDifferentDay(prevTime, msg.server_time)) {
+      // #422 Part 2: emit a day-separator before the FIRST rendered row
+      // (prevTime === null), labeled from that row's own day — not only on a
+      // day CHANGE. A window opened out of the Archive holding a single old
+      // message otherwise shows a bare `HH:MM` with no date anywhere. No-op
+      // visual addition for busy windows, which already separate each day.
+      if (prevTime === null || isDifferentDay(prevTime, msg.server_time)) {
         result.push({
           type: "separator",
           label: formatDateLabel(msg.server_time),

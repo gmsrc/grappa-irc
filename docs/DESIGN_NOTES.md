@@ -21359,3 +21359,65 @@ Two disjoint fixture doors close the gap, zero assertions removed:
   lives inside the closed `.shell-members` drawer, so `rail-actions-launcher` is
   not visible until the drawer opens. The intent was always "app ready", not
   "cog" — `.shell-main` is the honest signal.
+## 2026-07-28 — #422: inbound DM opens the query window SERVER-SIDE (+ leading day-separator)
+
+**The bug.** Query-window auto-open lived ONLY in the client
+(`cicchetto/src/lib/subscribe.ts` dm-listener → `openQueryWindowState`).
+`QueryWindows.open/4` had a single `lib/` call site: the `open_query_window`
+channel handler. So a DM that arrived while NO browser was attached was
+persisted + broadcast but no `query_windows` row was ever created — on the
+next login the peer was absent from the active list and the conversation
+rendered silently in Archive. This ALSO violated the standing invariant "cic
+NEVER originates state" — the DM path was the one place cic minted state off a
+server event.
+
+**The fix (Option B — server owns it, cic becomes a pure renderer).**
+`Session.Server` now opens the query window next to the persist, via a shared
+`maybe_open_query_window/2` helper called on BOTH persist arms:
+- inbound `apply_effects([{:persist, kind, attrs} | _])` (push: true), and
+- outbound `handle_persisting_send/3` (self-msg + cross-device: another
+  session must see the window without a reload).
+
+The discriminant is the **window key `dm_with || channel`** — the SAME
+`COALESCE(dm_with, channel)` grouping `Scrollback.list_archive/3` uses (an
+inbound PRIVMSG/ACTION keys `channel=own_nick, dm_with=peer`; a nick-targeted
+peer NOTICE is re-keyed `channel=sender, dm_with=nil` — both resolve to the
+peer). Eligibility is the SINGLE predicate `Scrollback.dm_eligible?/1` (made
+public), so services traffic re-keyed to `$server` (#400) carries a non-DM key
+and mints NO window WITHOUT re-deriving the `$server` carve-out at the auto-open
+site. `QueryWindows.open/4` is idempotent (rfc1459-fold unique index) and its
+`query_windows_list` broadcast is ordered AFTER the row/message broadcast,
+preserving the #373 "history already landed" barrier.
+
+**Design calls resolved (the issue's open questions):**
+- *Services:* solved by construction — reuse the routing already computed
+  (`$server` → `dm_eligible?` false → no window), never a second classifier.
+- *Unread:* `QueryWindows.open/4` never touches the read cursor → a brand-new
+  peer has no cursor → all-unread by default → badge non-zero at login. No
+  explicit action.
+- *Re-open after explicit close:* a later DM re-opens the window — parity with
+  the pre-fix live-socket dm-listener behaviour and correct for a bouncer.
+
+**cic collapses to a pure renderer.** `subscribe.ts`'s dm-listener DROPPED its
+two `openQueryWindowState` calls (PRIVMSG/ACTION + peer NOTICE) but KEEPS the
+`routeMessage` re-key + beep. The window now arrives solely via the server's
+`query_windows_list` broadcast. The user-action open paths (`/msg`, `/query`,
+nick click, MembersPane, push-tap) are unchanged — those are sanctioned client
+origination, not server-event mirroring.
+
+**Verification is parity-demonstrated, not assumed.** Server ExUnit
+deterministically proves the no-browser open (inbound + peer NOTICE open;
+services + channel do NOT; outbound to a peer opens, to a channel does not).
+`e2e/tests/issue422-inbound-dm-opens-query.spec.ts` proves the LIVE wiring with
+the client auto-open GONE: an unsolicited peer DM opens the sidebar query row
+with zero user action (server-driven), and it SURVIVES a reload (server-owned
+after-join snapshot — the issue's "log back in → active list" repro). If the
+server failed to open, the spec would see zero query rows.
+
+**Part 2 (rode along).** `ScrollbackPane.tsx` now emits a day-separator before
+the FIRST rendered row (labeled from that row's `server_time`), not only on a
+day CHANGE — so a window opened from Archive holding a single old message shows
+the date instead of a bare `HH:MM`. No-op visual addition for busy windows.
+
+**Out of scope (YAGNI):** showing `last_activity` in the Archive list (the
+issue's "related but distinct" note) — not the bug; left for a follow-up.

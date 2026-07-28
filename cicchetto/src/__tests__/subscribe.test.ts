@@ -1181,7 +1181,7 @@ describe("subscribe — C4.1 DM auto-open on incoming PRIVMSG", () => {
     vi.mocked(api.listMessages).mockResolvedValue([]);
   };
 
-  it("incoming PRIVMSG to own nick from new sender opens query window; selection unchanged", async () => {
+  it("incoming PRIVMSG to own nick does NOT originate the query window (#422 — server owns it) but routes to scrollback; selection unchanged", async () => {
     localStorage.setItem("grappa-token", "tok");
     localStorage.setItem(
       "grappa-subject",
@@ -1210,13 +1210,19 @@ describe("subscribe — C4.1 DM auto-open on incoming PRIVMSG", () => {
         meta: {},
       },
     });
-    // Query window should be opened for "bob" on network 1.
-    expect(qw.openQueryWindowState).toHaveBeenCalledWith(1, "bob", expect.any(String));
+    // #422 Option B: cic is a PURE RENDERER — the SERVER auto-opens the
+    // query window (QueryWindows.open next to the persist, delivered via the
+    // query_windows_list broadcast). cic must NOT originate it.
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
+    // …but the message still routes into bob's scrollback (routeMessage kept).
+    expect(store.scrollbackByChannel()[channelKey("freenode", "bob")]?.map((m) => m.body)).toEqual([
+      "hey",
+    ]);
     // Focus must NOT change.
     expect(store.selectedChannel()).toBeNull();
   });
 
-  it("incoming PRIVMSG to own nick from sender with existing query window — no duplicate open; selection unchanged", async () => {
+  it("incoming PRIVMSG to own nick with an existing query window — cic never originates; selection unchanged", async () => {
     localStorage.setItem("grappa-token", "tok");
     localStorage.setItem(
       "grappa-subject",
@@ -1250,13 +1256,11 @@ describe("subscribe — C4.1 DM auto-open on incoming PRIVMSG", () => {
         meta: {},
       },
     });
-    // openQueryWindowState still called (idempotent inside it), but
-    // selection must NOT change.
+    // #422 Option B: cic never calls openQueryWindowState — the server is
+    // the single origin of query-window state ("cic NEVER originates
+    // state"). Focus stays put regardless.
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
     expect(store.selectedChannel()).toBeNull();
-    // We do NOT assert openQueryWindowState NOT called — the production
-    // code calls it; idempotency is enforced inside queryWindows.ts
-    // (already tested in queryWindows.test.ts). The key invariant here
-    // is focus-neutrality.
   });
 
   it("incoming PRIVMSG from a differently-cased sender re-keys to the existing window casing (#372)", async () => {
@@ -1626,7 +1630,7 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
     expect(store.scrollbackByChannel()[ownKey]).toBeUndefined();
   });
 
-  it("inbound PRIVMSG on own-nick topic auto-opens the sender's query window", async () => {
+  it("inbound PRIVMSG on own-nick topic does NOT originate the query window (#422 — server owns it) but routes", async () => {
     localStorage.setItem("grappa-token", "tok");
     localStorage.setItem(
       "grappa-subject",
@@ -1634,7 +1638,7 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
     );
     await seedDmListenerStubs();
     const qw = await import("../lib/queryWindows");
-    await loadStores();
+    const store = await loadStores();
     await vi.waitFor(() => {
       // 1 channel + 1 DM-listener + 1 $server = 3.
       expect(mockChannel.on).toHaveBeenCalledTimes(3);
@@ -1654,7 +1658,13 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
         meta: {},
       },
     });
-    expect(qw.openQueryWindowState).toHaveBeenCalledWith(1, "vjt", expect.any(String));
+    // #422 Option B: cic is a pure renderer — the server auto-opens the
+    // window (delivered via query_windows_list). cic must NOT originate it…
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
+    // …but the DM still routes into the sender's scrollback (routeMessage).
+    expect(store.scrollbackByChannel()[channelKey("freenode", "vjt")]?.map((m) => m.body)).toEqual([
+      "hello",
+    ]);
   });
 
   // CP23 cluster `code-reload`: peer-to-peer NOTICEs on the own-nick
@@ -1667,7 +1677,7 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
   // which our server actually routes to "$server", not the own-nick
   // topic. So the own-nick-topic NOTICE branch is exclusively
   // peer-to-peer DMs and should auto-open same as PRIVMSG.
-  it("inbound NOTICE on own-nick topic auto-opens sender's window + appends", async () => {
+  it("inbound NOTICE on own-nick topic does NOT originate the query window (#422 — server owns it) but appends", async () => {
     localStorage.setItem("grappa-token", "tok");
     localStorage.setItem(
       "grappa-subject",
@@ -1697,8 +1707,9 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
         meta: {},
       },
     });
-    // Sender's query window auto-opened.
-    expect(qw.openQueryWindowState).toHaveBeenCalledWith(1, "vjt", expect.any(String));
+    // #422 Option B: cic does NOT originate the window — the server owns it
+    // (delivered via query_windows_list). The DM-shaped NOTICE still appends.
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
     // Body landed in sender's bucket (NOT alice's own-nick bucket).
     const vjtKey = channelKey("freenode", "vjt");
     expect(store.scrollbackByChannel()[vjtKey]?.map((m) => m.body)).toEqual([
@@ -1783,7 +1794,7 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
   // Bug B (self-msg path): PRIVMSG with sender = ownNick (self-msg via
   // `/msg alice body`) must append to the own-nick window key AND call
   // openQueryWindowState(networkId, ownNick).
-  it("self-msg PRIVMSG (sender = ownNick) appends to own-nick window and opens own-nick query window", async () => {
+  it("self-msg PRIVMSG (sender = ownNick) appends to own-nick window; cic does NOT originate the window (#422)", async () => {
     localStorage.setItem("grappa-token", "tok");
     localStorage.setItem(
       "grappa-subject",
@@ -1812,8 +1823,10 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
         meta: {},
       },
     });
-    // Must open the own-nick query window.
-    expect(qw.openQueryWindowState).toHaveBeenCalledWith(1, "alice", expect.any(String));
+    // #422 Option B: cic does NOT originate the window — the server opens
+    // the own-nick window on the OUTBOUND send arm (delivered via
+    // query_windows_list). The dm-listener only appends here.
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
     // Must append to own-nick key (channelKey("freenode", "alice")).
     const ownKey = channelKey("freenode", "alice");
     expect(store.scrollbackByChannel()[ownKey]?.map((m) => m.body)).toEqual(["hello yourself"]);
