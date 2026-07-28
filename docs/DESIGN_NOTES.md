@@ -21985,3 +21985,31 @@ you cannot see is a channel you cannot reach, while a roster that needs scrollin
 just needs scrolling. Shift+PgUp/PgDn scroll it, the wheel scrolls it when the
 pointer is over whichever column it currently occupies, and the offset resets on
 focus change like the scrollback one.
+
+## 2026-07-28 — shottino `/media all`: the #451 gate becomes a choice, not a wall
+
+Two separate things were making "/media on doesn't render anything" true, and
+only one of them was a bug.
+
+**The bug: the claim happened at the wrong moment.** A row's inline slot was
+claimed while the message was being INGESTED, which asked `inline_media_enabled`
+once, at arrival, and froze the #451 first-party verdict at the same instant.
+Toggling `/media on` afterwards could not affect a single row already in the log
+— and the rows already in the log are the whole visible scrollback, so the
+feature looked dead. Both are questions about the row you are LOOKING at, so the
+claim moved to the draw site, the first time a row is actually on screen. It also
+stops rows nobody ever scrolls to from consuming the 24-slot pool, which is what
+the comment there always claimed. The claim deliberately does not render in the
+same frame: the measuring pass ran before it and reserved nothing for the
+picture, and spending unreserved rows is the bug class that clips the newest
+message off the bottom.
+
+**Not a bug: peer URLs stay click-to-preview.** That is #451's ruling, and it
+holds — auto-fetching a URL on scroll tells whoever posted it your IP and your
+read times, and points ffmpeg at bytes a stranger chose. vjt's call now: keep
+that as the default and add an explicit `/media all` opt-in for people who want
+their old behaviour back, plus `/media first-party` to return. It is NOT
+persisted (a fresh shottino starts restrictive) and turning it on prints what it
+costs, in the command's own output, rather than burying it in a manpage. The
+default is unchanged, which is the part that matters: the safe posture is what
+you get without asking, and the risky one is what you get after being told.

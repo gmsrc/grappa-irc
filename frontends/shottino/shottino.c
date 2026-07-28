@@ -395,6 +395,10 @@ struct app {
     int log_media[LOG_LINES];
     media_protocol proto;           /* detected once, before ncurses */
     bool inline_media_enabled;
+    /* #451 opt-in: also auto-render media from hosts that are NOT this
+     * deployment's. OFF by default and deliberately not persisted — see
+     * the /media command for what it costs. */
+    bool inline_media_peers;
     /* #451/#324 — this deployment's HTTP host aliases (from
      * /api/server-settings). With app->url.host they define which
      * /uploads/ links are first-party and may auto-render inline; every
@@ -4342,7 +4346,7 @@ static void draw(struct app *app) {
          * frame measures it and draws it. */
         int mi = app->log_media[i];
         if (mi < 0 && mk != MEDIA_NONE && app->inline_media_enabled &&
-            url_is_first_party(app, url_tok)) {
+            (app->inline_media_peers || url_is_first_party(app, url_tok))) {
             app->log_media[i] = media_claim_locked(app, url_tok, mk == MEDIA_VIDEO);
             mi = -1;
         }
@@ -5463,7 +5467,7 @@ static void show_help(struct app *app) {
     log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
     log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
     log_line(app, "terminal: mouse tracking is OFF by default so the terminal keeps its own copy/paste selection; /mouse on enables click-to-preview (and suppresses selection), /mouse off restores it");
-    log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; /media [on|off] toggles");
+    log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; /media [on|off|all|first-party] — 'all' also auto-fetches images hosted elsewhere");
     log_line(app, "       /preview full-screen; /preview-ascii forces the art renderer; /open opens externally; with /mouse on, click a link to preview");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
@@ -6012,9 +6016,31 @@ static void handle_command_dispatch(struct app *app, char *line) {
         if (!*rest) app->inline_media_enabled = !app->inline_media_enabled;
         else if (strcmp(rest, "on") == 0) app->inline_media_enabled = true;
         else if (strcmp(rest, "off") == 0) app->inline_media_enabled = false;
-        else { log_line(app, "/media [on|off] — bare /media toggles inline images"); return; }
-        log_line(app, "inline images %s (terminal graphics: %s)",
-                 app->inline_media_enabled ? "ON" : "OFF", media_protocol_name(app->proto));
+        else if (strcmp(rest, "all") == 0) {
+            /* Auto-rendering a peer URL means fetching it the moment the
+             * row scrolls into view: anyone who can post in the channel
+             * learns your IP and when you read, and ffmpeg gets pointed
+             * at bytes they chose. That is exactly what #451 turned off
+             * by default. Saying yes is allowed; being told what you
+             * said yes to is not optional. */
+            app->inline_media_enabled = true;
+            app->inline_media_peers = true;
+            log_line(app, "inline images ON for ALL hosts — every image link in a channel is now");
+            log_line(app, "  fetched when it scrolls into view: the host learns your IP and read");
+            log_line(app, "  times, and ffmpeg decodes bytes a stranger chose. /media first-party");
+            log_line(app, "  returns to grappa uploads only.");
+        } else if (strcmp(rest, "first-party") == 0) {
+            app->inline_media_peers = false;
+            log_line(app, "inline images restricted to this deployment's uploads");
+        } else {
+            log_line(app, "/media [on|off|all|first-party] — bare /media toggles inline images;");
+            log_line(app, "  'all' also auto-renders images hosted elsewhere (see the warning it prints)");
+            return;
+        }
+        log_line(app, "inline images %s, hosts: %s (terminal graphics: %s)",
+                 app->inline_media_enabled ? "ON" : "OFF",
+                 app->inline_media_peers ? "ALL" : "first-party only",
+                 media_protocol_name(app->proto));
     } else if (strcmp(line, "/preview-ascii") == 0) {
         /* Force the character-art renderer even where a graphics protocol
          * exists — useful over a link that mangles binary escapes, or just
