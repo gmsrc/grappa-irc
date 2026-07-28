@@ -80,6 +80,14 @@ enum color_pair {
     CP_ERROR,
     CP_INPUT,
     CP_SELECTED,
+    /* Chrome bands: see enum theme_color. Each band needs its own pairs
+     * because a pair is (fg, bg) — text drawn in CP_ACCENT over the title
+     * band would carry the CHAT background with it and punch a hole in
+     * the band. */
+    CP_TITLE,
+    CP_TITLE_ACCENT,
+    CP_STATUS,
+    CP_STATUS_ERROR,
     CP_NICK0,
     CP_NICK1,
     CP_NICK2,
@@ -107,6 +115,19 @@ enum theme_color {
     TC_BORDER,
     TC_MENTION,
     TC_ERROR,
+    /* The chrome bands. The chat area is the only thing on screen that
+     * scrolls, and it used to share its background with everything
+     * around it — title, topic, status line and the input box all sat on
+     * TC_BG, so the eye had a single-pixel border to tell them apart. A
+     * band of its own per region says "this is not chat" without a
+     * legend: cool above (title + topic), warm below (status), and a
+     * lifted neutral for the input you type into. */
+    TC_BG_TITLE,
+    TC_TITLE_FG,
+    TC_TITLE_ACCENT,
+    TC_BG_STATUS,
+    TC_STATUS_FG,
+    TC_BG_INPUT,
     TC_NICK0,
     TC_NICK1,
     TC_NICK2,
@@ -624,6 +645,12 @@ static void init_theme(void) {
     define_color(TC_BORDER, 0x1f1f1f);
     define_color(TC_MENTION, 0x2a1f00);
     define_color(TC_ERROR, 0xd77070);
+    define_color(TC_BG_TITLE, 0x152029);
+    define_color(TC_TITLE_FG, 0xc2dced);
+    define_color(TC_TITLE_ACCENT, 0x7fc8ea);
+    define_color(TC_BG_STATUS, 0x241c14);
+    define_color(TC_STATUS_FG, 0xc8b193);
+    define_color(TC_BG_INPUT, 0x1c1c1c);
     define_color(TC_NICK0, 0xff8c8c);
     define_color(TC_NICK1, 0xffb060);
     define_color(TC_NICK2, 0xffd060);
@@ -648,8 +675,12 @@ static void init_theme(void) {
     init_pair(CP_MUTED, TC_MUTED, TC_BG);
     init_pair(CP_MENTION, TC_FG, TC_MENTION);
     init_pair(CP_ERROR, TC_ERROR, TC_BG);
-    init_pair(CP_INPUT, TC_FG, TC_BG);
+    init_pair(CP_INPUT, TC_FG, TC_BG_INPUT);
     init_pair(CP_SELECTED, TC_ACCENT, TC_BORDER);
+    init_pair(CP_TITLE, TC_TITLE_FG, TC_BG_TITLE);
+    init_pair(CP_TITLE_ACCENT, TC_TITLE_ACCENT, TC_BG_TITLE);
+    init_pair(CP_STATUS, TC_STATUS_FG, TC_BG_STATUS);
+    init_pair(CP_STATUS_ERROR, TC_ERROR, TC_BG_STATUS);
     for (short i = 0; i < 16; i++) init_pair((short)(CP_NICK0 + i), (short)(TC_NICK0 + i), TC_BG);
     bkgd(COLOR_PAIR(CP_MAIN));
 }
@@ -3811,16 +3842,20 @@ static void draw(struct app *app) {
         y++;
     }
 
+    /* Title + topic ride one continuous band, so the chat area begins
+     * where the colour changes rather than where a one-cell rule sits. */
+    draw_fill(chrome_y, main_x, main_w, CP_TITLE);
     if (app->hover_url[0])
-        draw_text(chrome_y, main_x + 1, main_w - 2, CP_ACCENT, A_BOLD,
-                  "click to preview: %s", app->hover_url);
+        draw_text(chrome_y, main_x + 1, main_w - 2, CP_TITLE_ACCENT, A_BOLD,
+                  "%s: %s", media_kind_of(app->hover_url) != MEDIA_NONE ? "click to preview" : "click to open",
+                  app->hover_url);
     else
-        draw_text(chrome_y, main_x + 1, main_w - 2, CP_MUTED, 0,
+        draw_text(chrome_y, main_x + 1, main_w - 2, CP_TITLE, 0,
                   "/archive  /settings  /admin  /chat  ws:%s", app->ws_connected ? "connected" : "offline");
-    for (int ty = 0; ty < topic_h; ty++) draw_fill(topic_y + ty, main_x, main_w, CP_ALT);
-    draw_text(topic_y, main_x + 1, topic_label_w, CP_ACCENT, A_BOLD, "%s/%s", w->network, w->channel);
-    if (topic_prefix_w) draw_text(topic_y, topic_text_x, topic_text_w, CP_ALT, A_BOLD, "topic: ");
-    draw_wrapped_text(topic_y, topic_text_x + topic_prefix_w, topic_wrap_w, 0, topic_h, CP_ALT, 0, topic_text);
+    for (int ty = 0; ty < topic_h; ty++) draw_fill(topic_y + ty, main_x, main_w, CP_TITLE);
+    draw_text(topic_y, main_x + 1, topic_label_w, CP_TITLE_ACCENT, A_BOLD, "%s/%s", w->network, w->channel);
+    if (topic_prefix_w) draw_text(topic_y, topic_text_x, topic_text_w, CP_TITLE, A_BOLD, "topic: ");
+    draw_wrapped_text(topic_y, topic_text_x + topic_prefix_w, topic_wrap_w, 0, topic_h, CP_TITLE, 0, topic_text);
 
     if (app->panel != PANEL_CHAT) {
         draw_text(scroll_y, main_x + 1, main_w - 2, CP_ACCENT, A_BOLD, "%s", panel_name(app->panel));
@@ -3829,7 +3864,8 @@ static void draw(struct app *app) {
             attr_t attr = i == 0 ? A_BOLD : 0;
             draw_text(scroll_y + 2 + (int)i, main_x + 1, main_w - 2, pair, attr, "%s", app->panel_lines[i]);
         }
-        draw_text(compose_y, main_x + 1, main_w - 2, CP_MUTED, 0, "panel: %s | Esc or /chat returns to chat", panel_name(app->panel));
+        draw_fill(compose_y, main_x, main_w, CP_STATUS);
+        draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0, "panel: %s | Esc or /chat returns to chat", panel_name(app->panel));
         int cursor_y = input_y;
         int cursor_x = main_x + 2;
         draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input, &cursor_y, &cursor_x);
@@ -4090,13 +4126,18 @@ static void draw(struct app *app) {
 
     /* A window in a terminal state says WHY on the status line — the
      * sidebar sigil says "dead", this says "kicked by op: flooding". */
+    /* The status line gets its own warm band: it is the boundary between
+     * what the channel said and what YOU are about to say, and it used to
+     * be muted grey on the chat background — indistinguishable from a
+     * dimmed system row until you read it. */
+    draw_fill(compose_y, main_x, main_w, CP_STATUS);
     const char *state_label = window_state_label(w->state);
     if (state_label) {
-        draw_text(compose_y, main_x + 1, main_w - 2, CP_ERROR, A_BOLD, "[%s] %s%s%s%s",
+        draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS_ERROR, A_BOLD, "[%s] %s%s%s%s",
                   w->channel, state_label, w->state_detail[0] ? ": " : "", w->state_detail,
                   app->scrollback_pinned ? " | scrolled" : "");
     } else {
-        draw_text(compose_y, main_x + 1, main_w - 2, CP_MUTED, 0,
+        draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0,
                   "[%s] PgUp/PgDn scroll | End bottom | Tab complete | Up/Down history | /open | /exit%s",
                   w->channel, app->scrollback_pinned ? " | scrolled" : "");
     }
