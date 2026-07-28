@@ -377,17 +377,19 @@ body {
    :focus rule, `html.is-ios input:where(:not(<same denylist>)), html.is-ios
    textarea { font-size: max(16px, var(--font-size)) }` — #508 removed it pending
    vjt's device check. */
-input:where(:not(
-    [type="radio"],
-    [type="checkbox"],
-    [type="range"],
-    [type="file"],
-    [type="color"],
-    [type="submit"],
-    [type="reset"],
-    [type="button"],
-    [type="image"]
-  )),
+input:where(
+    :not(
+        [type="radio"],
+        [type="checkbox"],
+        [type="range"],
+        [type="file"],
+        [type="color"],
+        [type="submit"],
+        [type="reset"],
+        [type="button"],
+        [type="image"]
+      )
+  ),
 textarea {
   box-sizing: border-box;
   min-height: var(--tap-min);
@@ -404,17 +406,19 @@ textarea {
   font-size: var(--font-size);
 }
 
-input:where(:not(
-    [type="radio"],
-    [type="checkbox"],
-    [type="range"],
-    [type="file"],
-    [type="color"],
-    [type="submit"],
-    [type="reset"],
-    [type="button"],
-    [type="image"]
-  )):focus,
+input:where(
+    :not(
+        [type="radio"],
+        [type="checkbox"],
+        [type="range"],
+        [type="file"],
+        [type="color"],
+        [type="submit"],
+        [type="reset"],
+        [type="button"],
+        [type="image"]
+      )
+  ):focus,
 textarea:focus {
   outline: none;
   border-color: var(--accent);
