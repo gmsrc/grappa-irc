@@ -159,7 +159,11 @@ declare global {
   interface Window {
     __cic_dropSocketForTests?: () => Promise<void>;
     __cic_socketHealth?: {
-      state: () => { state: string };
+      recordOpen: () => void;
+      recordError: () => void;
+      recordClose: (e: { code: number; reason: string } | undefined) => void;
+      reset: () => void;
+      state: () => { state: "connecting" | "open" | "error" };
     };
   }
 }
