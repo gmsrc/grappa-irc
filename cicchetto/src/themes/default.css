@@ -351,29 +351,43 @@ body {
   overscroll-behavior: none;
 }
 
-/* #497 — global text-input floor. The app had NO base <input>/<textarea>
-   rule, so UNCLASSED fields (the identity editor's nick/realname/ident) fell
-   back to tiny UA defaults, and every modal re-styled its own input in 13+
-   near-identical `.<x>-input` rules. This is the single global treatment the
-   issue asks for: a comfortable ≥44px tap-target, the app's `--font-size`
+/* #497 / #508 — global text-input treatment (DENYLIST). The app had NO base
+   <input>/<textarea> rule, so UNCLASSED fields (the identity editor's
+   nick/realname/ident) fell back to tiny UA defaults, and every modal re-styled
+   its own input in 13+ near-identical `.<x>-input` rules. This is the single
+   global treatment: a comfortable ≥44px tap-target, the app's `--font-size`
    (14px base, matching the surrounding chrome), and the theme tokens every
-   input already used. The ≥16px iOS anti-zoom floor is applied separately,
-   scoped to `html.is-ios` (see the rule after :focus — #508). `:where()`
-   keeps the specificity at (0,0,1) so the existing per-component rules (and
-   the is-ios overrides below) still win where they need a different
-   size/layout — this is a FLOOR, not an override. Placed here (before every
-   higher-specificity input rule) so the cascade stays ascending. Radio/checkbox are excluded: they must not
-   inherit text-field height/padding. */
-input:where(
-    [type="text"],
-    [type="password"],
-    [type="email"],
-    [type="search"],
-    [type="url"],
-    [type="tel"],
-    [type="number"],
-    :not([type])
-  ),
+   input already used. It is ALSO the compose textarea's font/bg/border source —
+   #497 stripped compose's own copy, so THIS rule reproduces the pre-#497 compose
+   look with no per-component duplication. `:where()` keeps the specificity at
+   (0,0,1) so per-component rules (and the is-ios `select` re-enable below) still
+   win where they need a different size/layout — a FLOOR, not an override; placed
+   before every higher-specificity input rule so the cascade stays ascending.
+   #508 flipped the target from an ALLOWLIST of text-ish types to a DENYLIST
+   (every <input> EXCEPT the non-text controls), so a future text field — `date`,
+   `time`, `datetime-local`, `week`, `month` — is covered without touching this
+   rule. Excluded: radio/checkbox (must not take text-field height/padding) plus
+   range/file/color/submit/reset/button/image (controls, not text entry — cic
+   ships range/file/color <input>s a naive radio+checkbox-only denylist would
+   visibly distort). NO iOS ≥16px anti-zoom floor: cic's viewport pins
+   `maximum-scale=1, user-scalable=no` and runs standalone
+   (apple-mobile-web-app-capable), which suppresses iOS Safari's <16px focus
+   auto-zoom — so `--font-size` holds on iOS too (the pre-#497 compose look, no
+   tradeoff). RESTORE PATH if a real iPhone DOES zoom on focus: re-add, after the
+   :focus rule, `html.is-ios input:where(:not(<same denylist>)), html.is-ios
+   textarea { font-size: max(16px, var(--font-size)) }` — #508 removed it pending
+   vjt's device check. */
+input:where(:not(
+    [type="radio"],
+    [type="checkbox"],
+    [type="range"],
+    [type="file"],
+    [type="color"],
+    [type="submit"],
+    [type="reset"],
+    [type="button"],
+    [type="image"]
+  )),
 textarea {
   box-sizing: border-box;
   min-height: var(--tap-min);
@@ -383,51 +397,27 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 3px;
   font-family: var(--font-mono);
-  /* #508 — base is the app's --font-size (14px), matching the surrounding
-     chrome so inputs no longer render 2px larger than everything else. The
-     iOS ≥16px anti-zoom floor that #497 applied globally is re-applied below,
-     scoped to html.is-ios: Safari is the ONLY engine that auto-zooms on a
-     <16px focus, so Android Chrome and desktop take the smaller size. */
+  /* #508 — the app's --font-size (14px base) everywhere, matching the
+     surrounding chrome (no more 2px-larger inputs) and restoring the pre-#497
+     compose textarea font. No iOS floor override — see the denylist moduledoc
+     above for why the anti-zoom floor is unnecessary here + the restore path. */
   font-size: var(--font-size);
 }
 
-input:where(
-    [type="text"],
-    [type="password"],
-    [type="email"],
-    [type="search"],
-    [type="url"],
-    [type="tel"],
-    [type="number"],
-    :not([type])
-  ):focus,
+input:where(:not(
+    [type="radio"],
+    [type="checkbox"],
+    [type="range"],
+    [type="file"],
+    [type="color"],
+    [type="submit"],
+    [type="reset"],
+    [type="button"],
+    [type="image"]
+  )):focus,
 textarea:focus {
   outline: none;
   border-color: var(--accent);
-}
-
-/* #508 — iOS-only anti-zoom floor. iOS Safari auto-zooms the page when a
-   focused input's font-size is < 16px; no other engine does. The 16px floor
-   #497 applied globally is scoped HERE to html.is-ios, so Android/desktop
-   take the chrome-matching --font-size (above) while iOS keeps the zoom-safe
-   minimum. Scales up with the text-size preference (reaches 20px at XXL, per
-   lib/fontSize.ts). (0,1,2) specificity beats both the base floor and the
-   per-component .<x>-input rules, so ALL iOS inputs clear the zoom line —
-   closing the latent gap where a classed input could fall under 16px on iOS.
-   Mirrors the #497 :where() target set. */
-html.is-ios
-input:where(
-  [type="text"],
-  [type="password"],
-  [type="email"],
-  [type="search"],
-  [type="url"],
-  [type="tel"],
-  [type="number"],
-  :not([type])
-),
-html.is-ios textarea {
-  font-size: max(16px, var(--font-size));
 }
 
 /* UX-6 D9 (2026-05-21) — iOS-only layout-viewport pin. This is the

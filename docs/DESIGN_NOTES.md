@@ -21589,7 +21589,7 @@ goes red, this is the cause.
 **Related, still open.** #402 (invite to an already-archived channel + a
 self-requested `/cs invite`) shares the `:invited`-absent-from-snapshot root but
 a different arm — not closed here.
-## 2026-07-28 — #508 mobile form controls: iOS `<select>` tap-to-open + iOS-scoped input font floor
+## 2026-07-28 — #508 mobile form controls: iOS `<select>` tap-to-open + chrome-matching input font (denylist, no iOS floor)
 
 Two distinct defects on the same surface (cic's form inputs), both cic-only /
 CSS-only (`themes/default.css`), both HOT.
@@ -21615,22 +21615,44 @@ two assertions only pass together. The real tap→picker FEEL is a device test
 (iOS picker invocation is not reproducible on Playwright webkit, per
 `feedback_playwright_webkit_not_ios_scroll`).
 
-**(b) Input font read too large on mobile.** #497 shipped a GLOBAL input floor
-`font-size: max(16px, var(--font-size))`; at the default `--font-size` (14px)
-that renders inputs at 16px while the surrounding chrome is 14px — 2px larger,
-which is what "too large" was. But #497's own comment states the 16px exists
-solely for the iOS focus-auto-zoom trap, and iOS Safari is the ONLY engine that
-auto-zooms a `<16px` focused input; Android Chrome and desktop never do.
-Deliberate choice (vjt: "pick deliberately, say why"): base the floor at the
-app's `--font-size` (matching chrome everywhere) and re-apply the ≥16px
-anti-zoom floor ONLY under `html.is-ios`. Its `(0,1,2)` specificity beats both
-the base floor and the per-component `.<x>-input` rules, so ALL iOS inputs
-clear the zoom line — also closing the latent gap where a classed input could
-fall under 16px on iOS. **Honest limit:** on iOS itself the floor stays 16px —
-you cannot shrink a focusable control below it without the very page-zoom the
-issue warns against, so a real iPhone still renders inputs at 16px; the change
-shrinks only Android/desktop. If 16px still reads large on iOS, the remaining
-levers are non-font (padding / min-height / line-height).
+**(b) Input font read too large on mobile — reworked per a vjt respec.** #497
+had shipped a GLOBAL input floor `font-size: max(16px, var(--font-size))`; at the
+default `--font-size` (14px) that renders inputs at 16px against 14px chrome —
+the 2px "too large". #497 had ALSO stripped the compose textarea's own
+`font-size`/`font-family`/`background`/`color`/`border` (and 13+ modal
+`.<x>-input` copies), delegating them ALL to that global rule — so the global
+rule IS the compose look's source, and the floor is precisely what made compose
+read large on vjt's iPhone. vjt's spec: restore the compose textarea to its
+pre-#497 font and drive EVERY input from that one rule, no CSS copy-paste. Two
+moves, both on the single global rule:
+
+1. **Font back to `--font-size` everywhere; the floor is DELETED, not
+   iOS-scoped.** The 16px floor existed solely for iOS Safari's `<16px`
+   focus-auto-zoom — but that auto-zoom is suppressed when the viewport pins
+   `maximum-scale=1, user-scalable=no` (cic's `index.html`) and when running
+   standalone (`apple-mobile-web-app-capable`), and cic does BOTH. So the floor
+   is unnecessary here: dropping it leaves `--font-size` (14px) on iOS too = the
+   true pre-#497 compose look with NO tradeoff (an earlier iOS-scoped-floor cut,
+   commit e2086db8, still left iOS stuck at 16px). This is **reasoned +
+   device-gated**: vjt verifies on a real iPhone that focus no longer zooms; the
+   RESTORE PATH (re-add an `html.is-ios … { font-size: max(16px, var(--font-size)) }`
+   block, denylisted) is documented inline in `default.css`.
+2. **Selector ALLOWLIST → DENYLIST** so future text inputs inherit the look with
+   zero code change. The rule targeted an allowlist of text-ish `type=`s; a
+   future `type=date` (or time/datetime-local/week/month) would silently miss it
+   and fall to the UA default. Inverted to `input:where(:not(<controls>))` —
+   every `<input>` EXCEPT the non-text controls. **Challenge-the-spec:** vjt said
+   "all inputs except radio/checkbox", but cic ships `<input type=range>` (×2
+   sliders), `type=file` (×2 pickers) and `type=color` (×1) that a
+   radio+checkbox-only denylist would slap text-field height/border/bg on (a
+   visible regression); the exclusion is therefore the full non-text set
+   (radio/checkbox/range/file/color/submit/reset/button/image) — exactly what the
+   allowlist already excluded, so today's inputs are unchanged while text-like
+   newcomers are auto-covered. `:where()` keeps the `(0,0,1)` FLOOR specificity.
+
+The e2e fallout of (b)'s font change is (c) below. The earlier cut of (b)
+(iOS-scoped floor + allowlist, e2086db8) was superseded by this respec — a spec
+pivot, not a bug, so it lives as its own commit rather than an amend.
 
 **(c) The full integration gate flushed out a LATENT e2e race that (b)'s font
 change TRIGGERED — fixed at the class, not the symptom.** The 14px chromium
