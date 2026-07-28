@@ -128,6 +128,20 @@ defmodule Grappa.Push.BadgeCountLiveNickTest do
            }
   end
 
+  test "live_nick_index falls back to the credential nick for a visitor with no live session" do
+    # Visitor twin of the user fallback above: the `{:visitor, _}` clause of
+    # live_nick_index is a distinct WHERE (visitor_id) + share the same
+    # live-or-fallback resolver. With no live session up, the per-credential
+    # resolve returns the CONFIGURED credential nick (#211-phase-6 visitors
+    # are multi-network, so the seed is per-credential like the user path).
+    network = network_fixture()
+    visitor = visitor_with_credential_fixture(nick: @configured_nick, network_slug: network.slug)
+
+    assert Networks.live_nick_index({:visitor, visitor.id}) == %{
+             network.slug => {network.id, @configured_nick}
+           }
+  end
+
   test "#498 — badge counts a mention of the LIVE nick after /nick (starts counting the new)" do
     {subject, network} = start_renamed_session()
 
