@@ -1037,7 +1037,7 @@ defmodule Grappa.Session.Server do
     # #498 — seed the cheap live-nick copy with the initial (configured)
     # nick so `current_nick/2` returns `{:ok, nick}` for a live session
     # from the moment it registers, before any reconcile/rename.
-    :ok = publish_live_nick(state)
+    :ok = publish_live_nick(state.subject, state.network_id, state.nick)
 
     {:ok, state, {:continue, {:start_client, client_opts(opts)}}}
   end
@@ -3524,7 +3524,7 @@ defmodule Grappa.Session.Server do
   @spec maybe_broadcast_own_nick_changed(t(), t()) :: :ok
   defp maybe_broadcast_own_nick_changed(%{nick: prev_nick}, %{nick: next_nick} = next_state)
        when prev_nick != next_nick do
-    :ok = publish_live_nick(next_state)
+    :ok = publish_live_nick(next_state.subject, next_state.network_id, next_state.nick)
 
     :ok =
       Grappa.PubSub.broadcast_event(
@@ -3548,8 +3548,14 @@ defmodule Grappa.Session.Server do
   # credential nick. A `:error` return would mean the process is not
   # registered under its own key — an impossible invariant break we let
   # crash rather than silently swallow.
-  @spec publish_live_nick(t()) :: :ok
-  defp publish_live_nick(%{subject: subject, network_id: network_id, nick: nick}) do
+  # Takes the three scalars it needs (subject / network_id / nick), NOT the
+  # whole `state`: passing `t()` handed dialyzer the state's OPAQUE `MapSet`
+  # fields (`awaiting_invite`, `caps_active` → `%MapSet{map =>
+  # MapSet.internal(_)}`) at the `do_init/1` call site, tripping
+  # `call_without_opaque`. The warning was a design signal — the interface
+  # was too wide. A narrow scalar interface cannot break opacity.
+  @spec publish_live_nick(Grappa.Session.subject(), integer(), String.t()) :: :ok
+  defp publish_live_nick(subject, network_id, nick) do
     {_, _} =
       Registry.update_value(Grappa.SessionRegistry, registry_key(subject, network_id), fn _ ->
         nick
