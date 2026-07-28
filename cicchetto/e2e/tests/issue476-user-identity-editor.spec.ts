@@ -165,11 +165,10 @@ test("issue #476 — a USER edits its per-network identity in settings and it ap
       timeout: 10_000,
     });
 
-    // Single network → a STATIC label naming the target network, NOT a
-    // pointless one-option dropdown.
-    await expect(general.getByTestId("settings-identity-network-label")).toHaveText(
-      NETWORK_SLUG,
-    );
+    // #497 — single network: the whole Network row is hidden (a one-option
+    // picker is noise). Neither the static label nor the selector renders; the
+    // nick/realname/ident fields self-evidently target the sole network.
+    await expect(general.getByTestId("settings-identity-network-label")).toHaveCount(0);
     await expect(general.getByTestId("settings-identity-network-select")).toHaveCount(0);
 
     // ── EDIT + APPLY: change the nick, two-tap apply (reconnect is disruptive) ──

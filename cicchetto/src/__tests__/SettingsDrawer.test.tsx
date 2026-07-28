@@ -960,6 +960,76 @@ describe("SettingsDrawer (#126 — registered-visitor lifecycle verbs)", () => {
   });
 });
 
+// #497 — general sub-page: identity outranks the rarely-touched upload knob,
+// and a one-option network picker is noise (hidden entirely on a single
+// network — the common visitor case).
+describe("SettingsDrawer (#497 — general ordering + single-network selector)", () => {
+  const userMe = {
+    kind: "user" as const,
+    id: "u1",
+    name: "alice",
+    is_admin: false,
+    inserted_at: "2026-06-29T00:00:00Z",
+  };
+  const netRow = (id: number, slug: string, nick: string) => ({
+    kind: "user" as const,
+    id,
+    slug,
+    nick,
+    ident: null as string | null,
+    realname: null as string | null,
+    connection_state: "connected" as const,
+    connection_state_reason: null as string | null,
+    connection_state_changed_at: null as string | null,
+    inserted_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  });
+
+  it("renders the identity section BEFORE the upload-retention fieldset", () => {
+    meHolder.current = userMe;
+    subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
+    networksHolder.current = [netRow(1, "bahamut-test", "vjt-grappa")];
+    wrap(true);
+    openSub("general-settings-entry");
+
+    const identity = screen.getByTestId("settings-section-identity");
+    const upload = screen.getByTestId("upload-ttl-select");
+    // Identity is what a user looks for; upload retention is a rarely-touched
+    // knob — identity must precede it (upload FOLLOWS identity in the DOM).
+    expect(
+      identity.compareDocumentPosition(upload) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("hides the whole Network row when the subject holds exactly one network", () => {
+    meHolder.current = userMe;
+    subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
+    networksHolder.current = [netRow(1, "bahamut-test", "vjt-grappa")];
+    wrap(true);
+    openSub("general-settings-entry");
+
+    // The identity editor still renders (nick/realname/ident fields) …
+    expect(screen.getByTestId("settings-section-identity")).toBeInTheDocument();
+    // … but a one-option picker is noise: neither the <select> nor the
+    // static network label is rendered (the whole row is gone).
+    expect(screen.queryByTestId("settings-identity-network-select")).toBeNull();
+    expect(screen.queryByTestId("settings-identity-network-label")).toBeNull();
+  });
+
+  it("shows the Network selector when the subject holds more than one network", () => {
+    meHolder.current = userMe;
+    subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
+    networksHolder.current = [netRow(1, "bahamut-test", "vjt-grappa"), netRow(2, "azzurra", "vjt")];
+    wrap(true);
+    openSub("general-settings-entry");
+
+    expect(screen.getByTestId("settings-identity-network-select")).toBeInTheDocument();
+    // The "Network" label is reinstated alongside the picker (the `for`
+    // association restored — no dangling label when the row IS shown).
+    expect(screen.getByText("Network")).toBeInTheDocument();
+  });
+});
+
 describe("SettingsDrawer delete-account gating (#157)", () => {
   it("registered NON-admin user → shows the delete-account entry", () => {
     meHolder.current = {
@@ -1302,13 +1372,17 @@ describe("SettingsDrawer (#476/#478 — per-network identity, both subjects)", (
     subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
   };
 
-  it("#476 — a single network renders a static network label, not a selector", () => {
+  it("#476/#497 — a single network hides the whole network row; the editor still targets the sole net", () => {
     seedUser();
     networksHolder.current = [netRow("user", 1, "bahamut-test", "vjt-grappa", "grp", "Real")];
     wrap(true);
     openSub("general-settings-entry");
+    // #497 — a one-option picker is noise: no selector AND no static label
+    // (the earlier #476 static label is gone; the whole row is hidden).
     expect(screen.queryByTestId("settings-identity-network-select")).toBeNull();
-    expect(screen.getByTestId("settings-identity-network-label")).toHaveTextContent("bahamut-test");
+    expect(screen.queryByTestId("settings-identity-network-label")).toBeNull();
+    // …but the identity editor still renders and seeds from the sole network.
+    expect((screen.getByLabelText(/^nick$/i) as HTMLInputElement).value).toBe("vjt-grappa");
   });
 
   it("#476/#478 — >1 network renders a selector; picking one re-seeds fields + targets it on apply", async () => {

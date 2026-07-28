@@ -976,39 +976,6 @@ const SettingsDrawer: Component<Props> = (props) => {
           <section class="settings-subpage general-subpage" data-testid="general-subpage">
             {subpageHeader("general", "general-back")}
 
-            {/* UX-4 bucket M (2026-05-19) — upload retention preference.
-              Host-gated: only renders when the active image host exposes
-              ttlOptions (litterbox does; a hypothetical imgur-style host
-              wouldn't). The `<option value="">` "use site default" entry
-              maps to a `null` PUT — clears the preference and falls back
-              to `activeHost().defaultTtl`. Server stores integer seconds,
-              cic translates to/from the host token at this boundary. */}
-            <Show when={activeHost().ttlOptions.length > 0}>
-              <fieldset class="upload-ttl-fieldset">
-                <legend>upload retention</legend>
-                <label>
-                  upload duration:
-                  <select
-                    data-testid="upload-ttl-select"
-                    value={uploadTtlSelectValue()}
-                    onChange={(e) => {
-                      void onUploadTtlChange(e);
-                    }}
-                  >
-                    <option value="">use site default ({defaultTtlLabel()})</option>
-                    <For each={activeHost().ttlOptions}>
-                      {(opt) => <option value={opt.value}>{opt.label}</option>}
-                    </For>
-                  </select>
-                </label>
-                <Show when={uploadTtlSavingError() !== null}>
-                  <p class="upload-ttl-error" role="alert" data-testid="upload-ttl-error">
-                    {uploadTtlSavingError()}
-                  </p>
-                </Show>
-              </fieldset>
-            </Show>
-
             {/* #476 / #478 — per-network identity editor, both subjects. It
               targets the SELECTED network row (focused-network default), with a
               picker when the subject holds more than one — the retired lowest-id
@@ -1025,28 +992,15 @@ const SettingsDrawer: Component<Props> = (props) => {
               >
                 <h4 class="settings-section-heading">identity</h4>
                 <div class="settings-identity" data-testid="settings-identity">
-                  {/* #476 — which network this identity edits. A picker when
-                      there's more than one; a static label otherwise (a
-                      single-option dropdown would be pointless chrome). The
-                      `for` associates only with the picker branch — in the
-                      static-label case the <select> isn't rendered, so a bare
-                      `for` would dangle at a nonexistent control (a11y). */}
-                  <label
-                    for={identityNetworks().length > 1 ? "settings-identity-network" : undefined}
-                  >
-                    Network
-                  </label>
-                  <Show
-                    when={identityNetworks().length > 1}
-                    fallback={
-                      <span
-                        class="settings-identity-network-name"
-                        data-testid="settings-identity-network-label"
-                      >
-                        {selectedIdentityNetwork()?.slug ?? "—"}
-                      </span>
-                    }
-                  >
+                  {/* #497 — the network this identity edits. Shown ONLY when
+                      the subject holds more than one network: a one-option
+                      picker is noise (a single network is the common visitor
+                      case), so the whole Network row is hidden there — the
+                      nick/realname/ident fields self-evidently target the sole
+                      network. The `for` always associates with the rendered
+                      <select> now (no dangling-label a11y branch). */}
+                  <Show when={identityNetworks().length > 1}>
+                    <label for="settings-identity-network">Network</label>
                     {/* Lock the target while an apply is in flight — the save
                         captured a specific network; switching mid-reconnect
                         would surface its result banner under the wrong row. */}
@@ -1128,6 +1082,40 @@ const SettingsDrawer: Component<Props> = (props) => {
                   </Show>
                 </div>
               </div>
+            </Show>
+
+            {/* #497 — upload retention moved BELOW identity: identity is what a
+              user looks for; upload duration is a rarely-touched knob.
+              UX-4 bucket M (2026-05-19) — host-gated: only renders when the
+              active image host exposes ttlOptions (litterbox does; a
+              hypothetical imgur-style host wouldn't). The `<option value="">`
+              "use site default" entry maps to a `null` PUT — clears the
+              preference and falls back to `activeHost().defaultTtl`. Server
+              stores integer seconds, cic translates at this boundary. */}
+            <Show when={activeHost().ttlOptions.length > 0}>
+              <fieldset class="upload-ttl-fieldset">
+                <legend>upload retention</legend>
+                <label>
+                  upload duration:
+                  <select
+                    data-testid="upload-ttl-select"
+                    value={uploadTtlSelectValue()}
+                    onChange={(e) => {
+                      void onUploadTtlChange(e);
+                    }}
+                  >
+                    <option value="">use site default ({defaultTtlLabel()})</option>
+                    <For each={activeHost().ttlOptions}>
+                      {(opt) => <option value={opt.value}>{opt.label}</option>}
+                    </For>
+                  </select>
+                </label>
+                <Show when={uploadTtlSavingError() !== null}>
+                  <p class="upload-ttl-error" role="alert" data-testid="upload-ttl-error">
+                    {uploadTtlSavingError()}
+                  </p>
+                </Show>
+              </fieldset>
             </Show>
           </section>
         </Show>

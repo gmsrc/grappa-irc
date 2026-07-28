@@ -305,6 +305,57 @@ body {
   overscroll-behavior: none;
 }
 
+/* #497 — global text-input floor. The app had NO base <input>/<textarea>
+   rule, so UNCLASSED fields (the identity editor's nick/realname/ident) fell
+   back to tiny UA defaults, and every modal re-styled its own input in 13+
+   near-identical `.<x>-input` rules. This is the single global treatment the
+   issue asks for: a comfortable ≥44px tap-target, a ≥16px font (so iOS does
+   NOT auto-zoom on focus — the `--font-size` base is 14px), and the theme
+   tokens every input already used. `:where()` keeps the specificity at
+   (0,0,1) so the existing per-component rules (and the is-ios override below)
+   still win where they need a different size/layout — this is a FLOOR, not
+   an override. Placed here (before every higher-specificity input rule) so
+   the cascade stays ascending. Radio/checkbox are excluded: they must not
+   inherit text-field height/padding. */
+input:where(
+    [type="text"],
+    [type="password"],
+    [type="email"],
+    [type="search"],
+    [type="url"],
+    [type="tel"],
+    [type="number"],
+    :not([type])
+  ),
+textarea {
+  box-sizing: border-box;
+  min-height: var(--tap-min);
+  padding: 0.5rem 0.6rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  /* ≥16px floor prevents iOS focus auto-zoom; scales up with the text-size
+     preference (--font-size reaches 20px at XXL, per lib/fontSize.ts). */
+  font-size: max(16px, var(--font-size));
+}
+
+input:where(
+    [type="text"],
+    [type="password"],
+    [type="email"],
+    [type="search"],
+    [type="url"],
+    [type="tel"],
+    [type="number"],
+    :not([type])
+  ):focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* UX-6 D9 (2026-05-21) — iOS-only layout-viewport pin. This is the
    Telegram Web K pattern (https://github.com/morethanwords/tweb
    src/scss/base.scss) for keeping the iOS on-screen keyboard from
@@ -642,14 +693,8 @@ html.overlay-open #root > div {
 }
 
 .login-form input {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
   /* #204 tap target: comfortable ≥44px touch height (iPad/mobile-first). */
   padding: 0.7rem 0.6rem;
-  min-height: var(--tap-min);
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
 }
 
 .login-form input:focus {
@@ -2563,12 +2608,7 @@ html.resize-dragging * {
 
 .compose-box textarea {
   flex: 1;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
   padding: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
   line-height: var(--line-height);
   resize: none;
   /* #123 (2026-07-03): a long draft IS a vertical scroll container (rows=1,
@@ -3230,11 +3270,6 @@ html.resize-dragging * {
 }
 
 .delete-account-confirm-input {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
   padding: 0.4rem 0.5rem;
 }
 
@@ -3748,10 +3783,7 @@ html.resize-dragging * {
 .cap-editor-input {
   background: transparent;
   color: var(--mode-op);
-  border: 1px solid var(--border);
   padding: 0.15rem 0.4rem;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
   width: 6rem;
 }
 
@@ -3858,12 +3890,8 @@ html.resize-dragging * {
 }
 
 .settings-drawer label.prefs-list input[type="text"] {
-  background: var(--bg);
   color: var(--text);
-  border: 1px solid var(--border);
   padding: 0.25rem 0.4rem;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
 }
 
 .settings-drawer label.prefs-list input[type="text"]:disabled {
@@ -5473,13 +5501,7 @@ html.resize-dragging * {
 .mode-modal-param-input {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: var(--tap-min);
   padding: 0.35rem 0.5rem;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
 }
 
 .mode-modal-param-input:focus {
@@ -5886,12 +5908,7 @@ html.resize-dragging * {
 .theme-editor-font-select,
 .theme-editor-bg-url-input {
   background: var(--bg-alt);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
   padding: 0 0.5rem;
-  min-height: var(--tap-min);
 }
 
 .theme-editor-group {
@@ -6442,11 +6459,8 @@ html.resize-dragging * {
   flex: 1 1 auto;
   min-width: 0;
   background: transparent;
-  color: var(--fg);
   border: none;
   outline: none;
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
   padding: 0.25rem 0;
 }
 
@@ -6575,16 +6589,8 @@ html.resize-dragging * {
 
 .registration-wizard-input {
   width: 100%;
-  box-sizing: border-box;
-  min-height: var(--tap-min);
   background: var(--bg-alt, var(--bg));
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
   outline: none;
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
-  padding: 0.5rem 0.6rem;
 }
 
 .registration-wizard-input:focus {
@@ -7124,10 +7130,6 @@ html.resize-dragging * {
   min-width: 8rem;
   padding: 0.4rem 0.5rem;
   background: var(--bg-alt);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: var(--font-size);
 }
 
 .banlist-modal-add-input:focus {
@@ -8724,10 +8726,7 @@ audio.media-viewer-media {
 .perform-textarea {
   width: 100%;
   min-height: 5rem;
-  box-sizing: border-box;
   resize: vertical;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
 }
 
 .perform-oper {
