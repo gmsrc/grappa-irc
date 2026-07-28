@@ -92,8 +92,10 @@ export function closeQueryWindow(networkId: number, targetNick: string): void {
 // otherwise pick the most-recently-viewed window). $server-vs-MRU is a
 // deferred product choice — see DESIGN_NOTES 2026-07-26 #71 INC-3 + the
 // follow-up issue; today both surfaces land on $server. The redirect runs
-// before `partAndForget` so it fires even in the (unreachable in-UI)
-// no-token case.
+// before `partAndForget`, so in the (unreachable in-UI) no-token case focus
+// still moves to $server while the row stays put — harmless because a
+// pseudo-row is never rendered without a token; revisit only if some
+// token-expiry edge ever makes this path reachable.
 export function dismissPseudoWindow(networkSlug: string, name: string): void {
   const sel = selectedChannel();
   if (sel !== null && sel.networkSlug === networkSlug && sel.channelName === name) {

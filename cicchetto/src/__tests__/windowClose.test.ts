@@ -239,7 +239,7 @@ describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focuse
     expect(api.postPart).toHaveBeenCalledWith("utok", "freenode", "#inv");
   });
 
-  it("clears the windowState entry via forceParted (unconditional user close)", async () => {
+  it("clears the windowState entry via forceParted (token-gated user close)", async () => {
     selectedChannelMock.mockReturnValue(null);
     const auth = await import("../lib/auth");
     auth.setToken("utok");
