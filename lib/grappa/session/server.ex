@@ -4560,10 +4560,21 @@ defmodule Grappa.Session.Server do
   # built-in / perform list too, and must get the SAME +r gate — otherwise the
   # feature ships with the exact race #347 exists to prevent.
   #
-  # Everything else fires immediately, unchanged: SASL identifies BEFORE 001 (so
-  # the 001 autojoin already sees +r), and `:none`/`:server_pass`/`:auto` with
-  # NO nickserv secret have no identify step to wait on. An empty autojoin set
-  # also fires now (the loop is a no-op) rather than arming a pointless timer.
+  # Everything else fires immediately: SASL identifies BEFORE 001 (so the 001
+  # autojoin already sees +r), and `:none`/`:server_pass`/`:auto` with NO
+  # nickserv secret have no identify step to wait on. An empty autojoin set also
+  # fires now (the loop is a no-op) rather than arming a pointless timer.
+  #
+  # KNOWN EDGE (#509): a `nickserv_pass` field set on a method that already
+  # authed pre-001 (SASL — a misconfiguration, but the editor exposes the field
+  # for every network) STILL takes the defer path. We cannot cheaply avoid it:
+  # `state.umodes` is empty until the 221 RPL_UMODEIS reply (queried at 001,
+  # lands after), so there is no honest "already +r" signal to test here. The
+  # cost is bounded — the JOINs fire on the `@autojoin_defer_ms` fallback (the
+  # +r echo already passed) — and correctness holds; only a ~0.5s delay on a
+  # misconfigured SASL credential, never a hang. Not worth an `auth_method`
+  # exclusion (asymmetric with the built-in identify, which fires the redundant
+  # IDENTIFY on the same combo by design).
   @spec maybe_autojoin_or_defer(t()) :: t()
   defp maybe_autojoin_or_defer(%{autojoin: [_ | _]} = state) do
     if identify_expected?(state) do

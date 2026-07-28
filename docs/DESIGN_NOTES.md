@@ -22147,6 +22147,18 @@ the defer decision. `nickserv_pass` is persistent config (like `oper_pass`), NOT
 one-shot: it re-runs on a defensive re-welcome exactly as the whole perform list
 does, bounded by the same `+r` gate.
 
+**Known edge — SASL + `nickserv_pass` field.** SASL authenticates pre-001, so
+its autojoin never needed the gate. But the editor exposes the field for every
+network, so a SASL credential CAN carry a `nickserv_pass` (a misconfiguration).
+That combo now (a) fires one redundant-but-harmless built-in IDENTIFY and (b)
+takes the defer path even though it is already `+r`. We do NOT special-case it:
+there is no honest "already +r" signal at 001 (`state.umodes` is empty until the
+221 RPL_UMODEIS reply, which is queried at 001 and lands after), and an
+`auth_method` exclusion would be asymmetric with the built-in identify. The cost
+is bounded — the JOINs fire on the `@autojoin_defer_ms` fallback (~0.5s), never a
+hang. The `maybe_autojoin_or_defer/1` comment documents this so the "SASL fires
+immediately" invariant is not silently false.
+
 **Wire.** Additive-only (#447): `perform_wire/1` gains `nickserv_pass_set`
 (write-only boolean, like `oper_pass_set`); the secret is never serialised.
 `PerformSettings.tsx` gains a second write-only input (the shared `.perform-secret`

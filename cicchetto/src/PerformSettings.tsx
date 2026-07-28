@@ -141,7 +141,7 @@ const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
         </button>
       </form>
       <Show when={saved()}>
-        <p class="perform-oper-status" data-testid={`perform-saved-${props.net.slug}`}>
+        <p class="perform-secret-status" data-testid={`perform-saved-${props.net.slug}`}>
           saved
         </p>
       </Show>

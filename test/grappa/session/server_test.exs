@@ -1343,7 +1343,7 @@ defmodule Grappa.Session.ServerTest do
     test ":server_pass with NO nickserv secret still fires autojoin immediately on 001 (unregressed)" do
       {server, port} = start_server()
 
-      {user, network, _} =
+      {user, network, credential} =
         setup_user_and_network(port, %{
           nick: "grappa-test",
           auth_method: :server_pass,
@@ -1351,7 +1351,11 @@ defmodule Grappa.Session.ServerTest do
           autojoin_channels: ["#sniffo"]
         })
 
-      pid = start_session_for(user, network)
+      # A LONG (60s) fallback is load-bearing: it proves the JOIN fired on 001
+      # itself, not on the deferred-autojoin fallback timer. With the production
+      # ~0.5s default a wrongful defer would still fire inside the 1s assertion
+      # window and this "fires immediately" test would pass either way (mirror).
+      pid = nickserv_plan(user, network, credential, 60_000)
 
       :ok = await_handshake(server)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
