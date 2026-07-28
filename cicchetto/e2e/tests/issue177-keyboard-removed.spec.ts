@@ -22,6 +22,7 @@ import {
   composeSend,
   composeTextarea,
   loginAs,
+  openRailMenu,
   scrollbackLines,
   selectChannel,
 } from "../fixtures/cicchettoPage";
@@ -39,9 +40,11 @@ test.describe("issue #177 — custom on-screen IRC keyboard removed", () => {
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
 
-    // (a) Settings no longer offers the IRC keyboard opt-in. Open the drawer
-    // via the desktop cog; assert the toggle is ABSENT (this fails on pre-#177
-    // code) paired with a stable positive twin so a testid typo can't green it.
+    // (a) Settings no longer offers the IRC keyboard opt-in. Reveal the rail
+    // launcher menu (#500) then open the drawer via the desktop cog; assert the
+    // toggle is ABSENT (this fails on pre-#177 code) paired with a stable
+    // positive twin so a testid typo can't green it.
+    await openRailMenu(page);
     await page.getByTestId("action-cluster-cog").click();
     const drawer = page.getByRole("dialog", { name: /settings/i });
     await expect(drawer).toHaveClass(/open/, { timeout: 5_000 });

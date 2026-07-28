@@ -35,7 +35,7 @@
 // contract, subject-shape-agnostic. Registered seed suffices.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -53,15 +53,22 @@ test("ux-5-bm desktop — members aside carries the RailActions drawer", async (
   // rail's RailActions drawer.
   await expect(page.locator(".shell-chrome")).toHaveCount(0);
   await expect(page.locator(".topic-bar")).toHaveCount(1);
-  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible();
+  // #500 — the cog + archive live behind the rail launcher menu now; open it
+  // (desktop: taps the launcher) then assert the cog is reachable.
+  await openRailMenu(page);
+  await expect(
+    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
+  ).toBeVisible();
 
   // #473 — the members aside DOES carry the `.rail-actions` drawer now (the
   // retired mobile-only `.mobile-panel-actions` footer became one rail present
-  // on both form factors). Assert it's here, hosting the always-on cog +
-  // archive rows.
+  // on both form factors). The container still holds the #500 launcher; the
+  // always-on cog + archive rows live in the launcher menu it opens.
   const rail = page.locator(".shell-members .rail-actions");
   await expect(rail).toHaveCount(1);
-  await expect(rail.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
+  await expect(
+    page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']"),
+  ).toHaveCount(1);
 });
 
 test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer hosts settings+archive launchers; mutex enforced", async ({
@@ -102,11 +109,18 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
   // footer (whose `mobile-panel-settings` launcher no longer exists at all).
   const rail = drawer.locator(".rail-actions");
   await expect(rail).toBeVisible();
-  await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
-  await expect(rail.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
+  // #500 folded the buttons behind the launcher menu — open it (the members
+  // drawer is already open, so this only taps the launcher), then assert.
+  await openRailMenu(page);
+  await expect(
+    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
+  ).toHaveCount(1);
+  await expect(
+    page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']"),
+  ).toHaveCount(1);
 
-  // Tap the rail's settings cog → drawer closes, SettingsDrawer opens.
-  await rail.locator("[data-testid='action-cluster-cog']").tap();
+  // Tap the rail's settings cog → launcher menu + drawer close, SettingsDrawer opens.
+  await page.locator(".rail-actions-menu [data-testid='action-cluster-cog']").tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
 
@@ -117,10 +131,11 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
 
-  // Tap archive launcher → drawer closes, ArchiveModal opens.
-  await page
-    .locator(".shell-members.open .rail-actions [data-testid='mobile-panel-archive']")
-    .tap();
+  // Tap archive launcher → launcher menu + drawer close, ArchiveModal opens.
+  // Re-open the launcher menu first (#500): re-opening the members drawer above
+  // did not re-open the menu.
+  await openRailMenu(page);
+  await page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']").tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator(".archive-modal")).toBeVisible({ timeout: 5_000 });
 });

@@ -17,7 +17,7 @@
 // test.
 
 import { TINY_PNG_HEX } from "../fixtures/bytes";
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -45,6 +45,7 @@ async function setEditorColor(page: PWPage, key: string, value: string): Promise
 }
 
 async function openThemesGalleryDesktop(page: PWPage): Promise<void> {
+  await openRailMenu(page);
   await page.getByLabel("open settings").click();
   await page.getByTestId("themes-settings-entry").click();
   await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });
@@ -110,12 +111,14 @@ test.describe("#75 — theme editor (producer path)", () => {
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
-    // Mobile: reach the themes sub-page via the cog (settings) → themes nav
-    // row. (#299 removed the footer 🎨 launcher; the cog is the path now.)
+    // Mobile: reach the themes sub-page via the rail launcher menu (#500) → cog
+    // (settings) → themes nav row. (#299 removed the footer 🎨 launcher; the
+    // cog is the path now.)
     await page.getByLabel(/open members sidebar/i).tap();
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
-    await drawer.locator("[data-testid='action-cluster-cog']").tap();
+    await openRailMenu(page);
+    await page.locator(".rail-actions-menu [data-testid='action-cluster-cog']").tap();
     await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
     await page.getByTestId("themes-settings-entry").tap();
     await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });

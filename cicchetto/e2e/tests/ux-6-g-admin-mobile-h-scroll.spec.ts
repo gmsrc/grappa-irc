@@ -29,7 +29,7 @@
 // + autojoined #bofh so it can reach the mobile launcher footer.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
   AUTOJOIN_CHANNELS,
   getSeededAdmin,
@@ -115,7 +115,9 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     await page.getByLabel(/open members sidebar/i).tap();
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
-    await drawer.locator("[data-testid='mobile-panel-admin']").tap();
+    // #500 — the admin button lives behind the rail launcher menu now.
+    await openRailMenu(page);
+    await page.locator(".rail-actions-menu [data-testid='mobile-panel-admin']").tap();
 
     const pane = page.getByTestId("admin-pane");
     await expect(pane).toBeVisible({ timeout: 5_000 });
@@ -178,7 +180,9 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await page.getByLabel(/open members sidebar/i).tap();
-    await page.locator(".shell-members.open [data-testid='mobile-panel-admin']").tap();
+    // #500 — the admin button lives behind the rail launcher menu now.
+    await openRailMenu(page);
+    await page.locator(".rail-actions-menu [data-testid='mobile-panel-admin']").tap();
     await expect(page.getByTestId("admin-pane")).toBeVisible({ timeout: 5_000 });
 
     await page.getByTestId("admin-tab-networks").tap();
@@ -213,7 +217,9 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await page.getByLabel(/open members sidebar/i).tap();
-    await page.locator(".shell-members.open [data-testid='mobile-panel-admin']").tap();
+    // #500 — the admin button lives behind the rail launcher menu now.
+    await openRailMenu(page);
+    await page.locator(".rail-actions-menu [data-testid='mobile-panel-admin']").tap();
     await expect(page.getByTestId("admin-pane")).toBeVisible({ timeout: 5_000 });
 
     // Negative twin: relaxing `.admin-pane` from `pan-y` to `pan-x pan-y`

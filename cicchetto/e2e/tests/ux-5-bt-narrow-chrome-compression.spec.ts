@@ -47,7 +47,13 @@
 // contract, subject-shape-agnostic. Registered seed suffices.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  closeMembersDrawer,
+  loginAs,
+  openRailMenu,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -61,12 +67,19 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
   await loginAs(page, vjt);
 
   // Cold-load lands on home. #71 INC-2 removed the desktop .shell-chrome row
-  // (cog moved to the permanent right rail); the rail's ActionCluster cog is
-  // the always-present desktop chrome affordance now.
-  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible({
+  // (cog moved to the permanent right rail); #500 folded the cog behind the rail
+  // launcher menu, so open it (desktop: taps the launcher) then assert the cog.
+  await openRailMenu(page);
+  await expect(
+    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
+  ).toBeVisible({
     timeout: 10_000,
   });
   await expect(page.locator(".shell-chrome")).toHaveCount(0);
+  // #500 — close the launcher menu before switching windows; its full-viewport
+  // backdrop would otherwise intercept the selectChannel sidebar click.
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".rail-actions-menu")).toHaveCount(0, { timeout: 5_000 });
 
   // Switch to a joined channel — topic-bar mounts (no chrome row above it on
   // desktop anymore; the freed top is the topic's per INC-2).
@@ -78,7 +91,12 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
   // the LIVE `action-cluster-cog` testid is absent from the topic-bar (the
   // retired `shell-chrome-cog` is gone from the DOM, so it would be vacuous).
   await expect(page.locator(".topic-bar [data-testid='action-cluster-cog']")).toHaveCount(0);
-  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible();
+  // #500 — re-open the launcher menu on the channel window; the cog is reachable
+  // in the rail (not the topic-bar).
+  await openRailMenu(page);
+  await expect(
+    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
+  ).toBeVisible();
 
   // Sidebar network-name nit: header span computed weight is bold +
   // header button uses flex-start justification. getComputedStyle
@@ -123,16 +141,24 @@ test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 
   // pointing at them would be vacuous).
   await expect(page.locator(".topic-bar [data-testid='action-cluster-cog']")).toHaveCount(0);
   await expect(page.locator(".topic-bar [data-testid='mobile-panel-archive']")).toHaveCount(0);
-  // The affordances live inside the members drawer's `.rail-actions` drawer (see
-  // ux-5-bm spec for the full mutex contract). Verified here as a sanity link
-  // between the BT reclamation and the #473 relocation: the cog + archive rows
-  // are present in the rail.
+  // The affordances live inside the members drawer's `.rail-actions` launcher
+  // menu (see ux-5-bm spec for the full mutex contract). Verified here as a
+  // sanity link between the BT reclamation and the #473/#500 relocation: the cog
+  // + archive rows are present in the rail launcher menu. openRailMenu opens the
+  // members drawer then the launcher (mobile), revealing the buttons.
+  await openRailMenu(page);
   await expect(
-    page.locator(".shell-members .rail-actions [data-testid='action-cluster-cog']"),
+    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
   ).toHaveCount(1);
   await expect(
-    page.locator(".shell-members .rail-actions [data-testid='mobile-panel-archive']"),
+    page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']"),
   ).toHaveCount(1);
+  // #500 — opening the launcher opened the members drawer + menu; close both so
+  // the hamburger tap-target checks + the re-open below run against the clean
+  // topic-bar state (the open drawer/backdrop would otherwise occlude the tap).
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".rail-actions-menu")).toHaveCount(0, { timeout: 5_000 });
+  await closeMembersDrawer(page);
 
   // #305 — the mobile members hamburger ADOPTS `.shell-chrome-btn` and so
   // sizes from the shared tokens: the tap target meets the 48px HIG floor

@@ -37,6 +37,7 @@
 import { expect, test } from "../fixtures/test";
 import {
   loginAs,
+  openRailMenu,
   selectChannel,
   sidebarEventsBadge,
   sidebarMessageBadge,
@@ -70,10 +71,16 @@ test("#239 — hidden control message does NOT bump the unread badge; reading cl
 
   // Pin #bofh to HIDE presence via the production toggle (no need to seed 50
   // members — the size-default math is unit-tested; this is the interactive
-  // hide path). The toggle lives in the TopicBar of the focused channel.
-  const toggle = page.locator('[data-testid="presence-toggle"]');
+  // hide path). #500 folded the denoise toggle behind the rail launcher menu;
+  // open it (desktop: taps the launcher) to reach the toggle.
+  await openRailMenu(page);
+  const toggle = page.locator('.rail-actions-menu [data-testid="presence-toggle"]');
   await expect(toggle).toBeVisible({ timeout: 5_000 });
   await toggle.click();
+  // #500 — denoise does NOT self-close the launcher menu; close it so its
+  // full-viewport backdrop stops intercepting the sidebar clicks below.
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".rail-actions-menu")).toHaveCount(0, { timeout: 5_000 });
 
   // Clean baseline: cursor at the current tail so the count reflects ONLY the
   // peer traffic we are about to generate.

@@ -13,7 +13,7 @@
 // attributed to the fixed "guest" label server-side (author model B); this
 // spec exercises the client half.
 
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
   adminDeleteTheme,
   adminDeleteVisitor,
@@ -39,19 +39,22 @@ test.setTimeout(60_000);
 type PWPage = import("@playwright/test").Page;
 
 // Mobile path to the themes sub-page (mirrors the #75 gallery spec): members
-// hamburger → cog (settings) → themes nav row.
+// hamburger → rail launcher menu (#500) → cog (settings) → themes nav row.
 async function openThemesSubPageMobile(page: PWPage): Promise<void> {
   await page.getByLabel(/open members sidebar/i).tap();
   const drawer = page.locator(".shell-members.open");
   await expect(drawer).toBeVisible({ timeout: 5_000 });
-  await drawer.locator("[data-testid='action-cluster-cog']").tap();
+  await openRailMenu(page);
+  await page.locator(".rail-actions-menu [data-testid='action-cluster-cog']").tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await page.getByTestId("themes-settings-entry").tap();
   await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });
 }
 
-// Desktop path to the themes sub-page (settings cog → themes nav row).
+// Desktop path to the themes sub-page (rail launcher menu → settings cog →
+// themes nav row).
 async function openThemesSubPageDesktop(page: PWPage): Promise<void> {
+  await openRailMenu(page);
   await page.getByLabel(/open settings/i).click();
   await page.getByTestId("themes-settings-entry").click();
   await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });

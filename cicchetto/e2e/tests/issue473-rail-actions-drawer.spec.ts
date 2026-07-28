@@ -45,6 +45,7 @@ import {
   loginAs,
   openArchive,
   openMembersDrawer,
+  openRailMenu,
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
@@ -91,18 +92,28 @@ test.describe("#473 — RailActions drawer + grouped ArchiveModal", () => {
     const rail = page.locator(".shell-members .rail-actions");
     await expect(rail).toBeVisible();
 
+    // #500 — the labelled buttons are collapsed behind ONE launcher; reveal the
+    // menu first (openRailMenu is viewport-aware: on desktop it taps the
+    // launcher directly). The seven action buttons live inside
+    // `.rail-actions-menu` now, so re-scope every button query to it.
+    await openRailMenu(page);
+    const menu = page.locator(".shell-members .rail-actions-menu");
+    await expect(menu).toBeVisible();
+
     // Each rail button renders its glyph AND its text label side by side. The
     // label text IS the #473 feature under guard — assert both the icon span is
     // present and the label carries the exact word.
     for (const { testid, label } of RAIL_BUTTONS) {
-      const button = rail.locator(`[data-testid='${testid}']`);
+      const button = menu.locator(`[data-testid='${testid}']`);
       await expect(button).toBeVisible();
       await expect(button.locator(".rail-action-icon")).toHaveCount(1);
       await expect(button.locator(".rail-action-label")).toHaveText(label);
     }
 
     // admin is isAdmin()-gated: vjt is a non-admin, so the button never renders.
-    await expect(rail.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
+    // Assert absence INSIDE the open menu (alongside the present buttons above),
+    // so the menu is proven expanded — a collapsed menu would hide admin too.
+    await expect(menu.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
   });
 
   test("desktop home — archive is always-on (no selection) and opens the grouped modal", async ({
@@ -175,15 +186,27 @@ test.describe("#473 — RailActions drawer + grouped ArchiveModal", () => {
     await openMembersDrawer(page);
     const rail = page.locator(".shell-members.open .rail-actions");
     await expect(rail).toBeVisible();
+    // #500 — the buttons are collapsed behind the launcher; reveal the menu
+    // (openRailMenu sees the drawer is already open and just taps the launcher).
+    // The seven action buttons live inside `.rail-actions-menu` now.
+    await openRailMenu(page);
+    const menu = page.locator(".shell-members.open .rail-actions-menu");
+    await expect(menu).toBeVisible();
     for (const { testid, label } of RAIL_BUTTONS) {
-      const button = rail.locator(`[data-testid='${testid}']`);
+      const button = menu.locator(`[data-testid='${testid}']`);
       await expect(button).toBeVisible();
       await expect(button.locator(".rail-action-label")).toHaveText(label);
     }
-    await expect(rail.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
+    await expect(menu.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
 
-    // Close the drawer before the archive flow so openArchive opens it fresh
-    // (opening an already-open drawer would toggle the hamburger the wrong way).
+    // Close the launcher menu first — its full-viewport backdrop (fixed
+    // inset:0) would otherwise intercept the drawer-backdrop click below. Escape
+    // routes through the shared overlay ESC stack `createOverlayLock` registers,
+    // closing the topmost overlay (the menu). Then close the drawer so
+    // openArchive opens it fresh (opening an already-open drawer would toggle the
+    // hamburger the wrong way).
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0, { timeout: 5_000 });
     await closeMembersDrawer(page);
 
     // PART → archived. Then reach the ONE archive door via the rail (openArchive

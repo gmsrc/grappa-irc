@@ -13,7 +13,7 @@
 // mirror is cleared before reload, so the post-reload swap can only come from
 // GET /me/theme.
 
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -31,7 +31,8 @@ async function openThemesSubPage(page: import("@playwright/test").Page): Promise
   await page.getByLabel(/open members sidebar/i).tap();
   const drawer = page.locator(".shell-members.open");
   await expect(drawer).toBeVisible({ timeout: 5_000 });
-  await drawer.locator("[data-testid='action-cluster-cog']").tap();
+  await openRailMenu(page);
+  await page.locator(".rail-actions-menu [data-testid='action-cluster-cog']").tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await page.getByTestId("themes-settings-entry").tap();
   await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });

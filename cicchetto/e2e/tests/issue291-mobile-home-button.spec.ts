@@ -22,7 +22,7 @@
 // vjt is temporarily promoted to admin (mirrors ux-6-c-mobile-admin-launcher),
 // then reverted in afterEach so the shared stack baseline is restored.
 
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
   AUTOJOIN_CHANNELS,
   getSeededAdmin,
@@ -99,6 +99,14 @@ test.describe("#291 — home launcher in the rail actions drawer", () => {
     const rail = drawer.locator(".rail-actions");
     await expect(rail).toBeVisible();
 
+    // #500 — the rail affordances collapsed behind ONE launcher; reveal the menu
+    // (openRailMenu sees the drawer is already open and just taps the launcher).
+    // The buttons live inside `.rail-actions-menu` now, so scope every query to
+    // it.
+    await openRailMenu(page);
+    const menu = drawer.locator(".rail-actions-menu");
+    await expect(menu).toBeVisible();
+
     // #473 — every rail affordance folded into the ONE `.rail-actions` drawer:
     // the window-nav launchers (home / rooms / admin), the own-signal launchers
     // (themes / archive), the settings cog (was the #71 top ActionCluster) and
@@ -107,22 +115,24 @@ test.describe("#291 — home launcher in the rail actions drawer", () => {
     // `mobile-panel-list` (labelled "rooms" now; opens the directory, covered
     // by issue361), themes deep-links the settings themes sub-page (covered by
     // issue332), and the cog keeps `action-cluster-cog`.
-    await expect(rail.locator("[data-testid='mobile-panel-home']")).toHaveCount(1);
-    await expect(rail.locator("[data-testid='mobile-panel-list']")).toHaveCount(1);
-    await expect(rail.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
-    await expect(rail.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
-    await expect(rail.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
+    await expect(menu.locator("[data-testid='mobile-panel-home']")).toHaveCount(1);
+    await expect(menu.locator("[data-testid='mobile-panel-list']")).toHaveCount(1);
+    await expect(menu.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
+    await expect(menu.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
+    await expect(menu.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
     // #473 — the settings cog folded INTO the rail (was a separate top
     // ActionCluster post-#71); it's now one of the rail buttons.
-    await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+    await expect(menu.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
     // #473 — denoise (presence toggle) is channel-gated and shows on this
     // channel window (it too folded into the rail).
-    await expect(rail.locator("[data-testid='presence-toggle']")).toHaveCount(1);
+    await expect(menu.locator("[data-testid='presence-toggle']")).toHaveCount(1);
 
     // Every launcher is a proper mobile tap target (≥44px, #291). Seven buttons
     // for an admin on a channel window: home, rooms, themes, archive, settings
-    // (cog), admin, denoise.
-    const buttons = rail.locator(".shell-chrome-btn");
+    // (cog), admin, denoise. #500 — scope the count to `.rail-actions-menu`: the
+    // pinned launcher ALSO carries `.shell-chrome-btn` but lives OUTSIDE the
+    // menu, so counting under the menu yields exactly the seven action buttons.
+    const buttons = menu.locator(".shell-chrome-btn");
     await expect(buttons).toHaveCount(7);
     const count = await buttons.count();
     for (let i = 0; i < count; i++) {
@@ -139,7 +149,7 @@ test.describe("#291 — home launcher in the rail actions drawer", () => {
     }
 
     // Tap home → drawer closes (mutex) + the HOME window renders.
-    await rail.locator("[data-testid='mobile-panel-home']").tap();
+    await menu.locator("[data-testid='mobile-panel-home']").tap();
     await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
     await expect(page.locator(".home-pane-registered").first()).toBeVisible({ timeout: 5_000 });
   });

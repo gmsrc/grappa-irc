@@ -29,6 +29,7 @@ import {
   expandArchiveGroup,
   loginAs,
   openArchive,
+  openRailMenu,
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
@@ -55,19 +56,27 @@ test("desktop — rail archive button is present across every window kind and op
   // that, pre-#473, surfaced the retired mobile ShellChrome button — proving
   // the rail button is universal, not selection-shape dependent). Query is
   // covered transitively (same always-on rail).
-  const archiveBtn = page.getByTestId("mobile-panel-archive");
+  // #500 — the archive button lives behind the RailActions launcher menu, in
+  // the DOM only after the launcher is tapped. openRailMenu reveals the menu
+  // (idempotent, viewport-aware) so the always-available archive affordance is
+  // reachable on every window kind; re-scope to `.rail-actions-menu` where it
+  // now renders.
+  const archiveBtn = page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']");
 
   // Home selection (post-login).
+  await openRailMenu(page);
   await expect(archiveBtn).toBeVisible();
 
   // Channel selection.
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1);
+  await openRailMenu(page);
   await expect(archiveBtn).toBeVisible();
 
   // Server tab selection.
   const serverTab = sidebarWindow(page, NETWORK_SLUG, "Server");
   await serverTab.click();
+  await openRailMenu(page);
   await expect(archiveBtn).toBeVisible();
 
   // Positive proof the button is wired to the grouped modal (not merely

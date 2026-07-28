@@ -25,6 +25,7 @@
 import {
   composeSend,
   loginAs,
+  openRailMenu,
   selectChannel,
   sidebarWindow,
   topicJoinRow,
@@ -88,7 +89,10 @@ test("#325 — presence-hide suppresses join/part churn but keeps the #237 topic
 
     // 2. toggle presence OFF → join/part vanish; PRIVMSG stays; and CRUCIALLY
     //    the #237 topic line STILL shows (the #325 fix — pre-fix it vanished).
-    const toggle = page.locator('[data-testid="presence-toggle"]');
+    //    #500 folded the denoise toggle behind the rail launcher menu; open it
+    //    (desktop: taps the launcher) to reach the toggle.
+    await openRailMenu(page);
+    const toggle = page.locator('.rail-actions-menu [data-testid="presence-toggle"]');
     await expect(toggle).toBeVisible({ timeout: 5_000 });
     await toggle.click();
     await expect(joinRow).toHaveCount(0, { timeout: 5_000 });

@@ -27,7 +27,7 @@
 // (f) Admin → Debug tab renders the diag panel + DiagFloat toggle
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, getSeededVjt, NETWORK_NICK, NETWORK_SLUG, VJT_USER } from "../fixtures/seedData";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
@@ -167,7 +167,10 @@ test.describe("UX-6 D cluster close — iOS PWA keyboard pattern @webkit", () =>
       await page.getByLabel(/open members sidebar/i).tap();
       const drawer = page.locator(".shell-members.open");
       await expect(drawer).toBeVisible({ timeout: 5_000 });
-      await drawer.locator("[data-testid='mobile-panel-admin']").tap();
+      // #500 — the admin button lives behind the rail launcher menu now; open
+      // it before tapping admin.
+      await openRailMenu(page);
+      await page.locator(".rail-actions-menu [data-testid='mobile-panel-admin']").tap();
       await expect(page.getByTestId("admin-pane")).toBeVisible({ timeout: 5_000 });
       const debugTab = page.getByTestId("admin-tab-debug");
       await expect(debugTab).toBeVisible();

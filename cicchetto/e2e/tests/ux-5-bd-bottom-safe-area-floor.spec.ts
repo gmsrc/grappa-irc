@@ -40,7 +40,12 @@
 // drop the env() arm still fail loud.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, openSettingsMobile, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  loginAs,
+  openRailMenu,
+  openSettingsMobile,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -146,8 +151,12 @@ test("@webkit ux-5-bd — .archive-modal computed padding-bottom >= 1.5rem floor
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
+  // #500 — the archive button lives behind the RailActions launcher menu (in the
+  // DOM only after the launcher is tapped). Reveal it, then tap the archive row
+  // from `.rail-actions-menu` where it now renders.
+  await openRailMenu(page);
   await page
-    .locator(".shell-members.open .rail-actions [data-testid='mobile-panel-archive']")
+    .locator(".rail-actions-menu [data-testid='mobile-panel-archive']")
     .tap();
   const modal = page.locator(".archive-modal");
   await expect(modal).toBeVisible({ timeout: 5_000 });

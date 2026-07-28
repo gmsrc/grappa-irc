@@ -27,7 +27,7 @@
 // branches on identity.
 
 import { test, expect } from "../fixtures/test";
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -43,7 +43,10 @@ test("ux-5-a desktop — ZERO chrome hamburgers; TopicBar hamburger CSS-hidden o
   // Cold-load lands on home (UX-4 bucket B). #71 INC-2 removed the desktop
   // ShellChrome row; the permanent rail's ActionCluster cog is the load
   // anchor. Hamburger DOM count is ZERO end-to-end.
-  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible({
+  await openRailMenu(page);
+  await expect(
+    page.locator(".shell-members .rail-actions-menu [data-testid='action-cluster-cog']"),
+  ).toBeVisible({
     timeout: 10_000,
   });
   await expect(page.locator(".shell-chrome-hamburger")).toHaveCount(0);
@@ -62,8 +65,10 @@ test("ux-5-a desktop — ZERO chrome hamburgers; TopicBar hamburger CSS-hidden o
   await expect(page.locator(".topic-bar-hamburger")).not.toBeVisible();
 
   // Settings cog still always reachable (UX-4 bucket L rule survives) —
-  // #71 INC-2 relocated it to the permanent rail's ActionCluster.
-  await expect(page.getByTestId("action-cluster-cog")).toBeVisible();
+  // #71 INC-2 relocated it to the permanent rail's ActionCluster; #500 put it
+  // behind the RailActions launcher.
+  await openRailMenu(page);
+  await expect(page.locator(".rail-actions-menu [data-testid='action-cluster-cog']")).toBeVisible();
 });
 
 test("@webkit ux-5-a mobile — exactly ONE visible hamburger (TopicBar members) on channel; ZERO on home", async ({

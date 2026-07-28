@@ -18,7 +18,7 @@
 // always-visible permanent rail; see issue71-inc2-permanent-rail-desktop).
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -42,11 +42,12 @@ test.describe("#71 INC-2 — mobile rail openers (Opt A)", () => {
     await expect(page.locator("[data-testid='shell-chrome-cog']")).toHaveCount(0);
 
     // Tap it → the SAME `.shell-members` drawer opens (paletto 1), hosting the
-    // ActionCluster cog at the top.
+    // ActionCluster cog behind the RailActions launcher (#500).
     await railOpener.tap();
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
-    const cog = drawer.locator("[data-testid='action-cluster-cog']");
+    await openRailMenu(page);
+    const cog = drawer.locator(".rail-actions-menu [data-testid='action-cluster-cog']");
     await expect(cog).toBeVisible();
 
     // Tap the cog → members drawer closes (mutex) + settings drawer opens.
@@ -70,11 +71,15 @@ test.describe("#71 INC-2 — mobile rail openers (Opt A)", () => {
     await expect(topicHamburger).toBeVisible({ timeout: 10_000 });
     await expect(topicHamburger).toHaveText(OPENER_GLYPH); // paletto 2 — identical ☰
 
-    // Tap it → the SAME `.shell-members` drawer (paletto 1), hosting the cog —
-    // proving both openers converge on one drawer + one cog home.
+    // Tap it → the SAME `.shell-members` drawer (paletto 1), hosting the cog
+    // behind the RailActions launcher (#500) — proving both openers converge on
+    // one drawer + one cog home.
     await topicHamburger.tap();
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
-    await expect(drawer.locator("[data-testid='action-cluster-cog']")).toBeVisible();
+    await openRailMenu(page);
+    await expect(
+      drawer.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
+    ).toBeVisible();
   });
 });

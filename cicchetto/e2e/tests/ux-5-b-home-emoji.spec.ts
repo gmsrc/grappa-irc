@@ -19,7 +19,7 @@
 // uses BottomBar and the home row is not present there.
 
 import { test, expect } from "../fixtures/test";
-import { loginAs } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 
 test.setTimeout(60_000);
@@ -33,7 +33,10 @@ test("ux-5-b — home sidebar row renders the 🏠 emoji icon", async ({ page })
   // mounted regardless of network state. #71 INC-2 removed the desktop
   // ShellChrome row (cog moved to the permanent right rail), so anchor the
   // "shell mounted" wait on the rail's ActionCluster cog.
-  await expect(page.locator(".shell-members [data-testid='action-cluster-cog']")).toBeVisible({
+  await openRailMenu(page);
+  await expect(
+    page.locator(".shell-members .rail-actions-menu [data-testid='action-cluster-cog']"),
+  ).toBeVisible({
     timeout: 10_000,
   });
 

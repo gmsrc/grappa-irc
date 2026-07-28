@@ -10,7 +10,7 @@
 // cleared, proving the cross-device server round-trip (not just the local
 // FOUC mirror).
 
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -29,9 +29,11 @@ async function openThemesSubPage(page: import("@playwright/test").Page): Promise
   const drawer = page.locator(".shell-members.open");
   await expect(drawer).toBeVisible({ timeout: 5_000 });
   // #299 — the footer 🎨 launcher was removed; themes is reached via the
-  // cog (settings) → themes nav row now. Tapping the cog closes the members
-  // drawer (mutex) and opens the settings drawer on its "main" page.
-  await drawer.locator("[data-testid='action-cluster-cog']").tap();
+  // cog (settings) → themes nav row now. #500 — the cog now lives behind the
+  // rail launcher menu, so reveal the menu first. Tapping the cog closes the
+  // members drawer (mutex) and opens the settings drawer on its "main" page.
+  await openRailMenu(page);
+  await page.locator(".rail-actions-menu [data-testid='action-cluster-cog']").tap();
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await page.getByTestId("themes-settings-entry").tap();
   await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });

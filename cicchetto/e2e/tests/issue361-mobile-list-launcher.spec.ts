@@ -23,7 +23,7 @@
 // vjt is NOT promoted to admin — the rooms launcher is not admin-gated, so the
 // base user sees it.
 
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
   AUTOJOIN_CHANNELS,
   getSeededVjt,
@@ -54,9 +54,16 @@ test.describe("#361 — rooms launcher in the rail actions drawer", () => {
     const rail = drawer.locator(".rail-actions");
     await expect(rail).toBeVisible();
 
+    // #500 — the rail affordances collapsed behind ONE launcher; reveal the menu
+    // (openRailMenu sees the drawer is already open and just taps the launcher).
+    // The buttons live inside `.rail-actions-menu` now.
+    await openRailMenu(page);
+    const menu = drawer.locator(".rail-actions-menu");
+    await expect(menu).toBeVisible();
+
     // The 📇 rooms launcher is present (base user, no admin needed). It keeps
     // the `mobile-panel-list` testid though it's labelled "rooms" now (#473).
-    const listBtn = rail.locator("[data-testid='mobile-panel-list']");
+    const listBtn = menu.locator("[data-testid='mobile-panel-list']");
     await expect(listBtn).toHaveCount(1);
 
     // …and a proper mobile tap target (≥44px, rounded — webkit returns
@@ -71,8 +78,10 @@ test.describe("#361 — rooms launcher in the rail actions drawer", () => {
     // is de-emphasised further down. Archive is NO LONGER the tail — #473 puts
     // settings/denoise after it, retiring the #361 "archive last" reorder. Read
     // the rendered DOM order and assert the front-of-rail position + that rooms
-    // sits ahead of archive.
-    const testids = await rail
+    // sits ahead of archive. #500 — scope to `.rail-actions-menu`: the pinned
+    // launcher ALSO carries `.shell-chrome-btn` but lives OUTSIDE the menu, so
+    // the menu-scoped list is exactly the action buttons in render order.
+    const testids = await menu
       .locator(".shell-chrome-btn")
       .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
     expect(testids[0]).toBe("mobile-panel-home");

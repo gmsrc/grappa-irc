@@ -23,7 +23,7 @@
 // to admin for the admin-launcher assertions, then reverted in afterEach so the
 // shared baseline is restored (mirrors #291).
 
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
   AUTOJOIN_CHANNELS,
   getSeededAdmin,
@@ -101,18 +101,24 @@ test.describe("#299 — admin reachable from the rail actions drawer", () => {
     const rail = drawer.locator(".rail-actions");
     await expect(rail).toBeVisible();
 
-    // #473 — every launcher lives in the ONE `.rail-actions` drawer. An admin
+    // #500 — the launchers collapsed behind ONE launcher button; open the menu
+    // before reaching any rail affordance. The buttons live in
+    // `.rail-actions-menu`, in the DOM only after the launcher is tapped.
+    await openRailMenu(page);
+    const railMenu = page.locator(".rail-actions-menu");
+
+    // #473/#500 — every launcher lives in the ONE `.rail-actions-menu`. An admin
     // on a channel window sees SEVEN: home, rooms, themes, archive, settings
     // (cog), admin, denoise. The themes launcher is PRESENT (its clip-vs-wrap
     // history is moot now the rail is a flex column). The settings cog folded
     // into the rail with the `action-cluster-cog` testid (no
     // `mobile-panel-settings` button ever existed).
-    await expect(rail.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
-    await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
-    await expect(rail.locator(".shell-chrome-btn")).toHaveCount(7);
+    await expect(railMenu.locator("[data-testid='mobile-panel-themes']")).toHaveCount(1);
+    await expect(railMenu.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+    await expect(railMenu.locator(".shell-chrome-btn")).toHaveCount(7);
 
     // Admin is present AND a proper ≥44px tap target.
-    const adminBtn = rail.locator("[data-testid='mobile-panel-admin']");
+    const adminBtn = railMenu.locator("[data-testid='mobile-panel-admin']");
     await expect(adminBtn).toHaveCount(1);
     const box = await adminBtn.boundingBox();
     if (box === null) throw new Error("admin launcher has no bounding box");
@@ -135,11 +141,13 @@ test.describe("#299 — admin reachable from the rail actions drawer", () => {
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
-    const drawer = await openRailDrawer(page);
-    // #473 — the cog lives in the `.rail-actions` drawer. Tapping it closes the
+    await openRailDrawer(page);
+    // #500 — the cog lives behind the rail launcher menu now; open it first.
+    await openRailMenu(page);
+    // #473 — the cog lives in the `.rail-actions-menu`. Tapping it closes the
     // members drawer (mutex) + opens the settings drawer on its "main" page,
     // which hosts the themes nav row.
-    await drawer.locator("[data-testid='action-cluster-cog']").tap();
+    await page.locator(".rail-actions-menu [data-testid='action-cluster-cog']").tap();
     await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
     // #299 item 3 — the legacy auto/mirc-light/irssi-dark radio selector is
     // gone from the settings main page (superseded by the gallery).

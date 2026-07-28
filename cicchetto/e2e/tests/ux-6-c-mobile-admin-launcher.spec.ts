@@ -29,7 +29,7 @@
 // channel + rail drawer) without ripple-affecting other specs.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
   AUTOJOIN_CHANNELS,
   getSeededAdmin,
@@ -112,23 +112,29 @@ test.describe("UX-6-C / #473 — admin launcher in the rail actions drawer", () 
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
 
-    // #473 — the `.rail-actions` drawer hosts the admin button alongside the
+    // #500 — the rail affordances collapsed behind ONE launcher; the buttons
+    // live in `.rail-actions-menu`, in the DOM only after the launcher is
+    // tapped. Open it before reaching any rail button.
+    await openRailMenu(page);
+
+    // #473/#500 — the `.rail-actions-menu` hosts the admin button alongside the
     // settings cog + archive (the cog folded into the rail here, was the #71
     // top ActionCluster). Order doesn't matter, just presence. No
     // `mobile-panel-settings` button ever existed — the cog is
     // `action-cluster-cog`.
     const rail = drawer.locator(".rail-actions");
     await expect(rail).toBeVisible();
-    await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
-    await expect(rail.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
-    await expect(rail.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
+    const railMenu = page.locator(".rail-actions-menu");
+    await expect(railMenu.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+    await expect(railMenu.locator("[data-testid='mobile-panel-archive']")).toHaveCount(1);
+    await expect(railMenu.locator("[data-testid='mobile-panel-admin']")).toHaveCount(1);
 
     // Tap admin launcher → drawer closes (mutex with settings/archive),
     // AdminPane mounts. Selection-driven: Shell's
     // `<Show when={sel.kind === "admin" && isAdmin()}>` flips true
     // when the click handler calls setSelectedChannel with
     // $admin/$admin/admin.
-    await rail.locator("[data-testid='mobile-panel-admin']").tap();
+    await railMenu.locator("[data-testid='mobile-panel-admin']").tap();
     await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
     const pane = page.getByTestId("admin-pane");
     await expect(pane).toBeVisible({ timeout: 5_000 });
@@ -150,14 +156,20 @@ test.describe("UX-6-C / #473 — admin launcher in the rail actions drawer", () 
     const drawer = page.locator(".shell-members.open");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
 
+    // #500 — the admin button (and its absence) only exists inside
+    // `.rail-actions-menu` after the launcher is tapped; open the menu first,
+    // or the absence assertion would pass trivially with the menu closed.
+    await openRailMenu(page);
+
     const rail = drawer.locator(".rail-actions");
     await expect(rail).toBeVisible();
+    const railMenu = page.locator(".rail-actions-menu");
     // Positive twin so a testid typo can't silently green both halves of the
-    // gate. #473 — the always-present settings cog lives in the rail; use it as
-    // the positive twin (proves the rail rendered) while the admin button is
-    // absent for a non-admin.
-    await expect(rail.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
-    await expect(rail.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
+    // gate. #473 — the always-present settings cog lives in the rail menu; use
+    // it as the positive twin (proves the menu rendered AND is OPEN) while the
+    // admin button is absent for a non-admin.
+    await expect(railMenu.locator("[data-testid='action-cluster-cog']")).toHaveCount(1);
+    await expect(railMenu.locator("[data-testid='mobile-panel-admin']")).toHaveCount(0);
   });
 
   test("desktop admin — members rail hosts the RailActions admin button (retired mobile footer is gone)", async ({
@@ -178,8 +190,12 @@ test.describe("UX-6-C / #473 — admin launcher in the rail actions drawer", () 
     // footer, hence no admin button there): assert the rail IS present and the
     // admin button lives in it on desktop.
     await expect(page.locator(".shell-members .rail-actions")).toBeVisible();
+    // #500 — the launchers collapsed behind ONE launcher button; open the menu
+    // (on desktop the rail is always on screen, so this taps the launcher
+    // directly) before reaching the admin button.
+    await openRailMenu(page);
     await expect(
-      page.locator(".shell-members .rail-actions [data-testid='mobile-panel-admin']"),
+      page.locator(".rail-actions-menu [data-testid='mobile-panel-admin']"),
     ).toHaveCount(1);
     // The retired mobile-only `.mobile-panel-actions` footer is gone entirely —
     // guard that the migration left no stray footer anywhere.

@@ -37,6 +37,7 @@
 import {
   loginAs,
   openMembersDrawer,
+  openRailMenu,
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
@@ -61,8 +62,12 @@ test.describe("#332/#473 — rail themes launcher: full-width labelled row + dee
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await openMembersDrawer(page);
-    const rail = page.locator(".shell-members.open .rail-actions");
-    const themesBtn = rail.locator("[data-testid='mobile-panel-themes']");
+    // #500 — the themes launcher is collapsed behind the rail launcher; reveal
+    // the menu first (openRailMenu sees the drawer is open and taps the
+    // launcher). The button lives inside `.rail-actions-menu` now.
+    await openRailMenu(page);
+    const menu = page.locator(".shell-members.open .rail-actions-menu");
+    const themesBtn = menu.locator("[data-testid='mobile-panel-themes']");
     await expect(themesBtn).toBeVisible();
 
     // Tap themes → members drawer closes (mutex) AND the settings drawer
@@ -84,16 +89,25 @@ test.describe("#332/#473 — rail themes launcher: full-width labelled row + dee
     const rail = page.locator(".shell-members.open .rail-actions");
     await expect(rail).toBeVisible();
 
-    // #473 CSS contract: the rail is a vertical single-column list that never
-    // wraps (superseding the horizontal `.mobile-panel-actions` flex-wrap
-    // footer that clipped buttons to glyph-only). This is the direct
-    // replacement for the retired `flex-wrap: wrap` assertion.
-    const flexDirection = await rail.evaluate((el) => getComputedStyle(el).flexDirection);
+    // #500 — the labelled button list is collapsed behind the launcher; reveal
+    // the menu (openRailMenu sees the drawer is open and taps the launcher).
+    await openRailMenu(page);
+    const menu = page.locator(".shell-members.open .rail-actions-menu");
+    await expect(menu).toBeVisible();
+
+    // #473 → #500 CSS contract: the rail's action list is a VERTICAL
+    // single-column list that never wraps (superseding the horizontal
+    // `.mobile-panel-actions` flex-wrap footer that clipped buttons to
+    // glyph-only). #500 moved that list from `.rail-actions` into the overlay
+    // `.rail-actions-menu`, which carries the `flex-direction: column` now — so
+    // assert on the menu. This is the direct replacement for the retired
+    // `flex-wrap: wrap` assertion.
+    const flexDirection = await menu.evaluate((el) => getComputedStyle(el).flexDirection);
     expect(flexDirection).toBe("column");
 
     // The themes launcher shows BOTH its 🎨 glyph and its "themes" text label —
     // no wrap-to-glyph, no clipped label.
-    const themesBtn = rail.locator("[data-testid='mobile-panel-themes']");
+    const themesBtn = menu.locator("[data-testid='mobile-panel-themes']");
     await expect(themesBtn).toBeVisible();
     const themesIcon = themesBtn.locator(".rail-action-icon");
     const themesLabel = themesBtn.locator(".rail-action-label");
@@ -118,12 +132,16 @@ test.describe("#332/#473 — rail themes launcher: full-width labelled row + dee
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await openMembersDrawer(page);
+    // #500 — the cog is collapsed behind the rail launcher; reveal the menu
+    // (openRailMenu sees the drawer is open and taps the launcher).
+    await openRailMenu(page);
     // #71 INC-2 + #473 — the settings cog lives in the rail's RailActions
     // drawer; its label row now carries a "settings" text label next to the
     // glyph, so scope the emoji assertion to the icon span (the button's full
     // text is "⚙️settings"). The ⚙️ emoji-presentation contract rides the icon.
+    // #500 — the cog now lives inside `.rail-actions-menu`; scope to it.
     const cogIcon = page.locator(
-      ".shell-members.open [data-testid='action-cluster-cog'] .rail-action-icon",
+      ".shell-members.open .rail-actions-menu [data-testid='action-cluster-cog'] .rail-action-icon",
     );
     await expect(cogIcon).toHaveText(SETTINGS_COG_EMOJI);
   });

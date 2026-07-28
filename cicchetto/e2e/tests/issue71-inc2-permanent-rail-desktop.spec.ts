@@ -31,6 +31,7 @@ import {
   expandArchiveGroup,
   loginAs,
   openArchive,
+  openRailMenu,
   scrollbackLine,
   selectChannel,
   sidebarWindow,
@@ -70,7 +71,10 @@ test.describe("#71 INC-2 — permanent right rail (desktop)", () => {
     // visible and opens settings from here — the whole point of the permanent
     // rail (pre-INC-2 the cog lived in a chrome row that had no home path on
     // desktop after the row was slated for removal).
-    const cog = page.locator(".shell-members [data-testid='action-cluster-cog']");
+    await openRailMenu(page);
+    const cog = page.locator(
+      ".shell-members .rail-actions-menu [data-testid='action-cluster-cog']",
+    );
     await expect(cog).toBeVisible({ timeout: 10_000 });
     await cog.click();
     await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
