@@ -3801,7 +3801,9 @@ static void draw(struct app *app) {
     int heights[LOG_LINES];
     size_t visible_count = 0;
     static int text_heights[LOG_LINES];
-    bool divider_counted = false;
+    /* Which visible row carries the unread divider, decided ONCE here and
+     * obeyed verbatim by the draw pass below. -1 = no divider this frame. */
+    int divider_vi = -1;
     int total_visible_lines = 0;
     for (size_t i = 0; i < app->log_count; i++) {
         if (strncmp(app->log[i], "[", 1) != 0 || strncmp(app->log[i], wanted_prefix, strlen(wanted_prefix)) == 0) {
@@ -3820,11 +3822,12 @@ static void draw(struct app *app) {
              * a line short of what gets drawn, the content overflows the
              * region by one, and the bottom line — the newest message —
              * never appears. Reserved on the same row the draw pass tests,
-             * so the two agree. */
-            if (!divider_counted && w->last_read_id > 0 &&
+             * so the two agree — and the ROW is recorded, not just the fact
+             * that one was reserved: see the draw pass. */
+            if (divider_vi < 0 && w->last_read_id > 0 &&
                 app->log_ids[i] > w->last_read_id) {
                 heights[visible_count] += 1;
-                divider_counted = true;
+                divider_vi = (int)visible_count;
             }
             /* An image reserves rows UNDER its message line. The height is
              * known before the picture is decoded (the cell box is chosen
@@ -3859,8 +3862,9 @@ static void draw(struct app *app) {
      * Written from the draw path, which already holds app->lock. */
     FILE *lay = layout_log();
     if (lay) {
-        fprintf(lay, "\n== frame scroll_y=%d scroll_h=%d visible=%zu total=%d\n", scroll_y,
-                scroll_h, visible_count, total_visible_lines);
+        fprintf(lay, "\n== frame scroll_y=%d scroll_h=%d visible=%zu total=%d divider_row=%d\n",
+                scroll_y, scroll_h, visible_count, total_visible_lines,
+                divider_vi >= 0 ? (int)visible[divider_vi] : -1);
         for (size_t k = 0; k < visible_count; k++) {
             int mi = app->log_media[visible[k]];
             fprintf(lay, "   row=%zu h=%d text=%d media=%d%s :: %.56s\n", visible[k], heights[k],
@@ -3878,8 +3882,8 @@ static void draw(struct app *app) {
     if ((int)app->scrollback_offset > max_offset) app->scrollback_offset = (size_t)max_offset;
     int skip_lines = max_offset - (int)app->scrollback_offset;
     int used_lines = 0;
-    bool divider_drawn = false;
     int drawn_rows = 0;
+    int last_drawn_vi = -1;
     for (size_t vi = 0; vi < visible_count; vi++) {
         if (skip_lines >= heights[vi]) {
             skip_lines -= heights[vi];
@@ -3899,20 +3903,33 @@ static void draw(struct app *app) {
          * server's cursor says has not been read. It is deliberately
          * anchored to the CURSOR rather than to "where I was scrolled
          * last", so it means the same thing here as on every other device
-         * attached to this session. */
-        if (!divider_drawn && w->last_read_id > 0 && app->log_ids[i] > w->last_read_id &&
-            used_lines + 1 < scroll_h) {
+         * attached to this session.
+         *
+         * The row is the one the MEASURING pass reserved a line for — not
+         * "the first unread row that happens to be on screen". Those two
+         * differ as soon as the first unread row scrolls off the top, which
+         * is the steady state of a window you sit in: the read cursor
+         * freezes on focus, so after a screenful of traffic the divider's
+         * row is above the viewport. Re-anchoring it to the topmost visible
+         * row then spent a line the measurement had reserved for a row that
+         * is no longer drawn, and the budget is paid at the BOTTOM: the
+         * newest message is clipped away every frame, appearing only once
+         * the next message pushes it up. A client permanently one line
+         * behind. When the reserved row is scrolled off, the divider goes
+         * with it — its line was skipped along with its row, so the two
+         * passes still agree. */
+        if ((int)vi == divider_vi && used_lines + 1 < scroll_h) {
             attron(COLOR_PAIR(CP_ERROR) | A_BOLD);
             mvhline(msg_y, main_x + 1, ACS_HLINE, main_w - 2);
             mvprintw(msg_y, main_x + 3, " unread ");
             attroff(COLOR_PAIR(CP_ERROR) | A_BOLD);
-            divider_drawn = true;
             used_lines += 1;
             msg_y += 1;
             available -= 1;
             if (draw_lines > available) draw_lines = available;
             if (draw_lines <= 0) break;
         }
+        last_drawn_vi = (int)vi;
         draw_message_line(msg_y, main_x + 1, main_w - 2, draw_lines, app->log[i], app->log_mentions[i], app->log_pending[i]);
         const char *msg_url = find_url(app->log[i]);
         enum media_kind mk = msg_url ? media_kind_of(msg_url) : MEDIA_NONE;
@@ -3959,11 +3976,20 @@ static void draw(struct app *app) {
     if (lay) {
         /* used < scroll_h with rows left undrawn means the budget ran out
          * early: the bottom of the buffer was clipped. used == scroll_h
-         * with rows left is the normal "scrolled" case. */
-        fprintf(lay, "   END max_off=%d skip=%d used=%d/%d drawn=%d/%zu%s\n", max_offset,
-                max_offset - (int)app->scrollback_offset, used_lines, scroll_h, drawn_rows,
-                visible_count,
-                (used_lines > scroll_h) ? "  *** OVERFLOW: budget exceeded ***" : "");
+         * with rows left is the normal "scrolled" case.
+         *
+         * CLIPPED is the one that matters and the one a screenshot cannot
+         * show: sitting at the bottom (offset 0) with the NEWEST row not
+         * drawn. That is the shape every measure-vs-draw disagreement
+         * takes — whatever line the draw pass spends that the measuring
+         * pass did not reserve is paid for out of the last row. */
+        bool clipped = visible_count > 0 && app->scrollback_offset == 0 &&
+                       last_drawn_vi != (int)visible_count - 1;
+        fprintf(lay, "   END max_off=%d skip=%d used=%d/%d drawn=%d/%zu last_drawn=%d%s%s\n",
+                max_offset, max_offset - (int)app->scrollback_offset, used_lines, scroll_h,
+                drawn_rows, visible_count, last_drawn_vi,
+                (used_lines > scroll_h) ? "  *** OVERFLOW: budget exceeded ***" : "",
+                clipped ? "  *** CLIPPED: newest row not drawn ***" : "");
         fflush(lay);
     }
 

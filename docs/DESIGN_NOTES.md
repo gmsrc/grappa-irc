@@ -21694,3 +21694,34 @@ precisely because the product path was proven synchronous + correct.
 ## 2026-07-28 — #510: cic's `setSelectedChannel` focus key is a channel-fold site
 
 Any cic selection path MUST `canonicalChannel` the channel name before handing it to `setSelectedChannel` (the rfc1459 twin of `Identifier.canonical_channel/1`, like every channel-keyed site #364) or it focuses a key the server-folded `window_states` never matches — the empty phantom window `/join #a,#b` produced by focusing the raw comma-list instead of the folded first split element (POST stays the unsplit list; the server splits it, #382).
+
+## 2026-07-28 — shottino: the unread divider's ROW is a measure/draw agreement site
+
+Third instance of the same class in shottino's chat layout (after the inline-media
+reservation and the divider reservation itself): the measuring pass, which sizes the
+scroll region, and the draw pass, which consumes it, disagreed — this time not about
+whether to reserve the divider row but about WHICH row carries it. Measuring reserved
+its line on the first unread row in the buffer; drawing spent it on the first unread
+row that happened to be ON SCREEN. Those coincide only while that row is inside the
+viewport, and in the steady state of a window you sit in they don't: the read cursor
+freezes on focus change (deliberately — the divider means "where I left off", the same
+frozen-in-pane contract as cic), so after a screenful of traffic the divider's row is
+above the viewport. The draw pass then re-anchored the divider to the topmost visible
+row and spent a line the measurement had reserved for a row that is no longer drawn.
+
+The overflow is always paid at the BOTTOM, because content is laid out top-down and
+the loop clamps every row to the remaining budget: the newest message loses its line
+and is dropped, every frame, so the client sits permanently ONE LINE BEHIND — the
+newest message appears only when the next one pushes it up. That is the symptom the
+user reported ("the last line stays hidden and reveals only when another line
+arrives") and it is the signature of every measure-vs-draw disagreement here.
+
+Fix: the divider's row is decided ONCE, in the measuring pass (`divider_vi`), and the
+draw pass obeys it verbatim instead of re-deriving it. When the reserved row scrolls
+off the top its line is skipped along with its row, so the two passes still agree and
+the divider is simply not shown — correct, since it belongs above content that is off
+screen. Same lesson as `media_extra_rows()`: two numbers that must agree belong in one
+place. The layout diagnostic (`SHOTTINO_LAYOUT_LOG`) now records `divider_row` and
+flags `*** CLIPPED: newest row not drawn ***` — sitting at offset 0 with the last
+visible row undrawn is the machine-checkable shape of this whole bug class, and it is
+the one thing a screenshot of the symptom cannot show.
