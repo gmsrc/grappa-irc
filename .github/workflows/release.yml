@@ -17,7 +17,9 @@ name: release
 #              could only prove on a like-for-like image, never a full
 #              makepkg → pacman -U). Regenerates .SRCINFO + updpkgsums.
 #   * publish — attaches deb + pkg.tar.zst + the regenerated PKGBUILD/.SRCINFO
-#              to the GitHub Release.
+#              to the GitHub Release. Runs even if a package job FAILED and
+#              attaches ONLY what built (#504): a broken distro never withholds
+#              the artifacts that succeeded; the failed leg stays red on its own.
 #
 # Version proof (#419 R3 / #391): the packaged build must report the BARE
 # `X.Y.Z`, never `-dev`. Two paths, both asserted on the real artifact:
@@ -158,8 +160,11 @@ jobs:
         run: |
           # -Syu (not -Sy): a partial upgrade against a half-synced db can
           # pull incompatible versions on Arch. --needed skips already-present.
+          # pacman-contrib provides `updpkgsums` (used by the makepkg step
+          # below); base-devel does NOT include it, so its absence killed the
+          # first release run at exit 127 (#504 defect 1).
           pacman -Syu --noconfirm --needed \
-            base-devel git elixir bun namcap sqlite sudo
+            base-devel git elixir bun namcap sqlite sudo pacman-contrib
 
       - name: Checkout
         uses: actions/checkout@v7
@@ -263,6 +268,12 @@ jobs:
   publish:
     name: publish GitHub Release assets
     needs: [deb, arch]
+    # Run once BOTH package jobs have settled, even if one FAILED (only a run
+    # cancel skips this). A distro-specific breakage (#504 defect 2) must not
+    # withhold the artifacts that built green: the attach step collects whatever
+    # actually downloaded and fails loudly only if NOTHING did. The failed leg
+    # stays red on its own, so the run is still marked failed and gets fixed.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Download built artifacts
@@ -270,30 +281,41 @@ jobs:
         with:
           path: assets
 
-      - name: Create the release and attach assets
+      - name: Create the release and attach whatever built
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           find assets -type f -print
+          # #504 defect 2 — collect ONLY the assets that actually downloaded.
+          # A failed leg never uploaded its artifact, so its files simply are
+          # not here; attaching what IS present publishes the green artifacts
+          # regardless. nullglob makes an unmatched *.deb / *.pkg.tar.zst vanish
+          # instead of becoming a literal; the explicit `-f` guard covers the
+          # two literal recipe files (PKGBUILD + the .SRCINFO dotfile the AUR
+          # push needs — spelling the name out sidesteps the dotglob trap).
+          shopt -s nullglob
+          assets=()
+          for f in assets/grappa-deb/*.deb \
+                   assets/grappa-arch/*.pkg.tar.zst \
+                   assets/grappa-arch/PKGBUILD \
+                   assets/grappa-arch/.SRCINFO; do
+            [ -f "$f" ] && assets+=("$f")
+          done
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::no build artifacts present — every package job failed; nothing to publish"
+            exit 1
+          fi
+          printf 'attaching: %s\n' "${assets[@]}"
           # Create the release on first run; on a re-run the release already
           # exists, so fall back to uploading with --clobber. BUILD ≠ PUBLISH
           # TO AUR: the regenerated PKGBUILD/.SRCINFO ride along as assets for
           # a human to push to aur.archlinux.org — nothing here pushes there.
-          # Assets listed EXPLICITLY, not via `assets/grappa-arch/*`: the
-          # default GHA shell has dotglob off, so a bare glob would silently
-          # drop `.SRCINFO` (a dotfile) — the one file the AUR push needs.
           if ! gh release create "${GITHUB_REF_NAME}" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --title "grappa ${GITHUB_REF_NAME}" \
                 --generate-notes \
-                assets/grappa-deb/*.deb \
-                assets/grappa-arch/*.pkg.tar.zst \
-                assets/grappa-arch/PKGBUILD \
-                assets/grappa-arch/.SRCINFO; then
+                "${assets[@]}"; then
             gh release upload "${GITHUB_REF_NAME}" \
               --repo "${GITHUB_REPOSITORY}" --clobber \
-              assets/grappa-deb/*.deb \
-              assets/grappa-arch/*.pkg.tar.zst \
-              assets/grappa-arch/PKGBUILD \
-              assets/grappa-arch/.SRCINFO
+              "${assets[@]}"
           fi
