@@ -403,6 +403,9 @@ enum overlay_action { ACT_NONE = 0, ACT_REPLY, ACT_QUERY };
 struct overlay_item {
     char label[MAX_LINE];
     char nick[MAX_CHANNEL];
+    /* What they said, so the reply can cite it. The label is for the
+     * eye and carries the nick column; this is the raw text. */
+    char body[MAX_LINE];
     enum overlay_action action;
 };
 
@@ -5373,6 +5376,7 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
         if (ov->nick[0]) {
             snprintf(out[n].label, sizeof(out[n].label), "Reply to %s", ov->nick);
             snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+            snprintf(out[n].body, sizeof(out[n].body), "%s", ov->body);
             out[n].action = ACT_REPLY;
             if (++n >= max) return n;
             snprintf(out[n].label, sizeof(out[n].label), "Open query with %s", ov->nick);
@@ -5407,6 +5411,7 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
          * name buries the rest. Keep the most recent of each run. */
         if (n > 0 && nick_case_equal(out[n - 1].nick, nick)) continue;
         snprintf(out[n].nick, sizeof(out[n].nick), "%s", nick);
+        snprintf(out[n].body, sizeof(out[n].body), "%s", body);
         snprintf(out[n].label, sizeof(out[n].label), "%-14s %s", nick, body);
         out[n].action = ACT_REPLY;
         n++;
@@ -5422,33 +5427,121 @@ static void overlay_close(struct app *app) {
     pthread_mutex_unlock(&app->lock);
 }
 
+
+/* ── Composing a reply ─────────────────────────────────────────────────
+ *
+ * IRC has no threading: a reply is a line like any other, so the only way
+ * to say WHICH message you are answering is to carry a piece of it. The
+ * shape is
+ *
+ *     nick: «what they said…» your answer
+ *
+ * chosen because it survives every client that will see it — it is plain
+ * text, the guillemets do not collide with mIRC formatting codes or with
+ * anything a shell or markdown renderer would eat, and `nick:` at the
+ * front is the addressing convention every IRC client already highlights
+ * on. The citation is TRUNCATED hard: an IRC line is ~450 usable bytes
+ * and the point is to jog a memory, not to repeat the channel back at
+ * it.
+ *
+ * Pure, so the awkward parts — re-picking a different message while a
+ * half-written answer sits in the input, a citation that must be cut on a
+ * word boundary, formatting codes in the original — are testable without
+ * a terminal.
+ */
+#define REPLY_CITE_MAX 56
+
+/* Strip a reply prefix this function previously wrote, so choosing a
+ * different message REPLACES the citation instead of stacking a second
+ * one in front of the first. Anything the user typed themselves survives;
+ * a line that does not look like our own prefix is returned untouched,
+ * because guessing wrong here deletes someone's sentence. */
+static const char *skip_reply_prefix(const char *input) {
+    const char *colon = strstr(input, ": ");
+    if (!colon) return input;
+    /* Only our own shape: no spaces in the addressed nick. */
+    for (const char *p = input; p < colon; p++)
+        if (isspace((unsigned char)*p)) return input;
+    const char *rest = colon + 2;
+    if (strncmp(rest, "\xc2\xab", 2) != 0) return rest; /* addressed, no citation */
+    const char *close = strstr(rest, "\xc2\xbb");
+    if (!close) return rest;
+    close += 2;
+    while (*close == ' ') close++;
+    return close;
+}
+
+/* One line of the original, with formatting codes removed and runs of
+ * whitespace collapsed: a citation is a reminder, and a newline or a
+ * colour code in the middle of one is neither. */
+static void cite_text(const char *body, char *out, size_t out_sz) {
+    if (!out_sz) return;
+    out[0] = '\0';
+    if (!body) return;
+    char plain[MAX_LINE * 2];
+    if (mirc_has_formatting(body)) mirc_strip(body, plain, sizeof(plain));
+    else snprintf(plain, sizeof(plain), "%s", body);
+
+    /* Collapse whitespace while copying, bounded by the cite width. */
+    char flat[REPLY_CITE_MAX + 1];
+    size_t w = 0;
+    bool gap = false;
+    const char *p = plain;
+    for (; *p && w < REPLY_CITE_MAX; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isspace(c)) { gap = w > 0; continue; }
+        if (gap && w < REPLY_CITE_MAX) flat[w++] = ' ';
+        gap = false;
+        if (w < REPLY_CITE_MAX) flat[w++] = (char)c;
+    }
+    flat[w] = '\0';
+
+    /* Was it actually CUT, or merely shorter once the whitespace
+     * collapsed? Comparing lengths cannot tell those apart — collapsing
+     * "two\n\nlines   and    spaces" shortens it by six characters
+     * without dropping a word — so the question is whether anything but
+     * whitespace is left where the copy stopped. */
+    bool cut = false;
+    for (const char *q = p; *q; q++)
+        if (!isspace((unsigned char)*q)) { cut = true; break; }
+    if (cut) {
+        char *last = strrchr(flat, ' ');
+        if (last && last - flat > REPLY_CITE_MAX / 3) *last = '\0';
+        snprintf(out, out_sz, "%s\xe2\x80\xa6", flat);
+    } else {
+        snprintf(out, out_sz, "%s", flat);
+    }
+}
+
+/* nick + citation + whatever was already being typed. */
+static void compose_reply(const char *nick, const char *body, const char *existing, char *out,
+                          size_t out_sz) {
+    if (!out_sz) return;
+    const char *tail = existing ? skip_reply_prefix(existing) : "";
+    char cite[REPLY_CITE_MAX + 8];
+    cite_text(body, cite, sizeof(cite));
+    /* Built in bounded steps so that if anything has to give it is the
+     * TAIL: the address and the citation are what make the line mean
+     * something to the person reading it. */
+    int n = cite[0] ? snprintf(out, out_sz, "%s: \xc2\xab%s\xc2\xbb ", nick, cite)
+                    : snprintf(out, out_sz, "%s: ", nick);
+    if (n < 0) { out[0] = '\0'; return; }
+    if ((size_t)n >= out_sz) return;
+    size_t off = (size_t)n;
+    size_t room = out_sz - off - 1;
+    size_t take = strnlen(tail, room);
+    memcpy(out + off, tail, take);
+    out[off + take] = '\0';
+}
+
 /* Prefill the input with the IRC convention for a reply. Anything already
  * typed is kept after the address rather than thrown away — losing a
  * half-written line to a stray keypress is its own bug. */
-static void reply_to(struct app *app, const char *nick) {
+static void reply_to(struct app *app, const char *nick, const char *body) {
     pthread_mutex_lock(&app->lock);
-    char rest[MAX_LINE];
-    snprintf(rest, sizeof(rest), "%s", app->input);
-    /* Already addressed to this nick? Leave it alone. */
-    size_t nlen = strlen(nick);
-    bool already = strncasecmp(rest, nick, nlen) == 0 && rest[nlen] == ':';
-    if (!already) {
-        /* Written in two bounded steps rather than one "%s: %s": the
-         * address must survive even if what was already typed has to be
-         * cut, and only the second step can be the one that gives. */
-        int n = snprintf(app->input, sizeof(app->input), "%s: ", nick);
-        if (n > 0 && (size_t)n < sizeof(app->input)) {
-            /* Copied by explicit length rather than with a second
-             * snprintf: the truncation here is DELIBERATE (the address
-             * wins over the tail), and saying so with a bound the
-             * compiler can see beats silencing a warning about it. */
-            size_t off = (size_t)n;
-            size_t room = sizeof(app->input) - off - 1;
-            size_t take = strnlen(rest, room);
-            memcpy(app->input + off, rest, take);
-            app->input[off + take] = '\0';
-        }
-    }
+    char composed[MAX_LINE];
+    compose_reply(nick, body, app->input, composed, sizeof(composed));
+    snprintf(app->input, sizeof(app->input), "%s", composed);
     app->input_len = strlen(app->input);
     pthread_mutex_unlock(&app->lock);
 }
@@ -5458,18 +5551,20 @@ static void query_window(struct app *app, const char *target);
 static void overlay_activate(struct app *app) {
     struct overlay_item items[64];
     char nick[MAX_CHANNEL] = "";
+    char body[MAX_LINE] = "";
     enum overlay_action action = ACT_NONE;
     pthread_mutex_lock(&app->lock);
     size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
     if (app->overlay.sel < n) {
         action = items[app->overlay.sel].action;
         snprintf(nick, sizeof(nick), "%s", items[app->overlay.sel].nick);
+        snprintf(body, sizeof(body), "%s", items[app->overlay.sel].body);
     }
     pthread_mutex_unlock(&app->lock);
     overlay_close(app);
     if (!nick[0]) return;
     switch (action) {
-    case ACT_REPLY: reply_to(app, nick); break;
+    case ACT_REPLY: reply_to(app, nick, body); break;
     case ACT_QUERY: query_window(app, nick); break;
     case ACT_NONE: break;
     }

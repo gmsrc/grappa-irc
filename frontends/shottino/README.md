@@ -89,8 +89,23 @@ run of the same nick. Type to filter by nick **or** by message text, which is
 how you find a line whose author you have forgotten; `Up`/`Down` to choose,
 `Enter` to reply, `Esc` to cancel.
 
-Replying prefills the input with the IRC convention, `nick: `. Anything
-already typed is kept after the address rather than thrown away.
+Replying prefills the input with the address **and a citation of the message
+you picked**:
+
+```
+alice: «the meeting is at four» 
+```
+
+IRC has no threading, so carrying a piece of the original is the only way to
+say which message you are answering — and it stays readable in every client
+that will see it. The citation is flattened to one line, stripped of
+formatting codes, and cut on a word boundary with `…` when the original runs
+long: an IRC line is ~450 usable bytes, and the point is to jog a memory, not
+to repeat the channel back at it.
+
+Anything already typed is kept after the citation rather than thrown away, and
+picking a different message replaces the citation instead of stacking a second
+one in front of the first.
 
 Right-click needs mouse reporting, which is off by default — `/mouse` turns
 it on. `Ctrl-R` always works.

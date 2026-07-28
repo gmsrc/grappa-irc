@@ -525,27 +525,68 @@ TEST(reply_picker_collapses_a_run_of_one_nick) {
     free(app);
 }
 
-TEST(reply_prefills_the_address_and_keeps_what_was_typed) {
-    struct app *app = test_app();
-    CHECK(app != NULL);
-    if (!app) return;
+TEST(reply_cites_the_original_and_keeps_what_was_typed) {
+    char out[MAX_LINE];
 
-    reply_to(app, "alice");
-    CHECK_STR(app->input, "alice: ");
-    CHECK_LONG(app->input_len, 7);
+    /* IRC has no threading, so the reply carries a piece of what it
+     * answers: nick, citation, then your words. */
+    compose_reply("alice", "the meeting is at four", "", out, sizeof(out));
+    CHECK_STR(out, "alice: \xc2\xab" "the meeting is at four\xc2\xbb ");
 
-    /* Something already typed is kept AFTER the address, not discarded. */
-    snprintf(app->input, sizeof(app->input), "sure, will do");
-    app->input_len = strlen(app->input);
-    reply_to(app, "bob");
-    CHECK_STR(app->input, "bob: sure, will do");
+    /* A half-written answer survives the citation being added. */
+    compose_reply("alice", "the meeting is at four", "ok, see you there", out, sizeof(out));
+    CHECK_STR(out, "alice: \xc2\xab" "the meeting is at four\xc2\xbb ok, see you there");
 
-    /* Already addressed to that nick: left alone rather than stacked. */
-    reply_to(app, "bob");
-    CHECK_STR(app->input, "bob: sure, will do");
+    /* Picking a DIFFERENT message replaces the citation instead of
+     * stacking a second one, and still keeps the answer. */
+    char again[MAX_LINE];
+    compose_reply("alice", "actually make it five", out, again, sizeof(again));
+    CHECK_STR(again, "alice: \xc2\xab" "actually make it five\xc2\xbb ok, see you there");
 
-    pthread_mutex_destroy(&app->lock);
-    free(app);
+    /* Replying to someone else re-addresses it. */
+    compose_reply("bob", "who is bringing the cake", again, out, sizeof(out));
+    CHECK_STR(out, "bob: \xc2\xab" "who is bringing the cake\xc2\xbb ok, see you there");
+
+    /* No body (a row with nothing to cite) is the plain address. */
+    compose_reply("carol", "", "", out, sizeof(out));
+    CHECK_STR(out, "carol: ");
+}
+
+TEST(reply_citation_is_flattened_and_cut_on_a_word) {
+    char out[MAX_LINE];
+
+    /* Formatting codes are not a citation. */
+    compose_reply("alice", "\x02" "bold\x0f and \x03" "04red\x0f text", "", out, sizeof(out));
+    CHECK_STR(out, "alice: \xc2\xab" "bold and red text\xc2\xbb ");
+
+    /* Newlines and runs of spaces collapse: a citation is one line. */
+    compose_reply("alice", "two\n\nlines   and    spaces", "", out, sizeof(out));
+    CHECK_STR(out, "alice: \xc2\xab" "two lines and spaces\xc2\xbb ");
+
+    /* Long originals are cut on a word boundary and say they were cut. */
+    compose_reply("alice",
+                  "this original message is quite a lot longer than the citation limit allows",
+                  "", out, sizeof(out));
+    CHECK(strstr(out, "\xe2\x80\xa6\xc2\xbb ") != NULL);   /* ends with an ellipsis */
+    CHECK(strlen(out) < 80);
+    CHECK(strstr(out, "this original message is quite") != NULL);
+    /* Cut BETWEEN words, so the citation never ends mid-word. */
+    const char *open = strstr(out, "\xc2\xab");
+    const char *close = strstr(out, "\xe2\x80\xa6");
+    CHECK(open && close && close > open);
+    CHECK(close[-1] != ' ');
+
+    /* A body that is exactly short enough is NOT marked as cut. */
+    compose_reply("alice", "short enough", "", out, sizeof(out));
+    CHECK(strstr(out, "\xe2\x80\xa6") == NULL);
+}
+
+TEST(reply_leaves_a_line_it_did_not_write_alone) {
+    char out[MAX_LINE];
+    /* "10:30 meeting: bring the thing" is a sentence, not a reply prefix
+     * this function wrote — guessing wrong here eats someone's line. */
+    compose_reply("alice", "yes", "10:30 meeting: bring the thing", out, sizeof(out));
+    CHECK(strstr(out, "10:30 meeting: bring the thing") != NULL);
 }
 
 int main(void) {
@@ -577,7 +618,9 @@ int main(void) {
     RUN(menu_offers_reply_and_query_for_the_clicked_nick);
     RUN(reply_picker_lists_newest_first_and_filters);
     RUN(reply_picker_collapses_a_run_of_one_nick);
-    RUN(reply_prefills_the_address_and_keeps_what_was_typed);
+    RUN(reply_cites_the_original_and_keeps_what_was_typed);
+    RUN(reply_citation_is_flattened_and_cut_on_a_word);
+    RUN(reply_leaves_a_line_it_did_not_write_alone);
     endwin();
     fclose(sink);
     return test_report();

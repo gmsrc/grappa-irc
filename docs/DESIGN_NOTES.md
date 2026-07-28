@@ -22243,3 +22243,37 @@ pictures on screen cost anything; and `media_frame_advance()` is pure and tested
 — a clip whose deadline passed several frames ago advances by ONE and re-bases
 rather than replaying the backlog, because catching up looks like a stutter and
 nobody is counting the frames of a background GIF.
+
+## 2026-07-28 — shottino: a reply carries a citation, because IRC has no threading
+
+`Ctrl-R` (and the right-click menu) prefilled `nick: ` and left it there. IRC has
+no reply mechanism — a reply is a line like any other — so the ONLY way to say
+which message you are answering is to carry a piece of it:
+
+```
+alice: «the meeting is at four» yes, see you there
+```
+
+**Shape.** Guillemets, because they survive everywhere the line will be read:
+plain text, no collision with mIRC formatting bytes, nothing a shell or a
+markdown renderer eats, and `nick:` at the front is the addressing convention
+every IRC client already highlights on. No IRCv3 `+draft/reply` tag — grappa does
+not carry one, and a tag nobody's client renders is not a citation.
+
+**The citation is flattened and cut.** Formatting codes stripped, whitespace runs
+collapsed (a citation is one line by definition), truncated on a word boundary
+with `…`. An IRC line is ~450 usable bytes and the citation must not eat the
+answer.
+
+**Two things the tests pinned that reading did not.** (a) "Was it cut" cannot be
+answered by comparing lengths before and after: collapsing whitespace shortens
+the string without dropping a word, so `two\n\nlines   and    spaces` looked
+truncated and got a spurious ellipsis. The real question is whether anything but
+whitespace remains where the copy stopped. (b) Re-picking a different message
+must REPLACE the citation rather than stack a second one, which means recognising
+a prefix this code wrote — and only that. `skip_reply_prefix` refuses to strip
+anything with a space before the colon, because `10:30 meeting: bring the thing`
+is somebody's sentence and guessing wrong there deletes it.
+
+`compose_reply()` is pure — nick, body, whatever is already typed, out — so all
+of the above is testable without a terminal, a decoder or a socket.
