@@ -60,6 +60,21 @@ the key) are accepted; `Ctrl-Alt-Up/Down` is the pair to rely on. Run
 `/keys` to print the code your terminal actually sends for a key — a
 binding that does not fire is then a bug report with a number in it.
 
+## Replying
+
+Right-click a message for a menu: reply to it, or open a query with whoever
+sent it. `Ctrl-R` opens the same thing from the keyboard — a picker over the
+recent messages in the focused pane's window, newest first, one entry per
+run of the same nick. Type to filter by nick **or** by message text, which is
+how you find a line whose author you have forgotten; `Up`/`Down` to choose,
+`Enter` to reply, `Esc` to cancel.
+
+Replying prefills the input with the IRC convention, `nick: `. Anything
+already typed is kept after the address rather than thrown away.
+
+Right-click needs mouse reporting, which is off by default — `/mouse` turns
+it on. `Ctrl-R` always works.
+
 ## Tests
 
 ```sh

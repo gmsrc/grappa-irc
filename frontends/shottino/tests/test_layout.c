@@ -419,6 +419,135 @@ TEST(closing_a_window_renumbers_every_pane) {
     free(app);
 }
 
+/* ── Overlay ──────────────────────────────────────────────────────────
+ *
+ * The right-click menu and the Ctrl-R picker share one item builder, and
+ * the draw and the activation both call it. If it ever returned a
+ * different list to those two callers, Enter would act on the row above
+ * the one highlighted — so the builder is what gets pinned. */
+static void seed_log(struct app *app, const char *line) {
+    app->log[app->log_count] = strdup(line);
+    app->log_mentions[app->log_count] = false;
+    app->log_pending[app->log_count] = false;
+    app->log_ids[app->log_count] = 0;
+    app->log_media[app->log_count] = -1;
+    app->log_count++;
+}
+
+TEST(menu_offers_reply_and_query_for_the_clicked_nick) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    struct overlay_item items[64];
+
+    app->overlay.kind = OVERLAY_MENU;
+    snprintf(app->overlay.nick, sizeof(app->overlay.nick), "alice");
+    CHECK_LONG(overlay_items(app, items, 64), 2);
+    CHECK_STR(items[0].label, "Reply to alice");
+    CHECK_LONG(items[0].action, ACT_REPLY);
+    CHECK_STR(items[1].label, "Open query with alice");
+    CHECK_LONG(items[1].action, ACT_QUERY);
+    CHECK_STR(items[1].nick, "alice");
+
+    /* No nick — a join row, a server notice — offers nothing rather than
+     * a menu that acts on "". */
+    app->overlay.nick[0] = 0;
+    CHECK_LONG(overlay_items(app, items, 64), 0);
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+TEST(reply_picker_lists_newest_first_and_filters) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    add_test_window(app, "azzurra", "#chan");
+    add_test_window(app, "azzurra", "#other");
+    struct overlay_item items[64];
+
+    seed_log(app, "[azzurra/#chan] 10:00 <alice> first thing");
+    seed_log(app, "[azzurra/#chan] 10:01 <bob> a reply about coffee");
+    seed_log(app, "[azzurra/#chan] 10:02 --> carol has joined");
+    seed_log(app, "[azzurra/#other] 10:03 <dave> different channel");
+    seed_log(app, "[azzurra/#chan] 10:04 <carol> last word");
+
+    app->overlay.kind = OVERLAY_REPLY;
+    size_t n = overlay_items(app, items, 64);
+    /* Newest first, this window only, and the join row is not something
+     * you can reply to. */
+    CHECK_LONG(n, 3);
+    CHECK_STR(items[0].nick, "carol");
+    CHECK_STR(items[1].nick, "bob");
+    CHECK_STR(items[2].nick, "alice");
+
+    /* The filter matches a nick... */
+    snprintf(app->overlay.filter, sizeof(app->overlay.filter), "ali");
+    CHECK_LONG(overlay_items(app, items, 64), 1);
+    CHECK_STR(items[0].nick, "alice");
+
+    /* ...or the message text, which is how you find a line whose author
+     * you have forgotten. */
+    snprintf(app->overlay.filter, sizeof(app->overlay.filter), "coffee");
+    CHECK_LONG(overlay_items(app, items, 64), 1);
+    CHECK_STR(items[0].nick, "bob");
+
+    snprintf(app->overlay.filter, sizeof(app->overlay.filter), "zzz");
+    CHECK_LONG(overlay_items(app, items, 64), 0);
+
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+TEST(reply_picker_collapses_a_run_of_one_nick) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    add_test_window(app, "azzurra", "#chan");
+    struct overlay_item items[64];
+    seed_log(app, "[azzurra/#chan] 10:00 <alice> one");
+    seed_log(app, "[azzurra/#chan] 10:01 <bob> two");
+    seed_log(app, "[azzurra/#chan] 10:02 <bob> three");
+    seed_log(app, "[azzurra/#chan] 10:03 <bob> four");
+    app->overlay.kind = OVERLAY_REPLY;
+    size_t n = overlay_items(app, items, 64);
+    /* bob said three things in a row; the picker offers his most recent
+     * and alice's, not a wall of one name. */
+    CHECK_LONG(n, 2);
+    CHECK_STR(items[0].nick, "bob");
+    CHECK(strstr(items[0].label, "four") != NULL);
+    CHECK_STR(items[1].nick, "alice");
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+TEST(reply_prefills_the_address_and_keeps_what_was_typed) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+
+    reply_to(app, "alice");
+    CHECK_STR(app->input, "alice: ");
+    CHECK_LONG(app->input_len, 7);
+
+    /* Something already typed is kept AFTER the address, not discarded. */
+    snprintf(app->input, sizeof(app->input), "sure, will do");
+    app->input_len = strlen(app->input);
+    reply_to(app, "bob");
+    CHECK_STR(app->input, "bob: sure, will do");
+
+    /* Already addressed to that nick: left alone rather than stacked. */
+    reply_to(app, "bob");
+    CHECK_STR(app->input, "bob: sure, will do");
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
 int main(void) {
     FILE *sink = fopen("/dev/null", "w");
     if (!sink) {
@@ -445,6 +574,10 @@ int main(void) {
     RUN(current_window_key_copies_and_reports_absence);
     RUN(focus_is_derived_from_the_focused_pane);
     RUN(closing_a_window_renumbers_every_pane);
+    RUN(menu_offers_reply_and_query_for_the_clicked_nick);
+    RUN(reply_picker_lists_newest_first_and_filters);
+    RUN(reply_picker_collapses_a_run_of_one_nick);
+    RUN(reply_prefills_the_address_and_keeps_what_was_typed);
     endwin();
     fclose(sink);
     return test_report();

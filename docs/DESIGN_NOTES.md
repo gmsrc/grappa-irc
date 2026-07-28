@@ -22172,3 +22172,38 @@ type broke the `@spec` contract on `build_plan/4`, and Dialyzer pruned the
 `pattern_match` errors in Bootstrap, Operator, Visitors, Login, admin
 controllers, session/networks controllers. ONE contract omission → 45 downstream
 dead-branch reports. A map's shape and its `@type` must change in the SAME edit.
+
+## 2026-07-28 — shottino: one overlay for the right-click menu and the Ctrl-R reply picker
+
+Two requests — a context menu on a message (reply / open a query) and a Ctrl-R
+reply picker with autocomplete over nick and message — are one widget: a floating
+list with a selection, a kind, and an action per row. Building them separately
+would have produced two selection models and two key handlers to keep in step.
+
+**The item list is DERIVED, by one function, for both callers.** `overlay_items()`
+is called by the draw AND by the activation. A list rendered from one source and
+acted on from another is a list that eventually acts on the row above the one you
+clicked — the same failure the chat area's measure/draw passes kept producing, in
+a different costume. Nothing is cached: the picker reads the log every time, so a
+message arriving under an open picker cannot silently re-point the highlighted
+row.
+
+Picker rules worth stating: newest first (you almost always mean something you
+just read); only rows from the focused pane's window; only rows with a nick, so a
+join or a server notice is not offered as something to reply to; and one entry
+per RUN of the same nick, because three lines from one person in a row is one
+thought and a wall of one name buries everyone else. The filter matches the nick
+OR the message text — finding a line whose author you have forgotten is the case
+that makes a picker better than scrolling.
+
+**Reply is a prefill, not a send.** It writes `nick: ` into the input and keeps
+whatever was already typed AFTER the address; losing a half-written line to a
+stray keypress is its own bug. Re-replying to the same nick is a no-op rather
+than stacking a second address. The two-step bounded write is deliberate: if
+something has to be cut, the address survives and the tail gives.
+
+**The overlay owns the keyboard and the mouse while it is up.** Otherwise typing
+into the picker's filter is also typing into the message being composed. A click
+outside it closes it — a modal you have to guess your way out of is worse than no
+modal. It draws last, over the pane borders, because a border crossing a menu
+reads as part of the menu.

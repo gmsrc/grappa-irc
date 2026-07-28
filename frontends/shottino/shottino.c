@@ -360,6 +360,43 @@ struct pane {
     int weight;             /* share of the axis; equal by default */
 };
 
+/* A message row on screen, so a right-click can name the message under
+ * the pointer. Sibling of link_region: same lifetime (rebuilt every
+ * frame), same reason (the wrapped layout is not re-derivable from a
+ * coordinate afterwards). */
+struct msg_region {
+    int y0, y1, x0, x1;
+    char nick[MAX_CHANNEL];
+    char body[MAX_LINE];
+};
+
+/* ── The overlay ───────────────────────────────────────────────────────
+ *
+ * Two things asked for a floating list — a right-click menu on a message
+ * and a Ctrl-R reply picker — so there is ONE, with a kind. The items are
+ * built by overlay_items(), called by BOTH the draw and the activation:
+ * a list you draw from one source and act on from another is a list that
+ * eventually acts on the row above the one you clicked. Same rule as the
+ * chat area's measure/draw agreement, for the same reason. */
+enum overlay_kind { OVERLAY_NONE = 0, OVERLAY_MENU, OVERLAY_REPLY };
+
+enum overlay_action { ACT_NONE = 0, ACT_REPLY, ACT_QUERY };
+
+struct overlay_item {
+    char label[MAX_LINE];
+    char nick[MAX_CHANNEL];
+    enum overlay_action action;
+};
+
+struct overlay {
+    enum overlay_kind kind;
+    int x, y;                 /* anchor (menu only) */
+    size_t sel;
+    char filter[64];          /* reply picker: matches nick OR message text */
+    char nick[MAX_CHANNEL];   /* menu: whose message was clicked */
+    char body[MAX_LINE];
+};
+
 struct app {
     struct url url;
     char token[MAX_TOKEN];
@@ -409,6 +446,9 @@ struct app {
     char hover_url[MAX_LINE];
     struct link_region link_regions[MAX_LINK_REGIONS];
     size_t link_region_count;
+    struct msg_region msg_regions[MAX_LINK_REGIONS];
+    size_t msg_region_count;
+    struct overlay overlay;
     struct inline_media media[MAX_INLINE_MEDIA];
     /* The full-screen preview gets its OWN slot so opening one never
      * evicts an inline image that is currently on screen. */
@@ -4138,6 +4178,26 @@ static size_t draw_member_list(struct app *app, struct window *w, int y, int x, 
  * measure/draw budget rules are unchanged, just applied per rectangle.
  *
  * Caller holds app->lock. */
+static size_t overlay_items(struct app *app, struct overlay_item *out, size_t max);
+
+/* Record a message row's rectangle plus who said it, so a right-click can
+ * name it. Rows without a nick (joins, parts, server notices) are skipped:
+ * there is nobody to reply to. Caller holds app->lock (draw path). */
+static void add_msg_region(struct app *app, int y0, int y1, int x0, int x1, const char *line) {
+    if (app->msg_region_count >= MAX_LINK_REGIONS) return;
+    char prefix[256], nick[256];
+    const char *body = NULL;
+    if (!split_message_line(line, prefix, sizeof(prefix), nick, sizeof(nick), &body)) return;
+    if (!nick[0]) return;
+    struct msg_region *r = &app->msg_regions[app->msg_region_count++];
+    r->y0 = y0;
+    r->y1 = y1;
+    r->x0 = x0;
+    r->x1 = x1;
+    snprintf(r->nick, sizeof(r->nick), "%s", nick);
+    snprintf(r->body, sizeof(r->body), "%s", body ? body : "");
+}
+
 static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int width, int height,
                            bool focused, bool split) {
     if (width < 8 || height < 2) return;
@@ -4341,6 +4401,8 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
             if (url_tok[0])
                 add_link_region(app, msg_y, msg_y + draw_lines - 1, x + 1,
                                 x + width - 2, url_tok, mk);
+            /* And every row that carries a nick is right-clickable. */
+            add_msg_region(app, msg_y, msg_y + draw_lines - 1, x + 1, x + width - 2, app->log[i]);
         }
         /* Claim the row's inline slot HERE, the first time the row is on
          * screen — not when the message arrived.
@@ -4431,6 +4493,7 @@ static void draw(struct app *app) {
     pthread_mutex_lock(&app->lock);
     erase();
     app->link_region_count = 0;
+    app->msg_region_count = 0;
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
     int side = cols > 118 ? 22 : (cols > 90 ? 18 : 14);
@@ -4664,6 +4727,49 @@ static void draw(struct app *app) {
             draw_text(2, members_x + 1, members - 2, CP_MUTED, 0, "(not seeded)");
     }
 
+    /* The overlay is drawn LAST and over everything: it is modal, and a
+     * pane border crossing a menu would read as part of the menu. */
+    if (app->overlay.kind != OVERLAY_NONE) {
+        struct overlay_item items[64];
+        size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
+        bool picker = app->overlay.kind == OVERLAY_REPLY;
+        int box_w = picker ? (main_w > 76 ? 76 : main_w - 2) : 34;
+        if (box_w > main_w - 2) box_w = main_w - 2;
+        if (box_w < 20) box_w = 20;
+        int list_h = (int)(n > 12 ? 12 : n);
+        if (list_h < 1) list_h = 1;
+        int box_h = list_h + (picker ? 2 : 0);
+        int box_x = picker ? main_x + (main_w - box_w) / 2 : app->overlay.x;
+        int box_y = picker ? (rows - box_h) / 2 : app->overlay.y;
+        /* Clamped below, then written back: the click handler maps a row
+         * to an item from these, so they have to be where it ACTUALLY
+         * landed, not where it was asked to go. */
+        if (box_x + box_w > cols) box_x = cols - box_w;
+        if (box_x < 0) box_x = 0;
+        if (box_y + box_h > rows - 1) box_y = rows - 1 - box_h;
+        if (box_y < 0) box_y = 0;
+        if (app->overlay.sel >= n && n) app->overlay.sel = n - 1;
+        app->overlay.x = box_x;
+        app->overlay.y = box_y;
+
+        for (int row = 0; row < box_h; row++) draw_fill(box_y + row, box_x, box_w, CP_SELECTED);
+        int line_y = box_y;
+        if (picker) {
+            draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "reply to: %s%s",
+                      app->overlay.filter, "_");
+            line_y++;
+        }
+        for (size_t i = 0; i < (size_t)list_h; i++) {
+            bool on = i == app->overlay.sel;
+            draw_fill(line_y, box_x, box_w, on ? CP_MENTION : CP_SELECTED);
+            draw_text(line_y, box_x + 1, box_w - 2, on ? CP_MENTION : CP_SELECTED,
+                      on ? A_BOLD : 0, "%s", i < n ? items[i].label : "(nothing to reply to)");
+            line_y++;
+        }
+        if (picker)
+            draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
+                      "type to filter | Up/Down | Enter replies | Esc cancels");
+    }
     move(cursor_y, cursor_x);
     pthread_mutex_unlock(&app->lock);
     refresh();
@@ -5182,6 +5288,175 @@ static void resize_pane(struct app *app, int delta) {
     if (w < 1) w = 1;
     if (w > 16) w = 16;
     p->weight = w;
+    pthread_mutex_unlock(&app->lock);
+}
+
+
+/* ── Overlay ───────────────────────────────────────────────────────────
+ *
+ * Items are derived, never stored: the reply picker reads the log every
+ * time it is drawn or acted on, so a message arriving under an open
+ * picker cannot make the highlighted row mean something else than what
+ * gets sent. Caller holds app->lock. */
+static size_t overlay_items(struct app *app, struct overlay_item *out, size_t max) {
+    if (max == 0) return 0;
+    struct overlay *ov = &app->overlay;
+    size_t n = 0;
+    if (ov->kind == OVERLAY_MENU) {
+        if (ov->nick[0]) {
+            snprintf(out[n].label, sizeof(out[n].label), "Reply to %s", ov->nick);
+            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+            out[n].action = ACT_REPLY;
+            if (++n >= max) return n;
+            snprintf(out[n].label, sizeof(out[n].label), "Open query with %s", ov->nick);
+            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+            out[n].action = ACT_QUERY;
+            n++;
+        }
+        return n;
+    }
+    if (ov->kind != OVERLAY_REPLY) return 0;
+
+    /* Newest first: you almost always mean something you just read. Only
+     * rows from the focused pane's window, and only rows that carry a
+     * nick — a join/part is not something to reply to. */
+    size_t cur = focused_window_locked(app);
+    if (cur >= app->window_count) return 0;
+    struct window *w = &app->windows[cur];
+    char want[MAX_SLUG + MAX_CHANNEL + 8];
+    snprintf(want, sizeof(want), "[%s/%s]", w->network, w->channel);
+    size_t want_len = strlen(want);
+    for (size_t k = app->log_count; k > 0 && n < max; k--) {
+        const char *line = app->log[k - 1];
+        if (strncmp(line, want, want_len) != 0) continue;
+        char prefix[256], nick[256];
+        const char *body = NULL;
+        if (!split_message_line(line, prefix, sizeof(prefix), nick, sizeof(nick), &body)) continue;
+        if (!nick[0] || !body) continue;
+        if (ov->filter[0] && !contains_ci(nick, ov->filter) && !contains_ci(body, ov->filter))
+            continue;
+        /* Same nick twice in a row is usually the same thought; the
+         * picker is for choosing a PERSON and a line, and a wall of one
+         * name buries the rest. Keep the most recent of each run. */
+        if (n > 0 && nick_case_equal(out[n - 1].nick, nick)) continue;
+        snprintf(out[n].nick, sizeof(out[n].nick), "%s", nick);
+        snprintf(out[n].label, sizeof(out[n].label), "%-14s %s", nick, body);
+        out[n].action = ACT_REPLY;
+        n++;
+    }
+    return n;
+}
+
+static void overlay_close(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    app->overlay.kind = OVERLAY_NONE;
+    app->overlay.filter[0] = 0;
+    app->overlay.sel = 0;
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Prefill the input with the IRC convention for a reply. Anything already
+ * typed is kept after the address rather than thrown away — losing a
+ * half-written line to a stray keypress is its own bug. */
+static void reply_to(struct app *app, const char *nick) {
+    pthread_mutex_lock(&app->lock);
+    char rest[MAX_LINE];
+    snprintf(rest, sizeof(rest), "%s", app->input);
+    /* Already addressed to this nick? Leave it alone. */
+    size_t nlen = strlen(nick);
+    bool already = strncasecmp(rest, nick, nlen) == 0 && rest[nlen] == ':';
+    if (!already) {
+        /* Written in two bounded steps rather than one "%s: %s": the
+         * address must survive even if what was already typed has to be
+         * cut, and only the second step can be the one that gives. */
+        int n = snprintf(app->input, sizeof(app->input), "%s: ", nick);
+        if (n > 0 && (size_t)n < sizeof(app->input)) {
+            /* Copied by explicit length rather than with a second
+             * snprintf: the truncation here is DELIBERATE (the address
+             * wins over the tail), and saying so with a bound the
+             * compiler can see beats silencing a warning about it. */
+            size_t off = (size_t)n;
+            size_t room = sizeof(app->input) - off - 1;
+            size_t take = strnlen(rest, room);
+            memcpy(app->input + off, rest, take);
+            app->input[off + take] = '\0';
+        }
+    }
+    app->input_len = strlen(app->input);
+    pthread_mutex_unlock(&app->lock);
+}
+
+static void query_window(struct app *app, const char *target);
+
+static void overlay_activate(struct app *app) {
+    struct overlay_item items[64];
+    char nick[MAX_CHANNEL] = "";
+    enum overlay_action action = ACT_NONE;
+    pthread_mutex_lock(&app->lock);
+    size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
+    if (app->overlay.sel < n) {
+        action = items[app->overlay.sel].action;
+        snprintf(nick, sizeof(nick), "%s", items[app->overlay.sel].nick);
+    }
+    pthread_mutex_unlock(&app->lock);
+    overlay_close(app);
+    if (!nick[0]) return;
+    switch (action) {
+    case ACT_REPLY: reply_to(app, nick); break;
+    case ACT_QUERY: query_window(app, nick); break;
+    case ACT_NONE: break;
+    }
+}
+
+/* Keys, while an overlay is up. Returns true when the key was consumed —
+ * an open overlay owns the keyboard, or typing into the picker's filter
+ * would also be typing into the message you are composing. */
+static bool overlay_key(struct app *app, int ch) {
+    pthread_mutex_lock(&app->lock);
+    enum overlay_kind kind = app->overlay.kind;
+    pthread_mutex_unlock(&app->lock);
+    if (kind == OVERLAY_NONE) return false;
+
+    if (ch == 27) {
+        overlay_close(app);
+        return true;
+    }
+    if (ch == '\n' || ch == '\r') {
+        overlay_activate(app);
+        return true;
+    }
+    if (ch == KEY_UP || ch == KEY_DOWN) {
+        struct overlay_item items[64];
+        pthread_mutex_lock(&app->lock);
+        size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
+        if (n) {
+            if (ch == KEY_DOWN) app->overlay.sel = (app->overlay.sel + 1) % n;
+            else app->overlay.sel = app->overlay.sel == 0 ? n - 1 : app->overlay.sel - 1;
+        }
+        pthread_mutex_unlock(&app->lock);
+        return true;
+    }
+    if (kind == OVERLAY_REPLY) {
+        pthread_mutex_lock(&app->lock);
+        size_t len = strlen(app->overlay.filter);
+        if ((ch == KEY_BACKSPACE || ch == 127 || ch == 8) && len) app->overlay.filter[len - 1] = 0;
+        else if (isprint(ch) && len + 1 < sizeof(app->overlay.filter)) {
+            app->overlay.filter[len] = (char)ch;
+            app->overlay.filter[len + 1] = 0;
+        }
+        /* The list just changed under the selection. */
+        app->overlay.sel = 0;
+        pthread_mutex_unlock(&app->lock);
+        return true;
+    }
+    return true; /* the menu swallows everything else rather than acting on it */
+}
+
+static void open_reply_picker(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    app->overlay.kind = OVERLAY_REPLY;
+    app->overlay.filter[0] = 0;
+    app->overlay.sel = 0;
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -5780,6 +6055,7 @@ static void show_help(struct app *app) {
     log_line(app, "terminal: mouse tracking is OFF by default so the terminal keeps its own copy/paste selection; /mouse on enables click-to-preview (and suppresses selection), /mouse off restores it");
     log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; /media [on|off|all|first-party] — 'all' also auto-fetches images hosted elsewhere");
     log_line(app, "       /preview full-screen; /preview-ascii forces the art renderer; /open opens externally; with /mouse on, click a link to preview");
+    log_line(app, "reply: right-click a message for reply/query, or Ctrl-R for a searchable reply picker (type to filter, Enter replies)");
     log_line(app, "panes: /split (stacked) /splitv (side by side) /unsplit; Ctrl-Alt-Up/Down or Ctrl-Alt-Tab switch, Ctrl-Alt-+/- resize, /keys shows what your terminal sends");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
@@ -6833,6 +7109,51 @@ static void handle_mouse(struct app *app) {
     MEVENT ev;
     if (getmouse(&ev) != OK) return;
     bool click = ev.bstate & (BUTTON1_PRESSED | BUTTON1_CLICKED);
+    bool right = false;
+#ifdef BUTTON3_PRESSED
+    right = (ev.bstate & (BUTTON3_PRESSED | BUTTON3_CLICKED)) != 0;
+#endif
+
+    /* An open overlay takes the click: on an item it acts, anywhere else
+     * it closes. A modal that ignores clicks outside itself is a modal
+     * you have to guess your way out of. */
+    pthread_mutex_lock(&app->lock);
+    bool overlay_open = app->overlay.kind != OVERLAY_NONE;
+    pthread_mutex_unlock(&app->lock);
+    if (overlay_open) {
+        if (!click && !right) return;
+        struct overlay_item items[64];
+        bool hit = false;
+        pthread_mutex_lock(&app->lock);
+        size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
+        int first = app->overlay.kind == OVERLAY_REPLY ? app->overlay.y + 1 : app->overlay.y;
+        if (ev.y >= first && (size_t)(ev.y - first) < n) {
+            app->overlay.sel = (size_t)(ev.y - first);
+            hit = true;
+        }
+        pthread_mutex_unlock(&app->lock);
+        if (hit) overlay_activate(app);
+        else overlay_close(app);
+        return;
+    }
+
+    if (right) {
+        /* Right-click names the message under the pointer. */
+        pthread_mutex_lock(&app->lock);
+        for (size_t i = 0; i < app->msg_region_count; i++) {
+            const struct msg_region *r = &app->msg_regions[i];
+            if (ev.y < r->y0 || ev.y > r->y1 || ev.x < r->x0 || ev.x > r->x1) continue;
+            app->overlay.kind = OVERLAY_MENU;
+            app->overlay.sel = 0;
+            app->overlay.x = ev.x;
+            app->overlay.y = ev.y + 1;
+            snprintf(app->overlay.nick, sizeof(app->overlay.nick), "%s", r->nick);
+            snprintf(app->overlay.body, sizeof(app->overlay.body), "%s", r->body);
+            break;
+        }
+        pthread_mutex_unlock(&app->lock);
+        return;
+    }
 
     /* Wheel over a member pane scrolls the roster. Which column that is
      * depends on the terminal width, so ask the same question the draw
@@ -6988,7 +7309,10 @@ static void event_loop(struct app *app) {
             log_line(app, "key: code=%d name=%s", ch, name ? name : "?");
         }
         if (ch == 27) ch = resolve_escape();
-        if (ch == '\n' || ch == '\r') {
+        if (overlay_key(app, ch)) continue;
+        if (ch == 18) { /* Ctrl-R */
+            open_reply_picker(app);
+        } else if (ch == '\n' || ch == '\r') {
             handle_enter(app);
         } else if (ch == KEY_PANE_NEXT || ch == KEY_PANE_CYCLE) {
             focus_pane(app, 1);
