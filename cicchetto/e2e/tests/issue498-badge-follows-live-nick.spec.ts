@@ -32,19 +32,25 @@
 //   GREEN after the fix: server counts against the LIVE nick → counted →
 //                        title badge increases.
 //
-// ## Shared-session hygiene
+// ## Dedicated-session isolation (NOT vjt)
 //
-// The rename mutates the SHARED seeded-vjt session's live nick, so the
-// `finally` renames it back to `NETWORK_NICK` (and waits for the member
-// list to confirm) to avoid poisoning sibling specs.
+// The witness renames a session's LIVE nick — a destructive mutation of
+// server-side identity. It runs against a DEDICATED seeded user (i498-user,
+// its own nick + its own channel #i498), NEVER the shared vjt session:
+// renaming vjt's live nick mutates identity under every sibling spec on the
+// shared stack (the same #477-avoided class that stranded the quit-persist
+// e2e). The `finally` still renames back to `I498_NICK` — not for sibling
+// hygiene (nothing else uses this session) but so a `--repeat-each` rerun
+// starts from the credential-nick baseline the opening `expectOwnMember`
+// asserts.
 
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { getSeededI498User, I498_CHANNEL, I498_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0];
+const CHANNEL = I498_CHANNEL;
 const SERVER_WINDOW = "Server";
 
 // The leading `(n)` badge prefix the title mirror writes (0 if absent),
@@ -76,18 +82,18 @@ async function expectOwnMember(
 test("#498 — a mention of the LIVE (renamed) nick lifts the server badge on cold-load", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const user = getSeededI498User();
   const runId = crypto.randomUUID().slice(0, 8);
   const newNick = `i498-${runId}`;
   const body = `${newNick}: ping while your socket is down`;
 
-  // Clean baseline: pin #bofh's cursor to the tail so the one mention below
+  // Clean baseline: pin #i498's cursor to the tail so the one mention below
   // is the ONLY post-cursor row it contributes to the global count.
-  await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
+  await restoreReadCursorToTail(user.token, NETWORK_SLUG, CHANNEL);
 
-  await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
-  await expectOwnMember(page, NETWORK_NICK);
+  await loginAs(page, user);
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: I498_NICK });
+  await expectOwnMember(page, I498_NICK);
 
   const peer = await IrcPeer.connect({ nick: `i498p-${runId}` });
   try {
@@ -117,7 +123,7 @@ test("#498 — a mention of the LIVE (renamed) nick lifts the server badge on co
     await peer.join(CHANNEL);
     peer.privmsg(CHANNEL, body);
     await assertMessagePersisted({
-      token: vjt.token,
+      token: user.token,
       networkSlug: NETWORK_SLUG,
       channel: CHANNEL,
       sender: `i498p-${runId}`,
@@ -140,16 +146,18 @@ test("#498 — a mention of the LIVE (renamed) nick lifts the server badge on co
       })
       .toBeGreaterThan(before);
   } finally {
-    // Restore the shared session's live nick so sibling specs still see
-    // NETWORK_NICK. Best-effort: the socket may be down after a failure, so
-    // guard the UI-driven rename-back.
+    // Restore this dedicated session's live nick to its credential nick so a
+    // `--repeat-each` rerun starts from the baseline the opening
+    // `expectOwnMember(I498_NICK)` asserts. Not sibling hygiene (nothing else
+    // uses i498-user). Best-effort: the socket may be down after a failure,
+    // so guard the UI-driven rename-back.
     try {
       await selectChannel(page, NETWORK_SLUG, CHANNEL, { awaitWsReady: false });
-      await runCommand(page, `/nick ${NETWORK_NICK}`);
-      await expectOwnMember(page, NETWORK_NICK);
+      await runCommand(page, `/nick ${I498_NICK}`);
+      await expectOwnMember(page, I498_NICK);
     } catch {
       // Leave restoration to the next reconnect (reconnect uses the
-      // credential nick, which is still NETWORK_NICK).
+      // credential nick, which is still I498_NICK).
     }
     await peer.disconnect("i498 done");
   }

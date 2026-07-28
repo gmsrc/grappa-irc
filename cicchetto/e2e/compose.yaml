@@ -275,8 +275,30 @@ services:
         mix grappa.bind_network --user m9b-victim --network bahamut-test \
           --server bahamut-test:6667 --no-tls --nick m9b-victim-grappa \
           --auth none --autojoin '#bofh'
-        # GREEN-CI batch-1 — bahamut-test user cap defaults to 3, which
-        # is exactly the seeded-user count (vjt + m9b-test + m9b-victim).
+        # #498 — dedicated user for the badge-follows-live-nick witness. The
+        # witness must rename a session's LIVE nick to prove the server badge
+        # counts against the live nick, not the configured one. Renaming the
+        # SHARED vjt session mutates identity under sibling specs (the
+        # #477-avoided destructive-on-shared-identity class), so this gets its
+        # OWN user, OWN nick (distinct leaf → no 433 autokill,
+        # feedback_e2e_multinet_live_needs_distinct_nicks) and OWN channel
+        # #i498 (vjt + #bofh membership stay untouched — zero blast radius,
+        # same isolation ethos as wiz-test / accr481 / m9b-victim).
+        mix grappa.create_user --name i498-user --password test-password-not-secret
+        mix grappa.bind_network --user i498-user --network bahamut-test \
+          --server bahamut-test:6667 --no-tls --nick i498-grappa \
+          --auth none --autojoin '#i498'
+        # #i498 needs only a tail row to anchor the read cursor:
+        # restoreReadCursorToTail is a no-op on an empty channel and
+        # BadgeCount skips windows with no cursor, so the witness's ONE
+        # post-cursor mention would never be counted without a seeded tail. A
+        # small count suffices — the vjt/#bofh 200-row seed exists for the
+        # density the scroll/cursor/divider specs need; this witness needs
+        # none of that.
+        mix grappa.seed_scrollback --user i498-user --network bahamut-test \
+          --channel '#i498' --count 5 --sender seed-bot
+        # GREEN-CI batch-1 — bahamut-test user cap defaults to 3, now BELOW
+        # the seeded-user count (vjt + m9b-test + m9b-victim + i498-user = 4).
         # The victim-reconnect PATCH in destructive specs would 503
         # `network_busy` if a prior spec's parked session hadn't yet
         # dropped its registry slot. Bump to 10 so the destructive-spec
