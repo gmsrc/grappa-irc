@@ -220,6 +220,17 @@ For how + when to use the test-running scripts (`test.sh`,
 e2e cascade-vs-flake-vs-real-bug triage runbook + iso-rerun
 discipline, see **`docs/TESTING.md`**.
 
+**Fresh-worktree e2e submodule gotcha.** A brand-new worktree has an
+empty `cicchetto/e2e/infra` (the `azzurra-testnet` submodule), so the
+first `integration.sh` aborts trying to SSH-clone it — SSH to GitHub is
+blocked on the worker. Permanent fix, set repo-local once:
+`git config url.https://github.com/.insteadOf git@github.com:` makes every
+future worktree auto-init the submodule over HTTPS. Manual fallback if it
+ever recurs: offline-init from the main checkout's already-cloned objects
+— `git -c protocol.file.allow=always -c
+submodule."cicchetto/e2e/infra".url=<main-checkout>/.git/modules/cicchetto/e2e/infra
+submodule update --init cicchetto/e2e/infra`.
+
 **The container IS the runtime.** No local Elixir installation, no host
 `mix deps.get`. All commands run inside the `grappa` container. NEVER run
 `mix` or `iex` on the host. NEVER install hex packages on the host.
