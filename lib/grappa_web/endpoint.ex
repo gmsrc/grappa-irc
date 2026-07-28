@@ -104,10 +104,12 @@ defmodule GrappaWeb.Endpoint do
   # `RemoteIpFromProxy` is a thin wrapper around `RemoteIp` with one
   # extra rule: peer-loopback + no-XFF → trust the peer (operator
   # shell, healthcheck). All other shapes — including peer-loopback
-  # + has-XFF — delegate to RemoteIp so the local nginx reverse-proxy
-  # path (bastille jail + docker prod both have nginx + grappa on the
-  # same host with grappa bound to 127.0.0.1:4000) surfaces the real
-  # client IP instead of `127.0.0.1`. See the wrapper's moduledoc for
+  # + has-XFF — delegate to RemoteIp so the local reverse-proxy path
+  # (the bastille jail, or any deployment an operator fronts with a
+  # same-host proxy — grappa bound to 127.0.0.1:4000; #485 dropped the
+  # in-stack docker nginx, so docker prod is this shape ONLY when the
+  # operator adds their own proxy) surfaces the real client IP instead
+  # of `127.0.0.1`. See the wrapper's moduledoc for
   # the full trust matrix and the explicitly-accepted shell-spoof
   # residual risk.
   plug GrappaWeb.Plugs.RemoteIpFromProxy,
@@ -194,10 +196,12 @@ defmodule GrappaWeb.Endpoint do
     end
   end
 
-  # #485 — replicate nginx's `location /backgrounds/ { expires max; }`.
-  # `expires max` emits `Cache-Control: max-age=315360000` (10y) so the
-  # system-owned, immutable background WebPs never re-fetch. The before_send
-  # overwrites Plug.Static's default `cache-control: public` at send time.
+  # #485 — the app-side answer to nginx's `location /backgrounds/ { expires
+  # max; }`, improved: it emits `Cache-Control: public, max-age=315360000,
+  # immutable` (10y + `immutable` to suppress revalidation entirely, which
+  # nginx's `expires max` did NOT set), so the system-owned background WebPs
+  # never re-fetch. The before_send overwrites Plug.Static's default
+  # `cache-control: public` at send time.
   # Skipped for the SPA-shell fallback (a missing key served as index.html),
   # so the shell is never pinned as immutable under a /backgrounds/ URL.
   defp cache_backgrounds(%Plug.Conn{request_path: "/backgrounds/" <> _} = conn, _) do

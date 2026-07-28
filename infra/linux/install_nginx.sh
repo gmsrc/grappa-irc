@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Install nginx config + snippets on a native Linux host, symlink the
-# cicchetto dist, enable/reload the service.
+# Install the dumb reverse-proxy nginx config + shared snippet on a native
+# Linux host, enable/reload the service. (#485 — the BEAM self-serves the
+# SPA, so there is no cicchetto-dist symlink.)
 #
 # Port of infra/freebsd/jail_install_nginx.sh. Idempotent — re-run
 # after `git pull` (or to change LISTEN_ADDR/TRUSTED_UPSTREAM_CIDR) to

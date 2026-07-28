@@ -7,8 +7,9 @@
 #   - grappa (dev image, build target — same source as `scripts/test.sh`),
 #     pointed at irc://hub:6667 via env override (no host-DNS dependency).
 #   - cicchetto-build-test (oneshot) — builds the SPA into a named volume.
-#   - nginx-test — same image + nginx.conf as prod; serves the SPA dist
-#     and reverse-proxies grappa-test:4000.
+#   - nginx-test — dumb reverse proxy (TLS on :443) → grappa-test:4000;
+#     the BEAM self-serves the SPA (#485). Shares the substrate-agnostic
+#     proxy snippet with the m42 jail + native-Linux configs.
 #   - playwright-runner — Bun-based, runs the e2e suite against
 #     http://nginx-test:80 from inside the docker network.
 #

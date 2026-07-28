@@ -26,8 +26,10 @@ defmodule GrappaWeb.Plugs.LoopbackOnly do
 
   `GrappaWeb.Endpoint`'s `RemoteIpFromProxy` plug runs FIRST and may
   rewrite `conn.remote_ip` from `X-Forwarded-For` when the peer is
-  loopback AND XFF is present (the local-nginx-as-reverse-proxy
-  shape — bastille jail + docker prod). That means a loopback peer
+  loopback AND XFF is present (the local-reverse-proxy shape — the
+  bastille jail, or any deployment fronted by an operator's own
+  same-host proxy; #485 dropped the in-stack docker nginx). That
+  means a loopback peer
   who sets `X-Forwarded-For: 127.0.0.1` will reach this plug with
   `conn.remote_ip = {127, 0, 0, 1}` and pass the gate. This is
   **explicitly accepted**: anyone with shell access on the host

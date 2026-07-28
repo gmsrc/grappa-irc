@@ -210,6 +210,17 @@ else
   esac
 fi
 
+# #485 — a pre-change box carries NGINX_PUBLISH=<host>:80 (the old nginx
+# container's LAN binding). quickstart.sh does NOT migrate it (only
+# quickstart-update.sh does): re-installing here would leave grappa on the
+# loopback GRAPPA_PUBLISH default and silently orphan the old LAN URL. Warn
+# loudly and point at the upgrade path rather than half-migrate.
+if grep -qE '^NGINX_PUBLISH=' .env; then
+  warn "This box predates #485 (NGINX_PUBLISH is set — the nginx container was dropped)."
+  warn "quickstart.sh does NOT migrate the port binding; run scripts/quickstart-update.sh"
+  warn "instead — it rewrites NGINX_PUBLISH → GRAPPA_PUBLISH and sweeps the stale grappa-nginx."
+fi
+
 # ---- 3. build the image -----------------------------------------------
 # Toolchain image (#364 docker S1) — just the base + apk packages, no
 # deps baked, so the first build only pulls/extracts layers (~1-2 min).

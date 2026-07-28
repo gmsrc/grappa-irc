@@ -31,10 +31,14 @@
 #                                         network change must take effect.
 #
 # EVERY path (server + --cic + --full-restart) also reinstalls the jail
-# nginx config — the /admin/* proxy allowlist (infra/snippets/) + a
-# graceful reload — from the freshly-pulled repo, so an allowlist change
-# ships on the same deploy that ships the route. Nothing else refreshes
-# it: not git pull, not a mix release, not even `bastille restart` (which
+# nginx config — the dumb reverse-proxy snippet (proxy pass, WS-upgrade
+# timeouts, `client_max_body_size 128m`) + a graceful reload — from the
+# freshly-pulled repo (#485: nginx is a dumb proxy now, no /admin
+# allowlist and no CSP/header snippet; the BEAM owns all of that). This
+# is load-bearing for the #485 cutover: the release starts emitting the
+# CSP and THIS step installs the config that no longer double-emits it —
+# they MUST land together (see DESIGN_NOTES). Nothing else refreshes it:
+# not git pull, not a mix release, not even `bastille restart` (which
 # only re-reads whatever is ALREADY on disk). See refresh_nginx below.
 #
 # Overridable via env:
@@ -60,7 +64,7 @@ FULL_RESTART_HC_SLEEP="${FULL_RESTART_HC_SLEEP:-2}"
 
 die() { echo "deploy-m42: $*" >&2; exit 1; }
 
-# Reinstall the jail nginx config (allowlist snippets + graceful reload)
+# Reinstall the jail nginx config (dumb-proxy snippet + graceful reload)
 # from the freshly-pulled repo. Runs AFTER the app deploy on every path:
 # both deploy.sh and jail_deploy_cic.sh `git pull --ff-only` as their
 # FIRST step, so the new infra/snippets/*.conf is already on disk in the
@@ -74,18 +78,20 @@ die() { echo "deploy-m42: $*" >&2; exit 1; }
 #
 # Failure is SURFACED, never swallowed (CLAUDE.md no-silent-swallow): the
 # app is already deployed + healthy here, so we do NOT pretend the whole
-# deploy failed — but a stale allowlist is a real defect (new /admin/*
-# routes 404 at nginx before reaching Phoenix), so we print a clear
-# diagnostic and exit non-zero. The step is idempotent, so any later
-# deploy-m42 run — even a nothing-to-do app deploy — retries it.
+# deploy failed — but a stale proxy config is a real defect (post-#485 the
+# worst case is the old header snippet still installed, so nginx AND the
+# BEAM both emit the CSP → the browser enforces the intersection), so we
+# print a clear diagnostic and exit non-zero. The step is idempotent, so
+# any later deploy-m42 run — even a nothing-to-do app deploy — retries it.
 refresh_nginx() {
-  echo "==> deploy-m42: refresh jail nginx config (allowlist snippets + graceful reload)"
+  echo "==> deploy-m42: refresh jail nginx config (dumb-proxy snippet + graceful reload)"
   # shellcheck disable=SC2029  # intentional client-side expansion of vars
   if ssh "$M42_HOST" "sudo bastille cmd ${JAIL} ${JAIL_REPO}/infra/freebsd/jail_install_nginx.sh"; then
     return 0
   fi
   echo "deploy-m42: ERROR — app deploy SUCCEEDED but nginx config refresh FAILED" >&2
-  echo "deploy-m42:   the /admin/* proxy allowlist may be STALE (new routes 404 at nginx before Phoenix)" >&2
+  echo "deploy-m42:   the dumb-proxy config may be STALE — worst case the old header snippet is still" >&2
+  echo "deploy-m42:   installed, so nginx + the BEAM both emit the CSP and the browser enforces the intersection" >&2
   echo "deploy-m42:   fix: ssh ${M42_HOST} \"sudo bastille cmd ${JAIL} ${JAIL_REPO}/infra/freebsd/jail_install_nginx.sh\" and read the nginx -t output" >&2
   exit 1
 }

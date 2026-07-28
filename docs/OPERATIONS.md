@@ -803,10 +803,14 @@ to add. (Aside: prod ships with captcha **disabled** —
 widget only renders where a provider is enabled.)
 
 **Deploying a CSP change** — the CSP now lives in `SecurityHeaders`, so
-editing it is a **code change**: it ships in the release, COLD-deployed
-like any BEAM change (the running-module swap does update it, but treat
-a security-header change as COLD — verify explicitly). No nginx reload.
-Verify the live header:
+editing it is a **code change** (a plain plug — `deploy-m42.sh`'s
+auto-classifier treats it as HOT, and the running-module swap does update
+the header). Still, PREFER a COLD deploy for any security-header change
+and verify the live value explicitly — a wrong or intersection-narrowed
+CSP is a security regression, not a cosmetic one. No nginx reload needed.
+(This is the routine case; the one-time #485 cutover below is COLD because
+`jail_install_nginx.sh` must run alongside the release.) Verify the live
+header:
 
 ```sh
 ssh m42 "curl -fsSL -D - -o /dev/null https://irc.sniffo.org/ 2>&1 | grep -i content-security-policy"

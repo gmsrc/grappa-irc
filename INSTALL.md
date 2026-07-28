@@ -208,15 +208,35 @@ headers, and held the LAN-facing port. #485 collapsed that into one:
   `GRAPPA_PUBLISH=127.0.0.1:4000` (grappa behind nginx); the new box
   has grappa alone on the published port.
 
-`scripts/quickstart-update.sh` does the migration for you — but the
+`scripts/quickstart-update.sh` does the `.env` migration for you — but the
 **very first** upgrade off a two-container box needs `git pull`
 **before** you run it, because the pre-change copy of the script still
 references the removed nginx service. So run the pull yourself once:
 
 ```sh
 git pull --ff-only        # get the #485 script + compose first
-scripts/quickstart-update.sh --no-pull   # then let it migrate (it already pulled)
+
+# A box that predates #485 has almost certainly crossed migration, dep,
+# and bundle commits (migrations land on main most days). Run those once
+# by hand — see the caveat below for WHY the script can't:
+docker compose -f compose.yaml --profile prod run --rm --no-deps grappa mix deps.get
+docker compose -f compose.yaml --profile prod run --rm cicchetto-build
+docker compose -f compose.yaml --profile prod run --rm --no-deps grappa mix ecto.migrate
+
+scripts/quickstart-update.sh --no-pull   # migrate .env + sweep grappa-nginx + recreate
 ```
+
+> **Caveat — `--no-pull` skips the script's automatic step detection.**
+> `quickstart-update.sh` decides whether to run `deps.get`, `ecto.migrate`,
+> and the bundle rebuild by **diffing the commits its own `git pull`
+> moved across**. Because you pulled by hand first, that diff is empty on
+> this run (`HEAD` didn't move), so the script runs **none** of those
+> expensive steps — which is exactly why they're listed above. This only
+> applies to the FIRST upgrade; from then on run
+> `scripts/quickstart-update.sh` normally (it pulls and auto-detects).
+> The critical one is `ecto.migrate`: skip it while crossing a
+> schema-adding commit and the new code boots against the old schema —
+> `Bootstrap` and the first queries 500, and the health poll times out.
 
 On that run the script:
 
