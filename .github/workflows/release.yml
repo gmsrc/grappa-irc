@@ -169,7 +169,7 @@ jobs:
           echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
 
       - name: Upload .deb artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v8
         with:
           name: grappa-deb
           path: dist/*.deb
@@ -288,7 +288,7 @@ jobs:
           cp infra/packaging/aur/PKGBUILD infra/packaging/aur/.SRCINFO arch-out/
 
       - name: Upload Arch artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v8
         with:
           name: grappa-arch
           path: arch-out/*
