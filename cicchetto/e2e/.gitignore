@@ -3,6 +3,14 @@ node_modules/
 test-results/
 playwright-report/
 playwright/.cache/
+# bun.lock is a host-only byproduct: `scripts/bun.sh x tsc -p e2e/tsconfig.json`
+# triggers a host `bun install` that writes it. The canonical e2e path never
+# uses it — runner/Dockerfile does `npm install` from package.json only (no
+# lockfile COPYd), node_modules is a named volume seeded at build. Tracking it
+# would only add a stray lockfile no gate reads; ignoring it keeps every
+# worktree's tree clean after a typecheck. (Distinct from the TRACKED
+# cicchetto/bun.lock, the real cic build lockfile — hence a scoped ignore.)
+bun.lock
 
 # Compose secrets / state
 .env
