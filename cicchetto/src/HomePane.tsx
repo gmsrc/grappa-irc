@@ -31,13 +31,14 @@ import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
 import { windowStateByChannel } from "./lib/windowState";
 import NickText from "./NickText";
 
-// #496 — the per-network 🗺 Map (LINKS/topology) control was HIDDEN until
-// `/links` was fixed (the topology bundle it opens was unreliable). #513
-// fixed both defects behind that gate — the mask-matched-nothing empty state
-// (a) and the two-requests-within-15ms lost-bundle race (b) — so the button
-// is restored. Kept as a flag (not deleted) so it can be re-hidden in one
-// line if a future upstream quirk resurfaces.
-const SHOW_NETWORK_MAP = true;
+// #496/#513 — the per-network 🗺 Map (LINKS/topology) control stays HIDDEN.
+// #513 fixed the two /links defects behind the original #496 gate (the
+// mask-matched-nothing empty state + the two-requests lost-bundle race), so
+// the button COULD return — but vjt's product call is to keep it hidden: the
+// `/links` command is the sole entry point to the topology map. Kept as a flag
+// (not deleted) so the button + its onTopology wiring restore in one line if
+// that call ever changes.
+const SHOW_NETWORK_MAP = false;
 
 // #85 — operator-curated featured channels for a network, fetched on
 // home DISPLAY (component mount / slug change) so an operator config

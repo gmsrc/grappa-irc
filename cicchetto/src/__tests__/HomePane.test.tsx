@@ -629,25 +629,20 @@ describe("HomePane", () => {
       expect(setSelectedChannelMock).not.toHaveBeenCalled();
     });
 
-    // #513 — /links is fixed (mask-empty split + in-flight guard), so the
-    // per-network 🗺 Map button is RESTORED (`SHOW_NETWORK_MAP` flipped true).
-    // Clicking it lands on this network's $server (so the network-scoped
-    // LinksModal shows THIS topology when the bundle arrives) then pushes the
-    // bare LINKS. Fire-and-forget behind the modal, like onDisconnect.
-    it(":connected row renders the 🗺 Map button; click jumps to $server + pushes bare LINKS (#513)", () => {
+    // #496/#513 — the per-network 🗺 Map button stays HIDDEN behind
+    // `SHOW_NETWORK_MAP`. #513 fixed the /links defects, but vjt's product call
+    // keeps the button hidden: the `/links` command is the sole entry point to
+    // the topology map. The #238 onTopology wiring (jump-to-$server + pushLinks)
+    // stays in source so a one-line flag flip restores it, but no Map control
+    // renders on any row. (pushLinks + LinksModal stay covered by their own
+    // tests / the /links slash command.)
+    it(":connected row does NOT render the 🗺 Map button (#496/#513 — flag-hidden)", () => {
       homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
       networkIdBySlugMock.mockReturnValue(7);
       render(() => <HomePane />);
 
-      const mapBtn = screen.getByRole("button", { name: /network map for azzurra/i });
-      expect(mapBtn).toBeInTheDocument();
-      expect(screen.getByTestId("home-topology-azzurra")).toBeInTheDocument();
-
-      fireEvent.click(mapBtn);
-
-      // Jump-to-$server (network-scoped modal target) + fire the bare LINKS.
-      expect(setSelectedChannelMock).toHaveBeenCalled();
-      expect(pushLinksMock).toHaveBeenCalledWith(7, null);
+      expect(screen.queryByRole("button", { name: /network map for azzurra/i })).toBeNull();
+      expect(screen.queryByTestId("home-topology-azzurra")).toBeNull();
       // The other row controls stay present (uniform action area intact).
       expect(screen.getByRole("button", { name: /disconnect azzurra/i })).toBeInTheDocument();
     });
