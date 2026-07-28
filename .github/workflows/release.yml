@@ -37,14 +37,30 @@ name: release
 # The .rpm is still deferred (needs a Fedora-built ERTS — a glibc/Debian
 # release is not a valid RHEL payload; see DESIGN_NOTES R1/R2).
 #
-# NOTE: this workflow only runs on a `v*` tag; a normal main-branch push
-# never triggers it (ci.yml + integration.yml handle those). Its concurrency
-# group is per-tag and separate from ci.yml, so it never cancels a CI run.
+# NOTE: this workflow runs on a `v*` tag push, OR via manual workflow_dispatch
+# against an EXISTING tag (the `tag` input) — the repair path (#504) for a
+# release whose first run shipped no assets: dispatch the FIXED workflow from
+# main targeting e.g. `v0.6.0` and it (re)builds THAT tag's tree and uploads to
+# the existing release, with NO tag force-push. Every job resolves the release
+# tag from whichever trigger fired (`inputs.tag` on dispatch, else the pushed
+# tag) into `RELEASE_TAG`, and checks that tag out explicitly. A normal
+# main-branch push never triggers it (ci.yml + integration.yml handle those);
+# its concurrency group is separate from ci.yml, so it never cancels a CI run.
 
 on:
   push:
     tags:
       - "v*"
+  # Repair / re-run path (#504 defect 2 follow-through): (re)build an EXISTING
+  # tag and attach its assets to the existing release, no tag surgery. A plain
+  # `gh run rerun` would replay the workflow FROM THE TAG's commit (the buggy
+  # version); dispatching from main runs the FIXED workflow against the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)build + attach assets to (e.g. v0.6.0)"
+        required: true
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
@@ -61,20 +77,28 @@ jobs:
   deb:
     name: build + prove .deb (amd64)
     runs-on: ubuntu-latest
+    env:
+      # The release tag, resolved from whichever trigger fired: the input on a
+      # manual repair dispatch, else the pushed tag. Every tag reference in this
+      # job uses it (never bare GITHUB_REF_NAME, which is `main` on a dispatch).
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Checkout (tags for #391 version derivation)
         uses: actions/checkout@v7
         with:
           submodules: recursive
-          # fetch-depth 0 pulls tags so `git describe --tags --exact-match`
-          # resolves the release tag at build time — the .deb's Grappa.Version
-          # then reports the bare X.Y.Z via the #391 clean-tag path.
+          # Check out the RELEASE TAG explicitly so a workflow_dispatch repair
+          # builds the TAGGED tree, not main (on a tag push this equals the
+          # default ref). fetch-depth 0 pulls tags so `git describe --tags
+          # --exact-match` resolves the release tag at build time — the .deb's
+          # Grappa.Version then reports the bare X.Y.Z via the #391 clean-tag path.
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Verify the tag matches mix.exs @version
         id: ver
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${RELEASE_TAG#v}"
           mixv="$(grep -oE '@version "[^"]+"' mix.exs | head -1 | sed -E 's/@version "([^"]+)"/\1/')"
           echo "tag=$tag mix.exs=$mixv"
           if [ "$tag" != "$mixv" ]; then
@@ -155,6 +179,11 @@ jobs:
     name: build + prove Arch pkg (x86_64)
     runs-on: ubuntu-latest
     container: archlinux:latest
+    env:
+      # Release tag from either trigger (see the deb job). The Arch build derives
+      # its version from the GitHub source TARBALL via updpkgsums, so this drives
+      # the checkout + the version asserts, not a .git describe.
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Install the Arch build toolchain
         run: |
@@ -170,10 +199,13 @@ jobs:
         uses: actions/checkout@v7
         with:
           submodules: recursive
+          # Check out the release tag so a repair dispatch builds the tagged
+          # PKGBUILD/recipe, not main's.
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Verify pkgver matches the tag and mix.exs @version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${RELEASE_TAG#v}"
           pkgver="$(sed -n 's/^pkgver=//p' infra/packaging/aur/PKGBUILD | head -1)"
           mixv="$(grep -oE '@version "[^"]+"' mix.exs | head -1 | sed -E 's/@version "([^"]+)"/\1/')"
           echo "tag=$tag pkgver=$pkgver mix.exs=$mixv"
@@ -228,7 +260,7 @@ jobs:
 
       - name: Prove the artifact reports the bare tag version (tarball → no .git → bare)
         run: |
-          want="${GITHUB_REF_NAME#v}"
+          want="${RELEASE_TAG#v}"
           # Sentinel-prefix the printed version so a stray stdout line from the
           # release boot can never be mistaken for it.
           got="$(grappa eval 'Application.load(:grappa); IO.puts("grappa-vsn=" <> Grappa.Version.current())' | grep '^grappa-vsn=' | tail -n1 | cut -d= -f2 | tr -d '\r')"
@@ -275,6 +307,11 @@ jobs:
     # stays red on its own, so the run is still marked failed and gets fixed.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    env:
+      # The release to attach to — the input on a repair dispatch, else the
+      # pushed tag. The release object is keyed by this tag NAME, so a dispatch
+      # uploads to the EXISTING release without any tag surgery.
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Download built artifacts
         uses: actions/download-artifact@v8
@@ -310,12 +347,12 @@ jobs:
           # exists, so fall back to uploading with --clobber. BUILD ≠ PUBLISH
           # TO AUR: the regenerated PKGBUILD/.SRCINFO ride along as assets for
           # a human to push to aur.archlinux.org — nothing here pushes there.
-          if ! gh release create "${GITHUB_REF_NAME}" \
+          if ! gh release create "${RELEASE_TAG}" \
                 --repo "${GITHUB_REPOSITORY}" \
-                --title "grappa ${GITHUB_REF_NAME}" \
+                --title "grappa ${RELEASE_TAG}" \
                 --generate-notes \
                 "${assets[@]}"; then
-            gh release upload "${GITHUB_REF_NAME}" \
+            gh release upload "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" --clobber \
               "${assets[@]}"
           fi
