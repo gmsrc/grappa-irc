@@ -22,7 +22,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
   import Grappa.{AuthFixtures, MessageEventAssertions}
 
-  alias Grappa.{IRCServer, PubSub.Topic, Scrollback}
+  alias Grappa.{IRCServer, PresenceFilter, PubSub.Topic, Scrollback, ScrollbackHelpers}
   alias Grappa.RateLimit.TokenBucket
 
   setup %{conn: conn} do
@@ -52,6 +52,56 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
   defp await_handshake(server) do
     {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
     :ok
+  end
+
+  describe "GET presence filter — #458 member-count (unset) branch" do
+    test "unset pref on a LARGE channel (>= threshold members) hides presence via the size default",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      # Seed the live Session with >= LARGE_CHANNEL_THRESHOLD members so the
+      # controller reads the count and an UNSET pref resolves to HIDE. This is
+      # the only branch that distinguishes "count read" from "count nil → show"
+      # (both small-channel and no-session resolve to show).
+      nicks = for i <- 1..(PresenceFilter.large_channel_threshold() + 1), do: "n#{i}"
+      IRCServer.feed(server, ":grappa-test!u@h JOIN :#big\r\n")
+      IRCServer.feed(server, ":irc 353 grappa-test = #big :grappa-test #{Enum.join(nicks, " ")}\r\n")
+      IRCServer.feed(server, ":irc 366 grappa-test #big :End of /NAMES list.\r\n")
+      IRCServer.feed(server, "PING :flush\r\n")
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
+
+      {:ok, _} =
+        ScrollbackHelpers.insert(%{
+          user_id: vjt.id,
+          network_id: network.id,
+          channel: "#big",
+          server_time: 0,
+          kind: :privmsg,
+          sender: "vjt",
+          body: "hi"
+        })
+
+      {:ok, _} =
+        ScrollbackHelpers.insert(%{
+          user_id: vjt.id,
+          network_id: network.id,
+          channel: "#big",
+          server_time: 1,
+          kind: :join,
+          sender: "n1",
+          body: nil
+        })
+
+      body = json_response(get(conn, "/networks/#{network.slug}/channels/%23big/messages"), 200)
+      kinds = body |> Enum.map(& &1["kind"]) |> Enum.uniq()
+
+      assert kinds == ["privmsg"], "unset + large channel must hide presence via the member-count size default"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
   end
 
   describe "POST with active session" do
@@ -116,7 +166,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
       assert {:ok, "PRIVMSG #sniffo :ciao raga\r\n"} =
                IRCServer.wait_for_line(server, &String.starts_with?(&1, "PRIVMSG"), 1_000)
 
-      [row] = Scrollback.fetch({:user, vjt.id}, network.id, "#sniffo", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, vjt.id}, network.id, "#sniffo", nil, 10, nil, false)
       assert row.body == "ciao raga"
       assert row.sender == "grappa-test"
       assert row.kind == :privmsg
@@ -493,7 +543,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
                )
 
       # No scrollback row persisted (credential never lands in DB).
-      assert [] = Scrollback.fetch({:user, vjt.id}, network.id, "NickServ", nil, 10, nil)
+      assert [] = Scrollback.fetch({:user, vjt.id}, network.id, "NickServ", nil, 10, nil, false)
 
       # No PubSub broadcast on the NickServ topic (no row, no fanout).
       refute_received %Phoenix.Socket.Broadcast{event: "event", payload: _}

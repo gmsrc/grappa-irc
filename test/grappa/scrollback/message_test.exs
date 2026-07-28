@@ -76,6 +76,39 @@ defmodule Grappa.Scrollback.MessageTest do
     end
   end
 
+  describe "suppressed_presence_kinds/0 (#458)" do
+    test "is the NARROW noise subset [:join, :part, :quit, :nick_change]" do
+      # Mirror order of cic's SUPPRESSED_PRESENCE_KINDS
+      # (cicchetto/src/lib/presenceFilter.ts) — the server filter and the
+      # client render-filter must agree on exactly which kinds are noise.
+      assert Message.suppressed_presence_kinds() == [:join, :part, :quit, :nick_change]
+    end
+
+    test "every suppressed kind is a valid schema kind (subset of kinds/0)" do
+      for k <- Message.suppressed_presence_kinds() do
+        assert k in Message.kinds(), "#{inspect(k)} is not a valid Message kind"
+      end
+    end
+
+    test "suppressed kinds are DISJOINT from content kinds (never suppress content)" do
+      # The core safety invariant: presence filtering must never drop a
+      # human-content row (:privmsg/:notice/:action). If these sets ever
+      # overlapped, hiding presence would silently swallow real messages.
+      assert Message.suppressed_presence_kinds() -- Message.content_kinds() ==
+               Message.suppressed_presence_kinds()
+    end
+
+    test "the broad control kinds (mode/topic/kick/server_event) are NOT suppressed" do
+      # NARROW vs broad: mode/topic/kick/server_event are presence/control
+      # but NOT noise — they carry operator-relevant signal and MUST stay
+      # visible. Suppressing them would be a bug (presenceFilter.ts:64-73).
+      for k <- [:mode, :topic, :kick, :server_event] do
+        refute k in Message.suppressed_presence_kinds(),
+               "#{inspect(k)} must NOT be in the narrow suppressed set"
+      end
+    end
+  end
+
   describe "changeset/2" do
     test "valid for fully-populated attrs" do
       cs = Message.changeset(%Message{}, @valid_attrs)

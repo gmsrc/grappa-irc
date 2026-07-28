@@ -1436,7 +1436,7 @@ defmodule Grappa.Session.ServerTest do
       assert {:ok, "PONG :irc.test.org\r\n"} =
                IRCServer.wait_for_line(server, &String.starts_with?(&1, "PONG"), 1_000)
 
-      assert [] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
+      assert [] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -1490,7 +1490,7 @@ defmodule Grappa.Session.ServerTest do
       assert net_slug == network.slug
 
       # NOISE gone: no notice row was persisted to $server.
-      assert [] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
+      assert [] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -1522,7 +1522,7 @@ defmodule Grappa.Session.ServerTest do
 
       assert net_slug == network.slug
 
-      assert [] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
+      assert [] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -1811,7 +1811,7 @@ defmodule Grappa.Session.ServerTest do
 
       refute_received {:event, _}
 
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
       assert row.body == "hello"
       assert row.sender == "alice"
       assert row.kind == :privmsg
@@ -1939,7 +1939,7 @@ defmodule Grappa.Session.ServerTest do
       # The empty-body row was dropped, not persisted — degrade, not
       # corrupt: exactly one row (the valid one) survives.
       assert [%{body: "still here", sender: "bob"}] =
-               Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil)
+               Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
 
       assert Process.alive?(pid)
 
@@ -2012,7 +2012,7 @@ defmodule Grappa.Session.ServerTest do
       end
 
       # Scrollback persisted N rows; joined in arrival order = original body.
-      rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 50, nil)
+      rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 50, nil, false)
       sent_rows = Enum.filter(rows, fn r -> r.sender == "grappa-actual" end)
       assert length(sent_rows) >= 2
 
@@ -2084,9 +2084,9 @@ defmodule Grappa.Session.ServerTest do
       assert [%{target_nick: "NickTemporaneo"}] = result[network.id]
 
       # History reads under the NEW window; the OLD nick is empty.
-      assert [row] = Scrollback.fetch({:user, user.id}, network.id, "NickTemporaneo", nil, 10, own)
+      assert [row] = Scrollback.fetch({:user, user.id}, network.id, "NickTemporaneo", nil, 10, own, false)
       assert row.body == "ciao"
-      assert Scrollback.fetch({:user, user.id}, network.id, "Guest87449", nil, 10, own) == []
+      assert Scrollback.fetch({:user, user.id}, network.id, "Guest87449", nil, 10, own, false) == []
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -2260,7 +2260,7 @@ defmodule Grappa.Session.ServerTest do
                      },
                      1_000
 
-      rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil)
+      rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
       kinds = Enum.map(rows, & &1.kind)
       assert :join in kinds
       assert :part in kinds
@@ -2317,7 +2317,7 @@ defmodule Grappa.Session.ServerTest do
         meta: %{}
       )
 
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
       assert row.sender == "grappa-actual"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -2354,7 +2354,7 @@ defmodule Grappa.Session.ServerTest do
       assert {:ok, msg} = Session.send_privmsg({:user, user.id}, network.id, "#sniffo", "post-rename")
       assert msg.sender == "renamed-vjt"
 
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
       assert row.sender == "renamed-vjt"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -2432,7 +2432,7 @@ defmodule Grappa.Session.ServerTest do
         network: network.slug
       )
 
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
       assert row.kind == :action
 
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -2473,7 +2473,7 @@ defmodule Grappa.Session.ServerTest do
 
       assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "#test", "hi all")
 
-      rows = Scrollback.fetch({:user, user.id}, network.id, "#test", nil, 10, nil)
+      rows = Scrollback.fetch({:user, user.id}, network.id, "#test", nil, 10, nil, false)
       privmsg = Enum.find(rows, &(&1.kind == :privmsg))
       assert privmsg.meta.sender_prefix == "@"
 
@@ -2666,10 +2666,10 @@ defmodule Grappa.Session.ServerTest do
       refute Map.has_key?(state.members["#a"], "alice")
       refute Map.has_key?(state.members["#b"], "alice")
 
-      rows_a = Scrollback.fetch({:user, user.id}, network.id, "#a", nil, 10, nil)
+      rows_a = Scrollback.fetch({:user, user.id}, network.id, "#a", nil, 10, nil, false)
       assert Enum.any?(rows_a, &(&1.kind == :quit and &1.sender == "alice"))
 
-      rows_b = Scrollback.fetch({:user, user.id}, network.id, "#b", nil, 10, nil)
+      rows_b = Scrollback.fetch({:user, user.id}, network.id, "#b", nil, 10, nil, false)
       assert Enum.any?(rows_b, &(&1.kind == :quit and &1.sender == "alice"))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -3495,7 +3495,7 @@ defmodule Grappa.Session.ServerTest do
       assert WindowState.state_of(state.window_state, "#random") == :invited
 
       # The INVITE row landed in the CHANNEL buffer, not $server.
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "#random", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "#random", nil, 10, nil, false)
       assert row.kind == :server_event
       assert row.sender == "someguy"
       assert row.meta.raw_verb == "INVITE"
@@ -3768,7 +3768,7 @@ defmodule Grappa.Session.ServerTest do
 
       # Persisted :notice row carries the numeric in meta so cic can
       # render the failure differently from a plain server NOTICE.
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
       assert row.kind == :notice
       assert row.body == "Cannot join channel (+i)"
       assert row.meta == %{numeric: 473}
@@ -3778,7 +3778,7 @@ defmodule Grappa.Session.ServerTest do
       # for the same numeric. Without delegation the channel would get
       # one notice (apply_effects) AND $server would get one notice (scan
       # route) — the failure would surface twice.
-      assert [] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
+      assert [] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4835,7 +4835,7 @@ defmodule Grappa.Session.ServerTest do
                Session.send_privmsg({:user, user.id}, network.id, "NickServ", "IDENTIFY s3cret")
 
       refute_receive %Phoenix.Socket.Broadcast{event: "event", payload: _}, 100
-      assert [] = Scrollback.fetch({:user, user.id}, network.id, "NickServ", nil, 10, nil)
+      assert [] = Scrollback.fetch({:user, user.id}, network.id, "NickServ", nil, 10, nil, false)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4850,7 +4850,7 @@ defmodule Grappa.Session.ServerTest do
       assert {:ok, :no_persist} =
                Session.send_privmsg({:user, user.id}, network.id, "ChanServ", "REGISTER #x pwd")
 
-      assert [] = Scrollback.fetch({:user, user.id}, network.id, "ChanServ", nil, 10, nil)
+      assert [] = Scrollback.fetch({:user, user.id}, network.id, "ChanServ", nil, 10, nil, false)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4865,7 +4865,7 @@ defmodule Grappa.Session.ServerTest do
       assert {:ok, :no_persist} =
                Session.send_privmsg({:user, user.id}, network.id, "nickserv", "IDENTIFY pwd")
 
-      assert [] = Scrollback.fetch({:user, user.id}, network.id, "nickserv", nil, 10, nil)
+      assert [] = Scrollback.fetch({:user, user.id}, network.id, "nickserv", nil, 10, nil, false)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4954,7 +4954,7 @@ defmodule Grappa.Session.ServerTest do
                  Session.send_privmsg({:user, user.id}, network.id, target, "secret"),
                "#{target} should be classified as service target"
 
-        assert [] = Scrollback.fetch({:user, user.id}, network.id, target, nil, 10, nil),
+        assert [] = Scrollback.fetch({:user, user.id}, network.id, target, nil, 10, nil, false),
                "#{target} scrollback must be empty"
       end
 
@@ -8488,7 +8488,7 @@ defmodule Grappa.Session.ServerTest do
         meta: %{numeric: 404, severity: :error, raw_params: ["vjt", "#sniffo", "Cannot send to channel"]}
       )
 
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
       assert row.kind == :notice
       assert row.body == "Cannot send to channel"
       assert row.meta.numeric == 404
@@ -8523,7 +8523,7 @@ defmodule Grappa.Session.ServerTest do
         meta: %{numeric: 421, severity: :error, raw_params: ["vjt", "BLEH", "Unknown command"]}
       )
 
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
       assert row.kind == :notice
       assert row.meta.numeric == 421
       assert row.meta.severity == "error"
@@ -8574,7 +8574,7 @@ defmodule Grappa.Session.ServerTest do
 
       refute_receive %Phoenix.Socket.Broadcast{event: "event"}, 100
 
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
       # MOTD path persists with empty meta — confirms it came from the
       # delegated handler, not the routed path (which would set numeric+severity).
       assert row.meta == %{}
@@ -8614,7 +8614,7 @@ defmodule Grappa.Session.ServerTest do
         network: network.slug
       )
 
-      [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil)
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
       assert row.kind == :notice
       assert row.meta.numeric == 213
 

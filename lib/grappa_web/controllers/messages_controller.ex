@@ -51,8 +51,9 @@ defmodule GrappaWeb.MessagesController do
 
   import GrappaWeb.Validation, only: [validate_target_name: 1, validate_post_target_name: 1]
 
+  alias Grappa.IRC.Identifier
+  alias Grappa.{PresenceFilter, Scrollback, Session, UserSettings}
   alias Grappa.RateLimit.TokenBucket
-  alias Grappa.{Scrollback, Session}
   alias GrappaWeb.{BodyLimit, Subject}
 
   @default_limit 50
@@ -118,16 +119,18 @@ defmodule GrappaWeb.MessagesController do
           {:error, :no_session} -> nil
         end
 
+      hide_presence = resolve_hide_presence(subject, network, channel)
+
       messages =
         case direction do
           {:before, cursor} ->
-            Scrollback.fetch(subject, network.id, channel, cursor, limit, own_nick)
+            Scrollback.fetch(subject, network.id, channel, cursor, limit, own_nick, hide_presence)
 
           {:after, after_id} ->
-            Scrollback.fetch_after(subject, network.id, channel, after_id, limit, own_nick)
+            Scrollback.fetch_after(subject, network.id, channel, after_id, limit, own_nick, hide_presence)
 
           {:around, around_id} ->
-            Scrollback.fetch_around(subject, network.id, channel, around_id, limit, own_nick)
+            Scrollback.fetch_around(subject, network.id, channel, around_id, limit, own_nick, hide_presence)
         end
 
       render(conn, :index, messages: messages)
@@ -215,6 +218,36 @@ defmodule GrappaWeb.MessagesController do
     |> put_status(:accepted)
     |> json(%{ok: true})
   end
+
+  # #458 — resolve "should the history reads omit presence for this channel?"
+  # from the server-owned tri-state pref (#449) + live member count. The
+  # server evaluates the tri-state itself (issue paletto: never a client
+  # boolean) so every device converges on one decision. `Session.list_members/3`
+  # is called ONLY when the pref is unset — an explicit show/hide needs no
+  # count, so the common case skips the GenServer round-trip.
+  defp resolve_hide_presence(subject, network, channel) do
+    prefs = UserSettings.get_display_prefs(subject)
+    pref = Map.get(prefs.presence_filter, presence_channel_key(network, channel))
+    PresenceFilter.hidden?(pref, member_count_for_unset(pref, subject, network.id, channel))
+  end
+
+  # Rebuild cic's opaque ChannelKey (`cicchetto/src/lib/channelKey.ts`):
+  # "<slug> <canonical_channel>" — the channel folded rfc1459 via the SSOT
+  # (#364), so a request in any casing resolves to the same stored pin.
+  defp presence_channel_key(network, channel),
+    do: "#{network.slug} #{Identifier.canonical_channel(channel)}"
+
+  defp member_count_for_unset(nil, subject, network_id, channel) do
+    case Session.list_members(subject, network_id, channel) do
+      {:ok, members} when is_list(members) -> length(members)
+      # :uninitialized (names not yet seeded) or :no_session — count unknowable
+      # → decision D: PresenceFilter.hidden?/2 treats nil as SHOW.
+      _ -> nil
+    end
+  end
+
+  # Explicit show/hide: the count is irrelevant, skip the Session call.
+  defp member_count_for_unset(_, _, _, _), do: nil
 
   # Cursor mutex: at most one of `before` / `after` / `around`. Two or
   # more present together silently picking one would mask client bugs;

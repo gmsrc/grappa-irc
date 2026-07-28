@@ -151,6 +151,18 @@ defmodule Grappa.Scrollback.Message do
   # construction (#395).
   @notify_kinds for {kind, :notify} <- @content_kind_projection, do: kind
 
+  # #458 — the NARROW presence-noise subset the scrollback fetch omits when a
+  # channel is hiding presence. Deliberately NARROW: join/part/quit/nick_change
+  # ONLY. The broad presence/control kinds (:mode, :topic, :kick,
+  # :server_event) carry operator-relevant signal and MUST stay visible —
+  # suppressing them would be a bug. Mirrors cic's SUPPRESSED_PRESENCE_KINDS
+  # (cicchetto/src/lib/presenceFilter.ts), same order, so the server history
+  # filter (#458) and the client live-tail render-filter agree exactly on
+  # which kinds are noise. Disjoint from @content_kinds BY the test invariant
+  # (presence noise is never human content), so hiding presence can never drop
+  # a real message.
+  @suppressed_presence_kinds [:join, :part, :quit, :nick_change]
+
   # M8 fix 2026-05-08: kinds for which `:dm_with` may legitimately
   # carry a peer nick. CP23 cluster `code-reload` extended the list to
   # include :notice — peer-to-peer NOTICEs (CTCP-VERSION-query
@@ -212,6 +224,20 @@ defmodule Grappa.Scrollback.Message do
   """
   @spec notify_kinds() :: [:privmsg | :action, ...]
   def notify_kinds, do: @notify_kinds
+
+  @doc """
+  Returns the NARROW presence-noise subset of `kinds/0` —
+  `[:join, :part, :quit, :nick_change]`. #458 SINGLE SOURCE: the scrollback
+  fetch omits exactly these kinds when a channel is hiding presence
+  (`Grappa.PresenceFilter.hidden?/2` resolves the per-channel decision). The
+  broad control kinds (`:mode`, `:topic`, `:kick`, `:server_event`) are
+  deliberately absent — they carry operator-relevant signal and stay visible.
+  Mirrors the cic `SUPPRESSED_PRESENCE_KINDS` set
+  (`cicchetto/src/lib/presenceFilter.ts`); the two MUST agree so the server
+  history filter and the client live-tail render-filter suppress the same rows.
+  """
+  @spec suppressed_presence_kinds() :: [:join | :part | :quit | :nick_change, ...]
+  def suppressed_presence_kinds, do: @suppressed_presence_kinds
 
   @type kind ::
           :privmsg

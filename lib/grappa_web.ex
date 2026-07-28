@@ -33,6 +33,7 @@ defmodule GrappaWeb do
         Grappa.Notify,
         Grappa.Operator,
         Grappa.OutboundV6Pool,
+        Grappa.PresenceFilter,
         Grappa.Protocol,
         Grappa.PubSub,
         Grappa.Push,

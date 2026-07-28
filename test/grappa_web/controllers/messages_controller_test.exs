@@ -14,7 +14,7 @@ defmodule GrappaWeb.MessagesControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Networks, ScrollbackHelpers}
+  alias Grappa.{Networks, ScrollbackHelpers, UserSettings}
 
   setup %{conn: conn} do
     {user, session} = user_and_session()
@@ -40,6 +40,99 @@ defmodule GrappaWeb.MessagesControllerTest do
           body: "m#{i}"
         })
     end
+  end
+
+  # #458 — the controller resolves the per-channel presence-hide decision from
+  # the server-owned pref (#449) + live member count, and passes it to
+  # Scrollback so `limit` counts VISIBLE rows. These tests exercise the
+  # pref-driven branches; the member-count (unset+large) branch has no live
+  # session here, so it resolves to SHOW (decision D) — the count-driven
+  # branch is covered by Grappa.PresenceFilter unit tests + the e2e.
+  defp seed_mixed(user, network, channel \\ "#sniffo") do
+    {:ok, _} =
+      ScrollbackHelpers.insert(%{
+        user_id: user.id,
+        network_id: network.id,
+        channel: channel,
+        server_time: 0,
+        kind: :privmsg,
+        sender: "vjt",
+        body: "hello"
+      })
+
+    {:ok, _} =
+      ScrollbackHelpers.insert(%{
+        user_id: user.id,
+        network_id: network.id,
+        channel: channel,
+        server_time: 1,
+        kind: :join,
+        sender: "alice",
+        body: nil
+      })
+
+    {:ok, _} =
+      ScrollbackHelpers.insert(%{
+        user_id: user.id,
+        network_id: network.id,
+        channel: channel,
+        server_time: 2,
+        kind: :quit,
+        sender: "bob",
+        body: "bye"
+      })
+  end
+
+  defp kinds_in(body), do: body |> Enum.map(& &1["kind"]) |> Enum.uniq()
+
+  test "GET omits join/part/quit when the channel pref is \"hide\" (#458)",
+       %{conn: conn, user: user, network: network} do
+    :ok = put_presence_pref(user, "azzurra #sniffo", "hide")
+    seed_mixed(user, network)
+
+    body = json_response(get(conn, "/networks/azzurra/channels/%23sniffo/messages"), 200)
+
+    assert kinds_in(body) == ["privmsg"]
+  end
+
+  test "GET returns every kind when the channel pref is \"show\" (#458)",
+       %{conn: conn, user: user, network: network} do
+    :ok = put_presence_pref(user, "azzurra #sniffo", "show")
+    seed_mixed(user, network)
+
+    body = json_response(get(conn, "/networks/azzurra/channels/%23sniffo/messages"), 200)
+
+    assert "join" in kinds_in(body)
+    assert "quit" in kinds_in(body)
+  end
+
+  test "GET on an unset channel with no live session shows presence (decision D) (#458)",
+       %{conn: conn, user: user, network: network} do
+    seed_mixed(user, network)
+
+    body = json_response(get(conn, "/networks/azzurra/channels/%23sniffo/messages"), 200)
+
+    assert "join" in kinds_in(body)
+  end
+
+  test "the presence pref key is rfc1459-canonicalised: a mixed-case channel still resolves \"hide\" (#458)",
+       %{conn: conn, user: user, network: network} do
+    # pref stored under the canonical key; a request for the SAME channel in a
+    # different casing must fold to the same key (channel invariant #364).
+    :ok = put_presence_pref(user, "azzurra #sniffo", "hide")
+    seed_mixed(user, network)
+
+    body = json_response(get(conn, "/networks/azzurra/channels/%23SNIFFO/messages"), 200)
+
+    assert kinds_in(body) == ["privmsg"]
+  end
+
+  defp put_presence_pref(user, channel_key, state) do
+    # put_display_prefs requires the full display-prefs shape (mirrors the #449
+    # wire PUT); build it from production defaults with the one pin set.
+    prefs = %{UserSettings.default_display_prefs() | presence_filter: %{channel_key => state}}
+    {:ok, _} = UserSettings.put_display_prefs({:user, user.id}, prefs)
+    :ok
   end
 
   test "GET ?limit=3 returns latest page descending with kind round-trip",

@@ -107,6 +107,15 @@ defmodule Grappa.Scrollback do
   # never notify.
   @content_kinds Message.content_kinds()
 
+  # #458 — the NARROW presence-noise kinds the history reads omit when a
+  # channel is hiding presence. Derived from the schema SSOT
+  # (`Message.suppressed_presence_kinds/0`); consumed by
+  # `maybe_exclude_presence/2`. A module attribute (compile-time list) so the
+  # `not in ^...` interpolation renders `kind NOT IN (?, ?, ?)` with the atoms
+  # dumped to their Ecto.Enum string values — same mechanism as
+  # `count_after_split/5`'s `^@content_kinds`.
+  @suppressed_presence_kinds Message.suppressed_presence_kinds()
+
   @doc """
   Maximum rows returned by a single `fetch/5` call.
 
@@ -452,6 +461,20 @@ defmodule Grappa.Scrollback do
   rule extends to "no wrapper arities that default a load-bearing
   parameter." Callers now state nil explicitly when they have no
   session.
+
+  ## `hide_presence` (#458)
+
+  When `true`, the query excludes the NARROW presence-noise kinds
+  (`Message.suppressed_presence_kinds/0` — join/part/quit/nick_change) in
+  SQL, so `limit` counts VISIBLE rows: one page-up is one screenful instead
+  of a page that renders empty on a busy channel. The broad control kinds
+  (mode/topic/kick/server_event) always stay. When `false`, every kind is
+  returned (unchanged behaviour). REQUIRED positional (same no-default rule as
+  `own_nick`): a `false` default would silently disable #458 for any caller
+  that forgets to thread it. The per-channel decision (tri-state pref × live
+  member count) is resolved by the caller via `Grappa.PresenceFilter.hidden?/2`
+  — this module only applies the boolean. cic keeps its own render-layer filter
+  for the LIVE WS tail; the two paths answer different questions.
   """
   @spec fetch(
           subject(),
@@ -459,17 +482,19 @@ defmodule Grappa.Scrollback do
           String.t(),
           integer() | nil,
           pos_integer(),
-          String.t() | nil
+          String.t() | nil,
+          boolean()
         ) :: [Message.t()]
-  def fetch(subject, network_id, channel, before, limit, own_nick)
+  def fetch(subject, network_id, channel, before, limit, own_nick, hide_presence)
       when is_integer(network_id) and is_integer(limit) and limit > 0 and
-             (is_binary(own_nick) or is_nil(own_nick)) do
+             (is_binary(own_nick) or is_nil(own_nick)) and is_boolean(hide_presence) do
     capped = min(limit, @max_limit)
 
     Message
     |> subject_where(subject)
     |> where([m], m.network_id == ^network_id)
     |> channel_or_dm_where(channel, own_nick)
+    |> maybe_exclude_presence(hide_presence)
     |> maybe_before(before)
     |> order_by([m], desc: m.server_time, desc: m.id)
     |> limit(^capped)
@@ -518,6 +543,16 @@ defmodule Grappa.Scrollback do
   page. Pass `nil` when the caller doesn't have a session (the
   channel-shape default applies) — the nil-ness is a deliberate
   decision at the call site (REV-J M12, same rule as `fetch/6`).
+
+  ## `hide_presence` (#458)
+
+  Same contract as `fetch/6` — excludes the narrow presence-noise kinds when
+  `true`, so the reconnect/backfill replay stays consistent with the history
+  page (#458 decision B). Safe by construction: cic routes backfill rows ONLY
+  to the render/scrollback store (`refreshScrollback`), NEVER through
+  `applyPresenceEvent` — the members store is fed by the LIVE WS stream +
+  `members_seeded` snapshots, so omitting presence from the backfill can't
+  starve the nicklist.
   """
   @spec fetch_after(
           subject(),
@@ -525,17 +560,19 @@ defmodule Grappa.Scrollback do
           String.t(),
           integer(),
           pos_integer(),
-          String.t() | nil
+          String.t() | nil,
+          boolean()
         ) :: [Message.t()]
-  def fetch_after(subject, network_id, channel, after_id, limit, own_nick)
+  def fetch_after(subject, network_id, channel, after_id, limit, own_nick, hide_presence)
       when is_integer(network_id) and is_integer(after_id) and is_integer(limit) and limit > 0 and
-             (is_binary(own_nick) or is_nil(own_nick)) do
+             (is_binary(own_nick) or is_nil(own_nick)) and is_boolean(hide_presence) do
     capped = min(limit, @max_limit)
 
     Message
     |> subject_where(subject)
     |> where([m], m.network_id == ^network_id)
     |> channel_or_dm_where(channel, own_nick)
+    |> maybe_exclude_presence(hide_presence)
     |> where([m], m.id > ^after_id)
     |> order_by([m], asc: m.id)
     |> limit(^capped)
@@ -731,6 +768,14 @@ defmodule Grappa.Scrollback do
   per-side ordering + per-side limit semantics. Two queries hit the
   same `(subject, network_id, channel, server_time)` index; cost is
   roughly double a single page fetch — bounded.
+
+  ## `hide_presence` (#458)
+
+  Same contract as `fetch/6` — the exclusion is applied to the shared `base`
+  query so BOTH the before- and after-rows inherit it. Filtered here for total
+  consistency with `fetch/6` / `fetch_after/6` (#458 decision C): all three
+  history reads suppress the same rows, so jump-to-context on a
+  presence-hiding channel doesn't surface noise the rest of the pane hides.
   """
   @spec fetch_around(
           subject(),
@@ -738,12 +783,13 @@ defmodule Grappa.Scrollback do
           String.t(),
           pos_integer(),
           pos_integer(),
-          String.t() | nil
+          String.t() | nil,
+          boolean()
         ) :: [Message.t()]
-  def fetch_around(subject, network_id, channel, around_id, limit, own_nick)
+  def fetch_around(subject, network_id, channel, around_id, limit, own_nick, hide_presence)
       when is_integer(network_id) and is_integer(around_id) and around_id > 0 and
              is_integer(limit) and limit > 0 and
-             (is_binary(own_nick) or is_nil(own_nick)) do
+             (is_binary(own_nick) or is_nil(own_nick)) and is_boolean(hide_presence) do
     capped = min(limit, @max_limit)
     before_count = div(capped, 2)
     after_count = capped - before_count
@@ -753,6 +799,7 @@ defmodule Grappa.Scrollback do
       |> subject_where(subject)
       |> where([m], m.network_id == ^network_id)
       |> channel_or_dm_where(channel, own_nick)
+      |> maybe_exclude_presence(hide_presence)
 
     before_rows =
       base
@@ -1046,6 +1093,17 @@ defmodule Grappa.Scrollback do
   # Order remains `(server_time DESC, id DESC)` for display stability.
   defp maybe_before(query, before) when is_integer(before),
     do: where(query, [m], m.id < ^before)
+
+  # #458 — when hiding, exclude the narrow presence-noise kinds
+  # (@suppressed_presence_kinds) in SQL so `limit` counts VISIBLE rows. The
+  # `not in ^...` renders `kind NOT IN (?, ?, ?)` with the atoms dumped to
+  # their Ecto.Enum string values (same mechanism as count_after_split/5).
+  # There is no index on `messages.kind` (#458 note): the predicate rides the
+  # existing composite after the index scan — fine at current volumes.
+  defp maybe_exclude_presence(query, false), do: query
+
+  defp maybe_exclude_presence(query, true),
+    do: where(query, [m], m.kind not in ^@suppressed_presence_kinds)
 
   @doc """
   UX-1 (2026-05-17) — deletes all scrollback rows for a DM peer in a
