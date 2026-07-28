@@ -21531,13 +21531,30 @@ INFORMATIONAL — it must not double the badge, and it doesn't, with ZERO
 `:invited` (like `:pending`) is broadcast on the USER topic at INVITE time and
 is absent from the cold-subscribe snapshot. A client that subscribes later
 (reload, backgrounded PWA, WS re-subscribe) never learns the window exists — the
-scrollback row survives, the tab does not. Fix: a user-topic backfill,
-`WindowState.invited_windows/2` → `Session.invited_windows/2` (`handle_call`) →
-`GrappaChannel.push_user_snapshot`'s new `push_invited_windows_if_live/2`, which
-re-emits `SessionWire.window_invited/2` for every `:invited` window on cold
-subscribe. Mirrors the #229 umode cold-snapshot exactly; cic already dispatches
-`window_invited` (`userTopic.ts`) → `setInvited` → `subscribe.ts` per-channel
-join, so NO cic source change.
+scrollback row survives, the tab does not. Fix: a user-topic backfill. The
+`:invited` windows are enumerated by `WindowState.invited_windows/2` and pushed
+as `SessionWire.window_invited/2` on cold subscribe by
+`GrappaChannel.push_session_snapshot/2`. Mirrors the #229 umode cold-snapshot
+exactly; cic already dispatches `window_invited` (`userTopic.ts`) → `setInvited`
+→ `subscribe.ts` per-channel join, so NO cic source change.
+
+**Latency regression the integration gate caught (and the fix).** The first cut
+added a *separate* `Session.invited_windows/2` `handle_call`, making
+`push_user_snapshot` fire a THIRD serial blocking `GenServer.call` per network
+on the login hot path (alongside `get_umodes` + `get_supported_umodes`). Under
+full-suite concurrency all specs share one seeded-vjt `Session.Server`; the
+extra call deepened its mailbox and slowed user-topic broadcasts enough that TWO
+independent broadcast-timing e2e specs went red — `slash-commands-bundle`'s `/q`
+close (waits for the `close_query_window` → `query_windows_list` rebroadcast)
+and `ux-6-b-admin-settings`'s `server_settings_changed` fan-out — while passing
+on a tree without the diff. That control-arm pairing (two specs, one variable)
+was the signal, not a flake. Fix: fold the three reads into ONE
+`Session.session_snapshot/2` call (umodes + supported_umodes + invited_windows)
+consumed by a single `push_session_snapshot/2` — net 3→1 round-trips per network,
+*below* the pre-#482 baseline. The untouched `get_umodes`/`get_supported_umodes`
+point accessors keep their #229/#249 hot-reload-safety tests green.
+**Lesson: the after-join user-topic snapshot is a hot path on a shared process;
+add data to an existing per-network call, never a new blocking round-trip.**
 
 **Mechanism correction on the record (RULING 1 amended).** The issue's point 2
 said *"teach `to_wire/3` to project `:invited`"*. That is wrong: `to_wire/3` is

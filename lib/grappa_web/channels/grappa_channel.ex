@@ -1156,92 +1156,53 @@ defmodule GrappaWeb.GrappaChannel do
     case resolve_subject(user_name) do
       {:ok, subject} ->
         push_query_windows_list(subject, socket)
-        push_umodes_if_live(subject, socket)
-        push_supported_umodes_if_live(subject, socket)
+        push_session_snapshot(subject, socket)
         push_notify_list(subject, socket)
         push_presence_if_live(subject, socket)
-        push_invited_windows_if_live(subject, socket)
 
       :error ->
         :ok
     end
   end
 
-  # #229: seed the cic `/mode <nick>` modal's umode set on the user-topic
-  # cold-WS-subscribe. Unlike #216's isupport (which rides the per-channel
-  # after-join snapshot), umodes are per-session and reachable with ZERO
-  # channels, so this fans out one `umode_changed` push per bound network
-  # on the user topic — the same carrier the live 221 broadcast uses. The
-  # live edge is the 221 RPL_UMODEIS broadcast; this closes the always-on-
-  # session race where the 221 fired long before the client subscribed.
-  # `get_umodes` only misses on `{:error, :no_session}` (parked/failed) —
-  # cic keeps its empty default until a session is live. A best-effort
-  # snapshot: a broadcast/resolve failure for one network must not disturb
-  # the others (each push is independent).
-  @spec push_umodes_if_live(Session.subject(), Phoenix.Socket.t()) :: :ok
-  defp push_umodes_if_live(subject, socket) do
+  # #229/#249/#482: seed the per-session user-topic cold-WS-subscribe state in
+  # ONE per-network round-trip — the umode set (`umode_changed`, #229), the
+  # server-advertised supported umodes (`supported_umodes_changed`, #249), and
+  # every `:invited` window (`window_invited`, #482). All three are per-session
+  # and reachable with ZERO joined channels, so they ride the user topic — NOT
+  # the per-channel snapshot (#216's isupport uses that; `to_wire/3` excludes
+  # `:invited` on purpose — a user-topic payload on a per-channel topic is
+  # dropped as malformed). Folded behind a SINGLE `Session.session_snapshot/2`
+  # call so this login hot path makes ONE blocking GenServer.call per network
+  # instead of three serial ones: #482's first cut added a third call here and
+  # regressed user-topic broadcast latency under concurrent WS load (two
+  # broadcast-timing e2e specs went red on the shared session's deepened
+  # mailbox).
+  #
+  # Each push reuses the SAME Wire verb the live broadcast emits (221 / 004 /
+  # `{:invited, _}`), so cic's dispatch never branches on snapshot-vs-event;
+  # this just closes the always-on-session race where those fired long before
+  # the client subscribed. `session_snapshot` only misses on
+  # `{:error, :no_session}` (parked/failed) — cic keeps its empty defaults
+  # until a session is live. Best-effort: one network's failure must not
+  # disturb the others (each network resolved independently).
+  @spec push_session_snapshot(Session.subject(), Phoenix.Socket.t()) :: :ok
+  defp push_session_snapshot(subject, socket) do
     for %Network{} = network <- Networks.Credentials.list_networks_for_subject(subject) do
-      case Session.get_umodes(subject, network.id) do
-        {:ok, modes} ->
-          push(socket, "event", SessionWire.umode_changed(network.id, modes))
+      case Session.session_snapshot(subject, network.id) do
+        {:ok, snapshot} ->
+          push(socket, "event", SessionWire.umode_changed(network.id, snapshot.umodes))
+
+          push(
+            socket,
+            "event",
+            SessionWire.supported_umodes_changed(network.id, snapshot.supported_umodes)
+          )
+
+          Enum.each(snapshot.invited_windows, &push(socket, "event", &1))
 
         {:error, _} ->
           :ok
-      end
-    end
-
-    :ok
-  end
-
-  # #249: seed the cic `/umode` modal's AVAILABLE toggle set on the user-topic
-  # cold-WS-subscribe. Mirror of `push_umodes_if_live/2` (umodes are
-  # per-session, reachable with ZERO channels, so this rides the user topic —
-  # not the per-channel snapshot #216's isupport uses). The live edge is the
-  # 004 `supported_umodes_changed` broadcast; this closes the always-on-session
-  # race where the 004 fired long before the client subscribed.
-  # `get_supported_umodes` only misses on `{:error, :no_session}`
-  # (parked/failed) — cic falls back to its static umode table until a session
-  # is live. Best-effort: one network's resolve/push failure must not disturb
-  # the others (each push is independent).
-  @spec push_supported_umodes_if_live(Session.subject(), Phoenix.Socket.t()) :: :ok
-  defp push_supported_umodes_if_live(subject, socket) do
-    for %Network{} = network <- Networks.Credentials.list_networks_for_subject(subject) do
-      case Session.get_supported_umodes(subject, network.id) do
-        {:ok, modes} ->
-          push(socket, "event", SessionWire.supported_umodes_changed(network.id, modes))
-
-        {:error, _} ->
-          :ok
-      end
-    end
-
-    :ok
-  end
-
-  # #482: re-surface every :invited window on the user-topic cold-WS-
-  # subscribe. An inbound INVITE we didn't request flips the channel to a
-  # greyed :invited tab and broadcasts `window_invited` ONCE, at INVITE
-  # time; a client that subscribes later (reload, backgrounded PWA, WS
-  # re-subscribe) misses that single broadcast and the bottom-bar tab
-  # evaporates — the invite survives only in scrollback, invisible (vjt's
-  # symptom). Like `push_umodes_if_live/2`, :invited is per-session and
-  # reachable with ZERO joined channels, so it rides the user topic — NOT
-  # the per-channel snapshot (`to_wire/3` excludes :invited on purpose; a
-  # user-topic payload on a per-channel topic is dropped as malformed). The
-  # live edge is the `{:invited, _}` broadcast; this closes the always-on-
-  # session race where it fired long before the client subscribed. Each
-  # payload is the SAME `SessionWire.window_invited/2` map the broadcast
-  # emits, so cic's dispatch doesn't branch on snapshot-vs-event.
-  # `Session.invited_windows/2` only misses on `{:error, :no_session}`
-  # (parked/failed) — cic keeps its empty `windowStateByChannel` until a
-  # session is live. Best-effort: one network's resolve/push failure must
-  # not disturb the others.
-  @spec push_invited_windows_if_live(Session.subject(), Phoenix.Socket.t()) :: :ok
-  defp push_invited_windows_if_live(subject, socket) do
-    for %Network{} = network <- Networks.Credentials.list_networks_for_subject(subject) do
-      case Session.invited_windows(subject, network.id) do
-        {:ok, payloads} -> Enum.each(payloads, &push(socket, "event", &1))
-        {:error, _} -> :ok
       end
     end
 
@@ -1339,7 +1300,7 @@ defmodule GrappaWeb.GrappaChannel do
 
   # #247 — snapshot-on-attach for /notify presence dots: one
   # `presence_snapshot` push per bound network with a live session.
-  # Mirrors `push_umodes_if_live/2` (same per-network fan-out, same
+  # Mirrors `push_session_snapshot/2` (same per-network fan-out, same
   # best-effort contract — a parked/failed network is skipped and cic
   # keeps unknown dots until the session comes up). Empty maps are
   # skipped: no watch list means nothing to paint.

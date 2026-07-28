@@ -1020,22 +1020,33 @@ defmodule Grappa.Session do
   end
 
   @doc """
-  Returns the `window_invited` cold-WS-subscribe backfill payloads for
-  EVERY `:invited` window in the given session (#482).
+  Returns the per-session cold-WS-subscribe bundle for the user-topic
+  after-join snapshot — the umode set (#229), the server-advertised
+  supported umodes (#249), and the `window_invited` payloads for EVERY
+  `:invited` window (#482) — in ONE round-trip.
 
-  The user-topic twin of `get_window_state/3`: `:invited` is a user-topic
-  state (cic subscribes per-channel only AFTER seeing it), so it is absent
-  from the per-channel snapshot. `GrappaWeb.GrappaChannel.push_user_snapshot`
-  calls this to re-emit `window_invited` for each invited window on a cold
-  subscribe, so the greyed tab survives a reload instead of evaporating
-  (the #482 symptom). `{:error, :no_session}` when no live `Session.Server`
-  backs the `(subject, network)`.
+  Folded into a single call so `GrappaWeb.GrappaChannel.push_user_snapshot`
+  makes ONE per-network `Session.Server` round-trip on the login hot path
+  rather than three serial blocking calls (the #482 latency regression:
+  a separate `:invited` call deepened the shared-session mailbox under
+  concurrent WS load and slowed user-topic broadcasts). `:invited` is a
+  user-topic state (cic subscribes per-channel only AFTER seeing it), so
+  it rides this snapshot; re-emitting `window_invited` on cold subscribe is
+  what keeps the greyed tab from evaporating on reload (the #482 symptom).
+  `{:error, :no_session}` when no live `Session.Server` backs the
+  `(subject, network)`.
   """
-  @spec invited_windows(subject(), integer()) ::
-          {:ok, [Grappa.Session.Wire.window_invited_payload()]} | {:error, :no_session}
-  def invited_windows(subject, network_id)
+  @spec session_snapshot(subject(), integer()) ::
+          {:ok,
+           %{
+             umodes: [String.t()],
+             supported_umodes: [String.t()],
+             invited_windows: [Grappa.Session.Wire.window_invited_payload()]
+           }}
+          | {:error, :no_session}
+  def session_snapshot(subject, network_id)
       when is_subject(subject) and is_integer(network_id) do
-    call_session(subject, network_id, :invited_windows)
+    call_session(subject, network_id, :session_snapshot)
   end
 
   @doc """

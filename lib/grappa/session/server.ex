@@ -1914,17 +1914,34 @@ defmodule Grappa.Session.Server do
     {:reply, WindowState.to_wire(state.window_state, state.network_slug, channel), state}
   end
 
-  # #482: the user-topic cold-WS-subscribe backfill source for :invited
-  # windows. `:invited` (like `:pending`) is broadcast on the user topic at
-  # INVITE time and is absent from the per-channel snapshot (`to_wire/3`
-  # excludes it), so a client that subscribes later never learns the greyed
-  # tab exists and it evaporates on reload. `GrappaChannel.push_user_snapshot`
-  # calls this to re-emit `window_invited` per invited window. Delegates to
-  # `WindowState.invited_windows/2` — the same Wire verb the event-time
-  # `{:invited, _}` broadcast uses, so snapshot + event payloads are
-  # byte-identical.
-  def handle_call(:invited_windows, _, state) do
-    {:reply, {:ok, WindowState.invited_windows(state.window_state, state.network_slug)}, state}
+  # #229/#249/#482: the per-session cold-WS-subscribe bundle pushed on the
+  # user-topic after-join snapshot — the umode set (221), the server-advertised
+  # supported umodes (004), and the `:invited` windows (#482). Folded into ONE
+  # GenServer.call so `GrappaChannel.push_user_snapshot` makes a SINGLE
+  # per-network round-trip on that hot path instead of three serial blocking
+  # calls: #482's first cut added a THIRD call (alongside get_umodes /
+  # get_supported_umodes), deepening the shared-session mailbox under
+  # concurrent WS load and regressing user-topic broadcast latency (two
+  # broadcast-timing e2e specs went red). One call, more data — reuse the verb.
+  # Always succeeds — every field defaults empty.
+  #
+  # `Map.get` defaults (not `state.umodes` / `state.supported_umodes`) so a live
+  # proc whose state predates a field — a plain hot module reload does NOT
+  # rewrite process state — returns [] instead of KeyError-crashing the
+  # :transient proc on the next after-join snapshot (see the #229 / #249
+  # hot-reload safety tests, which still exercise the same defaults via the
+  # untouched get_umodes / get_supported_umodes point accessors). Invited
+  # windows funnel through the SAME `SessionWire.window_invited/2` verb the
+  # event-time `{:invited, _}` broadcast uses, so snapshot + event payloads
+  # stay byte-identical.
+  def handle_call(:session_snapshot, _, state) do
+    {:reply,
+     {:ok,
+      %{
+        umodes: Map.get(state, :umodes, []),
+        supported_umodes: Map.get(state, :supported_umodes, []),
+        invited_windows: WindowState.invited_windows(state.window_state, state.network_slug)
+      }}, state}
   end
 
   # Returns the userhost cache entry for `nick`. Nick lookup is case-insensitive
