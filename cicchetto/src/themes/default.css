@@ -1041,6 +1041,19 @@ html.overlay-open #root > div {
      behave identically on both form factors (issue #473's core goal). */
   display: flex;
   flex-direction: column;
+  /* #500 — min-height:0 is load-bearing for the pinned launcher. `.shell-members`
+     is a GRID ITEM of `.shell` (grid-template-rows: 1fr, height: 100dvh), whose
+     default `min-height: auto` floors it at its CONTENT height. Pre-#500 the aside
+     was `overflow-y: auto`, and a scroll container's min-height:auto resolves to 0
+     — so the aside was bounded to the grid track and scrolled internally. #500
+     switched it to `overflow-y: visible` (so the absolute launcher menu overlays
+     unclipped), which RESURRECTED the content-height floor: on a big channel the
+     aside grew past the viewport and the bottom launcher (`margin-top: auto`) was
+     pushed below the fold — the exact desktop unreachability #500 set out to fix,
+     re-created. Explicit min-height:0 restores the shrink-to-track behavior so the
+     inner `.members-pane` (flex:1, overflow-y:auto) scrolls and the flex-shrink:0
+     launcher stays pinned in view. Proven by issue500-rail-launcher-overflow. */
+  min-height: 0;
   /* #205 — safe-area insets removed from the base rule and relocated to
      the mobile `.shell-members` override (~:2969). On desktop the members
      aside is a grid CHILD of `.shell`, which now insets the whole

@@ -14,7 +14,7 @@
 // iso-rerun at --repeat-each N. Server-side persistence of a `builtin` payload
 // is already pinned by the Elixir token_model + controller tests.
 
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { loginAs, openSettingsDrawer, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -25,7 +25,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 type PWPage = import("@playwright/test").Page;
 
 async function openEditorFromGallery(page: PWPage): Promise<void> {
-  await page.getByLabel("open settings").click();
+  // #500 — the settings cog lives behind the rail launcher; openSettingsDrawer
+  // reveals it and opens the drawer at its INDEX, where the themes nav row lives.
+  await openSettingsDrawer(page);
   await page.getByTestId("themes-settings-entry").click();
   await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });
   await page.getByTestId("theme-new").click();

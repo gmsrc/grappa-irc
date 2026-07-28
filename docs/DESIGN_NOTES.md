@@ -21308,6 +21308,30 @@ makes `.members-pane` the scroll owner on BOTH form factors and sets
 while the pinned launcher stays in view and the absolute `.rail-actions-menu`
 overlays unclipped.
 
+**The overflow guard caught a REAL production bug: `.shell-members` needed
+`min-height: 0`.** The scroll-owner switch above was INCOMPLETE. `.shell-members`
+is a GRID ITEM of `.shell` (`grid-template-rows: 1fr`, `height: 100dvh`), and a
+grid item's default `min-height: auto` floors it at its CONTENT height. Pre-#500
+the aside was `overflow-y: auto` — a scroll container's `min-height: auto`
+resolves to 0, so the aside was bounded to its grid track and scrolled. Switching
+it to `overflow-y: visible` (needed so the absolute launcher menu overlays
+unclipped) RESURRECTED the content-height floor: on a big channel the aside grew
+past the viewport, the inner `.members-pane` (`flex: 1`) filled the grown aside so
+it never actually overflowed, and the bottom launcher (`margin-top: auto`) was
+pushed BELOW THE FOLD — the exact desktop unreachability #500 set out to kill,
+silently re-created. `min-height: 0` on `.shell-members` restores the
+shrink-to-track behavior so the pane bounds, scrolls, and the launcher stays
+pinned. This was NOT found by eyeball — it was found by
+`issue500-rail-launcher-overflow`'s precondition assert (*"members pane must
+overflow for this test to be meaningful"*), which went RED (`overflows === false`)
+precisely because the unbounded pane could never overflow. Measured on the fixed
+build: at a 1280×200 viewport the aside is bounded to 200px, the pane overflows
+(scrollHeight 211 > clientHeight 137), and the launcher sits at y 145–193, in
+view. The lesson: a "make the pane own the scroll" change is not done until the
+pane's ANCESTOR chain can shrink (`min-height: 0` at every flex/grid level), and a
+red-proof precondition assert is what distinguishes "the fix works" from "the test
+never exercised the fix."
+
 **The e2e blast radius — the cog moved behind the launcher on BOTH form factors.**
 Pre-#500 the desktop rail was always-expanded, so the settings cog
 (`aria-label="open settings"` / `action-cluster-cog`) was directly clickable on

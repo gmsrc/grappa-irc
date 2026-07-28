@@ -28,7 +28,7 @@
 // Playwright e2e via scripts/integration.sh.
 
 import { expect, test } from "../fixtures/test";
-import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { composeSend, loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -70,6 +70,10 @@ test("#222 — per-channel toggle hides join/part rows, persists across reload, 
     await expect(partRow).toHaveCount(1, { timeout: 10_000 });
     await expect(privmsgRow).toHaveCount(1, { timeout: 10_000 });
 
+    // #500 — the denoise presence-toggle lives behind the rail launcher now;
+    // reveal the menu before reaching it. Firing the toggle keeps the menu open
+    // (denoise is a state toggle, not a nav action), so no re-open before click.
+    await openRailMenu(page);
     const toggle = page.locator('[data-testid="presence-toggle"]');
     await expect(toggle).toBeVisible({ timeout: 5_000 });
 
@@ -110,6 +114,8 @@ test("#222 — per-channel toggle hides join/part rows, persists across reload, 
     await expect(partRow).toHaveCount(0);
 
     // 4. toggle OFF → the join/part rows reappear.
+    // #500 — the reload closed the rail menu; reveal it again before the toggle.
+    await openRailMenu(page);
     const toggleAfterReload = page.locator('[data-testid="presence-toggle"]');
     await expect(toggleAfterReload).toBeVisible({ timeout: 5_000 });
     await toggleAfterReload.click();
