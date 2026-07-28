@@ -37,10 +37,16 @@ Optional runtime dependencies (only for media link previews — see below):
 
 ## Moving pictures
 
-Video and animated GIFs play inline as colour character art. They are decoded
-at 10fps up to 64 frames, and only frames that are ON SCREEN are advanced — a
-scrollback full of GIFs you scrolled past is not a scrollback full of running
-animations.
+Video and animated GIFs play inline as colour character art, and `/preview`
+plays them full-screen too. Up to 64 frames at 10fps, and only frames that are
+ON SCREEN are advanced — a scrollback full of GIFs you scrolled past is not a
+scrollback full of running animations.
+
+Whether something animates is decided by the DECODER, not by the link: on a
+character-art terminal every picture is asked for its frames, so an animated
+GIF plays whatever its URL looks like, and a still comes back as the single
+frame it has. On a terminal with a graphics protocol the extension is still
+consulted, because forcing art there would trade real sharpness for a guess.
 
 Motion is deliberately a character-art capability. A terminal graphics
 protocol (kitty/iTerm2/sixel) places a whole picture at the cursor, so
@@ -72,6 +78,7 @@ typing go" has to be answerable at a glance.
 | `Ctrl-Alt-Up` / `Ctrl-Alt-Down` | move focus between panes |
 | `Ctrl-Alt-Tab` | cycle focus |
 | `Ctrl-Alt-+` / `Ctrl-Alt--` | grow / shrink the focused pane |
+| `Ctrl-Shift-Up` / `Ctrl-Shift-Down` | scroll the userlist (`Shift-PgUp`/`PgDn` too) |
 
 Terminals disagree about what Ctrl-Alt sends, and some send nothing at all
 for Ctrl-Alt-Tab (a desktop usually eats Alt-Tab before the terminal sees

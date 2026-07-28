@@ -22277,3 +22277,43 @@ is somebody's sentence and guessing wrong there deletes it.
 
 `compose_reply()` is pure — nick, body, whatever is already typed, out — so all
 of the above is testable without a terminal, a decoder or a socket.
+
+## 2026-07-28 — shottino: the decoder decides what animates, not the URL
+
+The animation that shipped hours earlier keyed on `url_has_gif_suffix()`, and
+vjt reported the predictable result: video animated inline, an animated GIF did
+not. A URL is a bad witness — a link that does not end in `.gif`, an animated
+WebP, an APNG, a redirect, all decode to many frames and were rendered as one.
+
+**The fix is to ask the thing that knows, but the obvious form of it is a trap.**
+"Always request frames" breaks every still picture: the `fps` filter has no
+duration to sample on a single image and yields **zero** frames, so stills would
+fail to decode entirely. Measured, not assumed — `fps=10` on a PNG gives 0
+frames, `-fps_mode passthrough` gives 1, and the same passthrough gives a GIF all
+20 of its frames.
+
+So the rule is scoped by what the render is going to be anyway: **when the
+picture will be CHARACTER ART, always ask for frames** — a still answers "one"
+and costs exactly what it cost before. The URL hint survives only where it buys
+something: on a terminal with a graphics protocol, where forcing art for a still
+would trade real sharpness for a guess. Video keeps the `fps` filter (that is
+what makes its playback rate right); images take passthrough (their own frames,
+however many that is).
+
+`/preview` animates now too, and its frame clock is the terminal's own read
+timeout: `VMIN=0, VTIME=1` is a 100ms idle window, so a read that returns nothing
+means both "no key yet" and "next frame due" — 10fps with no sleep to drift
+against and no second timer to keep in step.
+
+**The roster scroll never worked, for a plainer reason.** It was bound to
+`KEY_SPREVIOUS`/`KEY_SNEXT`, which exist only if the terminfo entry defines
+`kPRV`/`kNXT` — plenty do not, so the key arrived as an undecoded escape burst
+and the list sat still. The sequences are bound directly now, alongside
+Ctrl-Shift-Up/Down (arrows are what a list wants), the same
+define_key() treatment the pane keys already needed. The on-screen hint was
+advertising the binding that did not work, which is how a missing terminfo
+capability turns into "the feature is broken".
+
+A test now runs the real ffmpeg over a generated GIF and a generated PNG — named
+without extensions, so only the decoder can answer — and skips rather than fails
+where ffmpeg is absent. Reinstating the URL guess fails it.

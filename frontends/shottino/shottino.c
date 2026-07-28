@@ -77,6 +77,7 @@
  * motion in a terminal; more just spends pairs faster. */
 #define MEDIA_ANIM_MAX_FRAMES 64
 #define MEDIA_ANIM_FPS 10
+#define MEDIA_ANIM_FPS_FILTER "fps=10,"
 /* #451/#324 — cap on the deployment's HTTP host aliases retained from
  * /api/server-settings for first-party media classification. */
 #define MAX_HTTP_ALIASES 16
@@ -1722,7 +1723,12 @@ static bool token_has_suffix(const char *token, const char *const *exts) {
 /* Is this URL a GIF? Same token-lowering rule as media_kind_of, so
  * "?x=1" and case cannot change the answer. */
 static bool url_has_gif_suffix(const char *url) {
-    static const char *const gif[] = {".gif", NULL};
+    /* Only a HINT, and only load-bearing on a terminal with a graphics
+     * protocol — everywhere else the decoder is asked directly. WebP and
+     * APNG carry animation under extensions that are usually still, so
+     * they are hinted too: guessing "maybe" costs one decode that
+     * answers itself. */
+    static const char *const gif[] = {".gif", ".webp", ".apng", NULL};
     char lower[MAX_LINE];
     url_token_lower(url, lower, sizeof(lower));
     return token_has_suffix(lower, gif);
@@ -4669,7 +4675,7 @@ static void draw(struct app *app) {
             /* Say so when the list runs past the pane, or a roster that is
              * simply taller than the sidebar reads as a truncated one. */
             if (roster_rows > (size_t)(roster_h - 1))
-                draw_text(rows - 1, 1, side - 2, CP_MUTED, A_DIM, "S-PgUp/PgDn %zu/%zu",
+                draw_text(rows - 1, 1, side - 2, CP_MUTED, A_DIM, "C-S-\u2191\u2193 %zu/%zu",
                           focused_pane_locked(app)->member_offset + 1, roster_rows);
         }
     }
@@ -4791,7 +4797,7 @@ static void draw(struct app *app) {
             draw_member_list(app, w, 2, members_x + 1, members - 2, pane_h, fp->member_offset);
             if (roster_rows > (size_t)pane_h)
                 draw_text(rows - 1, members_x + 1, members - 2, CP_MUTED, A_DIM,
-                          "S-PgUp/PgDn %zu/%zu", focused_pane_locked(app)->member_offset + 1, roster_rows);
+                          "C-S-\u2191\u2193 %zu/%zu", focused_pane_locked(app)->member_offset + 1, roster_rows);
         }
         if (w->member_count == 0)
             draw_text(2, members_x + 1, members - 2, CP_MUTED, 0, "(not seeded)");
@@ -5965,8 +5971,30 @@ static void media_decode_job(struct app *app, int slot) {
      * everything else. A clip therefore renders as art even where a
      * protocol is available: consistent motion beats a still that is
      * slightly sharper. */
-    bool animate = app->animate_media && m->is_animatable && slot != MEDIA_SLOT_PREVIEW;
+    /* Does this decode ask for FRAMES?
+     *
+     * The URL is a bad witness for "is this animated" and was the bug
+     * that shipped: a GIF whose link does not end in .gif — or is an
+     * animated WebP, or an APNG — decoded as a single frame and sat
+     * there. The decoder knows and the URL only guesses.
+     *
+     * So: when the picture is going to be rendered as CHARACTER ART
+     * anyway, always ask for frames and let the count decide. A still
+     * image comes back as exactly one frame and costs precisely what it
+     * costs today. The URL hint survives only where it buys something —
+     * a terminal with a graphics protocol, where forcing art for a still
+     * would trade real sharpness for a guess.
+     *
+     * (Asking for frames must not be done with the fps filter on a
+     * still: a single image has no duration for fps to sample, and it
+     * yields ZERO frames. Stills go through passthrough, which gives the
+     * one frame they have; only video takes fps, which is what makes its
+     * playback rate right.) */
+    bool art = proto == MEDIA_PROTO_NONE;
+    bool hinted = m->is_animatable;
+    bool animate = app->animate_media && (art || hinted);
     if (animate) proto = MEDIA_PROTO_NONE;
+    bool timed = animate && m->is_video; /* fps filter, vs native frames */
     int want_frames = animate ? MEDIA_ANIM_MAX_FRAMES : 1;
     pthread_mutex_unlock(&app->lock);
     if (!url[0] || cols <= 0 || rows <= 0) return;
@@ -6037,16 +6065,13 @@ static void media_decode_job(struct app *app, int slot) {
          * indexes it the same way. */
         char scale[224];
         char frames_arg[16];
-        if (want_frames > 1)
-            snprintf(scale, sizeof(scale),
-                     "fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,"
-                     "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
-                     MEDIA_ANIM_FPS, px_w, px_h, px_w, px_h);
-        else
-            snprintf(scale, sizeof(scale),
-                     "thumbnail,scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,"
-                     "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
-                     px_w, px_h, px_w, px_h);
+        const char *head = timed   ? MEDIA_ANIM_FPS_FILTER      /* video: resample to a known rate */
+                           : animate ? ""           /* image: whatever frames it has */
+                                     : "thumbnail,"; /* one representative frame */
+        snprintf(scale, sizeof(scale),
+                 "%sscale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,"
+                 "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
+                 head, px_w, px_h, px_w, px_h);
         snprintf(frames_arg, sizeof(frames_arg), "%d", want_frames);
         char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
                         /* #451: fetch untrusted peer media, so bound ffmpeg to the
@@ -6056,6 +6081,10 @@ static void media_decode_job(struct app *app, int slot) {
                          * otherwise reach. Input option, so it precedes -i. */
                         "-protocol_whitelist", "file,crypto,tcp,tls,http,https",
                         "-i", url, "-vf", scale, "-frames:v", frames_arg,
+                        /* passthrough: without it ffmpeg may resample an
+                         * image sequence to a default rate, which for a
+                         * single-frame input means dropping it entirely. */
+                        "-fps_mode", "passthrough",
                         "-f", "rawvideo", "-pix_fmt", "rgb24", raw, NULL};
         if (run_cmd(argv, false) == 0) {
             size_t one = (size_t)px_w * (size_t)px_h * 3;
@@ -6164,6 +6193,49 @@ static void request_preview(struct app *app, const char *url, bool is_video, boo
 
 /* Display an already-decoded preview. Runs on the UI thread — it owns the
  * screen — but does no fetching, so the takeover is brief. */
+/* Play a decoded clip full-screen until a key is pressed.
+ *
+ * The frame clock IS the terminal's read timeout: VTIME=1 is a 100ms
+ * idle window, so a read that returns nothing is both "no key yet" and
+ * "next frame due" — 10fps, the rate the frames were decoded at, with no
+ * sleep to drift against and no second timer to keep in step.
+ *
+ * Everything is written to stdout directly, outside curses, exactly as
+ * the still preview does: this runs after endwin(). */
+static void preview_play(const unsigned char *rgb, int cols, int rows, size_t frames,
+                         const char *url, int term_rows, int term_cols) {
+    struct termios old_tio, raw;
+    bool raw_ok = tcgetattr(STDIN_FILENO, &old_tio) == 0;
+    if (raw_ok) {
+        raw = old_tio;
+        cfmakeraw(&raw);
+        raw.c_cc[VMIN] = 0;
+        raw.c_cc[VTIME] = 1; /* 100ms */
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    }
+    unsigned char c;
+    /* Drain the terminal's replies to the graphics capability probes, or
+     * the first frame would be dismissed by a byte the terminal sent. */
+    if (raw_ok) while (read(STDIN_FILENO, &c, 1) > 0) {}
+
+    int depth = termcolor_detect_depth();
+    size_t stride = (size_t)cols * (size_t)(rows * 2) * 3;
+    int url_w = term_cols - 10;
+    if (url_w < 0) url_w = 0;
+    size_t f = 0;
+    for (;;) {
+        fputs("\033[H", stdout);
+        printf("preview: %.*s\r\n", url_w, url);
+        termcolor_render_rgb(rgb + f * stride, cols, rows * 2, depth, stdout);
+        printf("\033[%d;1H[ playing %zu frames — press any key to return ]", term_rows, frames);
+        fflush(stdout);
+        if (!raw_ok) { getchar(); break; }
+        if (read(STDIN_FILENO, &c, 1) > 0) break;
+        f = (f + 1) % frames;
+    }
+    if (raw_ok) tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+}
+
 static void show_preview(struct app *app) {
     char url[MAX_LINE];
     bool is_video, ok;
@@ -6184,6 +6256,7 @@ static void show_preview(struct app *app) {
     rgb = m->rgb;
     cols = m->cols;
     rows = m->rows;
+    size_t frame_count = m->frame_count;
     m->payload = NULL;
     m->rgb = NULL;
     m->state = IM_IDLE;
@@ -6213,20 +6286,25 @@ static void show_preview(struct app *app) {
     printf("preview: %.*s\r\n", url_w, url);
     fflush(stdout);
 
-    const char *how;
-    if (payload) {
-        fwrite(payload, 1, payload_len, stdout);
-        how = "image";
+    if (rgb && frame_count > 1) {
+        /* A clip: play it rather than freezing on one frame. */
+        preview_play(rgb, cols, rows, frame_count, url, term_rows, term_cols);
     } else {
-        termcolor_render_rgb(rgb, cols, rows * 2, termcolor_detect_depth(), stdout);
-        how = termcolor_detect_depth() == TERM_COLOR_NONE ? "ascii" : "colour ascii";
-    }
-    fflush(stdout);
+        const char *how;
+        if (payload) {
+            fwrite(payload, 1, payload_len, stdout);
+            how = "image";
+        } else {
+            termcolor_render_rgb(rgb, cols, rows * 2, termcolor_detect_depth(), stdout);
+            how = termcolor_detect_depth() == TERM_COLOR_NONE ? "ascii" : "colour ascii";
+        }
+        fflush(stdout);
 
-    printf("\033[%d;1H[ %s%s — press any key to return ]", term_rows,
-           is_video ? "video frame, " : "", how);
-    fflush(stdout);
-    wait_for_dismiss_key();
+        printf("\033[%d;1H[ %s%s — press any key to return ]", term_rows,
+               is_video ? "video frame, " : "", how);
+        fflush(stdout);
+        wait_for_dismiss_key();
+    }
 
     /* Kitty placements persist above the cell grid; drop them so the chat
      * repaint underneath is clean (a no-op on other terminals). */
@@ -6255,6 +6333,7 @@ static void show_help(struct app *app) {
     log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; video and GIFs PLAY as colour art (/media still for one frame); /media [on|off|all|first-party] — 'all' also auto-fetches images hosted elsewhere");
     log_line(app, "       /preview full-screen; /preview-ascii forces the art renderer; /open opens externally; with /mouse on, click a link to preview");
     log_line(app, "reply: right-click a message for reply/query, or Ctrl-R for a searchable reply picker (type to filter, Enter replies)");
+    log_line(app, "userlist: Ctrl-Shift-Up/Down or Shift-PgUp/PgDn scroll it; the wheel scrolls it too when /mouse is on");
     log_line(app, "panes: /split (stacked) /splitv (side by side) /unsplit; Ctrl-Alt-Up/Down or Ctrl-Alt-Tab switch, Ctrl-Alt-+/- resize, /keys shows what your terminal sends");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
@@ -7442,7 +7521,9 @@ enum {
     KEY_PANE_PREV,
     KEY_PANE_GROW,
     KEY_PANE_SHRINK,
-    KEY_PANE_CYCLE
+    KEY_PANE_CYCLE,
+    KEY_ROSTER_UP,
+    KEY_ROSTER_DOWN
 };
 
 static void define_pane_keys(void) {
@@ -7460,6 +7541,19 @@ static void define_pane_keys(void) {
         {"\033[27;7;9~", KEY_PANE_CYCLE},   /* Ctrl-Alt-Tab */
         {"\033[27;3;43~", KEY_PANE_GROW},
         {"\033[27;3;45~", KEY_PANE_SHRINK},
+        /* The member list. Shift+PgUp/PgDn was bound through terminfo's
+         * kPRV/kNXT alone, which plenty of terminfo entries simply do not
+         * define — the key then arrives as an undecoded escape burst and
+         * the roster never moves, which is exactly what happened. Binding
+         * the sequences directly is what makes the promise true, and
+         * Ctrl-Shift-Up/Down is bound alongside because arrows are what a
+         * list wants. */
+        {"\033[5;2~", KEY_ROSTER_UP},   /* Shift-PgUp */
+        {"\033[6;2~", KEY_ROSTER_DOWN}, /* Shift-PgDn */
+        {"\033[1;6A", KEY_ROSTER_UP},   /* Ctrl-Shift-Up */
+        {"\033[1;6B", KEY_ROSTER_DOWN}, /* Ctrl-Shift-Down */
+        {"\033[1;2A", KEY_ROSTER_UP},   /* Shift-Up, where ctrl is eaten */
+        {"\033[1;2B", KEY_ROSTER_DOWN}, /* Shift-Down */
     };
     for (size_t i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++)
         define_key(bindings[i].seq, bindings[i].code);
@@ -7548,14 +7642,24 @@ static void event_loop(struct app *app) {
             scroll_chat(app, 10);
         } else if (ch == KEY_NPAGE) {
             scroll_chat(app, -10);
+        } else if (ch == KEY_ROSTER_UP
 #ifdef KEY_SPREVIOUS
-        } else if (ch == KEY_SPREVIOUS) {
-            scroll_members(app, -5);
+                   || ch == KEY_SPREVIOUS
 #endif
+#ifdef KEY_SR
+                   || ch == KEY_SR
+#endif
+        ) {
+            scroll_members(app, -3);
+        } else if (ch == KEY_ROSTER_DOWN
 #ifdef KEY_SNEXT
-        } else if (ch == KEY_SNEXT) {
-            scroll_members(app, 5);
+                   || ch == KEY_SNEXT
 #endif
+#ifdef KEY_SF
+                   || ch == KEY_SF
+#endif
+        ) {
+            scroll_members(app, 3);
         } else if (ch == KEY_HOME) {
             scroll_chat(app, 1000000);
         } else if (ch == KEY_END) {

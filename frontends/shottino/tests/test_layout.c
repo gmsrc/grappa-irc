@@ -589,6 +589,109 @@ TEST(reply_leaves_a_line_it_did_not_write_alone) {
     CHECK(strstr(out, "10:30 meeting: bring the thing") != NULL);
 }
 
+/* The roster pane honours its scroll offset. The keys that drive it are
+ * a terminal question, but "the offset moves the list" is not. */
+TEST(roster_pane_draws_from_the_offset) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    struct window *w = add_test_window(app, "azzurra", "#chan");
+    seed(w, 0, "aa", "@");
+    seed(w, 1, "bb", "");
+    seed(w, 2, "cc", "");
+    seed(w, 3, "dd", "");
+    w->member_count = 4;
+
+    erase();
+    draw_member_list(app, w, 0, 0, 12, 2, 0);
+    snap(full_rows, 2, 12);
+    CHECK(strstr(full_rows[0], "aa") != NULL);
+    CHECK(strstr(full_rows[1], "bb") != NULL);
+
+    /* Scrolled by two, the same box shows the next pair. */
+    erase();
+    draw_member_list(app, w, 0, 0, 12, 2, 2);
+    snap(part_rows, 2, 12);
+    CHECK(strstr(part_rows[0], "cc") != NULL);
+    CHECK(strstr(part_rows[1], "dd") != NULL);
+    CHECK(strstr(part_rows[0], "aa") == NULL);
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+/* ── The decoder decides what animates ────────────────────────────────
+ *
+ * This one runs the REAL ffmpeg, because the bug it guards is a property
+ * of ffmpeg's filter graph and nothing else: the `fps` filter yields ZERO
+ * frames for a single still image (it has no duration to sample), so
+ * asking for frames that way silently broke every static picture, while
+ * NOT asking meant an animated GIF whose URL did not end in .gif sat
+ * there as one frame. Skipped, not failed, where ffmpeg is absent. */
+static bool have_ffmpeg(void) {
+    return system("ffmpeg -version >/dev/null 2>&1") == 0;
+}
+
+static int decode_frames(struct app *app, const char *path, media_protocol proto, bool anim) {
+    app->inline_media_enabled = true; /* or the claim declines before ffmpeg runs */
+    int slot = media_claim_locked(app, path, media_kind_of(path) == MEDIA_VIDEO);
+    if (slot < 0) return -1;
+    media_fit_cells(4, 3, 24, 8, &app->media[slot].cols, &app->media[slot].rows);
+    app->media[slot].state = IM_FETCHING;
+    app->proto = proto;
+    app->animate_media = anim;
+    media_decode_job(app, slot);
+    int n = app->media[slot].state == IM_READY ? (int)app->media[slot].frame_count : -1;
+    free(app->media[slot].rgb);
+    free(app->media[slot].payload);
+    app->media[slot].rgb = NULL;
+    app->media[slot].payload = NULL;
+    return n;
+}
+
+TEST(the_decoder_says_what_animates_not_the_url) {
+    if (!have_ffmpeg()) {
+        fprintf(stderr, "test_layout: no ffmpeg — skipping decode checks\n");
+        return;
+    }
+    char dir[] = "/tmp/shottino-test-XXXXXX";
+    if (!mkdtemp(dir)) return;
+    char gif[PATH_MAX], png[PATH_MAX], cmd[PATH_MAX * 2];
+    snprintf(gif, sizeof(gif), "%s/a.bin", dir);  /* no extension to hint with */
+    snprintf(png, sizeof(png), "%s/s.bin", dir);
+    snprintf(cmd, sizeof(cmd),
+             "ffmpeg -y -loglevel error -f lavfi -i testsrc=size=32x24:rate=10:duration=1 "
+             "-f gif %s >/dev/null 2>&1", gif);
+    bool made_gif = system(cmd) == 0;
+    snprintf(cmd, sizeof(cmd),
+             "ffmpeg -y -loglevel error -f lavfi -i testsrc=size=32x24:duration=1 -frames:v 1 "
+             "-f image2 -c:v png %s >/dev/null 2>&1", png);
+    bool made_png = system(cmd) == 0;
+
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (app && made_gif) {
+        /* An animated file whose NAME says nothing still animates on a
+         * character-art terminal: the decoder is asked, not the URL. */
+        CHECK(decode_frames(app, gif, MEDIA_PROTO_NONE, true) > 1);
+        /* With animation off it is one frame again. */
+        CHECK_LONG(decode_frames(app, gif, MEDIA_PROTO_NONE, false), 1);
+    }
+    if (app && made_png) {
+        /* And a still stays one frame rather than vanishing — the fps
+         * filter would have returned nothing at all here. */
+        CHECK_LONG(decode_frames(app, png, MEDIA_PROTO_NONE, true), 1);
+    }
+    if (app) {
+        pthread_mutex_destroy(&app->lock);
+        free(app);
+    }
+    unlink(gif);
+    unlink(png);
+    rmdir(dir);
+}
+
 int main(void) {
     FILE *sink = fopen("/dev/null", "w");
     if (!sink) {
@@ -621,6 +724,8 @@ int main(void) {
     RUN(reply_cites_the_original_and_keeps_what_was_typed);
     RUN(reply_citation_is_flattened_and_cut_on_a_word);
     RUN(reply_leaves_a_line_it_did_not_write_alone);
+    RUN(roster_pane_draws_from_the_offset);
+    RUN(the_decoder_says_what_animates_not_the_url);
     endwin();
     fclose(sink);
     return test_report();
