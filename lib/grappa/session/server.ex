@@ -3550,7 +3550,7 @@ defmodule Grappa.Session.Server do
   # crash rather than silently swallow.
   @spec publish_live_nick(t()) :: :ok
   defp publish_live_nick(%{subject: subject, network_id: network_id, nick: nick}) do
-    {_new, _old} =
+    {_, _} =
       Registry.update_value(Grappa.SessionRegistry, registry_key(subject, network_id), fn _ ->
         nick
       end)

@@ -439,13 +439,17 @@ defmodule Grappa.Networks do
   """
   @spec live_nick_index(Session.subject()) :: %{String.t() => {integer(), String.t()}}
   def live_nick_index({:user, user_id} = subject) when is_binary(user_id) do
-    from(c in Credential, where: c.user_id == ^user_id, preload: :network)
+    query = from(c in Credential, where: c.user_id == ^user_id, preload: :network)
+
+    query
     |> Repo.all()
     |> nick_index(subject)
   end
 
   def live_nick_index({:visitor, visitor_id} = subject) when is_binary(visitor_id) do
-    from(c in Credential, where: c.visitor_id == ^visitor_id, preload: :network)
+    query = from(c in Credential, where: c.visitor_id == ^visitor_id, preload: :network)
+
+    query
     |> Repo.all()
     |> nick_index(subject)
   end

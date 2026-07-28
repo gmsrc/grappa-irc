@@ -57,7 +57,7 @@ defmodule Grappa.Push.BadgeCountLiveNickTest do
     {network, _} = network_with_server(port: port, slug: "test-#{System.unique_integer([:positive])}")
     _ = credential_fixture(user, network, %{nick: @configured_nick})
 
-    _pid = start_session_for(user, network)
+    _ = start_session_for(user, network)
 
     {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
     # Autojoin JOIN fires only after 001 is fully processed → a barrier

@@ -877,7 +877,7 @@ defmodule Grappa.Session do
   def current_nick(subject, network_id)
       when is_subject(subject) and is_integer(network_id) do
     case Registry.lookup(Grappa.SessionRegistry, Server.registry_key(subject, network_id)) do
-      [{_pid, nick}] when is_binary(nick) -> {:ok, nick}
+      [{_, nick}] when is_binary(nick) -> {:ok, nick}
       _ -> {:error, :no_session}
     end
   end
