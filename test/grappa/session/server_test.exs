@@ -3454,15 +3454,22 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "inbound non-awaiting INVITE broadcasts window_invited + records :invited + persists row at the channel (#78)" do
+    test "inbound non-awaiting INVITE broadcasts window_invited + records :invited + persists rows at BOTH the channel AND $server (#78/#482)" do
       # #78 / folds #128: an inbound INVITE we did NOT request surfaces the
       # invited channel as a not-joined :invited window. EventRouter emits
       # {:invited, ch}; Server.apply_effects flips window_states[ch] to
       # :invited, broadcasts SessionWire.window_invited/2 on Topic.user/1
       # (same chicken-and-egg user-topic origination as window_pending),
       # and the INVITE row persists AT THE CHANNEL (route-by-channel-
-      # reference, NOT $server) so cic renders it in the channel buffer
-      # with the existing [Join] affordance.
+      # reference) so cic renders it in the channel buffer with the [Join]
+      # affordance.
+      #
+      # #482: the SAME INVITE ALSO persists a second $server copy so the
+      # status window keeps a durable, snapshot-independent record with the
+      # [Join now] CTA (the channel row is invisible on a cold reload until
+      # the user-topic :invited backfill re-surfaces the greyed tab). Both
+      # rows are :server_event (event-tier) so neither doubles the unread
+      # badge.
       {server, port} = start_server()
       {user, network, _} = setup_user_and_network(port)
 
@@ -3494,11 +3501,22 @@ defmodule Grappa.Session.ServerTest do
       state = :sys.get_state(pid)
       assert WindowState.state_of(state.window_state, "#random") == :invited
 
-      # The INVITE row landed in the CHANNEL buffer, not $server.
+      # #78: the INVITE row landed in the CHANNEL buffer.
       [row] = Scrollback.fetch({:user, user.id}, network.id, "#random", nil, 10, nil, false)
       assert row.kind == :server_event
       assert row.sender == "someguy"
       assert row.meta.raw_verb == "INVITE"
+
+      # #482: a durable copy of the SAME INVITE also landed in $server so the
+      # status window carries the record (+ [Join now] CTA) independent of
+      # the cold-subscribe snapshot. `any?` (not exact-one) is defensive
+      # against incidental status-window rows from the session lifecycle.
+      srv_rows = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
+
+      assert Enum.any?(srv_rows, fn r ->
+               r.kind == :server_event and r.sender == "someguy" and
+                 r.meta.raw_verb == "INVITE"
+             end)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end

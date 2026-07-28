@@ -4570,37 +4570,63 @@ defmodule Grappa.Session.EventRouterTest do
       assert effects == [{:rejoin_invited, "#secret"}]
     end
 
-    test "inbound INVITE for a NON-awaiting channel persists the row AT THE CHANNEL + emits {:invited, ch} (#78)" do
+    test "inbound INVITE for a NON-awaiting channel persists BOTH a channel row AND a $server row + emits {:invited, ch} (#78/#482)" do
       state = base_state(%{awaiting_invite: MapSet.new()})
       m = msg(:invite, ["vjt", "#random"], {:nick, "someguy", "u", "h"})
       {:cont, _, effects} = EventRouter.route(m, state)
-      # #78: route-by-channel-reference. The INVITE row lands in the
-      # invited channel's own buffer (NOT $server), and {:invited, ch}
-      # flips the window to a not-joined :invited tab the operator can
-      # /join on their own time.
-      assert [{:persist, :server_event, attrs}, {:invited, "#random"}] = effects
-      assert attrs.channel == "#random"
-      assert attrs.sender == "someguy"
-      assert attrs.meta.raw_verb == "INVITE"
-      assert attrs.meta.raw_params == ["vjt", "#random"]
+      # #78 route-by-channel-reference: the INVITE row lands in the invited
+      # channel's own buffer, and {:invited, ch} flips the greyed tab.
+      # #482 restores a SECOND $server copy so the status window carries a
+      # durable, snapshot-independent record with the [Join now] CTA — the
+      # channel-only row is invisible until the user-topic :invited backfill
+      # re-surfaces the tab. BOTH rows are :server_event (event-tier, NEITHER
+      # content nor notify) so neither doubles the unread badge (RULING 2).
+      assert [
+               {:persist, :server_event, chan_attrs},
+               {:persist, :server_event, srv_attrs},
+               {:invited, "#random"}
+             ] = effects
+
+      assert chan_attrs.channel == "#random"
+      assert srv_attrs.channel == "$server"
+
+      # Both rows carry the identical INVITE meta so cic renders [Join now]
+      # off either window (the CTA keys off the row, not its target window).
+      for attrs <- [chan_attrs, srv_attrs] do
+        assert attrs.sender == "someguy"
+        assert attrs.meta.raw_verb == "INVITE"
+        assert attrs.meta.raw_params == ["vjt", "#random"]
+      end
     end
 
-    test "inbound INVITE with absent awaiting_invite key (pre-#116 state) emits invite row + {:invited}, no crash" do
+    test "inbound INVITE with absent awaiting_invite key (pre-#116 state) emits BOTH rows + {:invited}, no crash" do
       state = base_state()
       m = msg(:invite, ["vjt", "#random"], {:nick, "someguy", "u", "h"})
       {:cont, _, effects} = EventRouter.route(m, state)
-      assert [{:persist, :server_event, %{channel: "#random"}}, {:invited, "#random"}] = effects
+
+      assert [
+               {:persist, :server_event, %{channel: "#random"}},
+               {:persist, :server_event, %{channel: "$server"}},
+               {:invited, "#random"}
+             ] = effects
     end
 
-    test "inbound non-awaiting INVITE folds a MIXED-CASE channel for both the row + {:invited} (#78 case-fold)" do
+    test "inbound non-awaiting INVITE folds a MIXED-CASE channel for the channel row + {:invited}; the $server copy stays literal (#78 case-fold / #482)" do
       # Channel case-fold invariant: INVITE's channel is at param 1, so it
       # MUST be canonicalised like every other channel param — otherwise the
       # :invited window (keyed on the raw channel) forks from the persisted
       # row (folded by the changeset) and the per-channel topic cic joins.
+      # The #482 $server copy is the synthetic status window — it is NOT a
+      # channel and stays the literal "$server".
       state = base_state(%{awaiting_invite: MapSet.new()})
       m = msg(:invite, ["vjt", "#MixedCase"], {:nick, "someguy", "u", "h"})
       {:cont, _, effects} = EventRouter.route(m, state)
-      assert [{:persist, :server_event, %{channel: "#mixedcase"}}, {:invited, "#mixedcase"}] = effects
+
+      assert [
+               {:persist, :server_event, %{channel: "#mixedcase"}},
+               {:persist, :server_event, %{channel: "$server"}},
+               {:invited, "#mixedcase"}
+             ] = effects
     end
   end
 

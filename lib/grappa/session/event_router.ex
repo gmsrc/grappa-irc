@@ -2235,8 +2235,12 @@ defmodule Grappa.Session.EventRouter do
   # invite landed upstream — re-JOIN keyless (the invite bypasses both
   # +i and +k: bahamut-azzurra channel.c can_join short-circuits on the
   # invited list). Channel is at param 1 (`:src INVITE <target> <chan>`).
-  # Any OTHER inbound INVITE delegates to the :server_event catch-all
-  # that drives cic's [Join] CTA (b2-inbound-invite-cta) — unchanged.
+  # #78/#482: any OTHER (non-awaiting) inbound INVITE persists the INVITE
+  # row TWICE — at the invited channel (route-by-channel-reference) AND at
+  # $server (the status window's durable copy #482 restores) — then emits
+  # {:invited, channel}. Both rows are :server_event (event-tier, NEITHER
+  # content nor notify) so neither doubles the unread badge; cic's [Join]
+  # CTA renders off either row (it keys on the INVITE verb, not the window).
   # Map.get keeps it safe on a pre-#116 state map (no awaiting_invite key).
   defp do_route(%Message{command: :invite, params: [_, channel | _]} = msg, state)
        when is_binary(channel) do
@@ -2245,16 +2249,19 @@ defmodule Grappa.Session.EventRouter do
     if MapSet.member?(awaiting, normalize_channel(channel)) do
       {:cont, state, [{:rejoin_invited, channel}]}
     else
-      # #78: an inbound INVITE we did NOT request (not a ChanServ relay of
-      # our own /join-on-+ik) surfaces as an :invited window for the named
-      # channel. Persist the INVITE row AT THE CHANNEL (route-by-channel-
-      # reference, NOT $server) so cic renders it in the channel's own
-      # buffer with the existing `[Join]` affordance, and emit
-      # {:invited, channel} so Server flips the window to a not-joined,
-      # greyed :invited tab. No auto-focus — the operator joins on their
-      # own time; the single persisted row is the one unread item.
-      {state, persist_eff} = persist_raw_event(msg, state, channel)
-      {:cont, state, [persist_eff, {:invited, channel}]}
+      # #78 route-by-channel-reference: the INVITE row lands in the invited
+      # channel's own buffer and {:invited, channel} flips the window to a
+      # not-joined, greyed tab the operator can /join on their own time.
+      #
+      # #482 restores a SECOND $server copy so the status window keeps a
+      # durable, snapshot-independent record with the [Join now] CTA — the
+      # channel row alone is invisible until the user-topic :invited backfill
+      # (WindowState.invited_windows/2) re-surfaces the greyed tab on a cold
+      # reload. persist_raw_event/3 is parametrized on the target, so this is
+      # an extra effect, not new plumbing. No auto-focus.
+      {state, chan_eff} = persist_raw_event(msg, state, channel)
+      {state, srv_eff} = persist_raw_event(msg, state, "$server")
+      {:cont, state, [chan_eff, srv_eff, {:invited, channel}]}
     end
   end
 
