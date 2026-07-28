@@ -13,7 +13,7 @@ import { token } from "./auth";
 import { openBanlistModal } from "./banlistModal";
 import { buildBanMask } from "./banMask";
 import { setQuery } from "./channelDirectory";
-import type { ChannelKey } from "./channelKey";
+import { type ChannelKey, canonicalChannel } from "./channelKey";
 import { friendlyError } from "./friendlyError";
 import { addHighlight, delHighlight } from "./highlightList";
 import { identityScopedStore } from "./identityScopedStore";
@@ -314,7 +314,25 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // driven JOIN paths still go through the subscribe.ts handler
           // (no race for those — channel was already joined when JOIN
           // event arrives via WS).
-          setSelectedChannel({ networkSlug, channelName: cmd.channel, kind: "channel" });
+          // #510 — cmd.channel may be an RFC1459 comma-list (`/join
+          // #a,#b`). postJoin forwards it UNSPLIT above — the server
+          // splits it and opens a `:pending` window per channel (#382).
+          // Focus, though, must land on the FIRST channel, folded the
+          // SAME way the server folds window keys (`canonicalChannel` =
+          // the `Identifier.canonical_channel/1` twin, rfc1459). Passing
+          // the raw list — or a mixed-case / bracketed first element —
+          // targets a key no `window_states` entry matches, opening the
+          // empty phantom window the issue reports. Single-channel
+          // `/join #foo` funnels through the same split (one element) so
+          // both paths canonicalise the focus key identically.
+          setSelectedChannel({
+            networkSlug,
+            // `split(",")` always yields >=1 element, so `[0]` is never
+            // undefined at runtime; the `?? cmd.channel` is unreachable and
+            // exists only to satisfy TS noUncheckedIndexedAccess.
+            channelName: canonicalChannel(cmd.channel.split(",")[0] ?? cmd.channel),
+            kind: "channel",
+          });
           result = { ok: true };
           break;
         case "part": {

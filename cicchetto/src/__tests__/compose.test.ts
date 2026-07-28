@@ -682,6 +682,65 @@ describe("compose submit — slash command dispatch", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  // #510 — `/join #a,#b` forwards the RFC1459 comma-list unsplit to the
+  // server (which splits it and opens a `:pending` window per channel,
+  // #382). But focus must land on the FIRST channel, not the raw
+  // "#a,#b" list: `setSelectedChannel({channelName: "#a,#b"})` focuses a
+  // key no `window_states` entry matches → the empty phantom window the
+  // issue reports. The POST body stays the unsplit list (server contract).
+  it("/join #a,#b posts the unsplit list but focuses the FIRST channel (#510)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.postJoin).mockResolvedValue();
+    const sel = await import("../lib/selection");
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/join #a,#b");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    // POST body stays the comma-list — the server splits it (#382).
+    expect(api.postJoin).toHaveBeenCalledWith("tok", "freenode", "#a,#b", null);
+    // Focus lands on the first channel, NEVER the phantom "#a,#b".
+    expect(sel.setSelectedChannel).toHaveBeenCalledWith({
+      networkSlug: "freenode",
+      channelName: "#a",
+      kind: "channel",
+    });
+    expect(sel.setSelectedChannel).not.toHaveBeenCalledWith(
+      expect.objectContaining({ channelName: "#a,#b" }),
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  // #510 — the focus key MUST match the server's rfc1459 canonical fold
+  // (Identifier.canonical_channel: besides A-Z, `[ ] \ ~` → `{ } | ^`),
+  // else a bracket/mixed-case first channel focuses a key that never
+  // matches the folded window_state. Mirror it via `canonicalChannel`
+  // (cic's twin) — a bare toLowerCase would leave `[` unfolded and fork
+  // the window. `#Foo[1]` → `#foo{1}` distinguishes the two.
+  it("/join folds the FIRST channel under rfc1459 for focus, not bare toLowerCase (#510)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.postJoin).mockResolvedValue();
+    const sel = await import("../lib/selection");
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/join #Foo[1],#bar");
+    await compose.submit(k, "freenode", "#a");
+
+    // Server folds each element itself; the POST carries the raw list verbatim.
+    expect(api.postJoin).toHaveBeenCalledWith("tok", "freenode", "#Foo[1],#bar", null);
+    // Focus is the rfc1459 fold of the first channel (`[` → `{`, `F` → `f`),
+    // matching the server-stored window key. toLowerCase would give #foo[1].
+    expect(sel.setSelectedChannel).toHaveBeenCalledWith({
+      networkSlug: "freenode",
+      channelName: "#foo{1}",
+      kind: "channel",
+    });
+  });
+
   // CP17: /join is no longer responsible for setting windowState
   // pending — the server-side `record_in_flight_join/2` writes
   // `window_states[ch] = :pending` and broadcasts

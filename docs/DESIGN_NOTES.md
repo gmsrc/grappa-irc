@@ -21690,3 +21690,7 @@ only (in scope); migrating the other ~19 admin specs that share the latent race
 is tracked in #512. This is HARDENING, not weakening — the spec's real assertion
 is untouched; it waits for the settled state the helper was skipping, authorized
 precisely because the product path was proven synchronous + correct.
+
+## 2026-07-28 — #510: cic's `setSelectedChannel` focus key is a channel-fold site
+
+Any cic selection path MUST `canonicalChannel` the channel name before handing it to `setSelectedChannel` (the rfc1459 twin of `Identifier.canonical_channel/1`, like every channel-keyed site #364) or it focuses a key the server-folded `window_states` never matches — the empty phantom window `/join #a,#b` produced by focusing the raw comma-list instead of the folded first split element (POST stays the unsplit list; the server splits it, #382).
