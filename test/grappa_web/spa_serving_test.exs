@@ -14,6 +14,7 @@ defmodule GrappaWeb.SpaServingTest do
   use GrappaWeb.ConnCase, async: false
 
   alias Grappa.Cic.Bundle
+  alias GrappaWeb.Plugs.SecurityHeaders
 
   # The committed fixture bundle wired via `config/test.exs`
   # `:cic_dist_root`. Booted at app start like the real dist dir.
@@ -27,9 +28,14 @@ defmodule GrappaWeb.SpaServingTest do
       assert ["text/javascript" <> _] = get_resp_header(conn, "content-type")
     end
 
-    test "GET /backgrounds/<key>.webp serves the built background image" do
+    test "GET /backgrounds/<key>.webp serves the image with a far-future immutable cache" do
+      # #485 — nginx's `location /backgrounds/ { expires max; }` moved to
+      # the BEAM: system-owned, content-addressable-ish keys never re-fetch.
       conn = get(build_conn(), "/backgrounds/01-test-dark.webp")
       assert conn.status == 200
+      assert [cache_control] = get_resp_header(conn, "cache-control")
+      assert cache_control =~ "max-age=315360000"
+      assert cache_control =~ "immutable"
     end
 
     test "GET /fonts/<file>.woff2 serves the built font (allowlist lockstep)" do
@@ -91,6 +97,44 @@ defmodule GrappaWeb.SpaServingTest do
 
       assert conn.status == 404
       refute conn.resp_body =~ "cic-app-root"
+    end
+  end
+
+  describe "security headers (#485 — the plug is the sole owner; nginx parity)" do
+    # Every response the BEAM self-serves now carries the header set that
+    # used to live in infra/snippets/security-headers.conf. SecurityHeaders
+    # runs before Plug.Static, so a static HIT (send+halt) carries them too.
+    test "GET / (SPA shell) carries the full security-header set" do
+      conn = get(html_conn(), "/")
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-security-policy") == [SecurityHeaders.csp()]
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      assert get_resp_header(conn, "referrer-policy") == ["same-origin"]
+      assert get_resp_header(conn, "x-frame-options") == ["DENY"]
+    end
+
+    test "GET /service-worker.js carries security headers AND stays no-cache" do
+      conn = get(build_conn(), "/service-worker.js")
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-security-policy") == [SecurityHeaders.csp()]
+      assert [cache_control] = get_resp_header(conn, "cache-control")
+      assert cache_control =~ "no-cache"
+    end
+
+    test "a hashed static asset (Plug.Static send+halt path) carries security headers" do
+      conn = get(build_conn(), "/assets/index-TESTHASH.js")
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-security-policy") == [SecurityHeaders.csp()]
+    end
+
+    test "a JSON error response carries security headers (nginx `always` parity)" do
+      conn =
+        build_conn()
+        |> put_req_header("accept", "application/json")
+        |> get("/api/server-settings")
+
+      assert conn.status == 401
+      assert get_resp_header(conn, "content-security-policy") == [SecurityHeaders.csp()]
     end
   end
 

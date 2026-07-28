@@ -113,6 +113,23 @@ defmodule GrappaWeb.Endpoint do
   plug GrappaWeb.Plugs.RemoteIpFromProxy,
     headers: ~w[x-forwarded-for x-real-ip]
 
+  # #485 — the security-header set (CSP + siblings) is emitted by the app on
+  # EVERY response, the single source of truth after the nginx container was
+  # dropped (docker), the jail/e2e nginx became a dumb proxy, and an operator's
+  # own TLS front door — which never got our headers before — now inherits them.
+  # BEFORE `:serve_cic_static` ON PURPOSE: a static HIT sends + halts, so the
+  # plug's `register_before_send` must already be registered to ride that
+  # response. See GrappaWeb.Plugs.SecurityHeaders for the CSP allowlist rationale.
+  plug GrappaWeb.Plugs.SecurityHeaders
+
+  # #485 — far-future immutable cache for the built-in theme backgrounds,
+  # replicating nginx's `location /backgrounds/ { expires max; }`. Registered
+  # before `:serve_cic_static` so the before_send overwrites Plug.Static's
+  # default `cache-control: public` on the way out. Skipped when the request
+  # falls through to the SPA shell (a missing key), so index.html is never
+  # cached as immutable.
+  plug :cache_backgrounds
+
   # #399 — self-serve the built cicchetto SPA static assets from the
   # embedded web server so a plain `bin/grappa start` on an HTTP port
   # yields a working instance without nginx in front (nginx stays
@@ -140,7 +157,10 @@ defmodule GrappaWeb.Endpoint do
   # transport silently outranked policy). Policy stays in the
   # ServerSettings caps. Scoped to :multipart only — raising the
   # top-level :length would let 128MiB JSON bodies buffer into the
-  # BEAM. nginx: client_max_body_size 160m (same margin reasoning).
+  # BEAM. #485 — this 128MiB IS the single body ceiling now: the docker
+  # nginx that carried `client_max_body_size 160m` is gone, and the jail's
+  # dumb-proxy `client_max_body_size` was reconciled DOWN to 128m to match
+  # (infra/snippets/locations-api.conf). One number, defined here.
   plug Plug.Parsers,
     parsers: [:urlencoded, {:multipart, length: 128 * 1024 * 1024}, :json],
     pass: ["*/*"],
@@ -172,6 +192,28 @@ defmodule GrappaWeb.Endpoint do
         :persistent_term.put(@cic_static_persistent_term_key, {root, opts})
         opts
     end
+  end
+
+  # #485 — replicate nginx's `location /backgrounds/ { expires max; }`.
+  # `expires max` emits `Cache-Control: max-age=315360000` (10y) so the
+  # system-owned, immutable background WebPs never re-fetch. The before_send
+  # overwrites Plug.Static's default `cache-control: public` at send time.
+  # Skipped for the SPA-shell fallback (a missing key served as index.html),
+  # so the shell is never pinned as immutable under a /backgrounds/ URL.
+  defp cache_backgrounds(%Plug.Conn{request_path: "/backgrounds/" <> _} = conn, _) do
+    Plug.Conn.register_before_send(conn, fn conn ->
+      if conn.status == 200 and not spa_shell?(conn) do
+        Plug.Conn.put_resp_header(conn, "cache-control", "public, max-age=315360000, immutable")
+      else
+        conn
+      end
+    end)
+  end
+
+  defp cache_backgrounds(conn, _), do: conn
+
+  defp spa_shell?(conn) do
+    match?(["text/html" <> _], Plug.Conn.get_resp_header(conn, "content-type"))
   end
 
   # Custom session plug that reads `signing_salt` at runtime from
