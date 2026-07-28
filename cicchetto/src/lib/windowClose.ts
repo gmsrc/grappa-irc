@@ -20,27 +20,48 @@ import { forceParted } from "./windowState";
 // (query + pseudo windows, which just drop a local row and are trivially
 // reopened — no confirm).
 
-export function closeChannelWindow(networkSlug: string, channelName: string): void {
+// #38, #71 INC-3, #511 — THE shared "close a channel-shaped window" verb:
+// forward a PART upstream (the DELETE) AND drop the local windowState
+// pseudo-projection. Both the × on a joined tab (`closeChannelWindow`) and
+// the × on a greyed non-joined pseudo-row (`dismissPseudoWindow`) route
+// through here so a close takes the SAME server-side path on every surface
+// — one door (CLAUDE.md one-feature-one-code-path).
+//
+// The DELETE removes the channel from `channelsBySlug` (server de-autojoins
+// + broadcasts `channels_changed` → refetch). For a channel the user never
+// actually joined — a +k autojoin entry that 475'd on (re)connect, or an
+// :invited / :failed / :kicked pseudo-row — the upstream PART is a 442
+// no-op, so NO self-PART scrollback echo arrives. But the server's
+// `PartCleanup.cleanup_local` → `WindowState.set_parted` still drops the
+// channel from EVERY window-state map. That is what makes a dismissal
+// DURABLE: #482's cold-subscribe backfill (`WindowState.invited_windows/2`)
+// re-emits `window_invited` for every channel STILL in `:invited`, so a
+// client-only drop (the pre-#511 bug) resurrected the tab on the next
+// reload; routing the × through the DELETE clears the server key so the
+// backfill stops re-asserting it (and covers the `:failed` / `:kicked`
+// siblings carried by the per-channel snapshot the same way).
+//
+// `forceParted` (not the echo's `setParted`): a × is a USER close, fresh
+// intent, so it drops the local key even mid-`pending` — the #495
+// stale-echo guard on `setParted` must NOT swallow a deliberate ×. Also the
+// only window-state drop when the 442 no-op means no echo arrives; without
+// it the non-`:joined` entry orphans into an un-dismissable greyed
+// pseudo-row (`Sidebar.pseudoChannelsForNetwork`) once `channelsBySlug`
+// drops the name. Idempotent with the echo for actually-joined channels;
+// clearing (vs. adding) a key can only emit FEWER pseudo-rows.
+//
+// Token-guarded: with no token the whole op is a no-op — a local-only drop
+// that never reaches the server is EXACTLY the #511 bug (row gone locally,
+// resurrected on reload), so we do neither half.
+function partAndForget(networkSlug: string, name: string): void {
   const t = token();
   if (!t) return;
-  void postPart(t, networkSlug, channelName);
-  // #38 — also clear the local windowState pseudo-projection. The DELETE
-  // removes the channel from `channelsBySlug` (server de-autojoins +
-  // broadcasts `channels_changed` → refetch), but for a channel the user
-  // never actually joined — e.g. a +k autojoin entry that 475'd on
-  // (re)connect — the upstream PART is a 442 no-op, so NO self-PART
-  // scrollback echo arrives. That echo (subscribe.ts) is the only OTHER
-  // window-state drop, so without clearing it here the non-`:joined`
-  // windowState entry is orphaned and re-emerges as an un-dismissable
-  // greyed pseudo-row (`Sidebar.pseudoChannelsForNetwork`) the instant
-  // `channelsBySlug` drops the name. Use `forceParted` (not the echo's
-  // `setParted`): this is a USER close, fresh intent, so it must drop the
-  // key even mid-`pending` — the #495 stale-echo guard on `setParted` must
-  // NOT swallow a deliberate ×. Idempotent with the echo for
-  // actually-joined channels, and clearing (vs. adding) a windowState key
-  // can only emit FEWER pseudo-rows — the opposite direction from the
-  // reverted PHASE-1.1 ghost-row regression.
-  forceParted(channelKey(networkSlug, channelName));
+  void postPart(t, networkSlug, name);
+  forceParted(channelKey(networkSlug, name));
+}
+
+export function closeChannelWindow(networkSlug: string, channelName: string): void {
+  partAndForget(networkSlug, channelName);
 }
 
 export function closeQueryWindow(networkId: number, targetNick: string): void {
@@ -48,31 +69,37 @@ export function closeQueryWindow(networkId: number, targetNick: string): void {
 }
 
 // #71 INC-3 — THE shared verb for dismissing a non-joined pseudo-row
-// (invited/failed/kicked/parked) via its ×. Both the desktop Sidebar and
-// the mobile BottomBar route their pseudo-row × through here, so the same
+// (invited/failed/kicked) via its ×. Both the desktop Sidebar and the
+// mobile BottomBar route their pseudo-row × through here, so the same
 // action produces the same navigation on both surfaces (one design). Was
 // previously inline in Sidebar.handleClosePseudo; the mobile bar's raw
 // setParted let the bucket-E close-watcher pick MRU, a per-surface
 // divergence the INC-3 review caught.
 //
-// UX-5 bucket BK — `forceParted` is the "absence is the projection" verb: it
-// drops the key from all three windowState maps, so the pseudo-row vanishes
-// and (if it had scrollback) resurfaces in the archive section.
-// `forceParted` (not `setParted`): a × on a pseudo-row is a USER close, so
-// it must drop the key even when it is "pending" — the #495 stale-echo guard
-// on `setParted` must not swallow this deliberate dismissal.
+// #511 — the dismissal now goes through the SAME `partAndForget` DELETE
+// path `closeChannelWindow` uses, not a client-only `forceParted`. Pre-fix
+// this dropped the local key only; the server kept `window_states[ch]`
+// (e.g. `:invited`), and #482's cold-subscribe backfill re-emitted
+// `window_invited` on the next reload — the dismissed tab came back. The
+// PART is a 442 no-op for the never-joined channel, but the server-side
+// `set_parted` clears the key so the dismissal is durable. See the
+// `partAndForget` doc above for why the PART, the `forceParted`, and the
+// token guard are the right primitives, and how `:failed` / `:kicked` are
+// covered by the same clear.
 //
 // If the dismissed row IS the focused window, redirect to the network's
 // $server window FIRST, pre-empting the bucket-E watcher (which would
 // otherwise pick the most-recently-viewed window). $server-vs-MRU is a
 // deferred product choice — see DESIGN_NOTES 2026-07-26 #71 INC-3 + the
-// follow-up issue; today both surfaces land on $server.
+// follow-up issue; today both surfaces land on $server. The redirect runs
+// before `partAndForget` so it fires even in the (unreachable in-UI)
+// no-token case.
 export function dismissPseudoWindow(networkSlug: string, name: string): void {
   const sel = selectedChannel();
   if (sel !== null && sel.networkSlug === networkSlug && sel.channelName === name) {
     setSelectedChannel({ networkSlug, channelName: SERVER_WINDOW_NAME, kind: "server" });
   }
-  forceParted(channelKey(networkSlug, name));
+  partAndForget(networkSlug, name);
 }
 
 // UX-4 bucket D — close the server window for a network by PARKING it.

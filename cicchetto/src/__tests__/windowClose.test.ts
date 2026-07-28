@@ -219,8 +219,30 @@ describe("disconnectNetwork — registered-user branch", () => {
 // let the bucket-E watcher pick MRU). The $server-vs-MRU destination is a
 // deferred product choice (DESIGN_NOTES 2026-07-26 + follow-up issue).
 describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focused", () => {
+  // #511 — a × on an :invited pseudo-row USED to be client-only
+  // (forceParted only), so the server kept `window_states[ch] = :invited`
+  // and #482's cold-subscribe backfill re-emitted `window_invited` on the
+  // next reload — the dismissed tab returned. The fix routes the dismissal
+  // through the SAME DELETE (postPart) closeChannelWindow uses: upstream
+  // PART is a 442 no-op for the never-joined channel, but the server's
+  // `PartCleanup.cleanup_local` → `WindowState.set_parted` drops the key
+  // from EVERY window-state map (invited/failed/kicked alike), so the
+  // backfill stops re-asserting it. The dismissal now mutates server
+  // state — the invariant #511 restores.
+  it("PARTs the invited channel so the dismissal reaches the server and survives a reload (#511)", async () => {
+    selectedChannelMock.mockReturnValue(null);
+    const api = await import("../lib/api");
+    const auth = await import("../lib/auth");
+    auth.setToken("utok");
+    const { dismissPseudoWindow } = await import("../lib/windowClose");
+    dismissPseudoWindow("freenode", "#inv");
+    expect(api.postPart).toHaveBeenCalledWith("utok", "freenode", "#inv");
+  });
+
   it("clears the windowState entry via forceParted (unconditional user close)", async () => {
     selectedChannelMock.mockReturnValue(null);
+    const auth = await import("../lib/auth");
+    auth.setToken("utok");
     const windowState = await import("../lib/windowState");
     const { channelKey } = await import("../lib/channelKey");
     const { dismissPseudoWindow } = await import("../lib/windowClose");
@@ -235,6 +257,8 @@ describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focuse
       channelName: "#inv",
       kind: "channel",
     });
+    const auth = await import("../lib/auth");
+    auth.setToken("utok");
     const { SERVER_WINDOW_NAME } = await import("../lib/windowKinds");
     const windowState = await import("../lib/windowState");
     const { channelKey } = await import("../lib/channelKey");
@@ -255,6 +279,8 @@ describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focuse
       channelName: "#other",
       kind: "channel",
     });
+    const auth = await import("../lib/auth");
+    auth.setToken("utok");
     const { dismissPseudoWindow } = await import("../lib/windowClose");
     dismissPseudoWindow("freenode", "#inv");
     expect(setSelectedChannelMock).not.toHaveBeenCalled();
