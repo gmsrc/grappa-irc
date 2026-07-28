@@ -1258,13 +1258,18 @@ defmodule Grappa.Session do
   answers with a bare 365 (empty bundle → cic shows "hides topology") or
   481 ERR_NOPRIVILEGES (a red `$server` :notice, not a bundle).
 
-  Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}` if
-  a non-nil mask's syntax is rejected by `Grappa.IRC.Client.send_links/2`
+  Returns `:ok`, `{:error, :no_session}`, `{:error, :invalid_line}` if a
+  non-nil mask's syntax is rejected by `Grappa.IRC.Client.send_links/2`
   (mirror of `send_motd/3`; the channel door validates first, but the
-  context contract stays honest for every door).
+  context contract stays honest for every door), or `{:error,
+  :links_in_flight}` (#513b) when a still-pending /links is in flight — the
+  caller surfaces "network map already loading" rather than clobbering the
+  in-flight request's bundle. A stuck request (withheld 365 / 481 denial)
+  self-heals: past the staleness window a fresh /links clobbers + re-sends.
   """
   @spec send_links(subject(), integer(), String.t() | nil) ::
-          :ok | {:error, :no_session | :invalid_line | send_transport_error()}
+          :ok
+          | {:error, :no_session | :invalid_line | :links_in_flight | send_transport_error()}
   def send_links(subject, network_id, mask)
       when is_subject(subject) and is_integer(network_id) and
              (is_binary(mask) or is_nil(mask)) do

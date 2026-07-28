@@ -266,11 +266,34 @@ const LinksModal: Component = () => {
                 <Show
                   when={nodeCount() > 0}
                   fallback={
-                    <div class="links-modal-empty" data-testid="links-modal-empty">
-                      <p>this network hides its topology</p>
-                      <p class="links-modal-empty-sub">
-                        LINKS returned no servers — many networks restrict it to operators.
-                      </p>
+                    // #513a — split the empty state on the requested mask. A
+                    // non-null mask that drained zero nodes MATCHED NOTHING
+                    // (`/links all` → bare 365); only a null-mask (full-mesh)
+                    // empty is a fair "restricted topology" guess. Pre-#513
+                    // both rendered "hides its topology", which lied for masks.
+                    <div
+                      class="links-modal-empty"
+                      data-testid="links-modal-empty"
+                      data-empty-reason={b.mask !== null ? "no-match" : "restricted"}
+                    >
+                      <Show
+                        when={b.mask !== null}
+                        fallback={
+                          <>
+                            <p>this network hides its topology</p>
+                            <p class="links-modal-empty-sub">
+                              LINKS returned no servers — many networks restrict it to operators.
+                            </p>
+                          </>
+                        }
+                      >
+                        <p>
+                          no server matches <code>{b.mask}</code>
+                        </p>
+                        <p class="links-modal-empty-sub">
+                          try /links with no argument for the full network map.
+                        </p>
+                      </Show>
                     </div>
                   }
                 >

@@ -812,7 +812,13 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       if (typeof r.network !== "string") return null;
       const entries = narrowArray(r.entries, narrowLinksEntry);
       if (entries === null) return null;
-      return { kind: "links_bundle", network: r.network, entries };
+      // #513a — the requested mask (null = full mesh). Additive-tolerant: an
+      // older grappa that predates the field omits it → treat as null (a
+      // full-mesh empty renders "hides topology", the pre-#513 behaviour), so
+      // a missing field is never fatal (unknown-is-never-fatal, #447).
+      if (r.mask !== undefined && r.mask !== null && typeof r.mask !== "string") return null;
+      const mask = typeof r.mask === "string" ? r.mask : null;
+      return { kind: "links_bundle", network: r.network, entries, mask };
     }
     case "joined":
     case "join_failed":

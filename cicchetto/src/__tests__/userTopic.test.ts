@@ -1665,6 +1665,7 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
     ).toEqual({
       kind: "links_bundle",
       network: "azzurra",
+      mask: null,
       entries: [
         { server: "hub", linked_to: "hub", hopcount: 0, description: "the hub" },
         { server: "leaf", linked_to: "hub", hopcount: 1, description: null },
@@ -1672,13 +1673,35 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
     });
   });
 
-  it("narrows an empty topology (restricted / hidden — bare 365)", async () => {
+  it("narrows an empty topology with no mask → mask null (restricted / hidden — bare 365)", async () => {
     const { narrowUserEvent } = await import("../lib/userTopic");
     expect(narrowUserEvent({ kind: "links_bundle", network: "azzurra", entries: [] })).toEqual({
       kind: "links_bundle",
       network: "azzurra",
+      mask: null,
       entries: [],
     });
+  });
+
+  it("#513a — carries a non-null mask on an empty bundle (matched-nothing signal)", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(
+      narrowUserEvent({ kind: "links_bundle", network: "azzurra", mask: "all", entries: [] }),
+    ).toEqual({ kind: "links_bundle", network: "azzurra", mask: "all", entries: [] });
+  });
+
+  it("#513a — tolerates a missing mask field (older grappa) → null, bundle kept", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    // No `mask` key at all — additive-tolerant, unknown-is-never-fatal (#447).
+    const out = narrowUserEvent({ kind: "links_bundle", network: "azzurra", entries: [] });
+    expect(out).toEqual({ kind: "links_bundle", network: "azzurra", mask: null, entries: [] });
+  });
+
+  it("#513a — drops the bundle when mask is present but non-string / non-null", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(
+      narrowUserEvent({ kind: "links_bundle", network: "azzurra", mask: 42, entries: [] }),
+    ).toBeNull();
   });
 
   it("accepts null linked_to / hopcount / description on an entry", async () => {
@@ -1692,6 +1715,7 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
     ).toEqual({
       kind: "links_bundle",
       network: "azzurra",
+      mask: null,
       entries: [{ server: "lonely", linked_to: null, hopcount: null, description: null }],
     });
   });

@@ -1072,6 +1072,10 @@ export type SessionWireLinksEntry = {
 export type SessionWireLinksBundlePayload = {
   kind: "links_bundle";
   network: string;
+  // #513a — the requested server mask (null = the bare full-mesh request).
+  // cic splits an empty bundle two ways: a non-null mask that matched nothing
+  // ("no server matches <mask>") vs a null-mask empty ("hides its topology").
+  mask: string | null;
   entries: SessionWireLinksEntry[];
 };
 
@@ -1343,5 +1347,6 @@ export const ERROR_TOKENS_CHANNEL_ERROR_TOKEN = [
   "upstream_unavailable",
   "persist_failed",
   "invalid_channel",
+  "links_in_flight",
 ] as const;
 export type ErrorTokensChannelErrorToken = (typeof ERROR_TOKENS_CHANNEL_ERROR_TOKEN)[number];

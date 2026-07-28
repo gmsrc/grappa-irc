@@ -160,4 +160,5 @@ defmodule GrappaWeb.ErrorTokens do
           | :upstream_unavailable
           | :persist_failed
           | :invalid_channel
+          | :links_in_flight
 end

@@ -147,6 +147,15 @@ defmodule Grappa.Session.Server do
   # services outage holding the FSM open indefinitely.
   @ghost_recovery_timeout_ms 8_000
 
+  # #513b — /links in-flight window. A second `:send_links` within this many ms
+  # of a still-pending one is REFUSED (rather than clobbering the un-keyed
+  # accumulator and losing the first bundle); past it the pending is treated as
+  # abandoned (a withheld 365 / 481-denial never clears `links_pending`) and a
+  # fresh /links clobbers + re-sends. Measured round-trip is 15-17ms, so 10s is
+  # ~600× the happy path — long enough to never refuse a legitimately-slow
+  # reply, short enough that a stuck request self-heals on the next user retry.
+  @links_stale_ms 10_000
+
   # #347 — deferred-autojoin fallback for `:nickserv_identify`. NickServ
   # IDENTIFY is sent async at 001 and the upstream sets the self `+r` umode
   # only AFTER 001/end-of-MOTD, so firing the autojoin JOINs on 001 races the
@@ -690,16 +699,26 @@ defmodule Grappa.Session.Server do
           # first LUSERS numeric and fills until flush. NOT persisted
           # across crashes — operator types /lusers to refresh.
           lusers_pending: nil | map(),
-          # #238 — pending LINKS topology accumulator. Un-keyed (one
+          # #238/#513 — pending LINKS topology accumulator. Un-keyed (one
           # topology per network, like LUSERS) but PRIMED on `:send_links`
-          # (unlike LUSERS): `nil` = idle, `%{entries: [...]}` = an explicit
-          # /links is in flight. The prime gate makes an unsolicited 364/365
-          # a no-op (an ircd never emits LINKS unrequested). 364 RPL_LINKS
-          # appends a `%{server, linked_to, hopcount, description}` entry;
-          # 365 RPL_ENDOFLINKS emits `{:links_bundle, accum}` and clears to
-          # nil. A withheld 365 leaves the accumulator set until the next
-          # /links clobbers it (harmless — not persisted, mirror of the
-          # un-swept lusers_pending). NOT persisted across crashes.
+          # (unlike LUSERS): `nil` = idle, `%{entries: [...], mask: mask,
+          # requested_at: ms}` = an explicit /links is in flight. The prime
+          # gate makes an unsolicited 364/365 a no-op (an ircd never emits
+          # LINKS unrequested). 364 RPL_LINKS appends a `%{server, linked_to,
+          # hopcount, description}` entry; 365 RPL_ENDOFLINKS emits
+          # `{:links_bundle, accum}` — carrying `mask` so cic splits "mask
+          # matched nothing" from "topology restricted" (#513a) — and clears
+          # to nil. `requested_at` is a `System.monotonic_time(:millisecond)`
+          # stamp used to gate re-priming (#513b): a second /links WHILE one
+          # is in flight is REFUSED (`{:error, :links_in_flight}`) instead of
+          # clobbering the accumulator — the pre-#513 unconditional clobber
+          # dropped the first request's bundle on the floor (two /links within
+          # ~15ms → second silently lost, ordering inherent in the un-keyed
+          # accumulator). The clobber REMAINS the recovery for a withheld 365
+          # or a 481-denied request (neither clears links_pending), but is now
+          # GATED on staleness: past `@links_stale_ms` the pending is treated
+          # as abandoned and a fresh /links clobbers + re-sends. So restricted
+          # networks are never bricked. NOT persisted across crashes.
           links_pending: nil | map(),
           # #127 — per-source server-text-reply accumulators, primed by
           # `:send_info` / `:send_version` / `:send_motd`. `nil` = idle (no
@@ -1515,15 +1534,33 @@ defmodule Grappa.Session.Server do
     {:reply, Client.send_motd(state.client, target), %{state | motd_pending: %{lines: []}}}
   end
 
-  # #238 — /links [<mask>]. Prime the accumulator BEFORE the send so the
+  # #238/#513 — /links [<mask>]. Prime the accumulator BEFORE the send so the
   # 364/365 burst folds into a bundle instead of the generic $server
   # scan-route notice (the pending flag IS the explicit-request signal —
   # an unsolicited 364/365, which an ircd never emits, is a no-op). The
   # optional mask filters the reply to matching server names; nil is the
   # full mesh. Priming before the send is safe: replies only arrive after
   # the send returns (mailbox-serialized ordering, same as /motd).
+  #
+  # #513b — refuse (do NOT clobber) while a FRESH /links is in flight: two
+  # requests within ~15ms would otherwise share one un-keyed accumulator and
+  # the second bundle would be silently lost. `requested_at` is a monotonic
+  # stamp; the clobber stays the recovery path but is gated on staleness so a
+  # withheld 365 / 481-denied request (neither clears links_pending) can never
+  # brick /links — past @links_stale_ms a fresh request clobbers + re-sends.
+  # `is_integer(ts)` guard first: `now - nil` would raise, and `n < nil` is
+  # `true` under Erlang term order — never compare against a possibly-nil ts.
   def handle_call({:send_links, mask}, _, state) do
-    {:reply, Client.send_links(state.client, mask), %{state | links_pending: %{entries: []}}}
+    now = System.monotonic_time(:millisecond)
+
+    case state.links_pending do
+      %{requested_at: ts} when is_integer(ts) and now - ts < @links_stale_ms ->
+        {:reply, {:error, :links_in_flight}, state}
+
+      _ ->
+        {:reply, Client.send_links(state.client, mask),
+         %{state | links_pending: %{entries: [], mask: mask, requested_at: now}}}
+    end
   end
 
   # Channel directory (#84) refresh trigger. Three clauses, ordered:

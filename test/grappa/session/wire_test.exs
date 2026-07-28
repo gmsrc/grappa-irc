@@ -901,6 +901,7 @@ defmodule Grappa.Session.WireTest do
       assert payload == %{
                kind: :links_bundle,
                network: "azzurra",
+               mask: nil,
                entries: [
                  %{server: "hub.azzurra.org", linked_to: "hub.azzurra.org", hopcount: 0, description: "Hub"},
                  %{server: "leaf.azzurra.org", linked_to: "hub.azzurra.org", hopcount: 1, description: "Leaf"}
@@ -908,10 +909,19 @@ defmodule Grappa.Session.WireTest do
              }
     end
 
-    test "empty entries → empty list (restricted/hidden topology)" do
+    test "empty entries + no mask → empty list, mask nil (restricted/hidden topology)" do
       payload = Wire.links_bundle("net", %{entries: []})
 
-      assert payload == %{kind: :links_bundle, network: "net", entries: []}
+      assert payload == %{kind: :links_bundle, network: "net", mask: nil, entries: []}
+    end
+
+    test "#513a — carries the requested mask so cic can split the empty state" do
+      # An empty bundle WITH a mask means the mask matched nothing (e.g.
+      # `/links all` answered with a bare 365) — cic renders "no server
+      # matches <mask>", not "hides topology".
+      payload = Wire.links_bundle("net", %{entries: [], mask: "all"})
+
+      assert payload == %{kind: :links_bundle, network: "net", mask: "all", entries: []}
     end
 
     test "entry with nil linked_to/hopcount/description (malformed line) round-trips nils" do

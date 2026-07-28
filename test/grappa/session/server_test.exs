@@ -1528,6 +1528,127 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  # #513 — /links topology: the mask must survive to the bundle (a) and a
+  # second in-flight request must not clobber the first, while a stuck request
+  # (481 denial / withheld 365) must still self-heal past the staleness window
+  # (b). These are Session.Server handle_call concerns (the 364/365 fold is
+  # EventRouter's), so they live here, driven end-to-end through IRCServer.
+  describe "/links in-flight guard + mask carry (#513)" do
+    test "#513a — a mask matching nothing carries the mask on the empty bundle" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      assert :ok = Session.send_links({:user, user.id}, network.id, "all")
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS all\r\n"), 1_000)
+
+      # Restricted mask: a bare 365 with zero 364 rows.
+      IRCServer.feed(server, ":irc.test.org 365 grappa-test all :End of /LINKS list.\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :links_bundle, network: slug, mask: "all", entries: []}
+                     },
+                     1_000
+
+      assert slug == network.slug
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#513a — a bare (full-mesh) request carries mask nil" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      assert :ok = Session.send_links({:user, user.id}, network.id, nil)
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS\r\n"), 1_000)
+
+      IRCServer.feed(server, ":irc.test.org 364 grappa-test hub.test hub.test :0 Hub\r\n")
+      IRCServer.feed(server, ":irc.test.org 365 grappa-test * :End of /LINKS list.\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :links_bundle, mask: nil, entries: [_ | _]}
+                     },
+                     1_000
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#513b — a second /links WHILE one is in flight is refused, first bundle survives" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      assert :ok = Session.send_links({:user, user.id}, network.id, nil)
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS\r\n"), 1_000)
+
+      # Second request within the window: refused, NOT clobbering the pending.
+      assert {:error, :links_in_flight} =
+               Session.send_links({:user, user.id}, network.id, nil)
+
+      # The first request's 364/365 still drains a bundle (its accumulator was
+      # never reset by the refused second call — the pre-#513 lost-bundle bug).
+      IRCServer.feed(server, ":irc.test.org 364 grappa-test hub.test hub.test :0 Hub\r\n")
+      IRCServer.feed(server, ":irc.test.org 365 grappa-test * :End of /LINKS list.\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :links_bundle, entries: [_ | _]}
+                     },
+                     1_000
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#513b — a 481-denied request (no 365) does NOT brick /links: past the staleness window a fresh request re-sends" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      assert :ok = Session.send_links({:user, user.id}, network.id, nil)
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS\r\n"), 1_000)
+
+      # Restricted network: 481 denial, NO 365 — links_pending stays set (481
+      # is on the generic scan route, never clears the accumulator).
+      IRCServer.feed(
+        server,
+        ":irc.test.org 481 grappa-test :Permission Denied- You're not an IRC operator\r\n"
+      )
+
+      # Within the window the pending is honoured → refused (no clobber).
+      assert {:error, :links_in_flight} =
+               Session.send_links({:user, user.id}, network.id, nil)
+
+      # Age the pending past @links_stale_ms — simulates a request abandoned
+      # long ago (a real 481 that never got a 365). The clobber recovery is
+      # now GATED on staleness, so a fresh /links must clobber + re-send.
+      :sys.replace_state(pid, fn s ->
+        %{s | links_pending: %{s.links_pending | requested_at: System.monotonic_time(:millisecond) - 20_000}}
+      end)
+
+      assert :ok = Session.send_links({:user, user.id}, network.id, nil)
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS\r\n"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   # C3 drift lock (arch review #369 A3): the persist→broadcast shape is
   # hand-rolled at THREE sites (inbound `:persist`, outbound
   # `persist_and_send_fragments`, `:join_failed`) and only the inbound arm

@@ -640,16 +640,19 @@ defmodule Grappa.Session.Wire do
   `/links [<mask>]`. Broadcast on `Topic.user/1` (mirrors `banlist_bundle`
   — ephemeral, carries its own `network`; cic keys the per-network topology
   store by slug). Ships ALL `entries` in the wire order the ircd sent them
-  (a topology is a set of nodes). An EMPTY `entries` list is the
-  restricted/hidden-topology signal (an oper-only network answered with a
-  bare 365 and no 364 rows) — cic renders "this network hides its
-  topology". A 481 ERR_NOPRIVILEGES denial never reaches this bundle: it
-  stays a red `$server` :notice on the generic scan route. NOT persisted —
-  operator types /links to refresh.
+  (a topology is a set of nodes). Carries the requested `mask` (`nil` = the
+  bare full-mesh request) so cic can split an EMPTY `entries` list two ways
+  (#513a): `mask != nil` → "no server matches <mask>" (the mask matched
+  nothing — `/links all` answered with a bare 365, zero 364); `mask == nil`
+  → "this network hides its topology" (a full-mesh request that came back
+  empty is a fair restricted-topology guess). A 481 ERR_NOPRIVILEGES denial
+  never reaches this bundle: it stays a red `$server` :notice on the generic
+  scan route. NOT persisted — operator types /links to refresh.
   """
   @type links_bundle_payload :: %{
           kind: :links_bundle,
           network: String.t(),
+          mask: String.t() | nil,
           entries: [links_entry()]
         }
 
@@ -1397,9 +1400,11 @@ defmodule Grappa.Session.Wire do
   prepend); this restores the wire order via `Enum.reverse/1`. Each entry
   is normalised to the `links_entry/0` wire shape so a missing
   `linked_to`/`hopcount`/`description` (malformed upstream line) ships as
-  nil. An empty `entries` list (restricted topology) ships verbatim — the
-  empty-set-is-hidden contract. NOT persisted — operator types /links to
-  refresh.
+  nil. The requested `mask` (`accum.mask`, `nil` = full mesh) rides along so
+  cic can split the empty state (#513a). An empty `entries` list ships
+  verbatim — with a non-nil mask it means "matched nothing", with a nil mask
+  it is the restricted-topology signal. NOT persisted — operator types
+  /links to refresh.
   """
   @spec links_bundle(String.t(), map()) :: links_bundle_payload()
   def links_bundle(network_slug, accum)
@@ -1420,6 +1425,7 @@ defmodule Grappa.Session.Wire do
     %{
       kind: :links_bundle,
       network: network_slug,
+      mask: Map.get(accum, :mask),
       entries: entries
     }
   end

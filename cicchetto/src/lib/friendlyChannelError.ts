@@ -98,6 +98,12 @@ function friendlyKnown(code: ErrorTokensChannelErrorToken): string {
       // failed (`set_highlight_patterns` → `{:error, _}`). Rare (DB-side),
       // but a state-changing verb MUST NOT report a raw token.
       return "Couldn't save your highlight list — try again.";
+    case "links_in_flight":
+      // #513b — a second /links issued while one is still in flight is
+      // refused (rather than clobbering the un-keyed topology accumulator and
+      // silently dropping the first bundle). The in-flight request's map is
+      // still coming; the user just retries once it lands.
+      return "A network map request is already loading — try again in a moment.";
 
     // ── #411 D6b — the 8 previously-unmapped channel tokens (product copy,
     //    vetted by vjt). Same actionable-copy contract as the REST sibling.

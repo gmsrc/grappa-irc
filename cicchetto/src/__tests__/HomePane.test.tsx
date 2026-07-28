@@ -629,18 +629,25 @@ describe("HomePane", () => {
       expect(setSelectedChannelMock).not.toHaveBeenCalled();
     });
 
-    // #496 — the per-network 🗺 Map button is HIDDEN behind `SHOW_NETWORK_MAP`
-    // until `/links` is fixed. The #238 onTopology wiring (jump-to-$server +
-    // pushLinks) stays in the source so a one-line flag flip restores it, but
-    // no Map control renders on any row. (The pushLinks boundary + LinksModal
-    // behaviour stay covered by their own tests / the /links slash command.)
-    it(":connected row does NOT render the 🗺 Map button (#496 — flag-hidden)", () => {
+    // #513 — /links is fixed (mask-empty split + in-flight guard), so the
+    // per-network 🗺 Map button is RESTORED (`SHOW_NETWORK_MAP` flipped true).
+    // Clicking it lands on this network's $server (so the network-scoped
+    // LinksModal shows THIS topology when the bundle arrives) then pushes the
+    // bare LINKS. Fire-and-forget behind the modal, like onDisconnect.
+    it(":connected row renders the 🗺 Map button; click jumps to $server + pushes bare LINKS (#513)", () => {
       homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
       networkIdBySlugMock.mockReturnValue(7);
       render(() => <HomePane />);
 
-      expect(screen.queryByRole("button", { name: /network map for azzurra/i })).toBeNull();
-      expect(screen.queryByTestId("home-topology-azzurra")).toBeNull();
+      const mapBtn = screen.getByRole("button", { name: /network map for azzurra/i });
+      expect(mapBtn).toBeInTheDocument();
+      expect(screen.getByTestId("home-topology-azzurra")).toBeInTheDocument();
+
+      fireEvent.click(mapBtn);
+
+      // Jump-to-$server (network-scoped modal target) + fire the bare LINKS.
+      expect(setSelectedChannelMock).toHaveBeenCalled();
+      expect(pushLinksMock).toHaveBeenCalledWith(7, null);
       // The other row controls stay present (uniform action area intact).
       expect(screen.getByRole("button", { name: /disconnect azzurra/i })).toBeInTheDocument();
     });

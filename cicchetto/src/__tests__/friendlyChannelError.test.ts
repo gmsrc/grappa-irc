@@ -42,6 +42,8 @@ const CASES: Array<{ code: string; matches: RegExp }> = [
   { code: "persist_failed", matches: /couldn't save that change/i },
   { code: "unknown_event", matches: /action isn't supported/i },
   { code: "unknown_topic", matches: /view isn't available/i },
+  // #513b — a second /links refused while one is in flight.
+  { code: "links_in_flight", matches: /network map request is already loading/i },
 ];
 
 describe("friendlyChannelError", () => {

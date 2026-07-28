@@ -28,7 +28,13 @@ const linkEntry = (over: Partial<LinksEntry>): LinksEntry => ({
   ...over,
 });
 
-const reply = (entries: LinksEntry[]): LinksReply => ({ network: SLUG, entries });
+// #513a — `mask` defaults to null (the bare full-mesh request, the common
+// case); pass a mask to exercise the "matched nothing" empty-state split.
+const reply = (entries: LinksEntry[], mask: string | null = null): LinksReply => ({
+  network: SLUG,
+  mask,
+  entries,
+});
 
 // A canonical three-server topology: hub (root, self-link) → mid → leaf.
 const tripleReply = (): LinksReply =>
@@ -146,18 +152,41 @@ describe("LinksModal (#238)", () => {
     await waitFor(() => expect(screen.queryByTestId("links-modal-detail")).not.toBeInTheDocument());
   });
 
-  it("renders the empty state (no svg) for a hidden topology", () => {
+  it("renders the restricted empty state (no svg) for a null-mask (full-mesh) empty topology", () => {
     focusNetwork();
     setLinksReply(SLUG, reply([]));
     render(() => <LinksModal />);
     expect(screen.getByTestId("links-modal")).toBeInTheDocument();
     expect(screen.getByTestId("links-modal-empty")).toBeInTheDocument();
+    expect(screen.getByTestId("links-modal-empty")).toHaveAttribute(
+      "data-empty-reason",
+      "restricted",
+    );
     expect(screen.getByTestId("links-modal-empty").textContent).toContain(
       "this network hides its topology",
     );
     // The SVG canvas + nodes are absent — the empty state replaces them.
     expect(screen.queryByTestId("links-modal-svg")).not.toBeInTheDocument();
     expect(screen.queryAllByTestId("links-modal-node")).toHaveLength(0);
+  });
+
+  // #513a — an empty bundle WITH a mask means the mask matched nothing
+  // (e.g. `/links all` → bare 365, zero 364), NOT a restricted topology.
+  // Pre-#513 this lied with "this network hides its topology".
+  it("renders the matched-nothing empty state for a masked empty topology", () => {
+    focusNetwork();
+    setLinksReply(SLUG, reply([], "all"));
+    render(() => <LinksModal />);
+    expect(screen.getByTestId("links-modal-empty")).toHaveAttribute(
+      "data-empty-reason",
+      "no-match",
+    );
+    const text = screen.getByTestId("links-modal-empty").textContent ?? "";
+    expect(text).toContain("no server matches");
+    expect(text).toContain("all");
+    // NOT the restricted-topology copy — that would be the pre-#513 lie.
+    expect(text).not.toContain("hides its topology");
+    expect(screen.queryByTestId("links-modal-svg")).not.toBeInTheDocument();
   });
 
   it("renders nothing when no topology is buffered for the active network", () => {

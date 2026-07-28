@@ -31,12 +31,13 @@ import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
 import { windowStateByChannel } from "./lib/windowState";
 import NickText from "./NickText";
 
-// #496 — the per-network 🗺 Map (LINKS/topology) control is HIDDEN until
-// `/links` is fixed (the topology bundle it opens is unreliable). Gated, NOT
-// deleted: flip this to `true` to restore the button and its `onTopology`
-// wiring the moment `/links` lands. The button JSX + handler stay in the tree
-// so the return is a one-line flag flip, not an archaeology exercise.
-const SHOW_NETWORK_MAP = false;
+// #496 — the per-network 🗺 Map (LINKS/topology) control was HIDDEN until
+// `/links` was fixed (the topology bundle it opens was unreliable). #513
+// fixed both defects behind that gate — the mask-matched-nothing empty state
+// (a) and the two-requests-within-15ms lost-bundle race (b) — so the button
+// is restored. Kept as a flag (not deleted) so it can be re-hidden in one
+// line if a future upstream quirk resurfaces.
+const SHOW_NETWORK_MAP = true;
 
 // #85 — operator-curated featured channels for a network, fetched on
 // home DISPLAY (component mount / slug change) so an operator config
