@@ -180,15 +180,8 @@ defmodule Grappa.Deploy.PreflightTest do
   end
 
   describe "classify_paths/2 — Class 6: nginx + infra/snippets (substrate-independent)" do
-    test "infra/nginx.conf → cold on both substrates" do
-      for substrate <- @substrates do
-        assert {:cold, reasons} = Preflight.classify_paths(["infra/nginx.conf"], substrate)
-        assert {:nginx, ["infra/nginx.conf"]} in reasons
-      end
-    end
-
-    test "infra/snippets/security-headers.conf → cold on both substrates" do
-      file = "infra/snippets/security-headers.conf"
+    test "infra/snippets/locations-api.conf → cold on both substrates" do
+      file = "infra/snippets/locations-api.conf"
 
       for substrate <- @substrates do
         assert {:cold, reasons} = Preflight.classify_paths([file], substrate)
@@ -202,8 +195,17 @@ defmodule Grappa.Deploy.PreflightTest do
       assert {:nginx, [^file]} = List.keyfind(reasons, :nginx, 0)
     end
 
-    test "infra/freebsd/nginx.conf → cold on both substrates (jail nginx config, parallel to Docker's infra/nginx.conf)" do
+    test "infra/freebsd/nginx.conf → cold on both substrates (jail dumb-proxy config)" do
       file = "infra/freebsd/nginx.conf"
+
+      for substrate <- @substrates do
+        assert {:cold, reasons} = Preflight.classify_paths([file], substrate)
+        assert {:nginx, [^file]} = List.keyfind(reasons, :nginx, 0)
+      end
+    end
+
+    test "infra/linux/nginx.conf → cold on both substrates (#485 closed classification gap)" do
+      file = "infra/linux/nginx.conf"
 
       for substrate <- @substrates do
         assert {:cold, reasons} = Preflight.classify_paths([file], substrate)

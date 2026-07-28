@@ -354,11 +354,16 @@ defmodule Grappa.Deploy.Preflight do
 
   # Class 6: nginx config + ALL infra/snippets (H20 deeper-paths gap —
   # prior regex was `^infra/(nginx\.conf|snippets/)` which only matched
-  # files DIRECTLY under snippets/, not nested ones). Plus the bastille
-  # jail's parallel `infra/freebsd/nginx.conf` (the jail's internal
-  # nginx between the BEAM and the host nginx that fronts public TLS).
-  defp nginx?("infra/nginx.conf"), do: true
+  # files DIRECTLY under snippets/, not nested ones). #485 dropped the
+  # Docker `infra/nginx.conf` (that substrate no longer runs nginx — the
+  # BEAM is published directly). The surviving nginx substrates are both
+  # dumb reverse proxies: the bastille jail's `infra/freebsd/nginx.conf`
+  # and the native-Linux host's `infra/linux/nginx.conf` (the latter was a
+  # pre-existing classification gap this change closes), plus the shared
+  # proxy snippet under infra/snippets/. A change to any needs a cold
+  # nginx reload (install script re-run + reload), never a hot BEAM swap.
   defp nginx?("infra/freebsd/nginx.conf"), do: true
+  defp nginx?("infra/linux/nginx.conf"), do: true
   defp nginx?(path), do: String.starts_with?(path, "infra/snippets/")
 
   # Class 7 (H20+H21): ALL config/*.exs. SECRET_SIGNING_SALT was

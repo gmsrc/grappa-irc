@@ -7,7 +7,9 @@
 # Run dev (default — no profile, grappa-only):
 #   docker compose up
 #
-# Run prod (adds nginx + cicchetto-build oneshot):
+# Run prod (single long-lived container: grappa; the cicchetto-build
+# oneshot builds the SPA the BEAM self-serves — #485 dropped the nginx
+# container):
 #   MIX_ENV=prod docker compose --profile prod up -d
 #
 # Run mix tasks: scripts/mix.sh test
@@ -21,9 +23,10 @@
 # Default publish: GRAPPA_PUBLISH=127.0.0.1:4000 — bouncer reachable
 # only on loopback. Operator overrides via env or override file to bind
 # to a LAN/VLAN IP, all interfaces (`0.0.0.0:4000`), or a different port.
-# In prod this is typically left untouched (loopback-only) and nginx
-# (the only LAN-facing service) reverse-proxies to it via the
-# grappa_internal bridge.
+# #485 dropped the in-stack nginx container: in prod the operator either
+# publishes grappa directly (scripts/quickstart.sh sets GRAPPA_PUBLISH to
+# your HTTP_BIND) or leaves it loopback-only and fronts it with their OWN
+# TLS reverse proxy (infra/nginx-tls-frontend.example.conf).
 
 services:
   grappa:
@@ -40,6 +43,17 @@ services:
       - "${GRAPPA_PUBLISH:-127.0.0.1:4000}:4000"
     networks:
       - grappa_internal
+    # #485 — the SPA the BEAM self-serves is built by the cicchetto-build
+    # oneshot into runtime/cicchetto-dist. Under `--profile prod` grappa
+    # waits for that build to finish; `required: false` so a plain dev
+    # `docker compose up` (the oneshot is prod-profile-gated and NOT in the
+    # active profile, cic is served by vite there) still starts grappa.
+    # deploy.sh / quickstart also run the build explicitly first — this
+    # depends_on is the safety net for a manual `--profile prod up`.
+    depends_on:
+      cicchetto-build:
+        condition: service_completed_successfully
+        required: false
     volumes:
       # Bind-mount the whole project for live-reload dev + hot-reload
       # prod workflow. Same source layout in both modes — the cluster's
@@ -139,10 +153,10 @@ services:
 
   # Oneshot service — builds cicchetto's static SPA into
   # ./runtime/cicchetto-dist on the host. scripts/deploy.sh runs this
-  # explicitly via `compose run --rm` before bringing up nginx, so dist/
-  # is always fresh on every deploy. The depends_on below is the safety
-  # net for a manual `compose --profile prod up` (compose will run the
-  # dep to completion before starting nginx).
+  # explicitly via `compose run --rm` before bringing up grappa, so dist/
+  # is always fresh on every deploy. grappa's depends_on (above) is the
+  # safety net for a manual `compose --profile prod up` (compose runs this
+  # to completion before starting grappa, which self-serves the dist).
   #
   # Why a host bind-mount instead of a named volume: a fresh Docker
   # named volume is root:root, but the container drops to UID 1000 (so
@@ -180,40 +194,6 @@ services:
       # an empty value makes vite fail loud rather than bake a blank version.
       GRAPPA_VERSION: ${GRAPPA_VERSION:-}
     command: ["sh", "-c", "bun install --frozen-lockfile && bun run build"]
-
-  nginx:
-    profiles: [prod]
-    image: nginx:alpine
-    container_name: grappa-nginx
-    hostname: grappa-nginx
-    restart: always
-    networks:
-      - grappa_internal
-    ports:
-      - "${NGINX_PUBLISH:-3000:80}"
-    volumes:
-      - ./infra/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./infra/snippets:/etc/nginx/snippets:ro
-      - ./runtime/cicchetto-dist:/usr/share/nginx/html:ro
-    depends_on:
-      grappa:
-        condition: service_started
-      cicchetto-build:
-        condition: service_completed_successfully
-    healthcheck:
-      # 127.0.0.1, not localhost: alpine resolves localhost to ::1 first
-      # but nginx.conf only declares `listen 80` (IPv4 wildcard), not
-      # `listen [::]:80`, so the IPv6 connect refuses → healthcheck fails.
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 5s
-      start_period: 10s
-      retries: 5
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "5"
 
 networks:
   grappa_internal:
