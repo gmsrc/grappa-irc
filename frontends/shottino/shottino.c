@@ -189,7 +189,11 @@ enum window_state {
 
 struct member {
     char nick[MAX_CHANNEL];
-    char modes[8]; /* mode letters (o, v, h...) — sigil resolved at draw */
+    /* PREFIX SIGILS, not mode letters: the wire carries `["@"]`, `["+"]`,
+     * `["@","+"]` (grappa's Identifier stores sigils; cic's tierRank
+     * matches on them). Reading these as mode letters — which this client
+     * did — matches nothing at all. */
+    char modes[8];
 };
 
 struct window {
@@ -285,15 +289,27 @@ struct inline_media {
     bool drawn;
 };
 
-/* A clickable media link rendered in the chat area. Recorded each draw()
- * frame (cleared at frame start) so mouse coordinates can be mapped back to
- * the URL under the cursor without re-deriving the wrapped layout. */
+/* What a URL points at, as far as this client cares. Declared up here
+ * rather than beside media_kind_of() because both the link regions below
+ * and the scrollback attach path need the COMPLETE type, and a forward
+ * declaration cannot give an enum a size. */
+enum media_kind { MEDIA_NONE = 0, MEDIA_IMAGE, MEDIA_VIDEO };
+
+/* A clickable link rendered in the chat area. Recorded each draw() frame
+ * (cleared at frame start) so mouse coordinates can be mapped back to the
+ * URL under the cursor without re-deriving the wrapped layout.
+ *
+ * EVERY http(s) link gets a region, not just media: a link you can see is
+ * a link you can click, and one that silently does nothing under the
+ * cursor reads as a broken client. `kind` decides what the click does —
+ * a picture previews in place, anything else opens in the browser. */
 struct link_region {
     int y0;
     int y1;
     int x0;
     int x1;
     bool is_video;
+    enum media_kind kind;
     char url[MAX_LINE];
 };
 
@@ -1202,10 +1218,6 @@ static void set_window_topic(struct app *app, const char *network, const char *c
 static void remember_url(struct app *app, const char *body);
 static const char *find_url(const char *s);
 static size_t copy_url_token(const char *url, char *out, size_t out_size);
-/* Defined here rather than beside media_kind_of(): the scrollback attach
- * path needs the complete type, and a forward declaration cannot give it
- * a size. */
-enum media_kind { MEDIA_NONE = 0, MEDIA_IMAGE, MEDIA_VIDEO };
 static enum media_kind media_kind_of(const char *url);
 static int media_claim_locked(struct app *app, const char *url, bool is_video);
 static bool message_mentions_me(struct app *app, const char *network, const char *sender, const char *body);
@@ -1368,24 +1380,12 @@ static void render_message(struct app *app, const struct wire_scrollback_message
      * divider lands on the exact row the server's cursor names rather
      * than being guessed from position. */
     if (app->log_count > 0) app->log_ids[app->log_count - 1] = id;
-    /* Attach an image slot when the row carries one. Claiming is cheap —
-     * DECODING is deferred until the row is actually on screen. */
-    if (app->log_count > 0 && conversational) {
-        const char *u = find_url(body);
-        if (u) {
-            char tok[MAX_LINE];
-            copy_url_token(u, tok, sizeof(tok));
-            enum media_kind mk = media_kind_of(tok);
-            /* #451: auto-render inline ONLY for first-party /uploads/
-             * links — grappa's own store (host in {connect host} ∪ the
-             * server alias set, the same rule as cic's mediaLink.ts).
-             * Every other peer http(s) URL stays click-to-preview: no
-             * automatic ffmpeg fetch on scroll (the H1 fix). */
-            if (mk != MEDIA_NONE && url_is_first_party(app, tok))
-                app->log_media[app->log_count - 1] =
-                    media_claim_locked(app, tok, mk == MEDIA_VIDEO);
-        }
-    }
+    /* The row's inline image slot is NOT claimed here. It is claimed by
+     * the draw path, the first time the row is actually on screen — the
+     * #451 first-party test and the `/media` toggle are both questions
+     * about the row you are looking at, and answering them at arrival
+     * time made `/media on` a no-op for every row already in the log. See
+     * the claim site in draw(). */
     if (!app->scrollback_pinned) app->scrollback_offset = 0;
     pthread_mutex_unlock(&app->lock);
 }
@@ -3703,14 +3703,15 @@ static int media_claim_locked(struct app *app, const char *url, bool is_video) {
 /* Record the screen rectangle of a media link so a later mouse event can map
  * back to its URL. Caller holds app->lock (draw path). */
 static void add_link_region(struct app *app, int y0, int y1, int x0, int x1,
-                            const char *url, bool is_video) {
+                            const char *url, enum media_kind kind) {
     if (app->link_region_count >= MAX_LINK_REGIONS) return;
     struct link_region *r = &app->link_regions[app->link_region_count++];
     r->y0 = y0;
     r->y1 = y1;
     r->x0 = x0;
     r->x1 = x1;
-    r->is_video = is_video;
+    r->kind = kind;
+    r->is_video = kind == MEDIA_VIDEO;
     snprintf(r->url, sizeof(r->url), "%s", url);
 }
 
@@ -3985,24 +3986,52 @@ static void draw(struct app *app) {
         row_skip -= text_skip;
         int draw_lines = text_heights[vi] - text_skip;
         if (draw_lines > available) draw_lines = available;
+        const char *msg_url = find_url(app->log[i]);
+        enum media_kind mk = MEDIA_NONE;
+        char url_tok[MAX_LINE] = "";
+        if (msg_url) {
+            copy_url_token(msg_url, url_tok, sizeof(url_tok));
+            mk = media_kind_of(url_tok);
+        }
         if (draw_lines > 0) {
             last_drawn_vi = (int)vi;
             drawn_rows++;
             draw_message_line(msg_y, main_x + 1, main_w - 2, text_skip, draw_lines, app->log[i],
                               app->log_mentions[i], app->log_pending[i]);
-            const char *msg_url = find_url(app->log[i]);
-            enum media_kind mk = msg_url ? media_kind_of(msg_url) : MEDIA_NONE;
-            if (mk != MEDIA_NONE) {
-                char url_tok[MAX_LINE];
-                copy_url_token(msg_url, url_tok, sizeof(url_tok));
+            /* EVERY link is clickable, not only the ones that turn into
+             * pictures: `kind` decides whether the click previews or hands
+             * the URL to the browser. */
+            if (url_tok[0])
                 add_link_region(app, msg_y, msg_y + draw_lines - 1, main_x + 1,
-                                main_x + main_w - 2, url_tok, mk == MEDIA_VIDEO);
-            }
+                                main_x + main_w - 2, url_tok, mk);
+        }
+        /* Claim the row's inline slot HERE, the first time the row is on
+         * screen — not when the message arrived.
+         *
+         * Claiming at ingest froze two decisions at the wrong moment. It
+         * asked `inline_media_enabled` once, so `/media on` could not
+         * affect a single row already in the log: the toggle looked dead
+         * for everything on screen, which is the whole scrollback. And it
+         * froze the first-party verdict at arrival time. Both are
+         * questions about the row you are LOOKING at, so they are asked
+         * where the row is drawn. It also stops rows nobody ever scrolls
+         * to from consuming the 24-slot pool, which is what the comment
+         * below always claimed the code did.
+         *
+         * The slot is claimed but NOT rendered this frame: the measuring
+         * pass ran before the claim and reserved no rows for the picture,
+         * and spending rows the measurement did not reserve is exactly the
+         * bug class that clips the newest message off the bottom. The next
+         * frame measures it and draws it. */
+        int mi = app->log_media[i];
+        if (mi < 0 && mk != MEDIA_NONE && app->inline_media_enabled &&
+            url_is_first_party(app, url_tok)) {
+            app->log_media[i] = media_claim_locked(app, url_tok, mk == MEDIA_VIDEO);
+            mi = -1;
         }
         /* Draw the row's image beneath it, and kick off its decode the
          * first time it is on screen — lazy by design, so scrollback full
          * of links costs nothing until you scroll to them. */
-        int mi = app->log_media[i];
         if (mi >= 0 && mi < (int)app->media_count) {
             struct inline_media *m = &app->media[mi];
             if (m->state == IM_IDLE && m->cols > 0) {
@@ -6038,8 +6067,9 @@ static const struct link_region *region_at(struct app *app, int x, int y) {
     return NULL;
 }
 
-/* Map a mouse event to a media region: motion updates the hover hint, a left
- * button press over a region opens its preview. */
+/* Map a mouse event to a link region: motion updates the hover hint, a
+ * left button press over a region acts on the link — a picture previews
+ * in place, anything else opens in the browser. */
 static void handle_mouse(struct app *app) {
     MEVENT ev;
     if (getmouse(&ev) != OK) return;
@@ -6049,10 +6079,12 @@ static void handle_mouse(struct app *app) {
     const struct link_region *r = region_at(app, ev.x, ev.y);
     char url[MAX_LINE];
     bool is_video = false;
+    enum media_kind kind = MEDIA_NONE;
     bool hit = r != NULL;
     if (r) {
         snprintf(url, sizeof(url), "%s", r->url);
         is_video = r->is_video;
+        kind = r->kind;
         snprintf(app->hover_url, sizeof(app->hover_url), "%s", r->url);
     } else {
         app->hover_url[0] = 0;
@@ -6060,10 +6092,17 @@ static void handle_mouse(struct app *app) {
     pthread_mutex_unlock(&app->lock);
 
     if (click && hit) {
-        /* Clicking a media link previews it, using the terminal's
-         * graphics protocol when there is one and character art when
-         * there is not — the same path as /preview. */
-        request_preview(app, url, is_video, false);
+        if (kind == MEDIA_NONE) {
+            /* Not a picture: hand it to the browser, the same door /open
+             * uses. A link that cannot be opened from where it is read is
+             * a link the user has to retype. */
+            open_external_url(app, url);
+        } else {
+            /* Clicking a media link previews it, using the terminal's
+             * graphics protocol when there is one and character art when
+             * there is not — the same path as /preview. */
+            request_preview(app, url, is_video, false);
+        }
         pthread_mutex_lock(&app->lock);
         app->hover_url[0] = 0;
         pthread_mutex_unlock(&app->lock);
