@@ -226,10 +226,10 @@ vi.mock("../lib/serviceModal", () => ({
 // impl is pinned in nickEquals.test.ts; here a boundary stub (rfc1459-ish
 // case-insensitive compare is enough for the dispatch tests). #412 — the
 // spread of `importOriginal` is now MANDATORY for the whole file, not just
-// tab-completion: `channelKey.ts` imports `rfc1459Fold` from this module,
+// tab-completion: `channelKey.ts` imports `asciiFold` from this module,
 // so every `channelKey(...)` fixture call would hit `undefined(...)` and
 // throw without the real export. Tab-completion additionally needs the
-// REAL `rfc1459Fold` (bracket range) — a stubbed fold would test the stub,
+// REAL `asciiFold` (bracket range) — a stubbed fold would test the stub,
 // not the server-pinned fold. Only `nickEquals` stays overridden.
 vi.mock("../lib/nickEquals", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/nickEquals")>()),

@@ -15,7 +15,7 @@ import {
   watchByNetwork,
 } from "../lib/notifyWatch";
 
-// rfc1459Fold's own tests live with its definition in nickEquals.test.ts
+// asciiFold's own tests live with its definition in nickEquals.test.ts
 // (#364 S13 — one client fold). These exercise the store's use of it.
 describe("notifyWatch store", () => {
   beforeEach(() => {

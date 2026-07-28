@@ -30,7 +30,7 @@ describe("PeerAwayBanner", () => {
 
   it("matches case-insensitively on peer nick", () => {
     // Server emits the peer's nick in whatever case upstream sent it;
-    // the store keys via rfc1459Fold, the banner lookups via the same
+    // the store keys via asciiFold, the banner lookups via the same
     // fold, so casing never matters.
     setPeerAway("azzurra", "Alice", "AFK");
     render(() => <PeerAwayBanner networkSlug="azzurra" peer="ALICE" />);

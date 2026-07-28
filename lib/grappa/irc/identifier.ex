@@ -172,7 +172,7 @@ defmodule Grappa.IRC.Identifier do
   @doc """
   Returns the canonical rfc1459-folded form of a channel name — the
   single source of truth for case-insensitive channel matching. Shares
-  ONE fold primitive with `canonical_nick/1` (`fold_rfc1459/1`, #364),
+  ONE fold primitive with `canonical_nick/1` (`fold_ascii/1`, #364),
   so the whole server casemaps channels and nicks one way. Non-channel
   input (nicks, the synthetic `$server` pseudo-channel, anything not
   prefixed with a chanstring sigil `#&+!`) is passed through verbatim —
@@ -214,7 +214,7 @@ defmodule Grappa.IRC.Identifier do
   @spec canonical_channel(term()) :: term()
   def canonical_channel(<<sigil::utf8, _::binary>> = name)
       when sigil in [?#, ?&, ?!, ?+],
-      do: fold_rfc1459(name)
+      do: fold_ascii(name)
 
   def canonical_channel(name), do: name
 
@@ -233,7 +233,7 @@ defmodule Grappa.IRC.Identifier do
   the ircd, so the bouncer must treat them identically or it forks
   windows / spawns duplicate visitor sessions.
 
-  Shares ONE fold primitive (`fold_rfc1459/1`) with `canonical_channel/1`
+  Shares ONE fold primitive (`fold_ascii/1`) with `canonical_channel/1`
   (#364): channels converge onto the SAME rfc1459 casemapping, since
   bahamut applies it to channel names as well as nicks.
 
@@ -256,7 +256,7 @@ defmodule Grappa.IRC.Identifier do
   `nil`).
   """
   @spec canonical_nick(term()) :: term()
-  def canonical_nick(nick) when is_binary(nick), do: fold_rfc1459(nick)
+  def canonical_nick(nick) when is_binary(nick), do: fold_ascii(nick)
 
   def canonical_nick(other), do: other
 
@@ -267,15 +267,15 @@ defmodule Grappa.IRC.Identifier do
   # `lower()` the fold migrations embed. `canonical_nick/1` folds the
   # whole nick; `canonical_channel/1` folds the sigil-prefixed name (the
   # sigils are outside the fold set, so they pass straight through).
-  @spec fold_rfc1459(binary()) :: binary()
-  defp fold_rfc1459(s), do: for(<<c <- s>>, into: "", do: <<fold_rfc1459_byte(c)>>)
+  @spec fold_ascii(binary()) :: binary()
+  defp fold_ascii(s), do: for(<<c <- s>>, into: "", do: <<fold_ascii_byte(c)>>)
 
-  defp fold_rfc1459_byte(c) when c in ?A..?Z, do: c + 32
-  defp fold_rfc1459_byte(?[), do: ?{
-  defp fold_rfc1459_byte(?]), do: ?}
-  defp fold_rfc1459_byte(?\\), do: ?|
-  defp fold_rfc1459_byte(?~), do: ?^
-  defp fold_rfc1459_byte(c), do: c
+  defp fold_ascii_byte(c) when c in ?A..?Z, do: c + 32
+  defp fold_ascii_byte(?[), do: ?{
+  defp fold_ascii_byte(?]), do: ?}
+  defp fold_ascii_byte(?\\), do: ?|
+  defp fold_ascii_byte(?~), do: ?^
+  defp fold_ascii_byte(c), do: c
 
   @doc """
   Ecto query fragment applying the rfc1459 nick fold to a column

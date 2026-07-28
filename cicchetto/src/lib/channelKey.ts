@@ -18,7 +18,7 @@
 // looked like a constraint but actually erased to `string` in the type
 // system — both ends were unconstrained.
 
-import { rfc1459Fold } from "./nickEquals";
+import { asciiFold } from "./nickEquals";
 
 declare const channelKeyBrand: unique symbol;
 export type ChannelKey = string & { readonly [channelKeyBrand]: true };
@@ -30,7 +30,7 @@ export const channelKey = (slug: string, name: string): ChannelKey =>
 // names. Faithful mirror of `Grappa.IRC.Identifier.canonical_channel/1`
 // on the server: bahamut (CASEMAPPING=rfc1459) folds `[ ] \ ~` →
 // `{ } | ^` in CHANNEL names too, so the client shares the SAME
-// `rfc1459Fold` primitive with the nick fold — exactly as the server
+// `asciiFold` primitive with the nick fold — exactly as the server
 // shares ONE `fold_rfc1459/1` between `canonical_nick/1` and
 // `canonical_channel/1`. A bare `toLowerCase` (the pre-#412 form) folded
 // `A-Z` but left the four brackets unfolded, forking `#chan[1]` from the
@@ -49,7 +49,7 @@ export function canonicalChannel(name: string): string {
   const first = name.charCodeAt(0);
   // 0x23 #, 0x26 &, 0x21 !, 0x2B +
   if (first === 0x23 || first === 0x26 || first === 0x21 || first === 0x2b) {
-    return rfc1459Fold(name);
+    return asciiFold(name);
   }
   return name;
 }

@@ -25,7 +25,7 @@
 import { type MessageKind, NOTIFY_KINDS } from "./api";
 import { canonicalChannel } from "./channelKey";
 import { matchesWatchlist } from "./mentionMatch";
-import { rfc1459Fold } from "./nickEquals";
+import { asciiFold } from "./nickEquals";
 import type { NotificationPrefs } from "./userSettings";
 
 // Minimal structural shape the predicate needs — a subset of the wire
@@ -47,7 +47,7 @@ export type ShouldNotifyMessage = {
  *      the "notify" subset of api's CONTENT_KINDS, #395) → everything else
  *      false. NOTICE (services chatter) counts as unread but never notifies.
  *   2. DM (channel === ownNick): private_messages_all OR
- *      rfc1459Fold(sender) in private_messages_only (mirrors the
+ *      asciiFold(sender) in private_messages_only (mirrors the
  *      server's `canonical_nick(sender) in ...`).
  *   3. channel: channel_messages_all OR canonicalChannel(channel) in
  *      channel_messages_only OR (channel_mentions AND mention).
@@ -76,7 +76,7 @@ function dmMatch(message: ShouldNotifyMessage, prefs: NotificationPrefs): boolea
   // whitelist entries are stored server-folded. A bare `.toLowerCase()`
   // here would miss a bracket-range nick the server folds.
   return (
-    prefs.private_messages_all || prefs.private_messages_only.includes(rfc1459Fold(message.sender))
+    prefs.private_messages_all || prefs.private_messages_only.includes(asciiFold(message.sender))
   );
 }
 

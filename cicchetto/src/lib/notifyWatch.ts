@@ -22,7 +22,7 @@
 //
 // `presence_snapshot` keys and the server's presence map are
 // rfc1459-folded (`Grappa.IRC.Identifier.canonical_nick/1`: A-Z plus
-// `[ ] \ ~` → `{ } | ^`). Presence lookups fold via `rfc1459Fold` — the
+// `[ ] \ ~` → `{ } | ^`). Presence lookups fold via `asciiFold` — the
 // SINGLE client nick fold, shared with `nickEquals`/`normalizeNick`
 // (#364 S13 consolidated the two former client folds into one). Without
 // the fold, bracket-nick dots (`Foo[1]`) silently never light up.
@@ -30,7 +30,7 @@
 import { createSignal } from "solid-js";
 import type { NotifyEntry } from "./api";
 import { identityScopedStore } from "./identityScopedStore";
-import { rfc1459Fold } from "./nickEquals";
+import { asciiFold } from "./nickEquals";
 
 export type PresenceState = "online" | "offline" | "unknown";
 
@@ -133,7 +133,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     initial: boolean;
     ts: string;
   }): void => {
-    const key = rfc1459Fold(payload.nick);
+    const key = asciiFold(payload.nick);
 
     setPresenceByNetwork((prev) => ({
       ...prev,
@@ -163,7 +163,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // Dot state for a display-form nick (the Watched panel iterates the
   // watch list, whose entries are display-cased).
   const presenceFor = (networkId: number, nick: string): PresenceState => {
-    return presenceByNetwork()[networkId]?.[rfc1459Fold(nick)] ?? "unknown";
+    return presenceByNetwork()[networkId]?.[asciiFold(nick)] ?? "unknown";
   };
 
   return {

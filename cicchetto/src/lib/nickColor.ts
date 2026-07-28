@@ -1,5 +1,5 @@
 import type { ChannelMembers } from "./memberTypes";
-import { nickEquals, rfc1459Fold } from "./nickEquals";
+import { nickEquals, asciiFold } from "./nickEquals";
 
 // UX-5 bucket BC2 — colored nicks (xchat-style) + scrollback-side
 // mode-prefix glyph lookup.
@@ -17,7 +17,7 @@ import { nickEquals, rfc1459Fold } from "./nickEquals";
 // the head; (2) decades of irc-client precedent (xchat/hexchat use
 // the same idea — they vary the multiplier but not the structure).
 //
-// Hash input is the rfc1459-FOLDED nick (`rfc1459Fold`, the ONE client
+// Hash input is the rfc1459-FOLDED nick (`asciiFold`, the ONE client
 // fold shared with the nick-identity layer and a faithful mirror of the
 // server's `Grappa.IRC.Identifier.canonical_nick/1`): `Vjt`/`vjt` AND
 // `Foo[1]`/`foo{1}` are the same operator to bahamut, so they must hash
@@ -88,7 +88,7 @@ export const NICK_PALETTE_SIZE = 32;
 // NICK_PALETTE_SIZE at the boundary; intermediate keeps full 32-bit
 // width via Math.imul to avoid sign-bit weirdness from `* 33`.
 export const nickColorIndex = (nick: string): number => {
-  const folded = rfc1459Fold(nick);
+  const folded = asciiFold(nick);
   let hash = 5381;
   for (let i = 0; i < folded.length; i++) {
     hash = (Math.imul(hash, 33) + folded.charCodeAt(i)) | 0;

@@ -6,7 +6,7 @@
 // Azzurra runs bahamut (`CASEMAPPING=rfc1459`): besides ASCII `A-Z` it
 // folds the four "national" chars `[ ] \ ~` → `{ } | ^`. The server's
 // single source of truth is `Grappa.IRC.Identifier.canonical_nick/1`
-// (byte-level ASCII). `rfc1459Fold` below is the ONE client mirror of
+// (byte-level ASCII). `asciiFold` below is the ONE client mirror of
 // that fold; `normalizeNick` and `nickEquals` are layered on it so the
 // whole cic codebase folds nicks exactly as the server does — no
 // two-policy drift class. `nickEquals.test.ts` enumerates the fold
@@ -18,7 +18,7 @@
 // identity invariant is exactly the "half-migrated creates two
 // patterns" failure CLAUDE.md forbids: a `[user]`/`{user}` pair the
 // server treats as ONE nick would fork here (members store phantoms,
-// DM windows, own-nick checks). Consolidated onto `rfc1459Fold`.
+// DM windows, own-nick checks). Consolidated onto `asciiFold`.
 //
 // Bucket F H3 (retained): pre-fix members.ts and ScrollbackPane.tsx
 // used bare `===` for nick comparison, producing phantom member entries
@@ -34,7 +34,7 @@
 // through untouched, byte-for-byte with the server's `fold_nick_byte/1`
 // (JS `toLowerCase()` is Unicode-aware and would over-fold, e.g.
 // `CAFÉ`→`café`, forking keys the server keeps distinct).
-export const rfc1459Fold = (nick: string): string =>
+export const asciiFold = (nick: string): string =>
   nick
     .replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32))
     .replace(/\[/g, "{")
@@ -45,7 +45,7 @@ export const rfc1459Fold = (nick: string): string =>
 // Normalize a nick to its case-folded comparison form. Use directly
 // when storing a nick into a Map/Set keyed for case-insensitive lookup;
 // for binary equality checks prefer `nickEquals`.
-export const normalizeNick = (nick: string): string => rfc1459Fold(nick);
+export const normalizeNick = (nick: string): string => asciiFold(nick);
 
 // Case-insensitive nick equality. Returns false when either side is
 // null or undefined — the existing call sites (members.ts presence
