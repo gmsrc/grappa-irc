@@ -35,7 +35,7 @@
 // genuine phantom, and (b) the real B login spawns NO upstream Session.Server,
 // so it can't dangle a session / cascade (feedback_e2e_real_login_poisons_shared_stack).
 
-import { waitForChannelReady } from "../fixtures/cicchettoPage";
+import { openSettingsDrawer, waitForChannelReady } from "../fixtures/cicchettoPage";
 import { login } from "../fixtures/grappaApi";
 import {
   ADMIN_IDENTIFIER,
@@ -97,7 +97,7 @@ test.describe("issue #281 — account switch replay", () => {
     // --- The account switch (the repro) ---
     // Detach A via the settings drawer → back to /login. token → null,
     // in-context: pre-fix, A's Solid resources go STALE (not cleared).
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     const drawer = page.getByRole("dialog", { name: /settings/i });
     await expect(drawer).toHaveClass(/open/);
     await page.getByTestId("detach-btn").click();

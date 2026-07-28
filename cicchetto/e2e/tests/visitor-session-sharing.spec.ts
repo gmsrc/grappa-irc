@@ -19,6 +19,7 @@
 // visitor-only by design (mint endpoint 403s for users). One-class spec.
 
 import { expect, test } from "../fixtures/test";
+import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
 import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
@@ -57,7 +58,7 @@ test("visitor session-sharing — mint on device A, consume on device B, both co
 
     // Open Settings drawer → click the "share session" button → the share
     // MODAL (#392, reverts #335's sub-page) opens and mints on open.
-    await pageA.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(pageA);
     await expect(pageA.getByRole("dialog", { name: /settings/i })).toBeVisible();
     await pageA.getByTestId("share-session-entry").click();
     await expect(pageA.getByTestId("share-modal")).toBeVisible();
@@ -85,7 +86,7 @@ test("visitor session-sharing — mint on device A, consume on device B, both co
     // consume route never renders for a measurable instant — we
     // therefore assert on the post-redirect Shell surface directly
     // (the settings button is stable across desktop + mobile).
-    await expect(pageB.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+    await expectShellReady(pageB);
     // No error rendered: a failure would keep the share-consume page
     // mounted with the error visible.
     await expect(pageB.getByTestId("share-consume-error")).toHaveCount(0);

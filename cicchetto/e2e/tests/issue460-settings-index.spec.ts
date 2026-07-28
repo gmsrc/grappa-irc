@@ -21,7 +21,7 @@
 // covered by the vitest unit). There is no subject-shaped branch to
 // parameterize here.
 
-import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { openSettingsDrawer, composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { expect, test } from "../fixtures/test";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -30,7 +30,7 @@ const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 test.setTimeout(90_000);
 
 async function openSettings(page: import("@playwright/test").Page): Promise<void> {
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   await expect(page.getByRole("dialog", { name: /settings/i })).toHaveClass(/open/, {
     timeout: 10_000,
   });

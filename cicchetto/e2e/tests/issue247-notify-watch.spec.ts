@@ -33,7 +33,7 @@
 // mid-spec failure can't strand the watch entry in vjt's durable list
 // for later specs.
 
-import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { openSettingsDrawer, composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { expect, test } from "../fixtures/test";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
@@ -60,7 +60,7 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
   // Open it (cog → nav row) whenever a dot must be observed; the drawer
   // resets closed across a reload, so this is called again after step 3.
   const openWatchLists = async (): Promise<void> => {
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     await page.getByTestId("watchlists-settings-entry").click();
     await expect(page.getByTestId("watchlists-subpage")).toBeVisible({ timeout: 10_000 });
   };

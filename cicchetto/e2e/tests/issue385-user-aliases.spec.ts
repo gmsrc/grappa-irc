@@ -22,7 +22,7 @@
 // (the server stores them per-subject via the same XOR-FK shape). No
 // subject-shaped branch to parameterize.
 
-import {
+import { openSettingsDrawer,
   composeSend,
   composeTextarea,
   loginAs,
@@ -113,7 +113,7 @@ test("#385 — aliases settings sub-page: deep-link, add round-trip, 422 inline,
     await expect(subpage).toHaveCount(0);
 
     // Open via the settings nav row (proves the row exists too).
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     await page.getByTestId("aliases-settings-entry").click();
     await expect(subpage).toBeVisible({ timeout: 10_000 });
 

@@ -29,7 +29,7 @@
 // table, so those toggles are present even though vjt holds none of them.
 
 import { expect, test } from "../fixtures/test";
-import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { expectShellReady, composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 test("#229 — own umodes are visible from connect (cold-snapshot after reload), and tapping opens the umode modal", async ({
@@ -55,7 +55,7 @@ test("#229 — own umodes are visible from connect (cold-snapshot after reload),
     // the umode set now is the user-topic after-join cold-snapshot — there
     // is no live MODE echo in the reloaded session. This is the P0 witness.
     await page.reload();
-    await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+    await expectShellReady(page);
 
     // HEADLINE (RED pre-fix): the indicator shows +i from connect, WITHOUT
     // any mid-session change in the reloaded session — the cold-snapshot

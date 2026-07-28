@@ -24,13 +24,13 @@
 // surface only, not the (pre-covered) destructive composite. Every
 // interaction below is client-side state — zero server mutation.
 
-import { loginAs } from "../fixtures/cicchettoPage";
+import { openSettingsDrawer, loginAs } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 import { type Page } from "@playwright/test";
 
 async function openDrawer(page: Page) {
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   const drawer = page.getByRole("dialog", { name: /settings/i });
   await expect(drawer).toHaveClass(/open/);
   return drawer;
@@ -71,7 +71,7 @@ test("issue #43 — quit arms on first tap (red confirm copy) and disarms on clo
   // button and a one-tap bouncer kill on reopen. Close → reopen → idle.
   await page.getByTestId("settings-drawer-done").click();
   await expect(drawer).not.toHaveClass(/open/);
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   await expect(drawer).toHaveClass(/open/);
   await expect(quit).toHaveText(/^quit$/i);
 });

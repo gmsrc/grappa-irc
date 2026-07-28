@@ -25,6 +25,7 @@
 // exercises the real CSS/DOM render path jsdom can't.
 
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
+import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
 import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -40,11 +41,11 @@ async function loginAs(page: import("@playwright/test").Page, seed: Seed): Promi
     [seed.token, seed.subjectJson] as const,
   );
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
 }
 
 async function openVhostsTab(page: import("@playwright/test").Page): Promise<void> {
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
   await page.getByTestId("admin-console-entry").click();
   await expect(page.getByTestId("admin-pane")).toBeVisible();
@@ -128,7 +129,7 @@ test("#252 admin curates a vhost; a user customizes it via the sub-page and it p
     const userPage = await page.context().newPage();
     try {
       await loginAs(userPage, user);
-      await userPage.getByLabel(/open settings/i).click();
+      await openSettingsDrawer(userPage);
       await expect(userPage.getByRole("dialog", { name: /settings/i })).toBeVisible();
 
       // The main page carries the nav ROW; tapping it lands on the sub-page.

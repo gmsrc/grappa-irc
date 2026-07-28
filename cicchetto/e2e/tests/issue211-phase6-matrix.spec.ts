@@ -36,7 +36,7 @@
 
 import type { Browser, Page } from "@playwright/test";
 import { test, expect } from "../fixtures/test";
-import { selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
+import { expectShellReady, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
   adminDeleteVisitor,
@@ -85,7 +85,7 @@ async function bootVisitor(
     ] as const,
   );
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
   return { ctx, page };
 }
 

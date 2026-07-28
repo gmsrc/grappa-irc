@@ -18,6 +18,7 @@
 // `finally`. Network id resolved by slug from GET /admin/networks.
 
 import { test, expect } from "../fixtures/test";
+import { expectShellReady } from "../fixtures/cicchettoPage";
 import { adminDeleteVisitor, GRAPPA_BASE_URL, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
@@ -95,7 +96,7 @@ test("issue #135 — visitor home shows welcome + featured + a directory link", 
       [visitor.token, JSON.stringify(visitorSubject)] as const,
     );
     await page.goto("/");
-    await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+    await expectShellReady(page);
 
     // (1) Welcome / orientation copy — the #496 always-on value prop (stable
     // phrase shared with the HomePane unit) + the honest guest 48h session line.

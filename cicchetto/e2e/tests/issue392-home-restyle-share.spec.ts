@@ -19,6 +19,7 @@
 // the QR is inline SVG, not a device camera.
 
 import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -45,7 +46,7 @@ test.describe("#392 — home restyle + session-share modal", () => {
       await seedVisitor(page, visitor);
       await page.goto("/");
 
-      await page.getByLabel(/open settings/i).click();
+      await openSettingsDrawer(page);
       await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
       await page.getByTestId("share-session-entry").click();
 

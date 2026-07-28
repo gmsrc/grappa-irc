@@ -21,6 +21,7 @@
 // actually holds in the e2e harness.
 
 import { expect, test } from "../fixtures/test";
+import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { mintVisitor, adminDeleteVisitor } from "../fixtures/grappaApi";
 
@@ -47,7 +48,7 @@ test("M-8 admin Visitors tab lists + deletes a minted visitor (inline confirm tw
       [admin.token, admin.subjectJson] as const,
     );
     await page.goto("/");
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
     await page.getByTestId("admin-console-entry").click();
     await expect(page.getByTestId("admin-pane")).toBeVisible();

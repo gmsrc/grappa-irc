@@ -21,6 +21,7 @@
 // the open SettingsDrawer overlay.
 
 import { expect, test } from "../fixtures/test";
+import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
 import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
 
 // admin-vjt has no network bind — loginAs's `.sidebar-network-section h3`
@@ -40,7 +41,7 @@ async function adminFriendlyLogin(
     [seed.token, seed.subjectJson] as const,
   );
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
 }
 
 const cases = [
@@ -61,7 +62,7 @@ for (const c of cases) {
     await adminFriendlyLogin(page, c.seed());
 
     // Open the settings drawer via the cog button.
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     const drawer = page.getByRole("dialog", { name: /settings/i });
     await expect(drawer).toBeVisible();
     await expect(drawer).toHaveClass(/open/);

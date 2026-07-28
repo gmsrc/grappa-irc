@@ -27,6 +27,7 @@
 // DeleteAccountModal). Honest scope, mirroring issue126-detach-lifecycle.
 
 import { test, expect } from "../fixtures/test";
+import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, adminDeleteVisitor, login, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
@@ -94,10 +95,10 @@ test.describe("issue #157 — delete account", () => {
         [token, JSON.stringify(subject)] as const,
       );
       await page.goto("/");
-      await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+      await expectShellReady(page);
 
       // Open the drawer → the delete-account entry is offered (non-admin).
-      await page.getByLabel(/open settings/i).click();
+      await openSettingsDrawer(page);
       await expect(page.getByRole("dialog", { name: /settings/i })).toHaveClass(/open/);
       await page.getByTestId("delete-account-btn").click();
 
@@ -149,7 +150,7 @@ test.describe("issue #157 — delete account", () => {
         [visitor.token, subjectJson] as const,
       );
       await page.goto("/");
-      await page.getByLabel(/open settings/i).click();
+      await openSettingsDrawer(page);
       await expect(page.getByRole("dialog", { name: /settings/i })).toHaveClass(/open/);
 
       // The ephemeral visitor gets quit, never delete-account.

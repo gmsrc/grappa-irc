@@ -24,7 +24,7 @@
 // Desktop chromium (untagged): the drawer + modal are layout-agnostic and
 // navigator.share is a JS API, not a touch gesture.
 
-import { openSettingsSection } from "../fixtures/cicchettoPage";
+import { openSettingsDrawer, openSettingsSection } from "../fixtures/cicchettoPage";
 import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -46,7 +46,7 @@ async function seedVisitor(page: import("@playwright/test").Page, visitor: Visit
 // Open Settings → tap the "share session" button → the share MODAL opens
 // (#392), waiting for the mint to resolve into a /share/ URL.
 async function openShareModalFromSettings(page: import("@playwright/test").Page) {
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
   await page.getByTestId("share-session-entry").click();
   await expect(page.getByTestId("share-modal")).toBeVisible();
@@ -63,7 +63,7 @@ test.describe("#335 — visitor identity card + share section + native share", (
     try {
       await seedVisitor(page, visitor);
       await page.goto("/");
-      await page.getByLabel(/open settings/i).click();
+      await openSettingsDrawer(page);
       await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
 
       // #392 dropped the share wrapper card — the share entry is now a bare

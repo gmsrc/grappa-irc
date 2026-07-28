@@ -12,7 +12,7 @@
 // surface behaving identically for every subject class (the server stores it on
 // the credential via the same shape). No subject-shaped branch to parameterize.
 
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { openSettingsDrawer, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -40,7 +40,7 @@ test("#189 — perform editor: nav row, save list + oper pass, round-trips again
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
 
     // Open via the settings nav row (proves the row exists + wiring).
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     await page.getByTestId("perform-settings-entry").click();
     await expect(page.getByTestId("perform-subpage")).toBeVisible({ timeout: 10_000 });
 

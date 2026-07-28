@@ -21272,3 +21272,66 @@ pre-phase-7 `expires_at = NULL` mechanism, even though the per-function
 docstrings (`commit_password/3`, `touch/1`) were already phase-7-correct. Aligned
 the moduledoc to the derived-permanence reality so code and its top-level doc
 agree — this issue's copy is derived from exactly that mechanism.
+
+---
+
+## 2026-07-28 — #500 rail actions collapse behind ONE launcher (supersedes the #473 always-expanded button column)
+
+**The regression #473 shipped.** #473 relocated every window action (settings /
+archive / rooms / admin / home / themes / denoise) into ONE always-expanded
+`RailActions` button column at the bottom of the `.shell-members` rail. On a big
+channel this column became UNREACHABLE: on desktop the overflowing nick list
+pushed it below the fold (the `<aside>` owned the scroll, so the column scrolled
+off with the list); on mobile the 7 buttons ate the rail. The affordance existed
+but you couldn't get to it.
+
+**The fix (vjt): collapse every action behind ONE launcher.** `RailActions.tsx`
+now renders a single `.rail-actions-launcher` (testid `rail-actions-launcher`, ☰
++ "actions" + caret) pinned at the bottom of the rail, plus a `<Show when={open()}>`-
+gated `.rail-actions-menu` (the 7 unchanged buttons) that OVERLAYS the nick area
+(`bottom: 100%`, absolute) when tapped. `open` is a local ephemeral UI signal —
+NOT window state; cic never persists it. The 6 nav actions close the menu after
+firing; denoise (a state toggle) stays open. The #449 denoise wiring
+(`syncedSetChannelPresencePref` from `displayPrefs`) is preserved verbatim.
+
+**Dismiss is a NON-BLOCKING document `pointerdown` listener, not a scrim.** A
+full-viewport scrim swallowed the FIRST outside click (you had to click twice:
+once to dismiss, once to act) and hung the e2e run. The listener lets the click
+through to its target AND closes the menu in the same gesture. Paired with
+`createOverlayLock` (Escape + refcounted scroll-lock,
+`feedback_new_covering_modal_must_push_overlay_refcount`).
+
+**Desktop scroll-owner unified onto `.members-pane`.** Previously only mobile let
+`.members-pane` own the internal scroll; desktop let the `<aside>` scroll. #500
+makes `.members-pane` the scroll owner on BOTH form factors and sets
+`.shell-members` → `overflow: visible`, so a long member list scrolls INTERNALLY
+while the pinned launcher stays in view and the absolute `.rail-actions-menu`
+overlays unclipped.
+
+**The e2e blast radius — the cog moved behind the launcher on BOTH form factors.**
+Pre-#500 the desktop rail was always-expanded, so the settings cog
+(`aria-label="open settings"` / `action-cluster-cog`) was directly clickable on
+desktop. #500 put it inside the `<Show>`-gated menu (UNMOUNTED until the launcher
+is tapped) on desktop too. The first migration sweep updated only the 24 specs
+that already routed through fixture doors (`openSettingsSection` / `openArchive`);
+it MISSED **49 specs** that reached a rail affordance by HAND — the exact
+"half-migrated → two patterns" trap CLAUDE.md warns about. The true broken set is
+"every spec that clicks a rail testid (or the cog's `getByLabel(/open settings/i)`)
+without first opening the launcher" — the CI gate was only a sample of it.
+
+Two disjoint fixture doors close the gap, zero assertions removed:
+- **`openSettingsDrawer(page)`** — for specs that actually OPEN settings (to reach
+  `admin-console-entry`, which lives in the drawer, or a control):
+  `openRailMenu` → cog → drawer-open. The sibling of `openSettingsSection` for the
+  drawer ROOT.
+- **`expectShellReady(page)`** — for specs that used `expect(getByLabel(/open
+  settings/i)).toBeVisible()` merely as an "app hydrated" LOAD-GATE, never
+  clicking the cog. Routing those through a drawer would open a surface they don't
+  need and couple them to settings UI. The gate asserts **`.shell-main`** instead:
+  rendered unconditionally in BOTH Shell branches, never inside a `<Show>`/drawer,
+  and mounted only under `<RequireAuth>` — so its visibility means exactly "authed
+  shell rendered", independent of viewport OR whether any network is bound
+  (admin-vjt has zero). The launcher itself is NOT a valid load-gate: on mobile it
+  lives inside the closed `.shell-members` drawer, so `rail-actions-launcher` is
+  not visible until the drawer opens. The intent was always "app ready", not
+  "cog" — `.shell-main` is the honest signal.

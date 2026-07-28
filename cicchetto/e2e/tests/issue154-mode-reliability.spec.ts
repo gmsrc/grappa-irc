@@ -33,7 +33,7 @@
 
 import type { Browser } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
-import {
+import { expectShellReady,
   composeSend,
   composeTextarea,
   scrollbackLine,
@@ -66,7 +66,7 @@ async function bootVisitor(browser: Browser, nick: string) {
     ] as const,
   );
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
   return { visitor, ctx, page };
 }
 

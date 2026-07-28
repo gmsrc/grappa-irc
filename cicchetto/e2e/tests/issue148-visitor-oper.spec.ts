@@ -26,7 +26,7 @@
 // nick can oper with `testoper`/`testoperpass`.
 
 import { expect, test } from "../fixtures/test";
-import { composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
+import { expectShellReady, composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
@@ -68,7 +68,7 @@ test("issue #148 — visitor /oper ships OPER upstream and renders the 381 notic
       [visitor.token, JSON.stringify(visitorSubject)] as const,
     );
     await page.goto("/");
-    await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+    await expectShellReady(page);
 
     // Focus the visitor's $server window. awaitWsReady:false — the server
     // window has no auto-join line to anchor on. compose now resolves to

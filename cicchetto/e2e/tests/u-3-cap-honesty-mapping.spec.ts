@@ -42,6 +42,7 @@
 // afterEach restores caps to permissive defaults.
 
 import { expect, test } from "../fixtures/test";
+import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
 import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
@@ -268,9 +269,9 @@ test("U-3 (UD4) — admin Sessions tab renders per-network cap-count summary", a
     [seed.token, seed.subjectJson] as const,
   );
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
 
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   const drawer = page.getByRole("dialog", { name: /settings/i });
   await expect(drawer).toBeVisible();
   await page.getByTestId("admin-console-entry").click();

@@ -20,7 +20,7 @@
 // parameterize (the parity-matrix rule applies only to subject-shaped
 // surfaces). The deep presence protocol arm lives in issue247-notify-watch.
 
-import { composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { openSettingsDrawer, composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { expect, test } from "../fixtures/test";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
@@ -109,7 +109,7 @@ test("#356 — settings keyword list add + × round-trips against real server st
   await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
 
   // Open the section via the settings nav row (proves the row exists too).
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   await page.getByTestId("watchlists-settings-entry").click();
   await expect(page.getByTestId("watchlists-subpage")).toBeVisible({ timeout: 10_000 });
 

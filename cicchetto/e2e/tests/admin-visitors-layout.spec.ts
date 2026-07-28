@@ -28,6 +28,7 @@
 // via REST, log in as the seeded admin, open AdminPane → Visitors tab).
 
 import { expect, test } from "../fixtures/test";
+import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { mintVisitor, adminDeleteVisitor } from "../fixtures/grappaApi";
 
@@ -48,7 +49,7 @@ test("admin Visitors tab: per-network cell is separated + delete button stays in
       [admin.token, admin.subjectJson] as const,
     );
     await page.goto("/");
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
     await page.getByTestId("admin-console-entry").click();
     await expect(page.getByTestId("admin-pane")).toBeVisible();

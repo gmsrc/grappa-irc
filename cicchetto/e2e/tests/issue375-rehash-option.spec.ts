@@ -29,7 +29,7 @@
 // still sends exactly `"REHASH"` (the null-filter drops the absent option).
 
 import { expect, test } from "../fixtures/test";
-import { composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
+import { expectShellReady, composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
@@ -83,7 +83,7 @@ test("issue #375 — /rehash <option> forwards the option on the raw wire, bare 
       [visitor.token, JSON.stringify(visitorSubject)] as const,
     );
     await page.goto("/");
-    await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+    await expectShellReady(page);
 
     // Focus the visitor's $server window and wait for the upstream
     // registration numerics (:notice rows) — proves the session is connected

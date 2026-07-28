@@ -23,7 +23,7 @@
 //      AND rejoins the channel (the visitor can speak in it again).
 
 import { expect, test } from "../fixtures/test";
-import {
+import { expectShellReady,
   composeSend,
   openSettingsSection,
   selectChannel,
@@ -65,7 +65,7 @@ test("issue #152 — login-Advanced ident + settings live-apply reach upstream",
     await page.getByRole("button", { name: /^connect$/i }).click();
 
     // Login resolves into Shell — the settings gear is the Shell anchor.
-    await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 30_000 });
+    await expectShellReady(page);
 
     // Read back the visitor id from the persisted subject so the finally
     // block can delete the row even if a later step throws.

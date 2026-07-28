@@ -15,6 +15,7 @@
 // `m11-admin-events-live.spec.ts`.
 
 import { expect, test } from "@playwright/test";
+import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 async function adminFriendlyLogin(
@@ -30,11 +31,11 @@ async function adminFriendlyLogin(
     [seed.token, seed.subjectJson] as const,
   );
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
 }
 
 async function openAdminPane(page: import("@playwright/test").Page): Promise<void> {
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   const drawer = page.getByRole("dialog", { name: /settings/i });
   await expect(drawer).toBeVisible();
   await page.getByTestId("admin-console-entry").click();

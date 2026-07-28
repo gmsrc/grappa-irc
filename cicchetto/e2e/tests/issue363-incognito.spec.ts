@@ -12,6 +12,7 @@
 // so vjt's final (pending) wording swap can never break this spec.
 
 import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -61,7 +62,7 @@ test("#363 incognito session disables share-session; a normal visitor keeps it",
       [v.token, JSON.stringify(v.subject)] as const,
     );
     await page.goto("/");
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
     return { ctx, page };
   };

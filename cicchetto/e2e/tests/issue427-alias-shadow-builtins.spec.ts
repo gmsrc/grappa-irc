@@ -15,7 +15,7 @@
 // (the expander is client-side; the settings sub-page + user_settings REST
 // behave identically for every subject class).
 
-import {
+import { openSettingsDrawer,
   composeSend,
   composeTextarea,
   loginAs,
@@ -96,7 +96,7 @@ test("#427 — a shadowing alias stays removable from Settings → Alias (bindin
     await composeSend(page, "/alias whois me");
     await expect(page.locator(".compose-box-notice")).toBeVisible({ timeout: 8_000 });
 
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     await page.getByTestId("aliases-settings-entry").click();
     await expect(page.getByTestId("aliases-subpage")).toBeVisible({ timeout: 10_000 });
 

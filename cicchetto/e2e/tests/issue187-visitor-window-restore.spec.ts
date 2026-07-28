@@ -23,7 +23,7 @@
 
 import type { Browser } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
-import {
+import { expectShellReady,
   composeSend,
   selectChannel,
   sidebarWindow,
@@ -55,7 +55,7 @@ async function bootVisitor(browser: Browser, nick: string) {
     ] as const,
   );
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
   return { visitor, ctx, page };
 }
 
@@ -98,7 +98,7 @@ test("issue #187 — a visitor's last-open channel is restored on refresh/reopen
     // signal to null, so the ONLY thing that can re-select #r187 is the
     // cold-load restore arm reading the persisted last-focused slot.
     await page.reload();
-    await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+    await expectShellReady(page);
 
     // HEADLINE (RED pre-fix): the visitor is restored to #r187, NOT stranded on
     // the $home default. The `.selected` class only lands via the cold-load

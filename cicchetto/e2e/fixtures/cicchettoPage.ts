@@ -76,6 +76,27 @@ function isMobileViewport(page: Page): boolean {
   return sz !== null && sz.width <= MOBILE_BREAKPOINT_PX;
 }
 
+// #500 — "the authed shell has hydrated" gate, form-factor-agnostic and
+// network-independent.
+//
+// Specs that inject a bearer and `goto("/")` need a signal that the SPA has
+// booted into the authed Shell before they interact. Pre-#500 many hand-rolled
+// this as `expect(getByLabel(/open settings/i)).toBeVisible()` — the settings
+// cog doubled as the "app is up" marker. #500 moved the cog behind the
+// RailActions launcher (unmounted until the launcher is tapped) AND the launcher
+// itself lives inside the mobile members drawer (hidden until opened), so
+// NEITHER is a valid ready signal any more. `.shell-main` is the authed main
+// content region: rendered unconditionally in BOTH Shell branches (desktop +
+// mobile), never inside a `<Show>`/drawer, and mounted only under `<RequireAuth>`
+// — so its visibility means exactly "authed shell rendered", independent of
+// viewport or whether any network is bound (admin-vjt has zero). This is the
+// honest intent — app ready, not cog.
+export async function expectShellReady(page: Page): Promise<void> {
+  await expect(page.locator(".shell-main")).toBeVisible({
+    timeout: SHELL_READY_TIMEOUT_MS,
+  });
+}
+
 // Seed a token + subject into localStorage so cicchetto boots already
 // authenticated, then load the SPA and wait for the shell to be ready
 // (sidebar/bottom-bar populated with at least one network section).
@@ -698,6 +719,26 @@ export async function openSettingsSection(
   const subpage = page.getByTestId(`${section}-subpage`);
   await expect(subpage).toBeVisible({ timeout: 10_000 });
   return subpage;
+}
+
+// #500 — open the settings drawer ROOT (viewport-aware), returning the drawer
+// dialog locator. The sibling of openSettingsSection for specs that need the
+// drawer's main index itself — e.g. to reach the Admin Console entry
+// (admin-console-entry), which lives in the drawer, not in a #460 sub-section —
+// or to assert drawer chrome. The cog (aria-label "open settings" /
+// action-cluster-cog) now lives behind the RailActions launcher (#500):
+// openRailMenu reveals the menu (opening the rail drawer first on mobile), then
+// the cog is tapped. Idempotent — the open step is a no-op if the drawer is
+// already open. This is the SINGLE door to the drawer root; never hand-roll
+// `getByLabel(/open settings/i).click()`, or the next rail reshuffle breaks
+// every copy at once (exactly the #500 regression).
+export async function openSettingsDrawer(page: Page): Promise<Locator> {
+  if ((await page.locator(".settings-drawer.open").count()) === 0) {
+    await openRailMenu(page);
+    await page.getByTestId("action-cluster-cog").click();
+    await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
+  }
+  return page.getByRole("dialog", { name: /settings/i });
 }
 
 // Close the settings drawer from ANY page — the exit counterpart to

@@ -37,6 +37,7 @@
 // visitors against azzurra would 503 if the revert didn't run.
 
 import { expect, test } from "@playwright/test";
+import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { mintVisitor } from "../fixtures/grappaApi";
 
@@ -57,11 +58,11 @@ async function adminFriendlyLogin(
     [seed.token, seed.subjectJson] as const,
   );
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
 }
 
 async function openAdminPane(page: import("@playwright/test").Page): Promise<void> {
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   const drawer = page.getByRole("dialog", { name: /settings/i });
   await expect(drawer).toBeVisible();
   await page.getByTestId("admin-console-entry").click();
@@ -94,7 +95,7 @@ test("M-Z admin operator journey: drawer → 4 tabs → cap-saturation event lan
   // STEP 1 — Login as admin → drawer entry visible.
   // adminFriendlyLogin already asserts the cog is visible; opening
   // the drawer + asserting the Admin entry exercises the M-7 gate.
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   const drawer = page.getByRole("dialog", { name: /settings/i });
   await expect(drawer).toBeVisible();
   await expect(page.getByTestId("admin-console-entry")).toBeVisible();

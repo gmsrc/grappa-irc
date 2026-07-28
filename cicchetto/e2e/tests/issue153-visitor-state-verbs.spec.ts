@@ -28,7 +28,7 @@
 // issue MODE freely on any channel they're in (see ircClient.oper docs).
 
 import { expect, test } from "../fixtures/test";
-import {
+import { expectShellReady,
   composeSend,
   scrollbackLine,
   selectChannel,
@@ -77,7 +77,7 @@ test("issue #153 — visitor /quote and /mode reach upstream and take effect", a
       [visitor.token, JSON.stringify(visitorSubject)] as const,
     );
     await page.goto("/");
-    await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+    await expectShellReady(page);
 
     // Focus the visitor's $server window and wait for the upstream
     // registration numerics (001-005 / LUSER / MOTD → :notice rows). Their

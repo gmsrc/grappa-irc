@@ -27,7 +27,7 @@
 // server-side or client-side.
 
 import { expect, test } from "../fixtures/test";
-import {
+import { expectShellReady,
   composeSend,
   scrollbackLine,
   selectChannel,
@@ -81,7 +81,7 @@ test("issue #184 — /stats reply renders in $server, never a query window named
       [visitor.token, JSON.stringify(visitorSubject)] as const,
     );
     await page.goto("/");
-    await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+    await expectShellReady(page);
 
     // Focus the $server window and wait for the registration numerics
     // (:notice rows) so the pane is live and the STATS reply won't race an

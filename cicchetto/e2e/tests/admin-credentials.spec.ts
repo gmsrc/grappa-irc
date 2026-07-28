@@ -10,6 +10,7 @@
 // vjt/bahamut-test credential (it's load-bearing for other specs).
 
 import { expect, test } from "../fixtures/test";
+import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 
@@ -26,11 +27,11 @@ async function adminLogin(
     [seed.token, seed.subjectJson] as const,
   );
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
 }
 
 async function openCredentialsTab(page: import("@playwright/test").Page): Promise<void> {
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
   await page.getByTestId("admin-console-entry").click();
   await expect(page.getByTestId("admin-pane")).toBeVisible();

@@ -19,6 +19,7 @@
 // layout-agnostic and the editor is a JS flow.
 
 import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -36,7 +37,7 @@ async function seedVisitor(page: import("@playwright/test").Page, visitor: Visit
 }
 
 async function openThemes(page: import("@playwright/test").Page) {
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
   await page.getByTestId("themes-settings-entry").click();
   await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });

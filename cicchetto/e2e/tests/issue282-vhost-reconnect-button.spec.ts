@@ -30,7 +30,7 @@
 
 import type { Browser, Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
-import { waitForUserTopicReady } from "../fixtures/cicchettoPage";
+import { openSettingsDrawer, expectShellReady, waitForUserTopicReady } from "../fixtures/cicchettoPage";
 import { adminDeleteVisitor, GRAPPA_BASE_URL, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
@@ -108,13 +108,13 @@ async function bootToVhostPage(
   });
 
   await page.goto("/");
-  await expect(page.getByLabel(/open settings/i)).toBeVisible({ timeout: 10_000 });
+  await expectShellReady(page);
   // Gate on cic hydration: the reconnect verb reads cic's networks() store,
   // so azzurra must be loaded before the button can bounce it. User-topic
   // ready is downstream of the networks() load (subscribe.ts).
   await waitForUserTopicReady(page, `visitor:${visitor.id}`);
 
-  await page.getByLabel(/open settings/i).click();
+  await openSettingsDrawer(page);
   await expect(page.getByRole("dialog", { name: /settings/i })).toHaveClass(/open/);
   await page.getByTestId("vhost-settings-entry").click();
   await expect(page.getByTestId("vhost-subpage")).toBeVisible();

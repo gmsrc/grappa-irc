@@ -27,7 +27,7 @@
 // RED run of this spec would tear the seeded session down).
 
 import { test, expect } from "../fixtures/test";
-import { loginAs } from "../fixtures/cicchettoPage";
+import { openSettingsDrawer, loginAs } from "../fixtures/cicchettoPage";
 import {
   adminDeleteVisitor,
   GRAPPA_BASE_URL,
@@ -119,7 +119,7 @@ test.describe("issue #126 — detach lifecycle", () => {
         [visitor.token, subjectJson] as const,
       );
       await page.goto("/");
-      await page.getByLabel(/open settings/i).click();
+      await openSettingsDrawer(page);
       const drawer = page.getByRole("dialog", { name: /settings/i });
       await expect(drawer).toHaveClass(/open/);
 
@@ -150,7 +150,7 @@ test.describe("issue #126 — detach lifecycle", () => {
     await loginAs(page, vjt);
 
     // Detach via the drawer — the web session ends (back to /login) …
-    await page.getByLabel(/open settings/i).click();
+    await openSettingsDrawer(page);
     const drawer = page.getByRole("dialog", { name: /settings/i });
     await expect(drawer).toHaveClass(/open/);
     await page.getByTestId("detach-btn").click();
