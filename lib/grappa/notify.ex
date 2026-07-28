@@ -308,7 +308,7 @@ defmodule Grappa.Notify do
   @spec insert_batch([Ecto.Changeset.t()], Subject.t(), integer(), [String.t()]) ::
           {:ok, [Entry.t()]} | {:error, Ecto.Changeset.t() | :list_full}
   defp insert_batch(changesets, subject, network_id, nicks) do
-    Repo.transaction(fn ->
+    Repo.immediate_transaction(fn ->
       with {:ok, entries} <- traverse_inserts(Enum.zip(changesets, nicks), [], subject, network_id),
            :ok <- check_cap(subject, network_id) do
         entries

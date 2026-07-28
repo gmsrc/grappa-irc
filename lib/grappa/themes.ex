@@ -247,7 +247,7 @@ defmodule Grappa.Themes do
     with {:ok, source} <- get_theme(theme_id),
          :ok <- check_cap(subject),
          :ok <- check_quota(subject) do
-      Repo.transaction(fn ->
+      Repo.immediate_transaction(fn ->
         name = available_name(bare_subject, source.name)
 
         attrs = Subject.put_subject_id(%{name: name, payload: source.payload}, bare_subject)

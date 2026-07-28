@@ -190,7 +190,7 @@ defmodule Grappa.Visitors do
     ttl_seconds = if incognito, do: @incognito_linger_seconds, else: @anon_ttl_seconds
     expires_at = DateTime.add(DateTime.utc_now(), ttl_seconds, :second)
 
-    Repo.transaction(fn ->
+    Repo.immediate_transaction(fn ->
       with {:ok, visitor} <-
              %{expires_at: expires_at, ip: ip, incognito: incognito}
              |> Visitor.create_changeset()

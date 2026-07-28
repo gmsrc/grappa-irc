@@ -172,7 +172,7 @@ defmodule Grappa.Push do
   end
 
   defp insert_superseding(subject, attrs, supersedes) do
-    Repo.transaction(fn ->
+    Repo.immediate_transaction(fn ->
       # Subject-scoped delete of the exact endpoint the client says it is
       # replacing — but never the endpoint we are about to (re)insert, so
       # a non-rotated re-subscribe still surfaces as the unique-constraint

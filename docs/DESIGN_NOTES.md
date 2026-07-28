@@ -21775,3 +21775,46 @@ perfectly ordinary. Sized so truncation cannot occur.
 ## 2026-07-28 — #511: dismissing a pseudo-row is a SERVER-mutating close, not a client-only projection clear
 
 The × on a greyed non-joined pseudo-row (`dismissPseudoWindow`) used to be purely local — `forceParted` dropped the cic-side `windowStateByChannel` key and nothing else. But `window_states[ch]` on the upstream `Session.Server` was untouched, so #482's cold-subscribe backfill (`WindowState.invited_windows/2`) faithfully re-emitted `window_invited` on the next reload and the dismissed `:invited` tab returned (the #511 bug report). The invariant this restores: **a user dismissal MUST mutate server state, or the server re-asserts it after reload.** The fix routes `dismissPseudoWindow` through the SAME `partAndForget` DELETE (`postPart` → `Session.send_part`) `closeChannelWindow` already uses — extracted as a shared verb (one door, CLAUDE.md one-feature-one-code-path). For a never-joined channel the upstream PART is a 442 no-op, but `PartCleanup.cleanup_local` → `WindowState.set_parted` drops the key from EVERY window-state map, so the `:invited` / `:failed` / `:kicked` siblings are all cleared by one path (no per-state verb). NO server change was needed — the existing PART DELETE already had the correct clean-up + de-autojoin semantics; only the client × was skipping it. `:parked` as a per-channel window state is a dead typedef value (no mutator writes it; the network-level park is a separate `connection_state` axis via `disconnectNetwork`/`patchNetwork`), so it is unaffected. `partAndForget` is token-guarded like `closeChannelWindow`: no token → no local drop either, because a local-only drop that never reaches the server is EXACTLY this bug. Client-only fix; witness is `issue511-invited-dismiss-durable.spec.ts` (the mirror of `issue482`: same reload setup, opposite verdict).
+## 2026-07-28 — #524: write transactions run in BEGIN IMMEDIATE; deferred stays read-only
+
+`Grappa.Themes.do_copy/3` (`POST /themes/:id/copy`) intermittently 500'd under
+e2e write concurrency with `Exqlite.Error: Database busy` on its `INSERT INTO
+themes` — and it failed in ~700ms, far under the configured 30s `busy_timeout`.
+That sub-timeout failure is the tell. Ecto/ecto_sqlite3 opens a `Repo.transaction`
+as a DEFERRED transaction (it starts as a reader and upgrades to a writer on the
+first write statement). Under WAL with `pool_size > 1`, when another connection
+already holds the file-level write lock, that read→write upgrade returns
+SQLITE_BUSY IMMEDIATELY — `busy_timeout` does NOT cover the upgrade, so the caller
+never waits; it raises at once. copyTheme was the visible victim, but the
+fragility is general: any deferred write transaction can lose this race.
+
+Fix: `Grappa.Repo.immediate_transaction/1` wraps `transaction/2` with
+`mode: :immediate` (`BEGIN IMMEDIATE`), taking the write lock up front so
+`busy_timeout` governs the wait and the transaction blocks-then-proceeds instead
+of failing. All four write transactions route through it (themes copy, visitors
+mint, notify batch-insert, push supersede). **Invariant: a WRITE transaction MUST
+use `immediate_transaction/1`; `transaction/2` (deferred) is for read-only
+transactions only.** A global `default_transaction_mode: :immediate` was rejected:
+it would take a write lock for read-only transactions too, serializing reads and
+killing WAL read concurrency. This is the documented `ecto_sqlite3` pattern for
+mixed read/write web apps, and it is pure lib (per-transaction opt-in) — no config,
+so it ships HOT.
+
+The helper's `@spec` is fun-only — `immediate_transaction(fun()) :: {:ok, any()} |
+{:error, any()}` — NOT the full `transaction/2` union. Every write-transaction
+caller passes a `fn -> … end`; none passes an `Ecto.Multi`. Advertising
+`Ecto.Multi.failure()` in the return (a 4-tuple only the Multi form can produce)
+made Dialyzer flag each caller's `@spec` (`copy_theme/2`, `insert_batch/4`,
+`create_anon/4`) with `missing_range` — they'd have to carry an impossible return.
+`Ecto.Multi` support is additive: widen the input to `fun() | Ecto.Multi.t()` and
+restore `Ecto.Multi.failure()` to the return together when a caller first needs it.
+
+Surfaced while investigating why #498 (badge/unread follows the live nick) turned
+issue299/m9b red in the full e2e suite: #498 replaced a `current_nick`
+`GenServer.call` with an ETS read, removing an accidental serialization point that
+had been pacing DB access and masking this latent contention. #498 is the
+messenger, not the bug. Same family: #523 (extend Scrollback's `with_pool_retry`
+busy-retry discipline to the other write paths — defense-in-depth) and #518
+(DB-unavailable write surfaces a 500 instead of a clean 503). Empirical proof:
+with #498 rebased on top of #524, issue299 and m9b pass the full suite without the
+diagnostic serialization restored.
