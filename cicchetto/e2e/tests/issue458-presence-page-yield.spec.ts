@@ -1,33 +1,34 @@
-// #458 — filter join/part/quit/nick_change out of the scrollback REST page
+// #458 — filter join/part/quit/nick_change out of the scrollback REST reads
 // SERVER-SIDE so `limit` counts VISIBLE rows. Before the fix, `limit` applied to
 // RAW rows while cic hides the four presence kinds at render time (#222): on a
-// channel crowded with join/part/quit churn a page-up (or a cold-load) returned
-// a page that was ALL hidden rows, so the pane rendered few visible rows or NONE
-// — the reported bug. The fix moves the presence filter into SQL, so a page of
-// `limit` rows is `limit` rows the operator will actually SEE.
+// channel crowded with join/part/quit churn a page-up (or cold-load) returned a
+// page that was ALL hidden rows, so the pane rendered few visible rows or NONE.
 //
-// This spec is the interactive witness for the VISIBLE outcome, exercising the
-// real HTTP + WS stack (not the unit-level SQL, which server ExUnit owns). Two
-// discriminating assertions:
+// ## What this e2e owns vs what the unit tests own
 //
-//   Witness 1 (the server filter yields content). With the channel's pref pinned
-//   "hide" and 60 nick_change rows newer than a handful of OLD content rows, a
-//   fresh cold-load returns the OLD content — because the server skips the 60
-//   hidden rows when counting the 50-row page. PRE-FIX the cold-load returned 50
-//   RAW rows (all nick_change, all render-hidden), so the OLD content sat past
-//   raw-position 50, never fetched → invisible. RED before the SQL filter.
+// The >50-rows "limit counts VISIBLE rows" MATH is proven deterministically —
+// with no IRC flood — in `test/grappa/scrollback_test.exs` ("fetch/6
+// hide_presence … one page-up is one screenful"), which seeds >limit presence
+// rows straight into the DB. Mirroring the #222 e2e (which likewise deferred the
+// 50-member size math to the vitest boundary test), THIS spec owns the
+// INTERACTIVE WIRING the unit tests can't reach:
 //
-//   Witness 2 (refetch on reveal — the cic half of #458). Because the server
-//   never sent the hidden rows, flipping the pref back to "show" needs a refetch:
-//   `syncedSetChannelPresencePref` purges + cold-reloads on "show". Toggling show
-//   makes the nick_change rows RE-APPEAR. RED without the displayPrefs refetch
-//   hook: the rows were filtered out of the store server-side, so a render-only
-//   reveal would have nothing to show.
+//   1. the pref PERSISTS server-side and a reload's cold-load RESPECTS it (the
+//      server omits presence rows from the page, not just render-hides them); and
+//   2. revealing presence REFETCHES — the #458 cic change. Because the server
+//      never sent the hidden rows, flipping the pref back to "show" must purge +
+//      cold-reload (`syncedSetChannelPresencePref`), awaiting the persist PUT
+//      first so the refetch reads-its-write. RED without that hook: the rows were
+//      filtered out of the store, so a render-only reveal has nothing to show.
 //
-// Volume note: the e2e testnet is SOLANUM with flood protection deliberately
-// relaxed (infra-solanum/ircd.conf.tmpl: number_per_ip=400, anti_nick_flood=no,
-// client_flood_max_lines=100), so one peer NICK-cycling 60 times is safe here —
-// unlike prod bahamut, where #222's spec avoided volume to dodge autokill.
+// ## Volume is deliberately LOW
+//
+// The e2e testnet is BAHAMUT (NETWORK_SLUG "bahamut-test"; IrcPeer defaults to
+// that leaf), which applies per-connection FAKE-LAG (~10s bank) — so a burst of
+// NICK changes on one connection risks NICK_TIMEOUT / budget flake
+// (feedback_e2e_peer_burst_flood_and_split). Three nick_change rows is plenty to
+// witness the wiring and stays well under the fake-lag bank. The row-count math
+// lives in ExUnit precisely so this spec need not manufacture 50+ presence rows.
 //
 // Desktop project (untagged → chromium; NO @webkit). Per feedback_ux_e2e_
 // mandatory: every cic UX-touching change ships a Playwright e2e.
@@ -39,13 +40,9 @@ import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
-// > the 50-row default page (@default_limit) with margin, so the OLD content
-// sits well past raw-position 50 and is invisible unless the server filters.
-const NICK_CHURN = 60;
+test.setTimeout(90_000);
 
-test.setTimeout(120_000);
-
-test("#458 — a channel crowded with hidden presence still yields visible content", async ({
+test("#458 — presence pref persists, cold-load respects it, and revealing refetches", async ({
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
@@ -56,28 +53,23 @@ test("#458 — a channel crowded with hidden presence still yields visible conte
   const peer = await IrcPeer.connect({ nick: "n458start" });
   try {
     await peer.join(CHANNEL);
+    // One content row (the load witness) + three nick_change rows (a suppressed
+    // kind). Same TCP socket ⇒ the content is ordered before the churn.
+    peer.privmsg(CHANNEL, "issue458-content");
+    for (let i = 0; i < 3; i++) await peer.changeNick(`n458p${i}`);
 
-    // A handful of OLD content rows — the reachable witnesses. Sent FIRST, so
-    // they are older than the churn that follows and fall past the raw page.
-    for (let i = 1; i <= 5; i++) peer.privmsg(CHANNEL, `issue458-old-${i}`);
-
-    // The "crowd": 60 nick_change rows (a suppressed kind), newest in the
-    // channel. Same TCP socket ⇒ ordered after the OLD content above.
-    for (let i = 0; i < NICK_CHURN; i++) await peer.changeNick(`n458p${i}`);
-
-    // Sync barrier: a final VISIBLE marker. Its arrival in cic proves the WS
-    // pipeline drained (and thus the server persisted everything before it,
-    // TCP-ordered) — so the cold-load after reload sees the full history.
-    peer.privmsg(CHANNEL, "issue458-marker");
-    const markerRow = page
+    const contentRow = page
       .locator('[data-testid="scrollback-line"][data-kind="privmsg"]')
-      .filter({ hasText: "issue458-marker" });
-    await expect(markerRow).toHaveCount(1, { timeout: 15_000 });
+      .filter({ hasText: "issue458-content" });
+    const nickRows = page.locator('[data-testid="scrollback-line"][data-kind="nick_change"]');
 
-    // Pin the channel pref to "hide" via the real toggle (persists server-side
-    // via the #449 coordinator PUT). Await the PUT's response before reloading:
-    // the reload's cold-load resolves hide_presence from the PERSISTED pref, so
-    // an in-flight PUT would race an unfiltered fetch.
+    // Baseline: default (unset) pref on a small channel → presence SHOWN.
+    await expect(contentRow).toHaveCount(1, { timeout: 15_000 });
+    await expect(nickRows).toHaveCount(3, { timeout: 10_000 });
+
+    // Toggle HIDE and AWAIT the persist PUT before reloading: the reload's
+    // cold-load resolves hide_presence from the PERSISTED pref, so an in-flight
+    // PUT would race an unfiltered fetch.
     await openRailMenu(page);
     const toggle = page.locator('[data-testid="presence-toggle"]');
     await expect(toggle).toBeVisible({ timeout: 5_000 });
@@ -89,36 +81,26 @@ test("#458 — a channel crowded with hidden presence still yields visible conte
     );
     await toggle.click();
     await hidePut;
+    await expect(nickRows).toHaveCount(0, { timeout: 5_000 }); // render-filter drops them
 
-    // WITNESS 1 — reload → cold-load with hide_presence=true. The server skips
-    // the 60 nick_change rows when filling the 50-row page, so the OLD content
-    // (raw-position >50) is now in the page and VISIBLE. PRE-FIX: the raw page
-    // was 50 nick_change rows, all hidden, and the OLD content was never fetched.
+    // WIRING 1 — reload → cold-load with the persisted "hide". The server OMITS
+    // the nick_change rows from the page (not just render-hides them); content
+    // still lands. (The equivalent >limit-rows yield is the ExUnit proof.)
     await page.reload();
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { awaitWsReady: false });
-    for (let i = 1; i <= 5; i++) {
-      await expect(
-        page
-          .locator('[data-testid="scrollback-line"][data-kind="privmsg"]')
-          .filter({ hasText: `issue458-old-${i}` }),
-      ).toHaveCount(1, { timeout: 15_000 });
-    }
-    // ...and the presence crowd stays hidden under the pref (no DOM node).
-    await expect(page.locator('[data-testid="scrollback-line"][data-kind="nick_change"]')).toHaveCount(
-      0,
-    );
+    await expect(contentRow).toHaveCount(1, { timeout: 15_000 });
+    await expect(nickRows).toHaveCount(0);
 
-    // WITNESS 2 — toggle the pref back to "show". `syncedSetChannelPresencePref`
-    // purges + cold-reloads on "show", so the server re-includes the nick_change
-    // rows and they RE-APPEAR. Without the refetch hook they would stay gone:
-    // the server filtered them out of the store, so there is nothing to reveal.
+    // WIRING 2 — toggle SHOW. `syncedSetChannelPresencePref` awaits the persist
+    // PUT, then purges + cold-reloads, so the server RE-INCLUDES the nick_change
+    // rows and they re-appear. RED without the refetch hook (or with the pre-fix
+    // race): the rows are absent from the store, so nothing renders.
     await openRailMenu(page);
-    const toggleAfterReload = page.locator('[data-testid="presence-toggle"]');
-    await expect(toggleAfterReload).toBeVisible({ timeout: 5_000 });
-    await toggleAfterReload.click();
-    await expect(
-      page.locator('[data-testid="scrollback-line"][data-kind="nick_change"]').first(),
-    ).toBeVisible({ timeout: 15_000 });
+    const toggleAfter = page.locator('[data-testid="presence-toggle"]');
+    await expect(toggleAfter).toBeVisible({ timeout: 5_000 });
+    await toggleAfter.click();
+    await expect(nickRows.first()).toBeVisible({ timeout: 15_000 });
+    await expect(nickRows).toHaveCount(3, { timeout: 15_000 });
   } finally {
     await peer.disconnect("458 witness done");
   }
