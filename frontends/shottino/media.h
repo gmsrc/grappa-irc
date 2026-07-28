@@ -90,6 +90,21 @@ bool media_emit_sixel(const unsigned char *rgb, int w, int h, FILE *out);
  * squashed. */
 void media_fit_cells(int img_w, int img_h, int max_cols, int max_rows, int *cols, int *rows);
 
+/* ── Animation timing ──────────────────────────────────────────────────
+ *
+ * Which frame a clip should be showing, given a monotonic clock. Pure so
+ * the wrap, the catch-up and the "not yet" cases can be tested without a
+ * terminal or a decoder.
+ *
+ * `now_ms` is monotonic milliseconds; `*next_ms` is when the CURRENT
+ * frame is due to be replaced, updated in place. Returns the frame index
+ * to show. A clip whose deadline passed several frames ago (the client
+ * was busy, or the terminal was not being drawn) advances by ONE and
+ * re-bases its deadline to now rather than replaying the backlog at full
+ * speed — catching up would look like a stutter, and nobody is counting
+ * the frames of a background GIF. */
+size_t media_frame_advance(size_t frame, size_t count, long frame_ms, long now_ms, long *next_ms);
+
 /* True when `url` points at this deployment's own upload store: its host
  * equals `connect_host` or one of the `n_aliases` server-provided host
  * aliases (#324), AND its path is under /uploads/. The shottino twin of

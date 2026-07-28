@@ -70,6 +70,13 @@
  * pool indices the decode job otherwise receives. */
 #define MEDIA_SLOT_PREVIEW (-2)
 #define INLINE_MAX_ROWS 14
+/* Animation caps. Character-art frames are downsampled to the CELL grid
+ * before they are stored, so a frame is a few kilobytes and 64 of them
+ * is a rounding error — the scarce resources here are ncurses colour
+ * pairs and ffmpeg time, not memory. 10fps is where motion reads as
+ * motion in a terminal; more just spends pairs faster. */
+#define MEDIA_ANIM_MAX_FRAMES 64
+#define MEDIA_ANIM_FPS 10
 /* #451/#324 — cap on the deployment's HTTP host aliases retained from
  * /api/server-settings for first-party media classification. */
 #define MAX_HTTP_ALIASES 16
@@ -305,6 +312,10 @@ enum panel_kind {
 enum inline_state { IM_IDLE = 0, IM_FETCHING, IM_READY, IM_FAILED };
 
 struct inline_media {
+    /* Set when the URL is a clip — a video, or a GIF, which may or may
+     * not turn out to have more than one frame. The decoder finds out;
+     * this only says "worth asking". */
+    bool is_animatable;
     char url[MAX_LINE];
     bool is_video;
     enum inline_state state;
@@ -318,6 +329,13 @@ struct inline_media {
      * every 50 ms frame would saturate the tty for no benefit. */
     int drawn_y, drawn_x;
     bool drawn;
+    /* Animation. `rgb` holds frame_count frames back to back, each
+     * rows*2 x cols pixels; frame_count == 1 is a still and every path
+     * below degrades to exactly what it did before. */
+    size_t frame_count;
+    size_t frame;
+    long frame_ms;
+    long next_frame_ms;
 };
 
 /* What a URL points at, as far as this client cares. Declared up here
@@ -461,6 +479,7 @@ struct app {
     int log_media[LOG_LINES];
     media_protocol proto;           /* detected once, before ncurses */
     bool key_echo;
+    bool animate_media;
     bool inline_media_enabled;
     /* #451 opt-in: also auto-render media from hosts that are NOT this
      * deployment's. OFF by default and deliberately not persisted — see
@@ -699,6 +718,14 @@ static void panel_line(struct app *app, const char *fmt, ...) {
     if (app->panel_line_count < PANEL_LINES) app->panel_lines[app->panel_line_count++] = s;
     else free(s);
     pthread_mutex_unlock(&app->lock);
+}
+
+/* Monotonic milliseconds. CLOCK_MONOTONIC, so a clock adjustment cannot
+ * make a GIF freeze or sprint. */
+static long monotonic_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 static int hexval(char c) {
@@ -1689,6 +1716,15 @@ static bool token_has_suffix(const char *token, const char *const *exts) {
 /* Classify a URL by extension (and grappa's /uploads/ image convention) in a
  * single lowercasing pass. Video is checked first so an extension wins over the
  * /uploads/ heuristic. */
+/* Is this URL a GIF? Same token-lowering rule as media_kind_of, so
+ * "?x=1" and case cannot change the answer. */
+static bool url_has_gif_suffix(const char *url) {
+    static const char *const gif[] = {".gif", NULL};
+    char lower[MAX_LINE];
+    url_token_lower(url, lower, sizeof(lower));
+    return token_has_suffix(lower, gif);
+}
+
 static enum media_kind media_kind_of(const char *url) {
     static const char *const img[] = {".jpg", ".jpeg", ".png", ".gif",
                                       ".webp", ".bmp", NULL};
@@ -1904,7 +1940,20 @@ static int mirc_pair_for(long fg_rgb, long bg_rgb, int fallback_pair) {
     short bg = bg_rgb < 0 ? (short)-1 : mirc_terminal_color(bg_rgb);
     for (size_t i = 0; i < mirc_pair_count; i++)
         if (mirc_pairs[i].fg == fg && mirc_pairs[i].bg == bg) return mirc_pairs[i].pair;
-    if (mirc_pair_next >= mirc_pair_limit || mirc_pair_count >= MIRC_PAIR_POOL) return fallback_pair;
+    if (mirc_pair_next >= mirc_pair_limit || mirc_pair_count >= MIRC_PAIR_POOL) {
+        /* The pool is a CACHE, and animation churns it: every frame of a
+         * clip can want its own (top, bottom) combinations, so a few
+         * seconds of video will exhaust any fixed table. Recycling beats
+         * degrading — the old behaviour was to hand back the fallback
+         * pair forever, i.e. the picture goes flat and STAYS flat.
+         *
+         * Safe precisely because draw() erases and repaints the whole
+         * screen every frame: redefining a pair cannot leave a stale cell
+         * behind, since every cell that used it is about to be drawn
+         * again this same frame or the next. */
+        mirc_pair_count = 0;
+        mirc_pair_next = CP_MIRC_BASE;
+    }
     short pair = mirc_pair_next++;
     if (init_pair(pair, fg, bg) == ERR) return fallback_pair;
     mirc_pairs[mirc_pair_count].fg = fg;
@@ -3947,12 +3996,19 @@ static void draw_inline_media(struct inline_media *m, int y, int x, int skip_row
         /* Half blocks: two image rows per cell, upper glyph in the top
          * pixel's colour over the bottom pixel's. Character art clips per
          * cell, so a picture whose top has scrolled off draws its bottom
-         * `rows` cells — it slides under the region edge like text. */
+         * `rows` cells — it slides under the region edge like text.
+         *
+         * Frames sit back to back in one buffer, so playing one is an
+         * offset: a still is the frame_count == 1 case of the same
+         * arithmetic, not a branch. */
+        size_t stride = (size_t)m->cols * (size_t)(m->rows * 2) * 3;
+        size_t idx = m->frame_count > 1 && m->frame < m->frame_count ? m->frame : 0;
+        const unsigned char *plane = m->rgb + idx * stride;
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
                 int sr = r + skip_rows;
-                const unsigned char *top = m->rgb + (((size_t)(sr * 2) * m->cols) + c) * 3;
-                const unsigned char *bot = m->rgb + (((size_t)(sr * 2 + 1) * m->cols) + c) * 3;
+                const unsigned char *top = plane + (((size_t)(sr * 2) * m->cols) + c) * 3;
+                const unsigned char *bot = plane + (((size_t)(sr * 2 + 1) * m->cols) + c) * 3;
                 long tv = ((long)top[0] << 16) | ((long)top[1] << 8) | top[2];
                 long bv = ((long)bot[0] << 16) | ((long)bot[1] << 8) | bot[2];
                 int pair = mirc_pair_for(tv, bv, CP_MAIN);
@@ -4103,6 +4159,10 @@ static int media_claim_locked(struct app *app, const char *url, bool is_video) {
     media_slot_reset(m);
     snprintf(m->url, sizeof(m->url), "%s", url);
     m->is_video = is_video;
+    /* A GIF is the other animated thing on IRC, and it classifies as an
+     * IMAGE. Asking by extension keeps the decision where the rest of
+     * the media typing lives. */
+    m->is_animatable = is_video || url_has_gif_suffix(url);
     m->state = IM_IDLE;
     return (int)idx;
 }
@@ -4451,6 +4511,13 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
             int spend = want < room ? want : room;
             if (spend > 0) {
                 if (m->state == IM_READY) {
+                    /* Advance here, at the draw, so only pictures that
+                     * are ON SCREEN cost anything: a scrollback full of
+                     * GIFs you have scrolled past is not a scrollback
+                     * full of running animations. */
+                    if (m->frame_count > 1)
+                        m->frame = media_frame_advance(m->frame, m->frame_count, m->frame_ms,
+                                                       monotonic_ms(), &m->next_frame_ms);
                     draw_inline_media(m, img_y, x + 2, row_skip, spend, width - 4);
                 } else if (m->state == IM_FAILED) {
                     draw_text(img_y, x + 2, width - 4, CP_MUTED, A_DIM,
@@ -5795,6 +5862,17 @@ static void media_decode_job(struct app *app, int slot) {
     proto = m->force_ascii ? MEDIA_PROTO_NONE : app->proto;
     cols = m->cols;
     rows = m->rows;
+    /* Motion is a CHARACTER-ART capability here. A terminal graphics
+     * protocol places a whole picture at the cursor, so animating one
+     * means re-emitting the escape per frame — flicker, bandwidth, and a
+     * different code path per protocol. Character art goes through
+     * ncurses like text, so it repaints, clips and scrolls with
+     * everything else. A clip therefore renders as art even where a
+     * protocol is available: consistent motion beats a still that is
+     * slightly sharper. */
+    bool animate = app->animate_media && m->is_animatable && slot != MEDIA_SLOT_PREVIEW;
+    if (animate) proto = MEDIA_PROTO_NONE;
+    int want_frames = animate ? MEDIA_ANIM_MAX_FRAMES : 1;
     pthread_mutex_unlock(&app->lock);
     if (!url[0] || cols <= 0 || rows <= 0) return;
 
@@ -5805,6 +5883,7 @@ static void media_decode_job(struct app *app, int slot) {
     char *payload = NULL;
     size_t payload_len = 0;
     unsigned char *rgb = NULL;
+    size_t frames = 1;
 
     if (proto == MEDIA_PROTO_KITTY || proto == MEDIA_PROTO_ITERM2) {
         /* Let the terminal scale: ask ffmpeg for a reasonable pixel size
@@ -5856,11 +5935,24 @@ static void media_decode_job(struct app *app, int slot) {
         if (proto == MEDIA_PROTO_SIXEL) { px_w = cols * 6; px_h = rows * 12; }
         char raw[PATH_MAX];
         snprintf(raw, sizeof(raw), "%s/m.rgb", dir);
-        char scale[192];
-        snprintf(scale, sizeof(scale),
-                 "thumbnail,scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,"
-                 "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
-                 px_w, px_h, px_w, px_h);
+        /* An animated clip asks ffmpeg for a STREAM of frames at a fixed
+         * rate instead of one representative frame. Same scale and pad,
+         * so a frame of an animation is byte-identical in shape to the
+         * still it would otherwise have been — everything downstream
+         * indexes it the same way. */
+        char scale[224];
+        char frames_arg[16];
+        if (want_frames > 1)
+            snprintf(scale, sizeof(scale),
+                     "fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,"
+                     "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
+                     MEDIA_ANIM_FPS, px_w, px_h, px_w, px_h);
+        else
+            snprintf(scale, sizeof(scale),
+                     "thumbnail,scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,"
+                     "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
+                     px_w, px_h, px_w, px_h);
+        snprintf(frames_arg, sizeof(frames_arg), "%d", want_frames);
         char *argv[] = {"ffmpeg", "-y", "-loglevel", "error", "-rw_timeout", "15000000",
                         /* #451: fetch untrusted peer media, so bound ffmpeg to the
                          * protocols this path actually needs — file (temp output),
@@ -5868,15 +5960,23 @@ static void media_decode_job(struct app *app, int slot) {
                          * concat/hls/rtp/data/pipe demuxers a hostile URL could
                          * otherwise reach. Input option, so it precedes -i. */
                         "-protocol_whitelist", "file,crypto,tcp,tls,http,https",
-                        "-i", url, "-vf", scale, "-frames:v", "1",
+                        "-i", url, "-vf", scale, "-frames:v", frames_arg,
                         "-f", "rawvideo", "-pix_fmt", "rgb24", raw, NULL};
         if (run_cmd(argv, false) == 0) {
-            size_t want = (size_t)px_w * (size_t)px_h * 3;
+            size_t one = (size_t)px_w * (size_t)px_h * 3;
+            size_t want = one * (size_t)want_frames;
             unsigned char *buf = malloc(want);
             FILE *f = buf ? fopen(raw, "rb") : NULL;
             if (f) {
-                if (fread(buf, 1, want, f) == want) {
+                /* Short is normal: a two-second GIF asked for 64 frames
+                 * yields what it has. Whole frames only — a partial one
+                 * would render as a band of garbage at the bottom. */
+                size_t got = buf ? fread(buf, 1, want, f) : 0;
+                size_t whole = one ? got / one : 0;
+                if (whole > 0) {
+                    frames = whole;
                     if (proto == MEDIA_PROTO_SIXEL) {
+                        /* Sixel is a still: it gets the first frame. */
                         char *mem = NULL;
                         size_t mem_len = 0;
                         FILE *ms = open_memstream(&mem, &mem_len);
@@ -5910,6 +6010,10 @@ static void media_decode_job(struct app *app, int slot) {
         m->payload = payload;
         m->payload_len = payload_len;
         m->rgb = rgb;
+        m->frame_count = rgb ? frames : 1;
+        m->frame = 0;
+        m->frame_ms = 1000 / MEDIA_ANIM_FPS;
+        m->next_frame_ms = 0;
         m->state = ok ? IM_READY : IM_FAILED;
         m->drawn = false;
     } else {
@@ -6053,7 +6157,7 @@ static void show_help(struct app *app) {
     log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
     log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
     log_line(app, "terminal: mouse tracking is OFF by default so the terminal keeps its own copy/paste selection; /mouse on enables click-to-preview (and suppresses selection), /mouse off restores it");
-    log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; /media [on|off|all|first-party] — 'all' also auto-fetches images hosted elsewhere");
+    log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; video and GIFs PLAY as colour art (/media still for one frame); /media [on|off|all|first-party] — 'all' also auto-fetches images hosted elsewhere");
     log_line(app, "       /preview full-screen; /preview-ascii forces the art renderer; /open opens externally; with /mouse on, click a link to preview");
     log_line(app, "reply: right-click a message for reply/query, or Ctrl-R for a searchable reply picker (type to filter, Enter replies)");
     log_line(app, "panes: /split (stacked) /splitv (side by side) /unsplit; Ctrl-Alt-Up/Down or Ctrl-Alt-Tab switch, Ctrl-Alt-+/- resize, /keys shows what your terminal sends");
@@ -6633,22 +6737,31 @@ static void handle_command_dispatch(struct app *app, char *line) {
              * by default. Saying yes is allowed; being told what you
              * said yes to is not optional. */
             app->inline_media_enabled = true;
+    app->animate_media = true;
             app->inline_media_peers = true;
             log_line(app, "inline images ON for ALL hosts — every image link in a channel is now");
             log_line(app, "  fetched when it scrolls into view: the host learns your IP and read");
             log_line(app, "  times, and ffmpeg decodes bytes a stranger chose. /media first-party");
             log_line(app, "  returns to grappa uploads only.");
+        } else if (strcmp(rest, "anim") == 0 || strcmp(rest, "anim on") == 0) {
+            app->animate_media = true;
+            log_line(app, "video and animated GIFs will play inline as colour art");
+        } else if (strcmp(rest, "anim off") == 0 || strcmp(rest, "still") == 0) {
+            app->animate_media = false;
+            log_line(app, "clips will show a single representative frame");
         } else if (strcmp(rest, "first-party") == 0) {
             app->inline_media_peers = false;
             log_line(app, "inline images restricted to this deployment's uploads");
         } else {
-            log_line(app, "/media [on|off|all|first-party] — bare /media toggles inline images;");
-            log_line(app, "  'all' also auto-renders images hosted elsewhere (see the warning it prints)");
+            log_line(app, "/media [on|off|all|first-party|anim|still] — bare /media toggles inline images;");
+            log_line(app, "  'all' also auto-renders images hosted elsewhere (see the warning it prints);");
+            log_line(app, "  'anim'/'still' control whether video and GIFs play or show one frame");
             return;
         }
-        log_line(app, "inline images %s, hosts: %s (terminal graphics: %s)",
+        log_line(app, "inline images %s, hosts: %s, clips: %s (terminal graphics: %s)",
                  app->inline_media_enabled ? "ON" : "OFF",
                  app->inline_media_peers ? "ALL" : "first-party only",
+                 app->animate_media ? "animated" : "still",
                  media_protocol_name(app->proto));
     } else if (strcmp(line, "/preview-ascii") == 0) {
         /* Force the character-art renderer even where a graphics protocol

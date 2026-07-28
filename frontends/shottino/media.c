@@ -388,3 +388,17 @@ bool media_url_is_first_party(const char *url, const char *connect_host,
         if (media_host_eq_ci(host, host_len, aliases[i])) return true;
     return false;
 }
+
+size_t media_frame_advance(size_t frame, size_t count, long frame_ms, long now_ms, long *next_ms) {
+    if (count <= 1 || frame_ms <= 0 || !next_ms) return 0;
+    if (frame >= count) frame = 0;
+    /* First look, or a clock that jumped backwards: start the countdown
+     * from here rather than trusting a deadline from another epoch. */
+    if (*next_ms == 0 || *next_ms > now_ms + frame_ms) {
+        *next_ms = now_ms + frame_ms;
+        return frame;
+    }
+    if (now_ms < *next_ms) return frame;
+    *next_ms = now_ms + frame_ms;
+    return (frame + 1) % count;
+}

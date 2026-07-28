@@ -313,6 +313,48 @@ TEST(first_party_url_classification) {
     CHECK(!media_url_is_first_party("https:///uploads/x", "irc.example", NULL, 0)); /* empty host */
 }
 
+TEST(frame_advance_holds_then_wraps) {
+    long next = 0;
+    /* First look arms the deadline and shows the frame it was given. */
+    CHECK_LONG(media_frame_advance(0, 4, 100, 1000, &next), 0);
+    CHECK_LONG(next, 1100);
+    /* Before the deadline nothing moves. */
+    CHECK_LONG(media_frame_advance(0, 4, 100, 1050, &next), 0);
+    CHECK_LONG(next, 1100);
+    /* On it, exactly one frame. */
+    CHECK_LONG(media_frame_advance(0, 4, 100, 1100, &next), 1);
+    CHECK_LONG(next, 1200);
+    /* And it wraps. */
+    CHECK_LONG(media_frame_advance(3, 4, 100, 1200, &next), 0);
+}
+
+TEST(frame_advance_does_not_replay_a_backlog) {
+    long next = 1000;
+    /* Two seconds late — twenty frames' worth. It advances by ONE and
+     * re-bases: catching up would be a stutter, and nobody is counting
+     * the frames of a background GIF. */
+    CHECK_LONG(media_frame_advance(0, 8, 100, 3000, &next), 1);
+    CHECK_LONG(next, 3100);
+}
+
+TEST(frame_advance_ignores_a_clock_that_went_backwards) {
+    long next = 9000;
+    /* A deadline further out than one frame cannot have come from this
+     * clock: re-arm instead of freezing until it arrives. */
+    CHECK_LONG(media_frame_advance(2, 8, 100, 1000, &next), 2);
+    CHECK_LONG(next, 1100);
+}
+
+TEST(frame_advance_is_inert_for_a_still) {
+    long next = 0;
+    CHECK_LONG(media_frame_advance(0, 1, 100, 1000, &next), 0);
+    CHECK_LONG(next, 0);
+    CHECK_LONG(media_frame_advance(0, 0, 100, 1000, &next), 0);
+    /* A frame index past the end is corrected, not indexed with. */
+    next = 0;
+    CHECK_LONG(media_frame_advance(99, 4, 100, 1000, &next), 0);
+}
+
 int main(void) {
     RUN(da1_sixel_parsing);
     RUN(env_detection);
@@ -326,5 +368,9 @@ int main(void) {
     RUN(sixel_dims_overflow_guard);
     RUN(cell_fitting_corrects_aspect);
     RUN(first_party_url_classification);
+    RUN(frame_advance_holds_then_wraps);
+    RUN(frame_advance_does_not_replay_a_backlog);
+    RUN(frame_advance_ignores_a_clock_that_went_backwards);
+    RUN(frame_advance_is_inert_for_a_still);
     return test_report();
 }

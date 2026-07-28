@@ -28,11 +28,31 @@ Dependencies checked by `./configure`:
 
 Optional runtime dependencies (only for media link previews — see below):
 
-- `ffmpeg` — fetches and decodes the linked image/video into a single frame.
+- `ffmpeg` — fetches and decodes the linked image, or a video/GIF into the
+  frames it plays back.
   Required for in-terminal previews; without it a media link opens via
   `xdg-open` instead.
 - `chafa` — optional. When present it renders the frame; when absent shottino
   renders it itself as coloured half-block character art.
+
+## Moving pictures
+
+Video and animated GIFs play inline as colour character art. They are decoded
+at 10fps up to 64 frames, and only frames that are ON SCREEN are advanced — a
+scrollback full of GIFs you scrolled past is not a scrollback full of running
+animations.
+
+Motion is deliberately a character-art capability. A terminal graphics
+protocol (kitty/iTerm2/sixel) places a whole picture at the cursor, so
+animating one means re-emitting an escape per frame: flicker, bandwidth, and
+a separate code path per protocol. Character art goes through ncurses like
+text, so it repaints, clips and scrolls with everything else — a clip renders
+as art even where a protocol is available. Still images keep using the
+protocol when there is one.
+
+`/media still` shows one representative frame instead; `/media anim` turns
+playback back on. Both obey the same first-party rule as still images — see
+`/media all`.
 
 ## Panes
 

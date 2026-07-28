@@ -22207,3 +22207,39 @@ into the picker's filter is also typing into the message being composed. A click
 outside it closes it — a modal you have to guess your way out of is worse than no
 modal. It draws last, over the pane borders, because a border crossing a menu
 reads as part of the menu.
+
+## 2026-07-28 — shottino: video and GIFs actually move
+
+vjt asked for real motion, not a representative frame. Three decisions carried
+the feature.
+
+**Motion is a character-art capability, on purpose.** A terminal graphics
+protocol places a whole picture at the cursor, so animating one means re-emitting
+its escape every frame: flicker, bandwidth, `m->drawn` bookkeeping per frame, and
+a different path per protocol. Character art goes through ncurses like text — it
+repaints, clips and scrolls with everything else, which is exactly why the
+partial-row clip work applies to it for free. So a CLIP renders as art even on a
+terminal that could show a sharper still. Consistent motion beats an
+inconsistent still, and stills keep the protocol.
+
+**Frames are cheap because they are stored downsampled.** The art renderer packs
+two source pixels into one cell, so a frame is stored at cell resolution — a few
+kilobytes — and 64 of them is a rounding error. They sit back to back in the
+existing `rgb` buffer and playing one is an offset, so a still is the
+`frame_count == 1` case of the same arithmetic rather than a branch. Short reads
+are normal (a two-second GIF asked for 64 frames yields what it has) and only
+WHOLE frames are kept; a partial one renders as a band of garbage.
+
+**The scarce resource is ncurses colour PAIRS, not memory.** A pair is a
+(fg, bg) combination, a half-block cell needs one per (top, bottom) pixel pair,
+and every frame of a clip can want its own — a few seconds of video exhausts any
+fixed table. The old behaviour on exhaustion was to hand back the fallback pair
+forever: the picture goes flat and STAYS flat. The pool now recycles, which is
+safe precisely because `draw()` erases and repaints the whole screen every frame,
+so redefining a pair cannot strand a cell that is not about to be redrawn anyway.
+
+Two smaller rules worth keeping: frames advance at the DRAW site, so only
+pictures on screen cost anything; and `media_frame_advance()` is pure and tested
+— a clip whose deadline passed several frames ago advances by ONE and re-bases
+rather than replaying the backlog, because catching up looks like a stutter and
+nobody is counting the frames of a background GIF.
