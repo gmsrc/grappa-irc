@@ -124,6 +124,14 @@ is DELETE-then-write, never append-only:
   via the ircbot pane ("vjt-claude"), its own voice, no vjt-highlight for routine. The bot owns
   both net connections (2 monitors). The bot may decline "nothing to add" → re-brief explicitly
   as an unposted ship announce so it posts. See memory [[feedback_announce_ships_to_grappa]].
+  🔴 **A COLD DEPLOY ANNOUNCES TWICE — BEFORE *AND* AFTER (vjt order 2026-07-02, RE-STATED 2026-07-29).**
+  A cold restart drops every live IRC + web session, so users get a heads-up, not a surprise:
+    • **BEFORE** (~30–60s ahead): "cold restart starting now, your IRC + web sessions will drop and
+      auto-reconnect in ~1–2 min."
+    • **AFTER** (post-verify, only once healthz is green): "deploy done, sessions restored" + what shipped.
+  A HOT `--cic`-only deploy needs NO before-announce (no session drop) — just the after/bundle-refresh
+  note. Both legs go to BOTH networks. **Forgetting the BEFORE is the failure mode — it is the only one
+  that costs users anything.**
 - **BATCH ALL DEPLOYS — never deploy per-issue (vjt STANDING ORDER 2026-07-17).** A per-issue
   `--cic` bundle deploy (OR cold restart) spams live users with a BundleRefreshBanner every
   ~20min. So: as each issue completes, worker MERGES + pushes to origin/main (the CI-green
@@ -136,6 +144,14 @@ is DELETE-then-write, never append-only:
   (`integration` must be green before ANY merge/ship) + the **night-cold-deploy** window (cold-
   classified issues wait for the ~4am restart window; batch them there too). Prefer designing
   features HOT. See [[feedback_minimize_cold_deploys]].
+  🔴 **DON'T STOP AT THE COLD DEPLOY, AND SHIP HOT WHAT CAN GO HOT (vjt STANDING ORDER 2026-07-29).**
+  Two halves, both explicit: (1) a cold deploy is NOT the end of the night — **keep pulling the
+  `status:queued` set and dispatching**, do not idle after the restart; (2) **hot-shippable work
+  must NOT be parked waiting for the next cold window** — classify honestly and ship it hot.
+  This does NOT repeal the batching gate above: batch hot ships too (a `--cic` batch is still one
+  banner), just never HOLD a hot-ready batch for a cold restart it does not need. When the two
+  rules pull against each other, the tiebreak is **users see one banner per batch, and no work
+  sits waiting on a restart it does not require**.
 - **RELEASE-CUTTING + NEWS.JSON (vjt STANDING ORDERS 2026-07-24).** After a batch DEPLOYS to
   Azzurra + verifies healthy: cut a GitHub **release + tag** (tag ≡ CTCP VERSION exactly, #391),
   THEN produce the site's **News/Releases `news.json` entry** — bilingual, curated by vjt, and
@@ -446,3 +462,87 @@ The daemon-survives-clear design eliminates the v1 silent-stall failure mode: if
 - **Stale task IDs surface back as notifications.** The harness sometimes re-fires completion events for old `task-id`s. Don't treat them as new events — verify the cursor advanced before processing. v2 cursor-tracking makes this safe (re-reading the same byte range yields nothing).
 - **Recurring same-triplet flake = real regression**, not flake (per `feedback_recurring_e2e_not_flake`). The visitor-parity cluster failed CI on the SAME 2 specs (network-circuit-ets-leak + push-server-fires-30s) for 6+ buckets in a row. Each bucket "documented as pre-existing flake and proceeded" — this is exactly the retry-mask pattern the rule warns against. Halt + investigate after the SECOND consecutive recurrence, not the sixth.
 - **`STALL state=idle` means YOU forgot to dispatch.** Don't ping vjt with "sibling stalled" — sibling is waiting on you. If the pane shows sibling's `CLEAR` + a staged `/tmp/orchestrate-next.txt`, auto-dispatch immediately under the autopilot mandate. Origin: visitor-parity cluster CLOSE → Images dispatch — orchestrator pinged vjt twice asking "Images dispatch a/b/c?" while sibling sat idle for 600+ seconds. The autopilot rule from cluster open already covered "dispatch staged next-cluster prompts without asking" — STALL idle is the signal that you missed the cue.
+
+## Project standing rules — grappa (moved out of the handoff 2026-07-29)
+
+These are PERMANENT: they were living in `.orchestrate/orchestrator-resume.md`, which is a live-state
+snapshot that gets pruned every flush — the wrong home for rules that must outlive the pruning. The
+handoff now carries state only and points here.
+
+## 🚢 DEPLOY POSTURE (prod = m42 bastille jail)
+Worker MERGES + pushes, **never deploys**; stays `cooking` until its DONE hand-off; ORCH flips to `soon`.
+ONE batched deploy (~4–5 issues), ONE dual-net announce, then close all + strip labels.
+- **COLD:** `/srv/grappa/scripts/deploy-m42.sh --force-cold` · **HOT:** `--force-hot` **THEN `--cic`** — a HOT deploy is
+  TWO runs; one alone ships half the range. ABSOLUTE path, **redirect to a file** (a pipe SIGPIPEs the remote deploy).
+- 🔴 **RUN DEPLOYS DETACHED** (`nohup` + `disown`). Tonight the `--cic` run was **HARNESS-REAPED mid-`vite build`**
+  (status `killed`, no rc); detached, it completed. Same rule as long gates.
+- 🔴 **WORKERS SYSTEMATICALLY MIS-CALL SERVER CHANGES "COLD" — CHECK IT YOURSELF.** The test:
+  `git diff --name-only <prod-sha>..<branch> | grep -E '^config/|priv/repo/migrations/|mix.exs|mix.lock|Dockerfile|infra/|lib/grappa/application.ex'`
+  — empty ⇒ HOT. ⚠️ **The `^infra/` arm over-triggers**: a shell script under `infra/freebsd/` is git-pulled and run at
+  deploy time, no restart needed. Let the CONTENT decide, not the grep.
+- 🔴 **PROVE A HOT DEPLOY** by the reload `{"failed":[]}` list + the served cic bundle hash (`curl
+  https://irc.sindro.me/`). **`/api/config` stays STALE after a hot deploy** — valid for COLD only. A release `rpc`
+  from root fails `:noconnection` — use `service grappa status` + `fetch http://127.0.0.1:4000/healthz`.
+- 🔴 **`grappa.chat` is the MARKETING SITE; the APP is `irc.sindro.me`.**
+- 🔴 **main MOVED FIVE TIMES tonight under in-flight branches** (a THIRD session pushes `shottino` every few minutes,
+  authored **`Your Name <you@example.com>`** — an unconfigured git identity landing on main; worth telling vjt).
+  **The rule that worked every time: verify the landed diff yourself and let the CONTENT, not the SHA, decide whether a
+  re-gate is owed.** Twice it saved a pointless 25-min re-run. For a starved `--ff-only` push: **rebase + push as ONE
+  immediate sequence**, retry ≤5, and STOP if an incoming commit touches `lib/`, `test/`, `cicchetto/`, `priv/`,
+  `config/`, `mix*`.
+
+## 🚦 SEMAPHORES — I AM THE ALLOCATOR (probe the HOST, never take a worker's word)
+**COMPILE** = anything touching the shared `_build` (`check.sh`, `mix.sh …`, any `mix compile`). **STACK** = docker /
+e2e / `integration.sh`. **Cic-only gates (`bun.sh run check|test`) need NEITHER — never make a worker queue for those**
+(both workers ask anyway; just say no lane needed). Grant them SEPARATELY and say which.
+🛑 **NEVER RECORD A LANE VERDICT HERE — PROBE BEFORE EVERY GRANT.** This line used to read "LANE IS CURRENTLY FREE"
+and that cached verdict is what made me grant an occupied stack (00:1x, cost ~10 min of a run). A handoff records what
+WAS true; only `pgrep` on the host records what IS.
+Probe (non-interactive ssh has no docker on PATH):
+`ssh voyager 'export PATH=$PATH:/usr/local/bin:/opt/homebrew/bin; pgrep -f "check.sh|bats-exec|mix |integration.sh"; docker ps'`
+— `check.sh`'s bats stage shows NO container, so `docker ps` ALONE LIES; `pgrep` is the authority.
+🔑 **REBASE BEFORE GATING.** 📟 `🧠 NN%` is the CONTEXT gauge (40%-clear rule); **`⚗️ NN％` is NOT context.**
+**CLEAR WORKERS AT 40%**, at a CLEAN BOUNDARY (after a commit, or while a long gate runs) — gate FIRST, then clear:
+clearing on unverified edits leaves the next session unable to tell whether they hold.
+
+## 🧷 KNOWN RED / caveats
+- 🔴 **FALSE-GREEN TRAP `scripts/_lib.sh:34`** — run scripts from the **worktree ROOT** or you gate MAIN's tree.
+- 🔴 **HOLLOW GREEN:** reconcile the tick COUNT against the summary AND confirm BOTH projects (~440 chromium + ~112
+  webkit). **Read the Playwright SUMMARY, never the exit code** — tonight's proof gate exited `1` on a tolerated flake
+  while PASSING its pre-registered criteria.
+- 🥇 **PRE-REGISTER pass/fail criteria BEFORE a run** when a tolerated red is expected, and HOLD them when the result is
+  inconvenient. 🥇 **ESTABLISH THE BASELINE BEFORE BLAMING A BRANCH.** 🥇 **A red that reproduces beats any code-path
+  argument; a red that does not reproduce beats any statistic.**
+- 🔴 **NEVER weaken an assert to get green.** Tonight vindicated this twice: the `issue496` spec was RIGHT and the
+  branch was wrong — after the revert those three went green **untouched**.
+- 🔴 **A GATE IS A SAMPLE, NOT A LIST** — scope a sweep from a systematic scan across every spelling, never from the
+  failures you happened to see.
+- ⚠️ **`check.sh` aborts at the first failing stage** — "check red" does NOT mean "only style is broken".
+- 🔴 **HARNESS REAP looks like infra death** — tell is the missing rc / task `killed`. Long gates + deploys DETACHED.
+- 🔴 **e2e serves a PRE-BUILT cic dist** (`runtime/e2e/cicchetto-dist`) — a cic fix needs a bundle rebuild.
+- 🔴 **`check` is src-scoped** ⇒ gates neither `e2e/` nor cic vitest (#484 tracks the ~20 pre-existing e2e type errors).
+- 🔴 **CROSS-WORKTREE `_build` CONTAMINATION**: a gate naming a module absent from your source = the neighbour's branch;
+  `scripts/mix.sh --env=dev compile --force`.
+- 🔁 Healthy `integration` ≈ 19–25 min, ~24 tests/min. A sub-5-min failure is registry/network death — re-run once.
+- 🔴 **A main `integration` gets CANCELLED by the next push** (concurrency group). `cancelled` ≠ failure, but nothing
+  settled. **Only a settled green at the FINAL SHA gates a deploy. THE ORCHESTRATOR WATCHES CI, NOT THE WORKERS.**
+- 🛑🛑 **NEVER SEND A BARE `Enter` WITHOUT CAPTURING THE PANE FIRST** — if a picker opened meanwhile, that Enter SELECTS
+  the highlighted option. Never `Esc` a picker either. (The guard caught exactly this tonight.)
+- 🔴 **LONG send-keys GET SWALLOWED** — short one-line orders, one constraint each; often needs a THIRD Enter.
+- 🔴 **IRCBOT:** `cd /home/vjt/code/IRC/vjt-claude && ./bot.say '#grappa' <<'EOF' … EOF`.
+  🔴 **FLAGS GO BEFORE THE TARGET** — `bot.say -f …/bot.send.libera '#grappa'`, NEVER `'#grappa' -f …`: the parse loop
+  stops at the first non-flag arg, so a trailing `-f` is **silently ignored and the message goes to AZZURRA**.
+  🔴 **`bot.say` exits 0 even when wedged — VERIFY the PRIVMSG in `bot.log` / `bot.libera.log`.**
+  🔴 **THE BOT LOGS SPAN DAYS, ARE NOT SORTED, AND CARRY NO DATE** — anchor to `TZ=Europe/Rome date` before reading any
+  line as a reply; a stale *"faccio io"* from another day nearly read as authorization.
+- 🔴 `ci.yml` triggers ONLY on push-to-main or a PR targeting main, and is **Elixir-only ⇒ GitHub CI cannot see a red
+  cic vitest.** After ANY change to a shared cic verb, run the FULL vitest.
+- **CI flakes (tracked):** #277 #279 #254 #291/#339 #519 #520 **#522** #506, bahamut IP-autokill.
+  **OTP29 pair #355/#185 HELD**; **bats #44** pre-existing red; `hex.audit`/`deps.audit` CVE wall NON-FATAL.
+- 🔴 **Never cite DESIGN_NOTES as current behaviour without confirming it in the code first.**
+
+## 🏷️ LABEL DISCIPLINE
+`lib/board-check.sh [--cooking "N M"]` at EVERY flush + resume. Moves are ATOMIC: `queued→cooking` rides the SAME Bash
+block as the dispatch send-keys; `strip status:*` rides the SAME turn as processing the shipped report.
+**`cooking→soon` only at the worker's DONE hand-off — CI-wait is still cooking.** A closed issue carries NO `status:*`.
+**Enqueue is vjt's or the ircbot's** — except when he says "fix it" in conversation: that IS the enqueue (#526, #522).
