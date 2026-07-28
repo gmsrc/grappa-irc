@@ -271,6 +271,19 @@ function handleMouseDown(e: MouseEvent): void {
     }
     return;
   }
+  // #508: a native <select>'s picker opens on THIS mousedown (unlike a
+  // button, whose action rides the click), so preventDefault here would
+  // suppress it — the "control looks dead to a direct tap" bug (only the
+  // <label for=…> worked, because a label forwards a synthetic click, never
+  // the select's own mousedown). Let it through: the tap dismisses the text
+  // keyboard and opens the picker, the correct behaviour for a select. Same
+  // shape as the .scrollback-invite-join control carve-out above — a control
+  // that must escape the generic-chrome always-fire preventDefault. (The CSS
+  // half of this fix re-enables user-select on iOS <select>, default.css
+  // #508; both mechanisms suppressed the picker, this is the JS half —
+  // reasoned, not device-proven, since Playwright webkit can't invoke the
+  // native picker.)
+  if (e.target instanceof HTMLSelectElement) return;
   e.preventDefault();
 }
 

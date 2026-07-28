@@ -355,13 +355,14 @@ body {
    rule, so UNCLASSED fields (the identity editor's nick/realname/ident) fell
    back to tiny UA defaults, and every modal re-styled its own input in 13+
    near-identical `.<x>-input` rules. This is the single global treatment the
-   issue asks for: a comfortable ≥44px tap-target, a ≥16px font (so iOS does
-   NOT auto-zoom on focus — the `--font-size` base is 14px), and the theme
-   tokens every input already used. `:where()` keeps the specificity at
-   (0,0,1) so the existing per-component rules (and the is-ios override below)
-   still win where they need a different size/layout — this is a FLOOR, not
-   an override. Placed here (before every higher-specificity input rule) so
-   the cascade stays ascending. Radio/checkbox are excluded: they must not
+   issue asks for: a comfortable ≥44px tap-target, the app's `--font-size`
+   (14px base, matching the surrounding chrome), and the theme tokens every
+   input already used. The ≥16px iOS anti-zoom floor is applied separately,
+   scoped to `html.is-ios` (see the rule after :focus — #508). `:where()`
+   keeps the specificity at (0,0,1) so the existing per-component rules (and
+   the is-ios overrides below) still win where they need a different
+   size/layout — this is a FLOOR, not an override. Placed here (before every
+   higher-specificity input rule) so the cascade stays ascending. Radio/checkbox are excluded: they must not
    inherit text-field height/padding. */
 input:where(
     [type="text"],
@@ -382,9 +383,12 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 3px;
   font-family: var(--font-mono);
-  /* ≥16px floor prevents iOS focus auto-zoom; scales up with the text-size
-     preference (--font-size reaches 20px at XXL, per lib/fontSize.ts). */
-  font-size: max(16px, var(--font-size));
+  /* #508 — base is the app's --font-size (14px), matching the surrounding
+     chrome so inputs no longer render 2px larger than everything else. The
+     iOS ≥16px anti-zoom floor that #497 applied globally is re-applied below,
+     scoped to html.is-ios: Safari is the ONLY engine that auto-zooms on a
+     <16px focus, so Android Chrome and desktop take the smaller size. */
+  font-size: var(--font-size);
 }
 
 input:where(
@@ -400,6 +404,30 @@ input:where(
 textarea:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* #508 — iOS-only anti-zoom floor. iOS Safari auto-zooms the page when a
+   focused input's font-size is < 16px; no other engine does. The 16px floor
+   #497 applied globally is scoped HERE to html.is-ios, so Android/desktop
+   take the chrome-matching --font-size (above) while iOS keeps the zoom-safe
+   minimum. Scales up with the text-size preference (reaches 20px at XXL, per
+   lib/fontSize.ts). (0,1,2) specificity beats both the base floor and the
+   per-component .<x>-input rules, so ALL iOS inputs clear the zoom line —
+   closing the latent gap where a classed input could fall under 16px on iOS.
+   Mirrors the #497 :where() target set. */
+html.is-ios
+input:where(
+  [type="text"],
+  [type="password"],
+  [type="email"],
+  [type="search"],
+  [type="url"],
+  [type="tel"],
+  [type="number"],
+  :not([type])
+),
+html.is-ios textarea {
+  font-size: max(16px, var(--font-size));
 }
 
 /* UX-6 D9 (2026-05-21) — iOS-only layout-viewport pin. This is the
@@ -456,6 +484,23 @@ html.is-ios .scrollback,
 html.is-ios .topic-modal-text,
 html.is-ios input,
 html.is-ios textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* #508 — <select> tap-to-open on iOS. `html.is-ios` sets
+   `-webkit-user-select: none` (the blanket kill above) and user-select
+   INHERITS, so it lands on every <select>. WebKit then refuses to open the
+   native picker on a DIRECT tap of a user-select:none form control — the
+   same "WebKit honors
+   inherited user-select:none inside controls" quirk the input/textarea
+   re-enable above works around. A tap on the associated `<label for=…>`
+   still forwards activation programmatically, which is exactly why only the
+   label opened the picker and the control itself looked dead. Re-enable it.
+   The value MUST be explicit: `user-select: auto` on a control re-inherits
+   the parent's `none` (per CSS-UI), so `text` — matching the input/textarea
+   re-enable — is the value that actually overrides it. */
+html.is-ios select {
   -webkit-user-select: text;
   user-select: text;
 }

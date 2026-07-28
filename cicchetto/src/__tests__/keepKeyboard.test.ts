@@ -339,6 +339,24 @@ describe("keepKeyboard — installKeyboardPreserve", () => {
     expect(mousedownDefaultPrevented(otherInput)).toBe(false);
   });
 
+  // #508 — a native <select>'s picker opens on THIS mousedown (unlike a
+  // button, whose action rides the click), so preventDefaulting the
+  // mousedown suppresses the picker — the "control looks dead to a direct
+  // tap" bug. A tap on a select SHOULD dismiss the text keyboard and open
+  // the picker, so it must fall through un-prevented even with compose
+  // focused. Without the carve-out a <select> hits the generic-chrome
+  // always-fire path (like `chrome` above) and the picker never opens.
+  it("iOS: mousedown on a <select> with compose focused is NOT prevented (native picker must open; a select tap dismisses the keyboard — #508)", () => {
+    stubUserAgent(IPHONE_UA);
+    input.focus();
+    const select = document.createElement("select");
+    const option = document.createElement("option");
+    option.textContent = "opt";
+    select.append(option);
+    document.body.append(select);
+    expect(mousedownDefaultPrevented(select)).toBe(false);
+  });
+
   it("iOS: mousedown with no input focused is NOT prevented", () => {
     stubUserAgent(IPHONE_UA);
     (document.activeElement as HTMLElement | null)?.blur();

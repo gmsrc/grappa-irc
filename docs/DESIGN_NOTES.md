@@ -21589,3 +21589,45 @@ goes red, this is the cause.
 **Related, still open.** #402 (invite to an already-archived channel + a
 self-requested `/cs invite`) shares the `:invited`-absent-from-snapshot root but
 a different arm — not closed here.
+## 2026-07-28 — #508 mobile form controls: iOS `<select>` tap-to-open + iOS-scoped input font floor
+
+Two distinct defects on the same surface (cic's form inputs), both cic-only /
+CSS-only (`themes/default.css`), both HOT.
+
+**(a) `<select>` opened only via its `<label>`, never a direct tap of the
+control.** Root cause: `html.is-ios { -webkit-user-select: none }` (the
+Telegram-Web-K blanket kill on `html.is-ios`) INHERITS — `user-select` is an
+inherited property — onto every `<select>`. WebKit then refuses to open the
+native picker on a DIRECT tap of a `user-select:none` form control. A tap on
+the linked `<label for=…>` still forwards activation programmatically, which is
+exactly why only the label worked (vjt's diagnostic clue). This is the SAME
+quirk the #79 Dispatch-1 re-enable already worked around for `input`/`textarea`
+(its own comment notes "WebKit honors inherited user-select:none inside
+inputs") — it simply never covered `<select>`. Fix: a dedicated
+`html.is-ios select { -webkit-user-select: text; user-select: text }` rule.
+The value MUST be explicit — `user-select: auto` on a control re-inherits the
+parent's `none` (per CSS-UI), so it would NOT fix it; `text` (matching the
+input/textarea re-enable) is the value that actually overrides the inherited
+`none`. Automated guard: `issue508-ios-select-tappable.spec.ts` (@webkit) is a
+computed-style contract test — under `html.is-ios` a generic `<div>` inherits
+`user-select: none` (the bug's precondition) while a `<select>` must not; the
+two assertions only pass together. The real tap→picker FEEL is a device test
+(iOS picker invocation is not reproducible on Playwright webkit, per
+`feedback_playwright_webkit_not_ios_scroll`).
+
+**(b) Input font read too large on mobile.** #497 shipped a GLOBAL input floor
+`font-size: max(16px, var(--font-size))`; at the default `--font-size` (14px)
+that renders inputs at 16px while the surrounding chrome is 14px — 2px larger,
+which is what "too large" was. But #497's own comment states the 16px exists
+solely for the iOS focus-auto-zoom trap, and iOS Safari is the ONLY engine that
+auto-zooms a `<16px` focused input; Android Chrome and desktop never do.
+Deliberate choice (vjt: "pick deliberately, say why"): base the floor at the
+app's `--font-size` (matching chrome everywhere) and re-apply the ≥16px
+anti-zoom floor ONLY under `html.is-ios`. Its `(0,1,2)` specificity beats both
+the base floor and the per-component `.<x>-input` rules, so ALL iOS inputs
+clear the zoom line — also closing the latent gap where a classed input could
+fall under 16px on iOS. **Honest limit:** on iOS itself the floor stays 16px —
+you cannot shrink a focusable control below it without the very page-zoom the
+issue warns against, so a real iPhone still renders inputs at 16px; the change
+shrinks only Android/desktop. If 16px still reads large on iOS, the remaining
+levers are non-font (padding / min-height / line-height).
