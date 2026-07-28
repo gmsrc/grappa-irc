@@ -21725,3 +21725,50 @@ place. The layout diagnostic (`SHOTTINO_LAYOUT_LOG`) now records `divider_row` a
 flags `*** CLIPPED: newest row not drawn ***` — sitting at offset 0 with the last
 visible row undrawn is the machine-checkable shape of this whole bug class, and it is
 the one thing a screenshot of the symptom cannot show.
+
+## 2026-07-28 — shottino: a partly-scrolled row is CLIPPED, not dropped (+ the first draw-path test)
+
+Companion to the divider fix above, same budget rule, other end of the row. The
+scroll offset is counted in LINES and a wrapped message is several, so the topmost
+row of the region is usually only partly above it. The draw loop dropped such a row
+whole (`if (skip_lines > 0) { skip_lines = 0; continue; }`), spending fewer lines
+than the measuring pass had reserved for it: a whole message vanished instead of
+sliding under the top edge, and because rows are laid out top-down the shortfall
+appeared at the BOTTOM — the newest message floating clear of the border, and a
+1-line scroll step doing nothing at all whenever it landed inside a wrapped row.
+
+The row's remaining lines are now drawn, in the row's own order (divider, then text,
+then image), each stage consuming the part of `row_skip` that belongs to it. That
+required a `skip_rows` parameter through `draw_wrapped_text` / `draw_message_line` /
+`draw_inline_media`. The load-bearing detail: **skipping is CLIPPING, never
+re-wrapping.** The wrap is computed over the whole text, at the same width, with the
+same break points a full draw would use, and only the cells of the skipped lines are
+withheld — re-wrapping a tail would break in different places and the row would
+visibly reflow as it scrolled, which also invalidates the height the measuring pass
+computed. Consequences that fall out of that rule: the timestamp and `<nick>` live on
+the row's FIRST line and so disappear with it, leaving the tail in the body column
+where the continuation lines already sit; a mIRC run walker is walked from the start
+even when its early runs land on skipped lines, so the tail keeps its inherited
+colour. Character-art images clip per cell and slide like text; a terminal-protocol
+image (sixel/kitty) cannot — the escape places the whole picture at the cursor, so it
+stays blank in cells the layout has already paid for until it is fully back on
+screen, rather than painting up over the topic bar.
+
+**`tests/test_layout.c` is the first test that touches `shottino.c` at all.** It
+compiles the file (with `main` renamed away) and drives the real drawing functions
+against an offscreen ncurses screen — `newterm()` to `/dev/null`, assertions read
+back from `stdscr` via `mvinch()`, no TTY anywhere — and asserts exactly the property
+the fix rests on: a draw from line `skip` equals the full draw's lines `skip`..  It
+is a real gate, not a mirror: reverting the clip in `draw_wrapped_text` fails 56 of
+its 593 checks. The Makefile's coverage caveat is updated to say what is now covered
+and what still is not (framing, dispatch, app state). The budget arithmetic itself
+was verified separately by fuzzing a transcription of both passes over 200k random
+layouts against an exact model of the laid-out document: no overflow, no gap at the
+bottom, the newest row always drawn, and the drawn view equal to the expected line
+window at every offset.
+
+Also fixed in passing, surfaced by building `shottino.c` at `-O1` for the new suite:
+the `/upload` confirmation message was assembled into a `MAX_LINE` buffer from a
+512-byte base plus a `MAX_LINE` path, so a long upload URL could be silently
+truncated — and a cut URL is not a shorter link, it is a dead one in a row that looks
+perfectly ordinary. Sized so truncation cannot occur.

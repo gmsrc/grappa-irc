@@ -1667,37 +1667,49 @@ static attr_t mirc_run_attrs(const struct mirc_run *r, attr_t base) {
     return a;
 }
 
-static void draw_wrapped_text(int y, int x, int width, int max_lines, int pair, attr_t attrs, const char *s) {
+/* Draw `s` wrapped at `width`, starting from its `skip_rows`-th wrapped
+ * line and drawing at most `max_lines` of them at (y, x).
+ *
+ * `skip_rows` is what makes a row that is PARTIALLY scrolled off the top
+ * renderable: the wrap is computed over the whole text exactly as if it
+ * were fully drawn — same width, same break points — and only the cells
+ * of the skipped lines are withheld. Wrapping and clipping are separate
+ * concerns; re-wrapping a tail would break at different places than the
+ * full row does, and the row would visibly reflow as it scrolls past. */
+static void draw_wrapped_text(int y, int x, int width, int skip_rows, int max_lines, int pair, attr_t attrs, const char *s) {
     if (width <= 0 || max_lines <= 0) return;
+    if (skip_rows < 0) skip_rows = 0;
     int line = 0;
     int col = 0;
+    /* First wrapped line past the visible window. */
+    const int last = skip_rows + max_lines;
 
     /* Fast path: the overwhelming majority of messages carry no control
      * bytes, and parsing runs for them would be pure overhead. */
     if (!mirc_has_formatting(s)) {
         attron(COLOR_PAIR(pair) | attrs);
-        move(y, x);
-        for (const char *p = s; *p && line < max_lines; p++) {
+        if (skip_rows == 0) move(y, x);
+        for (const char *p = s; *p && line < last; p++) {
             if (*p == '\r') {
                 if (p[1] == '\n') p++;
                 line++;
                 col = 0;
-                if (line < max_lines) move(y + line, x);
+                if (line < last && line >= skip_rows) move(y + line - skip_rows, x);
                 continue;
             }
             if (*p == '\n') {
                 line++;
                 col = 0;
-                if (line < max_lines) move(y + line, x);
+                if (line < last && line >= skip_rows) move(y + line - skip_rows, x);
                 continue;
             }
             if (col >= width) {
                 line++;
                 col = 0;
-                if (line >= max_lines) break;
-                move(y + line, x);
+                if (line >= last) break;
+                if (line >= skip_rows) move(y + line - skip_rows, x);
             }
-            addch((unsigned char)*p);
+            if (line >= skip_rows) addch((unsigned char)*p);
             col++;
         }
         attroff(COLOR_PAIR(pair) | attrs);
@@ -1706,36 +1718,40 @@ static void draw_wrapped_text(int y, int x, int width, int max_lines, int pair, 
 
     struct mirc_run runs[MIRC_MAX_RUNS];
     size_t nruns = mirc_parse(s, runs, MIRC_MAX_RUNS);
-    move(y, x);
-    for (size_t i = 0; i < nruns && line < max_lines; i++) {
+    if (skip_rows == 0) move(y, x);
+    for (size_t i = 0; i < nruns && line < last; i++) {
         const struct mirc_run *r = &runs[i];
         long fg = mirc_run_rgb(r->fg, r->fg_is_rgb);
         long bg = mirc_run_rgb(r->bg, r->bg_is_rgb);
         int run_pair = mirc_pair_for(fg, bg, pair);
         attr_t run_attrs = mirc_run_attrs(r, attrs);
         attron(COLOR_PAIR(run_pair) | run_attrs);
-        for (size_t k = 0; k < r->len && line < max_lines; k++) {
+        for (size_t k = 0; k < r->len && line < last; k++) {
             char ch = r->text[k];
             if (ch == '\r') {
                 if (k + 1 < r->len && r->text[k + 1] == '\n') k++;
                 line++;
                 col = 0;
-                if (line < max_lines) move(y + line, x);
+                if (line < last && line >= skip_rows) move(y + line - skip_rows, x);
                 continue;
             }
             if (ch == '\n') {
                 line++;
                 col = 0;
-                if (line < max_lines) move(y + line, x);
+                if (line < last && line >= skip_rows) move(y + line - skip_rows, x);
                 continue;
             }
             if (col >= width) {
                 line++;
                 col = 0;
-                if (line >= max_lines) break;
-                move(y + line, x);
+                if (line >= last) break;
+                if (line >= skip_rows) move(y + line - skip_rows, x);
             }
-            addch((unsigned char)ch);
+            /* Runs are walked from the start whether or not their cells
+             * land on a visible line: a run that opens in a skipped line
+             * still owns the cells it reaches on a visible one, so the
+             * tail keeps the colour the full row would have had. */
+            if (line >= skip_rows) addch((unsigned char)ch);
             col++;
         }
         attroff(COLOR_PAIR(run_pair) | run_attrs);
@@ -1755,8 +1771,17 @@ static int message_display_lines(const char *line, int width) {
     return wrapped_text_lines_visible(line, width);
 }
 
-static void draw_message_line(int y, int x, int width, int max_lines, const char *line, bool mention_row, bool pending_row) {
+/* Draw one log row at (y, x), omitting its first `skip_rows` wrapped
+ * lines — the ones scrolled off the top of the region.
+ *
+ * The timestamp and `<nick>` live ON the row's first wrapped line, so
+ * they are drawn only when that line is on screen. A tail keeps the body
+ * column the header established, which is where the row's continuation
+ * lines already sit: a partially scrolled message reads as the same
+ * shape it had before it started leaving the viewport. */
+static void draw_message_line(int y, int x, int width, int skip_rows, int max_lines, const char *line, bool mention_row, bool pending_row) {
     if (width <= 0 || max_lines <= 0) return;
+    if (skip_rows < 0) skip_rows = 0;
     for (int row = 0; row < max_lines; row++) {
         if (mention_row) draw_fill(y + row, x, width, CP_MENTION);
     }
@@ -1768,25 +1793,27 @@ static void draw_message_line(int y, int x, int width, int max_lines, const char
         int body_pair = mention_row ? CP_MENTION : (pending_row ? CP_MUTED : CP_MAIN);
         attr_t body_attr = mention_row ? A_BOLD : (pending_row ? A_DIM : 0);
         attr_t base_attr = pending_row ? A_DIM : 0;
-        draw_text(y, x, width, base_pair, base_attr, "%s", prefix);
         int px = x + (int)strlen(prefix);
-        draw_text(y, px, 1, base_pair, base_attr, "<");
-        draw_text(y, px + 1, (int)strlen(nick), mention_row ? CP_MENTION : nick_pair(nick), A_BOLD | base_attr, "%s", nick);
-        draw_text(y, px + 1 + (int)strlen(nick), 1, base_pair, base_attr, ">");
+        if (skip_rows == 0) {
+            draw_text(y, x, width, base_pair, base_attr, "%s", prefix);
+            draw_text(y, px, 1, base_pair, base_attr, "<");
+            draw_text(y, px + 1, (int)strlen(nick), mention_row ? CP_MENTION : nick_pair(nick), A_BOLD | base_attr, "%s", nick);
+            draw_text(y, px + 1 + (int)strlen(nick), 1, base_pair, base_attr, ">");
+        }
         int body_x = px + 3 + (int)strlen(nick);
         int body_w = width - (body_x - x);
         if (body_w < 12) {
             body_x = x + 2;
             body_w = width - 2;
         }
-        draw_wrapped_text(y, body_x, body_w, max_lines, body_pair, body_attr, body);
+        draw_wrapped_text(y, body_x, body_w, skip_rows, max_lines, body_pair, body_attr, body);
         if (pending_row && width > 11) draw_text(y + max_lines - 1, x + width - 11, 11, CP_MUTED, A_DIM, "[sending]");
     } else if (find_url(line)) {
-        draw_wrapped_text(y, x, width, max_lines, media_kind_of(find_url(line)) != MEDIA_NONE ? CP_ACCENT : CP_MUTED, A_UNDERLINE, line);
+        draw_wrapped_text(y, x, width, skip_rows, max_lines, media_kind_of(find_url(line)) != MEDIA_NONE ? CP_ACCENT : CP_MUTED, A_UNDERLINE, line);
     } else if (strstr(line, "failed") || strstr(line, "error")) {
-        draw_wrapped_text(y, x, width, max_lines, CP_ERROR, 0, line);
+        draw_wrapped_text(y, x, width, skip_rows, max_lines, CP_ERROR, 0, line);
     } else {
-        draw_wrapped_text(y, x, width, max_lines, CP_MUTED, 0, line);
+        draw_wrapped_text(y, x, width, skip_rows, max_lines, CP_MUTED, 0, line);
     }
 }
 
@@ -3496,24 +3523,29 @@ static void ws_pump(struct app *app) {
  * an image stay blank in its model, so it leaves them alone.
  *
  * Caller holds app->lock. */
-static void draw_inline_media(struct inline_media *m, int y, int x, int max_rows,
-                              int max_cols) {
+static void draw_inline_media(struct inline_media *m, int y, int x, int skip_rows,
+                              int max_rows, int max_cols) {
     if (m->state != IM_READY || m->rows <= 0) return;
+    if (skip_rows < 0) skip_rows = 0;
     /* Clamp BOTH axes. The cell box was fitted when the row was first
      * measured; a terminal resize since then leaves it stale, and an
      * image that overruns its box writes over the member pane or past
      * the scroll region. */
-    int rows = m->rows > max_rows ? max_rows : m->rows;
+    int rows = m->rows - skip_rows;
+    if (rows > max_rows) rows = max_rows;
     int cols = m->cols > max_cols ? max_cols : m->cols;
     if (rows <= 0 || cols <= 0) return;
 
     if (m->rgb) {
         /* Half blocks: two image rows per cell, upper glyph in the top
-         * pixel's colour over the bottom pixel's. */
+         * pixel's colour over the bottom pixel's. Character art clips per
+         * cell, so a picture whose top has scrolled off draws its bottom
+         * `rows` cells — it slides under the region edge like text. */
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
-                const unsigned char *top = m->rgb + (((size_t)(r * 2) * m->cols) + c) * 3;
-                const unsigned char *bot = m->rgb + (((size_t)(r * 2 + 1) * m->cols) + c) * 3;
+                int sr = r + skip_rows;
+                const unsigned char *top = m->rgb + (((size_t)(sr * 2) * m->cols) + c) * 3;
+                const unsigned char *bot = m->rgb + (((size_t)(sr * 2 + 1) * m->cols) + c) * 3;
                 long tv = ((long)top[0] << 16) | ((long)top[1] << 8) | top[2];
                 long bv = ((long)bot[0] << 16) | ((long)bot[1] << 8) | bot[2];
                 int pair = mirc_pair_for(tv, bv, CP_MAIN);
@@ -3530,6 +3562,17 @@ static void draw_inline_media(struct inline_media *m, int y, int x, int max_rows
          * then place it. Re-emitted only when the position changed. */
         for (int r = 0; r < rows; r++)
             for (int c = 0; c < cols; c++) mvaddch(y + r, x + c, ' ');
+        /* A terminal-protocol image is atomic: the escape places the whole
+         * picture at the cursor, so there is no way to draw the bottom of
+         * one — emitting it here would paint UP over the topic bar. It
+         * therefore stays blank (in cells the caller has already paid for,
+         * so the rest of the layout does not move) until it is fully back
+         * on screen, and is marked undrawn so that repaint happens. Only
+         * the character-art path above can slide under the edge. */
+        if (skip_rows > 0) {
+            m->drawn = false;
+            return;
+        }
         if (!m->drawn || m->drawn_y != y || m->drawn_x != x) {
             refresh();
             printf("\033[%d;%dH", y + 1, x + 1); /* 1-based cursor address */
@@ -3776,7 +3819,7 @@ static void draw(struct app *app) {
     for (int ty = 0; ty < topic_h; ty++) draw_fill(topic_y + ty, main_x, main_w, CP_ALT);
     draw_text(topic_y, main_x + 1, topic_label_w, CP_ACCENT, A_BOLD, "%s/%s", w->network, w->channel);
     if (topic_prefix_w) draw_text(topic_y, topic_text_x, topic_text_w, CP_ALT, A_BOLD, "topic: ");
-    draw_wrapped_text(topic_y, topic_text_x + topic_prefix_w, topic_wrap_w, topic_h, CP_ALT, 0, topic_text);
+    draw_wrapped_text(topic_y, topic_text_x + topic_prefix_w, topic_wrap_w, 0, topic_h, CP_ALT, 0, topic_text);
 
     if (app->panel != PANEL_CHAT) {
         draw_text(scroll_y, main_x + 1, main_w - 2, CP_ACCENT, A_BOLD, "%s", panel_name(app->panel));
@@ -3890,14 +3933,21 @@ static void draw(struct app *app) {
             continue;
         }
         size_t i = visible[vi];
-        if (skip_lines > 0) {
-            skip_lines = 0;
-            continue;
-        }
+        /* The topmost row is usually only PARTLY scrolled off — the offset
+         * is counted in lines, and a row is several. Its remaining lines
+         * are drawn, in the row's own order (divider, then text, then
+         * image), each pass of `row_skip` eating the part that is above
+         * the region. Dropping the whole row instead — the old behaviour —
+         * left the region short by the lines it had already been measured
+         * for, so a wrapped message at the top made the newest message
+         * float clear of the bottom border, and a whole message vanished
+         * rather than sliding under the top edge. Spending exactly what
+         * was reserved is what keeps the newest line glued to the bottom;
+         * it is the same budget rule the divider broke. */
+        int row_skip = skip_lines;
+        skip_lines = 0;
         int available = scroll_h - used_lines;
-        int draw_lines = text_heights[vi];
-        if (draw_lines > available) draw_lines = available;
-        if (draw_lines <= 0) break;
+        if (available <= 0) break;
         int msg_y = scroll_y + used_lines;
         /* Unread divider: drawn once, immediately above the first row the
          * server's cursor says has not been read. It is deliberately
@@ -3918,26 +3968,36 @@ static void draw(struct app *app) {
          * behind. When the reserved row is scrolled off, the divider goes
          * with it — its line was skipped along with its row, so the two
          * passes still agree. */
-        if ((int)vi == divider_vi && used_lines + 1 < scroll_h) {
-            attron(COLOR_PAIR(CP_ERROR) | A_BOLD);
-            mvhline(msg_y, main_x + 1, ACS_HLINE, main_w - 2);
-            mvprintw(msg_y, main_x + 3, " unread ");
-            attroff(COLOR_PAIR(CP_ERROR) | A_BOLD);
-            used_lines += 1;
-            msg_y += 1;
-            available -= 1;
-            if (draw_lines > available) draw_lines = available;
-            if (draw_lines <= 0) break;
+        if ((int)vi == divider_vi) {
+            if (row_skip > 0) {
+                row_skip -= 1; /* the divider itself is above the region */
+            } else if (used_lines + 1 < scroll_h) {
+                attron(COLOR_PAIR(CP_ERROR) | A_BOLD);
+                mvhline(msg_y, main_x + 1, ACS_HLINE, main_w - 2);
+                mvprintw(msg_y, main_x + 3, " unread ");
+                attroff(COLOR_PAIR(CP_ERROR) | A_BOLD);
+                used_lines += 1;
+                msg_y += 1;
+                available -= 1;
+            }
         }
-        last_drawn_vi = (int)vi;
-        draw_message_line(msg_y, main_x + 1, main_w - 2, draw_lines, app->log[i], app->log_mentions[i], app->log_pending[i]);
-        const char *msg_url = find_url(app->log[i]);
-        enum media_kind mk = msg_url ? media_kind_of(msg_url) : MEDIA_NONE;
-        if (mk != MEDIA_NONE) {
-            char url_tok[MAX_LINE];
-            copy_url_token(msg_url, url_tok, sizeof(url_tok));
-            add_link_region(app, msg_y, msg_y + draw_lines - 1, main_x + 1,
-                            main_x + main_w - 2, url_tok, mk == MEDIA_VIDEO);
+        int text_skip = row_skip < text_heights[vi] ? row_skip : text_heights[vi];
+        row_skip -= text_skip;
+        int draw_lines = text_heights[vi] - text_skip;
+        if (draw_lines > available) draw_lines = available;
+        if (draw_lines > 0) {
+            last_drawn_vi = (int)vi;
+            drawn_rows++;
+            draw_message_line(msg_y, main_x + 1, main_w - 2, text_skip, draw_lines, app->log[i],
+                              app->log_mentions[i], app->log_pending[i]);
+            const char *msg_url = find_url(app->log[i]);
+            enum media_kind mk = msg_url ? media_kind_of(msg_url) : MEDIA_NONE;
+            if (mk != MEDIA_NONE) {
+                char url_tok[MAX_LINE];
+                copy_url_token(msg_url, url_tok, sizeof(url_tok));
+                add_link_region(app, msg_y, msg_y + draw_lines - 1, main_x + 1,
+                                main_x + main_w - 2, url_tok, mk == MEDIA_VIDEO);
+            }
         }
         /* Draw the row's image beneath it, and kick off its decode the
          * first time it is on screen — lazy by design, so scrollback full
@@ -3953,13 +4013,17 @@ static void draw(struct app *app) {
             }
             int img_y = msg_y + draw_lines;
             int room = scroll_y + scroll_h - img_y;
-            /* Spend exactly what the measuring pass reserved, clamped to
-             * the room actually left. */
-            int want = media_extra_rows(m);
+            /* Spend exactly what the measuring pass reserved, less whatever
+             * of the picture is above the region (only possible once the
+             * row's text has scrolled off entirely), clamped to the room
+             * actually left. A one-line placeholder that has scrolled off
+             * asks for nothing, which is what the measurement skipped. */
+            int want = media_extra_rows(m) - row_skip;
+            if (want < 0) want = 0;
             int spend = want < room ? want : room;
             if (spend > 0) {
                 if (m->state == IM_READY) {
-                    draw_inline_media(m, img_y, main_x + 2, spend, main_w - 4);
+                    draw_inline_media(m, img_y, main_x + 2, row_skip, spend, main_w - 4);
                 } else if (m->state == IM_FAILED) {
                     draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM,
                               "  [image could not be decoded — /open to view externally]");
@@ -3967,11 +4031,13 @@ static void draw(struct app *app) {
                     draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM, "  [loading image…]");
                 }
                 used_lines += spend;
+                /* A tall picture can fill the region on its own, with its
+                 * message line scrolled off above it: the row IS on screen,
+                 * so the clipped-tail diagnostic must not call it missing. */
+                last_drawn_vi = (int)vi;
             }
         }
         used_lines += draw_lines;
-        drawn_rows++;
-        skip_lines = 0;
     }
     if (lay) {
         /* used < scroll_h with rows left undrawn means the budget ran out
@@ -5216,8 +5282,12 @@ static void upload_command(struct app *app, const char *path) {
     free(r.body);
 
     /* The server may answer with a path rather than an absolute URL;
-     * make it absolute so the link is clickable from any client. */
-    char message[MAX_LINE];
+     * make it absolute so the link is clickable from any client.
+     *
+     * Sized for base + url + the marker so no spelling of either can be
+     * truncated: a cut URL is not a shorter link, it is a dead one, and
+     * the row would look perfectly ordinary in scrollback. */
+    char message[sizeof(app->url.base) + MAX_LINE + 8];
     if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0)
         snprintf(message, sizeof(message), "📸 %s", url);
     else
