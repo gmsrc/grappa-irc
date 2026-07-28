@@ -326,18 +326,18 @@ jobs:
           # #504 defect 2 — collect ONLY the assets that actually downloaded.
           # A failed leg never uploaded its artifact, so its files simply are
           # not here; attaching what IS present publishes the green artifacts
-          # regardless. nullglob makes an unmatched *.deb / *.pkg.tar.zst vanish
-          # instead of becoming a literal; the explicit `-f` guard covers the
-          # two literal recipe files (PKGBUILD + the .SRCINFO dotfile the AUR
-          # push needs — spelling the name out sidesteps the dotglob trap).
-          shopt -s nullglob
-          assets=()
-          for f in assets/grappa-deb/*.deb \
-                   assets/grappa-arch/*.pkg.tar.zst \
-                   assets/grappa-arch/PKGBUILD \
-                   assets/grappa-arch/.SRCINFO; do
-            [ -f "$f" ] && assets+=("$f")
-          done
+          # regardless.
+          #
+          # Match by NAME at ANY DEPTH, never by path. In run 30399152630
+          # download-artifact unpacked the one green artifact FLAT into
+          # assets/ — despite announcing a per-artifact subdirectory — so the
+          # path-coupled `assets/grappa-deb/*.deb` glob matched nothing and
+          # this step claimed "every package job failed" with the .deb sitting
+          # right there. The layout is the action's business; ours is the file
+          # names. -name also sidesteps the dotglob trap on .SRCINFO.
+          mapfile -t assets < <(find assets -type f \
+            \( -name '*.deb' -o -name '*.pkg.tar.zst' \
+               -o -name 'PKGBUILD' -o -name '.SRCINFO' \) | sort)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "::error::no build artifacts present — every package job failed; nothing to publish"
             exit 1
