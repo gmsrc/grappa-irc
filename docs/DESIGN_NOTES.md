@@ -21421,3 +21421,77 @@ the date instead of a bare `HH:MM`. No-op visual addition for busy windows.
 
 **Out of scope (YAGNI):** showing `last_activity` in the Archive list (the
 issue's "related but distinct" note) — not the bug; left for a follow-up.
+
+## 2026-07-28 — #458: filter join/part/quit SERVER-SIDE so page-up yields visible rows
+
+**The bug.** On a crowded channel a page-up rendered few visible rows (or
+zero). `limit` applied to the RAW rows returned by the scrollback REST reads,
+while cic hides join/part/quit/nick_change at render time (the #222 presence
+filter). So a page of 50 raw rows that were all JOIN churn rendered as an empty
+screen — the operator paged up into nothing. The fix moves the presence filter
+into SQL so `limit` counts the rows cic will actually SHOW.
+
+**Design (all four calls blessed up front, no half-migration):**
+- **A = Option 1 — SQL filter, pref-driven; toggle→refetch.** The server
+  excludes the suppressed kinds in the query when the channel's pref hides them.
+  Over-fetch (return extra raw rows and let cic drop them) was rejected: it
+  re-imports the exact "limit counts the wrong rows" bug at a different ratio.
+- **B — filter `fetch_after` too.** Safe because backfill rows NEVER feed the
+  members store — they only `appendToScrollback`; the members map re-seeds via
+  the `members_seeded` event, not via scrollback pages. So dropping presence
+  rows from a backfill page cannot desync membership.
+- **C — filter `fetch_around` too.** Total consistency: all three read paths
+  (`fetch/7`, `fetch_after/7`, `fetch_around/7`) share the one
+  `maybe_exclude_presence/2`. No "cold-load filters but jump-to doesn't" split.
+- **D — member count unavailable → default SHOW.** When `Session.list_members`
+  returns `:no_session` / `:uninitialized`, `PresenceFilter.hidden?(nil, nil)`
+  returns false. A transient session gap shows MORE than intended, never hides
+  content the operator can't recover.
+
+**The server evaluates the tri-state itself — never a client boolean.** The
+issue flagged (consequence #2) that a `?hide_presence=true` query param would
+let a stale client silently drop content. Instead the controller
+(`resolve_hide_presence/3`) rebuilds the channel key, reads the #449
+server-backed `display_prefs.presence_filter[key]`, and calls
+`PresenceFilter.hidden?/2` — consulting `Session.list_members` for the live
+member count ONLY when the pref is unset (the size-default branch). One
+decision, server-owned, so every device converges.
+
+**SSOT + the mirrored threshold.** `Grappa.PresenceFilter.hidden?/2` is the
+inverted twin of cic's `resolvePresenceVisible` (show=visible ⇔ hidden=false);
+`@large_channel_threshold 50` mirrors cic's `LARGE_CHANNEL_THRESHOLD` and MUST
+stay equal (both moduledocs cross-reference). The suppressed set is a NARROW
+SSOT — `Message.suppressed_presence_kinds/0` = `[:join, :part, :quit,
+:nick_change]`, sitting beside `content_kinds`/`notify_kinds` — deliberately NOT
+the wider render-layer `PRESENCE_KINDS` (mode/topic/kick/server_event stay
+visible; suppressing them would be a bug). `Scrollback` reads it into a
+compile-time module attribute. The three `fetch*` arities gained a REQUIRED
+`hide_presence :: boolean()` (no default arg — CLAUDE.md; the own-nick DM rule
+already forced explicit call sites), and ~80 call sites migrated to /7.
+
+**cic's accepted consequence (Option 1): refetch on reveal.** Because the
+server never sent the hidden rows, flipping a channel's pref back to "show"
+needs a re-fetch. The hook lives in the display-prefs COORDINATOR
+(`displayPrefs.ts` `syncedSetChannelPresencePref`), not the RailActions toggle,
+so every door onto the synced write behaves identically. On "show" it
+`purgeScrollback(key)` then `loadInitialScrollback(slug, name)` — purge FIRST
+because `loadInitialScrollback`'s load-once gate skips a key still in
+`loadedChannels`, and purge is what drops it. "hide" needs no refetch: the
+render filter drops rows already in the store, for free. No import cycle
+(`scrollback.ts` does not import `displayPrefs.ts`).
+
+**Verification.** Server: `presence_filter_test.exs` (the tri-state truth
+table), `message_test.exs` (the narrow set), `scrollback_test.exs` (each fetch
+arity excludes the suppressed kinds under `hide_presence: true`),
+`messages_controller_test.exs` (hide / show / unset-no-session / channel
+canonicalization) + an outbound test proving unset + ≥50 members → hide (break-
+verified that it bites). cic: `displayPrefs.test.ts` asserts SHOW
+purges-then-reloads (with the order guard) and HIDE does neither. e2e
+(`issue458-presence-page-yield.spec.ts`) proves the visible-yield: a channel
+with many presence rows + few content rows, pref=hide, page-up renders a full
+screen of content instead of an empty page.
+
+**Follow-up (#505).** The unread-seed path (`WindowCounts` /
+`count_after_split`) still counts presence rows regardless of the pref — out of
+scope for #458, but it should consume this same `resolve_hide_presence` decision
+so the badge and the pane agree on which rows count.
