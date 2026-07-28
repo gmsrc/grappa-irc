@@ -27,7 +27,7 @@
 // seedData) to PUT it back in afterEach.
 
 import { expect, test } from "@playwright/test";
-import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
+import { openAdminConsole, expectShellReady } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 async function adminFriendlyLogin(
@@ -47,11 +47,11 @@ async function adminFriendlyLogin(
 }
 
 async function openAdminPaneAndSettingsTab(page: import("@playwright/test").Page): Promise<void> {
-  await openSettingsDrawer(page);
-  const drawer = page.getByRole("dialog", { name: /settings/i });
-  await expect(drawer).toBeVisible();
-  await page.getByTestId("admin-console-entry").click();
-  await expect(page.getByTestId("admin-pane")).toBeVisible();
+  // openAdminConsole waits for the settings drawer to finish its 200ms
+  // slide-out before returning, so the Settings-tab click below can't land on
+  // the still-closing drawer — the latent delivery race #508's iOS font floor
+  // perturbed into a ~9% flake (see the primitive's comment in cicchettoPage).
+  await openAdminConsole(page);
   await page.getByTestId("admin-tab-settings").click();
   await expect(page.getByTestId("admin-settings-tab")).toBeVisible();
 }

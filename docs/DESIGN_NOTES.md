@@ -21631,3 +21631,40 @@ you cannot shrink a focusable control below it without the very page-zoom the
 issue warns against, so a real iPhone still renders inputs at 16px; the change
 shrinks only Android/desktop. If 16px still reads large on iOS, the remaining
 levers are non-font (padding / min-height / line-height).
+
+**(c) The full integration gate flushed out a LATENT e2e race that (b)'s font
+change TRIGGERED — fixed at the class, not the symptom.** The 14px chromium
+input font perturbed layout timing enough to surface a ~9% flake in
+`ux-6-b-admin-settings.spec.ts` (the Settings-tab click intermittently failed to
+switch tabs). Isolation proved it is a test **delivery** race, NOT a product
+defect: an A/B on the single font hunk gave 14px 4/45 iso-fails vs 16px 0/70
+(main + font-reverted branch), Fisher p≈0.022, while the tab's onClick is a pure
+synchronous SolidJS signal (`AdminPane.tsx`) — so if a real click reaches the
+button the panel renders in the same tick, every time. Mechanism:
+`admin-console-entry`'s onClick fires `onClose()` (the settings drawer slides out
+over a 200ms `transform`, z-index 100, anchored right) then `onOpenAdmin()`;
+every admin spec hand-rolled `admin-console-entry.click()` + an immediate admin
+interaction, awaiting only `admin-pane` visible — never the drawer's slide-out
+finishing. A right-side tab (Settings = 9th/10) can catch the click on the
+still-sliding drawer; a swallowed synchronous click just never switches.
+Root-cause fix: a single-door `openAdminConsole(page)` primitive in
+`cicchetto/e2e/fixtures/cicchettoPage.ts` (sibling of `openSettingsDrawer` /
+`closeSettings`) that waits for the drawer to fully slide OUT of the viewport
+before returning — the wait lives in ONE place. **The precise wait condition is
+load-bearing, and a first cut got it wrong:** the drawer stays MOUNTED
+(`SettingsDrawer` keeps it in the DOM across open/close — a CSS `.open` toggle,
+not a `<Show>`), so closing only strips `.open`, which merely STARTS the 200ms
+`translateX(100%)` slide. The first cut awaited `.settings-drawer.open` → 0, but
+that fires at the slide's START — the drawer is still on-screen covering the
+tabs — so the re-gate still caught the race on a sibling test in the same file
+(`:73` while `:104`, the original flake, went green). `toBeHidden` fails too: the
+closed drawer changes no `visibility` / `display` / `pointer-events`, and
+Playwright treats an element merely translated off-screen as VISIBLE. The
+correct condition is `expect(drawer).not.toBeInViewport()` — semantic (the
+drawer no longer overlaps the viewport, i.e. the transition settled at
+`translateX(100%)`), retrying to the transition's end with zero magic sleep
+(the condition-based-waiting discipline). #508 adopts the primitive in `ux-6-b`
+only (in scope); migrating the other ~19 admin specs that share the latent race
+is tracked in #512. This is HARDENING, not weakening — the spec's real assertion
+is untouched; it waits for the settled state the helper was skipping, authorized
+precisely because the product path was proven synchronous + correct.

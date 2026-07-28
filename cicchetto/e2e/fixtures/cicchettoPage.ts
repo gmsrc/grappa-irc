@@ -741,6 +741,43 @@ export async function openSettingsDrawer(page: Page): Promise<Locator> {
   return page.getByRole("dialog", { name: /settings/i });
 }
 
+// Open the admin console — the SINGLE door for reaching AdminPane, the
+// sibling of openSettingsDrawer. The Admin Console entry lives INSIDE the
+// settings drawer, so this opens the drawer, clicks the entry (whose onClick
+// fires onClose() + onOpenAdmin()), then WAITS for the drawer to finish
+// closing before returning. That wait is load-bearing: `.settings-drawer`
+// slides out over a 200ms `transform` transition (themes/default.css) at
+// z-index 100 anchored right, so a caller that clicks a right-side admin tab
+// (e.g. the 9th tab, Settings) the instant `admin-pane` mounts can land the
+// click on the STILL-SLIDING drawer instead of the tab. The tab's onClick is
+// a pure synchronous signal, so a swallowed click simply never switches the
+// tab — no product defect, a delivery race. This race is pre-existing and
+// LATENT across the ~20 admin specs that hand-roll `admin-console-entry`
+// .click(); centralizing the wait here fixes the whole class in ONE place
+// (follow-up issue tracks migrating the remaining specs onto this primitive).
+// Surfaced as a ~9% flake once #508's iOS font floor perturbed the layout
+// timing. Returns the admin-pane locator so callers scope assertions to it.
+export async function openAdminConsole(page: Page): Promise<Locator> {
+  const drawer = await openSettingsDrawer(page);
+  await page.getByTestId("admin-console-entry").click();
+  // The entry closes the drawer AND opens admin. The drawer stays MOUNTED
+  // (SettingsDrawer keeps it in the DOM across open/close — a CSS `.open`
+  // toggle, not a <Show>): closing only strips `.open`, which STARTS a 200ms
+  // `translateX(100%)` slide-out (themes/default.css, z-index 100, anchored
+  // right). Waiting on `.settings-drawer.open` count→0 returned at the slide's
+  // START, with the drawer still on-screen covering the right-side admin tabs
+  // (Settings is the 9th of 10) → a caller's tab click landed on the sliding
+  // drawer and was swallowed. The closed drawer changes NO
+  // visibility/display/pointer-events (so toBeHidden never fires — an
+  // off-screen transform is still "visible" to Playwright); instead wait until
+  // it has fully slid OUT of the viewport (transition settled at
+  // translateX(100%)), the instant it can no longer intercept the next click.
+  await expect(drawer).not.toBeInViewport({ timeout: 5_000 });
+  const pane = page.getByTestId("admin-pane");
+  await expect(pane).toBeVisible({ timeout: 5_000 });
+  return pane;
+}
+
 // Close the settings drawer from ANY page — the exit counterpart to
 // openSettingsSection. #460 moved the "done" footer button onto the main index
 // only, so a spec sitting on a sub-page (where openSettingsSection leaves it)
