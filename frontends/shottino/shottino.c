@@ -236,6 +236,12 @@ struct window {
     long last_read_id;
     unsigned mentions;
     wire_counts_severity severity;
+    /* Channel mode LETTERS currently set (from channel_modes_changed,
+     * whose first delivery is the 324 snapshot the ircd sends on join).
+     * `known` distinguishes "no modes set" from "never been told" — the
+     * muted tier is only claimed when we actually know. */
+    char chan_modes[128];
+    bool chan_modes_known;
 };
 
 enum job_kind {
@@ -364,6 +370,10 @@ struct app {
     size_t seen_next;
     size_t scrollback_offset;
     bool scrollback_pinned;
+    /* First roster row shown in the member pane. Reset on focus change,
+     * like the scrollback offset — a roster you scrolled in #a means
+     * nothing in #b. */
+    size_t member_offset;
     char input[MAX_LINE];
     size_t input_len;
     char last_url[MAX_LINE];
@@ -1196,29 +1206,142 @@ static void clear_active_window_log(struct app *app) {
     pthread_mutex_unlock(&app->lock);
 }
 
+/* Prefix precedence + the tier a member sits in. Defined beside
+ * member_sigil_locked (they share network_prefixes_locked, which needs
+ * network_by_slug_locked); declared here because the roster sort below
+ * ranks members as they enter the app. */
+static size_t member_rank_locked(struct app *app, const char *network, const char *modes);
+static const char *member_rank_label_locked(struct app *app, const char *network, const char *modes);
+
+/* Rank a member for roster ordering: highest prefix first, then
+ * alphabetical. Sorting lives HERE, at the single point where a roster
+ * enters the app, rather than at the call sites that build one: the REST
+ * /members reply sorted itself and the members_seeded event did not, so
+ * the same channel was ordered or not depending on which door its roster
+ * came through. Caller holds app->lock. */
+static void sort_members_locked(struct app *app, const char *network, struct member *m, size_t count) {
+    for (size_t i = 1; i < count; i++) {
+        struct member key = m[i];
+        size_t key_rank = member_rank_locked(app, network, key.modes);
+        size_t j = i;
+        while (j > 0) {
+            size_t prev_rank = member_rank_locked(app, network, m[j - 1].modes);
+            if (prev_rank < key_rank) break;
+            if (prev_rank == key_rank && strcasecmp(m[j - 1].nick, key.nick) <= 0) break;
+            m[j] = m[j - 1];
+            j--;
+        }
+        m[j] = key;
+    }
+}
+
 static void set_window_members(struct app *app, const char *network, const char *channel, const struct member *members, size_t count) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
         if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
             app->windows[i].member_count = count > 512 ? 512 : count;
             for (size_t j = 0; j < app->windows[i].member_count; j++) app->windows[i].members[j] = members[j];
+            sort_members_locked(app, network, app->windows[i].members, app->windows[i].member_count);
             break;
         }
     }
     pthread_mutex_unlock(&app->lock);
 }
 
-/* Rank a member for roster ordering: ops first, then halfops, voiced,
- * plain. Mode LETTERS come off the wire (o/h/v), not sigils — the sigil is
- * a display concern resolved from the network's ISUPPORT PREFIX map. */
-static int member_rank(const char *modes) {
-    if (strchr(modes, 'q') || strchr(modes, 'a') || strchr(modes, 'o')) return 0;
-    if (strchr(modes, 'h')) return 1;
-    if (strchr(modes, 'v')) return 2;
-    return 3;
+/* ── Keeping the roster live ───────────────────────────────────────────
+ *
+ * A roster arrives whole (NAMES, members_seeded, REST /members) and then
+ * the channel moves under it. While the member list only appeared on very
+ * wide terminals that was survivable; as a permanent pane it is not — a
+ * list that still shows who was here when you joined is worse than no
+ * list, because it looks current.
+ *
+ * Membership changes are applied incrementally from the typed presence
+ * events this client already renders: join/part/quit/kick/nick say
+ * exactly who, with no parsing. A PREFIX change (+o, -v) is deliberately
+ * NOT parsed here — mode semantics are the server's job (one parser, on
+ * the server), and a client-side mode parser would be a second, divergent
+ * one. Those refetch the roster instead: rare event, one request, and the
+ * answer comes from the side that actually knows. */
+static bool nick_case_equal(const char *a, const char *b);
+
+static bool roster_add_locked(struct window *w, const char *nick) {
+    if (w->member_count >= 512) return false;
+    for (size_t i = 0; i < w->member_count; i++)
+        if (nick_case_equal(w->members[i].nick, nick)) return false;
+    snprintf(w->members[w->member_count].nick, sizeof(w->members[0].nick), "%s", nick);
+    w->members[w->member_count].modes[0] = '\0';
+    w->member_count++;
+    return true;
 }
 
-/* Sigil for the highest-ranked mode a member holds. Defaults match the
+static bool roster_remove_locked(struct window *w, const char *nick) {
+    for (size_t i = 0; i < w->member_count; i++) {
+        if (!nick_case_equal(w->members[i].nick, nick)) continue;
+        memmove(&w->members[i], &w->members[i + 1], sizeof(w->members[0]) * (w->member_count - i - 1));
+        w->member_count--;
+        return true;
+    }
+    return false;
+}
+
+/* A rename keeps the member's prefixes: ops stay ops across a NICK. */
+static bool roster_rename_locked(struct window *w, const char *from, const char *to) {
+    for (size_t i = 0; i < w->member_count; i++) {
+        if (!nick_case_equal(w->members[i].nick, from)) continue;
+        snprintf(w->members[i].nick, sizeof(w->members[0].nick), "%s", to);
+        return true;
+    }
+    return false;
+}
+
+static void enqueue_members(struct app *app, const char *network, const char *channel);
+
+/* Apply one presence row to the rosters it touches. `channel` is the row's
+ * own channel; QUIT and NICK are network-wide, so they sweep every window
+ * of that network — IRC delivers them once, not per channel. */
+static void apply_membership_event(struct app *app, const char *network, const char *channel,
+                                   wire_message_kind kind, const char *sender, const char *body) {
+    if (!network[0] || !sender) return;
+    bool refetch = false;
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) {
+        struct window *w = &app->windows[i];
+        if (strcmp(w->network, network) != 0) continue;
+        bool this_channel = channel[0] && strcmp(w->channel, channel) == 0;
+        bool touched = false;
+        switch (kind) {
+        case MSG_JOIN:
+            if (this_channel) touched = roster_add_locked(w, sender);
+            break;
+        case MSG_PART:
+            if (this_channel) touched = roster_remove_locked(w, sender);
+            break;
+        case MSG_KICK:
+            /* The KICKED nick is the body; the sender is whoever did it. */
+            if (this_channel && body && body[0]) touched = roster_remove_locked(w, body);
+            break;
+        case MSG_QUIT:
+            touched = roster_remove_locked(w, sender);
+            break;
+        case MSG_NICK_CHANGE:
+            if (body && body[0]) touched = roster_rename_locked(w, sender, body);
+            break;
+        case MSG_MODE:
+            /* Might be a prefix change; the server knows, this client
+             * deliberately does not. Ask, once, for this channel. */
+            if (this_channel) refetch = true;
+            break;
+        default:
+            break;
+        }
+        if (touched) sort_members_locked(app, w->network, w->members, w->member_count);
+    }
+    pthread_mutex_unlock(&app->lock);
+    if (refetch) enqueue_members(app, network, channel);
+}
+
+/* Sigil for the highest-ranked prefix a member holds. Defaults match the
  * near-universal PREFIX=(qaohv)~&@%+ ordering; a network that advertises
  * something else is handled by isupport_prefix below. */
 static char member_sigil(struct app *app, const char *network, const char *modes);
@@ -1402,6 +1525,9 @@ static void render_message(struct app *app, const struct wire_scrollback_message
         char line[MAX_LINE];
         format_presence_line(m->kind, sender, m->body, line, sizeof(line));
         if (line[0]) log_line_mention(app, false, "[%s/%s] %s %s", network, display_channel, clock, line);
+        /* The row is also a roster fact: the pane must not still show
+         * someone who just left. */
+        apply_membership_event(app, network, display_channel, m->kind, sender, m->body);
         break;
     }
     }
@@ -2718,19 +2844,82 @@ static struct network *network_by_id_locked(struct app *app, long id) {
 
 /* Caller holds app->lock. The draw path is already inside the lock, so
  * the locking wrapper below would self-deadlock there — hence the split. */
-static char member_sigil_locked(struct app *app, const char *network, const char *modes) {
-    /* Conventional fallback, used until the network sends its 005. */
+/* This network's prefix precedence, highest rank first, as parallel
+ * letter/sigil tables. Falls back to the near-universal (qaohv)~&@%+ map
+ * until 005 lands, so a roster drawn before ISUPPORT still tiers.
+ * `letters` may be NULL when the caller only wants sigils. Caller holds
+ * app->lock. */
+static size_t network_prefixes_locked(struct app *app, const char *network, const char **letters,
+                                      const char **sigils) {
     static const char fallback_letters[] = "qaohv";
     static const char fallback_sigils[] = "~&@%+";
     struct network *n = network_by_slug_locked(app, network);
     if (n && n->prefix_count) {
-        for (size_t i = 0; i < n->prefix_count; i++)
-            if (strchr(modes, n->prefix_letters[i])) return n->prefix_sigils[i];
-        return 0;
+        if (letters) *letters = n->prefix_letters;
+        *sigils = n->prefix_sigils;
+        return n->prefix_count;
     }
-    for (size_t i = 0; fallback_letters[i]; i++)
-        if (strchr(modes, fallback_letters[i])) return fallback_sigils[i];
-    return 0;
+    if (letters) *letters = fallback_letters;
+    *sigils = fallback_sigils;
+    return sizeof(fallback_sigils) - 1;
+}
+
+/* Rank of the highest prefix a member holds: 0 = highest (owner/op),
+ * `count` = no prefix at all, so a plain user always sorts last.
+ *
+ * The member's `modes` are PREFIX SIGILS — `@`, `+` — because that is
+ * what the wire carries (grappa stores sigils; cic's tierRank matches on
+ * them). This used to test mode LETTERS (`strchr(modes, 'o')`), which
+ * matches nothing a server ever sends: every member ranked plain, the
+ * roster never tiered, and no sigil was ever drawn beside a nick.
+ * Caller holds app->lock. */
+static size_t member_rank_locked(struct app *app, const char *network, const char *modes) {
+    const char *sigils;
+    size_t count = network_prefixes_locked(app, network, NULL, &sigils);
+    for (size_t i = 0; i < count; i++)
+        if (strchr(modes, sigils[i])) return i;
+    return count;
+}
+
+static char member_sigil_locked(struct app *app, const char *network, const char *modes) {
+    const char *sigils;
+    size_t count = network_prefixes_locked(app, network, NULL, &sigils);
+    size_t rank = member_rank_locked(app, network, modes);
+    return rank < count ? sigils[rank] : 0;
+}
+
+/* Word for a member's tier, for the /members listing. Derived from the
+ * mode LETTER the network pairs with the sigil the member holds, so a
+ * network with an unusual PREFIX still gets a truthful label. */
+static const char *member_rank_label_locked(struct app *app, const char *network,
+                                            const char *modes) {
+    const char *letters, *sigils;
+    size_t count = network_prefixes_locked(app, network, &letters, &sigils);
+    size_t rank = member_rank_locked(app, network, modes);
+    if (rank >= count) return "user";
+    switch (letters[rank]) {
+    case 'q': return "owner";
+    case 'a': return "admin";
+    case 'o': return "op";
+    case 'h': return "halfop";
+    case 'v': return "voice";
+    default: return "prefix";
+    }
+}
+
+/* Locking twins, for the command thread. The draw path holds app->lock
+ * for the whole frame and must use the _locked forms. */
+static const char *member_rank_label(struct app *app, const char *network, const char *modes) {
+    pthread_mutex_lock(&app->lock);
+    const char *label = member_rank_label_locked(app, network, modes);
+    pthread_mutex_unlock(&app->lock);
+    return label;
+}
+
+static void sort_members(struct app *app, const char *network, struct member *m, size_t count) {
+    pthread_mutex_lock(&app->lock);
+    sort_members_locked(app, network, m, count);
+    pthread_mutex_unlock(&app->lock);
 }
 
 static char member_sigil(struct app *app, const char *network, const char *modes) {
@@ -3045,6 +3234,21 @@ static void render_channel_modes(struct app *app, const struct wire_event *ev) {
         const char *m = wire_string_at(ev->u.channel_modes.modes, i);
         if (m && m[0]) { modes[w++] = m[0]; modes[w] = '\0'; }
     }
+    /* Retain them, don't just print them: the member pane needs to know
+     * whether the channel is moderated (+m) to say that plain users are
+     * muted. Stored WITHOUT the leading '+', and stored even when empty —
+     * "no modes" is an answer, and it is a different answer from "never
+     * been told", which is what the muted tier turns on. */
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) {
+        struct window *win = &app->windows[i];
+        if (strcmp(win->network, ev->u.channel_modes.network) != 0) continue;
+        if (strcmp(win->channel, ev->u.channel_modes.channel) != 0) continue;
+        snprintf(win->chan_modes, sizeof(win->chan_modes), "%s", modes + 1);
+        win->chan_modes_known = true;
+        break;
+    }
+    pthread_mutex_unlock(&app->lock);
     if (w == 1) return; /* no modes set — nothing worth a row */
     log_line(app, "[%s/%s] --- channel modes %s", ev->u.channel_modes.network,
              ev->u.channel_modes.channel, modes);
@@ -3746,6 +3950,53 @@ static void add_link_region(struct app *app, int y0, int y1, int x0, int x1,
     snprintf(r->url, sizeof(r->url), "%s", url);
 }
 
+/* Is this channel moderated? Plain users cannot speak in a +m channel —
+ * that is what "muted" means here. There is no per-member muted state on
+ * the wire (only @ / % / + and plain), so the tier is DERIVED from the
+ * channel's own mode, and only claimed when the modes are actually
+ * known: guessing "not muted" from silence would be a lie in the one
+ * case the label matters. */
+static bool channel_is_moderated(const struct window *w) {
+    return w->chan_modes_known && strchr(w->chan_modes, 'm') != NULL;
+}
+
+/* Rows the roster occupies: one per member, plus a separator above the
+ * muted group when the channel is +m and anyone is in it. Computed by
+ * the same walk that draws, so scrolling and drawing cannot disagree —
+ * the lesson the chat area learned the hard way. Caller holds app->lock.
+ *
+ * `y < 0` measures without drawing. Returns the total row count. */
+static size_t draw_member_list(struct app *app, struct window *w, int y, int x, int width,
+                               int height, size_t offset) {
+    bool moderated = channel_is_moderated(w);
+    const char *sigils;
+    size_t prefix_count = network_prefixes_locked(app, w->network, NULL, &sigils);
+    size_t row = 0;      /* index into the whole list */
+    bool split_drawn = false;
+    for (size_t i = 0; i < w->member_count; i++) {
+        size_t rank = member_rank_locked(app, w->network, w->members[i].modes);
+        bool plain = rank >= prefix_count;
+        if (moderated && plain && !split_drawn) {
+            split_drawn = true;
+            if (y >= 0 && row >= offset && (int)(row - offset) < height)
+                draw_text(y + (int)(row - offset), x, width, CP_MUTED, A_DIM, "%s", "— muted —");
+            row++;
+        }
+        if (y >= 0 && row >= offset && (int)(row - offset) < height) {
+            int line_y = y + (int)(row - offset);
+            char sigil = rank < prefix_count ? sigils[rank] : 0;
+            int pair = nick_pair(w->members[i].nick);
+            /* A muted member is dimmed: the pane says at a glance who can
+             * actually talk here. */
+            attr_t attrs = (moderated && plain) ? A_DIM : (sigil ? A_BOLD : 0);
+            if (sigil) draw_text(line_y, x, width, pair, attrs, "%c%s", sigil, w->members[i].nick);
+            else draw_text(line_y, x, width, pair, attrs, " %s", w->members[i].nick);
+        }
+        row++;
+    }
+    return row;
+}
+
 static void draw(struct app *app) {
     pthread_mutex_lock(&app->lock);
     erase();
@@ -3840,6 +4091,36 @@ static void draw(struct app *app) {
         else if (unread) draw_text(y, 4, side - 5, pair, A_BOLD, "%s [%u]", win->channel, app->windows[i].unread);
         else draw_text(y, 4, side - 5, pair, selected ? A_BOLD : 0, "%s", win->channel);
         y++;
+    }
+
+    /* The roster lives UNDER the window list, in whatever the window list
+     * left. Windows keep priority: a channel you cannot see in the list is
+     * a channel you cannot reach, while a roster that needs scrolling is
+     * merely a roster that needs scrolling.
+     *
+     * It is drawn here only when the wide-terminal pane on the right is
+     * NOT showing. One roster on screen at a time, in one of two places —
+     * the same list either way, since both call draw_member_list. */
+    size_t roster_rows = 0;
+    if (!members && w->member_count > 0) {
+        int roster_y = y + 1;
+        int roster_h = rows - 1 - roster_y;
+        if (roster_h > 0) {
+            attron(COLOR_PAIR(CP_BORDER));
+            mvhline(y, 0, ACS_HLINE, side);
+            attroff(COLOR_PAIR(CP_BORDER));
+            draw_fill(roster_y, 0, side, CP_ALT);
+            draw_text(roster_y, 1, side - 2, CP_ACCENT, A_BOLD, "users %zu", w->member_count);
+            roster_rows = draw_member_list(app, w, -1, 0, 0, 0, 0);
+            size_t max_off = roster_rows > (size_t)(roster_h - 1) ? roster_rows - (size_t)(roster_h - 1) : 0;
+            if (app->member_offset > max_off) app->member_offset = max_off;
+            draw_member_list(app, w, roster_y + 1, 1, side - 2, roster_h - 1, app->member_offset);
+            /* Say so when the list runs past the pane, or a roster that is
+             * simply taller than the sidebar reads as a truncated one. */
+            if (roster_rows > (size_t)(roster_h - 1))
+                draw_text(rows - 1, 1, side - 2, CP_MUTED, A_DIM, "S-PgUp/PgDn %zu/%zu",
+                          app->member_offset + 1, roster_rows);
+        }
     }
 
     /* Title + topic ride one continuous band, so the chat area begins
@@ -4151,12 +4432,17 @@ static void draw(struct app *app) {
      * advertises via ISUPPORT PREFIX, nick-coloured to match scrollback. */
     if (members) {
         draw_text(0, members_x + 1, members - 2, CP_ACCENT, A_BOLD, "members %zu", w->member_count);
-        int my = 2;
-        for (size_t i = 0; i < w->member_count && my < rows - 1; i++, my++) {
-            char sigil = member_sigil_locked(app, w->network, w->members[i].modes);
-            int pair = nick_pair(w->members[i].nick);
-            if (sigil) draw_text(my, members_x + 1, members - 2, pair, A_BOLD, "%c%s", sigil, w->members[i].nick);
-            else draw_text(my, members_x + 1, members - 2, pair, 0, " %s", w->members[i].nick);
+        /* Same list, same tiers, same scroll offset as the sidebar pane —
+         * only the column differs. */
+        int pane_h = rows - 3;
+        if (pane_h > 0) {
+            roster_rows = draw_member_list(app, w, -1, 0, 0, 0, 0);
+            size_t max_off = roster_rows > (size_t)pane_h ? roster_rows - (size_t)pane_h : 0;
+            if (app->member_offset > max_off) app->member_offset = max_off;
+            draw_member_list(app, w, 2, members_x + 1, members - 2, pane_h, app->member_offset);
+            if (roster_rows > (size_t)pane_h)
+                draw_text(rows - 1, members_x + 1, members - 2, CP_MUTED, A_DIM,
+                          "S-PgUp/PgDn %zu/%zu", app->member_offset + 1, roster_rows);
         }
         if (w->member_count == 0)
             draw_text(2, members_x + 1, members - 2, CP_MUTED, 0, "(not seeded)");
@@ -4251,7 +4537,13 @@ static void set_topic_target(struct app *app, const char *network, const char *c
     free(r.body);
 }
 
-static void list_members_target(struct app *app, const char *network, const char *channel) {
+/* `announce` false = fill the roster without printing it. The pane
+ * refreshes itself on focus and after a MODE, and dumping the whole
+ * member list into scrollback every time would bury the conversation
+ * under the furniture. /members still prints, because that is what the
+ * user asked for. */
+static void list_members_target(struct app *app, const char *network, const char *channel,
+                                bool announce) {
     char *net = url_encode(network);
     char *chan = url_encode(channel);
     char *path = xasprintf("/networks/%s/channels/%s/members", net, chan);
@@ -4301,24 +4593,20 @@ static void list_members_target(struct app *app, const char *network, const char
             count++;
         }
         json_free(doc);
-        for (size_t i = 0; i < count; i++) {
-            for (size_t j = i + 1; j < count; j++) {
-                int ri = member_rank(rows[i].modes), rj = member_rank(rows[j].modes);
-                if (rj < ri || (rj == ri && strcasecmp(rows[j].nick, rows[i].nick) < 0)) {
-                    struct member tmp = rows[i]; rows[i] = rows[j]; rows[j] = tmp;
-                }
-            }
-        }
+        /* No sort here: set_window_members owns the ordering, so the REST
+         * roster and the seeded one cannot disagree. */
         set_window_members(app, network, channel, rows, count);
-        log_line(app, "members %s (%zu):", channel, count);
-        for (size_t i = 0; i < count; i++) {
-            int rank = member_rank(rows[i].modes);
-            const char *label = rank == 0 ? "op" : (rank == 1 ? "halfop" : (rank == 2 ? "voice" : "user"));
-            char sigil = member_sigil(app, network, rows[i].modes);
-            log_line(app, "  %-6s %c%s", label, sigil ? sigil : ' ', rows[i].nick);
+        if (announce) {
+            sort_members(app, network, rows, count); /* same order as the pane */
+            log_line(app, "members %s (%zu):", channel, count);
+            for (size_t i = 0; i < count; i++) {
+                const char *label = member_rank_label(app, network, rows[i].modes);
+                char sigil = member_sigil(app, network, rows[i].modes);
+                log_line(app, "  %-6s %c%s", label, sigil ? sigil : ' ', rows[i].nick);
+            }
+            if (count == 0) log_line(app, "members %s: (none)", channel);
         }
-        if (count == 0) log_line(app, "members %s: (none)", channel);
-    } else {
+    } else if (announce) {
         log_line(app, "members failed HTTP %d: %.200s", r.status, r.body);
     }
     free(path);
@@ -4498,7 +4786,9 @@ static void *worker_main(void *arg) {
             set_topic_target(app, job.network, job.channel, job.arg1);
             break;
         case JOB_MEMBERS:
-            list_members_target(app, job.network, job.channel);
+            /* arg1 is the announce flag: "quiet" for the pane's own
+             * refreshes, empty for an explicit /members. */
+            list_members_target(app, job.network, job.channel, strcmp(job.arg1, "quiet") != 0);
             break;
         case JOB_CLOSE_QUERY:
             close_query_target(app, job.network, job.channel);
@@ -4525,6 +4815,33 @@ static void enqueue_fetch(struct app *app, const char *network, const char *chan
     snprintf(job.network, sizeof(job.network), "%s", network);
     snprintf(job.channel, sizeof(job.channel), "%s", channel);
     enqueue_job(app, job);
+}
+
+static void enqueue_members(struct app *app, const char *network, const char *channel) {
+    if (!network[0] || !channel[0] || strcmp(channel, "$server") == 0) return;
+    struct job job = { .kind = JOB_MEMBERS };
+    snprintf(job.network, sizeof(job.network), "%s", network);
+    snprintf(job.channel, sizeof(job.channel), "%s", channel);
+    snprintf(job.arg1, sizeof(job.arg1), "quiet");
+    enqueue_job(app, job);
+}
+
+/* Focus landed on a window with no roster: ask for one. The pane is
+ * always on screen now, so "empty until you type /members" is not a
+ * state worth having. Gated on empty, so switching windows in a channel
+ * whose roster is already live costs nothing. */
+static void ensure_roster(struct app *app, const char *network, const char *channel) {
+    bool empty = false;
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) {
+        if (strcmp(app->windows[i].network, network) == 0 &&
+            strcmp(app->windows[i].channel, channel) == 0) {
+            empty = app->windows[i].member_count == 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+    if (empty) enqueue_members(app, network, channel);
 }
 
 static void enqueue_send(struct app *app, const char *network, const char *channel, const char *body) {
@@ -4591,6 +4908,20 @@ static void scroll_bottom(struct app *app) {
     pthread_mutex_unlock(&app->lock);
 }
 
+/* Scroll the member pane. Positive = further down the roster. The upper
+ * bound is the draw path's business — it is the only thing that knows how
+ * many rows the pane got — so this only floors at zero and lets the frame
+ * clamp the top. */
+static void scroll_members(struct app *app, int delta) {
+    pthread_mutex_lock(&app->lock);
+    if (delta > 0) app->member_offset += (size_t)delta;
+    else {
+        size_t n = (size_t)(-delta);
+        app->member_offset = n > app->member_offset ? 0 : app->member_offset - n;
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
 static void cycle_window(struct app *app, int delta) {
     pthread_mutex_lock(&app->lock);
     if (app->window_count == 0) {
@@ -4602,12 +4933,14 @@ static void cycle_window(struct app *app, int delta) {
     clear_current_unread_locked(app);
     app->scrollback_offset = 0;
     app->scrollback_pinned = false;
+    app->member_offset = 0;
     char network[MAX_SLUG];
     char channel[MAX_CHANNEL];
     snprintf(network, sizeof(network), "%s", app->windows[app->current].network);
     snprintf(channel, sizeof(channel), "%s", app->windows[app->current].channel);
     pthread_mutex_unlock(&app->lock);
     enqueue_fetch(app, network, channel);
+    ensure_roster(app, network, channel);
 }
 
 static const char *commands[] = {
@@ -6063,7 +6396,9 @@ static void handle_command_dispatch(struct app *app, char *line) {
             clear_current_unread_locked(app);
             app->scrollback_offset = 0;
             app->scrollback_pinned = false;
+            app->member_offset = 0;
             enqueue_fetch(app, app->windows[app->current].network, app->windows[app->current].channel);
+            ensure_roster(app, app->windows[app->current].network, app->windows[app->current].channel);
         }
     } else {
         log_line(app, "unknown command: %.40s — /help lists every verb", line);
@@ -6115,6 +6450,26 @@ static void handle_mouse(struct app *app) {
     MEVENT ev;
     if (getmouse(&ev) != OK) return;
     bool click = ev.bstate & (BUTTON1_PRESSED | BUTTON1_CLICKED);
+
+    /* Wheel over a member pane scrolls the roster. Which column that is
+     * depends on the terminal width, so ask the same question the draw
+     * path asks: wide terminals put it on the right, narrow ones in the
+     * sidebar under the window list. */
+    bool wheel_up = false, wheel_down = false;
+#ifdef BUTTON4_PRESSED
+    wheel_up = (ev.bstate & BUTTON4_PRESSED) != 0;
+#endif
+#ifdef BUTTON5_PRESSED
+    wheel_down = (ev.bstate & BUTTON5_PRESSED) != 0;
+#endif
+    if (wheel_up || wheel_down) {
+        int cols = getmaxx(stdscr);
+        int side = cols > 118 ? 22 : (cols > 90 ? 18 : 14);
+        int members = cols > 118 ? 24 : 0;
+        bool over_roster = members ? ev.x >= cols - members : ev.x < side;
+        if (over_roster) scroll_members(app, wheel_up ? -3 : 3);
+        return;
+    }
 
     pthread_mutex_lock(&app->lock);
     const struct link_region *r = region_at(app, ev.x, ev.y);
@@ -6197,6 +6552,14 @@ static void event_loop(struct app *app) {
             scroll_chat(app, 10);
         } else if (ch == KEY_NPAGE) {
             scroll_chat(app, -10);
+#ifdef KEY_SPREVIOUS
+        } else if (ch == KEY_SPREVIOUS) {
+            scroll_members(app, -5);
+#endif
+#ifdef KEY_SNEXT
+        } else if (ch == KEY_SNEXT) {
+            scroll_members(app, 5);
+#endif
         } else if (ch == KEY_HOME) {
             scroll_chat(app, 1000000);
         } else if (ch == KEY_END) {

@@ -126,6 +126,180 @@ TEST(tail_omits_the_nick_header) {
     CHECK(strstr(part_rows[0], "12:34") == NULL);
 }
 
+/* ── Roster tiers ──────────────────────────────────────────────────────
+ *
+ * The member list is ordered and labelled off PREFIX SIGILS, because
+ * that is what the wire carries. It used to test mode LETTERS, which
+ * matches nothing a server sends: every member ranked plain, the roster
+ * never tiered, and no sigil was ever drawn beside a nick. These pin the
+ * representation so that cannot come back silently. */
+static struct app *test_app(void) {
+    struct app *app = calloc(1, sizeof(*app));
+    if (!app) return NULL;
+    pthread_mutex_init(&app->lock, NULL);
+    return app;
+}
+
+static void add_test_network(struct app *app, const char *slug, const char *letters,
+                             const char *sigils) {
+    struct network *n = &app->networks[app->network_count++];
+    snprintf(n->slug, sizeof(n->slug), "%s", slug);
+    n->prefix_count = 0;
+    for (size_t i = 0; letters[i] && sigils[i]; i++) {
+        n->prefix_letters[n->prefix_count] = letters[i];
+        n->prefix_sigils[n->prefix_count] = sigils[i];
+        n->prefix_count++;
+    }
+}
+
+static struct window *add_test_window(struct app *app, const char *net, const char *chan) {
+    struct window *w = &app->windows[app->window_count++];
+    snprintf(w->network, sizeof(w->network), "%s", net);
+    snprintf(w->channel, sizeof(w->channel), "%s", chan);
+    return w;
+}
+
+static void seed(struct window *w, size_t i, const char *nick, const char *modes) {
+    snprintf(w->members[i].nick, sizeof(w->members[i].nick), "%s", nick);
+    snprintf(w->members[i].modes, sizeof(w->members[i].modes), "%s", modes);
+}
+
+TEST(member_tiers_read_prefix_sigils_not_mode_letters) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+
+    CHECK_LONG(member_rank_locked(app, "azzurra", "@"), 0);
+    CHECK_LONG(member_rank_locked(app, "azzurra", "%"), 1);
+    CHECK_LONG(member_rank_locked(app, "azzurra", "+"), 2);
+    CHECK_LONG(member_rank_locked(app, "azzurra", ""), 3);
+    /* A member holding several sigils tiers by the highest. */
+    CHECK_LONG(member_rank_locked(app, "azzurra", "@+"), 0);
+    /* The mode LETTER is not a sigil: 'o' must NOT read as an op. */
+    CHECK_LONG(member_rank_locked(app, "azzurra", "o"), 3);
+
+    CHECK_LONG(member_sigil_locked(app, "azzurra", "@"), '@');
+    CHECK_LONG(member_sigil_locked(app, "azzurra", "+"), '+');
+    CHECK_LONG(member_sigil_locked(app, "azzurra", ""), 0);
+    CHECK_STR(member_rank_label_locked(app, "azzurra", "@"), "op");
+    CHECK_STR(member_rank_label_locked(app, "azzurra", "%"), "halfop");
+    CHECK_STR(member_rank_label_locked(app, "azzurra", "+"), "voice");
+    CHECK_STR(member_rank_label_locked(app, "azzurra", ""), "user");
+
+    /* Before 005 lands there is no PREFIX for the network: the
+     * conventional ~&@%+ map still has to tier, or every roster drawn
+     * during connect is flat. */
+    CHECK_LONG(member_rank_locked(app, "unknown-net", "@"), 2);
+    CHECK_LONG(member_sigil_locked(app, "unknown-net", "@"), '@');
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+TEST(roster_sorts_by_tier_then_nick) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    struct window *w = add_test_window(app, "azzurra", "#chan");
+    seed(w, 0, "zoe", "");
+    seed(w, 1, "Bob", "@");
+    seed(w, 2, "alice", "+");
+    seed(w, 3, "Carol", "@");
+    seed(w, 4, "dave", "");
+    seed(w, 5, "mod", "%");
+    w->member_count = 6;
+    sort_members_locked(app, "azzurra", w->members, w->member_count);
+
+    CHECK_STR(w->members[0].nick, "Bob");
+    CHECK_STR(w->members[1].nick, "Carol");
+    CHECK_STR(w->members[2].nick, "mod");
+    CHECK_STR(w->members[3].nick, "alice");
+    CHECK_STR(w->members[4].nick, "dave");
+    CHECK_STR(w->members[5].nick, "zoe");
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+TEST(roster_edits_keep_the_order_and_the_prefixes) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    struct window *w = add_test_window(app, "azzurra", "#chan");
+    seed(w, 0, "Bob", "@");
+    seed(w, 1, "alice", "");
+    w->member_count = 2;
+
+    CHECK(roster_add_locked(w, "zoe"));
+    CHECK(!roster_add_locked(w, "ZOE")); /* already here, folded */
+    sort_members_locked(app, "azzurra", w->members, w->member_count);
+    CHECK_LONG(w->member_count, 3);
+    CHECK_STR(w->members[0].nick, "Bob");
+    CHECK_STR(w->members[1].nick, "alice");
+    CHECK_STR(w->members[2].nick, "zoe");
+
+    /* A rename keeps the prefix: an op stays an op across a NICK. */
+    CHECK(roster_rename_locked(w, "Bob", "Roberto"));
+    CHECK_STR(w->members[0].nick, "Roberto");
+    CHECK_STR(w->members[0].modes, "@");
+
+    CHECK(roster_remove_locked(w, "ALICE"));
+    CHECK(!roster_remove_locked(w, "nobody"));
+    CHECK_LONG(w->member_count, 2);
+    CHECK_STR(w->members[0].nick, "Roberto");
+    CHECK_STR(w->members[1].nick, "zoe");
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+TEST(muted_tier_needs_a_known_plus_m) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    struct window *w = add_test_window(app, "azzurra", "#chan");
+    /* Never been told is NOT "not moderated": the label is only claimed
+     * when the modes are actually known. */
+    CHECK(!channel_is_moderated(w));
+    w->chan_modes_known = true;
+    snprintf(w->chan_modes, sizeof(w->chan_modes), "nt");
+    CHECK(!channel_is_moderated(w));
+    snprintf(w->chan_modes, sizeof(w->chan_modes), "nmt");
+    CHECK(channel_is_moderated(w));
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+/* The pane reserves one row per member plus a separator above the muted
+ * group — measured by the same walk that draws, so the scroll bound and
+ * the drawing cannot disagree. */
+TEST(roster_rows_count_the_muted_separator) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    struct window *w = add_test_window(app, "azzurra", "#chan");
+    seed(w, 0, "Bob", "@");
+    seed(w, 1, "alice", "");
+    seed(w, 2, "zoe", "");
+    w->member_count = 3;
+
+    CHECK_LONG(draw_member_list(app, w, -1, 0, 0, 0, 0), 3);
+    w->chan_modes_known = true;
+    snprintf(w->chan_modes, sizeof(w->chan_modes), "nmt");
+    CHECK_LONG(draw_member_list(app, w, -1, 0, 0, 0, 0), 4); /* + separator */
+    /* Everyone opped under +m: nobody is muted, so no separator row. */
+    seed(w, 1, "alice", "@");
+    seed(w, 2, "zoe", "@");
+    CHECK_LONG(draw_member_list(app, w, -1, 0, 0, 0, 0), 3);
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
 int main(void) {
     FILE *sink = fopen("/dev/null", "w");
     if (!sink) {
@@ -144,6 +318,11 @@ int main(void) {
     RUN(message_line_tail_matches_full_draw);
     RUN(zero_skip_is_the_ordinary_draw);
     RUN(tail_omits_the_nick_header);
+    RUN(member_tiers_read_prefix_sigils_not_mode_letters);
+    RUN(roster_sorts_by_tier_then_nick);
+    RUN(roster_edits_keep_the_order_and_the_prefixes);
+    RUN(muted_tier_needs_a_known_plus_m);
+    RUN(roster_rows_count_the_muted_separator);
     endwin();
     fclose(sink);
     return test_report();

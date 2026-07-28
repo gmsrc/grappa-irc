@@ -21925,3 +21925,63 @@ Two distinct defects in the same place, both papered over by `SHOW_NETWORK_MAP =
 **(a) A mask that matches nothing was rendered as "this network hides its topology".** `/links all` is a *mask*, not a keyword; azzurra answers it literally with a bare 365 RPL_ENDOFLINKS and zero 364 rows. The bundle drained `entries: []` and `LinksModal` fell through to the restricted-topology copy — a lie, since the mask simply matched nothing. Root cause: by the time the modal saw the bundle, **the mask was gone**. Fix: carry the requested mask on the `links_bundle` wire event, server→wire→cic (the server is the SSOT — it primes the request with the mask; cic never originates state). `Session.Server` stashes `mask` on `links_pending`; `Wire.links_bundle/2` ships it (additive, snake_case, `null` = the bare full-mesh request); `LinksModal` splits the empty state on it — a non-null mask that drained zero nodes says "no server matches `<mask>`", only a null-mask empty keeps the restricted guess. The `all` "nudge" the issue suspected in the compose help does NOT exist (verified — `slashCommands.ts` has only the parser); users type `all` because it reads like "everything". Left untouched.
 
 **(b) Two LINKS within ~15ms silently dropped the second bundle.** `handle_call({:send_links, ...})` re-primed `links_pending` unconditionally on every request; the un-keyed accumulator (one topology per network, by design) meant the first 365 flushed + cleared to `nil`, then the second request's 364 burst landed with `links_pending == nil` and was discarded, its 365 emitting nothing — caller got `:ok` then silence. Fix: **refuse (don't clobber) while a FRESH request is in flight** — a monotonic `requested_at` on the accumulator gates re-priming; a second `:send_links` within `@links_stale_ms` (10s) returns `{:error, :links_in_flight}` (surfaced by cic as "network map already loading"). Crucially, **the clobber REMAINS the recovery path, only gated on staleness instead of unconditional**: a 481-denied or withheld-365 request never clears `links_pending`, so a naive refuse would BRICK /links on a restricted network forever — past the staleness window a fresh request treats the pending as abandoned and clobbers + re-sends. Design fork (vjt decision): a monotonic timestamp *inside the accumulator we were already touching for the mask* is derived state, not a parallel structure; rejected a `send_after` timer (a new mechanism to arm/cancel/leak) and a mask-keyed multi-accumulator (would rewrite the typedef, append, terminator, and ordering for a case we don't have). Witnessed by a server-side test that PARTs no bundle after a 481 then proves a fresh /links re-sends past the window (the anti-brick regression guard), plus the real-upstream `issue513-links-mask-empty.spec.ts` for (a).
+
+## 2026-07-28 — shottino: a permanent member pane, and the sigil/letter confusion under it
+
+vjt asked for a userlist under the sidebar's window list, tiered ops → voice →
+plain → muted and scrollable. Building it surfaced that the tiering it asked for
+had never worked at all.
+
+**`member.modes` carries PREFIX SIGILS, not mode letters.** grappa stores sigils
+(`Identifier` moduledoc: `state.members[channel][nick]` holds `["@"]`,
+`["@","+"]`) and cic's `tierRank` matches `"@"/"%"/"+"`. shottino's
+`member_rank()` tested mode LETTERS (`strchr(modes, 'o')`) and
+`member_sigil_locked()` matched the member's modes against the ISUPPORT PREFIX
+*letters* — neither can ever match what a server sends. Every member ranked
+plain, the roster never tiered, and no sigil was ever drawn beside a nick. The
+fix is one representation with one precedence source: `network_prefixes_locked()`
+returns the network's advertised (letters, sigils) pair (falling back to the
+conventional `(qaohv)~&@%+` until 005 lands, so a roster drawn during connect
+still tiers), and rank / sigil / label are all derived from the member's position
+in it. A network with an unusual PREFIX therefore tiers and labels correctly
+instead of being hardcoded to o/h/v.
+
+**Sorting moved to where a roster ENTERS the app.** The REST `/members` reply
+sorted itself inline; the `members_seeded` event did not. The same channel was
+ordered or not depending on which door its roster came through. `set_window_members`
+sorts now, and the two call sites do not.
+
+**A permanent pane must stay live.** The roster only ever arrived whole and was
+never updated, which was survivable when the pane appeared solely on >118-column
+terminals and is not now: a list showing who was here when you joined is worse
+than no list, because it looks current. Membership changes apply incrementally
+from the typed presence rows shottino already renders (join/part/quit/kick/nick —
+each says exactly who, with no parsing). A PREFIX change (+o, -v) deliberately
+does NOT: mode semantics are the server's, and parsing them here would be a
+second, divergent IRC mode parser in a client whose whole premise is that it does
+not parse IRC. Those refetch the roster — rare event, one request, answered by
+the side that knows. Focus on a channel with an empty roster also fetches one.
+Both refetches are QUIET (`announce=false`); only an explicit `/members` prints
+the list, or the pane's own housekeeping would bury the conversation.
+
+**"Muted" is derived, and only when known.** There is no per-member muted state
+on the wire — only `@ / % / +` and plain. vjt's ruling: plain users in a `+m`
+(moderated) channel are the muted ones, since they are exactly the ones who
+cannot speak. shottino therefore retains `channel_modes_changed` (whose first
+delivery is the 324 snapshot the ircd sends on join) instead of only logging it,
+and `channel_is_moderated()` requires `chan_modes_known` — "never been told" is
+not the same answer as "not moderated", and the label is only claimed when we
+actually know. Under `+m` the plain tier gets a `— muted —` separator and is
+dimmed. Known gap: an ircd that never volunteers 324 leaves the modes unknown
+until some MODE happens, and the tier simply does not appear — silence, not a
+guess.
+
+**One list, two possible homes.** Narrow terminals draw it in the sidebar under
+the window list; wide ones keep the existing right-hand pane; both call
+`draw_member_list()`, which measures with `y < 0` and draws otherwise — the same
+walk, so the scroll bound and the drawing cannot disagree (the lesson the chat
+area learned twice this week). Windows keep priority for sidebar space: a channel
+you cannot see is a channel you cannot reach, while a roster that needs scrolling
+just needs scrolling. Shift+PgUp/PgDn scroll it, the wheel scrolls it when the
+pointer is over whichever column it currently occupies, and the offset resets on
+focus change like the scrollback one.
