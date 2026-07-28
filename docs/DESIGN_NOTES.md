@@ -21495,3 +21495,80 @@ screen of content instead of an empty page.
 `count_after_split`) still counts presence rows regardless of the pref — out of
 scope for #458, but it should consume this same `resolve_hide_presence` decision
 so the badge and the pane agree on which rows count.
+## 2026-07-28 — #482: inbound INVITE leaves a durable trace ($server copy + :invited cold-snapshot backfill)
+
+vjt's live symptom: an inbound INVITE we didn't request left *nothing* visible —
+*"non appare il canale nella bottom bar […] e non appare manco niente nella
+status window"*. Two independent gaps, both closed here.
+
+**Not a regression — a deliberate #78 move with a hole.** `834204b7` (#78,
+folds #128) rerouted the non-awaiting inbound INVITE: instead of a
+`:server_event` row on `$server`, it persists the row AT THE INVITED CHANNEL
+(route-by-channel-reference) and emits `{:invited, channel}` so the window flips
+to a greyed, not-joined `:invited` tab. Correct as far as it went — but it
+removed the `$server` status-window text AND relied on a window state that the
+cold-subscribe snapshot never replays.
+
+**Gap 1 — the status-window text (restored, not reverted).** EventRouter's
+non-awaiting INVITE clause now persists TWICE: the `#78` channel row PLUS a
+restored `$server` copy. `persist_raw_event/3` was already parametrized on the
+target, so this is one extra effect (`[chan_eff, srv_eff, {:invited, ch}]`), not
+new plumbing. The `[Join now]` CTA (`cicchetto` `ScrollbackPane` `.scrollback-
+invite-join`) renders off the INVITE row itself with no coupling to which window
+holds it, so the `$server` copy gets the button for free.
+
+**No unread double-count (the point-1 trap).** Two rows for one invite would
+double the badge IF the kind were content. It isn't: both rows are
+`:server_event`, which `Scrollback.Message` classifies as event-tier — NEITHER
+`content_kinds` nor `notify_kinds` (`message.ex`: *"presence/control → neither
+content nor notify"*). So neither row touches the message/mention badge nor the
+PWA badge (`Push.BadgeCount` counts content only); each contributes only a
+per-window event-tier signal. RULING (vjt): the `$server` copy is
+INFORMATIONAL — it must not double the badge, and it doesn't, with ZERO
+`WindowCounts`/`BadgeCount` change. The kind classification already enforces it.
+
+**Gap 2 — the greyed tab evaporating on reload (the real bottom-bar symptom).**
+`:invited` (like `:pending`) is broadcast on the USER topic at INVITE time and
+is absent from the cold-subscribe snapshot. A client that subscribes later
+(reload, backgrounded PWA, WS re-subscribe) never learns the window exists — the
+scrollback row survives, the tab does not. Fix: a user-topic backfill,
+`WindowState.invited_windows/2` → `Session.invited_windows/2` (`handle_call`) →
+`GrappaChannel.push_user_snapshot`'s new `push_invited_windows_if_live/2`, which
+re-emits `SessionWire.window_invited/2` for every `:invited` window on cold
+subscribe. Mirrors the #229 umode cold-snapshot exactly; cic already dispatches
+`window_invited` (`userTopic.ts`) → `setInvited` → `subscribe.ts` per-channel
+join, so NO cic source change.
+
+**Mechanism correction on the record (RULING 1 amended).** The issue's point 2
+said *"teach `to_wire/3` to project `:invited`"*. That is wrong: `to_wire/3` is
+the PER-CHANNEL snapshot projection (its `window_state_snapshot` union is
+`joined | join_failed | kicked`), and `window_invited` is a USER-topic payload.
+Projecting it through `to_wire/3` would push a user-topic-shaped event on the
+per-channel topic — the exact malformed-payload drop the per-channel snapshot
+already warns about — and widen the type union. `to_wire/3` therefore KEEPS
+returning `{:error, :not_tracked}` for `:invited`, consistent with its own
+documented `:pending` rationale; the backfill is a dedicated user-topic path.
+vjt: *"you were right and I was wrong on MECHANISM"* — goal unchanged (the tab
+must survive a cold load), delivery is the backfill, not `to_wire/3`.
+
+**Verification.** Unit: EventRouter dual-persist (channel + `$server`, both
+`:server_event`); `WindowState.invited_windows/2` enumerates only `:invited`;
+`GrappaChannel` replays `window_invited` on a cold user-topic subscribe after a
+real inbound INVITE. Integration: `server_test` proves both scrollback rows land
+(`#random` + `$server`). E2E:
+`e2e/tests/issue482-invite-survives-reload.spec.ts` is the #229-pattern witness —
+a peer INVITEs, the greyed tab appears, the page RELOADS (WS +
+`windowStateByChannel` torn down, upstream session survives holding `:invited`),
+and the ONLY path that can bring the tab back is the cold-snapshot backfill.
+Pre-fix: gone → RED. Post-fix: back, still `:invited`, CTA restored → GREEN.
+
+**Cross-spec caveat #482 introduces.** `:invited` windows now survive reload, so
+an e2e spec that leaves one lingering (e.g. `issue71-inc3` uses per-run-unique
+names and only disconnects the peer) will have it backfilled on a sibling's
+reload. Per-run-unique names avoid collisions; the #482 spec itself joins→parts
+in `finally` to clear its window. If a sibling asserting a global window count
+goes red, this is the cause.
+
+**Related, still open.** #402 (invite to an already-archived channel + a
+self-requested `/cs invite`) shares the `:invited`-absent-from-snapshot root but
+a different arm — not closed here.

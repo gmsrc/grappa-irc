@@ -1160,6 +1160,7 @@ defmodule GrappaWeb.GrappaChannel do
         push_supported_umodes_if_live(subject, socket)
         push_notify_list(subject, socket)
         push_presence_if_live(subject, socket)
+        push_invited_windows_if_live(subject, socket)
 
       :error ->
         :ok
@@ -1211,6 +1212,36 @@ defmodule GrappaWeb.GrappaChannel do
 
         {:error, _} ->
           :ok
+      end
+    end
+
+    :ok
+  end
+
+  # #482: re-surface every :invited window on the user-topic cold-WS-
+  # subscribe. An inbound INVITE we didn't request flips the channel to a
+  # greyed :invited tab and broadcasts `window_invited` ONCE, at INVITE
+  # time; a client that subscribes later (reload, backgrounded PWA, WS
+  # re-subscribe) misses that single broadcast and the bottom-bar tab
+  # evaporates — the invite survives only in scrollback, invisible (vjt's
+  # symptom). Like `push_umodes_if_live/2`, :invited is per-session and
+  # reachable with ZERO joined channels, so it rides the user topic — NOT
+  # the per-channel snapshot (`to_wire/3` excludes :invited on purpose; a
+  # user-topic payload on a per-channel topic is dropped as malformed). The
+  # live edge is the `{:invited, _}` broadcast; this closes the always-on-
+  # session race where it fired long before the client subscribed. Each
+  # payload is the SAME `SessionWire.window_invited/2` map the broadcast
+  # emits, so cic's dispatch doesn't branch on snapshot-vs-event.
+  # `Session.invited_windows/2` only misses on `{:error, :no_session}`
+  # (parked/failed) — cic keeps its empty `windowStateByChannel` until a
+  # session is live. Best-effort: one network's resolve/push failure must
+  # not disturb the others.
+  @spec push_invited_windows_if_live(Session.subject(), Phoenix.Socket.t()) :: :ok
+  defp push_invited_windows_if_live(subject, socket) do
+    for %Network{} = network <- Networks.Credentials.list_networks_for_subject(subject) do
+      case Session.invited_windows(subject, network.id) do
+        {:ok, payloads} -> Enum.each(payloads, &push(socket, "event", &1))
+        {:error, _} -> :ok
       end
     end
 

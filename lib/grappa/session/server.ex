@@ -1914,6 +1914,19 @@ defmodule Grappa.Session.Server do
     {:reply, WindowState.to_wire(state.window_state, state.network_slug, channel), state}
   end
 
+  # #482: the user-topic cold-WS-subscribe backfill source for :invited
+  # windows. `:invited` (like `:pending`) is broadcast on the user topic at
+  # INVITE time and is absent from the per-channel snapshot (`to_wire/3`
+  # excludes it), so a client that subscribes later never learns the greyed
+  # tab exists and it evaporates on reload. `GrappaChannel.push_user_snapshot`
+  # calls this to re-emit `window_invited` per invited window. Delegates to
+  # `WindowState.invited_windows/2` — the same Wire verb the event-time
+  # `{:invited, _}` broadcast uses, so snapshot + event payloads are
+  # byte-identical.
+  def handle_call(:invited_windows, _, state) do
+    {:reply, {:ok, WindowState.invited_windows(state.window_state, state.network_slug)}, state}
+  end
+
   # Returns the userhost cache entry for `nick`. Nick lookup is case-insensitive
   # (rfc1459, #121) — fold via Identifier.canonical_nick at read time, mirroring
   # write-time folding in EventRouter. Returns {:ok, entry} or {:error, :not_cached}.

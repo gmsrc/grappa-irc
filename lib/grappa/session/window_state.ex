@@ -48,11 +48,15 @@ defmodule Grappa.Session.WindowState do
   Adding a field to a Wire verb propagates to both paths
   automatically; no separate mirror to maintain.
 
-  `:pending` returns `{:error, :not_tracked}` because cic only
-  subscribes to the per-channel topic AFTER seeing `:pending` on the
-  user-level topic — the per-channel snapshot path therefore has no
-  work to do for a pending window. `:parked` (T32 placeholder) returns
-  the same until the disconnect verbs land.
+  `:pending` and `:invited` return `{:error, :not_tracked}` because cic
+  only subscribes to the per-channel topic AFTER seeing the state on the
+  user-level topic — the per-channel snapshot path therefore has no work
+  to do for them. `:invited` instead has a dedicated user-topic backfill,
+  `invited_windows/2` (#482), that re-emits `window_invited` on a cold
+  subscribe so the greyed tab survives a reload; `:pending` is transient
+  (it resolves to `:joined` / `:failed` within the JOIN round-trip) and
+  needs none. `:parked` (T32 placeholder) returns `:not_tracked` until the
+  disconnect verbs land.
   """
 
   alias Grappa.Session.Wire, as: SessionWire
@@ -306,5 +310,30 @@ defmodule Grappa.Session.WindowState do
       _ ->
         {:error, :not_tracked}
     end
+  end
+
+  @doc """
+  Returns the `window_invited` snapshot payloads for EVERY channel
+  currently in `:invited` state — the user-topic cold-WS-subscribe backfill
+  source (#482).
+
+  The user-topic twin of `to_wire/3`. `:invited` (like `:pending`) is a
+  user-topic state cic mirrors BEFORE it subscribes per-channel, so
+  `to_wire/3` deliberately excludes it (`{:error, :not_tracked}`) — routing
+  it through the per-channel path would push a user-topic-shaped payload on
+  the per-channel topic (cic drops it as malformed). Instead
+  `GrappaWeb.GrappaChannel.push_user_snapshot` calls this to re-emit
+  `window_invited` on the user topic for a cold subscribe, so the greyed tab
+  survives a reload — otherwise the state, broadcast once at INVITE time, is
+  absent from the snapshot and the tab evaporates (the #482 symptom).
+
+  Funnels through the SAME `SessionWire.window_invited/2` verb the
+  event-time broadcast (`Session.Server.apply_effects([{:invited, _} | _])`)
+  uses, so backfill + event payloads are byte-identical (the CP15 B7
+  invariant, extended to `:invited`).
+  """
+  @spec invited_windows(t(), String.t()) :: [SessionWire.window_invited_payload()]
+  def invited_windows(%__MODULE__{states: states}, network_slug) when is_binary(network_slug) do
+    for {channel, :invited} <- states, do: SessionWire.window_invited(network_slug, channel)
   end
 end

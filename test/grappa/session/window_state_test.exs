@@ -229,7 +229,12 @@ defmodule Grappa.Session.WindowStateTest do
       assert WindowState.to_wire(ws, "azzurra", "#grappa") == {:error, :not_tracked}
     end
 
-    test ":invited returns {:error, :not_tracked} (broadcast on user-topic, like :pending) (#78)" do
+    test ":invited returns {:error, :not_tracked} (broadcast on user-topic, like :pending) (#78/#482)" do
+      # #482: :invited stays OFF the per-channel snapshot path on purpose.
+      # It is a user-topic state (cic subscribes per-channel only AFTER
+      # seeing it), so its cold-load backfill rides `invited_windows/2` on
+      # the user topic — NOT to_wire/3, which would push a user-topic-shaped
+      # payload on the per-channel topic (cic drops it as malformed).
       ws = WindowState.set_invited(WindowState.new(), "#grappa")
       assert WindowState.to_wire(ws, "azzurra", "#grappa") == {:error, :not_tracked}
     end
@@ -237,6 +242,42 @@ defmodule Grappa.Session.WindowStateTest do
     test "unknown channel returns {:error, :not_tracked}" do
       assert WindowState.to_wire(WindowState.new(), "azzurra", "#nope") ==
                {:error, :not_tracked}
+    end
+  end
+
+  describe "invited_windows/2 — user-topic cold-snapshot backfill (#482)" do
+    # The user-topic twin of to_wire/3: enumerates every :invited window as
+    # a `window_invited` payload so `push_user_snapshot` can re-surface the
+    # greyed tab on a cold WS subscribe. Without this the tab evaporates on
+    # reload — the invite lands only in scrollback, invisible in the bottom
+    # bar (the #482 symptom). Funnels through the SAME `SessionWire.window_
+    # invited/2` verb the event-time broadcast uses, so backfill + event
+    # payloads stay byte-identical.
+    alias Grappa.Session.Wire, as: SessionWire
+
+    test "returns a window_invited payload for EVERY :invited channel, nothing else" do
+      ws =
+        WindowState.new()
+        |> WindowState.set_invited("#random")
+        |> WindowState.set_invited("#other")
+        |> WindowState.set_pending("#joining")
+        |> WindowState.set_joined("#here")
+        |> WindowState.set_failed("#nope", "Cannot join (+i)", 473)
+
+      assert MapSet.new(WindowState.invited_windows(ws, "azzurra")) ==
+               MapSet.new([
+                 SessionWire.window_invited("azzurra", "#random"),
+                 SessionWire.window_invited("azzurra", "#other")
+               ])
+    end
+
+    test "returns [] when no channel is :invited" do
+      ws = WindowState.set_joined(WindowState.new(), "#here")
+      assert WindowState.invited_windows(ws, "azzurra") == []
+    end
+
+    test "returns [] for a brand-new (empty) window state" do
+      assert WindowState.invited_windows(WindowState.new(), "azzurra") == []
     end
   end
 

@@ -1020,6 +1020,25 @@ defmodule Grappa.Session do
   end
 
   @doc """
+  Returns the `window_invited` cold-WS-subscribe backfill payloads for
+  EVERY `:invited` window in the given session (#482).
+
+  The user-topic twin of `get_window_state/3`: `:invited` is a user-topic
+  state (cic subscribes per-channel only AFTER seeing it), so it is absent
+  from the per-channel snapshot. `GrappaWeb.GrappaChannel.push_user_snapshot`
+  calls this to re-emit `window_invited` for each invited window on a cold
+  subscribe, so the greyed tab survives a reload instead of evaporating
+  (the #482 symptom). `{:error, :no_session}` when no live `Session.Server`
+  backs the `(subject, network)`.
+  """
+  @spec invited_windows(subject(), integer()) ::
+          {:ok, [Grappa.Session.Wire.window_invited_payload()]} | {:error, :no_session}
+  def invited_windows(subject, network_id)
+      when is_subject(subject) and is_integer(network_id) do
+    call_session(subject, network_id, :invited_windows)
+  end
+
+  @doc """
   Returns the cached userhost entry for `nick` in the given session.
 
   Serves from the in-memory WHOIS-userhost cache — no upstream WHOIS query

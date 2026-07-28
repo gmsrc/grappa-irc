@@ -952,6 +952,42 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert modes == ["S", "i", "w"]
     end
 
+    test "after-join snapshot: replays window_invited for every :invited window on the user topic (#482)" do
+      # #482 cold-WS-subscribe: an inbound INVITE we didn't request flips the
+      # channel to a greyed :invited tab and broadcasts window_invited on the
+      # USER topic ONCE, at INVITE time. A client that subscribes later
+      # (reload, backgrounded PWA, WS re-subscribe) misses that single
+      # broadcast and the bottom-bar tab evaporates — the invite survives
+      # only in scrollback, invisible. The user-topic snapshot must
+      # re-surface it, mirroring the umode / query_windows backfill.
+      {irc_server, port} = start_irc_server()
+      {user, network} = setup_user_and_network_with_session(port)
+
+      welcome_session_on_channel(irc_server, "#snap")
+
+      # An inbound INVITE to OUR nick for a channel we are not in — flips the
+      # window to :invited. The event-time broadcast fires HERE, with NO
+      # socket subscribed yet: the exact cold-load gap #482 closes.
+      IRCServer.feed(irc_server, ":someguy!u@h INVITE grappa-snap #random\r\n")
+      flush_server(irc_server)
+
+      topic = Topic.user(user.name)
+
+      {:ok, _, _} =
+        user.name
+        |> build_socket()
+        |> subscribe_and_join(topic, %{})
+
+      assert_push("event", %{
+        kind: :window_invited,
+        network: net_slug,
+        channel: "#random",
+        state: :invited
+      })
+
+      assert net_slug == network.slug
+    end
+
     # CP23 S4 B4 — bundle_hash push on user-topic join.
     #
     # The `Grappa.Cic.Bundle` reader live-reads `runtime/cicchetto-dist/
