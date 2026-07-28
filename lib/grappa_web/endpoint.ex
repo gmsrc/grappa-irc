@@ -44,15 +44,28 @@ defmodule GrappaWeb.Endpoint do
   # Top-level entries the vite build emits at the dist root (`base=/`),
   # matched on the FIRST path segment: the hashed `assets/` chunks +
   # everything copied verbatim from `cicchetto/public/` (`backgrounds/`,
-  # `fonts/`, `icon*.{svg,png}`) + the pwa-plugin `manifest.webmanifest`.
-  # Kept in lockstep with the actual build output — a NEW root-level
-  # public asset MUST be added here or it falls through to the SPA
-  # fallback (served as index.html for a browser navigation) instead of
-  # as its own bytes. `index.html` (SPA fallback route) and
-  # `service-worker.js` (dedicated no-cache route) are deliberately OUT
-  # so they fall through to the router.
+  # `fonts/`, the `icon*.{svg,png}` set, `apple-touch-icon.png`,
+  # `favicon.ico`) + the pwa-plugin `manifest.webmanifest`. Kept in
+  # lockstep with `cicchetto/public/` — a NEW root-level public asset MUST
+  # be added here or it falls through to the SPA fallback (served as
+  # index.html / text/html for a browser navigation) instead of as its own
+  # bytes. #485 regression (issue274/issue294 e2e): the maskable PNGs,
+  # `apple-touch-icon.png`, and `favicon.ico` were absent, so once the BEAM
+  # became the sole origin (nginx demoted to a dumb proxy) the PWA manifest
+  # icons + the iOS home-screen icon + the legacy favicon all arrived as
+  # HTML. `index.html` (SPA fallback route) and `service-worker.js`
+  # (dedicated no-cache route) are deliberately OUT so they fall through to
+  # the router.
   @cic_static_only ~w(assets backgrounds fonts manifest.webmanifest
-                      icon.svg icon-192.png icon-512.png)
+                      icon.svg icon-192.png icon-512.png
+                      icon-192-maskable.png icon-512-maskable.png
+                      apple-touch-icon.png favicon.ico)
+
+  # #485 — the far-future cache window (10 years, in seconds) for the
+  # system-owned, content-keyed `/backgrounds/` assets. Shared by the
+  # `Cache-Control: max-age` and the `Expires` HTTP-date in
+  # `cache_backgrounds/2` so the two can never drift apart.
+  @backgrounds_max_age 315_360_000
 
   # #95 — accept the bearer via the `Sec-WebSocket-Protocol` subprotocol
   # (`auth_token: true`) so it no longer has to ride `?token=` on the WS
@@ -197,17 +210,25 @@ defmodule GrappaWeb.Endpoint do
   end
 
   # #485 — the app-side answer to nginx's `location /backgrounds/ { expires
-  # max; }`, improved: it emits `Cache-Control: public, max-age=315360000,
-  # immutable` (10y + `immutable` to suppress revalidation entirely, which
-  # nginx's `expires max` did NOT set), so the system-owned background WebPs
-  # never re-fetch. The before_send overwrites Plug.Static's default
-  # `cache-control: public` at send time.
+  # max; }`: it emits BOTH `Cache-Control: public, max-age=<10y>, immutable`
+  # (the `immutable` an improvement over nginx — it suppresses revalidation
+  # entirely, which `expires max` did NOT) AND a matching far-future
+  # `Expires` HTTP-date. nginx's `expires max` set both headers; under #485
+  # the BEAM is the sole origin (nginx demoted to a dumb proxy), so it must
+  # carry `Expires` itself — the issue294 e2e asserts it on the wire, and a
+  # cache-control-only response regressed it to absent. The before_send
+  # overwrites Plug.Static's default `cache-control: public` at send time.
   # Skipped for the SPA-shell fallback (a missing key served as index.html),
   # so the shell is never pinned as immutable under a /backgrounds/ URL.
   defp cache_backgrounds(%Plug.Conn{request_path: "/backgrounds/" <> _} = conn, _) do
     Plug.Conn.register_before_send(conn, fn conn ->
       if conn.status == 200 and not spa_shell?(conn) do
-        Plug.Conn.put_resp_header(conn, "cache-control", "public, max-age=315360000, immutable")
+        conn
+        |> Plug.Conn.put_resp_header(
+          "cache-control",
+          "public, max-age=#{@backgrounds_max_age}, immutable"
+        )
+        |> Plug.Conn.put_resp_header("expires", far_future_http_date())
       else
         conn
       end
@@ -215,6 +236,17 @@ defmodule GrappaWeb.Endpoint do
   end
 
   defp cache_backgrounds(conn, _), do: conn
+
+  # The `Expires` twin of the far-future `Cache-Control: max-age` above:
+  # `now + @backgrounds_max_age` as an RFC 7231 IMF-fixdate
+  # (`Sun, 06 Nov 1994 08:49:37 GMT`). `Calendar.strftime/2` emits the
+  # English day/month abbreviations HTTP requires; the value is always UTC,
+  # so the literal `GMT` suffix is correct.
+  defp far_future_http_date do
+    DateTime.utc_now()
+    |> DateTime.add(@backgrounds_max_age, :second)
+    |> Calendar.strftime("%a, %d %b %Y %H:%M:%S GMT")
+  end
 
   defp spa_shell?(conn) do
     match?(["text/html" <> _], Plug.Conn.get_resp_header(conn, "content-type"))

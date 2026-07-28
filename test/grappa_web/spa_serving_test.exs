@@ -31,11 +31,18 @@ defmodule GrappaWeb.SpaServingTest do
     test "GET /backgrounds/<key>.webp serves the image with a far-future immutable cache" do
       # #485 — nginx's `location /backgrounds/ { expires max; }` moved to
       # the BEAM: system-owned, content-addressable-ish keys never re-fetch.
+      # Full parity with `expires max` = BOTH `Cache-Control: max-age`
+      # (+ our `immutable` improvement) AND a far-future `Expires` HTTP-date.
+      # The e2e (issue294) asserts the `Expires` header too — the app is the
+      # origin under #485, so it must emit it, not just cache-control.
       conn = get(build_conn(), "/backgrounds/01-test-dark.webp")
       assert conn.status == 200
       assert [cache_control] = get_resp_header(conn, "cache-control")
       assert cache_control =~ "max-age=315360000"
       assert cache_control =~ "immutable"
+      assert [expires] = get_resp_header(conn, "expires")
+      # A valid, non-empty far-future HTTP-date (RFC 7231, always ends "GMT").
+      assert expires =~ "GMT"
     end
 
     test "GET /fonts/<file>.woff2 serves the built font (allowlist lockstep)" do
@@ -48,6 +55,39 @@ defmodule GrappaWeb.SpaServingTest do
       conn = get(build_conn(), "/icon.svg")
       assert conn.status == 200
       assert ["image/svg+xml" <> _] = get_resp_header(conn, "content-type")
+    end
+
+    # #485 — the vite build copies these root-level public assets verbatim,
+    # and the PWA manifest / index.html <head> reference them by their own
+    # URL. They MUST be in the `:only` allowlist or they fall through to the
+    # SPA history-fallback and get served as `index.html` (text/html) — the
+    # exact regression the e2e caught (issue274 pwa-icons: apple-touch-icon,
+    # favicon.ico, and the maskable 192/512 PNGs all arrived as HTML).
+    test "GET /apple-touch-icon.png serves the raster icon, not the SPA shell" do
+      conn = get(build_conn(), "/apple-touch-icon.png")
+      assert conn.status == 200
+      assert ["image/png" <> _] = get_resp_header(conn, "content-type")
+    end
+
+    test "GET /icon-192-maskable.png serves its own bytes (allowlist lockstep)" do
+      conn = get(build_conn(), "/icon-192-maskable.png")
+      assert conn.status == 200
+      assert ["image/png" <> _] = get_resp_header(conn, "content-type")
+    end
+
+    test "GET /icon-512-maskable.png serves its own bytes (allowlist lockstep)" do
+      conn = get(build_conn(), "/icon-512-maskable.png")
+      assert conn.status == 200
+      assert ["image/png" <> _] = get_resp_header(conn, "content-type")
+    end
+
+    test "GET /favicon.ico serves its own bytes, never the text/html SPA shell" do
+      conn = get(build_conn(), "/favicon.ico")
+      assert conn.status == 200
+      # MIME for `.ico` varies (image/vnd.microsoft.icon vs image/x-icon);
+      # the precise regression contract is "served as its own file", i.e.
+      # NOT the index.html fallback.
+      refute match?(["text/html" <> _], get_resp_header(conn, "content-type"))
     end
 
     test "GET /manifest.webmanifest serves the PWA manifest" do
