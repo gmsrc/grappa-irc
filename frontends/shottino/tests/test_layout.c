@@ -320,13 +320,13 @@ TEST(current_window_key_copies_and_reports_absence) {
 
     add_test_window(app, "azzurra", "#one");
     add_test_window(app, "azzurra", "#two");
-    app->current = 1;
+    focused_pane_locked(app)->window = 1;
     CHECK(current_window_key(app, net, sizeof(net), chan, sizeof(chan)));
     CHECK_STR(net, "azzurra");
     CHECK_STR(chan, "#two");
 
     /* It is a COPY: moving focus does not rewrite what the caller holds. */
-    app->current = 0;
+    focused_pane_locked(app)->window = 0;
     CHECK_STR(chan, "#two");
 
     /* Either buffer may be omitted. */
@@ -337,8 +337,83 @@ TEST(current_window_key_copies_and_reports_absence) {
 
     /* current is out of range (a window closed under us): reported as
      * absent, not read past the end of the array. */
-    app->current = 7;
+    focused_pane_locked(app)->window = 7;
     CHECK(!current_window_key(app, net, sizeof(net), chan, sizeof(chan)));
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+/* ── Panes ────────────────────────────────────────────────────────────
+ *
+ * "The current window" is derived from the focused pane rather than
+ * stored beside it, and every pane holds an INDEX into a window array
+ * that shifts when a window closes. Both are the kind of thing that
+ * looks right until the second pane exists. */
+TEST(focus_is_derived_from_the_focused_pane) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_window(app, "azzurra", "#one");
+    add_test_window(app, "azzurra", "#two");
+
+    /* No panes configured yet: asking creates the one-pane case rather
+     * than reading past the end of the array. */
+    CHECK_LONG(app->pane_count, 0);
+    CHECK_LONG(focused_window_locked(app), 0);
+    CHECK_LONG(app->pane_count, 1);
+
+    app->panes[1] = (struct pane){.window = 1, .weight = 1};
+    app->pane_count = 2;
+    app->focus = 1;
+    CHECK_LONG(focused_window_locked(app), 1);
+    CHECK(window_is_visible_locked(app, 0));
+    CHECK(window_is_visible_locked(app, 1));
+
+    app->panes[1].window = 0;
+    CHECK(window_is_visible_locked(app, 0));
+    CHECK(!window_is_visible_locked(app, 1)); /* nothing shows it now */
+
+    /* Focus beyond the pane count is clamped, not trusted. */
+    app->focus = 9;
+    CHECK_LONG(focused_window_locked(app), 0);
+    CHECK_LONG(app->focus, 1);
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+/* Closing a window shifts the array under EVERY pane, not just the
+ * focused one — a pane left holding the old index silently starts
+ * showing its neighbour. */
+TEST(closing_a_window_renumbers_every_pane) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_window(app, "azzurra", "#a");
+    add_test_window(app, "azzurra", "#b");
+    add_test_window(app, "azzurra", "#c");
+    app->panes[0] = (struct pane){.window = 0, .weight = 1};
+    app->panes[1] = (struct pane){.window = 2, .weight = 1, .scroll_offset = 5};
+    app->pane_count = 2;
+    app->focus = 0;
+
+    /* Close #b, which sits BETWEEN them: the pane on #c must follow it
+     * down to index 1, not keep pointing at 2 (now past the end). */
+    remove_window(app, "azzurra", "#b");
+    CHECK_LONG(app->window_count, 2);
+    CHECK_LONG(app->panes[0].window, 0);
+    CHECK_LONG(app->panes[1].window, 1);
+    CHECK_STR(app->windows[app->panes[1].window].channel, "#c");
+    /* A pane whose window survived keeps its scroll position. */
+    CHECK_LONG(app->panes[1].scroll_offset, 5);
+
+    /* Close the window a pane is ON: its view resets rather than
+     * inheriting whatever slid into that index. */
+    remove_window(app, "azzurra", "#c");
+    CHECK_LONG(app->window_count, 1);
+    CHECK_LONG(app->panes[1].window, 0);
+    CHECK_LONG(app->panes[1].scroll_offset, 0);
 
     pthread_mutex_destroy(&app->lock);
     free(app);
@@ -368,6 +443,8 @@ int main(void) {
     RUN(muted_tier_needs_a_known_plus_m);
     RUN(roster_rows_count_the_muted_separator);
     RUN(current_window_key_copies_and_reports_absence);
+    RUN(focus_is_derived_from_the_focused_pane);
+    RUN(closing_a_window_renumbers_every_pane);
     endwin();
     fclose(sink);
     return test_report();

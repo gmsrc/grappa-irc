@@ -22041,3 +22041,56 @@ Sequencing note: this landed BEFORE `/split` deliberately. Panes make "the
 current window" mean "the focused pane's window", and with every caller already
 going through one accessor that becomes a change in one function instead of forty
 call sites. Fixing the race first was cheaper than fixing it after.
+
+## 2026-07-28 — shottino panes: /split, /splitv, and deriving "the current window"
+
+vjt asked for a split chat area: `/split` stacked, `/splitv` (also spelled
+`/splitw`) side by side, resize and focus on Ctrl-Alt keys.
+
+**The state question first.** A pane shows a window and carries the state that
+is about the VIEW rather than the window — where you scrolled it, where you
+scrolled its roster. Those three fields moved off `struct app` onto
+`struct pane`, which is what makes two panes on the same channel two
+independent views of it rather than one view drawn twice. What did NOT get
+duplicated is "which window is current": it is DERIVED
+(`focused_window_locked()` = `panes[focus].window`), because a second number
+that must agree with the first is a number that eventually will not. `app->current`
+is gone entirely.
+
+**One axis, not a tree.** `/split` and `/splitv` set an axis for the whole chat
+area and append a pane; asking for the other axis re-lays the panes you already
+have. A pane tree would allow arbitrary nesting and nothing in the request needs
+it — but a tree is also what you cannot retrofit cheaply, so the axis lives in
+one enum and the geometry in one loop, which is the part a tree would replace.
+Sizes are WEIGHTS, not absolute extents: a terminal resize then re-divides in the
+same proportions instead of leaving a pane pinned to a size the window no longer
+has.
+
+**Each pane owns its header.** With two windows on screen, one topic bar
+describes one pane and lies about the other. The header moved inside
+`draw_chat_pane()`, capped to a single line when split, and the focused pane's is
+accented and marked `*` — the input box is nowhere near either header, so "where
+does my typing go" needs an answer at a glance.
+
+**Two subtleties, one of them caught by a test rather than by reading.** (a) A
+pane holds an INDEX into `app->windows`, and closing a window memmoves that
+array, so EVERY pane is renumbered, not just the focused one. (b) The first cut
+reset the view of any pane whose index equalled the closed one AFTER shifting —
+which is also true of a pane that merely slid down from `i+1` to `i`, so closing
+a window silently threw away a neighbouring pane's scroll position. Whether a
+pane was showing the closed window has to be decided BEFORE the index moves.
+`closing_a_window_renumbers_every_pane` failed on exactly that and now pins it.
+Unread also became a pane question: a window visible in ANY pane is a window you
+have seen, so `maybe_mark_unread` asks `window_is_visible_locked()` instead of
+comparing against a single focused index.
+
+**Keys are a terminal-compatibility problem, so both dialects are accepted.**
+The CSI forms (`\033[1;7A` for Ctrl-Alt-Up, `\033[27;7;43~` for Ctrl-Alt-+ under
+modifyOtherKeys) are taught to ncurses with `define_key()`; the ESC-prefix
+dialect that most terminals actually send for Alt-<key> is handled by peeking
+after an ESC with a zero timeout — if nothing follows it was a real Escape.
+Ctrl-Alt-Tab is registered but many terminals send nothing for it at all, so
+Ctrl-Alt-Up/Down is the pair documented as reliable. `/keys` echoes the code and
+keyname of whatever you press: which sequence a given terminal emits is not
+something to guess at across a bug report, and this is the same
+debugging-tools-are-infrastructure rule as the layout log.

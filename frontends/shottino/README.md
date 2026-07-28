@@ -34,6 +34,32 @@ Optional runtime dependencies (only for media link previews — see below):
 - `chafa` — optional. When present it renders the frame; when absent shottino
   renders it itself as coloured half-block character art.
 
+## Panes
+
+`/split` divides the chat area into two stacked panes; `/splitv` (or
+`/splitw`) divides it side by side; `/unsplit` closes the focused one. A new
+pane opens on the same window it was split from — splitting asks for another
+view, and which conversation goes in it is the next thing you say (`/win`,
+Ctrl-N).
+
+Each pane scrolls independently, so two panes on the same channel are two
+independent views of it. The focused pane's header is accented and marked
+`*`, because the input box is nowhere near either header and "where does my
+typing go" has to be answerable at a glance.
+
+| key | does |
+|---|---|
+| `Ctrl-Alt-Up` / `Ctrl-Alt-Down` | move focus between panes |
+| `Ctrl-Alt-Tab` | cycle focus |
+| `Ctrl-Alt-+` / `Ctrl-Alt--` | grow / shrink the focused pane |
+
+Terminals disagree about what Ctrl-Alt sends, and some send nothing at all
+for Ctrl-Alt-Tab (a desktop usually eats Alt-Tab before the terminal sees
+it). Both the CSI dialect (`\033[1;7A`) and the ESC-prefix dialect (ESC then
+the key) are accepted; `Ctrl-Alt-Up/Down` is the pair to rely on. Run
+`/keys` to print the code your terminal actually sends for a key — a
+binding that does not fire is then a bug report with a number in it.
+
 ## Tests
 
 ```sh

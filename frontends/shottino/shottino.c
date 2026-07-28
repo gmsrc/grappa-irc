@@ -57,6 +57,10 @@
 #define SEEN_MESSAGES 12000
 #define INPUT_HISTORY 200
 #define PANEL_LINES 256
+/* Four is a working limit, not a law: beyond it a pane is too small to
+ * read a wrapped IRC line in, which is the point at which splitting
+ * stops helping. */
+#define MAX_PANES 4
 #define MAX_LINK_REGIONS 256
 /* How many decoded inline images to keep resident. Scrollback is long;
  * pictures are not, and each holds either a protocol payload or a pixel
@@ -340,6 +344,22 @@ struct link_region {
     char url[MAX_LINE];
 };
 
+/* How the chat area is divided. One axis for the whole area rather than
+ * a pane TREE: /split stacks, /splitv puts them side by side, and asking
+ * for the other one re-lays the panes you already have. A tree would let
+ * you nest arbitrarily, and nothing in the request needs that — but a
+ * tree is also the thing you cannot retrofit cheaply, so the axis lives
+ * in one enum and the layout in one function. */
+enum split_axis { SPLIT_ROWS = 0, SPLIT_COLS };
+
+struct pane {
+    size_t window;          /* index into app->windows */
+    size_t scroll_offset;   /* lines from the bottom of ITS window */
+    bool scroll_pinned;
+    size_t member_offset;   /* first roster row shown for it */
+    int weight;             /* share of the axis; equal by default */
+};
+
 struct app {
     struct url url;
     char token[MAX_TOKEN];
@@ -350,7 +370,19 @@ struct app {
     size_t network_count;
     struct window windows[MAX_WINDOWS];
     size_t window_count;
-    size_t current;
+    /* Panes divide the chat area; each shows one window and carries the
+     * state that is about the VIEW rather than the window — where you
+     * scrolled it, where you scrolled its roster. Two panes on the same
+     * channel are two independent views of it, which is most of the
+     * point of splitting.
+     *
+     * "The current window" is DERIVED from the focused pane
+     * (focused_window_locked) rather than stored beside it: one number
+     * that can disagree with another is a number that eventually will. */
+    struct pane panes[MAX_PANES];
+    size_t pane_count;
+    size_t focus;
+    enum split_axis split;
     char *log[LOG_LINES];
     bool log_mentions[LOG_LINES];
     bool log_pending[LOG_LINES];
@@ -368,12 +400,6 @@ struct app {
     struct seen_message seen[SEEN_MESSAGES];
     size_t seen_count;
     size_t seen_next;
-    size_t scrollback_offset;
-    bool scrollback_pinned;
-    /* First roster row shown in the member pane. Reset on focus change,
-     * like the scrollback offset — a roster you scrolled in #a means
-     * nothing in #b. */
-    size_t member_offset;
     char input[MAX_LINE];
     size_t input_len;
     char last_url[MAX_LINE];
@@ -394,6 +420,7 @@ struct app {
      * mention/pending/id arrays. */
     int log_media[LOG_LINES];
     media_protocol proto;           /* detected once, before ncurses */
+    bool key_echo;
     bool inline_media_enabled;
     /* #451 opt-in: also auto-render media from hosts that are NOT this
      * deployment's. OFF by default and deliberately not persisted — see
@@ -572,8 +599,11 @@ static void add_pending_echo(struct app *app, const char *network, const char *c
         snprintf(p->channel, sizeof(p->channel), "%s", channel);
         snprintf(p->body, sizeof(p->body), "%s", body);
     }
-    app->scrollback_offset = 0;
-    app->scrollback_pinned = false;
+    for (size_t p = 0; p < app->pane_count; p++) {
+        app->panes[p].scroll_offset = 0;
+        app->panes[p].scroll_pinned = false;
+        app->panes[p].member_offset = 0;
+    }
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -1058,11 +1088,17 @@ static void parse_networks(struct app *app, const char *json, size_t len) {
     json_free(doc);
 }
 
+/* Pane focus is asked about from everywhere a window is; defined with the
+ * other pane machinery, declared here. */
+static struct pane *focused_pane_locked(struct app *app);
+static size_t focused_window_locked(struct app *app);
+static bool window_is_visible_locked(struct app *app, size_t idx);
+
 static void add_window_ex(struct app *app, const char *network, const char *channel, bool focus) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
         if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
-            if (focus) app->current = i;
+            if (focus) focused_pane_locked(app)->window = i;
             pthread_mutex_unlock(&app->lock);
             return;
         }
@@ -1076,7 +1112,7 @@ static void add_window_ex(struct app *app, const char *network, const char *chan
     snprintf(w->network, sizeof(w->network), "%s", network);
     snprintf(w->channel, sizeof(w->channel), "%s", channel);
     w->last_id = 0;
-    if (focus) app->current = app->window_count - 1;
+    if (focus) focused_pane_locked(app)->window = app->window_count - 1;
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -1090,14 +1126,30 @@ static void remove_window(struct app *app, const char *network, const char *chan
         if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
             memmove(app->windows + i, app->windows + i + 1, sizeof(app->windows[0]) * (app->window_count - i - 1));
             app->window_count--;
-            if (app->window_count == 0) {
-                app->current = 0;
-            } else if (app->current >= app->window_count) {
-                app->current = app->window_count - 1;
-            } else if (app->current > i) {
-                app->current--;
+            /* Every pane holds an INDEX into the array that just shifted,
+             * so every pane is renumbered — not only the focused one. A
+             * pane left pointing at the old index would silently start
+             * showing its neighbour. */
+            for (size_t p = 0; p < app->pane_count; p++) {
+                struct pane *pane = &app->panes[p];
+                /* Whether this pane was SHOWING the closed window has to
+                 * be decided before the index moves: after the shift,
+                 * a pane that merely slid down from i+1 to i compares
+                 * equal to the closed index and would lose a scroll
+                 * position that is still perfectly valid. */
+                bool showed_it = pane->window == i;
+                if (app->window_count == 0) pane->window = 0;
+                else if (pane->window > i) pane->window--;
+                if (pane->window >= app->window_count && app->window_count > 0)
+                    pane->window = app->window_count - 1;
+                if (showed_it || app->window_count == 0) {
+                    pane->scroll_offset = 0;
+                    pane->scroll_pinned = false;
+                    pane->member_offset = 0;
+                }
             }
-            if (app->current < app->window_count) app->windows[app->current].unread = 0;
+            size_t cur = focused_window_locked(app);
+            if (cur < app->window_count) app->windows[cur].unread = 0;
             break;
         }
     }
@@ -1166,8 +1218,9 @@ static void enqueue_read_cursor(struct app *app, const char *network, const char
  * on the UI thread, holding the app lock, and a blocking POST here would
  * stall every keystroke. */
 static void clear_current_unread_locked(struct app *app) {
-    if (app->current >= app->window_count) return;
-    struct window *w = &app->windows[app->current];
+    size_t cur = focused_window_locked(app);
+    if (cur >= app->window_count) return;
+    struct window *w = &app->windows[cur];
     w->unread = 0;
     w->mentions = 0;
     w->severity = COUNTS_NONE;
@@ -1179,12 +1232,13 @@ static void clear_current_unread_locked(struct app *app) {
 
 static void clear_active_window_log(struct app *app) {
     pthread_mutex_lock(&app->lock);
-    if (app->current >= app->window_count) {
+    size_t cur = focused_window_locked(app);
+    if (cur >= app->window_count) {
         pthread_mutex_unlock(&app->lock);
         return;
     }
     char key[MAX_SLUG + MAX_CHANNEL + 8];
-    snprintf(key, sizeof(key), "[%s/%s]", app->windows[app->current].network, app->windows[app->current].channel);
+    snprintf(key, sizeof(key), "[%s/%s]", app->windows[cur].network, app->windows[cur].channel);
     size_t write_i = 0;
     for (size_t read_i = 0; read_i < app->log_count; read_i++) {
         if (strncmp(app->log[read_i], key, strlen(key)) == 0) {
@@ -1204,8 +1258,11 @@ static void clear_active_window_log(struct app *app) {
         write_i++;
     }
     app->log_count = write_i;
-    app->scrollback_offset = 0;
-    app->scrollback_pinned = false;
+    for (size_t p = 0; p < app->pane_count; p++) {
+        app->panes[p].scroll_offset = 0;
+        app->panes[p].scroll_pinned = false;
+        app->panes[p].member_offset = 0;
+    }
     clear_current_unread_locked(app);
     pthread_mutex_unlock(&app->lock);
 }
@@ -1355,7 +1412,7 @@ static void maybe_mark_unread(struct app *app, const char *network, const char *
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
         if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
-            if (i != app->current || app->panel != PANEL_CHAT) app->windows[i].unread++;
+            if (!window_is_visible_locked(app, i) || app->panel != PANEL_CHAT) app->windows[i].unread++;
             break;
         }
     }
@@ -1547,7 +1604,8 @@ static void render_message(struct app *app, const struct wire_scrollback_message
      * about the row you are looking at, and answering them at arrival
      * time made `/media on` a no-op for every row already in the log. See
      * the claim site in draw(). */
-    if (!app->scrollback_pinned) app->scrollback_offset = 0;
+    for (size_t p = 0; p < app->pane_count; p++)
+        if (!app->panes[p].scroll_pinned) app->panes[p].scroll_offset = 0;
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -2255,7 +2313,7 @@ static void open_panel(struct app *app, enum panel_kind panel) {
     pthread_mutex_lock(&app->lock);
     clear_panel_lines_locked(app);
     app->panel = panel;
-    struct window current = app->windows[app->current];
+    struct window current = app->windows[focused_window_locked(app)];
     size_t window_count = app->window_count;
     size_t alias_count = app->aliases.count;
     /* Snapshot the network table too — the event thread mutates it. */
@@ -2545,10 +2603,11 @@ static void seed_state(struct app *app) {
      * first thing a user typed came back as a bare "send failed HTTP 400".
      * Prefer the first channel or query; fall back to $server only when
      * there is genuinely nothing else, which is the case it exists for. */
-    app->current = 0;
+    struct pane *p = focused_pane_locked(app);
+    p->window = 0;
     for (size_t i = 0; i < app->window_count; i++) {
         if (strcmp(app->windows[i].channel, "$server") != 0) {
-            app->current = i;
+            p->window = i;
             break;
         }
     }
@@ -2741,6 +2800,34 @@ static void ws_push_user(struct app *app, const char *event, const char *payload
     free(frame);
 }
 
+/* ── Panes ─────────────────────────────────────────────────────────────
+ *
+ * There is ALWAYS at least one pane; an unsplit client is the one-pane
+ * case of the same code, not a separate path. */
+static struct pane *focused_pane_locked(struct app *app) {
+    if (app->pane_count == 0) {
+        app->pane_count = 1;
+        app->focus = 0;
+        app->panes[0].window = 0;
+        app->panes[0].weight = 1;
+    }
+    if (app->focus >= app->pane_count) app->focus = app->pane_count - 1;
+    return &app->panes[app->focus];
+}
+
+static size_t focused_window_locked(struct app *app) {
+    return focused_pane_locked(app)->window;
+}
+
+/* Is this window on screen in ANY pane? Unread is about what you have
+ * not seen, and a window you are looking at in the other pane is a
+ * window you have seen. */
+static bool window_is_visible_locked(struct app *app, size_t idx) {
+    for (size_t i = 0; i < app->pane_count; i++)
+        if (app->panes[i].window == idx) return true;
+    return false;
+}
+
 /* ── Which window am I typing into? ───────────────────────────────────
  *
  * ONE door, and it copies.
@@ -2760,7 +2847,7 @@ static void ws_push_user(struct app *app, const char *event, const char *payload
  * class. The _locked forms are for the draw path, which holds the lock
  * for its entire frame. */
 static int current_network_id_locked(struct app *app) {
-    const char *slug = app->windows[app->current].network;
+    const char *slug = app->windows[focused_window_locked(app)].network;
     for (size_t i = 0; i < app->network_count; i++) {
         if (strcmp(app->networks[i].slug, slug) == 0) return app->networks[i].id;
     }
@@ -2783,9 +2870,10 @@ static bool current_window_key(struct app *app, char *network, size_t net_sz, ch
     if (network && net_sz) network[0] = '\0';
     if (channel && chan_sz) channel[0] = '\0';
     pthread_mutex_lock(&app->lock);
-    bool have = app->window_count > 0 && app->current < app->window_count;
+    size_t cur = focused_window_locked(app);
+    bool have = app->window_count > 0 && cur < app->window_count;
     if (have) {
-        const struct window *w = &app->windows[app->current];
+        const struct window *w = &app->windows[cur];
         if (network && net_sz) snprintf(network, net_sz, "%s", w->network);
         if (channel && chan_sz) snprintf(channel, chan_sz, "%s", w->channel);
     }
@@ -4041,164 +4129,52 @@ static size_t draw_member_list(struct app *app, struct window *w, int y, int x, 
     return row;
 }
 
-static void draw(struct app *app) {
-    pthread_mutex_lock(&app->lock);
-    erase();
-    app->link_region_count = 0;
-    int rows, cols;
-    getmaxyx(stdscr, rows, cols);
-    int side = cols > 118 ? 22 : (cols > 90 ? 18 : 14);
-    int members = cols > 118 ? 24 : 0;
-    int main_x = side + 1;
-    int main_w = cols - side - members - 2;
-    int members_x = cols - members;
-    int chrome_y = 0;
-    int topic_y = 1;
-    struct window *w = &app->windows[app->current];
-    char prompt[MAX_CHANNEL + 4];
-    if (app->panel == PANEL_CHAT) snprintf(prompt, sizeof(prompt), "%s> ", w->channel);
-    else snprintf(prompt, sizeof(prompt), "%s> ", panel_name(app->panel));
-    int input_h = input_display_lines(prompt, app->input, main_w - 4);
-    int max_input_h = rows / 3;
-    if (max_input_h < 1) max_input_h = 1;
-    if (input_h > max_input_h) input_h = max_input_h;
-    int input_y = rows - input_h - 1;
-    int compose_y = input_y - 1;
+/* Draw one chat pane: its own header band, its own scrollback view.
+ *
+ * Everything that used to be "the chat area" lives here, parameterised by
+ * the rectangle it gets and the pane whose view it is. A pane carries its
+ * OWN scroll offset, so two panes on the same channel scroll
+ * independently — which is most of the reason to split at all — and the
+ * measure/draw budget rules are unchanged, just applied per rectangle.
+ *
+ * Caller holds app->lock. */
+static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int width, int height,
+                           bool focused, bool split) {
+    if (width < 8 || height < 2) return;
+    struct window *w = &app->windows[pane->window];
+
+    /* Header band. Unsplit, it is the topic bar as it always was; split,
+     * each pane needs its own or the bar describes one pane and lies
+     * about the other. The focused pane's is accented — with two panes
+     * on screen, "where does my typing go" has to be answerable at a
+     * glance, and the input box is nowhere near either header. */
     const char *topic_text = w->topic[0] ? w->topic : "(not loaded yet)";
-    int topic_label_w = main_w / 3;
+    int topic_label_w = width / 3;
     if (topic_label_w < 12) topic_label_w = 12;
-    if (topic_label_w > main_w - 12) topic_label_w = main_w / 2;
-    int topic_text_x = main_x + topic_label_w + 2;
-    int topic_text_w = main_w - topic_label_w - 3;
+    if (topic_label_w > width - 12) topic_label_w = width / 2;
+    int topic_text_x = x + topic_label_w + 2;
+    int topic_text_w = width - topic_label_w - 3;
     int topic_prefix_w = 7;
     if (topic_text_w < topic_prefix_w + 8) topic_prefix_w = 0;
     int topic_wrap_w = topic_text_w - topic_prefix_w;
     if (topic_wrap_w < 1) topic_wrap_w = 1;
     int topic_h = wrapped_text_lines_visible(topic_text, topic_wrap_w);
-    int max_topic_h = compose_y - topic_y - 1;
+    int max_topic_h = split ? 1 : height - 2;
     if (max_topic_h < 1) max_topic_h = 1;
     if (topic_h > max_topic_h) topic_h = max_topic_h;
-    int scroll_y = topic_y + topic_h;
-    int scroll_h = compose_y - 1 - scroll_y;
-    if (scroll_h < 0) scroll_h = 0;
 
-    for (int y = 0; y < rows; y++) {
-        draw_fill(y, 0, side, CP_ALT);
-        if (members) draw_fill(y, members_x, members, CP_ALT);
-    }
-    attron(COLOR_PAIR(CP_BORDER));
-    mvvline(0, side, ACS_VLINE, rows);
-    if (members) mvvline(0, members_x - 1, ACS_VLINE, rows);
-    mvhline(scroll_y, main_x, ACS_HLINE, main_w);
-    mvhline(compose_y - 1, main_x, ACS_HLINE, main_w);
-    attroff(COLOR_PAIR(CP_BORDER));
+    int head_pair = focused ? CP_TITLE : CP_ALT;
+    int head_accent = focused ? CP_TITLE_ACCENT : CP_MUTED;
+    for (int ty = 0; ty < topic_h; ty++) draw_fill(y + ty, x, width, head_pair);
+    draw_text(y, x + 1, topic_label_w, head_accent, A_BOLD, "%s%s/%s", focused && split ? "* " : "",
+              w->network, w->channel);
+    if (topic_prefix_w) draw_text(y, topic_text_x, topic_text_w, head_pair, A_BOLD, "topic: ");
+    draw_wrapped_text(y, topic_text_x + topic_prefix_w, topic_wrap_w, 0, topic_h, head_pair, 0,
+                      topic_text);
 
-    draw_text(0, 1, side - 2, CP_ACCENT, A_BOLD, "shottino");
-    if (app->ws_connected) {
-        draw_text(1, 1, side - 2, CP_MUTED, 0, "ws");
-    } else {
-        /* Count down to the next attempt. "offline" alone reads as a dead
-         * end; the countdown says recovery is in progress. */
-        long wait = (long)(app->ws_retry_at - time(NULL));
-        if (wait < 0) wait = 0;
-        draw_text(1, 1, side - 2, CP_ERROR, A_BOLD, "retry %lds", wait);
-    }
-
-    char last_net[MAX_SLUG] = "";
-    int y = 3;
-    for (size_t i = 0; i < app->window_count && y < rows - 1; i++) {
-        struct window *win = &app->windows[i];
-        if (strcmp(last_net, win->network) != 0) {
-            snprintf(last_net, sizeof(last_net), "%s", win->network);
-            draw_text(y++, 1, side - 2, CP_ACCENT, A_BOLD, "%s", win->network);
-            if (y >= rows - 1) break;
-        }
-        bool selected = i == app->current;
-        bool unread = app->windows[i].unread > 0;
-        /* A not-joined window is greyed and marked. cicchetto renders the
-         * same states as greyed synthetic rows; the sigil is the terminal
-         * equivalent of its badge, so a dead tab reads as dead at a glance
-         * instead of looking like an ordinary empty channel. */
-        char state_mark = window_state_mark(win->state);
-        bool dead = state_mark != ' ';
-        int pair = selected ? CP_SELECTED : (unread ? CP_ACCENT : (dead ? CP_MUTED : CP_ALT));
-        draw_fill(y, 0, side, pair);
-        draw_text(y, 1, 2, pair, (selected || unread) ? A_BOLD : 0, "%2zu", i + 1);
-        if (dead) draw_text(y, 4, side - 5, pair, A_DIM, "%c%s", state_mark, win->channel);
-        else if (win->mentions > 0) {
-            /* A mention outranks a plain-message count: it is the reason
-             * to look now rather than later, so it gets its own colour
-             * and marker instead of being folded into one number. */
-            draw_text(y, 4, side - 5, selected ? pair : CP_MENTION, A_BOLD, "%s (%u)",
-                      win->channel, win->mentions);
-        }
-        else if (unread) draw_text(y, 4, side - 5, pair, A_BOLD, "%s [%u]", win->channel, app->windows[i].unread);
-        else draw_text(y, 4, side - 5, pair, selected ? A_BOLD : 0, "%s", win->channel);
-        y++;
-    }
-
-    /* The roster lives UNDER the window list, in whatever the window list
-     * left. Windows keep priority: a channel you cannot see in the list is
-     * a channel you cannot reach, while a roster that needs scrolling is
-     * merely a roster that needs scrolling.
-     *
-     * It is drawn here only when the wide-terminal pane on the right is
-     * NOT showing. One roster on screen at a time, in one of two places —
-     * the same list either way, since both call draw_member_list. */
-    size_t roster_rows = 0;
-    if (!members && w->member_count > 0) {
-        int roster_y = y + 1;
-        int roster_h = rows - 1 - roster_y;
-        if (roster_h > 0) {
-            attron(COLOR_PAIR(CP_BORDER));
-            mvhline(y, 0, ACS_HLINE, side);
-            attroff(COLOR_PAIR(CP_BORDER));
-            draw_fill(roster_y, 0, side, CP_ALT);
-            draw_text(roster_y, 1, side - 2, CP_ACCENT, A_BOLD, "users %zu", w->member_count);
-            roster_rows = draw_member_list(app, w, -1, 0, 0, 0, 0);
-            size_t max_off = roster_rows > (size_t)(roster_h - 1) ? roster_rows - (size_t)(roster_h - 1) : 0;
-            if (app->member_offset > max_off) app->member_offset = max_off;
-            draw_member_list(app, w, roster_y + 1, 1, side - 2, roster_h - 1, app->member_offset);
-            /* Say so when the list runs past the pane, or a roster that is
-             * simply taller than the sidebar reads as a truncated one. */
-            if (roster_rows > (size_t)(roster_h - 1))
-                draw_text(rows - 1, 1, side - 2, CP_MUTED, A_DIM, "S-PgUp/PgDn %zu/%zu",
-                          app->member_offset + 1, roster_rows);
-        }
-    }
-
-    /* Title + topic ride one continuous band, so the chat area begins
-     * where the colour changes rather than where a one-cell rule sits. */
-    draw_fill(chrome_y, main_x, main_w, CP_TITLE);
-    if (app->hover_url[0])
-        draw_text(chrome_y, main_x + 1, main_w - 2, CP_TITLE_ACCENT, A_BOLD,
-                  "%s: %s", media_kind_of(app->hover_url) != MEDIA_NONE ? "click to preview" : "click to open",
-                  app->hover_url);
-    else
-        draw_text(chrome_y, main_x + 1, main_w - 2, CP_TITLE, 0,
-                  "/archive  /settings  /admin  /chat  ws:%s", app->ws_connected ? "connected" : "offline");
-    for (int ty = 0; ty < topic_h; ty++) draw_fill(topic_y + ty, main_x, main_w, CP_TITLE);
-    draw_text(topic_y, main_x + 1, topic_label_w, CP_TITLE_ACCENT, A_BOLD, "%s/%s", w->network, w->channel);
-    if (topic_prefix_w) draw_text(topic_y, topic_text_x, topic_text_w, CP_TITLE, A_BOLD, "topic: ");
-    draw_wrapped_text(topic_y, topic_text_x + topic_prefix_w, topic_wrap_w, 0, topic_h, CP_TITLE, 0, topic_text);
-
-    if (app->panel != PANEL_CHAT) {
-        draw_text(scroll_y, main_x + 1, main_w - 2, CP_ACCENT, A_BOLD, "%s", panel_name(app->panel));
-        for (size_t i = 0; i < app->panel_line_count && (int)i + scroll_y + 2 < compose_y - 1; i++) {
-            int pair = i == 0 ? CP_ACCENT : CP_MAIN;
-            attr_t attr = i == 0 ? A_BOLD : 0;
-            draw_text(scroll_y + 2 + (int)i, main_x + 1, main_w - 2, pair, attr, "%s", app->panel_lines[i]);
-        }
-        draw_fill(compose_y, main_x, main_w, CP_STATUS);
-        draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0, "panel: %s | Esc or /chat returns to chat", panel_name(app->panel));
-        int cursor_y = input_y;
-        int cursor_x = main_x + 2;
-        draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input, &cursor_y, &cursor_x);
-        move(cursor_y, cursor_x);
-        pthread_mutex_unlock(&app->lock);
-        refresh();
-        return;
-    }
+    int scroll_y = y + topic_h;
+    int scroll_h = height - topic_h;
+    if (scroll_h < 1) return;
 
     char wanted_prefix[MAX_SLUG + MAX_CHANNEL + 8];
     snprintf(wanted_prefix, sizeof(wanted_prefix), "[%s/%s]", w->network, w->channel);
@@ -4213,7 +4189,7 @@ static void draw(struct app *app) {
     for (size_t i = 0; i < app->log_count; i++) {
         if (strncmp(app->log[i], "[", 1) != 0 || strncmp(app->log[i], wanted_prefix, strlen(wanted_prefix)) == 0) {
             visible[visible_count] = i;
-            heights[visible_count] = message_display_lines(app->log[i], main_w - 2);
+            heights[visible_count] = message_display_lines(app->log[i], width - 2);
             if (heights[visible_count] < 1) heights[visible_count] = 1;
             /* The TEXT height, kept apart from the total below. Conflating
              * the two put the image after text+image rows instead of
@@ -4247,7 +4223,7 @@ static void draw(struct app *app) {
                     if (box_rows < 3) box_rows = 3;
                     /* Aspect is unknown until decode; assume 4:3, which is
                      * close enough that the reserved box rarely changes. */
-                    media_fit_cells(4, 3, main_w - 4, box_rows, &m->cols, &m->rows);
+                    media_fit_cells(4, 3, width - 4, box_rows, &m->cols, &m->rows);
                 }
                 heights[visible_count] += media_extra_rows(m);
             }
@@ -4284,8 +4260,8 @@ static void draw(struct app *app) {
         }
     }
     int max_offset = total_visible_lines > scroll_h ? total_visible_lines - scroll_h : 0;
-    if ((int)app->scrollback_offset > max_offset) app->scrollback_offset = (size_t)max_offset;
-    int skip_lines = max_offset - (int)app->scrollback_offset;
+    if ((int)pane->scroll_offset > max_offset) pane->scroll_offset = (size_t)max_offset;
+    int skip_lines = max_offset - (int)pane->scroll_offset;
     int used_lines = 0;
     int drawn_rows = 0;
     int last_drawn_vi = -1;
@@ -4335,8 +4311,8 @@ static void draw(struct app *app) {
                 row_skip -= 1; /* the divider itself is above the region */
             } else if (used_lines + 1 < scroll_h) {
                 attron(COLOR_PAIR(CP_ERROR) | A_BOLD);
-                mvhline(msg_y, main_x + 1, ACS_HLINE, main_w - 2);
-                mvprintw(msg_y, main_x + 3, " unread ");
+                mvhline(msg_y, x + 1, ACS_HLINE, width - 2);
+                mvprintw(msg_y, x + 3, " unread ");
                 attroff(COLOR_PAIR(CP_ERROR) | A_BOLD);
                 used_lines += 1;
                 msg_y += 1;
@@ -4357,14 +4333,14 @@ static void draw(struct app *app) {
         if (draw_lines > 0) {
             last_drawn_vi = (int)vi;
             drawn_rows++;
-            draw_message_line(msg_y, main_x + 1, main_w - 2, text_skip, draw_lines, app->log[i],
+            draw_message_line(msg_y, x + 1, width - 2, text_skip, draw_lines, app->log[i],
                               app->log_mentions[i], app->log_pending[i]);
             /* EVERY link is clickable, not only the ones that turn into
              * pictures: `kind` decides whether the click previews or hands
              * the URL to the browser. */
             if (url_tok[0])
-                add_link_region(app, msg_y, msg_y + draw_lines - 1, main_x + 1,
-                                main_x + main_w - 2, url_tok, mk);
+                add_link_region(app, msg_y, msg_y + draw_lines - 1, x + 1,
+                                x + width - 2, url_tok, mk);
         }
         /* Claim the row's inline slot HERE, the first time the row is on
          * screen — not when the message arrived.
@@ -4413,12 +4389,12 @@ static void draw(struct app *app) {
             int spend = want < room ? want : room;
             if (spend > 0) {
                 if (m->state == IM_READY) {
-                    draw_inline_media(m, img_y, main_x + 2, row_skip, spend, main_w - 4);
+                    draw_inline_media(m, img_y, x + 2, row_skip, spend, width - 4);
                 } else if (m->state == IM_FAILED) {
-                    draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM,
+                    draw_text(img_y, x + 2, width - 4, CP_MUTED, A_DIM,
                               "  [image could not be decoded — /open to view externally]");
                 } else {
-                    draw_text(img_y, main_x + 2, main_w - 4, CP_MUTED, A_DIM, "  [loading image…]");
+                    draw_text(img_y, x + 2, width - 4, CP_MUTED, A_DIM, "  [loading image…]");
                 }
                 used_lines += spend;
                 /* A tall picture can fill the region on its own, with its
@@ -4439,16 +4415,208 @@ static void draw(struct app *app) {
          * drawn. That is the shape every measure-vs-draw disagreement
          * takes — whatever line the draw pass spends that the measuring
          * pass did not reserve is paid for out of the last row. */
-        bool clipped = visible_count > 0 && app->scrollback_offset == 0 &&
+        bool clipped = visible_count > 0 && pane->scroll_offset == 0 &&
                        last_drawn_vi != (int)visible_count - 1;
         fprintf(lay, "   END max_off=%d skip=%d used=%d/%d drawn=%d/%zu last_drawn=%d%s%s\n",
-                max_offset, max_offset - (int)app->scrollback_offset, used_lines, scroll_h,
+                max_offset, max_offset - (int)pane->scroll_offset, used_lines, scroll_h,
                 drawn_rows, visible_count, last_drawn_vi,
                 (used_lines > scroll_h) ? "  *** OVERFLOW: budget exceeded ***" : "",
                 clipped ? "  *** CLIPPED: newest row not drawn ***" : "");
         fflush(lay);
     }
 
+}
+
+static void draw(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    erase();
+    app->link_region_count = 0;
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
+    int side = cols > 118 ? 22 : (cols > 90 ? 18 : 14);
+    int members = cols > 118 ? 24 : 0;
+    int main_x = side + 1;
+    int main_w = cols - side - members - 2;
+    int members_x = cols - members;
+    int chrome_y = 0;
+    int topic_y = 1;
+    struct window *w = &app->windows[focused_window_locked(app)];
+    char prompt[MAX_CHANNEL + 4];
+    if (app->panel == PANEL_CHAT) snprintf(prompt, sizeof(prompt), "%s> ", w->channel);
+    else snprintf(prompt, sizeof(prompt), "%s> ", panel_name(app->panel));
+    int input_h = input_display_lines(prompt, app->input, main_w - 4);
+    int max_input_h = rows / 3;
+    if (max_input_h < 1) max_input_h = 1;
+    if (input_h > max_input_h) input_h = max_input_h;
+    int input_y = rows - input_h - 1;
+    int compose_y = input_y - 1;
+    /* The chat AREA: everything between the chrome line and the rule
+     * above the status line. One pane fills it; several divide it. */
+    int area_y = topic_y;
+    int area_h = compose_y - 1 - area_y;
+    if (area_h < 0) area_h = 0;
+
+    for (int y = 0; y < rows; y++) {
+        draw_fill(y, 0, side, CP_ALT);
+        if (members) draw_fill(y, members_x, members, CP_ALT);
+    }
+    attron(COLOR_PAIR(CP_BORDER));
+    mvvline(0, side, ACS_VLINE, rows);
+    if (members) mvvline(0, members_x - 1, ACS_VLINE, rows);
+    mvhline(compose_y - 1, main_x, ACS_HLINE, main_w);
+    attroff(COLOR_PAIR(CP_BORDER));
+
+    draw_text(0, 1, side - 2, CP_ACCENT, A_BOLD, "shottino");
+    if (app->ws_connected) {
+        draw_text(1, 1, side - 2, CP_MUTED, 0, "ws");
+    } else {
+        /* Count down to the next attempt. "offline" alone reads as a dead
+         * end; the countdown says recovery is in progress. */
+        long wait = (long)(app->ws_retry_at - time(NULL));
+        if (wait < 0) wait = 0;
+        draw_text(1, 1, side - 2, CP_ERROR, A_BOLD, "retry %lds", wait);
+    }
+
+    char last_net[MAX_SLUG] = "";
+    int y = 3;
+    for (size_t i = 0; i < app->window_count && y < rows - 1; i++) {
+        struct window *win = &app->windows[i];
+        if (strcmp(last_net, win->network) != 0) {
+            snprintf(last_net, sizeof(last_net), "%s", win->network);
+            draw_text(y++, 1, side - 2, CP_ACCENT, A_BOLD, "%s", win->network);
+            if (y >= rows - 1) break;
+        }
+        bool selected = window_is_visible_locked(app, i);
+        bool unread = app->windows[i].unread > 0;
+        /* A not-joined window is greyed and marked. cicchetto renders the
+         * same states as greyed synthetic rows; the sigil is the terminal
+         * equivalent of its badge, so a dead tab reads as dead at a glance
+         * instead of looking like an ordinary empty channel. */
+        char state_mark = window_state_mark(win->state);
+        bool dead = state_mark != ' ';
+        int pair = selected ? CP_SELECTED : (unread ? CP_ACCENT : (dead ? CP_MUTED : CP_ALT));
+        draw_fill(y, 0, side, pair);
+        draw_text(y, 1, 2, pair, (selected || unread) ? A_BOLD : 0, "%2zu", i + 1);
+        if (dead) draw_text(y, 4, side - 5, pair, A_DIM, "%c%s", state_mark, win->channel);
+        else if (win->mentions > 0) {
+            /* A mention outranks a plain-message count: it is the reason
+             * to look now rather than later, so it gets its own colour
+             * and marker instead of being folded into one number. */
+            draw_text(y, 4, side - 5, selected ? pair : CP_MENTION, A_BOLD, "%s (%u)",
+                      win->channel, win->mentions);
+        }
+        else if (unread) draw_text(y, 4, side - 5, pair, A_BOLD, "%s [%u]", win->channel, app->windows[i].unread);
+        else draw_text(y, 4, side - 5, pair, selected ? A_BOLD : 0, "%s", win->channel);
+        y++;
+    }
+
+    /* The roster lives UNDER the window list, in whatever the window list
+     * left. Windows keep priority: a channel you cannot see in the list is
+     * a channel you cannot reach, while a roster that needs scrolling is
+     * merely a roster that needs scrolling.
+     *
+     * It is drawn here only when the wide-terminal pane on the right is
+     * NOT showing. One roster on screen at a time, in one of two places —
+     * the same list either way, since both call draw_member_list. */
+    size_t roster_rows = 0;
+    if (!members && w->member_count > 0) {
+        int roster_y = y + 1;
+        int roster_h = rows - 1 - roster_y;
+        if (roster_h > 0) {
+            attron(COLOR_PAIR(CP_BORDER));
+            mvhline(y, 0, ACS_HLINE, side);
+            attroff(COLOR_PAIR(CP_BORDER));
+            draw_fill(roster_y, 0, side, CP_ALT);
+            draw_text(roster_y, 1, side - 2, CP_ACCENT, A_BOLD, "users %zu", w->member_count);
+            roster_rows = draw_member_list(app, w, -1, 0, 0, 0, 0);
+            size_t max_off = roster_rows > (size_t)(roster_h - 1) ? roster_rows - (size_t)(roster_h - 1) : 0;
+            struct pane *fp = focused_pane_locked(app);
+            if (fp->member_offset > max_off) fp->member_offset = max_off;
+            draw_member_list(app, w, roster_y + 1, 1, side - 2, roster_h - 1, fp->member_offset);
+            /* Say so when the list runs past the pane, or a roster that is
+             * simply taller than the sidebar reads as a truncated one. */
+            if (roster_rows > (size_t)(roster_h - 1))
+                draw_text(rows - 1, 1, side - 2, CP_MUTED, A_DIM, "S-PgUp/PgDn %zu/%zu",
+                          focused_pane_locked(app)->member_offset + 1, roster_rows);
+        }
+    }
+
+    /* Title + topic ride one continuous band, so the chat area begins
+     * where the colour changes rather than where a one-cell rule sits. */
+    draw_fill(chrome_y, main_x, main_w, CP_TITLE);
+    if (app->hover_url[0])
+        draw_text(chrome_y, main_x + 1, main_w - 2, CP_TITLE_ACCENT, A_BOLD,
+                  "%s: %s", media_kind_of(app->hover_url) != MEDIA_NONE ? "click to preview" : "click to open",
+                  app->hover_url);
+    else
+        draw_text(chrome_y, main_x + 1, main_w - 2, CP_TITLE, 0,
+                  "/archive  /settings  /admin  /chat  ws:%s", app->ws_connected ? "connected" : "offline");
+
+    if (app->panel != PANEL_CHAT) {
+        /* A panel replaces the whole chat area, panes and all: it is a
+         * different mode, not another window. */
+        draw_text(area_y, main_x + 1, main_w - 2, CP_ACCENT, A_BOLD, "%s", panel_name(app->panel));
+        for (size_t i = 0; i < app->panel_line_count && (int)i + area_y + 2 < compose_y - 1; i++) {
+            int pair = i == 0 ? CP_ACCENT : CP_MAIN;
+            attr_t attr = i == 0 ? A_BOLD : 0;
+            draw_text(area_y + 2 + (int)i, main_x + 1, main_w - 2, pair, attr, "%s", app->panel_lines[i]);
+        }
+        draw_fill(compose_y, main_x, main_w, CP_STATUS);
+        draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0, "panel: %s | Esc or /chat returns to chat", panel_name(app->panel));
+        int cursor_y = input_y;
+        int cursor_x = main_x + 2;
+        draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input, &cursor_y, &cursor_x);
+        move(cursor_y, cursor_x);
+        pthread_mutex_unlock(&app->lock);
+        refresh();
+        return;
+    }
+
+    /* Lay the panes out along the split axis, proportionally to their
+     * weights, and hand each its rectangle. One pane is the same code
+     * with the whole area — there is no unsplit special case. */
+    bool split = app->pane_count > 1;
+    int total_weight = 0;
+    for (size_t i = 0; i < app->pane_count; i++) {
+        if (app->panes[i].weight < 1) app->panes[i].weight = 1;
+        total_weight += app->panes[i].weight;
+    }
+    if (total_weight < 1) total_weight = 1;
+    int axis_total = app->split == SPLIT_ROWS ? area_h : main_w;
+    /* Separators between panes cost a line/column each. */
+    int gaps = (int)app->pane_count - 1;
+    int usable = axis_total - gaps;
+    if (usable < (int)app->pane_count) usable = (int)app->pane_count;
+    int consumed = 0;
+    for (size_t i = 0; i < app->pane_count; i++) {
+        bool last = i + 1 == app->pane_count;
+        int extent = last ? usable - consumed
+                          : (usable * app->panes[i].weight) / total_weight;
+        int floor_extent = app->split == SPLIT_ROWS ? 3 : 24;
+        if (extent < floor_extent && !last) extent = floor_extent;
+        if (extent > usable - consumed) extent = usable - consumed;
+        if (extent < 1) extent = 1;
+        bool focused = i == app->focus;
+        if (app->split == SPLIT_ROWS) {
+            draw_chat_pane(app, &app->panes[i], main_x, area_y + consumed, main_w, extent, focused,
+                           split);
+            if (!last) {
+                attron(COLOR_PAIR(CP_BORDER));
+                mvhline(area_y + consumed + extent, main_x, ACS_HLINE, main_w);
+                attroff(COLOR_PAIR(CP_BORDER));
+            }
+        } else {
+            draw_chat_pane(app, &app->panes[i], main_x + consumed, area_y, extent, area_h, focused,
+                           split);
+            if (!last) {
+                attron(COLOR_PAIR(CP_BORDER));
+                mvvline(area_y, main_x + consumed + extent, ACS_VLINE, area_h);
+                attroff(COLOR_PAIR(CP_BORDER));
+            }
+        }
+        consumed += extent + (last ? 0 : 1);
+        if (consumed >= usable + gaps) break;
+    }
     /* A window in a terminal state says WHY on the status line — the
      * sidebar sigil says "dead", this says "kicked by op: flooding". */
     /* The status line gets its own warm band: it is the boundary between
@@ -4460,11 +4628,14 @@ static void draw(struct app *app) {
     if (state_label) {
         draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS_ERROR, A_BOLD, "[%s] %s%s%s%s",
                   w->channel, state_label, w->state_detail[0] ? ": " : "", w->state_detail,
-                  app->scrollback_pinned ? " | scrolled" : "");
+                  focused_pane_locked(app)->scroll_pinned ? " | scrolled" : "");
     } else {
         draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0,
-                  "[%s] PgUp/PgDn scroll | End bottom | Tab complete | Up/Down history | /open | /exit%s",
-                  w->channel, app->scrollback_pinned ? " | scrolled" : "");
+                  "[%s] %s | End bottom | Tab complete | Up/Down history | /open | /exit%s",
+                  w->channel,
+                  app->pane_count > 1 ? "PgUp/PgDn scroll | C-M-\u2191\u2193 pane | C-M-+/- size"
+                                      : "PgUp/PgDn scroll",
+                  focused_pane_locked(app)->scroll_pinned ? " | scrolled" : "");
     }
     int cursor_y = input_y;
     int cursor_x = main_x + 2;
@@ -4482,11 +4653,12 @@ static void draw(struct app *app) {
         if (pane_h > 0) {
             roster_rows = draw_member_list(app, w, -1, 0, 0, 0, 0);
             size_t max_off = roster_rows > (size_t)pane_h ? roster_rows - (size_t)pane_h : 0;
-            if (app->member_offset > max_off) app->member_offset = max_off;
-            draw_member_list(app, w, 2, members_x + 1, members - 2, pane_h, app->member_offset);
+            struct pane *fp = focused_pane_locked(app);
+            if (fp->member_offset > max_off) fp->member_offset = max_off;
+            draw_member_list(app, w, 2, members_x + 1, members - 2, pane_h, fp->member_offset);
             if (roster_rows > (size_t)pane_h)
                 draw_text(rows - 1, members_x + 1, members - 2, CP_MUTED, A_DIM,
-                          "S-PgUp/PgDn %zu/%zu", app->member_offset + 1, roster_rows);
+                          "S-PgUp/PgDn %zu/%zu", focused_pane_locked(app)->member_offset + 1, roster_rows);
         }
         if (w->member_count == 0)
             draw_text(2, members_x + 1, members - 2, CP_MUTED, 0, "(not seeded)");
@@ -4498,7 +4670,7 @@ static void draw(struct app *app) {
 }
 
 static void send_message(struct app *app, const char *body) {
-    struct window *w = &app->windows[app->current];
+    struct window *w = &app->windows[focused_window_locked(app)];
     char *net = url_encode(w->network);
     char *chan = url_encode(w->channel);
     char *escaped = json_escape(body);
@@ -4715,7 +4887,7 @@ static void join_channel(struct app *app, const char *name) {
     struct http_response r = http_request(app, "POST", path, body);
     if (r.status >= 200 && r.status < 300) {
         add_window(app, net_slug, name);
-        fetch_scrollback(app, &app->windows[app->current]);
+        fetch_scrollback(app, &app->windows[focused_window_locked(app)]);
         if (app->ws_connected) {
             char *t = xasprintf("grappa:user:%s/network:%s/channel:%s", app->subject, net_slug, name);
             ws_join(app, t);
@@ -4733,8 +4905,8 @@ static void part_current(struct app *app) {
     char network[MAX_SLUG];
     char channel[MAX_CHANNEL];
     pthread_mutex_lock(&app->lock);
-    snprintf(network, sizeof(network), "%s", app->windows[app->current].network);
-    snprintf(channel, sizeof(channel), "%s", app->windows[app->current].channel);
+    snprintf(network, sizeof(network), "%s", app->windows[focused_window_locked(app)].network);
+    snprintf(channel, sizeof(channel), "%s", app->windows[focused_window_locked(app)].channel);
     pthread_mutex_unlock(&app->lock);
     char *net = url_encode(network);
     char *chan = url_encode(channel);
@@ -4941,21 +5113,97 @@ static void history_next(struct app *app) {
     app->input_len = strlen(app->input);
 }
 
+
+/* ── /split, /splitv, /unsplit ─────────────────────────────────────────
+ *
+ * A new pane opens on the SAME window as the one it was split from, not
+ * on a guessed "next" one: splitting is a request for another view, and
+ * which conversation goes in it is the next thing you say (/win, Ctrl-N).
+ * Landing it on some other channel would be the client picking. */
+static void split_pane(struct app *app, enum split_axis axis) {
+    pthread_mutex_lock(&app->lock);
+    if (app->pane_count >= MAX_PANES) {
+        pthread_mutex_unlock(&app->lock);
+        log_line(app, "/split: %d panes is the limit — /unsplit closes one", MAX_PANES);
+        return;
+    }
+    struct pane *from = focused_pane_locked(app);
+    struct pane fresh = {.window = from->window, .weight = 1};
+    app->split = axis;
+    /* The new pane goes directly after the focused one and takes focus:
+     * you asked for it, so you are looking at it. */
+    size_t at = app->focus + 1;
+    memmove(&app->panes[at + 1], &app->panes[at], sizeof(app->panes[0]) * (app->pane_count - at));
+    app->panes[at] = fresh;
+    app->pane_count++;
+    app->focus = at;
+    size_t count = app->pane_count;
+    pthread_mutex_unlock(&app->lock);
+    log_line(app, "split %s — %zu panes; Ctrl-Alt-Up/Down or Ctrl-Alt-Tab to switch, Ctrl-Alt-+/- to resize",
+             axis == SPLIT_ROWS ? "horizontally" : "vertically", count);
+}
+
+static void unsplit_pane(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    if (app->pane_count <= 1) {
+        pthread_mutex_unlock(&app->lock);
+        log_line(app, "/unsplit: only one pane");
+        return;
+    }
+    size_t at = app->focus;
+    memmove(&app->panes[at], &app->panes[at + 1],
+            sizeof(app->panes[0]) * (app->pane_count - at - 1));
+    app->pane_count--;
+    if (app->focus >= app->pane_count) app->focus = app->pane_count - 1;
+    size_t count = app->pane_count;
+    pthread_mutex_unlock(&app->lock);
+    log_line(app, "%zu pane%s", count, count == 1 ? "" : "s");
+}
+
+/* Move focus between panes. The window list, the roster and the input all
+ * follow, because they all ask focused_pane_locked() where they are. */
+static void focus_pane(struct app *app, int delta) {
+    pthread_mutex_lock(&app->lock);
+    if (app->pane_count > 1) {
+        if (delta > 0) app->focus = (app->focus + 1) % app->pane_count;
+        else app->focus = app->focus == 0 ? app->pane_count - 1 : app->focus - 1;
+        clear_current_unread_locked(app);
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Grow or shrink the focused pane. Weights, not absolute sizes: a
+ * terminal resize then re-divides in the same proportions instead of
+ * leaving one pane pinned at a size the window can no longer hold. */
+static void resize_pane(struct app *app, int delta) {
+    pthread_mutex_lock(&app->lock);
+    struct pane *p = focused_pane_locked(app);
+    int w = p->weight + delta;
+    if (w < 1) w = 1;
+    if (w > 16) w = 16;
+    p->weight = w;
+    pthread_mutex_unlock(&app->lock);
+}
+
 static void scroll_chat(struct app *app, int delta) {
     pthread_mutex_lock(&app->lock);
-    if (delta > 0) app->scrollback_offset += (size_t)delta;
+    struct pane *p = focused_pane_locked(app);
+    if (delta > 0) p->scroll_offset += (size_t)delta;
     else {
         size_t n = (size_t)(-delta);
-        app->scrollback_offset = n > app->scrollback_offset ? 0 : app->scrollback_offset - n;
+        p->scroll_offset = n > p->scroll_offset ? 0 : p->scroll_offset - n;
     }
-    app->scrollback_pinned = app->scrollback_offset > 0;
+    p->scroll_pinned = p->scroll_offset > 0;
     pthread_mutex_unlock(&app->lock);
 }
 
 static void scroll_bottom(struct app *app) {
     pthread_mutex_lock(&app->lock);
-    app->scrollback_offset = 0;
-    app->scrollback_pinned = false;
+    for (size_t p = 0; p < app->pane_count; p++) {
+        app->panes[p].scroll_offset = 0;
+        app->panes[p].scroll_pinned = false;
+        app->panes[p].member_offset = 0;
+    }
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -4965,10 +5213,11 @@ static void scroll_bottom(struct app *app) {
  * clamp the top. */
 static void scroll_members(struct app *app, int delta) {
     pthread_mutex_lock(&app->lock);
-    if (delta > 0) app->member_offset += (size_t)delta;
+    struct pane *p = focused_pane_locked(app);
+    if (delta > 0) p->member_offset += (size_t)delta;
     else {
         size_t n = (size_t)(-delta);
-        app->member_offset = n > app->member_offset ? 0 : app->member_offset - n;
+        p->member_offset = n > p->member_offset ? 0 : p->member_offset - n;
     }
     pthread_mutex_unlock(&app->lock);
 }
@@ -4979,16 +5228,22 @@ static void cycle_window(struct app *app, int delta) {
         pthread_mutex_unlock(&app->lock);
         return;
     }
-    if (delta > 0) app->current = (app->current + 1) % app->window_count;
-    else app->current = app->current == 0 ? app->window_count - 1 : app->current - 1;
+    struct pane *p = focused_pane_locked(app);
+    if (delta > 0) p->window = (p->window + 1) % app->window_count;
+    else p->window = p->window == 0 ? app->window_count - 1 : p->window - 1;
+    p->scroll_offset = 0;
+    p->scroll_pinned = false;
+    p->member_offset = 0;
     clear_current_unread_locked(app);
-    app->scrollback_offset = 0;
-    app->scrollback_pinned = false;
-    app->member_offset = 0;
+    for (size_t p = 0; p < app->pane_count; p++) {
+        app->panes[p].scroll_offset = 0;
+        app->panes[p].scroll_pinned = false;
+        app->panes[p].member_offset = 0;
+    }
     char network[MAX_SLUG];
     char channel[MAX_CHANNEL];
-    snprintf(network, sizeof(network), "%s", app->windows[app->current].network);
-    snprintf(channel, sizeof(channel), "%s", app->windows[app->current].channel);
+    snprintf(network, sizeof(network), "%s", app->windows[focused_window_locked(app)].network);
+    snprintf(channel, sizeof(channel), "%s", app->windows[focused_window_locked(app)].channel);
     pthread_mutex_unlock(&app->lock);
     enqueue_fetch(app, network, channel);
     ensure_roster(app, network, channel);
@@ -5064,7 +5319,7 @@ static void complete_input(struct app *app) {
         const char *current_network = cur_net;
         pthread_mutex_lock(&app->lock);
         if (app->window_count > 0) {
-            struct window *w = &app->windows[app->current];
+            struct window *w = &app->windows[focused_window_locked(app)];
             for (size_t i = 0; i < w->member_count; i++) add_completion_candidate(candidates, &matches, w->members[i].nick, stem);
         }
         for (size_t i = 0; i < app->window_count; i++) {
@@ -5525,6 +5780,7 @@ static void show_help(struct app *app) {
     log_line(app, "terminal: mouse tracking is OFF by default so the terminal keeps its own copy/paste selection; /mouse on enables click-to-preview (and suppresses selection), /mouse off restores it");
     log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; /media [on|off|all|first-party] — 'all' also auto-fetches images hosted elsewhere");
     log_line(app, "       /preview full-screen; /preview-ascii forces the art renderer; /open opens externally; with /mouse on, click a link to preview");
+    log_line(app, "panes: /split (stacked) /splitv (side by side) /unsplit; Ctrl-Alt-Up/Down or Ctrl-Alt-Tab switch, Ctrl-Alt-+/- resize, /keys shows what your terminal sends");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
 
@@ -6072,6 +6328,21 @@ static void handle_command_dispatch(struct app *app, char *line) {
         open_panel(app, PANEL_ADMIN);
     } else if (strcmp(line, "/share") == 0) {
         mint_share_link(app);
+    } else if (strcmp(line, "/keys") == 0) {
+        /* Debugging tools are infrastructure: which escape sequence your
+         * terminal sends for Ctrl-Alt-+ is not something to guess at
+         * across a bug report. */
+        app->key_echo = !app->key_echo;
+        log_line(app, "key echo %s — press keys to see their codes; /keys again to stop",
+                 app->key_echo ? "ON" : "OFF");
+    } else if (strcmp(line, "/split") == 0 || strcmp(line, "/splith") == 0) {
+        split_pane(app, SPLIT_ROWS);
+    } else if (strcmp(line, "/splitv") == 0 || strcmp(line, "/splitw") == 0) {
+        /* Both spellings: /splitv reads as "vertical" and /splitw as
+         * "width", and both were asked for. Same door either way. */
+        split_pane(app, SPLIT_COLS);
+    } else if (strcmp(line, "/unsplit") == 0) {
+        unsplit_pane(app);
     } else if (strcmp(line, "/media") == 0 || strncmp(line, "/media ", 7) == 0) {
         const char *rest = line[6] ? line + 7 : "";
         while (*rest == ' ') rest++;
@@ -6135,7 +6406,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
     } else if (strcmp(line, "/close") == 0) {
         struct window w;
         pthread_mutex_lock(&app->lock);
-        w = app->windows[app->current];
+        w = app->windows[focused_window_locked(app)];
         pthread_mutex_unlock(&app->lock);
         if (w.channel[0] == '#' || w.channel[0] == '&' || w.channel[0] == '+' || w.channel[0] == '!') {
             struct job job = { .kind = JOB_PART };
@@ -6495,13 +6766,14 @@ static void handle_command_dispatch(struct app *app, char *line) {
         bool moved = false;
         pthread_mutex_lock(&app->lock);
         if (n > 0 && (size_t)n <= app->window_count) {
-            app->current = (size_t)n - 1;
+            struct pane *p = focused_pane_locked(app);
+            p->window = (size_t)n - 1;
+            p->scroll_offset = 0;
+            p->scroll_pinned = false;
+            p->member_offset = 0;
             clear_current_unread_locked(app);
-            app->scrollback_offset = 0;
-            app->scrollback_pinned = false;
-            app->member_offset = 0;
-            snprintf(win_net, sizeof(win_net), "%s", app->windows[app->current].network);
-            snprintf(win_chan, sizeof(win_chan), "%s", app->windows[app->current].channel);
+            snprintf(win_net, sizeof(win_net), "%s", app->windows[p->window].network);
+            snprintf(win_chan, sizeof(win_chan), "%s", app->windows[p->window].channel);
             moved = true;
         }
         pthread_mutex_unlock(&app->lock);
@@ -6616,6 +6888,73 @@ static void handle_mouse(struct app *app) {
     }
 }
 
+
+/* ── Pane keys ─────────────────────────────────────────────────────────
+ *
+ * Terminals disagree about what Ctrl-Alt even sends, so both dialects
+ * are accepted rather than betting on one:
+ *
+ *   1. The CSI forms (xterm/vte/kitty/alacritty): Ctrl-Alt-Up is
+ *      "\033[1;7A", and with modifyOtherKeys on, Ctrl-Alt-+ is
+ *      "\033[27;7;43~". These are taught to ncurses with define_key()
+ *      so getch() returns one code instead of a burst of bytes.
+ *   2. The ESC-prefix dialect, which is what most terminals actually
+ *      send for Alt-<key>: ESC then the key. Handled by peeking after an
+ *      ESC — if something follows immediately it was a modified key, and
+ *      if nothing does it was a real Escape.
+ *
+ * Ctrl-Alt-Tab is registered but many terminals send NOTHING for it (and
+ * a desktop usually eats Alt-Tab first) — Ctrl-Alt-Up/Down is the one to
+ * rely on. `/keys` prints what your terminal actually sends, so a
+ * binding that does not fire is a bug report with a number in it rather
+ * than a guess. */
+enum {
+    KEY_PANE_NEXT = KEY_MAX + 1,
+    KEY_PANE_PREV,
+    KEY_PANE_GROW,
+    KEY_PANE_SHRINK,
+    KEY_PANE_CYCLE
+};
+
+static void define_pane_keys(void) {
+    static const struct {
+        const char *seq;
+        int code;
+    } bindings[] = {
+        {"\033[1;7A", KEY_PANE_PREV},    /* Ctrl-Alt-Up */
+        {"\033[1;7B", KEY_PANE_NEXT},    /* Ctrl-Alt-Down */
+        {"\033[1;3A", KEY_PANE_PREV},    /* Alt-Up, for terminals with no ctrl form */
+        {"\033[1;3B", KEY_PANE_NEXT},    /* Alt-Down */
+        {"\033[27;7;43~", KEY_PANE_GROW},   /* Ctrl-Alt-+ */
+        {"\033[27;7;61~", KEY_PANE_GROW},   /* Ctrl-Alt-= (same key, unshifted) */
+        {"\033[27;7;45~", KEY_PANE_SHRINK}, /* Ctrl-Alt-- */
+        {"\033[27;7;9~", KEY_PANE_CYCLE},   /* Ctrl-Alt-Tab */
+        {"\033[27;3;43~", KEY_PANE_GROW},
+        {"\033[27;3;45~", KEY_PANE_SHRINK},
+    };
+    for (size_t i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++)
+        define_key(bindings[i].seq, bindings[i].code);
+}
+
+/* Resolve an ESC into either a modified key or a real Escape. Called
+ * with the 27 already consumed; peeks without blocking, because a lone
+ * Escape must not wait for a key that is never coming. */
+static int resolve_escape(void) {
+    timeout(0);
+    int next = getch();
+    timeout(50);
+    if (next == ERR) return 27; /* a real Escape */
+    switch (next) {
+    case '+':
+    case '=': return KEY_PANE_GROW;
+    case '-': return KEY_PANE_SHRINK;
+    case '\t': return KEY_PANE_CYCLE;
+    case KEY_UP: return KEY_PANE_PREV;
+    case KEY_DOWN: return KEY_PANE_NEXT;
+    default: return 27;
+    }
+}
+
 static void event_loop(struct app *app) {
     setlocale(LC_ALL, "");
     initscr();
@@ -6626,6 +6965,7 @@ static void event_loop(struct app *app) {
     cbreak();
     noecho();
     keypad(stdscr, TRUE);
+    define_pane_keys();
     timeout(50);
     mouse_apply(app);
     app->running = true;
@@ -6643,8 +6983,21 @@ static void event_loop(struct app *app) {
         draw(app);
         int ch = getch();
         if (ch == ERR) continue;
+        if (app->key_echo && ch != KEY_MOUSE) {
+            const char *name = keyname(ch);
+            log_line(app, "key: code=%d name=%s", ch, name ? name : "?");
+        }
+        if (ch == 27) ch = resolve_escape();
         if (ch == '\n' || ch == '\r') {
             handle_enter(app);
+        } else if (ch == KEY_PANE_NEXT || ch == KEY_PANE_CYCLE) {
+            focus_pane(app, 1);
+        } else if (ch == KEY_PANE_PREV) {
+            focus_pane(app, -1);
+        } else if (ch == KEY_PANE_GROW) {
+            resize_pane(app, 1);
+        } else if (ch == KEY_PANE_SHRINK) {
+            resize_pane(app, -1);
         } else if (ch == 27) {
             pthread_mutex_lock(&app->lock);
             app->panel = PANEL_CHAT;
