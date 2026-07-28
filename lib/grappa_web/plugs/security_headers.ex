@@ -111,7 +111,7 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
   def init(opts), do: opts
 
   @impl Plug
-  def call(conn, _opts), do: register_before_send(conn, &put_security_headers/1)
+  def call(conn, _), do: register_before_send(conn, &put_security_headers/1)
 
   defp put_security_headers(conn) do
     Enum.reduce(@headers, conn, fn {name, value}, acc ->

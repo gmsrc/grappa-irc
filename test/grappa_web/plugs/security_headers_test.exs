@@ -13,8 +13,7 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
   """
   use ExUnit.Case, async: true
 
-  import Plug.Test
-  import Plug.Conn
+  import Plug.{Conn, Test}
 
   alias GrappaWeb.Plugs.SecurityHeaders
 
@@ -24,7 +23,8 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
   @golden_csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data:; font-src 'self'; manifest-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
   defp sent(status) do
-    conn(:get, "/")
+    :get
+    |> conn("/")
     |> SecurityHeaders.call(SecurityHeaders.init([]))
     |> send_resp(status, "body")
   end
@@ -54,7 +54,8 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
 
   test "the plug is the sole owner — its value wins over a downstream header" do
     conn =
-      conn(:get, "/")
+      :get
+      |> conn("/")
       |> SecurityHeaders.call(SecurityHeaders.init([]))
       |> put_resp_header("x-frame-options", "SAMEORIGIN")
       |> send_resp(200, "body")
