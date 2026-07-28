@@ -100,6 +100,33 @@ describe("quit", () => {
     expect(quitMod.quitAll).not.toHaveBeenCalled();
     expect(auth.logout).toHaveBeenCalled();
   });
+
+  it("visitor with registered === undefined (pre-field / not-registered) → logout only", async () => {
+    const quitMod = await import("./quit");
+    const auth = await import("./auth");
+    // `registered` is optional (backward compat: a subject persisted
+    // before the field landed reads as not-registered). Only an EXPLICIT
+    // `registered === true` is a persistent identity — undefined is not.
+    subjectHolder.current = { kind: "visitor", id: "v3", nick: "legacy" };
+
+    await quit();
+
+    expect(quitMod.quitAll).not.toHaveBeenCalled();
+    expect(auth.logout).toHaveBeenCalled();
+  });
+
+  it("null subject (not yet loaded) → logout only, never parks", async () => {
+    const quitMod = await import("./quit");
+    const auth = await import("./auth");
+    // The loading null-subject is not a persistent identity; it falls
+    // through to the ephemeral (logout-only) path, never park-all.
+    subjectHolder.current = null;
+
+    await quit();
+
+    expect(quitMod.quitAll).not.toHaveBeenCalled();
+    expect(auth.logout).toHaveBeenCalled();
+  });
 });
 
 describe("deleteAccount (#157)", () => {
