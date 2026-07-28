@@ -786,8 +786,16 @@ export async function openAdminConsole(page: Page): Promise<Locator> {
 // door. Owning the exit here — not re-deriving it in each spec — keeps the next
 // IA reshuffle a one-line change, the same reason the open path is centralized.
 export async function closeSettings(page: Page): Promise<void> {
+  const drawer = page.getByRole("dialog", { name: /settings/i });
   await page.getByTestId("settings-drawer-close").click();
-  await expect(page.locator(".settings-drawer.open")).toHaveCount(0, { timeout: 5_000 });
+  // Twin of openAdminConsole's wait: the drawer stays MOUNTED and closing only
+  // strips `.open`, which STARTS a 200ms translateX(100%) slide — so waiting on
+  // `.settings-drawer.open` count→0 returns at the slide's START, the drawer
+  // still on-screen and click-intercepting. Wait until it has slid fully OUT of
+  // the viewport (transition settled), the instant it can no longer eat the
+  // next click. (toBeHidden never fires — an off-screen transform is still
+  // "visible" to Playwright.)
+  await expect(drawer).not.toBeInViewport({ timeout: 5_000 });
 }
 
 // Mobile members-drawer close primitive.
