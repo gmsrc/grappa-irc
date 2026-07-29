@@ -789,6 +789,83 @@ TEST(roster_pane_draws_from_the_offset) {
     free(app);
 }
 
+/* ── The topic band ────────────────────────────────────────────────────
+ *
+ * A band whose height depends on the topic is a band that eats the
+ * conversation it describes: a paragraph of a topic used to be allowed
+ * every row of the pane but two. And the label column was a fixed third
+ * of the width whatever it said, so the topic began a third of the way
+ * across and read as right-aligned with a hole beside it. */
+TEST(the_topic_band_is_at_most_two_lines) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    struct window *w = add_test_window(app, "azzurra", "#c");
+    app->pane_count = 1;
+    app->panes[0] = (struct pane){.window = 0, .weight = 1};
+    /* Far more topic than a 40-column band can hold. */
+    for (int i = 0; i < 12; i++)
+        snprintf(w->topic + strlen(w->topic), sizeof(w->topic) - strlen(w->topic),
+                 "sentence number %d of a very wordy topic. ", i);
+
+    erase();
+    draw_chat_pane(app, &app->panes[0], 0, 0, 40, 20, true, false);
+    snap(full_rows, 20, 40);
+    /* Row 2 is band, row 3 is not: the chat area starts there however
+     * long the topic is. */
+    CHECK(strstr(full_rows[0], "azzurra/#c") != NULL);
+    CHECK(strstr(full_rows[1], "sentence") != NULL);
+    CHECK(strstr(full_rows[2], "sentence") == NULL);
+
+    /* A short topic takes ONE line — the band grows to two only when
+     * there is something to put there. */
+    snprintf(w->topic, sizeof(w->topic), "short");
+    erase();
+    draw_chat_pane(app, &app->panes[0], 0, 0, 40, 20, true, false);
+    snap(full_rows, 20, 40);
+    CHECK(strstr(full_rows[0], "short") != NULL);
+    CHECK(strstr(full_rows[1], "short") == NULL);
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+/* The label takes what it needs, so the topic gets the rest of the
+ * width instead of two thirds of it. */
+TEST(a_short_channel_name_leaves_the_topic_the_width) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    struct window *w = add_test_window(app, "az", "#c");
+    app->pane_count = 1;
+    app->panes[0] = (struct pane){.window = 0, .weight = 1};
+    snprintf(w->topic, sizeof(w->topic), "%s", "TOPICSTART");
+
+    erase();
+    draw_chat_pane(app, &app->panes[0], 0, 0, 60, 20, true, false);
+    snap(full_rows, 20, 60);
+    const char *at = strstr(full_rows[0], "TOPICSTART");
+    CHECK(at != NULL);
+    /* "az/#c" is five columns, so the topic starts right after it — not
+     * a third of the way across a 60-column band. */
+    if (at) CHECK((long)(at - full_rows[0]) < 12);
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+/* A word is not cut in half, because a marquee that starts mid-word
+ * reads as corrupted text rather than as a continuation. */
+TEST(the_topic_breaks_on_a_word) {
+    CHECK_LONG(topic_head_len("short", 40), 5);
+    CHECK_LONG(topic_head_len("alpha beta gamma delta", 12), 10); /* after "alpha beta" */
+    /* Nothing to break on: a hard cut at the width, rather than nothing. */
+    CHECK_LONG(topic_head_len("aaaaaaaaaaaaaaaaaaaa", 8), 8);
+    /* Never inside a UTF-8 character. */
+    /* Split literal: "\xa8b" would parse as one three-digit escape. */
+    CHECK_LONG(topic_head_len("aaaaaaa\xc3\xa8" "bbb", 8), 7);
+}
+
 /* ── The decoder decides what animates ────────────────────────────────
  *
  * This one runs the REAL ffmpeg, because the bug it guards is a property
@@ -898,6 +975,9 @@ int main(void) {
     RUN(reply_leaves_a_line_it_did_not_write_alone);
     RUN(a_placement_the_frame_did_not_paint_is_stale);
     RUN(roster_pane_draws_from_the_offset);
+    RUN(the_topic_band_is_at_most_two_lines);
+    RUN(a_short_channel_name_leaves_the_topic_the_width);
+    RUN(the_topic_breaks_on_a_word);
     RUN(the_decoder_says_what_animates_not_the_url);
     endwin();
     fclose(sink);

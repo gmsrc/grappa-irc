@@ -60,6 +60,18 @@ protocol when there is one.
 playback back on. Both obey the same first-party rule as still images — see
 `/media all`.
 
+## The topic bar
+
+The band at the top is at most **two lines**, whatever the topic says. The
+channel label takes only the width it needs (capped at a third of the pane), so
+the topic gets the rest rather than starting a third of the way across.
+
+What does not fit on the two lines **scrolls** along the second one, pausing at
+each end so it can be read, and pausing entirely while the mouse pointer rests
+on the band (with `/mouse on`; the marquee is the way to read a long topic
+either way, the pointer is a courtesy). A `…` on the left of the second line
+says there is more; it reads `(paused)` while you hold it.
+
 ## Bridging a normal IRC client (`--ircd`)
 
 `shottino --ircd https://grappa.example.net you password` runs headless and

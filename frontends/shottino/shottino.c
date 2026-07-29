@@ -51,6 +51,11 @@
 #define MAX_SUBJECT 512
 #define MAX_NETWORKS 32
 #define SHOTTINO_VERSION "0.1"
+/* One column per step, and eight steps of stillness at each end. Fast
+ * enough to finish a long topic while you read the channel, slow enough
+ * not to be movement in the corner of your eye. */
+#define TOPIC_SCROLL_MS 250
+#define TOPIC_SCROLL_HOLD 8
 #define MAX_WINDOWS 128
 #define MAX_CHANNEL 256
 #define MAX_SLUG 128
@@ -366,6 +371,14 @@ enum media_kind { MEDIA_NONE = 0, MEDIA_IMAGE, MEDIA_VIDEO };
  * a link you can click, and one that silently does nothing under the
  * cursor reads as a broken client. `kind` decides what the click does —
  * a picture previews in place, anything else opens in the browser. */
+/* The topic band's rectangle, so the pointer resting on it can pause
+ * the marquee. Recorded per frame like the link regions, and for the
+ * same reason: the draw pass is the only thing that knows where it
+ * ended up. */
+struct topic_region {
+    int y0, y1, x0, x1;
+};
+
 struct link_region {
     int y0;
     int y1;
@@ -389,6 +402,11 @@ struct pane {
     size_t scroll_offset;   /* lines from the bottom of ITS window */
     bool scroll_pinned;
     size_t member_offset;   /* first roster row shown for it */
+    /* Where the topic marquee has got to, and when it last moved. Per
+     * pane, because two panes showing the same channel are two views of
+     * it and a shared position would jump in both. */
+    size_t topic_scroll;
+    long topic_scroll_at;
     int weight;             /* share of the axis; equal by default */
 };
 
@@ -588,6 +606,9 @@ struct app {
     size_t link_region_count;
     struct msg_region msg_regions[MAX_LINK_REGIONS];
     size_t msg_region_count;
+    struct topic_region topic_regions[MAX_PANES];
+    size_t topic_region_count;
+    bool topic_hover;
     struct overlay overlay;
     struct inline_media media[MAX_INLINE_MEDIA];
     /* The full-screen preview gets its OWN slot so opening one never
@@ -2083,6 +2104,26 @@ static int wrapped_text_lines(const char *s, int width) {
         col++;
     }
     return lines;
+}
+
+/* How many bytes of `s` belong on the first line of the topic band.
+ *
+ * Whole words where possible: a marquee that starts mid-word reads as
+ * corrupted text rather than as a continuation. Falls back to a hard cut
+ * when there is no space to break at, and never cuts inside a UTF-8
+ * character, whose remains the terminal would draw as a replacement
+ * glyph. Columns are counted as BYTES, the same approximation the
+ * wrapper above makes. */
+static int topic_head_len(const char *s, int width) {
+    if (width <= 0) return 0;
+    int len = (int)strlen(s);
+    if (len <= width) return len;
+    int cut = width;
+    while (cut > 0 && ((unsigned char)s[cut] & 0xC0) == 0x80) cut--;
+    for (int i = cut; i > width / 2; i--) {
+        if (s[i] == ' ') return i;
+    }
+    return cut;
 }
 
 /* Wrapped height of a body, measured on its VISIBLE text.
@@ -4522,29 +4563,87 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
      * about the other. The focused pane's is accented — with two panes
      * on screen, "where does my typing go" has to be answerable at a
      * glance, and the input box is nowhere near either header. */
+    /* The label takes what it NEEDS, capped so a long name cannot take
+     * the band. It used to take a fixed third of the width whatever it
+     * said, so every line of the topic began a third of the way across
+     * and the band read as right-aligned with a hole in it. */
     const char *topic_text = w->topic[0] ? w->topic : "(not loaded yet)";
-    int topic_label_w = width / 3;
-    if (topic_label_w < 12) topic_label_w = 12;
-    if (topic_label_w > width - 12) topic_label_w = width / 2;
-    int topic_text_x = x + topic_label_w + 2;
+    char label[MAX_SLUG + MAX_CHANNEL + 8];
+    snprintf(label, sizeof(label), "%s%s/%s", focused && split ? "* " : "", w->network, w->channel);
+    int topic_label_w = (int)strlen(label);
+    int label_cap = width / 3;
+    if (label_cap < 12) label_cap = 12;
+    if (topic_label_w > label_cap) topic_label_w = label_cap;
+    int topic_text_x = x + 1 + topic_label_w + 1;
     int topic_text_w = width - topic_label_w - 3;
-    int topic_prefix_w = 7;
-    if (topic_text_w < topic_prefix_w + 8) topic_prefix_w = 0;
-    int topic_wrap_w = topic_text_w - topic_prefix_w;
-    if (topic_wrap_w < 1) topic_wrap_w = 1;
-    int topic_h = wrapped_text_lines_visible(topic_text, topic_wrap_w);
-    int max_topic_h = split ? 1 : height - 2;
-    if (max_topic_h < 1) max_topic_h = 1;
-    if (topic_h > max_topic_h) topic_h = max_topic_h;
+    if (topic_text_w < 1) topic_text_w = 1;
+
+    /* Its VISIBLE text, on one geometric line. The band has its own
+     * colours and a topic's own formatting fights them; more to the
+     * point, a marquee has to know how many COLUMNS it is moving over,
+     * and control bytes occupy none. Newlines would break the two-line
+     * geometry, so they become spaces. */
+    char topic_plain[MAX_TOPIC];
+    if (mirc_has_formatting(topic_text)) mirc_strip(topic_text, topic_plain, sizeof(topic_plain));
+    else snprintf(topic_plain, sizeof(topic_plain), "%s", topic_text);
+    for (char *tc = topic_plain; *tc; tc++)
+        if (*tc == '\n' || *tc == '\r' || *tc == '\t') *tc = ' ';
+
+    /* Two lines, never more. A paragraph of a topic used to be allowed
+     * the whole pane but two rows, which left a channel with a wordy
+     * topic almost no room for the conversation it is about. */
+    int head_len = topic_head_len(topic_plain, topic_text_w);
+    const char *topic_tail = topic_plain + head_len;
+    while (*topic_tail == ' ') topic_tail++;
+    int topic_h = *topic_tail ? 2 : 1;
+    if (split || height < 4) topic_h = 1;
 
     int head_pair = focused ? CP_TITLE : CP_ALT;
     int head_accent = focused ? CP_TITLE_ACCENT : CP_MUTED;
     for (int ty = 0; ty < topic_h; ty++) draw_fill(y + ty, x, width, head_pair);
-    draw_text(y, x + 1, topic_label_w, head_accent, A_BOLD, "%s%s/%s", focused && split ? "* " : "",
-              w->network, w->channel);
-    if (topic_prefix_w) draw_text(y, topic_text_x, topic_text_w, head_pair, A_BOLD, "topic: ");
-    draw_wrapped_text(y, topic_text_x + topic_prefix_w, topic_wrap_w, 0, topic_h, head_pair, 0,
-                      topic_text);
+    draw_text(y, x + 1, topic_label_w, head_accent, A_BOLD, "%s", label);
+    draw_text(y, topic_text_x, topic_text_w, head_pair, 0, "%.*s", head_len, topic_plain);
+
+    if (topic_h > 1) {
+        /* What did not fit scrolls, so "two lines" does not mean "you
+         * cannot read your topic". It pauses at both ends — a line that
+         * only ever slides is a line you have to wait for — and pauses
+         * entirely while the pointer is over the band, which is what a
+         * reader does when they want to finish a sentence. */
+        int tail_cols = (int)strlen(topic_tail);
+        int overflow = tail_cols - topic_text_w;
+        int off = 0;
+        if (overflow > 0) {
+            long now = monotonic_ms();
+            if (!app->topic_hover && now - pane->topic_scroll_at >= TOPIC_SCROLL_MS) {
+                pane->topic_scroll_at = now;
+                pane->topic_scroll++;
+                if ((long)pane->topic_scroll > overflow + 2 * TOPIC_SCROLL_HOLD)
+                    pane->topic_scroll = 0;
+            }
+            off = (int)pane->topic_scroll - TOPIC_SCROLL_HOLD;
+            if (off < 0) off = 0;
+            if (off > overflow) off = overflow;
+            /* Never start inside a UTF-8 character: the terminal would
+             * draw the remains of one as a replacement glyph. */
+            while (off > 0 && ((unsigned char)topic_tail[off] & 0xC0) == 0x80) off++;
+        }
+        draw_text(y + 1, topic_text_x, topic_text_w, head_pair, 0, "%.*s", topic_text_w,
+                  topic_tail + off);
+        if (overflow > 0)
+            draw_text(y + 1, x + 1, topic_label_w, head_accent, A_DIM, "%s",
+                      app->topic_hover ? "(paused)" : "…");
+    }
+    /* Recorded so the pointer can pause it. Mouse tracking is off by
+     * default, so this is a courtesy for those who turned it on, never
+     * the only way to read a topic — that is what the scrolling is. */
+    if (app->topic_region_count < MAX_PANES) {
+        struct topic_region *tr = &app->topic_regions[app->topic_region_count++];
+        tr->y0 = y;
+        tr->y1 = y + topic_h - 1;
+        tr->x0 = x;
+        tr->x1 = x + width - 1;
+    }
 
     int scroll_y = y + topic_h;
     int scroll_h = height - topic_h;
@@ -4819,6 +4918,7 @@ static void draw(struct app *app) {
     app->frame_seq++;
     app->link_region_count = 0;
     app->msg_region_count = 0;
+    app->topic_region_count = 0;
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
     int side = cols > 118 ? 22 : (cols > 90 ? 18 : 14);
@@ -8207,6 +8307,16 @@ static void handle_mouse(struct app *app) {
     }
 
     pthread_mutex_lock(&app->lock);
+    /* Resting the pointer on the topic band pauses its marquee — the
+     * thing a reader does when they want to finish a sentence. Every
+     * mouse event answers it, motion included, so it is as live as the
+     * hover hint below. */
+    app->topic_hover = false;
+    for (size_t i = 0; i < app->topic_region_count; i++) {
+        const struct topic_region *tr = &app->topic_regions[i];
+        if (ev.y >= tr->y0 && ev.y <= tr->y1 && ev.x >= tr->x0 && ev.x <= tr->x1)
+            app->topic_hover = true;
+    }
     const struct link_region *r = region_at(app, ev.x, ev.y);
     char url[MAX_LINE];
     bool is_video = false;

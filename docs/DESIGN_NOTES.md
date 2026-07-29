@@ -22737,3 +22737,28 @@ tests/test_ircd opens a REAL socket to the bridge and speaks IRC to it, driving
 the client's own accept/read/dispatch/flush pass rather than a copy: a bridge is
 judged by what a client sees after it says hello, and that cannot be asserted
 from the inside.
+
+## 2026-07-29 — shottino: the topic band is two lines, and the topic moves
+
+vjt: a long topic made the band "multiline and very big, using a sensitive
+portion of the terminal, and mostly right aligned".
+
+Both halves were geometry. The label column was a FIXED `width / 3` whatever it
+said, so with a short channel name most of the band was empty and every line of
+the topic began a third of the way across — which is what read as right-aligned.
+The label now takes what it needs, capped at a third so a long name cannot take
+the band instead.
+
+And the height was `height - 2` unsplit: a paragraph of a topic was allowed
+every row of the pane but two, leaving a channel with a wordy topic almost no
+room for the conversation it describes. Two lines now, always.
+
+Which is only acceptable because the remainder SCROLLS along the second line —
+"max two lines" must not mean "you cannot read your topic". It holds at both
+ends (a line that only ever slides is one you have to wait for) and stops
+entirely while the pointer rests on the band. The band renders the topic's
+VISIBLE text: a marquee has to know how many columns it is moving over, and
+control bytes occupy none.
+
+The scroll position lives on the PANE, not the window: two panes showing one
+channel are two views of it, and a shared position would jump in both.
