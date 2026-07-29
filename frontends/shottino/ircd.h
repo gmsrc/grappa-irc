@@ -90,6 +90,43 @@ void ircd_sender_prefix(const char *nick, char *out, size_t out_sz);
  * a client stamps with the moment it reconnected. */
 void ircd_time_tag(long server_time_ms, bool wanted, char *out, size_t out_sz);
 
+/* ── IRCv3 ─────────────────────────────────────────────────────────────
+ *
+ * A CHATHISTORY selector: what a client points at when it asks for the
+ * messages around a place in the conversation.
+ *
+ *     *                                 no bound (LATEST's usual form)
+ *     timestamp=2026-07-29T10:00:00.000Z
+ *     msgid=1234
+ */
+typedef enum {
+    IRCD_SEL_NONE = 0,
+    IRCD_SEL_STAR,
+    IRCD_SEL_TIME,
+    IRCD_SEL_MSGID
+} ircd_sel_kind;
+
+struct ircd_selector {
+    ircd_sel_kind kind;
+    long time_ms;
+    long msgid;
+};
+
+bool ircd_parse_selector(const char *s, struct ircd_selector *out);
+
+/* The IRCv3 timestamp format, UTC, to epoch milliseconds. Returns false
+ * for anything it cannot read — a selector that silently became "the
+ * beginning of time" would answer a question nobody asked. */
+bool ircd_parse_time(const char *s, long *out_ms);
+
+/* The tag prefix for one outgoing message: "@time=…;msgid=…;batch=… ",
+ * or "" when the client negotiated nothing that puts tags on the wire.
+ * ONE function, because the separator rules (leading @, ';' between,
+ * trailing space, and nothing at all when empty) are the kind of thing
+ * that goes wrong once per tag if each caller does its own. */
+void ircd_tags(long server_time_ms, bool want_time, long msgid, bool want_tags,
+               const char *batch_ref, char *out, size_t out_sz);
+
 /* Copy `in` into `out`, dropping anything that would end the line early
  * or start a new one. A message body arrives from IRC, through grappa,
  * and back out to a client: without this, a body containing CRLF would

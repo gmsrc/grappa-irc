@@ -500,7 +500,7 @@ struct overlay {
 #define IRCD_MAX_CLIENTS 8
 #define IRCD_IN_MAX 8192
 #define IRCD_OUT_MAX (1024 * 1024)
-#define IRCD_HISTORY 512
+#define IRCD_HISTORY 1024
 #define IRCD_LISTEN_MAX 4
 
 struct ircd_client {
@@ -515,6 +515,8 @@ struct ircd_client {
     size_t out_len, out_cap;
     bool registered, got_nick, got_user, cap_negotiating, closing;
     bool cap_server_time, cap_multi_prefix, cap_echo;
+    bool cap_tags, cap_batch, cap_chathistory;
+    unsigned batch_seq;
     char nick[MAX_CHANNEL];
     char user[64];
     char network[MAX_SLUG];
@@ -527,6 +529,10 @@ struct ircd_client {
  * fills itself from what was fetched anyway: no extra request, and no
  * duplicate history when a second client connects. */
 struct ircd_hist {
+    /* grappa's scrollback id, which is what a client points at with
+     * msgid= — the same identity the dedup in render_message uses, so
+     * "the message with this id" means one thing everywhere. */
+    long id;
     long server_time;
     wire_message_kind kind;
     char network[MAX_SLUG];
@@ -8825,6 +8831,7 @@ static void ircd_history_add_locked(struct app *app, const struct wire_scrollbac
                                     const char *channel) {
     struct ircd_hist *h = &app->ircd.hist[app->ircd.hist_next];
     memset(h, 0, sizeof(*h));
+    h->id = m->id;
     h->server_time = m->server_time;
     h->kind = m->kind;
     snprintf(h->network, sizeof(h->network), "%s", m->network);
@@ -8840,7 +8847,7 @@ static void ircd_history_add_locked(struct app *app, const struct wire_scrollbac
  * someone else is addressed to US, and our own message in that window is
  * addressed to THEM. */
 static void ircd_message_line(const struct ircd_hist *h, const char *own, bool time_tag,
-                              char *out, size_t out_sz) {
+                              bool tags, const char *batch_ref, char *out, size_t out_sz) {
     char prefix[192];
     ircd_sender_prefix(h->sender[0] ? h->sender : IRCD_SERVER, prefix, sizeof(prefix));
     /* Bounded well under the line buffer rather than at MAX_LINE: a
@@ -8850,8 +8857,8 @@ static void ircd_message_line(const struct ircd_hist *h, const char *own, bool t
      * losing its last parameter instead of its last words. */
     char body[768];
     ircd_sanitize(h->body, body, sizeof(body));
-    char tag[64];
-    ircd_time_tag(h->server_time, time_tag, tag, sizeof(tag));
+    char tag[128];
+    ircd_tags(h->server_time, time_tag, h->id, tags, batch_ref, tag, sizeof(tag));
 
     const char *target = h->channel;
     if (!ircd_is_channel(h->channel) && !ircd_name_equal(h->sender, own)) target = own;
@@ -8923,7 +8930,7 @@ static void ircd_publish(struct app *app, const struct wire_scrollback_message *
          * echo-message is how a client opts into seeing those. */
         if (conversational && !c->cap_echo && ircd_name_equal(h->sender, own)) continue;
         char line[IRCD_LINE_MAX + 256];
-        ircd_message_line(h, own, c->cap_server_time, line, sizeof(line));
+        ircd_message_line(h, own, c->cap_server_time, c->cap_tags, NULL, line, sizeof(line));
         if (line[0]) ircd_send_locked(c, "%s", line);
     }
     pthread_mutex_unlock(&app->ircd.lock);
@@ -8946,10 +8953,216 @@ static void ircd_replay(struct app *app, struct ircd_client *c) {
          * was missed. */
         if (h->kind != MSG_PRIVMSG && h->kind != MSG_NOTICE && h->kind != MSG_ACTION) continue;
         char line[IRCD_LINE_MAX + 256];
-        ircd_message_line(h, own, c->cap_server_time, line, sizeof(line));
+        ircd_message_line(h, own, c->cap_server_time, c->cap_tags, NULL, line, sizeof(line));
         if (line[0]) ircd_send_locked(c, "%s", line);
     }
     pthread_mutex_unlock(&app->ircd.lock);
+}
+
+/* ── CHATHISTORY ───────────────────────────────────────────────────────
+ *
+ * The IRCv3 way for a client to ask for what it missed, instead of being
+ * told at connect time and never again. It is answered from the bridge's
+ * own ring, which is filled by the tee — so it holds the scrollback
+ * shottino fetched from grappa at startup and on join, plus everything
+ * live since. That is a SESSION's worth of conversation, not the whole
+ * archive: a request that reaches past it gets what there is rather than
+ * an error, and the honest place for that limit is the README.
+ *
+ * (Fetching further back from grappa on demand would mean routing REST
+ * results to ONE client. Every fetch today goes through render_message,
+ * which publishes to all of them as live traffic — the very thing that
+ * fills this ring. Splitting that path is the next step, not this one.) */
+
+/* Messages for `target` on this client's network, oldest first. Caller
+ * holds the bridge lock. */
+static size_t ircd_history_for(struct app *app, const char *network, const char *target,
+                               const struct ircd_hist **out, size_t max) {
+    size_t n = 0;
+    size_t start = app->ircd.hist_count == IRCD_HISTORY ? app->ircd.hist_next : 0;
+    for (size_t k = 0; k < app->ircd.hist_count && n < max; k++) {
+        const struct ircd_hist *h = &app->ircd.hist[(start + k) % IRCD_HISTORY];
+        if (strcmp(h->network, network) != 0) continue;
+        if (h->kind != MSG_PRIVMSG && h->kind != MSG_NOTICE && h->kind != MSG_ACTION) continue;
+        if (target && !ircd_name_equal(h->channel, target)) continue;
+        out[n++] = h;
+    }
+    return n;
+}
+
+/* Is this message before / after the point a selector names? A selector
+ * that names nothing (`*`) bounds nothing, which is what LATEST uses. */
+static bool ircd_hist_before(const struct ircd_hist *h, const struct ircd_selector *sel) {
+    switch (sel->kind) {
+    case IRCD_SEL_TIME: return h->server_time < sel->time_ms;
+    case IRCD_SEL_MSGID: return h->id > 0 && h->id < sel->msgid;
+    case IRCD_SEL_STAR:
+    case IRCD_SEL_NONE: return true;
+    }
+    return true;
+}
+
+static bool ircd_hist_after(const struct ircd_hist *h, const struct ircd_selector *sel) {
+    switch (sel->kind) {
+    case IRCD_SEL_TIME: return h->server_time > sel->time_ms;
+    case IRCD_SEL_MSGID: return h->id > sel->msgid;
+    case IRCD_SEL_STAR:
+    case IRCD_SEL_NONE: return true;
+    }
+    return true;
+}
+
+#define IRCD_CHATHISTORY_MAX 200
+
+static void ircd_send_batch(struct app *app, struct ircd_client *c, const char *target,
+                            const struct ircd_hist **rows, size_t count) {
+    char own[MAX_CHANNEL];
+    ircd_own_nick(app, c->network, own, sizeof(own));
+    char ref[32] = "";
+    /* A batch is what tells the client these are OLD messages rather than
+     * a burst of new ones. Without the capability they are sent anyway,
+     * because a client that asked for history and got nothing would be
+     * worse off than one that gets it unlabelled. */
+    if (c->cap_batch) {
+        snprintf(ref, sizeof(ref), "sh%u", ++c->batch_seq);
+        ircd_send(app, c, ":%s BATCH +%s chathistory %s", IRCD_SERVER, ref, target);
+    }
+    for (size_t i = 0; i < count; i++) {
+        char line[IRCD_LINE_MAX + 256];
+        ircd_message_line(rows[i], own, c->cap_server_time, c->cap_tags, ref[0] ? ref : NULL, line,
+                          sizeof(line));
+        if (line[0]) ircd_send(app, c, "%s", line);
+    }
+    if (ref[0]) ircd_send(app, c, ":%s BATCH -%s", IRCD_SERVER, ref);
+}
+
+static void ircd_cmd_chathistory(struct app *app, struct ircd_client *c,
+                                 const struct ircd_msg *m) {
+    if (m->param_count < 2) {
+        ircd_send(app, c, "FAIL CHATHISTORY NEED_MORE_PARAMS :Missing parameters");
+        return;
+    }
+    const char *sub = m->params[0];
+
+    /* TARGETS answers "who have I been talking to", which is how a
+     * client decides what to ask about next. */
+    if (strcasecmp(sub, "TARGETS") == 0) {
+        char seen[32][MAX_CHANNEL];
+        long latest[32];
+        size_t count = 0;
+        pthread_mutex_lock(&app->ircd.lock);
+        const struct ircd_hist *rows[IRCD_HISTORY];
+        size_t n = ircd_history_for(app, c->network, NULL, rows, IRCD_HISTORY);
+        for (size_t i = 0; i < n; i++) {
+            size_t at = count;
+            for (size_t j = 0; j < count; j++)
+                if (ircd_name_equal(seen[j], rows[i]->channel)) at = j;
+            if (at == count && count < 32) {
+                snprintf(seen[count], MAX_CHANNEL, "%s", rows[i]->channel);
+                latest[count] = rows[i]->server_time;
+                count++;
+            } else if (at < count) {
+                latest[at] = rows[i]->server_time;
+            }
+        }
+        pthread_mutex_unlock(&app->ircd.lock);
+        char ref[32] = "";
+        if (c->cap_batch) {
+            snprintf(ref, sizeof(ref), "sh%u", ++c->batch_seq);
+            ircd_send(app, c, ":%s BATCH +%s draft/chathistory-targets", IRCD_SERVER, ref);
+        }
+        char batch_tag[48] = "";
+        if (ref[0]) snprintf(batch_tag, sizeof(batch_tag), "@batch=%s ", ref);
+        for (size_t i = 0; i < count; i++) {
+            char stamp[64];
+            ircd_time_tag(latest[i], true, stamp, sizeof(stamp));
+            /* ircd_time_tag writes "@time=… " and here the value alone is
+             * wanted, as a parameter rather than as a tag. */
+            char value[48] = "";
+            if (strlen(stamp) > 7) snprintf(value, sizeof(value), "%.*s", (int)strlen(stamp) - 7,
+                                            stamp + 6);
+            ircd_send(app, c, "%s:%s CHATHISTORY TARGETS %s %s", batch_tag, IRCD_SERVER,
+                      seen[i], value);
+        }
+        if (ref[0]) ircd_send(app, c, ":%s BATCH -%s", IRCD_SERVER, ref);
+        return;
+    }
+
+    if (m->param_count < 3) {
+        ircd_send(app, c, "FAIL CHATHISTORY NEED_MORE_PARAMS :Missing parameters");
+        return;
+    }
+    const char *target = m->params[1];
+    bool between = strcasecmp(sub, "BETWEEN") == 0;
+    struct ircd_selector a, b;
+    if (!ircd_parse_selector(m->params[2], &a)) {
+        ircd_send(app, c, "FAIL CHATHISTORY INVALID_PARAMS %s :Invalid selector", sub);
+        return;
+    }
+    memset(&b, 0, sizeof(b));
+    if (between) {
+        if (m->param_count < 4 || !ircd_parse_selector(m->params[3], &b)) {
+            ircd_send(app, c, "FAIL CHATHISTORY INVALID_PARAMS %s :Invalid selector", sub);
+            return;
+        }
+    }
+    const char *limit_str = m->params[m->param_count - 1];
+    long limit = strtol(limit_str, NULL, 10);
+    if (limit <= 0) limit = 50;
+    if (limit > IRCD_CHATHISTORY_MAX) limit = IRCD_CHATHISTORY_MAX;
+
+    const struct ircd_hist *rows[IRCD_HISTORY];
+    const struct ircd_hist *picked[IRCD_CHATHISTORY_MAX];
+    size_t count = 0;
+    pthread_mutex_lock(&app->ircd.lock);
+    size_t n = ircd_history_for(app, c->network, target, rows, IRCD_HISTORY);
+    if (strcasecmp(sub, "LATEST") == 0 || strcasecmp(sub, "BEFORE") == 0) {
+        /* The most recent `limit` of what qualifies: walking BACKWARDS is
+         * what makes "the last twenty" mean the last twenty rather than
+         * the first twenty of everything that qualifies. */
+        for (size_t i = n; i > 0 && count < (size_t)limit; i--) {
+            const struct ircd_hist *h = rows[i - 1];
+            bool ok = strcasecmp(sub, "LATEST") == 0 ? (a.kind == IRCD_SEL_STAR || ircd_hist_after(h, &a))
+                                                     : ircd_hist_before(h, &a);
+            if (ok) picked[count++] = h;
+        }
+        /* Collected newest-first, delivered oldest-first, because that
+         * is the order a client renders them in. */
+        for (size_t i = 0; i < count / 2; i++) {
+            const struct ircd_hist *tmp = picked[i];
+            picked[i] = picked[count - 1 - i];
+            picked[count - 1 - i] = tmp;
+        }
+    } else if (strcasecmp(sub, "AFTER") == 0) {
+        for (size_t i = 0; i < n && count < (size_t)limit; i++)
+            if (ircd_hist_after(rows[i], &a)) picked[count++] = rows[i];
+    } else if (between) {
+        for (size_t i = 0; i < n && count < (size_t)limit; i++)
+            if (ircd_hist_after(rows[i], &a) && ircd_hist_before(rows[i], &b))
+                picked[count++] = rows[i];
+    } else if (strcasecmp(sub, "AROUND") == 0) {
+        /* Half either side of the point, in order: the last `half`
+         * before it, then everything from there up to the limit. Said in
+         * two passes because saying it in one needs a lookahead nobody
+         * can read six months later. */
+        size_t half = (size_t)limit / 2;
+        if (half == 0) half = 1;
+        size_t before_total = 0;
+        for (size_t i = 0; i < n; i++)
+            if (ircd_hist_before(rows[i], &a)) before_total++;
+        size_t skip = before_total > half ? before_total - half : 0;
+        size_t seen_before = 0;
+        for (size_t i = 0; i < n && count < (size_t)limit; i++) {
+            if (ircd_hist_before(rows[i], &a) && seen_before++ < skip) continue;
+            picked[count++] = rows[i];
+        }
+    } else {
+        pthread_mutex_unlock(&app->ircd.lock);
+        ircd_send(app, c, "FAIL CHATHISTORY INVALID_PARAMS %s :Unknown subcommand", sub);
+        return;
+    }
+    pthread_mutex_unlock(&app->ircd.lock);
+    ircd_send_batch(app, c, target, picked, count);
 }
 
 /* ── Registration ──────────────────────────────────────────────────── */
@@ -9070,8 +9283,10 @@ static void ircd_cmd_cap(struct app *app, struct ircd_client *c, const struct ir
     const char *sub = m->param_count > 0 ? m->params[0] : "";
     if (strcasecmp(sub, "LS") == 0 || strcasecmp(sub, "LIST") == 0) {
         c->cap_negotiating = true;
-        ircd_send(app, c, ":%s CAP %s LS :server-time multi-prefix echo-message", IRCD_SERVER,
-                  c->nick[0] ? c->nick : "*");
+        ircd_send(app, c,
+                  ":%s CAP %s LS :server-time multi-prefix echo-message message-tags batch "
+                  "draft/chathistory",
+                  IRCD_SERVER, c->nick[0] ? c->nick : "*");
         return;
     }
     if (strcasecmp(sub, "REQ") == 0) {
@@ -9086,6 +9301,9 @@ static void ircd_cmd_cap(struct app *app, struct ircd_client *c, const struct ir
             if (strcmp(tok, "server-time") == 0) c->cap_server_time = true;
             else if (strcmp(tok, "multi-prefix") == 0) c->cap_multi_prefix = true;
             else if (strcmp(tok, "echo-message") == 0) c->cap_echo = true;
+            else if (strcmp(tok, "message-tags") == 0) c->cap_tags = true;
+            else if (strcmp(tok, "batch") == 0) c->cap_batch = true;
+            else if (strcmp(tok, "draft/chathistory") == 0) c->cap_chathistory = true;
             else ok = false;
             if (!ok) {
                 all = false;
@@ -9311,6 +9529,10 @@ static void ircd_dispatch(struct app *app, struct ircd_client *c, const char *ra
     }
     if (ircd_command_is(&m, "TOPIC") && m.param_count == 1) {
         ircd_send_topic(app, c, m.params[0]);
+        return;
+    }
+    if (ircd_command_is(&m, "CHATHISTORY")) {
+        ircd_cmd_chathistory(app, c, &m);
         return;
     }
 

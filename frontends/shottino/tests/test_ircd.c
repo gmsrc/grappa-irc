@@ -197,6 +197,58 @@ TEST(server_time_is_tagged_only_when_asked_for) {
     CHECK_STR(out, "");
 }
 
+TEST(selectors_name_a_point_in_the_conversation) {
+    struct ircd_selector sel;
+
+    CHECK(ircd_parse_selector("*", &sel));
+    CHECK_LONG(sel.kind, IRCD_SEL_STAR);
+
+    CHECK(ircd_parse_selector("timestamp=2025-07-29T08:00:00.123Z", &sel));
+    CHECK_LONG(sel.kind, IRCD_SEL_TIME);
+    CHECK_LONG(sel.time_ms, 1753776000123L);
+
+    CHECK(ircd_parse_selector("msgid=4321", &sel));
+    CHECK_LONG(sel.kind, IRCD_SEL_MSGID);
+    CHECK_LONG(sel.msgid, 4321);
+
+    /* Unreadable is REFUSED, not quietly turned into the beginning of
+     * time: a selector that means "everything" when the client meant
+     * "since yesterday" answers a question nobody asked. */
+    CHECK(!ircd_parse_selector("timestamp=yesterday", &sel));
+    CHECK(!ircd_parse_selector("msgid=", &sel));
+    CHECK(!ircd_parse_selector("banana", &sel));
+    CHECK(!ircd_parse_selector("", &sel));
+
+    /* The format is UTC by definition; reading it in the local zone
+     * would move every selector by the offset. */
+    long ms = 0;
+    CHECK(ircd_parse_time("2025-01-01T00:00:00.000Z", &ms));
+    CHECK_LONG(ms, 1735689600000L);
+    /* Milliseconds are optional in what clients send. */
+    CHECK(ircd_parse_time("2025-01-01T00:00:00Z", &ms));
+    CHECK_LONG(ms, 1735689600000L);
+    CHECK(!ircd_parse_time("nonsense", &ms));
+}
+
+TEST(tags_are_built_as_one_prefix_or_not_at_all) {
+    char out[128];
+    /* Nothing negotiated: no tags, and no stray "@" either. */
+    ircd_tags(1753776000123L, false, 42, false, NULL, out, sizeof(out));
+    CHECK_STR(out, "");
+    /* server-time alone. */
+    ircd_tags(1753776000123L, true, 42, false, NULL, out, sizeof(out));
+    CHECK_STR(out, "@time=2025-07-29T08:00:00.123Z ");
+    /* With message-tags, the id a client can point back at. */
+    ircd_tags(1753776000123L, true, 42, true, NULL, out, sizeof(out));
+    CHECK_STR(out, "@time=2025-07-29T08:00:00.123Z;msgid=42 ");
+    /* In a batch, all three, separated once each. */
+    ircd_tags(1753776000123L, true, 42, true, "sh1", out, sizeof(out));
+    CHECK_STR(out, "@time=2025-07-29T08:00:00.123Z;msgid=42;batch=sh1 ");
+    /* message-tags without server-time still carries the id. */
+    ircd_tags(1753776000123L, false, 42, true, NULL, out, sizeof(out));
+    CHECK_STR(out, "@msgid=42 ");
+}
+
 /* ── The conversation ──────────────────────────────────────────────── */
 
 static struct app *bridge_app(void) {
@@ -628,6 +680,123 @@ TEST(unknown_commands_are_forwarded_in_the_clients_own_words) {
     free(app);
 }
 
+/* CHATHISTORY is how a client asks for what it missed instead of being
+ * told once at connect time. The slice it returns is the whole feature:
+ * "the last five" that returns the FIRST five is worse than an error. */
+static void seed_history(struct app *app, const char *channel, const char *sender, long id,
+                         long ms, const char *body) {
+    struct wire_scrollback_message m = {.id = id,
+                                        .network = "azzurra",
+                                        .channel = channel,
+                                        .server_time = ms,
+                                        .kind = MSG_PRIVMSG,
+                                        .sender = sender,
+                                        .body = body};
+    ircd_publish(app, &m, channel);
+}
+
+TEST(chathistory_returns_the_slice_that_was_asked_for) {
+    struct app *app = started_bridge();
+    CHECK(app != NULL);
+    if (!app) return;
+    /* Ten messages, one per minute, before anyone connects. */
+    for (int i = 0; i < 10; i++) {
+        char body[64];
+        snprintf(body, sizeof(body), "line %d", i);
+        seed_history(app, "#sniffo", "alice", 100 + i, 1753776000000L + i * 60000L, body);
+    }
+    seed_history(app, "bob", "bob", 200, 1753776600000L, "a private word");
+
+    int fd = bridge_connect(app);
+    CHECK(fd >= 0);
+    if (fd < 0) return;
+    char out[65536];
+    client_send(fd, "CAP LS");
+    client_send(fd, "CAP REQ :server-time message-tags batch draft/chathistory");
+    client_send(fd, "PASS azzurra");
+    client_send(fd, "NICK vjt");
+    client_send(fd, "USER u 0 * :r");
+    client_send(fd, "CAP END");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "ACK :server-time message-tags batch draft/chathistory") != NULL);
+    CHECK(strstr(out, "draft/chathistory") != NULL);
+
+    /* LATEST 3: the last three, in the order a client renders them. */
+    client_send(fd, "CHATHISTORY LATEST #sniffo * 3");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "BATCH +") != NULL);
+    CHECK(strstr(out, "chathistory #sniffo") != NULL);
+    CHECK(strstr(out, "line 7") != NULL);
+    CHECK(strstr(out, "line 9") != NULL);
+    CHECK(strstr(out, "line 6") == NULL);
+    const char *seven = strstr(out, "line 7");
+    const char *nine = strstr(out, "line 9");
+    CHECK(seven && nine && seven < nine); /* oldest first */
+    CHECK(strstr(out, "BATCH -") != NULL);
+    /* Tagged with the id the client can point back at. */
+    CHECK(strstr(out, "msgid=109") != NULL);
+
+    /* BEFORE a message id: what came earlier, not what came after. */
+    client_send(fd, "CHATHISTORY BEFORE #sniffo msgid=103 2");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "line 1") != NULL);
+    CHECK(strstr(out, "line 2") != NULL);
+    CHECK(strstr(out, "line 3") == NULL);
+    CHECK(strstr(out, "line 0") == NULL); /* the limit drops the oldest */
+
+    /* AFTER a timestamp. */
+    client_send(fd, "CHATHISTORY AFTER #sniffo timestamp=2025-07-29T08:07:00.000Z 5");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "line 8") != NULL);
+    CHECK(strstr(out, "line 9") != NULL);
+    CHECK(strstr(out, "line 7") == NULL);
+
+    /* BETWEEN two points, exclusive of both. */
+    client_send(fd, "CHATHISTORY BETWEEN #sniffo msgid=102 msgid=105 10");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "line 3") != NULL);
+    CHECK(strstr(out, "line 4") != NULL);
+    CHECK(strstr(out, "line 2") == NULL);
+    CHECK(strstr(out, "line 5") == NULL);
+
+    /* AROUND: some either side of the point. */
+    client_send(fd, "CHATHISTORY AROUND #sniffo msgid=105 4");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "line 3") != NULL);
+    CHECK(strstr(out, "line 5") != NULL);
+    CHECK(strstr(out, "line 0") == NULL);
+
+    /* Another channel's history is not this channel's. */
+    client_send(fd, "CHATHISTORY LATEST #sniffo * 50");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "a private word") == NULL);
+    /* A DM is a target like any other. */
+    client_send(fd, "CHATHISTORY LATEST bob * 50");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "a private word") != NULL);
+
+    /* TARGETS says who there is history WITH, which is how a client
+     * decides what to ask about next. */
+    client_send(fd, "CHATHISTORY TARGETS timestamp=2020-01-01T00:00:00.000Z "
+                    "timestamp=2030-01-01T00:00:00.000Z 20");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "CHATHISTORY TARGETS #sniffo") != NULL);
+    CHECK(strstr(out, "CHATHISTORY TARGETS bob") != NULL);
+
+    /* A selector that cannot be read is refused, not guessed at. */
+    client_send(fd, "CHATHISTORY BEFORE #sniffo timestamp=yesterday 5");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "FAIL CHATHISTORY INVALID_PARAMS") != NULL);
+    client_send(fd, "CHATHISTORY LATEST");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK(strstr(out, "FAIL CHATHISTORY NEED_MORE_PARAMS") != NULL);
+
+    close(fd);
+    ircd_stop(app);
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    free(app);
+}
+
 int main(void) {
     RUN(bind_spec_reads_ports_addresses_and_both_families);
     RUN(loopback_is_the_whole_127_block_and_the_v6_one);
@@ -637,6 +806,8 @@ int main(void) {
     RUN(names_fold_the_way_the_ircd_folds_them);
     RUN(sigils_follow_the_multi_prefix_the_client_asked_for);
     RUN(server_time_is_tagged_only_when_asked_for);
+    RUN(selectors_name_a_point_in_the_conversation);
+    RUN(tags_are_built_as_one_prefix_or_not_at_all);
     RUN(a_client_registers_and_is_shown_the_session_it_joined);
     RUN(messages_cross_the_bridge_in_both_directions);
     RUN(echo_message_turns_our_own_lines_back_on);
@@ -644,5 +815,6 @@ int main(void) {
     RUN(an_unknown_network_is_refused_with_the_list);
     RUN(a_reachable_bind_without_a_password_refuses_to_start);
     RUN(unknown_commands_are_forwarded_in_the_clients_own_words);
+    RUN(chathistory_returns_the_slice_that_was_asked_for);
     return test_report();
 }

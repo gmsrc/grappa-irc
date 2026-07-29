@@ -125,14 +125,42 @@ What the client gets on connect: the nick grappa uses on that network (a
 different one is corrected with a `NICK`, as a real server would), `001`–`005`
 with the network's real `PREFIX`, a `JOIN` for every channel grappa already
 holds open with its topic and names, and a replay of the recent conversation.
-`server-time`, `multi-prefix` and `echo-message` are offered as capabilities;
-with `server-time` the replay is stamped when things were **said** rather than
-when you reconnected.
+With `server-time` the replay is stamped when things were **said** rather than
+when you reconnected. See the capability list under Chat history.
 
 Your own messages are not echoed back unless the client negotiates
 `echo-message` — a client prints what it sends, and echoing doubles every line.
 The cost is that messages you send from cicchetto or from shottino's own UI do
 not appear; `echo-message` is how a client asks to see those.
+
+### Chat history
+
+The bridge speaks `CHATHISTORY`, so a client can ask for what it missed instead
+of being told once at connect time:
+
+```
+/quote CHATHISTORY LATEST #chan * 50
+/quote CHATHISTORY BEFORE #chan msgid=1234 50
+/quote CHATHISTORY AFTER  #chan timestamp=2026-07-29T08:00:00.000Z 50
+/quote CHATHISTORY BETWEEN #chan msgid=1200 msgid=1250 50
+/quote CHATHISTORY AROUND #chan msgid=1234 50
+/quote CHATHISTORY TARGETS * * 50
+```
+
+Clients that support it (senpai, goguma, Halloy, recent weechat) do this on their
+own when you scroll up. Replies come as a `chathistory` **batch**, each message
+tagged with `@time` (when it was said) and `@msgid` (what to point at next).
+
+Capabilities offered: `server-time`, `message-tags`, `batch`, `multi-prefix`,
+`echo-message`, `draft/chathistory`.
+
+**What history means here:** the bridge answers from what it has seen this
+session — the scrollback shottino fetched from grappa at startup and on each
+join, plus everything live since (a thousand messages). It does not reach
+further back into grappa's archive; a request that goes past the ring gets what
+there is rather than an error. Reaching deeper means routing a REST fetch to one
+client instead of to all of them, which is a change to how fetched scrollback is
+delivered, not an addition to this.
 
 `JOIN`, `PART`, `PRIVMSG`, `NOTICE`, `NAMES`, `WHO`, `WHOIS`, `TOPIC`, `PING`
 and the registration commands are handled here. **Everything else is forwarded

@@ -22839,3 +22839,35 @@ second /whois that drifts.
 The regions are recorded on the DRAW pass only. draw_member_list is called twice
 per frame — once with a negative y to measure — and a region for a row that was
 never drawn is a click that lands on the wrong nick.
+
+## 2026-07-29 — shottino --ircd speaks IRCv3, including CHATHISTORY
+
+vjt: "make the ircd being ircv3 and having chat history."
+
+Capabilities added: `message-tags`, `batch`, `draft/chathistory` beside the
+`server-time`, `multi-prefix` and `echo-message` already offered. Live messages
+now carry `@msgid` when message-tags is negotiated, which is what makes
+`CHATHISTORY AFTER msgid=…` possible at all — a client cannot point at a message
+it was never given a name for.
+
+`ircd_tags` builds the whole prefix in ONE place. The separator rules (leading
+@, ';' between, trailing space, nothing at all when empty) are the kind of thing
+that goes wrong once per tag if each call site does its own.
+
+CHATHISTORY is answered from the bridge's ring, which the tee fills: the
+scrollback shottino fetched at startup and on join, plus everything live since.
+LATEST, BEFORE, AFTER, AROUND, BETWEEN and TARGETS, in a `chathistory` batch
+when the client has `batch` and unbatched when it does not — a client that asked
+for history and got nothing is worse off than one that gets it unlabelled.
+
+**The slice IS the feature.** "The last five" that returns the FIRST five is
+worse than an error, so LATEST and BEFORE walk BACKWARDS to pick and then
+reverse to deliver, since a client renders oldest-first. Both halves are pinned
+by tests over a real socket, and both fail when broken: dropping the reversal
+fails the ordering check, and reading BEFORE as AFTER fails three.
+
+Known limit, in the README rather than in a comment nobody reads: history is a
+session's worth, not grappa's archive. Reaching further back means routing a
+REST fetch to ONE client, and today every fetch goes through render_message,
+which publishes to all of them as live traffic — the very path that fills this
+ring. Splitting that is a change to delivery, not an addition to this.

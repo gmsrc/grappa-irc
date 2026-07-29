@@ -3,6 +3,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <time.h>
@@ -178,6 +179,80 @@ void ircd_time_tag(long server_time_ms, bool wanted, char *out, size_t out_sz) {
     char stamp[32];
     if (strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", &tm) == 0) return;
     snprintf(out, out_sz, "@time=%s.%03ldZ ", stamp, ms);
+}
+
+bool ircd_parse_time(const char *s, long *out_ms) {
+    if (!s || !*s) return false;
+    struct tm tm;
+    memset(&tm, 0, sizeof(tm));
+    int year, mon, day, hour, min, sec, ms = 0;
+    int n = sscanf(s, "%4d-%2d-%2dT%2d:%2d:%2d.%3d", &year, &mon, &day, &hour, &min, &sec, &ms);
+    if (n < 6) return false;
+    tm.tm_year = year - 1900;
+    tm.tm_mon = mon - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = hour;
+    tm.tm_min = min;
+    tm.tm_sec = sec;
+    /* timegm, not mktime: the format is UTC by definition, and reading
+     * it in the local zone would move every selector by the offset. */
+    time_t secs = timegm(&tm);
+    if (secs == (time_t)-1) return false;
+    *out_ms = (long)secs * 1000 + ms;
+    return true;
+}
+
+bool ircd_parse_selector(const char *s, struct ircd_selector *out) {
+    memset(out, 0, sizeof(*out));
+    if (!s || !*s) return false;
+    if (strcmp(s, "*") == 0) {
+        out->kind = IRCD_SEL_STAR;
+        return true;
+    }
+    if (strncasecmp(s, "timestamp=", 10) == 0) {
+        if (!ircd_parse_time(s + 10, &out->time_ms)) return false;
+        out->kind = IRCD_SEL_TIME;
+        return true;
+    }
+    if (strncasecmp(s, "msgid=", 6) == 0) {
+        char *end = NULL;
+        long id = strtol(s + 6, &end, 10);
+        if (!end || end == s + 6 || id <= 0) return false;
+        out->msgid = id;
+        out->kind = IRCD_SEL_MSGID;
+        return true;
+    }
+    return false;
+}
+
+void ircd_tags(long server_time_ms, bool want_time, long msgid, bool want_tags,
+               const char *batch_ref, char *out, size_t out_sz) {
+    if (!out_sz) return;
+    out[0] = '\0';
+    char stamp[64] = "";
+    if (want_time) ircd_time_tag(server_time_ms, true, stamp, sizeof(stamp));
+    /* ircd_time_tag writes the whole tag with its trailing space; here it
+     * is one tag among several, so the decoration is taken off again. */
+    size_t stamp_len = strlen(stamp);
+    if (stamp_len > 2) {
+        memmove(stamp, stamp + 1, stamp_len - 1);
+        stamp[stamp_len - 2] = '\0';
+    } else {
+        stamp[0] = '\0';
+    }
+    bool have_msgid = want_tags && msgid > 0;
+    bool have_batch = want_tags && batch_ref && *batch_ref;
+    if (!stamp[0] && !have_msgid && !have_batch) return;
+    size_t used = 0;
+    used += (size_t)snprintf(out + used, out_sz - used, "@");
+    if (stamp[0]) used += (size_t)snprintf(out + used, out_sz - used, "%s", stamp);
+    if (have_msgid)
+        used += (size_t)snprintf(out + used, out_sz - used, "%smsgid=%ld", used > 1 ? ";" : "",
+                                 msgid);
+    if (have_batch)
+        used += (size_t)snprintf(out + used, out_sz - used, "%sbatch=%s", used > 1 ? ";" : "",
+                                 batch_ref);
+    snprintf(out + used, out_sz - used, " ");
 }
 
 void ircd_sanitize(const char *in, char *out, size_t out_sz) {
