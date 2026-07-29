@@ -27,6 +27,13 @@ set -euo pipefail
 
 E2E_DIR="$SRC_ROOT/cicchetto/e2e"
 
+# #538 — the e2e cicchetto-build-test container mounts only ./cicchetto and
+# cannot read mix.exs; vite bakes GRAPPA_VERSION into <meta cicchetto-version>
+# (asserted by the bundle-refresh e2e). Derive the single-source version here
+# (SRC_ROOT has mix.exs) so every `docker compose` below passes it through.
+GRAPPA_VERSION="$("$SRC_ROOT/infra/packaging/version.sh")"
+export GRAPPA_VERSION
+
 if [ ! -f "$E2E_DIR/compose.yaml" ]; then
     die "missing $E2E_DIR/compose.yaml"
 fi

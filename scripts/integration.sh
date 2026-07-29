@@ -34,6 +34,14 @@ set -euo pipefail
 E2E_DIR="$SRC_ROOT/cicchetto/e2e"
 TESTNET="$(cd "$(dirname "$0")" && pwd)/testnet.sh"
 
+# #538 — same single-source version the cic build bakes into
+# <meta cicchetto-version>. testnet.sh (invoked below) also derives+exports it,
+# but this script's own `docker compose run playwright-runner` re-resolves the
+# stack, so set it here too (SRC_ROOT has mix.exs; the container build mounts
+# only ./cicchetto and cannot).
+GRAPPA_VERSION="$("$SRC_ROOT/infra/packaging/version.sh")"
+export GRAPPA_VERSION
+
 cleanup() {
     if [ "${KEEP_STACK:-}" != "1" ]; then
         "$TESTNET" down 2>&1 || true

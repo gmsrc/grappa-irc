@@ -21,7 +21,12 @@
 # automated from here, no AUR credentials live in this tree. See README.md.
 
 pkgname=grappa
-pkgver=0.6.0
+# pkgver is DERIVED, not hand-edited (#538). The single source of truth is
+# `@version` in mix.exs; `regen.sh` (run by release.yml's Arch job and by the
+# human AUR publish) fills this from `version.sh` before makepkg. The
+# `@GRAPPA_VERSION@` sentinel is deliberate: makepkg's pkgver lint REFUSES '@',
+# so an underived build fails loudly instead of shipping `grappa-@GRAPPA_VERSION@`.
+pkgver=@GRAPPA_VERSION@
 pkgrel=1
 pkgdesc="Always-on IRC bouncer with a REST + Phoenix Channels API, a bundled web PWA (cicchetto) and a terminal client (shottino)"
 arch=('x86_64')
@@ -75,6 +80,13 @@ build() {
 	# newer compiler may warn where the pinned one does not — a distro
 	# rebuild must not hard-fail on that. mix.exs allows `~> 1.19`.
 	mix release --overwrite
+
+	# #538 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>. Derive
+	# it from mix.exs @version (the single source of truth) via version.sh —
+	# the SAME env channel nfpm + every other cic build uses. cwd is the
+	# extracted repo root here, so version.sh reads its mix.exs.
+	GRAPPA_VERSION="$(infra/packaging/version.sh)"
+	export GRAPPA_VERSION
 
 	echo "==> cicchetto SPA (bun + vite)"
 	cd cicchetto

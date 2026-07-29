@@ -99,7 +99,7 @@ jobs:
         id: ver
         run: |
           tag="${RELEASE_TAG#v}"
-          mixv="$(grep -oE '@version "[^"]+"' mix.exs | head -1 | sed -E 's/@version "([^"]+)"/\1/')"
+          mixv="$(infra/packaging/version.sh)"
           echo "tag=$tag mix.exs=$mixv"
           if [ "$tag" != "$mixv" ]; then
             echo "::error::tag v$tag does not match mix.exs @version $mixv — bump @version before cutting the tag"
@@ -203,14 +203,20 @@ jobs:
           # PKGBUILD/recipe, not main's.
           ref: ${{ env.RELEASE_TAG }}
 
-      - name: Verify pkgver matches the tag and mix.exs @version
+      # Guard, never fixer (#538): the ONE hand-declared version is mix.exs
+      # @version, and it must match the tag being cut. pkgver is DERIVED from
+      # mix.exs by regen.sh below, so it is not an independent carrier to
+      # verify — asserting tag==pkgver here would be tautological once CI fills
+      # it. (Deriving pkgver from mix.exs is "derive from the origin"; the
+      # rejected alternative was deriving it from the TAG, which makes THIS
+      # gate compare a value against itself.)
+      - name: Verify the tag matches mix.exs @version
         run: |
           tag="${RELEASE_TAG#v}"
-          pkgver="$(sed -n 's/^pkgver=//p' infra/packaging/aur/PKGBUILD | head -1)"
-          mixv="$(grep -oE '@version "[^"]+"' mix.exs | head -1 | sed -E 's/@version "([^"]+)"/\1/')"
-          echo "tag=$tag pkgver=$pkgver mix.exs=$mixv"
-          if [ "$tag" != "$pkgver" ] || [ "$tag" != "$mixv" ]; then
-            echo "::error::version mismatch — tag=$tag pkgver=$pkgver mix.exs=$mixv must all agree"
+          mixv="$(infra/packaging/version.sh)"
+          echo "tag=$tag mix.exs=$mixv"
+          if [ "$tag" != "$mixv" ]; then
+            echo "::error::tag v$tag does not match mix.exs @version $mixv — bump @version before cutting the tag"
             exit 1
           fi
 
@@ -220,21 +226,24 @@ jobs:
           printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
           chown -R builder:builder .
 
-      - name: makepkg — build the package, regenerate updpkgsums + .SRCINFO
+      - name: regen.sh (derive pkgver from mix.exs) + makepkg — build the package
         run: |
           cd infra/packaging/aur
-          # updpkgsums fetches the now-existing tag tarball and rewrites
-          # sha256sums=('SKIP'); .SRCINFO is regenerated from the PKGBUILD.
-          # makepkg builds the mix release + cicchetto FROM THE TARBALL (no
-          # .git → Grappa.Version reports the bare version). No
+          # regen.sh (#538) fills the committed `pkgver=@GRAPPA_VERSION@`
+          # sentinel from mix.exs @version (the single source of truth), then
+          # runs updpkgsums (fetches the now-existing tag tarball, rewrites
+          # sha256sums=('SKIP')) and regenerates .SRCINFO. It is the SAME
+          # derivation path a human uses to publish to the AUR — scripted, so
+          # the version can never be a forgotten manual step.
+          # makepkg then builds the mix release + cicchetto FROM THE TARBALL
+          # (no .git → Grappa.Version reports the bare version). No
           # --warnings-as-errors: Elixir 1.20 warns from deps (see PKGBUILD).
           # -s: makepkg installs any missing depends/makedepends via pacman
           # (the builder has NOPASSWD sudo) rather than aborting the hard dep
           # check — so a future `depends` entry not transitively present still
           # builds. -f overwrites an existing package file.
           sudo -u builder bash -euo pipefail -c '
-            updpkgsums
-            makepkg --printsrcinfo > .SRCINFO
+            ./regen.sh
             makepkg -sf --noconfirm
           '
 

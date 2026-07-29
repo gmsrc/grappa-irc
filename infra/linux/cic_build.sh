@@ -19,6 +19,11 @@ CIC_DIR="${REPO_ROOT}/cicchetto"
 OUT_DIR="${REPO_ROOT}/runtime/cicchetto-dist"
 GRAPPA_USER="${GRAPPA_USER:-grappa}"
 
+# #538 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>. Derive it
+# from mix.exs @version (the single source of truth) via version.sh; `sudo -u`
+# scrubs the env, so it is injected into the run_as_grappa command string below.
+GRAPPA_VERSION="$("${REPO_ROOT}/infra/packaging/version.sh")"
+
 # PATH must include ~grappa/.local/bin (bun lives there, installed by
 # install_toolchain.sh) — `sudo -u ... bash -c` otherwise falls back to
 # the system default PATH, which doesn't have it (found live on
@@ -34,7 +39,7 @@ echo "[cic_build] bun install && bun run build (outDir=${OUT_DIR})"
 # same pipefail-avoidance lesson as jail_cic_build.sh's header.
 log="$(mktemp)"
 trap 'rm -f "${log}"' EXIT
-if ! run_as_grappa "cd '${CIC_DIR}' && bun install && bun run build -- --outDir '${OUT_DIR}' --emptyOutDir" >"${log}" 2>&1; then
+if ! run_as_grappa "export GRAPPA_VERSION='${GRAPPA_VERSION}'; cd '${CIC_DIR}' && bun install && bun run build -- --outDir '${OUT_DIR}' --emptyOutDir" >"${log}" 2>&1; then
 	echo "[cic_build] ERROR: build failed — output:" >&2
 	cat "${log}" >&2
 	exit 1

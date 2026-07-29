@@ -40,6 +40,11 @@ cd "$REPO_ROOT"
 
 mkdir -p runtime/cicchetto-dist
 
+# #538 — derive the single-source version for the cic build. The
+# cicchetto-build container mounts only ./cicchetto, so it can't read mix.exs;
+# pass GRAPPA_VERSION (from mix.exs @version) through the compose env.
+GRAPPA_VERSION="$("$REPO_ROOT/infra/packaging/version.sh")"
+export GRAPPA_VERSION
 echo "Building cicchetto dist..."
 docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm cicchetto-build
 # Vite's `emptyOutDir` wipes .gitkeep on every build (the tracked

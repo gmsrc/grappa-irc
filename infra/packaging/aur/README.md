@@ -45,10 +45,18 @@ does not claim `aarch64` it cannot satisfy from official repos.
 
 ```sh
 cd infra/packaging/aur
+# Derive the version from mix.exs @version (#538) + refresh checksums/.SRCINFO
+# against the tag tarball. The committed pkgver is the @GRAPPA_VERSION@
+# sentinel (makepkg REFUSES it), so regen.sh is REQUIRED first — and makepkg
+# downloads the vX.Y.Z source tarball anyway, so the tag must already exist:
+./regen.sh
 # builds the mix release + cicchetto, stages FHS, produces the package:
 makepkg -f
 # → grappa-<version>-<rel>-x86_64.pkg.tar.zst  (NOT installed, NOT published)
 ```
+
+`regen.sh` rewrites `PKGBUILD`/`.SRCINFO` in place; do **not** commit the
+result — the committed recipe stays the `@GRAPPA_VERSION@` sentinel template.
 
 Install what you built (runs the scriptlet: user, secrets, migrate, enable):
 
@@ -70,14 +78,16 @@ same FHS paths, wrapper, and operator model.
 live here, and nothing here pushes to `aur.archlinux.org`. To publish a
 release, a maintainer:
 
-1. Cuts the `vX.Y.Z` git tag this `PKGBUILD` pulls (`pkgver` must match
-   `@version` in `mix.exs`).
-2. Regenerates the checksums + metadata against the now-existing tag tarball:
+1. Cuts the `vX.Y.Z` git tag this `PKGBUILD` pulls (matching `@version` in
+   `mix.exs` — the CI release gate asserts tag ↔ `mix.exs`; `pkgver` DERIVES
+   from `mix.exs`, so there is no second number to keep in sync).
+2. Regenerates the recipe against the now-existing tag tarball — one script
+   derives the version and refreshes checksums + metadata (#538), so the
+   version is never a manual step a publisher can forget:
 
    ```sh
    cd infra/packaging/aur
-   updpkgsums                       # replaces sha256sums=('SKIP') with the real hash
-   makepkg --printsrcinfo > .SRCINFO
+   ./regen.sh    # derive pkgver from mix.exs, updpkgsums, regenerate .SRCINFO
    ```
 
 3. Copies **`PKGBUILD`, `.SRCINFO`, `grappa.install`** into the AUR git repo
@@ -85,11 +95,22 @@ release, a maintainer:
    copied — they ship inside the source tarball and are installed from it by
    `package()`, keeping this repo their single source of truth.)
 
-`sha256sums=('SKIP')` is committed here on purpose: the `vX.Y.Z` tarball does
-not exist until the tag is cut, so the real hash cannot be known yet.
-`updpkgsums` fills it at release. `.SRCINFO` is committed so the recipe is
-reviewable in-tree; it is **derived** — regenerate it whenever `PKGBUILD`
-changes, never hand-edit.
+The committed `PKGBUILD`/`.SRCINFO` are a **template**, turned into the
+concrete publishable recipe by `regen.sh`:
+
+- `pkgver=@GRAPPA_VERSION@` is a sentinel `makepkg` REFUSES (#538) — an
+  underived build fails loudly instead of silently shipping
+  `grappa-@GRAPPA_VERSION@`. `regen.sh` fills it from `mix.exs` `@version`,
+  the single source of truth.
+- `sha256sums=('SKIP')` is a placeholder: the `vX.Y.Z` tarball does not exist
+  until the tag is cut, so its real hash cannot be known yet. `regen.sh` runs
+  `updpkgsums` to fill it at release.
+
+Both files are committed so the recipe is reviewable in-tree; `.SRCINFO` is
+**derived** (`makepkg --printsrcinfo`, run by `regen.sh`) — never hand-edit it,
+and never commit `regen.sh`'s concrete output. The guard test
+`test/grappa/version_single_source_test.exs` fails if either carrier stops
+being the `@GRAPPA_VERSION@` sentinel.
 
 ## Version reporting (bare `X.Y.Z`, #419 R3)
 

@@ -19,7 +19,8 @@
 # `runtime/cicchetto-dist/` (the path nginx serves). So `bun.sh run
 # build` is for local preview / debugging, not "preview prod" — for a
 # build that matches what nginx will serve, run `scripts/deploy.sh`
-# (or the standalone `docker compose run cicchetto-build`).
+# (which exports the #538 GRAPPA_VERSION; a bare `docker compose run
+# cicchetto-build` now fails loud in vite without it — prefer the script).
 #
 # Worktree-aware: cicchetto/ is bind-mounted from SRC_ROOT, so each
 # worktree builds from its own source. The bun install cache is a host
@@ -38,6 +39,14 @@
 CICCHETTO_DIR="$SRC_ROOT/cicchetto"
 BUN_CACHE_DIR="$REPO_ROOT/runtime/bun-cache"
 mkdir -p "$CICCHETTO_DIR" "$BUN_CACHE_DIR"
+
+# #538 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>. This
+# container mounts ONLY cicchetto/, so it cannot read mix.exs; derive the
+# single-source version on the host (SRC_ROOT = this worktree) and pass it in
+# via -e below. `run dev`/`run preview`/`run build` all evaluate vite.config.ts,
+# which fails loud if unset — so set it for every verb (harmless for the rest).
+GRAPPA_VERSION="$("$SRC_ROOT/infra/packaging/version.sh")"
+export GRAPPA_VERSION
 
 # Run bun inside the oven/bun:1 oneshot. Args are the trailing
 # `docker run` operands (any extra flags + image + `bun` + bun args),
@@ -59,6 +68,7 @@ run_bun() {
         --tmpfs "/tmp:exec,uid=$uid,gid=$gid" \
         -e HOME=/tmp \
         -e BUN_INSTALL_CACHE_DIR=/cache \
+        -e GRAPPA_VERSION \
         -w /app \
         "$@"
 }

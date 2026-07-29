@@ -28,6 +28,7 @@ setup() {
     DEPLOY_SH="$BATS_TEST_DIRNAME/../../scripts/deploy.sh"
     DEPLOY_CIC_SH="$BATS_TEST_DIRNAME/../../scripts/deploy-cic.sh"
     LIB_SH="$BATS_TEST_DIRNAME/../../scripts/_lib.sh"
+    VERSION_SH="$BATS_TEST_DIRNAME/../../infra/packaging/version.sh"
 
     FAKE_DIR="$BATS_TEST_TMPDIR/fake"
     mkdir -p "$FAKE_DIR"
@@ -48,6 +49,14 @@ setup() {
     cp "$DEPLOY_SH" "$MAIN/scripts/deploy.sh"
     cp "$DEPLOY_CIC_SH" "$MAIN/scripts/deploy-cic.sh"
     cp "$LIB_SH" "$MAIN/scripts/_lib.sh"
+    # #538 — deploy-cic.sh (and deploy.sh's cold path) derive the cic version
+    # from mix.exs @version via infra/packaging/version.sh. The fixture needs
+    # both the script and a mix.exs to derive from, or the real derivation dies
+    # under `set -e` before the build.
+    mkdir -p "$MAIN/infra/packaging"
+    cp "$VERSION_SH" "$MAIN/infra/packaging/version.sh"
+    chmod +x "$MAIN/infra/packaging/version.sh"
+    printf 'defmodule Grappa.MixProject do\n  @version "9.9.9"\nend\n' > "$MAIN/mix.exs"
     : > "$MAIN/compose.yaml"
     touch "$MAIN/runtime/.gitkeep"
     echo base > "$MAIN/lib/base.ex"

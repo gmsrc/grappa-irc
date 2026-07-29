@@ -22,6 +22,12 @@ exec su -l grappa -c '
 set -eu
 cd /home/grappa/grappa/cicchetto
 mkdir -p ../runtime/cicchetto-dist
+# #538 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>. Derive it
+# from mix.exs @version via the POSIX version.sh (this jail runs /bin/sh + npm,
+# no bash/bun port). Single source of truth; same env channel every cic build
+# uses. su -l scrubs the env, so set it INSIDE this login shell.
+GRAPPA_VERSION="$(../infra/packaging/version.sh)"
+export GRAPPA_VERSION
 # 2026-06-10 uploads-2 deploy lesson: `cmd | tail` makes the pipeline
 # exit status tail-s (plain sh has no pipefail), so set -e never fired
 # on npm failures and the deploy reported success over a STALE bundle.

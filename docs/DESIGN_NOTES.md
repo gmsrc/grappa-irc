@@ -22915,3 +22915,70 @@ pointing at. The draw pass records each pane's rectangle for the same reason the
 link and topic regions exist: it is the only thing that knows where the pane
 ended up. `scroll_chat` is now the focused-pane form of `scroll_pane`, so a key
 and a wheel event cannot drift into two notions of scrolling.
+## 2026-07-29 — #538: one declared version, everything else derived
+
+**The bug.** The `v0.6.1` release bumped `mix.exs @version` and nothing else,
+so the release CI's Arch job died at its version gate (`tag=0.6.1 pkgver=0.6.0`)
+before `makepkg`, and cicchetto still shipped `package.json: 0.0.1` — three
+hand-edited copies of one number, two already drifted. The owner ruling
+(#sbiffo): **the version is DECLARED IN ONE PLACE and everything else DERIVES
+from it** — not "bump N files together, CI yells", which is the same
+forget-a-step class as the bug.
+
+**Origin.** `mix.exs @version` is the single canonical declaration (the
+incumbent: `Application.spec(:grappa, :vsn)` reads it into the `.app`,
+`build.sh` already grepped it). One shared primitive, `infra/packaging/version.sh`,
+echoes it; `build.sh` sources it, so the existing `nfpm.yaml: ${GRAPPA_VERSION}`
+derivation is unchanged.
+
+**Derivations (generalising the nfpm sentinel).**
+- **Arch `pkgver`** — committed as the `@GRAPPA_VERSION@` **sentinel**;
+  `infra/packaging/aur/regen.sh` fills it from `version.sh`, then runs
+  `updpkgsums` + `makepkg --printsrcinfo`. ONE derivation path shared by the
+  release CI's Arch job AND the human AUR publish (BUILD ≠ PUBLISH: no AUR
+  creds in-tree, but "derive the version" is scripted, not a manual step).
+  The sentinel is deliberately a value **makepkg refuses** (its pkgver lint
+  rejects `@`), so an *underived* build fails loudly instead of silently
+  shipping `grappa-@GRAPPA_VERSION@`. `.SRCINFO` (a fourth carrier the first
+  census missed — it is generated from PKGBUILD) carries the same sentinel.
+- **cicchetto** — `vite.config.ts` reads `process.env.GRAPPA_VERSION` (fail
+  loud if unset) instead of `package.json`. It CANNOT be a direct `mix.exs`
+  read: cicchetto is built in containers that mount ONLY `./cicchetto` (the
+  compose `cicchetto-build`, `scripts/bun.sh`, the e2e stack), so `mix.exs` is
+  out of reach at build. So the number rides the SAME `GRAPPA_VERSION` env
+  channel nfpm already consumes — cic having a *second* mechanism (a direct
+  file read) was the flaw, not the fix. EVERY cic-build entrypoint derives it
+  from `version.sh` and exports it: `build.sh` (already did), the Arch
+  `PKGBUILD build()`, the FreeBSD (`jail_cic_build.sh`, also driving
+  `freebsd/deploy.sh` + `jail_deploy_cic.sh`) and Linux (`cic_build.sh`) prod
+  builds, and the compose launchers (`deploy.sh`, `deploy-cic.sh`,
+  `testnet.sh`/`integration.sh`) which pass it through the service
+  `environment:` (`GRAPPA_VERSION: ${GRAPPA_VERSION:-}`; `:-` not `:?` so
+  unrelated compose commands don't abort — the fail-loud lives once, in vite).
+  `version.sh` is POSIX sh (not bash) precisely so the FreeBSD `/bin/sh` jail
+  can call it. The **#292 plumbing is untouched** (meta injection, runtime
+  re-read, server dist read, refresh-bar hash); only the number's ORIGIN moved
+  from package.json to the env. `package.json`'s `version` is neutralised to
+  `0.0.0` (inert npm bookkeeping — no longer a reported carrier). The
+  enumeration was found by a systematic repo-wide grep for `vite`/`bun run
+  build`, NOT the handful of sites first noticed — a missed site now fails
+  loud at build (empty env → vite throws), never ships a blank version.
+
+**Guard, never fixer.** The release gate now asserts **tag ↔ mix.exs** only
+(the one human declaration must match the tag being cut); `pkgver` is derived
+from mix.exs, not from the TAG — deriving from the tag would make the gate
+compare a value against itself (the rejected alternative). A bump-commit-runnable
+guard (`test/grappa/version_single_source_test.exs`, plus the cic twin
+`cicchetto/src/__tests__/versionSource.test.ts`) fails the moment any
+carrier stops being its
+sentinel/derived form — catching a re-hardcoded literal on the bump commit,
+not weeks later at release.
+
+**Coherent with #533** (the reported version must describe what is RUNNING, not
+what was built): #538 gives "one number, declared once"; #533 owns "reported
+from what is actually loaded" (the compile-time `@git_facts` staleness). Not
+solved here, not made harder.
+
+**#438 (rpm) / #503 (docker)** consume `version.sh` when they land — doing this
+now, at two carriers, is the point: a fix covering only today's files
+guarantees the identical failure the day a new packaging target appears.

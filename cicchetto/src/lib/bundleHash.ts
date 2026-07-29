@@ -44,10 +44,11 @@ function readBootBundleHash(): string | null {
   return null;
 }
 
-// #292 — the running bundle's human-readable semver, baked into the page
-// as `<meta name="cicchetto-version" content="<pkg.version>">` by the
-// `transformIndexHtml` hook in vite.config.ts (server side reads the same
-// tag via `Grappa.Cic.Bundle.current_version/0`). Read once at module
+// #292 — the running bundle's human-readable version, baked into the page
+// as `<meta name="cicchetto-version" content="<grappa @version>">` by the
+// `transformIndexHtml` hook in vite.config.ts (#538: the number now derives
+// from mix.exs, the single source of truth, not package.json). Server side
+// reads the same tag via `Grappa.Cic.Bundle.current_version/0`. Read once at module
 // init, same as `readBootBundleHash`. `null` when absent (jsdom unit env
 // with no meta tag, or a bundle built before this shipped) — the display
 // then degrades to the build hash alone.

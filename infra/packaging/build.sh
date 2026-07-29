@@ -36,9 +36,10 @@ say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
 # ── Version ────────────────────────────────────────────────────────────────
+# Single source of truth: mix.exs @version, read via version.sh (#538). The
+# env override stays for a one-off build of a pinned version.
 if [ -z "${GRAPPA_VERSION:-}" ]; then
-	GRAPPA_VERSION="$(grep -oE '@version "[^"]+"' "${REPO_ROOT}/mix.exs" | head -1 | sed -E 's/@version "([^"]+)"/\1/')"
-	[ -n "${GRAPPA_VERSION}" ] || die "could not read @version from mix.exs — set GRAPPA_VERSION"
+	GRAPPA_VERSION="$("${SCRIPT_DIR}/version.sh")" || die "could not read @version from mix.exs — set GRAPPA_VERSION"
 fi
 export GRAPPA_VERSION
 
