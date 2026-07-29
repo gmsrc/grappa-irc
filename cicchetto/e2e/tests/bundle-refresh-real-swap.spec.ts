@@ -38,7 +38,7 @@
 // `performRefresh()`.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs } from "../fixtures/cicchettoPage";
+import { loginAs, awaitServiceWorkerActive } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 import { snapshotBundle, swapToBundleB } from "../fixtures/bundleSwap";
 
@@ -51,18 +51,9 @@ test("UX-6-I.2 — single-press refresh converges to new bundle (real swap)", as
   try {
     await loginAs(page, getSeededVjt());
 
-    // SW should install + claim. Wait for either an active controller
-    // or the navigator.serviceWorker.ready promise — either signals
-    // precache has run at least once.
-    await page.waitForFunction(
-      async () => {
-        if (!("serviceWorker" in navigator)) return true;
-        const reg = await navigator.serviceWorker.ready;
-        return reg.active !== null;
-      },
-      null,
-      { timeout: 10_000 },
-    );
+    // SW must install + activate + claim before we assert on banner
+    // state — shared gate + rationale in ../fixtures/cicchettoPage.
+    await awaitServiceWorkerActive(page);
 
     await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);
 

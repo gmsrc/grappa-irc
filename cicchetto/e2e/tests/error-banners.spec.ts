@@ -11,7 +11,7 @@
 // ONE error would hollow-green the overlap fix.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs } from "../fixtures/cicchettoPage";
+import { loginAs, awaitServiceWorkerActive } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 
 const REGION = ".error-banners";
@@ -40,30 +40,6 @@ async function tripWsUnhealthy(
       sh.recordClose({ code, reason });
     },
     { code, reason },
-  );
-}
-
-// #485 — the STACK test below drives the bundle-refresh banner (a module
-// singleton `serverBundleHash` signal) via setServerHash, so it MUST wait
-// for the real service worker to finish install + activate + claim first.
-// Without the gate it races the SW's first activation: `registerSW`
-// (vite-plugin-pwa autoUpdate) is deferred to `window.load`, so when the
-// SW later activates and `clients.claim()`s the page, the boot-time
-// workbox-window autoUpdate listener can reload — resetting
-// serverBundleHash so the bundle-refresh banner never appears (count 0)
-// and the stack assertion times out. Latent on nginx-static serving; #485
-// made the BEAM the sole, slower origin, sliding activation into the test
-// window. Same gate + rationale as bundle-refresh-banner.spec.ts /
-// bundle-refresh-real-swap.spec.ts. Synchronize on activation, don't sleep.
-async function awaitServiceWorkerActive(page: Parameters<typeof loginAs>[0]): Promise<void> {
-  await page.waitForFunction(
-    async () => {
-      if (!("serviceWorker" in navigator)) return true;
-      const reg = await navigator.serviceWorker.ready;
-      return reg.active !== null;
-    },
-    null,
-    { timeout: 10_000 },
   );
 }
 
@@ -182,7 +158,7 @@ test("two distinct error sources STACK vertically without overlapping", async ({
   // Gate on real SW activation before touching the bundle-refresh signal —
   // this test's second source IS the bundle-refresh banner (setServerHash
   // below), which the SW's first-activation reload otherwise wipes. See
-  // awaitServiceWorkerActive above.
+  // `awaitServiceWorkerActive` in ../fixtures/cicchettoPage.
   await awaitServiceWorkerActive(page);
 
   // Force WS-down AND a bundle-refresh mismatch simultaneously.

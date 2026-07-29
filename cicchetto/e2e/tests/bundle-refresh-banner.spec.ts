@@ -11,9 +11,8 @@
 // run. The banner's job is to render the bootBundleHash != serverHash
 // invariant, which this spec validates end-to-end.
 
-import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
-import { loginAs } from "../fixtures/cicchettoPage";
+import { loginAs, awaitServiceWorkerActive } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 
 // #119 — the bundle-refresh banner folded into the unified stacked error
@@ -23,32 +22,11 @@ import { getSeededVjt } from "../fixtures/seedData";
 const BANNER_SELECTOR = '.error-banner[data-source="bundle-refresh"]';
 
 // #485 — every test here drives the bundle-refresh banner (a module
-// singleton `serverBundleHash` signal), so each MUST wait for the real
-// service worker to finish install + activate + claim before touching
-// that state. Without the gate the spec races the SW's first activation:
-// `registerSW` (vite-plugin-pwa autoUpdate) is deferred to `window.load`,
-// so when the SW later activates and `clients.claim()`s the page, the
-// boot-time workbox-window autoUpdate listener may reload the page mid-
-// test — resetting `serverBundleHash`, so the banner never appears (or
-// vanishes) and the assertion times out on a missing element. Latent on
-// nginx-static serving (SW activated before the test's asserts); #485
-// made the BEAM the sole, slower origin, sliding activation into the test
-// window and turning the race deterministic for the stub-heavy UX-6-I
-// case and intermittent for the others. This is the same gate the
-// companion real-swap spec (bundle-refresh-real-swap.spec.ts) uses. See
-// that spec + the UX-6-I test below for the full mechanism. Synchronize
-// on the real activation, don't sleep.
-async function awaitServiceWorkerActive(page: Page): Promise<void> {
-  await page.waitForFunction(
-    async () => {
-      if (!("serviceWorker" in navigator)) return true;
-      const reg = await navigator.serviceWorker.ready;
-      return reg.active !== null;
-    },
-    null,
-    { timeout: 10_000 },
-  );
-}
+// singleton `serverBundleHash` signal), so each MUST await the real
+// service worker's first activation before touching that state, else the
+// SW's boot-time autoUpdate reload wipes it and the banner assertion
+// times out. Shared gate + full rationale: `awaitServiceWorkerActive` in
+// ../fixtures/cicchettoPage.
 
 test("BundleRefreshBanner appears on hash mismatch and click reloads the page", async ({
   page,
@@ -210,7 +188,8 @@ test("UX-6-I — refresh button forces SW update + cache purge before reload", a
   // `navigator.serviceWorker.controller` with a fake "activated" object
   // while the real SW is still registering, so a late real activation is
   // read as an UPDATE by workbox-window and reloads mid-click. See
-  // `awaitServiceWorkerActive` above for the full mechanism.
+  // `awaitServiceWorkerActive` in ../fixtures/cicchettoPage for the full
+  // mechanism.
   await awaitServiceWorkerActive(page);
 
   await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);

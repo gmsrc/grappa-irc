@@ -536,6 +536,32 @@ export async function waitForUserTopicReady(page: Page, userName: string): Promi
   );
 }
 
+// #485 — gate on the REAL service worker before a spec mutates any
+// module-singleton PWA state (e.g. the bundle-refresh banner's
+// `serverBundleHash` signal). `registerSW` (vite-plugin-pwa autoUpdate)
+// is deferred to `window.load`, so the SW installs → activates →
+// `clients.claim()`s the page AFTER `loginAs` returns; the boot-time
+// workbox-window autoUpdate listener then reloads the page on that first
+// claim, wiping any singleton state the spec has already set — the banner
+// vanishes (or never mounts) and the assertion times out on a missing
+// element. Latent on nginx-static serving (the SW activated before the
+// asserts); #485 made the BEAM the sole, slower origin, sliding
+// activation into the test window and turning the race deterministic.
+// Any spec that touches PWA singleton state after login MUST await this
+// first — synchronize on the real activation, never sleep. Callers:
+// bundle-refresh-banner, bundle-refresh-real-swap, error-banners.
+export async function awaitServiceWorkerActive(page: Page): Promise<void> {
+  await page.waitForFunction(
+    async () => {
+      if (!("serviceWorker" in navigator)) return true;
+      const reg = await navigator.serviceWorker.ready;
+      return reg.active !== null;
+    },
+    null,
+    { timeout: 10_000 },
+  );
+}
+
 // Scrollback accessors ──────────────────────────────────────────────
 
 // All message rows in the currently focused window's scrollback.
