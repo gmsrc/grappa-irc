@@ -425,13 +425,48 @@ TEST(closing_a_window_renumbers_every_pane) {
  * the draw and the activation both call it. If it ever returned a
  * different list to those two callers, Enter would act on the row above
  * the one highlighted — so the builder is what gets pinned. */
+/* Through the production push, so a row seeded by a test carries the
+ * same scope a row from the network would. Filling the arrays by hand
+ * here is how a test starts asserting a buffer the client never
+ * builds. */
 static void seed_log(struct app *app, const char *line) {
-    app->log[app->log_count] = strdup(line);
-    app->log_mentions[app->log_count] = false;
-    app->log_pending[app->log_count] = false;
-    app->log_ids[app->log_count] = 0;
-    app->log_media[app->log_count] = -1;
-    app->log_count++;
+    log_push_locked(app, strdup(line), false, false);
+}
+
+/* An operational line — preview progress, an upload result, a command's
+ * answer — belongs to the window it happened in, and stays there. It
+ * used to have no window at all and so appeared in ALL of them: leave
+ * the channel where you typed /preview and its output came along. */
+TEST(an_operational_line_belongs_to_the_window_it_happened_in) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_window(app, "azzurra", "#chan");
+    add_test_window(app, "azzurra", "#other");
+    app->pane_count = 1;
+    app->panes[0] = (struct pane){.window = 0, .weight = 1};
+
+    seed_log(app, "preparing preview of https://example.org/cat.png");
+    seed_log(app, "[azzurra/#other] 10:00 <dave> different channel");
+
+    CHECK(log_row_in_scope(app, 0, "[azzurra/#chan]"));
+    CHECK(!log_row_in_scope(app, 0, "[azzurra/#other]"));
+    /* A chat row is filed by its own prefix, not by what was focused. */
+    CHECK(log_row_in_scope(app, 1, "[azzurra/#other]"));
+    CHECK(!log_row_in_scope(app, 1, "[azzurra/#chan]"));
+
+    /* Switching windows does not move rows already written: the scope
+     * was taken when the line was written, so switching back finds it
+     * where it happened. */
+    app->panes[0].window = 1;
+    seed_log(app, "upload finished");
+    CHECK(log_row_in_scope(app, 2, "[azzurra/#other]"));
+    CHECK(!log_row_in_scope(app, 2, "[azzurra/#chan]"));
+    CHECK(log_row_in_scope(app, 0, "[azzurra/#chan]"));
+
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    pthread_mutex_destroy(&app->lock);
+    free(app);
 }
 
 TEST(menu_offers_reply_and_query_for_the_clicked_nick) {
@@ -756,6 +791,7 @@ int main(void) {
     RUN(current_window_key_copies_and_reports_absence);
     RUN(focus_is_derived_from_the_focused_pane);
     RUN(closing_a_window_renumbers_every_pane);
+    RUN(an_operational_line_belongs_to_the_window_it_happened_in);
     RUN(menu_offers_reply_and_query_for_the_clicked_nick);
     RUN(reply_picker_lists_newest_first_and_filters);
     RUN(reply_picker_collapses_a_run_of_one_nick);

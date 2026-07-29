@@ -490,6 +490,9 @@ struct app {
     /* Index into `media` per log row, or -1. Parallel to log[] like the
      * mention/pending/id arrays. */
     int log_media[LOG_LINES];
+    /* The window each row belongs to, "[network/channel]", or "" for a
+     * row that predates every window. See log_scope_of_locked(). */
+    char log_scope[LOG_LINES][MAX_SLUG + MAX_CHANNEL + 8];
     media_protocol proto;           /* detected once, before ncurses */
     bool key_echo;
     bool animate_media;
@@ -576,6 +579,98 @@ static char *xasprintf(const char *fmt, ...) {
 
 static void log_line(struct app *app, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static void log_line_mention(struct app *app, bool mention, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+static size_t focused_window_locked(struct app *app);
+
+/* ── The log ring ──────────────────────────────────────────────────────
+ *
+ * One text array and five parallel ones: mention, pending-echo, server
+ * id, media slot, scope. Parallel arrays drift — the ring shift was
+ * copy-pasted three times and the compaction once more, and twice a new
+ * array reached some copies and not the others, which is how the unread
+ * divider and the inline images ended up bound to the wrong rows after
+ * a /clear.
+ *
+ * So exactly TWO functions know the full set: the shift that drops the
+ * oldest row, and the move that compacts one. A NEW per-row array goes
+ * in both, or it drifts again. */
+static void log_shift_locked(struct app *app) {
+    free(app->log[0]);
+    memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
+    memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
+    memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
+    memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
+    memmove(app->log_media, app->log_media + 1, sizeof(app->log_media[0]) * (LOG_LINES - 1));
+    memmove(app->log_scope, app->log_scope + 1, sizeof(app->log_scope[0]) * (LOG_LINES - 1));
+    app->log_count--;
+}
+
+static void log_row_move_locked(struct app *app, size_t dst, size_t src) {
+    if (dst == src) return;
+    app->log[dst] = app->log[src];
+    app->log_mentions[dst] = app->log_mentions[src];
+    app->log_pending[dst] = app->log_pending[src];
+    app->log_ids[dst] = app->log_ids[src];
+    app->log_media[dst] = app->log_media[src];
+    memcpy(app->log_scope[dst], app->log_scope[src], sizeof(app->log_scope[dst]));
+}
+
+/* Which window a row belongs to, as "[network/channel]".
+ *
+ * A chat row names its window in its own prefix. An operational row —
+ * preview progress, an upload result, a command's answer, a WHOIS —
+ * names nothing, and used to be shown in EVERY window: switch away from
+ * the channel where you typed /preview and its output followed you, and
+ * stayed. Those rows belong to the window that was focused when they
+ * were written, which is both where they happened and where the user
+ * will look for them after switching back.
+ *
+ * Decided HERE, at the only door into the buffer, and never at the draw
+ * site: a scope computed while drawing is a scope that changes when the
+ * focus does, which is the bug. Caller holds app->lock. */
+static void log_scope_of_locked(struct app *app, const char *line, char *out, size_t out_sz) {
+    if (line[0] == '[') {
+        const char *close = strchr(line, ']');
+        size_t n = close ? (size_t)(close - line) + 1 : 0;
+        if (n && n < out_sz) {
+            memcpy(out, line, n);
+            out[n] = 0;
+            return;
+        }
+    }
+    size_t cur = focused_window_locked(app);
+    if (cur < app->window_count) {
+        /* Formatted via a local: `out` points INTO app (the scope array),
+         * and so do the arguments, which the compiler cannot prove is
+         * not an overlapping copy. */
+        const struct window *w = &app->windows[cur];
+        char scope[MAX_SLUG + MAX_CHANNEL + 8];
+        snprintf(scope, sizeof(scope), "[%s/%s]", w->network, w->channel);
+        snprintf(out, out_sz, "%s", scope);
+    } else {
+        out[0] = 0; /* before any window exists: nowhere to file it, show it everywhere */
+    }
+}
+
+/* Append a row. Takes ownership of `line`. Caller holds app->lock. */
+static void log_push_locked(struct app *app, char *line, bool mention, bool pending) {
+    if (app->log_count == LOG_LINES) log_shift_locked(app);
+    size_t i = app->log_count;
+    app->log[i] = line;
+    app->log_mentions[i] = mention;
+    app->log_pending[i] = pending;
+    app->log_ids[i] = 0;
+    app->log_media[i] = -1;
+    log_scope_of_locked(app, line, app->log_scope[i], sizeof(app->log_scope[i]));
+    app->log_count++;
+}
+
+/* Does row `i` belong in the window whose scope is `scope`? A row with
+ * no scope at all (written before any window existed) is shown
+ * everywhere — the alternative is a startup diagnostic nobody can
+ * reach. */
+static bool log_row_in_scope(const struct app *app, size_t i, const char *scope) {
+    return app->log_scope[i][0] == 0 || strcmp(app->log_scope[i], scope) == 0;
+}
 
 static void log_line(struct app *app, const char *fmt, ...) {
     va_list ap;
@@ -591,21 +686,7 @@ static void log_line(struct app *app, const char *fmt, ...) {
     va_end(ap2);
 
     pthread_mutex_lock(&app->lock);
-    if (app->log_count == LOG_LINES) {
-        free(app->log[0]);
-        memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
-        memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
-        memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
-        memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
-        memmove(app->log_media, app->log_media + 1, sizeof(app->log_media[0]) * (LOG_LINES - 1));
-        app->log_count--;
-    }
-    app->log[app->log_count] = s;
-    app->log_mentions[app->log_count] = false;
-    app->log_pending[app->log_count] = false;
-    app->log_ids[app->log_count] = 0;
-    app->log_media[app->log_count] = -1;
-    app->log_count++;
+    log_push_locked(app, s, false, false);
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -623,21 +704,7 @@ static void log_line_mention(struct app *app, bool mention, const char *fmt, ...
     va_end(ap2);
 
     pthread_mutex_lock(&app->lock);
-    if (app->log_count == LOG_LINES) {
-        free(app->log[0]);
-        memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
-        memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
-        memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
-        memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
-        memmove(app->log_media, app->log_media + 1, sizeof(app->log_media[0]) * (LOG_LINES - 1));
-        app->log_count--;
-    }
-    app->log[app->log_count] = s;
-    app->log_mentions[app->log_count] = mention;
-    app->log_pending[app->log_count] = false;
-    app->log_ids[app->log_count] = 0;
-    app->log_media[app->log_count] = -1;
-    app->log_count++;
+    log_push_locked(app, s, mention, false);
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -649,21 +716,7 @@ static void add_pending_echo(struct app *app, const char *network, const char *c
     strftime(clock, sizeof(clock), "%H:%M", &tm);
     char *line = xasprintf("[%s/%s] %s <%s> %s", network, channel, clock, sender && sender[0] ? sender : "me", body);
     pthread_mutex_lock(&app->lock);
-    if (app->log_count == LOG_LINES) {
-        free(app->log[0]);
-        memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
-        memmove(app->log_mentions, app->log_mentions + 1, sizeof(app->log_mentions[0]) * (LOG_LINES - 1));
-        memmove(app->log_pending, app->log_pending + 1, sizeof(app->log_pending[0]) * (LOG_LINES - 1));
-        memmove(app->log_ids, app->log_ids + 1, sizeof(app->log_ids[0]) * (LOG_LINES - 1));
-        memmove(app->log_media, app->log_media + 1, sizeof(app->log_media[0]) * (LOG_LINES - 1));
-        app->log_count--;
-    }
-    app->log[app->log_count] = line;
-    app->log_mentions[app->log_count] = false;
-    app->log_pending[app->log_count] = true;
-    app->log_ids[app->log_count] = 0;
-    app->log_media[app->log_count] = -1;
-    app->log_count++;
+    log_push_locked(app, line, false, true);
     if (app->pending_count < sizeof(app->pending) / sizeof(app->pending[0])) {
         struct pending_echo *p = &app->pending[app->pending_count++];
         p->id = ++app->next_pending_id;
@@ -1321,20 +1374,15 @@ static void clear_active_window_log(struct app *app) {
     snprintf(key, sizeof(key), "[%s/%s]", app->windows[cur].network, app->windows[cur].channel);
     size_t write_i = 0;
     for (size_t read_i = 0; read_i < app->log_count; read_i++) {
-        if (strncmp(app->log[read_i], key, strlen(key)) == 0) {
+        /* Everything filed under this window goes, its operational rows
+         * included: /clear clears the WINDOW, and a preview message left
+         * behind by a cleared channel is exactly the leftover this scope
+         * exists to prevent. */
+        if (strcmp(app->log_scope[read_i], key) == 0) {
             free(app->log[read_i]);
             continue;
         }
-        if (write_i != read_i) {
-            app->log[write_i] = app->log[read_i];
-            app->log_mentions[write_i] = app->log_mentions[read_i];
-            app->log_pending[write_i] = app->log_pending[read_i];
-            /* These two were missed when the parallel arrays were added:
-             * compacting the log without them left the unread divider and
-             * the inline images bound to the WRONG rows after a /clear. */
-            app->log_ids[write_i] = app->log_ids[read_i];
-            app->log_media[write_i] = app->log_media[read_i];
-        }
+        log_row_move_locked(app, write_i, read_i);
         write_i++;
     }
     app->log_count = write_i;
@@ -4358,7 +4406,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
     int divider_vi = -1;
     int total_visible_lines = 0;
     for (size_t i = 0; i < app->log_count; i++) {
-        if (strncmp(app->log[i], "[", 1) != 0 || strncmp(app->log[i], wanted_prefix, strlen(wanted_prefix)) == 0) {
+        if (log_row_in_scope(app, i, wanted_prefix)) {
             visible[visible_count] = i;
             heights[visible_count] = message_display_lines(app->log[i], width - 2);
             if (heights[visible_count] < 1) heights[visible_count] = 1;
@@ -5460,10 +5508,9 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
     struct window *w = &app->windows[cur];
     char want[MAX_SLUG + MAX_CHANNEL + 8];
     snprintf(want, sizeof(want), "[%s/%s]", w->network, w->channel);
-    size_t want_len = strlen(want);
     for (size_t k = app->log_count; k > 0 && n < max; k--) {
         const char *line = app->log[k - 1];
-        if (strncmp(line, want, want_len) != 0) continue;
+        if (!log_row_in_scope(app, k - 1, want)) continue;
         char prefix[256], nick[256];
         const char *body = NULL;
         if (!split_message_line(line, prefix, sizeof(prefix), nick, sizeof(nick), &body)) continue;
