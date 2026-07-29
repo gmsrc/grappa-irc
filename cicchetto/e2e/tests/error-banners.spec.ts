@@ -11,7 +11,7 @@
 // ONE error would hollow-green the overlap fix.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, awaitServiceWorkerActive } from "../fixtures/cicchettoPage";
+import { loginAs, awaitServiceWorkerActive, awaitServerBundleHashPush } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 
 const REGION = ".error-banners";
@@ -43,10 +43,21 @@ async function tripWsUnhealthy(
   );
 }
 
+// #485 — EVERY test here mutates a PWA module-singleton signal after login
+// (socketHealth via tripWsUnhealthy, connectivity, swRegistration, or the
+// bundle-refresh hash), all of which the service worker's one-shot
+// first-activation reload wipes. Gate ALL tests on a settled SW — not just the
+// STACK test (:156) that first surfaced the race; :192 flaked the same way
+// ungated. `awaitServiceWorkerActive` makes the settle deterministic (it
+// reloads once, past the autoUpdate reload). See ../fixtures/cicchettoPage.
+test.beforeEach(async ({ page }) => {
+  await loginAs(page, getSeededVjt());
+  await awaitServiceWorkerActive(page);
+});
+
 test("WS-health source renders the generic close-code entry, auto-dismisses on open", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
   await expect(page.locator(WS)).toHaveCount(0);
 
   await tripWsUnhealthy(page, 1006, "");
@@ -67,7 +78,6 @@ test("WS-health source renders the generic close-code entry, auto-dismisses on o
 // untouched). Driven via the SAME injected-event hook the specs above use — no
 // real backend op, so the shared testnet is never poisoned.
 test("clicking the × dismisses a banner (#207)", async ({ page }) => {
-  await loginAs(page, getSeededVjt());
   await tripWsUnhealthy(page, 1006, "");
 
   const ws = page.locator(WS);
@@ -83,8 +93,6 @@ test("clicking the × dismisses a banner (#207)", async ({ page }) => {
 test("a dismissed banner re-arms and re-appears after the source recovers + re-fires (#207)", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
-
   await tripWsUnhealthy(page, 1006, "");
   await expect(page.locator(WS)).toBeVisible();
   await page.locator(WS).locator(".error-banner-dismiss").click();
@@ -99,7 +107,6 @@ test("a dismissed banner re-arms and re-appears after the source recovers + re-f
 test("WS-health generic entry surfaces the real close code + reason for non-1006", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
   await tripWsUnhealthy(page, 1011, "internal error");
 
   const ws = page.locator(WS);
@@ -109,7 +116,6 @@ test("WS-health generic entry surfaces the real close code + reason for non-1006
 });
 
 test("connectivity source appears on the offline event and clears on online", async ({ page }) => {
-  await loginAs(page, getSeededVjt());
   await expect(page.locator(CONNECTIVITY)).toHaveCount(0);
 
   await page.evaluate(() => window.dispatchEvent(new Event("offline")));
@@ -124,7 +130,6 @@ test("connectivity source appears on the offline event and clears on online", as
 test("sw-registration source surfaces the captured error name + message (#120)", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
   await expect(page.locator(SWREG)).toHaveCount(0);
 
   // A real onRegisterError can't be forced from a black-box browser (it fires
@@ -154,15 +159,11 @@ test("sw-registration source surfaces the captured error name + message (#120)",
 });
 
 test("two distinct error sources STACK vertically without overlapping", async ({ page }) => {
-  await loginAs(page, getSeededVjt());
-  // Gate on real SW activation before touching the bundle-refresh signal —
-  // this test's second source IS the bundle-refresh banner (setServerHash
-  // below), which the SW's first-activation reload otherwise wipes. See
-  // `awaitServiceWorkerActive` in ../fixtures/cicchettoPage.
-  await awaitServiceWorkerActive(page);
-
   // Force WS-down AND a bundle-refresh mismatch simultaneously.
   await tripWsUnhealthy(page, 1006, "");
+  // Race-2: let the on-join server bundle_hash push land BEFORE we set the
+  // synthetic mismatch, else it overwrites ours and the banner never mounts.
+  await awaitServerBundleHashPush(page);
   await page.evaluate(() => {
     const bh = window.__cic_bundleHash;
     if (!bh) throw new Error("__cic_bundleHash hook missing");
@@ -190,8 +191,6 @@ test("two distinct error sources STACK vertically without overlapping", async ({
 });
 
 test("sw-registration STACKS below the WS source without overlapping (#120)", async ({ page }) => {
-  await loginAs(page, getSeededVjt());
-
   // Force WS-down AND a SW-registration failure simultaneously — #120's source
   // as one of the two in the anti-hollow-green no-overlap proof.
   await tripWsUnhealthy(page, 1006, "");

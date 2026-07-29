@@ -540,22 +540,61 @@ export async function waitForUserTopicReady(page: Page, userName: string): Promi
 // module-singleton PWA state (e.g. the bundle-refresh banner's
 // `serverBundleHash` signal). `registerSW` (vite-plugin-pwa autoUpdate)
 // is deferred to `window.load`, so the SW installs → activates →
-// `clients.claim()`s the page AFTER `loginAs` returns; the boot-time
-// workbox-window autoUpdate listener then reloads the page on that first
-// claim, wiping any singleton state the spec has already set — the banner
-// vanishes (or never mounts) and the assertion times out on a missing
-// element. Latent on nginx-static serving (the SW activated before the
-// asserts); #485 made the BEAM the sole, slower origin, sliding
-// activation into the test window and turning the race deterministic.
-// Any spec that touches PWA singleton state after login MUST await this
-// first — synchronize on the real activation, never sleep. Callers:
-// bundle-refresh-banner, bundle-refresh-real-swap, error-banners.
+// `clients.claim()`s the page AFTER `loginAs` returns (service-worker.ts
+// does skipWaiting + clients.claim). vite-plugin-pwa's autoUpdate handler
+// fires a ONE-SHOT `window.location.reload()` on that first claim, and the
+// reload re-inits every module singleton — `serverBundleHash` back to null
+// (bundleHash.ts has NO controllerchange reset path, so the reload is the
+// only thing that wipes it). The pre-fix gate only awaited `reg.active`,
+// which resolves AT activation ≈ claim — i.e. it returned a hair BEFORE the
+// reload committed, so the spec set the singleton on the doomed pre-reload
+// page and the reload wiped it: the banner vanishes (repeat: visible then
+// detached) or never mounts (repeat: count 0), and the assert times out.
+// Latent on nginx-static serving (the SW activated before the asserts);
+// #485 made the BEAM the sole, slower origin, sliding activation into the
+// test window.
+//
+// Deterministic fix (never a sleep, assert untouched): wait for the SW to
+// CONTROL the page (past install + activate + claim), then reload ONCE
+// ourselves and wait for `load`. The reloaded page boots already under SW
+// control, so no further autoUpdate reload can fire — any PWA singleton the
+// spec sets afterwards survives. Any spec that touches PWA singleton state
+// after login MUST await this first. Callers: bundle-refresh-banner,
+// bundle-refresh-real-swap, error-banners.
 export async function awaitServiceWorkerActive(page: Page): Promise<void> {
+  // Nothing to serialize on a browser without SW support.
+  if (!(await page.evaluate(() => "serviceWorker" in navigator))) return;
+  // Wait until the SW controls this page — the first claim is what triggers
+  // the autoUpdate reload, so once `controller` is set the SW is guaranteed
+  // active enough that our own reload below boots controlled-from-load.
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, {
+    timeout: 10_000,
+  });
+  // Neutralize the racy one-shot autoUpdate reload with a deterministic one:
+  // after this the page is stably controlled and no SW-driven reload follows.
+  await page.reload({ waitUntil: "load" });
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, {
+    timeout: 10_000,
+  });
+}
+
+// #485 (Race-2) — the server pushes `bundle_hash` (the REAL deployed hash) on
+// EVERY user-topic join (grappa_channel `push_user_snapshot` → cic userTopic
+// `setServerBundleHash`). That push lands AFTER onJoinOk, so
+// `waitForUserTopicReady` does NOT cover it; if it arrives after a spec's
+// synthetic `setServerHash`, it overwrites the synthetic and the bundle-refresh
+// banner never mounts / mounts-then-vanishes. Any spec that drives a SYNTHETIC
+// bundle mismatch MUST await this first — call it AFTER `awaitServiceWorkerActive`
+// so the value we wait on is the SW-reload's re-join push. Once the real push
+// has landed, the spec's synthetic set is the last write and the banner is
+// stable. Reads the `serverHash()` getter added to the `__cic_bundleHash` hook.
+export async function awaitServerBundleHashPush(page: Page): Promise<void> {
   await page.waitForFunction(
-    async () => {
-      if (!("serviceWorker" in navigator)) return true;
-      const reg = await navigator.serviceWorker.ready;
-      return reg.active !== null;
+    () => {
+      const bh = (
+        window as unknown as { __cic_bundleHash?: { serverHash?: () => string | null } }
+      ).__cic_bundleHash;
+      return bh?.serverHash?.() != null;
     },
     null,
     { timeout: 10_000 },

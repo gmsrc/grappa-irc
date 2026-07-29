@@ -38,7 +38,7 @@
 // `performRefresh()`.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, awaitServiceWorkerActive } from "../fixtures/cicchettoPage";
+import { loginAs, awaitServiceWorkerActive, awaitServerBundleHashPush } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 import { snapshotBundle, swapToBundleB } from "../fixtures/bundleSwap";
 
@@ -54,6 +54,7 @@ test("UX-6-I.2 — single-press refresh converges to new bundle (real swap)", as
     // SW must install + activate + claim before we assert on banner
     // state — shared gate + rationale in ../fixtures/cicchettoPage.
     await awaitServiceWorkerActive(page);
+    await awaitServerBundleHashPush(page);
 
     await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);
 

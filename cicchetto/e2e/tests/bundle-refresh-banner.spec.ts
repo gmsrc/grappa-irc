@@ -12,7 +12,7 @@
 // invariant, which this spec validates end-to-end.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs, awaitServiceWorkerActive } from "../fixtures/cicchettoPage";
+import { loginAs, awaitServiceWorkerActive, awaitServerBundleHashPush } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 
 // #119 — the bundle-refresh banner folded into the unified stacked error
@@ -33,6 +33,7 @@ test("BundleRefreshBanner appears on hash mismatch and click reloads the page", 
 }) => {
   await loginAs(page, getSeededVjt());
   await awaitServiceWorkerActive(page);
+  await awaitServerBundleHashPush(page);
 
   // Banner must NOT render before any server hash is known.
   await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);
@@ -78,6 +79,7 @@ test("refresh bar shows current vs available version, refresh still applies (#29
 }) => {
   await loginAs(page, getSeededVjt());
   await awaitServiceWorkerActive(page);
+  await awaitServerBundleHashPush(page);
   await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);
 
   const boot = await page.evaluate(() => {
@@ -121,6 +123,7 @@ test("refresh bar appends the short build hash when the semver is unchanged (#29
 }) => {
   await loginAs(page, getSeededVjt());
   await awaitServiceWorkerActive(page);
+  await awaitServerBundleHashPush(page);
   await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);
 
   const boot = await page.evaluate(() => {
@@ -151,6 +154,7 @@ test("refresh bar appends the short build hash when the semver is unchanged (#29
 test("BundleRefreshBanner stays hidden when server pushes the same hash", async ({ page }) => {
   await loginAs(page, getSeededVjt());
   await awaitServiceWorkerActive(page);
+  await awaitServerBundleHashPush(page);
 
   await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);
 
@@ -191,6 +195,7 @@ test("UX-6-I — refresh button forces SW update + cache purge before reload", a
   // `awaitServiceWorkerActive` in ../fixtures/cicchettoPage for the full
   // mechanism.
   await awaitServiceWorkerActive(page);
+  await awaitServerBundleHashPush(page);
 
   await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);
 

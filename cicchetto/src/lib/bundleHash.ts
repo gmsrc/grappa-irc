@@ -272,6 +272,11 @@ declare global {
       reset: () => void;
       bootHash: () => string | null;
       bootVersion: () => string | null;
+      // #485 — read-only accessor for the server-advertised hash (null until
+      // the on-join `bundle_hash` push lands). Symmetric to `bootHash`; no
+      // production logic. The e2e gates its synthetic `setServerHash` on this
+      // so the on-join push can't overwrite the synthetic afterwards (Race-2).
+      serverHash: () => string | null;
       __refreshProbe?: () => void;
     };
   }
@@ -284,5 +289,6 @@ if (typeof window !== "undefined") {
     reset: () => __resetBundleHashForTests(null, null),
     bootHash: () => bootBundleHash(),
     bootVersion: () => bootBundleVersion(),
+    serverHash: () => serverBundleHashSignal(),
   };
 }
