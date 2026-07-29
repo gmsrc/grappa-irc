@@ -9628,6 +9628,29 @@ static void print_usage(FILE *out, const char *prog) {
     fprintf(out, "                   network: the client picks it with PASS <network>:<password>.\n");
     fprintf(out, "                   Off loopback, SHOTTINO_IRCD_PASS is required.\n");
     fprintf(out, "  --help, -h       show this help and exit\n");
+    fprintf(out, "\n");
+    fprintf(out, "examples:\n");
+    fprintf(out, "  shottino https://grappa.example.net vjt hunter2\n");
+    fprintf(out, "  shottino --user --login-email vjt@example.net https://grappa.example.net hunter2\n");
+    fprintf(out, "  shottino --ircd=6668 https://grappa.example.net vjt hunter2   # then: /connect localhost 6668\n");
+    fprintf(out, "\n");
+    fprintf(out, "environment:\n");
+    fprintf(out, "  SHOTTINO_IRCD_PASS   password downstream IRC clients must send with --ircd.\n");
+    fprintf(out, "                       REQUIRED to bind anything but a loopback address, since a\n");
+    fprintf(out, "                       bridge hands over the whole IRC session to whoever connects.\n");
+    fprintf(out, "  SHOTTINO_GRAPHICS    1 forces the terminal-graphics path when it cannot be\n");
+    fprintf(out, "                       probed (sixel); kitty|iterm2|sixel forces one protocol.\n");
+    fprintf(out, "  SHOTTINO_LAYOUT_LOG  file to dump the chat area's per-row measure-vs-draw\n");
+    fprintf(out, "                       numbers into, for reporting a missing or clipped line.\n");
+    fprintf(out, "  TMPDIR               where /view downloads land (removed when shottino exits).\n");
+    fprintf(out, "\n");
+    fprintf(out, "files:\n");
+    fprintf(out, "  ~/.local/share/shottino/   cached session tokens, one per (server, identity)\n");
+    fprintf(out, "\n");
+    fprintf(out, "requires ffmpeg for inline pictures and clips; without it they stay off and\n");
+    fprintf(out, "links remain clickable. Inline media is otherwise ON FOR EVERY HOST, which means\n");
+    fprintf(out, "an image linked in a channel is fetched when you scroll to it, so that host\n");
+    fprintf(out, "learns your IP — /media first-party limits it to your own deployment's uploads.\n");
     fprintf(out, "\nOnce connected, /help lists every command.\n");
 }
 
