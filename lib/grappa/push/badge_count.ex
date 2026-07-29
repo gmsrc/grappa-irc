@@ -50,8 +50,12 @@ defmodule Grappa.Push.BadgeCount do
   early-bails once the running total reaches the badge cap — so the
   uniform path stays off any unbounded scan while keeping a single source
   of truth. Outbound DM rows (our own messages) are excluded by the
-  predicate itself (`channel != own_nick`), so the tail needs no
-  inbound/outbound split.
+  predicate itself — `should_notify?/4` returns `false` for any row whose
+  `sender` folds to the live own_nick (#532 C), an IDENTITY test that
+  covers both self-authored shapes. It is NOT `channel != own_nick`:
+  outbound DMs are persisted with `channel = peer`, which passes that test
+  and would route them into the mention branch (the #532 C bug — the
+  earlier wording of this note asserted the opposite of the real code).
 
   ## own_nick is the LIVE nick, via a cheap Registry lookup (#498)
 

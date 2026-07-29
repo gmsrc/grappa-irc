@@ -15,7 +15,18 @@ defmodule Grappa.Push.Triggers do
 
   ## Decision logic — `should_notify?/4`
 
-  Returns `true` for one of three reasons:
+  The FIRST question is "is this row mine?", decided by IDENTITY
+  (`Identifier.canonical_nick(sender) == canonical_nick(own_nick)`), NOT
+  by window shape:
+
+    0. **Own row** (`sender` folds to `own_nick`) — never notify (#532 C).
+       An OUTBOUND DM is persisted with `channel = peer` (only INBOUND
+       carries `channel = own_nick`), so a shape test would misroute it to
+       the channel branch and run the user's own highlight patterns over
+       their own message body. Excluding by sender-identity kills that for
+       both self-authored shapes (outbound DM + own channel message).
+
+  Otherwise returns `true` for one of three reasons:
 
     1. **DM** (`message.channel == own_nick`):
        `prefs.private_messages_all` OR
@@ -188,10 +199,20 @@ defmodule Grappa.Push.Triggers do
 
   def should_notify?(%Message{} = message, own_nick, prefs, patterns)
       when is_binary(own_nick) and is_map(prefs) and is_list(patterns) do
-    if dm?(message, own_nick) do
-      dm_match?(message, prefs)
-    else
-      channel_match?(message, prefs, own_nick, patterns)
+    cond do
+      # #532 C — the subject's OWN rows never notify, decided by IDENTITY
+      # (sender folds to own_nick), NOT by window shape. An OUTBOUND DM is
+      # persisted with `channel = peer` (only INBOUND carries `channel =
+      # own_nick`), so the `dm?/2` shape test below misses it and it would
+      # fall to the channel branch, where the user's OWN highlight patterns
+      # run over their OWN message body — counting an outgoing DM as
+      # notify-worthy. Excluding by sender-identity kills that for BOTH
+      # directions of self-authored rows (outbound DM + own channel msg).
+      # This is the ONE predicate `Push.BadgeCount` folds over the unread
+      # tail, so the badge and the OS notification can never disagree.
+      own_row?(message, own_nick) -> false
+      dm?(message, own_nick) -> dm_match?(message, prefs)
+      true -> channel_match?(message, prefs, own_nick, patterns)
     end
   end
 
@@ -215,6 +236,19 @@ defmodule Grappa.Push.Triggers do
       nil -> payload
     end
   end
+
+  # #532 C — is this row the subject's OWN message? Folded identity
+  # compare (`Identifier.canonical_nick/1`, #121) between the row's sender
+  # and the live own_nick, NOT the window-shape `channel == own_nick` test
+  # (which only holds for INBOUND DMs, so it can't recognise an outbound
+  # DM as self-authored). The row already carries everything needed to
+  # decide — this is the "is this row mine?" the moduledoc's decision tree
+  # asks first.
+  defp own_row?(%Message{sender: sender}, own_nick) when is_binary(sender) do
+    Identifier.canonical_nick(sender) == Identifier.canonical_nick(own_nick)
+  end
+
+  defp own_row?(_, _), do: false
 
   # Canonical DM rule across the codebase: inbound row's `channel`
   # field equals own_nick. Mirrors `Grappa.Scrollback.dm_peer/4`'s

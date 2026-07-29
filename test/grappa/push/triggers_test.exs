@@ -243,6 +243,41 @@ defmodule Grappa.Push.TriggersTest do
     end
   end
 
+  describe "should_notify?/4 — the subject's OWN rows never notify (#532 C)" do
+    test "own OUTBOUND DM matching a highlight pattern does NOT notify" do
+      # The #532 C bug: an outbound DM is persisted with `channel = peer`
+      # (not own_nick), so the DM branch misses it and it falls to the
+      # channel branch, where the user's OWN highlight patterns run over
+      # their OWN message body. Excluded by identity: sender == own_nick.
+      m = msg(channel: "peer", sender: "vjt", body: "oncall page incoming")
+
+      refute Triggers.should_notify?(m, "vjt", prefs(channel_mentions: true), ["oncall"])
+    end
+
+    test "own outbound message mentioning own nick does NOT notify" do
+      m = msg(channel: "peer", sender: "vjt", body: "note to self: vjt fix this")
+
+      refute Triggers.should_notify?(m, "vjt", prefs(channel_mentions: true), [])
+    end
+
+    test "own-sender check folds ASCII case — still excluded" do
+      # sender differs from own_nick only by ASCII case; the identity fold
+      # (#525: ASCII, A-Z only — brackets are NOT folded) must still
+      # recognise it as the subject's own row.
+      m = msg(channel: "peer", sender: "VJT", body: "oncall")
+
+      refute Triggers.should_notify?(m, "vjt", prefs(channel_mentions: true), ["oncall"])
+    end
+
+    test "an INBOUND DM from the peer still notifies (regression guard)" do
+      # Inbound DM: channel == own_nick, sender == peer. The own-row
+      # exclusion must NOT suppress a genuine inbound message.
+      m = msg(channel: "vjt", sender: "peer", body: "ping")
+
+      assert Triggers.should_notify?(m, "vjt", prefs(private_messages_all: true), [])
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # evaluate_and_dispatch/2 — end-to-end with Bypass + real subscription
   # ---------------------------------------------------------------------------

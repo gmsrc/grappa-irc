@@ -150,6 +150,22 @@ defmodule Grappa.Push.BadgeCountTest do
     assert BadgeCount.count(ctx.subject) == 0
   end
 
+  test "own OUTBOUND DM matching a highlight pattern does NOT count (#532 C)" do
+    # The prod-measured C bug: an outbound DM (channel = peer, sender =
+    # own_nick, dm_with = peer) whose body contains one of the user's own
+    # highlight words was counted as notify-worthy — the row is self-
+    # authored and must never contribute to the badge.
+    ctx = user_ctx("vjt")
+    set_prefs(ctx.subject, channel_mentions: true)
+    {:ok, _} = UserSettings.set_highlight_patterns(ctx.subject, ["oncall"])
+
+    anchor = insert(ctx, "peer", st: 1, sender: "vjt", dm_with: "peer", body: "hi")
+    insert(ctx, "peer", st: 2, sender: "vjt", dm_with: "peer", body: "oncall reminder")
+    set_cursor(ctx.subject, ctx.network, "peer", anchor.id)
+
+    assert BadgeCount.count(ctx.subject) == 0
+  end
+
   # ---------------------------------------------------------------------------
   # Channel branch
   # ---------------------------------------------------------------------------
