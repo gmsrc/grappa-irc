@@ -9,10 +9,13 @@ import {
   visibleArchiveForNetwork,
 } from "./lib/archive";
 import { token } from "./lib/auth";
+import { type ChannelKey, channelKey } from "./lib/channelKey";
+import { mentionCounts } from "./lib/mentions";
 import { networks } from "./lib/networks";
+import { normalizeNick } from "./lib/nickEquals";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import { openQueryWindowState } from "./lib/queryWindows";
-import { setSelectedChannel } from "./lib/selection";
+import { eventsUnread, messagesUnread, setSelectedChannel } from "./lib/selection";
 import NickText from "./NickText";
 
 // #473 — the ONE archive surface, on BOTH form factors.
@@ -59,6 +62,21 @@ import NickText from "./NickText";
 const ArchiveModal: Component = () => {
   const [armedKey, setArmedKey] = createSignal<string | null>(null);
   const archiveKey = (slug: string, target: string) => `${slug} ${target}`;
+
+  // #532 B — resolve an archived window's unread from the SAME server
+  // `unread_counts` seed the sidebar renders (`messagesUnread` /
+  // `eventsUnread` / `mentionCounts`, keyed by `channelKey`). An archived
+  // window with a cursor still contributes to that envelope (a DM from
+  // someone whose window you closed), but the modal previously showed no
+  // badge, so the holding window was unattributable. The seed keys DM
+  // windows by the server's CANONICAL nick (folded, #532 D) while an
+  // archive `entry.target` carries DISPLAY casing — so fold the nick to
+  // canonical before keying (channelKey folds channels itself; the nick
+  // body is folded via normalizeNick), exactly as the read path resolves
+  // the window. Own self-PART events no longer appear here either, because
+  // #532 A drops them from the server `events` count.
+  const unreadKey = (slug: string, target: string): ChannelKey =>
+    channelKey(slug, normalizeNick(target));
 
   const close = () => {
     setArchiveModalOpen(false);
@@ -187,6 +205,42 @@ const ArchiveModal: Component = () => {
                                 ) : (
                                   <span class="archive-modal-target">{entry.target}</span>
                                 )}
+                                {/* #532 B — same unread badges the sidebar renders,
+                                    keyed off the shared server seed (see unreadKey). */}
+                                {(() => {
+                                  const key = unreadKey(network.slug, entry.target);
+                                  return (
+                                    <Show
+                                      when={
+                                        (messagesUnread()[key] ?? 0) +
+                                          (eventsUnread()[key] ?? 0) +
+                                          (mentionCounts()[key] ?? 0) >
+                                        0
+                                      }
+                                    >
+                                      <span
+                                        class="archive-modal-unread"
+                                        data-testid={`archive-unread-${network.slug}-${entry.target}`}
+                                      >
+                                        <Show when={(messagesUnread()[key] ?? 0) > 0}>
+                                          <span class="sidebar-msg-unread">
+                                            {messagesUnread()[key]}
+                                          </span>
+                                        </Show>
+                                        <Show when={(eventsUnread()[key] ?? 0) > 0}>
+                                          <span class="sidebar-events-unread">
+                                            {eventsUnread()[key]}
+                                          </span>
+                                        </Show>
+                                        <Show when={(mentionCounts()[key] ?? 0) > 0}>
+                                          <span class="sidebar-mention">
+                                            @{mentionCounts()[key]}
+                                          </span>
+                                        </Show>
+                                      </span>
+                                    </Show>
+                                  );
+                                })()}
                               </button>
                               <InlineConfirmButton
                                 idleLabel="×"

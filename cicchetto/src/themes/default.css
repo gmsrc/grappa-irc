@@ -4836,6 +4836,15 @@ html.resize-dragging * {
   text-transform: uppercase;
 }
 
+/* #532 B — unread badge cluster on an archived row. Reuses the sidebar
+   badge pills (.sidebar-msg-unread / -events-unread / -mention) and pushes
+   them to the row's trailing edge so the count is discoverable per entry. */
+.archive-modal-unread {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+}
+
 .archive-modal-target {
   color: var(--fg);
 }

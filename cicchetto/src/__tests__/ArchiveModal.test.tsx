@@ -19,6 +19,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../lib/selection", () => ({
   setSelectedChannel: vi.fn(),
   applySeedEnvelope: vi.fn(),
+  // #532 B — the archive row reads the same server unread seed the sidebar does.
+  messagesUnread: () => mockMessagesUnread(),
+  eventsUnread: () => mockEventsUnread(),
+}));
+
+vi.mock("../lib/mentions", () => ({
+  mentionCounts: () => mockMentionCounts(),
 }));
 
 vi.mock("../lib/networks", () => ({
@@ -46,25 +53,35 @@ vi.mock("../lib/auth", () => ({
   token: () => "test-token",
 }));
 
-const { mockOpen, mockEntries, mockArchivedBySlug, setArchiveModalOpen, loadArchive } = vi.hoisted(
-  () => ({
-    mockOpen: vi.fn<() => boolean>(() => false),
-    mockEntries: vi.fn<
-      (
-        slug: string,
-        id: number,
-      ) => Array<{
-        target: string;
-        kind: "channel" | "query";
-        last_activity: number;
-        row_count: number;
-      }>
-    >(() => []),
-    mockArchivedBySlug: vi.fn<() => Record<string, unknown[]>>(() => ({})),
-    setArchiveModalOpen: vi.fn(),
-    loadArchive: vi.fn<(slug: string) => Promise<void>>().mockResolvedValue(undefined),
-  }),
-);
+const {
+  mockOpen,
+  mockEntries,
+  mockArchivedBySlug,
+  setArchiveModalOpen,
+  loadArchive,
+  mockMessagesUnread,
+  mockEventsUnread,
+  mockMentionCounts,
+} = vi.hoisted(() => ({
+  mockOpen: vi.fn<() => boolean>(() => false),
+  mockEntries: vi.fn<
+    (
+      slug: string,
+      id: number,
+    ) => Array<{
+      target: string;
+      kind: "channel" | "query";
+      last_activity: number;
+      row_count: number;
+    }>
+  >(() => []),
+  mockArchivedBySlug: vi.fn<() => Record<string, unknown[]>>(() => ({})),
+  setArchiveModalOpen: vi.fn(),
+  loadArchive: vi.fn<(slug: string) => Promise<void>>().mockResolvedValue(undefined),
+  mockMessagesUnread: vi.fn<() => Record<string, number>>(() => ({})),
+  mockEventsUnread: vi.fn<() => Record<string, number>>(() => ({})),
+  mockMentionCounts: vi.fn<() => Record<string, number>>(() => ({})),
+}));
 
 vi.mock("../lib/archive", () => ({
   archiveModalOpen: () => mockOpen(),
@@ -84,6 +101,9 @@ beforeEach(() => {
   mockOpen.mockReturnValue(false);
   mockEntries.mockReturnValue([]);
   mockArchivedBySlug.mockReturnValue({});
+  mockMessagesUnread.mockReturnValue({});
+  mockEventsUnread.mockReturnValue({});
+  mockMentionCounts.mockReturnValue({});
 });
 
 describe("ArchiveModal (#473 grouped)", () => {
@@ -227,6 +247,51 @@ describe("ArchiveModal (#473 grouped)", () => {
     // per-channel topic, else server NOTICEs (e.g. 401) drop on the floor.
     expect(qwMod.openQueryWindowState).toHaveBeenCalledWith(2, "vjt-peer", expect.any(String));
     expect(setArchiveModalOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("renders the unread msg badge for an archived DM holding unread (#532 B)", () => {
+    mockOpen.mockReturnValue(true);
+    mockEntries.mockImplementation((slug) =>
+      slug === "libera"
+        ? [{ target: "DebugServ", kind: "query", last_activity: 100, row_count: 4 }]
+        : [],
+    );
+    // Seed is keyed by the server's CANONICAL nick (DM keys fold, #532 D);
+    // the row must fold the DISPLAY-cased "DebugServ" to hit "libera debugserv".
+    mockMessagesUnread.mockReturnValue({ "libera debugserv": 3 });
+
+    render(() => <ArchiveModal />);
+
+    const badge = screen.getByTestId("archive-unread-libera-DebugServ");
+    expect(badge.textContent).toContain("3");
+  });
+
+  it("renders the event badge for an archived channel holding unread (#532 B)", () => {
+    mockOpen.mockReturnValue(true);
+    mockEntries.mockImplementation((slug) =>
+      slug === "freenode"
+        ? [{ target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 }]
+        : [],
+    );
+    mockEventsUnread.mockReturnValue({ "freenode #bofh": 2 });
+
+    render(() => <ArchiveModal />);
+
+    const badge = screen.getByTestId("archive-unread-freenode-#bofh");
+    expect(badge.textContent).toContain("2");
+  });
+
+  it("renders NO unread cluster for an archived window read to the tail (#532 B)", () => {
+    mockOpen.mockReturnValue(true);
+    mockEntries.mockImplementation((slug) =>
+      slug === "libera"
+        ? [{ target: "quietpeer", kind: "query", last_activity: 100, row_count: 4 }]
+        : [],
+    );
+    // No seed entry for this window → nothing pending.
+    render(() => <ArchiveModal />);
+
+    expect(screen.queryByTestId("archive-unread-libera-quietpeer")).toBeNull();
   });
 
   it("first click on × delete arms; second calls deleteArchiveEntry with token + slug + target", async () => {
