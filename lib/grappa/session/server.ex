@@ -98,6 +98,7 @@ defmodule Grappa.Session.Server do
   alias Grappa.Session.{
     AwayState,
     Backoff,
+    Broadcaster,
     EventRouter,
     GhostRecovery,
     ISupport,
@@ -3527,11 +3528,7 @@ defmodule Grappa.Session.Server do
   # sourced.
   @spec broadcast_channels_changed(t()) :: :ok
   defp broadcast_channels_changed(state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.channels_changed()
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.channels_changed())
   end
 
   # UX-5 bucket BK (2026-05-19) + #459: the `:join_failed` and `:kicked`
@@ -3548,11 +3545,7 @@ defmodule Grappa.Session.Server do
   # refetch, so redundant broadcasts are cheap.
   @spec broadcast_archive_changed(t()) :: :ok
   defp broadcast_archive_changed(state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        Wire.archive_changed_payload(state.network_slug)
-      )
+    :ok = Broadcaster.to_user(state, Wire.archive_changed_payload(state.network_slug))
   end
 
   @spec persist_last_joined(Grappa.Session.subject(), pos_integer(), [String.t()], last_joined_persister() | nil) :: :ok
@@ -3592,11 +3585,7 @@ defmodule Grappa.Session.Server do
        when prev_nick != next_nick do
     :ok = publish_live_nick(next_state.subject, next_state.network_id, next_state.nick)
 
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(next_state.subject_label),
-        SessionWire.own_nick_changed(next_state.network_id, next_nick)
-      )
+    :ok = Broadcaster.to_user(next_state, SessionWire.own_nick_changed(next_state.network_id, next_nick))
   end
 
   defp maybe_broadcast_own_nick_changed(_, _), do: :ok
@@ -3699,19 +3688,16 @@ defmodule Grappa.Session.Server do
   defp apply_effects([], state), do: state
 
   defp apply_effects([{:topic_changed, channel, entry} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.channel(state.subject_label, state.network_slug, channel),
-        SessionWire.topic_changed(state.network_slug, channel, entry)
-      )
+    :ok = Broadcaster.to_channel(state, channel, SessionWire.topic_changed(state.network_slug, channel, entry))
 
     apply_effects(rest, state)
   end
 
   defp apply_effects([{:channel_modes_changed, channel, entry} | rest], state) do
     :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.channel(state.subject_label, state.network_slug, channel),
+      Broadcaster.to_channel(
+        state,
+        channel,
         SessionWire.channel_modes_changed(state.network_slug, channel, entry)
       )
 
@@ -3724,11 +3710,7 @@ defmodule Grappa.Session.Server do
   # own_nick_changed / isupport_changed). `state.umodes` was already
   # updated by EventRouter (Map.put); this arm just fans out the payload.
   defp apply_effects([{:umode_changed, modes} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.umode_changed(state.network_id, modes)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.umode_changed(state.network_id, modes))
 
     apply_effects(rest, state)
   end
@@ -3739,11 +3721,7 @@ defmodule Grappa.Session.Server do
   # `state.supported_umodes` was already updated by EventRouter (Map.put); this
   # arm just fans out the payload.
   defp apply_effects([{:supported_umodes_changed, modes} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.supported_umodes_changed(state.network_id, modes)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.supported_umodes_changed(state.network_id, modes))
 
     apply_effects(rest, state)
   end
@@ -3754,8 +3732,8 @@ defmodule Grappa.Session.Server do
   # attached client without a per-channel subscription dance.
   defp apply_effects([{:presence_changed, nick, presence, kind, source} | rest], state) do
     :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
+      Broadcaster.to_user(
+        state,
         SessionWire.presence_changed(
           state.network_id,
           nick,
@@ -3773,11 +3751,7 @@ defmodule Grappa.Session.Server do
   # the raw numeric is additionally persisted on $server by the routing
   # matrix (734/512 are NOT delegated).
   defp apply_effects([{:presence_error, reason, detail} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.presence_error(state.network_id, reason, detail)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.presence_error(state.network_id, reason, detail))
 
     apply_effects(rest, state)
   end
@@ -3852,11 +3826,7 @@ defmodule Grappa.Session.Server do
   end
 
   defp apply_effects([{:channel_created, channel, %DateTime{} = dt} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.channel(state.subject_label, state.network_slug, channel),
-        SessionWire.channel_created(state.network_slug, channel, dt)
-      )
+    :ok = Broadcaster.to_channel(state, channel, SessionWire.channel_created(state.network_slug, channel, dt))
 
     apply_effects(rest, state)
   end
@@ -3884,8 +3854,9 @@ defmodule Grappa.Session.Server do
     state = %{state | seeded_channels: MapSet.put(state.seeded_channels, channel)}
 
     :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.channel(state.subject_label, state.network_slug, channel),
+      Broadcaster.to_channel(
+        state,
+        channel,
         SessionWire.members_seeded(state.network_slug, channel, members)
       )
 
@@ -3905,11 +3876,7 @@ defmodule Grappa.Session.Server do
       |> Enum.map(fn {nick, modes} -> %{nick: nick, modes: modes} end)
       |> Enum.sort_by(&{member_sort_tier(&1.modes), &1.nick})
 
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.names_reply(state.network_slug, channel, members)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.names_reply(state.network_slug, channel, members))
 
     apply_effects(rest, state)
   end
@@ -3924,11 +3891,7 @@ defmodule Grappa.Session.Server do
   # per-user table is shown in arrival order. Projection to the JSON-safe
   # wire shape lives in `SessionWire.who_reply/3`.
   defp apply_effects([{:who_reply, target, users} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.who_reply(state.network_slug, target, users)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.who_reply(state.network_slug, target, users))
 
     apply_effects(rest, state)
   end
@@ -3939,11 +3902,7 @@ defmodule Grappa.Session.Server do
   # keys by network and renders a dismissable retro modal; it maps `source`
   # to a human title (the server emits no display strings).
   defp apply_effects([{:server_reply, source, lines} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.server_reply(state.network_slug, source, lines)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.server_reply(state.network_slug, source, lines))
 
     apply_effects(rest, state)
   end
@@ -4167,11 +4126,7 @@ defmodule Grappa.Session.Server do
   # — NOT persisted in scrollback. cic's `whoisCard.ts` keys by network
   # and replaces on each new bundle.
   defp apply_effects([{:whois_bundle, target, accum} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.whois_bundle(state.network_slug, target, accum)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.whois_bundle(state.network_slug, target, accum))
 
     apply_effects(rest, state)
   end
@@ -4183,11 +4138,7 @@ defmodule Grappa.Session.Server do
   # the per-network `whowasCard.ts` store (last-write-wins replacement
   # per network). NOT persisted — operator types /whowas to refresh.
   defp apply_effects([{:whowas_bundle, target, accum} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.whowas_bundle(state.network_slug, target, accum)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.whowas_bundle(state.network_slug, target, accum))
 
     apply_effects(rest, state)
   end
@@ -4198,11 +4149,7 @@ defmodule Grappa.Session.Server do
   # arm into the per-network `banlistCard.ts` store (last-write-wins per
   # network). NOT persisted — operator types /banlist to refresh.
   defp apply_effects([{:banlist_bundle, channel, accum} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.banlist_bundle(state.network_slug, channel, accum)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.banlist_bundle(state.network_slug, channel, accum))
 
     apply_effects(rest, state)
   end
@@ -4212,11 +4159,7 @@ defmodule Grappa.Session.Server do
   # by `peer:` field and renders inline in the peer's DM window. No
   # server-side dedup / rate-limit: display rate is a UI concern.
   defp apply_effects([{:peer_away, peer, message} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.peer_away(state.network_slug, peer, message)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.peer_away(state.network_slug, peer, message))
 
     apply_effects(rest, state)
   end
@@ -4234,11 +4177,7 @@ defmodule Grappa.Session.Server do
   # LUSERS routing precedent — ephemerals carrying their own `network`
   # field (and now `channel`) route via Topic.user/1.
   defp apply_effects([{:invite_ack, channel, peer} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.invite_ack(state.network_slug, channel, peer)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.invite_ack(state.network_slug, channel, peer))
 
     apply_effects(rest, state)
   end
@@ -4250,11 +4189,7 @@ defmodule Grappa.Session.Server do
   # (last-write-wins replacement). NOT persisted — operator types
   # /lusers to refresh.
   defp apply_effects([{:lusers_bundle, accum} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.lusers_bundle(state.network_slug, accum)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.lusers_bundle(state.network_slug, accum))
 
     apply_effects(rest, state)
   end
@@ -4266,11 +4201,7 @@ defmodule Grappa.Session.Server do
   # store (last-write-wins replacement) and renders the interactive
   # topology map. NOT persisted — operator types /links to refresh.
   defp apply_effects([{:links_bundle, accum} | rest], state) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.links_bundle(state.network_slug, accum)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.links_bundle(state.network_slug, accum))
 
     apply_effects(rest, state)
   end
@@ -4331,11 +4262,7 @@ defmodule Grappa.Session.Server do
   # `kind` (Jason stringifies at the JSON edge; S14).
   defp apply_effects([{:away_confirmed, away_atom} | rest], state)
        when away_atom in [:present, :away] do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.away_confirmed(state.network_slug, away_atom)
-      )
+    :ok = Broadcaster.to_user(state, SessionWire.away_confirmed(state.network_slug, away_atom))
 
     apply_effects(rest, state)
   end
@@ -4722,11 +4649,7 @@ defmodule Grappa.Session.Server do
         %{state | in_flight_joins: in_flight_joins}
 
       _ ->
-        :ok =
-          Grappa.PubSub.broadcast_event(
-            Topic.user(state.subject_label),
-            SessionWire.window_pending(state.network_slug, channel)
-          )
+        :ok = Broadcaster.to_user(state, SessionWire.window_pending(state.network_slug, channel))
 
         %{
           state
@@ -4784,11 +4707,7 @@ defmodule Grappa.Session.Server do
   # by definition.
   @spec broadcast_window_state(t(), map()) :: :ok
   defp broadcast_window_state(state, payload) do
-    :ok =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        payload
-      )
+    :ok = Broadcaster.to_user(state, payload)
   end
 
   # #100 — presentational connection-progress badge. Broadcasts
@@ -4801,11 +4720,7 @@ defmodule Grappa.Session.Server do
   # `broadcast_event/2` and must not disturb the connect path.
   @spec broadcast_connection_progress(t(), :connecting | :connected) :: :ok
   defp broadcast_connection_progress(state, progress) do
-    _ =
-      Grappa.PubSub.broadcast_event(
-        Topic.user(state.subject_label),
-        SessionWire.connection_progress(state.network_slug, progress)
-      )
+    _ = Broadcaster.to_user(state, SessionWire.connection_progress(state.network_slug, progress))
 
     :ok
   end
@@ -5413,8 +5328,8 @@ defmodule Grappa.Session.Server do
           away_ended_iso = DateTime.to_iso8601(DateTime.utc_now())
 
           :ok =
-            Grappa.PubSub.broadcast_event(
-              Topic.user(state.subject_label),
+            Broadcaster.to_user(
+              state,
               SessionWire.mentions_bundle(
                 state.network_slug,
                 away_started_iso,
