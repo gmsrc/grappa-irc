@@ -256,23 +256,53 @@ defmodule Grappa.ReadCursor do
     the envelope (`refute Map.has_key?`).
   * One statement covers ALL of the subject's networks (`rc` carries
     `network_id`); the `Network` join resolves the slug.
+
+  ## #532 A — the subject's OWN presence rows are excluded from `events`
+
+  `own_nicks` (`%{slug => {network_id, own_nick}}`, the LIVE nick the caller
+  already resolves via `Push.BadgeCount.live_nick_windows/1`) drives a
+  per-network exclusion in the JOIN `on:`: a row that is BOTH non-content
+  AND the subject's own presence — `nick_fold(sender) ==
+  canonical_nick(own_nick)` (self-PART, a KICK they issued, a case-only
+  self-rename) OR `nick_fold(meta.new_nick) == canonical_nick(own_nick)`
+  (a genuine self-rename's `:nick_change` row, whose `sender` is the OLD
+  nick and whose `meta.new_nick` is the live one) — for ITS network does
+  not join, so it never lands in the `events` bucket. Such an action is not
+  "unread" to them, and a parted channel (or every `/nick`) used to strand
+  a permanent "1" behind it. The fold is PER-NETWORK because a subject may
+  hold a different nick on each.
+  This is the #396 cold-load twin of `Scrollback.count_after_split/5`'s
+  identical exclusion — one rule, both count doors. Content is untouched;
+  legitimate unread that arrived before the leave survives (and #532 B
+  surfaces it). A slug absent from `own_nicks` (or a `nil` nick) applies no
+  exclusion for that network — its presence rows count as before.
   """
-  @spec bulk_unread_split(subject()) :: bulk_split_envelope()
-  def bulk_unread_split(subject) do
+  @spec bulk_unread_split(subject(), %{String.t() => {integer(), String.t()}}) ::
+          bulk_split_envelope()
+  def bulk_unread_split(subject, own_nicks) when is_map(own_nicks) do
     content = Message.content_kinds()
     {sub_field, sub_id} = subject_pair(subject)
+    own_presence = own_presence_dynamic(own_nicks)
+
+    # Full JOIN on-clause built as a dynamic so the per-network own-presence
+    # OR (`^own_presence`) can be interpolated into it (#532 A).
+    join_on =
+      dynamic(
+        [rc, _, m],
+        m.network_id == rc.network_id and
+          field(m, ^sub_field) == ^sub_id and
+          Identifier.nick_fold(fragment("COALESCE(?, ?)", m.dm_with, m.channel)) ==
+            Identifier.nick_fold(rc.channel) and
+          m.id > rc.last_read_message_id and
+          not (m.kind not in ^content and ^own_presence)
+      )
 
     query =
       from(rc in Cursor,
         join: n in Network,
         on: n.id == rc.network_id,
         left_join: m in Message,
-        on:
-          m.network_id == rc.network_id and
-            field(m, ^sub_field) == ^sub_id and
-            Identifier.nick_fold(fragment("COALESCE(?, ?)", m.dm_with, m.channel)) ==
-              Identifier.nick_fold(rc.channel) and
-            m.id > rc.last_read_message_id,
+        on: ^join_on,
         where: not is_nil(rc.last_read_message_id),
         group_by: [n.slug, rc.channel, fragment("CASE WHEN ? THEN 1 ELSE 0 END", m.kind in ^content)],
         select: {
@@ -310,7 +340,7 @@ defmodule Grappa.ReadCursor do
   — the two fields `WindowCounts` folds through `Mentions.mentioned?/3`.
 
   Same unified `nick_fold(COALESCE(...))` window predicate as
-  `bulk_unread_split/1`, restricted to content kinds. An INNER JOIN (a
+  `bulk_unread_split/2`, restricted to content kinds. An INNER JOIN (a
   window with no unread content contributes no rows → zero mentions,
   supplied by the caller's default). The per-window `cap` is enforced with a
   `ROW_NUMBER() OVER (PARTITION BY window ORDER BY id)` window function
@@ -347,7 +377,7 @@ defmodule Grappa.ReadCursor do
 
     # Scope the DRIVING `read_cursors` to the subject via the shared
     # `subject_filter/2` (binding 0 == `rc`), identical to
-    # `bulk_unread_split/1` + `bulk_for_subject/1` — one way to express
+    # `bulk_unread_split/2` + `bulk_for_subject/1` — one way to express
     # "these cursors are mine". `subject_pair/1` is still needed for the
     # `on:`-clause match on `messages` (a join-side filter belongs in `on:`,
     # not `where`, so the JOIN keeps its driving row).
@@ -385,6 +415,42 @@ defmodule Grappa.ReadCursor do
   @spec subject_pair(subject()) :: {:user_id | :visitor_id, Ecto.UUID.t()}
   defp subject_pair({:user, user_id}) when is_binary(user_id), do: {:user_id, user_id}
   defp subject_pair({:visitor, visitor_id}) when is_binary(visitor_id), do: {:visitor_id, visitor_id}
+
+  # #532 A — a dynamic OR flagging a `messages` row as the subject's OWN
+  # presence for ITS network: `rc.network_id == nid AND (nick_fold(sender)
+  # == canonical_nick(own_nick) OR nick_fold(meta.new_nick) ==
+  # canonical_nick(own_nick))`, OR'd across every network in `own_nicks`
+  # (`%{slug => {network_id, own_nick}}`). Two clauses because a genuine
+  # self-rename's `:nick_change` row carries `sender = OLD nick` +
+  # `meta.new_nick = NEW`; the live `own_nick` is the NEW one, so only the
+  # `new_nick` clause catches the terminal rename (see
+  # `Scrollback.exclude_own_presence/2` for the full rationale + boundary).
+  # The fold is per-network because a subject may hold a different nick on
+  # each. Interpolated into `bulk_unread_split/2`'s join on-clause so an own
+  # presence row is dropped from the `events` bucket. Empty map / a `nil`
+  # nick entry contributes nothing → `dynamic(false)` = "no row is mine",
+  # which leaves that network's presence counts unchanged.
+  @spec own_presence_dynamic(%{String.t() => {integer(), String.t()}}) ::
+          Ecto.Query.dynamic_expr()
+  defp own_presence_dynamic(own_nicks) do
+    Enum.reduce(own_nicks, dynamic(false), fn
+      {_, {network_id, own_nick}}, acc when is_binary(own_nick) ->
+        folded = Identifier.canonical_nick(own_nick)
+
+        dynamic(
+          [rc, _, m],
+          ^acc or
+            (rc.network_id == ^network_id and
+               (Identifier.nick_fold(m.sender) == ^folded or
+                  (not is_nil(fragment("json_extract(?, '$.new_nick')", m.meta)) and
+                     Identifier.nick_fold(fragment("json_extract(?, '$.new_nick')", m.meta)) ==
+                       ^folded)))
+        )
+
+      _, acc ->
+        acc
+    end)
+  end
 
   @doc """
   Broadcasts a typed `read_cursor_set` event on the per-channel topic

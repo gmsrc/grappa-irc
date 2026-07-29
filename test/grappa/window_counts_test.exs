@@ -39,7 +39,8 @@ defmodule Grappa.WindowCountsTest do
         kind: opts[:kind] || :privmsg,
         sender: opts[:sender] || "alice",
         body: Keyword.get(opts, :body, "hello"),
-        dm_with: opts[:dm_with]
+        dm_with: opts[:dm_with],
+        meta: opts[:meta]
       })
 
     {:ok, message} = ScrollbackHelpers.insert(attrs)
@@ -63,7 +64,8 @@ defmodule Grappa.WindowCountsTest do
         kind: opts[:kind] || :privmsg,
         sender: opts[:sender] || "alice",
         body: Keyword.get(opts, :body, "hello"),
-        dm_with: opts[:dm_with]
+        dm_with: opts[:dm_with],
+        meta: opts[:meta]
       })
 
     {:ok, message} = ScrollbackHelpers.insert(attrs)
@@ -122,6 +124,66 @@ defmodule Grappa.WindowCountsTest do
 
     assert snap(c, "#chan", anchor.id, "vjt") ==
              %{messages: 0, mentions: 0, events: 3, severity: :event}
+  end
+
+  test "the subject's OWN self-PART is NOT counted as an unread event (#532 A)" do
+    c = ctx()
+    anchor = insert(c, "#chan", st: 1, body: "anchor")
+    # Own self-PART (leaving the channel) — the exact #532 A shape.
+    insert(c, "#chan", st: 2, sender: "vjt", kind: :part, body: nil)
+    # Another user's presence event must still count.
+    insert(c, "#chan", st: 3, sender: "bob", kind: :join, body: nil)
+
+    assert snap(c, "#chan", anchor.id, "vjt") ==
+             %{messages: 0, mentions: 0, events: 1, severity: :event}
+  end
+
+  test "a self-PART that is the only unread leaves nothing pending (#532 A)" do
+    c = ctx()
+    anchor = insert(c, "#chan", st: 1, body: "anchor")
+    insert(c, "#chan", st: 2, sender: "vjt", kind: :part, body: nil)
+
+    assert snap(c, "#chan", anchor.id, "vjt") ==
+             %{messages: 0, mentions: 0, events: 0, severity: :none}
+  end
+
+  test "own-presence exclusion preserves unread CONTENT before the leave (#532 A/B)" do
+    c = ctx()
+    anchor = insert(c, "#chan", st: 1, body: "anchor")
+    # A real mention arrives, then the operator parts without reading it.
+    insert(c, "#chan", st: 2, sender: "bob", body: "hey vjt")
+    insert(c, "#chan", st: 3, sender: "vjt", kind: :part, body: nil)
+
+    result = snap(c, "#chan", anchor.id, "vjt")
+    assert result.messages == 1
+    assert result.events == 0
+    assert result.mentions == 1
+    assert result.severity == :mention
+  end
+
+  test "self-KICK and a genuine self-rename are excluded — general own-presence rule (#532 A)" do
+    c = ctx()
+    anchor = insert(c, "#chan", st: 1, body: "anchor")
+    # A KICK the subject issued: sender is their live nick.
+    insert(c, "#chan", st: 2, sender: "vjt", kind: :kick, body: nil)
+    # A genuine self-rename is persisted with `sender = OLD nick` and
+    # `meta.new_nick = NEW` (EventRouter fan-out); the live nick is NEW, so
+    # only the meta.new_nick clause catches it. sender != own_nick here — a
+    # rename to the SAME nick is impossible, so this is the realistic shape.
+    insert(c, "#chan", st: 3, sender: "oldvjt", kind: :nick_change, body: nil, meta: %{new_nick: "vjt"})
+
+    assert snap(c, "#chan", anchor.id, "vjt") ==
+             %{messages: 0, mentions: 0, events: 0, severity: :none}
+  end
+
+  test "a PEER's rename still counts as an event (own-presence exclusion is scoped)" do
+    c = ctx()
+    anchor = insert(c, "#chan", st: 1, body: "anchor")
+    # bob renames to carol — neither the old sender nor the new nick is the
+    # subject's live nick, so it is a legitimate unread event.
+    insert(c, "#chan", st: 2, sender: "bob", kind: :nick_change, body: nil, meta: %{new_nick: "carol"})
+
+    assert snap(c, "#chan", anchor.id, "vjt").events == 1
   end
 
   test "join/part churn alone never escalates above :event (#265)" do

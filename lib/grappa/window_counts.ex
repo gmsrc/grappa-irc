@@ -147,16 +147,18 @@ defmodule Grappa.WindowCounts do
   Returns the SAME nested shape the per-window loop built —
   `%{network_slug => %{channel => t()}}` — so `/me`'s `unread_counts`
   envelope is byte-identical for channel + DM-peer windows (the own-nick
-  SELF window count changes by design; see `ReadCursor.bulk_unread_split/1`
-  and DESIGN_NOTES 2026-07-25).
+  SELF window count changes by design; see `ReadCursor.bulk_unread_split/2`
+  and DESIGN_NOTES 2026-07-25). The subject's own presence rows are excluded
+  from `events` (#532 A) — the `own_nicks` threaded below drives that.
 
   Two bulk reads, both driven by the read cursors (#393's single
   `nick_fold(COALESCE(dm_with, channel))` predicate unifies channel + DM
   windows into one join condition, served by the live prod indexes):
 
-    1. `ReadCursor.bulk_unread_split/1` — every window's `%{messages,
+    1. `ReadCursor.bulk_unread_split/2` — every window's `%{messages,
        events}` in one grouped statement (zero-unread windows included,
-       nil-cursor windows skipped);
+       nil-cursor windows skipped; own presence rows excluded from `events`
+       via `own_nicks`, #532 A);
     2. `ReadCursor.bulk_unread_content_tails/2` — every window's capped
        unread content tail in one statement; the mention fold
        (`Mentions.mentioned?/3`, not expressible in SQL) then runs in Elixir
@@ -175,7 +177,7 @@ defmodule Grappa.WindowCounts do
           %{String.t() => %{String.t() => t()}}
   def bulk_snapshot(subject, own_nicks, patterns)
       when is_map(own_nicks) and is_list(patterns) do
-    counts = ReadCursor.bulk_unread_split(subject)
+    counts = ReadCursor.bulk_unread_split(subject, own_nicks)
     tails = ReadCursor.bulk_unread_content_tails(subject, @mention_scan_cap)
 
     Map.new(counts, fn {slug, per_channel} ->

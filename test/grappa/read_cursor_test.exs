@@ -805,7 +805,8 @@ defmodule Grappa.ReadCursorTest do
       insert_message(attrs, net_b.id, "#ops", 2, "b1")
       {:ok, _} = ReadCursor.set(subject, net_b.id, "#ops", b.id)
 
-      split = ReadCursor.bulk_unread_split(subject)
+      own_nicks = %{net_a.slug => {net_a.id, "vjt"}, net_b.slug => {net_b.id, "vjt"}}
+      split = ReadCursor.bulk_unread_split(subject, own_nicks)
 
       assert split[net_a.slug]["#chan"] == %{messages: 2, events: 1}
       assert split[net_a.slug]["peer"] == %{messages: 1, events: 0}
@@ -820,13 +821,107 @@ defmodule Grappa.ReadCursorTest do
       m = insert_message(%{user_id: user.id}, net.id, "#chan", 1)
       {:ok, _} = ReadCursor.set(subject, net.id, "#chan", m.id)
 
-      assert ReadCursor.bulk_unread_split(subject)[net.slug]["#chan"] ==
+      own_nicks = %{net.slug => {net.id, "vjt"}}
+
+      assert ReadCursor.bulk_unread_split(subject, own_nicks)[net.slug]["#chan"] ==
                %{messages: 0, events: 0}
     end
 
     test "returns an empty envelope for a subject with no cursors" do
       user = user_fixture()
-      assert ReadCursor.bulk_unread_split({:user, user.id}) == %{}
+      assert ReadCursor.bulk_unread_split({:user, user.id}, %{}) == %{}
+    end
+
+    test "excludes the subject's OWN presence rows from events (#532 A)" do
+      user = user_fixture()
+      subject = {:user, user.id}
+      attrs = %{user_id: user.id}
+      net = network_fixture()
+
+      a = insert_message(attrs, net.id, "#chan", 1)
+
+      # Own self-PART after the cursor — the exact #532 A shape (leaving a
+      # channel left a permanent unread the operator couldn't clear).
+      {:ok, _} =
+        ScrollbackHelpers.insert(
+          Map.merge(attrs, %{
+            network_id: net.id,
+            channel: "#chan",
+            server_time: 2,
+            kind: :part,
+            sender: "vjt",
+            body: nil
+          })
+        )
+
+      # An other-user presence event must still count.
+      {:ok, _} =
+        ScrollbackHelpers.insert(
+          Map.merge(attrs, %{
+            network_id: net.id,
+            channel: "#chan",
+            server_time: 3,
+            kind: :join,
+            sender: "bob",
+            body: nil
+          })
+        )
+
+      {:ok, _} = ReadCursor.set(subject, net.id, "#chan", a.id)
+
+      own_nicks = %{net.slug => {net.id, "vjt"}}
+
+      assert ReadCursor.bulk_unread_split(subject, own_nicks)[net.slug]["#chan"] ==
+               %{messages: 0, events: 1}
+    end
+
+    test "excludes the subject's OWN terminal self-rename via meta.new_nick (#532 A/H1)" do
+      user = user_fixture()
+      subject = {:user, user.id}
+      attrs = %{user_id: user.id}
+      net = network_fixture()
+
+      a = insert_message(attrs, net.id, "#chan", 1)
+
+      # Own self-NICK: EventRouter persists the :nick_change with
+      # sender=OLD and meta.new_nick=NEW; the live own_nick is the NEW
+      # one, so only the meta.new_nick clause catches this row. It must
+      # NOT count (else every /nick left a permanent $server +1 — the
+      # exact #532 symptom). sender != own_nick here, proving the clause
+      # is not a no-op the sender check already covers.
+      {:ok, _} =
+        ScrollbackHelpers.insert(
+          Map.merge(attrs, %{
+            network_id: net.id,
+            channel: "#chan",
+            server_time: 2,
+            kind: :nick_change,
+            sender: "oldvjt",
+            body: nil,
+            meta: %{new_nick: "vjt"}
+          })
+        )
+
+      # A PEER rename (meta.new_nick is someone else) must still count.
+      {:ok, _} =
+        ScrollbackHelpers.insert(
+          Map.merge(attrs, %{
+            network_id: net.id,
+            channel: "#chan",
+            server_time: 3,
+            kind: :nick_change,
+            sender: "bob",
+            body: nil,
+            meta: %{new_nick: "carol"}
+          })
+        )
+
+      {:ok, _} = ReadCursor.set(subject, net.id, "#chan", a.id)
+
+      own_nicks = %{net.slug => {net.id, "vjt"}}
+
+      assert ReadCursor.bulk_unread_split(subject, own_nicks)[net.slug]["#chan"] ==
+               %{messages: 0, events: 1}
     end
   end
 

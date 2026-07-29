@@ -671,6 +671,7 @@ defmodule Grappa.Scrollback do
       |> where([m], m.network_id == ^network_id)
       |> channel_or_dm_where(channel, own_nick)
       |> where([m], m.id > ^after_id)
+      |> exclude_own_presence(own_nick)
       # S17: the content bucket derives from `@content_kinds` (schema
       # SSOT) via Ecto's `in` — which renders the same
       # `kind IN (?, ?, ?)` predicate the hand-maintained raw-SQL list
@@ -687,6 +688,54 @@ defmodule Grappa.Scrollback do
       {0, n}, acc -> %{acc | events: n}
     end)
   end
+
+  # #532 A — the subject's OWN presence/control rows are never "unread" to
+  # them: leaving a channel (self-PART), a KICK they issued, or renaming
+  # themselves is an action they performed, not something to catch up on.
+  # Excludes rows that are BOTH non-content (`kind not in @content_kinds`)
+  # AND the subject's own presence, matched two ways because a rename splits
+  # identity across the row:
+  #
+  #   * `nick_fold(sender) == canonical_nick(own_nick)` — a self-PART or a
+  #     KICK the subject issued (`sender` is the current/live nick), and a
+  #     case-only self-rename (folds to the live nick).
+  #   * `nick_fold(meta.new_nick) == canonical_nick(own_nick)` — a genuine
+  #     self-rename's `:nick_change` row is persisted with `sender = OLD
+  #     nick` and `meta.new_nick = NEW nick` (EventRouter fan-out to every
+  #     shared channel + `$server`); the live nick is the NEW one, so the
+  #     `sender` clause misses it. Matching `new_nick` catches the TERMINAL
+  #     rename (`new_nick` == live nick), killing the recurring `$server`
+  #     "+1" every `/nick` left behind and the rename-then-part strand.
+  #
+  # so the `events` bucket no longer strands a permanent "1" behind an own
+  # leave. CONTENT rows are untouched (own content still counts toward
+  # `messages`; C's notify predicate — a separate concern — handles own
+  # content for the badge). Derive-don't-duplicate: no cursor is moved, so
+  # any legitimate unread CONTENT that arrived before the leave survives
+  # (and #532 B surfaces it), and it is timing-independent — the self-PART
+  # audit row is never counted whether or not the upstream echo has landed.
+  # Same rule applied in `ReadCursor.bulk_unread_split/2` (the #396
+  # cold-load twin). Boundary: an INTERMEDIATE row of a multi-hop rename
+  # (`alice→bob→vjt`: the `alice→bob` row folds to neither `alice`'s old
+  # sender nor `vjt`'s live nick) still counts and self-heals on the next
+  # view — a rare, narrow gap. `own_nick == nil` (unbound network) → no
+  # nick to match → no exclusion.
+  @spec exclude_own_presence(Ecto.Query.t(), String.t() | nil) :: Ecto.Query.t()
+  defp exclude_own_presence(query, own_nick) when is_binary(own_nick) do
+    folded = Identifier.canonical_nick(own_nick)
+
+    where(
+      query,
+      [m],
+      not (m.kind not in ^@content_kinds and
+             (Identifier.nick_fold(m.sender) == ^folded or
+                (not is_nil(fragment("json_extract(?, '$.new_nick')", m.meta)) and
+                   Identifier.nick_fold(fragment("json_extract(?, '$.new_nick')", m.meta)) ==
+                     ^folded)))
+    )
+  end
+
+  defp exclude_own_presence(query, nil), do: query
 
   @doc """
   Returns up to `limit` unread CONTENT rows (`id > after_id`) for the
