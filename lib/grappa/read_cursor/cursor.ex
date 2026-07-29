@@ -94,15 +94,18 @@ defmodule Grappa.ReadCursor.Cursor do
     )
   end
 
-  # UX-4 bucket A — defense-in-depth canonicalisation. Mirrors
-  # `Grappa.Scrollback.Message.changeset/2`. Nicks (DM-shape windows)
-  # pass through unchanged because `Identifier.canonical_channel/1`
-  # only folds sigil-prefixed channel names.
+  # #532 D — defense-in-depth canonicalisation, SHAPE-APPROPRIATE. Was
+  # `canonical_channel/1` (UX-4 bucket A), which is a no-op for a DM-peer
+  # nick — so a nick-keyed cursor stored whatever casing reached the
+  # changeset, forking one DM window into one row per casing. The write
+  # boundary (`ReadCursor.set/4`) now pre-folds via `canonical_target/1`;
+  # this last-line-of-defence fold uses the same function so ANY writer
+  # that builds this changeset directly still lands the canonical key.
   @spec canonicalize_channel(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   defp canonicalize_channel(changeset) do
     case get_change(changeset, :channel) do
       ch when is_binary(ch) ->
-        put_change(changeset, :channel, Identifier.canonical_channel(ch))
+        put_change(changeset, :channel, Identifier.canonical_target(ch))
 
       _ ->
         changeset

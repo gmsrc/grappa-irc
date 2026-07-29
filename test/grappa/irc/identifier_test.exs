@@ -338,6 +338,42 @@ defmodule Grappa.IRC.IdentifierTest do
     end
   end
 
+  describe "canonical_target/1 (shape-appropriate fold — GH #532 D)" do
+    test "channel-shaped targets fold exactly like canonical_channel/1" do
+      for name <- ["#Chan", "&Local", "!ABCDE", "+Modey", "#Chan[1]"] do
+        assert Identifier.canonical_target(name) == Identifier.canonical_channel(name)
+      end
+
+      assert Identifier.canonical_target("#Chan") == "#chan"
+    end
+
+    test "nick-shaped targets fold like canonical_nick/1 — the D fix" do
+      # A DM window is keyed by a NICK. `canonical_channel/1` is a no-op for
+      # a nick (sigil-gated), so the write path used to store raw casing and
+      # fork one window into N cursor rows. `canonical_target/1` routes a
+      # nick through `canonical_nick/1` so the write key matches the
+      # case-insensitive read key.
+      assert Identifier.canonical_target("NickTemp") == Identifier.canonical_nick("NickTemp")
+      assert Identifier.canonical_target("NickTemp") == "nicktemp"
+    end
+
+    test "nick shape is where it DIVERGES from canonical_channel/1" do
+      # This divergence IS the bug D fixes: canonical_channel leaves a nick
+      # untouched, canonical_target folds it.
+      assert Identifier.canonical_channel("NickTemp") == "NickTemp"
+      assert Identifier.canonical_target("NickTemp") == "nicktemp"
+    end
+
+    test "the $server pseudo-channel is stable (fold is a no-op)" do
+      assert Identifier.canonical_target("$server") == "$server"
+    end
+
+    test "passes non-binary through" do
+      assert Identifier.canonical_target(nil) == nil
+      assert Identifier.canonical_target(:atom) == :atom
+    end
+  end
+
   describe "valid_network_slug?/1" do
     test "accepts lowercase alphanum + dash + underscore" do
       assert Identifier.valid_network_slug?("azzurra")

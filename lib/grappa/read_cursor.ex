@@ -123,10 +123,11 @@ defmodule Grappa.ReadCursor do
   @spec get(subject(), integer(), String.t()) :: Cursor.t() | nil
   def get(subject, network_id, channel)
       when is_integer(network_id) and is_binary(channel) and channel != "" do
-    # UX-4 bucket A — canonicalise channel at the read boundary so a
-    # cic-side `#Chan` lookup hits the canonical `#chan` cursor row.
-    # Sigil-aware; nick-shape DM windows pass through unchanged.
-    channel = Identifier.canonical_channel(channel)
+    # #532 D — canonicalise the window key SHAPE-APPROPRIATELY: a channel
+    # folds via canonical_channel, a DM-peer nick via canonical_nick. Using
+    # canonical_channel alone was a no-op for nicks, so a `NickTemp` lookup
+    # missed the folded `nicktemp` cursor row the read path resolves to.
+    channel = Identifier.canonical_target(channel)
 
     Cursor
     |> subject_filter(subject)
@@ -170,10 +171,13 @@ defmodule Grappa.ReadCursor do
   def set(subject, network_id, channel, message_id)
       when is_integer(network_id) and is_binary(channel) and channel != "" and
              is_integer(message_id) and message_id > 0 do
-    # UX-4 bucket A — canonicalise once at the entry boundary so every
-    # downstream call (`message_belongs?/4` validator + `do_set/4`
-    # → `get/3` + `Cursor.changeset/2`) observes the canonical key.
-    channel = Identifier.canonical_channel(channel)
+    # #532 D — canonicalise once at the entry boundary, SHAPE-APPROPRIATELY
+    # (channel via canonical_channel, DM-peer nick via canonical_nick),
+    # so every downstream call (`message_belongs?/4` validator + `do_set/4`
+    # → `get/3` + `Cursor.changeset/2`) observes the ONE canonical key the
+    # read path resolves to. Before this the nick branch was a no-op and a
+    # DM window accumulated one cursor row PER CASING, each stale forever.
+    channel = Identifier.canonical_target(channel)
 
     if message_belongs?(subject, network_id, channel, message_id) do
       do_set(subject, network_id, channel, message_id)
@@ -466,7 +470,8 @@ defmodule Grappa.ReadCursor do
   def force_set(subject, network_id, channel, message_id)
       when is_integer(network_id) and is_binary(channel) and channel != "" and
              is_integer(message_id) and message_id > 0 do
-    channel = Identifier.canonical_channel(channel)
+    # #532 D — same shape-appropriate window-key fold as `set/4`.
+    channel = Identifier.canonical_target(channel)
 
     if message_belongs?(subject, network_id, channel, message_id) do
       force_write(subject, network_id, channel, message_id)
@@ -483,8 +488,8 @@ defmodule Grappa.ReadCursor do
   `old`), so `WindowCounts` derives the count from `cursor || 0`.
 
   Case-insensitive on both nicks (ASCII fold, #121/#525). The cursor
-  `channel` is stored case-preserved (`canonical_channel/1` is a no-op for
-  a bare nick) and matched fold-wise here, mirroring
+  `channel` is stored CANONICAL (folded via `Identifier.canonical_target/1`
+  at the write boundary, #532 D) and matched fold-wise here, mirroring
   `Scrollback.rename_dm_peer/4`. `fold(old) == fold(new)` (a case-only
   change) is a noop — the fold already resolves. A nick-collision (a
   cursor already folds to `new`, i.e. a merge into an existing DM) keeps
@@ -526,7 +531,12 @@ defmodule Grappa.ReadCursor do
 
         true ->
           try do
-            Repo.update_all(old_query, set: [channel: new_nick])
+            # #532 D — store the CANONICAL nick key, not the raw new_nick.
+            # The cursor write boundary now folds nick-shaped keys
+            # (`Identifier.canonical_target/1`), so a raw-cased channel here
+            # would re-fork the window the moment the next `set/4` folds its
+            # lookup and misses this row.
+            Repo.update_all(old_query, set: [channel: folded_new])
           rescue
             Ecto.ConstraintError ->
               # A concurrent set/4 (channel process, NOT the serialized

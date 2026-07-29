@@ -264,6 +264,41 @@ defmodule Grappa.IRC.Identifier do
 
   def canonical_nick(other), do: other
 
+  @doc """
+  Returns the canonical fold of a Grappa **window key** — a target that
+  may be EITHER a channel or a DM-peer nick — picking the shape-appropriate
+  fold (GH #532 D).
+
+  A window key is stored/looked-up as one column (`read_cursors.channel`),
+  but the two shapes route through different canonicalisers at the read
+  boundary: channels via `canonical_channel/1` and DM-peer nicks via
+  `canonical_nick/1`. `canonical_channel/1` alone is sigil-gated, so it is
+  a NO-OP for a nick — which let the cursor WRITE path store a nick key at
+  whatever casing the client sent, forking one DM window into one cursor
+  row PER CASING while the read path (`Scrollback.channel_or_dm_where/3`)
+  resolved them all case-insensitively via `canonical_nick/1`. The stale
+  rows then reported unread forever with no UI action able to reach them.
+
+  This is the single SHAPE-AWARE canonicaliser the cursor write boundary
+  uses so the write key and the read key derive from the same fold:
+
+    * sigil-shaped (`# & ! +`) → `canonical_channel/1`
+    * everything else (nick, `$server`) → `canonical_nick/1`
+
+  The two agree byte-for-byte on channel-shaped input (the sigils sit
+  outside the fold set), so this is purely additive over
+  `canonical_channel/1` for channels and CORRECTIVE for nicks. Non-binary
+  passes through (mirrors both delegates).
+  """
+  @spec canonical_target(term()) :: term()
+  def canonical_target(<<sigil::utf8, _::binary>> = name)
+      when sigil in [?#, ?&, ?!, ?+],
+      do: canonical_channel(name)
+
+  def canonical_target(name) when is_binary(name), do: canonical_nick(name)
+
+  def canonical_target(other), do: other
+
   # The shared ASCII byte fold — the SINGLE in-memory casemapping for
   # both nicks (#121) and channels (#364), corrected to plain ASCII in
   # #525. Azzurra (bahamut) advertises `CASEMAPPING=ascii` in 005 AND

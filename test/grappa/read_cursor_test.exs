@@ -24,7 +24,7 @@ defmodule Grappa.ReadCursorTest do
   """
   use Grappa.DataCase, async: true
 
-  alias Grappa.{Accounts, Networks, ReadCursor, ScrollbackHelpers, Visitors}
+  alias Grappa.{Accounts, Networks, ReadCursor, Repo, ScrollbackHelpers, Visitors}
   alias Grappa.PubSub.Topic
   alias Grappa.ReadCursor.Cursor
 
@@ -104,6 +104,47 @@ defmodule Grappa.ReadCursorTest do
       {:ok, _} = ReadCursor.set({:user, alice.id}, net.id, "#sniffo", msg.id)
 
       assert nil == ReadCursor.get({:user, bob.id}, net.id, "#sniffo")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # DM-window nick fold — one window ⇒ one cursor row (#532 D)
+  # ---------------------------------------------------------------------------
+
+  describe "set/4 + get/3 — DM peer key folds shape-appropriately (#532 D)" do
+    test "two casings of a DM peer resolve to ONE cursor row and advance it" do
+      user = user_fixture()
+      net = network_fixture()
+      # Outbound DM rows in the peer window (channel = peer, dm_with nil).
+      m1 = insert_message(%{user_id: user.id}, net.id, "NickTemp", 1)
+      m2 = insert_message(%{user_id: user.id}, net.id, "NickTemp", 2)
+
+      # The client sends the peer window key at two different casings — the
+      # #532 prod evidence (`NickTemporaneo` then `nicktemporaneo`). Both
+      # must land on ONE cursor row (the read path already resolves the
+      # window case-insensitively via canonical_nick/1).
+      {:ok, _} = ReadCursor.set({:user, user.id}, net.id, "NickTemp", m1.id)
+      {:ok, _} = ReadCursor.set({:user, user.id}, net.id, "nicktemp", m2.id)
+
+      query = from(c in Cursor, where: c.user_id == ^user.id and c.network_id == ^net.id)
+      rows = Repo.all(query)
+      assert length(rows) == 1
+      assert hd(rows).last_read_message_id == m2.id
+      # Stored key is the fold, not the raw casing the caller happened to send.
+      assert hd(rows).channel == "nicktemp"
+    end
+
+    test "get/3 resolves a DM window regardless of the casing looked up" do
+      user = user_fixture()
+      net = network_fixture()
+      msg = insert_message(%{user_id: user.id}, net.id, "NickTemp", 1)
+
+      {:ok, _} = ReadCursor.set({:user, user.id}, net.id, "NickTemp", msg.id)
+
+      assert %Cursor{last_read_message_id: id} =
+               ReadCursor.get({:user, user.id}, net.id, "NICKTEMP")
+
+      assert id == msg.id
     end
   end
 
