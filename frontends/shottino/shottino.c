@@ -330,6 +330,12 @@ struct inline_media {
      * every 50 ms frame would saturate the tty for no benefit. */
     int drawn_y, drawn_x;
     bool drawn;
+    /* The frame that last PAINTED this picture, against app->frame_seq.
+     * `drawn` says a placement exists somewhere on the terminal; this
+     * says whether the current frame still wants it there. The two
+     * disagreeing is the definition of a stale placement — see
+     * media_placements_drop_locked(). */
+    unsigned long painted_frame;
     /* Animation. `rgb` holds frame_count frames back to back, each
      * rows*2 x cols pixels; frame_count == 1 is a still and every path
      * below degrades to exactly what it did before. */
@@ -478,6 +484,9 @@ struct app {
     bool preview_pending;
     size_t media_count;
     size_t media_next;              /* recycle cursor */
+    /* Bumped once per draw(), so a picture can say which frame last
+     * painted it. Wrapping after 2^64 frames is not a scenario. */
+    unsigned long frame_seq;
     /* Index into `media` per log row, or -1. Parallel to log[] like the
      * mention/pending/id arrays. */
     int log_media[LOG_LINES];
@@ -4149,6 +4158,39 @@ static void media_slot_reset(struct inline_media *m) {
     memset(m, 0, sizeof(*m));
 }
 
+/* Drop every terminal-graphics placement, and the image data behind it.
+ *
+ * A protocol image (kitty) lives ABOVE the cell grid: ncurses has no
+ * model of it, cannot erase it, and will happily paint the new channel's
+ * text around a picture from the channel you just left. Nothing but this
+ * escape removes it — which is why leaving a window, or returning from a
+ * preview, has to say so explicitly.
+ *
+ * `d=A` frees the stored image data as well as the placement. The
+ * placement alone (`d=a`) leaves the pixels in the terminal's image
+ * store for the rest of the session, so every preview and every picture
+ * scrolled past would add to it — the long-session growth this is meant
+ * to avoid. Nothing is lost by letting it go: the payload is re-sent
+ * whenever a picture is placed again.
+ *
+ * Every slot is therefore marked undrawn, and the next frame re-places
+ * whatever is genuinely on screen. Caller holds app->lock. */
+static void media_placements_drop_locked(struct app *app) {
+    fputs("\033_Ga=d,d=A\033\\", stdout);
+    fflush(stdout);
+    for (size_t i = 0; i < app->media_count; i++) app->media[i].drawn = false;
+}
+
+/* Is anything placed on the terminal that the frame just drawn did not
+ * paint? That — and not "did the window change" — is what makes a
+ * placement stale, so it is the only question asked. Caller holds
+ * app->lock. */
+static bool media_placements_stale_locked(const struct app *app) {
+    for (size_t i = 0; i < app->media_count; i++)
+        if (app->media[i].drawn && app->media[i].painted_frame != app->frame_seq) return true;
+    return false;
+}
+
 /* Claim a slot for `url`, recycling the oldest when full. Caller holds
  * app->lock. Returns the index, or -1 when inline media is off. */
 static int media_claim_locked(struct app *app, const char *url, bool is_video) {
@@ -4527,6 +4569,9 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
                     if (m->frame_count > 1)
                         m->frame = media_frame_advance(m->frame, m->frame_count, m->frame_ms,
                                                        monotonic_ms(), &m->next_frame_ms);
+                    /* Claimed by THIS frame, so the reconciliation at the
+                     * end of draw() knows the placement is still wanted. */
+                    m->painted_frame = app->frame_seq;
                     draw_inline_media(m, img_y, x + 2, row_skip, spend, width - 4);
                 } else if (m->state == IM_FAILED) {
                     draw_text(img_y, x + 2, width - 4, CP_MUTED, A_DIM,
@@ -4568,6 +4613,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
 static void draw(struct app *app) {
     pthread_mutex_lock(&app->lock);
     erase();
+    app->frame_seq++;
     app->link_region_count = 0;
     app->msg_region_count = 0;
     int rows, cols;
@@ -4846,6 +4892,18 @@ static void draw(struct app *app) {
             draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
                       "type to filter | Up/Down | Enter replies | Esc cancels");
     }
+    /* Reconcile the terminal's graphics placements with what this frame
+     * actually drew.
+     *
+     * A placement outlives the cells around it: switch windows and the
+     * picture from the channel you left is still hanging over the one you
+     * opened, because nothing in ncurses' model knows it is there. So the
+     * question is asked once per frame, generally — "is anything placed
+     * that this frame did not paint?" — rather than at each of the half
+     * dozen sites that change what is visible (/win, /close, scroll,
+     * resize, split, a slot recycled out from under a row). One of those
+     * sites will always be the one nobody remembered. */
+    if (media_placements_stale_locked(app)) media_placements_drop_locked(app);
     move(cursor_y, cursor_x);
     pthread_mutex_unlock(&app->lock);
     refresh();
@@ -6277,8 +6335,21 @@ static void show_preview(struct app *app) {
         term_cols = ws.ws_col;
     }
 
+    /* Suspend curses WITHOUT leaving the alternate screen.
+     *
+     * endwin() was the obvious call and the wrong one: it emits rmcup, so
+     * everything below — the image, the art, the "press any key" line —
+     * was written onto the user's NORMAL screen, under the shell they
+     * started shottino from. It is still there when they quit, and every
+     * preview adds another one. reset_shell_mode() restores the tty modes
+     * endwin() would have restored and stops there, so the preview draws
+     * over the alternate screen, where it belongs: the repaint below
+     * erases it, and quitting takes the whole screen with it.
+     *
+     * (Verified against ncurses rather than assumed: endwin() emits
+     * \033[?1049l, reset_shell_mode() does not.) */
     def_prog_mode();
-    endwin();
+    reset_shell_mode();
     mouse_reporting(false);
     fputs("\033[2J\033[H", stdout);
     int url_w = term_cols - 10;
@@ -6306,10 +6377,14 @@ static void show_preview(struct app *app) {
         wait_for_dismiss_key();
     }
 
-    /* Kitty placements persist above the cell grid; drop them so the chat
-     * repaint underneath is clean (a no-op on other terminals). */
-    fputs("\033_Ga=d\033\\", stdout);
-    fflush(stdout);
+    /* The preview's own placement has to go, or it floats over the chat
+     * repaint underneath (a no-op on terminals without the protocol). The
+     * inline pictures go with it — they are placements too, and the
+     * escape cannot spare them — so they are marked undrawn and the next
+     * frame puts back the ones that are actually on screen. */
+    pthread_mutex_lock(&app->lock);
+    media_placements_drop_locked(app);
+    pthread_mutex_unlock(&app->lock);
 
     free(payload);
     free(rgb);

@@ -589,6 +589,44 @@ TEST(reply_leaves_a_line_it_did_not_write_alone) {
     CHECK(strstr(out, "10:30 meeting: bring the thing") != NULL);
 }
 
+/* Terminal graphics placements are not part of ncurses' model of the
+ * screen: erase() does not remove them and a repaint does not cover
+ * them. The client therefore has to notice when one has outlived the
+ * frame that wanted it — a picture from the channel you just left,
+ * floating over the one you just opened. */
+TEST(a_placement_the_frame_did_not_paint_is_stale) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    app->media_count = 2;
+    app->frame_seq = 7;
+
+    /* Nothing placed: nothing to reconcile. */
+    CHECK(!media_placements_stale_locked(app));
+
+    /* Placed, and repainted by the frame that just ran: still wanted. */
+    app->media[0].drawn = true;
+    app->media[0].painted_frame = 7;
+    CHECK(!media_placements_stale_locked(app));
+
+    /* The next frame does not paint it — /win, a scroll, a close — and
+     * the placement is now hanging over whatever replaced it. */
+    app->frame_seq = 8;
+    CHECK(media_placements_stale_locked(app));
+
+    /* Dropping clears EVERY slot, including the one this frame did
+     * paint: the escape deletes all placements and cannot spare one, so
+     * pretending otherwise would leave a picture the client believes is
+     * on screen and the terminal has already forgotten. */
+    app->media[1].drawn = true;
+    app->media[1].painted_frame = 8;
+    media_placements_drop_locked(app);
+    CHECK(!app->media[0].drawn);
+    CHECK(!app->media[1].drawn);
+    CHECK(!media_placements_stale_locked(app));
+    free(app);
+}
+
 /* The roster pane honours its scroll offset. The keys that drive it are
  * a terminal question, but "the offset moves the list" is not. */
 TEST(roster_pane_draws_from_the_offset) {
@@ -724,6 +762,7 @@ int main(void) {
     RUN(reply_cites_the_original_and_keeps_what_was_typed);
     RUN(reply_citation_is_flattened_and_cut_on_a_word);
     RUN(reply_leaves_a_line_it_did_not_write_alone);
+    RUN(a_placement_the_frame_did_not_paint_is_stale);
     RUN(roster_pane_draws_from_the_offset);
     RUN(the_decoder_says_what_animates_not_the_url);
     endwin();
