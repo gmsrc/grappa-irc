@@ -13,7 +13,7 @@
 // archive paths (`Scrollback.channel_or_dm_where` / `list_archive`)
 // matched/grouped the peer RAW instead of folding — while delete already
 // folded ("delete either → deletes both"). Fixed on BOTH sides:
-//   * server: fold the DM peer on the read + archive paths (rfc1459),
+//   * server: fold the DM peer on the read + archive paths (ascii casemapping),
 //   * cic: re-key incoming DMs via `canonicalQueryNick` (this spec).
 //
 // This e2e pins the LIVE routing (the reply appears in the opened window,
@@ -55,8 +55,8 @@ test("incoming reply from a differently-cased nick lands in the opened query win
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
 
   // Peer registers with the PROPER-case nick — its PRIVMSG source prefix
-  // on the wire carries that casing (rfc1459 makes it the SAME nick as
-  // the lowercase window the user opens below).
+  // on the wire carries that casing (the ascii casemapping makes it the
+  // SAME nick as the lowercase window the user opens below).
   const peer = await IrcPeer.connect({ nick: PEER_NICK_PROPER });
   try {
     await peer.join(CHANNEL);

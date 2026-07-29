@@ -89,15 +89,18 @@ defmodule Grappa.QueryWindowsTest do
       assert id1 == id2
     end
 
-    test "rfc1459: 'nick[1]' and 'nick{1}' resolve to the same row (#121)" do
-      # Azzurra (bahamut) folds [ ] \\ ~ -> { } | ^. Plain ASCII lower()
-      # would fork these into two DM windows; rfc1459 collapses them.
+    test "ASCII: 'nick[1]'/'NICK[1]' are one row; the brace twin is distinct (#525)" do
+      # Azzurra (bahamut) is CASEMAPPING=ascii — folds A-Z only, brackets
+      # preserved. A case variant collapses; `nick{1}` is a DIFFERENT nick.
       user = user_fixture()
       net = network_fixture()
 
       assert {:ok, %Window{id: id1}} = QueryWindows.open({:user, user.id}, net.id, "nick[1]", user.name)
-      assert {:ok, %Window{id: id2}} = QueryWindows.open({:user, user.id}, net.id, "nick{1}", user.name)
+      assert {:ok, %Window{id: id2}} = QueryWindows.open({:user, user.id}, net.id, "NICK[1]", user.name)
       assert id1 == id2
+
+      assert {:ok, %Window{id: id3}} = QueryWindows.open({:user, user.id}, net.id, "nick{1}", user.name)
+      assert id3 != id1
     end
 
     test "different nicks on the same (user, network) produce separate rows" do
@@ -318,17 +321,19 @@ defmodule Grappa.QueryWindowsTest do
       refute QueryWindows.open?({:user, user.id}, net.id, "SeenServ")
     end
 
-    test "folds rfc1459: an open 'seenserv' matches 'SeenServ' and 'nick[1]' matches 'nick{1}'" do
+    test "folds ASCII case: 'seenserv' matches 'SeenServ', 'nick[1]' matches 'NICK[1]' (#525)" do
       user = user_fixture()
       net = network_fixture()
       {:ok, _} = QueryWindows.open({:user, user.id}, net.id, "seenserv", user.name)
       {:ok, _} = QueryWindows.open({:user, user.id}, net.id, "nick[1]", user.name)
 
-      # rfc1459 case-fold: besides A-Z it folds `[ ] \ ~` -> `{ } | ^` — the
-      # #400 re-key MUST match the folded uniqueness index (#121/#372) or a
-      # `SeenServ` reply forks from a `seenserv` window the operator opened.
+      # ASCII case-fold (A-Z only, brackets preserved) — the #400 re-key MUST
+      # match the folded uniqueness index (#121/#372) or a `SeenServ` reply
+      # forks from a `seenserv` window the operator opened.
       assert QueryWindows.open?({:user, user.id}, net.id, "SeenServ")
-      assert QueryWindows.open?({:user, user.id}, net.id, "nick{1}")
+      assert QueryWindows.open?({:user, user.id}, net.id, "NICK[1]")
+      # The brace twin is a DIFFERENT nick (#525) — NOT open.
+      refute QueryWindows.open?({:user, user.id}, net.id, "nick{1}")
     end
 
     test "is scoped to (subject, network) — a window on another network is not seen" do
@@ -431,15 +436,16 @@ defmodule Grappa.QueryWindowsTest do
       assert [%Window{id: ^id, target_nick: "Foo"}] = result[net.id]
     end
 
-    test "rfc1459 fold: 'nick[1]' window renames when matched via 'nick{1}'" do
+    test "ASCII fold: 'nick[1]' window renames when matched via 'NICK[1]' (#525)" do
       user = user_fixture()
       net = network_fixture()
 
       {:ok, %Window{id: id}} = QueryWindows.open({:user, user.id}, net.id, "nick[1]", user.name)
 
-      # bahamut folds [ -> {, so "nick{1}" matches the "nick[1]" row.
+      # bahamut is CASEMAPPING=ascii (A-Z only), so "NICK[1]" matches the
+      # "nick[1]" row (a brace twin would NOT).
       assert {:ok, :renamed} =
-               QueryWindows.rename({:user, user.id}, net.id, "nick{1}", "renamed")
+               QueryWindows.rename({:user, user.id}, net.id, "NICK[1]", "renamed")
 
       result = QueryWindows.list_for_subject({:user, user.id})
       assert [%Window{id: ^id, target_nick: "renamed"}] = result[net.id]

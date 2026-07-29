@@ -183,7 +183,7 @@ defmodule Grappa.Networks.CredentialXorTest do
       assert "nick already taken on this network" in errors_on(cs).nick
     end
 
-    test "the collision is rfc1459-folded (Mezmerize == mezmerize == nick[1]/nick{1})", %{
+    test "the collision is ASCII-folded (Mez[1] == MEZ[1]; brace is distinct) (#525)", %{
       network: network,
       v1: v1,
       v2: v2
@@ -198,14 +198,14 @@ defmodule Grappa.Networks.CredentialXorTest do
                })
                |> Repo.insert()
 
-      # `[` folds to `{` under rfc1459 — a different display case + a
-      # bracket variant is the SAME identity, so this must collide.
+      # ASCII fold (A-Z only, brackets preserved) — a different display CASE
+      # of the same bracket nick is the SAME identity, so this must collide.
       assert {:error, cs} =
                %Credential{}
                |> Credential.changeset(%{
                  visitor_id: v2.id,
                  network_id: network.id,
-                 nick: "mez{1}",
+                 nick: "MEZ[1]",
                  auth_method: :none
                })
                |> Repo.insert()

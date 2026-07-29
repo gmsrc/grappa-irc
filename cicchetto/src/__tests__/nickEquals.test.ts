@@ -1,25 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { nickEquals, normalizeNick, asciiFold } from "../lib/nickEquals";
+import { asciiFold, nickEquals, normalizeNick } from "../lib/nickEquals";
 
-// #364 cross-surface S13 — ONE client nick fold, pinned to the server.
-// `asciiFold` is the single client-side fold and must stay byte-for-byte
-// with `Grappa.IRC.Identifier.canonical_nick/1`. This enumerated table is
-// the drift gate: a server-side fold change (or an accidental Unicode
-// regression) makes it go RED loudly, exactly like `nick_fold_sql/1`'s
-// migration pin does server-side.
+// #525 — ONE client nick fold, pinned to the server. `asciiFold` is the
+// single client-side fold and must stay byte-for-byte with
+// `Grappa.IRC.Identifier.canonical_nick/1` (bahamut is CASEMAPPING=ascii:
+// A-Z only). This enumerated table is the drift gate: a server-side fold
+// change (or an accidental Unicode / bracket regression) makes it go RED
+// loudly, exactly like `nick_fold_sql/1`'s migration pin does server-side.
 describe("asciiFold — single client fold, mirror of server canonical_nick/1", () => {
   it("folds A-Z to a-z", () => {
     expect(asciiFold("ABCDEFGHIJKLMNOPQRSTUVWXYZ")).toBe("abcdefghijklmnopqrstuvwxyz");
   });
 
-  it("folds the four rfc1459 national chars [ ] \\ ~ -> { } | ^", () => {
-    expect(asciiFold("[")).toBe("{");
-    expect(asciiFold("]")).toBe("}");
-    expect(asciiFold("\\")).toBe("|");
-    expect(asciiFold("~")).toBe("^");
+  it("does NOT fold [ ] \\ ~ — bahamut is CASEMAPPING=ascii (#525)", () => {
+    // Reverses the #364 over-fold: these are DISTINCT to the ircd.
+    expect(asciiFold("[")).toBe("[");
+    expect(asciiFold("]")).toBe("]");
+    expect(asciiFold("\\")).toBe("\\");
+    expect(asciiFold("~")).toBe("~");
   });
 
-  it("leaves already-folded targets, digits and punctuation untouched", () => {
+  it("leaves brace/pipe/caret, digits and punctuation untouched", () => {
     expect(asciiFold("{}|^")).toBe("{}|^");
     expect(asciiFold("0-9_a")).toBe("0-9_a");
   });
@@ -41,11 +42,11 @@ describe("normalizeNick", () => {
     expect(normalizeNick("VJT-Grappa")).toBe("vjt-grappa");
   });
 
-  // #364 E/S13 — normalizeNick is layered on asciiFold, so it folds the
-  // bracket range too (mirrors the server); previously ASCII-downcase-only.
-  it("folds the rfc1459 bracket range", () => {
-    expect(normalizeNick("Foo[1]")).toBe("foo{1}");
-    expect(normalizeNick("A\\B~C")).toBe("a|b^c");
+  // #525 — normalizeNick is layered on asciiFold: case folds, the bracket
+  // range does NOT (mirrors the ircd's CASEMAPPING=ascii).
+  it("folds case only, not the bracket range", () => {
+    expect(normalizeNick("Foo[1]")).toBe("foo[1]");
+    expect(normalizeNick("A\\B~C")).toBe("a\\b~c");
   });
 
   it("is idempotent", () => {
@@ -65,12 +66,14 @@ describe("nickEquals", () => {
     expect(nickEquals("alice", "alice")).toBe(true);
   });
 
-  // #364 E/S13 — case AND rfc1459 bracket differences collapse to one
-  // identity, matching the server's canonical_nick/1.
-  it("treats case- and bracket-differing nicks as one", () => {
-    expect(nickEquals("Ni[k", "ni{k")).toBe(true);
-    expect(nickEquals("Foo[1]", "FOO{1}")).toBe(true);
-    expect(nickEquals("a\\b~c", "A|B^C")).toBe(true);
+  // #525 — case folds, but bracket-vs-brace does NOT: `foo[1]` and
+  // `foo{1}` are DISTINCT nicks to the ircd (CASEMAPPING=ascii), so cic
+  // keeps them apart too (reverses the #364 over-fold that merged them).
+  it("keeps bracket-vs-brace nicks distinct, folds case only", () => {
+    expect(nickEquals("Foo[1]", "foo[1]")).toBe(true);
+    expect(nickEquals("Foo[1]", "foo{1}")).toBe(false);
+    expect(nickEquals("a\\b", "a|b")).toBe(false);
+    expect(nickEquals("x~y", "x^y")).toBe(false);
   });
 
   it("returns false for distinct nicks", () => {

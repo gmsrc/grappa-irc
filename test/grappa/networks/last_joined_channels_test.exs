@@ -232,14 +232,14 @@ defmodule Grappa.Networks.LastJoinedChannelsTest do
       assert merged == ["#BOFH", "#grappa"]
     end
 
-    test "dedupes rfc1459 bracket variants (#364 — bahamut casemapping)" do
-      # `#foo[1]` and `#foo{1}` are ONE channel to bahamut (rfc1459 folds
-      # [ -> {). The old String.downcase dedup left them distinct, forking
-      # the snapshot into a duplicate autojoin. The merge must fold via
-      # canonical_channel/1 so the snapshot variant is recognised as
-      # already covered by the operator entry (whose case wins).
+    test "dedupes ASCII case variants (#525 — CASEMAPPING=ascii)" do
+      # `#foo[1]` and `#FOO[1]` are ONE channel to bahamut (A-Z fold,
+      # brackets preserved). The merge must fold via canonical_channel/1 so
+      # the snapshot variant is recognised as already covered by the
+      # operator entry (whose case wins). The brace twin `#foo{1}` would be
+      # a DIFFERENT channel (#525).
       autojoin = ["#foo[1]"]
-      last_joined = ["#foo{1}", "#grappa"]
+      last_joined = ["#FOO[1]", "#grappa"]
 
       merged = do_merge(autojoin, last_joined)
 

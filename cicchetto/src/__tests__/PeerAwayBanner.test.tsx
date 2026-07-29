@@ -38,11 +38,12 @@ describe("PeerAwayBanner", () => {
     expect(banner.textContent).toContain("AFK");
   });
 
-  // #364 E/S5 — store key + banner lookup fold the rfc1459 bracket
-  // range, so `Foo[1]` (set) and `foo{1}` (lookup) are one peer.
-  it("matches on the rfc1459 fold (bracket range) between store and lookup", () => {
+  // #525 — store key + banner lookup fold CASE only (CASEMAPPING=ascii),
+  // so `Foo[1]` (set) and `foo[1]` (lookup) are one peer; a brace twin
+  // `foo{1}` would be distinct.
+  it("matches on the ASCII fold (case only) between store and lookup", () => {
     setPeerAway("azzurra", "Foo[1]", "brb");
-    render(() => <PeerAwayBanner networkSlug="azzurra" peer="foo{1}" />);
+    render(() => <PeerAwayBanner networkSlug="azzurra" peer="foo[1]" />);
     const banner = screen.getByTestId("peer-away-banner");
     expect(banner.textContent).toContain("brb");
   });

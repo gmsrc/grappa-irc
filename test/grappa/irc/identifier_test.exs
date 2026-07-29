@@ -175,7 +175,7 @@ defmodule Grappa.IRC.IdentifierTest do
     end
   end
 
-  describe "canonical_channel/1 (rfc1459 casemapping — GH #364)" do
+  describe "canonical_channel/1 (ASCII casemapping — GH #525)" do
     test "ASCII-downcases sigil-prefixed channel names" do
       assert Identifier.canonical_channel("#Chan") == "#chan"
       assert Identifier.canonical_channel("#CHAN") == "#chan"
@@ -185,14 +185,15 @@ defmodule Grappa.IRC.IdentifierTest do
       assert Identifier.canonical_channel("+Modeless") == "+modeless"
     end
 
-    test "folds rfc1459 bracket chars [ ] \\ ~ -> { } | ^ in the channel body" do
-      # #364 E/irc-S4: channels converge to bahamut's CASEMAPPING=rfc1459,
-      # the SAME fold nicks use (#121). `#chan[1]` and `#chan{1}` are ONE
-      # channel to the ircd, so they must resolve to one window.
-      assert Identifier.canonical_channel("#chan[1]") == "#chan{1}"
-      assert Identifier.canonical_channel("#a\\b") == "#a|b"
-      assert Identifier.canonical_channel("&tilde~") == "&tilde^"
-      assert Identifier.canonical_channel("#Foo[Bar]") == "#foo{bar}"
+    test "does NOT fold bracket chars [ ] \\ ~ (bahamut is CASEMAPPING=ascii — #525)" do
+      # #525: Azzurra advertises AND implements CASEMAPPING=ascii, so
+      # `#chan[1]` and `#chan{1}` are DISTINCT channels to the ircd — the
+      # fold must keep them apart (only A-Z folds). Reverses the #364
+      # over-fold that merged the two into one window.
+      assert Identifier.canonical_channel("#chan[1]") == "#chan[1]"
+      assert Identifier.canonical_channel("#a\\b") == "#a\\b"
+      assert Identifier.canonical_channel("&tilde~") == "&tilde~"
+      assert Identifier.canonical_channel("#Foo[Bar]") == "#foo[bar]"
     end
 
     test "does NOT touch the fold targets { } | ^ (collision-free)" do
@@ -240,29 +241,26 @@ defmodule Grappa.IRC.IdentifierTest do
     end
 
     test "is idempotent" do
-      assert Identifier.canonical_channel(Identifier.canonical_channel("#Chan[1]")) == "#chan{1}"
+      assert Identifier.canonical_channel(Identifier.canonical_channel("#Chan[1]")) == "#chan[1]"
     end
 
-    property "folds any sigil-prefixed ASCII channel per rfc1459, and is idempotent" do
+    property "folds any sigil-prefixed ASCII channel per ASCII casemapping, and is idempotent" do
       sigils = StreamData.member_of([?#, ?&, ?!, ?+])
       # Body bytes: printable ASCII incl. the bracket chars so the
-      # rfc1459 fold is exercised. Channel-legality is irrelevant here —
-      # comma/etc. are fold-invariant, so they pass through both the
-      # implementation and the oracle identically (same generator shape
-      # as the canonical_nick property below).
+      # non-fold of `[ ] \\ ~` is exercised. Channel-legality is
+      # irrelevant here — comma/etc. are fold-invariant, so they pass
+      # through both the implementation and the oracle identically (same
+      # generator shape as the canonical_nick property below).
       body_bytes = StreamData.list_of(StreamData.integer(?!..?~), min_length: 1, max_length: 20)
 
       check all(sigil <- sigils, cs <- body_bytes) do
         input = <<sigil>> <> :binary.list_to_bin(cs)
         canon = Identifier.canonical_channel(input)
 
-        expected =
-          input
-          |> String.downcase()
-          |> String.replace("[", "{")
-          |> String.replace("]", "}")
-          |> String.replace("\\", "|")
-          |> String.replace("~", "^")
+        # ASCII fold = downcase A-Z only. The generator is ASCII-only, so
+        # String.downcase/1 (Unicode-aware) coincides with the byte-level
+        # ASCII fold here — brackets are left untouched.
+        expected = String.downcase(input)
 
         assert canon == expected
         # Round-trip stability.
@@ -282,21 +280,21 @@ defmodule Grappa.IRC.IdentifierTest do
     end
   end
 
-  describe "canonical_nick/1 (rfc1459 casemapping — GH #121)" do
+  describe "canonical_nick/1 (ASCII casemapping — GH #525)" do
     test "ASCII-downcases A-Z" do
       assert Identifier.canonical_nick("Mezmerize") == "mezmerize"
       assert Identifier.canonical_nick("MEZMERIZE") == "mezmerize"
       assert Identifier.canonical_nick("mezmerize") == "mezmerize"
     end
 
-    test "folds rfc1459 bracket chars [ ] \\ ~ -> { } | ^" do
-      # bahamut (azzurra) runs rfc1459 casemapping: besides A-Z it folds
-      # the four 'national' chars. Two nicks differing only by these are
-      # the SAME nick to the ircd.
-      assert Identifier.canonical_nick("nick[1]") == "nick{1}"
-      assert Identifier.canonical_nick("a\\b") == "a|b"
-      assert Identifier.canonical_nick("tilde~") == "tilde^"
-      assert Identifier.canonical_nick("Foo[Bar]") == "foo{bar}"
+    test "does NOT fold bracket chars [ ] \\ ~ (bahamut is CASEMAPPING=ascii — #525)" do
+      # #525: bahamut folds ONLY A-Z (CASEMAPPING=ascii). Two nicks
+      # differing only in a bracket-vs-brace are DISTINCT to the ircd —
+      # merging them is the #525 "ghost in the nicklist" bug.
+      assert Identifier.canonical_nick("nick[1]") == "nick[1]"
+      assert Identifier.canonical_nick("a\\b") == "a\\b"
+      assert Identifier.canonical_nick("tilde~") == "tilde~"
+      assert Identifier.canonical_nick("Foo[Bar]") == "foo[bar]"
     end
 
     test "does NOT touch the fold targets { } | ^ (collision-free)" do
@@ -319,10 +317,10 @@ defmodule Grappa.IRC.IdentifierTest do
     end
 
     test "is idempotent" do
-      assert Identifier.canonical_nick(Identifier.canonical_nick("Foo[Bar]")) == "foo{bar}"
+      assert Identifier.canonical_nick(Identifier.canonical_nick("Foo[Bar]")) == "foo[bar]"
     end
 
-    property "matches ASCII-downcase + bracket-fold for any ASCII nick, and is idempotent" do
+    property "matches ASCII downcase (A-Z only) for any ASCII nick, and is idempotent" do
       bytes = StreamData.list_of(StreamData.integer(?!..?~), min_length: 1, max_length: 20)
 
       check all(cs <- bytes) do
@@ -330,13 +328,10 @@ defmodule Grappa.IRC.IdentifierTest do
         canon = Identifier.canonical_nick(input)
         assert Identifier.canonical_nick(canon) == canon
 
-        expected =
-          input
-          |> String.downcase()
-          |> String.replace("[", "{")
-          |> String.replace("]", "}")
-          |> String.replace("\\", "|")
-          |> String.replace("~", "^")
+        # ASCII fold = downcase A-Z only; the generator is ASCII-only, so
+        # String.downcase/1 coincides with the byte-level fold (brackets
+        # `[ ] \\ ~` are left untouched, unlike the old rfc1459 fold).
+        expected = String.downcase(input)
 
         assert canon == expected
       end
@@ -538,76 +533,85 @@ defmodule Grappa.IRC.IdentifierTest do
     end
   end
 
-  describe "nick_fold_sql/1 — fold-drift pin (review 2026-07-19)" do
-    # The rfc1459 fold SQL lives in three places that MUST stay
-    # byte-identical or SQLite silently stops using the folded
-    # expression indexes (dedup then quietly breaks): the
-    # `nick_fold/1` query fragment, `nick_fold_sql/1` (used by
-    # Notify's conflict_target), and each folded-index migration's
-    # self-contained copy. This test pins them to one canonical
-    # string; a future edit to any site fails loudly here.
-    @canonical "replace(replace(replace(replace(lower(COL), '[', '{'), ']', '}'), '\\', '|'), '~', '^')"
+  describe "nick_fold_sql/1 — ASCII fold pin (#525)" do
+    # #525 narrowed the server-wide fold from rfc1459 (A-Z + the four
+    # bracket chars `[ ] \\ ~` → `{ } | ^`) to plain ASCII (A-Z only),
+    # because Azzurra (bahamut) is CASEMAPPING=ascii. The fold SQL now
+    # lives in two runtime sources (`nick_fold/1` fragment,
+    # `nick_fold_sql/1`) plus the live folded-index migrations, which MUST
+    # stay byte-identical or SQLite silently stops using the expression
+    # indexes (the on-conflict target then quietly breaks). This block
+    # pins them to one canonical string AND guards against a future
+    # reintroduction of the rfc1459 fold.
+    @canonical "lower(COL)"
 
-    test "nick_fold_sql/1 renders the canonical fold" do
+    # The #525 re-fold migration — recreates every live folded index with
+    # the ASCII `lower()` expression. Pinned by name so its up-path index
+    # literals stay tied to nick_fold_sql/1.
+    @refold_migration "priv/repo/migrations/20260729120000_refold_identifiers_ascii.exs"
+
+    # Pre-#525 migrations legitimately embed the rfc1459 four-replace fold
+    # (correct when written; #525 supersedes their LIVE indexes). The
+    # re-fold migration's own down/0 restores the rfc1459 indexes as its
+    # documented inverse, so it is allow-listed too. Anything NEWER than
+    # the re-fold must NOT carry the rfc1459 literal.
+    @rfc1459_marker "replace(replace(replace(replace(lower("
+
+    test "nick_fold_sql/1 renders the canonical ASCII fold" do
       assert Identifier.nick_fold_sql("COL") == @canonical
-      assert Identifier.nick_fold_sql("nick") == String.replace(@canonical, "COL", "nick")
+      assert Identifier.nick_fold_sql("nick") == "lower(nick)"
+      assert Identifier.nick_fold_sql("target_nick") == "lower(target_nick)"
 
       # #393 — the DM-peer covering index folds the COALESCE window key
       # `COALESCE(dm_with, channel)` (the SAME expression `list_archive/3`'s
       # GROUP BY uses). `nick_fold_sql/1` takes any column-expression, so the
-      # folded-COALESCE index literal is single-sourced here too; the
-      # scrollback DDL byte-identity test pins the migration to this string.
+      # folded-COALESCE index literal is single-sourced here too.
       assert Identifier.nick_fold_sql("COALESCE(dm_with, channel)") ==
-               String.replace(@canonical, "COL", "COALESCE(dm_with, channel)")
+               "lower(COALESCE(dm_with, channel))"
     end
 
-    test "every folded-index migration embeds the canonical fold verbatim" do
-      # Migration .exs SOURCE escapes the backslash (`'\\'`), so the
-      # source-side pattern doubles it before matching raw file text.
-      source_side = fn col ->
-        @canonical |> String.replace("COL", col) |> String.replace("\\", "\\\\")
-      end
+    test "the #525 re-fold migration's up path embeds the ASCII fold from nick_fold_sql/1" do
+      source = File.read!(@refold_migration)
 
-      candidates = [source_side.("\#{col}"), source_side.("target_nick"), source_side.("nick")]
-
-      migrations =
-        "priv/repo/migrations/*.exs"
-        |> Path.wildcard()
-        |> Enum.filter(&(File.read!(&1) =~ "replace(replace(replace(replace(lower("))
-
-      assert migrations != [], "no folded-index migrations found — glob broken?"
-
-      for path <- migrations do
-        source = File.read!(path)
-
-        assert Enum.any?(candidates, &String.contains?(source, &1)),
-               "#{path} embeds a fold expression that drifted from Identifier.nick_fold_sql/1"
+      # Every live folded index the migration recreates, tied to the single
+      # source so a fold change reddens here if the migration drifts.
+      for col <- ["target_nick", "nick", "COALESCE(dm_with, channel)"] do
+        assert String.contains?(source, Identifier.nick_fold_sql(col)),
+               "#{@refold_migration} is missing #{Identifier.nick_fold_sql(col)}"
       end
     end
 
-    test "no lib/ module hand-copies the fold literal outside the single source (#364 E/S2)" do
-      # Migrations must embed the literal verbatim (they run before the
-      # app is loaded, so they can't call nick_fold_sql/1) — but runtime
-      # `lib/` code has NO such excuse. Every runtime caller MUST derive
-      # the conflict-target / index fold via `Identifier.nick_fold_sql/1`
-      # so a fold change can't leave one module's `:unsafe_fragment` out
-      # of step with the index (SQLite drops an expression index the
-      # moment the query-side string differs by one byte → "ON CONFLICT
-      # clause does not match" at the first contended upsert). The fold
-      # literal is therefore allowed in exactly ONE lib/ file: Identifier
-      # itself (the source of nick_fold_sql/1 + the nick_fold/1 fragment).
-      fold_marker = "replace(replace(replace(replace(lower("
+    test "no migration newer than the #525 re-fold reintroduces the rfc1459 fold" do
+      # Lexicographic basename compare == chronological (YYYYMMDDHHMMSS
+      # prefix). The re-fold migration and everything before it may carry
+      # the rfc1459 literal (historical indexes / the re-fold's inverse
+      # down/0); anything after must not.
+      cutoff = Path.basename(@refold_migration)
 
       offenders =
-        "lib/**/*.ex"
+        "priv/repo/migrations/*.exs"
         |> Path.wildcard()
-        |> Enum.filter(fn path ->
-          File.read!(path) =~ fold_marker and not (path =~ "grappa/irc/identifier.ex")
+        |> Enum.map(&Path.basename/1)
+        |> Enum.filter(fn base ->
+          base > cutoff and File.read!("priv/repo/migrations/#{base}") =~ @rfc1459_marker
         end)
 
       assert offenders == [],
-             "these lib/ modules hand-copy the rfc1459 fold literal instead of " <>
-               "Grappa.IRC.Identifier.nick_fold_sql/1: #{inspect(offenders)}"
+             "these migrations reintroduce the rfc1459 fold after #525: #{inspect(offenders)}"
+    end
+
+    test "no lib/ module carries the rfc1459 fold literal (runtime folds via nick_fold*)" do
+      # Post-#525 the fold is a trivial `lower()`; every runtime caller
+      # derives it via nick_fold/1 / nick_fold_sql/1, and NO lib/ file —
+      # not even Identifier itself — hand-writes the old rfc1459
+      # four-replace form. Reintroducing it anywhere in lib/ reddens here.
+      offenders =
+        "lib/**/*.ex"
+        |> Path.wildcard()
+        |> Enum.filter(&(File.read!(&1) =~ @rfc1459_marker))
+
+      assert offenders == [],
+             "these lib/ modules carry the rfc1459 fold literal: #{inspect(offenders)}"
     end
   end
 end

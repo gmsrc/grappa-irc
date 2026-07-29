@@ -68,10 +68,11 @@ defmodule GrappaWeb.NotifyControllerTest do
 
     resp =
       conn
-      |> post("/networks/#{network.slug}/notify", %{"nicks" => ["foo{1}"]})
+      |> post("/networks/#{network.slug}/notify", %{"nicks" => ["FOO[1]"]})
       |> json_response(201)
 
-    # First-add display form wins; still one row.
+    # Case-variant is fold-equal (#525: ASCII fold, brackets preserved);
+    # first-add display form wins; still one row.
     assert [%{"nick" => "Foo[1]"}] = resp["entries"]
 
     listed = conn |> get("/networks/#{network.slug}/notify") |> json_response(200)
@@ -133,7 +134,7 @@ defmodule GrappaWeb.NotifyControllerTest do
     |> json_response(201)
 
     assert conn
-           |> delete("/networks/#{network.slug}/notify/FOO{1}")
+           |> delete("/networks/#{network.slug}/notify/FOO[1]")
            |> json_response(200) == %{"ok" => true}
 
     listed = conn |> get("/networks/#{network.slug}/notify") |> json_response(200)

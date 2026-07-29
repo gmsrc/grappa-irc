@@ -576,32 +576,36 @@ defmodule Grappa.ReadCursorTest do
     end
   end
 
-  describe "#364 E/irc-S4 — rfc1459 channel cursor convergence" do
-    test "set/get converge across rfc1459 bracket spellings — one cursor, no fork" do
+  describe "#525 — ASCII channel cursor convergence" do
+    test "set/get converge across ASCII case spellings — one cursor, no fork" do
       user = user_fixture()
       net = network_fixture()
-      m1 = insert_message(%{user_id: user.id}, net.id, "#chan[1]", 1)
-      m2 = insert_message(%{user_id: user.id}, net.id, "#chan{1}", 2)
+      m1 = insert_message(%{user_id: user.id}, net.id, "#Chan[1]", 1)
+      m2 = insert_message(%{user_id: user.id}, net.id, "#CHAN[1]", 2)
 
-      # Both messages land under the folded key (canonical storage).
-      assert m1.channel == "#chan{1}"
-      assert m2.channel == "#chan{1}"
+      # Both messages land under the folded key (canonical storage: A-Z
+      # lower, brackets preserved — CASEMAPPING=ascii).
+      assert m1.channel == "#chan[1]"
+      assert m2.channel == "#chan[1]"
 
       {:ok, c1} = ReadCursor.set({:user, user.id}, net.id, "#chan[1]", m1.id)
 
-      # A set under the brace spelling hits the SAME cursor row (no fork
-      # past the UNIQUE (subject, network, channel) index) and advances.
-      {:ok, c2} = ReadCursor.set({:user, user.id}, net.id, "#chan{1}", m2.id)
+      # A set under a case variant hits the SAME cursor row (no fork past
+      # the UNIQUE (subject, network, channel) index) and advances.
+      {:ok, c2} = ReadCursor.set({:user, user.id}, net.id, "#CHAN[1]", m2.id)
 
       assert c1.id == c2.id
       assert c2.last_read_message_id == m2.id
 
-      # get under any spelling (incl. mixed case) returns that one cursor.
-      for spelling <- ["#chan[1]", "#chan{1}", "#CHAN[1]"] do
+      # get under any case spelling returns that one cursor.
+      for spelling <- ["#chan[1]", "#CHAN[1]", "#Chan[1]"] do
         cursor = ReadCursor.get({:user, user.id}, net.id, spelling)
         assert cursor.id == c1.id, "spelling #{spelling} did not converge"
         assert cursor.last_read_message_id == m2.id
       end
+
+      # The brace twin is a DIFFERENT channel — it does NOT converge.
+      assert ReadCursor.get({:user, user.id}, net.id, "#chan{1}") == nil
     end
   end
 
@@ -645,13 +649,13 @@ defmodule Grappa.ReadCursorTest do
       assert ReadCursor.get(subject, net.id, "Guest87449") == nil
     end
 
-    test "rfc1459 fold: a 'nick[1]' cursor migrates when matched via 'nick{1}'" do
+    test "ASCII fold: a 'nick[1]' cursor migrates when matched via 'NICK[1]' (#525)" do
       user = user_fixture()
       net = network_fixture()
       subject = {:user, user.id}
       msg = seed_dm_cursor(%{user_id: user.id}, subject, net.id, "nick[1]", "vjt-grappa", 1)
 
-      assert :ok = ReadCursor.rename_dm_peer(subject, net.id, "nick{1}", "renamed")
+      assert :ok = ReadCursor.rename_dm_peer(subject, net.id, "NICK[1]", "renamed")
 
       assert %Cursor{last_read_message_id: id} = ReadCursor.get(subject, net.id, "renamed")
       assert id == msg.id

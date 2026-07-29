@@ -713,13 +713,12 @@ describe("compose submit — slash command dispatch", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  // #510 — the focus key MUST match the server's rfc1459 canonical fold
-  // (Identifier.canonical_channel: besides A-Z, `[ ] \ ~` → `{ } | ^`),
-  // else a bracket/mixed-case first channel focuses a key that never
-  // matches the folded window_state. Mirror it via `canonicalChannel`
-  // (cic's twin) — a bare toLowerCase would leave `[` unfolded and fork
-  // the window. `#Foo[1]` → `#foo{1}` distinguishes the two.
-  it("/join folds the FIRST channel under rfc1459 for focus, not bare toLowerCase (#510)", async () => {
+  // #510/#525 — the focus key MUST match the server's canonical fold
+  // (Identifier.canonical_channel: CASEMAPPING=ascii, A-Z only), else a
+  // mixed-case first channel focuses a key that never matches the folded
+  // window_state. Mirror it via `canonicalChannel` (cic's twin).
+  // `#Foo[1]` → `#foo[1]` (case only; `[` is NOT folded post-#525).
+  it("/join folds the FIRST channel's case for focus (ASCII, brackets kept) (#510/#525)", async () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.postJoin).mockResolvedValue();
@@ -732,11 +731,11 @@ describe("compose submit — slash command dispatch", () => {
 
     // Server folds each element itself; the POST carries the raw list verbatim.
     expect(api.postJoin).toHaveBeenCalledWith("tok", "freenode", "#Foo[1],#bar", null);
-    // Focus is the rfc1459 fold of the first channel (`[` → `{`, `F` → `f`),
-    // matching the server-stored window key. toLowerCase would give #foo[1].
+    // Focus is the ASCII fold of the first channel (`F` → `f`; `[` stays),
+    // matching the server-stored window key (#525: CASEMAPPING=ascii).
     expect(sel.setSelectedChannel).toHaveBeenCalledWith({
       networkSlug: "freenode",
-      channelName: "#foo{1}",
+      channelName: "#foo[1]",
       kind: "channel",
     });
   });
@@ -854,14 +853,14 @@ describe("compose tabComplete (members-only, irssi-exact)", () => {
     expect(compose.tabComplete(k, "al", 2, true)).toBeNull();
   });
 
-  it("folds the rfc1459 bracket range on the prefix match (#412)", async () => {
-    // bahamut CASEMAPPING=rfc1459: `[`→`{`, so a member `Foo[1]` and the
-    // typed `foo{` are the SAME nick — completion MUST match. A bare
-    // toLowerCase leaves the bracket unfolded and the completion silently
-    // fails on the common `nick[away]` shape.
+  it("folds case (not the bracket range) on the prefix match (#525)", async () => {
+    // #525 CASEMAPPING=ascii: `[` is NOT folded, so a member `Foo[1]` and
+    // the typed `foo[` are the SAME nick (case-only) and completion
+    // matches on the common `nick[away]` shape; a brace `foo{` would be a
+    // DIFFERENT nick.
     await setMembers(["Foo[1]"]);
     const compose = await import("../lib/compose");
-    const r = compose.tabComplete(k, "foo{", 4, true);
+    const r = compose.tabComplete(k, "foo[", 4, true);
     expect(r?.newInput).toBe("Foo[1]: ");
   });
 

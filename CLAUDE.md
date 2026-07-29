@@ -62,33 +62,42 @@ Key invariants — break only with deliberate cause + DESIGN_NOTES entry:
   `(network_id, channel, server_time DESC)`-indexed; a future
   `CHATHISTORY` listener facade (Phase 6) is a mechanical query
   translation, not a redesign.
-- **Channel names are case-folded under rfc1459 (GH #364).** bahamut
-  (azzurra, `CASEMAPPING=rfc1459`) folds channels the SAME way it folds
-  nicks: besides `A-Z` it maps `[ ] \ ~` → `{ } | ^`. The single source
-  of truth is `Grappa.IRC.Identifier.canonical_channel/1` (sigil-gated),
-  which shares ONE byte-level `fold_rfc1459/1` primitive with
-  `canonical_nick/1` (#121). Every channel-keyed table (`messages`,
-  `read_cursors`, `network_credentials.autojoin_channels` /
-  `last_joined_channels`, archive, `network_featured_channels`) STORES
-  the channel canonical (fold at write) and every lookup canonicalizes
-  the input then compares plain `==` — so `#Chan`/`#chan`/`#CHAN` AND
-  `#chan[1]`/`#chan{1}` resolve to one window, while non-ASCII (`#CAFÉ`
-  vs `#café`) stays DISTINCT (ASCII-only fold, per the ircd). This is
-  the **channel pattern**: canonical storage + plain `==` + one-shot
-  backfill (`fold_channels_rfc1459` / the earlier lowercase backfill) —
-  NOT #121's expression-index pattern, which is only for
-  `query_windows.target_nick`, a NICK stored RAW for display. A new
-  channel-keyed table or query MUST canonicalize via
-  `canonical_channel/1` (never a bare `String.downcase`, which fails to
-  fold the bracket chars) or it silently forks windows. **Display
-  exception (case-preserved, like nicks):** `channel_directory.name` is
-  stored verbatim (the /LIST spelling) and folded only at the
-  featured-label compare (`ChannelDirectory.Wire.mark_featured/2`).
-- **Nicks are case-folded under rfc1459 (GH #121).** Azzurra runs
-  bahamut (`CASEMAPPING=rfc1459`): besides `A-Z` it folds `[ ] \ ~` →
-  `{ } | ^`. The single source of truth is
-  `Grappa.IRC.Identifier.canonical_nick/1` (in-memory, ASCII-byte-level)
-  and its query-side twin `Identifier.nick_fold/1` (Ecto fragment). EVERY
+- **Channel names are case-folded under ASCII casemapping (GH #525,
+  correcting #364).** bahamut (azzurra) advertises AND implements
+  `CASEMAPPING=ascii`: it folds channels the SAME way it folds nicks —
+  `A-Z` ONLY, leaving `[ ] \ ~` UNTOUCHED. The single source of truth is
+  `Grappa.IRC.Identifier.canonical_channel/1` (sigil-gated), which shares
+  ONE byte-level `fold_ascii/1` primitive with `canonical_nick/1` (#121).
+  Every channel-keyed table (`messages`, `read_cursors`,
+  `network_credentials.autojoin_channels` / `last_joined_channels`,
+  archive, `network_featured_channels`) STORES the channel canonical
+  (fold at write) and every lookup canonicalizes the input then compares
+  plain `==` — so `#Chan`/`#chan`/`#CHAN` resolve to one window, while
+  `#chan[1]`/`#chan{1}` AND non-ASCII (`#CAFÉ` vs `#café`) stay DISTINCT
+  (the ircd keeps them apart; #364 wrongly merged the bracket pair — the
+  #525 over-fold, reproduced live). This is the **channel pattern**:
+  canonical storage + plain `==` + one-shot backfill — NOT #121's
+  expression-index pattern, which is only for `query_windows.target_nick`,
+  a NICK stored RAW for display. A new channel-keyed table or query MUST
+  canonicalize via `canonical_channel/1` (never a bare `String.downcase`,
+  which Unicode-over-folds non-ASCII) or it silently forks/merges
+  windows. **History stays put (#525):** the earlier
+  `fold_channels_rfc1459` migration folded stored channel VALUES to
+  braces; the #525 `refold_identifiers_ascii` migration does NOT rewrite
+  them (the original bracket spelling is unrecoverable) — a brace-spelled
+  channel keeps its scrollback, a bracket-spelled one starts a fresh
+  window. **Display exception (case-preserved, like nicks):**
+  `channel_directory.name` is stored verbatim (the /LIST spelling) and
+  folded only at the featured-label compare
+  (`ChannelDirectory.Wire.mark_featured/2`).
+- **Nicks are case-folded under ASCII casemapping (GH #121, narrowed to
+  ASCII by #525).** Azzurra runs bahamut, which advertises AND implements
+  `CASEMAPPING=ascii`: it folds `A-Z` ONLY, leaving `[ ] \ ~` UNTOUCHED
+  (`foo[1]` and `foo{1}` are DISTINCT nicks — #121/#364 wrongly merged
+  them, the #525 over-fold / "ghost in the nicklist"). The single source
+  of truth is `Grappa.IRC.Identifier.canonical_nick/1` (in-memory,
+  ASCII-byte-level) and its query-side twin `Identifier.nick_fold/1`
+  (Ecto fragment, now plain `lower()`). EVERY
   server-side nick compare routes through one of them — visitor +
   query_windows lookups (UNIQUE **expression** indexes on the fold, NOT a
   denormalised column), the WHOIS/userhost/whowas caches, dm_peer, the

@@ -22411,3 +22411,87 @@ No server, no wire change — ships on a `--cic` bundle. Both themes inherit via
 the existing `--fg`/`--border`/`--accent` vars. The dead `.home-pane-network-
 register` / `.home-pane-network-actions` / `.home-pane-featured-intro` classes
 were removed, not left as drift.
+
+---
+
+## 2026-07-29 — #525: the fold is ASCII, not rfc1459 (Azzurra is `CASEMAPPING=ascii`)
+
+Sonic raised it on IRC, then vjt measured rather than assumed: the whole stack
+folded nicks **and** channels with the **rfc1459** table (`A-Z` plus the four
+"national" chars `[ ] \ ~` → `{ } | ^`), on the premise "Azzurra runs bahamut,
+`CASEMAPPING=rfc1459`". That premise is wrong. Azzurra advertises
+`CASEMAPPING=ascii` in every 005 (68/68 in the bot's raw log; zero `rfc1459`)
+AND its ircd folds ASCII in the table too — `src/match.c` `tolowertab[]` maps
+`A-Z` → `a-z` and leaves `[ \ ] ^ ~` untouched. Live check: joining `#vjtclaude[t]`
+and `#vjtclaude{t}` from one connection yields **two** channels, each with its
+own JOIN echo + 353/366. So grappa **over-folded** — the exact window-merge #364
+set out to prevent, in the opposite direction. Worst symptom (Sonic, reproduced
+on prod): two people whose nicks differ only in `[`-vs-`{` collapsed into one
+nicklist row; when one quit, the other — still connected, still talking —
+**vanished** from the list ("I'm a ghost") until a manual `/names`.
+
+**Decision (vjt, with Sonic + morph concurring): option 1 — fold ASCII
+everywhere, server AND client, same release.** Rationale on record: a bouncer is
+not an ircd. It matches no bans and enforces no uniqueness, so being *too lax*
+(two identifiers distinct that the network would merge) costs far less than
+*merging two the network keeps apart*; and on a genuine rfc1459 network the lax
+case can't even arise — the ircd refuses the second nick. Server and client
+cannot ship apart: a server folding ASCII while the client folds rfc1459
+reproduces the same merge one layer up.
+
+**Shipped in two commits (rename split from behaviour, for clean review/revert):**
+
+1. **Pure rename** — `fold_rfc1459/1` → `fold_ascii/1` (server, private) and
+   `rfc1459Fold` → `asciiFold` (cic, the one client mirror + its importers).
+   Zero behaviour change; suite stayed green. Calling a function that will fold
+   plain ASCII "rfc1459" was a lie.
+2. **Behaviour** — `fold_ascii/1` drops the four bracket clauses (A-Z only);
+   `Identifier.nick_fold/1` + `nick_fold_sql/1` become plain `lower()`; cic's
+   `asciiFold` drops the four `.replace()`s. All ~40 server call sites and every
+   cic consumer inherit the change through the two single-source primitives.
+   Nick **colours** now differ for bracket vs brace nicks (the hash consumes the
+   folded form) — expected, not a regression.
+
+**The issue undercounted the SQL sites.** It named four migrations; only two host
+a LIVE unique fold index. The full set of live fold-expression indexes — all
+recreated `rfc1459 → lower()` by the new `refold_identifiers_ascii` migration —
+is SIX across FOUR tables: `query_windows` ×2 (unique), `notify_entries` ×2
+(unique — **missed by the issue**), `network_credentials` ×1 (unique), and the
+#393 `messages` DM-peer COALESCE covering index ×2 (non-unique — **missed by the
+issue**). `query_windows` + `notify` build their on-conflict `:unsafe_fragment`
+from `nick_fold_sql/1` at compile time, so had the notify index been left
+rfc1459 the first contended upsert would throw "ON CONFLICT clause does not
+match"; the covering index would silently fall back to a full scan. The
+`visitors` folded index was already dropped in phase 7 (#211). Channel-VALUE
+tables (`messages.channel`, `read_cursors`, `network_featured_channels`,
+autojoin/last-joined JSON) are the **channel pattern** (folded value + plain
+index), not expression indexes — nothing to recreate there.
+
+**Migration policy — forward-only, DETECT-and-fail, never guess.** vjt's call:
+no un-merge, no split, no guess-delete. Rows already merged under the wider fold
+can't be un-merged (the original bracket spelling is gone), so history stays put
+— a brace-spelled identifier keeps its scrollback, a bracket-spelled one starts a
+fresh window. Recreating a UNIQUE index with the NARROWER ASCII fold on data that
+was unique under the WIDER rfc1459 fold can **never** collide (rfc1459 folds a
+superset of ASCII; distinct-under-rfc1459 ⟹ distinct-under-ASCII), and vjt
+measured prod (2026-07-29): zero colliding pairs. But a hand-edited / drifted DB
+could hide a masked pair, so the migration runs an ASCII-collision probe on every
+unique branch BEFORE touching any index and **raises loud** (aborting the txn) if
+any group has > 1 row — it never picks a "loser" to delete. On prod that path
+does not fire; it is the difference between a migration that is safe and one that
+merely got lucky. `down/0` restores the rfc1459 indexes (reintroducing the
+over-fold, so pair it with a code revert); being the merging direction it can
+itself fail loud on a genuine bracket-distinct pair, which is honest.
+
+**Pin test redesign.** The old fold-drift pin globbed every migration for the
+rfc1459 four-`replace()` literal and asserted it matched the canonical. Post-#525
+the canonical is `lower(COL)`; historical rfc1459 migrations are immutable and
+superseded, so the pin now (a) pins `nick_fold_sql/1` = `lower(...)`, (b) ties
+the re-fold migration's up-path index literals to `nick_fold_sql/1`, and (c)
+guards that no migration NEWER than the re-fold — and no `lib/` module — carries
+the rfc1459 literal (anti-reintroduction; the historical migrations + the re-fold
+migration's inverse `down/0` are allow-listed by timestamp).
+
+cic mirrors byte-for-byte: `nickEquals.test.ts` stays the client drift gate
+(now enumerating the ASCII table). e2e `nick-case-*` specs use case-only peer
+nicks, so they exercise the unchanged case-insensitivity and needed no flip.

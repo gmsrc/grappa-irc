@@ -189,11 +189,12 @@ defmodule Grappa.WindowCountsTest do
     assert result.severity == :mention
   end
 
-  test "own-sender fold respects rfc1459 casemapping" do
+  test "own-sender fold respects ASCII casemapping (#525)" do
     c = ctx()
     anchor = insert(c, "#chan", st: 1, body: "anchor")
-    # own_nick "foo[bar]"; own-sent under rfc1459-equivalent "foo{bar}".
-    insert(c, "#chan", st: 2, sender: "foo{bar}", body: "foo[bar] wrote this")
+    # own_nick "foo[bar]"; own-sent under the case-variant "FOO[BAR]"
+    # (ASCII fold-equal — brackets are NOT folded post-#525).
+    insert(c, "#chan", st: 2, sender: "FOO[BAR]", body: "foo[bar] wrote this")
 
     result = snap(c, "#chan", anchor.id, "foo[bar]")
     assert result.mentions == 0

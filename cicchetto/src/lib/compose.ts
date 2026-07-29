@@ -23,7 +23,7 @@ import { clearMentionsBundle } from "./mentionsWindow";
 import { splitMessageLines } from "./messageLines";
 import { openModeModal } from "./modeModal";
 import { networkBySlug, networkIdBySlug, user } from "./networks";
-import { nickEquals, asciiFold } from "./nickEquals";
+import { asciiFold, nickEquals } from "./nickEquals";
 import { ensureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 import { quitAll } from "./quit";

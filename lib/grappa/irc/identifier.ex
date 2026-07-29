@@ -170,46 +170,46 @@ defmodule Grappa.IRC.Identifier do
   def valid_ident?(_), do: false
 
   @doc """
-  Returns the canonical rfc1459-folded form of a channel name — the
-  single source of truth for case-insensitive channel matching. Shares
-  ONE fold primitive with `canonical_nick/1` (`fold_ascii/1`, #364),
-  so the whole server casemaps channels and nicks one way. Non-channel
-  input (nicks, the synthetic `$server` pseudo-channel, anything not
-  prefixed with a chanstring sigil `#&+!`) is passed through verbatim —
-  case is meaningful for nicks (`dm_with`, sender badge display) and the
+  Returns the canonical ASCII-folded form of a channel name — the single
+  source of truth for case-insensitive channel matching. Shares ONE fold
+  primitive with `canonical_nick/1` (`fold_ascii/1`), so the whole server
+  casemaps channels and nicks one way. Non-channel input (nicks, the
+  synthetic `$server` pseudo-channel, anything not prefixed with a
+  chanstring sigil `#&+!`) is passed through verbatim — case is
+  meaningful for nicks (`dm_with`, sender badge display) and the
   `$server` marker is fixed-case by intent.
 
-  ## Why rfc1459 (#364 — reverses the UX-4-A Unicode downcase)
+  ## Why plain ASCII (#525 — corrects the #364 rfc1459 over-fold)
 
-  UX-4 bucket A first case-folded channels with Unicode
-  `String.downcase/1` (RFC 2812 §1.3, ASCII-plus-Unicode). That
-  diverged from bahamut (azzurra, `CASEMAPPING=rfc1459`) TWO ways, both
-  forking or merging windows against the ircd's own rule:
+  Azzurra runs **bahamut**, which advertises `CASEMAPPING=ascii` in 005
+  AND implements plain ASCII folding in the ircd (`src/match.c`
+  `tolowertab[]` maps `A-Z` → `a-z` and leaves `[ \\ ] ^ ~` untouched).
+  #121/#364 assumed rfc1459 (also fold `[ ] \\ ~` → `{ } | ^`) and so
+  OVER-folded: `#chan[1]` and `#chan{1}` — two DISTINCT channels to this
+  ircd — collapsed onto one grappa window / scrollback / cursor (the #525
+  window-merge, verified live against prod). #525 narrows the fold to the
+  ircd's real rule: ONLY `A-Z`, brackets left alone.
 
-    * it FAILED to fold the four rfc1459 "national" chars `[ ] \\ ~` →
-      `{ } | ^`, so `#chan[1]` and `#chan{1}` — one channel to the
-      ircd — forked into two windows / scrollback streams / cursors.
-    * it OVER-folded non-ASCII (`#CAFÉ` → `#café`), merging two
-      channels the ircd's ASCII casemapping keeps distinct.
-
-  #364 converges channels onto the ircd's casemapping: the EXACT
-  byte-level ASCII fold nicks already use (#121), sigil-gated. Sigils
-  (`# & ! +`) sit outside the fold set, so folding the whole name
-  leaves the sigil intact and folds the body identically to a nick.
+  A bouncer is not an ircd — it matches no bans and enforces no
+  uniqueness — so being *too lax* (treating two identifiers as distinct
+  that the network would merge) costs far less than merging two the
+  network keeps apart; on a genuine rfc1459 network the lax case can't
+  even arise (the ircd refuses the second nick). Sigils (`# & ! +`) sit
+  outside `A-Z`, so folding the whole name leaves the sigil intact and
+  folds the body identically to a nick.
 
   ## ASCII-only, by design
 
-  Byte-level ASCII (`A-Z` + the four brackets), NOT Unicode
-  `String.downcase/1` — see `canonical_nick/1` for the full rationale.
-  UTF-8 multibyte (≥ `0x80`) passes untouched, so the fold matches the
-  ASCII-only SQLite `lower()` the backfill migration uses in pure SQL.
+  Byte-level ASCII (`A-Z` only), NOT Unicode `String.downcase/1` — see
+  `canonical_nick/1` for the full rationale. UTF-8 multibyte (≥ `0x80`)
+  passes untouched, so the fold matches the ASCII-only SQLite `lower()`
+  the migrations embed (`#CAFÉ` and `#café` stay DISTINCT, per the ircd).
 
-  Canonicalize at every channel-bearing boundary (`Grappa.Session`
-  entry API, `Grappa.Session.EventRouter` channel-param extraction,
-  schema changesets defense-in-depth, PubSub topic builder, the
-  rfc1459 fold backfill migration) so the rest of the codebase observes
-  one key per channel regardless of upstream-or-input casing.
-  Non-binary input returns unchanged.
+  Canonicalize at every channel-bearing boundary (`Grappa.Session` entry
+  API, `Grappa.Session.EventRouter` channel-param extraction, schema
+  changesets defense-in-depth, PubSub topic builder) so the rest of the
+  codebase observes one key per channel regardless of upstream-or-input
+  casing. Non-binary input returns unchanged.
   """
   @spec canonical_channel(term()) :: term()
   def canonical_channel(<<sigil::utf8, _::binary>> = name)
@@ -219,37 +219,41 @@ defmodule Grappa.IRC.Identifier do
   def canonical_channel(name), do: name
 
   @doc """
-  Returns the canonical rfc1459-folded form of an IRC nickname — the
-  single source of truth for case-insensitive nick matching across the
-  server (GH #121). Use it at EVERY nick comparison/lookup boundary
-  (visitor table lookups, query-window DM keys, self-detection in the
-  event router, WHOIS/userhost/whowas/ban caches).
+  Returns the canonical ASCII-folded form of an IRC nickname — the single
+  source of truth for case-insensitive nick matching across the server
+  (GH #121, narrowed to ASCII in #525). Use it at EVERY nick
+  comparison/lookup boundary (visitor table lookups, query-window DM
+  keys, self-detection in the event router, WHOIS/userhost/whowas/ban
+  caches).
 
-  ## Why rfc1459 (not plain downcase, not RFC 2812)
+  ## Why plain ASCII (not rfc1459, not Unicode downcase, not RFC 2812)
 
-  Azzurra runs **bahamut**, whose `CASEMAPPING` is `rfc1459`: besides
-  ASCII `A-Z`, it folds the four "national" chars `[ ] \\ ~` →
-  `{ } | ^`. Two nicks differing only by those are the SAME nick to
-  the ircd, so the bouncer must treat them identically or it forks
-  windows / spawns duplicate visitor sessions.
+  Azzurra runs **bahamut**, which advertises `CASEMAPPING=ascii` and
+  folds ONLY `A-Z` (`src/match.c` `tolowertab[]` leaves `[ \\ ] ^ ~`
+  untouched). #121 originally assumed `rfc1459` (also folding
+  `[ ] \\ ~` → `{ } | ^`); #525 measured the ircd and corrected it. Two
+  nicks differing only in bracket-vs-brace are DISTINCT to this ircd, so
+  the bouncer must keep them apart or it merges two people onto one
+  identity — the #525 "ghost in the nicklist" symptom (a present, talking
+  user vanishes when their bracket-variant twin quits).
 
   Shares ONE fold primitive (`fold_ascii/1`) with `canonical_channel/1`
-  (#364): channels converge onto the SAME rfc1459 casemapping, since
+  (#364): channels converge onto the SAME ASCII casemapping, since
   bahamut applies it to channel names as well as nicks.
 
   ## ASCII-only, by design
 
   Folding is **byte-level ASCII** — `A-Z` only, NOT Unicode
-  `String.downcase/1`. rfc1459 is defined over the ASCII range; bahamut
-  compares nicks byte-wise. Two reasons this matters:
+  `String.downcase/1`. bahamut compares nicks byte-wise. Two reasons this
+  matters:
 
     * UTF-8 multibyte sequences pass through untouched (their lead +
       continuation bytes are all ≥ `0x80`, never colliding with the
-      `A-Z`/bracket range `0x41..0x7e`), so the fold is UTF-8-safe.
+      `A-Z` range `0x41..0x5a`), so the fold is UTF-8-safe.
     * The migration backfill computes the folded key in pure SQL via
-      `replace(...lower(x)...)`; SQLite `lower()` is ASCII-only, so an
-      Elixir Unicode downcase here would diverge from the stored
-      folded column for any non-ASCII nick.
+      `lower(x)`; SQLite `lower()` is ASCII-only, so an Elixir Unicode
+      downcase here would diverge from the stored folded column for any
+      non-ASCII nick.
 
   Non-binary input passes through unchanged (mirrors
   `canonical_channel/1` — the folded-column changeset boundary may see
@@ -260,34 +264,38 @@ defmodule Grappa.IRC.Identifier do
 
   def canonical_nick(other), do: other
 
-  # The shared rfc1459 byte fold — the SINGLE in-memory casemapping for
-  # both nicks (#121) and channels (#364). ASCII `A-Z` → lower, plus the
-  # four "national" chars `[ ] \\ ~` → `{ } | ^`. Byte-level so UTF-8
-  # multibyte (≥ 0x80) passes untouched, matching the ASCII-only SQLite
-  # `lower()` the fold migrations embed. `canonical_nick/1` folds the
-  # whole nick; `canonical_channel/1` folds the sigil-prefixed name (the
-  # sigils are outside the fold set, so they pass straight through).
+  # The shared ASCII byte fold — the SINGLE in-memory casemapping for
+  # both nicks (#121) and channels (#364), corrected to plain ASCII in
+  # #525. Azzurra (bahamut) advertises `CASEMAPPING=ascii` in 005 AND
+  # implements plain ASCII folding in the ircd (`tolowertab[]` leaves
+  # `[ \\ ] ^ ~` untouched), NOT the rfc1459 the stack originally assumed.
+  # So this folds ONLY `A-Z` → lower; the four "national" chars
+  # `[ ] \\ ~` pass through UNCHANGED — the ircd keeps `foo[1]`/`foo{1}`
+  # and `#chan[1]`/`#chan{1}` distinct, so the bouncer must too or it
+  # merges two identities the network keeps apart (the #525 over-fold).
+  # Byte-level so UTF-8 multibyte (≥ 0x80) passes untouched, matching the
+  # ASCII-only SQLite `lower()` the fold migrations embed.
+  # `canonical_nick/1` folds the whole nick; `canonical_channel/1` folds
+  # the sigil-prefixed name (sigils are outside `A-Z`, so they pass
+  # straight through).
   @spec fold_ascii(binary()) :: binary()
   defp fold_ascii(s), do: for(<<c <- s>>, into: "", do: <<fold_ascii_byte(c)>>)
 
   defp fold_ascii_byte(c) when c in ?A..?Z, do: c + 32
-  defp fold_ascii_byte(?[), do: ?{
-  defp fold_ascii_byte(?]), do: ?}
-  defp fold_ascii_byte(?\\), do: ?|
-  defp fold_ascii_byte(?~), do: ?^
   defp fold_ascii_byte(c), do: c
 
   @doc """
-  Ecto query fragment applying the rfc1459 nick fold to a column
+  Ecto query fragment applying the ASCII nick fold to a column
   expression — the **query-side twin** of `canonical_nick/1`, for
-  matching a column against a folded unique index (GH #121).
+  matching a column against a folded unique index (GH #121, #525).
 
   Derives the folded key in SQL so no denormalised column is stored
-  (mirrors how `query_windows` indexes `lower(target_nick)`). ASCII
-  `lower()` + the four bracket `replace()`s; the SQL text MUST stay
-  character-identical to the folded-index expression in the
-  `network_credentials` / `query_windows` migrations, or SQLite won't
-  recognise the query as index-eligible.
+  (mirrors how `query_windows` indexes `lower(target_nick)`). Plain
+  ASCII `lower()` (#525 dropped the four rfc1459 bracket `replace()`s);
+  the SQL text MUST stay character-identical to the folded-index
+  expression in the `network_credentials` / `query_windows` /
+  `notify_entries` migrations, or SQLite won't recognise the query as
+  index-eligible.
 
   The caller must `require Grappa.IRC.Identifier` (macro) and have
   `Ecto.Query` imported (the expanded `fragment/2` resolves in the
@@ -302,26 +310,23 @@ defmodule Grappa.IRC.Identifier do
   """
   defmacro nick_fold(column) do
     quote do
-      fragment(
-        "replace(replace(replace(replace(lower(?), '[', '{'), ']', '}'), '\\', '|'), '~', '^')",
-        unquote(column)
-      )
+      fragment("lower(?)", unquote(column))
     end
   end
 
   @doc """
-  The rfc1459 fold as a raw SQL expression over a literal column name —
+  The ASCII fold as a raw SQL expression over a literal column name —
   the SINGLE SOURCE for callers that must embed the fold outside Ecto's
   fragment path (`:unsafe_fragment` conflict targets, index-expression
-  audits). Byte-identical to `nick_fold/1`'s fragment and to the
+  audits). Byte-identical to `nick_fold/1`'s fragment and to the live
   folded-index migrations; the pin test in `IdentifierTest` fails if
-  either ever drifts (review 2026-07-19: three hand-copied sites meant
-  a silent-index-loss hazard — SQLite drops an expression index the
-  moment the query-side string differs by one byte).
+  either ever drifts (SQLite drops an expression index the moment the
+  query-side string differs by one byte). #525 narrowed this from the
+  rfc1459 four-`replace()` form to plain `lower()`.
   """
   @spec nick_fold_sql(String.t()) :: String.t()
   def nick_fold_sql(column) when is_binary(column) do
-    "replace(replace(replace(replace(lower(#{column}), '[', '{'), ']', '}'), '\\', '|'), '~', '^')"
+    "lower(#{column})"
   end
 
   @doc """

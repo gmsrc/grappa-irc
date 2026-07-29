@@ -1833,16 +1833,16 @@ defmodule Grappa.ScrollbackTest do
           })
       end
 
-      # The bracket-folded spelling `foo{1}` AND an ASCII-case variant both
-      # resolve to the SAME single DM window (#372) — the COALESCE predicate
-      # must change only the PLAN, never the row set.
-      via_brace = Scrollback.fetch({:user, user.id}, net.id, "foo{1}", nil, 10, nil, false)
-      via_upper = Scrollback.fetch({:user, user.id}, net.id, "FOO{1}", nil, 10, nil, false)
+      # All three ASCII-case variants resolve to the SAME single DM window
+      # (#372, #525) — the COALESCE predicate must change only the PLAN,
+      # never the row set. (The brace twin `foo{1}` is a DIFFERENT peer.)
+      via_lower = Scrollback.fetch({:user, user.id}, net.id, "foo[1]", nil, 10, nil, false)
+      via_upper = Scrollback.fetch({:user, user.id}, net.id, "FOO[1]", nil, 10, nil, false)
 
-      assert Enum.sort(Enum.map(via_brace, & &1.body)) ==
+      assert Enum.sort(Enum.map(via_lower, & &1.body)) ==
                ["from FOO[1]", "from Foo[1]", "from foo[1]"]
 
-      assert Enum.map(via_brace, & &1.body) == Enum.map(via_upper, & &1.body)
+      assert Enum.map(via_lower, & &1.body) == Enum.map(via_upper, & &1.body)
     end
 
     test "delete_for_dm/3 folds inbound + outbound + orphan arms across casings (all matched by COALESCE)",
@@ -1921,10 +1921,11 @@ defmodule Grappa.ScrollbackTest do
           dm_with: nil
         })
 
-      # Deleting via a bracket-folded variant removes EXACTLY the 3 foo[1]
-      # rows (both DM arms + orphan) — no more, no less.
-      assert {:ok, 3} = Scrollback.delete_for_dm({:user, user.id}, net.id, "foo{1}")
-      assert Scrollback.fetch({:user, user.id}, net.id, "foo{1}", nil, 10, nil, false) == []
+      # Deleting via an ASCII-case variant removes EXACTLY the 3 foo[1]
+      # rows (both DM arms + orphan) — no more, no less (#525; the brace
+      # twin `foo{1}` would match nothing).
+      assert {:ok, 3} = Scrollback.delete_for_dm({:user, user.id}, net.id, "FOO[1]")
+      assert Scrollback.fetch({:user, user.id}, net.id, "foo[1]", nil, 10, nil, false) == []
 
       # Decoys survive.
       assert [%{id: id}] = Scrollback.fetch({:user, user.id}, net.id, "other", nil, 10, nil, false)
@@ -2036,17 +2037,17 @@ defmodule Grappa.ScrollbackTest do
   # lockstep by convention. Promoting it to a public helper closes
   # the convention-not-contract gap and gives external callers
   # (cic-wire, future Phase 6 listener) a canonical predicate.
-  describe "dm_peer/4 — rfc1459 own-nick folding (#121)" do
+  describe "dm_peer/4 — ASCII own-nick folding (#525)" do
     test "matches the own-nick target case-insensitively (ASCII)" do
       assert Scrollback.dm_peer(:privmsg, "VJT", "alice", "vjt") == "alice"
     end
 
-    test "folds the rfc1459 national chars [ ] \\ ~ on the own nick" do
-      # An inbound DM addressed to our nick spelled with the mirror-case
-      # national chars must still resolve the peer, not be misread as a
-      # message to someone else. own_nick "a[1]" folds to "a{1}".
-      assert Scrollback.dm_peer(:privmsg, "a{1}", "bob", "a[1]") == "bob"
-      assert Scrollback.dm_peer(:privmsg, "chan", "a{1}", "a[1]") == "chan"
+    test "folds ASCII case (not brackets) on the own nick (#525)" do
+      # An inbound DM addressed to our nick in a different CASE must still
+      # resolve the peer, not be misread as a message to someone else.
+      # own_nick "A[1]" folds to "a[1]" (brackets preserved — CASEMAPPING=ascii).
+      assert Scrollback.dm_peer(:privmsg, "a[1]", "bob", "A[1]") == "bob"
+      assert Scrollback.dm_peer(:privmsg, "chan", "a[1]", "A[1]") == "chan"
     end
   end
 
@@ -2589,12 +2590,12 @@ defmodule Grappa.ScrollbackTest do
       assert row.dm_with == nil
     end
 
-    test "rfc1459-folded match: 'nick[1]' rows migrate when matched via 'nick{1}'",
+    test "ASCII-folded match: 'nick[1]' rows migrate when matched via 'NICK[1]' (#525)",
          %{user: user, network: net} do
       {:ok, out} =
         Scrollback.persist_event(sample(user, net, 100, %{channel: "nick[1]", sender: "vjt", dm_with: "nick[1]"}))
 
-      {:ok, _} = Scrollback.rename_dm_peer({:user, user.id}, net.id, "nick{1}", "renamed")
+      {:ok, _} = Scrollback.rename_dm_peer({:user, user.id}, net.id, "NICK[1]", "renamed")
 
       row = Repo.get!(Message, out.id)
       assert row.channel == "renamed"
@@ -2959,30 +2960,30 @@ defmodule Grappa.ScrollbackTest do
     end
   end
 
-  describe "#364 E/irc-S4 — rfc1459 channel window convergence" do
-    test "channels differing only by rfc1459 bracket chars resolve to ONE window",
+  describe "#525 — ASCII channel window convergence" do
+    test "channels differing only by ASCII case resolve to ONE window",
          %{user: user, network: net} do
       {:ok, m1} =
-        ScrollbackHelpers.insert(sample(user, net, 1, %{channel: "#chan[1]", body: "bracket"}))
+        ScrollbackHelpers.insert(sample(user, net, 1, %{channel: "#Chan[1]", body: "mixed"}))
 
       {:ok, m2} =
-        ScrollbackHelpers.insert(sample(user, net, 2, %{channel: "#chan{1}", body: "brace"}))
+        ScrollbackHelpers.insert(sample(user, net, 2, %{channel: "#CHAN[1]", body: "upper"}))
 
-      # Stored canonical (rfc1459-folded) — both land on the same key, the
-      # SAME fold bahamut applies ([ -> {).
-      assert m1.channel == "#chan{1}"
-      assert m2.channel == "#chan{1}"
+      # Stored canonical (ASCII fold: A-Z lower, brackets preserved) — both
+      # land on the same key.
+      assert m1.channel == "#chan[1]"
+      assert m2.channel == "#chan[1]"
 
-      # A fetch under EITHER spelling (incl. mixed case) returns both rows:
-      # one window, exactly as the ircd sees the channel.
-      for spelling <- ["#chan[1]", "#chan{1}", "#CHAN[1]"] do
+      # A fetch under any CASE spelling returns both rows: one window. The
+      # brace twin `#chan{1}` is a DIFFERENT channel to the ircd (#525).
+      for spelling <- ["#chan[1]", "#CHAN[1]", "#Chan[1]"] do
         bodies =
           {:user, user.id}
           |> Scrollback.fetch(net.id, spelling, nil, 50, nil, false)
           |> Enum.map(& &1.body)
           |> Enum.sort()
 
-        assert bodies == ["brace", "bracket"], "spelling #{spelling} did not converge"
+        assert bodies == ["mixed", "upper"], "spelling #{spelling} did not converge"
       end
     end
 
@@ -3060,7 +3061,7 @@ defmodule Grappa.ScrollbackTest do
       end
     end
 
-    test "fetch/6 folds rfc1459 bracket chars in the DM peer",
+    test "fetch/6 folds ASCII case in the DM peer (#525)",
          %{user: user, network: net} do
       {:ok, _} =
         ScrollbackHelpers.insert(
@@ -3076,12 +3077,14 @@ defmodule Grappa.ScrollbackTest do
         ScrollbackHelpers.insert(
           sample(user, net, 200, %{
             channel: "vjt-grappa",
-            sender: "Foo{1}",
+            sender: "FOO[1]",
             body: "in",
-            dm_with: "Foo{1}"
+            dm_with: "FOO[1]"
           })
         )
 
+      # "Foo[1]" and "FOO[1]" are ONE peer (A-Z fold, brackets kept); the
+      # brace twin "Foo{1}" would be a DIFFERENT peer (#525).
       bodies =
         {:user, user.id}
         |> Scrollback.fetch(net.id, "Foo[1]", nil, 50, nil, false)

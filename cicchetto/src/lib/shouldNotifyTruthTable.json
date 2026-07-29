@@ -84,7 +84,7 @@
     "expected": true
   },
   {
-    "name": "DM: whitelist folds the rfc1459 bracket range on sender (#364 E/S5)",
+    "name": "DM: whitelist folds CASE but not brackets — Foo[1] matches foo[1] (#525)",
     "message": { "kind": "privmsg", "channel": "vjt", "sender": "Foo[1]", "body": "ping" },
     "own_nick": "vjt",
     "prefs": {
@@ -92,7 +92,7 @@
       "channel_messages_only": [],
       "channel_mentions": false,
       "private_messages_all": false,
-      "private_messages_only": ["foo{1}"]
+      "private_messages_only": ["foo[1]"]
     },
     "patterns": [],
     "expected": true
@@ -169,7 +169,7 @@
     "expected": true
   },
   {
-    "name": "channel: channel_messages_only folds the rfc1459 bracket range on channel (#412)",
+    "name": "channel: channel_messages_only does NOT fold brackets — #Foo[1] != #foo{1} (#525)",
     "message": {
       "kind": "privmsg",
       "channel": "#Foo[1]",
@@ -185,7 +185,7 @@
       "private_messages_only": []
     },
     "patterns": [],
-    "expected": true
+    "expected": false
   },
   {
     "name": "channel: channel_mentions + body mentions own_nick notifies",

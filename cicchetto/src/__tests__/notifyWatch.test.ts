@@ -34,8 +34,8 @@ describe("notifyWatch store", () => {
     expect(Object.keys(watchByNetwork())).toEqual(["42"]);
   });
 
-  it("applyPresenceSnapshot paints dots wholesale", () => {
-    applyPresenceSnapshot(42, { "foo{1}": "online", bar: "offline" });
+  it("applyPresenceSnapshot paints dots wholesale (folds case, not brackets — #525)", () => {
+    applyPresenceSnapshot(42, { "foo[1]": "online", bar: "offline" });
 
     expect(presenceFor(42, "Foo[1]")).toBe("online");
     expect(presenceFor(42, "BAR")).toBe("offline");

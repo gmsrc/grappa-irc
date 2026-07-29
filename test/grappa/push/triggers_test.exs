@@ -144,29 +144,28 @@ defmodule Grappa.Push.TriggersTest do
              )
     end
 
-    test "whitelist match folds sender under rfc1459 — bracket → brace (#121)" do
-      # bahamut CASEMAPPING=rfc1459 folds `[` → `{`, so foo[bar] and
-      # foo{bar} are the SAME nick. The stored list is canonicalized to the
-      # folded form (UserSettings.normalize_list), so an inbound foo[bar]
-      # must fold to foo{bar} and match. A plain String.downcase leaves the
-      # bracket untouched → whitelisted DM silently missed.
-      m = msg(channel: "vjt", sender: "foo[bar]", body: "ping")
+    test "whitelist match folds sender under ASCII case, not brackets (#525)" do
+      # bahamut CASEMAPPING=ascii folds A-Z only, so foo[bar] and FOO[BAR]
+      # are the SAME nick (but foo{bar} is DIFFERENT). The stored list is
+      # canonicalized to the folded form (UserSettings.normalize_list), so
+      # an inbound FOO[BAR] must fold to foo[bar] and match.
+      m = msg(channel: "vjt", sender: "FOO[BAR]", body: "ping")
 
       assert Triggers.should_notify?(
                m,
                "vjt",
-               prefs(private_messages_all: false, private_messages_only: ["foo{bar}"]),
+               prefs(private_messages_all: false, private_messages_only: ["foo[bar]"]),
                []
              )
     end
 
-    test "whitelist match folds sender under rfc1459 — tilde → caret + case (#121)" do
-      m = msg(channel: "vjt", sender: "Foo~Baz", body: "ping")
+    test "whitelist match folds sender under ASCII case — tilde kept (#525)" do
+      m = msg(channel: "vjt", sender: "FOO~BAZ", body: "ping")
 
       assert Triggers.should_notify?(
                m,
                "vjt",
-               prefs(private_messages_all: false, private_messages_only: ["foo^baz"]),
+               prefs(private_messages_all: false, private_messages_only: ["foo~baz"]),
                []
              )
     end

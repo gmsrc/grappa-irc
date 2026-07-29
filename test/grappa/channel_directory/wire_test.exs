@@ -42,12 +42,12 @@ defmodule Grappa.ChannelDirectory.WireTest do
     assert Jason.decode!(Jason.encode!(wire))["status"] == "refreshing"
   end
 
-  test "featured match folds rfc1459 brackets, not bare downcase (#364)" do
+  test "featured match folds ASCII case, not brackets (#525)" do
     # Directory names are stored VERBATIM (case-preserving display); the
-    # featured set is stored canonical (rfc1459-folded via
-    # canonical_channel/1). A bracket-char channel `#Foo[1]` from the
-    # directory must mark featured against the folded `#foo{1}` — a bare
-    # String.downcase would leave `#foo[1]` and miss it.
+    # featured set is stored canonical (ASCII-folded via canonical_channel/1
+    # — A-Z only, brackets preserved). A bracket-char channel `#Foo[1]` from
+    # the directory must mark featured against the folded `#foo[1]`; the
+    # brace twin `#foo{1}` is a DIFFERENT channel (#525).
     page = %{
       entries: [%{name: "#Foo[1]", topic: nil, user_count: 2}],
       next_cursor: nil,
@@ -56,7 +56,7 @@ defmodule Grappa.ChannelDirectory.WireTest do
       status: :fresh
     }
 
-    featured = MapSet.new(["#foo{1}"])
+    featured = MapSet.new(["#foo[1]"])
 
     assert %{entries: [%{name: "#Foo[1]", featured: true}]} =
              Wire.index_payload(page, featured)

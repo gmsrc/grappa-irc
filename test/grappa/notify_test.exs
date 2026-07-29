@@ -13,8 +13,9 @@ defmodule Grappa.NotifyTest do
 
     1. Idempotent add: adding the same (subject, network, nick) N times
        always resolves to the same row id (first insert wins).
-    2. rfc1459 case-insensitive uniqueness: "FooBar"/"foobar" AND
-       "nick[1]"/"nick{1}" are one watch entry (GH #121 fold).
+    2. ASCII case-insensitive uniqueness: "FooBar"/"foobar" are one
+       watch entry; "nick[1]" and "nick{1}" are DISTINCT (GH #525 — the
+       fold is `CASEMAPPING=ascii`, A-Z only, brackets preserved).
 
   `async: true` — the broadcast tests subscribe to a per-user PubSub
   topic so each test uses a distinct user_name to avoid crosstalk.
@@ -87,16 +88,21 @@ defmodule Grappa.NotifyTest do
       assert only_id == first.id
     end
 
-    test "rfc1459 fold: FooBar / foobar / foo[1] vs foo{1} collapse to one entry" do
+    test "ASCII fold: case variants collapse; bracket vs brace stay DISTINCT (#525)" do
       user = user_fixture()
       net = network_fixture()
 
       assert {:ok, [first]} = Notify.add({:user, user.id}, net.id, ["Foo[1]"], user.name)
-      assert {:ok, [dup]} = Notify.add({:user, user.id}, net.id, ["foo{1}"], user.name)
+      # Case-variant of the same bracket nick collapses to the first entry.
+      assert {:ok, [dup]} = Notify.add({:user, user.id}, net.id, ["FOO[1]"], user.name)
 
       assert dup.id == first.id
       # Display form: first add wins (case-preserving).
       assert dup.nick == "Foo[1]"
+
+      # The brace twin is a DIFFERENT nick to the ircd — a SEPARATE entry.
+      assert {:ok, [brace]} = Notify.add({:user, user.id}, net.id, ["foo{1}"], user.name)
+      assert brace.id != first.id
     end
 
     test "same nick on two networks is two independent entries" do
@@ -245,7 +251,7 @@ defmodule Grappa.NotifyTest do
       net = network_fixture()
       {:ok, _} = Notify.add({:user, user.id}, net.id, ["Foo[1]", "Bar"], user.name)
 
-      assert :ok = Notify.remove({:user, user.id}, net.id, ["FOO{1}"], user.name)
+      assert :ok = Notify.remove({:user, user.id}, net.id, ["FOO[1]"], user.name)
       assert [%Entry{nick: "Bar"}] = Notify.list({:user, user.id}, net.id)
 
       # Second remove of the same nick: still :ok, nothing changes.

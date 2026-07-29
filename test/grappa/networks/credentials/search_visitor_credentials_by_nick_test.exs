@@ -46,19 +46,19 @@ defmodule Grappa.Networks.Credentials.SearchVisitorCredentialsByNickTest do
       assert cred.network.slug == network.slug
     end
 
-    test "folds rfc1459 bracket variants (GH #121)" do
+    test "folds ASCII case, not brackets (GH #525)" do
       {visitor, network} = visitor_with_network(7002)
 
       {:ok, _} =
         Credentials.upsert_visitor_credential(visitor.id, network.id, %{
-          nick: "foo{bar",
+          nick: "foo[bar",
           auth_method: :none
         })
 
-      # `[` folds to `{`, so a bracket-variant query resolves the SAME
-      # credential the folded index stores.
-      assert [%Credential{nick: "foo{bar"}] =
-               Credentials.search_visitor_credentials_by_nick("foo[bar", 10)
+      # A CASE-variant query resolves the SAME credential (A-Z fold,
+      # brackets preserved); a brace variant "foo{bar" would be DIFFERENT.
+      assert [%Credential{nick: "foo[bar"}] =
+               Credentials.search_visitor_credentials_by_nick("FOO[BAR", 10)
     end
 
     test "returns one row per network for a multi-network visitor holding the same nick" do

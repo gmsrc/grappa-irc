@@ -26,17 +26,19 @@ export type ChannelKey = string & { readonly [channelKeyBrand]: true };
 export const channelKey = (slug: string, name: string): ChannelKey =>
   `${slug} ${canonicalChannel(name)}` as ChannelKey;
 
-// UX-4 bucket A — sigil-aware rfc1459 canonicalisation for IRC channel
+// UX-4 bucket A — sigil-aware ASCII canonicalisation for IRC channel
 // names. Faithful mirror of `Grappa.IRC.Identifier.canonical_channel/1`
-// on the server: bahamut (CASEMAPPING=rfc1459) folds `[ ] \ ~` →
-// `{ } | ^` in CHANNEL names too, so the client shares the SAME
-// `asciiFold` primitive with the nick fold — exactly as the server
-// shares ONE `fold_rfc1459/1` between `canonical_nick/1` and
-// `canonical_channel/1`. A bare `toLowerCase` (the pre-#412 form) folded
-// `A-Z` but left the four brackets unfolded, forking `#chan[1]` from the
-// server's canonical `#chan{1}` — the silent channel-fork the CLAUDE.md
-// channel invariant forbids. Nicks (DM-target windows) keep their casing
-// because display + CTCP visibility row's `dm_with` carry meaning.
+// on the server: bahamut (CASEMAPPING=ascii, #525) folds ONLY `A-Z` in
+// CHANNEL names, leaving `[ ] \ ~` untouched, so the client shares the
+// SAME `asciiFold` primitive with the nick fold — exactly as the server
+// shares ONE `fold_ascii/1` between `canonical_nick/1` and
+// `canonical_channel/1`. #364 briefly folded the brackets too (`#chan[1]`
+// → `#chan{1}`); the ircd keeps those two channels DISTINCT, so #525
+// reverted the over-fold to plain ASCII. A bare `toLowerCase` would
+// Unicode-over-fold non-ASCII (`#CAFÉ` → `#café`); `asciiFold` is
+// byte-level so those stay distinct too. Nicks (DM-target windows) keep
+// their casing because display + the CTCP visibility row's `dm_with`
+// carry meaning.
 //
 // Applied at every channel-bearing cic boundary: `channelKey(slug,
 // name)` (composite key), `joinChannel(...)` (Phoenix Channel topic

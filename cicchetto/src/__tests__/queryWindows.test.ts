@@ -126,17 +126,17 @@ describe("queryWindows state", () => {
     expect(socket.pushOpenQueryWindow).toHaveBeenCalledWith(1, "dave");
   });
 
-  // #364 E/S5 — dedup must fold rfc1459 (server keys the window on
-  // canonical_nick/1), not ASCII-downcase-only: `Foo[1]` and `foo{1}`
-  // are ONE window server-side, so a second open must not round-trip.
-  it("openQueryWindowState dedups on the rfc1459 fold (bracket range)", async () => {
+  // #525 — dedup folds CASE only (server keys on canonical_nick/1 =
+  // CASEMAPPING=ascii). `Foo[1]` and `foo{1}` are DISTINCT windows, so a
+  // second open on the brace twin is NOT a dup and DOES round-trip.
+  it("openQueryWindowState does NOT dedup a bracket-vs-brace nick (#525)", async () => {
     const socket = await import("../lib/socket");
     const { setQueryWindowsByNetwork, openQueryWindowState } = await import("../lib/queryWindows");
     setQueryWindowsByNetwork({
       1: [{ targetNick: "Foo[1]", openedAt: "2026-05-04T10:00:00Z" }],
     });
     openQueryWindowState(1, "foo{1}", "2026-05-04T12:00:00Z");
-    expect(socket.pushOpenQueryWindow).not.toHaveBeenCalled();
+    expect(socket.pushOpenQueryWindow).toHaveBeenCalledWith(1, "foo{1}");
   });
 
   // Nick case-sensitivity fix (post-U): canonicalQueryNick resolves
@@ -156,14 +156,16 @@ describe("queryWindows state", () => {
       expect(canonicalQueryNick(1, "grappa")).toBe("grappa");
     });
 
-    it("resolves via the rfc1459 fold (bracket range), not ASCII downcase (#364 E/S5)", async () => {
+    it("resolves case-only; a bracket-vs-brace nick is a DISTINCT window (#525)", async () => {
       const { setQueryWindowsByNetwork, canonicalQueryNick } = await import("../lib/queryWindows");
       setQueryWindowsByNetwork({
         1: [{ targetNick: "Foo[1]", openedAt: "2026-05-04T10:00:00Z" }],
       });
-      // `foo{1}` is the same nick to the server; resolve to stored casing.
-      expect(canonicalQueryNick(1, "foo{1}")).toBe("Foo[1]");
-      expect(canonicalQueryNick(1, "FOO{1}")).toBe("Foo[1]");
+      // Case-only variant of the stored nick resolves to stored casing.
+      expect(canonicalQueryNick(1, "FOO[1]")).toBe("Foo[1]");
+      // `foo{1}` is a DIFFERENT nick to the ircd (CASEMAPPING=ascii) — no
+      // window matches, so the input is returned unchanged.
+      expect(canonicalQueryNick(1, "foo{1}")).toBe("foo{1}");
     });
 
     it("returns the input unchanged when no window matches", async () => {

@@ -77,15 +77,13 @@ describe("channelKey + decodeChannelKey round-trip", () => {
       expect(canonicalChannel("+Modeless")).toBe("+modeless");
     });
 
-    it("folds the rfc1459 bracket range in sigil-channels (#412)", () => {
-      // bahamut CASEMAPPING=rfc1459 folds `[ ] \ ~` → `{ } | ^` in CHANNEL
-      // names too (server shares ONE fold_rfc1459 primitive between nicks
-      // and channels). A bare toLowerCase forks `#chan[1]` from the
-      // server's canonical `#chan{1}` — the exact silent window-fork the
-      // CLAUDE.md channel invariant forbids.
-      expect(canonicalChannel("#Chan[1]")).toBe("#chan{1}");
-      expect(canonicalChannel("#a\\b")).toBe("#a|b");
-      expect(canonicalChannel("#x~y")).toBe("#x^y");
+    it("does NOT fold the bracket range in sigil-channels — CASEMAPPING=ascii (#525)", () => {
+      // #525: bahamut folds ONLY A-Z in channel names; `[ ] \ ~` stay put,
+      // so `#chan[1]` and `#chan{1}` are DISTINCT channels (reverses the
+      // #364 over-fold). Only case is canonicalised.
+      expect(canonicalChannel("#Chan[1]")).toBe("#chan[1]");
+      expect(canonicalChannel("#A\\B")).toBe("#a\\b");
+      expect(canonicalChannel("#X~Y")).toBe("#x~y");
     });
 
     it("leaves nicks unchanged", () => {

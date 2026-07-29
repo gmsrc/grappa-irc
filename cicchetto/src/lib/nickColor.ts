@@ -1,5 +1,5 @@
 import type { ChannelMembers } from "./memberTypes";
-import { nickEquals, asciiFold } from "./nickEquals";
+import { asciiFold, nickEquals } from "./nickEquals";
 
 // UX-5 bucket BC2 — colored nicks (xchat-style) + scrollback-side
 // mode-prefix glyph lookup.

@@ -129,13 +129,14 @@ defmodule Grappa.Session.GhostRecoveryTest do
       assert "PRIVMSG NickServ :IDENTIFY s3cret\r\n" in lines
     end
 
-    test ":awaiting_whois on 311 for a bracket-fold echo still fails-fast (#364 S2)" do
-      # rfc1459: orig `foo[x]` folds to `foo{x}` — the server's 311 echo.
+    test ":awaiting_whois on 311 for a case-fold echo still fails-fast (#525)" do
+      # ASCII: orig `foo[x]` matches the server's 311 echo in a different
+      # CASE `FOO[X]` (brackets preserved — a brace twin would NOT match).
       state = %GhostRecovery{phase: :awaiting_whois, orig_nick: "foo[x]"}
 
       msg = %Message{
         command: {:numeric, 311},
-        params: ["foo[x]_", "foo{x}", "user", "host", "*", "Real"]
+        params: ["foo[x]_", "FOO[X]", "user", "host", "*", "Real"]
       }
 
       assert {:stop, next, []} = GhostRecovery.step(state, msg)

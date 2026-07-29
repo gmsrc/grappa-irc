@@ -67,8 +67,8 @@ defmodule Grappa.Session.PresenceTest do
   end
 
   describe "seed/1 + apply_report/3" do
-    test "seed folds keys and starts :unknown" do
-      assert Presence.seed(["Foo[1]", "Bar"]) == %{"foo{1}" => :unknown, "bar" => :unknown}
+    test "seed folds keys (ASCII case) and starts :unknown (#525)" do
+      assert Presence.seed(["Foo[1]", "Bar"]) == %{"foo[1]" => :unknown, "bar" => :unknown}
     end
 
     test "first report on an :unknown entry is :initial (baseline, no toast)" do
@@ -93,9 +93,9 @@ defmodule Grappa.Session.PresenceTest do
       assert Presence.apply_report(online, "FOO", :online) == :unchanged
     end
 
-    test "reports fold rfc1459 (Foo[1] report matches foo{1} entry)" do
-      map = Presence.seed(["foo{1}"])
-      assert {:changed, :initial, _} = Presence.apply_report(map, "Foo[1]", :online)
+    test "reports fold ASCII case (FOO[1] report matches foo[1] entry) (#525)" do
+      map = Presence.seed(["foo[1]"])
+      assert {:changed, :initial, _} = Presence.apply_report(map, "FOO[1]", :online)
     end
 
     test "reports for untracked nicks are :unchanged — never invent entries" do
@@ -113,9 +113,10 @@ defmodule Grappa.Session.PresenceTest do
       assert tracked == %{"foo" => :online, "bar" => :unknown}
     end
 
-    test "untrack drops fold-matched entries" do
+    test "untrack drops fold-matched entries (ASCII case, #525)" do
       map = Presence.seed(["Foo[1]", "Bar"])
-      assert Presence.untrack(map, ["foo{1}"]) == %{"bar" => :unknown}
+      # Case variant matches; a brace twin "foo{1}" would NOT.
+      assert Presence.untrack(map, ["FOO[1]"]) == %{"bar" => :unknown}
     end
   end
 end

@@ -84,10 +84,16 @@ defmodule Grappa.VisitorsTest do
       assert nick_of(v1) == "Mezmerize", "display case of the first-provisioned credential is preserved"
     end
 
-    test "folds the four rfc1459 national chars [ ] \\ ~ (bahamut casemapping)" do
+    test "does NOT fold the bracket chars [ ] \\ ~ — CASEMAPPING=ascii (#525)" do
+      # bahamut folds A-Z only; `nick[1]` and `nick{1}` are DISTINCT nicks,
+      # so they provision SEPARATE visitor identities (reverses the #121
+      # over-fold). A case-only variant still collapses (below).
       {:ok, v1} = Visitors.find_or_provision_anon("nick[1]", @network, "1.2.3.4")
       {:ok, v2} = Visitors.find_or_provision_anon("nick{1}", @network, "5.6.7.8")
-      assert v2.id == v1.id
+      assert v2.id != v1.id
+
+      {:ok, v3} = Visitors.find_or_provision_anon("NICK[1]", @network, "9.9.9.9")
+      assert v3.id == v1.id
     end
 
     test "returns {:error, :network_unconfigured} when the slug has no networks row" do

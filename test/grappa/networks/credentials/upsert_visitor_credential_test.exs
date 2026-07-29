@@ -82,8 +82,8 @@ defmodule Grappa.Networks.Credentials.UpsertVisitorCredentialTest do
           auth_method: :none
         })
 
-      # rfc1459-folded: a different-case / bracket-variant nick resolves to
-      # the SAME credential (GH #121).
+      # ASCII-folded: a different-CASE nick resolves to the SAME credential
+      # (GH #121/#525; brackets are NOT folded).
       assert {:ok, %Credential{} = cred} =
                Credentials.fetch_visitor_credential_by_nick("mezmerize", network.id)
 

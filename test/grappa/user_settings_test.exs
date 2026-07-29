@@ -393,26 +393,26 @@ defmodule Grappa.UserSettingsTest do
       assert result.private_messages_only == ["alice", "bob"]
     end
 
-    test "folds BOTH nick and channel whitelists under rfc1459 (#121, #364)" do
+    test "folds BOTH nick and channel whitelists under ASCII casemapping (#525)" do
       user = user_fixture()
 
       prefs = %{
         channel_messages_all: false,
-        # #364: channels now fold via canonical_channel under the SAME
-        # rfc1459 casemapping as nicks (bahamut casemaps channels too), so
-        # `#Foo[X]` folds `[`→`{` + case → `#foo{x}` (was plain downcase).
+        # #525: channels fold via canonical_channel under CASEMAPPING=ascii
+        # (A-Z only, brackets preserved), so `#Foo[X]` → `#foo[x]` (was the
+        # #364 rfc1459 `#foo{x}` over-fold).
         channel_messages_only: ["#Foo[X]"],
         channel_mentions: true,
         private_messages_all: false,
-        # Nicks fold via canonical_nick (rfc1459): `[`→`{`, `~`→`^`, plus case.
+        # Nicks fold via canonical_nick (ASCII): case only; `[ ~` are kept.
         private_messages_only: ["Foo[Bar]", "quux~"]
       }
 
       assert {:ok, _} = UserSettings.put_notification_prefs({:user, user.id}, prefs)
 
       result = UserSettings.get_notification_prefs({:user, user.id})
-      assert result.channel_messages_only == ["#foo{x}"]
-      assert result.private_messages_only == ["foo{bar}", "quux^"]
+      assert result.channel_messages_only == ["#foo[x]"]
+      assert result.private_messages_only == ["foo[bar]", "quux~"]
     end
 
     test "deduplicates whitelist members preserving first-occurrence order" do

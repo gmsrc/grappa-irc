@@ -6515,12 +6515,11 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "channel-key rfc1459 fold: 332 via #foo[1], get via #foo{1} (#364)" do
-      # The topic cache is WRITTEN with the rfc1459 canonical key (`[`→`{`);
-      # get_topic MUST read with the SAME fold. Pre-#364 the read used a
-      # bare String.downcase, which leaves `[` intact — so a get under
-      # either bracket spelling missed the cache the 332 populated under
-      # the folded key.
+    test "channel-key ASCII fold: 332 via #foo[1], get via #FOO[1] (#525)" do
+      # The topic cache is WRITTEN with the ASCII canonical key (A-Z lower,
+      # brackets preserved); get_topic MUST read with the SAME fold. A
+      # case-variant spelling resolves; the brace twin `#foo{1}` is a
+      # DIFFERENT channel to the ircd (#525).
       {server, port} = start_server()
 
       {user, network, _} =
@@ -6532,11 +6531,11 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 332 grappa-test #foo[1] :Bracket topic\r\n")
       flush_server(server)
 
-      # Both bracket spellings resolve to the one cached entry.
-      for spelling <- ["#foo[1]", "#foo{1}"] do
+      # Both CASE spellings resolve to the one cached entry.
+      for spelling <- ["#foo[1]", "#FOO[1]"] do
         assert {:ok, %{text: "Bracket topic"}} =
                  Session.get_topic({:user, user.id}, network.id, spelling),
-               "get_topic missed the rfc1459-folded cache for #{spelling}"
+               "get_topic missed the ASCII-folded cache for #{spelling}"
       end
 
       :ok = GenServer.stop(pid, :normal, 1_000)

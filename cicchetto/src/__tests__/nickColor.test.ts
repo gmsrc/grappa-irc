@@ -46,17 +46,14 @@ describe("nickColorIndex", () => {
     expect(upper).toBe(lower);
   });
 
-  it("gives one color to rfc1459-equivalent nicks Foo[1] === foo{1} (#412)", () => {
-    // Identity-invariant guard, NOT a red-first bug repro: bahamut folds
-    // `[ ] \ ~` → `{ } | ^`, so Foo[1] and foo{1} are the SAME operator
-    // and MUST share a color. Honesty note — at NICK_PALETTE_SIZE = 16
-    // this ALSO held under the pre-#412 bare toLowerCase (djb2 mod 16
-    // collapses every ±32 rfc1459 shift to 0), so this can't fail today;
-    // it pins the invariant so a future palette-size change (weechat 10 /
-    // irssi 12, where 32 mod N ≠ 0) can't silently fork the hue.
-    expect(nickColorIndex("Foo[1]")).toBe(nickColorIndex("foo{1}"));
-    expect(nickColorIndex("a\\b")).toBe(nickColorIndex("a|b"));
-    expect(nickColorIndex("op~x")).toBe(nickColorIndex("op^x"));
+  it("gives one color to case-variant nicks; the hue is on the ASCII fold (#525)", () => {
+    // #525: the hue is computed on the ASCII fold (A-Z only). Case
+    // variants share a color; `[ ] \ ~` are NO LONGER folded to
+    // `{ } | ^` (bahamut is CASEMAPPING=ascii), so a bracket nick and its
+    // brace twin are distinct identities that hash independently.
+    expect(nickColorIndex("Foo[1]")).toBe(nickColorIndex("foo[1]"));
+    expect(nickColorIndex("A\\B")).toBe(nickColorIndex("a\\b"));
+    expect(nickColorIndex("OP~X")).toBe(nickColorIndex("op~x"));
   });
 
   it("always returns an index in [0, NICK_PALETTE_SIZE)", () => {
