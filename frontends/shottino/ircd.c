@@ -1,0 +1,217 @@
+/* ircd.c — see ircd.h. Pure: no sockets, no app state, no allocation. */
+#include "ircd.h"
+
+#include <ctype.h>
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
+#include <time.h>
+
+#define IRCD_DEFAULT_PORT "6667"
+#define IRCD_DEFAULT_HOST "127.0.0.1"
+
+static void copy_bounded(char *out, size_t out_sz, const char *start, size_t len) {
+    if (!out_sz) return;
+    if (len >= out_sz) len = out_sz - 1;
+    memcpy(out, start, len);
+    out[len] = '\0';
+}
+
+bool ircd_parse_line(const char *line, struct ircd_msg *out) {
+    memset(out, 0, sizeof(*out));
+    if (!line) return false;
+    const char *p = line;
+    while (*p == ' ') p++;
+
+    if (*p == ':') {
+        p++;
+        const char *start = p;
+        while (*p && *p != ' ') p++;
+        copy_bounded(out->prefix, sizeof(out->prefix), start, (size_t)(p - start));
+        while (*p == ' ') p++;
+    }
+
+    const char *start = p;
+    while (*p && *p != ' ') p++;
+    if (p == start) return false;
+    copy_bounded(out->command, sizeof(out->command), start, (size_t)(p - start));
+    for (char *c = out->command; *c; c++) *c = (char)toupper((unsigned char)*c);
+
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        if (out->param_count >= IRCD_MAX_PARAMS) break;
+        if (*p == ':') {
+            /* The trailing parameter is the rest of the line, spaces and
+             * all, and there is at most one. */
+            p++;
+            copy_bounded(out->params[out->param_count], IRCD_PARAM_MAX, p, strlen(p));
+            out->param_count++;
+            break;
+        }
+        start = p;
+        while (*p && *p != ' ') p++;
+        copy_bounded(out->params[out->param_count], IRCD_PARAM_MAX, start, (size_t)(p - start));
+        out->param_count++;
+    }
+    return true;
+}
+
+bool ircd_command_is(const struct ircd_msg *m, const char *name) {
+    return strcasecmp(m->command, name) == 0;
+}
+
+bool ircd_parse_bind(const char *spec, char *host, size_t host_sz, char *port, size_t port_sz) {
+    if (!host_sz || !port_sz) return false;
+    snprintf(host, host_sz, "%s", IRCD_DEFAULT_HOST);
+    snprintf(port, port_sz, "%s", IRCD_DEFAULT_PORT);
+    if (!spec || !*spec) return true;
+
+    /* "[addr]" or "[addr]:port" — the only unambiguous way to write an
+     * IPv6 address with a port. */
+    if (*spec == '[') {
+        const char *close = strchr(spec, ']');
+        if (!close || close == spec + 1) return false;
+        copy_bounded(host, host_sz, spec + 1, (size_t)(close - spec - 1));
+        if (close[1] == ':' && close[2]) snprintf(port, port_sz, "%s", close + 2);
+        else if (close[1]) return false;
+        return true;
+    }
+
+    bool all_digits = true;
+    size_t colons = 0;
+    for (const char *c = spec; *c; c++) {
+        if (*c == ':') colons++;
+        if (!isdigit((unsigned char)*c)) all_digits = false;
+    }
+    if (all_digits) { /* a bare port keeps the loopback default */
+        snprintf(port, port_sz, "%s", spec);
+        return true;
+    }
+    if (colons > 1) { /* a bare IPv6 literal: "::1", "fe80::1" */
+        snprintf(host, host_sz, "%s", spec);
+        return true;
+    }
+    if (colons == 1) {
+        const char *sep = strchr(spec, ':');
+        if (sep == spec || !sep[1]) return false;
+        copy_bounded(host, host_sz, spec, (size_t)(sep - spec));
+        snprintf(port, port_sz, "%s", sep + 1);
+        return true;
+    }
+    snprintf(host, host_sz, "%s", spec);
+    return true;
+}
+
+bool ircd_bind_is_loopback(const char *host) {
+    if (!host || !*host) return false;
+    if (strcmp(host, "::1") == 0) return true;
+    if (strcasecmp(host, "localhost") == 0) return true;
+    /* The whole 127/8 block, not just 127.0.0.1: a bridge on 127.0.0.2 is
+     * exactly as unreachable from outside. */
+    if (strncmp(host, "127.", 4) == 0) return true;
+    return false;
+}
+
+void ircd_split_pass(const char *pass, char *network, size_t network_sz, char *secret,
+                     size_t secret_sz) {
+    if (network_sz) network[0] = '\0';
+    if (secret_sz) secret[0] = '\0';
+    if (!pass) return;
+    const char *colon = strchr(pass, ':');
+    if (!colon) {
+        /* No colon: it is a network name or a password, and only the
+         * caller (who knows the network names) can say which. */
+        snprintf(network, network_sz, "%s", pass);
+        snprintf(secret, secret_sz, "%s", pass);
+        return;
+    }
+    copy_bounded(network, network_sz, pass, (size_t)(colon - pass));
+    snprintf(secret, secret_sz, "%s", colon + 1);
+}
+
+static char fold_char(char c) {
+    if (c >= 'A' && c <= 'Z') return (char)(c - 'A' + 'a');
+    switch (c) {
+    case '[': return '{';
+    case ']': return '}';
+    case '\\': return '|';
+    case '~': return '^';
+    default: return c;
+    }
+}
+
+void ircd_fold(const char *in, char *out, size_t out_sz) {
+    if (!out_sz) return;
+    size_t n = 0;
+    for (const char *c = in ? in : ""; *c && n + 1 < out_sz; c++) out[n++] = fold_char(*c);
+    out[n] = '\0';
+}
+
+bool ircd_name_equal(const char *a, const char *b) {
+    if (!a || !b) return false;
+    while (*a && *b) {
+        if (fold_char(*a) != fold_char(*b)) return false;
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+void ircd_sender_prefix(const char *nick, char *out, size_t out_sz) {
+    char clean[128];
+    ircd_sanitize(nick && *nick ? nick : "grappa", clean, sizeof(clean));
+    /* A nick is not allowed spaces or '!' or '@'; a hostile one would
+     * otherwise forge a different sender. */
+    for (char *c = clean; *c; c++)
+        if (*c == ' ' || *c == '!' || *c == '@' || *c == ':') *c = '_';
+    snprintf(out, out_sz, "%s!%s@grappa", clean, clean);
+}
+
+void ircd_time_tag(long server_time_ms, bool wanted, char *out, size_t out_sz) {
+    if (out_sz) out[0] = '\0';
+    if (!wanted || server_time_ms <= 0) return;
+    time_t secs = (time_t)(server_time_ms / 1000);
+    long ms = server_time_ms % 1000;
+    struct tm tm;
+    if (!gmtime_r(&secs, &tm)) return;
+    char stamp[32];
+    if (strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", &tm) == 0) return;
+    snprintf(out, out_sz, "@time=%s.%03ldZ ", stamp, ms);
+}
+
+void ircd_sanitize(const char *in, char *out, size_t out_sz) {
+    if (!out_sz) return;
+    size_t n = 0;
+    for (const char *c = in ? in : ""; *c && n + 1 < out_sz; c++) {
+        /* CR and LF end a line; NUL ends a string. Everything else,
+         * including the CTCP \x01 and mIRC colour codes, is carried
+         * through untouched — this is a bridge, not a filter. */
+        if (*c == '\r' || *c == '\n') continue;
+        out[n++] = *c;
+    }
+    out[n] = '\0';
+}
+
+bool ircd_needs_trailing(const char *text) {
+    if (!text || !*text) return true;
+    if (*text == ':') return true;
+    return strchr(text, ' ') != NULL;
+}
+
+void ircd_member_sigils(const char *modes, const char *sigils, bool multi_prefix, char *out,
+                        size_t out_sz) {
+    if (!out_sz) return;
+    out[0] = '\0';
+    if (!modes || !sigils) return;
+    size_t n = 0;
+    for (const char *s = sigils; *s && n + 1 < out_sz; s++) {
+        if (!strchr(modes, *s)) continue;
+        out[n++] = *s;
+        out[n] = '\0';
+        /* Without multi-prefix a client expects exactly one sigil, the
+         * highest — sending "@+" to a client that did not ask for it
+         * makes the nick itself read as "+nick". */
+        if (!multi_prefix) return;
+    }
+}

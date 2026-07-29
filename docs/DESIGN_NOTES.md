@@ -22679,3 +22679,61 @@ collapse read well and answered the wrong question — the chosen line is QUOTED
 into the reply, so between two people it hid all but the last line of each. The
 filter searches the window's whole buffer rather than the twenty on offer,
 because the point of a search is to reach what is not in front of you.
+
+## 2026-07-29 — shottino --ircd: a downstream IRC server in the client
+
+vjt asked for a mode where shottino runs headless and speaks IRC to a normal
+client, bridging it to grappa. Note that this is NOT Phase 6: the roadmap's
+listener facade lives in the SERVER and exposes grappa to the internet with its
+own auth. This one runs on the user's machine, on loopback by default, and is
+worth having anyway because shottino already holds everything a bridge needs —
+the wire protocol, the windows, the rosters, the scrollback — so the mode is a
+different front end on the same client rather than a second implementation.
+
+**One connection is one network.** An IRC client has one nick, one MOTD and one
+channel namespace per connection; grappa has several networks at once, and #ops
+on two of them is two different rooms. Multiplexing them means renaming channels
+to keep them apart, which breaks every client's idea of what a channel is
+called and every config the user already has. The client names its network in
+PASS ("network:secret") because a password is a string every client can already
+send without a plugin, and three networks is three connections — how people
+already use bouncers.
+
+**Off loopback the password is required, or it refuses to start.** The bridge
+hands over the entire session: every channel, every DM, the ability to speak as
+the user. On 127.0.0.1 that is bounded by who can run processes as them;
+anywhere else it is bounded by nothing. A bridge that came up anyway would be
+discovered by someone else using it.
+
+**The tee is render_message.** Every row reaches it — live push and fetched
+scrollback alike — already deduplicated by id and already carrying network,
+channel, sender, kind and server_time. Hooking there rather than at the socket
+means history and live traffic take one path, and presence rows (join, part,
+quit, nick, mode, kick, topic) come along for free, because grappa delivers
+those as messages too. The replay ring fills itself from the scrollback
+shottino fetches at startup anyway: no extra request, and no duplicate history
+when a second client connects.
+
+**Own messages are not echoed without echo-message.** A client prints what it
+sends; echoing doubles every line. The cost — messages sent from cicchetto do
+not appear — is exactly what the echo-message capability exists to let a client
+opt into, so the decision is the client's rather than ours.
+
+**Unhandled commands are forwarded verbatim** through the raw verb. That is the
+difference between a bridge and a reimplementation: MODE, INVITE, KICK, OPER
+and anything else the network knows keep working. Their replies reach grappa's
+other clients rather than returning as numerics, since a grappa event carries no
+client to attribute it to.
+
+Two latent bugs fell out. JOB_JOIN carried a network and the worker threw it
+away, joining on whatever window had focus; JOB_PART reached its channel by
+creating a window and parting "the current one". Both are right for a keystroke
+and wrong for anything else, and a bridge has no focus at all — join_channel_on
+and part_target take the network explicitly, and the focus-derived wrappers are
+gone. SIGPIPE is now ignored: a write to a socket whose peer has gone killed the
+process by default, which was as true of the websocket as of a bridge client.
+
+tests/test_ircd opens a REAL socket to the bridge and speaks IRC to it, driving
+the client's own accept/read/dispatch/flush pass rather than a copy: a bridge is
+judged by what a client sees after it says hello, and that cannot be asserted
+from the inside.

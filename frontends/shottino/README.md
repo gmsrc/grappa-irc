@@ -60,6 +60,67 @@ protocol when there is one.
 playback back on. Both obey the same first-party rule as still images — see
 `/media all`.
 
+## Bridging a normal IRC client (`--ircd`)
+
+`shottino --ircd https://grappa.example.net you password` runs headless and
+listens as an IRC **server**, so irssi, hexchat, weechat or anything else can
+connect to it and reach grappa through it. No terminal is opened, which is why
+it works over ssh, in a service unit, or in a container with no tty.
+
+```
+shottino --ircd              https://grappa.example.net you password   # 127.0.0.1:6667
+shottino --ircd=6668         https://grappa.example.net you password
+shottino --ircd=10.0.0.2     https://grappa.example.net you password
+shottino --ircd=[::1]:6668   https://grappa.example.net you password
+```
+
+The argument is a port, an address, or address:port, v4 or v6; a bare IPv6
+address needs no brackets (`--ircd=::1`) but one **with** a port does
+(`--ircd=[::1]:6668`), since otherwise the colons are ambiguous. Only the
+`--ircd=SPEC` form is accepted — `--ircd 6668` would be indistinguishable from
+a positional argument, and the positional it would eat is your password.
+
+**One connection is one network.** An IRC client has one nick, one MOTD and one
+channel namespace per connection, while grappa has several networks at once and
+`#ops` on two of them is two different rooms. So the client names the network it
+wants in `PASS`, and a user with three networks opens three connections — the
+way people already use bouncers:
+
+```
+/connect localhost 6667
+/quote PASS azzurra:<password>     # or set the server password to azzurra:<password>
+```
+
+With one network bound, `PASS azzurra` (or nothing at all, on loopback) is
+enough. Naming a network that does not exist is answered with the list.
+
+**Off loopback, a password is required.** The bridge hands over the whole IRC
+session — every channel, every DM, and the ability to speak as you. On
+`127.0.0.1` that is bounded by who can run processes as you; on any other
+address it is bounded by nothing, so a non-loopback bind without
+`SHOTTINO_IRCD_PASS` refuses to start rather than listening quietly. Set it and
+the clients must send it: `PASS <network>:<password>`.
+
+What the client gets on connect: the nick grappa uses on that network (a
+different one is corrected with a `NICK`, as a real server would), `001`–`005`
+with the network's real `PREFIX`, a `JOIN` for every channel grappa already
+holds open with its topic and names, and a replay of the recent conversation.
+`server-time`, `multi-prefix` and `echo-message` are offered as capabilities;
+with `server-time` the replay is stamped when things were **said** rather than
+when you reconnected.
+
+Your own messages are not echoed back unless the client negotiates
+`echo-message` — a client prints what it sends, and echoing doubles every line.
+The cost is that messages you send from cicchetto or from shottino's own UI do
+not appear; `echo-message` is how a client asks to see those.
+
+`JOIN`, `PART`, `PRIVMSG`, `NOTICE`, `NAMES`, `WHO`, `WHOIS`, `TOPIC`, `PING`
+and the registration commands are handled here. **Everything else is forwarded
+to the real server in the words you typed** — `MODE`, `INVITE`, `KICK`, `OPER`,
+`LIST` and whatever else that network knows — so anything you can type still
+works. Their replies reach grappa's other clients rather than coming back as
+numerics, which is the one place this is a bridge rather than a server.
+
 ## Panes
 
 `/split` divides the chat area into two stacked panes; `/splitv` (or

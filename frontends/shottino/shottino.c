@@ -10,6 +10,9 @@
 #include <fcntl.h>
 #include <locale.h>
 #include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <signal.h>
 #include <ncurses.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
@@ -37,6 +40,7 @@
 
 #include "alias.h"
 #include "http.h"
+#include "ircd.h"
 #include "json.h"
 #include "media.h"
 #include "mirc.h"
@@ -46,6 +50,7 @@
 #define MAX_TOKEN 4096
 #define MAX_SUBJECT 512
 #define MAX_NETWORKS 32
+#define SHOTTINO_VERSION "0.1"
 #define MAX_WINDOWS 128
 #define MAX_CHANNEL 256
 #define MAX_SLUG 128
@@ -440,6 +445,98 @@ struct overlay {
     enum overlay_action pick_action;
 };
 
+/* ── The downstream IRC server (--ircd) ────────────────────────────────
+ *
+ * With --ircd, shottino runs headless and listens as an IRC SERVER, so a
+ * normal client — irssi, hexchat, weechat — connects to it and reaches
+ * grappa through it. Everything above this point is reused unchanged:
+ * the same REST calls, the same websocket, the same app state, the same
+ * worker. Only the front end differs, which is why this is a mode of
+ * shottino rather than a second program.
+ *
+ * Two decisions shape the rest.
+ *
+ * ONE CONNECTION IS ONE NETWORK. An IRC client has one nick, one MOTD
+ * and one channel namespace per connection; grappa has several networks
+ * at once, and #ops on two of them is two different rooms. Folding them
+ * into a single connection means renaming channels to keep them apart,
+ * which breaks every client's idea of what a channel is called and every
+ * config the user already has. So a client says which network it wants
+ * and gets that one — three networks is three connections, which is how
+ * people already use bouncers. The network is named in PASS
+ * ("network:secret"), because a password is a string every client can
+ * already send without needing a plugin.
+ *
+ * THE PASSWORD IS REQUIRED OFF LOOPBACK. This bridge hands over the
+ * user's entire IRC session — every channel, every DM, and the ability
+ * to speak as them. On 127.0.0.1 that is bounded by "who can run
+ * processes as you"; on any other address it is bounded by nothing at
+ * all. A non-loopback bind without SHOTTINO_IRCD_PASS therefore refuses
+ * to start rather than quietly listening.
+ *
+ * The protocol grammar lives in ircd.c, where it can be tested without a
+ * socket. What is here is the part that needs the app: sockets, state,
+ * and translation in both directions. */
+
+#define IRCD_SERVER "grappa"
+#define IRCD_MAX_CLIENTS 8
+#define IRCD_IN_MAX 8192
+#define IRCD_OUT_MAX (1024 * 1024)
+#define IRCD_HISTORY 512
+#define IRCD_LISTEN_MAX 4
+
+struct ircd_client {
+    int fd;
+    char in[IRCD_IN_MAX];
+    size_t in_len;
+    /* Output is buffered on the heap and grows only for a client that is
+     * not reading. A bridge must never block its own event loop on a
+     * downstream socket, so a client that will not drain is dropped
+     * rather than allowed to stall the others — an ircd's SendQ. */
+    char *out;
+    size_t out_len, out_cap;
+    bool registered, got_nick, got_user, cap_negotiating, closing;
+    bool cap_server_time, cap_multi_prefix, cap_echo;
+    char nick[MAX_CHANNEL];
+    char user[64];
+    char network[MAX_SLUG];
+    char pass[256];
+};
+
+/* Recent messages, kept STRUCTURALLY so a client connecting later can be
+ * given what it missed. shottino already fetches scrollback at startup
+ * and on join, and every row passes through render_message, so this ring
+ * fills itself from what was fetched anyway: no extra request, and no
+ * duplicate history when a second client connects. */
+struct ircd_hist {
+    long server_time;
+    wire_message_kind kind;
+    char network[MAX_SLUG];
+    char channel[MAX_CHANNEL];
+    char sender[MAX_CHANNEL];
+    char body[MAX_LINE];
+};
+
+struct ircd {
+    bool enabled;
+    char host[128];
+    char port[16];
+    char secret[128];
+    bool secret_required;
+    int listen_fd[IRCD_LISTEN_MAX];
+    size_t listen_count;
+    /* Its own lock. The tee runs on whichever thread delivered the
+     * message (socket or worker); everything else runs on the main
+     * thread. Held only around bridge state, and NEVER while calling
+     * anything that takes app->lock — that ordering rule is what keeps
+     * the two locks from ever deadlocking. */
+    pthread_mutex_t lock;
+    struct ircd_client clients[IRCD_MAX_CLIENTS];
+    struct ircd_hist hist[IRCD_HISTORY];
+    size_t hist_count, hist_next;
+};
+
+
 struct app {
     struct url url;
     char token[MAX_TOKEN];
@@ -509,6 +606,12 @@ struct app {
      * row that predates every window. See log_scope_of_locked(). */
     char log_scope[LOG_LINES][MAX_SLUG + MAX_CHANNEL + 8];
     media_protocol proto;           /* detected once, before ncurses */
+    /* --ircd: the downstream IRC server. Zeroed (and disabled) in every
+     * other mode, so the tee in render_message costs one branch. */
+    struct ircd ircd;
+    /* Headless: no terminal to draw on, so the operational log goes to
+     * stderr where a service manager can collect it. */
+    bool headless;
     /* /view downloads here, and the directory goes at exit: a session
      * that opens fifty pictures must not leave fifty files behind. */
     char view_dir[1024];
@@ -692,6 +795,10 @@ static void log_push_locked(struct app *app, char *line, bool mention, bool pend
     app->log_media[i] = -1;
     log_scope_of_locked(app, line, app->log_scope[i], sizeof(app->log_scope[i]));
     app->log_count++;
+    /* Headless there is no window to file it under and nobody to read
+     * it: the same line goes to stderr, which is where a service manager
+     * or a terminal running --ircd will look for it. */
+    if (app->headless) fprintf(stderr, "%s\n", line);
 }
 
 /* Does row `i` belong in the window whose scope is `scope`? A row with
@@ -1662,6 +1769,9 @@ static void format_presence_line(wire_message_kind kind, const char *sender, con
     }
 }
 
+static void ircd_publish(struct app *app, const struct wire_scrollback_message *m,
+                         const char *display_channel);
+
 static void render_message(struct app *app, const struct wire_scrollback_message *m, bool live) {
     long id = m->id;
     long server_time = m->server_time;
@@ -1730,6 +1840,11 @@ static void render_message(struct app *app, const struct wire_scrollback_message
     }
     pthread_mutex_unlock(&app->lock);
     remember_url(app, body);
+    /* The bridge sees the row here, where live pushes and fetched
+     * scrollback have already become the same thing and the id-dedup
+     * above has already run. Anywhere else means two feeds to keep in
+     * step. */
+    ircd_publish(app, m, display_channel);
     /* Presence rows are ambient: they must not bump the unread badge or
      * they drown the count that signals someone actually spoke. */
     if (conversational) maybe_mark_unread(app, network, display_channel, live);
@@ -5222,10 +5337,16 @@ static void query_window(struct app *app, const char *target) {
     free(payload);
 }
 
-static void join_channel(struct app *app, const char *name) {
-    char join_net[MAX_SLUG];
-    const char *net_slug = app->networks[0].slug;
-    if (current_window_key(app, join_net, sizeof(join_net), NULL, 0)) net_slug = join_net;
+/* Join `name` on an EXPLICIT network.
+ *
+ * The network used to be derived from whichever window had focus, which
+ * is right for a keystroke and wrong for anything else: JOB_JOIN carries
+ * a network and the worker threw it away, so a join requested for one
+ * network landed on whatever the user happened to be looking at. The
+ * bridge (--ircd) has no focus at all, which is what made the latent bug
+ * unavoidable. */
+static void join_channel_on(struct app *app, const char *network, const char *name) {
+    const char *net_slug = network && network[0] ? network : app->networks[0].slug;
     char *net = url_encode(net_slug);
     char *path = xasprintf("/networks/%s/channels", net);
     char *escaped = json_escape(name);
@@ -5249,13 +5370,10 @@ static void join_channel(struct app *app, const char *name) {
     free(r.body);
 }
 
-static void part_current(struct app *app) {
-    char network[MAX_SLUG];
-    char channel[MAX_CHANNEL];
-    pthread_mutex_lock(&app->lock);
-    snprintf(network, sizeof(network), "%s", app->windows[focused_window_locked(app)].network);
-    snprintf(channel, sizeof(channel), "%s", app->windows[focused_window_locked(app)].channel);
-    pthread_mutex_unlock(&app->lock);
+/* Part an EXPLICIT (network, channel), for the same reason as
+ * join_channel_on: the caller knows which one, and deriving it from the
+ * focused window means a request for one channel parting another. */
+static void part_target(struct app *app, const char *network, const char *channel) {
     char *net = url_encode(network);
     char *chan = url_encode(channel);
     char *path = xasprintf("/networks/%s/channels/%s", net, chan);
@@ -5265,8 +5383,9 @@ static void part_current(struct app *app) {
     if (r.status >= 200 && r.status < 300) {
         log_line(app, "parted %s", channel);
         remove_window(app, network, channel);
+    } else {
+        log_line(app, "part failed HTTP %d: %.200s", r.status, r.body);
     }
-    else log_line(app, "part failed HTTP %d: %.200s", r.status, r.body);
     free(path);
     free(r.body);
 }
@@ -5342,13 +5461,11 @@ static void *worker_main(void *arg) {
             break;
         }
         case JOB_JOIN:
-            join_channel(app, job.channel);
+            join_channel_on(app, job.network, job.channel);
             break;
-        case JOB_PART: {
-            add_window(app, job.network, job.channel);
-            part_current(app);
+        case JOB_PART:
+            part_target(app, job.network, job.channel);
             break;
-        }
         case JOB_NICK:
             add_window(app, job.network, job.channel);
             set_nick(app, job.arg1);
@@ -8261,6 +8378,1013 @@ static int resolve_escape(void) {
     }
 }
 
+/* Set by the signal handler in headless mode: a bridge has no /exit to
+ * type, so Ctrl-C and SIGTERM are how it stops. */
+static volatile sig_atomic_t ircd_signalled;
+
+static void ircd_signal_handler(int sig) {
+    (void)sig;
+    ircd_signalled = 1;
+}
+
+static bool ircd_is_channel(const char *name) {
+    return name && (name[0] == '#' || name[0] == '&' || name[0] == '+' || name[0] == '!');
+}
+
+/* ── Output ────────────────────────────────────────────────────────────
+ * Every send appends a whole line to the client's buffer under the
+ * bridge lock, so lines from the tee and lines from a command reply can
+ * interleave but never tear. */
+
+static void ircd_queue_locked(struct ircd_client *c, const char *line, size_t len) {
+    if (c->fd < 0 || c->closing) return;
+    size_t need = c->out_len + len + 2;
+    if (need > IRCD_OUT_MAX) {
+        c->closing = true; /* SendQ exceeded: the client stopped reading */
+        return;
+    }
+    if (need > c->out_cap) {
+        size_t cap = c->out_cap ? c->out_cap : 8192;
+        while (cap < need) cap *= 2;
+        char *bigger = realloc(c->out, cap);
+        if (!bigger) {
+            c->closing = true;
+            return;
+        }
+        c->out = bigger;
+        c->out_cap = cap;
+    }
+    memcpy(c->out + c->out_len, line, len);
+    c->out_len += len;
+    c->out[c->out_len++] = '\r';
+    c->out[c->out_len++] = '\n';
+}
+
+static void ircd_vsend_locked(struct ircd_client *c, const char *fmt, va_list ap) {
+    char line[IRCD_LINE_MAX + 256];
+    int n = vsnprintf(line, sizeof(line), fmt, ap);
+    if (n < 0) return;
+    if ((size_t)n >= sizeof(line)) n = (int)sizeof(line) - 1;
+    /* The backstop. Bodies are sanitised where they enter, but ONE stray
+     * newline reaching a client is a command injected into that client's
+     * session by whoever wrote the message. */
+    for (int i = 0; i < n; i++)
+        if (line[i] == '\r' || line[i] == '\n') line[i] = ' ';
+    ircd_queue_locked(c, line, (size_t)n);
+}
+
+static void ircd_send_locked(struct ircd_client *c, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+static void ircd_send_locked(struct ircd_client *c, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    ircd_vsend_locked(c, fmt, ap);
+    va_end(ap);
+}
+
+static void ircd_send(struct app *app, struct ircd_client *c, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+static void ircd_send(struct app *app, struct ircd_client *c, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    pthread_mutex_lock(&app->ircd.lock);
+    ircd_vsend_locked(c, fmt, ap);
+    pthread_mutex_unlock(&app->ircd.lock);
+    va_end(ap);
+}
+
+static void ircd_numeric(struct app *app, struct ircd_client *c, int num, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+static void ircd_numeric(struct app *app, struct ircd_client *c, int num, const char *fmt, ...) {
+    char rest[IRCD_LINE_MAX];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(rest, sizeof(rest), fmt, ap);
+    va_end(ap);
+    ircd_send(app, c, ":%s %03d %s %s", IRCD_SERVER, num, c->nick[0] ? c->nick : "*", rest);
+}
+
+static void ircd_notice(struct app *app, struct ircd_client *c, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+static void ircd_notice(struct app *app, struct ircd_client *c, const char *fmt, ...) {
+    char text[IRCD_LINE_MAX];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(text, sizeof(text), fmt, ap);
+    va_end(ap);
+    ircd_send(app, c, ":%s NOTICE %s :%s", IRCD_SERVER, c->nick[0] ? c->nick : "*", text);
+}
+
+/* Push whatever is buffered. Non-blocking: a partial write leaves the
+ * rest for the next pass. Caller holds the bridge lock. */
+static void ircd_flush_locked(struct ircd_client *c) {
+    while (c->out_len > 0 && c->fd >= 0) {
+        ssize_t n = send(c->fd, c->out, c->out_len, MSG_NOSIGNAL);
+        if (n > 0) {
+            memmove(c->out, c->out + n, c->out_len - (size_t)n);
+            c->out_len -= (size_t)n;
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+        c->closing = true;
+        return;
+    }
+}
+
+static void ircd_drop_locked(struct ircd_client *c) {
+    if (c->fd >= 0) close(c->fd);
+    free(c->out);
+    memset(c, 0, sizeof(*c));
+    c->fd = -1;
+}
+
+/* ── Grappa side ───────────────────────────────────────────────────────
+ * Everything the bridge asks of grappa goes through the same paths the
+ * terminal UI uses: jobs for anything that blocks, the raw verb for what
+ * the client asked in IRC's own words. */
+
+static int ircd_network_id(struct app *app, const char *slug) {
+    int id = 0;
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->network_count; i++)
+        if (strcmp(app->networks[i].slug, slug) == 0) id = app->networks[i].id;
+    pthread_mutex_unlock(&app->lock);
+    return id;
+}
+
+/* Hand a line to the real ircd upstream, verbatim. This is what makes
+ * the bridge useful beyond the commands it implements: a client can send
+ * anything its user knows how to type, and grappa forwards it. Replies
+ * come back as grappa events, and the ones that map onto a numeric are
+ * translated below; the rest reach the user in shottino's other clients,
+ * which the NOTICE says. */
+static void ircd_forward_raw(struct app *app, struct ircd_client *c, const char *line) {
+    int id = ircd_network_id(app, c->network);
+    if (!id) return;
+    char *raw = json_escape(line);
+    char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", id, raw);
+    ws_push_user(app, "raw", payload);
+    free(raw);
+    free(payload);
+}
+
+/* ── Downstream state, from app state ──────────────────────────────── */
+
+/* Copy the channels this client's network has open. Takes app->lock, so
+ * it must NOT be called with the bridge lock held. */
+static size_t ircd_channels_of(struct app *app, const char *network, char out[][MAX_CHANNEL],
+                               size_t max) {
+    size_t n = 0;
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count && n < max; i++) {
+        if (strcmp(app->windows[i].network, network) != 0) continue;
+        if (!ircd_is_channel(app->windows[i].channel)) continue;
+        snprintf(out[n], MAX_CHANNEL, "%s", app->windows[i].channel);
+        n++;
+    }
+    pthread_mutex_unlock(&app->lock);
+    return n;
+}
+
+static void ircd_own_nick(struct app *app, const char *network, char *out, size_t out_sz) {
+    pthread_mutex_lock(&app->lock);
+    const char *nick = own_nick_for_network(app, network);
+    snprintf(out, out_sz, "%s", nick ? nick : "grappa");
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* RPL_NAMREPLY + RPL_ENDOFNAMES for one channel, from the roster the
+ * client already keeps up to date. */
+static void ircd_send_names(struct app *app, struct ircd_client *c, const char *channel) {
+    char line[IRCD_LINE_MAX];
+    size_t used = 0;
+    line[0] = '\0';
+
+    pthread_mutex_lock(&app->lock);
+    const char *sigils = NULL;
+    network_prefixes_locked(app, c->network, NULL, &sigils);
+    struct window *w = NULL;
+    for (size_t i = 0; i < app->window_count; i++)
+        if (strcmp(app->windows[i].network, c->network) == 0 &&
+            ircd_name_equal(app->windows[i].channel, channel))
+            w = &app->windows[i];
+    /* Copied out under the lock: the send below must not hold it. */
+    static char names[512][MAX_CHANNEL + 8];
+    size_t count = 0;
+    if (w) {
+        for (size_t i = 0; i < w->member_count && count < 512; i++) {
+            char sig[8];
+            ircd_member_sigils(w->members[i].modes, sigils ? sigils : "", c->cap_multi_prefix, sig,
+                               sizeof(sig));
+            snprintf(names[count], sizeof(names[0]), "%s%s", sig, w->members[i].nick);
+            count++;
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+
+    for (size_t i = 0; i < count; i++) {
+        size_t len = strlen(names[i]);
+        if (used + len + 2 > 400) {
+            ircd_numeric(app, c, 353, "= %s :%s", channel, line);
+            line[0] = '\0';
+            used = 0;
+        }
+        if (used) {
+            line[used++] = ' ';
+            line[used] = '\0';
+        }
+        memcpy(line + used, names[i], len + 1);
+        used += len;
+    }
+    if (used) ircd_numeric(app, c, 353, "= %s :%s", channel, line);
+    ircd_numeric(app, c, 366, "%s :End of /NAMES list", channel);
+}
+
+static void ircd_send_topic(struct app *app, struct ircd_client *c, const char *channel) {
+    char topic[MAX_TOPIC];
+    topic[0] = '\0';
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++)
+        if (strcmp(app->windows[i].network, c->network) == 0 &&
+            ircd_name_equal(app->windows[i].channel, channel))
+            snprintf(topic, sizeof(topic), "%s", app->windows[i].topic);
+    pthread_mutex_unlock(&app->lock);
+    char clean[MAX_TOPIC];
+    ircd_sanitize(topic, clean, sizeof(clean));
+    if (clean[0]) ircd_numeric(app, c, 332, "%s :%s", channel, clean);
+    else ircd_numeric(app, c, 331, "%s :No topic is set", channel);
+}
+
+/* Show the client a channel it is in: the JOIN it would have seen, the
+ * topic, and who is there. Used both when a client registers (for the
+ * channels grappa already holds open) and when it asks to join one that
+ * is already open. */
+static void ircd_present_channel(struct app *app, struct ircd_client *c, const char *channel) {
+    char prefix[192];
+    ircd_sender_prefix(c->nick, prefix, sizeof(prefix));
+    ircd_send(app, c, ":%s JOIN %s", prefix, channel);
+    ircd_send_topic(app, c, channel);
+    ircd_send_names(app, c, channel);
+}
+
+/* ── The tee ───────────────────────────────────────────────────────────
+ *
+ * render_message() is the ONE place every message reaches, live push and
+ * fetched scrollback alike, already deduplicated by id and already
+ * carrying network, channel, sender, kind and server_time. Hooking the
+ * bridge there rather than at the socket means history and live traffic
+ * take the same path — and that presence rows (join, part, quit, nick,
+ * mode, kick, topic) come along, because grappa delivers those as
+ * messages too. */
+
+static void ircd_history_add_locked(struct app *app, const struct wire_scrollback_message *m,
+                                    const char *channel) {
+    struct ircd_hist *h = &app->ircd.hist[app->ircd.hist_next];
+    memset(h, 0, sizeof(*h));
+    h->server_time = m->server_time;
+    h->kind = m->kind;
+    snprintf(h->network, sizeof(h->network), "%s", m->network);
+    snprintf(h->channel, sizeof(h->channel), "%s", channel);
+    snprintf(h->sender, sizeof(h->sender), "%s", m->sender ? m->sender : "");
+    snprintf(h->body, sizeof(h->body), "%s", m->body ? m->body : "");
+    app->ircd.hist_next = (app->ircd.hist_next + 1) % IRCD_HISTORY;
+    if (app->ircd.hist_count < IRCD_HISTORY) app->ircd.hist_count++;
+}
+
+/* One message, as the IRC line a client expects. `own` is our nick on
+ * that network, which decides who a DM is addressed to: a message from
+ * someone else is addressed to US, and our own message in that window is
+ * addressed to THEM. */
+static void ircd_message_line(const struct ircd_hist *h, const char *own, bool time_tag,
+                              char *out, size_t out_sz) {
+    char prefix[192];
+    ircd_sender_prefix(h->sender[0] ? h->sender : IRCD_SERVER, prefix, sizeof(prefix));
+    /* Bounded well under the line buffer rather than at MAX_LINE: a
+     * grappa body can be longer than an IRC line may be, and the
+     * arithmetic has to leave room for the prefix, the target and the
+     * tag. Truncating here is what stops a long message from silently
+     * losing its last parameter instead of its last words. */
+    char body[768];
+    ircd_sanitize(h->body, body, sizeof(body));
+    char tag[64];
+    ircd_time_tag(h->server_time, time_tag, tag, sizeof(tag));
+
+    const char *target = h->channel;
+    if (!ircd_is_channel(h->channel) && !ircd_name_equal(h->sender, own)) target = own;
+
+    switch (h->kind) {
+    case MSG_PRIVMSG:
+        snprintf(out, out_sz, "%s:%s PRIVMSG %.64s :%s", tag, prefix, target, body);
+        break;
+    case MSG_NOTICE:
+        snprintf(out, out_sz, "%s:%s NOTICE %.64s :%s", tag, prefix, target, body);
+        break;
+    case MSG_ACTION:
+        /* grappa classifies the kind; whether the CTCP wrapper survived
+         * in the body depends on where the row came from, so it is put
+         * back only when it is not already there. */
+        if (body[0] == '\001') snprintf(out, out_sz, "%s:%s PRIVMSG %.64s :%s", tag, prefix, target, body);
+        else snprintf(out, out_sz, "%s:%s PRIVMSG %.64s :\001ACTION %s\001", tag, prefix, target, body);
+        break;
+    case MSG_JOIN:
+        snprintf(out, out_sz, "%s:%s JOIN %.64s", tag, prefix, h->channel);
+        break;
+    case MSG_PART:
+        snprintf(out, out_sz, "%s:%s PART %.64s :%s", tag, prefix, h->channel, body);
+        break;
+    case MSG_QUIT:
+        snprintf(out, out_sz, "%s:%s QUIT :%s", tag, prefix, body);
+        break;
+    case MSG_NICK_CHANGE:
+        snprintf(out, out_sz, "%s:%s NICK :%s", tag, prefix, body);
+        break;
+    case MSG_MODE:
+        snprintf(out, out_sz, "%s:%s MODE %.64s %s", tag, prefix, h->channel, body);
+        break;
+    case MSG_TOPIC:
+        snprintf(out, out_sz, "%s:%s TOPIC %.64s :%s", tag, prefix, h->channel, body);
+        break;
+    case MSG_KICK:
+        /* grappa carries the victim in the body and the kicker in the
+         * sender; there is no reason field on the wire. */
+        snprintf(out, out_sz, "%s:%s KICK %.64s %.64s :kicked", tag, prefix, h->channel, body);
+        break;
+    case MSG_SERVER_EVENT:
+        snprintf(out, out_sz, "%s:%s NOTICE %.64s :%s", tag, IRCD_SERVER,
+                 ircd_is_channel(h->channel) ? h->channel : own, body);
+        break;
+    }
+}
+
+/* Called from render_message on whichever thread delivered the row. */
+static void ircd_publish(struct app *app, const struct wire_scrollback_message *m,
+                         const char *display_channel) {
+    if (!app->ircd.enabled) return;
+    char own[MAX_CHANNEL];
+    ircd_own_nick(app, m->network, own, sizeof(own)); /* takes app->lock — before ours */
+
+    pthread_mutex_lock(&app->ircd.lock);
+    ircd_history_add_locked(app, m, display_channel);
+    const struct ircd_hist *h = &app->ircd.hist[(app->ircd.hist_next + IRCD_HISTORY - 1) % IRCD_HISTORY];
+    for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++) {
+        struct ircd_client *c = &app->ircd.clients[i];
+        if (c->fd < 0 || !c->registered) continue;
+        if (strcmp(c->network, m->network) != 0) continue;
+        bool conversational = h->kind == MSG_PRIVMSG || h->kind == MSG_NOTICE || h->kind == MSG_ACTION;
+        /* A client displays its own messages the moment it sends them,
+         * so echoing them back doubles every line — unless it asked for
+         * echo-message, which exists precisely to move that decision to
+         * the server. The cost of not echoing is that a message sent
+         * from cicchetto or shottino's own UI does not appear here;
+         * echo-message is how a client opts into seeing those. */
+        if (conversational && !c->cap_echo && ircd_name_equal(h->sender, own)) continue;
+        char line[IRCD_LINE_MAX + 256];
+        ircd_message_line(h, own, c->cap_server_time, line, sizeof(line));
+        if (line[0]) ircd_send_locked(c, "%s", line);
+    }
+    pthread_mutex_unlock(&app->ircd.lock);
+}
+
+/* Everything in the ring for this client's network, oldest first. The
+ * ring is small enough that "all of it" is the right answer: a client
+ * reconnecting wants the conversation, and picking a per-channel cap
+ * would reorder it. */
+static void ircd_replay(struct app *app, struct ircd_client *c) {
+    char own[MAX_CHANNEL];
+    ircd_own_nick(app, c->network, own, sizeof(own));
+    pthread_mutex_lock(&app->ircd.lock);
+    size_t start = app->ircd.hist_count == IRCD_HISTORY ? app->ircd.hist_next : 0;
+    for (size_t k = 0; k < app->ircd.hist_count; k++) {
+        const struct ircd_hist *h = &app->ircd.hist[(start + k) % IRCD_HISTORY];
+        if (strcmp(h->network, c->network) != 0) continue;
+        /* Presence rows are noise in a replay: a JOIN from an hour ago
+         * tells a client someone is arriving now. Conversation is what
+         * was missed. */
+        if (h->kind != MSG_PRIVMSG && h->kind != MSG_NOTICE && h->kind != MSG_ACTION) continue;
+        char line[IRCD_LINE_MAX + 256];
+        ircd_message_line(h, own, c->cap_server_time, line, sizeof(line));
+        if (line[0]) ircd_send_locked(c, "%s", line);
+    }
+    pthread_mutex_unlock(&app->ircd.lock);
+}
+
+/* ── Registration ──────────────────────────────────────────────────── */
+
+/* Which grappa network this client asked for. Returns false when it
+ * named one that does not exist — answered with the list, because a
+ * typo'd network name is the most likely first-connection mistake. */
+static bool ircd_resolve_network(struct app *app, const char *want, char *out, size_t out_sz,
+                                 char *known, size_t known_sz) {
+    bool found = false;
+    size_t used = 0;
+    known[0] = '\0';
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->network_count; i++) {
+        const char *slug = app->networks[i].slug;
+        used += (size_t)snprintf(known + used, used < known_sz ? known_sz - used : 0, "%s%s",
+                                 used ? " " : "", slug);
+        if (!found && (!want[0] || strcasecmp(want, slug) == 0)) {
+            snprintf(out, out_sz, "%s", slug);
+            found = true;
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+    return found;
+}
+
+static void ircd_register(struct app *app, struct ircd_client *c) {
+    char want[MAX_SLUG] = "";
+    char secret[128] = "";
+    ircd_split_pass(c->pass, want, sizeof(want), secret, sizeof(secret));
+
+    char network[MAX_SLUG] = "";
+    char known[512];
+    /* With no colon, PASS is either a network name or a password and
+     * nothing in the string says which — so it is tried as a network
+     * name first, and if that is not one, it was a password. */
+    if (!ircd_resolve_network(app, want, network, sizeof(network), known, sizeof(known))) {
+        if (strcmp(want, secret) == 0) {
+            want[0] = '\0';
+            if (!ircd_resolve_network(app, "", network, sizeof(network), known, sizeof(known))) {
+                ircd_send(app, c, "ERROR :grappa has no networks bound yet");
+                c->closing = true;
+                return;
+            }
+        } else {
+            ircd_send(app, c, "ERROR :no such network %s — this account has: %s", want, known);
+            c->closing = true;
+            return;
+        }
+    }
+    if (strcmp(want, secret) == 0 && want[0] && strcasecmp(want, network) == 0) secret[0] = '\0';
+
+    if (app->ircd.secret_required && strcmp(secret, app->ircd.secret) != 0) {
+        ircd_numeric(app, c, 464, ":Password incorrect");
+        ircd_send(app, c, "ERROR :bad password");
+        c->closing = true;
+        return;
+    }
+    snprintf(c->network, sizeof(c->network), "%s", network);
+
+    /* The nick is grappa's, not the client's: a bouncer speaks as the
+     * account it is bridging, and a client that guessed differently is
+     * told so with the NICK it would have got from a real server. */
+    char own[MAX_CHANNEL];
+    ircd_own_nick(app, network, own, sizeof(own));
+    if (own[0] && !ircd_name_equal(own, c->nick)) {
+        char prefix[192];
+        ircd_sender_prefix(c->nick, prefix, sizeof(prefix));
+        ircd_send(app, c, ":%s NICK :%s", prefix, own);
+        snprintf(c->nick, sizeof(c->nick), "%s", own);
+    }
+    c->registered = true;
+
+    ircd_numeric(app, c, 1, ":Welcome to grappa via shottino, %s", c->nick);
+    ircd_numeric(app, c, 2, ":Your host is %s, running shottino %s", IRCD_SERVER, SHOTTINO_VERSION);
+    ircd_numeric(app, c, 3, ":This bridge speaks for network %s", network);
+    ircd_numeric(app, c, 4, "%s shottino-%s o o", IRCD_SERVER, SHOTTINO_VERSION);
+
+    const char *sigils = NULL;
+    const char *letters = NULL;
+    pthread_mutex_lock(&app->lock);
+    network_prefixes_locked(app, network, &letters, &sigils);
+    char pfx[64];
+    snprintf(pfx, sizeof(pfx), "(%s)%s", letters ? letters : "ohv", sigils ? sigils : "@%+");
+    pthread_mutex_unlock(&app->lock);
+    ircd_numeric(app, c, 5,
+                 "CHANTYPES=#&+! PREFIX=%s NETWORK=%s CASEMAPPING=rfc1459 NICKLEN=32 "
+                 "CHANNELLEN=64 :are supported by this server",
+                 pfx, network);
+
+    ircd_numeric(app, c, 375, ":- %s message of the day -", IRCD_SERVER);
+    ircd_numeric(app, c, 372, ":- shottino is bridging this connection to grappa.");
+    ircd_numeric(app, c, 372, ":- Network: %s. Your session, channels and history are grappa's;", network);
+    ircd_numeric(app, c, 372, ":- this connection is only a view of them.");
+    ircd_numeric(app, c, 372, ":- Commands shottino does not implement are forwarded to the real");
+    ircd_numeric(app, c, 372, ":- server verbatim, so anything you can type still works.");
+    ircd_numeric(app, c, 376, ":End of /MOTD command.");
+
+    /* The channels grappa already holds open ARE this session — a
+     * bouncer shows them without being asked, or the client comes up
+     * empty and the user rejoins channels they never left. */
+    static char channels[MAX_WINDOWS][MAX_CHANNEL];
+    size_t n = ircd_channels_of(app, network, channels, MAX_WINDOWS);
+    for (size_t i = 0; i < n; i++) ircd_present_channel(app, c, channels[i]);
+    ircd_replay(app, c);
+    startup("ircd: %s registered on %s (%zu channels)", c->nick, network, n);
+}
+
+static void ircd_maybe_register(struct app *app, struct ircd_client *c) {
+    if (c->registered || c->cap_negotiating) return;
+    if (!c->got_nick || !c->got_user) return;
+    ircd_register(app, c);
+}
+
+/* ── Commands from the client ──────────────────────────────────────── */
+
+static void ircd_cmd_cap(struct app *app, struct ircd_client *c, const struct ircd_msg *m) {
+    const char *sub = m->param_count > 0 ? m->params[0] : "";
+    if (strcasecmp(sub, "LS") == 0 || strcasecmp(sub, "LIST") == 0) {
+        c->cap_negotiating = true;
+        ircd_send(app, c, ":%s CAP %s LS :server-time multi-prefix echo-message", IRCD_SERVER,
+                  c->nick[0] ? c->nick : "*");
+        return;
+    }
+    if (strcasecmp(sub, "REQ") == 0) {
+        const char *want = m->param_count > 1 ? m->params[1] : "";
+        char acked[128] = "";
+        size_t used = 0;
+        bool all = true;
+        char copy[IRCD_PARAM_MAX];
+        snprintf(copy, sizeof(copy), "%s", want);
+        for (char *tok = strtok(copy, " "); tok; tok = strtok(NULL, " ")) {
+            bool ok = true;
+            if (strcmp(tok, "server-time") == 0) c->cap_server_time = true;
+            else if (strcmp(tok, "multi-prefix") == 0) c->cap_multi_prefix = true;
+            else if (strcmp(tok, "echo-message") == 0) c->cap_echo = true;
+            else ok = false;
+            if (!ok) {
+                all = false;
+                continue;
+            }
+            used += (size_t)snprintf(acked + used, sizeof(acked) - used, "%s%s", used ? " " : "",
+                                     tok);
+        }
+        ircd_send(app, c, ":%s CAP %s %s :%s", IRCD_SERVER, c->nick[0] ? c->nick : "*",
+                  all ? "ACK" : "NAK", all ? acked : want);
+        return;
+    }
+    if (strcasecmp(sub, "END") == 0) {
+        c->cap_negotiating = false;
+        ircd_maybe_register(app, c);
+    }
+}
+
+static void ircd_cmd_join(struct app *app, struct ircd_client *c, const char *targets) {
+    char copy[IRCD_PARAM_MAX];
+    snprintf(copy, sizeof(copy), "%s", targets);
+    for (char *tok = strtok(copy, ","); tok; tok = strtok(NULL, ",")) {
+        if (!ircd_is_channel(tok)) continue;
+        bool known = false;
+        pthread_mutex_lock(&app->lock);
+        for (size_t i = 0; i < app->window_count; i++)
+            if (strcmp(app->windows[i].network, c->network) == 0 &&
+                ircd_name_equal(app->windows[i].channel, tok))
+                known = true;
+        pthread_mutex_unlock(&app->lock);
+        if (known) {
+            /* Already in it: show the client where it is rather than
+             * asking grappa to join a channel it is already in. */
+            ircd_present_channel(app, c, tok);
+            continue;
+        }
+        struct job job = {.kind = JOB_JOIN};
+        snprintf(job.network, sizeof(job.network), "%s", c->network);
+        snprintf(job.channel, sizeof(job.channel), "%s", tok);
+        enqueue_job(app, job);
+        /* The JOIN the client is waiting for arrives when the SERVER
+         * says so, which is a round trip away. Saying that out loud is
+         * the difference between "slow" and "broken". */
+        ircd_notice(app, c, "asking %s to join %s", c->network, tok);
+    }
+}
+
+static void ircd_cmd_part(struct app *app, struct ircd_client *c, const char *targets) {
+    char copy[IRCD_PARAM_MAX];
+    snprintf(copy, sizeof(copy), "%s", targets);
+    for (char *tok = strtok(copy, ","); tok; tok = strtok(NULL, ",")) {
+        struct job job = {.kind = JOB_PART};
+        snprintf(job.network, sizeof(job.network), "%s", c->network);
+        snprintf(job.channel, sizeof(job.channel), "%s", tok);
+        enqueue_job(app, job);
+        /* The client is told immediately: grappa confirms by removing
+         * the window, which produces no message of its own. */
+        char prefix[192];
+        ircd_sender_prefix(c->nick, prefix, sizeof(prefix));
+        ircd_send(app, c, ":%s PART %s", prefix, tok);
+    }
+}
+
+static void ircd_cmd_privmsg(struct app *app, struct ircd_client *c, const struct ircd_msg *m,
+                             bool notice) {
+    if (m->param_count < 2) {
+        ircd_numeric(app, c, 411, ":No recipient given");
+        return;
+    }
+    const char *target = m->params[0];
+    const char *text = m->params[1];
+    if (notice) {
+        /* grappa's message API posts a PRIVMSG; a NOTICE has to go
+         * upstream in IRC's own words. */
+        char line[IRCD_LINE_MAX];
+        snprintf(line, sizeof(line), "NOTICE %.64s :%.700s", target, text);
+        ircd_forward_raw(app, c, line);
+        return;
+    }
+    struct job job = {.kind = JOB_SEND};
+    snprintf(job.network, sizeof(job.network), "%s", c->network);
+    snprintf(job.channel, sizeof(job.channel), "%.*s", (int)sizeof(job.channel) - 1, target);
+    snprintf(job.arg1, sizeof(job.arg1), "%.*s", (int)sizeof(job.arg1) - 1, text);
+    enqueue_job(app, job);
+}
+
+static void ircd_cmd_who(struct app *app, struct ircd_client *c, const char *mask) {
+    char nicks[512][MAX_CHANNEL];
+    char modes[512][8];
+    size_t count = 0;
+    pthread_mutex_lock(&app->lock);
+    const char *sigils = NULL;
+    network_prefixes_locked(app, c->network, NULL, &sigils);
+    for (size_t i = 0; i < app->window_count && !count; i++) {
+        if (strcmp(app->windows[i].network, c->network) != 0) continue;
+        if (!ircd_name_equal(app->windows[i].channel, mask)) continue;
+        struct window *w = &app->windows[i];
+        for (size_t k = 0; k < w->member_count && count < 512; k++) {
+            snprintf(nicks[count], MAX_CHANNEL, "%s", w->members[k].nick);
+            ircd_member_sigils(w->members[k].modes, sigils ? sigils : "", false, modes[count],
+                               sizeof(modes[0]));
+            count++;
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+    for (size_t i = 0; i < count; i++)
+        ircd_numeric(app, c, 352, "%s %s grappa %s %s H%s :0 %s", mask, nicks[i], IRCD_SERVER,
+                     nicks[i], modes[i], nicks[i]);
+    ircd_numeric(app, c, 315, "%s :End of /WHO list", mask);
+}
+
+/* WHOIS is answered from what the bridge knows — which channels of this
+ * network the nick is in — and the query is NOT forwarded: a real WHOIS
+ * reply arrives as a grappa event with no client to attribute it to, and
+ * answering twice with different information is worse than answering
+ * once with less. */
+static void ircd_cmd_whois(struct app *app, struct ircd_client *c, const char *nick) {
+    char shared[IRCD_LINE_MAX] = "";
+    size_t used = 0;
+    bool seen = false;
+    pthread_mutex_lock(&app->lock);
+    const char *sigils = NULL;
+    network_prefixes_locked(app, c->network, NULL, &sigils);
+    for (size_t i = 0; i < app->window_count; i++) {
+        if (strcmp(app->windows[i].network, c->network) != 0) continue;
+        struct window *w = &app->windows[i];
+        if (!ircd_is_channel(w->channel)) continue;
+        for (size_t k = 0; k < w->member_count; k++) {
+            if (!ircd_name_equal(w->members[k].nick, nick)) continue;
+            seen = true;
+            char sig[8];
+            ircd_member_sigils(w->members[k].modes, sigils ? sigils : "", false, sig, sizeof(sig));
+            used += (size_t)snprintf(shared + used, sizeof(shared) - used, "%s%s%s",
+                                     used ? " " : "", sig, w->channel);
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+    if (!seen) {
+        ircd_numeric(app, c, 401, "%s :No such nick (not in any channel here)", nick);
+        ircd_numeric(app, c, 318, "%s :End of /WHOIS list", nick);
+        return;
+    }
+    ircd_numeric(app, c, 311, "%s %s grappa * :%s", nick, nick, nick);
+    if (used) ircd_numeric(app, c, 319, "%s :%s", nick, shared);
+    ircd_numeric(app, c, 312, "%s %s :bridged by shottino", nick, IRCD_SERVER);
+    ircd_numeric(app, c, 318, "%s :End of /WHOIS list", nick);
+}
+
+static void ircd_dispatch(struct app *app, struct ircd_client *c, const char *raw) {
+    struct ircd_msg m;
+    if (!ircd_parse_line(raw, &m)) return;
+
+    if (ircd_command_is(&m, "CAP")) {
+        ircd_cmd_cap(app, c, &m);
+        return;
+    }
+    if (ircd_command_is(&m, "PASS")) {
+        if (m.param_count > 0) snprintf(c->pass, sizeof(c->pass), "%.*s", (int)sizeof(c->pass) - 1, m.params[0]);
+        return;
+    }
+    if (ircd_command_is(&m, "USER")) {
+        if (m.param_count > 0) snprintf(c->user, sizeof(c->user), "%.*s", (int)sizeof(c->user) - 1, m.params[0]);
+        c->got_user = true;
+        ircd_maybe_register(app, c);
+        return;
+    }
+    if (ircd_command_is(&m, "PING")) {
+        ircd_send(app, c, ":%s PONG %s :%s", IRCD_SERVER, IRCD_SERVER,
+                  m.param_count > 0 ? m.params[0] : IRCD_SERVER);
+        return;
+    }
+    if (ircd_command_is(&m, "PONG")) return;
+    if (ircd_command_is(&m, "QUIT")) {
+        ircd_send(app, c, "ERROR :Closing link");
+        c->closing = true;
+        return;
+    }
+    if (ircd_command_is(&m, "NICK")) {
+        if (m.param_count == 0) return;
+        if (!c->registered) {
+            snprintf(c->nick, sizeof(c->nick), "%.*s", (int)sizeof(c->nick) - 1, m.params[0]);
+            c->got_nick = true;
+            ircd_maybe_register(app, c);
+            return;
+        }
+        /* After registration a NICK is a real request against the
+         * network: grappa answers with a nick_change that comes back
+         * through the tee, so nothing is echoed here. */
+        char line[IRCD_LINE_MAX];
+        snprintf(line, sizeof(line), "NICK %s", m.params[0]);
+        ircd_forward_raw(app, c, line);
+        return;
+    }
+
+    if (!c->registered) {
+        ircd_numeric(app, c, 451, ":You have not registered");
+        return;
+    }
+
+    if (ircd_command_is(&m, "JOIN")) {
+        if (m.param_count > 0) ircd_cmd_join(app, c, m.params[0]);
+        return;
+    }
+    if (ircd_command_is(&m, "PART")) {
+        if (m.param_count > 0) ircd_cmd_part(app, c, m.params[0]);
+        return;
+    }
+    if (ircd_command_is(&m, "PRIVMSG") || ircd_command_is(&m, "NOTICE")) {
+        ircd_cmd_privmsg(app, c, &m, ircd_command_is(&m, "NOTICE"));
+        return;
+    }
+    if (ircd_command_is(&m, "NAMES")) {
+        if (m.param_count > 0) ircd_send_names(app, c, m.params[0]);
+        return;
+    }
+    if (ircd_command_is(&m, "WHO")) {
+        if (m.param_count > 0) ircd_cmd_who(app, c, m.params[0]);
+        return;
+    }
+    if (ircd_command_is(&m, "WHOIS")) {
+        if (m.param_count > 0) ircd_cmd_whois(app, c, m.params[m.param_count - 1]);
+        return;
+    }
+    if (ircd_command_is(&m, "TOPIC") && m.param_count == 1) {
+        ircd_send_topic(app, c, m.params[0]);
+        return;
+    }
+
+    /* Everything else — MODE, TOPIC with a new topic, AWAY, LIST,
+     * INVITE, KICK, OPER, and whatever this server knows that this
+     * bridge does not — goes upstream in the words the client used. That
+     * is the difference between a bridge and a reimplementation. */
+    char line[IRCD_LINE_MAX];
+    size_t used = (size_t)snprintf(line, sizeof(line), "%s", m.command);
+    for (size_t i = 0; i < m.param_count && used < sizeof(line); i++) {
+        bool last = i + 1 == m.param_count;
+        used += (size_t)snprintf(line + used, sizeof(line) - used, " %s%s",
+                                 last && ircd_needs_trailing(m.params[i]) ? ":" : "", m.params[i]);
+    }
+    ircd_forward_raw(app, c, line);
+}
+
+/* ── Sockets ───────────────────────────────────────────────────────── */
+
+static bool ircd_listen(struct app *app) {
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV;
+    struct addrinfo *res = NULL;
+    int err = getaddrinfo(app->ircd.host, app->ircd.port, &hints, &res);
+    if (err != 0) {
+        startup("ircd: cannot resolve %s:%s — %s", app->ircd.host, app->ircd.port,
+                gai_strerror(err));
+        return false;
+    }
+    /* A name can resolve to both stacks (localhost is the usual one), so
+     * every address is bound rather than only the first: a client that
+     * connects over ::1 must not find the door shut because v4 answered
+     * first. */
+    for (struct addrinfo *ai = res; ai && app->ircd.listen_count < IRCD_LISTEN_MAX; ai = ai->ai_next) {
+        int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) continue;
+        int on = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+#ifdef IPV6_V6ONLY
+        /* Bind the two families SEPARATELY rather than relying on a
+         * v4-mapped v6 socket, which is off by default on some systems
+         * and on by default on others — the same spec producing a
+         * different set of reachable addresses per OS is not a bridge
+         * anyone can reason about. */
+        if (ai->ai_family == AF_INET6) setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on));
+#endif
+        if (bind(fd, ai->ai_addr, ai->ai_addrlen) != 0 || listen(fd, 8) != 0) {
+            startup("ircd: cannot listen on %s:%s — %s", app->ircd.host, app->ircd.port,
+                    strerror(errno));
+            close(fd);
+            continue;
+        }
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        app->ircd.listen_fd[app->ircd.listen_count++] = fd;
+    }
+    freeaddrinfo(res);
+    return app->ircd.listen_count > 0;
+}
+
+static void ircd_accept(struct app *app, int listen_fd) {
+    for (;;) {
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) return;
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        pthread_mutex_lock(&app->ircd.lock);
+        struct ircd_client *slot = NULL;
+        for (size_t i = 0; i < IRCD_MAX_CLIENTS && !slot; i++)
+            if (app->ircd.clients[i].fd < 0) slot = &app->ircd.clients[i];
+        if (slot) {
+            memset(slot, 0, sizeof(*slot));
+            slot->fd = fd;
+        }
+        pthread_mutex_unlock(&app->ircd.lock);
+        if (!slot) {
+            const char *full = "ERROR :too many connections to this bridge\r\n";
+            ssize_t w = send(fd, full, strlen(full), MSG_NOSIGNAL);
+            (void)w;
+            close(fd);
+            startup("ircd: refused a connection — all %d slots are in use", IRCD_MAX_CLIENTS);
+            continue;
+        }
+        startup("ircd: client connected");
+    }
+}
+
+/* Read whatever arrived and dispatch the complete lines in it. The
+ * dispatch runs WITHOUT the bridge lock — it calls into app state and
+ * enqueues jobs — so the lines are copied out first. */
+static void ircd_read(struct app *app, struct ircd_client *c) {
+    char lines[32][IRCD_LINE_MAX];
+    size_t count = 0;
+    bool gone = false;
+
+    pthread_mutex_lock(&app->ircd.lock);
+    for (;;) {
+        if (c->in_len >= sizeof(c->in) - 1) {
+            /* A line longer than the buffer is not a line. */
+            c->in_len = 0;
+            break;
+        }
+        ssize_t n = recv(c->fd, c->in + c->in_len, sizeof(c->in) - 1 - c->in_len, 0);
+        if (n > 0) {
+            c->in_len += (size_t)n;
+            continue;
+        }
+        if (n == 0) gone = true;
+        else if (errno != EAGAIN && errno != EWOULDBLOCK) gone = true;
+        break;
+    }
+    size_t start = 0;
+    for (size_t i = 0; i < c->in_len; i++) {
+        if (c->in[i] != '\n') continue;
+        size_t len = i - start;
+        if (len && c->in[start + len - 1] == '\r') len--;
+        if (len && count < 32) {
+            if (len >= IRCD_LINE_MAX) len = IRCD_LINE_MAX - 1;
+            memcpy(lines[count], c->in + start, len);
+            lines[count][len] = '\0';
+            count++;
+        }
+        start = i + 1;
+    }
+    if (start) {
+        memmove(c->in, c->in + start, c->in_len - start);
+        c->in_len -= start;
+    }
+    if (gone) c->closing = true;
+    pthread_mutex_unlock(&app->ircd.lock);
+
+    for (size_t i = 0; i < count && !c->closing; i++) ircd_dispatch(app, c, lines[i]);
+}
+
+static bool ircd_start(struct app *app, const char *spec) {
+    memset(&app->ircd, 0, sizeof(app->ircd));
+    pthread_mutex_init(&app->ircd.lock, NULL);
+    for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++) app->ircd.clients[i].fd = -1;
+
+    if (!ircd_parse_bind(spec, app->ircd.host, sizeof(app->ircd.host), app->ircd.port,
+                         sizeof(app->ircd.port))) {
+        startup("ircd: cannot read '%s' as a port, an address, or address:port", spec);
+        return false;
+    }
+    const char *secret = getenv("SHOTTINO_IRCD_PASS");
+    if (secret && *secret) snprintf(app->ircd.secret, sizeof(app->ircd.secret), "%s", secret);
+    bool loopback = ircd_bind_is_loopback(app->ircd.host);
+    app->ircd.secret_required = app->ircd.secret[0] != '\0' || !loopback;
+    if (!loopback && !app->ircd.secret[0]) {
+        /* Refusing is the whole point: anyone who reaches this port owns
+         * the user's IRC session, and a bridge that came up anyway would
+         * be discovered only by someone else using it. */
+        startup("ircd: %s is reachable from other machines and SHOTTINO_IRCD_PASS is not set —"
+                " refusing to listen",
+                app->ircd.host);
+        startup("ircd: set SHOTTINO_IRCD_PASS, or bind a loopback address (the default)");
+        return false;
+    }
+    if (!ircd_listen(app)) return false;
+    app->ircd.enabled = true;
+    startup("ircd: listening on %s:%s (%s, password %s)", app->ircd.host, app->ircd.port,
+            loopback ? "loopback only" : "REACHABLE FROM OTHER MACHINES",
+            app->ircd.secret_required ? "required" : "not set");
+    startup("ircd: connect an IRC client there; PASS <network>:<password> chooses the network");
+    return true;
+}
+
+static void ircd_stop(struct app *app) {
+    pthread_mutex_lock(&app->ircd.lock);
+    for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++)
+        if (app->ircd.clients[i].fd >= 0) ircd_drop_locked(&app->ircd.clients[i]);
+    pthread_mutex_unlock(&app->ircd.lock);
+    for (size_t i = 0; i < app->ircd.listen_count; i++) close(app->ircd.listen_fd[i]);
+    app->ircd.listen_count = 0;
+    app->ircd.enabled = false;
+    pthread_mutex_destroy(&app->ircd.lock);
+}
+
+/* The headless event loop: the websocket keeps app state current, and
+ * poll() waits on the listeners and the connected clients. No terminal
+ * is opened at all, which is why --ircd works over ssh, in a service
+ * unit, or in a container with no tty. */
+/* One pass over the listeners and the clients: accept, read, dispatch,
+ * flush, reap. Split out from the loop so the suite can drive the bridge
+ * over a real socket without a websocket or a grappa behind it — the
+ * test then exercises THIS code rather than a copy of it. */
+static void ircd_poll_once(struct app *app, int timeout_ms) {
+    {
+        struct pollfd fds[IRCD_LISTEN_MAX + IRCD_MAX_CLIENTS];
+        struct ircd_client *owner[IRCD_LISTEN_MAX + IRCD_MAX_CLIENTS];
+        nfds_t n = 0;
+        for (size_t i = 0; i < app->ircd.listen_count; i++) {
+            fds[n].fd = app->ircd.listen_fd[i];
+            fds[n].events = POLLIN;
+            fds[n].revents = 0;
+            owner[n] = NULL;
+            n++;
+        }
+        pthread_mutex_lock(&app->ircd.lock);
+        for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++) {
+            struct ircd_client *c = &app->ircd.clients[i];
+            if (c->fd < 0) continue;
+            fds[n].fd = c->fd;
+            fds[n].events = POLLIN | (c->out_len ? POLLOUT : 0);
+            fds[n].revents = 0;
+            owner[n] = c;
+            n++;
+        }
+        pthread_mutex_unlock(&app->ircd.lock);
+
+        int ready = poll(fds, n, timeout_ms);
+        if (ready < 0 && errno != EINTR) return;
+
+        for (nfds_t i = 0; i < n; i++) {
+            if (!fds[i].revents) continue;
+            if (!owner[i]) {
+                ircd_accept(app, fds[i].fd);
+                continue;
+            }
+            if (fds[i].revents & (POLLIN | POLLHUP | POLLERR)) ircd_read(app, owner[i]);
+        }
+
+        pthread_mutex_lock(&app->ircd.lock);
+        for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++) {
+            struct ircd_client *c = &app->ircd.clients[i];
+            if (c->fd < 0) continue;
+            ircd_flush_locked(c);
+            /* Dropped last, after the flush, so a client that asked to
+             * QUIT still receives the ERROR that says why. */
+            if (c->closing && c->out_len == 0) {
+                ircd_drop_locked(c);
+                startup("ircd: client disconnected");
+            }
+        }
+        pthread_mutex_unlock(&app->ircd.lock);
+    }
+}
+
+static void ircd_loop(struct app *app) {
+    signal(SIGINT, ircd_signal_handler);
+    signal(SIGTERM, ircd_signal_handler);
+    app->running = true;
+    while (app->running) {
+        ws_pump(app);
+        if (ircd_signalled) {
+            startup("ircd: signal received, shutting down");
+            app->running = false;
+            break;
+        }
+        /* 50ms is the websocket's own cadence: the loop is awake often
+         * enough that a message pushed by grappa reaches the client in
+         * the tick it arrived. */
+        ircd_poll_once(app, 50);
+    }
+    ircd_stop(app);
+}
+
 static void event_loop(struct app *app) {
     setlocale(LC_ALL, "");
     initscr();
@@ -8386,6 +9510,12 @@ static void print_usage(FILE *out, const char *prog) {
     fprintf(out, "                   from the network credential, not from the email\n");
     fprintf(out, "  --share URL      consume a visitor session-share link (mint one with /share);\n");
     fprintf(out, "                   both host and token are read from the URL\n");
+    fprintf(out, "  --ircd[=ADDR]    run headless and listen as an IRC SERVER, bridging a normal\n");
+    fprintf(out, "                   IRC client to grappa. ADDR is a port, an address, or\n");
+    fprintf(out, "                   address:port, v4 or v6 (default 127.0.0.1:6667; write a v6\n");
+    fprintf(out, "                   address with a port as [::1]:6667). One connection is one\n");
+    fprintf(out, "                   network: the client picks it with PASS <network>:<password>.\n");
+    fprintf(out, "                   Off loopback, SHOTTINO_IRCD_PASS is required.\n");
     fprintf(out, "  --help, -h       show this help and exit\n");
     fprintf(out, "\nOnce connected, /help lists every command.\n");
 }
@@ -8422,6 +9552,8 @@ static void load_http_host_aliases(struct app *app) {
 int main(int argc, char **argv) {
     const char *mode = "auto";
     const char *login_override = NULL;
+    bool ircd_enabled = false;
+    const char *ircd_spec = "";
     /* Checked before the option loop so --help works from any position and
      * never requires the other arguments to be present. */
     for (int i = 1; i < argc; i++) {
@@ -8452,7 +9584,16 @@ int main(int argc, char **argv) {
                 positional[positional_count++] = a;
             continue;
         }
-        if (strcmp(a, "--user") == 0) mode = "user";
+        if (strcmp(a, "--ircd") == 0) {
+            ircd_enabled = true;
+            ircd_spec = "";
+        } else if (strncmp(a, "--ircd=", 7) == 0) {
+            /* Only the =SPEC form. `--ircd 6667` would be indistinguishable
+             * from a positional — and the positional it would eat is the
+             * password. A loud usage error beats guessing. */
+            ircd_enabled = true;
+            ircd_spec = a + 7;
+        } else if (strcmp(a, "--user") == 0) mode = "user";
         else if (strcmp(a, "--visitor") == 0) mode = "visitor";
         else if (strcmp(a, "--share") == 0) mode = "share";
         else if (strcmp(a, "--auto") == 0) mode = "auto";
@@ -8480,6 +9621,12 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    /* A write to a socket whose peer has gone raises SIGPIPE, whose
+     * default action is to kill the process. That is true of the
+     * websocket as well as of a downstream bridge client — the terminal
+     * UI simply had not met the failure yet. Errors come back from
+     * send()/write() instead. */
+    signal(SIGPIPE, SIG_IGN);
     startup("starting (%s mode)", mode);
     SSL_library_init();
     SSL_load_error_strings();
@@ -8538,8 +9685,17 @@ int main(int argc, char **argv) {
      * to precede parsing too: rows parsed while the protocol is unknown
      * and the feature still off get no image attached, which is why the
      * first screenful used to come up pictureless. */
-    app->proto = media_detect(STDIN_FILENO, 120);
-    startup("terminal graphics: %s", media_protocol_name(app->proto));
+    app->headless = ircd_enabled;
+    if (app->headless) {
+        /* Nothing draws, so nothing decodes: the probe wants a raw tty
+         * that a service unit does not have, and an inline picture has
+         * no cell grid to land on. */
+        app->inline_media_enabled = false;
+        startup("headless: no terminal, no inline media");
+    } else {
+        app->proto = media_detect(STDIN_FILENO, 120);
+        startup("terminal graphics: %s", media_protocol_name(app->proto));
+    }
     /* Retain the deployment's upload host set BEFORE any scrollback
      * renders, so first-party /uploads/ links classify from frame one. */
     load_http_host_aliases(app);
@@ -8564,8 +9720,25 @@ int main(int argc, char **argv) {
     }
     startup("starting background worker");
     pthread_create(&app->worker, NULL, worker_main, app);
-    startup("entering terminal UI");
-    event_loop(app);
+    if (ircd_enabled) {
+        if (!ircd_start(app, ircd_spec)) {
+            /* The listener is the whole point of the mode: coming up
+             * without one would look like it worked. */
+            pthread_mutex_lock(&app->jobs_lock);
+            app->worker_stop = true;
+            pthread_cond_signal(&app->jobs_cond);
+            pthread_mutex_unlock(&app->jobs_lock);
+            pthread_join(app->worker, NULL);
+            if (app->ws_connected) conn_close(&app->ws);
+            SSL_CTX_free(app->ssl_ctx);
+            free(app);
+            return 1;
+        }
+        ircd_loop(app);
+    } else {
+        startup("entering terminal UI");
+        event_loop(app);
+    }
     pthread_mutex_lock(&app->jobs_lock);
     app->worker_stop = true;
     pthread_cond_signal(&app->jobs_cond);
