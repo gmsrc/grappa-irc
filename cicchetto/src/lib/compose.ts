@@ -676,7 +676,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // /who modal replaced the inline WHO dump). Open the modal AND fire
           // a fresh re-query so the 367/368 list is live on open (pre-#386 it
           // was fire-and-forget only).
-          const chanOrErr = requireChannel("banlist");
+          // #536 — the list-mode query form of /mode (`/mode #chan +b`)
+          // resolves an explicit channel in the parser; bare /banlist and
+          // `/mode +b` carry null → the current channel (same resolver
+          // every channel-scoped verb uses).
+          const chanOrErr = cmd.channel ?? requireChannel("banlist");
           if (typeof chanOrErr !== "string") return chanOrErr;
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/banlist: network not found" };

@@ -23185,3 +23185,59 @@ only the deployments that happen to run that layer — and "optional" always mea
 proxy dumb. And when one header can come from two places, the browser's
 tie-break (CSP intersection) is a footgun, so make the app the sole emitter and
 say so at every proxy that could forget.*
+
+## 2026-07-30 — #536: `/mode #chan +b` maps to the /banlist path, at the request site
+
+A user on #grappa reported `/mode #grappa +b` returning nothing. Traced: the
+ircd answered correctly (one `367 RPL_BANLIST` per entry + `368`), but grappa's
+`EventRouter` folds those numerics ONLY when `state.banlist_pending` is primed,
+and that marker is set in exactly one place — `Session.send_banlist/3`, reached
+only from the `/banlist` slash command. So a ban list requested via raw MODE was
+genuinely unsolicited *from the accumulator's point of view*, got swallowed, and
+the user saw silence. The pending marker was tracking "did the client issue
+/banlist" when it should track "is a ban-list query in flight".
+
+**The fix belongs at the REQUEST site, not the numeric site.** The tempting
+"fix" — loosen the `EventRouter` gate to accept unsolicited 367s — reopens #376:
+every stray 367 from an operator's manual query, or from another client sharing
+the bouncer session, becomes a junk `:notice` scrollback row carrying the
+set-timestamp as its body. So instead, cic's parser maps the list-mode QUERY
+shape of `/mode` onto the existing `/banlist` path. A list-mode query is the `b`
+mode letter, optionally signed, with NO mask parameter — the same
+dispatch-by-argument-shape rule #216/#229 established (no mode-args → open the
+modal; args present → execute); a `b` letter with no mask *is* the no-args shape,
+it just was not recognised as such. Both `/mode #chan +b` and `/mode +b` now emit
+`{kind:"banlist"}`, which primes `banlist_pending` server-side via the unchanged
+`pushChannelBanlist` and opens the BanlistModal (#386). **Zero server change** —
+the whole path is reused end-to-end.
+
+**Shape gains a channel.** `{kind:"banlist"}` grew a `channel: string | null`
+field (mirroring `mode-view`): `/mode #chan +b` queries THAT channel, not the
+focused window; bare `/banlist` and `/mode +b` carry `null` → the current
+channel, resolved by the same `requireChannel` resolver every channel-scoped verb
+uses. The discriminator is one shared helper, `isBanlistQuery(modes, params)` =
+`params.length === 0 && /^[+-]?b$/.test(modes)`, used in both parser branches.
+
+**Scope, deliberately narrow:**
+- Mask present (`/mode #chan +b nick!*@*`) is a MUTATION — stays `mode` /
+  `mode-apply-current`, executes raw. Unchanged.
+- `b` ONLY. `+e` (except) and `+I` (invex) are also type-A list modes with the
+  same silent-drop shape, but there is no accumulator and no modal for them;
+  widening the mapping there would trade silence for a crash-shaped path. A
+  combined form like `/mode #chan +be` therefore still executes raw and drops its
+  367s — the residual edge the `b`-only scope leaves open, worth a separate issue.
+- Bare UNSIGNED `/mode b` (no channel, no sign) is nick-ambiguous — it stays
+  `umode-target-view` (nick "b"). The issue TEXT wrongly called it
+  `mode-apply-current`; the real code path (`slashCommands.ts` `mode:` parser:
+  `b` matches neither `isModeString` nor `isChannel`, falls to the nick branch) is
+  `umode-target-view`. A traced correction was posted on #536. Mapping the bare
+  form would trade a real umode-view of a 1-char nick for a case the user can
+  already spell as `/mode +b`; no scope widening on an ambiguous form. The
+  case-sensitive regex is intentional — bahamut's list mode is lowercase `b`;
+  uppercase `B` is a distinct (non-list) mode letter and must NOT map.
+
+The e2e proves the USER-VISIBLE outcome, not a numeric: it sets a ban via the
+mutation form (a synthetic peer witnesses the `MODE +b` line, which also
+serialises "the ban landed" before the query fires — 367/368 carry no
+request-id, so the +b must not race the re-query), then opens the list via
+`/mode #chan +b` and asserts the mask RENDERS in the modal.

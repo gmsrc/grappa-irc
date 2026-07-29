@@ -120,7 +120,12 @@ export type SlashCommand =
   | { kind: "kb"; nick: string; reason: string }
   | { kind: "ban"; mask: string }
   | { kind: "unban"; mask: string }
-  | { kind: "banlist" }
+  // #386 /banlist opens the ban-management modal. #536 — the list-mode
+  // QUERY form of /mode (`/mode #chan +b`, `/mode +b`) also maps here, so
+  // the shape carries the resolved channel: an explicit channel for
+  // `/mode #chan +b`, or null (= the current window, resolved in
+  // compose.ts) for bare `/banlist` and `/mode +b`.
+  | { kind: "banlist"; channel: string | null }
   | { kind: "invite"; nick: string; channel: string | null }
   | { kind: "umode"; modes: string }
   // #229 — no-mode-args umode forms open the umode viewer/editor modal.
@@ -183,6 +188,17 @@ function err(verb: string, message: string): SlashCommand {
 // Parse a list of whitespace-delimited tokens from `rest`.
 function tokens(rest: string): string[] {
   return rest === "" ? [] : rest.split(/\s+/).filter((t) => t.length > 0);
+}
+
+// #536 — a /mode "list-mode query" is the `b` letter, optionally signed,
+// with NO mask parameter (`+b`, `-b`, `b`). That is the no-args shape
+// #216/#229 route to the modal: it must open the banlist, not execute a
+// raw MODE whose 367/368 reply is dropped for lack of banlist_pending.
+// A mask parameter makes it a MUTATION (`/mode #chan +b nick!*@*`),
+// which stays an execute verb. Scope is `b` only (#536 constraint —
+// +e/+I are also type-A list modes but have no accumulator/modal yet).
+function isBanlistQuery(modes: string, params: string[]): boolean {
+  return params.length === 0 && /^[+-]?b$/.test(modes);
 }
 
 // Parse nicks-requiring ops verbs (/op /deop /voice /devoice).
@@ -417,7 +433,7 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     return { kind: "unban", mask };
   },
 
-  banlist: (_verb, _rest) => ({ kind: "banlist" }),
+  banlist: (_verb, _rest) => ({ kind: "banlist", channel: null }),
 
   invite: (verb, rest) => {
     // Codebase audit type-A9 — destructure + guard so the index access
@@ -469,6 +485,9 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     const isChannel = /^[#&!]/.test(first);
 
     if (isModeString) {
+      // /mode +b (list-mode query, no mask) → banlist for the current
+      // channel (#536). compose.ts resolves the null channel.
+      if (isBanlistQuery(first, restToks)) return { kind: "banlist", channel: null };
       // /mode +s [params] → apply to the current channel.
       return { kind: "mode-apply-current", modes: first, params: restToks };
     }
@@ -477,6 +496,9 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
       const [modes, ...params] = restToks;
       // /mode #chan (no modes) → open the modal for that channel.
       if (!modes) return { kind: "mode-view", channel: first };
+      // /mode #chan +b (list-mode query, no mask) → banlist for that
+      // channel (#536), not a raw MODE whose 367s are dropped.
+      if (isBanlistQuery(modes, params)) return { kind: "banlist", channel: first };
       // /mode #chan +s [params] → execute directly.
       return { kind: "mode", target: first, modes, params };
     }

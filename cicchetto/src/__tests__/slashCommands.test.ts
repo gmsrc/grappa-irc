@@ -547,8 +547,8 @@ describe("parseSlash — channel ops verbs", () => {
     });
   });
 
-  it("/banlist bare", () => {
-    expect(parseSlash("/banlist")).toEqual({ kind: "banlist" });
+  it("/banlist bare → banlist for the current channel (null)", () => {
+    expect(parseSlash("/banlist")).toEqual({ kind: "banlist", channel: null });
   });
 
   it("/invite <nick>", () => {
@@ -638,6 +638,92 @@ describe("parseSlash — channel ops verbs", () => {
       kind: "mode-apply-current",
       modes: "-l+k",
       params: ["secret"],
+    });
+  });
+
+  // #536 — a list-mode QUERY form of /mode (the `b` letter, optionally
+  // signed, with NO mask param) is the no-args shape: it must open the
+  // banlist modal (the /banlist path), NOT execute a raw MODE whose
+  // 367/368 reply is silently dropped for lack of banlist_pending. The
+  // parser stays pure and emits `banlist` carrying the resolved channel
+  // (explicit for `/mode #chan +b`; null = current for `/mode +b`).
+  // Scope: `b` only (#536 constraints — +e/+I stay silent).
+  it("/mode #chan +b (list-mode query, no mask) → banlist for that channel", () => {
+    expect(parseSlash("/mode #sniffo +b")).toEqual({ kind: "banlist", channel: "#sniffo" });
+  });
+
+  it("/mode #chan b (unsigned list-mode query) → banlist for that channel", () => {
+    expect(parseSlash("/mode #sniffo b")).toEqual({ kind: "banlist", channel: "#sniffo" });
+  });
+
+  it("/mode #chan -b (signed list-mode query) → banlist for that channel", () => {
+    expect(parseSlash("/mode #sniffo -b")).toEqual({ kind: "banlist", channel: "#sniffo" });
+  });
+
+  it("/mode +b (bare list-mode query, no channel) → banlist for the current channel (null)", () => {
+    expect(parseSlash("/mode +b")).toEqual({ kind: "banlist", channel: null });
+  });
+
+  it("/mode -b (bare signed list-mode query) → banlist for the current channel (null)", () => {
+    expect(parseSlash("/mode -b")).toEqual({ kind: "banlist", channel: null });
+  });
+
+  // A mask parameter turns the list-mode letter into a MUTATION, not a
+  // query — it must keep executing raw, unchanged (#536 constraint).
+  it("/mode #chan +b <mask> (mask present) → mode (mutation, unchanged)", () => {
+    expect(parseSlash("/mode #sniffo +b nick!*@*")).toEqual({
+      kind: "mode",
+      target: "#sniffo",
+      modes: "+b",
+      params: ["nick!*@*"],
+    });
+  });
+
+  it("/mode +b <mask> (bare, mask present) → mode-apply-current (mutation, unchanged)", () => {
+    expect(parseSlash("/mode +b nick!*@*")).toEqual({
+      kind: "mode-apply-current",
+      modes: "+b",
+      params: ["nick!*@*"],
+    });
+  });
+
+  // #536 challenge-the-spec: bare UNSIGNED /mode b (no channel, no sign)
+  // is nick-ambiguous — it stays umode-target-view (nick "b"), NOT
+  // banlist. Only signed/channel forms map; scope is locked to the
+  // reported /mode #chan +b shape. Guard against accidental widening.
+  it("/mode b (bare unsigned, no channel) → umode-target-view (unchanged, out of scope)", () => {
+    expect(parseSlash("/mode b")).toEqual({ kind: "umode-target-view", target: "b" });
+  });
+
+  // #536 regex-boundary guards — the discriminator is a single `b`, exact.
+  // A future careless widening of isBanlistQuery must NOT swallow these:
+  // `+bb` (repeated), `+be` (combined list letters — +e is out of scope),
+  // and uppercase `+B` (a DISTINCT, case-sensitive mode letter on bahamut)
+  // all stay raw MODE executes, not banlist queries.
+  it("/mode #chan +bb (repeated letter) → mode (not a banlist query)", () => {
+    expect(parseSlash("/mode #sniffo +bb")).toEqual({
+      kind: "mode",
+      target: "#sniffo",
+      modes: "+bb",
+      params: [],
+    });
+  });
+
+  it("/mode #chan +be (combined list letters) → mode (not a banlist query)", () => {
+    expect(parseSlash("/mode #sniffo +be")).toEqual({
+      kind: "mode",
+      target: "#sniffo",
+      modes: "+be",
+      params: [],
+    });
+  });
+
+  it("/mode #chan +B (uppercase, distinct mode letter) → mode (not a banlist query)", () => {
+    expect(parseSlash("/mode #sniffo +B")).toEqual({
+      kind: "mode",
+      target: "#sniffo",
+      modes: "+B",
+      params: [],
     });
   });
 });
