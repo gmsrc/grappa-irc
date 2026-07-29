@@ -776,6 +776,53 @@ TEST(the_roster_records_a_region_per_nick_it_draws) {
     free(app);
 }
 
+/* The wheel scrolls the pane under the POINTER. With a split, that is
+ * not always the focused pane, and the pointer is what the user was
+ * pointing at — so the draw pass has to say where each pane landed. */
+TEST(each_pane_records_where_it_was_drawn) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_window(app, "azzurra", "#one");
+    add_test_window(app, "azzurra", "#two");
+    app->pane_count = 2;
+    app->panes[0] = (struct pane){.window = 0, .weight = 1};
+    app->panes[1] = (struct pane){.window = 1, .weight = 1};
+
+    erase();
+    app->pane_region_count = 0;
+    draw_chat_pane(app, &app->panes[0], 0, 0, 40, 10, true, true);
+    draw_chat_pane(app, &app->panes[1], 0, 10, 40, 10, false, true);
+    CHECK_LONG(app->pane_region_count, 2);
+    CHECK_LONG(app->pane_regions[0].pane, 0);
+    CHECK_LONG(app->pane_regions[0].y0, 0);
+    CHECK_LONG(app->pane_regions[0].y1, 9);
+    CHECK_LONG(app->pane_regions[1].pane, 1);
+    CHECK_LONG(app->pane_regions[1].y0, 10);
+    CHECK_LONG(app->pane_regions[1].y1, 19);
+
+    /* And scrolling addresses that pane, not the focused one. */
+    app->focus = 0;
+    scroll_pane(app, 1, 3);
+    CHECK_LONG(app->panes[1].scroll_offset, 3);
+    CHECK_LONG(app->panes[0].scroll_offset, 0);
+    CHECK(app->panes[1].scroll_pinned);
+
+    /* Scrolling back to the bottom unpins it: a pane pinned above the
+     * newest line stops following the conversation. */
+    scroll_pane(app, 1, -3);
+    CHECK_LONG(app->panes[1].scroll_offset, 0);
+    CHECK(!app->panes[1].scroll_pinned);
+
+    /* An index that is not a pane falls back to the focused one rather
+     * than writing past the array. */
+    scroll_pane(app, 99, 2);
+    CHECK_LONG(app->panes[0].scroll_offset, 2);
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
 /* Terminal graphics placements are not part of ncurses' model of the
  * screen: erase() does not remove them and a repaint does not cover
  * them. The client therefore has to notice when one has outlived the
@@ -1031,6 +1078,7 @@ int main(void) {
     RUN(reply_citation_is_flattened_and_cut_on_a_word);
     RUN(reply_leaves_a_line_it_did_not_write_alone);
     RUN(the_roster_records_a_region_per_nick_it_draws);
+    RUN(each_pane_records_where_it_was_drawn);
     RUN(a_placement_the_frame_did_not_paint_is_stale);
     RUN(roster_pane_draws_from_the_offset);
     RUN(the_topic_band_is_at_most_two_lines);

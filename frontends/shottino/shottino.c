@@ -380,6 +380,15 @@ struct topic_region {
     int y0, y1, x0, x1;
 };
 
+/* Where each pane ended up, so a wheel event can scroll the one under
+ * the pointer rather than the one that happens to have focus — with two
+ * panes on screen those are different answers, and the pointer is the
+ * one the user meant. */
+struct pane_region {
+    int y0, y1, x0, x1;
+    size_t pane;
+};
+
 struct link_region {
     int y0;
     int y1;
@@ -626,6 +635,8 @@ struct app {
     size_t msg_region_count;
     struct topic_region topic_regions[MAX_PANES];
     size_t topic_region_count;
+    struct pane_region pane_regions[MAX_PANES];
+    size_t pane_region_count;
     bool topic_hover;
     struct overlay overlay;
     struct inline_media media[MAX_INLINE_MEDIA];
@@ -4717,6 +4728,14 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
             draw_text(y + 1, x + 1, topic_label_w, head_accent, A_DIM, "%s",
                       app->topic_hover ? "(paused)" : "…");
     }
+    if (app->pane_region_count < MAX_PANES) {
+        struct pane_region *pr = &app->pane_regions[app->pane_region_count++];
+        pr->y0 = y;
+        pr->y1 = y + height - 1;
+        pr->x0 = x;
+        pr->x1 = x + width - 1;
+        pr->pane = (size_t)(pane - app->panes);
+    }
     /* Recorded so the pointer can pause it. Mouse tracking is off by
      * default, so this is a courtesy for those who turned it on, never
      * the only way to read a topic — that is what the scrolling is. */
@@ -5002,6 +5021,7 @@ static void draw(struct app *app) {
     app->link_region_count = 0;
     app->msg_region_count = 0;
     app->topic_region_count = 0;
+    app->pane_region_count = 0;
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
     int side = cols > 118 ? 22 : (cols > 90 ? 18 : 14);
@@ -6214,9 +6234,13 @@ static bool open_media_picker(struct app *app, enum overlay_action action) {
     return n > 0;
 }
 
-static void scroll_chat(struct app *app, int delta) {
+/* Scroll ONE pane. Positive = further back. The focused-pane form below
+ * is this with the focus filled in, so a key and a wheel event cannot
+ * drift into two different notions of scrolling. */
+static void scroll_pane(struct app *app, size_t index, int delta) {
     pthread_mutex_lock(&app->lock);
-    struct pane *p = focused_pane_locked(app);
+    if (index >= app->pane_count) index = app->focus < app->pane_count ? app->focus : 0;
+    struct pane *p = &app->panes[index];
     if (delta > 0) p->scroll_offset += (size_t)delta;
     else {
         size_t n = (size_t)(-delta);
@@ -6224,6 +6248,13 @@ static void scroll_chat(struct app *app, int delta) {
     }
     p->scroll_pinned = p->scroll_offset > 0;
     pthread_mutex_unlock(&app->lock);
+}
+
+static void scroll_chat(struct app *app, int delta) {
+    pthread_mutex_lock(&app->lock);
+    size_t index = (size_t)(focused_pane_locked(app) - app->panes);
+    pthread_mutex_unlock(&app->lock);
+    scroll_pane(app, index, delta);
 }
 
 static void scroll_bottom(struct app *app) {
@@ -8424,7 +8455,24 @@ static void handle_mouse(struct app *app) {
         int side = cols > 118 ? 22 : (cols > 90 ? 18 : 14);
         int members = cols > 118 ? 24 : 0;
         bool over_roster = members ? ev.x >= cols - members : ev.x < side;
-        if (over_roster) scroll_members(app, wheel_up ? -3 : 3);
+        if (over_roster) {
+            scroll_members(app, wheel_up ? -3 : 3);
+            return;
+        }
+        /* Otherwise the chat — the pane under the POINTER, which with a
+         * split is not always the focused one, and the pointer is what
+         * the user was pointing at. Scrolling the chat with the wheel is
+         * what every other client does; leaving it to the roster alone
+         * made the wheel feel broken everywhere else on screen. */
+        pthread_mutex_lock(&app->lock);
+        size_t index = app->focus;
+        for (size_t i = 0; i < app->pane_region_count; i++) {
+            const struct pane_region *pr = &app->pane_regions[i];
+            if (ev.y >= pr->y0 && ev.y <= pr->y1 && ev.x >= pr->x0 && ev.x <= pr->x1)
+                index = pr->pane;
+        }
+        pthread_mutex_unlock(&app->lock);
+        scroll_pane(app, index, wheel_up ? 3 : -3);
         return;
     }
 

@@ -221,6 +221,7 @@ in (`^U` when the chat has the keys, `↑↓` when the list does).
 | `Ctrl-Shift-Up` / `Ctrl-Shift-Down` | scroll it without changing mode |
 | `Shift-PgUp` / `Shift-PgDn` | the same, by ten |
 | wheel over the list | scrolls it |
+| wheel over the chat | scrolls the pane under the pointer |
 
 The modifier shortcuts are a convenience, not the way in: `Ctrl-Shift-Up` and
 `Ctrl-Shift-Down` are the terminal's OWN scrollback shortcut in

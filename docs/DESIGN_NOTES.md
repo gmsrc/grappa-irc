@@ -22905,3 +22905,13 @@ under.
 later, and by then the slot may hold somebody else. The reply carries the id and
 is dropped when it no longer matches; without it a slow query delivers one
 user's history into another user's client.
+
+## 2026-07-29 — shottino: the wheel scrolls the chat, under the pointer
+
+The wheel only ever scrolled the roster, so everywhere else on screen it felt
+broken. It scrolls the chat now — specifically the pane under the POINTER, which
+with a split is not always the focused one, and the pointer is what the user was
+pointing at. The draw pass records each pane's rectangle for the same reason the
+link and topic regions exist: it is the only thing that knows where the pane
+ended up. `scroll_chat` is now the focused-pane form of `scroll_pane`, so a key
+and a wheel event cannot drift into two notions of scrolling.
