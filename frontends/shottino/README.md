@@ -179,6 +179,7 @@ in (`^U` when the chat has the keys, `↑↓` when the list does).
 | key | does |
 |---|---|
 | `Ctrl-U` | give the arrows to the userlist, or take them back |
+| right-click a name | query, whois, or type the nick |
 | `Ctrl-Shift-Up` / `Ctrl-Shift-Down` | scroll it without changing mode |
 | `Shift-PgUp` / `Shift-PgDn` | the same, by ten |
 | wheel over the list | scrolls it |
@@ -217,6 +218,11 @@ to repeat the channel back at it.
 Anything already typed is kept after the citation rather than thrown away, and
 picking a different message replaces the citation instead of stacking a second
 one in front of the first.
+
+Right-click works on a **name in the userlist** too, where the menu offers what
+a person can do rather than what a message can: open a query, whois them, or
+type their nick into the input. Replying is offered only on a message, since it
+quotes what was said.
 
 Right-click needs mouse reporting, which is on by default; `Ctrl-R` works
 either way.

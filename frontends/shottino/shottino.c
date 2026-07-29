@@ -430,7 +430,7 @@ struct msg_region {
  * chat area's measure/draw agreement, for the same reason. */
 enum overlay_kind { OVERLAY_NONE = 0, OVERLAY_MENU, OVERLAY_REPLY, OVERLAY_MEDIA };
 
-enum overlay_action { ACT_NONE = 0, ACT_REPLY, ACT_QUERY, ACT_PREVIEW, ACT_VIEW };
+enum overlay_action { ACT_NONE = 0, ACT_REPLY, ACT_QUERY, ACT_WHOIS, ACT_INSERT, ACT_PREVIEW, ACT_VIEW };
 
 /* How many entries a picker offers. Twenty is what fits the phrase "the
  * last twenty" and comfortably more than a box shows, which is why the
@@ -4309,6 +4309,19 @@ static void draw_inline_media(struct inline_media *m, int y, int x, int skip_row
     }
 }
 
+/* What to call the key that scrolls the roster, in the space there is.
+ *
+ * It used to read "^U", which is how a terminal PRINTS a control
+ * character and not how anyone reads one: on screen, beside a list of
+ * nicknames, it looks like stray output rather than like a key to press.
+ * Spelled out where the pane is wide enough to spell it. */
+static const char *roster_hint(const struct app *app, int width) {
+    if (app->roster_focus) return width >= 12 ? "\u2191\u2193 Esc" : "\u2191\u2193";
+    if (width >= 18) return "Ctrl-U scrolls";
+    if (width >= 12) return "Ctrl-U";
+    return "C-u";
+}
+
 /* Rows a message's image adds, by state.
  *
  * ONE definition, used by BOTH the measuring pass (which sizes the scroll
@@ -4493,6 +4506,8 @@ static bool channel_is_moderated(const struct window *w) {
  * the lesson the chat area learned the hard way. Caller holds app->lock.
  *
  * `y < 0` measures without drawing. Returns the total row count. */
+static void add_nick_region(struct app *app, int y, int x0, int x1, const char *nick);
+
 static size_t draw_member_list(struct app *app, struct window *w, int y, int x, int width,
                                int height, size_t offset) {
     bool moderated = channel_is_moderated(w);
@@ -4518,6 +4533,10 @@ static size_t draw_member_list(struct app *app, struct window *w, int y, int x, 
             attr_t attrs = (moderated && plain) ? A_DIM : (sigil ? A_BOLD : 0);
             if (sigil) draw_text(line_y, x, width, pair, attrs, "%c%s", sigil, w->members[i].nick);
             else draw_text(line_y, x, width, pair, attrs, " %s", w->members[i].nick);
+            /* Recorded on the DRAW pass only: the measuring call passes a
+             * negative y and paints nothing, and a region for a row that
+             * was never drawn is a click that hits the wrong nick. */
+            add_nick_region(app, line_y, x, x + width - 1, w->members[i].nick);
         }
         row++;
     }
@@ -4538,6 +4557,25 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
 /* Record a message row's rectangle plus who said it, so a right-click can
  * name it. Rows without a nick (joins, parts, server notices) are skipped:
  * there is nobody to reply to. Caller holds app->lock (draw path). */
+/* A NICK under the pointer, with no message attached — a roster row.
+ *
+ * The same region type as a chat row, deliberately: right-click already
+ * means "the person under the pointer", the hit test is already written,
+ * and the only difference is that this one has nothing they said. A
+ * parallel array would be a second thing to keep in step for no new
+ * behaviour. Caller holds app->lock (draw path). */
+static void add_nick_region(struct app *app, int y, int x0, int x1, const char *nick) {
+    if (app->msg_region_count >= MAX_LINK_REGIONS) return;
+    if (!nick || !nick[0]) return;
+    struct msg_region *r = &app->msg_regions[app->msg_region_count++];
+    r->y0 = y;
+    r->y1 = y;
+    r->x0 = x0;
+    r->x1 = x1;
+    snprintf(r->nick, sizeof(r->nick), "%s", nick);
+    r->body[0] = '\0';
+}
+
 static void add_msg_region(struct app *app, int y0, int y1, int x0, int x1, const char *line) {
     if (app->msg_region_count >= MAX_LINK_REGIONS) return;
     char prefix[256], nick[256];
@@ -5016,7 +5054,7 @@ static void draw(struct app *app) {
             attroff(COLOR_PAIR(CP_BORDER));
             draw_fill(roster_y, 0, side, app->roster_focus ? CP_MENTION : CP_ALT);
             draw_text(roster_y, 1, side - 2, app->roster_focus ? CP_MENTION : CP_ACCENT, A_BOLD,
-                      "users %zu %s", w->member_count, app->roster_focus ? "\u2191\u2193" : "^U");
+                      "users %zu%s", w->member_count, app->roster_focus ? " \u2191\u2193" : "");
             roster_rows = draw_member_list(app, w, -1, 0, 0, 0, 0);
             size_t max_off = roster_rows > (size_t)(roster_h - 1) ? roster_rows - (size_t)(roster_h - 1) : 0;
             struct pane *fp = focused_pane_locked(app);
@@ -5026,7 +5064,7 @@ static void draw(struct app *app) {
              * simply taller than the sidebar reads as a truncated one. */
             if (roster_rows > (size_t)(roster_h - 1))
                 draw_text(rows - 1, 1, side - 2, CP_MUTED, A_DIM, "%s %zu/%zu",
-                          app->roster_focus ? "\u2191\u2193 Esc" : "^U",
+                          roster_hint(app, side - 2),
                           focused_pane_locked(app)->member_offset + 1, roster_rows);
         }
     }
@@ -5138,7 +5176,7 @@ static void draw(struct app *app) {
     if (members) {
         draw_fill(0, members_x, members, app->roster_focus ? CP_MENTION : CP_ALT);
         draw_text(0, members_x + 1, members - 2, app->roster_focus ? CP_MENTION : CP_ACCENT, A_BOLD,
-                  "members %zu %s", w->member_count, app->roster_focus ? "↑↓" : "^U");
+                  "members %zu%s", w->member_count, app->roster_focus ? " ↑↓" : "");
         /* Same list, same tiers, same scroll offset as the sidebar pane —
          * only the column differs. */
         int pane_h = rows - 3;
@@ -5150,7 +5188,7 @@ static void draw(struct app *app) {
             draw_member_list(app, w, 2, members_x + 1, members - 2, pane_h, fp->member_offset);
             if (roster_rows > (size_t)pane_h)
                 draw_text(rows - 1, members_x + 1, members - 2, CP_MUTED, A_DIM, "%s %zu/%zu",
-                          app->roster_focus ? "\u2191\u2193 Esc" : "^U",
+                          roster_hint(app, members - 2),
                           focused_pane_locked(app)->member_offset + 1, roster_rows);
         }
         if (w->member_count == 0)
@@ -5765,17 +5803,29 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
     struct overlay *ov = &app->overlay;
     size_t n = 0;
     if (ov->kind == OVERLAY_MENU) {
-        if (ov->nick[0]) {
+        if (!ov->nick[0]) return n;
+        /* Replying needs something they SAID, which a roster row does not
+         * have: the menu offers what the thing under the pointer can
+         * actually do, rather than an entry that fails when chosen. */
+        if (ov->body[0]) {
             snprintf(out[n].label, sizeof(out[n].label), "Reply to %s", ov->nick);
             snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
             snprintf(out[n].body, sizeof(out[n].body), "%s", ov->body);
             out[n].action = ACT_REPLY;
             if (++n >= max) return n;
-            snprintf(out[n].label, sizeof(out[n].label), "Open query with %s", ov->nick);
-            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-            out[n].action = ACT_QUERY;
-            n++;
         }
+        snprintf(out[n].label, sizeof(out[n].label), "Open query with %s", ov->nick);
+        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+        out[n].action = ACT_QUERY;
+        if (++n >= max) return n;
+        snprintf(out[n].label, sizeof(out[n].label), "Whois %s", ov->nick);
+        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+        out[n].action = ACT_WHOIS;
+        if (++n >= max) return n;
+        snprintf(out[n].label, sizeof(out[n].label), "Type %s", ov->nick);
+        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+        out[n].action = ACT_INSERT;
+        n++;
         return n;
     }
     /* The media picker: the last PICKER_MAX pictures and clips posted in
@@ -5983,6 +6033,7 @@ static void reply_to(struct app *app, const char *nick, const char *body) {
 }
 
 static void query_window(struct app *app, const char *target);
+static void handle_command(struct app *app, const char *input);
 static void request_preview(struct app *app, const char *url, bool is_video, bool force_ascii);
 static void request_view(struct app *app, const char *url);
 
@@ -6008,6 +6059,28 @@ static void overlay_activate(struct app *app) {
         break;
     case ACT_QUERY:
         if (nick[0]) query_window(app, nick);
+        break;
+    case ACT_WHOIS:
+        if (nick[0]) {
+            /* Through the ordinary command path, so the menu cannot
+             * become a second implementation of /whois that drifts. */
+            char cmd[MAX_CHANNEL + 8];
+            snprintf(cmd, sizeof(cmd), "/whois %s", nick);
+            handle_command(app, cmd);
+        }
+        break;
+    case ACT_INSERT:
+        /* What tab-completion would have typed. Appended rather than
+         * replacing, because the input may already be half a sentence. */
+        if (nick[0]) {
+            pthread_mutex_lock(&app->lock);
+            size_t len = strlen(app->input);
+            const char *sep = len == 0 ? "" : (app->input[len - 1] == ' ' ? "" : " ");
+            snprintf(app->input + len, sizeof(app->input) - len, "%s%s%s", sep, nick,
+                     len == 0 ? ": " : " ");
+            app->input_len = strlen(app->input);
+            pthread_mutex_unlock(&app->lock);
+        }
         break;
     case ACT_PREVIEW:
         if (body[0]) request_preview(app, body, media_kind_of(body) == MEDIA_VIDEO, false);

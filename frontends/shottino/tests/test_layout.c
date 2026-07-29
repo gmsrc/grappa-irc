@@ -475,14 +475,27 @@ TEST(menu_offers_reply_and_query_for_the_clicked_nick) {
     if (!app) return;
     struct overlay_item items[64];
 
+    /* A message: everything you can do with a person, plus the one thing
+     * that needs what they said. */
     app->overlay.kind = OVERLAY_MENU;
     snprintf(app->overlay.nick, sizeof(app->overlay.nick), "alice");
-    CHECK_LONG(overlay_items(app, items, 64), 2);
+    snprintf(app->overlay.body, sizeof(app->overlay.body), "something she said");
+    CHECK_LONG(overlay_items(app, items, 64), 4);
     CHECK_STR(items[0].label, "Reply to alice");
     CHECK_LONG(items[0].action, ACT_REPLY);
     CHECK_STR(items[1].label, "Open query with alice");
     CHECK_LONG(items[1].action, ACT_QUERY);
     CHECK_STR(items[1].nick, "alice");
+    CHECK_LONG(items[2].action, ACT_WHOIS);
+    CHECK_LONG(items[3].action, ACT_INSERT);
+
+    /* A roster row is a person with nothing said: replying to it would
+     * be an entry that fails when chosen, so it is not offered. */
+    app->overlay.body[0] = 0;
+    CHECK_LONG(overlay_items(app, items, 64), 3);
+    CHECK_LONG(items[0].action, ACT_QUERY);
+    CHECK_LONG(items[1].action, ACT_WHOIS);
+    CHECK_LONG(items[2].action, ACT_INSERT);
 
     /* No nick — a join row, a server notice — offers nothing rather than
      * a menu that acts on "". */
@@ -717,6 +730,50 @@ TEST(reply_leaves_a_line_it_did_not_write_alone) {
      * this function wrote — guessing wrong here eats someone's line. */
     compose_reply("alice", "yes", "10:30 meeting: bring the thing", out, sizeof(out));
     CHECK(strstr(out, "10:30 meeting: bring the thing") != NULL);
+}
+
+/* Right-clicking a name in the userlist has to reach the same menu as
+ * right-clicking a message — which means the roster has to record where
+ * it drew each nick, and only on the pass that actually drew it. */
+TEST(the_roster_records_a_region_per_nick_it_draws) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    struct window *w = add_test_window(app, "azzurra", "#chan");
+    seed(w, 0, "alice", "@");
+    seed(w, 1, "bob", "");
+    seed(w, 2, "carol", "");
+    w->member_count = 3;
+
+    /* The MEASURING call draws nothing, so it must record nothing: a
+     * region for a row that was never drawn is a click that lands on the
+     * wrong nick. */
+    app->msg_region_count = 0;
+    draw_member_list(app, w, -1, 0, 0, 0, 0);
+    CHECK_LONG(app->msg_region_count, 0);
+
+    erase();
+    app->msg_region_count = 0;
+    draw_member_list(app, w, 0, 0, 14, 3, 0);
+    CHECK_LONG(app->msg_region_count, 3);
+    CHECK_STR(app->msg_regions[0].nick, "alice");
+    CHECK_LONG(app->msg_regions[0].y0, 0);
+    CHECK_STR(app->msg_regions[2].nick, "carol");
+    CHECK_LONG(app->msg_regions[2].y0, 2);
+    /* No message: that is what tells the menu this is a person rather
+     * than something they said. */
+    CHECK_STR(app->msg_regions[0].body, "");
+
+    /* Scrolled, the regions follow what is on screen. */
+    erase();
+    app->msg_region_count = 0;
+    draw_member_list(app, w, 0, 0, 14, 2, 1);
+    CHECK_LONG(app->msg_region_count, 2);
+    CHECK_STR(app->msg_regions[0].nick, "bob");
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
 }
 
 /* Terminal graphics placements are not part of ncurses' model of the
@@ -973,6 +1030,7 @@ int main(void) {
     RUN(reply_cites_the_original_and_keeps_what_was_typed);
     RUN(reply_citation_is_flattened_and_cut_on_a_word);
     RUN(reply_leaves_a_line_it_did_not_write_alone);
+    RUN(the_roster_records_a_region_per_nick_it_draws);
     RUN(a_placement_the_frame_did_not_paint_is_stale);
     RUN(roster_pane_draws_from_the_offset);
     RUN(the_topic_band_is_at_most_two_lines);

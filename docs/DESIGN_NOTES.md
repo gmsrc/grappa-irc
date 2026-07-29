@@ -22816,3 +22816,26 @@ down a connection the child is still using.
 
 `--foreground` exists for service managers, which supervise the process they
 started and read a fork as a crash.
+
+## 2026-07-29 — shottino: the roster is a list of PEOPLE, and says so
+
+Two small reports, one root.
+
+"^U" appeared at the top and bottom of the userlist. That is how a terminal
+PRINTS a control character, not how anyone reads one: beside a list of
+nicknames it looks like stray output. The header now just names the list, and
+the hint lives only on the overflow line where it is actionable, spelled to fit
+the pane it is in ("Ctrl-U scrolls" / "Ctrl-U" / "C-u").
+
+Right-click now works on a name in the userlist, and reuses `struct msg_region`
+rather than adding a parallel array: right-click already means "the person under
+the pointer", the hit test is already written, and the only difference is that a
+roster row has nothing they SAID. That difference is the menu's rule — replying
+is offered only when there is a message to quote, so no entry in the menu can
+fail when chosen. Whois and "type the nick" join query for both kinds of row,
+and whois goes through the ordinary command path so the menu cannot become a
+second /whois that drifts.
+
+The regions are recorded on the DRAW pass only. draw_member_list is called twice
+per frame — once with a negative y to measure — and a region for a row that was
+never drawn is a click that lands on the wrong nick.
