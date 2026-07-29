@@ -31,7 +31,7 @@ OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o
 # reaches, which is the drawing primitives and nothing else. Do not trust
 # this net for changes elsewhere in that file; add a test or reason about
 # the path by hand.
-TESTS := tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_layout
+TESTS := tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_layout tests/test_keys
 SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O1 -g $(SANITIZE)
 
@@ -81,6 +81,12 @@ tests/test_media: tests/test_media.c tests/test.h media.c media.h termcolor.c te
 # shottino links.
 tests/test_layout: tests/test_layout.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_layout.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c $(LDLIBS)
+
+# test_keys needs a pty (-lutil): it feeds real byte sequences through the
+# client's own key decoding, because every key bug so far has been about
+# what the terminal DELIVERS rather than what the handler does with it.
+tests/test_keys: tests/test_keys.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_keys.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c $(LDLIBS) -lutil
 
 # `make check` is the gate: build every suite, run every suite, fail loud.
 check: $(TESTS)

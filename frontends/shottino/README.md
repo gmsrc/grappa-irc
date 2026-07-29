@@ -78,7 +78,7 @@ typing go" has to be answerable at a glance.
 | `Ctrl-Alt-Up` / `Ctrl-Alt-Down` | move focus between panes |
 | `Ctrl-Alt-Tab` | cycle focus |
 | `Ctrl-Alt-+` / `Ctrl-Alt--` | grow / shrink the focused pane |
-| `Ctrl-Shift-Up` / `Ctrl-Shift-Down` | scroll the userlist (`Shift-PgUp`/`PgDn` too) |
+| `Ctrl-Up` / `Ctrl-Down` | scroll the chat one line |
 
 Terminals disagree about what Ctrl-Alt sends, and some send nothing at all
 for Ctrl-Alt-Tab (a desktop usually eats Alt-Tab before the terminal sees
@@ -86,6 +86,28 @@ it). Both the CSI dialect (`\033[1;7A`) and the ESC-prefix dialect (ESC then
 the key) are accepted; `Ctrl-Alt-Up/Down` is the pair to rely on. Run
 `/keys` to print the code your terminal actually sends for a key — a
 binding that does not fire is then a bug report with a number in it.
+
+## The userlist
+
+`Ctrl-U` hands the arrow keys to the member list; `Esc` gives them back.
+While it holds them, `Up`/`Down` move a line, `PgUp`/`PgDn` ten, `Home` and
+`End` go to the ends, and anything else — a letter, `Enter`, `Tab` — returns
+to the input line and is typed as usual. The header says which mode you are
+in (`^U` when the chat has the keys, `↑↓` when the list does).
+
+| key | does |
+|---|---|
+| `Ctrl-U` | give the arrows to the userlist, or take them back |
+| `Ctrl-Shift-Up` / `Ctrl-Shift-Down` | scroll it without changing mode |
+| `Shift-PgUp` / `Shift-PgDn` | the same, by ten |
+| wheel over the list | scrolls it, with `/mouse on` |
+
+The modifier shortcuts are a convenience, not the way in: `Ctrl-Shift-Up` and
+`Ctrl-Shift-Down` are the terminal's OWN scrollback shortcut in
+gnome-terminal, konsole, kitty and terminator, which keep the key and never
+forward it. No client can bind what it is not sent. `Ctrl-U` and plain arrows
+are the two things every terminal delivers, which is why the way in is a mode
+rather than a modifier.
 
 ## Replying
 

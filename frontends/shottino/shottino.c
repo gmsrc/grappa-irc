@@ -494,6 +494,17 @@ struct app {
      * row that predates every window. See log_scope_of_locked(). */
     char log_scope[LOG_LINES][MAX_SLUG + MAX_CHANNEL + 8];
     media_protocol proto;           /* detected once, before ncurses */
+    /* Ctrl-U hands the arrow keys to the member list.
+     *
+     * The modified arrows the roster was reachable by are not reliably
+     * DELIVERED: Ctrl-Shift-Up/Down is a scroll shortcut in the terminal
+     * itself on gnome-terminal, konsole, kitty and terminator, so it
+     * never reaches the client, and plenty of terminfo entries describe
+     * no modified arrows at all. A plain control character and plain
+     * arrows are the two things every terminal sends, so the way in
+     * cannot be swallowed. The shortcuts stay for terminals that do
+     * deliver them. */
+    bool roster_focus;
     bool key_echo;
     bool animate_media;
     bool inline_media_enabled;
@@ -4759,8 +4770,9 @@ static void draw(struct app *app) {
             attron(COLOR_PAIR(CP_BORDER));
             mvhline(y, 0, ACS_HLINE, side);
             attroff(COLOR_PAIR(CP_BORDER));
-            draw_fill(roster_y, 0, side, CP_ALT);
-            draw_text(roster_y, 1, side - 2, CP_ACCENT, A_BOLD, "users %zu", w->member_count);
+            draw_fill(roster_y, 0, side, app->roster_focus ? CP_MENTION : CP_ALT);
+            draw_text(roster_y, 1, side - 2, app->roster_focus ? CP_MENTION : CP_ACCENT, A_BOLD,
+                      "users %zu %s", w->member_count, app->roster_focus ? "\u2191\u2193" : "^U");
             roster_rows = draw_member_list(app, w, -1, 0, 0, 0, 0);
             size_t max_off = roster_rows > (size_t)(roster_h - 1) ? roster_rows - (size_t)(roster_h - 1) : 0;
             struct pane *fp = focused_pane_locked(app);
@@ -4769,7 +4781,8 @@ static void draw(struct app *app) {
             /* Say so when the list runs past the pane, or a roster that is
              * simply taller than the sidebar reads as a truncated one. */
             if (roster_rows > (size_t)(roster_h - 1))
-                draw_text(rows - 1, 1, side - 2, CP_MUTED, A_DIM, "C-S-\u2191\u2193 %zu/%zu",
+                draw_text(rows - 1, 1, side - 2, CP_MUTED, A_DIM, "%s %zu/%zu",
+                          app->roster_focus ? "\u2191\u2193 Esc" : "^U",
                           focused_pane_locked(app)->member_offset + 1, roster_rows);
         }
     }
@@ -4879,7 +4892,9 @@ static void draw(struct app *app) {
      * halfops, voiced, plain — each with the sigil its network actually
      * advertises via ISUPPORT PREFIX, nick-coloured to match scrollback. */
     if (members) {
-        draw_text(0, members_x + 1, members - 2, CP_ACCENT, A_BOLD, "members %zu", w->member_count);
+        draw_fill(0, members_x, members, app->roster_focus ? CP_MENTION : CP_ALT);
+        draw_text(0, members_x + 1, members - 2, app->roster_focus ? CP_MENTION : CP_ACCENT, A_BOLD,
+                  "members %zu %s", w->member_count, app->roster_focus ? "↑↓" : "^U");
         /* Same list, same tiers, same scroll offset as the sidebar pane —
          * only the column differs. */
         int pane_h = rows - 3;
@@ -4890,8 +4905,9 @@ static void draw(struct app *app) {
             if (fp->member_offset > max_off) fp->member_offset = max_off;
             draw_member_list(app, w, 2, members_x + 1, members - 2, pane_h, fp->member_offset);
             if (roster_rows > (size_t)pane_h)
-                draw_text(rows - 1, members_x + 1, members - 2, CP_MUTED, A_DIM,
-                          "C-S-\u2191\u2193 %zu/%zu", focused_pane_locked(app)->member_offset + 1, roster_rows);
+                draw_text(rows - 1, members_x + 1, members - 2, CP_MUTED, A_DIM, "%s %zu/%zu",
+                          app->roster_focus ? "\u2191\u2193 Esc" : "^U",
+                          focused_pane_locked(app)->member_offset + 1, roster_rows);
         }
         if (w->member_count == 0)
             draw_text(2, members_x + 1, members - 2, CP_MUTED, 0, "(not seeded)");
@@ -5770,6 +5786,59 @@ static void scroll_members(struct app *app, int delta) {
     pthread_mutex_unlock(&app->lock);
 }
 
+/* Keys while the member list holds the keyboard. Returns true when the
+ * key was consumed.
+ *
+ * This exists because the modified arrows the roster was reachable by
+ * are not reliably DELIVERED: Ctrl-Shift-Up/Down is the terminal's own
+ * scroll shortcut in gnome-terminal, konsole, kitty and terminator, so
+ * the client never sees it, and a terminfo entry that describes no
+ * modified arrows turns the rest into raw bytes. A plain control
+ * character and plain arrows are the two things every terminal sends,
+ * so this way in cannot be swallowed. The shortcuts stay for terminals
+ * that do deliver them; this is the one that always works.
+ *
+ * Any key that is not a movement hands the keyboard straight back — a
+ * mode you can get stuck in is worse than a list you cannot scroll. */
+static bool roster_key(struct app *app, int ch) {
+    pthread_mutex_lock(&app->lock);
+    bool focused = app->roster_focus;
+    size_t cur = focused_window_locked(app);
+    size_t members = cur < app->window_count ? app->windows[cur].member_count : 0;
+    pthread_mutex_unlock(&app->lock);
+
+    if (ch == 21) { /* Ctrl-U */
+        if (!focused && members == 0) {
+            log_line(app, "this window has no member list to scroll");
+            return true;
+        }
+        pthread_mutex_lock(&app->lock);
+        app->roster_focus = !focused;
+        pthread_mutex_unlock(&app->lock);
+        return true;
+    }
+    if (!focused) return false;
+
+    int delta;
+    switch (ch) {
+    case KEY_UP: delta = -1; break;
+    case KEY_DOWN: delta = 1; break;
+    case KEY_PPAGE: delta = -10; break;
+    case KEY_NPAGE: delta = 10; break;
+    /* The frame clamps the far end — it is the only thing that knows how
+     * tall the pane got — so "top" and "bottom" are just big numbers. */
+    case KEY_HOME: delta = -1000000; break;
+    case KEY_END: delta = 1000000; break;
+    default:
+        pthread_mutex_lock(&app->lock);
+        app->roster_focus = false;
+        pthread_mutex_unlock(&app->lock);
+        return ch == 27; /* Escape leaves the mode and does nothing else */
+    }
+    scroll_members(app, delta);
+    return true;
+}
+
 static void cycle_window(struct app *app, int delta) {
     pthread_mutex_lock(&app->lock);
     if (app->window_count == 0) {
@@ -6455,7 +6524,7 @@ static void show_help(struct app *app) {
     log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; video and GIFs PLAY as colour art (/media still for one frame); /media [on|off|all|first-party] — 'all' also auto-fetches images hosted elsewhere");
     log_line(app, "       /preview full-screen; /preview-ascii forces the art renderer; /open opens externally; with /mouse on, click a link to preview");
     log_line(app, "reply: right-click a message for reply/query, or Ctrl-R for a searchable reply picker (type to filter, Enter replies)");
-    log_line(app, "userlist: Ctrl-Shift-Up/Down or Shift-PgUp/PgDn scroll it; the wheel scrolls it too when /mouse is on");
+    log_line(app, "userlist: Ctrl-U gives it the arrow keys (Up/Down/PgUp/PgDn/Home/End, Esc back to chat); Ctrl-Shift-Up/Down and Shift-PgUp/PgDn work where the terminal does not keep them; the wheel scrolls it with /mouse on");
     log_line(app, "panes: /split (stacked) /splitv (side by side) /unsplit; Ctrl-Alt-Up/Down or Ctrl-Alt-Tab switch, Ctrl-Alt-+/- resize, /keys shows what your terminal sends");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
@@ -7645,7 +7714,9 @@ enum {
     KEY_PANE_SHRINK,
     KEY_PANE_CYCLE,
     KEY_ROSTER_UP,
-    KEY_ROSTER_DOWN
+    KEY_ROSTER_DOWN,
+    KEY_CHAT_UP,
+    KEY_CHAT_DOWN
 };
 
 static void define_pane_keys(void) {
@@ -7676,9 +7747,62 @@ static void define_pane_keys(void) {
         {"\033[1;6B", KEY_ROSTER_DOWN}, /* Ctrl-Shift-Down */
         {"\033[1;2A", KEY_ROSTER_UP},   /* Shift-Up, where ctrl is eaten */
         {"\033[1;2B", KEY_ROSTER_DOWN}, /* Shift-Down */
+        /* Ctrl-Up/Down scrolls the chat a line at a time. Bound because
+         * it is one of the few modified arrows terminals both send and
+         * do not keep for themselves. */
+        {"\033[1;5A", KEY_CHAT_UP},
+        {"\033[1;5B", KEY_CHAT_DOWN},
     };
     for (size_t i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++)
         define_key(bindings[i].seq, bindings[i].code);
+}
+
+/* Decode a CSI sequence ncurses did not.
+ *
+ * keypad(TRUE) recognises exactly what terminfo describes, and many
+ * entries — screen-256color among them — describe no modified arrows at
+ * all. Those bytes then arrive raw, and with only the ESC consumed the
+ * remainder is typed into the input line as "1;5A". Reading the sequence
+ * through to its final byte costs nothing on a terminal that never sends
+ * one, and is the difference between a key that does nothing and a key
+ * that types rubbish. Returns a key code, or 27 for a sequence we have
+ * no meaning for — having consumed the whole sequence either way. */
+static int resolve_csi(void) {
+    char buf[24];
+    size_t n = 0;
+    int c;
+    timeout(0);
+    while ((c = getch()) != ERR) {
+        if (c < 0x20 || c > 0x7e) break; /* not part of a CSI: give up */
+        if (n < sizeof(buf) - 1) buf[n++] = (char)c;
+        if (c >= 0x40) break;            /* final byte */
+    }
+    timeout(50);
+    if (n == 0) return 27;
+    char final = buf[n - 1];
+    buf[n - 1] = 0;
+    /* "1;6" for an arrow, "5;2" for a page key: the first parameter says
+     * WHICH key for the ~ forms, the second is the xterm modifier set,
+     * biased by one (2 = shift, 3 = alt, 5 = ctrl, 6 = ctrl+shift). */
+    int first = atoi(buf);
+    const char *semi = strchr(buf, ';');
+    int mod = semi ? atoi(semi + 1) : 0;
+    if (final == 'A' || final == 'B') {
+        bool up = final == 'A';
+        switch (mod) {
+        case 2:
+        case 6: return up ? KEY_ROSTER_UP : KEY_ROSTER_DOWN;
+        case 3:
+        case 7: return up ? KEY_PANE_PREV : KEY_PANE_NEXT;
+        case 5: return up ? KEY_CHAT_UP : KEY_CHAT_DOWN;
+        default: return up ? KEY_UP : KEY_DOWN;
+        }
+    }
+    if (final == '~' && mod == 2) {
+        if (first == 5) return KEY_ROSTER_UP;  /* Shift-PgUp */
+        if (first == 6) return KEY_ROSTER_DOWN;
+    }
+    return 27;
 }
 
 /* Resolve an ESC into either a modified key or a real Escape. Called
@@ -7696,6 +7820,7 @@ static int resolve_escape(void) {
     case '\t': return KEY_PANE_CYCLE;
     case KEY_UP: return KEY_PANE_PREV;
     case KEY_DOWN: return KEY_PANE_NEXT;
+    case '[': return resolve_csi();
     default: return 27;
     }
 }
@@ -7734,6 +7859,7 @@ static void event_loop(struct app *app) {
         }
         if (ch == 27) ch = resolve_escape();
         if (overlay_key(app, ch)) continue;
+        if (roster_key(app, ch)) continue;
         if (ch == 18) { /* Ctrl-R */
             open_reply_picker(app);
         } else if (ch == '\n' || ch == '\r') {
@@ -7782,6 +7908,10 @@ static void event_loop(struct app *app) {
 #endif
         ) {
             scroll_members(app, 3);
+        } else if (ch == KEY_CHAT_UP) {
+            scroll_chat(app, 1);
+        } else if (ch == KEY_CHAT_DOWN) {
+            scroll_chat(app, -1);
         } else if (ch == KEY_HOME) {
             scroll_chat(app, 1000000);
         } else if (ch == KEY_END) {
