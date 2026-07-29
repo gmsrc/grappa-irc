@@ -9417,6 +9417,80 @@ static void ircd_stop(struct app *app) {
     pthread_mutex_destroy(&app->ircd.lock);
 }
 
+/* Where a detached bridge writes what it would have printed. Beside the
+ * cached tokens, because that is already the directory this client owns
+ * on the machine. */
+static void ircd_log_path(char *out, size_t out_sz) {
+    const char *home = getenv("HOME");
+    if (!home || !*home) home = ".";
+    char dir[PATH_MAX - 16];
+    snprintf(dir, sizeof(dir), "%s/.local/share/shottino", home);
+    mkdir(dir, 0700);
+    snprintf(out, out_sz, "%s/ircd.log", dir);
+}
+
+/* Detach into the background.
+ *
+ * Called at ONE point and no earlier: after the login, after the
+ * scrollback, after the websocket, and after the listener is bound. Every
+ * one of those can fail for a reason the user needs to read — a bad
+ * password, a port already in use — and a daemon that forks first
+ * reports them into a log file nobody knew to look at, having already
+ * returned 0 to the shell. Backgrounding is the last thing that happens,
+ * so exit status still means "did it start".
+ *
+ * And BEFORE the worker thread exists: fork() carries over only the
+ * calling thread, so a mutex another thread happened to hold would stay
+ * locked forever in the child. That ordering is not a preference.
+ *
+ * The parent leaves with _exit() rather than returning: it shares the
+ * websocket and the TLS session with the child, and an orderly exit
+ * would send OpenSSL's close_notify down a connection the child is still
+ * using. */
+static bool ircd_daemonize(struct app *app) {
+    char log[PATH_MAX];
+    ircd_log_path(log, sizeof(log));
+    int fd = open(log, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd < 0) {
+        startup("ircd: cannot open %s — staying in the foreground", log);
+        return false;
+    }
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        startup("ircd: cannot fork — staying in the foreground");
+        close(fd);
+        return false;
+    }
+    if (pid > 0) {
+        /* Say where it went and what to look at BEFORE leaving: a
+         * background process with no pid and no log path is a process
+         * the user can only find with pgrep. */
+        fprintf(stderr, "shottino: ircd running in the background (pid %ld)\n", (long)pid);
+        fprintf(stderr, "shottino: log: %s\n", log);
+        fprintf(stderr, "shottino: stop it with: kill %ld\n", (long)pid);
+        fflush(stderr);
+        _exit(0);
+    }
+    /* Its own session, so it survives the terminal closing and no longer
+     * takes Ctrl-C meant for whatever the user runs next. */
+    if (setsid() < 0) startup("ircd: setsid failed — the bridge will still run");
+    int null_fd = open("/dev/null", O_RDONLY);
+    if (null_fd >= 0) {
+        dup2(null_fd, STDIN_FILENO);
+        if (null_fd > STDERR_FILENO) close(null_fd);
+    }
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    if (fd > STDERR_FILENO) close(fd);
+    /* The cwd is deliberately kept: a relative path the user gave on the
+     * command line has to keep meaning what it meant when they typed it. */
+    startup("ircd: detached (pid %ld), listening on %s:%s", (long)getpid(), app->ircd.host,
+            app->ircd.port);
+    return true;
+}
+
 /* The headless event loop: the websocket keeps app state current, and
  * poll() waits on the listeners and the connected clients. No terminal
  * is opened at all, which is why --ircd works over ssh, in a service
@@ -9627,6 +9701,9 @@ static void print_usage(FILE *out, const char *prog) {
     fprintf(out, "                   address with a port as [::1]:6667). One connection is one\n");
     fprintf(out, "                   network: the client picks it with PASS <network>:<password>.\n");
     fprintf(out, "                   Off loopback, SHOTTINO_IRCD_PASS is required.\n");
+    fprintf(out, "  --foreground     with --ircd, stay in the foreground instead of detaching.\n");
+    fprintf(out, "                   What a service manager wants: it supervises the process it\n");
+    fprintf(out, "                   started, and a daemon that forks away looks like a crash.\n");
     fprintf(out, "  --help, -h       show this help and exit\n");
     fprintf(out, "\n");
     fprintf(out, "examples:\n");
@@ -9687,6 +9764,7 @@ int main(int argc, char **argv) {
     const char *mode = "auto";
     const char *login_override = NULL;
     bool ircd_enabled = false;
+    bool foreground = false;
     const char *ircd_spec = "";
     /* Checked before the option loop so --help works from any position and
      * never requires the other arguments to be present. */
@@ -9727,6 +9805,8 @@ int main(int argc, char **argv) {
              * password. A loud usage error beats guessing. */
             ircd_enabled = true;
             ircd_spec = a + 7;
+        } else if (strcmp(a, "--foreground") == 0) {
+            foreground = true;
         } else if (strcmp(a, "--user") == 0) mode = "user";
         else if (strcmp(a, "--visitor") == 0) mode = "visitor";
         else if (strcmp(a, "--share") == 0) mode = "share";
@@ -9889,22 +9969,25 @@ int main(int argc, char **argv) {
         log_line(app, "websocket unavailable; retrying in %ds (REST send/fetch still works)",
                  (int)(app->ws_retry_at - time(NULL)));
     }
-    startup("starting background worker");
-    pthread_create(&app->worker, NULL, worker_main, app);
+    /* The listener is bound, and the process detaches, BEFORE the worker
+     * thread is created: fork() takes only the calling thread with it,
+     * and a lock held by another one would never be released in the
+     * child. Binding first also means a port already in use is still a
+     * foreground failure with a non-zero exit. */
     if (ircd_enabled) {
         if (!ircd_start(app, ircd_spec)) {
             /* The listener is the whole point of the mode: coming up
              * without one would look like it worked. */
-            pthread_mutex_lock(&app->jobs_lock);
-            app->worker_stop = true;
-            pthread_cond_signal(&app->jobs_cond);
-            pthread_mutex_unlock(&app->jobs_lock);
-            pthread_join(app->worker, NULL);
             if (app->ws_connected) conn_close(&app->ws);
             SSL_CTX_free(app->ssl_ctx);
             free(app);
             return 1;
         }
+        if (!foreground) ircd_daemonize(app);
+    }
+    startup("starting background worker");
+    pthread_create(&app->worker, NULL, worker_main, app);
+    if (ircd_enabled) {
         ircd_loop(app);
     } else {
         startup("entering terminal UI");

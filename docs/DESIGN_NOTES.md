@@ -22793,3 +22793,26 @@ the client on their behalf. Two things keep that honest: the exposure is printed
 at EVERY start, not buried in `/media all`, and the server-side and cicchetto
 defaults are untouched, because those choices are not this one. A deployment
 that wants the old behaviour has `/media first-party`.
+
+## 2026-07-29 — shottino --ircd detaches, and the ORDER is the design
+
+vjt: "when in ircd mode, shottino should go in background."
+
+The fork is three lines; where it goes is the whole thing.
+
+It happens LAST among the things that can fail: after the login, the scrollback,
+the websocket and the bind. A daemon that forks first reports a wrong password
+or an occupied port into a log file nobody knew to look at, having already
+returned 0 to the shell — the exit status stops meaning "did it start". Binding
+before detaching keeps "port in use" a foreground failure.
+
+And it happens BEFORE the worker thread is created, which is not a preference:
+fork() carries over only the calling thread, so a mutex another thread happened
+to hold at that instant would stay locked forever in the child.
+
+The parent leaves with _exit(), not return: it shares the websocket and its TLS
+session with the child, and an orderly exit would send OpenSSL's close_notify
+down a connection the child is still using.
+
+`--foreground` exists for service managers, which supervise the process they
+started and read a fork as a crash.

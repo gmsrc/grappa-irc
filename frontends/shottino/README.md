@@ -92,6 +92,14 @@ address needs no brackets (`--ircd=::1`) but one **with** a port does
 `--ircd=SPEC` form is accepted — `--ircd 6668` would be indistinguishable from
 a positional argument, and the positional it would eat is your password.
 
+It **detaches into the background** once it is up, printing the pid, the log
+path (`~/.local/share/shottino/ircd.log`) and how to stop it. Backgrounding is
+the last thing it does: the login, the scrollback, the websocket and the bind
+all happen in the foreground first, so a wrong password or a port already in use
+is still an error you see and a non-zero exit — not a line in a log file you did
+not know to look at. Pass `--foreground` under a service manager, which
+supervises the process it started and reads a fork as a crash.
+
 **One connection is one network.** An IRC client has one nick, one MOTD and one
 channel namespace per connection, while grappa has several networks at once and
 `#ops` on two of them is two different rooms. So the client names the network it
