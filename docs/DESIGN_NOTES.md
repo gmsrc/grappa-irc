@@ -23098,9 +23098,10 @@ every existing caller.
 
 **Verification boundary.** Like #527, distro-packaging metadata is not
 unit-testable in the musl dev container. The gate is the `rpm` leg reaching a
-green build on the first tag (`release.yml` had zero runs at authoring time —
-the first post-merge tag is the first real exercise of the whole path, rpm
-included). The job proves on the INSTALLED artifact: `dnf install` runs `%post`
+green build on a tag. `release.yml` itself is PROVEN — v0.7.0 ran fully green
+(deb + arch + publish, real artifacts attached) — so it is specifically the NEW
+`rpm` leg that is untested; its first real exercise is the NEXT tag after this
+merge. The job proves on the INSTALLED artifact: `dnf install` runs `%post`
 (openssl secrets + packaged migrate on the Fedora ERTS — the real risk), then
 asserts the migration count, the bare `X.Y.Z` (#391 clean-tag path; the `.rpm`
 builds in the `.git` checkout, unlike the tarball-built Arch pkg), and that
