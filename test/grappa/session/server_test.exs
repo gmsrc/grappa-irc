@@ -33,6 +33,7 @@ defmodule Grappa.Session.ServerTest do
   alias Grappa.{IRCServer, PubSub.Topic, QueryWindows, Repo, Scrollback, Session, WSPresence}
   alias Grappa.Networks.{Credentials, SessionPlan}
   alias Grappa.Session.{AwayState, Backoff, GhostRecovery, ISupport, Server, WindowState}
+  alias Grappa.SessionStateHelpers
   alias Grappa.WindowCounts.PushSource
 
   # C3 (arch review #369 A3) — a `WindowCounts.PushSource` seam probe that
@@ -195,7 +196,7 @@ defmodule Grappa.Session.ServerTest do
     # `DynamicSupervisor.start_child/2` caches the original child spec; a
     # `:transient` restart replays the SAME `init_opts` the supervisor
     # captured at first spawn. Without re-resolving the plan from the DB,
-    # `state.nick` / `state.autojoin` freeze at the boot-time values even
+    # `SessionStateHelpers.nick(state)` / `SessionStateHelpers.autojoin(state)` freeze at the boot-time values even
     # after `Visitors.update_nick/2` and `last_joined_persister` have
     # rotated the DB row. The Azzurra incident (2026-05-27): visitor
     # connected as `kazam02`, `/NICK kazamobile` persisted, upstream
@@ -247,12 +248,12 @@ defmodule Grappa.Session.ServerTest do
       {:ok, pid} = Server.start_link(init_opts)
       :ok = await_handshake(server)
 
-      state = :sys.get_state(pid)
+      state = SessionStateHelpers.fetch(pid)
 
-      # Pre-fix: state.nick == "stale-nick" (opts won), autojoin == [].
+      # Pre-fix: SessionStateHelpers.nick(state) == "stale-nick" (opts won), autojoin == [].
       # Post-fix: refresh_plan ran, fresh values from DB won.
-      assert state.nick == "fresh-nick"
-      assert state.autojoin == ["#fresh-room"]
+      assert SessionStateHelpers.nick(state) == "fresh-nick"
+      assert SessionStateHelpers.autojoin(state) == ["#fresh-room"]
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -366,7 +367,7 @@ defmodule Grappa.Session.ServerTest do
   end
 
   describe "linked Client EXIT — backoff accounting (lifecycle review HIGH S2)" do
-    # The {:EXIT, client_pid, reason} clause keyed on `state.client = client_pid`
+    # The {:EXIT, client_pid, reason} clause keyed on `SessionStateHelpers.client(state) = client_pid`
     # used to record a Backoff failure UNCONDITIONALLY. Operator-initiated
     # clean teardown (T32 disconnect verb, planned Client.stop/1, supervisor
     # :shutdown) made the linked Client exit :normal/:shutdown — but the
@@ -392,8 +393,8 @@ defmodule Grappa.Session.ServerTest do
 
       # Capture the linked Client pid + monitor the Session, then synthesize
       # a clean EXIT exactly as a planned Client.stop/1 would.
-      state = :sys.get_state(pid)
-      client_pid = state.client
+      state = SessionStateHelpers.fetch(pid)
+      client_pid = SessionStateHelpers.client(state)
       assert is_pid(client_pid)
 
       ref = Process.monitor(pid)
@@ -426,8 +427,8 @@ defmodule Grappa.Session.ServerTest do
       :ok = await_handshake(server)
       :ok = Backoff.reset({:user, user.id}, network.id)
 
-      state = :sys.get_state(pid)
-      client_pid = state.client
+      state = SessionStateHelpers.fetch(pid)
+      client_pid = SessionStateHelpers.client(state)
       assert is_pid(client_pid)
 
       ref = Process.monitor(pid)
@@ -459,8 +460,8 @@ defmodule Grappa.Session.ServerTest do
       :ok = await_handshake(server)
       :ok = Backoff.reset({:user, user.id}, network.id)
 
-      state = :sys.get_state(pid)
-      client_pid = state.client
+      state = SessionStateHelpers.fetch(pid)
+      client_pid = SessionStateHelpers.client(state)
       assert is_pid(client_pid)
 
       ref = Process.monitor(pid)
@@ -535,8 +536,8 @@ defmodule Grappa.Session.ServerTest do
 
       :ok = await_handshake(server)
 
-      state = :sys.get_state(pid)
-      client_pid = state.client
+      state = SessionStateHelpers.fetch(pid)
+      client_pid = SessionStateHelpers.client(state)
       assert is_pid(client_pid)
 
       ref = Process.monitor(pid)
@@ -569,8 +570,8 @@ defmodule Grappa.Session.ServerTest do
 
       :ok = await_handshake(server)
 
-      state = :sys.get_state(pid)
-      client_pid = state.client
+      state = SessionStateHelpers.fetch(pid)
+      client_pid = SessionStateHelpers.client(state)
       assert is_pid(client_pid)
 
       ref = Process.monitor(pid)
@@ -830,7 +831,7 @@ defmodule Grappa.Session.ServerTest do
     # The integration check: Credentials.unbind_credential/2 must call
     # stop_session/2 BEFORE deleting the credential row so the running
     # GenServer doesn't outlive the FK row it cached. Without the
-    # teardown the GenServer's `state.network_id` points at a deleted
+    # teardown the GenServer's `SessionStateHelpers.network_id(state)` points at a deleted
     # row; the next outbound PRIVMSG crashes the call handler and
     # the `:transient` restart would loop forever (init can't reload
     # the now-absent credential).
@@ -2555,7 +2556,7 @@ defmodule Grappa.Session.ServerTest do
   end
 
   describe "nick mutation tracking (C6 / S13)" do
-    # `state.nick` is captured at `init/1` from the credential's nick
+    # `SessionStateHelpers.nick(state)` is captured at `init/1` from the credential's nick
     # field, but the upstream server is the source of truth: a nick
     # collision can land us on a fallback (`433 ERR_NICKNAMEINUSE`
     # is currently fatal but Phase 5 may add fallback), `001 RPL_WELCOME`
@@ -2645,7 +2646,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "other-user NICK rename does NOT affect own state.nick" do
+    test "other-user NICK rename does NOT affect own SessionStateHelpers.nick(state)" do
       rfc_handler = fn state, line ->
         if String.starts_with?(line, "USER ") do
           {:reply, ":server 001 grappa-test :Welcome\r\n", state}
@@ -2793,8 +2794,8 @@ defmodule Grappa.Session.ServerTest do
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
-      state = :sys.get_state(pid)
-      assert state.members == %{}
+      state = SessionStateHelpers.fetch(pid)
+      assert SessionStateHelpers.members(state) == %{}
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -2824,8 +2825,8 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert state.members["#test"] == %{"grappa-test" => []}
+      state = SessionStateHelpers.fetch(pid)
+      assert SessionStateHelpers.members(state)["#test"] == %{"grappa-test" => []}
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -2855,9 +2856,9 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
+      state = SessionStateHelpers.fetch(pid)
 
-      assert state.members["#test"] == %{
+      assert SessionStateHelpers.members(state)["#test"] == %{
                "grappa-test" => ["@"],
                "alice" => ["+"],
                "bob" => []
@@ -2869,7 +2870,7 @@ defmodule Grappa.Session.ServerTest do
     test "366 RPL_ENDOFNAMES broadcasts members_seeded on the channel topic" do
       # Bug fix: cicchetto's GET /members races against bahamut's NAMES
       # arrival on /join. The members_seeded broadcast tells the client
-      # "state.members[channel] is now populated; re-fetch is safe."
+      # "SessionStateHelpers.members(state)[channel] is now populated; re-fetch is safe."
       # Without this, a fresh /join sidebar entry has an empty MembersPane
       # until page reload.
       handler = fn state, line ->
@@ -2947,9 +2948,9 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      refute Map.has_key?(state.members["#a"], "alice")
-      refute Map.has_key?(state.members["#b"], "alice")
+      state = SessionStateHelpers.fetch(pid)
+      refute Map.has_key?(SessionStateHelpers.members(state)["#a"], "alice")
+      refute Map.has_key?(SessionStateHelpers.members(state)["#b"], "alice")
 
       rows_a = Scrollback.fetch({:user, user.id}, network.id, "#a", nil, 10, nil, false)
       assert Enum.any?(rows_a, &(&1.kind == :quit and &1.sender == "alice"))
@@ -2967,8 +2968,8 @@ defmodule Grappa.Session.ServerTest do
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
-      state = :sys.get_state(pid)
-      assert state.window_state == WindowState.new()
+      state = SessionStateHelpers.fetch(pid)
+      assert SessionStateHelpers.window_state(state) == WindowState.new()
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -3023,14 +3024,14 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#test") == :joined
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#test") == :joined
       # S1 (lifecycle review HIGH): self-JOIN echo strips the in-flight
       # entry — symmetric with the failure-numeric path (event_router.ex:698).
       # Without the strip, a stale entry can survive 30s and let an
       # unsolicited 471/473 corrupt the window state machine
       # (apply_effects[:join_failed] would overwrite :joined → :failed).
-      refute Map.has_key?(state.in_flight_joins, "#test")
+      refute Map.has_key?(SessionStateHelpers.in_flight_joins(state), "#test")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -3163,8 +3164,8 @@ defmodule Grappa.Session.ServerTest do
       refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :joined}}, 200
 
       # window_state unchanged — still :joined for #test from the self-JOIN.
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#test") == :joined
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#test") == :joined
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -3603,8 +3604,8 @@ defmodule Grappa.Session.ServerTest do
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
-      state = :sys.get_state(pid)
-      assert state.in_flight_joins == %{}
+      state = SessionStateHelpers.fetch(pid)
+      assert SessionStateHelpers.in_flight_joins(state) == %{}
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -3612,7 +3613,7 @@ defmodule Grappa.Session.ServerTest do
     test ":send_join call inserts into in_flight_joins keyed by lowercase channel" do
       # CP15 B2 contract: every outbound JOIN — cic-initiated via the
       # Session.send_join/4 call — records {channel, at_ms, label?} in
-      # state.in_flight_joins keyed by String.downcase/1 of the channel
+      # SessionStateHelpers.in_flight_joins(state) keyed by String.downcase/1 of the channel
       # so a later 471/473/474/475/403/405 numeric can correlate even
       # when the upstream echoes a case-folded channel name.
       #
@@ -3630,8 +3631,8 @@ defmodule Grappa.Session.ServerTest do
 
       {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert {channel, at_ms, label} = Map.fetch!(state.in_flight_joins, "#sniffo")
+      state = SessionStateHelpers.fetch(pid)
+      assert {channel, at_ms, label} = Map.fetch!(SessionStateHelpers.in_flight_joins(state), "#sniffo")
       assert channel == "#sniffo"
       assert is_integer(at_ms)
       assert label == nil
@@ -3673,8 +3674,8 @@ defmodule Grappa.Session.ServerTest do
 
       assert net_slug == network.slug
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#sniffo") == :pending
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#sniffo") == :pending
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -3708,11 +3709,11 @@ defmodule Grappa.Session.ServerTest do
                        1_000
       end
 
-      state = :sys.get_state(pid)
-      assert {"#alfa", _, nil} = Map.fetch!(state.in_flight_joins, "#alfa")
-      assert {"#beta", _, nil} = Map.fetch!(state.in_flight_joins, "#beta")
-      assert WindowState.state_of(state.window_state, "#alfa") == :pending
-      assert WindowState.state_of(state.window_state, "#beta") == :pending
+      state = SessionStateHelpers.fetch(pid)
+      assert {"#alfa", _, nil} = Map.fetch!(SessionStateHelpers.in_flight_joins(state), "#alfa")
+      assert {"#beta", _, nil} = Map.fetch!(SessionStateHelpers.in_flight_joins(state), "#beta")
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#alfa") == :pending
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#beta") == :pending
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -3732,9 +3733,9 @@ defmodule Grappa.Session.ServerTest do
       assert {:ok, "JOIN #alfa,#beta\r\n"} =
                IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert Map.has_key?(state.in_flight_joins, "#alfa")
-      assert Map.has_key?(state.in_flight_joins, "#beta")
+      state = SessionStateHelpers.fetch(pid)
+      assert Map.has_key?(SessionStateHelpers.in_flight_joins(state), "#alfa")
+      assert Map.has_key?(SessionStateHelpers.in_flight_joins(state), "#beta")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -3783,8 +3784,8 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#random") == :invited
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#random") == :invited
 
       # #78: the INVITE row landed in the CHANNEL buffer.
       [row] = Scrollback.fetch({:user, user.id}, network.id, "#random", nil, 10, nil, false)
@@ -3835,8 +3836,8 @@ defmodule Grappa.Session.ServerTest do
 
       refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :window_invited}}, 200
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#pendingchan") == :pending
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#pendingchan") == :pending
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -3878,9 +3879,9 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#sniffo") == :pending
-      assert WindowState.state_of(state.window_state, "#other") == :pending
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#sniffo") == :pending
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#other") == :pending
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -3946,8 +3947,8 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush1\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush1\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#sniffo") == :joined
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#sniffo") == :joined
 
       # Second send_join — channel already :joined; must NOT broadcast
       # window_pending (cic would flicker) and must NOT downgrade state.
@@ -3966,11 +3967,11 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush2\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush2\r\n"), 1_000)
 
-      state2 = :sys.get_state(pid)
-      assert WindowState.state_of(state2.window_state, "#sniffo") == :joined
+      state2 = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state2), "#sniffo") == :joined
 
       # In-flight entry was still recorded (failure-numeric correlation).
-      assert {"#sniffo", _, nil} = Map.fetch!(state2.in_flight_joins, "#sniffo")
+      assert {"#sniffo", _, nil} = Map.fetch!(SessionStateHelpers.in_flight_joins(state2), "#sniffo")
 
       # Crucially: NO second window_pending broadcast.
       refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :window_pending}}, 200
@@ -4007,10 +4008,10 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
+      state = SessionStateHelpers.fetch(pid)
 
-      assert {"#sniffo", _, nil} = Map.fetch!(state.in_flight_joins, "#sniffo")
-      assert {"#other", _, nil} = Map.fetch!(state.in_flight_joins, "#other")
+      assert {"#sniffo", _, nil} = Map.fetch!(SessionStateHelpers.in_flight_joins(state), "#sniffo")
+      assert {"#other", _, nil} = Map.fetch!(SessionStateHelpers.in_flight_joins(state), "#other")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4060,14 +4061,14 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#sniffo") == :failed
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#sniffo") == :failed
 
-      assert WindowState.failure_meta(state.window_state, "#sniffo") ==
+      assert WindowState.failure_meta(SessionStateHelpers.window_state(state), "#sniffo") ==
                %{reason: "Cannot join channel (+i)", numeric: 473}
 
       # In-flight entry stripped — a re-issued JOIN gets a fresh slot.
-      refute Map.has_key?(state.in_flight_joins, "#sniffo")
+      refute Map.has_key?(SessionStateHelpers.in_flight_joins(state), "#sniffo")
 
       # Persisted :notice row carries the numeric in meta so cic can
       # render the failure differently from a plain server NOTICE.
@@ -4151,9 +4152,9 @@ defmodule Grappa.Session.ServerTest do
 
       refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :join_failed}}, 200
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#sniffo") == nil
-      assert WindowState.failure_meta(state.window_state, "#sniffo") == nil
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#sniffo") == nil
+      assert WindowState.failure_meta(SessionStateHelpers.window_state(state), "#sniffo") == nil
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4183,9 +4184,9 @@ defmodule Grappa.Session.ServerTest do
 
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "JOIN #fresh\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      refute Map.has_key?(state.in_flight_joins, "#stale")
-      assert {"#fresh", _, nil} = Map.fetch!(state.in_flight_joins, "#fresh")
+      state = SessionStateHelpers.fetch(pid)
+      refute Map.has_key?(SessionStateHelpers.in_flight_joins(state), "#stale")
+      assert {"#fresh", _, nil} = Map.fetch!(SessionStateHelpers.in_flight_joins(state), "#fresh")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4212,9 +4213,9 @@ defmodule Grappa.Session.ServerTest do
 
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "JOIN #fresh\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert {"#recent", ^recent_at, nil} = Map.fetch!(state.in_flight_joins, "#recent")
-      assert {"#fresh", _, nil} = Map.fetch!(state.in_flight_joins, "#fresh")
+      state = SessionStateHelpers.fetch(pid)
+      assert {"#recent", ^recent_at, nil} = Map.fetch!(SessionStateHelpers.in_flight_joins(state), "#recent")
+      assert {"#fresh", _, nil} = Map.fetch!(SessionStateHelpers.in_flight_joins(state), "#fresh")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4261,8 +4262,8 @@ defmodule Grappa.Session.ServerTest do
           %{
             state
             | window_state: %{
-                state.window_state
-                | failure_reasons: Map.put(state.window_state.failure_reasons, "#test", "stale")
+                SessionStateHelpers.window_state(state)
+                | failure_reasons: Map.put(SessionStateHelpers.window_state(state).failure_reasons, "#test", "stale")
               }
           }
         end)
@@ -4273,9 +4274,9 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :sync2\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :sync2\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#test") == nil
-      assert WindowState.failure_meta(state.window_state, "#test") == nil
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#test") == nil
+      assert WindowState.failure_meta(SessionStateHelpers.window_state(state), "#test") == nil
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4377,8 +4378,8 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#test") == :kicked
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#test") == :kicked
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4462,8 +4463,8 @@ defmodule Grappa.Session.ServerTest do
       refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :kicked}}, 200
 
       # window_state stays :joined — operator still in channel.
-      state = :sys.get_state(pid)
-      assert WindowState.state_of(state.window_state, "#test") == :joined
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#test") == :joined
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -4558,7 +4559,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = await_handshake(server)
       {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
 
-      # Self-JOIN echo only — no 353/366. state.members[#test] exists
+      # Self-JOIN echo only — no 353/366. SessionStateHelpers.members(state)[#test] exists
       # (own_nick seeded) but seeded_channels does NOT include #test.
       IRCServer.feed(server, ":grappa-test!u@h JOIN :#test\r\n")
       IRCServer.feed(server, "PING :flush\r\n")
@@ -4606,7 +4607,7 @@ defmodule Grappa.Session.ServerTest do
   end
 
   describe "list_channels via GenServer.call" do
-    test "returns Map.keys(state.members) sorted alphabetically" do
+    test "returns Map.keys(SessionStateHelpers.members(state)) sorted alphabetically" do
       {_, port} = start_server()
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
@@ -4628,7 +4629,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "returns empty list when state.members is empty" do
+    test "returns empty list when SessionStateHelpers.members(state) is empty" do
       {_, port} = start_server()
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
@@ -4755,7 +4756,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "channels_changed broadcast on user topic" do
     # Server-side half of the cicchetto live-channel-on-/join fix.
-    # Whenever `Map.keys(state.members)` mutates between input + derived
+    # Whenever `Map.keys(SessionStateHelpers.members(state))` mutates between input + derived
     # state in `Session.Server.delegate/2`, fire a fan-out
     # `%{kind: :channels_changed}` broadcast on `Topic.user(user_name)`
     # so every connected tab refetches GET /channels and re-subscribes
@@ -5276,9 +5277,9 @@ defmodule Grappa.Session.ServerTest do
       assert {:ok, :no_persist} =
                Session.send_privmsg({:user, user.id}, network.id, "NickServ", "IDENTIFY s3cret")
 
-      state = :sys.get_state(pid)
-      assert match?({"s3cret", _deadline}, state.pending_auth)
-      assert is_reference(state.pending_auth_timer)
+      state = SessionStateHelpers.fetch(pid)
+      assert match?({"s3cret", _deadline}, SessionStateHelpers.pending_auth(state))
+      assert is_reference(SessionStateHelpers.pending_auth_timer(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -5293,8 +5294,8 @@ defmodule Grappa.Session.ServerTest do
       Session.send_privmsg({:user, user.id}, network.id, "NickServ", "IDENTIFY old")
       Session.send_privmsg({:user, user.id}, network.id, "NickServ", "IDENTIFY new")
 
-      state = :sys.get_state(pid)
-      assert match?({"new", _}, state.pending_auth)
+      state = SessionStateHelpers.fetch(pid)
+      assert match?({"new", _}, SessionStateHelpers.pending_auth(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -5310,9 +5311,9 @@ defmodule Grappa.Session.ServerTest do
       send(pid, :pending_auth_timeout)
       Process.sleep(50)
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_auth)
-      assert is_nil(state.pending_auth_timer)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_auth_timer(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -5326,9 +5327,9 @@ defmodule Grappa.Session.ServerTest do
 
       Session.send_privmsg({:user, user.id}, network.id, "ChanServ", "REGISTER #x pwd")
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_auth)
-      assert is_nil(state.pending_auth_timer)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_auth_timer(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -5342,8 +5343,8 @@ defmodule Grappa.Session.ServerTest do
 
       Session.send_privmsg({:user, user.id}, network.id, "#italia", "ciao")
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_auth)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -5367,7 +5368,7 @@ defmodule Grappa.Session.ServerTest do
                  "IDENTIFY s3cret"
                )
 
-      assert match?({"s3cret", _}, :sys.get_state(pid).pending_auth)
+      assert match?({"s3cret", _}, SessionStateHelpers.pending_auth(SessionStateHelpers.fetch(pid)))
 
       mode_msg = %Message{
         command: :mode,
@@ -5378,9 +5379,9 @@ defmodule Grappa.Session.ServerTest do
 
       send(pid, {:irc, mode_msg})
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_auth)
-      assert is_nil(state.pending_auth_timer)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_auth_timer(state))
 
       # #211 phase 7 — the secret lands on the credential; registration is
       # DERIVED from it (`visitor_registered?`). commit_password/3 does NOT
@@ -5410,7 +5411,7 @@ defmodule Grappa.Session.ServerTest do
                  "PRIVMSG NickServ :id s3cret"
                )
 
-      assert match?({"s3cret", _}, :sys.get_state(pid).pending_auth)
+      assert match?({"s3cret", _}, SessionStateHelpers.pending_auth(SessionStateHelpers.fetch(pid)))
 
       mode_msg = %Message{
         command: :mode,
@@ -5421,9 +5422,9 @@ defmodule Grappa.Session.ServerTest do
 
       send(pid, {:irc, mode_msg})
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_auth)
-      assert is_nil(state.pending_auth_timer)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_auth_timer(state))
 
       assert visitor_password(visitor, network) != nil
       assert Credentials.visitor_registered?(visitor.id)
@@ -5442,8 +5443,8 @@ defmodule Grappa.Session.ServerTest do
       send(pid, :pending_auth_timeout)
       Process.sleep(50)
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_auth)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
 
       assert is_nil(visitor_password(visitor, network))
 
@@ -5465,7 +5466,7 @@ defmodule Grappa.Session.ServerTest do
       }
 
       send(pid, {:irc, mode_msg})
-      _ = :sys.get_state(pid)
+      _ = SessionStateHelpers.fetch(pid)
 
       assert is_nil(visitor_password(visitor, network))
 
@@ -5480,14 +5481,14 @@ defmodule Grappa.Session.ServerTest do
       :ok = await_handshake(server)
 
       Session.send_privmsg({:user, user.id}, network.id, "NickServ", "IDENTIFY s3cret")
-      assert match?({"s3cret", _}, :sys.get_state(pid).pending_auth)
+      assert match?({"s3cret", _}, SessionStateHelpers.pending_auth(SessionStateHelpers.fetch(pid)))
 
       mode_msg = %Message{
         command: :mode,
         params: [
-          # User-side state.nick is whatever credential.nick resolved to
+          # User-side SessionStateHelpers.nick(state) is whatever credential.nick resolved to
           # — read it from live state so the test stays nick-agnostic.
-          :sys.get_state(pid).nick,
+          SessionStateHelpers.nick(SessionStateHelpers.fetch(pid)),
           "+r"
         ],
         prefix: {:server, "irc.example.test"},
@@ -5497,9 +5498,9 @@ defmodule Grappa.Session.ServerTest do
       log =
         capture_log(fn ->
           send(pid, {:irc, mode_msg})
-          state = :sys.get_state(pid)
-          assert is_nil(state.pending_auth)
-          assert is_nil(state.pending_auth_timer)
+          state = SessionStateHelpers.fetch(pid)
+          assert is_nil(SessionStateHelpers.pending_auth(state))
+          assert is_nil(SessionStateHelpers.pending_auth_timer(state))
         end)
 
       assert log =~ "visitor_r_observed effect on user session"
@@ -5528,20 +5529,20 @@ defmodule Grappa.Session.ServerTest do
                  "REGISTER regpass me@example.com"
                )
 
-      assert :sys.get_state(pid).pending_registration_secret == "regpass"
+      assert SessionStateHelpers.pending_registration_secret(SessionStateHelpers.fetch(pid)) == "regpass"
 
       # Services confirm the registration by setting +r on our nick.
       mode_msg = %Message{
         command: :mode,
-        params: [:sys.get_state(pid).nick, "+r"],
+        params: [SessionStateHelpers.nick(SessionStateHelpers.fetch(pid)), "+r"],
         prefix: {:server, "irc.example.test"},
         tags: %{}
       }
 
       send(pid, {:irc, mode_msg})
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_registration_secret)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_registration_secret(state))
 
       # commit-on-+r: the credential now carries the password AND is promoted
       # to auto-identify on the next reconnect.
@@ -5563,12 +5564,12 @@ defmodule Grappa.Session.ServerTest do
       # registration. This is #124's territory, not commit-on-+r: the +r must
       # leave the credential's :none auth posture untouched.
       Session.send_privmsg({:user, user.id}, network.id, "NickServ", "IDENTIFY s3cret")
-      assert match?({"s3cret", _}, :sys.get_state(pid).pending_auth)
-      assert is_nil(:sys.get_state(pid).pending_registration_secret)
+      assert match?({"s3cret", _}, SessionStateHelpers.pending_auth(SessionStateHelpers.fetch(pid)))
+      assert is_nil(SessionStateHelpers.pending_registration_secret(SessionStateHelpers.fetch(pid)))
 
       mode_msg = %Message{
         command: :mode,
-        params: [:sys.get_state(pid).nick, "+r"],
+        params: [SessionStateHelpers.nick(SessionStateHelpers.fetch(pid)), "+r"],
         prefix: {:server, "irc.example.test"},
         tags: %{}
       }
@@ -5576,7 +5577,7 @@ defmodule Grappa.Session.ServerTest do
       log =
         capture_log(fn ->
           send(pid, {:irc, mode_msg})
-          assert is_nil(:sys.get_state(pid).pending_auth)
+          assert is_nil(SessionStateHelpers.pending_auth(SessionStateHelpers.fetch(pid)))
         end)
 
       assert log =~ "visitor_r_observed effect on user session"
@@ -5611,18 +5612,18 @@ defmodule Grappa.Session.ServerTest do
         "REGISTER regpass me@x.io"
       )
 
-      state = :sys.get_state(pid)
-      assert state.pending_registration_secret == "regpass"
+      state = SessionStateHelpers.fetch(pid)
+      assert SessionStateHelpers.pending_registration_secret(state) == "regpass"
       # REGISTER must NOT arm the 10s pending_auth fail-safe timer.
-      assert is_nil(state.pending_auth)
-      assert is_nil(state.pending_auth_timer)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_auth_timer(state))
 
       # The pending_auth timeout fires (the 10s window elapses) — it must
       # clear ONLY the timed slot, never the untimed registration secret.
       send(pid, :pending_auth_timeout)
       Process.sleep(50)
 
-      assert :sys.get_state(pid).pending_registration_secret == "regpass"
+      assert SessionStateHelpers.pending_registration_secret(SessionStateHelpers.fetch(pid)) == "regpass"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -5641,7 +5642,7 @@ defmodule Grappa.Session.ServerTest do
         "REGISTER regpass me@x.io"
       )
 
-      assert :sys.get_state(pid).pending_registration_secret == "regpass"
+      assert SessionStateHelpers.pending_registration_secret(SessionStateHelpers.fetch(pid)) == "regpass"
 
       mode_msg = %Message{
         command: :mode,
@@ -5652,8 +5653,8 @@ defmodule Grappa.Session.ServerTest do
 
       send(pid, {:irc, mode_msg})
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_registration_secret)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_registration_secret(state))
 
       assert visitor_password(visitor, network) == "regpass"
       # #211 phase 7 — registration is DERIVED from the credential;
@@ -5681,7 +5682,7 @@ defmodule Grappa.Session.ServerTest do
       # /ns AUTH). Simulate the elapsed window by firing the timeout.
       send(pid, :pending_auth_timeout)
       Process.sleep(50)
-      assert :sys.get_state(pid).pending_registration_secret == "regpass"
+      assert SessionStateHelpers.pending_registration_secret(SessionStateHelpers.fetch(pid)) == "regpass"
 
       # /ns AUTH <code> lands minutes-to-hours later → services set +r.
       mode_msg = %Message{
@@ -5692,7 +5693,7 @@ defmodule Grappa.Session.ServerTest do
       }
 
       send(pid, {:irc, mode_msg})
-      _ = :sys.get_state(pid)
+      _ = SessionStateHelpers.fetch(pid)
 
       assert visitor_password(visitor, network) == "regpass"
       assert Credentials.visitor_registered?(visitor.id)
@@ -5711,9 +5712,9 @@ defmodule Grappa.Session.ServerTest do
       Session.send_privmsg({:visitor, visitor.id}, network.id, "NickServ", "IDENTIFY identifypass")
       Session.send_privmsg({:visitor, visitor.id}, network.id, "NickServ", "REGISTER regpass me@x.io")
 
-      staged = :sys.get_state(pid)
-      assert match?({"identifypass", _}, staged.pending_auth)
-      assert staged.pending_registration_secret == "regpass"
+      staged = SessionStateHelpers.fetch(pid)
+      assert match?({"identifypass", _}, SessionStateHelpers.pending_auth(staged))
+      assert SessionStateHelpers.pending_registration_secret(staged) == "regpass"
 
       mode_msg = %Message{
         command: :mode,
@@ -5724,10 +5725,10 @@ defmodule Grappa.Session.ServerTest do
 
       send(pid, {:irc, mode_msg})
 
-      cleared = :sys.get_state(pid)
-      assert is_nil(cleared.pending_auth)
-      assert is_nil(cleared.pending_auth_timer)
-      assert is_nil(cleared.pending_registration_secret)
+      cleared = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(cleared))
+      assert is_nil(SessionStateHelpers.pending_auth_timer(cleared))
+      assert is_nil(SessionStateHelpers.pending_registration_secret(cleared))
 
       # Register wins — the committed cleartext is the REGISTER secret.
       assert visitor_password(visitor, network) == "regpass"
@@ -5746,9 +5747,9 @@ defmodule Grappa.Session.ServerTest do
       # stays nil (the slots are independent).
       Session.send_privmsg({:visitor, visitor.id}, network.id, "NickServ", "IDENTIFY s3cret")
 
-      staged = :sys.get_state(pid)
-      assert match?({"s3cret", _}, staged.pending_auth)
-      assert is_nil(staged.pending_registration_secret)
+      staged = SessionStateHelpers.fetch(pid)
+      assert match?({"s3cret", _}, SessionStateHelpers.pending_auth(staged))
+      assert is_nil(SessionStateHelpers.pending_registration_secret(staged))
 
       mode_msg = %Message{
         command: :mode,
@@ -5759,9 +5760,9 @@ defmodule Grappa.Session.ServerTest do
 
       send(pid, {:irc, mode_msg})
 
-      cleared = :sys.get_state(pid)
-      assert is_nil(cleared.pending_auth)
-      assert is_nil(cleared.pending_registration_secret)
+      cleared = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(cleared))
+      assert is_nil(SessionStateHelpers.pending_registration_secret(cleared))
 
       assert visitor_password(visitor, network) == "s3cret"
       assert Credentials.visitor_registered?(visitor.id)
@@ -5783,7 +5784,7 @@ defmodule Grappa.Session.ServerTest do
         "REGISTER regpass me@x.io"
       )
 
-      assert :sys.get_state(pid).pending_registration_secret == "regpass"
+      assert SessionStateHelpers.pending_registration_secret(SessionStateHelpers.fetch(pid)) == "regpass"
 
       # Session dies before +r ever arrives (the documented #129 limitation:
       # the in-memory secret is lost, NOT persisted). The visitor row stays
@@ -5824,13 +5825,13 @@ defmodule Grappa.Session.ServerTest do
                )
 
       # Commit is synchronous inside the send handler — no `+r` MODE was fed.
-      state = :sys.get_state(pid)
+      state = SessionStateHelpers.fetch(pid)
       assert Credentials.get_credential!(user, network).password_encrypted == "newpass"
 
       # SET PASSWD commits; it does NOT stage a +r rendezvous slot.
-      assert is_nil(state.pending_auth)
-      assert is_nil(state.pending_auth_timer)
-      assert is_nil(state.pending_registration_secret)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_auth_timer(state))
+      assert is_nil(SessionStateHelpers.pending_registration_secret(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -5852,7 +5853,7 @@ defmodule Grappa.Session.ServerTest do
                  "SET PASSWD correct horse battery staple"
                )
 
-      _ = :sys.get_state(pid)
+      _ = SessionStateHelpers.fetch(pid)
 
       assert Credentials.get_credential!(user, network).password_encrypted ==
                "correct horse battery staple"
@@ -5877,9 +5878,9 @@ defmodule Grappa.Session.ServerTest do
                  "SET PASSWD newpass"
                )
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_auth)
-      assert is_nil(state.pending_registration_secret)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_registration_secret(state))
 
       # rotate_password/3 rewrites the credential secret; the identity stays
       # registered (derived from the credential).
@@ -5905,7 +5906,7 @@ defmodule Grappa.Session.ServerTest do
                  "SET PASSWD newpass"
                )
 
-      _ = :sys.get_state(pid)
+      _ = SessionStateHelpers.fetch(pid)
 
       # rotate_password/3 refuses an anon credential: the throwaway visitor
       # is NOT promoted (stays unregistered + reapable — services would have
@@ -5929,11 +5930,11 @@ defmodule Grappa.Session.ServerTest do
       assert {:ok, :no_persist} =
                Session.send_privmsg({:user, user.id}, network.id, "NickServ", "SET EMAIL me@x.io")
 
-      state = :sys.get_state(pid)
+      state = SessionStateHelpers.fetch(pid)
       # Untouched: SET EMAIL is not a captured verb.
       assert Credentials.get_credential!(user, network).password_encrypted == "oldpass"
-      assert is_nil(state.pending_auth)
-      assert is_nil(state.pending_registration_secret)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_registration_secret(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -5968,10 +5969,10 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert match?({"s3cret", _deadline}, state.pending_auth)
-      assert is_reference(state.pending_auth_timer)
-      assert is_nil(state.pending_password)
+      state = SessionStateHelpers.fetch(pid)
+      assert match?({"s3cret", _deadline}, SessionStateHelpers.pending_auth(state))
+      assert is_reference(SessionStateHelpers.pending_auth_timer(state))
+      assert is_nil(SessionStateHelpers.pending_password(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -5995,9 +5996,9 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.pending_auth)
-      assert is_nil(state.pending_password)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_password(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6306,19 +6307,19 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 332 grappa-test #test :Welcome to the test channel\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert state.topics["#test"].text == "Welcome to the test channel"
-      assert is_nil(state.topics["#test"].set_by)
-      assert is_nil(state.topics["#test"].set_at)
+      state = SessionStateHelpers.fetch(pid)
+      assert SessionStateHelpers.topics(state)["#test"].text == "Welcome to the test channel"
+      assert is_nil(SessionStateHelpers.topics(state)["#test"].set_by)
+      assert is_nil(SessionStateHelpers.topics(state)["#test"].set_at)
 
       # 333 RPL_TOPICWHOTIME
       IRCServer.feed(server, ":irc.test.org 333 grappa-test #test vjt!user@host 1714900000\r\n")
       flush_server(server)
 
-      state2 = :sys.get_state(pid)
-      assert state2.topics["#test"].text == "Welcome to the test channel"
-      assert state2.topics["#test"].set_by == "vjt!user@host"
-      assert %DateTime{} = state2.topics["#test"].set_at
+      state2 = SessionStateHelpers.fetch(pid)
+      assert SessionStateHelpers.topics(state2)["#test"].text == "Welcome to the test channel"
+      assert SessionStateHelpers.topics(state2)["#test"].set_by == "vjt!user@host"
+      assert %DateTime{} = SessionStateHelpers.topics(state2)["#test"].set_at
 
       # Two :event/:topic_changed broadcasts expected (one per numeric)
       assert_receive %Phoenix.Socket.Broadcast{
@@ -6359,18 +6360,18 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 333 grappa-test #oot alice!a@host 1714900000\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.topics["#oot"].text)
-      assert state.topics["#oot"].set_by == "alice!a@host"
-      assert %DateTime{} = state.topics["#oot"].set_at
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.topics(state)["#oot"].text)
+      assert SessionStateHelpers.topics(state)["#oot"].set_by == "alice!a@host"
+      assert %DateTime{} = SessionStateHelpers.topics(state)["#oot"].set_at
 
       # 332 arrives later
       IRCServer.feed(server, ":irc.test.org 332 grappa-test #oot :The real topic\r\n")
       flush_server(server)
 
-      state2 = :sys.get_state(pid)
-      assert state2.topics["#oot"].text == "The real topic"
-      assert state2.topics["#oot"].set_by == "alice!a@host"
+      state2 = SessionStateHelpers.fetch(pid)
+      assert SessionStateHelpers.topics(state2)["#oot"].text == "The real topic"
+      assert SessionStateHelpers.topics(state2)["#oot"].set_by == "alice!a@host"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6390,11 +6391,11 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 331 grappa-test #quiet :No topic is set\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert Map.has_key?(state.topics, "#quiet")
-      assert is_nil(state.topics["#quiet"].text)
-      assert is_nil(state.topics["#quiet"].set_by)
-      assert is_nil(state.topics["#quiet"].set_at)
+      state = SessionStateHelpers.fetch(pid)
+      assert Map.has_key?(SessionStateHelpers.topics(state), "#quiet")
+      assert is_nil(SessionStateHelpers.topics(state)["#quiet"].text)
+      assert is_nil(SessionStateHelpers.topics(state)["#quiet"].set_by)
+      assert is_nil(SessionStateHelpers.topics(state)["#quiet"].set_at)
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "event",
@@ -6421,12 +6422,12 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":alice!a@host TOPIC #live :Fresh new topic\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert state.topics["#live"].text == "Fresh new topic"
-      assert state.topics["#live"].set_by == "alice"
-      assert %DateTime{} = state.topics["#live"].set_at
+      state = SessionStateHelpers.fetch(pid)
+      assert SessionStateHelpers.topics(state)["#live"].text == "Fresh new topic"
+      assert SessionStateHelpers.topics(state)["#live"].set_by == "alice"
+      assert %DateTime{} = SessionStateHelpers.topics(state)["#live"].set_at
       # set_at should be approximately now (wall-clock)
-      assert DateTime.compare(state.topics["#live"].set_at, t_before) in [:gt, :eq]
+      assert DateTime.compare(SessionStateHelpers.topics(state)["#live"].set_at, t_before) in [:gt, :eq]
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "event",
@@ -6449,15 +6450,15 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 332 grappa-test #leavetest :A topic\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert Map.has_key?(state.topics, "#leavetest")
+      state = SessionStateHelpers.fetch(pid)
+      assert Map.has_key?(SessionStateHelpers.topics(state), "#leavetest")
 
       # Self-PART clears the cache entry
       IRCServer.feed(server, ":grappa-test!u@h PART #leavetest :bye\r\n")
       flush_server(server)
 
-      state2 = :sys.get_state(pid)
-      refute Map.has_key?(state2.topics, "#leavetest")
+      state2 = SessionStateHelpers.fetch(pid)
+      refute Map.has_key?(SessionStateHelpers.topics(state2), "#leavetest")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6558,11 +6559,11 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 324 grappa-test #modes +nt\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert "n" in state.channel_modes["#modes"].modes
-      assert "t" in state.channel_modes["#modes"].modes
-      assert length(state.channel_modes["#modes"].modes) == 2
-      assert state.channel_modes["#modes"].params == %{}
+      state = SessionStateHelpers.fetch(pid)
+      assert "n" in SessionStateHelpers.channel_modes(state)["#modes"].modes
+      assert "t" in SessionStateHelpers.channel_modes(state)["#modes"].modes
+      assert length(SessionStateHelpers.channel_modes(state)["#modes"].modes) == 2
+      assert SessionStateHelpers.channel_modes(state)["#modes"].params == %{}
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "event",
@@ -6589,11 +6590,11 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 324 grappa-test #keyed +ntk secret\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert "n" in state.channel_modes["#keyed"].modes
-      assert "t" in state.channel_modes["#keyed"].modes
-      assert "k" in state.channel_modes["#keyed"].modes
-      assert state.channel_modes["#keyed"].params["k"] == "secret"
+      state = SessionStateHelpers.fetch(pid)
+      assert "n" in SessionStateHelpers.channel_modes(state)["#keyed"].modes
+      assert "t" in SessionStateHelpers.channel_modes(state)["#keyed"].modes
+      assert "k" in SessionStateHelpers.channel_modes(state)["#keyed"].modes
+      assert SessionStateHelpers.channel_modes(state)["#keyed"].params["k"] == "secret"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6613,9 +6614,9 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":op!o@host MODE #delta +nt\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert "n" in state.channel_modes["#delta"].modes
-      assert "t" in state.channel_modes["#delta"].modes
+      state = SessionStateHelpers.fetch(pid)
+      assert "n" in SessionStateHelpers.channel_modes(state)["#delta"].modes
+      assert "t" in SessionStateHelpers.channel_modes(state)["#delta"].modes
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "event",
@@ -6642,16 +6643,16 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 324 grappa-test #remove +nt\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert "t" in state.channel_modes["#remove"].modes
+      state = SessionStateHelpers.fetch(pid)
+      assert "t" in SessionStateHelpers.channel_modes(state)["#remove"].modes
 
       # Remove t
       IRCServer.feed(server, ":op!o@host MODE #remove -t\r\n")
       flush_server(server)
 
-      state2 = :sys.get_state(pid)
-      refute "t" in state2.channel_modes["#remove"].modes
-      assert "n" in state2.channel_modes["#remove"].modes
+      state2 = SessionStateHelpers.fetch(pid)
+      refute "t" in SessionStateHelpers.channel_modes(state2)["#remove"].modes
+      assert "n" in SessionStateHelpers.channel_modes(state2)["#remove"].modes
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6681,11 +6682,11 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":op!o@host MODE #roles +o alice\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
+      state = SessionStateHelpers.fetch(pid)
       # Per-user modes updated (alice gets @)
-      assert "@" in (state.members["#roles"]["alice"] || [])
+      assert "@" in (SessionStateHelpers.members(state)["#roles"]["alice"] || [])
       # channel_modes unchanged (still just ["n"])
-      assert state.channel_modes["#roles"].modes == ["n"]
+      assert SessionStateHelpers.channel_modes(state)["#roles"].modes == ["n"]
 
       refute_receive %Phoenix.Socket.Broadcast{event: "event", payload: %{kind: :channel_modes_changed}}, 200
 
@@ -6705,19 +6706,19 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 324 grappa-test #mixed +ntk secret\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert "k" in state.channel_modes["#mixed"].modes
+      state = SessionStateHelpers.fetch(pid)
+      assert "k" in SessionStateHelpers.channel_modes(state)["#mixed"].modes
 
       # Apply +m-k (add m, remove k)
       IRCServer.feed(server, ":op!o@host MODE #mixed +m-k secret\r\n")
       flush_server(server)
 
-      state2 = :sys.get_state(pid)
-      assert "m" in state2.channel_modes["#mixed"].modes
-      assert "n" in state2.channel_modes["#mixed"].modes
-      assert "t" in state2.channel_modes["#mixed"].modes
-      refute "k" in state2.channel_modes["#mixed"].modes
-      refute Map.has_key?(state2.channel_modes["#mixed"].params, "k")
+      state2 = SessionStateHelpers.fetch(pid)
+      assert "m" in SessionStateHelpers.channel_modes(state2)["#mixed"].modes
+      assert "n" in SessionStateHelpers.channel_modes(state2)["#mixed"].modes
+      assert "t" in SessionStateHelpers.channel_modes(state2)["#mixed"].modes
+      refute "k" in SessionStateHelpers.channel_modes(state2)["#mixed"].modes
+      refute Map.has_key?(SessionStateHelpers.channel_modes(state2)["#mixed"].params, "k")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6734,14 +6735,14 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, ":irc.test.org 324 grappa-test #leavemodes +n\r\n")
       flush_server(server)
 
-      state = :sys.get_state(pid)
-      assert Map.has_key?(state.channel_modes, "#leavemodes")
+      state = SessionStateHelpers.fetch(pid)
+      assert Map.has_key?(SessionStateHelpers.channel_modes(state), "#leavemodes")
 
       IRCServer.feed(server, ":grappa-test!u@h PART #leavemodes :bye\r\n")
       flush_server(server)
 
-      state2 = :sys.get_state(pid)
-      refute Map.has_key?(state2.channel_modes, "#leavemodes")
+      state2 = SessionStateHelpers.fetch(pid)
+      refute Map.has_key?(SessionStateHelpers.channel_modes(state2), "#leavemodes")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6893,12 +6894,12 @@ defmodule Grappa.Session.ServerTest do
           1_000
         )
 
-      state = :sys.get_state(pid)
+      state = SessionStateHelpers.fetch(pid)
 
       assert %GhostRecovery{phase: :awaiting_ghost_notice, orig_nick: ^nick, password: "s3cret"} =
-               state.ghost_recovery
+               SessionStateHelpers.ghost_recovery(state)
 
-      assert is_reference(state.ghost_timer)
+      assert is_reference(SessionStateHelpers.ghost_timer(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6972,11 +6973,11 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert is_nil(state.ghost_recovery)
-      assert is_nil(state.ghost_timer)
-      assert match?({"s3cret", _deadline}, state.pending_auth)
-      assert is_reference(state.pending_auth_timer)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.ghost_recovery(state))
+      assert is_nil(SessionStateHelpers.ghost_timer(state))
+      assert match?({"s3cret", _deadline}, SessionStateHelpers.pending_auth(state))
+      assert is_reference(SessionStateHelpers.pending_auth_timer(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6996,9 +6997,9 @@ defmodule Grappa.Session.ServerTest do
 
       # Sync via :sys.get_state — handle_info(:ghost_timeout, ...) fully
       # serializes the clear before this returns.
-      state = :sys.get_state(pid)
-      assert is_nil(state.ghost_recovery)
-      assert is_nil(state.ghost_timer)
+      state = SessionStateHelpers.fetch(pid)
+      assert is_nil(SessionStateHelpers.ghost_recovery(state))
+      assert is_nil(SessionStateHelpers.ghost_timer(state))
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -7024,8 +7025,8 @@ defmodule Grappa.Session.ServerTest do
 
       send(pid, {:irc, noise})
 
-      state = :sys.get_state(pid)
-      assert %GhostRecovery{phase: :awaiting_ghost_notice} = state.ghost_recovery
+      state = SessionStateHelpers.fetch(pid)
+      assert %GhostRecovery{phase: :awaiting_ghost_notice} = SessionStateHelpers.ghost_recovery(state)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -7305,7 +7306,7 @@ defmodule Grappa.Session.ServerTest do
 
       # The in-memory away state is restored with the ORIGINAL window —
       # started_at preserved verbatim (the re-send must not reset it).
-      away = :sys.get_state(pid).away_state
+      away = SessionStateHelpers.away_state(SessionStateHelpers.fetch(pid))
       assert away.state == :away_explicit
       assert away.reason == "lunch"
       assert away.started_at == since
@@ -7329,7 +7330,7 @@ defmodule Grappa.Session.ServerTest do
       assert cred.away_reason == "afk"
       assert %DateTime{} = cred.away_since
       # The persisted started_at IS the live away window (same source).
-      assert cred.away_since == :sys.get_state(pid).away_state.started_at
+      assert cred.away_since == SessionStateHelpers.away_state(SessionStateHelpers.fetch(pid)).started_at
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -7487,7 +7488,7 @@ defmodule Grappa.Session.ServerTest do
 
       # Confirm the debounce was armed by the visibility event (so the
       # silence above is the debounce, not a dropped/mis-routed event).
-      assert :sys.get_state(pid).auto_away_timer != nil
+      assert SessionStateHelpers.auto_away_timer(SessionStateHelpers.fetch(pid)) != nil
 
       # Fire the debounce directly (avoids a real wait) → real AWAY.
       send(pid, :auto_away_debounce_fire)
@@ -7496,13 +7497,15 @@ defmodule Grappa.Session.ServerTest do
                IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :auto"), 1_000)
 
       assert String.starts_with?(away_line, "AWAY :auto-away")
-      assert AwayState.state_of(:sys.get_state(pid).away_state) == :away_auto
+      state = SessionStateHelpers.fetch(pid)
+      assert AwayState.state_of(SessionStateHelpers.away_state(state)) == :away_auto
 
       # Foreground the device again → :ws_visible → unaway → bare AWAY.
       :ok = WSPresence.set_visibility(user.name, device, true)
 
       assert {:ok, "AWAY\r\n"} = IRCServer.wait_for_line(server, &(&1 == "AWAY\r\n"), 1_000)
-      assert AwayState.state_of(:sys.get_state(pid).away_state) == :present
+      present_state = SessionStateHelpers.fetch(pid)
+      assert AwayState.state_of(SessionStateHelpers.away_state(present_state)) == :present
 
       Process.exit(device, :kill)
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -7942,7 +7945,7 @@ defmodule Grappa.Session.ServerTest do
       port = IRCServer.port(server)
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: []})
       pid = start_session_for(user, network)
-      # Wait for 001 reception so state.nick is reconciled (post-001 only).
+      # Wait for 001 reception so SessionStateHelpers.nick(state) is reconciled (post-001 only).
       Process.sleep(50)
       %{server: server, user: user, network: network, pid: pid}
     end
@@ -7977,9 +7980,9 @@ defmodule Grappa.Session.ServerTest do
       assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS fresh\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      refute Map.has_key?(state.whois_pending, "ghost")
-      assert Map.has_key?(state.whois_pending, "fresh")
+      state = SessionStateHelpers.fetch(pid)
+      refute Map.has_key?(SessionStateHelpers.whois_pending(state), "ghost")
+      assert Map.has_key?(SessionStateHelpers.whois_pending(state), "fresh")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -8000,9 +8003,9 @@ defmodule Grappa.Session.ServerTest do
       assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS fresh\r\n"), 1_000)
 
-      state = :sys.get_state(pid)
-      assert Map.has_key?(state.whois_pending, "recent")
-      assert Map.has_key?(state.whois_pending, "fresh")
+      state = SessionStateHelpers.fetch(pid)
+      assert Map.has_key?(SessionStateHelpers.whois_pending(state), "recent")
+      assert Map.has_key?(SessionStateHelpers.whois_pending(state), "fresh")
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -8030,7 +8033,7 @@ defmodule Grappa.Session.ServerTest do
 
       refute_receive {:DOWN, ^ref, :process, ^pid, _}, 300
 
-      state = :sys.get_state(pid)
+      state = SessionStateHelpers.fetch(pid)
       assert Map.has_key?(state, :labels_pending_at)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -8421,7 +8424,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.channel(user.name, network.slug, "#bofh"))
 
-      # Join #bofh first so it's in state.members.
+      # Join #bofh first so it's in SessionStateHelpers.members(state).
       IRCServer.feed(server, ":grappa-test!u@h JOIN #bofh\r\n")
       IRCServer.feed(server, ":irc.test.org 353 grappa-test = #bofh :grappa-test\r\n")
       IRCServer.feed(server, ":irc.test.org 366 grappa-test #bofh :End of /NAMES list\r\n")
@@ -8970,8 +8973,8 @@ defmodule Grappa.Session.ServerTest do
 
       # Nil the linked Client's socket — `transport_send/2` will now
       # return `{:error, :no_socket}` for every subsequent send_*.
-      state = :sys.get_state(pid)
-      client_pid = state.client
+      state = SessionStateHelpers.fetch(pid)
+      client_pid = SessionStateHelpers.client(state)
       :sys.replace_state(client_pid, fn cs -> %{cs | socket: nil} end)
 
       %{server: server, user: user, network: network, pid: pid, client: client_pid}
@@ -9028,8 +9031,8 @@ defmodule Grappa.Session.ServerTest do
       assert log =~ "set_explicit_away: Client.send failed"
       # Local AwayState flipped despite the wire failure — next reconnect
       # will resend AWAY; the operator's intent is preserved in state.
-      state = :sys.get_state(pid)
-      assert AwayState.state_of(state.away_state) == :away_explicit
+      state = SessionStateHelpers.fetch(pid)
+      assert AwayState.state_of(SessionStateHelpers.away_state(state)) == :away_explicit
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -9050,8 +9053,8 @@ defmodule Grappa.Session.ServerTest do
       assert Process.alive?(pid), "Session.Server crashed on dead-socket /away unset"
       assert log =~ "set_explicit_away: Client.send failed"
       assert log =~ "unset_away: Client.send failed"
-      state = :sys.get_state(pid)
-      assert AwayState.state_of(state.away_state) == :present
+      state = SessionStateHelpers.fetch(pid)
+      assert AwayState.state_of(SessionStateHelpers.away_state(state)) == :present
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -9065,8 +9068,8 @@ defmodule Grappa.Session.ServerTest do
 
       assert Process.alive?(pid), "Session.Server crashed on dead-socket auto-away"
       assert log =~ "set_auto_away: Client.send failed"
-      state = :sys.get_state(pid)
-      assert AwayState.state_of(state.away_state) == :away_auto
+      state = SessionStateHelpers.fetch(pid)
+      assert AwayState.state_of(SessionStateHelpers.away_state(state)) == :away_auto
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -9138,7 +9141,8 @@ defmodule Grappa.Session.ServerTest do
       IRCServer.feed(server, "PING :flush\r\n")
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
 
-      assert MapSet.member?(:sys.get_state(pid).awaiting_invite, "#secret")
+      state = SessionStateHelpers.fetch(pid)
+      assert MapSet.member?(SessionStateHelpers.awaiting_invite(state), "#secret")
     end
 
     test "475 (+k) on an autojoin channel also sends ChanServ INVITE" do
@@ -9240,7 +9244,9 @@ defmodule Grappa.Session.ServerTest do
       refute line =~ ~r/^JOIN #secret \S/
       # Window flips back to :pending while the re-join is in flight.
       flush_server(server)
-      assert WindowState.state_of(:sys.get_state(pid).window_state, "#secret") == :pending
+
+      state = SessionStateHelpers.fetch(pid)
+      assert WindowState.state_of(SessionStateHelpers.window_state(state), "#secret") == :pending
     end
   end
 end
