@@ -22455,7 +22455,7 @@ reproduces the same merge one layer up.
 **The issue undercounted the SQL sites.** It named four migrations; only two host
 a LIVE unique fold index. The full set of live fold-expression indexes — all
 recreated `rfc1459 → lower()` by the new `refold_identifiers_ascii` migration —
-is SIX across FOUR tables: `query_windows` ×2 (unique), `notify_entries` ×2
+is SEVEN across FOUR tables: `query_windows` ×2 (unique), `notify_entries` ×2
 (unique — **missed by the issue**), `network_credentials` ×1 (unique), and the
 #393 `messages` DM-peer COALESCE covering index ×2 (non-unique — **missed by the
 issue**). `query_windows` + `notify` build their on-conflict `:unsafe_fragment`

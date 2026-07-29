@@ -4,8 +4,8 @@ defmodule Grappa.Networks.Credentials.SearchVisitorCredentialsByNickTest do
 
   `Credentials.search_visitor_credentials_by_nick/2` is the visitor-scoped
   (`WHERE visitor_id IS NOT NULL`) substring search over the per-network
-  visitor `nick`, rfc1459-folded (GH #121) so a case/bracket variant
-  resolves the same way login does, and LIKE-escaped so an underscore in a
+  visitor `nick`, ASCII-folded (GH #121/#525) so a case variant (A-Z only;
+  brackets NOT folded) resolves the same way login does, and LIKE-escaped so an underscore in a
   nick matches literally. It returns `%Credential{}` rows with `:network`
   preloaded (the caller renders the network slug), ordered by nick.
 

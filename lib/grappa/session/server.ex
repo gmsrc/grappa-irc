@@ -416,10 +416,12 @@ defmodule Grappa.Session.Server do
   In-flight JOIN tracking entry (CP15 B2). Recorded on every outbound
   JOIN — both cic-initiated `Session.send_join/4` calls and the 001
   RPL_WELCOME autojoin loop — keyed by `Identifier.canonical_channel/1`
-  (rfc1459, #364) of the channel so a 471/473/474/475/403/405 failure
+  (ASCII, #364/#525) of the channel so a 471/473/474/475/403/405 failure
   numeric can correlate even when the upstream echoes a case-folded
-  channel name — including the rfc1459 bracket fold (`[ ] \\ ~`), which a
-  bare `String.downcase` missed.
+  channel name. The fold is A-Z-only (CASEMAPPING=ascii) — brackets
+  `[ ] \\ ~` are NOT folded, so `#chan[1]`/`#chan{1}` stay DISTINCT
+  windows. It beats a bare `String.downcase` because downcase
+  Unicode-over-folds non-ASCII (`#CAFÉ`/`#café` would wrongly merge).
 
   - `channel` — case-preserved as written by the caller (the form we
     use when broadcasting `kind: "join_failed"`, so cic addresses the
@@ -632,7 +634,7 @@ defmodule Grappa.Session.Server do
           # a 005 with the tokens arrives. See `Grappa.Session.ISupport`.
           isupport: ISupport.t(),
           # #247: authoritative /notify presence map for this session,
-          # keyed by rfc1459-folded nick — `:unknown` until the first
+          # keyed by ASCII-folded nick (#121/#525) — `:unknown` until the first
           # MONITOR/WATCH report after arm. Seeded from `Grappa.Notify`
           # at end-of-MOTD (376/422 — post-005, when the mechanism pick
           # is known; 001 is too early). Dies with the process: a
@@ -1611,7 +1613,7 @@ defmodule Grappa.Session.Server do
   # state.banlist_pending so EventRouter folds 367 RPL_BANLIST rows into
   # it (368 RPL_ENDOFBANLIST drains it as :banlist_bundle); (2) emit
   # `MODE #chan b\r\n`. NOTE the channel arriving here is ALREADY
-  # rfc1459-folded by the facade (`Session.send_banlist/3`, mirroring the
+  # ASCII-folded by the facade (`Session.send_banlist/3`, mirroring the
   # WHO/NAMES sibling verbs) — so `channel_display` is the FOLDED channel,
   # NOT the user-typed casing (the card header shows the canonical
   # spelling, per #364; unlike WHOWAS, which is nick-keyed and preserves
@@ -1632,7 +1634,7 @@ defmodule Grappa.Session.Server do
   # C2 — /whois <nick>. Two effects: (1) prime the accumulator entry in
   # state.whois_pending so EventRouter folds 311/312/313/317/319 into it;
   # (2) emit `WHOIS nick\r\n`. The entry's `target_display` is the user-
-  # typed nick (case preserved); EventRouter folds (rfc1459, #121) for
+  # typed nick (case preserved); EventRouter folds (ASCII, #121/#525) for
   # the lookup key. Replaces any prior accumulator for the same target
   # (running /whois twice without an 318 in between drops the first).
   # On send_line failure the accumulator stays primed — a transient send
@@ -1655,8 +1657,8 @@ defmodule Grappa.Session.Server do
   # (1) prime the accumulator entry in state.whowas_pending so EventRouter
   # appends 314 RPL_WHOWASUSER entries + folds 312 logoff_time into the
   # last entry; (2) emit `WHOWAS nick\r\n`. The entry's `target_display`
-  # is the user-typed nick (case preserved); EventRouter folds (rfc1459,
-  # #121) for the lookup key. Replaces any prior accumulator for the
+  # is the user-typed nick (case preserved); EventRouter folds (ASCII,
+  # #121/#525) for the lookup key. Replaces any prior accumulator for the
   # same target (running /whowas twice without a 369 in between drops
   # the first). On send_line failure the accumulator stays primed —
   # harmless until the next /whowas replaces the entry.
@@ -1884,7 +1886,7 @@ defmodule Grappa.Session.Server do
   # Returns a snapshot of the topic cache for `channel`. Serves from cache —
   # no upstream query. Public via `Grappa.Session.get_topic/3`.
   def handle_call({:get_topic, channel}, _, state) when is_binary(channel) do
-    # #364: the topic cache is WRITTEN with the rfc1459 canonical key
+    # #364/#525: the topic cache is WRITTEN with the ASCII canonical key
     # (event_router `normalize_channel`), so the read MUST fold the same
     # way — a bare `String.downcase` missed the cache for any non-ASCII
     # channel (`#CAFÉ` → downcase `#café` ≠ canonical `#cafÉ`).
@@ -1899,7 +1901,7 @@ defmodule Grappa.Session.Server do
   # Returns a snapshot of the channel_modes cache for `channel`. Serves from
   # cache — no upstream query. Public via `Grappa.Session.get_channel_modes/3`.
   def handle_call({:get_channel_modes, channel}, _, state) when is_binary(channel) do
-    # #364: read the modes cache with the SAME rfc1459 canonical key the
+    # #364/#525: read the modes cache with the SAME ASCII canonical key the
     # write side uses (see get_topic) — a bare downcase missed non-ASCII.
     chan_key = Identifier.canonical_channel(channel)
 
@@ -1985,7 +1987,7 @@ defmodule Grappa.Session.Server do
   end
 
   # Returns the userhost cache entry for `nick`. Nick lookup is case-insensitive
-  # (rfc1459, #121) — fold via Identifier.canonical_nick at read time, mirroring
+  # (ASCII, #121/#525) — fold via Identifier.canonical_nick at read time, mirroring
   # write-time folding in EventRouter. Returns {:ok, entry} or {:error, :not_cached}.
   # Public via `Grappa.Session.lookup_userhost/3`.
   #
@@ -3663,7 +3665,7 @@ defmodule Grappa.Session.Server do
   # NOT a channel, NOT `$server`), so services traffic re-keyed to `$server`
   # (#400) mints NO window without re-deriving the carve-out here.
   #
-  # `QueryWindows.open/4` is idempotent (rfc1459-fold unique index) and
+  # `QueryWindows.open/4` is idempotent (ASCII-fold unique index) and
   # broadcasts `query_windows_list` on the user topic — ordered AFTER the
   # row+message broadcast, preserving the #373 "history already landed"
   # barrier. This makes the server the single origin of query-window state:

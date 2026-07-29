@@ -35,18 +35,22 @@ defmodule Grappa.QueryWindows do
   `lib/grappa/read_cursor.ex`, this module and the others speaking
   the same shape.
 
-  ## Case-insensitive uniqueness (rfc1459, GH #121)
+  ## Case-insensitive uniqueness (ASCII, GH #121/#525)
 
-  IRC nicks are case-insensitive. Azzurra runs bahamut (rfc1459
-  casemapping), so besides A-Z it folds `[ ] \\ ~` → `{ } | ^`. Two
-  partial unique **expression** indexes — one per subject branch —
-  enforce `(<subject_id>, network_id, rfc1459-fold(target_nick))` so
-  "FooBar"/"foobar" AND "nick[1]"/"nick{1}" are the same DM target. The
+  IRC nicks are case-insensitive. Azzurra runs bahamut, which advertises
+  AND implements `CASEMAPPING=ascii`: it folds `A-Z` ONLY and leaves
+  `[ ] \\ ~` UNTOUCHED (#121/#364 originally assumed rfc1459 and also
+  folded `[ ] \\ ~` → `{ } | ^`; #525 measured the ircd and narrowed the
+  fold to plain ASCII). Two partial unique **expression** indexes — one
+  per subject branch — enforce `(<subject_id>, network_id,
+  ascii-fold(target_nick))` so "FooBar"/"foobar" are the same DM target,
+  while "nick[1]"/"nick{1}" are DISTINCT (the ircd keeps them apart). The
   fold is `Grappa.IRC.Identifier.nick_fold/1` (query side) /
-  `canonical_nick/1` (in-memory); the stored `target_nick` column is
-  case-preserving (original input wins). The SQL fold expression in the
-  index, the `conflict_target/1` upsert fragment, and `nick_fold/1` MUST
-  stay character-identical or sqlite stops using the index.
+  `canonical_nick/1` (in-memory), now plain `lower()`; the stored
+  `target_nick` column is case-preserving (original input wins). The SQL
+  fold expression in the index, the `conflict_target/1` upsert fragment,
+  and `nick_fold/1` MUST stay character-identical or sqlite stops using
+  the index.
 
   ## Idempotent open / close
 
@@ -76,7 +80,7 @@ defmodule Grappa.QueryWindows do
 
   `Grappa.QueryWindows` is a standalone context. Its only deps are:
     * `Grappa.Repo` — persistence.
-    * `Grappa.IRC` — `Identifier.nick_fold/1` (rfc1459 DM-target key).
+    * `Grappa.IRC` — `Identifier.nick_fold/1` (ASCII DM-target key).
     * `Grappa.Subject` — XOR FK helper.
     * `Grappa.Accounts` (via `User` association — FK reference only).
     * `Grappa.PubSub` — `Topic.user/1` for the `query_windows_list` broadcast.
@@ -118,7 +122,7 @@ defmodule Grappa.QueryWindows do
     Visitors.Visitor
   }
 
-  # Identifier.nick_fold/1 is a query macro (rfc1459 fold fragment).
+  # Identifier.nick_fold/1 is a query macro (ASCII fold fragment).
   require Identifier
 
   # ---------------------------------------------------------------------------
@@ -139,7 +143,7 @@ defmodule Grappa.QueryWindows do
   @doc """
   Idempotently opens a DM window for `target_nick` on `(subject, network_id)`.
 
-  If a row for the same `(subject, network_id, rfc1459-fold(target_nick))`
+  If a row for the same `(subject, network_id, ascii-fold(target_nick))`
   already exists, returns `{:ok, existing_row}` WITHOUT modifying the
   existing row (`opened_at` is left unchanged — first-opened
   semantics). If no row exists, inserts one with `opened_at =
@@ -153,7 +157,7 @@ defmodule Grappa.QueryWindows do
 
   The implementation uses `Repo.insert/2` with `on_conflict: :nothing`
   so concurrent callers race on the per-subject unique index — the
-  loser finds the row via a follow-up select that folds (rfc1459) to
+  loser finds the row via a follow-up select that folds (ASCII) to
   match case-insensitively. Race safety: at most two DB round-trips
   per contended open.
   """
@@ -222,7 +226,7 @@ defmodule Grappa.QueryWindows do
   `(subject, network_id)` — the server-authoritative half of #373 (a
   query window following a peer's NICK change).
 
-  Case-insensitive on `old_nick` (rfc1459 fold, #121). Returns:
+  Case-insensitive on `old_nick` (ASCII fold, #121/#525). Returns:
 
     * `{:ok, :noop}` when `old_nick` and `new_nick` fold to the SAME
       identity (a case-only change — the fold-keyed row already resolves
@@ -332,8 +336,9 @@ defmodule Grappa.QueryWindows do
   Returns `true` when `subject` has an open DM (query) window for
   `target_nick` on `network_id`.
 
-  Case-insensitive under rfc1459 (#121/#372): `open?(s, n, "SeenServ")`
-  matches a stored `"seenserv"` window (and `"nick[1]"`/`"nick{1}"`).
+  Case-insensitive under the ASCII fold (#121/#372/#525): `open?(s, n,
+  "SeenServ")` matches a stored `"seenserv"` window. `"nick[1]"` and
+  `"nick{1}"` are DISTINCT windows (brackets `[ ] \\ ~` are NOT folded).
   Folds `target_nick` via `Identifier.canonical_nick/1` and delegates to
   the same `new_window_exists?/3` exists-query the fold-collision path in
   `rename/4` uses — character-identical to the folded unique **expression**
@@ -392,7 +397,7 @@ defmodule Grappa.QueryWindows do
   # The partial unique indexes carry the `WHERE <subject>_id IS NOT
   # NULL` predicate; sqlite requires the conflict_target fragment to
   # mirror it for the upsert to recognize the index. One fragment per
-  # subject branch. The rfc1459 fold expression (#121) is derived from
+  # subject branch. The ASCII fold expression (#121/#525) is derived from
   # the single source `Identifier.nick_fold_sql/1` (#364 E/S2 — was a
   # hand-copied literal, unpinned by the fold-drift test); it MUST stay
   # character-identical to the folded index in

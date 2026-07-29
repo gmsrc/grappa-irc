@@ -171,7 +171,7 @@ defmodule Grappa.AccountsTest do
     end
 
     # Account names are the account key — a distinct namespace from the
-    # rfc1459-folded IRC nick. The lookup is case-SENSITIVE (plain
+    # ASCII-folded IRC nick. The lookup is case-SENSITIVE (plain
     # `Repo.get_by(User, name:)`), the SAME semantics
     # `get_user_by_credentials/2` uses, so the two account lookups can
     # never disagree on what "the account named X" is (the #404 dispatch

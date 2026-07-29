@@ -21,11 +21,15 @@
 // ## Key folding
 //
 // `presence_snapshot` keys and the server's presence map are
-// rfc1459-folded (`Grappa.IRC.Identifier.canonical_nick/1`: A-Z plus
-// `[ ] \ ~` → `{ } | ^`). Presence lookups fold via `asciiFold` — the
-// SINGLE client nick fold, shared with `nickEquals`/`normalizeNick`
-// (#364 S13 consolidated the two former client folds into one). Without
-// the fold, bracket-nick dots (`Foo[1]`) silently never light up.
+// ASCII-folded (`Grappa.IRC.Identifier.canonical_nick/1`: A-Z ONLY,
+// CASEMAPPING=ascii, #525 — `[ ] \ ~` left UNTOUCHED, so `foo[1]` and
+// `foo{1}` are DISTINCT identities). Presence lookups fold via
+// `asciiFold` — the SINGLE client nick fold, shared with
+// `nickEquals`/`normalizeNick` (#364 S13 consolidated the two former
+// client folds into one). Without the fold, a case-variant dot (`Foo[1]`
+// vs `foo[1]`) silently never lights up; `asciiFold` beats a bare
+// `toLowerCase`, which Unicode-over-folds non-ASCII (`CAFÉ`→`café`), not
+// the brackets.
 
 import { createSignal } from "solid-js";
 import type { NotifyEntry } from "./api";

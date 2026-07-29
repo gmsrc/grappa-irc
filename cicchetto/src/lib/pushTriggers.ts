@@ -71,10 +71,12 @@ export function shouldNotify(
 }
 
 function dmMatch(message: ShouldNotifyMessage, prefs: NotificationPrefs): boolean {
-  // rfc1459 fold on the sender, mirroring the server's
+  // ASCII fold on the sender, mirroring the server's
   // `Identifier.canonical_nick(sender) in private_messages_only` — the
-  // whitelist entries are stored server-folded. A bare `.toLowerCase()`
-  // here would miss a bracket-range nick the server folds.
+  // whitelist entries are stored server-folded (CASEMAPPING=ascii, A-Z
+  // only; #121/#525). A bare `.toLowerCase()` would Unicode-over-fold a
+  // non-ASCII nick (`CAFÉ`→`café`), forking the key; neither fold touches
+  // `[ ] \ ~`, so `foo[1]`/`foo{1}` stay DISTINCT the way the server keeps them.
   return (
     prefs.private_messages_all || prefs.private_messages_only.includes(asciiFold(message.sender))
   );
@@ -87,13 +89,14 @@ function channelMatch(
   patterns: string[],
 ): boolean {
   return (
-    // canonicalChannel (sigil-gated rfc1459 fold), NOT a bare toLowerCase,
+    // canonicalChannel (sigil-gated ASCII fold), NOT a bare toLowerCase,
     // mirroring the server's `Identifier.canonical_channel(channel) in
-    // channel_messages_only` — the whitelist is stored channel-folded, and
-    // bahamut folds `[ ] \ ~` in channel names too, so `#chan[1]` and
-    // `#chan{1}` are ONE channel. A bare toLowerCase leaves the brackets
-    // unfolded and misses a whitelisted `#chan{1}` when the channel is
-    // `#chan[1]`.
+    // channel_messages_only` — the whitelist is stored channel-folded
+    // (CASEMAPPING=ascii, A-Z only; #525). bahamut folds `A-Z` ONLY, so
+    // `#Chan`/`#chan` are ONE channel but `#chan[1]` and `#chan{1}` are
+    // DISTINCT (brackets untouched). A bare toLowerCase is avoided
+    // because it Unicode-over-folds non-ASCII (`#CAFÉ`→`#café`), not the
+    // brackets.
     prefs.channel_messages_all ||
     prefs.channel_messages_only.includes(canonicalChannel(message.channel)) ||
     (prefs.channel_mentions && matchesWatchlist(message.body, ownNick, patterns))

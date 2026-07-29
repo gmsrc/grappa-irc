@@ -310,8 +310,8 @@ defmodule GrappaWeb.AuthController do
   #
   # Account names are matched the ACCOUNT way — the case-sensitive
   # `Accounts.get_user_by_name/1`, the SAME `name` key
-  # `mode1_login/3` + `get_user_by_credentials/2` use — NOT the rfc1459
-  # nick fold. Account name is the account key, a namespace distinct from
+  # `mode1_login/3` + `get_user_by_credentials/2` use — NOT the ASCII
+  # nick fold (#121/#525). Account name is the account key, a namespace distinct from
   # the IRC nick; folding it here would diverge from the email branch and
   # fork what "the account named X" means across the two login doors.
   @spec nick_login(

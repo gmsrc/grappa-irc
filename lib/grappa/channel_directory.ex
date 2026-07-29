@@ -13,7 +13,7 @@ defmodule Grappa.ChannelDirectory do
   use Boundary,
     top_level?: true,
     # `Grappa.IRC` — `Wire.mark_featured/2` folds directory names via
-    # `Identifier.canonical_channel/1` (rfc1459, #364) to key them against
+    # `Identifier.canonical_channel/1` (ASCII, #364/#525) to key them against
     # the canonical featured set.
     deps: [Grappa.Accounts, Grappa.IRC, Grappa.Repo, Grappa.Subject, Grappa.Visitors.Visitor],
     # `Networks.Network` is referenced ONLY by `Entry`'s

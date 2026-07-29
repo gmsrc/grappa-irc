@@ -69,7 +69,7 @@ describe("channelKey + decodeChannelKey round-trip", () => {
     });
   });
 
-  describe("canonicalChannel — sigil-aware rfc1459 fold", () => {
+  describe("canonicalChannel — sigil-aware ASCII fold", () => {
     it("lowercases sigil-prefixed channel names", () => {
       expect(canonicalChannel("#Chan")).toBe("#chan");
       expect(canonicalChannel("&LocalChan")).toBe("&localchan");

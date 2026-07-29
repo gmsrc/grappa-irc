@@ -446,7 +446,7 @@ defmodule Grappa.Themes do
   # the same identity nick the subject wire + admin tab show), NOT the caller
   # subject (an admin may publish another subject's theme) and NOT the Visitor
   # row (#211 phase 7 dropped the row's nick — it lives per-network on the
-  # credential). Raw nick as displayed, NOT rfc1459-folded: a display LABEL,
+  # credential). Raw nick as displayed, NOT ASCII-folded: a display LABEL,
   # not a fold-MATCH site (consistent with the raw-cased members map / state.nick).
   # Only on publish=true, only for a visitor-owned theme; a missing anchor (no
   # credential — should not happen post-provision) leaves `author_nick`

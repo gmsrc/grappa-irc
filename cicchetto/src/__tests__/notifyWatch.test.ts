@@ -1,4 +1,4 @@
-// #247 — notifyWatch store: rfc1459 key folding, snapshot/list
+// #247 — notifyWatch store: ASCII key folding, snapshot/list
 // ingestion, and the baseline-vs-transition toast gate.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {

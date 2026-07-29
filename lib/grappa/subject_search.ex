@@ -46,7 +46,7 @@ defmodule Grappa.SubjectSearch do
 
   @doc """
   Searches users + visitors for `query` (a case-insensitive substring;
-  the visitor leg additionally rfc1459-folds the nick, GH #121), returning
+  the visitor leg additionally ASCII-folds the nick, GH #121/#525), returning
   up to `limit` tagged-union results. A blank/whitespace query short-
   circuits to `[]` (no DB round-trip).
   """

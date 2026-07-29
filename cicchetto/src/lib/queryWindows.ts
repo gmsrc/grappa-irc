@@ -87,12 +87,13 @@ const exports = createRoot(() => {
    * Returns the canonical casing for `nick` if a query window for it is
    * already open on `networkId`, otherwise returns `nick` unchanged.
    *
-   * IRC nicks are case-insensitive (rfc1459); the server-side
-   * `Grappa.QueryWindows` row is unique on `(subject, network_id,
-   * rfc1459-fold(target_nick))` and the stored `target_nick` preserves
-   * the first-opened casing. cic mirrors that via `nickEquals` (the
-   * shared rfc1459 fold): the row's `targetNick` value is the canonical
-   * casing for sidebar/scrollback ChannelKey derivation.
+   * IRC nicks are case-insensitive (CASEMAPPING=ascii, #121/#525); the
+   * server-side `Grappa.QueryWindows` row is unique on `(subject,
+   * network_id, lower(target_nick))` and the stored `target_nick`
+   * preserves the first-opened casing. cic mirrors that via `nickEquals`
+   * (the shared ASCII fold, A-Z only — `[ ] \ ~` untouched): the row's
+   * `targetNick` value is the canonical casing for sidebar/scrollback
+   * ChannelKey derivation.
    *
    * Without this helper, typing `/q GRAPPA` when a `grappa` window
    * already exists would `setSelectedChannel({channelName: "GRAPPA"})`,

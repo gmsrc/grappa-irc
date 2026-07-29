@@ -17,14 +17,18 @@ import { asciiFold, nickEquals } from "./nickEquals";
 // the head; (2) decades of irc-client precedent (xchat/hexchat use
 // the same idea — they vary the multiplier but not the structure).
 //
-// Hash input is the rfc1459-FOLDED nick (`asciiFold`, the ONE client
+// Hash input is the ASCII-FOLDED nick (`asciiFold`, the ONE client
 // fold shared with the nick-identity layer and a faithful mirror of the
-// server's `Grappa.IRC.Identifier.canonical_nick/1`): `Vjt`/`vjt` AND
-// `Foo[1]`/`foo{1}` are the same operator to bahamut, so they must hash
-// to the same color. (Pre-#412 this used a bare `toLowerCase`, which
-// leaves `[ ] \ ~` unfolded — harmless ONLY because at the current
-// palette size the fold happens to be invisible: see below. It is a
-// separate fold policy from the identity layer and was consolidated.)
+// server's `Grappa.IRC.Identifier.canonical_nick/1`): bahamut is
+// CASEMAPPING=ascii (#121/#525), so the fold touches `A-Z` ONLY. Case
+// variants like `Vjt`/`vjt` are the same operator and MUST hash to the
+// same color; `[ ] \ ~` are NOT folded, so `Foo[1]` and `foo{1}` are
+// DISTINCT identities that hash independently (#525 reverted #364's
+// bracket over-fold). `asciiFold` is preferred over a bare `toLowerCase`
+// because `toLowerCase` Unicode-OVER-folds non-ASCII (`CAFÉ`→`café`),
+// forking the identity layer; it does NOT touch the brackets. (Pre-#412
+// nick colors used their own `toLowerCase`, a separate fold policy from
+// the identity layer, since consolidated onto the shared primitive.)
 // Bucket count is `NICK_PALETTE_SIZE` (32) — but the theme AUTHORS only
 // 16 hues. #444: a busy channel shows more than 16 nicks at once, so at
 // 16 buckets same-color collisions are a pigeonhole CERTAINTY (measured:
@@ -54,12 +58,14 @@ import { asciiFold, nickEquals } from "./nickEquals";
 //
 // Hash honesty at 32: djb2 mod 32 keeps the SAME documented degeneracies
 // as mod 16 — 33 ≡ 1 (mod 32) so letter ORDER is invisible (anagrams
-// share a bucket), and every rfc1459 shift (`A-Z`, `[ ] \ ~`) is ±32 ≡ 0
-// (mod 32) so the fold is output-invisible here too. Per #444 the hash is
-// NOT the problem (its distribution was measured fine) and must not eat a
-// commit; the win is the doubled COLOR count via derivation. Folding is
-// still correct-by-construction (`Foo[1]`/`foo{1}` fold to one string →
-// one index at ANY N; the #412 regression test pins it).
+// share a bucket), and the ASCII case shift (`A-Z`, ±32) is ≡ 0
+// (mod 32) so case-folding is output-invisible here too. Per #444 the
+// hash is NOT the problem (its distribution was measured fine) and must
+// not eat a commit; the win is the doubled COLOR count via derivation.
+// Folding is still correct-by-construction (case variants `Foo[1]`/
+// `foo[1]` fold to one string → one index at ANY N; `[ ] \ ~` are NOT
+// folded post-#525, so `Foo[1]`/`foo{1}` are distinct and hash
+// independently — the #412/#525 regression tests pin both).
 //
 // Theme-aware by construction: the helper produces a `var(--nick-color-N)`
 // string; the theme (or the derived rule) owns the hue. Switching themes

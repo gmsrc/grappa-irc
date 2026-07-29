@@ -236,7 +236,7 @@ describe("archive.visibleArchiveForNetwork", () => {
   // archived variant. A service replied as `DebugServ` (archived under
   // that casing) while the user's open window is `debugserv`; a raw
   // Set.has left the archived split visible. The filter folds both sides
-  // under rfc1459 (`normalizeNick`) so the active window releases it.
+  // under ASCII casemapping (`normalizeNick`, A-Z only) so the active window releases it.
   it("filters out an archived query whose casing folds to an active window (#372)", async () => {
     vi.doMock("../lib/networks", () => ({
       channelsBySlug: () => ({ freenode: [] }),

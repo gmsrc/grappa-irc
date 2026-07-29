@@ -355,7 +355,7 @@ defmodule Grappa.Networks.Credential do
     # #211 phase 4b — the credential-side folded-nick partial unique index
     # for VISITOR credentials (`(fold(nick), network_id) WHERE visitor_id
     # IS NOT NULL`, GH #121). Two DIFFERENT visitors cannot hold the same
-    # rfc1459-folded nick on one network — the per-network identity guard
+    # ASCII-folded nick on one network — the per-network identity guard
     # that phase 4c resolves identity against and accretion collision-checks
     # (mirrors the `visitors`-table folded index onto the Credential). Keyed
     # on `:nick` so a cross-visitor collision surfaces as a changeset error.

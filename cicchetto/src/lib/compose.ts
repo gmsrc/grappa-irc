@@ -319,7 +319,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // splits it and opens a `:pending` window per channel (#382).
           // Focus, though, must land on the FIRST channel, folded the
           // SAME way the server folds window keys (`canonicalChannel` =
-          // the `Identifier.canonical_channel/1` twin, rfc1459). Passing
+          // the `Identifier.canonical_channel/1` twin, CASEMAPPING=ascii
+          // — A-Z only, brackets untouched; #525). Passing
           // the raw list — or a mixed-case / bracketed first element —
           // targets a key no `window_states` entry matches, opening the
           // empty phantom window the issue reports. Single-channel
@@ -731,8 +732,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // modal edits your own umodes; there's no viewer for another
           // user's). Resolve via ownNickForNetwork (visitor → me.nick;
           // user → per-credential net.nick) — the same canonical resolver
-          // /whois self-default uses; nickEquals for rfc1459-insensitive
-          // compare (#121). A non-self target is a friendly error rather
+          // /whois self-default uses; nickEquals for case-insensitive
+          // compare (ASCII, #121/#525). A non-self target is a friendly error rather
           // than a phantom modal.
           const net = networkBySlug(networkSlug);
           const own = net ? ownNickForNetwork(net, user()) : null;
@@ -1150,9 +1151,12 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       typedWord = input.slice(start, cursor);
       if (typedWord.length === 0) return null;
       anchorStart = start;
-      // rfc1459 fold (not a bare toLowerCase) so `foo{` completes a
-      // member `Foo[1]` — bahamut folds `[ ] \ ~` → `{ } | ^`, so those
-      // are the SAME nick. Mirror of `Grappa.IRC.Identifier.canonical_nick/1`.
+      // ASCII fold (not a bare toLowerCase) so `Foo` completes a member
+      // `foo` — bahamut is CASEMAPPING=ascii (#525), folding `A-Z` ONLY.
+      // `[ ] \ ~` are NOT folded, so `foo{` does NOT complete `Foo[1]`
+      // (they are DISTINCT nicks). toLowerCase is avoided because it
+      // Unicode-over-folds non-ASCII (`CAFÉ`→`café`), not the brackets.
+      // Mirror of `Grappa.IRC.Identifier.canonical_nick/1`.
       prefix = asciiFold(typedWord);
       // ": " only when the word is the first token on the line.
       suffix = input.slice(0, anchorStart).trim() === "" ? ": " : " ";

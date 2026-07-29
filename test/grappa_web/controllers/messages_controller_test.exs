@@ -115,7 +115,7 @@ defmodule GrappaWeb.MessagesControllerTest do
     assert "join" in kinds_in(body)
   end
 
-  test "the presence pref key is rfc1459-canonicalised: a mixed-case channel still resolves \"hide\" (#458)",
+  test "the presence pref key is ASCII-canonicalised: a mixed-case channel still resolves \"hide\" (#458)",
        %{conn: conn, user: user, network: network} do
     # pref stored under the canonical key; a request for the SAME channel in a
     # different casing must fold to the same key (channel invariant #364).

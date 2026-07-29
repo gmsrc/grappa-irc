@@ -483,7 +483,7 @@ createRoot(() => {
             const newNick =
               typeof message.meta.new_nick === "string" ? message.meta.new_nick : null;
             // Guard genuine rename: a case-only shift (old ≡ new under
-            // rfc1459) needs no key move (canonicalQueryNick already resolves
+            // the ASCII fold, #121/#525) needs no key move (canonicalQueryNick already resolves
             // casing) and the server row stays put (`:noop`).
             if (newNick !== null && !nickEquals(message.sender, newNick)) {
               // The scrollback + cursor caches are keyed by the query

@@ -223,14 +223,15 @@ vi.mock("../lib/serviceModal", () => ({
 }));
 
 // #229 — nickEquals is used by the /mode <ownnick> self-nick gate. Real
-// impl is pinned in nickEquals.test.ts; here a boundary stub (rfc1459-ish
+// impl is pinned in nickEquals.test.ts; here a boundary stub (ASCII
 // case-insensitive compare is enough for the dispatch tests). #412 — the
 // spread of `importOriginal` is now MANDATORY for the whole file, not just
 // tab-completion: `channelKey.ts` imports `asciiFold` from this module,
 // so every `channelKey(...)` fixture call would hit `undefined(...)` and
 // throw without the real export. Tab-completion additionally needs the
-// REAL `asciiFold` (bracket range) — a stubbed fold would test the stub,
-// not the server-pinned fold. Only `nickEquals` stays overridden.
+// REAL `asciiFold` (A-Z fold, brackets untouched; #525) — a stubbed fold
+// would test the stub, not the server-pinned fold. Only `nickEquals`
+// stays overridden.
 vi.mock("../lib/nickEquals", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/nickEquals")>()),
   nickEquals: (a: string, b: string) => a.toLowerCase() === b.toLowerCase(),

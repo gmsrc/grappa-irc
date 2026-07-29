@@ -16,7 +16,7 @@ defmodule Grappa.Notify.Entry do
       synthetic `:subject` key for uniform client-side rendering).
     * DB CHECK constraint `notify_entries_subject_xor`.
     * Two partial unique expression indexes (one per subject branch) on
-      `(<subject_id>, network_id, rfc1459-fold(nick))` (GH #121)
+      `(<subject_id>, network_id, ascii-fold(nick))` (GH #121/#525)
       enforcing per-subject case-insensitive uniqueness.
 
   The `nick` column is case-preserving (display form; first add wins).

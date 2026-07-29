@@ -3717,7 +3717,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "#382 comma-list JOIN canonical-folds EACH channel (rfc1459) on the wire + in-flight" do
+    test "#382 comma-list JOIN canonical-folds EACH channel (ASCII) on the wire + in-flight" do
       # #382 — the fold is PER channel (invariant #364): `#A,#B` becomes
       # `#a,#b` on the wire AND as the in_flight_joins / window_state keys,
       # so cic sees one canonical key per channel regardless of casing.

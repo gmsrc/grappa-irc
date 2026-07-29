@@ -232,8 +232,8 @@ defmodule GrappaWeb.MessagesController do
   end
 
   # Rebuild cic's opaque ChannelKey (`cicchetto/src/lib/channelKey.ts`):
-  # "<slug> <canonical_channel>" — the channel folded rfc1459 via the SSOT
-  # (#364), so a request in any casing resolves to the same stored pin.
+  # "<slug> <canonical_channel>" — the channel folded ASCII via the SSOT
+  # (#364/#525), so a request in any casing resolves to the same stored pin.
   defp presence_channel_key(network, channel),
     do: "#{network.slug} #{Identifier.canonical_channel(channel)}"
 

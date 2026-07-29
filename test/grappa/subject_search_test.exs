@@ -101,7 +101,7 @@ defmodule Grappa.SubjectSearchTest do
       assert Enum.map(results, & &1.id) == [user.id, visitor.id]
     end
 
-    test "folds the visitor nick (rfc1459, GH #121) — uppercase query matches" do
+    test "folds the visitor nick (ASCII, GH #121/#525) — uppercase query matches" do
       {visitor, network} = visitor_with_network(7205)
 
       {:ok, _} =

@@ -18,7 +18,7 @@ defmodule Grappa.Repo.Migrations.RefoldIdentifiersAscii do
   the same release; this migration converges the SQL expression indexes
   so the going-forward query fold and the stored index expression agree.
 
-  ## The six LIVE folded indexes (four tables)
+  ## The seven LIVE folded indexes (four tables)
 
   The issue text listed four migrations, but only two of them host a live
   UNIQUE fold index. The full set of LIVE fold-expression indexes — each
@@ -219,6 +219,7 @@ defmodule Grappa.Repo.Migrations.RefoldIdentifiersAscii do
   the migration test can exercise the exact detection SQL against a seeded
   DB (the repo is passed in — a plain call has no migration `repo()`).
   """
+  @spec ascii_collisions(module()) :: [{String.t(), String.t(), String.t(), list()}]
   def ascii_collisions(repo) do
     Enum.flat_map(@unique_branches, fn {table, col, where, group_cols} ->
       group = Enum.join(group_cols ++ ["lower(#{col})"], ", ")
@@ -242,6 +243,7 @@ defmodule Grappa.Repo.Migrations.RefoldIdentifiersAscii do
   never guess/un-merge). `:ok` when clean. Split from `up/0` so the raise
   behaviour is testable without a migration runner.
   """
+  @spec refuse_on_collision!(module()) :: :ok
   def refuse_on_collision!(repo) do
     case ascii_collisions(repo) do
       [] ->

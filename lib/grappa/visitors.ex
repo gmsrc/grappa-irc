@@ -842,7 +842,7 @@ defmodule Grappa.Visitors do
 
   @doc """
   #211 phase 4c — credential-first VISITOR identity resolution: which
-  synthetic visitor identity owns `nick` (rfc1459-folded) on `network_id`?
+  synthetic visitor identity owns `nick` (ASCII-folded, #121/#525) on `network_id`?
 
   Resolves via the visitor's `(fold(nick), network_id)` **Credential**
   (`Credentials.fetch_visitor_credential_by_nick/2`) → its `visitor_id` →

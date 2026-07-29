@@ -74,8 +74,8 @@ defmodule Grappa.VisitorsTest do
       assert v1.id == v2.id
     end
 
-    test "reattaches a different-case reconnect to the SAME identity (rfc1459 #121)" do
-      # rfc1459 folding collapses `Mezmerize`/`mezmerize` to one identity —
+    test "reattaches a different-case reconnect to the SAME identity (ASCII, #121/#525)" do
+      # ASCII folding collapses `Mezmerize`/`mezmerize` to one identity —
       # credential-first resolution (phase 4c) keys on the folded credential
       # nick, so the second login resolves the first's visitor.
       {:ok, v1} = Visitors.find_or_provision_anon("Mezmerize", @network, "1.2.3.4")
@@ -226,7 +226,7 @@ defmodule Grappa.VisitorsTest do
     # transaction's all-or-nothing rollback can only be driven by the clause-2
     # credential collision, which is NOT fixture-reachable: the guard
     # `resolve_identity_by_nick`/`fetch_visitor_credential_by_nick` shares the
-    # exact partial scope (`WHERE visitor_id IS NOT NULL`) and rfc1459 fold of
+    # exact partial scope (`WHERE visitor_id IS NOT NULL`) and ASCII fold of
     # the `network_credentials_visitor_folded_nick_network_id_index` it guards,
     # so it is a genuine concurrency race, not a single-threaded scenario.
     # Forcing it would need a production seam (design-discipline #4: the
@@ -338,7 +338,7 @@ defmodule Grappa.VisitorsTest do
       {:ok, _} = Visitors.find_or_provision_anon("Taken", @network, "1.2.3.4")
       {:ok, other} = Visitors.find_or_provision_anon("other", @network, "5.6.7.8")
 
-      # rfc1459-folded: `taken` collides with `Taken`.
+      # ASCII-folded: `taken` collides with `Taken`.
       assert Visitors.nick_in_use?(other.id, "taken", net.id)
     end
 

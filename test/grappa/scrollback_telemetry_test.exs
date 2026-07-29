@@ -76,7 +76,7 @@ defmodule Grappa.ScrollbackTelemetryTest do
       assert {:ok, _} = Scrollback.persist_event(valid_attrs(user, net, %{}))
 
       assert_receive {:telemetry, [:grappa, :scrollback, :persist, :stop], measurements, metadata}
-      # Channel is stored canonical (rfc1459 fold) — the tag matches storage.
+      # Channel is stored canonical (ASCII fold) — the tag matches storage.
       assert metadata.channel == Identifier.canonical_channel("#sniffo")
       assert metadata.kind == :privmsg
       assert metadata.network_id == net.id

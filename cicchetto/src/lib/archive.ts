@@ -144,8 +144,8 @@ export const setArchiveModalOpen = exports_.setArchiveModalOpen;
 export function visibleArchiveForNetwork(slug: string, networkId: number): ArchiveEntry[] {
   const entries = archivedBySlug()[slug] ?? [];
   if (entries.length === 0) return entries;
-  // #372: fold every comparison key under rfc1459 (`normalizeNick` — the
-  // single client mirror of the server fold, letters + bracket chars). A
+  // #372: fold every comparison key under ASCII casemapping (`normalizeNick`
+  // — the single client mirror of the server fold, A-Z only; #525). A
   // service that replied as `DebugServ` archives under that casing while
   // the open window is `debugserv`; a raw `Set.has` would leave the
   // archived split visible. Folding both sides collapses the casing so an
@@ -157,7 +157,7 @@ export function visibleArchiveForNetwork(slug: string, networkId: number): Archi
     (queryWindowsByNetwork()[networkId] ?? []).map((qw) => normalizeNick(qw.targetNick)),
   );
   // Reuse the ONE shared pseudo-row projection — folding its names
-  // (rfc1459, #372) for the archive's own compare. See the block comment
+  // (ASCII, #372/#525) for the archive's own compare. See the block comment
   // above for why this MUST NOT re-derive from raw windowState.
   const pseudoNames = new Set(
     pseudoChannelsForNetwork(slug, networkId).map((row) => normalizeNick(row.name)),

@@ -1695,7 +1695,7 @@ defmodule Grappa.ScrollbackTest do
     end
   end
 
-  # #393 — restore sargability of the rfc1459-FOLDED DM-peer read + count.
+  # #393 — restore sargability of the ASCII-FOLDED DM-peer read + count.
   #
   # `where_dm_peer/2` (shared by the read path `channel_or_dm_where/3` and
   # the delete path `delete_for_dm/3`) matches the DM window on the FOLD of
@@ -1812,10 +1812,11 @@ defmodule Grappa.ScrollbackTest do
              "expected the DM count_after_split covered by the coalesce kind index, got:\n#{plan}"
     end
 
-    test "changes the PLAN, never the RESULT — fetch/6 folds rfc1459 variant peers to ONE window",
+    test "changes the PLAN, never the RESULT — fetch/6 folds ASCII case-variant peers to ONE window",
          %{user: user, network: net} do
-      # Inbound DMs from a peer whose nick uses an rfc1459 national char,
-      # stored case-preserved at (channel = own_nick, dm_with = spelling).
+      # Inbound DMs from ONE peer whose nick contains a bracket char (`[`,
+      # NOT folded under ASCII), the rows differing only in CASE, stored
+      # case-preserved at (channel = own_nick, dm_with = spelling).
       spellings = ["foo[1]", "Foo[1]", "FOO[1]"]
 
       for {spelling, i} <- Enum.with_index(spellings) do
@@ -1849,9 +1850,9 @@ defmodule Grappa.ScrollbackTest do
          %{user: user, network: net} do
       # Inbound (channel = own_nick, dm_with = peer), outbound (channel =
       # peer, dm_with = peer), and orphan (channel = peer, dm_with = nil —
-      # e.g. a 401 NOTICE) rows for ONE peer, spelled with three rfc1459
+      # e.g. a 401 NOTICE) rows for ONE peer, spelled with three CASE
       # variants. The folded COALESCE(dm_with, channel) must collapse all
-      # three arms to one window, so a delete via a bracket-folded variant
+      # three arms to one window, so a delete via any CASE variant
       # removes every row.
       {:ok, _} =
         Scrollback.persist_event(%{
@@ -2987,7 +2988,7 @@ defmodule Grappa.ScrollbackTest do
       end
     end
 
-    test "non-ASCII case variants do NOT merge (ASCII-only rfc1459)",
+    test "non-ASCII case variants do NOT merge (ASCII-only fold)",
          %{user: user, network: net} do
       {:ok, upper} =
         ScrollbackHelpers.insert(sample(user, net, 1, %{channel: "#CAFÉ", body: "upper"}))
@@ -3010,7 +3011,7 @@ defmodule Grappa.ScrollbackTest do
     end
   end
 
-  # #372 — rfc1459 DM-peer window convergence. Bug: a query window opened
+  # #372 — ASCII DM-peer window convergence. Bug: a query window opened
   # as `debugserv` (lowercase) split from the service's proper-case
   # `DebugServ` replies. The inbound row persists `dm_with = "DebugServ"`
   # RAW (display-case, like every nick — message.ex canonicalize_channel
@@ -3022,7 +3023,7 @@ defmodule Grappa.ScrollbackTest do
   # while the window stayed split, the exact inconsistency #372 reports.
   # Every peer MATCH now folds via `Identifier.nick_fold/1` (the same
   # primitive delete_for_dm + WHOIS/query_windows use, #121).
-  describe "#372 — rfc1459 DM peer window convergence" do
+  describe "#372 — ASCII DM peer window convergence" do
     test "fetch/6 merges an inbound reply from a differently-cased peer into the window",
          %{user: user, network: net} do
       # Outbound: vjt-grappa → debugserv (channel = peer, dm_with = peer).
@@ -3049,7 +3050,7 @@ defmodule Grappa.ScrollbackTest do
         )
 
       # A fetch under EITHER casing returns BOTH directions — one window,
-      # exactly as the ircd (rfc1459) sees the nick.
+      # exactly as the ircd (ASCII) sees the nick.
       for spelling <- ["debugserv", "DebugServ", "DEBUGSERV"] do
         bodies =
           {:user, user.id}

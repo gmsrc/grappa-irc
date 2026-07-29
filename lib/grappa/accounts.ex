@@ -248,7 +248,7 @@ defmodule Grappa.Accounts do
   the case-sensitive `name`-key semantics of `get_user_by_credentials/2`
   so the two account lookups can never disagree on what "an account
   named X" is — account names are the account key, a distinct namespace
-  from the rfc1459-folded IRC nick.
+  from the ASCII-folded IRC nick.
   """
   @spec get_user_by_name(String.t()) :: User.t() | nil
   def get_user_by_name(name) when is_binary(name), do: Repo.get_by(User, name: name)

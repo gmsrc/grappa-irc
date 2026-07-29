@@ -105,8 +105,9 @@ defmodule Grappa.Session.GhostRecoveryTest do
     end
 
     # S2 (#364 codebase review 2026-07-19) — the 401/311 echo comes from the
-    # ghost holder's server-side user record and can differ in CASE (or the
-    # rfc1459 bracket-fold `[]\~` → `{}|^`) from the configured orig_nick.
+    # ghost holder's server-side user record and can differ in CASE from the
+    # configured orig_nick (ASCII fold, #121/#525: A-Z only — the bracket
+    # chars `[ ] \ ~` are NOT folded, so a brace twin would NOT match).
     # Pre-fix these guarded `when queried == orig` (bare ==), so a folded
     # echo missed the clause, fell to the no-op catch-all, and stalled the FSM
     # until the 8s :ghost_timeout forced :failed — a one-round-trip recovery

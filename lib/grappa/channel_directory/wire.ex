@@ -34,12 +34,14 @@ defmodule Grappa.ChannelDirectory.Wire do
   bare `string` (S14 convention — see `Grappa.Scrollback.Wire`).
   `captured_at` renders to ISO-8601. Each entry is marked
   `featured: true` when its
-  rfc1459-folded name is in `featured_names` — the network's enabled
+  ASCII-folded name is in `featured_names` — the network's enabled
   `network_featured_channels` set (GH #85). Directory names are stored
   VERBATIM (case-preserving display), the featured set canonical, so the
   compare MUST fold the directory name via `Identifier.canonical_channel/1`
-  (#364 — a bare `String.downcase` left `#foo[1]` unfolded and missed
-  the canonical `#foo{1}` on bahamut). Sort order is unchanged.
+  (#364/#525 — a bare `String.downcase` would Unicode-over-fold non-ASCII
+  like `#CAFÉ` and diverge from the ASCII-only stored set; brackets
+  `[ ] \ ~` are NOT folded, so `#foo[1]` and `#foo{1}` are DISTINCT
+  featured entries per CASEMAPPING=ascii). Sort order is unchanged.
   """
   @spec index_payload(ChannelDirectory.page(), MapSet.t(String.t())) :: index_payload()
   def index_payload(%{captured_at: ca, status: status} = page, featured_names)

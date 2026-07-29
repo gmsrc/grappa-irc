@@ -450,7 +450,7 @@ defmodule Grappa.Session.NumericRouterTest do
       assert :delegated = NumericRouter.route(m, st)
     end
 
-    test "the whois-leg guard folds the target case-insensitively (rfc1459)" do
+    test "the whois-leg guard folds the target case-insensitively (ASCII)" do
       m = msg(617, ["vjt", "ALICE", "some new WHOIS line"])
       st = state(whois_targets: MapSet.new(["alice"]))
       assert :delegated = NumericRouter.route(m, st)

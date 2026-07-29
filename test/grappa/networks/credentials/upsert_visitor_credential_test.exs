@@ -69,7 +69,7 @@ defmodule Grappa.Networks.Credentials.UpsertVisitorCredentialTest do
 
   # #211 phase 4c — credential-first identity resolution. Login resolves
   # WHICH visitor identity owns a `(nick, network)` by looking up the
-  # visitor credential rfc1459-folded on `(fold(nick), network_id)` — the
+  # visitor credential ASCII-folded on `(fold(nick), network_id)` — the
   # phase-7-ready replacement for the `visitors.(fold(nick), network_slug)`
   # row lookup (the visitor scalar `network_slug` is dropped at phase 7).
   describe "fetch_visitor_credential_by_nick/2 (phase-4c identity resolution)" do

@@ -1081,7 +1081,7 @@ defmodule Grappa.Session do
   (`call_session/4`) — callers must handle it, not enumerate only the first
   two (#386: an un-handled `:timeout` crashed the channel `with`/`else`).
 
-  Nick lookup is case-insensitive (rfc1459, #121) — callers may pass the
+  Nick lookup is case-insensitive (ASCII, #121/#525) — callers may pass the
   nick in any case. This cache is consumed by S5's `/ban` mask derivation
   and the #386 `/kb` + BanlistModal mask builder (via the `resolve_userhost`
   channel verb), and is NOT broadcast over PubSub (the data goes stale and
@@ -1329,7 +1329,7 @@ defmodule Grappa.Session do
   EventRouter folds the 367 RPL_BANLIST rows into it. On 368
   RPL_ENDOFBANLIST the bundle is broadcast on `Topic.user/1` as a
   `banlist_bundle` event (#376). The accumulator keys on the
-  rfc1459-folded channel (#364) so the rows drain regardless of upstream
+  ASCII-folded channel (#364/#525) so the rows drain regardless of upstream
   casing.
 
   Ephemeral — NOT persisted in scrollback. Bundle replaces any prior

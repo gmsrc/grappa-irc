@@ -977,13 +977,15 @@ defmodule Grappa.UserSettings do
   end
 
   # trim + case-fold + drop empties + dedup. Preserves order on first
-  # occurrence. The fold is identity-key-correct per list type (#121):
-  # `private_messages_only` is a nick list → canonical_nick/1 (rfc1459,
-  # folds `[ ] \ ~` → `{ } | ^`); `channel_messages_only` is a channel
-  # list → canonical_channel/1 (sigil-gated rfc1459 fold, #364 — folds
-  # `[ ] \ ~` like nicks). A bare String.downcase would fork
-  # foo[bar]/foo{bar} on bahamut and never match the folded sender in
-  # Triggers.sender_in_whitelist?/2.
+  # occurrence. The fold is identity-key-correct per list type (ASCII,
+  # #121/#525): `private_messages_only` is a nick list → canonical_nick/1
+  # (CASEMAPPING=ascii — folds `A-Z` ONLY); `channel_messages_only` is a
+  # channel list → canonical_channel/1 (sigil-gated ASCII fold, #364/#525 —
+  # folds `A-Z` like nicks, brackets `[ ] \ ~` left UNTOUCHED so
+  # foo[bar]/foo{bar} stay DISTINCT). A bare String.downcase is wrong not
+  # for the brackets but because it Unicode-over-folds non-ASCII (e.g.
+  # #CAFÉ/#café), diverging from the ASCII fold the stored list + the
+  # folded sender in Triggers.sender_in_whitelist?/2 use.
   defp normalize_list(list, key) do
     fold = list_fold(key)
 

@@ -86,7 +86,7 @@ defmodule Grappa.ReadCursor do
   alias Grappa.Repo
   alias Grappa.Scrollback.Message
 
-  # Identifier.nick_fold/1 is a query macro (rfc1459 fold fragment) used by
+  # Identifier.nick_fold/1 is a query macro (ASCII fold fragment) used by
   # rename_dm_peer/4 to match a DM cursor by the fold of the peer nick.
   require Identifier
 
@@ -482,7 +482,7 @@ defmodule Grappa.ReadCursor do
   UNREAD: the `new` window has no cursor row (the old row is stranded at
   `old`), so `WindowCounts` derives the count from `cursor || 0`.
 
-  Case-insensitive on both nicks (rfc1459 fold, #121). The cursor
+  Case-insensitive on both nicks (ASCII fold, #121/#525). The cursor
   `channel` is stored case-preserved (`canonical_channel/1` is a no-op for
   a bare nick) and matched fold-wise here, mirroring
   `Scrollback.rename_dm_peer/4`. `fold(old) == fold(new)` (a case-only

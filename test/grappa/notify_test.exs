@@ -410,7 +410,7 @@ defmodule Grappa.NotifyTest do
       assert [%Entry{id: ^id}] = Notify.list({:visitor, visitor.id}, net.id)
     end
 
-    test "rfc1459 fold collapses FooBar/foobar to one visitor entry" do
+    test "ASCII fold collapses FooBar/foobar to one visitor entry" do
       net = network_fixture()
       visitor = visitor_fixture(net.slug)
       label = "visitor:" <> visitor.id

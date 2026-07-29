@@ -27,7 +27,7 @@ defmodule Grappa.WindowCounts do
       subject, via the SSOT predicate `Grappa.Mentions.mentioned?/3`
       (own_nick ∪ highlight patterns, word-boundary, case-insensitive).
       Own-sent rows are excluded (you cannot mention yourself), folding
-      `sender` through the rfc1459 nick SSOT (#121). Bounded by
+      `sender` through the ASCII nick SSOT (#121/#525). Bounded by
       `@mention_scan_cap` — the same bounded-tail strategy
       `Grappa.Push.BadgeCount` uses (SQLite has no `REGEXP`, so the
       match runs in-memory over a capped content tail).
@@ -217,7 +217,7 @@ defmodule Grappa.WindowCounts do
 
   # Mention count over a pre-fetched capped content tail (#396 bulk path),
   # IDENTICAL fold to `count_mentions/6`'s per-window Enum.count: exclude
-  # own-sent rows (fold `sender` via the rfc1459 nick SSOT, #121), then the
+  # own-sent rows (fold `sender` via the ASCII nick SSOT, #121/#525), then the
   # `Mentions.mentioned?/3` SSOT predicate. `nil` own_nick → nothing to
   # match, so no mentions.
   @spec count_tail_mentions([%{sender: String.t(), body: String.t() | nil}], String.t() | nil, [
@@ -234,7 +234,7 @@ defmodule Grappa.WindowCounts do
   end
 
   # Counts unread content rows that mention the subject, excluding own-sent
-  # rows (fold via the rfc1459 nick SSOT, #121). Bounded by the scan cap.
+  # rows (fold via the ASCII nick SSOT, #121/#525). Bounded by the scan cap.
   @spec count_mentions(
           Subject.t(),
           integer(),

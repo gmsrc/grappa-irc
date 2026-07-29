@@ -22,15 +22,18 @@ defmodule Grappa.Notify do
   `Grappa.QueryWindows` / `Grappa.ReadCursor.Cursor`. Visitor reaping
   CASCADEs the rows on TTL expiry.
 
-  ## Case-insensitive uniqueness (rfc1459, GH #121)
+  ## Case-insensitive uniqueness (ASCII, GH #121/#525)
 
   Two partial unique **expression** indexes — one per subject branch —
-  enforce `(<subject_id>, network_id, rfc1459-fold(nick))` so
-  "FooBar"/"foobar" AND "nick[1]"/"nick{1}" are one watch entry. The
+  enforce `(<subject_id>, network_id, ascii-fold(nick))` so
+  "FooBar"/"foobar" are one watch entry, while "nick[1]"/"nick{1}" are
+  DISTINCT (bahamut advertises `CASEMAPPING=ascii` and folds `A-Z` ONLY,
+  leaving `[ ] \\ ~` UNTOUCHED — #121/#364 assumed rfc1459 and over-folded
+  the brackets, #525 narrowed it). The
   fold is `Grappa.IRC.Identifier.nick_fold/1` (query side) /
-  `canonical_nick/1` (in-memory); the stored `nick` column is
-  case-preserving (first add wins). The SQL fold expression in the
-  index, the `conflict_target/1` upsert fragment, and `nick_fold/1`
+  `canonical_nick/1` (in-memory), now plain `lower()`; the stored `nick`
+  column is case-preserving (first add wins). The SQL fold expression in
+  the index, the `conflict_target/1` upsert fragment, and `nick_fold/1`
   MUST stay character-identical or sqlite stops using the index.
 
   ## Atomic batch add, idempotent everything
@@ -98,7 +101,7 @@ defmodule Grappa.Notify do
     Visitors.Visitor
   }
 
-  # Identifier.nick_fold/1 is a query macro (rfc1459 fold fragment).
+  # Identifier.nick_fold/1 is a query macro (ASCII fold fragment).
   require Identifier
   require Logger
 
@@ -158,7 +161,7 @@ defmodule Grappa.Notify do
   end
 
   @doc """
-  Removes `nicks` (fold-matched, rfc1459) from the watch list for
+  Removes `nicks` (fold-matched, ASCII) from the watch list for
   `(subject, network_id)`. Idempotent — returns `:ok` whether or not
   any row was deleted. Broadcasts the full current list afterwards.
   """
@@ -365,7 +368,7 @@ defmodule Grappa.Notify do
 
   # The partial unique indexes carry the `WHERE <subject>_id IS NOT
   # NULL` predicate; sqlite requires the conflict_target fragment to
-  # mirror it. The rfc1459 fold expression (#121) comes from the single
+  # mirror it. The ASCII fold expression (#121/#525) comes from the single
   # source `Identifier.nick_fold_sql/1` (review 2026-07-19 — was a
   # hand-copied literal); the migration's self-contained copy is pinned
   # byte-identical by the IdentifierTest fold-drift test.

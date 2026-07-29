@@ -24,8 +24,8 @@ defmodule Grappa.Session.Presence do
       or dedupes to `:unchanged`. This is the issue's baseline-snapshot
       rule: adding a large list must not fire a notification storm.
 
-  Keys are rfc1459-folded via `Grappa.IRC.Identifier.canonical_nick/1`
-  — same fold as every other server-side nick compare (GH #121).
+  Keys are ASCII-folded via `Grappa.IRC.Identifier.canonical_nick/1`
+  — same fold as every other server-side nick compare (ASCII, #121/#525).
 
   ## Purity contract
 

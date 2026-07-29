@@ -4135,7 +4135,7 @@ defmodule Grappa.Session.EventRouterTest do
       assert new_state.banlist_pending == %{}
     end
 
-    test "367/368 channel lookup folds rfc1459 (#364) — primed #chan, wire #CHAN" do
+    test "367/368 channel lookup folds ASCII (#364/#525) — primed #chan, wire #CHAN" do
       state = banlist_pending_state("#chan")
 
       m367 =

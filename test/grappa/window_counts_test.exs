@@ -341,7 +341,7 @@ defmodule Grappa.WindowCountsTest do
 
       anchor = ins(subject, net.id, own, st: 1, sender: own, body: "anchor", dm_with: own)
       cursor(subject, net.id, own, anchor.id)
-      # Self-message whose dm_with is stored at a differing (rfc1459-equivalent)
+      # Self-message whose dm_with is stored at a differing (ASCII-equivalent)
       # casing — display-preserved, so the fold is required to match.
       ins(subject, net.id, own, st: 2, sender: own, body: "cased self", dm_with: "VJT")
 

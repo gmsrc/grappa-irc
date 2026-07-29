@@ -760,8 +760,8 @@ const exports = identityScopedStore((onIdentityChange) => {
   // no-such-nick. Per-device, cic-owned focus (mirrors members.ts renaming
   // a member); the window LIST itself stays server-authoritative
   // (`query_windows_list`). No-op unless the CURRENT selection is the
-  // (slug, oldNick) query. `nickEquals` (rfc1459) so a case-shift casing
-  // still matches; caller (subscribe.ts) only invokes this for a genuine
+  // (slug, oldNick) query. `nickEquals` (ASCII fold, A-Z only; #121/#525)
+  // so a case-shift casing still matches; caller (subscribe.ts) only invokes this for a genuine
   // rename (old ≢ new).
   const followQueryNick = (slug: string, oldNick: string, newNick: string): void => {
     const sel = untrack(selectedChannel);

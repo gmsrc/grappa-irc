@@ -115,7 +115,7 @@ defmodule Grappa.Session.Persistor do
       })
   end
 
-  # Self-echoes never push. rfc1459 fold (#121) rather than an exact
+  # Self-echoes never push. ASCII fold (#121/#525) rather than an exact
   # match: if `echo-message` is ever enabled, an upstream-cased echo of
   # the own nick (`MyNick` vs `mynick`) must still suppress. Otherwise
   # delegate to `Push.Triggers`, which spawns its own unlinked Task for

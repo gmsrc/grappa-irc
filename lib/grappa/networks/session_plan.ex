@@ -268,10 +268,12 @@ defmodule Grappa.Networks.SessionPlan do
   # operator autojoin (stable) with last-live snapshot (runtime). Order:
   # operator entries first to preserve operator-intent join order; then
   # snapshot entries the operator didn't already cover. Dedupe folds via
-  # `Identifier.canonical_channel/1` (rfc1459, #364) — NOT bare
-  # `String.downcase`, which left `#foo[1]`/`#foo{1}` distinct and forked
-  # the snapshot into a duplicate autojoin on bahamut. We preserve the
-  # case of the EARLIER entry (operator wins on case style).
+  # `Identifier.canonical_channel/1` (ASCII, #364/#525) — NOT bare
+  # `String.downcase`, which would Unicode-over-fold non-ASCII channels and
+  # diverge from the ASCII fold. Brackets `[ ] \ ~` are NOT folded, so
+  # `#foo[1]`/`#foo{1}` remain DISTINCT autojoins on bahamut
+  # (CASEMAPPING=ascii). We preserve the case of the EARLIER entry
+  # (operator wins on case style).
   @spec merge_autojoin([String.t()], [String.t()]) :: [String.t()]
   defp merge_autojoin(autojoin, last_joined) when is_list(autojoin) and is_list(last_joined) do
     seen =

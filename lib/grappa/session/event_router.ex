@@ -635,7 +635,7 @@ defmodule Grappa.Session.EventRouter do
 
   # MODE on a 2+-param target. The leading param is either the session's
   # OWN nick (user-MODE-on-self, Task 15) or a channel — discriminated by
-  # rfc1459 nick-equality (#121), NOT an exact-match dispatch guard, so a
+  # ASCII nick-equality (#121/#525), NOT an exact-match dispatch guard, so a
   # different-cased echo of the own nick still routes to the self branch.
   defp do_route(%Message{command: :mode, params: [target, modes | args]} = msg, state)
        when is_binary(target) and is_binary(modes) do
@@ -804,7 +804,7 @@ defmodule Grappa.Session.EventRouter do
     visitor_persist_effects =
       case state.subject do
         {:visitor, _} ->
-          # rfc1459 self-rename detection (#121) — can't fold inside a
+          # ASCII self-rename detection (#121/#525) — can't fold inside a
           # case-clause guard, so branch in the body.
           if nick_eq?(old_nick, state.nick),
             do: [{:visitor_nick_changed, new_nick}],
@@ -3022,8 +3022,8 @@ defmodule Grappa.Session.EventRouter do
   # S2.4 helpers — WHOIS-userhost cache
   # ---------------------------------------------------------------------------
 
-  # IRC nicks are case-insensitive. Normalise via rfc1459 (#121) for
-  # userhost_cache / whois_pending / whowas_pending keys — mirrors
+  # IRC nicks are case-insensitive. Normalise via the ASCII fold (#121/#525)
+  # for userhost_cache / whois_pending / whowas_pending keys — mirrors
   # normalize_channel/1 above. Applied at BOTH write (JOIN/311/352/NICK)
   # and read (Session.Server's lookup_userhost/whois/whowas/ban keys)
   # time so a lookup matches regardless of how the upstream cases the
@@ -3032,7 +3032,7 @@ defmodule Grappa.Session.EventRouter do
   @spec normalize_nick(String.t()) :: String.t()
   defp normalize_nick(nick) when is_binary(nick), do: Identifier.canonical_nick(nick)
 
-  # rfc1459 nick equality (#121) — the in-memory twin of the folded DB
+  # ASCII nick equality (#121/#525) — the in-memory twin of the folded DB
   # lookups, for self-detection against `state.nick` and service-nick
   # checks. The second arg is nil-safe (state.nick is nil before
   # RPL_WELCOME); callers always pass a binary first arg (parsed wire

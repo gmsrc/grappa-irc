@@ -847,7 +847,7 @@ export type BanlistEntry = SessionWireBanlistEntry;
 // Aggregated reply to `/banlist <#chan>` (or a raw `MODE #chan b`). Unlike
 // WhowasBundle (most-recent entry only) it ships ALL `entries` — a ban
 // list is a set of rows — in the wire order the ircd sent them. `channel`
-// is the rfc1459-folded channel (#364).
+// is the ASCII-folded channel (A-Z only; #525 corrected #364).
 export type BanlistBundle = Omit<SessionWireBanlistBundlePayload, "kind">;
 
 // #238 — one server node from a 364 RPL_LINKS row. Mirrors
@@ -1128,7 +1128,7 @@ export type WireUserEvent =
   // `initial: true` = post-arm baseline (paint the dot, NO toast),
   // `initial: false` = genuine transition (toast-eligible).
   // `presence_snapshot` re-paints the whole per-network dot map on
-  // (re)attach; its keys are SERVER-side rfc1459-folded nicks.
+  // (re)attach; its keys are SERVER-side ASCII-folded nicks (A-Z only; #121/#525).
   // `presence_error` surfaces an upstream watch-list rejection
   // (ERR_MONLISTFULL / ERR_TOOMANYWATCH) — never a silent drop.
   | { kind: "notify_list"; networks: Record<string, NotifyEntry[]> }

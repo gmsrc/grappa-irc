@@ -227,9 +227,10 @@ defmodule Grappa.Push.Triggers do
   end
 
   defp sender_in_whitelist?(%Message{sender: sender}, prefs) when is_binary(sender) do
-    # Fold the sender through the rfc1459 nick SSOT (#121) — never a bare
-    # String.downcase, which leaves `[ ] \ ~` unfolded and misses a
-    # whitelisted foo[bar] when the inbound nick is foo{bar}. The stored
+    # Fold the sender through the ASCII nick SSOT (#121/#525) — never a bare
+    # String.downcase, which Unicode-over-folds non-ASCII and diverges from
+    # the ASCII fold. Brackets `[ ] \ ~` are NOT folded, so foo[bar] and
+    # foo{bar} are DELIBERATELY distinct (CASEMAPPING=ascii). The stored
     # list is canonicalized to the same fold by UserSettings.normalize_list.
     Identifier.canonical_nick(sender) in Map.get(prefs, :private_messages_only, [])
   end

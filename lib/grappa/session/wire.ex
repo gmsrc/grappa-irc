@@ -196,8 +196,8 @@ defmodule Grappa.Session.Wire do
   @typedoc """
   #247 — full presence map snapshot for one network, pushed at
   channel after-join so a (re)attaching client paints correct dots
-  without waiting for the next transition. Keys are rfc1459-folded
-  nicks (cic matches via its `nickEquals` mirror); `:unknown` means
+  without waiting for the next transition. Keys are ASCII-folded
+  nicks (#121/#525; cic matches via its `nickEquals` mirror); `:unknown` means
   no upstream report yet (or no mechanism on this network).
   """
   @type presence_snapshot_payload :: %{
@@ -605,8 +605,8 @@ defmodule Grappa.Session.Wire do
   (or a raw `MODE #chan b`). Unlike `whowas_bundle` (which projects only
   the most-recent historical entry into flat fields) the banlist ships
   ALL `entries` — a channel's ban list is a set of rows. `entries` are in
-  the wire order the ircd sent them. `channel` is the rfc1459-folded
-  channel (#364) — the card renders it as the surface header. cic owns the
+  the wire order the ircd sent them. `channel` is the ASCII-folded
+  channel (#364/#525) — the card renders it as the surface header. cic owns the
   human-readable rendering (mask · set-by · set-time); the server never
   emits a bare set-timestamp (the #376 leak).
   """

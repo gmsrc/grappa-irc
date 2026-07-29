@@ -40,7 +40,7 @@ defmodule Grappa.Networks.Credentials do
   alias Grappa.Networks.{Credential, Network}
   alias Grappa.{Repo, Session}
 
-  # Identifier.nick_fold/1 is a query macro (rfc1459 fold fragment).
+  # Identifier.nick_fold/1 is a query macro (ASCII fold fragment).
   require Identifier
 
   @doc """
@@ -773,7 +773,7 @@ defmodule Grappa.Networks.Credentials do
 
   @doc """
   #211 phase 4c — credential-first VISITOR identity resolution: find the
-  visitor credential holding `nick` (rfc1459-folded, GH #121) on
+  visitor credential holding `nick` (ASCII-folded, GH #121/#525) on
   `network_id`.
 
   This is the phase-7-ready replacement for the `visitors` row lookup
@@ -816,13 +816,16 @@ defmodule Grappa.Networks.Credentials do
   contains `query`, with `:network` preloaded (the caller renders the
   slug), ordered by nick then network.
 
-  The nick match is rfc1459-folded (GH #121) on BOTH sides — the query via
-  `Identifier.canonical_nick/1`, the column via the `Identifier.nick_fold/1`
-  fragment — so a case/bracket variant resolves the same way login does.
-  The folded query is then LIKE-escaped via `Grappa.Ecto.Like` (an
-  underscore is a legal nick char and must match literally) with an
-  explicit `ESCAPE '\\'` clause. Folding runs BEFORE escaping so a `\\` in
-  the query (which folds to `|`) never collides with the LIKE escape char.
+  The nick match is ASCII-folded (GH #121/#525) on BOTH sides — the query
+  via `Identifier.canonical_nick/1`, the column via the
+  `Identifier.nick_fold/1` fragment — so a case variant resolves the same
+  way login does (a bracket variant like foo[bar]/foo{bar} stays DISTINCT,
+  per CASEMAPPING=ascii). The folded query is then LIKE-escaped via
+  `Grappa.Ecto.Like` (an underscore is a legal nick char and must match
+  literally) with an explicit `ESCAPE '\\'` clause. The ASCII fold leaves
+  `\\` UNCHANGED (it is not an `A-Z` byte), so a literal `\\` in the query
+  reaches the escape step and is escaped there — no collision with the LIKE
+  escape char.
 
   Visitor-scoped BY CONSTRUCTION (`WHERE visitor_id IS NOT NULL`): a USER
   credential with a matching nick is never returned (the phase-1 subject-

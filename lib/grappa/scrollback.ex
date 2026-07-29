@@ -53,7 +53,7 @@ defmodule Grappa.Scrollback do
   alias Grappa.Repo
   alias Grappa.Scrollback.{Message, Meta, Telemetry}
 
-  # Identifier.nick_fold/1 is a query macro (rfc1459 fold fragment, #121).
+  # Identifier.nick_fold/1 is a query macro (ASCII fold fragment, #121/#525).
   require Identifier
   require Logger
 
@@ -849,7 +849,7 @@ defmodule Grappa.Scrollback do
   carry `dm_with = peer` regardless of which side `channel` points at
   (inbound = own_nick, outbound = peer); channel rows carry
   `dm_with = nil` so the COALESCE picks the channel name. The GROUP BY
-  folds that key via `Identifier.nick_fold/1` (rfc1459, #372) so a DM
+  folds that key via `Identifier.nick_fold/1` (ASCII, #372/#525) so a DM
   peer that differs only in casing — the service `DebugServ` replying
   to an opened `debugserv` window — collapses to ONE archive entry
   instead of splitting. `dm_with` is stored case-PRESERVED (nick display
@@ -866,7 +866,7 @@ defmodule Grappa.Scrollback do
   joined channels (from `Grappa.Session.list_channels/2`) plus open
   query window targets (from `Grappa.QueryWindows.list_for_subject/1`).
   Members are filtered OUT so the active + archive sets are disjoint per
-  intent doc. The exclusion compares on the rfc1459 fold of BOTH sides
+  intent doc. The exclusion compares on the ASCII fold of BOTH sides
   (#372) — an open `debugserv` window MUST suppress the proper-case
   `DebugServ` inbound rows, not leave them as a phantom archived split.
   Empty set means everything with rows qualifies.
@@ -988,8 +988,8 @@ defmodule Grappa.Scrollback do
 
       # Peer DM target (nick-shaped, NOT own-nick): outbound `/msg peer`
       # lands at `channel = peer`; inbound `<peer> PRIVMSG ownnick` lands
-      # at `channel = ownnick AND dm_with = peer`. Match on the rfc1459
-      # FOLD of the peer (#372) so a reply from a differently-cased sender
+      # at `channel = ownnick AND dm_with = peer`. Match on the ASCII
+      # FOLD of the peer (#372/#525) so a reply from a differently-cased sender
       # (service `DebugServ` vs the opened `debugserv` window) resolves to
       # the SAME window — `dm_with` is stored case-PRESERVED (nick display
       # rule, message.ex) so the MATCH must fold, exactly like the nick
@@ -1023,14 +1023,15 @@ defmodule Grappa.Scrollback do
   def dm_eligible?("$server"), do: false
   def dm_eligible?(name) when is_binary(name), do: target_kind(name) == :query
 
-  # `where_dm_peer/2` — the SINGLE rfc1459-folded DM-peer match: "rows
+  # `where_dm_peer/2` — the SINGLE ASCII-folded DM-peer match: "rows
   # belonging to the DM window whose peer folds to `folded_peer`". Shared
   # by the read path (`channel_or_dm_where/3`) and the delete path
-  # (`delete_for_dm/3`) so a nick that folds identically (ASCII case +
-  # the four rfc1459 bracket chars) resolves to ONE window everywhere
-  # (#372). `dm_with` is stored case-PRESERVED (nick display rule,
-  # `message.ex`), so every MATCH folds via `Identifier.nick_fold/1` —
-  # the same query-side twin the WHOIS / query_windows lookups use (#121).
+  # (`delete_for_dm/3`) so a nick that folds identically (ASCII case only,
+  # A-Z; brackets `[ ] \ ~` are NOT folded, so `nick[1]`/`nick{1}` stay
+  # DISTINCT) resolves to ONE window everywhere (#372/#525). `dm_with` is
+  # stored case-PRESERVED (nick display rule, `message.ex`), so every MATCH
+  # folds via `Identifier.nick_fold/1` — the same query-side twin the WHOIS
+  # / query_windows lookups use (#121).
   # `folded_peer` MUST already be `Identifier.canonical_nick/1`-folded by
   # the caller (the value side of the fold).
   #
@@ -1107,7 +1108,8 @@ defmodule Grappa.Scrollback do
 
   @doc """
   UX-1 (2026-05-17) — deletes all scrollback rows for a DM peer in a
-  `(subject, network_id)` pair. Folds the peer nick under rfc1459 to
+  `(subject, network_id)` pair. Folds the peer nick under the ASCII fold
+  (#121/#525) to
   match the IRC-side normalization (`dm_with` is stored case-preserved
   but MATCHED folded, via the shared `where_dm_peer/2` — the same window
   key `channel_or_dm_where/3` reads, #372).
@@ -1165,9 +1167,9 @@ defmodule Grappa.Scrollback do
   #373 — migrates every DM scrollback row for `old_nick` to `new_nick`
   in `(subject, network_id)`, so a query window that followed a peer's
   NICK change keeps its history (`channel_or_dm_where/3` reads a peer
-  window by the rfc1459 fold of the peer nick).
+  window by the ASCII fold of the peer nick).
 
-  Case-insensitive on both nicks (rfc1459 fold, #121). A case-only
+  Case-insensitive on both nicks (ASCII fold, #121/#525). A case-only
   change (`fold(old) == fold(new)`) is a noop (`{:ok, 0}`): the read
   path already resolves both to one folded window, and `dm_with` /
   `channel` are stored case-preserved for display (#372), so nothing

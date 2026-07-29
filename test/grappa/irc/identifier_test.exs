@@ -202,10 +202,10 @@ defmodule Grappa.IRC.IdentifierTest do
       assert Identifier.canonical_channel("&caret^") == "&caret^"
     end
 
-    test "is ASCII-only — does NOT merge non-ASCII case variants (rfc1459 is byte-level)" do
+    test "is ASCII-only — does NOT merge non-ASCII case variants (the ASCII fold is byte-level)" do
       # The old Unicode `String.downcase/1` folded É->é so `#CAFÉ` and
       # `#café` merged into one window — WRONG for bahamut, whose ASCII
-      # casemapping leaves both distinct. rfc1459 is byte-level: the
+      # casemapping leaves both distinct. the ASCII fold is byte-level: the
       # multibyte É (>= 0x80) passes through untouched.
       assert Identifier.canonical_channel("#café") == "#café"
       assert Identifier.canonical_channel("#CAFÉ") == "#cafÉ"
@@ -303,8 +303,8 @@ defmodule Grappa.IRC.IdentifierTest do
       assert Identifier.canonical_nick("caret^") == "caret^"
     end
 
-    test "is ASCII-only — leaves UTF-8 multibyte untouched (rfc1459 is byte-level)" do
-      # Unlike String.downcase/1, rfc1459 does NOT fold non-ASCII; the
+    test "is ASCII-only — leaves UTF-8 multibyte untouched (the ASCII fold is byte-level)" do
+      # Unlike String.downcase/1, the ASCII fold does NOT fold non-ASCII; the
       # SQLite lower() backfill (ASCII-only) must match this exactly.
       assert Identifier.canonical_nick("Ä") == "Ä"
       assert Identifier.canonical_nick("café") == "café"
