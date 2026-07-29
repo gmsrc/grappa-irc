@@ -115,7 +115,7 @@ bin/grappa list-visitors       # live-state verb (RPC into the running BEAM)
 bin/grappa remote-shell        # iex --remsh into the live node
 ```
 
-Boot-time verbs run as mix tasks in the container; live-state verbs attach to the running BEAM over Erlang distribution, so they introspect or mutate the actual supervised state (no second BEAM, no port collision). Developer scripts — gates, tests, shells — live in `scripts/*.sh`; how to run the test suites is documented in `docs/TESTING.md`; the full operator + deploy runbook is `docs/OPERATIONS.md`.
+Boot-time verbs run as mix tasks in the container; live-state verbs attach to the running BEAM over Erlang distribution, so they introspect or mutate the actual supervised state (no second BEAM, no port collision). Developer scripts — gates, tests, shells — live in `scripts/*.sh`; how to run the test suites is documented in `docs/TESTING.md`; the full operator + deploy runbook is `docs/OPERATIONS.md`. The design of per-client derived outbound source addresses — written for the staff of networks a grappa instance connects to, rather than for developers — is `docs/DERIVED_SOURCE_ADDRESSES.md` (not yet implemented; #454, #543).
 
 ### First deploy
 
