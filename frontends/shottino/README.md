@@ -112,10 +112,11 @@ rather than a modifier.
 ## Replying
 
 Right-click a message for a menu: reply to it, or open a query with whoever
-sent it. `Ctrl-R` opens the same thing from the keyboard — a picker over the
-recent messages in the focused pane's window, newest first, one entry per
-run of the same nick. Type to filter by nick **or** by message text, which is
-how you find a line whose author you have forgotten; `Up`/`Down` to choose,
+sent it. `Ctrl-R` opens the same thing from the keyboard — the last 20 messages in the
+focused pane's window, newest first. Type to search: the filter matches nick
+**or** message text and runs over the window's WHOLE buffer, not just the
+twenty on offer, because the point of a search is to reach what is not in
+front of you. `Up`/`Down` to choose (the list scrolls under the selection),
 `Enter` to reply, `Esc` to cancel.
 
 Replying prefills the input with the address **and a citation of the message
@@ -218,8 +219,16 @@ Key bindings:
 
 Media link previews:
 
-- `/preview` opens the most recent image or video link full-screen (a still
-  frame for video); press any key to return to the chat. No mouse needed.
+- `/preview` opens a picker over the last 20 pictures and clips posted in this
+  window, newest first, each URL once — type to filter, `Enter` to open, `Esc`
+  to cancel. `/preview <url>` skips the list. Press any key to return to the
+  chat.
+- `/view` offers the same list but hands the file to the DESKTOP: it downloads
+  it and opens whatever your system uses for that file type. This is what
+  `/open` cannot do — `xdg-open` on a URL picks the handler from the *scheme*
+  and so always opens a browser; picking it from the file type means having the
+  file. Downloads go to a temporary directory that is removed when shottino
+  exits.
 - With `/mouse on`, hovering an image or video link shows a `click to preview:`
   hint and left-clicking opens the same preview.
 - A terminal with a graphics protocol (Kitty, iTerm2, Sixel, WezTerm) shows a
@@ -232,7 +241,7 @@ Media link previews:
   the bitmap path on a terminal you know supports it.
 - **Mouse tracking is OFF by default**, so your terminal keeps its own
   copy/paste selection. Previews are still reachable from the keyboard with
-  `/preview`, which shows the most recent image or video link.
+  `/preview`.
 - `/mouse on` enables tracking, which adds the hover hint and click-to-preview
   — and necessarily suppresses terminal selection while it is on, because the
   terminal then forwards button and motion events to shottino instead of

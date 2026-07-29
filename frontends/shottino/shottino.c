@@ -33,6 +33,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <limits.h>
+#include <dirent.h>
 
 #include "alias.h"
 #include "http.h"
@@ -267,7 +268,8 @@ enum job_kind {
     JOB_MEMBERS,
     JOB_CLOSE_QUERY,
     JOB_READ_CURSOR,
-    JOB_MEDIA
+    JOB_MEDIA,
+    JOB_VIEW
 };
 
 struct job {
@@ -403,9 +405,14 @@ struct msg_region {
  * a list you draw from one source and act on from another is a list that
  * eventually acts on the row above the one you clicked. Same rule as the
  * chat area's measure/draw agreement, for the same reason. */
-enum overlay_kind { OVERLAY_NONE = 0, OVERLAY_MENU, OVERLAY_REPLY };
+enum overlay_kind { OVERLAY_NONE = 0, OVERLAY_MENU, OVERLAY_REPLY, OVERLAY_MEDIA };
 
-enum overlay_action { ACT_NONE = 0, ACT_REPLY, ACT_QUERY };
+enum overlay_action { ACT_NONE = 0, ACT_REPLY, ACT_QUERY, ACT_PREVIEW, ACT_VIEW };
+
+/* How many entries a picker offers. Twenty is what fits the phrase "the
+ * last twenty" and comfortably more than a box shows, which is why the
+ * list scrolls under the selection. */
+#define PICKER_MAX 20
 
 struct overlay_item {
     char label[MAX_LINE];
@@ -420,9 +427,17 @@ struct overlay {
     enum overlay_kind kind;
     int x, y;                 /* anchor (menu only) */
     size_t sel;
-    char filter[64];          /* reply picker: matches nick OR message text */
+    /* First entry shown. A picker offers more entries than the box has
+     * rows, so the window into the list follows the selection — without
+     * it, choosing the eighteenth of twenty means selecting something
+     * nobody can see. */
+    size_t top;
+    char filter[64];          /* picker: matches nick OR message text */
     char nick[MAX_CHANNEL];   /* menu: whose message was clicked */
     char body[MAX_LINE];
+    /* Media picker: what Enter does with the URL, decided by the command
+     * that opened it (/preview or /view) rather than by the list. */
+    enum overlay_action pick_action;
 };
 
 struct app {
@@ -494,6 +509,10 @@ struct app {
      * row that predates every window. See log_scope_of_locked(). */
     char log_scope[LOG_LINES][MAX_SLUG + MAX_CHANNEL + 8];
     media_protocol proto;           /* detected once, before ncurses */
+    /* /view downloads here, and the directory goes at exit: a session
+     * that opens fifty pictures must not leave fifty files behind. */
+    char view_dir[1024];
+    unsigned view_seq;
     /* Ctrl-U hands the arrow keys to the member list.
      *
      * The modified arrows the roster was reachable by are not reliably
@@ -1038,16 +1057,21 @@ static int connect_tcp(const char *host, const char *port) {
     return fd;
 }
 
-static bool conn_open(struct app *app, struct tls_conn *conn) {
+/* Open a connection to an EXPLICIT host, so the same TLS setup serves
+ * both the grappa connection and a one-off fetch of a link somebody
+ * pasted (/view). The hostname is bound for verification either way —
+ * a third-party host gets the same check the bouncer does. */
+static bool conn_open_to(struct app *app, const char *host, const char *port, bool use_tls,
+                         struct tls_conn *conn) {
     memset(conn, 0, sizeof(*conn));
-    conn->fd = connect_tcp(app->url.host, app->url.port);
+    conn->fd = connect_tcp(host, port);
     if (conn->fd < 0) return false;
-    conn->tls = app->url.tls;
+    conn->tls = use_tls;
     if (conn->tls) {
         conn->ssl = SSL_new(app->ssl_ctx);
         if (!conn->ssl) return false;
         SSL_set_fd(conn->ssl, conn->fd);
-        SSL_set_tlsext_host_name(conn->ssl, app->url.host);
+        SSL_set_tlsext_host_name(conn->ssl, host);
         /* SNI (above) only NAMES the host in the ClientHello — it does not
          * make OpenSSL verify anything. SSL_VERIFY_PEER (see ssl_ctx setup)
          * validates the certificate CHAIN but NOT that the cert belongs to
@@ -1056,10 +1080,14 @@ static bool conn_open(struct app *app, struct tls_conn *conn) {
          * for attacker.example and read the bearer token we send on this
          * connection. SSL_set1_host makes the handshake fail on a hostname
          * mismatch — the client twin of the server's #89 hostname check. */
-        if (SSL_set1_host(conn->ssl, app->url.host) != 1) return false;
+        if (SSL_set1_host(conn->ssl, host) != 1) return false;
         if (SSL_connect(conn->ssl) != 1) return false;
     }
     return true;
+}
+
+static bool conn_open(struct app *app, struct tls_conn *conn) {
+    return conn_open_to(app, app->url.host, app->url.port, app->url.tls, conn);
 }
 
 static void conn_close(struct tls_conn *conn) {
@@ -4209,6 +4237,7 @@ static const char *window_state_label(enum window_state state) {
  * pictures nobody scrolled to. */
 
 static void media_decode_job(struct app *app, int slot);
+static void view_fetch_and_open(struct app *app, const char *url);
 static bool enqueue_job(struct app *app, struct job job);
 
 static void media_slot_reset(struct inline_media *m) {
@@ -4918,7 +4947,7 @@ static void draw(struct app *app) {
     if (app->overlay.kind != OVERLAY_NONE) {
         struct overlay_item items[64];
         size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
-        bool picker = app->overlay.kind == OVERLAY_REPLY;
+        bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA;
         int box_w = picker ? (main_w > 76 ? 76 : main_w - 2) : 34;
         if (box_w > main_w - 2) box_w = main_w - 2;
         if (box_w < 20) box_w = 20;
@@ -4935,26 +4964,41 @@ static void draw(struct app *app) {
         if (box_y + box_h > rows - 1) box_y = rows - 1 - box_h;
         if (box_y < 0) box_y = 0;
         if (app->overlay.sel >= n && n) app->overlay.sel = n - 1;
+        /* The window into the list follows the selection: a picker offers
+         * more entries than the box has rows, and a selection nobody can
+         * see is a selection nobody can trust. */
+        if (app->overlay.sel < app->overlay.top) app->overlay.top = app->overlay.sel;
+        if (app->overlay.sel >= app->overlay.top + (size_t)list_h)
+            app->overlay.top = app->overlay.sel - (size_t)list_h + 1;
+        if (app->overlay.top + (size_t)list_h > n)
+            app->overlay.top = n > (size_t)list_h ? n - (size_t)list_h : 0;
         app->overlay.x = box_x;
         app->overlay.y = box_y;
 
+        const char *verb = app->overlay.kind == OVERLAY_MEDIA
+                               ? (app->overlay.pick_action == ACT_VIEW ? "open" : "preview")
+                               : "reply to";
+        const char *empty = app->overlay.kind == OVERLAY_MEDIA ? "(no pictures or clips here)"
+                                                               : "(nothing to reply to)";
         for (int row = 0; row < box_h; row++) draw_fill(box_y + row, box_x, box_w, CP_SELECTED);
         int line_y = box_y;
         if (picker) {
-            draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "reply to: %s%s",
+            draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s: %s%s", verb,
                       app->overlay.filter, "_");
             line_y++;
         }
         for (size_t i = 0; i < (size_t)list_h; i++) {
-            bool on = i == app->overlay.sel;
+            size_t idx = app->overlay.top + i;
+            bool on = idx == app->overlay.sel;
             draw_fill(line_y, box_x, box_w, on ? CP_MENTION : CP_SELECTED);
             draw_text(line_y, box_x + 1, box_w - 2, on ? CP_MENTION : CP_SELECTED,
-                      on ? A_BOLD : 0, "%s", i < n ? items[i].label : "(nothing to reply to)");
+                      on ? A_BOLD : 0, "%s", idx < n ? items[idx].label : empty);
             line_y++;
         }
         if (picker)
             draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
-                      "type to filter | Up/Down | Enter replies | Esc cancels");
+                      "%zu/%zu | type to filter | Up/Down | Enter | Esc", n ? app->overlay.sel + 1 : 0,
+                      n);
     }
     /* Reconcile the terminal's graphics placements with what this frame
      * actually drew.
@@ -5290,6 +5334,9 @@ static void *worker_main(void *arg) {
         case JOB_MEDIA:
             media_decode_job(app, (int)strtol(job.arg1, NULL, 10));
             break;
+        case JOB_VIEW:
+            view_fetch_and_open(app, job.arg1);
+            break;
         case JOB_SEND: {
             send_message_target(app, job.network, job.channel, job.arg1);
             break;
@@ -5514,11 +5561,59 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
         }
         return n;
     }
+    /* The media picker: the last PICKER_MAX pictures and clips posted in
+     * this window, newest first, each URL once however many times it was
+     * repeated. Same list for /preview and /view — what Enter does with
+     * the URL is the command's decision, not the list's. */
+    if (ov->kind == OVERLAY_MEDIA) {
+        if (max > PICKER_MAX) max = PICKER_MAX;
+        size_t cur = focused_window_locked(app);
+        if (cur >= app->window_count) return 0;
+        struct window *w = &app->windows[cur];
+        char want[MAX_SLUG + MAX_CHANNEL + 8];
+        snprintf(want, sizeof(want), "[%s/%s]", w->network, w->channel);
+        for (size_t k = app->log_count; k > 0 && n < max; k--) {
+            if (!log_row_in_scope(app, k - 1, want)) continue;
+            const char *line = app->log[k - 1];
+            const char *url = find_url(line);
+            if (!url) continue;
+            char tok[MAX_LINE];
+            copy_url_token(url, tok, sizeof(tok));
+            enum media_kind kind = media_kind_of(tok);
+            if (kind == MEDIA_NONE) continue;
+            if (ov->filter[0] && !contains_ci(tok, ov->filter)) continue;
+            bool already = false;
+            for (size_t j = 0; j < n && !already; j++) already = strcmp(out[j].body, tok) == 0;
+            if (already) continue;
+            char prefix[256], nick[256];
+            const char *body = NULL;
+            if (!split_message_line(line, prefix, sizeof(prefix), nick, sizeof(nick), &body))
+                nick[0] = 0;
+            snprintf(out[n].nick, sizeof(out[n].nick), "%s", nick);
+            snprintf(out[n].body, sizeof(out[n].body), "%s", tok);
+            snprintf(out[n].label, sizeof(out[n].label), "%-12.20s %s%.900s", nick[0] ? nick : "-",
+                     kind == MEDIA_VIDEO ? "▶ " : "", tok);
+            out[n].action = ov->pick_action;
+            n++;
+        }
+        return n;
+    }
+
     if (ov->kind != OVERLAY_REPLY) return 0;
+    if (max > PICKER_MAX) max = PICKER_MAX;
 
     /* Newest first: you almost always mean something you just read. Only
      * rows from the focused pane's window, and only rows that carry a
-     * nick — a join/part is not something to reply to. */
+     * nick — a join/part is not something to reply to.
+     *
+     * Unfiltered this is the last PICKER_MAX messages, every one of
+     * them. It used to keep only the most recent line of each run of one
+     * nick, which reads well and answers the wrong question: the picker
+     * is for choosing a LINE (it is quoted into the reply), and in a
+     * conversation between two people the collapse hid every line but
+     * two. Typing filters instead, and the filter searches the whole
+     * buffer of the window rather than the visible list — the point of a
+     * search is to reach what is not in front of you. */
     size_t cur = focused_window_locked(app);
     if (cur >= app->window_count) return 0;
     struct window *w = &app->windows[cur];
@@ -5533,10 +5628,6 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
         if (!nick[0] || !body) continue;
         if (ov->filter[0] && !contains_ci(nick, ov->filter) && !contains_ci(body, ov->filter))
             continue;
-        /* Same nick twice in a row is usually the same thought; the
-         * picker is for choosing a PERSON and a line, and a wall of one
-         * name buries the rest. Keep the most recent of each run. */
-        if (n > 0 && nick_case_equal(out[n - 1].nick, nick)) continue;
         snprintf(out[n].nick, sizeof(out[n].nick), "%s", nick);
         snprintf(out[n].body, sizeof(out[n].body), "%s", body);
         snprintf(out[n].label, sizeof(out[n].label), "%-14s %s", nick, body);
@@ -5551,6 +5642,7 @@ static void overlay_close(struct app *app) {
     app->overlay.kind = OVERLAY_NONE;
     app->overlay.filter[0] = 0;
     app->overlay.sel = 0;
+    app->overlay.top = 0;
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -5674,6 +5766,8 @@ static void reply_to(struct app *app, const char *nick, const char *body) {
 }
 
 static void query_window(struct app *app, const char *target);
+static void request_preview(struct app *app, const char *url, bool is_video, bool force_ascii);
+static void request_view(struct app *app, const char *url);
 
 static void overlay_activate(struct app *app) {
     struct overlay_item items[64];
@@ -5689,11 +5783,23 @@ static void overlay_activate(struct app *app) {
     }
     pthread_mutex_unlock(&app->lock);
     overlay_close(app);
-    if (!nick[0]) return;
+    /* A media row need not carry a nick — a bare URL is still something
+     * to look at — so each action checks the field it actually needs. */
     switch (action) {
-    case ACT_REPLY: reply_to(app, nick, body); break;
-    case ACT_QUERY: query_window(app, nick); break;
-    case ACT_NONE: break;
+    case ACT_REPLY:
+        if (nick[0]) reply_to(app, nick, body);
+        break;
+    case ACT_QUERY:
+        if (nick[0]) query_window(app, nick);
+        break;
+    case ACT_PREVIEW:
+        if (body[0]) request_preview(app, body, media_kind_of(body) == MEDIA_VIDEO, false);
+        break;
+    case ACT_VIEW:
+        if (body[0]) request_view(app, body);
+        break;
+    case ACT_NONE:
+        break;
     }
 }
 
@@ -5725,7 +5831,7 @@ static bool overlay_key(struct app *app, int ch) {
         pthread_mutex_unlock(&app->lock);
         return true;
     }
-    if (kind == OVERLAY_REPLY) {
+    if (kind == OVERLAY_REPLY || kind == OVERLAY_MEDIA) {
         pthread_mutex_lock(&app->lock);
         size_t len = strlen(app->overlay.filter);
         if ((ch == KEY_BACKSPACE || ch == 127 || ch == 8) && len) app->overlay.filter[len - 1] = 0;
@@ -5735,6 +5841,7 @@ static bool overlay_key(struct app *app, int ch) {
         }
         /* The list just changed under the selection. */
         app->overlay.sel = 0;
+        app->overlay.top = 0;
         pthread_mutex_unlock(&app->lock);
         return true;
     }
@@ -5746,7 +5853,27 @@ static void open_reply_picker(struct app *app) {
     app->overlay.kind = OVERLAY_REPLY;
     app->overlay.filter[0] = 0;
     app->overlay.sel = 0;
+    app->overlay.top = 0;
     pthread_mutex_unlock(&app->lock);
+}
+
+/* The same picker over this window's pictures and clips. `action` is
+ * what Enter does with the one you choose — /preview renders it here,
+ * /view hands it to the system viewer. Returns false when the window
+ * has no media to offer, so the caller can say so rather than opening
+ * an empty box. */
+static bool open_media_picker(struct app *app, enum overlay_action action) {
+    struct overlay_item items[PICKER_MAX];
+    pthread_mutex_lock(&app->lock);
+    app->overlay.kind = OVERLAY_MEDIA;
+    app->overlay.pick_action = action;
+    app->overlay.filter[0] = 0;
+    app->overlay.sel = 0;
+    app->overlay.top = 0;
+    size_t n = overlay_items(app, items, PICKER_MAX);
+    if (n == 0) app->overlay.kind = OVERLAY_NONE;
+    pthread_mutex_unlock(&app->lock);
+    return n > 0;
 }
 
 static void scroll_chat(struct app *app, int delta) {
@@ -6006,6 +6133,295 @@ static void open_external_url(struct app *app, const char *url) {
     log_line(app, "opened %s", url);
 }
 
+
+/* ── /view: fetch it, then let the desktop choose the viewer ───────────
+ *
+ * xdg-open on a URL opens a BROWSER: the handler is picked from the
+ * SCHEME. "Open this in my picture viewer" therefore means fetching the
+ * bytes first and opening the FILE, whose handler is picked from its
+ * type. That is the whole difference between /view and /open, and it is
+ * why this needs a download at all.
+ *
+ * It runs on the worker thread, because it is a network round trip and
+ * the UI thread never waits on one — the same rule the inline decoder
+ * follows.
+ *
+ * The session token is never sent. The URL points wherever a stranger's
+ * message pointed, and a bearer token is not something to hand to a
+ * host because its link was pasted in a channel. Uploads on this
+ * deployment are fetchable without it, which is how the inline decoder
+ * reaches them too.
+ *
+ * Fetching a third-party URL does tell that host your IP and that you
+ * are reading — the #451 exposure. /view is an explicit act on a link
+ * you chose, which is the bargain /open already makes by handing the
+ * same URL to a browser. What #451 turned off was doing it
+ * AUTOMATICALLY for every link that scrolled past. */
+#define VIEW_MAX_BYTES (32u * 1024u * 1024u)
+#define VIEW_MAX_REDIRECTS 3
+
+/* One GET. Returns false when the response never arrived; a response
+ * that arrived with a bad status is a `true` with that status in it, so
+ * the caller can tell "no route" from "404". */
+struct fetch_result {
+    int status;
+    char *body;
+    size_t len;
+    char location[MAX_LINE];
+    char content_type[128];
+};
+
+static void fetch_result_free(struct fetch_result *r) {
+    free(r->body);
+    r->body = NULL;
+    r->len = 0;
+}
+
+/* Copy a header's value out of a NUL-terminated header block. */
+static void header_value(const char *headers, const char *name, char *out, size_t out_sz) {
+    out[0] = 0;
+    const char *p = strcasestr(headers, name);
+    if (!p) return;
+    p += strlen(name);
+    while (*p == ' ' || *p == '\t') p++;
+    size_t n = 0;
+    while (p[n] && p[n] != '\r' && p[n] != '\n' && n + 1 < out_sz) n++;
+    memcpy(out, p, n);
+    out[n] = 0;
+}
+
+static bool http_fetch(struct app *app, const char *url, struct fetch_result *out) {
+    memset(out, 0, sizeof(*out));
+    struct url u;
+    if (!parse_url(url, &u)) return false;
+    /* parse_url keeps the authority; the path is whatever follows it. */
+    const char *after_scheme = strstr(url, "://");
+    const char *path = after_scheme ? strchr(after_scheme + 3, '/') : NULL;
+
+    struct tls_conn conn;
+    if (!conn_open_to(app, u.host, u.port, u.tls, &conn)) {
+        conn_close(&conn);
+        return false;
+    }
+    char *head = xasprintf("GET %s HTTP/1.1\r\n"
+                           "Host: %s\r\n"
+                           "User-Agent: shottino/0.1\r\n"
+                           "Accept: */*\r\n"
+                           "Connection: close\r\n\r\n",
+                           path && *path ? path : "/", u.host);
+    bool ok = conn_write_all(&conn, head, strlen(head));
+    free(head);
+    if (!ok) {
+        conn_close(&conn);
+        return false;
+    }
+
+    /* Read with a cap and NO die(): a third-party URL may serve
+     * gigabytes, and a client that exits because someone pasted a link
+     * is worse than one that says the file was too big. */
+    size_t cap = 65536, len = 0;
+    char *buf = malloc(cap + 1);
+    if (!buf) {
+        conn_close(&conn);
+        return false;
+    }
+    bool truncated = false;
+    for (;;) {
+        if (len == cap) {
+            if (cap >= VIEW_MAX_BYTES) {
+                truncated = true;
+                break;
+            }
+            cap *= 2;
+            char *bigger = realloc(buf, cap + 1);
+            if (!bigger) {
+                free(buf);
+                conn_close(&conn);
+                return false;
+            }
+            buf = bigger;
+        }
+        ssize_t n = conn_read(&conn, buf + len, cap - len);
+        if (n <= 0) break;
+        len += (size_t)n;
+    }
+    buf[len] = 0;
+    conn_close(&conn);
+    if (truncated) {
+        free(buf);
+        return false;
+    }
+
+    char *sep = strstr(buf, "\r\n\r\n");
+    if (!sep) {
+        free(buf);
+        return false;
+    }
+    *sep = 0;
+    const char *status_sp = strchr(buf, ' ');
+    out->status = status_sp ? atoi(status_sp + 1) : 0;
+    header_value(buf, "Location:", out->location, sizeof(out->location));
+    header_value(buf, "Content-Type:", out->content_type, sizeof(out->content_type));
+    bool chunked = strcasestr(buf, "Transfer-Encoding: chunked") != NULL;
+    char *body_start = sep + 4;
+    size_t hdr_len = (size_t)(body_start - buf);
+    size_t blen = len >= hdr_len ? len - hdr_len : 0;
+    if (chunked) {
+        out->body = http_decode_chunked(body_start, blen, &out->len);
+        free(buf);
+        if (!out->body) return false;
+    } else {
+        out->body = malloc(blen ? blen : 1);
+        if (!out->body) {
+            free(buf);
+            return false;
+        }
+        memcpy(out->body, body_start, blen);
+        out->len = blen;
+        free(buf);
+    }
+    return true;
+}
+
+/* The extension the saved file should carry, since it is what the
+ * desktop picks the viewer from. The URL is asked first because it is
+ * what the sender meant; Content-Type answers for the links that carry
+ * no extension at all. */
+static void view_extension(const char *url, const char *content_type, char *out, size_t out_sz) {
+    static const struct {
+        const char *type;
+        const char *ext;
+    } TYPES[] = {
+        {"image/png", "png"},   {"image/jpeg", "jpg"}, {"image/gif", "gif"},
+        {"image/webp", "webp"}, {"image/avif", "avif"}, {"image/bmp", "bmp"},
+        {"image/svg", "svg"},   {"video/mp4", "mp4"},  {"video/webm", "webm"},
+        {"video/quicktime", "mov"}, {"video/x-matroska", "mkv"}, {"application/pdf", "pdf"},
+    };
+    snprintf(out, out_sz, "%s", "bin");
+    const char *after_scheme = strstr(url, "://");
+    const char *path = after_scheme ? strchr(after_scheme + 3, '/') : NULL;
+    const char *last_slash = path ? strrchr(path, '/') : NULL;
+    const char *dot = last_slash ? strrchr(last_slash, '.') : NULL;
+    if (dot && dot[1]) {
+        size_t n = 0;
+        while (dot[1 + n] && isalnum((unsigned char)dot[1 + n]) && n < 5) n++;
+        if (n && !dot[1 + n]) { /* the whole tail is the extension */
+            snprintf(out, out_sz, "%.*s", (int)n, dot + 1);
+            return;
+        }
+    }
+    for (size_t i = 0; i < sizeof(TYPES) / sizeof(TYPES[0]); i++)
+        if (strncasecmp(content_type, TYPES[i].type, strlen(TYPES[i].type)) == 0) {
+            snprintf(out, out_sz, "%s", TYPES[i].ext);
+            return;
+        }
+}
+
+/* A directory of our own, made once and removed at exit, so a session
+ * that views fifty pictures leaves nothing behind. Caller holds
+ * app->lock. */
+static bool view_dir_locked(struct app *app) {
+    if (app->view_dir[0]) return true;
+    const char *tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) tmp = "/tmp";
+    char pattern[sizeof(app->view_dir)];
+    snprintf(pattern, sizeof(pattern), "%s/shottino-XXXXXX", tmp);
+    if (!mkdtemp(pattern)) return false;
+    snprintf(app->view_dir, sizeof(app->view_dir), "%s", pattern);
+    return true;
+}
+
+static void view_dir_cleanup(struct app *app) {
+    if (!app->view_dir[0]) return;
+    DIR *d = opendir(app->view_dir);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            char path[PATH_MAX];
+            snprintf(path, sizeof(path), "%s/%s", app->view_dir, e->d_name);
+            unlink(path);
+        }
+        closedir(d);
+    }
+    rmdir(app->view_dir);
+    app->view_dir[0] = 0;
+}
+
+static void open_external_url(struct app *app, const char *url);
+
+/* Worker side of /view: fetch, save, hand to the desktop. */
+static void view_fetch_and_open(struct app *app, const char *url) {
+    struct fetch_result res;
+    char current[MAX_LINE];
+    snprintf(current, sizeof(current), "%s", url);
+    bool got = false;
+    for (int hop = 0; hop <= VIEW_MAX_REDIRECTS; hop++) {
+        if (!http_fetch(app, current, &res)) {
+            log_line(app, "/view: could not fetch %.60s", current);
+            return;
+        }
+        if ((res.status == 301 || res.status == 302 || res.status == 303 ||
+             res.status == 307 || res.status == 308) &&
+            res.location[0]) {
+            char next[MAX_LINE];
+            snprintf(next, sizeof(next), "%s", res.location);
+            fetch_result_free(&res);
+            /* Only absolute redirects are followed: resolving a relative
+             * Location means reimplementing URL joining, and every host
+             * that serves media sends an absolute one. */
+            if (strncmp(next, "http://", 7) != 0 && strncmp(next, "https://", 8) != 0) {
+                log_line(app, "/view: %.40s redirected somewhere this client cannot follow", current);
+                return;
+            }
+            snprintf(current, sizeof(current), "%s", next);
+            continue;
+        }
+        got = true;
+        break;
+    }
+    if (!got) {
+        log_line(app, "/view: %.40s redirects in circles", url);
+        return;
+    }
+    if (res.status != 200 || res.len == 0) {
+        log_line(app, "/view: %.50s answered %d%s", current, res.status,
+                 res.len == 0 ? " with nothing" : "");
+        fetch_result_free(&res);
+        return;
+    }
+
+    char ext[16];
+    view_extension(current, res.content_type, ext, sizeof(ext));
+    char path[PATH_MAX];
+    pthread_mutex_lock(&app->lock);
+    bool have_dir = view_dir_locked(app);
+    unsigned seq = ++app->view_seq;
+    if (have_dir) snprintf(path, sizeof(path), "%s/%u.%s", app->view_dir, seq, ext);
+    pthread_mutex_unlock(&app->lock);
+    if (!have_dir) {
+        log_line(app, "/view: no writable temporary directory");
+        fetch_result_free(&res);
+        return;
+    }
+
+    FILE *f = fopen(path, "wb");
+    if (!f || fwrite(res.body, 1, res.len, f) != res.len) {
+        if (f) fclose(f);
+        log_line(app, "/view: could not write %s", path);
+        fetch_result_free(&res);
+        return;
+    }
+    fclose(f);
+    fetch_result_free(&res);
+    open_external_url(app, path);
+}
+
+static void request_view(struct app *app, const char *url) {
+    struct job job = {.kind = JOB_VIEW};
+    snprintf(job.arg1, sizeof(job.arg1), "%s", url);
+    if (enqueue_job(app, job)) log_line(app, "fetching %.60s for the system viewer", url);
+}
 
 /* Run argv[0] with execvp (no shell). stderr always discarded; stdout goes to
  * the controlling terminal when `inherit_stdout` (so chafa can paint), else to
@@ -6522,8 +6938,9 @@ static void show_help(struct app *app) {
     log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
     log_line(app, "terminal: mouse tracking is OFF by default so the terminal keeps its own copy/paste selection; /mouse on enables click-to-preview (and suppresses selection), /mouse off restores it");
     log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; video and GIFs PLAY as colour art (/media still for one frame); /media [on|off|all|first-party] — 'all' also auto-fetches images hosted elsewhere");
-    log_line(app, "       /preview full-screen; /preview-ascii forces the art renderer; /open opens externally; with /mouse on, click a link to preview");
-    log_line(app, "reply: right-click a message for reply/query, or Ctrl-R for a searchable reply picker (type to filter, Enter replies)");
+    log_line(app, "       /preview [url] full-screen here; bare /preview picks from the last 20 pictures and clips in this window; /preview-ascii forces the art renderer");
+    log_line(app, "       /view [url] downloads it and opens your desktop's viewer for that file type (bare /view offers the same list); /open hands a URL to the browser");
+    log_line(app, "reply: right-click a message for reply/query, or Ctrl-R for the last 20 messages here — type to search the whole window buffer, Enter replies");
     log_line(app, "userlist: Ctrl-U gives it the arrow keys (Up/Down/PgUp/PgDn/Home/End, Esc back to chat); Ctrl-Shift-Up/Down and Shift-PgUp/PgDn work where the terminal does not keep them; the wheel scrolls it with /mouse on");
     log_line(app, "panes: /split (stacked) /splitv (side by side) /unsplit; Ctrl-Alt-Up/Down or Ctrl-Alt-Tab switch, Ctrl-Alt-+/- resize, /keys shows what your terminal sends");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
@@ -6565,7 +6982,9 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "invite") == 0) log_line(app, "/invite nick — invite nick to the current channel");
     else if (strcmp(cmd, "quote") == 0) log_line(app, "/quote raw-line — send a raw IRC line through grappa");
     else if (strcmp(cmd, "oper") == 0) log_line(app, "/oper name password — send IRC OPER credentials; password is not logged");
-    else if (strcmp(cmd, "open") == 0) log_line(app, "/open — open the most recent URL using xdg-open");
+    else if (strcmp(cmd, "open") == 0) log_line(app, "/open — open the most recent URL using xdg-open (the browser: the handler comes from the scheme)");
+    else if (strcmp(cmd, "view") == 0) log_line(app, "/view [url] — download it and open the desktop viewer for that file TYPE; bare /view offers the last 20 pictures and clips posted in this window");
+    else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; bare /preview offers the last 20 pictures and clips posted in this window");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
     else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "admin") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);
     else log_line(app, "no help for /%s; use /help for the command list", cmd);
@@ -7140,19 +7559,31 @@ static void handle_command_dispatch(struct app *app, char *line) {
         pthread_mutex_unlock(&app->lock);
         if (!url[0]) log_line(app, "/preview-ascii: no image or video link seen yet");
         else request_preview(app, url, is_video, true);
-    } else if (strcmp(line, "/preview") == 0) {
+    } else if (strcmp(line, "/preview") == 0 || strncmp(line, "/preview ", 9) == 0) {
         /* The keyboard route to click-to-preview. With mouse tracking off
          * by default (so the terminal keeps its own selection), this is
          * how the preview stays reachable — the feature is not gated on
-         * surrendering copy/paste. */
-        char url[MAX_LINE];
-        bool is_video;
-        pthread_mutex_lock(&app->lock);
-        snprintf(url, sizeof(url), "%s", app->last_media_url);
-        is_video = app->last_media_is_video;
-        pthread_mutex_unlock(&app->lock);
-        if (!url[0]) log_line(app, "/preview: no image or video link seen yet in this session");
-        else request_preview(app, url, is_video, false);
+         * surrendering copy/paste.
+         *
+         * Bare, it offers the last pictures and clips posted HERE rather
+         * than silently taking the most recent one seen anywhere in the
+         * session: the one you want is rarely the one that happens to be
+         * last, and a picker makes that choice visible. A URL as an
+         * argument skips the list. */
+        const char *arg = line[8] ? line + 9 : "";
+        while (*arg == ' ') arg++;
+        if (*arg) request_preview(app, arg, media_kind_of(arg) == MEDIA_VIDEO, false);
+        else if (!open_media_picker(app, ACT_PREVIEW))
+            log_line(app, "/preview: nothing to preview — no picture or clip has been posted in this window");
+    } else if (strcmp(line, "/view") == 0 || strncmp(line, "/view ", 6) == 0) {
+        /* Same list, different destination: the desktop's own viewer for
+         * that file type, which is the one thing a terminal cannot do
+         * itself. */
+        const char *arg = line[5] ? line + 6 : "";
+        while (*arg == ' ') arg++;
+        if (*arg) request_view(app, arg);
+        else if (!open_media_picker(app, ACT_VIEW))
+            log_line(app, "/view: nothing to open — no picture or clip has been posted in this window");
     } else if (strcmp(line, "/open") == 0) {
         open_external_url(app, app->last_url);
     } else if (strcmp(line, "/clear") == 0) {
@@ -7604,9 +8035,14 @@ static void handle_mouse(struct app *app) {
         bool hit = false;
         pthread_mutex_lock(&app->lock);
         size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
-        int first = app->overlay.kind == OVERLAY_REPLY ? app->overlay.y + 1 : app->overlay.y;
-        if (ev.y >= first && (size_t)(ev.y - first) < n) {
-            app->overlay.sel = (size_t)(ev.y - first);
+        /* A picker spends its first row on the filter, and its list may
+         * be scrolled — so the row under the pointer is an offset from
+         * `top`, not from the head of the list. */
+        bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA;
+        int first = picker ? app->overlay.y + 1 : app->overlay.y;
+        size_t idx = ev.y >= first ? app->overlay.top + (size_t)(ev.y - first) : 0;
+        if (ev.y >= first && idx < n) {
+            app->overlay.sel = idx;
             hit = true;
         }
         pthread_mutex_unlock(&app->lock);
@@ -8136,6 +8572,8 @@ int main(int argc, char **argv) {
     pthread_mutex_unlock(&app->jobs_lock);
     pthread_join(app->worker, NULL);
     if (app->ws_connected) conn_close(&app->ws);
+    /* After the worker is joined, so nothing is still writing into it. */
+    view_dir_cleanup(app);
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
     pthread_cond_destroy(&app->jobs_cond);
     pthread_mutex_destroy(&app->jobs_lock);

@@ -536,7 +536,7 @@ TEST(reply_picker_lists_newest_first_and_filters) {
     free(app);
 }
 
-TEST(reply_picker_collapses_a_run_of_one_nick) {
+TEST(reply_picker_offers_every_line_not_one_per_nick) {
     struct app *app = test_app();
     CHECK(app != NULL);
     if (!app) return;
@@ -549,15 +549,110 @@ TEST(reply_picker_collapses_a_run_of_one_nick) {
     seed_log(app, "[azzurra/#chan] 10:03 <bob> four");
     app->overlay.kind = OVERLAY_REPLY;
     size_t n = overlay_items(app, items, 64);
-    /* bob said three things in a row; the picker offers his most recent
-     * and alice's, not a wall of one name. */
-    CHECK_LONG(n, 2);
+    /* Every line, newest first. bob saying three things in a row used to
+     * collapse to his most recent, which reads well and answers the
+     * wrong question: the chosen line is QUOTED into the reply, so the
+     * two you cannot reach are two you might have meant. In a
+     * conversation between two people the collapse hid everything but
+     * the last line of each. */
+    CHECK_LONG(n, 4);
     CHECK_STR(items[0].nick, "bob");
     CHECK(strstr(items[0].label, "four") != NULL);
-    CHECK_STR(items[1].nick, "alice");
+    CHECK(strstr(items[1].label, "three") != NULL);
+    CHECK(strstr(items[2].label, "two") != NULL);
+    CHECK_STR(items[3].nick, "alice");
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
     pthread_mutex_destroy(&app->lock);
     free(app);
+}
+
+/* Unfiltered, the picker is "the last twenty", not "everything ever
+ * said": a box cannot show a thousand rows and a list that pretends to
+ * is a list you scroll forever. */
+TEST(reply_picker_stops_at_twenty) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_window(app, "azzurra", "#chan");
+    struct overlay_item items[64];
+    for (int i = 0; i < 30; i++) {
+        char line[128];
+        snprintf(line, sizeof(line), "[azzurra/#chan] 10:%02d <nick%d> message %d", i, i, i);
+        seed_log(app, line);
+    }
+    app->overlay.kind = OVERLAY_REPLY;
+    CHECK_LONG(overlay_items(app, items, 64), PICKER_MAX);
+    /* Newest first, so the cap drops the OLDEST — the twenty you can
+     * still see, not the twenty you have forgotten. */
+    CHECK(strstr(items[0].label, "message 29") != NULL);
+
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+/* The media picker: this window's pictures and clips, newest first,
+ * each URL once. Same list for /preview and /view — the command decides
+ * what Enter does with it. */
+TEST(media_picker_lists_this_windows_pictures_once_each) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_window(app, "azzurra", "#chan");
+    add_test_window(app, "azzurra", "#other");
+    struct overlay_item items[64];
+
+    seed_log(app, "[azzurra/#chan] 10:00 <alice> look https://example.net/cat.png");
+    seed_log(app, "[azzurra/#chan] 10:01 <bob> and https://example.net/clip.mp4");
+    seed_log(app, "[azzurra/#chan] 10:02 <carol> read https://example.net/notes.html");
+    seed_log(app, "[azzurra/#chan] 10:03 <dave> https://example.net/cat.png again");
+    seed_log(app, "[azzurra/#other] 10:04 <eve> https://example.net/elsewhere.png");
+    seed_log(app, "[azzurra/#chan] 10:05 --> frank has joined");
+
+    app->overlay.kind = OVERLAY_MEDIA;
+    app->overlay.pick_action = ACT_VIEW;
+    size_t n = overlay_items(app, items, 64);
+    /* cat.png (repeated, listed once at its most recent mention),
+     * clip.mp4 — and NOT the html, nor the other window's picture. */
+    CHECK_LONG(n, 2);
+    CHECK_STR(items[0].body, "https://example.net/cat.png");
+    CHECK_STR(items[1].body, "https://example.net/clip.mp4");
+    /* The row's author labels the entry, so a channel full of links is
+     * still a list of people. */
+    CHECK_STR(items[0].nick, "dave");
+    CHECK_LONG(items[0].action, ACT_VIEW);
+
+    /* Opened by /preview instead, the same list previews. */
+    app->overlay.pick_action = ACT_PREVIEW;
+    CHECK_LONG(overlay_items(app, items, 64), 2);
+    CHECK_LONG(items[0].action, ACT_PREVIEW);
+
+    /* Typing filters by URL. */
+    snprintf(app->overlay.filter, sizeof(app->overlay.filter), "mp4");
+    CHECK_LONG(overlay_items(app, items, 64), 1);
+    CHECK_STR(items[0].body, "https://example.net/clip.mp4");
+
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
+/* The saved file's extension is what the desktop picks a viewer from,
+ * so the URL is asked first and the Content-Type answers for links that
+ * carry no extension at all. */
+TEST(view_names_the_file_after_its_type) {
+    char ext[16];
+    view_extension("https://example.net/cat.png", "", ext, sizeof(ext));
+    CHECK_STR(ext, "png");
+    /* A query string is not an extension. */
+    view_extension("https://example.net/i?id=99", "image/jpeg", ext, sizeof(ext));
+    CHECK_STR(ext, "jpg");
+    view_extension("https://example.net/uploads/abc123", "video/mp4", ext, sizeof(ext));
+    CHECK_STR(ext, "mp4");
+    /* Nothing to go on: a name the desktop will not mis-handle. */
+    view_extension("https://example.net/uploads/abc123", "application/octet-stream", ext,
+                   sizeof(ext));
+    CHECK_STR(ext, "bin");
 }
 
 TEST(reply_cites_the_original_and_keeps_what_was_typed) {
@@ -794,7 +889,10 @@ int main(void) {
     RUN(an_operational_line_belongs_to_the_window_it_happened_in);
     RUN(menu_offers_reply_and_query_for_the_clicked_nick);
     RUN(reply_picker_lists_newest_first_and_filters);
-    RUN(reply_picker_collapses_a_run_of_one_nick);
+    RUN(reply_picker_offers_every_line_not_one_per_nick);
+    RUN(reply_picker_stops_at_twenty);
+    RUN(media_picker_lists_this_windows_pictures_once_each);
+    RUN(view_names_the_file_after_its_type);
     RUN(reply_cites_the_original_and_keeps_what_was_typed);
     RUN(reply_citation_is_flattened_and_cut_on_a_word);
     RUN(reply_leaves_a_line_it_did_not_write_alone);
