@@ -77,6 +77,12 @@ overrides:
       - libgcc-s1
       - ca-certificates
       - passwd # provides useradd/groupadd (preinstall.sh)
+      # openssl CLI: gen-secrets.sh hard-fails without it (%post). Debian
+      # ships it by default (priority important) but a minbase install does
+      # not, so declare it. runuser (grappa-wrapper.sh) needs NO entry here:
+      # it lives in util-linux, which is Essential:yes on Debian (always
+      # present) — unlike Fedora, where it is a separate package (see rpm).
+      - openssl
     recommends:
       - libimage-exiftool-perl
       - ffmpeg
@@ -96,6 +102,16 @@ overrides:
       - libgcc
       - ca-certificates
       - shadow-utils
+      # CLI tools %post hard-requires — the ones Debian gives for free but
+      # Fedora does not, so the SONAME translation above misses them:
+      #   openssl:    /usr/bin/openssl for gen-secrets.sh. openssl-libs above
+      #               is ONLY libssl/libcrypto; the CLI is a separate package.
+      #   util-linux: /usr/sbin/runuser for the grappa wrapper's privilege
+      #               drop (migrate). runuser is NOT in util-linux-core (the
+      #               minimal set a cloud/container Fedora ships), so a
+      #               minimal host would %post-fail without this.
+      - openssl
+      - util-linux
     recommends:
       - perl-Image-ExifTool
       - ffmpeg

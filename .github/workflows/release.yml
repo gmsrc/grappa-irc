@@ -359,6 +359,10 @@ jobs:
           # and the exqlite NIF compile. tar/gzip/unzip: build.sh's pinned-nfpm
           # download + setup-bun. sqlite/openssl/util-linux: the %post
           # (gen-secrets openssl, runuser drop) + the migrate-count proof.
+          # curl is deliberately NOT listed: build.sh downloads nfpm with it,
+          # but `dnf install curl` would swap the base image's curl-minimal
+          # (which already provides `curl -fsSL` and is guaranteed in the
+          # pinned fedora:43 base) — so we rely on that pinned base binary.
           # install_weak_deps=False keeps optional recommends off the CI box.
           dnf install -y --setopt=install_weak_deps=False \
             elixir erlang \
