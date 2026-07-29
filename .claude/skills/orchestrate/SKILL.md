@@ -66,6 +66,19 @@ v2 separates concerns:
 - `last_emit` — unix ts of last emitted event
 - `last_state_change` — unix ts of last state transition (STALL gate)
 
+## ⚠️ One handoff file PER WORKER — never the shared path
+
+This skill was written for ONE sibling, so it says `/tmp/orchestrate-next.txt` throughout. **With two or more
+workers on the same host that single path is a silent clobber**: w2 stages its body, w1 stages its own minutes
+later, and whichever clears second reads the other's prompt — resuming the wrong branch with total confidence.
+Caught 2026-07-29 with both grappa workers live on voyager (w2's 00:47 file still sitting there while w1 was
+being asked to stage its own).
+
+**Use `/tmp/orchestrate-next-<worker>.txt`** (`-w1`, `-w2`, …) whenever more than one worker exists, and say the
+exact path in BOTH the clear-ask and the post-clear directive. Read every path in this document as that
+per-worker form. **Check the file's mtime before dispatching it** — a stale file from an earlier run looks
+identical to a fresh one, and re-dispatching yesterday's prompt is worse than not clearing at all.
+
 ## Setup
 
 ### Step 0 — read the handoff doc FIRST (always, before anything else)
