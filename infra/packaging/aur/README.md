@@ -41,7 +41,11 @@ does not claim `aarch64` it cannot satisfy from official repos.
 
 ## Building locally
 
-`makepkg` needs `elixir` (pulls `erlang-core`) and `bun` on the host:
+`makepkg -s` auto-installs the build deps — `elixir`, `erlang-headless`, `bun`.
+`erlang-headless` is the full headless OTP the `mix release` bundles
+(public_key, ssl, inets, runtime_tools): Arch's `elixir` pulls only
+`erlang-core`, which does NOT carry them (#527). Without `-s`, install those
+three first.
 
 ```sh
 cd infra/packaging/aur
@@ -50,8 +54,9 @@ cd infra/packaging/aur
 # sentinel (makepkg REFUSES it), so regen.sh is REQUIRED first — and makepkg
 # downloads the vX.Y.Z source tarball anyway, so the tag must already exist:
 ./regen.sh
-# builds the mix release + cicchetto, stages FHS, produces the package:
-makepkg -f
+# builds the mix release + cicchetto, stages FHS, produces the package.
+# -s auto-installs makedepends (elixir, erlang-headless, bun) via pacman:
+makepkg -sf
 # → grappa-<version>-<rel>-x86_64.pkg.tar.zst  (NOT installed, NOT published)
 ```
 
@@ -106,9 +111,15 @@ concrete publishable recipe by `regen.sh`:
   until the tag is cut, so its real hash cannot be known yet. `regen.sh` runs
   `updpkgsums` to fill it at release.
 
-Both files are committed so the recipe is reviewable in-tree; `.SRCINFO` is
-**derived** (`makepkg --printsrcinfo`, run by `regen.sh`) — never hand-edit it,
-and never commit `regen.sh`'s concrete output. The guard test
+Both files are committed so the recipe is reviewable in-tree. `.SRCINFO` is
+**derived** — `regen.sh` regenerates it in full (`makepkg --printsrcinfo`) at
+release, filling the real `pkgver`/`sha256sums`; never commit that concrete
+output — the committed copy stays the `@GRAPPA_VERSION@`/`SKIP` sentinel
+template. Do not hand-edit its DERIVED fields (`pkgver`, `sha256sums`). Its
+STRUCTURAL fields (`makedepends`, `depends`, …) ARE mirrored by hand from
+PKGBUILD, since `regen.sh` only runs at release: a PKGBUILD dep change must be
+copied here too to keep the committed snapshot honest (e.g. #527's
+`erlang-headless`). The guard test
 `test/grappa/version_single_source_test.exs` fails if either carrier stops
 being the `@GRAPPA_VERSION@` sentinel.
 

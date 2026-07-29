@@ -22982,3 +22982,49 @@ solved here, not made harder.
 **#438 (rpm) / #503 (docker)** consume `version.sh` when they land — doing this
 now, at two carriers, is the point: a fix covering only today's files
 guarantees the identical failure the day a new packaging target appears.
+
+---
+
+## 2026-07-29 — #527: the Arch build needs the full headless OTP, not just erlang-core
+
+**The bug.** With #538's version gate cleared, the Arch release leg finally
+reached `build()` and died deeper: `** (Mix.Error) The application "public_key"
+could not be found` during `mix release` (repair run 30398320900). `public_key`
+is not incidental — `Grappa.IRC.Client.tls_connect_opts/1` calls
+`:public_key.cacerts_get/0` for the system CA trust store (#89) — so the
+release genuinely needs it in its app tree.
+
+**Root cause (evidence, not the error's hint).** Mix's message *suggests*
+`erlang-dev`/`erlang-public_key`, but that text is Debian-shaped — there is no
+`erlang-dev` on Arch. The real cause: **Arch split Erlang/OTP into per-app
+subpackages** (`erlang-public_key`, `erlang-ssl`, `erlang-inets`, …), and the
+`elixir` package runtime-depends on ONLY `erlang-core` (erts, kernel, stdlib,
+compiler, crypto). The other OTP apps are `(make)` deps of *elixir* — needed to
+build elixir, NOT installed by `pacman -S elixir`. The PKGBUILD's
+`makedepends=('elixir' 'bun')` therefore left a builder with `erlang-core`
+only, and `mix release` (which bundles grappa's whole transitive app tree:
+public_key, ssl, inets, runtime_tools …) could not find them.
+
+**Fix: depend on the headless OTP meta, not an enumerated list.** Added
+`erlang-headless` to `makedepends`. It is the meta that "replaces erlang-nox" —
+the FULL OTP minus the wx/observer GUI (verified via the Arch package DB to
+carry public_key, ssl, inets, sasl, runtime_tools, and erlang-core/crypto).
+Rejected alternatives: (a) **enumerate** `erlang-public_key` + `erlang-ssl` +
+`erlang-inets` + … — the exact fragile list that silently drifts the day a dep
+adds another OTP app (the same forget-a-carrier class as #538); (b) the
+`erlang` meta — pulls the wx/observer GUI AND a JDK (jinterface), absurd bloat
+for a headless bouncer build. `makepkg -s` installs `makedepends` via pacman,
+so the committed `.SRCINFO` gets the same `makedepends = erlang-headless` line
+(regen.sh regenerates it at release, but the committed copy stays consistent).
+
+**No header gap.** The observed failure is a release-*assembly* error (missing
+app dirs), not a NIF C-compile error — `erl_nif.h` ships in `erlang-core`
+(already pulled by elixir), so `ecto_sqlite3`'s NIF still compiles. Adding
+`erlang-headless` only supplies the missing OTP *applications*.
+
+**Verification boundary.** This is Arch-packaging metadata; it is not
+unit-testable in the dev container (musl/alpine, no makepkg). The real gate is
+the release CI's Arch leg (or a `workflow_dispatch` repair run) actually
+reaching a green `makepkg`. The #538 `version_single_source_test.exs` still
+passes untouched — it reads PKGBUILD only for the `pkgver` sentinel, not
+`makedepends`.

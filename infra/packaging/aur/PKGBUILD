@@ -35,12 +35,21 @@ license=('MIT')
 # Runtime shared libs the bundled ERTS + crypto/exiftool paths link against.
 # The mix release bundles ERTS itself; these are the system libs it needs.
 depends=('openssl' 'ncurses' 'gcc-libs' 'ca-certificates')
-# elixir pulls erlang-core (= the OTP the release bundles); bun builds the
-# cicchetto SPA. git is intentionally NOT here: the tarball has no .git, and
-# Grappa.Version (#419 R3) reports the bare package version from the `.app`
-# metadata when `.git` is absent — no git suffix, no git needed at build
-# (see README.md "Version reporting").
-makedepends=('elixir' 'bun')
+# elixir + erlang-headless build the mix release; bun builds the cicchetto SPA.
+# WHY erlang-headless and not just elixir (#527): Arch split OTP into per-app
+# subpackages, and `elixir` runtime-depends on ONLY `erlang-core` (erts,
+# kernel, stdlib, compiler, crypto). `mix release` bundles grappa's whole app
+# tree — which needs public_key (#89 TLS cacerts), ssl, inets, runtime_tools —
+# none of which erlang-core carries, so an elixir-only builder
+# died with `(Mix.Error) The application "public_key" could not be found`.
+# `erlang-headless` (the meta that "replaces erlang-nox") pulls the FULL OTP
+# minus the wx/observer GUI, so the release finds every app it needs without
+# enumerating a per-subpackage list that drifts as deps change — and without
+# the `erlang` meta's GUI + JDK haul. git is intentionally NOT here: the
+# tarball has no .git, and Grappa.Version (#419 R3) reports the bare package
+# version from the `.app` metadata when `.git` is absent — no git suffix, no
+# git needed at build (see README.md "Version reporting").
+makedepends=('elixir' 'erlang-headless' 'bun')
 # Media metadata strip (#39) shells out to these fail-closed; nginx fronts
 # TLS/static. All optional — the bouncer boots + self-serves without any.
 optdepends=('perl-image-exiftool: strip metadata from image uploads (#39)'
