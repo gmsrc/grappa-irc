@@ -22587,3 +22587,95 @@ sidebar uses, keyed by `channelKey(slug, target)` with the cic canonicalisation
 (so a DM archive row matches its cursor regardless of casing — the client twin
 of D). Server-owned counts, one projection, three surfaces (sidebar, push,
 archive) — no cic-side recomputation.
+
+## 2026-07-29 — shottino: what the terminal owns, the client must clean up
+
+vjt: "the window that opens to show the image/video remains in background when
+I exit back to the main chat, and when I close I can see it was still in
+background — that will probably become a memory leak for a long session."
+
+Two separate things, both about state living OUTSIDE ncurses' model of the
+screen.
+
+**The preview was drawing on the wrong screen.** It suspended curses with
+`endwin()`, which emits `rmcup`: everything after it — the image, the art, the
+"press any key" line — went to the NORMAL screen, under the shell shottino was
+launched from, where it survives the session and accumulates one copy per
+preview. `reset_shell_mode()` restores the same tty modes and stops short of
+leaving the alternate screen. Verified against ncurses on a pty rather than
+reasoned about: `endwin()` emits `\033[?1049l`, `reset_shell_mode()` does not.
+
+**Placements outlive the frames that wanted them.** A kitty image lives above
+the cell grid; `erase()` does not touch it and the image data stays in the
+terminal's store until deleted. So a picture from the channel you left floated
+over the one you opened, and the store grew all session. Deleting with `d=A`
+frees the data as well as the placement — safe, because the payload is re-sent
+whenever a picture is placed again.
+
+The reconciliation is deliberately GENERAL: once per frame, "is anything placed
+that this frame did not paint?" The alternative was hooking /win, /close,
+scroll, resize, split and slot-recycling — six sites, and the seventh would be
+the one nobody remembered.
+
+**Operational output belongs to a window.** A log row was shown in every window
+unless it carried a `[network/channel]` prefix, and only chat rows carry one —
+so "preparing preview of…", upload results and command answers followed you out
+of the channel where you typed them. A row now records its window when it is
+WRITTEN: from its prefix if it has one, else from the window that was focused at
+the time. Deciding this at the draw site instead would mean a scope that changes
+when the focus does, which is the bug restated. /clear honours the same scope.
+The ring shift had been copy-pasted three times with a fourth version in the
+compaction; a sixth parallel array kept by hand in four places is how the unread
+divider and the inline images landed on the wrong rows after a /clear, so there
+are now exactly two functions that enumerate the set.
+
+## 2026-07-29 — shottino: the userlist gets a mode, not another modifier
+
+Ctrl-Shift-Up/Down still did not scroll the roster after the previous fix bound
+the sequences correctly. It was measured decoding to `KEY_ROSTER_UP` on a pty —
+and the client never saw the bytes, because that pair is the terminal's OWN
+scrollback shortcut in gnome-terminal, konsole, kitty and terminator. **No
+binding can fix a key that is never forwarded.** A third modifier would have
+been the same guess a third time.
+
+`Ctrl-U` gives the arrows to the member list instead, `Esc` gives them back, and
+any key that is not a movement ends the mode and is handled normally — a mode
+you can get stuck in is worse than a list you cannot scroll. A plain control
+character and plain arrows are the two things every terminal delivers. The
+header shows which mode holds the keyboard, because a mode you cannot see is the
+other half of the problem. The modifier shortcuts stay for terminals that do
+deliver them.
+
+Unknown CSI sequences are now read to their final byte. terminfo entries like
+`screen-256color` describe no modified arrows at all, and with only the ESC
+consumed the remainder was typed into the input line — under screen even a plain
+Up arrow left `[A` behind.
+
+**`tests/test_keys` exists because every key bug here has been a DELIVERY bug**,
+not a handler bug, and delivery cannot be reasoned about from the source. It
+writes real byte sequences into a pty and asserts both the code that comes out
+AND that nothing is left in the queue, across a terminfo that describes modified
+arrows and one that describes none. Reverting the CSI fallback fails 8 checks.
+
+## 2026-07-29 — shottino: /view, and one picker for three lists
+
+`/preview` used the most recent media URL seen anywhere in the session — rarely
+the one meant, and never visible before it opened. It offers the window's last
+20 pictures and clips now, in the overlay the reply picker already had.
+
+`/view` is that list with a different destination: the desktop's own viewer.
+`xdg-open` on a URL picks its handler from the SCHEME, which is why `/open`
+always lands in a browser; picking it from the file TYPE means having the file,
+so `/view` fetches first. Downloads go to a directory made once and removed at
+exit. The fetch runs on the worker, follows up to three absolute redirects,
+decodes chunked, caps at 32MB, and never `die()`s — the existing HTTP path dies
+on failure, which is fine for the bouncer we chose to trust and unacceptable for
+a URL a stranger pasted. The session token is never sent for the same reason.
+This is the #451 bargain `/open` already makes, deliberately: an explicit act on
+a chosen link, not automatic rendering of everything that scrolls past.
+
+The reply picker offers every line now rather than one per run of a nick. The
+collapse read well and answered the wrong question — the chosen line is QUOTED
+into the reply, so between two people it hid all but the last line of each. The
+filter searches the window's whole buffer rather than the twenty on offer,
+because the point of a search is to reach what is not in front of you.
