@@ -68,8 +68,8 @@ the topic gets the rest rather than starting a third of the way across.
 
 What does not fit on the two lines **scrolls** along the second one, pausing at
 each end so it can be read, and pausing entirely while the mouse pointer rests
-on the band (with `/mouse on`; the marquee is the way to read a long topic
-either way, the pointer is a courtesy). A `…` on the left of the second line
+on the band (the marquee is the way to read a long topic; the pointer is a
+courtesy, and needs mouse tracking, which is on by default). A `…` on the left of the second line
 says there is more; it reads `(paused)` while you hold it.
 
 ## Bridging a normal IRC client (`--ircd`)
@@ -173,7 +173,7 @@ in (`^U` when the chat has the keys, `↑↓` when the list does).
 | `Ctrl-U` | give the arrows to the userlist, or take them back |
 | `Ctrl-Shift-Up` / `Ctrl-Shift-Down` | scroll it without changing mode |
 | `Shift-PgUp` / `Shift-PgDn` | the same, by ten |
-| wheel over the list | scrolls it, with `/mouse on` |
+| wheel over the list | scrolls it |
 
 The modifier shortcuts are a convenience, not the way in: `Ctrl-Shift-Up` and
 `Ctrl-Shift-Down` are the terminal's OWN scrollback shortcut in
@@ -210,8 +210,8 @@ Anything already typed is kept after the citation rather than thrown away, and
 picking a different message replaces the citation instead of stacking a second
 one in front of the first.
 
-Right-click needs mouse reporting, which is off by default — `/mouse` turns
-it on. `Ctrl-R` always works.
+Right-click needs mouse reporting, which is on by default; `Ctrl-R` works
+either way.
 
 ## Tests
 
@@ -292,6 +292,14 @@ Key bindings:
 
 Media link previews:
 
+- **Inline media is on for every host by default**, and off entirely when
+  `ffmpeg` is not installed — it decodes every picture and clip, so a default
+  that promised pictures without it would deliver "[image could not be
+  decoded]" on every row. Being on for every host means an image linked in a
+  channel is fetched when its row scrolls into view, so **that host learns your
+  IP address and when you read**. `/media first-party` limits fetching to your
+  own deployment's uploads; `/media off` turns pictures off. shottino says which
+  of these is in force every time it starts.
 - `/preview` opens a picker over the last 20 pictures and clips posted in this
   window, newest first, each URL once — type to filter, `Enter` to open, `Esc`
   to cancel. `/preview <url>` skips the list. Press any key to return to the
@@ -302,8 +310,8 @@ Media link previews:
   and so always opens a browser; picking it from the file type means having the
   file. Downloads go to a temporary directory that is removed when shottino
   exits.
-- With `/mouse on`, hovering an image or video link shows a `click to preview:`
-  hint and left-clicking opens the same preview.
+- Hovering an image or video link shows a `click to preview:` hint and
+  left-clicking opens the same preview (mouse tracking, on by default).
 - A terminal with a graphics protocol (Kitty, iTerm2, Sixel, WezTerm) shows a
   real bitmap. **Every other terminal gets coloured character art instead** —
   the frame is rendered as half-block glyphs, two pixels per cell, in truecolor
@@ -312,13 +320,15 @@ Media link previews:
   `chafa` is used when installed but is not needed.
 - Sixel support cannot be probed reliably. Set `SHOTTINO_GRAPHICS=1` to force
   the bitmap path on a terminal you know supports it.
-- **Mouse tracking is OFF by default**, so your terminal keeps its own
-  copy/paste selection. Previews are still reachable from the keyboard with
-  `/preview`.
-- `/mouse on` enables tracking, which adds the hover hint and click-to-preview
-  — and necessarily suppresses terminal selection while it is on, because the
-  terminal then forwards button and motion events to shottino instead of
-  selecting. `/mouse off` restores selection; bare `/mouse` toggles.
+- **Mouse tracking is ON by default**: click a link, right-click a message,
+  scroll the userlist with the wheel. The cost is the terminal's own click-drag
+  selection, because the terminal forwards button and motion events to shottino
+  instead of selecting — **hold Shift to select text as usual**, which works in
+  xterm, vte (gnome-terminal), konsole, kitty, alacritty and iTerm2. `/mouse
+  off` gives selection back unconditionally and turns click-to-preview off with
+  it; bare `/mouse` toggles. Everything reachable by mouse is also reachable by
+  keyboard (`/preview`, `Ctrl-R`, `Ctrl-U`), so turning it off costs no
+  features.
 
 ## Commands
 

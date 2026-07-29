@@ -355,6 +355,26 @@ TEST(frame_advance_is_inert_for_a_still) {
     CHECK_LONG(media_frame_advance(99, 4, 100, 1000, &next), 0);
 }
 
+/* The default for inline media is "on, for every host" — but only when
+ * there is something to decode with, because every picture and clip goes
+ * through ffmpeg. A default the machine cannot keep is a promise of
+ * pictures and a delivery of "[image could not be decoded]" on every
+ * row, so the promise asks first. */
+TEST(a_tool_is_found_only_if_it_is_really_there) {
+    /* Present on every system this builds on, and found by walking PATH
+     * rather than by spawning it: this decides a default at startup. */
+    CHECK(media_tool_available("sh"));
+    CHECK(!media_tool_available("definitely-not-a-real-binary-xyzzy"));
+    CHECK(!media_tool_available(""));
+    CHECK(!media_tool_available(NULL));
+    /* An explicit path is asked about directly, not searched for. */
+    CHECK(media_tool_available("/bin/sh") || media_tool_available("/usr/bin/sh"));
+    CHECK(!media_tool_available("/nonexistent/ffmpeg"));
+    /* An empty PATH must not find things: the fallback list is a
+     * courtesy, not a search of the whole filesystem. */
+    CHECK(!media_tool_available("./media.c"));
+}
+
 int main(void) {
     RUN(da1_sixel_parsing);
     RUN(env_detection);
@@ -372,5 +392,6 @@ int main(void) {
     RUN(frame_advance_does_not_replay_a_backlog);
     RUN(frame_advance_ignores_a_clock_that_went_backwards);
     RUN(frame_advance_is_inert_for_a_still);
+    RUN(a_tool_is_found_only_if_it_is_really_there);
     return test_report();
 }

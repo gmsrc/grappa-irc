@@ -7153,8 +7153,9 @@ static void show_help(struct app *app) {
     log_line(app, "watch: /notify [nick...|del nick|list] watches PEOPLE; /hilight pattern, /dehilight pattern watch WORDS (/watch add|del|list is the older spelling)");
     log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
     log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
-    log_line(app, "terminal: mouse tracking is OFF by default so the terminal keeps its own copy/paste selection; /mouse on enables click-to-preview (and suppresses selection), /mouse off restores it");
-    log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; video and GIFs PLAY as colour art (/media still for one frame); /media [on|off|all|first-party] — 'all' also auto-fetches images hosted elsewhere");
+    log_line(app, "terminal: mouse tracking is ON by default (click links, right-click a message, wheel over the userlist); hold Shift to select text as usual, or /mouse off to give selection back unconditionally");
+    log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; video and GIFs PLAY as colour art (/media still for one frame)");
+    log_line(app, "       /media [on|off|all|first-party] — ON for ALL hosts by default (off entirely without ffmpeg): every image link is fetched when it scrolls into view, so the host learns your IP; /media first-party limits it to this deployment's uploads");
     log_line(app, "       /preview [url] full-screen here; bare /preview picks from the last 20 pictures and clips in this window; /preview-ascii forces the art renderer");
     log_line(app, "       /view [url] downloads it and opens your desktop's viewer for that file type (bare /view offers the same list); /open hands a URL to the browser");
     log_line(app, "reply: right-click a message for reply/query, or Ctrl-R for the last 20 messages here — type to search the whole window buffer, Enter replies");
@@ -7738,12 +7739,12 @@ static void handle_command_dispatch(struct app *app, char *line) {
              * by default. Saying yes is allowed; being told what you
              * said yes to is not optional. */
             app->inline_media_enabled = true;
-    app->animate_media = true;
+            app->animate_media = true;
             app->inline_media_peers = true;
-            log_line(app, "inline images ON for ALL hosts — every image link in a channel is now");
+            log_line(app, "inline images ON for ALL hosts — every image link in a channel is");
             log_line(app, "  fetched when it scrolls into view: the host learns your IP and read");
-            log_line(app, "  times, and ffmpeg decodes bytes a stranger chose. /media first-party");
-            log_line(app, "  returns to grappa uploads only.");
+            log_line(app, "  times, and ffmpeg decodes bytes a stranger chose. This is the default;");
+            log_line(app, "  /media first-party returns to %s uploads only.", app->url.host);
         } else if (strcmp(rest, "anim") == 0 || strcmp(rest, "anim on") == 0) {
             app->animate_media = true;
             log_line(app, "video and animated GIFs will play inline as colour art");
@@ -9746,8 +9747,27 @@ int main(int argc, char **argv) {
     pthread_mutex_init(&app->jobs_lock, NULL);
     pthread_cond_init(&app->jobs_cond, NULL);
     app->ws.fd = -1;
-    app->mouse_enabled = false;
-    app->inline_media_enabled = true;
+    /* Mouse tracking ON by default.
+     *
+     * It costs the terminal's own click-drag selection, which is a real
+     * cost and the reason it used to be off — but Shift-drag overrides
+     * tracking in every terminal that matters (xterm, vte, konsole,
+     * kitty, alacritty, iTerm2), while a right-click menu, a clickable
+     * link and a scrollable roster are unreachable without it. A feature
+     * nobody discovers is a feature nobody has; a selection that needs
+     * Shift is a selection that still works. Announced at startup rather
+     * than left to be noticed, and /mouse off restores the old
+     * behaviour. */
+    app->mouse_enabled = true;
+    /* Inline media, for ALL hosts, when there is something to decode
+     * with. Every picture and clip goes through ffmpeg, so without it
+     * the setting would promise pictures and deliver "[image could not
+     * be decoded]" on every row — the honest default is the one the
+     * machine can keep. */
+    bool have_ffmpeg = media_tool_available("ffmpeg");
+    app->inline_media_enabled = have_ffmpeg;
+    app->inline_media_peers = have_ffmpeg;
+    app->animate_media = have_ffmpeg;
     char *share_base = NULL, *share_token = NULL;
     const char *server_url;
     if (share_mode) {
@@ -9811,6 +9831,24 @@ int main(int argc, char **argv) {
     load_http_host_aliases(app);
     startup("first-party upload hosts: %s + %zu alias(es)", app->url.host,
             app->http_host_alias_count);
+    if (!app->headless) {
+        if (have_ffmpeg) {
+            /* Said out loud, every start. The exposure #451 identified is
+             * unchanged by being the default — what changes is who chose
+             * it, so the choice has to be visible rather than discovered
+             * by someone reading the source. */
+            log_line(app, "inline media ON for ALL hosts: an image or clip linked in a channel is");
+            log_line(app, "  fetched when its row scrolls into view, so that host learns your IP and");
+            log_line(app, "  when you read. /media first-party limits this to %s uploads; /media off",
+                     app->url.host);
+            log_line(app, "  turns pictures off entirely.");
+        } else {
+            log_line(app, "ffmpeg not found — inline media is off (it decodes every picture and clip)."
+                          " Install it, then /media on");
+        }
+        log_line(app, "mouse tracking ON — click links, right-click a message, wheel over the "
+                      "userlist; hold Shift to select text as usual, or /mouse off");
+    }
     seed_state(app);
     startup("loading initial scrollback for %zu windows", app->window_count);
     for (size_t i = 0; i < app->window_count; i++) fetch_scrollback(app, &app->windows[i]);

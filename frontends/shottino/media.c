@@ -10,6 +10,7 @@
 #include <strings.h>
 #include <termios.h>
 #include <unistd.h>
+#include <limits.h>
 
 const char *media_protocol_name(media_protocol p) {
     switch (p) {
@@ -94,6 +95,27 @@ static bool da1_query(int fd, int timeout_ms, char *out, size_t out_sz) {
     }
     tcsetattr(fd, TCSANOW, &saved);
     return got;
+}
+
+bool media_tool_available(const char *name) {
+    if (!name || !*name) return false;
+    if (strchr(name, '/')) return access(name, X_OK) == 0;
+    const char *path = getenv("PATH");
+    if (!path || !*path) path = "/usr/bin:/bin:/usr/local/bin";
+    while (*path) {
+        const char *sep = strchr(path, ':');
+        size_t len = sep ? (size_t)(sep - path) : strlen(path);
+        char candidate[PATH_MAX];
+        if (len && len + strlen(name) + 2 < sizeof(candidate)) {
+            memcpy(candidate, path, len);
+            candidate[len] = '/';
+            snprintf(candidate + len + 1, sizeof(candidate) - len - 1, "%s", name);
+            if (access(candidate, X_OK) == 0) return true;
+        }
+        if (!sep) break;
+        path = sep + 1;
+    }
+    return false;
 }
 
 media_protocol media_detect(int fd, int timeout_ms) {

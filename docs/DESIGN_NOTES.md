@@ -22762,3 +22762,34 @@ control bytes occupy none.
 
 The scroll position lives on the PANE, not the window: two panes showing one
 channel are two views of it, and a shared position would jump in both.
+
+## 2026-07-29 — shottino: mouse and inline media are on by default
+
+vjt asked for both, and for the one condition that makes the second honest:
+"unless ffmpeg isn't available".
+
+**Mouse tracking on.** It costs the terminal's own click-drag selection —
+tracking means the terminal forwards button and motion events to the client
+instead of selecting — which is exactly why it was off. What changed the balance
+is that Shift-drag overrides tracking in every terminal that matters (xterm,
+vte, konsole, kitty, alacritty, iTerm2), while click-to-preview, the right-click
+menu and the wheel over the userlist are simply unreachable without it. A
+feature nobody discovers is a feature nobody has; a selection that needs Shift is
+a selection that still works. It is announced at startup rather than left to be
+noticed, and every mouse affordance has a keyboard twin (`/preview`, `Ctrl-R`,
+`Ctrl-U`), so `/mouse off` costs no features.
+
+**Inline media on, for all hosts — GATED ON FFMPEG.** Every picture and clip is
+decoded by ffmpeg, so a default that promised pictures on a machine without it
+would deliver "[image could not be decoded]" on every row. `media_tool_available`
+walks PATH rather than spawning anything: this decides a default at startup, and
+a default should not cost a fork before the client has drawn.
+
+This REVERSES shottino's #451 default, deliberately and locally. #451's finding
+is unchanged and still true: auto-fetching a peer's URL tells that host your IP
+and when you read, and hands ffmpeg bytes a stranger chose. What changed is who
+decides — the operator of a terminal client on their own machine, rather than
+the client on their behalf. Two things keep that honest: the exposure is printed
+at EVERY start, not buried in `/media all`, and the server-side and cicchetto
+defaults are untouched, because those choices are not this one. A deployment
+that wants the old behaviour has `/media first-party`.

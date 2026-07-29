@@ -49,6 +49,14 @@ media_protocol media_detect_env(void);
  * wait so a terminal that ignores DA1 costs a short pause, not a hang.
  * Honours SHOTTINO_GRAPHICS=kitty|iterm2|sixel|none as an override, for
  * terminals that lie or that we cannot probe. */
+/* Is `name` runnable from PATH? Walks $PATH and tests for an executable
+ * file, rather than spawning it: this decides a DEFAULT at startup, and
+ * a default should not cost a fork before the client has drawn anything.
+ *
+ * Inline media exists only if ffmpeg does — every picture and clip is
+ * decoded by it — so the default has to ask before it promises. */
+bool media_tool_available(const char *name);
+
 media_protocol media_detect(int fd, int timeout_ms);
 
 /* Parse a DA1 reply body for sixel support (capability `4`). Exposed for
