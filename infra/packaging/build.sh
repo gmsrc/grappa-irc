@@ -15,12 +15,20 @@
 # OWN, throwaway _build.
 #
 # Env knobs (all optional):
-#   GRAPPA_VERSION   package version (default: @version from mix.exs)
-#   GRAPPA_PKG_ARCH  deb arch (default: dpkg --print-architecture / uname map)
-#   OUT_DIR          where the .deb lands (default: <repo>/dist)
-#   NFPM_BIN         path to nfpm (default: on PATH, else downloaded pinned)
-#   SKIP_RELEASE=1   reuse an existing _build/prod/rel/grappa
-#   SKIP_CIC=1       reuse an existing staged cicchetto-dist
+#   GRAPPA_VERSION    package version (default: @version from mix.exs)
+#   GRAPPA_PKG_ARCH   deb-style arch (default: dpkg --print-architecture /
+#                     uname map). nfpm translates it per format (amd64 ->
+#                     x86_64 for rpm), so the SAME value drives both.
+#   GRAPPA_PKG_FORMAT deb | rpm — the nfpm output format (default: deb; #438).
+#                     The staging tree is format-agnostic; the ONLY constraint
+#                     is that the bundled ERTS + shottino must link the TARGET
+#                     distro's glibc/libssl — so rpm builds run in a Fedora
+#                     container (release.yml `rpm` job), never on the Debian
+#                     runner that builds the deb.
+#   OUT_DIR           where the package lands (default: <repo>/dist)
+#   NFPM_BIN          path to nfpm (default: on PATH, else downloaded pinned)
+#   SKIP_RELEASE=1    reuse an existing _build/prod/rel/grappa
+#   SKIP_CIC=1        reuse an existing staged cicchetto-dist
 
 set -euo pipefail
 
@@ -57,7 +65,16 @@ if [ -z "${GRAPPA_PKG_ARCH:-}" ]; then
 fi
 export GRAPPA_PKG_ARCH
 
-say "building grappa ${GRAPPA_VERSION} (${GRAPPA_PKG_ARCH})"
+# ── Package format ───────────────────────────────────────────────────────────
+# deb (default) or rpm. Rejected at the boundary so a typo fails here, not
+# with an opaque nfpm error. The value doubles as the output file extension.
+GRAPPA_PKG_FORMAT="${GRAPPA_PKG_FORMAT:-deb}"
+case "${GRAPPA_PKG_FORMAT}" in
+deb | rpm) ;;
+*) die "GRAPPA_PKG_FORMAT must be deb or rpm, got '${GRAPPA_PKG_FORMAT}'" ;;
+esac
+
+say "building grappa ${GRAPPA_VERSION} (${GRAPPA_PKG_ARCH}, ${GRAPPA_PKG_FORMAT})"
 
 # ── mix release ────────────────────────────────────────────────────────────
 if [ "${SKIP_RELEASE:-}" != "1" ]; then
@@ -177,11 +194,11 @@ if [ -z "${nfpm_bin}" ]; then
 fi
 
 mkdir -p "${OUT_DIR}"
-say "nfpm package → ${OUT_DIR}"
+say "nfpm package (${GRAPPA_PKG_FORMAT}) → ${OUT_DIR}"
 (
 	cd "${PKG_DIR}"
-	"${nfpm_bin}" package -f nfpm.yaml -p deb -t "${OUT_DIR}"
+	"${nfpm_bin}" package -f nfpm.yaml -p "${GRAPPA_PKG_FORMAT}" -t "${OUT_DIR}"
 )
 
 say "done — package(s) in ${OUT_DIR}:"
-ls -la "${OUT_DIR}"/*.deb
+ls -la "${OUT_DIR}"/*."${GRAPPA_PKG_FORMAT}"

@@ -23028,3 +23028,81 @@ the release CI's Arch leg (or a `workflow_dispatch` repair run) actually
 reaching a green `makepkg`. The #538 `version_single_source_test.exs` still
 passes untouched — it reads PKGBUILD only for the `pkgver` sentinel, not
 `makedepends`.
+
+---
+
+## 2026-07-30 — #438: the `.rpm` builds in a Fedora container (per-distro ERTS)
+
+**What deferred it.** nfpm renders `.deb` and `.rpm` from the SAME staging
+tree — the format is a flag. The *payload* is not: the `mix release` bundles
+its own ERTS + the crypto/exqlite NIFs, all linked against the build host's
+glibc/libssl. `release.yml`'s `deb` job runs on `ubuntu-latest`, so that
+payload is a valid `.deb` and an `.rpm` that installs cleanly and then dies at
+boot on Fedora. The fix is a Fedora-built ERTS: a new `rpm` job in a Fedora
+container with its own toolchain.
+
+**Fedora's own toolchain, never setup-beam — the #527 carry-over.** The whole
+point of a per-distro job is that the bundled ERTS links THIS distro's libs;
+`erlef/setup-beam` installs an Ubuntu-built OTP and would reproduce the exact
+glibc mismatch. So the job installs `elixir` + `erlang` via `dnf`. And — the
+lesson #527 just paid for on Arch — **Fedora ALSO splits OTP into per-app
+subpackages**, and `mix release` bundles grappa's whole transitive app tree
+(`public_key` for #89's `cacerts_get/0`, plus `ssl`/`inets`/`runtime_tools`).
+`erlang` is Fedora's full-OTP metapackage; we pull it rather than lean on
+`elixir`'s dep chain or enumerate subpackages (that list drifts). Unlike Arch
+there is no headless meta on Fedora — `erlang` is the honest full-OTP dep.
+
+**Challenging the spec: the Elixir version floor.** grappa is `~> 1.19`. Arch
+ships bleeding-edge (1.20/OTP 29), so "use the distro toolchain" is free there;
+Fedora is the opposite (conservative). Checked the Fedora package DB rather than
+assume: **Fedora 43 and 44 both ship Elixir 1.19.5** (byte-identical to our
+`.tool-versions` pin — so `build.sh`'s `mix compile --warnings-as-errors` is
+safe, no version-delta dep warnings like Arch's 1.20) **on Erlang/OTP 26**, not
+our OTP 28. grappa runs on OTP 26 (no OTP-27/28-only features; `hot_reload.ex`
+documents the "OTP 26+ cached code path"; `:public_key.cacerts_get/0` is OTP
+25+). Rawhide (Elixir 1.20/OTP 27) was rejected — a moving target contradicts
+pinning a release artifact's glibc floor.
+
+**Pin the OLDEST still-supported Fedora carrying 1.19 → `fedora:43`.** glibc is
+backward-compatible, so building against the oldest floor gives the widest set
+of hosts the `.rpm` runs on (#438 open-q1/q2). Declared **Fedora-family only**:
+a Fedora ERTS is NOT valid on RHEL/Rocky/Alma (older glibc); widening that is a
+future oldest-glibc matrix entry, not a one-line bump. Bump the pin when 43
+EOLs.
+
+**Per-format deps via nfpm `overrides.{deb,rpm}` — one config, not two.** The
+Debian and RPM runtime-lib package names are disjoint (`libssl3` vs
+`openssl-libs`; Debian splits narrow/wide ncurses into two packages, Fedora
+folds both SONAMEs into one `ncurses-libs`; `passwd` vs `shadow-utils`). nfpm's
+`overrides` is purpose-built for this, so there is no second config file to
+drift. RPM `depends`: `openssl-libs ncurses-libs libstdc++ libgcc
+ca-certificates shadow-utils`.
+
+**The non-obvious trap: maintainer scripts are arg-convention-specific.** nfpm
+embeds the `scripts/*.sh` VERBATIM into both the dpkg maintainer scripts and the
+rpm scriptlets, but the two managers pass DIFFERENT `$1`: dpkg sends strings
+(`configure`/`remove`/`purge`), rpm sends numbers (`1`/`2` install/upgrade, `0`
+uninstall). The existing `postinstall.sh` guarded on `case $1 in configure)` —
+which on rpm matches nothing, so `%post` would silently no-op: the `.rpm` would
+install, create the user (preinstall has no `$1` branch, so it was already fine),
+and then create NO dirs, generate NO secrets, run NO migrate. The install
+"succeeds" and the box is broken. Fixed all three action scripts to branch on
+both conventions (`postinstall`: run on anything but dpkg `abort-*`;
+`preremove`/`postremove`: treat rpm `0` like dpkg `remove`). Backward-compatible
+— dpkg's string args hit the same paths as before, so the proven `.deb` is
+untouched.
+
+**`build.sh` gained `GRAPPA_PKG_FORMAT` (deb|rpm, default deb).** Rejected at
+the boundary; drives nfpm's `-p` and the output extension. Default preserves
+every existing caller.
+
+**Verification boundary.** Like #527, distro-packaging metadata is not
+unit-testable in the musl dev container. The gate is the `rpm` leg reaching a
+green build on the first tag (`release.yml` had zero runs at authoring time —
+the first post-merge tag is the first real exercise of the whole path, rpm
+included). The job proves on the INSTALLED artifact: `dnf install` runs `%post`
+(openssl secrets + packaged migrate on the Fedora ERTS — the real risk), then
+asserts the migration count, the bare `X.Y.Z` (#391 clean-tag path; the `.rpm`
+builds in the `.git` checkout, unlike the tarball-built Arch pkg), and that
+shottino links Fedora's libs. Local static checks only: `sh -n`/`bash -n`,
+shellcheck, YAML parse.

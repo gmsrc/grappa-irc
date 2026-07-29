@@ -190,8 +190,11 @@ is genuinely CI-only.
   attaches the package + regenerated `PKGBUILD`/`.SRCINFO` to the GitHub
   Release. Publishing to the AUR stays a human decision (no AUR creds
   in-tree).
-- **`.rpm` (R3)** — nfpm renders it from the same substrate, but the bundled
-  ERTS is glibc/libssl-specific, so a valid `.rpm` needs a Fedora-built
-  release: a per-distro build matrix, not a one-line nfpm flip.
+- **`.rpm` (#438)** — **shipped.** nfpm renders it from the same substrate,
+  but the bundled ERTS is glibc/libssl-specific, so it is built inside a
+  pinned Fedora container with Fedora's own Elixir/OTP (the `rpm` job in
+  `release.yml`). Fedora-family only — a Fedora ERTS is not a valid
+  RHEL/Rocky/Alma payload. See [`../README.md`](../README.md) "Building the
+  `.rpm`".
 - **`grappa create-user` subcommand** — see [`../README.md`](../README.md)
   "First user"; needs a release-callable entry point.

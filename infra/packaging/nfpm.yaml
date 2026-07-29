@@ -1,12 +1,22 @@
-# nfpm config — builds the grappa .deb (and, once R3 adds a per-distro
-# ERTS build matrix, the .rpm) from the staging tree assembled by build.sh.
+# nfpm config — builds the grappa .deb AND .rpm from the staging tree
+# assembled by build.sh. nfpm is a single Go binary (no dpkg/rpmbuild
+# toolchain, no host hex) that renders the SAME staging tree into either
+# format; build.sh picks the format via GRAPPA_PKG_FORMAT and nfpm's `-p`.
 #
-# nfpm is a single Go binary (no dpkg/rpmbuild toolchain, no host hex) —
-# it renders the SAME staging tree into either format. R1 ships the .deb
-# only: the release bundles ERTS + crypto NIFs linked against the BUILD
-# host's libc/libssl, so a Debian-built payload is a valid .deb but NOT a
-# valid .rpm (a Fedora .rpm needs a Fedora-built ERTS). See build.sh + the
-# packaging README for that R3 boundary.
+# The FORMAT is just a flag — the PAYLOAD is not. The release bundles ERTS
+# + crypto NIFs linked against the BUILD host's glibc/libssl, so a
+# Debian-built payload is a valid .deb but not a valid .rpm. That is why
+# the .rpm builds in a Fedora container (release.yml `rpm` job) with its own
+# Fedora ERTS, not on the Debian runner that builds the .deb (#438). See
+# build.sh + the packaging README.
+#
+# Per-format package DEPENDENCIES live under `overrides.{deb,rpm}` below —
+# ONE config, no duplicate file: the Debian and RPM runtime-lib package
+# names are disjoint (libssl3 vs openssl-libs, …), and nfpm's `overrides`
+# exists for exactly this. Everything else (contents, scripts, metadata) is
+# shared, because the FHS layout and the maintainer scripts are — the
+# scripts are written to handle both dpkg (string $1) and rpm (numeric $1)
+# argument conventions (see scripts/*.sh).
 #
 # ${GRAPPA_VERSION} / ${GRAPPA_PKG_ARCH} are expanded from the environment
 # build.sh exports.
@@ -30,39 +40,66 @@ description: |
   The terminal client installs as /usr/bin/shottino and talks to the
   same REST + Channels API as the web frontend.
 
-# Runtime shared libraries the bundled ERTS + crypto/exiftool paths need.
-# The mix release bundles ERTS itself; these are the system libs it links.
+# Runtime deps are per-format (disjoint package names across distro
+# families), so they live under `overrides` — NOT top-level `depends`,
+# which nfpm would apply to BOTH formats. The bundled ERTS links these
+# system libs; shottino links the same libssl + the WIDE ncurses.
 #
-# libncursesw6 is for SHOTTINO, and is NOT the same package as
-# libncurses6: the client links libncursesw.so.6 (the WIDE build, because
-# it is UTF-8 end to end) while the narrow libncurses6 above is what ERTS
-# wants. Debian ships them separately, so depending on only one leaves the
-# other's consumer with a "cannot open shared object file" at exec time.
-# libssl3t64 | libssl3: Debian's 64-bit time_t transition renamed the
-# OpenSSL runtime package `libssl3` -> `libssl3t64` on Ubuntu 24.04 (noble)
-# and forward, WITHOUT a `Provides: libssl3` on the new package — the
-# pre-t64 names are being decrufted from the archive, so a hard-coded
-# `libssl3` dependency is UNINSTALLABLE there. That matters directly: the
-# release job builds AND `apt install`s the .deb on ubuntu-latest, which is
-# noble. The alternation resolves libssl3t64 on noble/trixie and falls back
-# to libssl3 on bookworm and pre-t64 Ubuntu. Same libssl.so.3 SONAME either
-# way, so the bundled ERTS + shottino link the same lib regardless.
-depends:
-  - libssl3t64 | libssl3
-  - libncurses6
-  - libncursesw6
-  - libstdc++6
-  - libgcc-s1
-  - ca-certificates
-  - passwd
-
-# Media metadata strip (#39) shells out to these fail-closed; without
-# them uploads 422. nginx is the recommended TLS/static front. All
-# optional — the bouncer boots and serves without any of them.
-recommends:
-  - libimage-exiftool-perl
-  - ffmpeg
-  - nginx
+# recommends: the media-metadata strip (#39) shells out to exiftool/ffmpeg
+# fail-closed (without them uploads 422), and nginx is the recommended
+# TLS/static front. All soft — the bouncer boots and serves without any of
+# them, and a Recommends whose package is absent from the enabled repos is
+# silently ignored (matters for ffmpeg on Fedora: it lives in RPM Fusion,
+# not base, so it stays a best-effort weak dep).
+overrides:
+  deb:
+    depends:
+      # libncursesw6 is for SHOTTINO and is NOT the same Debian package as
+      # libncurses6: the client links libncursesw.so.6 (the WIDE build,
+      # because it is UTF-8 end to end) while ERTS wants the narrow
+      # libncurses6. Debian ships them separately, so depending on only one
+      # leaves the other's consumer with "cannot open shared object file"
+      # at exec time. (Fedora folds both SONAMEs into one ncurses-libs — see
+      # the rpm override.)
+      #
+      # libssl3t64 | libssl3: Debian's 64-bit time_t transition renamed the
+      # OpenSSL runtime package `libssl3` -> `libssl3t64` on Ubuntu 24.04
+      # (noble) and forward, WITHOUT a `Provides: libssl3` — the pre-t64
+      # names are being decrufted, so a hard-coded `libssl3` is
+      # UNINSTALLABLE there. The release job builds AND `apt install`s the
+      # .deb on ubuntu-latest (noble). The alternation resolves libssl3t64
+      # on noble/trixie, falls back to libssl3 on bookworm/pre-t64. Same
+      # libssl.so.3 SONAME either way.
+      - libssl3t64 | libssl3
+      - libncurses6
+      - libncursesw6
+      - libstdc++6
+      - libgcc-s1
+      - ca-certificates
+      - passwd # provides useradd/groupadd (preinstall.sh)
+    recommends:
+      - libimage-exiftool-perl
+      - ffmpeg
+      - nginx
+  rpm:
+    depends:
+      # Fedora/RHEL package names for the SAME SONAMEs the deb depends on.
+      # openssl-libs = libssl.so.3 + libcrypto.so.3; ncurses-libs is ONE
+      # package providing BOTH libncurses.so.6 (ERTS) and libncursesw.so.6
+      # (shottino) — no wide/narrow split like Debian, so a single entry
+      # covers both consumers. shadow-utils provides useradd/groupadd (the
+      # deb's `passwd`); ca-certificates is the system CA trust store that
+      # #89's verify_peer / :public_key.cacerts_get/0 reads.
+      - openssl-libs
+      - ncurses-libs
+      - libstdc++
+      - libgcc
+      - ca-certificates
+      - shadow-utils
+    recommends:
+      - perl-Image-ExifTool
+      - ffmpeg
+      - nginx
 
 contents:
   # The mix release (self-contained ERTS + compiled app + boot scripts).

@@ -1,11 +1,22 @@
 #!/bin/sh
-# nfpm postinstall — maps to the .deb postinst. Debian arg convention:
-# $1 = configure (install/upgrade) | abort-* (rollback). We act only on
-# configure. POSIX /bin/sh.
+# nfpm postinstall — the .deb postinst AND the .rpm %post scriptlet. nfpm
+# embeds this script VERBATIM into both, but the two package managers pass
+# DIFFERENT $1 conventions:
+#   dpkg:  $1 = configure (install/upgrade) | abort-* (rollback)
+#   rpm:   $1 = 1 (install) | 2 (upgrade)   [a NUMBER, never "configure"]
+# A bare `case $1 in configure)` would therefore NEVER match on rpm — the
+# package would install and do nothing (no dirs, no secrets, no migrate).
+# The body is idempotent (mkdir -p, chown, gen-secrets fills only REPLACE_ME,
+# Ecto.Migrator applies only PENDING), so we run it on every install/upgrade
+# under EITHER manager and skip only dpkg's abort-* rollback. POSIX /bin/sh.
 set -e
 
 case "${1:-configure}" in
-configure)
+abort-*)
+	# dpkg rollback of a failed upgrade — leave the prior config untouched.
+	;;
+*)
+	# configure (dpkg) OR a numeric rpm $1 (1 install / 2 upgrade) — apply.
 	# ── State + config dirs ────────────────────────────────────────────
 	# /var/lib/grappa carries the sqlite DB + uploads (writable by the
 	# daemon); /etc/grappa carries the secrets env file (root:grappa 0750).

@@ -16,10 +16,18 @@ name: release
 #              container (Elixir 1.20 / OTP 29 — the toolchain delta R2
 #              could only prove on a like-for-like image, never a full
 #              makepkg → pacman -U). Regenerates .SRCINFO + updpkgsums.
-#   * publish — attaches deb + pkg.tar.zst + the regenerated PKGBUILD/.SRCINFO
-#              to the GitHub Release. Runs even if a package job FAILED and
-#              attaches ONLY what built (#504): a broken distro never withholds
-#              the artifacts that succeeded; the failed leg stays red on its own.
+#   * rpm    — nfpm binary package (x86_64), built by infra/packaging/build.sh
+#              inside a PINNED Fedora container using Fedora's OWN Elixir/OTP
+#              (never setup-beam — its Ubuntu-built ERTS would reproduce the
+#              exact glibc mismatch this job exists to avoid), then INSTALLED
+#              (dnf) so %post's openssl secrets + packaged migrate run for
+#              real. The Fedora-built ERTS is why the .rpm cannot be a flag on
+#              the deb job — see #438 + the packaging README.
+#   * publish — attaches deb + rpm + pkg.tar.zst + the regenerated
+#              PKGBUILD/.SRCINFO to the GitHub Release. Runs even if a package
+#              job FAILED and attaches ONLY what built (#504): a broken distro
+#              never withholds the artifacts that succeeded; the failed leg
+#              stays red on its own.
 #
 # Version proof (#419 R3 / #391): the packaged build must report the BARE
 # `X.Y.Z`, never `-dev`. Two paths, both asserted on the real artifact:
@@ -34,8 +42,13 @@ name: release
 # regenerates the AUR recipe metadata; pushing to aur.archlinux.org stays a
 # HUMAN step (no AUR credentials in the tree). See infra/packaging/aur/README.md.
 #
-# The .rpm is still deferred (needs a Fedora-built ERTS — a glibc/Debian
-# release is not a valid RHEL payload; see DESIGN_NOTES R1/R2).
+# The .rpm ships from the `rpm` job. It needs a Fedora-built ERTS (glibc +
+# libssl are distro-specific, so a Debian release is not a valid RHEL
+# payload). It is built on the OLDEST Fedora that carries Elixir 1.19 —
+# glibc is backward-compatible, so building against the oldest floor gives
+# the widest validity — and is declared FEDORA-FAMILY ONLY: RHEL/Rocky/Alma
+# (older glibc) are out of scope (#438). See DESIGN_NOTES R1/R2 + the
+# packaging README.
 #
 # NOTE: this workflow runs on a `v*` tag push, OR via manual workflow_dispatch
 # against an EXISTING tag (the `tag` input) — the repair path (#504) for a
@@ -306,9 +319,125 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+  rpm:
+    name: build + prove .rpm (x86_64)
+    runs-on: ubuntu-latest
+    # Pinned Fedora MAJOR (not :latest): a release artifact's glibc floor must
+    # not move under us (#438 open-q2). The rule: the OLDEST still-supported
+    # Fedora that carries Elixir 1.19 — glibc is backward-compatible, so
+    # building against the oldest floor maximises the range of hosts the .rpm
+    # runs on. Fedora 43 ships Elixir 1.19.5 (== our .tool-versions pin) on
+    # Erlang/OTP 26; grappa runs on OTP 26 (hot_reload.ex documents 26+; #89's
+    # :public_key.cacerts_get/0 is OTP 25+). Bump this when 43 goes EOL.
+    container: fedora:43
+    env:
+      # Release tag from either trigger (see the deb job). The .rpm builds IN
+      # the CI checkout (has .git on the clean tag), so — like the .deb, unlike
+      # the tarball-built arch pkg — it reports the bare X.Y.Z via #391's
+      # clean-tag path.
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Install the Fedora build + proof toolchain
+        run: |
+          # Fedora's OWN Elixir + full Erlang/OTP — deliberately NOT setup-beam.
+          # The point of a per-distro job is that the bundled ERTS links THIS
+          # distro's glibc/libssl; setup-beam's Ubuntu-built OTP would bundle
+          # the wrong libc and reproduce the exact bug that deferred the .rpm.
+          #
+          # `erlang` is Fedora's full-OTP metapackage. `mix release` assembles
+          # grappa's whole transitive OTP app tree (public_key/ssl/inets/
+          # runtime_tools) at BUILD time, and — exactly like Arch (#527) —
+          # Fedora SPLITS OTP into per-app subpackages, so leaning on `elixir`'s
+          # dep chain alone can miss them → "(Mix.Error) the application ...
+          # could not be found". Pull the meta; do NOT enumerate subpackages
+          # (fragile, drifts as deps add OTP apps).
+          #
+          # git BEFORE checkout: actions/checkout needs it for a real clone
+          # (with .git), which #391's clean-tag version derivation reads;
+          # without git it falls back to a .git-less tarball and the version
+          # proof fails. gcc/make + *-devel + pkgconf: shottino's ./configure
+          # and the exqlite NIF compile. tar/gzip/unzip: build.sh's pinned-nfpm
+          # download + setup-bun. sqlite/openssl/util-linux: the %post
+          # (gen-secrets openssl, runuser drop) + the migrate-count proof.
+          # install_weak_deps=False keeps optional recommends off the CI box.
+          dnf install -y --setopt=install_weak_deps=False \
+            elixir erlang \
+            git gcc make pkgconf-pkg-config ncurses-devel openssl-devel \
+            tar gzip unzip findutils sqlite openssl util-linux
+
+      - name: Setup bun (cicchetto build)
+        uses: oven-sh/setup-bun@v2
+
+      - name: Checkout (tags for #391 version derivation)
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          # Check out the RELEASE TAG explicitly (a dispatch repair builds the
+          # tagged tree, not main); fetch-depth 0 pulls tags so `git describe
+          # --tags --exact-match` resolves the release tag and Grappa.Version
+          # reports the bare X.Y.Z via the #391 clean-tag path.
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Verify the tag matches mix.exs @version
+        run: |
+          tag="${RELEASE_TAG#v}"
+          mixv="$(infra/packaging/version.sh)"
+          echo "tag=$tag mix.exs=$mixv"
+          if [ "$tag" != "$mixv" ]; then
+            echo "::error::tag v$tag does not match mix.exs @version $mixv — bump @version before cutting the tag"
+            exit 1
+          fi
+
+      - name: Build the .rpm (Fedora ERTS via GRAPPA_PKG_FORMAT=rpm)
+        run: GRAPPA_PKG_FORMAT=rpm infra/packaging/build.sh
+
+      - name: Install the .rpm (%post runs openssl secrets + migrate)
+        run: dnf install -y --setopt=install_weak_deps=False ./dist/*.rpm
+
+      - name: Prove the packaged migrate applied every migration
+        run: |
+          expected="$(find priv/repo/migrations -name '*.exs' | wc -l | tr -d ' ')"
+          applied="$(sqlite3 /var/lib/grappa/grappa.db 'SELECT count(*) FROM schema_migrations')"
+          echo "migrations: expected=$expected applied=$applied"
+          if [ "$applied" != "$expected" ]; then
+            echo "::error::migration count mismatch — expected $expected, applied $applied"
+            exit 1
+          fi
+
+      - name: Prove the artifact reports the bare tag version
+        run: |
+          want="${RELEASE_TAG#v}"
+          # Sentinel-prefix the printed version so a stray stdout line from the
+          # release boot can never be mistaken for it.
+          got="$(grappa eval 'Application.load(:grappa); IO.puts("grappa-vsn=" <> Grappa.Version.current())' | grep '^grappa-vsn=' | tail -n1 | cut -d= -f2 | tr -d '\r')"
+          echo "reported version: '$got' (want '$want')"
+          if [ "$got" != "$want" ]; then
+            echo "::error::packaged .rpm reports '$got', expected bare '$want'"
+            exit 1
+          fi
+
+      # Same proof discipline as the .deb — assert on the INSTALLED artifact.
+      # Like the arch source build, this also confirms shottino compiled on
+      # this toolchain (Fedora's gcc) and links THIS host's ncursesw/openssl.
+      - name: Prove the packaged shottino installed and runs
+        run: |
+          test -x /usr/bin/shottino || { echo "::error::/usr/bin/shottino missing from the .rpm"; exit 1; }
+          /usr/bin/shottino --help > /tmp/shottino-help.txt
+          grep -q '^usage: ' /tmp/shottino-help.txt || {
+            echo "::error::shottino --help produced no usage output"; cat /tmp/shottino-help.txt; exit 1; }
+          echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
+
+      - name: Upload .rpm artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: grappa-rpm
+          path: dist/*.rpm
+          if-no-files-found: error
+
   publish:
     name: publish GitHub Release assets
-    needs: [deb, arch]
+    needs: [deb, arch, rpm]
     # Run once BOTH package jobs have settled, even if one FAILED (only a run
     # cancel skips this). A distro-specific breakage (#504 defect 2) must not
     # withhold the artifacts that built green: the attach step collects whatever
@@ -345,7 +474,7 @@ jobs:
           # right there. The layout is the action's business; ours is the file
           # names. -name also sidesteps the dotglob trap on .SRCINFO.
           mapfile -t assets < <(find assets -type f \
-            \( -name '*.deb' -o -name '*.pkg.tar.zst' \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \
                -o -name 'PKGBUILD' -o -name '.SRCINFO' \) | sort)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "::error::no build artifacts present — every package job failed; nothing to publish"
