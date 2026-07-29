@@ -154,13 +154,23 @@ tagged with `@time` (when it was said) and `@msgid` (what to point at next).
 Capabilities offered: `server-time`, `message-tags`, `batch`, `multi-prefix`,
 `echo-message`, `draft/chathistory`.
 
-**What history means here:** the bridge answers from what it has seen this
-session — the scrollback shottino fetched from grappa at startup and on each
-join, plus everything live since (a thousand messages). It does not reach
-further back into grappa's archive; a request that goes past the ring gets what
-there is rather than an error. Reaching deeper means routing a REST fetch to one
-client instead of to all of them, which is a change to how fetched scrollback is
-delivered, not an addition to this.
+**Where history comes from.** By default the bridge answers from what it has
+seen this session — the scrollback fetched from grappa at startup and on each
+join, plus everything live since (a thousand messages). That covers the question
+a client actually asks on reconnect, and costs nothing.
+
+`--ircd-archive` lets a request reach past it into grappa's stored scrollback.
+One rule decides the source, so it stays predictable: **the session's history
+answers when it can answer fully, and anything short of that becomes a REST
+query.** It is opt-in because that query is not free — one round trip per
+request, against a table that can be very large, driven by whatever a client
+asks for while someone scrolls.
+
+`msgid=` selectors map exactly: grappa pages on integer message ids, and a
+`msgid` IS that id. `timestamp=` has no server-side equivalent, so it is
+resolved through the nearest id this session knows and filtered by time after
+the fetch — exact where the bridge has seen that stretch of the conversation,
+approximate where it has not.
 
 `JOIN`, `PART`, `PRIVMSG`, `NOTICE`, `NAMES`, `WHO`, `WHOIS`, `TOPIC`, `PING`
 and the registration commands are handled here. **Everything else is forwarded

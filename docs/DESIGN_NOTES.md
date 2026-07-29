@@ -22871,3 +22871,37 @@ session's worth, not grappa's archive. Reaching further back means routing a
 REST fetch to ONE client, and today every fetch goes through render_message,
 which publishes to all of them as live traffic — the very path that fills this
 ring. Splitting that is a change to delivery, not an addition to this.
+
+## 2026-07-29 — shottino/ircd: CHATHISTORY can reach grappa's archive, optionally
+
+vjt asked for the archive behind CHATHISTORY, "but only optionally".
+
+The mapping is almost exact and was worth checking rather than assuming: grappa's
+`GET .../messages` pages on integer `messages.id` with `?before=`/`?after=`/
+`?around=`/`?limit=` (post-CP29 the cursors ARE ids, not timestamps), and a
+CHATHISTORY `msgid=` selector is that id. `timestamp=` has no server-side
+equivalent, so it is resolved through the nearest id the session's ring knows and
+the page is filtered by time afterwards — exact where the bridge has seen that
+stretch, approximate where it has not, and the README says so rather than
+implying precision it does not have.
+
+**One rule decides the source**: the ring answers when it can answer FULLY, and
+anything short of that becomes a REST query when `--ircd-archive` allows it.
+Merging the two would mean stitching two orderings together for rows the archive
+query returns anyway. Opt-in because the query is not free: one round trip per
+request, on a table that can be very large, driven by whatever a downstream
+client asks while someone scrolls.
+
+Two things had to exist first.
+
+**One parser, two destinations.** Every scrollback fetch ran through
+render_message, which publishes to ALL clients as live traffic — that is what
+fills the ring, and it is exactly why archive history could not be delivered
+before. `parse_messages_into` takes a sink: the client's own scrollback, or one
+CHATHISTORY reply. Two parsers would be two places for the wire shape to change
+under.
+
+**Clients got a never-reused id.** The query is answered by the worker seconds
+later, and by then the slot may hold somebody else. The reply carries the id and
+is dropped when it no longer matches; without it a slow query delivers one
+user's history into another user's client.

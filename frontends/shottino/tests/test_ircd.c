@@ -797,6 +797,78 @@ TEST(chathistory_returns_the_slice_that_was_asked_for) {
     free(app);
 }
 
+/* With --ircd-archive, a request the session's own history cannot fill
+ * becomes a query against grappa — addressed to the client that asked,
+ * and to the network THAT connection chose. */
+TEST(archive_mode_asks_grappa_only_when_the_ring_falls_short) {
+    struct app *app = started_bridge();
+    CHECK(app != NULL);
+    if (!app) return;
+    app->ircd.archive = true;
+    for (int i = 0; i < 4; i++) {
+        char body[64];
+        snprintf(body, sizeof(body), "line %d", i);
+        seed_history(app, "#sniffo", "alice", 100 + i, 1753776000000L + i * 60000L, body);
+    }
+    int fd = bridge_connect(app);
+    CHECK(fd >= 0);
+    if (fd < 0) return;
+    char out[65536];
+    client_send(fd, "PASS azzurra");
+    client_send(fd, "NICK vjt");
+    client_send(fd, "USER u 0 * :r");
+    client_drain(app, fd, out, sizeof(out));
+
+    /* Four in the ring and three asked for: answered here, no query. */
+    size_t before = app->jobs_tail;
+    client_send(fd, "CHATHISTORY LATEST #sniffo * 3");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK_LONG(app->jobs_tail, before);
+    CHECK(strstr(out, "line 3") != NULL);
+
+    /* Ten asked for and four to give: grappa is asked for the rest, and
+     * nothing is sent from the ring — one answer, from one source. */
+    client_send(fd, "CHATHISTORY LATEST #sniffo * 10");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK_LONG(app->jobs_tail, before + 1);
+    CHECK_LONG(app->jobs[before].kind, JOB_CHATHISTORY);
+    CHECK_STR(app->jobs[before].network, "azzurra");
+    CHECK_STR(app->jobs[before].channel, "#sniffo");
+    CHECK(strstr(out, "BATCH") == NULL);
+
+    /* A msgid selector IS grappa's page cursor, so BEFORE goes over
+     * verbatim rather than being approximated. */
+    client_send(fd, "CHATHISTORY BEFORE #sniffo msgid=100 50");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK_LONG(app->jobs_tail, before + 2);
+    CHECK(strstr(app->jobs[before + 1].arg1, "before 100") != NULL);
+
+    /* The reply is addressed to the client that asked: the id in the
+     * job is this connection's, and it is never reused. */
+    unsigned long asked_by = strtoul(app->jobs[before + 1].arg1, NULL, 10);
+    CHECK(asked_by > 0);
+    pthread_mutex_lock(&app->ircd.lock);
+    bool matches = false;
+    for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++)
+        if (app->ircd.clients[i].fd >= 0 && app->ircd.clients[i].id == asked_by) matches = true;
+    pthread_mutex_unlock(&app->ircd.lock);
+    CHECK(matches);
+
+    /* Without the flag the same request stays local, however short the
+     * answer: reaching into the archive is opt-in. */
+    app->ircd.archive = false;
+    size_t quiet = app->jobs_tail;
+    client_send(fd, "CHATHISTORY LATEST #sniffo * 100");
+    client_drain(app, fd, out, sizeof(out));
+    CHECK_LONG(app->jobs_tail, quiet);
+    CHECK(strstr(out, "line 0") != NULL);
+
+    close(fd);
+    ircd_stop(app);
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    free(app);
+}
+
 int main(void) {
     RUN(bind_spec_reads_ports_addresses_and_both_families);
     RUN(loopback_is_the_whole_127_block_and_the_v6_one);
@@ -816,5 +888,6 @@ int main(void) {
     RUN(a_reachable_bind_without_a_password_refuses_to_start);
     RUN(unknown_commands_are_forwarded_in_the_clients_own_words);
     RUN(chathistory_returns_the_slice_that_was_asked_for);
+    RUN(archive_mode_asks_grappa_only_when_the_ring_falls_short);
     return test_report();
 }

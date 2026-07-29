@@ -279,7 +279,8 @@ enum job_kind {
     JOB_CLOSE_QUERY,
     JOB_READ_CURSOR,
     JOB_MEDIA,
-    JOB_VIEW
+    JOB_VIEW,
+    JOB_CHATHISTORY
 };
 
 struct job {
@@ -521,6 +522,12 @@ struct ircd_client {
     char user[64];
     char network[MAX_SLUG];
     char pass[256];
+    /* Never reused. An archive query is answered by the worker, seconds
+     * after it was asked, and by then this slot may hold somebody else:
+     * the reply carries this number and is dropped if it no longer
+     * matches. Without it, a slow query delivers one user's history into
+     * another user's client. */
+    unsigned long id;
 };
 
 /* Recent messages, kept STRUCTURALLY so a client connecting later can be
@@ -556,6 +563,11 @@ struct ircd {
      * the two locks from ever deadlocking. */
     pthread_mutex_t lock;
     struct ircd_client clients[IRCD_MAX_CLIENTS];
+    unsigned long next_client_id;
+    /* --ircd-archive: let CHATHISTORY reach past what this session has
+     * seen, at the cost of a REST query per request. Off by default —
+     * see ircd_cmd_chathistory. */
+    bool archive;
     struct ircd_hist hist[IRCD_HISTORY];
     size_t hist_count, hist_next;
 };
@@ -636,6 +648,9 @@ struct app {
     /* --ircd: the downstream IRC server. Zeroed (and disabled) in every
      * other mode, so the tee in render_message costs one branch. */
     struct ircd ircd;
+    /* Read by ircd_start, which memsets the struct above and so cannot
+     * be handed the flag through it. */
+    bool ircd_archive_wanted;
     /* Headless: no terminal to draw on, so the operational log goes to
      * stderr where a service manager can collect it. */
     bool headless;
@@ -2051,7 +2066,25 @@ static void render_created_message(struct app *app, const char *json, size_t len
  * endpoint returns DESC (newest first, `Scrollback.fetch/6`), so replayed
  * scrollback rendered upside down. cicchetto reverses on ingestion; this
  * now does the same. */
-static void parse_messages(struct app *app, const char *json, size_t len) {
+/* What to do with each row of a scrollback page, oldest first.
+ *
+ * The page has ONE parser and two destinations: the client's own
+ * scrollback (render_message, which also feeds the bridge and every
+ * connected IRC client), and a CHATHISTORY reply, which belongs to the
+ * one client that asked and must NOT arrive at the others as live
+ * traffic. Two parsers would be two places for the wire shape to
+ * change under. */
+typedef void (*scrollback_sink)(struct app *app, const struct wire_scrollback_message *m,
+                               void *ctx);
+
+static void scrollback_to_client(struct app *app, const struct wire_scrollback_message *m,
+                                 void *ctx) {
+    (void)ctx;
+    render_message(app, m, false);
+}
+
+static void parse_messages_into(struct app *app, const char *json, size_t len,
+                                scrollback_sink sink, void *ctx) {
     char err[160];
     json_doc *doc = json_parse(json, len, err, sizeof(err));
     if (!doc) {
@@ -2064,11 +2097,16 @@ static void parse_messages(struct app *app, const char *json, size_t len) {
         return;
     }
     size_t n = json_len(list);
+    /* The server pages DESC; both destinations want oldest first. */
     for (size_t i = n; i > 0; i--) {
         struct wire_scrollback_message m;
-        if (wire_narrow_message(json_at(list, i - 1), &m)) render_message(app, &m, false);
+        if (wire_narrow_message(json_at(list, i - 1), &m)) sink(app, &m, ctx);
     }
     json_free(doc);
+}
+
+static void parse_messages(struct app *app, const char *json, size_t len) {
+    parse_messages_into(app, json, len, scrollback_to_client, NULL);
 }
 
 static void draw_fill(int y, int x, int n, int pair) {
@@ -4413,6 +4451,7 @@ static const char *window_state_label(enum window_state state) {
 
 static void media_decode_job(struct app *app, int slot);
 static void view_fetch_and_open(struct app *app, const char *url);
+static void ircd_archive_job(struct app *app, const struct job *job);
 static bool enqueue_job(struct app *app, struct job job);
 
 static void media_slot_reset(struct inline_media *m) {
@@ -5599,6 +5638,9 @@ static void *worker_main(void *arg) {
             break;
         case JOB_VIEW:
             view_fetch_and_open(app, job.arg1);
+            break;
+        case JOB_CHATHISTORY:
+            ircd_archive_job(app, &job);
             break;
         case JOB_SEND: {
             send_message_target(app, job.network, job.channel, job.arg1);
@@ -9161,8 +9203,172 @@ static void ircd_cmd_chathistory(struct app *app, struct ircd_client *c,
         ircd_send(app, c, "FAIL CHATHISTORY INVALID_PARAMS %s :Unknown subcommand", sub);
         return;
     }
+    /* The id a `timestamp=` selector points at, if the ring spans that
+     * moment: grappa pages on message ids, and this is the only place
+     * that can translate. Computed while the lock is still held. */
+    long anchor_before = 0, anchor_after = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (a.kind != IRCD_SEL_TIME) break;
+        if (!anchor_before && rows[i]->server_time >= a.time_ms) anchor_before = rows[i]->id;
+        if (rows[i]->server_time <= a.time_ms) anchor_after = rows[i]->id;
+    }
     pthread_mutex_unlock(&app->ircd.lock);
+
+    /* One rule, so a client can predict where an answer comes from: the
+     * ring answers when it can answer FULLY, and anything short of that
+     * goes to grappa when --ircd-archive says it may. Merging the two
+     * would mean stitching two orderings together for rows the archive
+     * query returns anyway. */
+    if (app->ircd.archive && count < (size_t)limit) {
+        const char *cursor = "";
+        long cursor_id = 0;
+        long after_ms = 0, before_ms = 0, after_id = 0, before_id = 0;
+        if (strcasecmp(sub, "BEFORE") == 0) {
+            cursor = "before";
+            cursor_id = a.kind == IRCD_SEL_MSGID ? a.msgid : anchor_before;
+            if (a.kind == IRCD_SEL_TIME && !cursor_id) before_ms = a.time_ms;
+        } else if (strcasecmp(sub, "AFTER") == 0) {
+            cursor = "after";
+            cursor_id = a.kind == IRCD_SEL_MSGID ? a.msgid : anchor_after;
+            if (a.kind == IRCD_SEL_TIME && !cursor_id) after_ms = a.time_ms;
+        } else if (strcasecmp(sub, "AROUND") == 0) {
+            cursor = "around";
+            cursor_id = a.kind == IRCD_SEL_MSGID ? a.msgid : anchor_after;
+            if (a.kind == IRCD_SEL_TIME && !cursor_id) after_ms = a.time_ms;
+        } else if (between) {
+            /* Two ends, one cursor: anchor on the earlier one and drop
+             * what falls past the later one on the way out. */
+            cursor = "after";
+            cursor_id = a.kind == IRCD_SEL_MSGID ? a.msgid : anchor_after;
+            if (b.kind == IRCD_SEL_MSGID) before_id = b.msgid;
+            else if (b.kind == IRCD_SEL_TIME) before_ms = b.time_ms;
+            if (a.kind == IRCD_SEL_TIME && !cursor_id) after_ms = a.time_ms;
+        } else if (a.kind == IRCD_SEL_MSGID) { /* LATEST after a point */
+            cursor = "after";
+            cursor_id = a.msgid;
+        }
+        struct job job = {.kind = JOB_CHATHISTORY};
+        snprintf(job.network, sizeof(job.network), "%s", c->network);
+        snprintf(job.channel, sizeof(job.channel), "%.*s", (int)sizeof(job.channel) - 1, target);
+        snprintf(job.arg1, sizeof(job.arg1), "%lu %ld %s %ld", c->id, limit,
+                 cursor_id > 0 ? cursor : "-", cursor_id);
+        snprintf(job.arg2, sizeof(job.arg2), "%ld %ld %ld %ld", after_ms, before_ms, after_id,
+                 before_id);
+        if (enqueue_job(app, job)) return;
+        /* The queue is full: the ring's answer is better than none. */
+    }
     ircd_send_batch(app, c, target, picked, count);
+}
+
+/* ── CHATHISTORY against grappa's archive ──────────────────────────────
+ *
+ * The ring holds a session's worth of conversation. `--ircd-archive`
+ * lets a request reach past it, into what grappa has stored, by asking
+ * the same REST endpoint the client's own scrollback comes from.
+ *
+ * It is OPTIONAL because it is not free: one HTTP round trip per
+ * request, on a scrollback table that can be very large, driven by
+ * whatever a downstream client decides to ask for while the user scrolls.
+ * The ring costs nothing and answers the common case — what did I miss —
+ * so the archive is the deeper question you opt into.
+ *
+ * The cursors line up almost exactly: grappa pages on integer message
+ * ids with ?before=, ?after=, ?around= and ?limit=, and a CHATHISTORY
+ * msgid selector IS that id. A `timestamp=` selector has no server-side
+ * equivalent, so it is resolved through the nearest id the ring knows
+ * and the page is filtered by time afterwards — exact when the bridge
+ * has seen that part of the conversation, approximate when it has not,
+ * which is stated in the README rather than implied by silence. */
+
+struct archive_reply {
+    struct wire_scrollback_message rows[IRCD_CHATHISTORY_MAX];
+    char bodies[IRCD_CHATHISTORY_MAX][MAX_LINE];
+    char senders[IRCD_CHATHISTORY_MAX][MAX_CHANNEL];
+    struct ircd_hist hist[IRCD_CHATHISTORY_MAX];
+    size_t count;
+    /* Bounds the server could not express, applied after the fetch:
+     * grappa pages on ONE cursor, and BETWEEN has two ends. */
+    long before_ms, after_ms;
+    long before_id, after_id;
+};
+
+static void archive_collect(struct app *app, const struct wire_scrollback_message *m, void *ctx) {
+    (void)app;
+    struct archive_reply *out = ctx;
+    if (out->count >= IRCD_CHATHISTORY_MAX) return;
+    /* Conversation only: a JOIN from last week tells a client someone is
+     * arriving now, which is the same reason the replay drops them. */
+    if (m->kind != MSG_PRIVMSG && m->kind != MSG_NOTICE && m->kind != MSG_ACTION) return;
+    if (out->after_ms && m->server_time <= out->after_ms) return;
+    if (out->before_ms && m->server_time >= out->before_ms) return;
+    if (out->after_id && m->id <= out->after_id) return;
+    if (out->before_id && m->id >= out->before_id) return;
+    struct ircd_hist *h = &out->hist[out->count];
+    memset(h, 0, sizeof(*h));
+    h->id = m->id;
+    h->server_time = m->server_time;
+    h->kind = m->kind;
+    snprintf(h->network, sizeof(h->network), "%s", m->network);
+    snprintf(h->channel, sizeof(h->channel), "%s", m->channel);
+    snprintf(h->sender, sizeof(h->sender), "%s", m->sender ? m->sender : "");
+    snprintf(h->body, sizeof(h->body), "%s", m->body ? m->body : "");
+    out->count++;
+}
+
+/* Worker side: fetch the page, then hand it to the client that asked —
+ * if that client is still the one holding the slot. */
+static void ircd_archive_job(struct app *app, const struct job *job) {
+    char network[MAX_SLUG], target[MAX_CHANNEL];
+    snprintf(network, sizeof(network), "%s", job->network);
+    snprintf(target, sizeof(target), "%s", job->channel);
+    /* arg1: "<client_id> <limit> <cursor_param> <cursor_id>"
+     * arg2: "<after_ms> <before_ms>" — the time window, when the client
+     * asked in timestamps rather than ids. */
+    unsigned long client_id = 0;
+    long limit = 50, cursor_id = 0, after_ms = 0, before_ms = 0;
+    char cursor[16] = "";
+    sscanf(job->arg1, "%lu %ld %15s %ld", &client_id, &limit, cursor, &cursor_id);
+    long after_id = 0, before_id = 0;
+    sscanf(job->arg2, "%ld %ld %ld %ld", &after_ms, &before_ms, &after_id, &before_id);
+
+    struct archive_reply *reply = calloc(1, sizeof(*reply));
+    if (!reply) return;
+    reply->after_ms = after_ms;
+    reply->before_ms = before_ms;
+    reply->after_id = after_id;
+    reply->before_id = before_id;
+
+    char *net = url_encode(network);
+    char *chan = url_encode(target);
+    char *path;
+    if (cursor[0] && cursor_id > 0)
+        path = xasprintf("/networks/%s/channels/%s/messages?%s=%ld&limit=%ld", net, chan, cursor,
+                         cursor_id, limit);
+    else
+        path = xasprintf("/networks/%s/channels/%s/messages?limit=%ld", net, chan, limit);
+    free(net);
+    free(chan);
+    struct http_response r = http_request(app, "GET", path, NULL);
+    free(path);
+    if (r.status >= 200 && r.status < 300)
+        parse_messages_into(app, r.body, r.body_len, archive_collect, reply);
+    else
+        log_line(app, "chathistory: GET messages failed HTTP %d", r.status);
+    free(r.body);
+
+    const struct ircd_hist *rows[IRCD_CHATHISTORY_MAX];
+    for (size_t i = 0; i < reply->count; i++) rows[i] = &reply->hist[i];
+
+    pthread_mutex_lock(&app->ircd.lock);
+    struct ircd_client *c = NULL;
+    for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++)
+        if (app->ircd.clients[i].fd >= 0 && app->ircd.clients[i].id == client_id)
+            c = &app->ircd.clients[i];
+    pthread_mutex_unlock(&app->ircd.lock);
+    /* Gone, or the slot belongs to somebody else now: the answer is
+     * dropped rather than delivered into a session that never asked. */
+    if (c) ircd_send_batch(app, c, target, rows, reply->count);
+    free(reply);
 }
 
 /* ── Registration ──────────────────────────────────────────────────── */
@@ -9607,6 +9813,7 @@ static void ircd_accept(struct app *app, int listen_fd) {
         if (slot) {
             memset(slot, 0, sizeof(*slot));
             slot->fd = fd;
+            slot->id = ++app->ircd.next_client_id;
         }
         pthread_mutex_unlock(&app->ircd.lock);
         if (!slot) {
@@ -9694,10 +9901,14 @@ static bool ircd_start(struct app *app, const char *spec) {
     }
     if (!ircd_listen(app)) return false;
     app->ircd.enabled = true;
+    app->ircd.archive = app->ircd_archive_wanted;
     startup("ircd: listening on %s:%s (%s, password %s)", app->ircd.host, app->ircd.port,
             loopback ? "loopback only" : "REACHABLE FROM OTHER MACHINES",
             app->ircd.secret_required ? "required" : "not set");
     startup("ircd: connect an IRC client there; PASS <network>:<password> chooses the network");
+    startup("ircd: CHATHISTORY reads %s", app->ircd.archive
+                                              ? "this session, then grappa's stored scrollback"
+                                              : "this session only (--ircd-archive reads further back)");
     return true;
 }
 
@@ -9996,6 +10207,9 @@ static void print_usage(FILE *out, const char *prog) {
     fprintf(out, "                   address with a port as [::1]:6667). One connection is one\n");
     fprintf(out, "                   network: the client picks it with PASS <network>:<password>.\n");
     fprintf(out, "                   Off loopback, SHOTTINO_IRCD_PASS is required.\n");
+    fprintf(out, "  --ircd-archive   let a client's CHATHISTORY reach past this session into\n");
+    fprintf(out, "                   grappa's stored scrollback. One REST query per request that\n");
+    fprintf(out, "                   the session's own history cannot answer, so it is opt-in.\n");
     fprintf(out, "  --foreground     with --ircd, stay in the foreground instead of detaching.\n");
     fprintf(out, "                   What a service manager wants: it supervises the process it\n");
     fprintf(out, "                   started, and a daemon that forks away looks like a crash.\n");
@@ -10059,6 +10273,7 @@ int main(int argc, char **argv) {
     const char *mode = "auto";
     const char *login_override = NULL;
     bool ircd_enabled = false;
+    bool ircd_archive = false;
     bool foreground = false;
     const char *ircd_spec = "";
     /* Checked before the option loop so --help works from any position and
@@ -10100,6 +10315,8 @@ int main(int argc, char **argv) {
              * password. A loud usage error beats guessing. */
             ircd_enabled = true;
             ircd_spec = a + 7;
+        } else if (strcmp(a, "--ircd-archive") == 0) {
+            ircd_archive = true;
         } else if (strcmp(a, "--foreground") == 0) {
             foreground = true;
         } else if (strcmp(a, "--user") == 0) mode = "user";
@@ -10270,6 +10487,7 @@ int main(int argc, char **argv) {
      * child. Binding first also means a port already in use is still a
      * foreground failure with a non-zero exit. */
     if (ircd_enabled) {
+        app->ircd_archive_wanted = ircd_archive;
         if (!ircd_start(app, ircd_spec)) {
             /* The listener is the whole point of the mode: coming up
              * without one would look like it worked. */
