@@ -22495,3 +22495,95 @@ migration's inverse `down/0` are allow-listed by timestamp).
 cic mirrors byte-for-byte: `nickEquals.test.ts` stays the client drift gate
 (now enumerating the ASCII table). e2e `nick-case-*` specs use case-only peer
 nicks, so they exercise the unchanged case-insensitivity and needed no flip.
+
+---
+
+## 2026-07-29 — #532: stale unread badges (four defects, one theme: badge honesty)
+
+Four bugs, all instances of "a badge or count says unread when nothing the
+operator can act on is unread." Fixed as four bite-sized commits (D root cause,
+C notify predicate, A events count, B cic archive rows) atop the #525 ASCII
+fold (the branch was rebased onto #525 mid-flight; every fold this feature adds
+uses the post-#525 ASCII `lower()`, and the collapse migration sorts AFTER
+`refold_identifiers_ascii`).
+
+**D — one DM window, N cursor rows per casing (the ROOT cause).** A window key
+lands in ONE column (`read_cursors.channel`) but the two shapes canonicalise
+through different folders at the boundaries: channels via the sigil-gated
+`canonical_channel/1`, DM-peer nicks via `canonical_nick/1`. The cursor WRITE
+path (`ReadCursor.set/4`) used `canonical_channel/1` alone — a NO-OP for a nick
+— so it minted a fresh cursor row per casing the client sent (`Peer`, `peer`,
+`PEER` → three rows), while the READ path (`Scrollback.channel_or_dm_where/3`)
+resolved them all case-insensitively via `canonical_nick/1`. A stale lower-id
+row then reported unread forever with no UI action able to reach it. Fix: a
+single SHAPE-AWARE canonicaliser, `Identifier.canonical_target/1` — sigil-shaped
+→ `canonical_channel/1`, else (nick / `$server`) → `canonical_nick/1`. The two
+delegates agree byte-for-byte on channel-shaped input (sigils sit outside the
+fold set), so `canonical_target/1` is purely ADDITIVE for channels and
+CORRECTIVE for nicks. `set/4` / `get/3` / `force_set/4` route through it;
+`rename_dm_peer/4` now writes `canonical_nick(new_nick)` (was raw). A collapse
+migration (`20260729130000_collapse_nick_read_cursors`) converges history: it is
+the mirror of the channel-fold migration with the sigil guard INVERTED
+(`substr(channel,1,1) NOT IN ('#','&','!','+')` — nick-shaped keys only;
+channel-shaped were already folded), using the bare ASCII `lower()` #525 settles
+on (so `nick[1]`/`nick{1}` stay DISTINCT, and the migration clears the rfc1459
+fold-literal pin). **Tie-break: KEEP `MAX(last_read_message_id)` (tie: `MAX(id)`)
+— the OPPOSITE of #525's "keep the existing/older row."** For a read cursor the
+furthest-read position is the meaningful one; keeping the older row would
+preserve exactly the stale badge #532 is about. `ORDER BY last_read_message_id
+DESC` sorts a NULL cursor last (SQLite NULL smallest), so a real read position
+always beats a NULL'd one.
+
+**C — the icon badge counted the operator's OWN outbound DMs.** `should_notify?/4`
+decided DM-ness by window shape (`channel == own_nick`), which only holds for
+INBOUND DMs — an OUTBOUND DM is persisted with `channel = peer`, so it fell to
+the channel branch where the user's OWN highlight patterns ran over their OWN
+message body and counted it. Fix: a FIRST `cond` clause `own_row?(message,
+own_nick)` deciding by IDENTITY (folded `sender == own_nick`), not shape — one
+predicate that kills self-authored rows in BOTH directions (outbound DM + own
+channel message). It is the SAME predicate `Push.BadgeCount` folds over the
+unread tail, so the badge and the OS notification can never disagree. (Push is
+inbound-only and was already correct; the shared predicate keeps it that way.)
+
+**A — a self-PART / self-KICK / self-QUIT left a permanent unread EVENT.**
+Decision: **option 2 — exclude the subject's OWN presence rows from the `events`
+count**, NOT advance-the-cursor. Option 2 is timing-independent (the audit row
+is never counted whether or not the upstream echo landed), preserves genuine
+content unread (consistent with B), and fixes self-KICK + quit-not-rejoined in
+the same place. Implemented at both count boundaries: `Scrollback`'s
+`exclude_own_presence/2` (a `where` on `count_after_split/5`) and `ReadCursor`'s
+`own_presence_dynamic/1` (a per-network dynamic OR interpolated into the #396
+`bulk_unread_split` LEFT-JOIN `on:`). A row is "own presence" when it is
+non-content AND `nick_fold(sender) == canonical_nick(own_nick)`.
+
+**A/H1 — the exclusion had to cover a terminal self-NICK, and the fix for THAT
+introduced a NULL-poison.** A genuine self-rename persists the `:nick_change`
+with `sender = OLD` and `meta.new_nick = NEW` (EventRouter fan-out); the live
+`own_nick` is the NEW one, so a `sender`-only match MISSES it and every `/nick`
+left a permanent `$server` "+1" — a real #532 symptom, and one an earlier
+(vacuous `old == new`) test wrongly claimed covered. Per CLAUDE.md "fix the
+general rule, not the examples," the exclusion also matches
+`nick_fold(json_extract(meta, '$.new_nick')) == canonical_nick(own_nick)`. But
+`json_extract` returns NULL for the meta-less rows (a plain JOIN/PART carries no
+`meta`), and `nick_fold(NULL) == folded` is NULL, not FALSE — so
+`not (… OR NULL)` evaluated to NULL and the LEFT-JOIN `on:` / `where` silently
+DROPPED every PEER presence row (a peer's JOIN stopped counting). Eight tests
+caught it on re-gate. Fix: guard the new_nick clause with
+`not is_nil(json_extract(…))` so an absent `meta` yields FALSE, not NULL — the
+classic NULL-poisoning trap (cf. the `NOT IN` polymorphic-subquery note). The
+guard keeps the `nick_fold/1` SSOT macro rather than a hand-written `lower()` in
+the fragment (which would fork the fold). **Boundary:** an INTERMEDIATE hop of a
+multi-rename (`alice→bob→vjt`: the `alice→bob` row folds to neither `alice`'s old
+sender nor `vjt`'s live nick) still counts and self-heals on the next view — a
+rare, narrow gap. The predicate is deliberately DUPLICATED across the two count
+paths (they interpolate into different query shapes — a `where` vs a joined
+`dynamic`); both carry the guard and both have a self-rename-excluded /
+peer-rename-counted test.
+
+**B — cic archive rows showed no unread badge.** `ArchiveModal.tsx` rendered
+kind+target+delete only. It now renders msg/events/mention badges from the SAME
+`serverSeedCounts` / `messagesUnread` / `eventsUnread` / `mentionCounts` the
+sidebar uses, keyed by `channelKey(slug, target)` with the cic canonicalisation
+(so a DM archive row matches its cursor regardless of casing — the client twin
+of D). Server-owned counts, one projection, three surfaces (sidebar, push,
+archive) — no cic-side recomputation.
