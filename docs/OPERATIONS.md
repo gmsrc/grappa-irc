@@ -988,6 +988,24 @@ mapped to the three mechanisms the issue traced:
     `Process.info(pid, :message_queue_len)` loop against the target session
     pid (from `list-sessions`).
 
+**Which upstream server did a session land on? (netsplit triage, #550)** —
+`GET /admin/sessions` carries, per row, `live_state.peer_address` +
+`live_state.peer_port` (the destination the IRC socket actually connected to
+— the round-robin DNS name, e.g. `azzurra.chat`, says nothing about where a
+session ended up) plus `live_state.peer_name` (its reverse-DNS, resolved out
+of band via `Grappa.Net.PtrCache`, #252 — never a blocking lookup on the
+request path). During a netsplit, group the inventory by `peer_address`:
+every session sharing the split-off server's address (e.g.
+`2a01:4f8:201:2281:11::22` → `allnight6.azzurra.chat`) is a bounce candidate,
+the rest are left alone — the question that used to need an `rpc` into the
+live BEAM. A not-connected session (pre-connect, mid-reconnect, socket just
+closed) shows `peer_address: null` + `:peer_address` in
+`introspection_degraded` — never a stale address. cic renders this as the
+**upstream** column (reverse name first, raw `address:port` alongside; the
+reverse name is untrusted text for third-party networks). The reverse-DNS is
+resolved lazily, so the first scan after a fresh connect may show the raw
+address until the cache warms.
+
 **The consumer ships in code (#357 D1-completion, 2026-07-26).** The D1 spans
 originally emitted into the void ("no handler by default" — the Phase-5 PromEx
 exporter is the eventual consumer), so sampling meant hand-attaching a forwarder

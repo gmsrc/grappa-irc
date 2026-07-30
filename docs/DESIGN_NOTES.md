@@ -23583,3 +23583,79 @@ Regression-guarded by `issue535-visibility-return-preserve-scroll.spec.ts` (four
 visible-outcome e2e cases: preserve-scrollTop with no divider, land-on-divider,
 the follow-live tail-snap that must NOT regress, and messages-missed-while-hidden
 that must neither tail-snap nor strand the reader at the top).
+
+## 2026-07-30 — #550: the upstream peer each session landed on (netsplit triage)
+
+**What.** `GET /admin/sessions` (and the cic admin Sessions tab) now shows the
+destination each IRC session's socket is actually connected to — the peer IP
+(v6/v4) + port + its reverse-DNS name. The round-robin DNS name we dial
+(`azzurra.chat`) says nothing about where a session ended up; during a
+netsplit that is exactly the question ("which sessions are on the split-off
+server and need a bounce?"), and it used to require an `rpc` into the live
+BEAM — the kind of introspection the admin Sessions tab exists to replace.
+
+**Derivation — capture at connect, cache on `Session.Server`, NOT re-derived
+per read.** The socket lives in the `IRC.Client` pid; the admin scan reads
+from the `Session.Server` pid. Three shapes were on the table: (A) derive
+live via a nested `Session.Server → Client` call per admin read — rejected: it
+blocks a session-critical process on a cross-process round-trip for an admin
+page (a stuck `Client` stalls real user traffic); (C, chosen) the `Client`
+reads `peername` ONCE at connect (a transport-dispatched helper, twin of
+`transport_send/2`) and pushes `{:irc_peer, result}` upward; `Session.Server`
+caches `peer_address` (string, `:inet.ntoa/1` at store time) + `peer_port` and
+invalidates them on client EXIT + the next connect attempt
+(`do_start_client`). The peer is **immutable for the connection's lifetime**,
+so this is a connection fact captured at the one authoritative moment and
+cleared at the connection edges — NOT the drift-prone mutable duplication
+CLAUDE.md's "derive, don't duplicate" warns against (that rule targets
+parallel *mutable* state needing housekeeping). Today a client death tears the
+whole `Session.Server` down (`:transient` restart → fresh `peer_address: nil`
+init) — there is no in-process reconnect — so the EXIT/`do_start_client`
+clears are belt-and-suspenders that also future-proof a reconnect that reuses
+the process. `Session.peer_address/3` mirrors `list_channels/3`: an instant
+state read with a 250ms budget, `{:error, :no_peer}` in every not-connected
+window.
+
+**`{:irc_peer, _}` is a separate message from `:irc_connected`** on purpose —
+that signal's contract is load-bearing (#100 liveness, #215 SessionLog,
+visitor-login readiness), so the peer rides its own message and leaves it
+byte-unchanged.
+
+**Reverse DNS reuses `Grappa.Net.PtrCache` (#252), resolved in the
+controller.** The name is looked up in ONE batched, lock-free ETS read
+(`names_for/1`) that resolves cold entries out of band — NEVER a blocking PTR
+per row, which would hang the admin page on one unreachable resolver. A cold /
+no-PTR address yields a `nil` name; the raw address is authoritative on its
+own. The name is **attacker-controlled** for third-party (self-hosted)
+networks, so the wire keeps the numeric address alongside it and cic renders
+the name as untrusted (Solid-escaped) text, never replacing the address.
+
+**Honesty.** Peer absent for ANY reason (pre-connect / mid-reconnect / socket
+just closed / peername error / call timeout) → `peer_address: null` +
+`:peer_address` in `introspection_degraded` (the `SessionEntry.degraded_field`
+allowlist widened from `:joined_channels`). Never a fabricated or stale
+address. Unlike `joined_channels` (where an empty list is a meaningful
+"connected, no channels"), there is no meaningful empty address, so
+`fetch_peer_address/2` collapses `:no_session` to degraded too, not to a
+neutral value.
+
+**Scope + wire.** `live_state` gained `peer_address` / `peer_port` /
+`peer_name` — additive-only (#447), snake_case, no version bump; `wireTypes.ts`
+is the regenerated mirror. Scope is the **Sessions tab** (the netsplit-triage
+door): the operator CLI text formatter (`Grappa.Operator`) and the
+visitors/credentials admin tabs keep their existing `live_state` subset, and
+`peer_name` resolution is the Sessions controller's responsibility.
+
+**Deliberately deferred.** The session's *source* address
+(`:ssl.sockname/1` / `:inet.sockname/1`) is nearly free once this plumbing
+exists and is the natural surface for the per-session outbound source-address
+work — but it touches #454/#543, which have open decisions. Left OUT of this
+change and raised as an explicit PR question rather than decided here.
+
+**Known tradeoff (not changed).** The admin scan now issues two serial
+per-session `GenServer.call`s (`list_channels` + `peer_address`), doubling the
+worst-case latency for a fleet of mailbox-bloated pids (250ms→500ms each,
+serial). Healthy fleets are unaffected (both are instant state reads); the
+shape mirrors the established `fetch_joined_channels` pattern. A single
+combined introspection call would halve the degraded-scan cost — deferred as
+an optimization, not folded here to avoid scope creep.
