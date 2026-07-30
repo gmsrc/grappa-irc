@@ -306,16 +306,16 @@ const AdminSessionsTab: Component = () => {
 // pid). The `null` (U-0 honesty) branch lives on /admin/visitors +
 // /admin/credentials, not here.
 //
-// #428 — the server's `SessionEntry.degraded_field` allowlist is
-// `:joined_channels` ONLY: `alive`/`mailbox_len`/`memory_bytes` come from
-// synchronous Process BIFs that never time out, so only the
-// `list_channels` GenServer.call can degrade. The prior "alive unknown"
-// branch (guarded on `"alive"` ∈ introspection_degraded, M4 reviewer)
-// checked a state the server can never emit; the codegen-tightened
-// `introspection_degraded: "joined_channels"[]` proved it dead code and
-// tsc rejected it. Removed. If per-field degradation of alive/mailbox/
-// memory is ever wanted, widen the SERVER `degraded_field` type first —
-// the client then inherits it through the generated mirror.
+// #428 / #550 — the server's `SessionEntry.degraded_field` allowlist is
+// `:joined_channels | :peer_address`: both are GenServer-call round-trips
+// that can time out, whereas `alive`/`mailbox_len`/`memory_bytes` come from
+// synchronous Process BIFs that never do. So there is NO "alive unknown"
+// state to render — the prior branch (guarded on `"alive"` ∈
+// introspection_degraded, M4 reviewer) checked a state the server can never
+// emit; the codegen-tightened union proved it dead code and tsc rejected it.
+// Removed. If per-field degradation of alive/mailbox/memory is ever wanted,
+// widen the SERVER `degraded_field` type first — the client then inherits it
+// through the generated mirror.
 const LiveBadge: Component<{ live: AdminSession["live_state"] }> = (props) => {
   if (props.live.alive === false) {
     return (

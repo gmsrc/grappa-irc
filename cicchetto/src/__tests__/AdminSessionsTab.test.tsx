@@ -102,15 +102,17 @@ const DEAD_SESSION: AdminSession = {
     pid_inspect: "#PID<0.999.0>",
     mailbox_len: 0,
     memory_bytes: 0,
-    joined_channels: null,
+    // `alive: false` is trustworthy here (pid registered, Session.Server
+    // genuinely dead between BEAM crash + registry sweep). A dead pid's
+    // GenServer.calls both exit :noproc → {:error, :no_session}:
+    // list_channels maps that to `[]` (empty, NOT degraded); peer_address
+    // maps it to nil + the `:peer_address` marker — the realistic degraded
+    // shape a dead-but-registered pid actually produces (#550).
+    joined_channels: [],
     peer_address: null,
     peer_port: null,
     peer_name: null,
-    // `alive: false` is trustworthy here (pid registered, Session.Server
-    // genuinely dead between BEAM crash + registry sweep). The degraded set
-    // now spans `:joined_channels | :peer_address` (#550) — a dead pid
-    // times out both introspection calls.
-    introspection_degraded: ["joined_channels", "peer_address"],
+    introspection_degraded: ["peer_address"],
   },
 };
 
