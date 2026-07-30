@@ -16,7 +16,12 @@ export const IRCAUTH_FSMAUTH_METHOD = [
 ] as const;
 export type IRCAuthFSMAuthMethod = (typeof IRCAUTH_FSMAUTH_METHOD)[number];
 
-export type LiveIntrospectionSessionEntryDegradedField = "joined_channels";
+export const LIVE_INTROSPECTION_SESSION_ENTRY_DEGRADED_FIELD = [
+  "joined_channels",
+  "peer_address",
+] as const;
+export type LiveIntrospectionSessionEntryDegradedField =
+  (typeof LIVE_INTROSPECTION_SESSION_ENTRY_DEGRADED_FIELD)[number];
 
 export type NetworksCredentialAuthMethod = IRCAuthFSMAuthMethod;
 
@@ -440,6 +445,9 @@ export type LiveIntrospectionAdminWireLiveStateJson = {
   mailbox_len: number;
   memory_bytes: number;
   joined_channels: string[] | null;
+  peer_address: string | null;
+  peer_port: number | null;
+  peer_name: string | null;
   introspection_degraded: LiveIntrospectionSessionEntryDegradedField[];
 };
 

@@ -21,11 +21,20 @@ defmodule Grappa.LiveIntrospection.SessionEntry do
       `Grappa.Session.list_channels/2`. `nil` when the GenServer
       call timed out (busy / mailbox-bloated pid — see
       `introspection_degraded`).
+    * `peer_address` — the upstream peer IP (v6/v4) the session's
+      IRC socket is connected to, as a string, per
+      `Grappa.Session.peer_address/3` (#550, netsplit triage). `nil`
+      when the session is not connected (pre-connect, mid-reconnect,
+      socket just closed) OR the call timed out — both add
+      `:peer_address` to `introspection_degraded`. Never a fabricated
+      or stale address.
+    * `peer_port` — the peer TCP port alongside `peer_address`; `nil`
+      whenever `peer_address` is.
     * `introspection_degraded` — atom allowlist marking which
-      sub-fields fell back to a degraded shape. Today only
-      `:joined_channels`. The wire layer surfaces this so the
-      operator sees "this session is sick" rather than "this
-      session has no channels."
+      sub-fields fell back to a degraded shape (`:joined_channels`,
+      `:peer_address`). The wire layer surfaces this so the operator
+      sees "this session is sick / not connected" rather than "this
+      session has no channels / no upstream."
   """
 
   @enforce_keys [
@@ -36,6 +45,8 @@ defmodule Grappa.LiveIntrospection.SessionEntry do
     :mailbox_len,
     :memory_bytes,
     :joined_channels,
+    :peer_address,
+    :peer_port,
     :introspection_degraded
   ]
 
@@ -47,10 +58,12 @@ defmodule Grappa.LiveIntrospection.SessionEntry do
     :mailbox_len,
     :memory_bytes,
     :joined_channels,
+    :peer_address,
+    :peer_port,
     :introspection_degraded
   ]
 
-  @type degraded_field :: :joined_channels
+  @type degraded_field :: :joined_channels | :peer_address
 
   @type t :: %__MODULE__{
           subject: Grappa.Session.subject(),
@@ -60,6 +73,8 @@ defmodule Grappa.LiveIntrospection.SessionEntry do
           mailbox_len: non_neg_integer(),
           memory_bytes: non_neg_integer(),
           joined_channels: [String.t()] | nil,
+          peer_address: String.t() | nil,
+          peer_port: :inet.port_number() | nil,
           introspection_degraded: [degraded_field()]
         }
 end

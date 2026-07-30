@@ -72,6 +72,8 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
         mailbox_len: 0,
         memory_bytes: 12_345,
         joined_channels: ["#bofh"],
+        peer_address: nil,
+        peer_port: nil,
         introspection_degraded: []
       }
 

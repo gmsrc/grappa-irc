@@ -47,6 +47,8 @@ defmodule Grappa.Visitors.AdminWireTest do
         mailbox_len: 0,
         memory_bytes: 12_345,
         joined_channels: ["#sbiffo"],
+        peer_address: nil,
+        peer_port: nil,
         introspection_degraded: []
       }
 

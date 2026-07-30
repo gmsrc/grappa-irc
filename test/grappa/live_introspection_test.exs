@@ -79,6 +79,57 @@ defmodule Grappa.LiveIntrospectionTest do
     end
   end
 
+  describe "upstream peer capture (#550)" do
+    test "captures the peer address string + port for a connected session" do
+      # #550 netsplit triage — the entry carries the destination the socket
+      # landed on. The Client dialed the in-process IRCServer on
+      # 127.0.0.1:<port>; USER is sent right after the Client pushes
+      # {:irc_peer, _}, so waiting for it guarantees the peer is captured
+      # before the registry scan reads it.
+      {server, port} = start_irc_server()
+      {visitor, network} = visitor_with_network(port)
+      _ = start_visitor_session_for(visitor, network)
+      on_exit(fn -> Session.stop_session({:visitor, visitor.id}, network.id) end)
+
+      {:ok, _} =
+        Grappa.IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+
+      entry = LiveIntrospection.lookup_session({:visitor, visitor.id}, network.id)
+
+      assert entry.peer_address == "127.0.0.1"
+      assert entry.peer_port == port
+      assert entry.introspection_degraded == []
+    end
+
+    test "a non-responsive session pid degrades peer_address to nil + marker" do
+      # A registered pid that never answers a GenServer.call (mailbox-bloat /
+      # stuck session) → peer_address times out at 250ms → nil + the
+      # :peer_address degraded marker: the honest "sick session" signal, never
+      # a fabricated or stale address. Same dummy-pid trick as the
+      # count_sessions test — no real Session.Server needed.
+      subject = {:visitor, Ecto.UUID.generate()}
+      network_id = 424_242
+      key = {:session, subject, network_id}
+      parent = self()
+
+      {:ok, pid} =
+        Task.start_link(fn ->
+          {:ok, _} = Registry.register(Grappa.SessionRegistry, key, nil)
+          send(parent, :registered)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :registered, 500
+      on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :kill) end)
+
+      entry = LiveIntrospection.lookup_session(subject, network_id)
+
+      assert entry.peer_address == nil
+      assert entry.peer_port == nil
+      assert :peer_address in entry.introspection_degraded
+    end
+  end
+
   describe "count_sessions_by_user/0 (M-6 admin console)" do
     test "returns empty map when registry holds no user sessions" do
       assert LiveIntrospection.count_sessions_by_user() == %{}

@@ -69,6 +69,7 @@ defmodule GrappaWeb.Admin.SessionsController do
 
   alias Grappa.{Accounts, LiveIntrospection, Operator, Session}
   alias Grappa.LiveIntrospection.AdminWire
+  alias Grappa.Net.PtrCache
   alias Grappa.Networks.Credentials
   alias GrappaWeb.Admin.AuthPlug
 
@@ -103,13 +104,25 @@ defmodule GrappaWeb.Admin.SessionsController do
     # the label resolution uses.
     user_last_seen = Accounts.max_last_seen_by_subject_ids(:user, user_ids)
     visitor_last_seen = Accounts.max_last_seen_by_subject_ids(:visitor, visitor_ids)
+    # #550 — resolve every connected session's upstream peer reverse-DNS in
+    # ONE batched, lock-free PtrCache read. Out of band (a cold/expired
+    # entry fires an async resolve so the NEXT scan is warm) — NEVER a
+    # blocking PTR per row, which would hang the admin page on one
+    # unreachable resolver. A cold / no-PTR address maps to `nil`; the raw
+    # peer_address is rendered on its own then.
+    peer_names =
+      entries
+      |> Enum.map(& &1.peer_address)
+      |> Enum.reject(&is_nil/1)
+      |> PtrCache.names_for()
 
     rows =
       Enum.map(entries, fn entry ->
         AdminWire.session_to_admin_json(
           entry,
           resolve_label(entry, users, visitor_nicks),
-          resolve_last_seen(entry, user_last_seen, visitor_last_seen)
+          resolve_last_seen(entry, user_last_seen, visitor_last_seen),
+          resolve_peer_name(entry, peer_names)
         )
       end)
 
@@ -148,6 +161,13 @@ defmodule GrappaWeb.Admin.SessionsController do
 
   defp resolve_last_seen(%{subject: {:visitor, id}}, _, visitor_last_seen),
     do: Map.get(visitor_last_seen, id)
+
+  # #550 — the reverse-DNS name for this entry's upstream peer, or nil when
+  # the session is not connected (no address to resolve) or the batched
+  # PtrCache read had no name yet (cold / no-PTR). Keyed on the address
+  # string, exactly what names_for/1 returns.
+  defp resolve_peer_name(%{peer_address: nil}, _), do: nil
+  defp resolve_peer_name(%{peer_address: address}, names), do: Map.get(names, address)
 
   @doc """
   T32 disconnect verb — parks the credential + stops the pid (user

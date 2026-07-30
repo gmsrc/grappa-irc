@@ -133,6 +133,41 @@ defmodule GrappaWeb.Admin.SessionsControllerTest do
       assert is_integer(row["live_state"]["memory_bytes"])
     end
 
+    test "live_state carries the upstream peer address + port (#550)", %{conn: conn} do
+      # #550 netsplit triage — the row shows the destination the socket
+      # landed on. The session dialed the in-process IRCServer on
+      # 127.0.0.1:<port>. USER is sent right after the Client pushes
+      # {:irc_peer, _}, so waiting for it guarantees the peer is captured
+      # before the admin scan reads it.
+      {server, port} = start_irc_server()
+      {visitor, network} = visitor_with_network(port)
+      _ = start_visitor_session_for(visitor, network)
+      on_exit(fn -> Session.stop_session({:visitor, visitor.id}, network.id) end)
+
+      {:ok, _} =
+        Grappa.IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+
+      session = admin_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> get("/admin/sessions")
+
+      body = json_response(conn, 200)
+      row = Enum.find(body["sessions"], &(&1["subject_id"] == visitor.id))
+
+      assert row["live_state"]["peer_address"] == "127.0.0.1"
+      assert row["live_state"]["peer_port"] == port
+      # peer_name resolves out of band (Grappa.Net.PtrCache is lazy): the key
+      # is present but `nil` on a cold cache (cic falls back to the raw
+      # address). Assert it's the honest nil-or-string, never fabricated.
+      assert Map.has_key?(row["live_state"], "peer_name")
+
+      assert is_nil(row["live_state"]["peer_name"]) or
+               is_binary(row["live_state"]["peer_name"])
+    end
+
     test "subject_label: null surfaces orphan pid when DB row is gone", %{conn: conn} do
       # Bucket B/C honesty signal: a Session.Server registered for a
       # visitor whose DB row was deleted (raw SQL, terminate race, or

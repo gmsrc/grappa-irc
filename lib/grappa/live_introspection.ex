@@ -49,6 +49,10 @@ defmodule Grappa.LiveIntrospection do
   alias Grappa.Session.Server
 
   @list_channels_timeout_ms 250
+  # #550 — same honesty budget as list_channels: an instant state read on a
+  # healthy session, but a mailbox-bloated pid degrades to nil rather than
+  # blocking the admin scan on the default 5s exit cascade.
+  @peer_address_timeout_ms 250
 
   @doc """
   Enumerate every live `Session.Server` registered in
@@ -104,7 +108,8 @@ defmodule Grappa.LiveIntrospection do
 
   defp build_entry(subject, network_id, pid) do
     info = Process.info(pid, [:message_queue_len, :memory]) || []
-    {channels, degraded} = fetch_joined_channels(subject, network_id)
+    {channels, channels_degraded} = fetch_joined_channels(subject, network_id)
+    {peer_address, peer_port, peer_degraded} = fetch_peer_address(subject, network_id)
 
     %SessionEntry{
       subject: subject,
@@ -114,7 +119,9 @@ defmodule Grappa.LiveIntrospection do
       mailbox_len: Keyword.get(info, :message_queue_len, 0),
       memory_bytes: Keyword.get(info, :memory, 0),
       joined_channels: channels,
-      introspection_degraded: degraded
+      peer_address: peer_address,
+      peer_port: peer_port,
+      introspection_degraded: channels_degraded ++ peer_degraded
     }
   end
 
@@ -123,6 +130,21 @@ defmodule Grappa.LiveIntrospection do
       {:ok, channels} -> {channels, []}
       {:error, :no_session} -> {[], []}
       {:error, :timeout} -> {nil, [:joined_channels]}
+    end
+  end
+
+  # #550 — mirror of fetch_joined_channels/2 for the upstream peer. Unlike
+  # channels (where an empty list is a meaningful "connected, no channels"),
+  # there is no meaningful "empty address": every not-connected / stuck
+  # outcome (:no_peer, :no_session race, :timeout) collapses to nil + the
+  # :peer_address degraded marker — an honest "unknown", never fabricated.
+  defp fetch_peer_address(subject, network_id) do
+    case Session.peer_address(subject, network_id, @peer_address_timeout_ms) do
+      {:ok, {address, port}} ->
+        {address, port, []}
+
+      {:error, reason} when reason in [:no_peer, :no_session, :timeout] ->
+        {nil, nil, [:peer_address]}
     end
   end
 end
