@@ -296,6 +296,38 @@ defmodule GrappaWeb.Admin.SettingsControllerTest do
                "field" => "addressing.static_mapping_prefix"
              }
     end
+
+    test "applies upload AND addressing subtrees in one request", %{conn: conn, session: session} do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "upload" => %{"active_host" => "litterbox"},
+          "addressing" => %{"mode" => "static_mapping_with_reservations"}
+        })
+
+      assert %{
+               "settings" => %{
+                 "upload" => %{"active_host" => "litterbox"},
+                 "addressing" => %{"mode" => "static_mapping_with_reservations"}
+               }
+             } = json_response(conn, 200)
+
+      assert ServerSettings.get_upload_active_host() == :litterbox
+      assert ServerSettings.addressing_mode() == :static_mapping_with_reservations
+    end
+
+    test "400 for a malformed (non-map) subtree — no silent swallow", %{
+      conn: conn,
+      session: session
+    } do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{"addressing" => "not-a-map"})
+
+      assert %{"error" => _} = json_response(conn, 400)
+    end
   end
 
   describe "PUT /admin/settings — fan-out (UX-6-B2)" do

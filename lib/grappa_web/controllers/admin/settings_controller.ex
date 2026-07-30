@@ -81,7 +81,9 @@ defmodule GrappaWeb.Admin.SettingsController do
   end
 
   @doc false
-  @spec update(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom() | Ecto.Changeset.t()}
+  @spec update(Plug.Conn.t(), map()) ::
+          Plug.Conn.t()
+          | {:error, atom() | {:invalid_setting, String.t()} | Ecto.Changeset.t()}
   def update(conn, params) do
     with :ok <- apply_updates(params) do
       view = ServerSettings.public_view()
