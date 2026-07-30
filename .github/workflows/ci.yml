@@ -91,13 +91,29 @@ jobs:
       - name: Tests with coverage
         run: mix coveralls.json --warnings-as-errors
 
-      - name: Bats (bin/grappa dispatcher + debug-attach scripts)
+      - name: Bats (bin/grappa dispatcher + debug-attach + infra deploy)
         # Mirror scripts/bats.sh's discovery set so the CI gate matches the
-        # local check.sh gate (#364 docker S2 added test/scripts/). Run the
-        # bats binary directly (submodule already checked out in CI) rather
-        # than scripts/bats.sh, which would drag in _lib.sh's docker-compose
+        # local check.sh gate (#364 docker S2 added test/scripts/; #503
+        # added test/infra/ — the deploy-orchestrator decision-logic
+        # suites that were previously local-only). Run the bats binary
+        # directly (submodule already checked out in CI) rather than
+        # scripts/bats.sh, which would drag in _lib.sh's docker-compose
         # arg wiring the bare runner doesn't need.
-        run: vendor/bats-core/bin/bats test/bin/ test/scripts/
+        run: vendor/bats-core/bin/bats test/bin/ test/infra/ test/scripts/
+
+      - name: Shellcheck + POSIX-lint deploy scripts (#503 anti-drift)
+        # The shared deploy lib (infra/lib/deploy_common.sh) MUST stay
+        # strict POSIX sh so dash can run it on the FreeBSD jail (/bin/sh).
+        # Lint the lib as sh, the three consumers with -x (they source the
+        # lib), and dash -n parse the POSIX pieces so a reintroduced
+        # bashism in the shared algorithm fails CI instead of silently
+        # breaking the jail deploy — the exact copy-paste-drift class #503
+        # exists to kill.
+        run: |
+          shellcheck -s sh infra/lib/deploy_common.sh
+          shellcheck -x infra/freebsd/deploy.sh infra/linux/deploy.sh scripts/deploy.sh
+          dash -n infra/lib/deploy_common.sh
+          dash -n infra/freebsd/deploy.sh
 
       - name: Upload coverage
         uses: codecov/codecov-action@v7
