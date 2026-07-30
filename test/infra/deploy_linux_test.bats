@@ -15,9 +15,10 @@
 # committed recorders inside the temp repo. What only a real host deploy
 # exercises (systemd Type=exec, the live BEAM) is out of scope.
 #
-# #503 enrich gains (own RED-GREEN sections at the bottom): --force-*
-# flags (done). Still to land: the nothing-to-do fast path and the
-# DEPLOY_PREV_SHA carry across re-exec.
+# #503 enrich gains have their own RED-GREEN sections at the bottom:
+# --force-* flags, the marker-gated nothing-to-do fast path, and the
+# DEPLOY_PREV_SHA carry across re-exec — all now landed, bringing this
+# substrate to parity with the jail.
 
 setup() {
     DEPLOY_SH="$BATS_TEST_DIRNAME/../../infra/linux/deploy.sh"
@@ -306,4 +307,21 @@ run_deploy() {
     [[ "$output" == *"overrides"* ]]
     grep -q "systemctl stop grappa" "$ARGV_LOG"
     ! grep -q "run --no-start" "$ARGV_LOG"      # forced mode skips preflight
+}
+
+# --- #503 enrich: DEPLOY_PREV_SHA carry across re-exec ------------------------
+
+@test "re-exec carries the pre-pull HEAD as preflight base (no marker)" {
+    prev="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    new="$(commit_upstream infra/linux/deploy.sh)"   # deploy.sh change → re-exec
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"re-exec"* ]]
+    # After re-exec the re-pulled run's own pre-pull HEAD == new (the pull
+    # is a no-op the second time). Without the carry the range collapses to
+    # new..new and the real change silently drops out; the carry keeps the
+    # ORIGINAL pre-pull HEAD as the base.
+    grep -q "cli(\[\"$prev\", \"$new\", \"linux\"\])" "$ARGV_LOG"
+    ! grep -q "cli(\[\"$new\", \"$new\"" "$ARGV_LOG"
 }
