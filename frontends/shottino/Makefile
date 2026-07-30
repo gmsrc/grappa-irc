@@ -31,7 +31,7 @@ OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o ircd.
 # reaches, which is the drawing primitives and nothing else. Do not trust
 # this net for changes elsewhere in that file; add a test or reason about
 # the path by hand.
-TESTS := tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_layout tests/test_keys tests/test_ircd
+TESTS := tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_layout tests/test_keys tests/test_ircd tests/test_commands
 SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O1 -g $(SANITIZE)
 
@@ -91,6 +91,12 @@ tests/test_layout: tests/test_layout.c tests/test.h shottino.c json.c wire.c ali
 # from the inside.
 tests/test_ircd: tests/test_ircd.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_ircd.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS)
+
+# test_commands reads shottino.c off disk as well as compiling it: the
+# invariant it guards is that three lists inside that file agree, and the
+# only honest source for "what the dispatcher accepts" is the dispatcher.
+tests/test_commands: tests/test_commands.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_commands.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS)
 
 tests/test_keys: tests/test_keys.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_keys.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS) -lutil

@@ -1,0 +1,167 @@
+/* test_commands — the command lists have to agree with the dispatcher.
+ *
+ * A slash command lives in three places in shottino.c: the dispatcher in
+ * handle_input() that does the work, the `commands[]` table that makes it
+ * tab-complete, and the show_command_help() chain that answers
+ * `/help <verb>`. Nothing links them, so they drift — and they had: 36 of
+ * the 79 working verbs did not tab-complete.
+ *
+ * The gap is invisible in use. A missing completion entry makes Tab do
+ * nothing, which reads as "no such command" rather than as a bug in the
+ * client, so this suite is the only thing that notices.
+ *
+ * It asserts by SCANNING shottino.c for the dispatcher's own string
+ * literals rather than by keeping a fourth list — a fourth list would be
+ * one more thing to forget. The scan is deliberately dumb: it looks for the
+ * exact shapes the dispatcher uses (`strcmp(line, "/verb"` and
+ * `strncmp(line, "/verb "`), so a NEW dispatch shape reads as zero verbs and
+ * the floor assertion fails loudly instead of passing vacuously.
+ */
+#define main shottino_main_unused
+#include "../shottino.c"
+#undef main
+
+#include "test.h"
+
+/* Verbs the dispatcher accepts but that are deliberately not offered for
+ * completion. Empty today; an entry here needs its reason beside it. */
+static const char *const completion_exempt[] = {NULL};
+
+enum { MAX_VERBS = 256, VERB_MAX = 32, COMMAND_COUNT = sizeof(commands) / sizeof(commands[0]) };
+
+static char verbs[MAX_VERBS][VERB_MAX];
+static size_t verb_count;
+static char *source;
+
+static bool verb_known(const char *v) {
+    for (size_t i = 0; i < verb_count; i++)
+        if (strcmp(verbs[i], v) == 0) return true;
+    return false;
+}
+
+static void verb_add(const char *v) {
+    if (verb_known(v) || verb_count >= MAX_VERBS) return;
+    snprintf(verbs[verb_count++], VERB_MAX, "%s", v);
+}
+
+static char *read_source(void) {
+    /* `make check` runs from frontends/shottino; a hand-run from tests/
+     * should work too rather than fail as if the lists were wrong. */
+    const char *paths[] = {"shottino.c", "../shottino.c"};
+    for (size_t i = 0; i < 2; i++) {
+        FILE *f = fopen(paths[i], "rb");
+        if (!f) continue;
+        if (fseek(f, 0, SEEK_END) != 0) {
+            fclose(f);
+            continue;
+        }
+        long n = ftell(f);
+        rewind(f);
+        if (n <= 0) {
+            fclose(f);
+            continue;
+        }
+        char *buf = malloc((size_t)n + 1);
+        size_t got = fread(buf, 1, (size_t)n, f);
+        buf[got] = '\0';
+        fclose(f);
+        return buf;
+    }
+    return NULL;
+}
+
+/* Collect the verb from every `<needle>"/xxx"` occurrence, where the verb
+ * ends at the closing quote or at the space before an argument. */
+static void scan(const char *needle) {
+    size_t nlen = strlen(needle);
+    for (const char *p = source; (p = strstr(p, needle)) != NULL; p += nlen) {
+        const char *q = p + nlen;
+        if (*q != '"') continue;
+        q++;
+        if (*q != '/') continue;
+        q++;
+        /* Carries its own leading slash, so it is the same shape as a
+         * commands[] entry and needs no second buffer to compare. */
+        char verb[VERB_MAX] = "/";
+        size_t n = 1;
+        while (*q && islower((unsigned char)*q) && n + 1 < sizeof(verb)) verb[n++] = *q++;
+        verb[n] = '\0';
+        /* A real verb ends at the quote, or at the space that separates it
+         * from its arguments. Anything else was another literal's prefix. */
+        if (n == 1) continue;
+        if (*q != '"' && !(*q == ' ' && q[1] == '"')) continue;
+        verb_add(verb);
+    }
+}
+
+static bool in_completion_table(const char *slashed) {
+    for (size_t i = 0; i < COMMAND_COUNT; i++)
+        if (strcmp(commands[i], slashed) == 0) return true;
+    return false;
+}
+
+static bool is_exempt(const char *slashed) {
+    for (size_t i = 0; completion_exempt[i]; i++)
+        if (strcmp(completion_exempt[i], slashed) == 0) return true;
+    return false;
+}
+
+/* The scan found the dispatcher at all. Without this, a refactor that
+ * changes the dispatch shape turns every assertion below into a vacuous
+ * pass over an empty list. */
+TEST(scan_finds_the_dispatcher) {
+    CHECK(source != NULL);
+    CHECK(verb_count > 60);
+    CHECK(verb_known("/join"));
+    CHECK(verb_known("/kick"));
+    CHECK(verb_known("/media"));
+}
+
+TEST(every_dispatched_verb_completes) {
+    for (size_t i = 0; i < verb_count; i++) {
+        if (is_exempt(verbs[i])) continue;
+        if (!in_completion_table(verbs[i]))
+            fprintf(stderr, "  %s dispatches but is missing from commands[]\n", verbs[i]);
+        CHECK(in_completion_table(verbs[i]));
+    }
+}
+
+/* And the other direction: an entry left behind by a removed command
+ * offers the user a verb that does nothing. */
+TEST(every_completion_entry_dispatches) {
+    for (size_t i = 0; i < COMMAND_COUNT; i++) {
+        if (!verb_known(commands[i]))
+            fprintf(stderr, "  %s completes but nothing dispatches it\n", commands[i]);
+        CHECK(verb_known(commands[i]));
+    }
+}
+
+/* Completion offers candidates in table order, so sorted is both the order
+ * a user expects and the one that makes a missing entry visible when
+ * reading the list. Strictly sorted, so it also rules out duplicates. */
+TEST(completion_table_is_sorted) {
+    for (size_t i = 1; i < COMMAND_COUNT; i++) {
+        if (strcmp(commands[i - 1], commands[i]) >= 0)
+            fprintf(stderr, "  commands[] out of order: %s before %s\n", commands[i - 1],
+                    commands[i]);
+        CHECK(strcmp(commands[i - 1], commands[i]) < 0);
+    }
+}
+
+int main(void) {
+    source = read_source();
+    if (!source) {
+        fprintf(stderr, "test_commands: cannot read shottino.c (run from frontends/shottino)\n");
+        return 1;
+    }
+    scan("strcmp(line, ");
+    scan("strncmp(line, ");
+
+    RUN(scan_finds_the_dispatcher);
+    RUN(every_dispatched_verb_completes);
+    RUN(every_completion_entry_dispatches);
+    RUN(completion_table_is_sorted);
+
+    free(source);
+    return test_report();
+}

@@ -6362,11 +6362,24 @@ static void cycle_window(struct app *app, int delta) {
     ensure_roster(app, network, channel);
 }
 
+/* Every verb the dispatcher in handle_input() accepts, sorted. The list is
+ * data and the dispatcher is code, so the two can drift — and they had:
+ * 36 of the 79 working verbs did not tab-complete, including everything
+ * added after the first cut (/media, /split*, the services shortcuts, /kb).
+ * A missing entry is invisible in use — Tab simply does nothing, which
+ * reads as "no such command" — so tests/test_commands.c scans this file for
+ * the dispatcher's own literals and fails when one is not listed here.
+ * Adding a verb means adding it in three places; that test names them. */
 static const char *commands[] = {
-    "/admin", "/archive", "/away", "/ban", "/banlist", "/chat", "/clear", "/close", "/connect", "/deop", "/devoice", "/disconnect",
-    "/invite", "/join", "/kick", "/lusers", "/me", "/members", "/mode", "/msg", "/names",
-    "/nick", "/op", "/oper", "/part", "/q", "/query", "/quit", "/quote", "/settings", "/share", "/topic", "/umode",
-    "/unban", "/users", "/voice", "/w", "/watch", "/whowas", "/who", "/whois", "/win", "/window"
+    "/admin", "/alias", "/archive", "/away", "/ban", "/banlist", "/chat", "/clear", "/close",
+    "/connect", "/cs", "/dehilight", "/deop", "/devoice", "/disconnect", "/exit", "/help",
+    "/highlight", "/hilight", "/hs", "/info", "/invite", "/j", "/join", "/kb", "/keys", "/kick",
+    "/kickban", "/links", "/list", "/lusers", "/me", "/media", "/members", "/mode", "/motd",
+    "/mouse", "/ms", "/msg", "/names", "/nick", "/notify", "/ns", "/op", "/open", "/oper", "/os",
+    "/part", "/preview", "/q", "/query", "/quit", "/quote", "/rehash", "/rs", "/settings",
+    "/share", "/split", "/splith", "/splitv", "/splitw", "/stats", "/topic", "/umode", "/unalias",
+    "/unban", "/unsplit", "/upload", "/users", "/version", "/view", "/voice", "/w", "/watch",
+    "/who", "/whois", "/whowas", "/win", "/window"
 };
 
 static bool prefix_ci(const char *s, const char *prefix) {
@@ -6420,6 +6433,16 @@ static void complete_input(struct app *app) {
     if (prefix[0] == '/' && !last_space) {
         for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
             add_completion_candidate(candidates, &matches, commands[i], stem);
+        }
+        /* A user's own aliases are commands too — /alias hi /me waves then
+         * /hi has to complete, or the feature is only usable by memory. No
+         * lock: the alias table is written and read on this thread only.
+         * Names are stored bare, and one that shadows a built-in dedupes
+         * against the entry already added above (#427 lets it shadow). */
+        for (size_t i = 0; i < app->aliases.count; i++) {
+            char verb[ALIAS_MAX_NAME + 2];
+            snprintf(verb, sizeof(verb), "/%s", app->aliases.entries[i].name);
+            add_completion_candidate(candidates, &matches, verb, stem);
         }
     } else {
         /* Tab completion reads the roster, the window list, the network
