@@ -76,6 +76,11 @@ substrate_read_marker() {
 }
 
 substrate_write_marker() {
+	# mkdir -p: the marker owns its dir. A git checkout already has runtime/
+	# (tracked .gitkeep + the DB), but don't ASSUME a checkout — a
+	# checkout-less install (release image / curl|bash on a fresh host)
+	# reuses this same write.
+	mkdir -p runtime
 	printf '%s\n' "$NEW_SHA" > runtime/last-deployed-sha
 }
 

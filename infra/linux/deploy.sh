@@ -70,7 +70,9 @@ substrate_read_marker() {
 }
 
 substrate_write_marker() {
-	run_as_grappa "printf '%s\n' '${NEW_SHA}' > runtime/last-deployed-sha"
+	# mkdir -p: the marker owns its dir (no-op on a checkout where runtime/
+	# already holds the DB; required for any checkout-less reuse).
+	run_as_grappa "mkdir -p runtime && printf '%s\n' '${NEW_SHA}' > runtime/last-deployed-sha"
 }
 
 substrate_commit_exists() {

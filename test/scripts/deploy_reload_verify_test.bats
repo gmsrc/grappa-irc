@@ -46,10 +46,11 @@ setup() {
     # exist in the throwaway clone for the script to run.
     cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_common.sh" "$UPSTREAM/infra/lib/deploy_common.sh"
     : > "$UPSTREAM/compose.yaml"
-    # #503: the hot path now writes runtime/last-deployed-sha (the marker).
-    # A committed .gitkeep so the clone actually HAS runtime/ (git drops
-    # empty dirs) — prod always has it (the DB lives there).
-    touch "$UPSTREAM/runtime/.gitkeep"
+    # NB: deliberately NO runtime/.gitkeep here — git drops the empty dir,
+    # so the clone has NO runtime/. This mimics a checkout-less install
+    # (Unit D: release image / curl|bash on a fresh host) and proves the
+    # marker write provisions its own dir (mkdir -p) instead of assuming
+    # a git-tracked runtime/.
     echo base > "$UPSTREAM/lib/base.ex"
     git -C "$UPSTREAM" add -A
     git -C "$UPSTREAM" commit -qm "base"
@@ -96,6 +97,9 @@ run_hot() {
     run_hot
     [ "$status" -eq 0 ]
     [[ "$output" == *"hot-deploy complete"* ]]
+    # The marker write must provision runtime/ itself — the clone has none
+    # (no .gitkeep above), mimicking a checkout-less host.
+    [ "$(cat "$REPO/runtime/last-deployed-sha")" = "$(git -C "$REPO" rev-parse HEAD)" ]
     # A post-reload healthcheck must have run (the jail path does one).
     grep -q 'healthz' "$ARGV_LOG"
     # Ordering: reload POST precedes the healthcheck.
