@@ -63,7 +63,17 @@ defmodule Grappa.MixProject do
       releases: [
         grappa: [
           include_executables_for: [:unix],
-          # `assemble` only — Docker deploys never used `mix release`
+          # #542 — deploy-time drift guard. After `:assemble`, assert the git
+          # short-sha COMPILED into `Grappa.Version` equals the current `HEAD`,
+          # else FAIL the release. This step runs inside EVERY `mix release
+          # --overwrite` (the FreeBSD jail, the .deb, the AUR source pkg) — one
+          # door, no substrate can skip it. #533 fixed the ROOT cause (the
+          # @external_resource watch set that let the sha go stale); this is the
+          # belt-and-suspenders that refuses to ship if a future gap reopens it,
+          # because a version string that can be stale is worse than none — it
+          # is trusted. See `assert_version_sha/1`.
+          steps: [:assemble, &assert_version_sha/1],
+          # `assemble` — Docker deploys never used `mix release`
           # (the container IS the runtime, see CLAUDE.md). The release
           # target is the FreeBSD bastille jail on m42 which has no
           # Docker. Build steps mirror what the container did at
@@ -105,6 +115,78 @@ defmodule Grappa.MixProject do
       mod: {Grappa.Application, []},
       extra_applications: [:logger, :runtime_tools, :ssl, :crypto, :inets]
     ]
+  end
+
+  # #542 — `mix release` step (runs after `:assemble`). Compares the git
+  # short-sha COMPILED into the just-built `Grappa.Version` (`@git_facts`)
+  # against the CURRENT `HEAD`, and raises — failing the release — on drift.
+  # The verdict matrix (skip-on-no-git-but-log, FAIL on a git build with a
+  # missing/mismatched sha) is the pure `Grappa.Version.verify_build_sha/2`,
+  # unit-tested in `test/grappa/version_test.exs`; this shell only resolves
+  # HEAD, logs, and raises.
+  #
+  # `Grappa.Version` is reached through a variable (`version = Grappa.Version`)
+  # on purpose: `mix.exs` is compiled by Mix BEFORE the app, so a static call
+  # would emit an "undefined function" xref warning on every mix invocation.
+  # The capture in `steps:` is lazy — the app is compiled by the time this runs.
+  defp assert_version_sha(release) do
+    version = Grappa.Version
+    head_sha = head_short_sha()
+
+    case version.verify_build_sha(head_sha) do
+      :ok ->
+        Mix.shell().info("version guard (#542): Grappa.Version sha matches HEAD #{head_sha}")
+        release
+
+      {:skip, :no_git} ->
+        # Log-honesty: a fast path states what it OBSERVED, never a silent no-op.
+        # Report the bare version from `release.version` (the %Mix.Release{}
+        # field) — NOT `Grappa.Version.base/0`, which returns "" unless `:grappa`
+        # is loaded into the mix VM, and would emit an empty version on this very
+        # honesty-logging path (the AUR-tarball substrate exercises it).
+        Mix.shell().info(
+          "version guard (#542): no .git at build — artifact reports the bare " <>
+            "#{release.version} (package/tarball); no HEAD to verify against"
+        )
+
+        release
+
+      {:error, {:stale, compiled, head}} ->
+        Mix.raise(
+          "version guard (#542): compiled Grappa.Version sha #{compiled} != HEAD #{head} — " <>
+            "Version.beam is STALE (mix compile did not re-snapshot the git ref). Refusing to " <>
+            "assemble a release that would misreport CTCP VERSION — clean-rebuild and retry."
+        )
+
+      {:error, :sha_snapshot_degraded} ->
+        Mix.raise(
+          "version guard (#542): git was present at build but Grappa.Version snapshotted no sha " <>
+            "(reports -dev) — a trusted-but-unverifiable version. Refusing to assemble."
+        )
+
+      {:error, :head_unresolved} ->
+        Mix.raise(
+          "version guard (#542): cannot resolve HEAD via `git rev-parse` though the build carries " <>
+            "a compiled sha — refusing to ship a version that can't be verified."
+        )
+    end
+  end
+
+  # Current `HEAD` short-sha, or `nil` when git can't answer. Mirrors
+  # `Grappa.Version.GitProbe.git/2`: `env: []` (git introspection needs none of
+  # grappa's secrets, and a cleared env keeps them out of the subprocess), and a
+  # `rescue`/`catch` so a MISSING git binary degrades to `nil` (→ the clean
+  # `:head_unresolved` verdict) rather than a raw `:enoent` stack trace — a
+  # clean-verdict guard deserves a clean failure.
+  defp head_short_sha do
+    case System.cmd("git", ["rev-parse", "--short", "HEAD"], env: [], stderr_to_stdout: true) do
+      {out, 0} -> String.trim(out)
+      {_, _} -> nil
+    end
+  rescue
+    _ -> nil
+  catch
+    _, _ -> nil
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]

@@ -23733,3 +23733,56 @@ cases: structured `/who +s <hub>` opens the WhoModal, and raw `/quote WHO +s
 <hub>` opens it too — the B1 hole), the `:send_raw`-primes-WHO server tests
 (WHO primes, WHOIS does not), plus unit coverage in `client_test`,
 `grappa_channel_test`, `event_router_test`, and the cic parser suite.
+
+## 2026-07-30 — #542: deploy-time guard — a `mix release` step fails if the compiled version sha ≠ HEAD
+
+#533 fixed the ROOT cause of the stale version sha (the `@external_resource`
+watch set that missed the loose branch ref a `--ff-only` pull moves). #542's own
+"Suggested direction" asked for the belt-and-suspenders on top: a deploy-time
+assertion that the sha COMPILED into `Grappa.Version` equals `git rev-parse HEAD`,
+failing the build otherwise — because "a version string that can be stale is
+worse than no version string, because it is trusted." vjt's ruling: keep #542
+OPEN, scope it to exactly that hardening (the recompile fix is #533, not redone).
+
+**Where — one door, every substrate.** The guard is a `mix release` step
+(`steps: [:assemble, &assert_version_sha/1]` in `mix.exs`). It runs INSIDE every
+`mix release --overwrite`, which is how EVERY prod substrate assembles: the
+FreeBSD jail (`infra/freebsd/deploy.sh`), the `.deb` (`infra/packaging/build.sh`),
+the AUR source pkg (`PKGBUILD`). One code path — no deploy script can forget it.
+The alternative (an `eval`-based check wired into each deploy script, like
+release.yml's tag-proof) was rejected: three doors, forgettable. The step lives
+in `mix.exs`, NOT `lib/` — `Mix.raise`/`Mix.shell` don't exist at prod runtime and
+`mix.exs` never ships in the release; it reaches `Grappa.Version` through a
+variable so the compiler (which compiles `mix.exs` before the app) emits no
+undefined-function xref warning, the capture in `steps:` being lazy.
+
+**Why it is a real belt-and-suspenders, not a no-op after `mix compile`.** The
+step reads the sha ACTUALLY compiled into `Grappa.Version.beam`, not a fresh
+recompute. If a future `@external_resource` gap re-opens #542 and `mix compile`
+leaves `Version.beam` stale, the step reads that stale sha, sees it ≠ HEAD, and
+FAILS the release — regardless of whether compile did its job.
+
+**The verdict is total — no silent skip.** The two `nil`-carrying states are kept
+distinct (the exact hole #542 denounces): no `.git` at build (`@git_facts` nil, a
+package/tarball) is the ONLY skip, and it LOGS what it observed (log-honesty),
+because the artifact honestly reports the bare base and there is genuinely no
+HEAD to compare; BUT git-present-with-a-nil-sha (a source build degraded to
+`-dev`) is the drift itself and FAILS, as does an unresolvable HEAD, as does a
+compiled≠HEAD mismatch. The pure kernel `Grappa.Version.verify_build_sha/2` folds
+`(git_facts | nil, head_sha | nil)` → `:ok | {:skip, :no_git} | {:error, reason}`
+and is unit-tested across the full matrix (`test/grappa/version_test.exs`); `/1`
+reads `@git_facts` and delegates; the `mix.exs` step resolves HEAD via `git
+rev-parse --short HEAD` (env-stripped, mirroring `GitProbe`) and raises on error.
+
+**Runtime vs build-time posture.** `derive/2` (the CTCP-VERSION path) degrades a
+broken snapshot to `-dev` so a RUNNING node never crashes its reply; this guard
+is the opposite — at build time it refuses to ship rather than emit a trusted
+lie. Same facts, stricter verdict. release.yml's existing tag-proof (#419/#391)
+is unaffected: the `.deb` builds on a clean tag (git present, sha == HEAD → :ok)
+and the Arch tarball has no `.git` (→ `{:skip, :no_git}` + log).
+
+**Proven:** unit matrix RED→GREEN; a real `mix release` in the container logged
+`version guard (#542): Grappa.Version sha matches HEAD 32117b04` and assembled.
+A live-drift E2E is intentionally unreachable now — #533 recompiles `Version.beam`
+on any ref move — so the FAIL arms rest on the unit matrix plus the proven `:ok`
+wiring.

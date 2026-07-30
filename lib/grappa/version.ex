@@ -131,4 +131,60 @@ defmodule Grappa.Version do
       true -> "#{base}-dev"
     end
   end
+
+  @typedoc """
+  The deploy-time build-sha guard verdict (#542):
+
+    * `:ok` — a source build whose compiled sha equals the current `HEAD`;
+    * `{:skip, :no_git}` — no `.git` at build (a package/tarball): the artifact
+      honestly reports the bare `base`, there is no `HEAD` to compare, so the
+      caller LOGS the observation and proceeds (the ONLY non-error outcome
+      without a comparison, and a positively-identified package — not an
+      anomalous fall-through);
+    * `{:error, reason}` — refuse to ship (the release step raises), one of:
+      * `{:stale, compiled, head}` — the compiled sha ≠ `HEAD`, the #542 drift:
+        `Grappa.Version` was not recompiled, so the beam carries a previous
+        build's sha;
+      * `:sha_snapshot_degraded` — git WAS present at build but no sha was
+        snapshotted (the build reports `-dev`), a trusted-but-unverifiable
+        version;
+      * `:head_unresolved` — a source build whose `HEAD` cannot be resolved at
+        deploy time, so the match cannot be proven.
+  """
+  @type build_sha_verdict ::
+          :ok
+          | {:skip, :no_git}
+          | {:error, {:stale, String.t(), String.t()} | :sha_snapshot_degraded | :head_unresolved}
+
+  @doc """
+  Deploy-time drift guard (#542): compares the git short-sha COMPILED into this
+  module (`@git_facts.short_sha`) against the caller-supplied current `HEAD`
+  short-sha, so a `mix release` step can REFUSE to assemble an artifact whose
+  reported version has gone stale.
+
+  `derive/2` (the runtime CTCP-VERSION path) degrades a broken snapshot to
+  `-dev` so a running node never crashes its reply; this guard is the opposite
+  posture — at build time it fails loudly rather than ship a version an operator
+  would trust: *a version string that can be stale is worse than no version
+  string, because it is trusted.* See `t:build_sha_verdict/0` for every outcome.
+  """
+  @spec verify_build_sha(String.t() | nil) :: build_sha_verdict()
+  def verify_build_sha(head_sha), do: verify_build_sha(@git_facts, head_sha)
+
+  @doc """
+  Pure kernel of the #542 guard: folds the build-time git snapshot and the
+  current `HEAD` short-sha into a verdict. Split from `verify_build_sha/1` (which
+  reads `@git_facts`) so the full matrix is unit-testable with explicit inputs —
+  the compile-time git state of the build itself is unstable.
+
+  `nil` facts (no git at build) skips; a facts map with a `nil` `short_sha` (git
+  present, snapshot failed) is the #542 failure itself and is an error, NOT a
+  silent skip — the two `nil`-carrying states are deliberately kept distinct.
+  """
+  @spec verify_build_sha(GitProbe.git_facts() | nil, String.t() | nil) :: build_sha_verdict()
+  def verify_build_sha(nil, _), do: {:skip, :no_git}
+  def verify_build_sha(%{short_sha: nil}, _), do: {:error, :sha_snapshot_degraded}
+  def verify_build_sha(%{short_sha: _}, nil), do: {:error, :head_unresolved}
+  def verify_build_sha(%{short_sha: sha}, sha), do: :ok
+  def verify_build_sha(%{short_sha: sha}, head_sha), do: {:error, {:stale, sha, head_sha}}
 end

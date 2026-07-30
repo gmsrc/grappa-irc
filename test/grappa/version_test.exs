@@ -105,4 +105,103 @@ defmodule Grappa.VersionTest do
       assert String.starts_with?(current, Version.base())
     end
   end
+
+  describe "verify_build_sha/2 — deploy-time drift guard (#542): compiled sha ≡ HEAD or the build fails" do
+    # The runtime CTCP-VERSION path (derive/2) degrades a broken snapshot to
+    # `-dev` so a RUNNING node never crashes its VERSION reply. The DEPLOY guard
+    # is the opposite posture: at `mix release` assembly it REFUSES to ship a
+    # version it cannot prove, because "a version string that can be stale is
+    # worse than no version string, because it is trusted" (#542). Same facts,
+    # stricter verdict — build-time, not runtime.
+
+    test "compiled sha equals HEAD → :ok (the honest source build)" do
+      facts = %{exact_tag: nil, short_sha: "a40ad10", dirty?: false}
+
+      assert Version.verify_build_sha(facts, "a40ad10") == :ok
+    end
+
+    test "compiled sha differs from HEAD → {:error, {:stale, compiled, head}} (the #542 drift)" do
+      # The exact production reproduction: the node reported 0.6.0-6ba1235a
+      # while running a40ad10e — Version.beam kept the previous build's sha
+      # because the @external_resource watch set missed the loose branch ref.
+      facts = %{exact_tag: nil, short_sha: "6ba1235a", dirty?: false}
+
+      assert Version.verify_build_sha(facts, "a40ad10e") ==
+               {:error, {:stale, "6ba1235a", "a40ad10e"}}
+    end
+
+    test "git present at build but snapshot degraded (short_sha nil) → {:error, :sha_snapshot_degraded}" do
+      # This is the case that must NOT collapse into a silent skip: a source
+      # build (git WAS present, @git_facts is a map) whose sha snapshot failed
+      # reports `-dev` — a trusted-but-unverifiable version. That IS the #542
+      # failure the issue names, so the deploy must FAIL, not skip.
+      facts = %{exact_tag: nil, short_sha: nil, dirty?: false}
+
+      assert Version.verify_build_sha(facts, "a40ad10") == {:error, :sha_snapshot_degraded}
+    end
+
+    test "snapshot degraded AND HEAD unresolvable → :sha_snapshot_degraded (clause 2 beats clause 3)" do
+      # Pins the clause ordering the design hinges on: a git build with no
+      # snapshotted sha must report the degraded-snapshot drift even when HEAD is
+      # ALSO unresolvable — it must never fall through to :head_unresolved.
+      facts = %{exact_tag: nil, short_sha: nil, dirty?: false}
+
+      assert Version.verify_build_sha(facts, nil) == {:error, :sha_snapshot_degraded}
+    end
+
+    test "compiled sha present but HEAD unresolvable now → {:error, :head_unresolved}" do
+      # git was present at build (we hold a compiled sha) but the deploy cannot
+      # resolve HEAD to compare against — don't ship a version we can't verify.
+      facts = %{exact_tag: nil, short_sha: "a40ad10", dirty?: false}
+
+      assert Version.verify_build_sha(facts, nil) == {:error, :head_unresolved}
+    end
+
+    test "a dirty tree does not change the guard — the committed sha still governs" do
+      facts = %{exact_tag: "v1.2.3", short_sha: "a40ad10", dirty?: true}
+
+      assert Version.verify_build_sha(facts, "a40ad10") == :ok
+
+      assert Version.verify_build_sha(facts, "beefca7") ==
+               {:error, {:stale, "a40ad10", "beefca7"}}
+    end
+  end
+
+  describe "verify_build_sha/2 — no git at build (package/tarball): skip, but the caller logs the observation" do
+    test "nil git facts → {:skip, :no_git} (nothing to verify; release.yml's tag-proof covers packages)" do
+      # A package built from the source tarball has no `.git` → @git_facts is
+      # nil → the artifact honestly reports the bare base. There is genuinely no
+      # HEAD to compare, so the guard skips — but the release step LOGS what it
+      # observed (log-honesty: a fast path states what it saw, never a silent
+      # no-op). This is the ONLY non-error outcome without a sha comparison, and
+      # it is a positively-identified package, not an anomalous fall-through.
+      assert Version.verify_build_sha(nil, nil) == {:skip, :no_git}
+    end
+
+    test "nil git facts skips regardless of a HEAD that happens to resolve" do
+      # The beam's own claim (built without git → bare version) is
+      # authoritative; a HEAD appearing at deploy time does not retro-make a
+      # tarball build into a source build.
+      assert Version.verify_build_sha(nil, "a40ad10") == {:skip, :no_git}
+    end
+  end
+
+  describe "verify_build_sha/1 — reads the compiled @git_facts snapshot, delegates to /2" do
+    test "returns a valid tagged verdict for the build's own snapshot" do
+      # Like current/0, the compile-time git state of the test build is unstable
+      # (untagged worktree, possibly dirty), so we assert the CONTRACT SHAPE, not
+      # a fixed literal. A head that cannot equal any real short sha exercises
+      # the delegation without coupling the test to the build's actual sha.
+      result = Version.verify_build_sha("0000000")
+
+      # `:ok` is impossible — the build's real short-sha can't be "0000000" — so a
+      # git build (every real env) yields `{:error, {:stale, <real>, "0000000"}}`;
+      # the "0000000" we passed appearing in the verdict proves `/1` threads its
+      # argument into `/2` rather than ignoring it. A git-less build env degrades
+      # to `{:skip, :no_git}` / `:sha_snapshot_degraded`.
+      assert match?({:error, {:stale, _, "0000000"}}, result) or
+               match?({:skip, :no_git}, result) or
+               match?({:error, :sha_snapshot_degraded}, result)
+    end
+  end
 end
