@@ -23418,6 +23418,23 @@ behaviour per commit, each with a failing test first. The toggles
 linux had re-exec+marker, docker had neither" during the port without
 forking the algorithm.
 
+**deps.get precedes the Mix preflight (#541, abonforti).** The native
+substrates (linux + jail) classify hot-vs-cold with a `mix run --no-start`
+oneshot, which COMPILES. A pull that moved `mix.exs`/`mix.lock` leaves deps
+stale, so `mix` aborts — and preflight then exits 1, a CRASH the verdict
+case-statement cannot read as 0/3, stranding the deploy before it ever
+reaches the build step's own `deps.get`. So `deps.get --only prod` runs
+BEFORE the oneshot in each native `substrate_preflight`, chained with `&&`
+so a fetch failure surfaces as a non-verdict abort rather than a silently
+misclassified deploy. It is idempotent + cheap when already in sync, and
+`substrate_build` re-runs it so the `--force-*` paths (which skip preflight
+entirely) still fetch before compile. The Docker substrates are unaffected:
+their preflight oneshot runs against a bind-mounted `deps/` populated by a
+prior install/update, not a fresh `mix.exs` diff. The regression tests
+assert this by OUTCOME, not sequence — a mix stub models mix's stale-deps
+abort (the oneshot fails unless a `deps.get` marker exists) and the test
+asserts the deploy still reaches a verdict and completes.
+
 This is Unit A of #503 (which absorbs #51's shared-deploy-lib + docker
 parity and #439's ghcr image). Units B–E — the source-mode
 `infra/docker/deploy.sh` consumer, the release image → ghcr, the

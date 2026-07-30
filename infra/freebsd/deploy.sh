@@ -108,7 +108,14 @@ substrate_preflight() {
 		deploy_error "env file ${ENV_FILE} not readable — cannot run preflight"
 		exit 1
 	fi
-	run_as_grappa "set -a; . '${ENV_FILE}'; set +a; mix run --no-start -e 'Grappa.Deploy.Preflight.cli([\"$1\", \"$2\", \"jail\"])'"
+	# deps.get runs BEFORE the oneshot (#541, Co-authored-by abonforti): a
+	# pull that moved mix.exs/mix.lock leaves deps stale, and `mix run`
+	# aborts on that — preflight would then exit 1 (a crash, not a 0/3
+	# verdict) and the deploy would strand before ever reaching the build
+	# step's own deps.get. `&&` so a deps.get failure surfaces as a
+	# non-verdict abort; idempotent + cheap when in sync, and build re-runs
+	# it so the preflight-skipping --force-* paths still fetch before compile.
+	run_as_grappa "set -a; . '${ENV_FILE}'; set +a; mix deps.get --only prod && mix run --no-start -e 'Grappa.Deploy.Preflight.cli([\"$1\", \"$2\", \"jail\"])'"
 }
 
 substrate_build() {

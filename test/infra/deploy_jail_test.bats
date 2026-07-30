@@ -57,6 +57,12 @@ EOF
     echo "DUMMY=1" > "$ENV_FILE"
     export HEALTHCHECK_RETRIES=2 HEALTHCHECK_SLEEP=0
     export PREFLIGHT_RC=0
+    # #541 outcome harness: the preflight oneshot compiles, so on a pull
+    # that moved mix.exs/mix.lock it aborts on stale deps UNLESS deps.get
+    # ran first. STRICT_PREFLIGHT_DEPS=1 makes the mix stub model that real
+    # failure (via a marker deps.get drops); default off keeps every other
+    # test's oneshot honoring PREFLIGHT_RC unconditionally.
+    export DEPS_MARKER="$BATS_TEST_TMPDIR/deps-synced"
 
     # ---- PATH stubs ------------------------------------------------------
     # su -l grappa -c '<cmd>' → run <cmd> in-process (env preserved; the
@@ -73,13 +79,22 @@ exit 64
 EOF
 
     # mix: preflight oneshot honors $PREFLIGHT_RC; build verbs succeed.
+    # deps.get drops a marker; the oneshot models mix's stale-deps abort
+    # (exit 1) when STRICT_PREFLIGHT_DEPS=1 and no deps.get preceded it.
     cat > "$FAKE_DIR/mix" <<'EOF'
 #!/bin/sh
 printf 'mix %s\n' "$*" >> "$ARGV_LOG"
 case "$*" in
-    "run --no-start"*) exit "$PREFLIGHT_RC" ;;
-    *) exit 0 ;;
+    "deps.get"*) : > "$DEPS_MARKER" ;;
+    "run --no-start"*)
+        if [ "${STRICT_PREFLIGHT_DEPS:-0}" = 1 ] && [ ! -f "$DEPS_MARKER" ]; then
+            echo "** (Mix) Can't continue due to errors on stale dependencies" >&2
+            exit 1
+        fi
+        exit "$PREFLIGHT_RC"
+        ;;
 esac
+exit 0
 EOF
 
     # curl: reload POST answers a clean reload; healthcheck answers 200.
@@ -332,4 +347,21 @@ EOF
 @test "unknown flag alongside a valid one is still a usage error (64)" {
     run_deploy --force-cold --bogus
     [ "$status" -eq 64 ]
+}
+
+# --- #541: deps sync precedes the preflight oneshot (Co-authored abonforti) ---
+
+@test "#541: a dep-moving pull still reaches a verdict — deps fetched before preflight" {
+    # OUTCOME, not sequence: `mix run --no-start` compiles, so a pull that
+    # moved mix.exs/mix.lock aborts it on stale deps (exit 1 — a crash, not
+    # a 0/3 verdict) and the deploy strands before the build step's own
+    # deps.get. Fetching deps before the oneshot lets preflight classify and
+    # the deploy complete. STRICT_PREFLIGHT_DEPS models that abort.
+    export STRICT_PREFLIGHT_DEPS=1
+    new="$(commit_upstream mix.lock)"
+
+    run_deploy
+    [ "$status" -eq 0 ]                                        # deploy completed
+    grep -q "cli(\[.*\"jail\"\])" "$ARGV_LOG"                  # preflight reached a verdict
+    [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
 }

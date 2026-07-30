@@ -91,9 +91,19 @@ substrate_preflight() {
 	# file is sourced first: config/runtime.exs raises on missing
 	# DATABASE_PATH & co, and `sudo -u ... bash -c` does not inherit the
 	# systemd unit's EnvironmentFile.
+	#
+	# deps.get runs BEFORE the oneshot (#541, Co-authored-by abonforti): a
+	# pull that moved mix.exs/mix.lock leaves deps stale, and `mix run`
+	# aborts on that — preflight would then exit 1 (a crash, not a 0/3
+	# verdict) and the deploy would strand before ever reaching the build
+	# step's own deps.get. `&&` so a deps.get failure surfaces as a
+	# non-verdict abort rather than a silently-misclassified deploy;
+	# idempotent + cheap when in sync, and build re-runs it so the
+	# preflight-skipping --force-* paths still fetch before compile.
 	run_as_grappa "
 		set -a; . '${ENV_FILE}'; set +a
 		export MIX_ENV=prod
+		mix deps.get --only prod &&
 		mix run --no-start -e 'Grappa.Deploy.Preflight.cli([\"$1\", \"$2\", \"linux\"])'
 	"
 }
