@@ -3743,10 +3743,13 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "#382 comma-list JOIN canonical-folds EACH channel (ASCII) on the wire + in-flight" do
-      # #382 — the fold is PER channel (invariant #364): `#A,#B` becomes
-      # `#a,#b` on the wire AND as the in_flight_joins / window_state keys,
-      # so cic sees one canonical key per channel regardless of casing.
+    test "#382 comma-list JOIN ships RAW on the wire, folds EACH window KEY (#537)" do
+      # #382 — one window per comma-list element. #537 (reverses the prior
+      # assert): the wire ships the RAW user-typed casing (`#Alfa,#BETA`) —
+      # only the Session.Server knows the network's CASEMAPPING, so the fold
+      # moved off the facade and the wire stays as-typed — while the
+      # in_flight_joins / window_state KEYS are network-folded (ASCII here →
+      # `#alfa`/`#beta`), so cic still sees one canonical key per channel.
       {server, port} = start_server()
       {user, network, _} = setup_user_and_network(port)
 
@@ -3755,7 +3758,7 @@ defmodule Grappa.Session.ServerTest do
 
       :ok = Session.send_join({:user, user.id}, network.id, "#Alfa,#BETA", nil)
 
-      assert {:ok, "JOIN #alfa,#beta\r\n"} =
+      assert {:ok, "JOIN #Alfa,#BETA\r\n"} =
                IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
 
       state = SessionStateHelpers.fetch(pid)

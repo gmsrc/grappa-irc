@@ -1638,20 +1638,19 @@ defmodule Grappa.Session.Server do
   # channel, not nick. Two effects: (1) prime the accumulator in
   # state.banlist_pending so EventRouter folds 367 RPL_BANLIST rows into
   # it (368 RPL_ENDOFBANLIST drains it as :banlist_bundle); (2) emit
-  # `MODE #chan b\r\n`. NOTE the channel arriving here is ALREADY
-  # ASCII-folded by the facade (`Session.send_banlist/3`, mirroring the
-  # WHO/NAMES sibling verbs) — so `channel_display` is the FOLDED channel,
-  # NOT the user-typed casing (the card header shows the canonical
-  # spelling, per #364; unlike WHOWAS, which is nick-keyed and preserves
-  # display case). Re-folding for `chan_key` here is idempotent and keeps
-  # the key-derivation local so 367/368 rows drain the accumulator
-  # regardless of upstream casing. On send_line failure the accumulator
-  # stays primed — harmless until the next /banlist replaces the entry.
+  # `MODE #chan b\r\n`. #537 — the facade now passes `channel` RAW; the
+  # accumulator KEY folds network-aware here (`fold_key/2`), and
+  # `channel_display` is the FOLDED key (channels have no separate display
+  # form — the card header shows the canonical spelling, per #364/option B;
+  # unlike WHOWAS, which is nick-keyed and preserves display case). The
+  # MODE line ships the RAW `channel` upstream (wire stays as-typed). On
+  # send_line failure the accumulator stays primed — harmless until the
+  # next /banlist replaces the entry.
   def handle_call({:send_banlist, channel}, _, state) when is_binary(channel) do
-    chan_key = Identifier.canonical_channel(channel)
+    chan_key = fold_key(state, channel)
 
     next_pending =
-      prime_pending(state.banlist_pending, chan_key, %{channel_display: channel, entries: []})
+      prime_pending(state.banlist_pending, chan_key, %{channel_display: chan_key, entries: []})
 
     next_state = %{state | banlist_pending: next_pending}
     {:reply, Client.send_banlist(state.client, channel), next_state}
@@ -1673,7 +1672,7 @@ defmodule Grappa.Session.Server do
   # differs (`WHOIS <server> <nick>` vs `WHOIS <nick>`).
   def handle_call({:send_whois, target, server}, _, state)
       when is_binary(target) and (is_binary(server) or is_nil(server)) do
-    nick_key = Identifier.canonical_nick(target)
+    nick_key = fold_key(state, target)
     next_pending = prime_pending(state.whois_pending, nick_key, %{target_display: target})
     next_state = %{state | whois_pending: next_pending}
     {:reply, Client.send_whois(state.client, target, server), next_state}
@@ -1689,7 +1688,7 @@ defmodule Grappa.Session.Server do
   # the first). On send_line failure the accumulator stays primed —
   # harmless until the next /whowas replaces the entry.
   def handle_call({:send_whowas, target}, _, state) when is_binary(target) do
-    nick_key = Identifier.canonical_nick(target)
+    nick_key = fold_key(state, target)
 
     next_pending =
       prime_pending(state.whowas_pending, nick_key, %{target_display: target, entries: []})
@@ -1714,7 +1713,7 @@ defmodule Grappa.Session.Server do
   # error doesn't strand the WHO flow because no numerics will arrive to
   # drain it; the @pending_ttl_ms sweep on the next prime reaps it.
   def handle_call({:send_who, target}, _, state) when is_binary(target) do
-    chan_key = Identifier.canonical_channel(target)
+    chan_key = fold_key(state, target)
     next_pending = prime_pending(state.who_pending, chan_key, %{target_display: target, replies: []})
     next_state = %{state | who_pending: next_pending}
     {:reply, Client.send_who(state.client, target), next_state}
@@ -1722,22 +1721,24 @@ defmodule Grappa.Session.Server do
 
   # #140 — /names <#channel>. Two effects: (1) prime the accumulator
   # entry in state.names_pending so EventRouter folds 353 RPL_NAMREPLY
-  # rows into it; (2) emit `NAMES #channel\r\n`. `target_display`
-  # matches `target` — `Session.send_names/3` canonicalises at entry so
-  # the names_reply channel is canonical (see /who docstring above for
-  # the rationale). Replaces any prior accumulator for the same target
-  # (running /names twice without a 366 in between drops the first).
-  # On send_line failure the accumulator stays primed — a transient
-  # send error doesn't strand the NAMES flow because no numerics will
-  # arrive to drain it; harmless until the next /names replaces the entry.
-  # The reply is the network-wide ephemeral names_reply (Topic.user); the
-  # operator's focused window is irrelevant, so no origin_window is
-  # threaded (the modal renders network-scoped, last-write-wins).
+  # rows into it; (2) emit `NAMES #channel\r\n`. #537 — the facade now
+  # passes `target` RAW; the accumulator KEY + `target_display` both fold
+  # network-aware here (`fold_key/2`) so the names_reply channel is
+  # canonical (channels have no separate display form — option B). The
+  # NAMES line ships the RAW `target` upstream (wire stays as-typed).
+  # Replaces any prior accumulator for the same key (running /names twice
+  # without a 366 in between drops the first). On send_line failure the
+  # accumulator stays primed — a transient send error doesn't strand the
+  # NAMES flow because no numerics will arrive to drain it; harmless until
+  # the next /names replaces the entry. The reply is the network-wide
+  # ephemeral names_reply (Topic.user); the operator's focused window is
+  # irrelevant, so no origin_window is threaded (modal renders
+  # network-scoped, last-write-wins).
   def handle_call({:send_names, target}, _, state) when is_binary(target) do
-    chan_key = Identifier.canonical_channel(target)
+    chan_key = fold_key(state, target)
 
     next_pending =
-      prime_pending(state.names_pending, chan_key, %{target_display: target, names: []})
+      prime_pending(state.names_pending, chan_key, %{target_display: chan_key, names: []})
 
     next_state = %{state | names_pending: next_pending}
     {:reply, Client.send_names(state.client, target), next_state}
@@ -1908,6 +1909,11 @@ defmodule Grappa.Session.Server do
   WS surface stays consistent with REST.
   """
   def handle_call({:list_members, channel}, _, state) when is_binary(channel) do
+    # #537 — the facade passes `channel` RAW; fold the members-map KEY
+    # network-aware here (the members map + seeded_channels are keyed by
+    # the folded channel via EventRouter's ingress dispatcher).
+    channel = fold_key(state, channel)
+
     if MapSet.member?(state.seeded_channels, channel) do
       members =
         state.members
@@ -1924,11 +1930,12 @@ defmodule Grappa.Session.Server do
   # Returns a snapshot of the topic cache for `channel`. Serves from cache —
   # no upstream query. Public via `Grappa.Session.get_topic/3`.
   def handle_call({:get_topic, channel}, _, state) when is_binary(channel) do
-    # #364/#525: the topic cache is WRITTEN with the ASCII canonical key
-    # (event_router `normalize_channel`), so the read MUST fold the same
-    # way — a bare `String.downcase` missed the cache for any non-ASCII
-    # channel (`#CAFÉ` → downcase `#café` ≠ canonical `#cafÉ`).
-    chan_key = Identifier.canonical_channel(channel)
+    # #364/#525/#537: the topic cache is WRITTEN with the network-folded key
+    # (event_router ingress), so the read MUST fold the same way. `fold_key/2`
+    # normalises the rfc1459 national chars for this network then ASCII-folds
+    # (the facade now passes `channel` RAW) — a bare `String.downcase` missed
+    # the cache for any non-ASCII channel (`#CAFÉ` → downcase `#café`).
+    chan_key = fold_key(state, channel)
 
     case Map.get(state.topics, chan_key) do
       nil -> {:reply, {:error, :no_topic}, state}
@@ -1939,9 +1946,9 @@ defmodule Grappa.Session.Server do
   # Returns a snapshot of the channel_modes cache for `channel`. Serves from
   # cache — no upstream query. Public via `Grappa.Session.get_channel_modes/3`.
   def handle_call({:get_channel_modes, channel}, _, state) when is_binary(channel) do
-    # #364/#525: read the modes cache with the SAME ASCII canonical key the
-    # write side uses (see get_topic) — a bare downcase missed non-ASCII.
-    chan_key = Identifier.canonical_channel(channel)
+    # #364/#525/#537: read the modes cache with the SAME network-folded key
+    # the write side uses (see get_topic) — the facade passes `channel` RAW.
+    chan_key = fold_key(state, channel)
 
     case Map.get(state.channel_modes, chan_key) do
       nil -> {:reply, {:error, :no_modes}, state}
@@ -1991,6 +1998,9 @@ defmodule Grappa.Session.Server do
   # doesn't yet render `:parked`). Returns `{:ok, payload}` for the
   # three terminal states cic mirrors on the per-channel topic.
   def handle_call({:get_window_state, channel}, _, state) when is_binary(channel) do
+    # #537 — the facade passes `channel` RAW; fold the window-state KEY
+    # network-aware (window_state is keyed by the folded channel).
+    channel = fold_key(state, channel)
     {:reply, WindowState.to_wire(state.window_state, state.network_slug, channel), state}
   end
 
@@ -2036,7 +2046,7 @@ defmodule Grappa.Session.Server do
   # optimistic performance hint, not a source of truth. Only the IRC upstream
   # is authoritative; WHOIS is the fallback when the cache misses.
   def handle_call({:lookup_userhost, nick}, _, state) when is_binary(nick) do
-    nick_key = Identifier.canonical_nick(nick)
+    nick_key = fold_key(state, nick)
 
     case Map.get(state.userhost_cache, nick_key) do
       nil -> {:reply, {:error, :not_cached}, state}
@@ -2136,8 +2146,12 @@ defmodule Grappa.Session.Server do
     # would see a "ghost" channel resurface. Plan accepts this trade —
     # the race is theoretical (PART is wire-fast, ms-scale) and the
     # alternative is the persistent-ghost bug this bucket closes.
+    # #537 — the facade passes `channel` RAW; the local-cleanup KEY folds
+    # network-aware (members/window_state/caches are keyed folded). The
+    # upstream PART line ships the RAW `channel` (wire stays as-typed).
+    key = fold_key(state, channel)
     prev = state
-    state = PartCleanup.cleanup_local(state, channel)
+    state = PartCleanup.cleanup_local(state, key)
     broadcast_channels_changed(state)
 
     # #459 — emit archive_changed from the SESSION, here, once cleanup_local
@@ -2938,6 +2952,30 @@ defmodule Grappa.Session.Server do
   # privacy contract.
   defp service_target?(target), do: Identifier.services_sender?(target)
 
+  # #537 axis 2 — the SINGLE network-aware identifier KEY fold every
+  # Session.Server send/read handler routes a user-typed target through
+  # before using it as a map/cache/accumulator/window/PubSub-topic key.
+  # WIRE and DISPLAY forms stay RAW (the target ships upstream as-typed;
+  # dm_with / target_display keep their case). Only the Server + EventRouter
+  # know the network's CASEMAPPING (from 005 → `state.isupport`), so the
+  # facade now passes the target RAW and the fold happens HERE.
+  #
+  # `Identifier.canonical_target/2` normalises the rfc1459 national chars
+  # (`[ ] \ ~` → `{ } | ^` on a solanum/Libera network) then ASCII-folds;
+  # on `:ascii` (bahamut/Azzurra, pre-005, hot-reload-absent isupport) the
+  # normalise step is a no-op, so this is byte-identical to the pre-#537
+  # `canonical_channel`/`canonical_nick` fold on every ASCII network (all
+  # of prod). `Map.get` default (not `state.isupport`) mirrors the module's
+  # hot-reload safety — a live proc whose state predates the `:isupport`
+  # field folds `:ascii` instead of KeyError-crashing the :transient proc.
+  @spec fold_key(t(), String.t()) :: String.t()
+  defp fold_key(state, target) when is_binary(target),
+    do: Identifier.canonical_target(target, session_casemapping(state))
+
+  @spec session_casemapping(t()) :: Identifier.casemapping()
+  defp session_casemapping(state),
+    do: ISupport.casemapping(Map.get(state, :isupport, ISupport.default()))
+
   # Existing behavior — persist scrollback row, broadcast on per-channel
   # PubSub topic, send the wire line. Reply carries the persisted row.
   # BUGHUNT-1 A: a body larger than the wire-frame budget (LINELEN -
@@ -2953,9 +2991,13 @@ defmodule Grappa.Session.Server do
   # makes the fast-path `[body]` for typical-length messages — no
   # behavior change vs the pre-BUGHUNT-1 single-fragment loop.
   defp handle_persisting_send(target, body, state) do
+    # #537 axis 2 — the persist/broadcast/window KEY folds network-aware
+    # HERE (the facade now passes `target` RAW); the wire + `dm_with`
+    # display keep the raw casing. Fold once and thread both forms.
+    key = fold_key(state, target)
     fragments = Grappa.IRC.LineSplit.split_privmsg_body(body, target, state.linelen)
 
-    case persist_and_send_fragments(target, fragments, state, nil) do
+    case persist_and_send_fragments(target, key, fragments, state, nil) do
       {:ok, last_message} ->
         # #422: the operator's own outbound DM opens its server-side query
         # window too — a self-msg or a DM sent from another device must
@@ -2963,8 +3005,8 @@ defmodule Grappa.Session.Server do
         # longer originates the open). ONE open per send (not per fragment),
         # ordered after the persist+broadcast so `query_windows_list` trails
         # the row. Same `dm_eligible?` discriminant as the inbound arm: an
-        # outbound message to a channel is a no-op (window_key = target).
-        maybe_open_query_window(state, %{channel: target})
+        # outbound message to a channel is a no-op (window_key = folded key).
+        maybe_open_query_window(state, %{channel: key})
         {:reply, {:ok, last_message}, state}
 
       {:error, _} = err ->
@@ -2974,15 +3016,16 @@ defmodule Grappa.Session.Server do
 
   @spec persist_and_send_fragments(
           String.t(),
+          String.t(),
           [String.t()],
           t(),
           Scrollback.Message.t() | nil
         ) ::
           {:ok, Scrollback.Message.t()} | {:error, term()}
-  defp persist_and_send_fragments(_, [], _, last_message),
+  defp persist_and_send_fragments(_, _, [], _, last_message),
     do: {:ok, last_message}
 
-  defp persist_and_send_fragments(target, [fragment | rest], state, _) do
+  defp persist_and_send_fragments(target, key, [fragment | rest], state, _) do
     # Issue #14: the operator's own `/me` (cic sends `\x01ACTION text\x01`
     # as a PRIVMSG body) must self-echo-persist as :action, NOT :privmsg —
     # otherwise cic renders it on the privmsg branch (`<nick> ACTION text`)
@@ -2997,7 +3040,9 @@ defmodule Grappa.Session.Server do
       Session.put_subject_id(
         %{
           network_id: state.network_id,
-          channel: target,
+          # #537 axis 2 — the persist/broadcast KEY is the network-folded
+          # `key` (the DM/channel window key), NOT the raw wire target.
+          channel: key,
           server_time: System.system_time(:millisecond),
           kind: kind,
           sender: state.nick,
@@ -3006,7 +3051,9 @@ defmodule Grappa.Session.Server do
           # so a later MODE change can't retroactively re-prefix their
           # own outbound lines. Mirror of EventRouter.put_sender_prefix
           # for the inbound side; nil → %{} for DM targets / plain grade.
-          meta: own_sender_prefix_meta(state, target),
+          # Members-map lookup uses the folded `key` (EventRouter keys the
+          # members map by the folded channel too).
+          meta: own_sender_prefix_meta(state, key),
           # CP14 B3 — outbound DM detection. `Scrollback.dm_peer/4` is
           # the single source for the rule (channel msg vs DM): for
           # outbound, target is the peer iff target is nick-shaped (no
@@ -3014,6 +3061,8 @@ defmodule Grappa.Session.Server do
           # path uses the same fn, so both halves of every DM thread
           # land with matching `dm_with` values. `:action` is a
           # dm-eligible kind alongside `:privmsg` (Scrollback.dm_peer/4).
+          # `dm_with` is DISPLAY → the RAW peer nick (the MATCH folds); pass
+          # the raw `target`, not the folded key.
           dm_with: Scrollback.dm_peer(kind, target, state.nick, state.nick)
         },
         state.subject
@@ -3022,13 +3071,13 @@ defmodule Grappa.Session.Server do
     # Persist + broadcast via the shared Persistor (`push: false` — an
     # operator's own outbound row must not self-notify or fire the #267
     # window-counts push; that obligation is the inbound arm's alone),
-    # then relay upstream. `Client.send_privmsg` returns
-    # `:ok | {:error, :invalid_line}` since S29 C1; the Session facade
+    # then relay upstream RAW (wire stays as-typed — #537). `Client.send_privmsg`
+    # returns `:ok | {:error, :invalid_line}` since S29 C1; the Session facade
     # pre-validates so the error branch is unreachable on the documented
     # path — forward-compat insurance against a future facade bypass.
     with {:ok, message} <- Persistor.persist_and_broadcast(attrs, state, push: false),
          :ok <- send_privmsg_or_log(state.client, target, fragment) do
-      persist_and_send_fragments(target, rest, state, message)
+      persist_and_send_fragments(target, key, rest, state, message)
     else
       {:error, _} = err -> err
     end
@@ -3036,11 +3085,12 @@ defmodule Grappa.Session.Server do
 
   # #25: the operator's own channel grade for an outbound content row,
   # as `%{sender_prefix: "@" | "%" | "+"}` or `%{}` (DM target / plain /
-  # untracked). Canonicalises the target so the members lookup hits the
-  # same key EventRouter stores under.
+  # untracked). `key` is ALREADY the network-folded channel window key
+  # (`fold_key/2`, #537) — the same key EventRouter's members map is
+  # keyed under — so the lookup hits directly, no re-fold.
   @spec own_sender_prefix_meta(t(), String.t()) :: map()
-  defp own_sender_prefix_meta(state, target) do
-    sigils = get_in(state.members, [Identifier.canonical_channel(target), state.nick]) || []
+  defp own_sender_prefix_meta(state, key) do
+    sigils = get_in(state.members, [key, state.nick]) || []
 
     case Identifier.member_prefix(sigils) do
       nil -> %{}
@@ -3252,7 +3302,7 @@ defmodule Grappa.Session.Server do
   defp maybe_prime_raw_who(state, line) do
     if Regex.match?(@who_line_re, line) do
       target = line |> String.replace(@who_strip_re, "") |> String.trim()
-      chan_key = Identifier.canonical_channel(target)
+      chan_key = fold_key(state, target)
 
       pending =
         prime_pending(state.who_pending, chan_key, %{target_display: target, replies: []})
@@ -4723,22 +4773,27 @@ defmodule Grappa.Session.Server do
       |> Enum.reject(fn {_, {_, at_ms, _}} -> at_ms < cutoff end)
       |> Map.new()
 
-    key = Identifier.canonical_channel(channel)
-    entry = {channel, now_ms, nil}
+    # #537 — fold the window KEY network-aware HERE (callers pass RAW from
+    # the facade, or the ASCII-canonical autojoin set). The `key` is used
+    # for the in_flight_joins map, the window_state, AND the window_pending
+    # broadcast (channels have no separate display form — option B), so the
+    # self-JOIN echo (EventRouter, network-folded) resolves the SAME key.
+    key = fold_key(state, channel)
+    entry = {key, now_ms, nil}
     in_flight_joins = Map.put(swept, key, entry)
 
-    case WindowState.state_of(state.window_state, channel) do
+    case WindowState.state_of(state.window_state, key) do
       :joined ->
         # Idempotent re-JOIN: don't downgrade state + don't broadcast.
         %{state | in_flight_joins: in_flight_joins}
 
       _ ->
-        :ok = Broadcaster.to_user(state, SessionWire.window_pending(state.network_slug, channel))
+        :ok = Broadcaster.to_user(state, SessionWire.window_pending(state.network_slug, key))
 
         %{
           state
           | in_flight_joins: in_flight_joins,
-            window_state: WindowState.set_pending(state.window_state, channel)
+            window_state: WindowState.set_pending(state.window_state, key)
         }
     end
   end
@@ -5039,8 +5094,9 @@ defmodule Grappa.Session.Server do
       # Looks like an explicit mask — pass through verbatim.
       mask_or_nick
     else
-      # Bare nick — attempt userhost_cache lookup.
-      nick_key = Identifier.canonical_nick(mask_or_nick)
+      # Bare nick — attempt userhost_cache lookup. #537 — fold network-aware
+      # so the read matches EventRouter's network-aware userhost write key.
+      nick_key = fold_key(state, mask_or_nick)
 
       case Map.get(state.userhost_cache, nick_key) do
         %{host: host} when is_binary(host) -> "*!*@#{host}"

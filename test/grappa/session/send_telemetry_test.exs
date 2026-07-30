@@ -18,7 +18,6 @@ defmodule Grappa.Session.SendTelemetryTest do
   """
   use Grappa.DataCase, async: false
 
-  alias Grappa.IRC.Identifier
   alias Grappa.Session
 
   defp attach(events) do
@@ -45,8 +44,10 @@ defmodule Grappa.Session.SendTelemetryTest do
     assert {:error, :no_session} = Session.send_privmsg(subject, 4242, "#Sniffo", "ciao")
 
     assert_receive {:telemetry, [:grappa, :session, :send_privmsg, :stop], measurements, metadata}
-    # Target is canonicalised before dispatch (UX-4) — the tag matches the wire.
-    assert metadata.target == Identifier.canonical_channel("#Sniffo")
+    # #537 (reverses the prior assert): the target ships RAW (the fold moved
+    # server-side, where CASEMAPPING is known), so the telemetry tag reports
+    # the RAW user-typed target as-sent — NOT the folded form.
+    assert metadata.target == "#Sniffo"
     assert metadata.network_id == 4242
     assert metadata.subject == :user
     assert metadata.outcome == :no_session
