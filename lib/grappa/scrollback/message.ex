@@ -348,10 +348,18 @@ defmodule Grappa.Scrollback.Message do
   # case keys. `dm_with` is a NICK column (display-case-meaningful)
   # so it is intentionally NOT canonicalised; the `valid_target?/1`
   # predicate keeps accepting `$server` and DM-target nicks verbatim.
+  #
+  # #537 — folds via `canonical_target/1` (the fold at EVERY identifier
+  # boundary), NOT the sigil-gated `canonical_channel/1`: the `:channel`
+  # column is a WINDOW KEY that for a DM is a peer nick. The sigil gate
+  # left a DM key RAW, forking one window into one row per casing while
+  # reads resolved them case-insensitively (the #532-family ghost, one
+  # table out). Display case is read from `dm_with`, never from this key,
+  # so folding it loses nothing (vjt ruling #537: fold on every identifier).
   @spec canonicalize_channel(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   defp canonicalize_channel(changeset) do
     case get_change(changeset, :channel) do
-      ch when is_binary(ch) -> put_change(changeset, :channel, Identifier.canonical_channel(ch))
+      ch when is_binary(ch) -> put_change(changeset, :channel, Identifier.canonical_target(ch))
       _ -> changeset
     end
   end

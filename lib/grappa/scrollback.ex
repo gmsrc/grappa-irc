@@ -1015,14 +1015,16 @@ defmodule Grappa.Scrollback do
   """
   @spec channel_or_dm_where(Ecto.Query.t(), String.t(), String.t() | nil) :: Ecto.Query.t()
   def channel_or_dm_where(query, channel, own_nick) when is_binary(channel) do
-    # UX-4 bucket A: canonicalise the channel param at the read
-    # boundary so case-insensitive lookups land on the canonical
-    # lowercase row regardless of how the REST URL path-segment was
-    # cased by the cic caller. Mirrors the write-time canonicalisation
-    # in `Grappa.Scrollback.Message.changeset/2` + the backfill
-    # migration. Sigil-aware via `Identifier.canonical_channel/1` —
-    # nick-shape DM targets pass through unchanged.
-    channel = Identifier.canonical_channel(channel)
+    # Canonicalise the channel param at the read boundary so
+    # case-insensitive lookups land on the canonical row regardless of
+    # how the REST URL path-segment was cased by the cic caller. Mirrors
+    # the write-time canonicalisation in
+    # `Grappa.Scrollback.Message.changeset/2`. #537 — `canonical_target/1`
+    # (fold at every identifier boundary) so a nick-shaped DM/own-nick
+    # window KEY folds too, matching the folded write key; the sigil-gated
+    # form left it raw and the own-nick self-window read then missed its
+    # own folded rows.
+    channel = Identifier.canonical_target(channel)
 
     cond do
       # Own-nick query window: restrict to self-msgs only
@@ -1033,7 +1035,11 @@ defmodule Grappa.Scrollback do
       # vjt observed the bug 2026-05-10 (every CristoBOT reply leaked into
       # the `grappa` window's scrollback).
       is_binary(own_nick) and Identifier.canonical_nick(channel) == Identifier.canonical_nick(own_nick) ->
-        where(query, [m], m.channel == ^channel and m.dm_with == ^channel)
+        # #537 — `channel` is now the folded own-nick (canonical_target),
+        # and `m.channel` is folded at write; but `m.dm_with` is stored
+        # RAW (display), so the self-msg dm_with match MUST fold via
+        # `nick_fold/1` or a mixed-case own_nick misses its own rows.
+        where(query, [m], m.channel == ^channel and Identifier.nick_fold(m.dm_with) == ^channel)
 
       # Peer DM target (nick-shaped, NOT own-nick): outbound `/msg peer`
       # lands at `channel = peer`; inbound `<peer> PRIVMSG ownnick` lands
@@ -1263,13 +1269,19 @@ defmodule Grappa.Scrollback do
       count = base |> where_dm_peer(folded_old) |> Repo.aggregate(:count)
 
       if count > 0 do
+        # `dm_with` is the DISPLAY column → set the RAW new nick.
         base
         |> where([m], Identifier.nick_fold(m.dm_with) == ^folded_old)
         |> Repo.update_all(set: [dm_with: new_nick])
 
+        # #537 — `channel` is the window KEY → set the FOLDED new nick,
+        # not the raw one. `Repo.update_all` bypasses the changeset fold
+        # (`Message.canonicalize_channel/1`), so a raw value here would
+        # re-fork the window the moment the next persist folds its key
+        # and misses these migrated rows.
         base
         |> where([m], Identifier.nick_fold(m.channel) == ^folded_old)
-        |> Repo.update_all(set: [channel: new_nick])
+        |> Repo.update_all(set: [channel: folded_new])
       end
 
       {:ok, count}

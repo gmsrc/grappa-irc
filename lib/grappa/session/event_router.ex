@@ -410,12 +410,13 @@ defmodule Grappa.Session.EventRouter do
         # the broadcast lands on a topic cic isn't subscribed to
         # until that window already exists, defeating auto-open.
         # Channel-targeted CTCP keeps target as channel (no re-key).
-        # UX-4 A: canonicalise channel-shape targets at the persist
-        # boundary; nicks pass through unchanged.
+        # #537 — `canonical_target/1` (fold at every identifier boundary)
+        # so a DM CTCP target (a peer nick) folds into a canonical window
+        # KEY; the sigil-gated form left it raw-cased.
         dm_channel =
           if nick_eq?(target, state.nick),
             do: state.nick,
-            else: Identifier.canonical_channel(target)
+            else: Identifier.canonical_target(target)
 
         notice_body = "CTCP VERSION query → grappa #{version}"
         {state2, persist_eff} = build_persist(state, :notice, dm_channel, sender, notice_body, %{})

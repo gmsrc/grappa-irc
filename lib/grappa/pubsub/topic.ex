@@ -97,7 +97,7 @@ defmodule Grappa.PubSub.Topic do
       user_name <>
       "/network:" <>
       network_slug <>
-      "/channel:" <> Grappa.IRC.Identifier.canonical_channel(channel_name)
+      "/channel:" <> Grappa.IRC.Identifier.canonical_target(channel_name)
   end
 
   @doc """

@@ -187,6 +187,24 @@ defmodule Grappa.Scrollback.MessageTest do
       assert cs.valid?, "expected nick target to produce a valid changeset"
     end
 
+    test "folds a nick-shaped channel (DM window KEY) at the persist boundary (#537)" do
+      # #537 — the `:channel` column is the WINDOW KEY. A DM key is a peer
+      # nick; the sigil-gated canonical_channel/1 left it RAW, so the write
+      # path forked one DM window into one row PER CASING while the read
+      # path resolved them case-insensitively — the #532-family ghost, one
+      # table out. The KEY must fold (display case is read from `dm_with`,
+      # never from the key). `canonical_target/1` is the fold at every
+      # identifier boundary (vjt ruling #537: fold on EVERY identifier).
+      cs = Message.changeset(%Message{}, %{@valid_attrs | channel: "PeerNick"})
+      assert cs.valid?
+      assert Ecto.Changeset.get_change(cs, :channel) == "peernick"
+
+      # ASCII-only (#525 pin): bracket/brace variants stay distinct keys.
+      a = Message.changeset(%Message{}, %{@valid_attrs | channel: "foo[1]"})
+      b = Message.changeset(%Message{}, %{@valid_attrs | channel: "foo{1}"})
+      refute Ecto.Changeset.get_change(a, :channel) == Ecto.Changeset.get_change(b, :channel)
+    end
+
     test "rejects a channel that is neither a valid channel nor a valid nick" do
       cs = Message.changeset(%Message{}, %{@valid_attrs | channel: "123bad"})
       refute cs.valid?

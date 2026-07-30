@@ -82,17 +82,26 @@ defmodule Grappa.PubSub.TopicTest do
       assert Topic.channel("u", "n", "+MODELESS") =~ "channel:+modeless"
     end
 
-    test "preserves nick (DM-window) case" do
-      # The third segment is conceptually a "window key" — for DM
-      # windows it's a peer nick, not a channel name. Nicks are
-      # display-meaningful (CTCP visibility row's `dm_with`, sender
-      # badge) so canonical_channel/1's sigil-aware predicate
-      # leaves them alone.
+    test "folds a nick (DM-window) segment too — one topic per peer (#537)" do
+      # #537 — the third segment is a WINDOW KEY of unknown shape; for a DM
+      # window it's a peer nick. The KEY must fold (case is read from
+      # `dm_with`/`sender`, never from the key), so `CristoBOT` and
+      # `cristobot` land on ONE topic — the #532-family ghost fix, one door
+      # out from the cursor. This is the fold-not-sigil-gate contract:
+      # producer + subscriber must observe the same DM topic string.
       assert Topic.channel("vjt", "net", "CristoBOT") ==
-               "grappa:user:vjt/network:net/channel:CristoBOT"
+               "grappa:user:vjt/network:net/channel:cristobot"
+
+      assert Topic.channel("vjt", "net", "CristoBOT") == Topic.channel("vjt", "net", "cristobot")
     end
 
-    test "preserves $server pseudo-channel sentinel case" do
+    test "keeps ASCII-distinct nick segments apart (#525 pin)" do
+      # The fold is ASCII-only (A-Z): bracket/brace variants stay DISTINCT
+      # topics, matching the ircd under CASEMAPPING=ascii.
+      refute Topic.channel("vjt", "net", "foo[1]") == Topic.channel("vjt", "net", "foo{1}")
+    end
+
+    test "preserves $server pseudo-channel sentinel (no A-Z to fold)" do
       assert Topic.channel("vjt", "net", "$server") ==
                "grappa:user:vjt/network:net/channel:$server"
     end

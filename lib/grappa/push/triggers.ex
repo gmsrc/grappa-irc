@@ -252,8 +252,15 @@ defmodule Grappa.Push.Triggers do
 
   # Canonical DM rule across the codebase: inbound row's `channel`
   # field equals own_nick. Mirrors `Grappa.Scrollback.dm_peer/4`'s
-  # inbound branch + cic's dm-listener channelKey rule.
-  defp dm?(%Message{channel: channel}, own_nick), do: channel == own_nick
+  # inbound branch + cic's dm-listener channelKey rule. #537 — the
+  # `channel` KEY is now folded at the persist boundary
+  # (`Message.canonicalize_channel/1`), so this compare MUST fold both
+  # sides (`canonical_nick/1`) or a mixed-case own_nick fails to match
+  # its own folded DM rows.
+  defp dm?(%Message{channel: channel}, own_nick) when is_binary(channel) and is_binary(own_nick),
+    do: Identifier.canonical_nick(channel) == Identifier.canonical_nick(own_nick)
+
+  defp dm?(_, _), do: false
 
   defp dm_match?(%Message{} = message, prefs) do
     Map.get(prefs, :private_messages_all, false) or
@@ -278,10 +285,12 @@ defmodule Grappa.Push.Triggers do
   end
 
   defp channel_in_whitelist?(%Message{channel: channel}, prefs) when is_binary(channel) do
-    # Fold via the channel SSOT (sigil-gated downcase) to match the store
-    # path; keeps the nick vs channel fold distinction explicit rather than
-    # a bare downcase that happens to coincide today.
-    Identifier.canonical_channel(channel) in Map.get(prefs, :channel_messages_only, [])
+    # #537 — fold via `canonical_target/1` (the fold at every identifier
+    # boundary) to match the store path (`UserSettings.normalize_list`).
+    # An exact-string membership test on a sigil-gated fold silently
+    # stopped applying to a nick-shaped window after a case-different
+    # re-open; folding every identifier closes that hole.
+    Identifier.canonical_target(channel) in Map.get(prefs, :channel_messages_only, [])
   end
 
   defp channel_in_whitelist?(_, _), do: false

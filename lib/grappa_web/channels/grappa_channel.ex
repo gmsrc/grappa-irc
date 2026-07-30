@@ -250,9 +250,12 @@ defmodule GrappaWeb.GrappaChannel do
   # user:vjt/network:az/channel:#Chan")` falls onto the canonical
   # `#chan` topic regardless of input casing. User + network topics
   # carry no channel segment and pass through unchanged. Admin events
-  # likewise.
+  # likewise. #537 — `canonical_target/1` (fold at every identifier
+  # boundary) so a DM-window topic segment (a peer nick) folds too,
+  # matching `Topic.channel/3`; the sigil-gated form left DM topics
+  # case-forked (producer vs subscriber mismatch).
   defp canonicalize_topic({:channel, user_name, network_slug, channel}) do
-    {:channel, user_name, network_slug, Grappa.IRC.Identifier.canonical_channel(channel)}
+    {:channel, user_name, network_slug, Grappa.IRC.Identifier.canonical_target(channel)}
   end
 
   defp canonicalize_topic(other), do: other

@@ -81,14 +81,20 @@ defmodule Grappa.Push.Payload do
   (account name vs IRC nick); the server-side trigger path inherits
   it.
 
-  `dm?` discriminator: `message.channel == own_nick` is the canonical
-  rule across the codebase (mirrors `Grappa.Scrollback.dm_peer/4`'s
-  inbound branch).
+  `dm?` discriminator: the inbound row's `channel` KEY equals own_nick
+  (mirrors `Grappa.Scrollback.dm_peer/4`'s inbound branch). #537 — the
+  `channel` KEY is folded at the persist boundary, so the compare folds
+  BOTH sides (`canonical_nick/1`) or a mixed-case own_nick misses its
+  own folded DM rows.
   """
   @spec build(Message.t(), network_slug :: String.t(), own_nick :: String.t()) :: t()
   def build(%Message{} = message, network_slug, own_nick)
       when is_binary(network_slug) and is_binary(own_nick) do
-    dm? = message.channel == own_nick
+    dm? =
+      is_binary(message.channel) and
+        Grappa.IRC.Identifier.canonical_nick(message.channel) ==
+          Grappa.IRC.Identifier.canonical_nick(own_nick)
+
     sender = message.sender || ""
     body = message.body || ""
 

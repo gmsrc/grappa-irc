@@ -995,8 +995,15 @@ defmodule Grappa.UserSettings do
     |> Enum.uniq()
   end
 
-  defp list_fold(:private_messages_only), do: &Identifier.canonical_nick/1
-  defp list_fold(:channel_messages_only), do: &Identifier.canonical_channel/1
+  # #537 — both lists fold via `canonical_target/1` (the fold at every
+  # identifier boundary). `channel_messages_only` was sigil-gated
+  # (`canonical_channel/1`), so a nick-shaped entry stayed raw and its
+  # membership test (`Triggers.channel_in_whitelist?/2`) stopped applying
+  # after a case-different re-open. `canonical_target` folds channels and
+  # nicks identically (sigils sit outside A-Z), so this is byte-identical
+  # for real channels and corrective for a nick-shaped key.
+  defp list_fold(:private_messages_only), do: &Identifier.canonical_target/1
+  defp list_fold(:channel_messages_only), do: &Identifier.canonical_target/1
 
   defp ensure_at_least_one_trigger(prefs, subject) do
     if Enum.any?(@prefs_trigger_keys, &Map.fetch!(prefs, &1)) do

@@ -2587,7 +2587,10 @@ defmodule Grappa.ScrollbackTest do
       {:ok, 1} = Scrollback.rename_dm_peer({:user, user.id}, net.id, "Guest87449", "NickTemporaneo")
 
       row = Repo.get!(Message, orphan.id)
-      assert row.channel == "NickTemporaneo"
+      # #537 — the `channel` window KEY is folded on rename (canonical
+      # storage); the sigil-gated form stored the raw new nick, re-forking
+      # the window against folded fresh rows. dm_with stays nil (orphan).
+      assert row.channel == "nicktemporaneo"
       assert row.dm_with == nil
     end
 
@@ -2610,7 +2613,11 @@ defmodule Grappa.ScrollbackTest do
       assert {:ok, 0} = Scrollback.rename_dm_peer({:user, user.id}, net.id, "Foo", "FOO")
 
       row = Repo.get!(Message, out.id)
-      assert row.channel == "Foo"
+      # #537 — the key/display split: `channel` is the window KEY, folded
+      # at the persist boundary (canonical storage); `dm_with` is the
+      # DISPLAY column, stored raw. "Foo"/"FOO" fold to one key so the
+      # rename is a noop, but the persisted key is already "foo".
+      assert row.channel == "foo"
       assert row.dm_with == "Foo"
     end
 
