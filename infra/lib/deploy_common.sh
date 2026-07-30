@@ -87,6 +87,15 @@ _deploy_cold_sleep()   { printf '%s' "${COLD_HEALTHCHECK_SLEEP:-$HEALTHCHECK_SLE
 : "${DEPLOY_SELF_REL:=}"
 DEPLOY_LIB_REL="infra/lib/deploy_common.sh"
 
+# Argument(s) the re-exec guard must PREPEND when it re-invokes the
+# consumer script. Empty for a verb-less consumer (jail/linux/operator
+# docker: `deploy.sh --force-hot`), so re-exec replays the argv verbatim.
+# A verb-dispatched consumer (infra/docker/deploy.sh `update …`) sets this
+# to its verb so re-exec replays `deploy.sh update …` — else the guard
+# would drop the verb and the re-exec'd run would fall through to a usage
+# error. Word-split on purpose (a single verb token).
+: "${DEPLOY_REEXEC_PREFIX:=}"
+
 # ---- logging --------------------------------------------------------
 deploy_log()   { printf '[deploy] %s\n' "$*"; }
 deploy_error() { printf '[deploy] ERROR: %s\n' "$*" >&2; }
@@ -200,7 +209,8 @@ $DEPLOY_LIB_REL
 				DEPLOY_PREV_SHA="$PREV_SHA"
 				export DEPLOY_PREV_SHA
 			fi
-			exec "$REPO_ROOT/$DEPLOY_SELF_REL" "$@"
+			# shellcheck disable=SC2086  # DEPLOY_REEXEC_PREFIX is an intentional verb prefix (empty → verbatim replay)
+			exec "$REPO_ROOT/$DEPLOY_SELF_REL" $DEPLOY_REEXEC_PREFIX "$@"
 			;;
 	esac
 }

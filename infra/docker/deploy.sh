@@ -178,6 +178,21 @@ migrate_publish_env() {
 	fi
 }
 
+# published_bind — echo the host:port GRAPPA_PUBLISH actually publishes,
+# loopback-normalised for display (a wildcard/bare-port bind is shown as
+# loopback, since a URL nobody listens on is the #469 failure mode).
+published_bind() {
+	local p
+	p="$(sed -n 's/^GRAPPA_PUBLISH=//p' .env 2>/dev/null | tail -n1)"
+	case "$p" in
+		'')            printf '127.0.0.1:4000' ;;
+		0.0.0.0:*)     printf '127.0.0.1:%s' "${p##*:}" ;;
+		'[::]:'*)      printf '127.0.0.1:%s' "${p##*:}" ;;
+		*:*)           printf '%s' "$p" ;;
+		*)             printf '127.0.0.1:%s' "$p" ;;
+	esac
+}
+
 # ======================================================================
 # verb: install
 # ======================================================================
@@ -506,12 +521,190 @@ EOF
 }
 
 # ======================================================================
+# verb: update — consumes the shared deploy algorithm for hot-vs-cold
+# ======================================================================
+cmd_update() {
+	# ---- parse verb-local flags -------------------------------------
+	local no_pull=0 forced=0
+	local libargs=()
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--no-pull) no_pull=1 ;;
+			--force-hot|--force-cold) forced=1; libargs+=("$1") ;;
+			*) libargs+=("$1") ;;   # let the lib reject unknowns
+		esac
+		shift
+	done
+
+	# ---- guards (before any side effect) ----------------------------
+	require_compose_file
+	require_docker
+	[ -f .env ] || die "no .env in $REPO_ROOT — this box was never installed. Run 'infra/docker/deploy.sh install' first."
+	git rev-parse --git-dir >/dev/null 2>&1 || die "not a git checkout — nothing to update from."
+	assert_box_ownership   # sets BOX_RUNNING
+
+	if [ "$no_pull" -eq 0 ]; then
+		# A fast-forward onto a dirty tree either fails halfway or silently
+		# carries local edits into "the latest revision". Refuse, and say
+		# which files.
+		if ! git diff --quiet || ! git diff --cached --quiet; then
+			warn "uncommitted changes in the checkout:"
+			git status --short >&2
+			die "refusing to pull onto a dirty tree — commit, stash or use --no-pull."
+		fi
+	fi
+
+	# #485 — migrate a pre-change .env in place (idempotent; a no-op once
+	# NGINX_PUBLISH is gone). This is where the deprecated alias is honoured,
+	# unlike `install` which only warns.
+	migrate_publish_env
+
+	# ---- resolve the mode the operator did NOT force ----------------
+	# Two docker-specific reasons to force cold when the operator left it to
+	# auto: a stopped stack cannot be hot-reloaded (this is the
+	# start-again-after-stop path — quickstart-stop points here), and
+	# --no-pull deploys the working tree, whose empty prev..new range
+	# preflight cannot classify. A recreate is never wrong (unlike a hot
+	# reload), so force cold in both cases.
+	if [ "$forced" -eq 0 ]; then
+		if [ "$no_pull" -eq 1 ]; then
+			say "no-pull: deploying the working tree cold (empty range; a recreate is never wrong)"
+			libargs+=(--force-cold)
+		elif [ "$BOX_RUNNING" -eq 0 ]; then
+			say "stack is not running — bringing it up cold (a stopped box cannot be hot-reloaded)"
+			libargs+=(--force-cold)
+		fi
+	fi
+	export NO_PULL="$no_pull"
+
+	# ---- lib config + feature toggles -------------------------------
+	DEPLOY_SELF_REL="infra/docker/deploy.sh"
+	DEPLOY_REEXEC_PREFIX="update"                       # replay the verb on re-exec
+	DEPLOY_USAGE="update [--no-pull] [--force-hot|--force-cold]"
+	DEPLOY_FEATURE_FORCE_FLAGS=1
+	DEPLOY_FEATURE_DEFER=0
+	DEPLOY_FEATURE_NOTHING_TO_DO=0                      # already-current+up → cheap hot no-op; down → forced cold above
+	DEPLOY_FEATURE_REEXEC=1
+	DEPLOY_FEATURE_MARKER=1
+	DEPLOY_FEATURE_PREV_SHA_CARRY=1
+	HOT_HEALTHCHECK_RETRIES="${HOT_HEALTHCHECK_RETRIES:-30}"
+	HOT_HEALTHCHECK_SLEEP="${HOT_HEALTHCHECK_SLEEP:-1}"
+	COLD_HEALTHCHECK_RETRIES="${COLD_HEALTHCHECK_RETRIES:-120}"
+	COLD_HEALTHCHECK_SLEEP="${COLD_HEALTHCHECK_SLEEP:-2}"
+
+	# ---- substrate hooks --------------------------------------------
+	substrate_pull() {
+		PREV_SHA="$(git rev-parse HEAD)"
+		if [ "$NO_PULL" -eq 1 ]; then
+			NEW_SHA="$PREV_SHA"
+		else
+			local branch
+			branch="$(git rev-parse --abbrev-ref HEAD)"
+			say "Pulling ${branch} (fast-forward only)"
+			git pull --ff-only || die "pull is not a fast-forward — the branch diverged. Resolve it by hand."
+			NEW_SHA="$(git rev-parse HEAD)"
+		fi
+	}
+
+	substrate_read_marker()  { cat runtime/last-deployed-sha 2>/dev/null || true; }
+	substrate_write_marker() { mkdir -p runtime; printf '%s\n' "$NEW_SHA" > runtime/last-deployed-sha; }
+	substrate_commit_exists() { git cat-file -e "$1^{commit}" >/dev/null 2>&1; }
+	substrate_changed_files() { git diff --name-only "$1..$2"; }
+
+	substrate_preflight() {
+		# Classify via Grappa.Deploy.Preflight (substrate "docker") — the
+		# same SoT the operator + native substrates use. 0=HOT, 3=COLD,
+		# anything else is a crash the lib aborts on.
+		"${COMPOSE[@]}" run --rm --no-deps -e MIX_ENV=dev grappa \
+			mix run --no-start -e "Grappa.Deploy.Preflight.cli([\"$1\", \"$2\", \"docker\"])"
+	}
+
+	substrate_build() {
+		# Hot needs no build — the pulled commit is already in the
+		# bind-mounted tree (compose.yaml mounts ./:/app). Cold rebuilds the
+		# toolchain image.
+		[ "$MODE" = cold ] || return 0
+		say "Rebuilding the grappa image"
+		"${COMPOSE[@]}" --profile prod build grappa
+	}
+
+	substrate_reload() {
+		# The lib captures this hook's stdout as the reload response body, so
+		# the pre-reload chatter must go to stderr — else it pollutes the
+		# JSON the "failed":[] honesty glob inspects.
+		say "Reloading modules in the live BEAM" >&2
+		"${COMPOSE[@]}" exec -T grappa curl -fsS -X POST http://localhost:4000/admin/reload
+	}
+
+	substrate_cic() {
+		mkdir -p runtime/cicchetto-dist
+		say "Rebuilding the cicchetto bundle"
+		"${COMPOSE[@]}" --profile prod run --rm cicchetto-build
+		touch runtime/cicchetto-dist/.gitkeep
+	}
+
+	substrate_migrate() {
+		say "Syncing deps + running migrations"
+		# shellcheck disable=SC1010  # `mix do` is a mix subcommand, not shell `do`
+		"${COMPOSE[@]}" --profile prod run --rm --no-deps grappa \
+			mix do local.hex --force, local.rebar --force, deps.get
+		"${COMPOSE[@]}" --profile prod run --rm --no-deps grappa mix ecto.migrate
+	}
+
+	substrate_restart() {
+		"${COMPOSE[@]}" --profile prod up -d --force-recreate --no-deps --remove-orphans grappa
+	}
+
+	substrate_healthcheck() {
+		"${COMPOSE[@]}" exec -T grappa curl -fsS -o /dev/null http://localhost:4000/healthz
+	}
+
+	substrate_done_banner() {
+		if [ "$MODE" = hot ]; then
+			say "grappa updated — hot (sessions preserved) 🎉"
+		else
+			say "grappa updated — cold (stack recreated) 🎉"
+		fi
+		cat <<EOF
+
+  Web UI:   http://$(published_bind)/
+  Logs:     ${COMPOSE[*]} --profile prod logs -f grappa
+  Stop:     infra/docker/deploy.sh stop
+EOF
+	}
+
+	# shellcheck source=infra/lib/deploy_common.sh
+	. "$REPO_ROOT/infra/lib/deploy_common.sh"
+	# Empty-array-safe expansion for bash 3.2 under `set -u`.
+	deploy_main ${libargs[@]+"${libargs[@]}"}
+}
+
+# ======================================================================
+# verb: (bare) idempotent — install if not yet installed, else update
+# ======================================================================
+cmd_bare() {
+	# A checkout-less host or a fresh clone has no .env — that IS what "not
+	# installed" means to this stack. Install it; otherwise bring it current
+	# and up via update. This is the single command a curl|bash one-liner
+	# (unit D) can always run.
+	if [ -f .env ]; then
+		say "existing .env — updating this box"
+		cmd_update "$@"
+	else
+		say "no .env — installing a fresh box"
+		cmd_install "$@"
+	fi
+}
+
+# ======================================================================
 # dispatch
 # ======================================================================
 verb="${1:-}"
 if [ $# -gt 0 ]; then shift; fi
 case "$verb" in
 	install) cmd_install "$@" ;;
+	update)  cmd_update "$@" ;;
 	stop)    cmd_stop "$@" ;;
+	'')      cmd_bare "$@" ;;
 	*)       usage ;;
 esac
