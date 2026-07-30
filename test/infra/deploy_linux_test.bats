@@ -40,9 +40,13 @@ setup() {
     git -C "$UPSTREAM" config user.email test@grappa.local
     git -C "$UPSTREAM" config user.name "bats"
 
-    mkdir -p "$UPSTREAM/infra/linux" "$UPSTREAM/runtime" "$UPSTREAM/lib"
+    mkdir -p "$UPSTREAM/infra/linux" "$UPSTREAM/infra/lib" "$UPSTREAM/runtime" "$UPSTREAM/lib"
     cp "$DEPLOY_SH" "$UPSTREAM/infra/linux/deploy.sh"
     chmod +x "$UPSTREAM/infra/linux/deploy.sh"
+    # The ported consumer sources the shared algorithm lib (#503). It must
+    # exist in the throwaway clone for the script to run — committed so
+    # pulls stay clean. Assertions below are UNCHANGED by the extraction.
+    cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_common.sh" "$UPSTREAM/infra/lib/deploy_common.sh"
     # Delegates called by absolute SCRIPT_DIR path → committed recorders.
     for stub in cic_build.sh install_systemd.sh; do
         cat > "$UPSTREAM/infra/linux/$stub" <<EOF
