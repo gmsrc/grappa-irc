@@ -31,7 +31,9 @@
 //     MARKER (scrollIntoView({block:"start"}), atBottom=false), re-asserted;
 //   * COLD-MOUNT / app-startup into an unread channel → ALSO the MARKER (vjt
 //     point-2, reverses the #46 cold-mount-tail wontfix); no unread → tail;
-//   * visibility-return / resize → TAIL (#46 resume family, one-shot);
+//   * resize / follow-live visibility-return → TAIL (#46 resume family,
+//     one-shot); scrolled-up visibility-return preserves position or lands on
+//     the divider (#535, atBottom()-gated — see issue535 spec);
 //   * post-send / live-append → BOTTOM (#168; the send clears the latch first).
 // The divider still renders at its frozen position (freeze-display contract,
 // DESIGN_NOTES 2026-06-08) regardless.

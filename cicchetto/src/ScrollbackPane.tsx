@@ -1711,7 +1711,11 @@ const ScrollbackPane: Component<Props> = (props) => {
   //      point-2, 2026-07-03 — reverses the #46 cold-mount-tail wontfix).
   //   3. `document.visibilitychange` → visible — PWA backgrounded then
   //      re-opened (the effect below tracks `isDocumentVisible` false→true).
-  //      "tail-only", no latch: resume ≠ switch (#46).
+  //      GATED on the follow-state at hide time (#535), no latch: resume ≠
+  //      switch (#46). atBottom() true → "tail-only" (the reader was following
+  //      live). atBottom() false → "marker-or-preserve" (the reader had
+  //      deliberately scrolled up; land on the divider or hold their scrollTop
+  //      — NEVER tail-snap them).
   //
   // Single source of truth for the DOM read/scroll mechanics: any future
   // activation trigger plugs into `scrollToActivation` and picks its mode.
@@ -1739,9 +1743,25 @@ const ScrollbackPane: Component<Props> = (props) => {
   //     is set the length-effect re-asserts this on every rows recreation, so
   //     the post-switch catch-up refresh / late cursor hydration can't strand
   //     it (307). Cleared on operator input / own send.
-  //   * "tail-only" — visibility-return / resize (#46 resume family). Never
-  //     the divider; `atBottom=true`; no latch (the length-effect's
-  //     `atBottom` tail-follow already re-establishes the tail).
+  //   * "tail-only" — resize (#46 resume family) + the follow-live arm of
+  //     visibility-return. Never the divider; `atBottom=true`; no latch (the
+  //     length-effect's `atBottom` tail-follow already re-establishes the tail).
+  //   * "marker-or-preserve" — the scrolled-up arm of visibility-return (#535).
+  //     Same marker DOM read as "marker-or-tail", but when NO divider renders it
+  //     PRESERVES the reader's scrollTop instead of tailing. It is safe to skip
+  //     the scroll then: the re-latch (`setMarkerCursorId`) only recomputes
+  //     `rows()` — which resets scrollTop to 0 via the ref-keyed `<For>` — when
+  //     it MOVES the cursor, and a moved cursor still below the tail always
+  //     renders a divider, so "no marker" means the re-latch left scrollTop
+  //     untouched. The sibling `refreshScrollback` (fired one line before this)
+  //     is an ASYNC co-trigger that CAN recompute `rows()` later by appending
+  //     rows missed while hidden, but a TAIL append preserves a scrolled-up
+  //     reader's position (the length-effect's `atBottom` gate does nothing +
+  //     browser scroll anchoring holds the viewport) — empirically pinned by the
+  //     #535 "messages missed while hidden" e2e case, not just asserted here. No
+  //     latch (one-shot resume). Owner ruling 2026-07-29 (#535): the only
+  //     legitimate jump-to-bottom is the operator's own send in the active
+  //     window; every other trigger preserves position or lands on the divider.
   // Post-send / live-append stay at the BOTTOM via the length-effect +
   // `lastOwnSend`→`scrollToBottom` (both untouched; the send clears the latch
   // first). The divider still RENDERS at its frozen position (freeze-display
@@ -1756,7 +1776,10 @@ const ScrollbackPane: Component<Props> = (props) => {
   // rows-recreation reset happens in the SAME frame and the rAF×2 corrects it
   // pre-paint, so the intermediate scrollTop=0 is never painted — no hide
   // needed, and toggling `activating` on every rows change would itself flicker.
-  const scrollToActivation = (mode: "marker-or-tail" | "tail-only", withHide: boolean): void => {
+  const scrollToActivation = (
+    mode: "marker-or-tail" | "tail-only" | "marker-or-preserve",
+    withHide: boolean,
+  ): void => {
     if (!listRef) return;
     // #219 / #219-general — while a covering overlay is up, the pane's scroll is
     // frozen by the overlay-snapshot capture/restore below (`isOverlayFrozen()`
@@ -1824,7 +1847,7 @@ const ScrollbackPane: Component<Props> = (props) => {
         // geometry a second way. Its ABSENCE (fully-read channel, or a cold
         // switch whose rows haven't landed) naturally falls to the tail.
         const marker =
-          mode === "marker-or-tail"
+          mode === "marker-or-tail" || mode === "marker-or-preserve"
             ? (listRef.querySelector('[data-testid="unread-marker"]') as HTMLElement | null)
             : null;
         if (marker?.scrollIntoView) {
@@ -1838,6 +1861,15 @@ const ScrollbackPane: Component<Props> = (props) => {
           // bottom, tail-follow is correct.
           const distance = listRef.scrollHeight - listRef.scrollTop - listRef.clientHeight;
           setAtBottom(distance <= SCROLL_BOTTOM_THRESHOLD_PX);
+        } else if (mode === "marker-or-preserve") {
+          // #535 — scrolled-up visibility-return with NO divider to land on
+          // (e.g. a fully-read channel the reader paged up into). The re-latch
+          // left `markerCursorId` — hence this synchronous `rows()`, hence
+          // scrollTop — untouched. PRESERVE the reader's position: do NOT
+          // tail-snap, and leave `atBottom` false (they are still parked above
+          // the tail). Nothing to scroll here. (A later async `refreshScrollback`
+          // append can still recompute `rows()`, but a tail append preserves a
+          // scrolled-up viewport — guarded by the #535 gap e2e case.)
         } else {
           const tail = listRef.lastElementChild as HTMLElement | null;
           if (tail?.scrollIntoView) {
@@ -2032,10 +2064,24 @@ const ScrollbackPane: Component<Props> = (props) => {
         // channel — no synthetic-window 404.
         void refreshScrollback(props.networkSlug, props.channelName);
         setMarkerCursorId(getReadCursor(props.networkSlug, props.channelName));
-        // visibility-return (PWA re-foreground) = resume family → TAIL, never
-        // the divider (#46); one-shot, no latch. Only a channel activation
-        // (switch / cold-mount) jumps to the marker (#168, 2026-07-03).
-        scrollToActivation("tail-only", true);
+        // #535 — gate the resume scroll on the follow-state that was in effect
+        // when the document hid. `atBottom()` flips false ONLY on a real
+        // operator scroll-UP (onScroll), so it is an honest "the reader chose to
+        // leave the tail" signal — the SAME gate the resize re-anchor uses
+        // (onMount `onResize`). Both arms are one-shot with no latch: resume ≠
+        // switch, so only a channel activation (switch / cold-mount) latches a
+        // re-asserted marker jump (#168, 2026-07-03).
+        //   * atBottom() true  → the reader was following live → TAIL (#46).
+        //   * atBottom() false → the reader deliberately scrolled up mid-backlog
+        //     → land on the re-latched divider if one renders, else PRESERVE
+        //     their scrollTop. NEVER tail-snap them (the pre-#535 bug: the
+        //     unconditional "tail-only" here dropped a mid-backlog reader at the
+        //     tail on every return from an external link).
+        if (atBottom()) {
+          scrollToActivation("tail-only", true);
+        } else {
+          scrollToActivation("marker-or-preserve", true);
+        }
       }
     }),
   );

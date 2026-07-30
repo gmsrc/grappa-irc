@@ -23496,3 +23496,90 @@ suites moved to the consumer that now owns the logic
 only a thin forwarder suite. The old always-recreate assertions were NOT
 carried over — re-asserting a behaviour we set out to replace would have
 pinned the bug.
+---
+
+## 2026-07-30 — #535: returning from an external link must not tail-snap a mid-backlog reader
+
+Reported on #grappa: reading a channel with backlog, tapping an image link that
+leaves the PWA, then coming back drops the reader at the tail instead of where
+they were reading. Expected (reporter's words): "coming back should land at the
+messages still to be read."
+
+**Root cause — one arm of the visibility-return effect ignored the follow
+state.** In-app overlays (media viewer, `/names`, drawers) were already correct:
+they bump the `overlayScrollLock` refcount and the snapshot effect re-asserts
+`scrollTop` across open/close, so opening the image *in-app* keeps your place.
+But an EXTERNAL tab/app hides the document, so on return the `isDocumentVisible`
+false→true effect in `ScrollbackPane` ran `scrollToActivation("tail-only", true)`
+**unconditionally**. `"tail-only"` sets `atBottom = true` and snaps to the
+bottom whatever the reader was doing — a follow-live reader and a reader parked
+400 rows up got the same tail snap.
+
+Note the two halves already disagreed: the blur arm (`prev===true &&
+visible===false`) writes the cursor from `lastFullyVisibleRowId` via
+`setCursorIfAdvances`, so on hide the cursor is parked at the reader's actual
+position, and on return the marker is re-latched to exactly that row — then the
+viewport was scrolled away from it one line later.
+
+**Fix — gate the resume scroll on `atBottom()`, the same signal the resize
+re-anchor already uses.** `atBottom()` flips false ONLY on a real operator
+scroll-UP (`onScroll`, gated on `st < lastScrollTop`), never on programmatic
+content growth, so it is an honest "the reader chose to leave the tail" signal.
+
+* `atBottom()` true → the reader was following live → keep `"tail-only"` (#46
+  resume family; unchanged).
+* `atBottom()` false → the reader deliberately scrolled up → `"marker-or-preserve"`.
+
+`"marker-or-preserve"` is a new `scrollToActivation` mode: same marker DOM read
+as `"marker-or-tail"`, but when NO divider renders it PRESERVES the reader's
+scrollTop instead of tailing. Two `rows()`-recompute co-triggers fire in this
+effect and both are accounted for:
+
+* The synchronous re-latch (`setMarkerCursorId`) only recomputes `rows()` —
+  which resets scrollTop to 0 via the ref-keyed `<For>` — when it MOVES the
+  cursor, and a moved cursor still below the tail always renders a divider. So
+  "no marker" means the re-latch left scrollTop untouched; nothing to scroll.
+* The sibling `refreshScrollback` (fired one line earlier, `#159` catch-up) is
+  ASYNC and can recompute `rows()` later by appending rows missed while hidden.
+  A TAIL append preserves a scrolled-up reader's viewport (the length-effect's
+  `atBottom` gate does nothing for a scrolled-up reader, and the browser's
+  default scroll anchoring holds the position) — so the reader lands neither at
+  the tail nor stranded at the top. This is empirically pinned by an e2e case
+  (peer posts while the tab is hidden, via the `#159` per-channel delivery gap,
+  so the rows arrive only through `refreshScrollback` on return), not merely
+  asserted — the reasoning is subtle enough that a maintainer should trust the
+  test, not re-derive the invariant.
+
+**Two sub-cases, both handled:**
+
+1. PWA stays resident — the component is not remounted, `atBottom` is intact, the
+   gate above is all that is needed.
+2. PWA is evicted and cold-mounts on return — that is activation trigger 2
+   (onMount, `"marker-or-tail"` + latch), which already lands at the divider.
+   Untouched; the visibility effect's `prev===undefined` guard skips the mount
+   run, so there is no double authority.
+
+**Why not just make visibility-return unconditionally `"marker-or-tail"`.** That
+reverses #46 for the follow-live reader (who should keep getting the tail) and
+re-widens #168's collapse of scroll to a single always-bottom authority — the
+send-race #168 killed. The marker branch stays scoped by the explicit
+`atBottom()` condition, one-shot, no latch.
+
+**Owner ruling (vjt, #grappa, 2026-07-29) — general rule, not just this branch:**
+
+> non dobbiamo sminchiare lo scroll, come regola generale. l'unico caso in cui
+> scrolliamo to bottom è quando si scrive un messaggio nella finestra attiva.
+
+So the invariant is: **an unconditional jump to the bottom is legitimate only
+for the operator's own send in the active window.** Everything else preserves
+the reader's position or lands on the unread divider. This confirms the other
+call sites (switch / cold-mount are `"marker-or-tail"`, reaching the tail only
+when there is no divider; resize is already `atBottom()`-gated; the post-append
+effect tails only when already at the bottom). The visibility-return branch was
+the one site still violating it.
+
+Server-side: nothing. This is entirely in `cicchetto/src/ScrollbackPane.tsx`.
+Regression-guarded by `issue535-visibility-return-preserve-scroll.spec.ts` (four
+visible-outcome e2e cases: preserve-scrollTop with no divider, land-on-divider,
+the follow-live tail-snap that must NOT regress, and messages-missed-while-hidden
+that must neither tail-snap nor strand the reader at the top).
