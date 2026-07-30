@@ -42,6 +42,9 @@
 #   substrate_migrate         ecto migrate (cold only)
 #   substrate_restart         stop/start the daemon (cold only; may exit on defer)
 #   substrate_healthcheck     one /healthz probe; 0=200, nonzero=not yet
+#   substrate_done_banner N   print the success line (N = retries taken); the
+#                             wording is substrate-specific (sessions preserved
+#                             vs container recreated vs daemon respawned)
 #
 # ── Feature toggles (consumer sets to 1 to enable; default OFF) ──────
 #   DEPLOY_FEATURE_FORCE_FLAGS    accept --force-hot / --force-cold
@@ -239,7 +242,10 @@ _deploy_healthcheck_loop() {
 			if [ "$DEPLOY_FEATURE_MARKER" = 1 ]; then
 				substrate_write_marker
 			fi
-			deploy_log "✓ $MODE deploy complete after $i retries"
+			# Substrate-specific success wording (sessions preserved vs
+			# container recreated vs daemon respawned) — the consumer owns
+			# it; $1 = retries taken.
+			substrate_done_banner "$i"
 			exit 0
 		fi
 		i=$((i + 1))

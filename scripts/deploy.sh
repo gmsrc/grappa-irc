@@ -171,6 +171,16 @@ substrate_healthcheck() {
 	in_container curl -fsS -o /dev/null http://localhost:4000/healthz
 }
 
+substrate_done_banner() {
+	# Docker success wording (no [deploy] prefix — matches the original +
+	# deploy_reload_verify_test.bats). $1 = retries taken (unused here).
+	if [ "$MODE" = hot ]; then
+		echo "✓ hot-deploy complete (sessions preserved, container ID unchanged)"
+	else
+		echo "✓ cold-deploy complete (sessions reset, new container)"
+	fi
+}
+
 # ---- run ------------------------------------------------------------
 # shellcheck source=infra/lib/deploy_common.sh
 . "$REPO_ROOT/infra/lib/deploy_common.sh"

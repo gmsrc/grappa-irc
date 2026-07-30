@@ -39,10 +39,17 @@ setup() {
     git init -q -b main "$UPSTREAM"
     git -C "$UPSTREAM" config user.email test@grappa.local
     git -C "$UPSTREAM" config user.name "bats"
-    mkdir -p "$UPSTREAM/scripts" "$UPSTREAM/lib" "$UPSTREAM/runtime"
+    mkdir -p "$UPSTREAM/scripts" "$UPSTREAM/infra/lib" "$UPSTREAM/lib" "$UPSTREAM/runtime"
     cp "$DEPLOY_SH" "$UPSTREAM/scripts/deploy.sh"
     cp "$LIB_SH" "$UPSTREAM/scripts/_lib.sh"
+    # #503: deploy.sh now sources the shared deploy algorithm lib — it must
+    # exist in the throwaway clone for the script to run.
+    cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_common.sh" "$UPSTREAM/infra/lib/deploy_common.sh"
     : > "$UPSTREAM/compose.yaml"
+    # #503: the hot path now writes runtime/last-deployed-sha (the marker).
+    # A committed .gitkeep so the clone actually HAS runtime/ (git drops
+    # empty dirs) — prod always has it (the DB lives there).
+    touch "$UPSTREAM/runtime/.gitkeep"
     echo base > "$UPSTREAM/lib/base.ex"
     git -C "$UPSTREAM" add -A
     git -C "$UPSTREAM" commit -qm "base"

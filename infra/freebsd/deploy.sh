@@ -182,6 +182,14 @@ substrate_healthcheck() {
 	curl -fsS -o /dev/null "${HEALTHCHECK_URL}"
 }
 
+substrate_done_banner() {
+	if [ "$MODE" = hot ]; then
+		deploy_log "✓ hot deploy complete (sessions preserved, daemon pid unchanged) after $1 retries"
+	else
+		deploy_log "✓ cold deploy complete (sessions reset, daemon respawned) after $1 retries"
+	fi
+}
+
 # ---- run ------------------------------------------------------------
 SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=infra/lib/deploy_common.sh

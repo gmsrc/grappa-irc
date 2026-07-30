@@ -154,6 +154,10 @@ substrate_healthcheck() {
 	curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/healthz"
 }
 
+substrate_done_banner() {
+	deploy_log "✓ ${MODE} deploy complete (${NEW_SHA}) after $1 retries"
+}
+
 # ---- run ------------------------------------------------------------
 # shellcheck source=infra/lib/deploy_common.sh
 . "${SCRIPT_DIR}/../lib/deploy_common.sh"

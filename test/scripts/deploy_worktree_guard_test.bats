@@ -45,10 +45,13 @@ setup() {
     git init -q -b main "$MAIN"
     git -C "$MAIN" config user.email test@grappa.local
     git -C "$MAIN" config user.name "bats"
-    mkdir -p "$MAIN/scripts" "$MAIN/lib" "$MAIN/runtime"
+    mkdir -p "$MAIN/scripts" "$MAIN/infra/lib" "$MAIN/lib" "$MAIN/runtime"
     cp "$DEPLOY_SH" "$MAIN/scripts/deploy.sh"
     cp "$DEPLOY_CIC_SH" "$MAIN/scripts/deploy-cic.sh"
     cp "$LIB_SH" "$MAIN/scripts/_lib.sh"
+    # #503: deploy.sh now sources the shared deploy algorithm lib — it must
+    # exist in the checkout for the script to reach the pull step.
+    cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_common.sh" "$MAIN/infra/lib/deploy_common.sh"
     # #538 — deploy-cic.sh (and deploy.sh's cold path) derive the cic version
     # from mix.exs @version via infra/packaging/version.sh. The fixture needs
     # both the script and a mix.exs to derive from, or the real derivation dies
