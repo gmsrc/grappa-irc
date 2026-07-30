@@ -26,34 +26,40 @@ export type ChannelKey = string & { readonly [channelKeyBrand]: true };
 export const channelKey = (slug: string, name: string): ChannelKey =>
   `${slug} ${canonicalChannel(name)}` as ChannelKey;
 
-// UX-4 bucket A — sigil-aware ASCII canonicalisation for IRC channel
-// names. Faithful mirror of `Grappa.IRC.Identifier.canonical_channel/1`
-// on the server: bahamut (CASEMAPPING=ascii, #525) folds ONLY `A-Z` in
-// CHANNEL names, leaving `[ ] \ ~` untouched, so the client shares the
-// SAME `asciiFold` primitive with the nick fold — exactly as the server
-// shares ONE `fold_ascii/1` between `canonical_nick/1` and
-// `canonical_channel/1`. #364 briefly folded the brackets too (`#chan[1]`
-// → `#chan{1}`); the ircd keeps those two channels DISTINCT, so #525
-// reverted the over-fold to plain ASCII. A bare `toLowerCase` would
-// Unicode-over-fold non-ASCII (`#CAFÉ` → `#café`); `asciiFold` is
-// byte-level so those stay distinct too. Nicks (DM-target windows) keep
-// their casing because display + the CTCP visibility row's `dm_with`
-// carry meaning.
+// ASCII canonicalisation for any Grappa identifier KEY — a channel OR a
+// DM-peer nick. Faithful mirror of `Grappa.IRC.Identifier.canonical_target/1`
+// on the server: bahamut (CASEMAPPING=ascii, #525) folds ONLY `A-Z`,
+// leaving `[ ] \ ~` untouched, and folds channels the SAME way it folds
+// nicks — so this is the plain byte-level `asciiFold` on the WHOLE
+// identifier. A sigil (`# & ! +`) sits outside `A-Z` and passes through,
+// so `canonicalChannel("#Chan") === "#chan"` and a nick folds identically.
 //
-// Applied at every channel-bearing cic boundary: `channelKey(slug,
-// name)` (composite key), `joinChannel(...)` (Phoenix Channel topic
-// segment), REST endpoint URL path-segment producers, slash-command
-// channel arg producers. Without this, `#Chan` from the operator's
-// typed input would create a duplicate window beside the `#chan` the
-// server canonicalises to in scrollback + window_state.
+// #537 CONTRACT CHANGE — this used to be sigil-gated (folded only names
+// starting with `# & ! +`, returning nicks RAW), the twin of the server's
+// then-sigil-gated `canonical_channel/1`. INC-3 collapsed the server's
+// `canonical_channel/1` AND `canonical_nick/1` into one unconditional
+// `canonical_target/1`, so the DM window KEY now folds `A-Z` server-side.
+// The client mirror MUST fold nick KEYS in lockstep, or a mixed-case DM
+// window (`/q Guest`) keys/subscribes on `channel:Guest` while the server
+// persists+broadcasts on the folded `channel:guest` — the live DM never
+// renders (the regression #537's own e2e caught). The ORIGINAL casing is
+// NOT lost: it survives for DISPLAY via the raw `qw.targetNick` (Sidebar /
+// BottomBar `<NickText>`) and on the WIRE via the raw send target — this
+// function feeds KEYS only (never a shown label or an upstream frame).
+//
+// #525 posture holds for both shapes: only `A-Z` folds, so `#chan[1]`/
+// `#chan{1}` AND `foo[1]`/`foo{1}` stay DISTINCT. A bare `toLowerCase`
+// would Unicode-over-fold non-ASCII (`#CAFÉ` → `#café`); `asciiFold` is
+// byte-level so those stay distinct too.
+//
+// Applied at every identifier-KEY cic boundary: `channelKey(slug, name)`
+// (composite key), `joinChannel(...)` (Phoenix Channel topic segment),
+// REST endpoint URL path-segment producers, and per-channel KEY matches
+// (push triggers, banlist, invite-ack). Without it, a mixed-case
+// channel/nick from typed input forks a duplicate window beside the folded
+// one the server canonicalises to in scrollback + window_state.
 export function canonicalChannel(name: string): string {
-  if (name.length === 0) return name;
-  const first = name.charCodeAt(0);
-  // 0x23 #, 0x26 &, 0x21 !, 0x2B +
-  if (first === 0x23 || first === 0x26 || first === 0x21 || first === 0x2b) {
-    return asciiFold(name);
-  }
-  return name;
+  return asciiFold(name);
 }
 
 // Codebase audit cic M4 — paired decoder for the composite key. Pre-

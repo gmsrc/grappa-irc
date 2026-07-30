@@ -42,9 +42,15 @@ describe("channelKey + decodeChannelKey round-trip", () => {
     expect(decodeChannelKey(k)).toEqual({ slug: "freenode", name: "#italia weird" });
   });
 
-  // UX-4 bucket A — sigil-aware channel-name canonicalisation. Mirrors
-  // `Grappa.IRC.Identifier.canonical_channel/1` on the server so the
-  // composite key for `#Chan` and `#chan` collapses to the same row.
+  // #537 — identifier-KEY canonicalisation. Mirrors
+  // `Grappa.IRC.Identifier.canonical_target/1` on the server (the
+  // sigil-gated `canonical_channel/1` was COLLAPSED into it): the
+  // composite KEY folds `A-Z` for BOTH channels AND DM-peer nicks, so
+  // `#Chan`/`#chan` AND `Vjt`/`vjt` each resolve to one row/topic.
+  // Contract change: pre-#537 this twin left nicks RAW to match a RAW
+  // topic key; the server now folds the nick KEY (canonical_target/1), so
+  // the client mirror must fold it too or a mixed-case DM window
+  // subscribes to a topic the server never broadcasts on.
   describe("channelKey + canonicalChannel: case-insensitive composite", () => {
     it("collapses sigil-channels to lowercase in the composite key", () => {
       expect(channelKey("freenode", "#CHAN")).toBe("freenode #chan");
@@ -59,17 +65,23 @@ describe("channelKey + decodeChannelKey round-trip", () => {
       expect(channelKey("net", "+MODELESS")).toBe("net +modeless");
     });
 
-    it("preserves NICK (DM) case — display + CTCP visibility row carry meaning", () => {
-      expect(channelKey("net", "CristoBOT")).toBe("net CristoBOT");
-      expect(channelKey("net", "Vjt")).toBe("net Vjt");
+    it("folds NICK (DM) KEYS too (#537) — display uses the raw targetNick, not this key", () => {
+      // Contract change (#537): pre-collapse the twin left nicks RAW
+      // ("net CristoBOT") to match a RAW topic; the server now folds the
+      // DM window KEY via `canonical_target/1`, so this composite routing
+      // key folds A-Z in lockstep. The original casing survives for
+      // DISPLAY (`qw.targetNick` → Sidebar/BottomBar `<NickText>`) and on
+      // the WIRE (the raw send target) — this key is never shown or sent.
+      expect(channelKey("net", "CristoBOT")).toBe("net cristobot");
+      expect(channelKey("net", "Vjt")).toBe("net vjt");
     });
 
-    it("preserves the $server pseudo-channel sentinel case", () => {
+    it("leaves $server unchanged (all-lowercase sentinel — no A-Z to fold)", () => {
       expect(channelKey("net", "$server")).toBe("net $server");
     });
   });
 
-  describe("canonicalChannel — sigil-aware ASCII fold", () => {
+  describe("canonicalChannel — ASCII identifier fold (channels + nicks, #537)", () => {
     it("lowercases sigil-prefixed channel names", () => {
       expect(canonicalChannel("#Chan")).toBe("#chan");
       expect(canonicalChannel("&LocalChan")).toBe("&localchan");
@@ -86,18 +98,27 @@ describe("channelKey + decodeChannelKey round-trip", () => {
       expect(canonicalChannel("#X~Y")).toBe("#x~y");
     });
 
-    it("leaves nicks unchanged", () => {
-      expect(canonicalChannel("Vjt")).toBe("Vjt");
-      expect(canonicalChannel("CristoBOT")).toBe("CristoBOT");
+    it("folds nicks too — no sigil gate (#537, the canonical_target/1 twin)", () => {
+      // Contract change (#537): pre-collapse `canonicalChannel` mirrored
+      // the sigil-gated `canonical_channel/1` and returned nicks RAW; the
+      // server collapsed that into `canonical_target/1` (unconditional
+      // A-Z fold). The KEY twin must fold nicks too, else a mixed-case DM
+      // window's topic/composite key diverges from the server's folded
+      // broadcast. Display + wire keep the original case elsewhere.
+      expect(canonicalChannel("Vjt")).toBe("vjt");
+      expect(canonicalChannel("CristoBOT")).toBe("cristobot");
+      // #525 posture holds for nicks too: only A-Z folds, brackets stay
+      // (bahamut keeps `foo[1]`/`foo{1}` DISTINCT).
+      expect(canonicalChannel("Foo[1]")).toBe("foo[1]");
     });
 
-    it("leaves $server unchanged", () => {
+    it("leaves $server unchanged (no A-Z to fold)", () => {
       expect(canonicalChannel("$server")).toBe("$server");
     });
 
-    it("is idempotent", () => {
+    it("is idempotent (a mixed-case nick folds once, stays folded)", () => {
       expect(canonicalChannel(canonicalChannel("#Chan"))).toBe("#chan");
-      expect(canonicalChannel(canonicalChannel("alice"))).toBe("alice");
+      expect(canonicalChannel(canonicalChannel("Alice"))).toBe("alice");
     });
 
     it("handles the empty string", () => {

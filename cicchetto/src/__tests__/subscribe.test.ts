@@ -1303,7 +1303,13 @@ describe("subscribe — C4.1 DM auto-open on incoming PRIVMSG", () => {
     expect(store.scrollbackByChannel()[channelKey("freenode", "bob")]?.map((m) => m.body)).toEqual([
       "usage",
     ]);
-    expect(store.scrollbackByChannel()[channelKey("freenode", "Bob")]).toBeUndefined();
+    // Contract change (#537): the DM window KEY now folds A-Z, so `Bob`
+    // and `bob` are ONE composite key — a phantom mixed-case bucket is
+    // structurally impossible. Pre-#537 the key was RAW, so this line
+    // asserted the "Bob" bucket stayed empty; post-collapse the two keys
+    // are identical (the raw casing survives only for display via
+    // `qw.targetNick`, never as a store key).
+    expect(channelKey("freenode", "Bob")).toBe(channelKey("freenode", "bob"));
   });
 
   it("incoming PRIVMSG to a channel (not own nick) does NOT open query window", async () => {
