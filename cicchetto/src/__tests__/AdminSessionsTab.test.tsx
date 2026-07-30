@@ -43,6 +43,9 @@ const USER_SESSION: AdminSession = {
     mailbox_len: 3,
     memory_bytes: 250_000,
     joined_channels: ["#bofh", "#italia"],
+    peer_address: "2a01:4f8:201:2281:11::22",
+    peer_port: 6697,
+    peer_name: "allnight6.azzurra.chat",
     introspection_degraded: [],
   },
 };
@@ -59,6 +62,9 @@ const VISITOR_SESSION: AdminSession = {
     mailbox_len: 0,
     memory_bytes: 90_000,
     joined_channels: ["#guest"],
+    peer_address: "192.0.2.10",
+    peer_port: 6667,
+    peer_name: null,
     introspection_degraded: [],
   },
 };
@@ -75,7 +81,13 @@ const DEGRADED_SESSION: AdminSession = {
     mailbox_len: 0,
     memory_bytes: 100_000,
     joined_channels: null,
-    introspection_degraded: ["joined_channels"],
+    // A sick session degrading BOTH introspection calls: no peer known →
+    // nil address + the :peer_address marker (rendered "—" in the upstream
+    // column, never a fabricated/stale address).
+    peer_address: null,
+    peer_port: null,
+    peer_name: null,
+    introspection_degraded: ["joined_channels", "peer_address"],
   },
 };
 
@@ -91,11 +103,14 @@ const DEAD_SESSION: AdminSession = {
     mailbox_len: 0,
     memory_bytes: 0,
     joined_channels: null,
+    peer_address: null,
+    peer_port: null,
+    peer_name: null,
     // `alive: false` is trustworthy here (pid registered, Session.Server
-    // genuinely dead between BEAM crash + registry sweep) — it can never
-    // appear in introspection_degraded, whose only member is
-    // `:joined_channels` (#428, server-authoritative degraded_field set).
-    introspection_degraded: ["joined_channels"],
+    // genuinely dead between BEAM crash + registry sweep). The degraded set
+    // now spans `:joined_channels | :peer_address` (#550) — a dead pid
+    // times out both introspection calls.
+    introspection_degraded: ["joined_channels", "peer_address"],
   },
 };
 
@@ -114,6 +129,9 @@ const ORPHAN_SESSION: AdminSession = {
     mailbox_len: 0,
     memory_bytes: 80_000,
     joined_channels: [],
+    peer_address: "198.51.100.7",
+    peer_port: 6697,
+    peer_name: null,
     introspection_degraded: [],
   },
 };
@@ -204,6 +222,56 @@ describe("AdminSessionsTab", () => {
     expect(visitorRow.textContent).toContain("visitor: M\\Grappa");
     expect(userRow.textContent).not.toContain("11111111");
     expect(visitorRow.textContent).not.toContain("22222222");
+  });
+
+  it("renders the upstream peer: name + address, address-only, or — when not connected (#550)", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminListSessions).mockResolvedValue([
+      USER_SESSION,
+      VISITOR_SESSION,
+      DEGRADED_SESSION,
+    ]);
+
+    render(() => <AdminSessionsTab />);
+    await screen.findByTestId(`admin-session-row-${rowId(USER_SESSION)}`);
+
+    // Reverse-DNS name first (readable), the raw address:port kept visible
+    // next to it (authoritative) — the name NEVER replaces the address.
+    const withName = screen.getByTestId(`admin-session-upstream-${rowId(USER_SESSION)}`);
+    expect(withName.textContent).toContain("allnight6.azzurra.chat");
+    expect(withName.textContent).toContain("2a01:4f8:201:2281:11::22");
+    expect(withName.textContent).toContain("6697");
+
+    // Cold cache / no PTR: no name → the raw address:port stands on its own.
+    const addrOnly = screen.getByTestId(`admin-session-upstream-${rowId(VISITOR_SESSION)}`);
+    expect(addrOnly.textContent).toContain("192.0.2.10");
+    expect(addrOnly.textContent).toContain("6667");
+
+    // Not connected (peer_address null): em-dash, never a fabricated address.
+    const notConnected = screen.getByTestId(`admin-session-upstream-${rowId(DEGRADED_SESSION)}`);
+    expect(notConnected.textContent).toContain("—");
+  });
+
+  it("renders an attacker-controlled reverse-DNS name as inert text, not HTML (#550)", async () => {
+    // PTR is attacker-controlled for third-party networks (issue failure
+    // mode #3). Solid escapes text interpolation, so a markup payload lands
+    // as literal characters and no live element is created.
+    const api = await import("../lib/api");
+    const hostile: AdminSession = {
+      ...USER_SESSION,
+      subject_id: "77777777-7777-7777-7777-777777777777",
+      live_state: {
+        ...USER_SESSION.live_state,
+        peer_name: "<img src=x onerror=alert(1)>",
+      },
+    };
+    vi.mocked(api.adminListSessions).mockResolvedValue([hostile]);
+
+    render(() => <AdminSessionsTab />);
+    const cell = await screen.findByTestId(`admin-session-upstream-${rowId(hostile)}`);
+
+    expect(cell.textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(cell.querySelector("img")).toBeNull();
   });
 
   it("renders 'no DB row' for orphan-pid sessions (subject_label === null)", async () => {

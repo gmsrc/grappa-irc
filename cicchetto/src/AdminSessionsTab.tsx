@@ -240,6 +240,7 @@ const AdminSessionsTab: Component = () => {
               <th>state</th>
               <th>who</th>
               <th>network</th>
+              <th>upstream</th>
               <th>mailbox</th>
               <th>memory</th>
               <th>last seen</th>
@@ -259,6 +260,9 @@ const AdminSessionsTab: Component = () => {
                     <td>{renderWho(s)}</td>
                     <td data-testid={`admin-session-network-${id}`}>
                       {networkSlugById().get(s.network_id) ?? String(s.network_id)}
+                    </td>
+                    <td data-testid={`admin-session-upstream-${id}`}>
+                      {renderUpstream(s.live_state)}
                     </td>
                     <td>{s.live_state.mailbox_len}</td>
                     <td>{renderKb(s.live_state.memory_bytes)}</td>
@@ -370,6 +374,34 @@ function renderLastSeen(iso: string | null): string {
   if (h < 24) return `${h}h`;
   const d = Math.floor(h / 24);
   return `${d}d`;
+}
+
+// #550 — the upstream peer (destination) this session's socket landed on.
+// Reverse-DNS name first (the readable part), the raw address:port second
+// AND as the title — the address is authoritative, the name is
+// attacker-controlled for third-party networks, so it renders as plain
+// (Solid-escaped) text and NEVER replaces the numeric address. `null`
+// address = not connected (the degraded column carries the ⚠ peer_address
+// marker); a `null` name with a live address = cold cache / no PTR, where
+// the raw address stands on its own.
+function renderUpstream(live: AdminSession["live_state"]) {
+  const addr = live.peer_address;
+  if (addr === null) return "—";
+  const hostport = live.peer_port === null ? addr : `${addr}:${live.peer_port}`;
+  const name = live.peer_name;
+  if (name === null) {
+    return (
+      <span class="admin-session-upstream" title={hostport}>
+        {hostport}
+      </span>
+    );
+  }
+  return (
+    <span class="admin-session-upstream" title={hostport}>
+      {name}
+      <span class="admin-session-upstream-addr"> ({hostport})</span>
+    </span>
+  );
 }
 
 function renderDegraded(degraded: string[], id: string) {
