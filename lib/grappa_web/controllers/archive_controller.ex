@@ -110,17 +110,18 @@ defmodule GrappaWeb.ArchiveController do
       # REV-B / H17 (2026-05-22 codebase review): canonicalise the
       # target at the controller boundary BEFORE sigil dispatch so the
       # delete path observes the same normalisation as the write path
-      # (`Grappa.Scrollback.Message.canonicalize_channel/1`). The
-      # `Identifier.canonical_channel/1` helper is sigil-aware — it
-      # lowercases channel-shaped names and passes nick-shaped names
-      # through verbatim, so it is also safe for the `:query` branch
-      # (DMs are nick-shaped and case-meaningful per the `dm_with`
-      # column rule at `lib/grappa/scrollback/message.ex:252-254`,
-      # which `canonical_channel/1` correctly preserves). Mirrors the
-      # write-side single-sourcing pattern; the only consumer of
-      # `delete_for_channel/3` is this controller so the upstream
-      # canonicalisation is sufficient.
-      canonical_target = Grappa.IRC.Identifier.canonical_channel(target)
+      # (`Grappa.Scrollback.Message.canonicalize_channel/1`). #537 INC-2.3 —
+      # `canonical_target/2` folds network-aware to the live session's
+      # CASEMAPPING (`:ascii` when no pid → byte-identical to the pure-ASCII
+      # fold, so prod is unchanged), the stateless controller's twin of the
+      # Server's write-time `fold_key/2`: an rfc1459 `#Foo[1]` deletes the one
+      # window keyed `#foo{1}`. Shape-aware (delegates to the sigil-gated
+      # `canonical_target/1`): a channel folds A-Z; a nick-shaped DM folds via
+      # `canonical_nick/1`, and `delete_for_dm/3` re-folds the peer through the
+      # shared ASCII `where_dm_peer/2` so the delete lands on the same window
+      # the read path resolves.
+      canonical_target =
+        Grappa.IRC.Identifier.canonical_target(target, Session.casemapping(session_subject, network.id))
 
       # M17 (REV-D 2026-05-22): pre-fix this was a strict-bind
       # `{:ok, _} =` against the Scrollback delete result. Even though

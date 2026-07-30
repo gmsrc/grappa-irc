@@ -45,8 +45,9 @@ defmodule GrappaWeb.ReadCursorController do
 
   import GrappaWeb.Validation, only: [validate_target_name: 1]
 
+  alias Grappa.IRC.Identifier
   alias Grappa.Push.BadgeCount
-  alias Grappa.{ReadCursor, WindowCounts}
+  alias Grappa.{ReadCursor, Session, WindowCounts}
   alias GrappaWeb.Subject
 
   @doc """
@@ -64,6 +65,13 @@ defmodule GrappaWeb.ReadCursorController do
     network = conn.assigns.network
 
     with :ok <- validate_target_name(channel),
+         # #537 INC-2.3 — fold the USER-TYPED key to the network's CASEMAPPING
+         # at this ingress (after validating the raw input) so the cursor upsert
+         # AND the deferred fanout topic/window_counts key match the one key the
+         # Server wrote under (rfc1459 `#Foo[1]` → `#foo{1}`). `:ascii` is
+         # byte-identical to ReadCursor.set's internal ASCII fold → prod
+         # unchanged. Bare `=` with-clause: rebinds `channel` for set + fanout.
+         channel = Identifier.canonical_target(channel, Session.casemapping(subject, network.id)),
          {:ok, cursor} <- ReadCursor.set(subject, network.id, channel, message_id) do
       # #273 — only the cursor upsert is request-critical. Proven with
       # timing: `ReadCursor.set/4` ~69µs vs a ~10ms+ full

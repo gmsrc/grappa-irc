@@ -70,6 +70,10 @@ defmodule GrappaWeb.NotifyController do
   def create(conn, %{"nicks" => nicks}) when is_list(nicks) and nicks != [] do
     subject = session_subject(conn)
     network = conn.assigns.network
+    # #537 INC-2.3 — fold the dedup set to the network's CASEMAPPING so an
+    # rfc1459 re-add of `Foo[1]` matches an armed `Foo{1}` (`:ascii` → the
+    # byte-identical pure-ASCII nick fold, prod unchanged).
+    casemapping = Session.casemapping(subject, network.id)
 
     with :ok <- validate_batch_size(nicks),
          :ok <- validate_nicks(nicks),
@@ -78,10 +82,10 @@ defmodule GrappaWeb.NotifyController do
          # `MONITOR +`/`WATCH +` for already-armed targets (review nit
          # 2026-07-19). Same read the batch-size cap does; cheap.
          pre_folds =
-           MapSet.new(Notify.list(subject, network.id), &Identifier.canonical_nick(&1.nick)),
+           MapSet.new(Notify.list(subject, network.id), &Identifier.canonical_target(&1.nick, casemapping)),
          {:ok, entries} <- Notify.add(subject, network.id, nicks, subject_label(conn)) do
       added =
-        Enum.reject(nicks, &MapSet.member?(pre_folds, Identifier.canonical_nick(&1)))
+        Enum.reject(nicks, &MapSet.member?(pre_folds, Identifier.canonical_target(&1, casemapping)))
 
       :ok = Session.notify_changed(subject, network.id, added, [])
 

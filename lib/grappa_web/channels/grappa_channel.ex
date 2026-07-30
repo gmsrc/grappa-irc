@@ -244,21 +244,45 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   # UX-4 bucket A — canonicalise the channel segment of a per-channel
-  # topic so subscribers join the SAME topic string the broadcasters
-  # emit on. `Topic.channel/3` canonicalises at build time; this
-  # mirrors it at parse time so a cic-side `socket.channel("grappa:
-  # user:vjt/network:az/channel:#Chan")` falls onto the canonical
-  # `#chan` topic regardless of input casing. User + network topics
-  # carry no channel segment and pass through unchanged. Admin events
-  # likewise. #537 — `canonical_target/1` (fold at every identifier
-  # boundary) so a DM-window topic segment (a peer nick) folds too,
-  # matching `Topic.channel/3`; the sigil-gated form left DM topics
-  # case-forked (producer vs subscriber mismatch).
+  # topic so the read-side (cursor, window_counts, snapshot) resolves the
+  # SAME key the broadcasters emit on. `Topic.channel/3` canonicalises at
+  # build time (on the Server's already-folded key); this mirrors it at
+  # parse time so a cic-side `socket.channel("grappa:user:vjt/network:az/
+  # channel:#Chan")` resolves to the canonical `#chan` window regardless of
+  # input casing. User + network topics carry no channel segment and pass
+  # through unchanged. Admin events likewise.
+  #
+  # #537 INC-2.3 — network-aware `canonical_target/2`: the topic join is a
+  # STATELESS web-edge, so it reaches the network's CASEMAPPING via
+  # `Session.casemapping/2` (the Server + EventRouter read `state.isupport`).
+  # An rfc1459 `#Foo[1]` folds to `#foo{1}` — the one window the Server keyed
+  # folded. `:ascii` (no live session, unresolvable user/network, or an ascii
+  # network — all of production) makes the normalise step a no-op, so this is
+  # byte-identical to the pre-#537 ASCII fold. cic normally joins with the
+  # already-folded key it learned from server events (a no-op here); the
+  # network-aware fold is the robustness path for a raw user-typed topic.
   defp canonicalize_topic({:channel, user_name, network_slug, channel}) do
-    {:channel, user_name, network_slug, Grappa.IRC.Identifier.canonical_target(channel)}
+    casemapping = topic_casemapping(user_name, network_slug)
+    {:channel, user_name, network_slug, Identifier.canonical_target(channel, casemapping)}
   end
 
   defp canonicalize_topic(other), do: other
+
+  # Resolve the network's CASEMAPPING for a stateless per-channel topic join.
+  # `resolve_subject/1` yields the session subject; `get_network_by_slug/1`
+  # the network_id; `Session.casemapping/2` reads the live Server (`:ascii`
+  # when no pid). Any unresolvable leg degrades to `:ascii` — the safe,
+  # prod-invariant default (the join then falls through to `authorize/2`'s
+  # own `:error`/`:forbidden` handling on a genuinely bad topic).
+  @spec topic_casemapping(String.t(), String.t()) :: Identifier.casemapping()
+  defp topic_casemapping(user_name, network_slug) do
+    with {:ok, subject} <- resolve_subject(user_name),
+         {:ok, %Network{} = network} <- Networks.get_network_by_slug(network_slug) do
+      Session.casemapping(subject, network.id)
+    else
+      _ -> :ascii
+    end
+  end
 
   # CP29 R-3: per-channel topic joins return the current read cursor in
   # the join reply so cic doesn't need a per-window REST round-trip on

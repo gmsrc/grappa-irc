@@ -113,6 +113,15 @@ defmodule GrappaWeb.MessagesController do
     with :ok <- validate_target_name(channel),
          {:ok, direction} <- parse_direction(params),
          {:ok, limit} <- parse_limit(params["limit"]) do
+      # #537 INC-2.3 — normalise the USER-TYPED key to the network's
+      # CASEMAPPING at this ingress so an rfc1459 `#Foo[1]` resolves to the one
+      # window the Server keyed folded (`#foo{1}`). `:ascii` (no live session,
+      # or an ascii network) is byte-identical to the pure-ASCII fold Scrollback
+      # applies internally, so prod is unchanged. Every downstream read
+      # (Scrollback, hide_presence, presence_channel_key) now sees the folded
+      # key — the stateless controller's twin of the Server's `fold_key/2`.
+      channel = Identifier.canonical_target(channel, Session.casemapping(subject, network.id))
+
       own_nick =
         case Session.current_nick(subject, network.id) do
           {:ok, nick} -> nick
@@ -232,8 +241,11 @@ defmodule GrappaWeb.MessagesController do
   end
 
   # Rebuild cic's opaque ChannelKey (`cicchetto/src/lib/channelKey.ts`):
-  # "<slug> <canonical_channel>" — the channel folded ASCII via the SSOT
-  # (#364/#525), so a request in any casing resolves to the same stored pin.
+  # "<slug> <canonical_channel>" — so a request in any casing resolves to the
+  # same stored pin. #537 — `index/2` already network-folded `channel` to the
+  # CASEMAPPING at the ingress, so on rfc1459 this matches cic's ChannelKey
+  # (built from the server's folded key); the fold here is the idempotent
+  # ASCII backstop (bahamut/ascii: byte-identical, prod unchanged).
   defp presence_channel_key(network, channel),
     do: "#{network.slug} #{Identifier.canonical_channel(channel)}"
 
