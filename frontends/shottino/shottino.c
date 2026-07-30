@@ -7380,6 +7380,29 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; bare /preview offers the last 20 pictures and clips posted in this window");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
     else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "admin") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);
+    else if (strcmp(cmd, "help") == 0) log_line(app, "/help [command] — bare /help lists every command by group; /help command explains one");
+    else if (strcmp(cmd, "kb") == 0 || strcmp(cmd, "kickban") == 0) log_line(app, "/kb nick [reason], /kickban nick [reason] — ban nick!*@* and then kick; the ban lands first so the kick cannot be outrun by a rejoin");
+    else if (strcmp(cmd, "mode") == 0) log_line(app, "/mode [#chan] +modes [params] — change channel modes; without a channel it applies to the current one, and bare /mode requests the current modes");
+    else if (strcmp(cmd, "umode") == 0) log_line(app, "/umode +modes — change your own user modes on the current network");
+    else if (strcmp(cmd, "list") == 0) log_line(app, "/list [query|-refresh] — search this network's channel directory; -refresh asks grappa to rescan it");
+    else if (strcmp(cmd, "links") == 0) log_line(app, "/links — request the network's server map");
+    else if (strcmp(cmd, "motd") == 0) log_line(app, "/motd — request the server's message of the day");
+    else if (strcmp(cmd, "info") == 0) log_line(app, "/info — request the server's INFO text");
+    else if (strcmp(cmd, "version") == 0) log_line(app, "/version — request the IRC server's version (Shottino's own is in /settings)");
+    else if (strcmp(cmd, "stats") == 0) log_line(app, "/stats [letter] — request server statistics; most servers want a letter, e.g. /stats q");
+    else if (strcmp(cmd, "rehash") == 0) log_line(app, "/rehash [option] — ask the server to reload its configuration; operators only");
+    else if (strcmp(cmd, "notify") == 0) log_line(app, "/notify [nick...|del nick|list] — watch PEOPLE; bare /notify lists the watched nicks with their presence");
+    else if (strcmp(cmd, "hilight") == 0 || strcmp(cmd, "dehilight") == 0) log_line(app, "/hilight pattern, /dehilight pattern — watch WORDS: add or remove a highlight pattern (/watch add|del|list is the older spelling)");
+    else if (strcmp(cmd, "alias") == 0) log_line(app, "/alias name expansion — define a command ($1..$9 positional, $* all arguments, neither appends them); bare /alias lists what is defined. An alias may shadow a built-in");
+    else if (strcmp(cmd, "unalias") == 0) log_line(app, "/unalias name — remove a user-defined alias");
+    else if (strcmp(cmd, "media") == 0) log_line(app, "/media [on|off|all|first-party|anim|still] — inline pictures, ON for ALL hosts by default: every image link is fetched when it scrolls into view, so the host learns your IP");
+    else if (strcmp(cmd, "mouse") == 0) log_line(app, "/mouse [on|off] — mouse tracking; bare /mouse toggles, off gives text selection back unconditionally");
+    else if (strcmp(cmd, "keys") == 0) log_line(app, "/keys — echo key codes as you press them, to see what your terminal actually sends; /keys again stops");
+    else if (strcmp(cmd, "split") == 0 || strcmp(cmd, "splith") == 0) log_line(app, "/split, /splith — split the chat area into stacked panes; Ctrl-Alt-Up/Down switches, Ctrl-Alt-+/- resizes");
+    else if (strcmp(cmd, "splitv") == 0 || strcmp(cmd, "splitw") == 0) log_line(app, "/splitv, /splitw — split the chat area side by side; both spellings do the same thing");
+    else if (strcmp(cmd, "unsplit") == 0) log_line(app, "/unsplit — close the split and give the whole chat area back to one window");
+    else if (strcmp(cmd, "upload") == 0) log_line(app, "/upload path — post a local file and share its link; IRC stays text, the link is clickable");
+    else if (strcmp(cmd, "cs") == 0 || strcmp(cmd, "ns") == 0 || strcmp(cmd, "ms") == 0 || strcmp(cmd, "os") == 0 || strcmp(cmd, "hs") == 0 || strcmp(cmd, "rs") == 0) log_line(app, "/%s [command] — send a private message to this network's service; the bare form sends HELP", cmd);
     else log_line(app, "no help for /%s; use /help for the command list", cmd);
 }
 

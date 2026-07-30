@@ -3,12 +3,14 @@
  * A slash command lives in three places in shottino.c: the dispatcher in
  * handle_input() that does the work, the `commands[]` table that makes it
  * tab-complete, and the show_command_help() chain that answers
- * `/help <verb>`. Nothing links them, so they drift — and they had: 36 of
- * the 79 working verbs did not tab-complete.
+ * `/help <verb>`. Nothing links them, so they drift — and they had: of the
+ * 79 working verbs, 36 did not tab-complete and 32 had no help topic.
  *
- * The gap is invisible in use. A missing completion entry makes Tab do
- * nothing, which reads as "no such command" rather than as a bug in the
- * client, so this suite is the only thing that notices.
+ * Both gaps are invisible in use, and both read as "this command does not
+ * exist" rather than as a bug in the client: Tab on a missing entry does
+ * nothing, and /help on a missing topic says so in as many words. Neither
+ * shows up as a warning or a crash, so this suite is the only thing that
+ * notices.
  *
  * It asserts by SCANNING shottino.c for the dispatcher's own string
  * literals rather than by keeping a fourth list — a fourth list would be
@@ -148,6 +150,20 @@ TEST(completion_table_is_sorted) {
     }
 }
 
+/* `/help <verb>` answers for every verb it accepts. The fallthrough prints
+ * "no help for /x", which about a verb that works is worse than useless: it
+ * says the command does not exist. show_command_help() matches the verb
+ * without its slash, so that is the literal looked for here. */
+TEST(every_dispatched_verb_has_a_help_topic) {
+    for (size_t i = 0; i < verb_count; i++) {
+        char needle[VERB_MAX + 16];
+        snprintf(needle, sizeof(needle), "strcmp(cmd, \"%s\")", verbs[i] + 1);
+        if (!strstr(source, needle))
+            fprintf(stderr, "  %s has no /help topic (add an arm to show_command_help)\n", verbs[i]);
+        CHECK(strstr(source, needle) != NULL);
+    }
+}
+
 int main(void) {
     source = read_source();
     if (!source) {
@@ -161,6 +177,7 @@ int main(void) {
     RUN(every_dispatched_verb_completes);
     RUN(every_completion_entry_dispatches);
     RUN(completion_table_is_sorted);
+    RUN(every_dispatched_verb_has_a_help_topic);
 
     free(source);
     return test_report();
