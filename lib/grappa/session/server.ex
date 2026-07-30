@@ -1872,6 +1872,15 @@ defmodule Grappa.Session.Server do
     {:reply, {:ok, {state.peer_address, state.peer_port}}, state}
   end
 
+  # #537 INC-2.3 — the network's CASEMAPPING for the stateless web-edge
+  # (controllers, GrappaChannel topic join) to fold a user-typed KEY the same
+  # way this Server did at write time. `session_casemapping/1` reads
+  # `state.isupport` (Map.get hot-safe). Public via `Grappa.Session.casemapping/2`,
+  # which degrades to `:ascii` when there is no live pid.
+  def handle_call(:casemapping, _, state) do
+    {:reply, session_casemapping(state), state}
+  end
+
   # #247 — the authoritative /notify presence map for this session.
   # Public via `Grappa.Session.presence_snapshot/2`; consumed by the
   # channel after-join snapshot and the REST notify listing (DB list +

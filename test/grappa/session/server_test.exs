@@ -171,6 +171,74 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "casemapping/2 (#537 INC-2.3)" do
+    # The web-edge (controllers, GrappaChannel topic join) is stateless — it
+    # has no `state.isupport` to read the network's CASEMAPPING from. This
+    # facade is how those no-state ingress sites fold a USER-TYPED channel/nick
+    # KEY the SAME way the live Server did, so `#Foo[1]` on an rfc1459 network
+    # resolves to the one window the Server already keyed folded. `:ascii`
+    # (the safe, prod-invariant default) when there is no live pid.
+
+    test "returns the live session's CASEMAPPING once a 005 advertises it" do
+      handler = fn state, line ->
+        if String.starts_with?(line, "USER ") do
+          {:reply, ":irc 001 grappa-test :Welcome\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(handler)
+      {user, network, _} = setup_user_and_network(port)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      # CASEMAPPING alongside PREFIX so the isupport_changed broadcast fires
+      # and serves as the "005 processed" barrier before we read the facade.
+      IRCServer.feed(
+        server,
+        ":irc.test.org 005 grappa-test CASEMAPPING=rfc1459 PREFIX=(ov)@+ :are supported\r\n"
+      )
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :isupport_changed}
+                     },
+                     1_000
+
+      assert Session.casemapping({:user, user.id}, network.id) == :rfc1459
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "returns :ascii (bahamut default) before any 005 CASEMAPPING" do
+      handler = fn state, line ->
+        if String.starts_with?(line, "USER ") do
+          {:reply, ":irc 001 grappa-test :Welcome\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(handler)
+      {user, network, _} = setup_user_and_network(port)
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      assert Session.casemapping({:user, user.id}, network.id) == :ascii
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "returns :ascii when no session is registered (safe no-state default)" do
+      assert Session.casemapping({:user, Ecto.UUID.generate()}, -1) == :ascii
+    end
+  end
+
   describe "init/1 non-blocking (C2)" do
     # Pairs with `Grappa.IRC.ClientTest`'s C2 test. `Session.Server.init/1`
     # must NOT call `Client.start_link/1` synchronously: Bootstrap iterates

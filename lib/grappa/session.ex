@@ -897,6 +897,34 @@ defmodule Grappa.Session do
   end
 
   @doc """
+  Returns the network's IRC `CASEMAPPING` as observed by the LIVE session at
+  `(subject, network_id)` — `:ascii | :rfc1459 | :rfc1459_strict`.
+
+  #537 — the stateless web-edge (controllers, `GrappaChannel` topic join) has
+  no `state.isupport` to read the network's casemapping from, yet it must fold
+  a USER-TYPED channel/nick KEY the SAME way the Server did at write time so
+  `#Foo[1]` on an rfc1459 network resolves to the one window the Server already
+  keyed folded. This is the ingress source those no-state sites feed into
+  `Identifier.canonical_target/2` (the Server + EventRouter read `state.isupport`
+  directly instead).
+
+  Returns `:ascii` — the safe, prod-invariant default — whenever there is no
+  live session (parked/failed/not-bootstrapped) or the call cannot complete:
+  on ASCII the fold is byte-identical to the pure-ASCII `canonical_target/1`, so
+  a missing session degrades an rfc1459 web read to the same key the row was
+  written under before the network's 005 was seen (pre-connect autojoin is
+  ASCII-planned too — DESIGN_NOTES 2026-07-30).
+  """
+  @spec casemapping(subject(), integer()) :: Identifier.casemapping()
+  def casemapping(subject, network_id)
+      when is_subject(subject) and is_integer(network_id) do
+    case call_session(subject, network_id, :casemapping) do
+      mapping when mapping in [:ascii, :rfc1459, :rfc1459_strict] -> mapping
+      _ -> :ascii
+    end
+  end
+
+  @doc """
   Returns the live IRC nick for the session at `(subject, network_id)`.
 
   The live nick may differ from the credential's configured nick after
