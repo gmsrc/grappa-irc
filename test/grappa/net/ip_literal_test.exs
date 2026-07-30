@@ -67,4 +67,59 @@ defmodule Grappa.Net.IpLiteralTest do
       assert :error = IpLiteral.to_tuple("192.000.002.001")
     end
   end
+
+  # #543 — the static-mapping addressing mode configures a derived-source
+  # prefix as an IPv6 CIDR. `parse_cidr6/1` yields the {network_tuple, len}
+  # the derivation + prefix-impact scan need; `canonicalize_cidr6/1` masks
+  # the host bits and renders the network canonical for stable storage.
+  describe "parse_cidr6/1" do
+    test "parses a strict IPv6 CIDR to {tuple, prefix_len}" do
+      assert {:ok, {{0x2A03, 0x4000, 0x20, 0x2D3, 0xCB, 0, 0, 0}, 80}} =
+               IpLiteral.parse_cidr6("2a03:4000:20:2d3:cb::/80")
+    end
+
+    test "parses a full /128" do
+      assert {:ok, {{0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1}, 128}} =
+               IpLiteral.parse_cidr6("2001:db8::1/128")
+    end
+
+    test "rejects an IPv4 CIDR" do
+      assert :error = IpLiteral.parse_cidr6("192.0.2.0/24")
+    end
+
+    test "rejects a bare literal with no prefix length" do
+      assert :error = IpLiteral.parse_cidr6("2001:db8::1")
+    end
+
+    test "rejects a prefix length above 128" do
+      assert :error = IpLiteral.parse_cidr6("2001:db8::/129")
+    end
+
+    test "rejects a non-strict / malformed address part" do
+      assert :error = IpLiteral.parse_cidr6("2001:db8:::/64")
+    end
+
+    test "rejects an empty string" do
+      assert :error = IpLiteral.parse_cidr6("")
+    end
+  end
+
+  describe "canonicalize_cidr6/1" do
+    test "lowercases + compresses the network and keeps the length" do
+      assert {:ok, "2a03:4000:20:2d3:cb::/80"} =
+               IpLiteral.canonicalize_cidr6("2A03:4000:20:2D3:00CB:0:0:0/80")
+    end
+
+    test "masks host bits below the prefix length to zero" do
+      # An operator who pastes an address with host bits set gets the
+      # NETWORK back — a prefix is its network, not a host in it.
+      assert {:ok, "2a03:4000:20:2d3:cb::/80"} =
+               IpLiteral.canonicalize_cidr6("2a03:4000:20:2d3:cb::5/80")
+    end
+
+    test "rejects an IPv4 CIDR and a non-literal" do
+      assert :error = IpLiteral.canonicalize_cidr6("192.0.2.0/24")
+      assert :error = IpLiteral.canonicalize_cidr6("nope/64")
+    end
+  end
 end

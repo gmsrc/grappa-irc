@@ -199,4 +199,74 @@ defmodule Grappa.ServerSettingsTest do
       assert {:ok, :server_settings} = Grappa.PubSub.Topic.parse(topic)
     end
   end
+
+  # #543 — outbound addressing mode. Admin-only: NOT exposed in
+  # public_view/0 (that broadcasts to every cic client). Read by the
+  # session-plan resolver (INC-4) + the admin vhost surface.
+  describe "addressing_mode/0 + put_addressing_mode/1" do
+    test "defaults to :pool_with_reservations (current behaviour)" do
+      assert ServerSettings.addressing_mode() == :pool_with_reservations
+    end
+
+    test "round-trips :static_mapping_with_reservations" do
+      assert :ok = ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
+      assert ServerSettings.addressing_mode() == :static_mapping_with_reservations
+      assert :ok = ServerSettings.put_addressing_mode(:pool_with_reservations)
+      assert ServerSettings.addressing_mode() == :pool_with_reservations
+    end
+
+    test "rejects an unknown mode atom" do
+      assert {:error, :invalid_value} = ServerSettings.put_addressing_mode(:bogus)
+    end
+
+    test "rejects a string" do
+      assert {:error, :invalid_value} = ServerSettings.put_addressing_mode("static_mapping_with_reservations")
+    end
+  end
+
+  describe "static_mapping_prefix/0 + put_static_mapping_prefix/1" do
+    test "defaults to nil" do
+      assert ServerSettings.static_mapping_prefix() == nil
+    end
+
+    test "accepts a /80 v6 CIDR, stored canonical" do
+      assert :ok = ServerSettings.put_static_mapping_prefix("2A03:4000:20:2D3:00CB:0:0:0/80")
+      assert ServerSettings.static_mapping_prefix() == "2a03:4000:20:2d3:cb::/80"
+    end
+
+    test "masks host bits — a prefix is its network" do
+      assert :ok = ServerSettings.put_static_mapping_prefix("2a03:4000:20:2d3:cb::5/80")
+      assert ServerSettings.static_mapping_prefix() == "2a03:4000:20:2d3:cb::/80"
+    end
+
+    test "rejects a length OperServ cannot express (16-bit-group boundaries only)" do
+      # /72 and /120 are not expressible in azzurra OperServ's 16-bit-group
+      # scan-width — reject at the boundary so the operator never configures
+      # a prefix a network cannot ban on.
+      assert {:error, :invalid_prefix} = ServerSettings.put_static_mapping_prefix("2a03:4000:20:2d3:cb::/72")
+      assert {:error, :invalid_prefix} = ServerSettings.put_static_mapping_prefix("2a03:4000:20:2d3:cb::/120")
+    end
+
+    test "accepts every 16-bit-group boundary length" do
+      for len <- [64, 80, 96, 112, 128] do
+        assert :ok = ServerSettings.put_static_mapping_prefix("2a03:4000:20:2d3:cb::/#{len}")
+      end
+    end
+
+    test "rejects an IPv4 CIDR and a non-CIDR" do
+      assert {:error, :invalid_prefix} = ServerSettings.put_static_mapping_prefix("192.0.2.0/24")
+      assert {:error, :invalid_prefix} = ServerSettings.put_static_mapping_prefix("2a03:4000:20:2d3:cb::")
+    end
+  end
+
+  describe "public_view/0 — addressing stays admin-only" do
+    test "does NOT leak addressing config to the cic-facing view" do
+      :ok = ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
+      :ok = ServerSettings.put_static_mapping_prefix("2a03:4000:20:2d3:cb::/80")
+      view = ServerSettings.public_view()
+      refute Map.has_key?(view, :addressing)
+      refute Map.has_key?(view, :addressing_mode)
+      refute Map.has_key?(view, :static_mapping_prefix)
+    end
+  end
 end

@@ -6,11 +6,12 @@ defmodule GrappaWeb.Admin.SettingsController do
   ## GET /admin/settings
 
   Returns the admin settings view — the `upload` subtree of
-  `public_view/0` (`render_view/1`). It deliberately OMITS the #324
-  `http_host_aliases` that the authenticated `/api/server-settings`
-  carries: those are deployment config (env-derived), not an
-  admin-editable DB setting. Admin-only settings, when added, land here
-  only. Wire shape:
+  `public_view/0` plus the admin-only `addressing` subtree (#543, read
+  straight from the `Grappa.ServerSettings` accessors, NOT part of
+  `public_view/0`). It deliberately OMITS the #324 `http_host_aliases`
+  that the authenticated `/api/server-settings` carries: those are
+  deployment config (env-derived), not an admin-editable DB setting.
+  Wire shape:
 
       %{
         settings: %{
@@ -20,6 +21,10 @@ defmodule GrappaWeb.Admin.SettingsController do
             video_per_file_cap_bytes: pos_integer(),
             document_per_file_cap_bytes: pos_integer(),
             global_cap_bytes: pos_integer()
+          },
+          addressing: %{
+            mode: "pool_with_reservations" | "static_mapping_with_reservations",
+            static_mapping_prefix: String.t() | nil
           }
         }
       }
@@ -35,14 +40,18 @@ defmodule GrappaWeb.Admin.SettingsController do
           "video_per_file_cap_bytes" => pos_integer(),
           "document_per_file_cap_bytes" => pos_integer(),
           "global_cap_bytes" => pos_integer()
+        },
+        "addressing" => %{
+          "mode" => "pool_with_reservations" | "static_mapping_with_reservations",
+          "static_mapping_prefix" => String.t()
         }
       }
 
-  Each key in `upload` is optional — the controller upserts only
-  the keys present in the body. Any invalid value (out-of-set host
-  string, non-positive integer cap) collapses to 422
-  `validation_failed` with a `field_errors` map naming the offending
-  key.
+  Both `upload` and `addressing` are independently optional subtrees, and
+  every key within each is optional — the controller upserts only the keys
+  present in the body. Any invalid value (out-of-set host/mode string,
+  non-positive integer cap, non-16-bit-group prefix length) collapses to
+  422 `invalid_setting` with the offending dotted key in `field`.
 
   On success: 200 with the new full settings view AND fan-out of a
   `server_settings_changed` push on every live `Topic.user(name)`
@@ -110,12 +119,29 @@ defmodule GrappaWeb.Admin.SettingsController do
 
   # ---- Internal ----------------------------------------------------
 
-  defp apply_updates(%{"upload" => upload}) when is_map(upload) do
-    Enum.reduce_while(upload, :ok, fn {k, v}, _ -> halt_or_cont(apply_upload_key(k, v)) end)
+  defp apply_updates(params) when is_map(params) do
+    with :ok <- apply_subtree(params, "upload", &apply_upload_key/2) do
+      apply_subtree(params, "addressing", &apply_addressing_key/2)
+    end
   end
 
-  defp apply_updates(%{}), do: :ok
   defp apply_updates(_), do: {:error, :bad_request}
+
+  # Fold a present subtree through its per-key applier. Absent subtree → :ok
+  # (each is independently optional — an empty body updates nothing); a
+  # non-map subtree → bad_request (no silent swallow of a malformed shape).
+  defp apply_subtree(params, key, fun) do
+    case Map.get(params, key) do
+      nil ->
+        :ok
+
+      subtree when is_map(subtree) ->
+        Enum.reduce_while(subtree, :ok, fn {k, v}, _ -> halt_or_cont(fun.(k, v)) end)
+
+      _ ->
+        {:error, :bad_request}
+    end
+  end
 
   # Per-key dispatch so the surrounding fold stays a 2-line lambda
   # and Credo's cyclomatic-complexity check on `apply_updates/1`
@@ -165,12 +191,48 @@ defmodule GrappaWeb.Admin.SettingsController do
     :ok
   end
 
+  # ---- addressing.* dispatch (#543) --------------------------------
+
+  defp apply_addressing_key("mode", "pool_with_reservations"),
+    do: ServerSettings.put_addressing_mode(:pool_with_reservations)
+
+  defp apply_addressing_key("mode", "static_mapping_with_reservations"),
+    do: ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
+
+  defp apply_addressing_key("mode", _),
+    do: {:error, {:invalid_setting, "addressing.mode"}}
+
+  defp apply_addressing_key("static_mapping_prefix", value) when is_binary(value) do
+    case ServerSettings.put_static_mapping_prefix(value) do
+      :ok -> :ok
+      {:error, :invalid_prefix} -> {:error, {:invalid_setting, "addressing.static_mapping_prefix"}}
+    end
+  end
+
+  defp apply_addressing_key("static_mapping_prefix", _),
+    do: {:error, {:invalid_setting, "addressing.static_mapping_prefix"}}
+
+  defp apply_addressing_key(k, _) do
+    Logger.warning("admin PUT /settings: unknown addressing key", setting_key: k)
+    :ok
+  end
+
   # Translate per-key return to Enum.reduce_while continuation. `:ok`
   # → continue; `{:error, _}` → halt with the error preserved.
   defp halt_or_cont(:ok), do: {:cont, :ok}
   defp halt_or_cont({:error, _} = err), do: {:halt, err}
 
+  # Admin settings view. The `upload` subtree comes from public_view/0 via
+  # the shared Wire projection; the `addressing` subtree (#543) is admin-only
+  # so it is read straight from the accessors — deliberately NOT part of
+  # public_view/0, which broadcasts to every cic client.
   defp render_view(%{upload: upload}) do
-    %{upload: SettingsWire.upload_view(upload)}
+    %{
+      upload: SettingsWire.upload_view(upload),
+      addressing: %{
+        mode: ServerSettings.addressing_mode(),
+        static_mapping_prefix: ServerSettings.static_mapping_prefix()
+      }
+    }
   end
 end

@@ -19,6 +19,12 @@ defmodule Grappa.ServerSettings do
   | `"upload.document_per_file_cap_bytes"`  | `pos_integer()`            | 10_485_760 (10MB)| UX-6-B |
   | `"upload.audio_per_file_cap_bytes"`     | `pos_integer()`            | 26_214_400 (25MB)| audio-uploads |
   | `"upload.global_cap_bytes"`             | `pos_integer()`            | 10_737_418_240 (10GB) | UX-6-B |
+  | `"addressing.mode"`                     | `:pool_with_reservations \\| :static_mapping_with_reservations` | `:pool_with_reservations` | #543 |
+  | `"addressing.static_mapping_prefix"`    | `String.t()` (v6 CIDR) \\| `nil` | `nil`       | #543 |
+
+  `addressing.*` are **admin-only** — deliberately NOT in `public_view/0`
+  (that broadcasts to every cic client); the admin settings surface reads
+  the accessors directly.
 
   ## Public-subset shape (`public_view/0`)
 
@@ -60,8 +66,15 @@ defmodule Grappa.ServerSettings do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Repo, Grappa.PubSub, Grappa.ServerSettings.Wire, Grappa.HttpHosts]
+    deps: [
+      Grappa.Repo,
+      Grappa.PubSub,
+      Grappa.ServerSettings.Wire,
+      Grappa.HttpHosts,
+      Grappa.Net.IpLiteral
+    ]
 
+  alias Grappa.Net.IpLiteral
   alias Grappa.PubSub, as: GrappaPubSub
   alias Grappa.PubSub.Topic
   alias Grappa.Repo
@@ -87,7 +100,21 @@ defmodule Grappa.ServerSettings do
   @default_upload_audio_per_file_cap_bytes 25 * 1024 * 1024
   @default_upload_global_cap_bytes 10 * 1024 * 1024 * 1024
 
+  # #543 outbound addressing mode (admin-only — NOT in public_view/0).
+  @key_addressing_mode "addressing.mode"
+  @key_static_mapping_prefix "addressing.static_mapping_prefix"
+  @default_addressing_mode :pool_with_reservations
+  @addressing_modes [:pool_with_reservations, :static_mapping_with_reservations]
+  # OperServ (azzurra bahamut) counts scan width in 16-bit groups, so a
+  # ban mask is only expressible on these boundaries — /72 and /120 are NOT.
+  # Reject any other length so an operator never configures a prefix a
+  # network cannot ban on. (#543 vjt ruling 2026-07-30.)
+  @allowed_prefix_lengths [64, 80, 96, 112, 128]
+
   @type upload_host :: :embedded | :litterbox
+
+  @typedoc "Closed set of outbound addressing modes (#543)."
+  @type addressing_mode :: :pool_with_reservations | :static_mapping_with_reservations
 
   @typedoc "Closed set of upload categories — one per-file cap each."
   @type upload_category :: :image | :video | :document | :audio
@@ -189,6 +216,62 @@ defmodule Grappa.ServerSettings do
   end
 
   def put_upload_global_cap_bytes(_), do: {:error, :invalid_value}
+
+  # ---- addressing.mode (#543) --------------------------------------
+
+  @doc """
+  Returns the configured outbound addressing mode
+  (`:pool_with_reservations` default — today's behaviour). Admin-only;
+  read by the session-plan source resolver (#543 INC-4).
+  """
+  @spec addressing_mode() :: addressing_mode()
+  def addressing_mode do
+    case get_raw(@key_addressing_mode) do
+      "pool_with_reservations" -> :pool_with_reservations
+      "static_mapping_with_reservations" -> :static_mapping_with_reservations
+      _ -> @default_addressing_mode
+    end
+  end
+
+  @doc "Pins the outbound addressing mode. Validates against the closed set."
+  @spec put_addressing_mode(addressing_mode()) :: :ok | {:error, :invalid_value}
+  def put_addressing_mode(mode) when mode in @addressing_modes do
+    put_raw(@key_addressing_mode, Atom.to_string(mode))
+  end
+
+  def put_addressing_mode(_), do: {:error, :invalid_value}
+
+  # ---- addressing.static_mapping_prefix (#543) ---------------------
+
+  @doc """
+  Returns the configured static-mapping derived-source prefix as a
+  canonical IPv6 CIDR string, or `nil` when unset. This is the `::cb::/80`
+  untrusted block the source derivation maps client `/64`s into.
+  """
+  @spec static_mapping_prefix() :: String.t() | nil
+  def static_mapping_prefix, do: get_raw(@key_static_mapping_prefix)
+
+  @doc """
+  Pins the static-mapping derived-source prefix. Accepts a strict IPv6
+  CIDR whose length is a 16-bit-group boundary (OperServ scan-width
+  constraint: `64 | 80 | 96 | 112 | 128`); stores it masked + canonical.
+  Any other input → `{:error, :invalid_prefix}`.
+  """
+  @spec put_static_mapping_prefix(String.t()) :: :ok | {:error, :invalid_prefix}
+  def put_static_mapping_prefix(value) when is_binary(value) do
+    with {:ok, {_, len}} <- IpLiteral.parse_cidr6(value),
+         true <- len in @allowed_prefix_lengths,
+         {:ok, canonical} <- IpLiteral.canonicalize_cidr6(value) do
+      case put_raw(@key_static_mapping_prefix, canonical) do
+        :ok -> :ok
+        {:error, _} -> {:error, :invalid_prefix}
+      end
+    else
+      _ -> {:error, :invalid_prefix}
+    end
+  end
+
+  def put_static_mapping_prefix(_), do: {:error, :invalid_prefix}
 
   # ---- Public projection -------------------------------------------
 

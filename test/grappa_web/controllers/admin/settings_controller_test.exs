@@ -223,6 +223,81 @@ defmodule GrappaWeb.Admin.SettingsControllerTest do
     end
   end
 
+  describe "GET /admin/settings — addressing subtree (#543)" do
+    setup do
+      {_, session} = user_and_session(is_admin: true)
+      %{session: session}
+    end
+
+    test "returns addressing mode + prefix (defaults)", %{conn: conn, session: session} do
+      conn = conn |> put_bearer(session.id) |> get("/admin/settings")
+      assert %{"settings" => %{"addressing" => addressing}} = json_response(conn, 200)
+      assert addressing["mode"] == "pool_with_reservations"
+      assert addressing["static_mapping_prefix"] == nil
+    end
+
+    test "reflects a configured mode + prefix", %{conn: conn, session: session} do
+      :ok = ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
+      :ok = ServerSettings.put_static_mapping_prefix("2a03:4000:20:2d3:cb::/80")
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/settings")
+      assert %{"settings" => %{"addressing" => addressing}} = json_response(conn, 200)
+      assert addressing["mode"] == "static_mapping_with_reservations"
+      assert addressing["static_mapping_prefix"] == "2a03:4000:20:2d3:cb::/80"
+    end
+  end
+
+  describe "PUT /admin/settings — addressing (#543)" do
+    setup do
+      {_, session} = user_and_session(is_admin: true)
+      %{session: session}
+    end
+
+    test "sets mode + prefix", %{conn: conn, session: session} do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "addressing" => %{
+            "mode" => "static_mapping_with_reservations",
+            "static_mapping_prefix" => "2a03:4000:20:2d3:cb::/80"
+          }
+        })
+
+      assert %{"settings" => %{"addressing" => addressing}} = json_response(conn, 200)
+      assert addressing["mode"] == "static_mapping_with_reservations"
+      assert addressing["static_mapping_prefix"] == "2a03:4000:20:2d3:cb::/80"
+      assert ServerSettings.addressing_mode() == :static_mapping_with_reservations
+      assert ServerSettings.static_mapping_prefix() == "2a03:4000:20:2d3:cb::/80"
+    end
+
+    test "422 invalid_setting for an unknown mode", %{conn: conn, session: session} do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{"addressing" => %{"mode" => "chaos"}})
+
+      assert json_response(conn, 422) == %{
+               "error" => "invalid_setting",
+               "field" => "addressing.mode"
+             }
+    end
+
+    test "422 invalid_setting for a prefix OperServ cannot express", %{conn: conn, session: session} do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "addressing" => %{"static_mapping_prefix" => "2a03:4000:20:2d3:cb::/72"}
+        })
+
+      assert json_response(conn, 422) == %{
+               "error" => "invalid_setting",
+               "field" => "addressing.static_mapping_prefix"
+             }
+    end
+  end
+
   describe "PUT /admin/settings — fan-out (UX-6-B2)" do
     setup do
       {_, session} = user_and_session(is_admin: true)

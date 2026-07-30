@@ -22,6 +22,8 @@ defmodule Grappa.Net.IpLiteral do
 
   use Boundary, top_level?: true, deps: []
 
+  import Bitwise
+
   @doc """
   Parses `value` as a strict IPv4 or IPv6 literal and returns it in
   canonical form (`:inet.ntoa/1` — lowercase compressed v6, unpadded v4).
@@ -82,5 +84,65 @@ defmodule Grappa.Net.IpLiteral do
           {:error, _} -> raise ArgumentError, "not a strict IP literal: #{inspect(value)}"
         end
     end
+  end
+
+  @doc """
+  Parses `value` as a strict IPv6 CIDR (`<v6-literal>/<0..128>`) and returns
+  `{tuple, prefix_len}`. The address part goes through the SAME strict parse
+  as `to_tuple/1`; the tuple is returned VERBATIM — host bits are NOT masked
+  here (use `canonicalize_cidr6/1` for the masked network form).
+
+  Returns `:error` for an IPv4 CIDR, a bare literal with no `/len`, a length
+  outside `0..128`, a non-strict address, or any malformed input. The #543
+  static-mapping derivation + prefix-impact scan consume `{tuple, len}`.
+  """
+  @spec parse_cidr6(String.t()) :: {:ok, {:inet.ip6_address(), 0..128}} | :error
+  def parse_cidr6(value) when is_binary(value) do
+    with [addr, len_str] <- String.split(value, "/", parts: 2),
+         {len, ""} <- Integer.parse(len_str),
+         true <- len in 0..128,
+         {:ok, tuple} <- :inet.parse_ipv6strict_address(String.to_charlist(addr)) do
+      {:ok, {tuple, len}}
+    else
+      _ -> :error
+    end
+  end
+
+  @doc """
+  Parses `value` as a strict IPv6 CIDR, masks the host bits below the prefix
+  length to zero, and renders the network in canonical form (`<net>/<len>`,
+  lowercase compressed). A prefix stored this way is stable regardless of how
+  the operator typed it (case, compression, or an address carrying host bits).
+
+  Returns `:error` for the same inputs `parse_cidr6/1` rejects.
+  """
+  @spec canonicalize_cidr6(String.t()) :: {:ok, String.t()} | :error
+  def canonicalize_cidr6(value) when is_binary(value) do
+    case parse_cidr6(value) do
+      {:ok, {tuple, len}} ->
+        network = tuple |> ip6_to_integer() |> mask_prefix(len) |> integer_to_ip6()
+        {:ok, to_string(:inet.ntoa(network)) <> "/" <> Integer.to_string(len)}
+
+      :error ->
+        :error
+    end
+  end
+
+  # ---- v6 bit helpers (128-bit int ↔ 8×16 tuple) -------------------
+
+  defp ip6_to_integer({a, b, c, d, e, f, g, h}) do
+    <<n::128>> = <<a::16, b::16, c::16, d::16, e::16, f::16, g::16, h::16>>
+    n
+  end
+
+  defp integer_to_ip6(n) do
+    <<a::16, b::16, c::16, d::16, e::16, f::16, g::16, h::16>> = <<n::128>>
+    {a, b, c, d, e, f, g, h}
+  end
+
+  # Zero the low (128 - len) host bits. len=128 → no-op; len=0 → all zero.
+  defp mask_prefix(n, len) do
+    host_bits = 128 - len
+    (n >>> host_bits) <<< host_bits
   end
 end
