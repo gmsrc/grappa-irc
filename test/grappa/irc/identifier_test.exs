@@ -374,6 +374,50 @@ defmodule Grappa.IRC.IdentifierTest do
     end
   end
 
+  describe "canonical_target/2 (network-aware KEY fold — #537)" do
+    test "composes normalize_casemapping/2 then the ASCII canonical_target/1" do
+      # The single network-aware KEY fold every INGRESS routes through:
+      # normalize the national chars for the network, then ASCII-fold. It
+      # equals the explicit two-step pipe.
+      for {input, cm} <- [
+            {"#Foo[1]", :rfc1459},
+            {"#Foo[1]", :ascii},
+            {"Nick[1]", :rfc1459_strict},
+            {"#CHAN", :rfc1459}
+          ] do
+        assert Identifier.canonical_target(input, cm) ==
+                 input |> Identifier.normalize_casemapping(cm) |> Identifier.canonical_target()
+      end
+    end
+
+    test "on :ascii it is byte-identical to canonical_target/1 (all of prod)" do
+      # Azzurra is CASEMAPPING=ascii: the network-aware fold degenerates to
+      # the plain ASCII fold, so every ASCII network behaves exactly as pre-#537.
+      for input <- ["#Chan", "#chan[1]", "NickTemp", "$server", "#café"] do
+        assert Identifier.canonical_target(input, :ascii) == Identifier.canonical_target(input)
+      end
+    end
+
+    test "two rfc1459 channel spellings converge to ONE key" do
+      assert Identifier.canonical_target("#Foo[1]", :rfc1459) ==
+               Identifier.canonical_target("#Foo{1}", :rfc1459)
+
+      assert Identifier.canonical_target("#Foo[1]", :rfc1459) == "#foo{1}"
+    end
+
+    test "the SAME two spellings stay DISTINCT on :ascii (pins #525)" do
+      refute Identifier.canonical_target("#Foo[1]", :ascii) ==
+               Identifier.canonical_target("#Foo{1}", :ascii)
+    end
+
+    test "passes non-binary through for every casemapping" do
+      for cm <- [:ascii, :rfc1459, :rfc1459_strict] do
+        assert Identifier.canonical_target(nil, cm) == nil
+        assert Identifier.canonical_target(:atom, cm) == :atom
+      end
+    end
+  end
+
   describe "normalize_casemapping/2 (per-network national-char ingress fold — #537)" do
     test ":ascii is identity — the national chars are meaningful distinct bytes" do
       # bahamut/Azzurra is CASEMAPPING=ascii: `[ ] \\ ~` are ordinary

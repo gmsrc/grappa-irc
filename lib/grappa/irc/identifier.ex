@@ -360,6 +360,27 @@ defmodule Grappa.IRC.Identifier do
 
   def normalize_casemapping(other, cm) when cm in [:rfc1459, :rfc1459_strict], do: other
 
+  @doc """
+  The full network-aware identifier KEY fold (#537, axis 2) — the SINGLE
+  primitive every INGRESS routes a user-typed or upstream target through:
+  `normalize_casemapping/2` for the network's `casemapping`, then the
+  plain-ASCII `canonical_target/1`.
+
+  Wire/display forms stay RAW; only KEYS fold. The three ingress classes
+  each supply the casemapping from where they can reach it — the
+  `Session.Server` + `EventRouter` from `state.isupport` (005-derived),
+  the web edge (controllers, `GrappaChannel` topic join) from
+  `Grappa.Session.casemapping/2`.
+
+  On `:ascii` (bahamut/Azzurra, pre-005, hot-reload-absent isupport) the
+  normalize step is a no-op, so this is byte-for-byte the arity-1 ASCII
+  fold on every ASCII network (all of production). Non-binary passes
+  through (mirrors both delegates).
+  """
+  @spec canonical_target(term(), casemapping()) :: term()
+  def canonical_target(target, casemapping),
+    do: target |> normalize_casemapping(casemapping) |> canonical_target()
+
   # The rfc1459 national-char fold. `fold_tilde?` distinguishes `:rfc1459`
   # (folds `~`→`^`, RFC 2812) from `:rfc1459_strict` (bracket trio only,
   # RFC 1459). Byte-level for the same UTF-8-safety reason as `fold_ascii/1`.
