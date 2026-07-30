@@ -23786,3 +23786,117 @@ and the Arch tarball has no `.git` (→ `{:skip, :no_git}` + log).
 A live-drift E2E is intentionally unreachable now — #533 recompiles `Version.beam`
 on any ref move — so the FAIL arms rest on the unit matrix plus the proven `:ok`
 wiring.
+## 2026-07-30 — #537: one identifier fold at every boundary + per-network CASEMAPPING at ingress
+
+The ghost-badge class one door out from #532-D. The sigil-gated
+`canonical_channel/1` (fold only what sits after a `#&+!` sigil) left every
+NON-channel KEY — a DM-peer nick, the `$server` pseudo-channel, a `/msg`-self
+target — RAW at the write / topic / membership sites, while the READ side
+resolved those same keys case-insensitively (`nick_fold`, `where_dm_peer/2`).
+Write-raw + read-folded is exactly the fork the #121/#364/#525 work spent three
+issues closing for channels: `/msg Foo` and `/msg foo` wrote two `dm_with`
+spellings, the reader opened one window, and the other's scrollback/cursor was
+stranded where nobody re-opens it. #537 removes the last write-side gate so the
+write key and the case-insensitive read key derive from the SAME fold, for
+EVERY identifier shape.
+
+**The model (vjt ruling, CLOSED).** There is now ONE fold —
+`Grappa.IRC.Identifier.canonical_target/1` — applied at EVERY identifier KEY
+boundary (channel, DM-peer nick, `$server`), replacing both the sigil-gated
+`canonical_channel/1` AND `canonical_nick/1` (deleted). It is the plain
+byte-level ASCII fold (`A-Z` only; the `#525` posture — `#chan[1]`/`#chan{1}`
+and `foo[1]`/`foo{1}` stay DISTINCT, non-ASCII stays distinct). A channel sigil
+sits outside `A-Z`, so folding the whole identifier equals `sigil <> fold(body)`
+— nick and channel fold identically, which is *why* the two functions could
+collapse into one. **Wire + display forms stay RAW; only KEYs fold** — never
+touch `sender`, `dm_with`, the members map, a ban mask, or any wire builder.
+The key/display/wire split is load-bearing.
+
+**Option B for channels (folded IS the display).** Channels carry NO separate
+display column: the folded key is what cic renders. "As-first-seen display" was
+REJECTED — on an rfc1459 network `#Foo[1]` would render its folded form anyway,
+so a display column buys nothing but drift. Nicks are the exception (they keep a
+RAW `sender`/`dm_with` for display + a folded KEY for matching), because a nick's
+case IS meaningful presentation (`vjt` vs `VJT`), whereas a channel's is not.
+
+**Axis 2 — per-network CASEMAPPING, normalised at INGRESS only.** bahamut
+(Azzurra, all of prod) is `CASEMAPPING=ascii`; solanum/Libera advertise
+`rfc1459`, where RFC 2812 §2.2 makes `{ } | ^` the lowercase equivalents of
+`[ ] \ ~` (so `#foo[1]` and `#foo{1}` are ONE channel there). Rather than teach
+`canonical_target/1` — and its byte-pinned SQL twin `nick_fold_sql/1`, which
+MUST stay plain `lower()` or SQLite drops the expression indexes — three fold
+tables, the national-char fold is split out: `normalize_casemapping/2` maps the
+four national chars ONCE at the ingress door where the network's casemapping is
+known, and every downstream KEY path then folds `A-Z` via `canonical_target/1`.
+The composition `canonical_target/2` = `normalize_casemapping |>
+canonical_target/1` is the full network-aware fold. **On `:ascii` the normalise
+step is a no-op**, so on every ASCII network (all production) this is
+byte-for-byte the pre-#537 fold — prod behaviour is unchanged.
+
+Storage and query stay pure ASCII: rows are written with `canonical_target/1`
+and read back with `nick_fold` / `nick_fold_sql` (`lower()`). Normalisation
+lives strictly at the three INGRESS classes, each supplying the casemapping
+from where it can reach the 005: the `Session.Server` + `EventRouter` from
+`state.isupport` (`ISupport.casemapping`, `Map.get` hot-safe; `fold_key/2` +
+`session_casemapping/1`); the stateless web edge (controllers, the
+`GrappaChannel` topic join) from `Grappa.Session.casemapping/2`, a GenServer
+call that degrades to `:ascii` when there is no live pid. A folded WRITE forces
+a folded READ compare, including the plain-`==` sites no `canonical_*` grep
+surfaces (`channel == own_nick` in `Push.Triggers.dm?`/`Payload`, the
+self-window `dm_with == ^channel`) and the raw `Repo.update_all(set: channel:)`
+in `rename_dm_peer` — enumerate write+read pairs, not just the obvious folds.
+
+**Known niche gaps (both rfc1459-only, both documented, neither in scope):**
+
+  1. *national-char DM peer on rfc1459.* `dm_with` is stored RAW (display) and
+     matched via `nick_fold` (`lower()`, ASCII-only). A DM peer whose nick
+     carries a national char (`foo[1]`) on an rfc1459 network folds ASCII on the
+     match path, not rfc1459 — the same class as the raw-cased in-memory members
+     map keys / `state.nick`. It does not affect ASCII networks (all prod) and
+     is not a fold-MATCH regression, so it stays out of scope, exactly as the
+     members-map raw-key gap does.
+
+  2. *pre-connect autojoin plan is ASCII-folded.* The autojoin set is resolved
+     and folded with `canonical_target/1` (arity-1, ASCII) at plan time
+     (`server.ex` init), BEFORE 005 reveals the CASEMAPPING. On an rfc1459
+     network with a national-char autojoin channel behind an invite-only
+     ChanServ (473/475), `maybe_request_chanserv_invite/3` derives its lookup
+     key with the same ASCII `canonical_target/1`, so it compares the ircd's
+     rfc1459-folded numeric channel against the ASCII-folded plan key, misses,
+     and the INVITE is never requested (the channel stays `:failed` — a superset
+     of the #113 niche). ASCII networks are unaffected. Folding the plan
+     network-aware is impossible before connect; documented, not fixed.
+
+**Migration (`messages.channel` DM nick-key fork) — CLOSED: NO MIGRATION (vjt).**
+The historical DM rows written RAW pre-#537 leave a casing fork in
+`messages.channel` for DM peers. Evidence that the fork is INERT:
+`Scrollback.where_dm_peer/2` matches `nick_fold(COALESCE(dm_with, channel))` at
+QUERY time, so peer-DM reads, the `list_archive/3` grouping+exclusion, and the
+#393 covering index all resolve regardless of the stored casing. The ONLY site
+that direct-compares `m.channel == ^channel` is the own-nick self-window
+(`/msg` yourself — vanishingly rare). #525's `refold_identifiers_ascii`
+migration explicitly leaves channel-VALUE tables (`messages.channel`) put.
+
+**Verdict (vjt, measured on prod):** NO migration ships. A prod scan found only
+12 messages + 1 read cursor carrying any of the four national chars `[ ] \ ~`,
+**every one of them on azzurra (`CASEMAPPING=ascii`) and ZERO on the rfc1459
+networks (libera / oftc).** On an ASCII network those bytes are MEANINGFUL,
+distinct characters — folding them (`[`→`{` etc.) would be exactly the #525
+over-fold this whole issue reverses. A `lower()`-only `UPDATE` (which would touch
+just the `A-Z` casing, not the national chars) buys nothing the query-time
+`nick_fold` doesn't already resolve, so it too is declined. The stays-put stance
+is the correct one; the branch ships with no backfill migration at all.
+
+**Accepted residual:** with no migration, exactly ONE historical message — under
+the raw key `H\mob` — stays orphaned from its folded lookup (the own-nick
+self-window direct-compare, the single non-`where_dm_peer` path). One stranded
+message on prod, on ASCII where the `\` is meaningful anyway, is a strictly
+better outcome than an over-fold that would re-merge identities the ircd keeps
+distinct. Documented and accepted, not fixed.
+
+The `nick_fold/1` fragment + `nick_fold_sql/1` STAY (byte-pinned to the
+`network_credentials` / `query_windows` / `notify_entries` folded-index
+migrations; the `IdentifierTest` pin test fails on one byte of drift). Shipped
+as separate reviewable INCs on the `537-identifier-fold-casemapping` branch
+(INC-1 boundary folds → INC-2a/b/c + 2.2/2.3/2.4 the network-aware ingress →
+INC-3 the mechanical collapse), never a big-bang.

@@ -62,61 +62,85 @@ Key invariants — break only with deliberate cause + DESIGN_NOTES entry:
   `(network_id, channel, server_time DESC)`-indexed; a future
   `CHATHISTORY` listener facade (Phase 6) is a mechanical query
   translation, not a redesign.
-- **Channel names are case-folded under ASCII casemapping (GH #525,
-  correcting #364).** bahamut (azzurra) advertises AND implements
-  `CASEMAPPING=ascii`: it folds channels the SAME way it folds nicks —
-  `A-Z` ONLY, leaving `[ ] \ ~` UNTOUCHED. The single source of truth is
-  `Grappa.IRC.Identifier.canonical_channel/1` (sigil-gated), which shares
-  ONE byte-level `fold_ascii/1` primitive with `canonical_nick/1` (#121).
-  Every channel-keyed table (`messages`, `read_cursors`,
-  `network_credentials.autojoin_channels` / `last_joined_channels`,
-  archive, `network_featured_channels`) STORES the channel canonical
-  (fold at write) and every lookup canonicalizes the input then compares
-  plain `==` — so `#Chan`/`#chan`/`#CHAN` resolve to one window, while
-  `#chan[1]`/`#chan{1}` AND non-ASCII (`#CAFÉ` vs `#café`) stay DISTINCT
-  (the ircd keeps them apart; #364 wrongly merged the bracket pair — the
-  #525 over-fold, reproduced live). This is the **channel pattern**:
-  canonical storage + plain `==` + one-shot backfill — NOT #121's
-  expression-index pattern, which is only for `query_windows.target_nick`,
-  a NICK stored RAW for display. A new channel-keyed table or query MUST
-  canonicalize via `canonical_channel/1` (never a bare `String.downcase`,
-  which Unicode-over-folds non-ASCII) or it silently forks/merges
-  windows. **History stays put (#525):** the earlier
-  `fold_channels_rfc1459` migration folded stored channel VALUES to
-  braces; the #525 `refold_identifiers_ascii` migration does NOT rewrite
-  them (the original bracket spelling is unrecoverable) — a brace-spelled
-  channel keeps its scrollback, a bracket-spelled one starts a fresh
-  window. **Display exception (case-preserved, like nicks):**
-  `channel_directory.name` is stored verbatim (the /LIST spelling) and
-  folded only at the featured-label compare
+- **Identifiers (nicks AND channels) are case-folded by ONE
+  `canonical_target` fold at every KEY boundary (GH #537, unifying #121
+  nicks + #364/#525 channels); wire + display stay RAW.** bahamut
+  (Azzurra, all of prod) advertises AND implements `CASEMAPPING=ascii`: it
+  folds `A-Z` ONLY, leaving `[ ] \ ~` UNTOUCHED, and folds channels the
+  SAME way it folds nicks. The single source of truth is
+  `Grappa.IRC.Identifier.canonical_target/1` — the plain byte-level ASCII
+  `fold_ascii/1`. A sigil sits outside `A-Z`, so
+  `canonical_target("#Chan") == "#" <> fold("Chan")` and a nick folds
+  identically: that is WHY #537 collapsed the former sigil-gated
+  `canonical_channel/1` AND `canonical_nick/1` into this one function. Its
+  query-side SQL twins `Identifier.nick_fold/1` (Ecto fragment) +
+  `nick_fold_sql/1` stay plain `lower()`, BYTE-PINNED to the folded-index
+  migrations (`network_credentials` / `query_windows` / `notify_entries`)
+  — `IdentifierTest`'s pin test fails on one byte of drift (SQLite drops
+  an expression index the moment the query string differs). `#chan[1]`/
+  `#chan{1}`, `foo[1]`/`foo{1}`, and non-ASCII (`#CAFÉ` vs `#café`) all
+  stay DISTINCT (the #525 posture, reversing the #364 over-fold). **Only
+  KEYs fold** — never fold `sender`, `dm_with`, the members map, a ban
+  mask, or any wire builder (the key/display/wire split). A new identifier
+  lookup, equality, or key-derivation MUST fold via `canonical_target/1`
+  (or the SQL twins), never a bare `String.downcase` (Unicode-over-folds
+  non-ASCII) or `==`, or it silently forks/merges identities. **Channel
+  KEYs (the channel pattern):** every channel-keyed table (`messages`,
+  `read_cursors`, `network_credentials.autojoin_channels` /
+  `last_joined_channels`, archive, `network_featured_channels`) STORES the
+  folded channel (fold at write) and every lookup folds then compares
+  plain `==`. Channels carry NO display column — **the folded key IS the
+  display (option B)** ("as-first-seen" rejected: on rfc1459 `#Foo[1]`
+  renders folded anyway). **History stays put (#525):**
+  `refold_identifiers_ascii` does NOT rewrite stored channel VALUES — a
+  brace-spelled channel keeps its scrollback, a bracket-spelled one starts
+  fresh. **Display exception:** `channel_directory.name` is stored verbatim
+  (the /LIST spelling), folded only at the featured-label compare
   (`ChannelDirectory.Wire.mark_featured/2`).
-- **Nicks are case-folded under ASCII casemapping (GH #121, narrowed to
-  ASCII by #525).** Azzurra runs bahamut, which advertises AND implements
-  `CASEMAPPING=ascii`: it folds `A-Z` ONLY, leaving `[ ] \ ~` UNTOUCHED
-  (`foo[1]` and `foo{1}` are DISTINCT nicks — #121/#364 wrongly merged
-  them, the #525 over-fold / "ghost in the nicklist"). The single source
-  of truth is `Grappa.IRC.Identifier.canonical_nick/1` (in-memory,
-  ASCII-byte-level) and its query-side twin `Identifier.nick_fold/1`
-  (Ecto fragment, now plain `lower()`). EVERY
-  server-side nick compare routes through one of them — visitor +
-  query_windows lookups (UNIQUE **expression** indexes on the fold, NOT a
-  denormalised column), the WHOIS/userhost/whowas caches, dm_peer, the
-  **DM-peer read + archive match** (`Scrollback.where_dm_peer/2`, shared by
-  `channel_or_dm_where/3` + `delete_for_dm/3`, and `list_archive/3`'s
-  grouping+exclusion — #372; `dm_with` is stored RAW for display, so the
-  MATCH must fold, like `query_windows.target_nick`), numeric_router, and
-  event_router self-detection. A new nick lookup, equality, or nick-keyed
-  cache MUST fold via these, never a bare `String.downcase` or `==`, or it
-  silently forks identities. The SQL
-  fold in a migration index, the `nick_fold/1` fragment, and any
-  `:unsafe_fragment` conflict target MUST stay character-identical or
-  SQLite drops the index. **Out of scope / known gap:** the in-memory
-  members map keys + `state.nick` as an identity key stay raw-cased
+- **Per-network CASEMAPPING is normalised at INGRESS only (GH #537 axis
+  2).** solanum/Libera advertise `CASEMAPPING=rfc1459`, where `{ } | ^`
+  are the lowercase equivalents of `[ ] \ ~` (so `#foo[1]`/`#foo{1}` are
+  ONE channel there). Rather than teach `canonical_target/1` + the
+  byte-pinned SQL `lower()` three fold tables, `normalize_casemapping/2`
+  maps the four national chars ONCE at the ingress door, then every KEY
+  path folds `A-Z` via `canonical_target/1`; `canonical_target/2` is the
+  composition. **On `:ascii` (all prod) normalize is a no-op**, so
+  storage/query are byte-for-byte the pre-#537 fold. Storage + query stay
+  pure ASCII; ONLY the three ingress classes normalise, each supplying the
+  casemapping from where it reaches the 005: `Session.Server` +
+  `EventRouter` from `state.isupport` (`ISupport.casemapping`, `Map.get`
+  hot-safe; `fold_key/2`); the stateless web edge (controllers,
+  `GrappaChannel` topic join) from `Grappa.Session.casemapping/2` (a
+  GenServer call, `:ascii` when no live pid). A folded WRITE forces a
+  folded READ compare — including plain-`==` sites no `canonical_*` grep
+  surfaces (`channel == own_nick` in `Push.Triggers.dm?`/`Payload`,
+  self-window `dm_with == ^channel`) and the raw
+  `Repo.update_all(set: channel:)` in `rename_dm_peer`. **Known niche gaps
+  (rfc1459-only, out of scope, DESIGN_NOTES 2026-07-30):** a national-char
+  DM peer on rfc1459 (`dm_with` RAW + `nick_fold` ASCII, like the
+  members-map raw key); the pre-connect autojoin plan folded ASCII before
+  005 (rfc1459 + national-char autojoin + invite-only ChanServ misses
+  `maybe_request_chanserv_invite`).
+- **Nick KEYs fold via the same `canonical_target/1`; the display stays
+  RAW (GH #121, #372).** A nick's case IS presentation (`vjt` vs `VJT`),
+  so `sender`/`dm_with` are stored RAW and only the MATCH folds — via
+  in-memory `canonical_target/1` or its query-side twin
+  `Identifier.nick_fold/1` (`lower()`, on a UNIQUE **expression** index,
+  NOT a denormalised column). EVERY server-side nick compare routes
+  through one of them — visitor + query_windows lookups, the
+  WHOIS/userhost/whowas caches, dm_peer, the **DM-peer read + archive
+  match** (`Scrollback.where_dm_peer/2`, shared by `channel_or_dm_where/3`
+  + `delete_for_dm/3`, and `list_archive/3`'s grouping+exclusion — #372;
+  `dm_with` is stored RAW for display, so the MATCH must fold, like
+  `query_windows.target_nick`), numeric_router, and event_router
+  self-detection. A new nick lookup, equality, or nick-keyed cache MUST
+  fold via these, never a bare `String.downcase` or `==`, or it silently
+  forks identities. **Out of scope / known gap:** the in-memory members
+  map keys + `state.nick` as an identity key stay raw-cased
   (server-consistent identity, not a fold-MATCH site). cic mirrors with
-  `nickEquals` — including the INCOMING DM re-key
-  (`subscribe.ts` → `canonicalQueryNick`) and the archive-visibility
-  filter (`archive.ts` → `normalizeNick`), the client twins of the #372
-  server fold. **A peer NICK change is an identity MIGRATION, not a fold
+  `nickEquals` — including the INCOMING DM re-key (`subscribe.ts` →
+  `canonicalQueryNick`) and the archive-visibility filter (`archive.ts` →
+  `normalizeNick`), the client twins of the #372 server fold. **A peer NICK change is an identity MIGRATION, not a fold
   (GH #373).** When `old ≢ new` (a genuine rename, not a casing) EVERY
   store of the old nick moves old→new, folding only to MATCH the old:
   the `query_windows` row (`QueryWindows.rename/4` — UPDATE, or MERGE on
