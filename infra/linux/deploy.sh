@@ -74,7 +74,10 @@ substrate_write_marker() {
 }
 
 substrate_commit_exists() {
-	run_as_grappa "git cat-file -e '$1^{commit}'" 2>/dev/null
+	# Boolean predicate — the lib evaluates this inside `base=$(...)`, so
+	# suppress stdout too (not just stderr) to keep the captured range base
+	# clean of any run_as subshell noise.
+	run_as_grappa "git cat-file -e '$1^{commit}'" >/dev/null 2>&1
 }
 
 substrate_changed_files() {
@@ -111,8 +114,10 @@ substrate_reload() {
 	# Hot path: tell the live BEAM to md5-walk the release's ebin and
 	# reload changed modules (Grappa.HotReload). No systemctl, no cic
 	# rebuild, no migration — preflight only returns HOT when none of
-	# those changed.
-	deploy_log "POST ${RELOAD_URL}"
+	# those changed. The lib captures this hook's stdout as the reload
+	# response body, so the pre-reload log goes to stderr (else it
+	# pollutes the JSON the "failed":[] honesty glob inspects).
+	deploy_log "POST ${RELOAD_URL}" >&2
 	curl -fsS -X POST "${RELOAD_URL}"
 }
 

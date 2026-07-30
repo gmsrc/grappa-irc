@@ -86,7 +86,10 @@ substrate_write_marker() {
 }
 
 substrate_commit_exists() {
-	run_as_grappa "git cat-file -e '$1^{commit}'" 2>/dev/null
+	# Boolean predicate — the lib evaluates this inside `base=$(...)`, so
+	# suppress stdout too (not just stderr): a `su -l grappa` login shell
+	# emitting a banner would otherwise splice into the captured range base.
+	run_as_grappa "git cat-file -e '$1^{commit}'" >/dev/null 2>&1
 }
 
 substrate_changed_files() {
@@ -119,7 +122,10 @@ substrate_build() {
 }
 
 substrate_reload() {
-	deploy_log "POST ${RELOAD_URL}"
+	# The lib captures this hook's stdout as the reload response body, so
+	# the pre-reload chatter must go to stderr — else it pollutes the
+	# JSON the "failed":[] honesty glob inspects.
+	deploy_log "POST ${RELOAD_URL}" >&2
 	curl -fsS -X POST "${RELOAD_URL}"
 }
 

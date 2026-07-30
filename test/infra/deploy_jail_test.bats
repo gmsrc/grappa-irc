@@ -165,6 +165,40 @@ run_deploy() {
     run_deploy
     [ "$status" -eq 0 ]
     [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+    # The lib captures substrate_reload's stdout as the response body, so
+    # the hook's pre-reload log must NOT leak into it — a polluted capture
+    # would read "reload response: [deploy] POST ..." and make the
+    # "failed":[] honesty glob depend on the log text.
+    [[ "$output" != *"reload response: [deploy]"* ]]
+}
+
+# Regression: a substrate hook the lib evaluates inside `base=$(...)` must
+# not emit to STDOUT — a `su -l grappa` login banner would otherwise splice
+# into the captured preflight range base and crash the mix oneshot. The
+# default `su` stub is noise-free (so the other suites can't catch this);
+# here we make it emit a banner and assert the base stays clean.
+@test "noisy su login banner does NOT pollute the preflight range base" {
+    cat > "$FAKE_DIR/su" <<'EOF'
+#!/bin/sh
+echo "Last login: Tue on ttyv0"     # login-shell banner to STDOUT
+while [ $# -gt 0 ]; do
+    if [ "$1" = "-c" ]; then shift; exec /bin/sh -c "$1"; fi
+    shift
+done
+echo "fake su: no -c arg" >&2
+exit 64
+EOF
+    chmod +x "$FAKE_DIR/su"
+
+    marker="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    printf '%s\n' "$marker" > "$REPO_ROOT/runtime/last-deployed-sha"
+    new="$(commit_upstream lib/base.txt)"
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    # base must be the bare marker sha — not "Last login...<marker>".
+    grep -q "cli(\[\"$marker\", \"$new\", \"jail\"\])" "$ARGV_LOG"
+    ! grep -q "cli(\[\"Last login" "$ARGV_LOG"
 }
 
 # --- #7 caveat (a): re-exec guard stays keyed on the PRE-PULL range ---------

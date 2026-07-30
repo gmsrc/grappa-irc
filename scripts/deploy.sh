@@ -80,7 +80,10 @@ substrate_write_marker() {
 }
 
 substrate_commit_exists() {
-	git cat-file -e "$1^{commit}" 2>/dev/null
+	# Boolean predicate evaluated inside the lib's `base=$(...)` — suppress
+	# stdout too, for parity with the jail/linux hooks (git cat-file -e is
+	# silent, but keep the discipline identical across substrates).
+	git cat-file -e "$1^{commit}" >/dev/null 2>&1
 }
 
 substrate_changed_files() {
