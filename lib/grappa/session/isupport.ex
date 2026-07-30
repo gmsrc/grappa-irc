@@ -39,10 +39,14 @@ defmodule Grappa.Session.ISupport do
   consume a param (the target nick) regardless of sign, and are excluded
   from the CHANMODES classes.
 
-  This is a pure, stateless module — no GenServer, no Repo, no side
-  effects. `Grappa.Session.Server` holds one `t()` per session on its
-  state and threads it into `EventRouter` at route time.
+  This is a stateless module — no GenServer, no Repo, no PubSub. The lone
+  side effect is a diagnostic `Logger.warning` when a 005 advertises a
+  `CASEMAPPING=` value we do not model (#537); parsing itself is pure.
+  `Grappa.Session.Server` holds one `t()` per session on its state and
+  threads it into `EventRouter` at route time.
   """
+
+  require Logger
 
   @type chanmodes :: %{
           a: [String.t()],
@@ -70,12 +74,29 @@ defmodule Grappa.Session.ISupport do
   """
   @type presence_mechanism :: {:monitor, presence_limit()} | {:watch, presence_limit()} | :none
 
+  @typedoc """
+  How the upstream ircd folds identifiers (nicks AND channels), from the
+  005 `CASEMAPPING=` token (#537):
+
+    * `:ascii` — fold `A-Z` only (bahamut/Azzurra); also the absent /
+      unrecognised default.
+    * `:rfc1459` — also fold `[ ] \\` → `{ } |` and `~` → `^`
+      (solanum/Libera).
+    * `:rfc1459_strict` — the bracket trio `[ ] \\`, NOT `~`.
+
+  The per-network ingress normaliser (`Grappa.IRC.Identifier`) maps the
+  rfc1459 national chars onto their folded representative once at the
+  ingress door, so every KEY path downstream can assume ASCII.
+  """
+  @type casemapping :: :ascii | :rfc1459 | :rfc1459_strict
+
   @type t :: %{
           chanmodes: chanmodes(),
           prefix: prefix(),
           statusmsg: [String.t()],
           monitor: presence_limit() | nil,
-          watch: presence_limit() | nil
+          watch: presence_limit() | nil,
+          casemapping: casemapping()
         }
 
   # Pre-005 seed = the exact values the old EventRouter constants held.
@@ -111,6 +132,13 @@ defmodule Grappa.Session.ISupport do
   # chanmodes seeds carry the pre-005 bahamut values.
   @default_statusmsg ["@", "+"]
 
+  # #537 — pre-005 / absent-token default. bahamut/Azzurra advertises
+  # `CASEMAPPING=ascii` and the whole stack was built for ASCII (#525);
+  # a network that omits the token, or advertises one we don't model, is
+  # treated as ASCII (too-lax beats merging identities the ircd keeps
+  # apart).
+  @default_casemapping :ascii
+
   @doc """
   The pre-005 default capability table (bahamut/Azzurra values). Used as
   the initial `Session.Server` state field and as the fallback whenever a
@@ -127,7 +155,8 @@ defmodule Grappa.Session.ISupport do
       # optimistic WATCH probe with a 421-driven MONITOR→:none fallback,
       # per review 2026-07-19) lives in Session.Server.arm_presence/1.
       monitor: nil,
-      watch: nil
+      watch: nil,
+      casemapping: @default_casemapping
     }
   end
 
@@ -222,6 +251,24 @@ defmodule Grappa.Session.ISupport do
     end
   end
 
+  @doc """
+  The upstream's identifier casemapping (#537), from the 005
+  `CASEMAPPING=` token. `:ascii` when the network omitted the token, when
+  the value was unrecognised, or — for hot-reload safety — when the live
+  isupport table predates the `:casemapping` field (`Map.get`, not a
+  key pattern-match, mirroring `statusmsg/1` + `presence_mechanism/1`).
+  """
+  @spec casemapping(t()) :: casemapping()
+  def casemapping(isupport) when is_map(isupport),
+    do: Map.get(isupport, :casemapping, @default_casemapping)
+
+  @doc """
+  The pre-005 default casemapping (`:ascii`). Exposed so callers/tests
+  reference the seed through production code rather than the literal.
+  """
+  @spec default_casemapping() :: casemapping()
+  def default_casemapping, do: @default_casemapping
+
   # ---------------------------------------------------------------------------
   # Token parsing
   # ---------------------------------------------------------------------------
@@ -263,6 +310,10 @@ defmodule Grappa.Session.ISupport do
   defp merge_token("WATCH=" <> rest, acc), do: Map.put(acc, :watch, parse_limit(rest))
   defp merge_token("WATCH", acc), do: Map.put(acc, :watch, :unlimited)
 
+  # #537 — CASEMAPPING=<token>. `Map.put` (not update-syntax) for the same
+  # hot-reload-window safety as STATUSMSG/MONITOR above.
+  defp merge_token("CASEMAPPING=" <> rest, acc), do: Map.put(acc, :casemapping, parse_casemapping(rest))
+
   defp merge_token(_, acc), do: acc
 
   # A presence-mechanism limit value. Non-numeric / empty / non-positive
@@ -274,6 +325,20 @@ defmodule Grappa.Session.ISupport do
       {n, ""} when n > 0 -> n
       _ -> :unlimited
     end
+  end
+
+  # #537 — CASEMAPPING value → the modelled atom. An unrecognised value is
+  # NOT a fold table we can guess: degrade to :ascii (too-lax beats merging
+  # distinct identities) and log so the operator sees the unsupported
+  # network. bahamut advertises `ascii`; solanum/Libera `rfc1459`.
+  @spec parse_casemapping(String.t()) :: casemapping()
+  defp parse_casemapping("ascii"), do: :ascii
+  defp parse_casemapping("rfc1459"), do: :rfc1459
+  defp parse_casemapping("rfc1459-strict"), do: :rfc1459_strict
+
+  defp parse_casemapping(other) do
+    Logger.warning("unrecognised CASEMAPPING=#{inspect(other)} — treating as :ascii")
+    :ascii
   end
 
   # CHANMODES=A,B,C,D — four comma-separated classes of mode letters.

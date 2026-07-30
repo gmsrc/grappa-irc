@@ -164,6 +164,70 @@ defmodule Grappa.Session.ISupportTest do
     end
   end
 
+  # #537 — CASEMAPPING is the ISUPPORT token declaring how the ircd folds
+  # identifiers (nicks AND channels): `ascii` (A-Z only — bahamut/Azzurra),
+  # `rfc1459` (also folds `[ ] \` → `{ } |` and `~` → `^` — solanum/Libera),
+  # `rfc1459-strict` (the bracket trio, NOT `~`). It's the source of truth
+  # for the per-network ingress normaliser; an absent or unrecognised token
+  # is treated as `ascii` (what #525 built for) so the rest of the server
+  # can assume ASCII after the ingress door.
+  describe "CASEMAPPING (#537)" do
+    test "default/0 seeds :ascii (the absent-token default)" do
+      assert ISupport.casemapping(ISupport.default()) == :ascii
+    end
+
+    test "merge_isupport/2 parses CASEMAPPING=ascii" do
+      params = ["grappa-test", "CASEMAPPING=ascii", "are supported by this server"]
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.casemapping(isupport) == :ascii
+    end
+
+    test "merge_isupport/2 parses CASEMAPPING=rfc1459 (solanum/Libera)" do
+      params = ["grappa-test", "CASEMAPPING=rfc1459", "are supported by this server"]
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.casemapping(isupport) == :rfc1459
+    end
+
+    test "merge_isupport/2 parses CASEMAPPING=rfc1459-strict" do
+      params = ["grappa-test", "CASEMAPPING=rfc1459-strict"]
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.casemapping(isupport) == :rfc1459_strict
+    end
+
+    test "merge_isupport/2 falls back to :ascii + logs on an unrecognised value" do
+      # A token value we don't model MUST NOT guess a fold table — it
+      # degrades to :ascii (the safest: too-lax beats merging distinct
+      # identities) and logs so the operator sees the unsupported network.
+      import ExUnit.CaptureLog
+
+      log =
+        capture_log(fn ->
+          isupport =
+            ISupport.merge_isupport(["grappa-test", "CASEMAPPING=weird-9000"], ISupport.default())
+
+          assert ISupport.casemapping(isupport) == :ascii
+        end)
+
+      assert log =~ "CASEMAPPING"
+      assert log =~ "weird-9000"
+    end
+
+    test "merge_isupport/2 preserves the current casemapping when the token is absent" do
+      params = ["grappa-test", "NETWORK=Azzurra", "are supported by this server"]
+      rfc = ISupport.merge_isupport(["grappa-test", "CASEMAPPING=rfc1459"], ISupport.default())
+      assert ISupport.casemapping(ISupport.merge_isupport(params, rfc)) == :rfc1459
+    end
+
+    test "casemapping/1 falls back to :ascii on a table predating the field (hot-reload safety)" do
+      # A live Session.Server isupport map seeded before #537 has no
+      # :casemapping key; a hot code-reload reading it must default to
+      # :ascii, not KeyError. Mirrors statusmsg/1 + presence_mechanism/1.
+      pre_537 = Map.drop(ISupport.default(), [:casemapping])
+      refute Map.has_key?(pre_537, :casemapping)
+      assert ISupport.casemapping(pre_537) == :ascii
+    end
+  end
+
   describe "presence_mechanism/1 (#247)" do
     test "default/0 advertises no presence mechanism (:none pre-005)" do
       assert ISupport.presence_mechanism(ISupport.default()) == :none
