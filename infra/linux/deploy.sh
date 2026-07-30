@@ -41,7 +41,8 @@ export REPO_ROOT ENV_FILE GRAPPA_USER
 
 # ---- lib config + feature toggles -----------------------------------
 DEPLOY_SELF_REL="infra/linux/deploy.sh"
-DEPLOY_FEATURE_FORCE_FLAGS=0
+DEPLOY_USAGE="[--force-hot|--force-cold]"
+DEPLOY_FEATURE_FORCE_FLAGS=1
 DEPLOY_FEATURE_DEFER=0
 DEPLOY_FEATURE_NOTHING_TO_DO=0
 DEPLOY_FEATURE_REEXEC=1

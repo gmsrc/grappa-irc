@@ -15,9 +15,9 @@
 # committed recorders inside the temp repo. What only a real host deploy
 # exercises (systemd Type=exec, the live BEAM) is out of scope.
 #
-# Deliberately NOT locked here (behavior that #503 CHANGES, covered by its
-# own RED-GREEN test when wired): linux gaining --force-* flags, the
-# nothing-to-do fast path, and the DEPLOY_PREV_SHA carry across re-exec.
+# #503 enrich gains (own RED-GREEN sections at the bottom): --force-*
+# flags (done). Still to land: the nothing-to-do fast path and the
+# DEPLOY_PREV_SHA carry across re-exec.
 
 setup() {
     DEPLOY_SH="$BATS_TEST_DIRNAME/../../infra/linux/deploy.sh"
@@ -246,4 +246,35 @@ run_deploy() {
     [ "$stop_line" -lt "$start_line" ]
 
     [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+}
+
+# --- #503 enrich: --force-* flags (parity with jail + docker) ----------------
+
+@test "--force-hot skips preflight and hot-reloads (no systemctl)" {
+    export PREFLIGHT_RC=3   # would be COLD if preflight ran; --force-hot overrides
+    new="$(commit_upstream lib/base.txt)"
+
+    run_deploy --force-hot
+    [ "$status" -eq 0 ]
+    ! grep -q "run --no-start" "$ARGV_LOG"          # forced mode skips preflight
+    grep -q "curl .*-X POST.*reload" "$ARGV_LOG"
+    ! grep -q "systemctl" "$ARGV_LOG"               # hot path never restarts
+    [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+}
+
+@test "--force-cold skips preflight and cold-deploys" {
+    export PREFLIGHT_RC=0   # would be HOT if preflight ran; --force-cold overrides
+    new="$(commit_upstream lib/base.txt)"
+
+    run_deploy --force-cold
+    [ "$status" -eq 0 ]
+    ! grep -q "run --no-start" "$ARGV_LOG"
+    grep -q "systemctl stop grappa" "$ARGV_LOG"
+    grep -q "systemctl start grappa" "$ARGV_LOG"
+    [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+}
+
+@test "unknown flag is a usage error (64)" {
+    run_deploy --bogus
+    [ "$status" -eq 64 ]
 }
