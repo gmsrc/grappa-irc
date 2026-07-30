@@ -46,6 +46,8 @@ defmodule Grappa.Session.ISupport do
   threads it into `EventRouter` at route time.
   """
 
+  alias Grappa.IRC.Identifier
+
   require Logger
 
   @type chanmodes :: %{
@@ -76,19 +78,15 @@ defmodule Grappa.Session.ISupport do
 
   @typedoc """
   How the upstream ircd folds identifiers (nicks AND channels), from the
-  005 `CASEMAPPING=` token (#537):
-
-    * `:ascii` — fold `A-Z` only (bahamut/Azzurra); also the absent /
-      unrecognised default.
-    * `:rfc1459` — also fold `[ ] \\` → `{ } |` and `~` → `^`
-      (solanum/Libera).
-    * `:rfc1459_strict` — the bracket trio `[ ] \\`, NOT `~`.
-
-  The per-network ingress normaliser (`Grappa.IRC.Identifier`) maps the
-  rfc1459 national chars onto their folded representative once at the
-  ingress door, so every KEY path downstream can assume ASCII.
+  005 `CASEMAPPING=` token (#537). Re-exported from
+  `Grappa.IRC.Identifier`, which OWNS the fold semantics — this module
+  only PARSES the 005 token into the type (`parse_casemapping/1`) and
+  carries it on `t()`. See `Grappa.IRC.Identifier.normalize_casemapping/2`
+  for the per-network ingress fold that maps the rfc1459 national chars
+  onto their folded representative so every KEY path downstream can assume
+  plain ASCII.
   """
-  @type casemapping :: :ascii | :rfc1459 | :rfc1459_strict
+  @type casemapping :: Identifier.casemapping()
 
   @type t :: %{
           chanmodes: chanmodes(),

@@ -374,6 +374,119 @@ defmodule Grappa.IRC.IdentifierTest do
     end
   end
 
+  describe "normalize_casemapping/2 (per-network national-char ingress fold — #537)" do
+    test ":ascii is identity — the national chars are meaningful distinct bytes" do
+      # bahamut/Azzurra is CASEMAPPING=ascii: `[ ] \\ ~` are ordinary
+      # distinct bytes, never folded onto `{ } | ^`. normalize is a no-op;
+      # the downstream canonical_target/1 does the A-Z fold. This is the
+      # #525 posture — keeping `#foo[1]`/`#foo{1}` DISTINCT.
+      for s <- ["#Chan[1]", "foo{1}", "a\\b", "tilde~", "caret^", "#CAFÉ"] do
+        assert Identifier.normalize_casemapping(s, :ascii) == s
+      end
+    end
+
+    test ":rfc1459 folds the national quartet [ ] \\ ~ -> { } | ^" do
+      # RFC 2812 §2.2: {}|^ are the lowercase equivalents of []\~. solanum/
+      # Libera advertise CASEMAPPING=rfc1459, so `#foo[1]` and `#foo{1}` are
+      # ONE channel to the ircd; the ingress normaliser maps the national
+      # chars onto their folded representative so the ASCII fold downstream
+      # converges them.
+      assert Identifier.normalize_casemapping("[", :rfc1459) == "{"
+      assert Identifier.normalize_casemapping("]", :rfc1459) == "}"
+      assert Identifier.normalize_casemapping("\\", :rfc1459) == "|"
+      assert Identifier.normalize_casemapping("~", :rfc1459) == "^"
+      assert Identifier.normalize_casemapping("#foo[1]\\~", :rfc1459) == "#foo{1}|^"
+    end
+
+    test ":rfc1459 leaves A-Z to the downstream ASCII fold (separation of concerns)" do
+      # normalize handles ONLY the national chars; the A-Z fold is
+      # canonical_target/1's job. Keeping them split lets the SQL twin
+      # (plain lower()) stay byte-pinned to the A-Z fold, per the vjt ruling.
+      assert Identifier.normalize_casemapping("Foo", :rfc1459) == "Foo"
+      assert Identifier.normalize_casemapping("#CHAN", :rfc1459) == "#CHAN"
+    end
+
+    test ":rfc1459 leaves the fold TARGETS { } | ^ untouched (already lowercase)" do
+      # {}|^ are the lowercase forms — the ircd never folds them further, so
+      # `#foo~` and `#foo^` converge onto `#foo^` (idempotent under re-fold).
+      assert Identifier.normalize_casemapping("{}|^", :rfc1459) == "{}|^"
+    end
+
+    test ":rfc1459_strict folds [ ] \\ but NOT ~ (RFC 1459 predates the tilde rule)" do
+      assert Identifier.normalize_casemapping("[", :rfc1459_strict) == "{"
+      assert Identifier.normalize_casemapping("]", :rfc1459_strict) == "}"
+      assert Identifier.normalize_casemapping("\\", :rfc1459_strict) == "|"
+      # tilde stays a tilde under strict — the strict fold omits it.
+      assert Identifier.normalize_casemapping("~", :rfc1459_strict) == "~"
+      assert Identifier.normalize_casemapping("#foo[1]~", :rfc1459_strict) == "#foo{1}~"
+    end
+
+    test "is byte-level — UTF-8 multibyte passes through every casemapping" do
+      # `[ ] \\ ~` are all < 0x80 and never appear as UTF-8 continuation
+      # bytes, so multibyte sequences are untouched (mirrors fold_ascii).
+      for cm <- [:ascii, :rfc1459, :rfc1459_strict] do
+        assert Identifier.normalize_casemapping("café", cm) == "café"
+        assert Identifier.normalize_casemapping("Ä", cm) == "Ä"
+      end
+    end
+
+    test "combined with canonical_target/1, two rfc1459 spellings converge to ONE key" do
+      # The whole point of axis 2: on an rfc1459 network `#Foo[1]` and
+      # `#Foo{1}` are ONE channel. normalize_casemapping maps the national
+      # chars, canonical_target folds A-Z, and both spellings land on the
+      # same storage/lookup key.
+      key = fn s ->
+        s |> Identifier.normalize_casemapping(:rfc1459) |> Identifier.canonical_target()
+      end
+
+      assert key.("#Foo[1]") == key.("#Foo{1}")
+      assert key.("#Foo[1]") == "#foo{1}"
+      # nick-shaped too — rfc1459 folds nicks and channels identically.
+      assert key.("Nick[1]") == key.("Nick{1}")
+    end
+
+    test "on :ascii the same two spellings stay DISTINCT (pins #525)" do
+      key = fn s ->
+        s |> Identifier.normalize_casemapping(:ascii) |> Identifier.canonical_target()
+      end
+
+      refute key.("#Foo[1]") == key.("#Foo{1}")
+      assert key.("#Foo[1]") == "#foo[1]"
+    end
+
+    test "passes non-binary through for every casemapping" do
+      for cm <- [:ascii, :rfc1459, :rfc1459_strict] do
+        assert Identifier.normalize_casemapping(nil, cm) == nil
+        assert Identifier.normalize_casemapping(:atom, cm) == :atom
+      end
+    end
+
+    property ":rfc1459 maps exactly the national quartet, is idempotent, and touches no other byte" do
+      bytes = StreamData.list_of(StreamData.integer(?!..?~), min_length: 1, max_length: 20)
+
+      check all(cs <- bytes) do
+        input = :binary.list_to_bin(cs)
+        out = Identifier.normalize_casemapping(input, :rfc1459)
+
+        # Independent oracle: map the four national chars, leave the rest.
+        expected =
+          for <<c <- input>>, into: "" do
+            case c do
+              ?[ -> "{"
+              ?] -> "}"
+              ?\\ -> "|"
+              ?~ -> "^"
+              _ -> <<c>>
+            end
+          end
+
+        assert out == expected
+        # Idempotent: the targets {}|^ are never in the source set.
+        assert Identifier.normalize_casemapping(out, :rfc1459) == out
+      end
+    end
+  end
+
   describe "valid_network_slug?/1" do
     test "accepts lowercase alphanum + dash + underscore" do
       assert Identifier.valid_network_slug?("azzurra")

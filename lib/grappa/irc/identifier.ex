@@ -21,6 +21,24 @@ defmodule Grappa.IRC.Identifier do
   may be `nil` or another type.
   """
 
+  @typedoc """
+  How an upstream ircd folds identifiers (nicks AND channels), from the
+  005 `CASEMAPPING=` token (#537). The Identifier module OWNS this type
+  because it owns the fold semantics; `Grappa.Session.ISupport` parses
+  the 005 token INTO it and re-exports it for its own `t()`.
+
+    * `:ascii` — fold `A-Z` only (bahamut/Azzurra); also the absent /
+      unrecognised default.
+    * `:rfc1459` — additionally fold the national quartet `[ ] \\ ~` →
+      `{ } | ^` (solanum/Libera).
+    * `:rfc1459_strict` — the bracket trio `[ ] \\`, NOT `~`.
+
+  `normalize_casemapping/2` maps the rfc1459 national chars onto their
+  folded representative once at the ingress door, so every KEY path
+  downstream can assume plain ASCII and route through `canonical_target/1`.
+  """
+  @type casemapping :: :ascii | :rfc1459 | :rfc1459_strict
+
   # RFC 2812 §2.3.1 — `nickname = ( letter / special ) *8( letter /
   # digit / special / "-" )`. Dash is tail-only; first char is
   # letter-or-special. Total length ≤ 30 (IRCd-modern cap; RFC's 9 is
@@ -298,6 +316,62 @@ defmodule Grappa.IRC.Identifier do
   def canonical_target(name) when is_binary(name), do: canonical_nick(name)
 
   def canonical_target(other), do: other
+
+  @doc """
+  Maps the rfc1459 "national" characters onto their folded representative
+  for a given network `casemapping` — the per-network INGRESS normaliser
+  that precedes the ASCII fold (#537, axis 2).
+
+  ## The two-step fold
+
+  bahamut/Azzurra is `CASEMAPPING=ascii`: it folds ONLY `A-Z`, so the four
+  national chars `[ ] \\ ~` are ordinary distinct bytes (`#foo[1]` and
+  `#foo{1}` are TWO channels — the #525 posture). solanum/Libera advertise
+  `CASEMAPPING=rfc1459`: RFC 2812 §2.2 makes `{ } | ^` the *lowercase
+  equivalents* of `[ ] \\ ~`, so those two spellings are ONE channel.
+
+  Rather than teach `canonical_target/1` (and its byte-pinned SQL twin
+  `nick_fold_sql/1`, which MUST stay plain `lower()`) three different fold
+  tables, the fold is split in two: this function maps the national chars
+  ONCE at the ingress door where the network's casemapping is known (only
+  the Server sees the 005), and every downstream KEY path then folds `A-Z`
+  via `canonical_target/1`. The composition
+  `normalize_casemapping(x, cm) |> canonical_target()` is the full
+  network-aware casefold; on `:ascii` the first step is a no-op and the
+  behaviour is byte-for-byte the pre-#537 ASCII fold.
+
+    * `:ascii` — identity (national chars are meaningful, distinct bytes).
+    * `:rfc1459` — `[`→`{`, `]`→`}`, `\\`→`|`, `~`→`^`.
+    * `:rfc1459_strict` — the bracket trio only; `~` stays `~` (RFC 1459
+      predates the tilde rule RFC 2812 added).
+
+  Byte-level, so UTF-8 multibyte (≥ `0x80`) passes untouched — the four
+  national chars are all `< 0x80` and never appear as continuation bytes,
+  mirroring `fold_ascii/1`. Non-binary input passes through unchanged
+  (mirrors `canonical_target/1`). Idempotent under `:rfc1459`/`_strict`:
+  the fold targets `{ } | ^` are not in any source set.
+  """
+  @spec normalize_casemapping(term(), casemapping()) :: term()
+  def normalize_casemapping(s, :ascii), do: s
+
+  def normalize_casemapping(s, :rfc1459) when is_binary(s), do: national_fold(s, true)
+
+  def normalize_casemapping(s, :rfc1459_strict) when is_binary(s), do: national_fold(s, false)
+
+  def normalize_casemapping(other, cm) when cm in [:rfc1459, :rfc1459_strict], do: other
+
+  # The rfc1459 national-char fold. `fold_tilde?` distinguishes `:rfc1459`
+  # (folds `~`→`^`, RFC 2812) from `:rfc1459_strict` (bracket trio only,
+  # RFC 1459). Byte-level for the same UTF-8-safety reason as `fold_ascii/1`.
+  @spec national_fold(binary(), boolean()) :: binary()
+  defp national_fold(s, fold_tilde?),
+    do: for(<<c <- s>>, into: "", do: <<national_byte(c, fold_tilde?)>>)
+
+  defp national_byte(?[, _), do: ?{
+  defp national_byte(?], _), do: ?}
+  defp national_byte(?\\, _), do: ?|
+  defp national_byte(?~, true), do: ?^
+  defp national_byte(c, _), do: c
 
   # The shared ASCII byte fold — the SINGLE in-memory casemapping for
   # both nicks (#121) and channels (#364), corrected to plain ASCII in
