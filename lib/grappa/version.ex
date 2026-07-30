@@ -42,11 +42,20 @@ defmodule Grappa.Version do
   `X.Y.Z`.
 
   The git state is a **build-time** snapshot (`@git_facts`), captured once
-  at compile via the `git` binary — shelling out per reply would be absurd,
-  and a running release has no live checkout anyway. `@external_resource`
-  re-triggers compilation when `HEAD`/refs change so a dev *incremental*
-  build stays honest; a cold deploy recompiles from scratch and
-  re-snapshots regardless.
+  at compile via the `git` binary (`Grappa.Version.GitProbe.facts/1`) —
+  shelling out per reply would be absurd, and a running release has no live
+  checkout anyway. `@external_resource` re-triggers compilation when the
+  build's git ref moves so an incremental build re-snapshots and stays
+  honest — but WHICH files to watch is the subtle part: a `git pull
+  --ff-only` of an already-checked-out branch leaves `HEAD` and
+  `packed-refs` untouched and rewrites only the LOOSE ref
+  `refs/heads/<branch>`. Watching only `HEAD`/`packed-refs` (as this module
+  once did) therefore let the sha go stale across every incremental deploy
+  — and EVERY production deploy is incremental (`git pull → mix compile →
+  mix release --overwrite`; the jail does NOT wipe `_build`, so the old
+  "cold deploy recompiles from scratch" belief was false). The corrected
+  watch set — the loose branch ref, plus `HEAD` and `packed-refs` — is
+  resolved by `Grappa.Version.GitProbe.resource_paths/1` (#533 / #542).
 
   When there was **no `.git` at build** — a package built from a release
   tarball (Arch) — `@git_facts` is `nil` and the reported version is the
@@ -65,73 +74,25 @@ defmodule Grappa.Version do
 
   use Boundary, top_level?: true, deps: [], exports: []
 
+  alias Grappa.Version.GitProbe
+
   @app :grappa
 
-  @typedoc """
-  Build-time snapshot of the git state, folded into the reported version by
-  `derive/2`. `nil` when there was no `.git` at build time (a package built
-  from a release tarball) — `derive/2` then reports the bare `base`.
-
-    * `:exact_tag` — the tag `HEAD` points at exactly (`git describe
-      --tags --exact-match`), or `nil` when `HEAD` is not on a tag.
-    * `:short_sha` — the abbreviated `HEAD` commit, or `nil` when the `git`
-      binary was unavailable.
-    * `:dirty?` — whether the working tree had uncommitted changes at build
-      time.
-  """
-  @type git_facts :: %{
-          exact_tag: String.t() | nil,
-          short_sha: String.t() | nil,
-          dirty?: boolean()
-        }
-
   @repo_root Path.expand("../..", __DIR__)
-  # `.git` is a directory in a normal checkout and a FILE in a `git
-  # worktree` (it points at the shared gitdir), so probe presence with
-  # `File.exists?/1`, not `File.dir?/1` — both are source builds that must
-  # keep the #391 suffix. Absent entirely = a release tarball / package.
-  @git_dir Path.join(@repo_root, ".git")
 
-  # Re-run compilation when HEAD or the ref db changes so an incremental
-  # dev build re-snapshots. Cold builds recompile from scratch regardless.
-  for ref <- ["HEAD", "packed-refs"] do
-    path = Path.join(@git_dir, ref)
-    if File.exists?(path), do: @external_resource(path)
+  # Re-run compilation whenever the build's git ref moves so an incremental
+  # build re-snapshots the sha. The watch set is the corrected #533/#542 one
+  # (the LOOSE branch ref a same-branch fast-forward rewrites, plus HEAD and
+  # packed-refs) — see `GitProbe.resource_paths/1`. Registering each existing
+  # path as an `@external_resource` is what dirties this module on the next
+  # `mix compile`.
+  for path <- GitProbe.resource_paths(@repo_root) do
+    @external_resource path
   end
 
-  # `nil` when there is no `.git` at build (a release tarball / package) —
-  # `derive/2` reports the bare base for that. Otherwise a build-time
-  # snapshot of the git state.
-  @git_facts (if File.exists?(@git_dir) do
-                run = fn args ->
-                  try do
-                    # env: [] — git introspection needs none of grappa's
-                    # secrets (SECRET_KEY_BASE, CLOAK_KEY, …); a cleared env
-                    # keeps them out of the subprocess (Credo UnsafeExec) and
-                    # git's plain describe/rev-parse/status don't need HOME.
-                    case System.cmd("git", args, cd: @repo_root, env: [], stderr_to_stdout: true) do
-                      {out, 0} -> String.trim(out)
-                      {_, _} -> nil
-                    end
-                  rescue
-                    _ -> nil
-                  catch
-                    _, _ -> nil
-                  end
-                end
-
-                tag = run.(["describe", "--tags", "--exact-match"])
-                sha = run.(["rev-parse", "--short", "HEAD"])
-                status = run.(["status", "--porcelain"])
-
-                %{
-                  exact_tag: if(tag in [nil, ""], do: nil, else: tag),
-                  short_sha: if(sha in [nil, ""], do: nil, else: sha),
-                  dirty?: is_binary(status) and status != ""
-                }
-              else
-                nil
-              end)
+  # Build-time snapshot of the git state, or `nil` when there is no `.git` at
+  # build (a release tarball / package) — `derive/2` reports the bare base.
+  @git_facts GitProbe.facts(@repo_root)
 
   @doc """
   Returns the honest running grappa version: bare `X.Y.Z` for a released
@@ -160,7 +121,7 @@ defmodule Grappa.Version do
   base, or a dirty tree) is *unreleased* and gets a `-<shortsha>` suffix,
   degrading to `-dev` when git left no short sha behind.
   """
-  @spec derive(String.t(), git_facts() | nil) :: String.t()
+  @spec derive(String.t(), GitProbe.git_facts() | nil) :: String.t()
   def derive(base, nil), do: base
 
   def derive(base, %{exact_tag: exact_tag, short_sha: short_sha, dirty?: dirty?}) do

@@ -23241,3 +23241,63 @@ mutation form (a synthetic peer witnesses the `MODE +b` line, which also
 serialises "the ban landed" before the query fires — 367/368 carry no
 request-id, so the +b must not race the re-query), then opens the list via
 `/mode #chan +b` and asserts the mask RENDERS in the modal.
+
+## 2026-07-30 — #533/#542: the version sha must track the build, not the file's mtime
+
+`Grappa.Version` (#391) folds the base version with a build-time git snapshot
+so `CTCP VERSION` / `/api/config` name the running commit. Production reported
+`0.6.0-6ba1235a` while actually running `a40ad10e` — a confidently WRONG sha,
+worse than none, because operators trust it for triage (it had already misled
+#408's reporter-vs-prod comparison).
+
+**Root cause — the `@external_resource` watched the wrong files.** The snapshot
+is a compile-time attribute (`@git_facts`); `@external_resource` is supposed to
+re-trigger compilation of `version.ex` when the build's git ref moves, keeping
+an *incremental* build honest. It watched `<gitdir>/HEAD` + `<gitdir>/packed-refs`.
+Neither moves on a `git pull --ff-only` of an ALREADY-checked-out branch: `HEAD`
+stays `ref: refs/heads/<branch>` and the advanced commit lands in the LOOSE ref
+`<gitdir>/refs/heads/<branch>`, which was unwatched. So the compiler saw nothing
+stale and left `Grappa.Version.beam` untouched.
+
+**Every production deploy is an incremental compile.** The jail (and the Linux
+systemd host) run `git pull → mix compile → mix release --overwrite` over a warm
+`_build` — they do NOT wipe it. The old moduledoc's belief that "a cold deploy
+recompiles from scratch and re-snapshots regardless" was simply false; there is
+no from-scratch build in the deploy path. `mix release` then copies whatever
+`.beam` are in `_build`, stale `Version.beam` included.
+
+**#542's evidence nailed the mechanism** (2026-07-29): the `.beam` mtimes in
+`_build/prod/lib/grappa/ebin/` showed every module recompiled at the `02:47`
+build EXCEPT `Elixir.Grappa.Version.beam`, which carried the previous compile's
+`02:33` mtime — the exact compile that snapshotted `6ba1235a`. Running code was
+confirmed `a40ad10e` by function presence (`Grappa.Networks.live_nick_index/1`),
+not by any version string.
+
+**Fix (vjt option 1 — watch the file that actually moves).** New
+`Grappa.Version.GitProbe` (sibling module in the `Grappa.Version` boundary,
+compiled first so the `Version` module body can call it at compile time) owns
+two build-time functions: `facts/1` (the snapshot) and `resource_paths/1` (the
+watch set). The corrected watch set is the current branch's LOOSE ref (the
+same-branch fast-forward mover) PLUS `HEAD` (branch switch / detached HEAD) PLUS
+`packed-refs` (packed layout). Paths are resolved by asking `git` itself
+(`rev-parse --git-path`, `symbolic-ref -q HEAD`) so a normal checkout, a packed
+ref, a detached HEAD, and a `git worktree` (`.git` is a FILE, refs in a shared
+common dir) all answer correctly — no hand-parsing of `.git` internals.
+
+The split into `GitProbe` also makes the git logic unit-testable against
+throwaway repos (`test/grappa/version_git_probe_test.exs`) instead of only the
+build's own unstable git state — the key regression assertion is that
+`resource_paths/1` INCLUDES the loose branch ref (RED under the old
+HEAD/packed-refs-only logic).
+
+**Gotcha logged for the tests:** the throwaway repos live under
+`System.tmp_dir!()` (`/tmp`, container-local), NOT ExUnit's `:tmp_dir` tag
+(under `<project>/tmp`, the `./:/app` bind mount). On macOS Docker the bind
+mount has consistency lag — a just-created dir isn't always visible to the `git`
+subprocess yet, so `git` intermittently failed getcwd() ("unable to get current
+working directory"). `/tmp` is consistent and fast.
+
+**#542 stays OPEN** (vjt's call on consolidation). Its secondary suggestion — a
+deploy-time assertion that the compiled sha equals `git rev-parse HEAD`, failing
+the build otherwise — is a belt-and-suspenders guard on top of this root-cause
+fix, deferred to that issue.
