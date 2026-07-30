@@ -23342,3 +23342,84 @@ hardening the settle helps EVERY downstream spec, not just #53.
 wait for `/members` HTTP 200, not the channels row. `joined` means "the JOIN
 echo landed"; only the members 200 means "the channel is fully seeded and no
 NAMES burst is in flight."
+## 2026-07-30 — #503: one deploy algorithm, three substrates (kill the copy-paste drift)
+
+grappa deploys to three production substrates — the FreeBSD bastille jail
+(`infra/freebsd/deploy.sh`, `/bin/sh`), the native systemd host
+(`infra/linux/deploy.sh`, bash), and the operator Docker stack
+(`scripts/deploy.sh`, bash). All three ran a near-identical hot-vs-cold
+DECISION algorithm, copy-pasted. They drifted. The 2026-06-11 outage was
+that drift made flesh: a fix (the preflight range base, defect #7; the
+nothing-to-do-vs-`--force` swallow, defect #8; the stop/start
+synchronisation, defect #9) landed in ONE script while the same defect
+stayed live in another. Three copies of a load-bearing algorithm is three
+places to forget.
+
+**The algorithm is now ONE file: `infra/lib/deploy_common.sh` (strict
+POSIX sh).** It owns everything substrate-independent: flag parse, the
+`DEPLOY_PREV_SHA` carry across re-exec, the self-modifying-script re-exec
+guard, the completed-deploy marker base-select + validate, the
+marker-gated nothing-to-do predicate, the preflight verdict→mode mapping,
+the reload `"failed":[]` honesty check, and the healthcheck loop (which
+owns the marker write on first 200). Every one of those was a documented
+invariant that previously lived — and drifted — per script.
+
+**Template-method, not a mega-script.** The lib owns the ALGORITHM; each
+consumer defines the ~20% that genuinely differ as hooks (`substrate_pull`,
+`substrate_build`, `substrate_reload`, `substrate_cic`, `substrate_migrate`,
+`substrate_restart`, `substrate_healthcheck`, the marker read/write/commit
+hooks) then calls `deploy_main "$@"`. The split is the CLAUDE.md rule
+"reuse the verbs, not the nouns": shared execution framework = good reuse;
+a shared data model with a substrate type-flag would have been the
+boundary violation. `su -l grappa -c` vs `sudo -u grappa -H` vs
+`docker compose run`; `service`+`rc.d` vs `systemctl` vs `compose up
+--force-recreate` — those stay in hooks, because they are the domain
+boundary, not the algorithm.
+
+**Why POSIX sh, tested under dash.** The jail's `/bin/sh` is not bash — no
+arrays, no `[[ ]]`, no `local`. The lib is `dash -n`-clean and
+`shellcheck -s sh`-clean, and CI now enforces both (a reintroduced bashism
+in the shared algorithm fails the build instead of silently breaking the
+jail deploy). Consumers keep their own shebangs and may use bashisms in
+their OWN hooks; only the shared file is constrained.
+
+**The re-exec guard now watches the lib too.** The self-modifying-script
+trap (git pull replaces files by rename, so the running interpreter keeps
+executing pre-pull bytes from the old inode) used to key only on the
+consumer script's path. Extracting the algorithm into a separate file
+would have re-opened it — a change to `deploy_common.sh` would no longer
+trigger the re-exec that reloads the deploy bytes. So the guard matches
+the consumer script OR `infra/lib/deploy_common.sh`; a lib change re-execs
+and the fresh process re-sources the new bytes. This is behaviour
+PRESERVATION, not a new feature: the extracted bytes must reload exactly
+as the inlined bytes did.
+
+**Docker reaches parity — and that changed one thing on the wire.** Bringing
+`scripts/deploy.sh` up to jail/linux parity (it gained the marker, the
+re-exec guard, and the `DEPLOY_PREV_SHA` carry) forced a deliberate change:
+its preflight `to` token was the symbolic string `"HEAD"`; it is now the
+RESOLVED new sha. A completed-deploy marker must hold a real sha (writing
+`"HEAD"` is meaningless), so `NEW_SHA` is resolved at pull time — which
+also makes all three substrates uniform: real `from` + real `to` + marker.
+Re-exec is shipped WITH the carry, never without: a re-exec guard that
+drops the pre-pull sha collapses the range to `new..new` on the re-exec'd
+run (the re-pull is a no-op), silently dropping the very change that
+triggered the re-exec — the same defect the systemd substrate had inherited
+by copying the guard but not the carry.
+
+**Method: LOCK-REFACTOR-VERIFY, then RED-GREEN enrich.** The three
+consumers were characterised by bats suites FIRST (locked, separate
+commits), asserting only behaviour-to-PRESERVE and deliberately NOT the
+absence of the gains. Then the lib was extracted and each consumer ported
+behaviour-preserving (feature toggles OFF for not-yet-had features), tests
+staying green. Only then were the parity gains added RED-GREEN, one gained
+behaviour per commit, each with a failing test first. The toggles
+(`DEPLOY_FEATURE_*`) are what let the SAME lib express "jail has all of it,
+linux had re-exec+marker, docker had neither" during the port without
+forking the algorithm.
+
+This is Unit A of #503 (which absorbs #51's shared-deploy-lib + docker
+parity and #439's ghcr image). Units B–E — the source-mode
+`infra/docker/deploy.sh` consumer, the release image → ghcr, the
+`docker run` / `curl|bash` one-liners, and the hot-update-on-image
+evaluation — build on this shared lib.
