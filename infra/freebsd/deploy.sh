@@ -6,29 +6,32 @@
 #   sudo bastille cmd grappa /home/grappa/grappa/infra/freebsd/deploy.sh --force-hot
 #   sudo bastille cmd grappa /home/grappa/grappa/infra/freebsd/deploy.sh --force-cold
 #
-# Mirror of `scripts/deploy.sh` for the Docker substrate, sharing the
-# `Grappa.Deploy.Preflight` classifier (single source of truth for which
-# diffs are hot-safe — see `lib/grappa/deploy/preflight.ex`).
+# This is a THIN consumer of the shared deploy algorithm in
+# `infra/lib/deploy_common.sh` (#503): it sets config, flips the feature
+# toggles the jail wants ON (all of them — the jail is the most complete
+# substrate), and defines the substrate-specific hooks. The lib owns the
+# hot-vs-cold DECISION logic (marker base-select, re-exec guard,
+# nothing-to-do, preflight verdict→mode, reload honesty, healthcheck
+# loop) — one algorithm, shared with infra/linux/deploy.sh (systemd) and
+# scripts/deploy.sh (Docker), so a fix here can no longer drift from the
+# others (the 2026-06-11 outage root cause).
 #
 # Hot path (default when preflight returns HOT):
 #   git pull → mix compile → mix release --overwrite → POST /admin/reload
-#   Sessions preserved (Session.Server, IRC.Client, etc keep state via
-#   Erlang's 2-version code-loading guarantee). NO service restart.
+#   Sessions preserved (Erlang's 2-version code-loading guarantee). NO
+#   service restart.
 #
 # Cold path (preflight returns COLD or --force-cold):
-#   git pull → mix compile → mix release --overwrite → vite build →
-#   migrate → service grappa restart → healthcheck loop.
-#   Sessions reset. ~10-30s downtime depending on Bootstrap connect time.
+#   git pull → mix release --overwrite → vite build → migrate →
+#   service grappa restart → healthcheck loop. Sessions reset.
 #
 # Cic bundle is rebuilt on COLD only; on HOT, server-side reload doesn't
-# need the new bundle (cic deploys are orthogonal — use deploy-cic.sh
-# equivalent or the operator can vite-build + jail_cic_build.sh
-# separately).
+# need the new bundle (cic deploys are orthogonal — jail_deploy_cic.sh).
 #
 # The script runs as root but delegates every build step to
 # `su -l grappa -c '...'` so artifacts stay owned by the grappa user.
 #
-# Exit codes: 0 ok, non-zero on any failure (set -e).
+# Exit codes: 0 ok, 64 usage, non-zero on any failure (set -e).
 
 set -eu
 
@@ -39,349 +42,143 @@ HEALTHCHECK_RETRIES="${HEALTHCHECK_RETRIES:-30}"
 HEALTHCHECK_SLEEP="${HEALTHCHECK_SLEEP:-2}"
 RELOAD_URL="${RELOAD_URL:-http://127.0.0.1:4000/admin/reload}"
 
-mode=auto
-defer=0
-# Flags accepted in any order (the host wrapper invokes
-# `deploy.sh --force-cold --defer-restart`). POSIX sh: loop, no arrays.
-while [ $# -gt 0 ]; do
-	case "$1" in
-		--force-hot)     mode=hot ;;
-		--force-cold)    mode=cold ;;
-		--defer-restart) defer=1 ;;
-		*)
-			echo "usage: $0 [--force-hot|--force-cold] [--defer-restart]" >&2
-			exit 64
-			;;
-	esac
-	shift
-done
+# ---- lib config + feature toggles -----------------------------------
+DEPLOY_SELF_REL="infra/freebsd/deploy.sh"
+DEPLOY_USAGE="[--force-hot|--force-cold] [--defer-restart]"
+DEPLOY_FEATURE_FORCE_FLAGS=1
+DEPLOY_FEATURE_DEFER=1
+DEPLOY_FEATURE_NOTHING_TO_DO=1
+DEPLOY_FEATURE_REEXEC=1
+DEPLOY_FEATURE_MARKER=1
+DEPLOY_FEATURE_PREV_SHA_CARRY=1
 
-# --defer-restart only makes sense on the COLD path: it stages the new
-# release + rc.d wrappers, stops the BEAM, and exits WITHOUT restarting —
-# the host `bastille restart` boots the staged release. The hot path has
-# no stop, so deferring it is meaningless. Catch the statically-known
-# case (--force-hot) here, before any side effects; auto→hot is caught
-# again after preflight resolves the mode (below).
-if [ "${defer}" -eq 1 ] && [ "${mode}" = "hot" ]; then
-	echo "usage: --defer-restart is only valid on the cold path (not with --force-hot)" >&2
-	exit 64
-fi
-
-# All build steps run as the grappa user. `su -l grappa -c` strips
-# the environment (login shell), so MIX_OS_CONCURRENCY_LOCK and PATH
-# must be re-set inside each invocation. PATH includes the Erlang
-# bin dir explicitly so `mix` is found without depending on the
-# grappa user's .profile.
+# All build steps run as the grappa user. `su -l grappa -c` strips the
+# environment (login shell), so MIX_OS_CONCURRENCY_LOCK/PATH/MIX_ENV must
+# be re-set inside each invocation. PATH includes the Erlang bin dir
+# explicitly so `mix` is found without depending on the user's .profile.
 run_as_grappa() {
-	cmd="$1"
 	su -l grappa -c "
 		set -eu
 		export PATH=/usr/local/lib/erlang28/bin:\$PATH
 		export MIX_OS_CONCURRENCY_LOCK=0
 		export MIX_ENV=prod
 		cd '${REPO_ROOT}'
-		${cmd}
+		$1
 	"
 }
 
-echo "[deploy] git pull --ff-only"
-# Capture the pre-pull SHA so preflight can diff against the new HEAD
-# regardless of how many commits ago the last deploy was. Read as the
-# grappa user — root can't `git rev-parse` in a grappa-owned dir
-# without `git config --global --add safe.directory ...`, which we'd
-# rather not require host-wide. `run_as_grappa` already cd's to REPO_ROOT.
-prev_sha=$(run_as_grappa 'git rev-parse HEAD' | tail -1)
-run_as_grappa 'git pull --ff-only && git log --oneline -3'
-new_sha=$(run_as_grappa 'git rev-parse HEAD' | tail -1)
+# ---- substrate hooks ------------------------------------------------
 
-# On re-exec (below), the pre-pull SHA from the FIRST invocation rides
-# in via DEPLOY_PREV_SHA — the re-exec'd run re-pulls a no-op, so its
-# own rev-parse-before-pull equals new_sha and the nothing-to-do check
-# would wrongly exit 0, silently skipping the whole deploy.
-prev_sha="${DEPLOY_PREV_SHA:-${prev_sha}}"
+# Read as the grappa user — root can't `git rev-parse` in a grappa-owned
+# dir without a host-wide safe.directory config we'd rather not require.
+substrate_pull() {
+	PREV_SHA=$(run_as_grappa 'git rev-parse HEAD' | tail -1)
+	run_as_grappa 'git pull --ff-only && git log --oneline -3'
+	NEW_SHA=$(run_as_grappa 'git rev-parse HEAD' | tail -1)
+}
 
-# Nothing-to-do requires ALL of: auto mode, no new commits, AND the
-# last deploy completed (marker written as the final step of both
-# paths below). "No new commits" alone is a lie when the previous
-# deploy died mid-flight — live-repro 2026-06-10: a deploy was killed
-# between `mix release` and the reload POST (SIGPIPE on the operator's
-# ssh), leaving fresh beams on disk and a stale BEAM live; every
-# re-run then exited "nothing to do" because the pull was a no-op, and
-# prod had to be recovered by hand (rpc purge + load). And an explicit
-# --force-* is an operator order, not a heuristic input — the fast
-# path swallowing --force-cold left prod un-restarted on 2026-06-11
-# (defect #8). Fast paths state what they OBSERVED: same HEAD +
-# completed marker (+ which flag overrode), not "no work".
-last_deployed=$(run_as_grappa "cat runtime/last-deployed-sha 2>/dev/null || true" | tail -1)
+substrate_read_marker() {
+	run_as_grappa "cat runtime/last-deployed-sha 2>/dev/null || true" | tail -1
+}
 
-if [ "${prev_sha}" = "${new_sha}" ] && [ "${last_deployed}" = "${new_sha}" ]; then
-	if [ "${mode}" = "auto" ]; then
-		echo "[deploy] same HEAD (${new_sha}) + completed-deploy marker match — nothing to do"
-		exit 0
-	fi
-	echo "[deploy] same HEAD (${new_sha}) + completed-deploy marker match, but --force-${mode} overrides — proceeding"
-elif [ "${prev_sha}" = "${new_sha}" ]; then
-	echo "[deploy] HEAD unchanged (${new_sha}) but last COMPLETED server deploy is '${last_deployed:-none}' — driving the gap (cic deploys advance HEAD without applying server changes; or a prior deploy died mid-flight)"
-fi
+substrate_write_marker() {
+	run_as_grappa "printf '%s\n' '${NEW_SHA}' > runtime/last-deployed-sha"
+}
 
-# Self-modifying-deploy-script trap (live-repro 2026-05-31):
-# git pull replaces files by rename, so the running /bin/sh keeps
-# executing the PRE-PULL bytes from the old inode — every fix to the
-# deploy pipeline silently no-ops on the first deploy that ships it.
-# Re-exec ourselves so the NEW script bytes run for everything
-# downstream of git-pull. Guard via DEPLOY_REEXECED env so we only
-# re-exec once (otherwise infinite loop).
-#
-# Detection is by DIFF RANGE, not file comparison: the previous
-# `cmp -s "${REPO_ROOT}/infra/freebsd/deploy.sh" "$0"` guard compared
-# the post-pull file against itself ($0 IS the repo path under the
-# documented bastille invocation) and could never fire (found in the
-# 2026-06-10 substrate-preflight review).
-if [ -z "${DEPLOY_REEXECED:-}" ] \
-	&& run_as_grappa "git diff --name-only '${prev_sha}..${new_sha}'" | grep -qx 'infra/freebsd/deploy.sh'; then
-	echo "[deploy] deploy.sh changed in ${prev_sha}..${new_sha} — re-exec to load new bytes"
-	export DEPLOY_REEXECED=1
-	export DEPLOY_PREV_SHA="${prev_sha}"
-	exec "${REPO_ROOT}/infra/freebsd/deploy.sh" "$@"
-fi
+substrate_commit_exists() {
+	run_as_grappa "git cat-file -e '$1^{commit}'" 2>/dev/null
+}
 
-# ---- Preflight (auto mode only; explicit --force-* skips) ----
-#
-# Source of truth: `lib/grappa/deploy/preflight.ex` (the Elixir module
-# also drives scripts/deploy.sh on the Docker substrate). The shell side
-# is a thin invoker — every classification rule lives in Elixir so
-# substrate-specific deploy scripts cannot drift from each other.
-#
-# `mix run --no-start -e '...'` boots the BEAM without starting the
-# application (so the preflight check doesn't accidentally talk to the
-# live DB or take the supervision tree out from under the running
-# release). ~2-3s of mix-boot cost is dwarfed by the multi-minute
-# mix release --overwrite that follows in the cold path; for hot paths
-# the cost is the worst-case overhead vs the saved restart downtime.
-if [ "${mode}" = "auto" ]; then
-	# Preflight base: the last COMPLETED server deploy, not the
-	# pre-pull HEAD. jail_deploy_cic.sh also git-pulls, so every cic
-	# deploy advances the jail HEAD without applying server changes —
-	# a pre-pull-HEAD base silently drops any server-side commit that
-	# landed between two cic deploys (defect #7, live-repro
-	# 2026-06-11: the runtime.exs COLD change vanished from the range,
-	# the deploy went honestly-HOT over the wrong range, ~15 min
-	# outage followed). The re-exec guard above deliberately KEEPS the
-	# pre-pull HEAD: it answers "did THIS run's pull change the bytes
-	# I am executing?" — running-bytes staleness, to which the marker
-	# is irrelevant (a deploy.sh change pulled in by an earlier cic
-	# deploy is already the file we were invoked from).
-	preflight_base="${prev_sha}"
-	if [ -n "${last_deployed}" ]; then
-		# A garbage marker (truncated write, rewritten history) must
-		# abort LOUDLY here with a fix-it hint — fed to git diff it
-		# would crash the preflight oneshot with an opaque exit 1.
-		# Deliberately NOT a silent fallback to prev_sha: that would
-		# re-open the exact range hole this base exists to close.
-		# Shape check FIRST (full 40-hex sha), so marker bytes never
-		# reach a `su -c` command line unvalidated — a marker
-		# containing a quote would otherwise splice into the shell
-		# string git runs under.
-		marker_ok=no
-		if [ "${#last_deployed}" -eq 40 ]; then
-			case "${last_deployed}" in
-				*[!0-9a-f]*) ;;
-				*)
-					if run_as_grappa "git cat-file -e '${last_deployed}^{commit}'" 2>/dev/null; then
-						marker_ok=yes
-					fi
-					;;
-			esac
-		fi
-		if [ "${marker_ok}" = "yes" ]; then
-			preflight_base="${last_deployed}"
-		else
-			echo "[deploy] ERROR: runtime/last-deployed-sha contains '${last_deployed}' — not a full sha of a commit in this repo" >&2
-			echo "[deploy]   fix the marker (write the last deployed sha to runtime/last-deployed-sha) or rerun with an explicit --force-hot/--force-cold" >&2
-			exit 1
-		fi
-	fi
-	echo "[deploy] preflight: classifying ${preflight_base}..${new_sha}"
-	# `mix run` under MIX_ENV=prod evaluates config/runtime.exs, which
-	# raises on missing DATABASE_PATH & co. — the daemon gets those
-	# from the env file via rc.d, but `su -l` login shells do not.
-	# Source it the same way jail_release.sh does (set -a exports
-	# every assignment), and refuse to run blind: an unreadable env
-	# file would crash the oneshot, and a crash must never decide a
-	# deploy mode (found live 2026-06-10 — the env-less preflight
-	# exited 1 on every run, indistinguishable from a COLD verdict).
+substrate_changed_files() {
+	run_as_grappa "git diff --name-only '$1..$2'"
+}
+
+substrate_preflight() {
+	# `mix run --no-start` boots the BEAM without starting the app (so the
+	# check never talks to the live DB or steps on the running release).
+	# MIX_ENV=prod evaluates config/runtime.exs, which raises on missing
+	# DATABASE_PATH & co. — sourced from the env file (set -a exports every
+	# assignment). Refuse to run blind: a crash must never decide a mode.
 	if [ ! -r "${ENV_FILE}" ]; then
-		echo "[deploy] ERROR: env file ${ENV_FILE} not readable — cannot run preflight" >&2
+		deploy_error "env file ${ENV_FILE} not readable — cannot run preflight"
 		exit 1
 	fi
-	preflight_rc=0
-	run_as_grappa "set -a; . '${ENV_FILE}'; set +a; mix run --no-start -e 'Grappa.Deploy.Preflight.cli([\"${preflight_base}\", \"${new_sha}\", \"jail\"])'" || preflight_rc=$?
-	case "${preflight_rc}" in
-		0) mode=hot ;;
-		3) mode=cold ;;
-		*)
-			# Mix crash (1), usage error (2), or anything else that is
-			# not a verdict. Falling through to COLD would convert a
-			# miswired call into a silent session-dropping restart on
-			# every future deploy — the exact incident class the
-			# substrate arg exists to kill.
-			echo "[deploy] ERROR: preflight exited ${preflight_rc} (crash/usage, not a verdict) — aborting" >&2
-			exit "${preflight_rc}"
-			;;
-	esac
-elif [ "${mode}" = "hot" ]; then
-	echo "[deploy] --force-hot: skipping preflight"
-elif [ "${mode}" = "cold" ]; then
-	echo "[deploy] --force-cold: skipping preflight"
-fi
+	run_as_grappa "set -a; . '${ENV_FILE}'; set +a; mix run --no-start -e 'Grappa.Deploy.Preflight.cli([\"$1\", \"$2\", \"jail\"])'"
+}
 
-# auto→hot + --defer-restart: same invariant as the --force-hot guard at
-# the top, now that preflight has resolved the mode. Defer needs a stop;
-# a HOT verdict has none.
-if [ "${defer}" -eq 1 ] && [ "${mode}" = "hot" ]; then
-	echo "usage: --defer-restart is only valid on the cold path (preflight classified this deploy HOT)" >&2
-	exit 64
-fi
+substrate_build() {
+	# mix release --overwrite is REQUIRED in BOTH paths: it writes fresh
+	# .beam into the daemon's code path (lib/grappa-X.Y/ebin) — without it
+	# the hot reload POST would have nothing new to load.
+	deploy_log "mix deps.get --only prod"
+	run_as_grappa 'mix deps.get --only prod'
+	deploy_log "mix compile --warnings-as-errors"
+	run_as_grappa 'mix compile --warnings-as-errors'
+	deploy_log "mix release --overwrite"
+	run_as_grappa 'mix release --overwrite'
+}
 
-echo
-echo "[deploy] ==> mode: ${mode}"
-echo
+substrate_reload() {
+	deploy_log "POST ${RELOAD_URL}"
+	curl -fsS -X POST "${RELOAD_URL}"
+}
 
-echo "[deploy] mix deps.get --only prod"
-run_as_grappa 'mix deps.get --only prod'
+substrate_cic() {
+	# Shared with jail_cic_build.sh — one code path for the vite build +
+	# outDir. Required after a fresh clone (dist is gitkeep-only) and
+	# whenever cicchetto/src changed; cheap otherwise (~40ms incremental).
+	deploy_log "vite build (cicchetto bundle)"
+	"${REPO_ROOT}/infra/freebsd/jail_cic_build.sh"
+}
 
-echo "[deploy] mix compile --warnings-as-errors"
-run_as_grappa 'mix compile --warnings-as-errors'
+substrate_migrate() {
+	# Delegate to jail_release.sh — the canonical source-env-then-exec
+	# flow used by all other operator verbs. One code path for the release
+	# entry point; deploy.sh does NOT re-implement env sourcing inline.
+	deploy_log "Grappa.Release.migrate()"
+	"${REPO_ROOT}/infra/freebsd/jail_release.sh" eval 'Grappa.Release.migrate()'
+}
 
-# mix release --overwrite is REQUIRED in BOTH paths. The release puts
-# fresh .beam in `_build/prod/rel/grappa/lib/grappa-X.Y/ebin/` which is
-# exactly the directory the live daemon's `code:get_path/0` includes.
-# Without this step the running BEAM would never see the new .beam even
-# if POST /admin/reload runs — see `feedback_hot_deploy_silent_noop_prod`
-# for the live-repro debugging.
-echo "[deploy] mix release --overwrite"
-run_as_grappa 'mix release --overwrite'
+substrate_restart() {
+	# The rc.d wrapper's stop is synchronous (defect #9), but re-assert
+	# the BEAM-exit + name-release conditions anyway: the rc.d refresh
+	# below runs BETWEEN stop and start, so a deploy that ships an rc.d
+	# fix stops through the PREVIOUSLY INSTALLED wrapper — possibly one
+	# that returns mid-drain — and a timed-out wait must never race start.
+	deploy_log "service grappa stop"
+	service grappa stop || true
+	"${REPO_ROOT}/infra/freebsd/jail_beam_wait.sh" wait-stopped grappa 20
 
-if [ "${mode}" = "hot" ]; then
-	# Hot path: tell the live BEAM to walk :code.modified_modules/0
-	# and reload via :code.load_file/1. The release rebuild above
-	# already wrote the new .beam to the daemon's code path; this is
-	# just the "now load them" signal. Live sessions keep state
-	# (Erlang's 2-version code-loading guarantee).
-	echo "[deploy] POST ${RELOAD_URL}"
-	if response=$(curl -fsS -X POST "${RELOAD_URL}"); then
-		echo "[deploy] reload response: ${response}"
-		# HTTP 200 is NOT success — the endpoint reports per-module
-		# failures in-band (e.g. :old_code_in_use when a process still
-		# runs a prior hot-reload's old code; live-repro 2026-06-10 as
-		# :not_purged). Declaring "✓ complete" over a failed reload
-		# leaves prod silently running stale code.
-		case "${response}" in
-		*'"failed":[]'*) ;;
-		*)
-			echo "[deploy] ERROR: reload reported per-module failures (see response above)" >&2
-			echo "[deploy]   old code in use? retry once processes settle, or schedule a cold window" >&2
-			exit 1
-			;;
-		esac
-		echo "[deploy] healthcheck loop (${HEALTHCHECK_URL})"
-		i=0
-		while [ "${i}" -lt "${HEALTHCHECK_RETRIES}" ]; do
-			if curl -fsS -o /dev/null "${HEALTHCHECK_URL}"; then
-				run_as_grappa "printf '%s\n' '${new_sha}' > runtime/last-deployed-sha"
-				echo "[deploy] ✓ hot deploy complete (sessions preserved, daemon pid unchanged) after ${i} retries"
-				exit 0
-			fi
-			i=$((i + 1))
-			sleep "${HEALTHCHECK_SLEEP}"
-		done
-		echo "[deploy] ERROR: healthcheck never returned 200 after $((HEALTHCHECK_RETRIES * HEALTHCHECK_SLEEP))s post-reload"
-		exit 1
-	else
-		echo "[deploy] ERROR: POST /admin/reload failed — daemon may be down or unreachable"
-		exit 1
-	fi
-fi
+	# rc.d wrappers: refresh from the repo BETWEEN stop and start, so the
+	# OLD daemon was stopped through the wrapper that started it and the
+	# new daemon boots through the NEW wrapper. An rc.d/grappa diff
+	# classifies COLD (Preflight class :rc_d), so this is what makes a
+	# shipped wrapper change actually take effect. Runs as root.
+	deploy_log "refresh rc.d wrappers (jail_install_rcd.sh)"
+	"${REPO_ROOT}/infra/freebsd/jail_install_rcd.sh"
 
-# ---- Cold path ----
-
-# cic bundle — vite build via npm. Required after a fresh `git clone`
-# (runtime/cicchetto-dist/ is gitkeep-only) and on every deploy that
-# touched cicchetto/src/. The nginx symlink /usr/local/www/cic →
-# runtime/cicchetto-dist/ is set up once by jail_install_nginx.sh;
-# an empty dist here makes nginx loop on `try_files $uri /index.html`
-# (the "rewrite or internal redirection cycle" 500). Belt-and-braces:
-# even when nothing in cicchetto/src/ changed, `npm run build` is fast
-# (~40ms incremental). HOT path skips this — module reload doesn't need
-# new cic; cic deploys are orthogonal (see jail_deploy_cic.sh).
-#
-# Shared with jail_cic_build.sh — one code path for the vite build +
-# outDir, so an outDir tweak doesn't have to be applied in two places.
-echo "[deploy] vite build (cicchetto bundle)"
-"${REPO_ROOT}/infra/freebsd/jail_cic_build.sh"
-
-echo "[deploy] Grappa.Release.migrate()"
-# Delegate to jail_release.sh which has the canonical
-# source-env-then-exec-bin/grappa flow (used by all other operator
-# verbs against the live BEAM). One code path for the release entry
-# point; deploy.sh does NOT re-implement env sourcing inline.
-"${REPO_ROOT}/infra/freebsd/jail_release.sh" eval 'Grappa.Release.migrate()'
-
-echo "[deploy] service grappa stop"
-# The rc.d wrapper's stop is synchronous since defect #9 (2026-06-11
-# outage): it blocks until the BEAM has exited AND epmd released the
-# node name (jail_beam_wait.sh — the full stop/start race lore lives
-# there). Re-assert both conditions here anyway: the rc.d refresh
-# below runs BETWEEN stop and start, so any deploy that ships an rc.d
-# fix stops through the PREVIOUSLY INSTALLED wrapper — possibly one
-# that still returns mid-drain — and a timed-out wrapper wait must
-# never race the start. Same helper, second call site; instant when
-# the wrapper already waited.
-service grappa stop || true
-"${REPO_ROOT}/infra/freebsd/jail_beam_wait.sh" wait-stopped grappa 20
-
-# rc.d wrappers: refresh from the repo BETWEEN stop and start, so the
-# OLD daemon was stopped through the wrapper that started it and the
-# new daemon boots through the NEW wrapper. Delegates to
-# jail_install_rcd.sh — the existing idempotent installer (one code
-# path, same convention as the jail_cic_build.sh + jail_release.sh
-# delegations above); it refreshes BOTH wrappers (grappa +
-# grappa_ndp_keepalive) and leaves existing rc.conf.d files alone.
-# An rc.d/grappa diff classifies COLD on the jail (Preflight class
-# :rc_d), so this is what makes a shipped wrapper change actually
-# take effect — replaces the manual cp+restart step that bit on
-# 2026-06-10 (rc(8) PATH fix shipped in the repo, prod kept 422ing
-# until the wrapper was hand-copied). Runs as root: rc.d scripts are
-# root:wheel 0555, the build user can't write there.
-echo "[deploy] refresh rc.d wrappers (jail_install_rcd.sh)"
-"${REPO_ROOT}/infra/freebsd/jail_install_rcd.sh"
-
-# --defer-restart: stop here. The BEAM is stopped (through the OLD
-# wrapper) and the new release + rc.d wrappers are staged on disk, but we
-# deliberately do NOT `service grappa start`, healthcheck, or write the
-# completed-deploy marker — the host's single `bastille restart grappa`
-# boots the staged release through the NEW wrapper and binds any new jail
-# vhosts in one window. The marker is the host wrapper's job after the
-# bounce healthcheck (deploy-m42.sh --full-restart); writing it here would
-# let the next auto deploy's nothing-to-do guard think this completed.
-if [ "${defer}" -eq 1 ]; then
-	echo "[deploy] --defer-restart: BEAM stopped, new release+rc.d wrappers staged; host must bastille-restart grappa to boot it (marker NOT written)"
-	exit 0
-fi
-
-service grappa start
-
-echo "[deploy] healthcheck loop (${HEALTHCHECK_URL})"
-i=0
-while [ "${i}" -lt "${HEALTHCHECK_RETRIES}" ]; do
-	if curl -fsS -o /dev/null "${HEALTHCHECK_URL}"; then
-		run_as_grappa "printf '%s\n' '${new_sha}' > runtime/last-deployed-sha"
-		echo "[deploy] ✓ cold deploy complete (sessions reset, daemon respawned) after ${i} retries"
+	# --defer-restart: stop here. The BEAM is stopped (through the OLD
+	# wrapper) and the new release + rc.d wrappers are staged, but we
+	# deliberately do NOT start, healthcheck, or write the marker — the
+	# host's single `bastille restart grappa` boots the staged release in
+	# one window and completes the deploy. Writing the marker here would
+	# let the next auto deploy's nothing-to-do guard think this completed.
+	if [ "${DEFER}" -eq 1 ]; then
+		deploy_log "--defer-restart: BEAM stopped, new release+rc.d wrappers staged; host must bastille-restart grappa to boot it (marker NOT written)"
 		exit 0
 	fi
-	i=$((i + 1))
-	sleep "${HEALTHCHECK_SLEEP}"
-done
 
-echo "[deploy] ERROR: healthcheck never returned 200 after $((HEALTHCHECK_RETRIES * HEALTHCHECK_SLEEP))s"
-exit 1
+	deploy_log "service grappa start"
+	service grappa start
+}
+
+substrate_healthcheck() {
+	curl -fsS -o /dev/null "${HEALTHCHECK_URL}"
+}
+
+# ---- run ------------------------------------------------------------
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=infra/lib/deploy_common.sh
+. "${SCRIPT_DIR}/../lib/deploy_common.sh"
+
+deploy_main "$@"

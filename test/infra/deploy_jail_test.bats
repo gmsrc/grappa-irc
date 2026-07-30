@@ -27,8 +27,12 @@ setup() {
     git -C "$UPSTREAM" config user.email test@grappa.local
     git -C "$UPSTREAM" config user.name "bats"
 
-    mkdir -p "$UPSTREAM/infra/freebsd" "$UPSTREAM/runtime" "$UPSTREAM/lib"
+    mkdir -p "$UPSTREAM/infra/freebsd" "$UPSTREAM/infra/lib" "$UPSTREAM/runtime" "$UPSTREAM/lib"
     cp "$DEPLOY_SH" "$UPSTREAM/infra/freebsd/deploy.sh"
+    # The ported consumer sources the shared algorithm lib (#503). It must
+    # exist in the throwaway clone for the script to run — committed so
+    # pulls stay clean. Assertions below are UNCHANGED by the extraction.
+    cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_common.sh" "$UPSTREAM/infra/lib/deploy_common.sh"
     # jail_*.sh delegates → recorders. Committed so pulls stay clean.
     for stub in jail_cic_build.sh jail_release.sh jail_install_rcd.sh jail_beam_wait.sh; do
         cat > "$UPSTREAM/infra/freebsd/$stub" <<EOF
