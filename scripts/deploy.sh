@@ -41,13 +41,14 @@ require_main_checkout "deploy.sh"
 cd "$REPO_ROOT"
 
 # ---- lib config + feature toggles -----------------------------------
+DEPLOY_SELF_REL="scripts/deploy.sh"
 DEPLOY_USAGE="[--force-hot|--force-cold]"
 DEPLOY_FEATURE_FORCE_FLAGS=1
 DEPLOY_FEATURE_DEFER=0
 DEPLOY_FEATURE_NOTHING_TO_DO=0
-DEPLOY_FEATURE_REEXEC=0
+DEPLOY_FEATURE_REEXEC=1
 DEPLOY_FEATURE_MARKER=1
-DEPLOY_FEATURE_PREV_SHA_CARRY=0
+DEPLOY_FEATURE_PREV_SHA_CARRY=1
 # Docker's hot healthcheck loop is fast/short; the cold loop is long
 # because a bind-mounted first boot recompiles `mix phx.server` (2-3 min).
 HOT_HEALTHCHECK_RETRIES="${HOT_HEALTHCHECK_RETRIES:-30}"
@@ -80,6 +81,10 @@ substrate_write_marker() {
 
 substrate_commit_exists() {
 	git cat-file -e "$1^{commit}" 2>/dev/null
+}
+
+substrate_changed_files() {
+	git diff --name-only "$1..$2"
 }
 
 substrate_preflight() {

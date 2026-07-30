@@ -15,10 +15,11 @@
 # recorded + answered) and the version.sh delegate stubbed as a committed
 # recorder. Real docker/compose is out of scope.
 #
-# #503 enrich gains have their own RED-GREEN section at the bottom: the
-# runtime/last-deployed-sha marker (done — the preflight `to` token is now
-# a resolved sha, not the symbolic "HEAD", so it can be written to the
-# marker). Still to land: the self-modifying-script re-exec guard.
+# #503 enrich gains have their own RED-GREEN sections at the bottom: the
+# runtime/last-deployed-sha marker (the preflight `to` token is now a
+# resolved sha, not the symbolic "HEAD", so it can be written to the
+# marker) and the self-modifying-script re-exec guard (+ DEPLOY_PREV_SHA
+# carry) — all now landed, bringing this substrate to parity with the jail.
 
 setup() {
     # Normalize the tmpdir to its PHYSICAL path. On macOS $TMPDIR is a
@@ -283,4 +284,43 @@ run_deploy() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"last-deployed-sha"* ]]
     ! grep -q "run --no-start" "$ARGV_LOG"
+}
+
+# --- #503 enrich: self-modifying-script re-exec guard (+ prev-sha carry) ------
+
+@test "deploy.sh touched in THIS pull re-execs and still completes" {
+    new="$(commit_upstream scripts/deploy.sh)"
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"re-exec"* ]]
+    [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+}
+
+@test "re-exec carries the pre-pull HEAD as preflight base (no marker)" {
+    prev="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    new="$(commit_upstream scripts/deploy.sh)"   # deploy.sh change → re-exec
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"re-exec"* ]]
+    # Doubles as the carry regression gate: re-exec ON but carry OFF would
+    # collapse the range to new..new (the re-pulled run's own pre-pull HEAD
+    # equals new). The carry keeps the ORIGINAL pre-pull HEAD.
+    grep -q "cli(\[\"$prev\", \"$new\", \"docker\"\])" "$ARGV_LOG"
+    ! grep -q "cli(\[\"$new\", \"$new\"" "$ARGV_LOG"
+}
+
+@test "lib change (deploy_common.sh) in THIS pull also re-execs" {
+    # Append a harmless COMMENT (not commit_upstream's random text, which
+    # would corrupt the sourced lib and abort the re-exec'd run) — the
+    # re-exec guard matches infra/lib/deploy_common.sh as well as the
+    # consumer script, so the extracted algorithm reloads its own bytes.
+    echo "# bats touch $RANDOM" >> "$UPSTREAM/infra/lib/deploy_common.sh"
+    git -C "$UPSTREAM" add -A
+    git -C "$UPSTREAM" commit -qm "touch lib"
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"re-exec"* ]]
 }
