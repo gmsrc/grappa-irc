@@ -1,0 +1,235 @@
+#!/usr/bin/env bats
+#
+# Characterization suite for scripts/deploy.sh — the operator Docker
+# deploy orchestrator's DECISION logic, LOCKED before the #503 extraction
+# of the shared deploy lib (infra/lib/deploy_common.sh). Captures the
+# behaviors the extraction must preserve: the require_main_checkout guard,
+# mode parsing (--force-hot/--force-cold/auto), the preflight invocation
+# (substrate "docker", range from=pre-pull-HEAD to="HEAD"), the hot reload
+# "failed":[] honesty + post-reload healthcheck, and the cold path step
+# ordering.
+#
+# Scope: pure shell-side logic, mirroring test/infra/deploy_jail_test.bats.
+# The script runs against a throwaway git clone (REPO_ROOT) pulled from a
+# throwaway upstream, with `docker` stubbed via PATH (compose subcommands
+# recorded + answered) and the version.sh delegate stubbed as a committed
+# recorder. Real docker/compose is out of scope.
+#
+# Deliberately NOT locked (scripts/deploy.sh has NEITHER today, both ADDED
+# by #503 as scope-4 side effects — asserting their absence would lock
+# behavior we intend to change): a runtime/last-deployed-sha marker and a
+# re-exec guard.
+
+setup() {
+    # Normalize the tmpdir to its PHYSICAL path. On macOS $TMPDIR is a
+    # symlink (/var/folders -> /private/var/folders); _lib.sh derives
+    # SRC_ROOT via logical `pwd` but REPO_ROOT via git's physical
+    # --path-format=absolute, so an unnormalized symlinked base makes the
+    # two disagree and trips require_main_checkout's "this is a worktree"
+    # guard. Real checkouts aren't under a symlinked path, so this is a
+    # test-env artifact, not a production bug.
+    BATS_TEST_TMPDIR="$(cd "$BATS_TEST_TMPDIR" && pwd -P)"
+
+    DEPLOY_SH="$BATS_TEST_DIRNAME/../../scripts/deploy.sh"
+    LIB_SH="$BATS_TEST_DIRNAME/../../scripts/_lib.sh"
+
+    FAKE_DIR="$BATS_TEST_TMPDIR/fake"
+    mkdir -p "$FAKE_DIR"
+    ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
+    : > "$ARGV_LOG"
+    export ARGV_LOG
+    export HOME="$BATS_TEST_TMPDIR/home"
+    mkdir -p "$HOME"
+
+    # ---- throwaway upstream + clone ------------------------------------
+    UPSTREAM="$BATS_TEST_TMPDIR/upstream"
+    git init -q -b main "$UPSTREAM"
+    git -C "$UPSTREAM" config user.email test@grappa.local
+    git -C "$UPSTREAM" config user.name "bats"
+
+    mkdir -p "$UPSTREAM/scripts" "$UPSTREAM/infra/packaging" \
+             "$UPSTREAM/runtime" "$UPSTREAM/lib"
+    cp "$DEPLOY_SH" "$UPSTREAM/scripts/deploy.sh"
+    cp "$LIB_SH" "$UPSTREAM/scripts/_lib.sh"
+    chmod +x "$UPSTREAM/scripts/deploy.sh"
+    # version.sh delegate → committed recorder that echoes a version.
+    cat > "$UPSTREAM/infra/packaging/version.sh" <<'EOF'
+#!/bin/sh
+echo 0.0.0-test
+EOF
+    chmod +x "$UPSTREAM/infra/packaging/version.sh"
+    touch "$UPSTREAM/runtime/.gitkeep"
+    echo base > "$UPSTREAM/lib/base.txt"
+    git -C "$UPSTREAM" add -A
+    git -C "$UPSTREAM" commit -qm "base"
+
+    export REPO_ROOT="$BATS_TEST_TMPDIR/repo"
+    git clone -q "$UPSTREAM" "$REPO_ROOT"
+    git -C "$REPO_ROOT" config user.email test@grappa.local
+    git -C "$REPO_ROOT" config user.name "bats"
+
+    # ---- env the script needs ------------------------------------------
+    export PREFLIGHT_RC=0
+    export RELOAD_FAILS=0
+    export HOT_HEALTHCHECK_RETRIES=2 HOT_HEALTHCHECK_SLEEP=0
+
+    # ---- PATH stubs ------------------------------------------------------
+    # docker: record every compose invocation, then answer the ones the
+    # deploy body reads back:
+    #   compose ps -q grappa            → a fake container id (so in_container
+    #                                      doesn't die "not running")
+    #   compose run … mix run --no-start → preflight oneshot, honors PREFLIGHT_RC
+    #   compose exec … curl … reload     → reload JSON (clean, or failing when
+    #                                      $RELOAD_FAILS=1)
+    #   everything else (build, run cicchetto-build, deps.get, ecto.migrate,
+    #   up -d, exec … curl … healthz)    → succeed silently
+    cat > "$FAKE_DIR/docker" <<'EOF'
+#!/bin/sh
+printf 'docker %s\n' "$*" >> "$ARGV_LOG"
+case "$*" in
+    *"ps -q grappa"*)  echo fakecid ;;
+    *"run --no-start"*) exit "$PREFLIGHT_RC" ;;
+    *"exec -T grappa curl"*reload*)
+        if [ "$RELOAD_FAILS" = "1" ]; then
+            printf '{"loaded":[],"failed":[{"module":"Foo","reason":"old_code_in_use"}]}'
+        else
+            printf '{"loaded":[],"failed":[]}'
+        fi
+        ;;
+esac
+exit 0
+EOF
+    chmod +x "$FAKE_DIR"/*
+    export PATH="$FAKE_DIR:$PATH"
+}
+
+# Append a commit touching $1 in the upstream; echo its sha.
+commit_upstream() {
+    echo "$RANDOM $(date +%s%N)" >> "$UPSTREAM/$1"
+    git -C "$UPSTREAM" add -A
+    git -C "$UPSTREAM" commit -qm "touch $1"
+    git -C "$UPSTREAM" rev-parse HEAD
+}
+
+make_env() { echo "SECRET_KEY_BASE=x" > "$REPO_ROOT/.env"; }
+
+run_deploy() {
+    # cd into the clone so _lib.sh's PWD-based SRC_ROOT detection resolves
+    # to the clone (its .git is a directory), not the surrounding worktree
+    # (whose .git is a FILE — the marker _lib.sh reads as "this is a
+    # worktree", which would trip require_main_checkout before anything).
+    cd "$REPO_ROOT"
+    run "$REPO_ROOT/scripts/deploy.sh" "$@"
+}
+
+# --- require_main_checkout guard --------------------------------------------
+
+@test "refuses to run on a non-main branch before any side effect" {
+    git -C "$REPO_ROOT" checkout -q -b feature
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"branch"* ]]
+    ! grep -q "docker" "$ARGV_LOG"          # aborted before any docker call
+}
+
+# --- mode parsing ------------------------------------------------------------
+
+@test "unknown flag is a usage error" {
+    run_deploy --bogus
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"usage"* ]]
+}
+
+@test "auto mode: preflight classifies pre-pull HEAD .. HEAD as substrate docker" {
+    prev="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    grep -q "cli(\[\"$prev\", \"HEAD\", \"docker\"\])" "$ARGV_LOG"
+}
+
+@test "--force-hot skips preflight and reloads" {
+    run_deploy --force-hot
+    [ "$status" -eq 0 ]
+    ! grep -q "run --no-start" "$ARGV_LOG"
+    grep -q "exec -T grappa curl.*reload" "$ARGV_LOG"
+}
+
+@test "--force-cold skips preflight and cold-deploys" {
+    make_env
+    run_deploy --force-cold
+    [ "$status" -eq 0 ]
+    ! grep -q "run --no-start" "$ARGV_LOG"
+    grep -q "up -d --force-recreate" "$ARGV_LOG"
+}
+
+@test "preflight non-verdict exit aborts and propagates the code" {
+    export PREFLIGHT_RC=1
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"preflight"* ]]
+}
+
+# --- hot path ----------------------------------------------------------------
+
+@test "hot path: reload then post-reload healthcheck, exit 0" {
+    export PREFLIGHT_RC=0
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    grep -q "exec -T grappa curl.*reload" "$ARGV_LOG"
+    grep -q "exec -T grappa curl.*healthz" "$ARGV_LOG"
+    ! grep -q "up -d" "$ARGV_LOG"           # hot path never recreates
+}
+
+@test "hot reload reporting per-module failures aborts non-zero" {
+    export PREFLIGHT_RC=0 RELOAD_FAILS=1
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"failures"* ]]
+    ! grep -q "up -d" "$ARGV_LOG"
+}
+
+# --- cold path ---------------------------------------------------------------
+
+@test "cold path requires a .env file" {
+    export PREFLIGHT_RC=3
+    commit_upstream lib/base.txt > /dev/null
+    # no make_env
+
+    run_deploy
+    [ "$status" -ne 0 ]
+    [[ "$output" == *".env"* ]]
+}
+
+@test "cold path order: build -> cicchetto-build -> deps.get -> migrate -> up -> healthcheck" {
+    export PREFLIGHT_RC=3
+    make_env
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    grep -q "build grappa" "$ARGV_LOG"
+    grep -q "cicchetto-build" "$ARGV_LOG"
+    grep -q "deps.get" "$ARGV_LOG"
+    grep -q "ecto.migrate" "$ARGV_LOG"
+    grep -q "up -d --force-recreate" "$ARGV_LOG"
+
+    build_line=$(grep -n "build grappa" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    cic_line=$(grep -n "cicchetto-build" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    deps_line=$(grep -n "deps.get" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    mig_line=$(grep -n "ecto.migrate" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    up_line=$(grep -n "up -d --force-recreate" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    [ "$build_line" -lt "$cic_line" ]
+    [ "$cic_line" -lt "$deps_line" ]
+    [ "$deps_line" -lt "$mig_line" ]
+    [ "$mig_line" -lt "$up_line" ]
+}
