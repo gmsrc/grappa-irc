@@ -854,6 +854,46 @@ defmodule Grappa.Session do
   end
 
   @doc """
+  Returns the upstream peer (`{address, port}`) the session at
+  `(subject, network_id)` is connected to — the destination the IRC
+  socket actually landed on (#550, netsplit triage).
+
+  `address` is the peer IP as a string (`:inet.ntoa/1` of the v6/v4
+  tuple). The peer is captured once at connect and cached on the
+  Session.Server (immutable for the connection's lifetime), so this is
+  an instant state read.
+
+  Returns `{:error, :no_peer}` in every not-connected window (pre-connect,
+  mid-reconnect, socket just closed) — the honest "unknown", never a
+  fabricated address — and `{:error, :no_session}` when no session is
+  registered for `(subject, network_id)`.
+  """
+  @spec peer_address(subject(), integer()) ::
+          {:ok, {String.t(), :inet.port_number()}} | {:error, :no_session | :no_peer}
+  def peer_address(subject, network_id)
+      when is_subject(subject) and is_integer(network_id) do
+    call_session(subject, network_id, {:peer_address})
+  end
+
+  @doc """
+  Variant of `peer_address/2` accepting an explicit per-call receive
+  `timeout_ms`. Returns `{:error, :timeout}` instead of exiting when the
+  target Session.Server's mailbox is too deep to respond within budget —
+  the operator surface (`Grappa.LiveIntrospection`) needs an honest signal
+  for stuck pids rather than the default 5s exit cascade.
+
+  `:infinity` is allowed (delegates to the underlying GenServer.call).
+  """
+  @spec peer_address(subject(), integer(), timeout()) ::
+          {:ok, {String.t(), :inet.port_number()}}
+          | {:error, :no_session | :no_peer | :timeout}
+  def peer_address(subject, network_id, timeout_ms)
+      when is_subject(subject) and is_integer(network_id) and
+             (is_integer(timeout_ms) or timeout_ms == :infinity) do
+    call_session(subject, network_id, {:peer_address}, timeout_ms)
+  end
+
+  @doc """
   Returns the live IRC nick for the session at `(subject, network_id)`.
 
   The live nick may differ from the credential's configured nick after

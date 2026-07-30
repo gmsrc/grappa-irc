@@ -146,6 +146,31 @@ defmodule Grappa.Session.ServerTest do
     # path which exercises a refused upstream port end-to-end.
   end
 
+  describe "peer_address/3 (#550)" do
+    test "returns {:ok, {address_string, port}} of the upstream peer once connected" do
+      # #550 netsplit triage — the admin Sessions inventory shows which
+      # upstream server each session landed on. The Client captures the peer
+      # at connect and pushes `{:irc_peer, _}`; Session.Server caches it and
+      # serves it here (address formatted to a string at store time). The
+      # session dialed the in-process IRCServer on 127.0.0.1:<port>, so the
+      # cached peer reflects exactly that. `await_handshake` blocks until the
+      # USER line reaches the server, which the Client sends AFTER pushing
+      # `{:irc_peer, _}` — so the peer is in the mailbox before this call.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      _ = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      assert {:ok, {"127.0.0.1", ^port}} =
+               Session.peer_address({:user, user.id}, network.id)
+    end
+
+    test "returns {:error, :no_session} when no session is registered" do
+      assert {:error, :no_session} =
+               Session.peer_address({:user, Ecto.UUID.generate()}, -1)
+    end
+  end
+
   describe "init/1 non-blocking (C2)" do
     # Pairs with `Grappa.IRC.ClientTest`'s C2 test. `Session.Server.init/1`
     # must NOT call `Client.start_link/1` synchronously: Bootstrap iterates

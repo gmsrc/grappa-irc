@@ -267,6 +267,17 @@ defmodule Grappa.IRC.Client do
   @spec start_link(opts()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
+  @typedoc """
+  The upstream peer of the live socket, read via `transport_peername/1` at
+  connect: `{ip, port}` on success, or a tagged error when the socket is
+  absent / just-closed. Pushed to `dispatch_to` as `{:irc_peer, result}`.
+  #550 — the admin Sessions inventory derives the destination address
+  from this.
+  """
+  @type peername_result ::
+          {:ok, {:inet.ip_address(), :inet.port_number()}}
+          | {:error, :no_socket | :closed | :inet.posix()}
+
   @doc """
   Sends raw bytes verbatim to the upstream socket. The caller is
   responsible for CR/LF framing and IRC syntax. Used by the high-level
@@ -979,6 +990,13 @@ defmodule Grappa.IRC.Client do
         # rDNS-blocked welcome timeout — different upstream pathologies
         # with different Retry-After hints at the HTTP edge.
         send(state.dispatch_to, :irc_connected)
+        # #550 — capture the upstream peer ONCE, now that the socket is up,
+        # and push it upward. The peer is immutable for the connection's
+        # lifetime, so Session.Server caches it (invalidated on client EXIT +
+        # the next connect attempt) rather than round-tripping the socket per
+        # admin read. Separate message from :irc_connected to keep that
+        # load-bearing signal's contract byte-unchanged.
+        send(state.dispatch_to, {:irc_peer, transport_peername(connected)})
         {fsm, sends} = AuthFSM.initial_handshake(state.fsm)
         # `_ =`-discard: a peer RST between connect-success and the
         # first handshake byte will surface as `{:error, :closed}` from
@@ -1567,4 +1585,16 @@ defmodule Grappa.IRC.Client do
 
   defp transport_setopts(%{transport: :ssl, socket: sock}, opts),
     do: :ssl.setopts(sock, opts)
+
+  # #550 — peername dispatched over the transport tag, the read twin of
+  # transport_send/2. Nil-socket guard mirrors it: the bounded pre-connect
+  # window returns an honest tagged tuple rather than crashing on
+  # :inet.peername(nil).
+  defp transport_peername(%{socket: nil}), do: {:error, :no_socket}
+
+  defp transport_peername(%{transport: :tcp, socket: sock}),
+    do: :inet.peername(sock)
+
+  defp transport_peername(%{transport: :ssl, socket: sock}),
+    do: :ssl.peername(sock)
 end

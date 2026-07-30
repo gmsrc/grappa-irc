@@ -130,6 +130,21 @@ defmodule Grappa.IRC.ClientTest do
     end
   end
 
+  describe "peer capture on connect" do
+    test "pushes {:irc_peer, {:ok, {ip, port}}} to dispatch_to once the socket is up" do
+      # #550 — the admin Sessions inventory surfaces the destination each
+      # session landed on (netsplit triage). The Client captures the peer
+      # ONCE at connect and pushes it upward (dispatch_to = self() here), so
+      # Session.Server can cache it without round-tripping the socket per
+      # admin read. The client dialed the in-process IRCServer on
+      # 127.0.0.1:<port>, so the pushed peer reflects exactly that.
+      {_, port} = start_server()
+      _ = start_client(port)
+
+      assert_receive {:irc_peer, {:ok, {{127, 0, 0, 1}, ^port}}}, 1_000
+    end
+  end
+
   describe "outbound: client → server" do
     test "send_line/2 writes the raw bytes to the server socket" do
       {server, port} = start_server()

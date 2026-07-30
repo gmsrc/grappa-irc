@@ -547,6 +547,15 @@ defmodule Grappa.Session.Server do
           autojoin_defer_ms: pos_integer(),
           autojoin_defer_timer: reference() | nil,
           client: pid() | nil,
+          # #550 — the upstream peer the live socket connected to, captured
+          # once from the Client at connect (`{:irc_peer, _}`) and invalidated
+          # on client EXIT + the next connect attempt. Cached (not re-derived
+          # per read) because it is immutable for the connection's lifetime;
+          # `nil` in every not-connected window is the honest degraded signal
+          # the admin Sessions inventory surfaces. Address stored as a string
+          # (`:inet.ntoa/1`) at capture so the read side stays format-free.
+          peer_address: String.t() | nil,
+          peer_port: :inet.port_number() | nil,
           notify_pid: pid() | nil,
           notify_ref: reference() | nil,
           pending_auth: nil | {String.t(), integer()},
@@ -930,6 +939,9 @@ defmodule Grappa.Session.Server do
       autojoin_defer_ms: Map.get(opts, :autojoin_defer_ms, @autojoin_defer_ms),
       autojoin_defer_timer: nil,
       client: nil,
+      # #550 — nil until the Client pushes {:irc_peer, _} at connect.
+      peer_address: nil,
+      peer_port: nil,
       notify_pid: Map.get(opts, :notify_pid),
       notify_ref: Map.get(opts, :notify_ref),
       pending_auth: nil,
@@ -1135,7 +1147,11 @@ defmodule Grappa.Session.Server do
 
     case Client.start_link(client_opts) do
       {:ok, client} ->
-        {:noreply, %{state | client: client}}
+        # #550 — a fresh connection attempt: clear any stale peer until this
+        # new Client pushes {:irc_peer, _} on connect (honest nil in the
+        # connect window; future-proofs an in-process reconnect that reuses
+        # this process instead of the transient full-restart today).
+        {:noreply, %{state | client: client, peer_address: nil, peer_port: nil}}
 
       {:error, reason} ->
         # Inline start failure (Client.init/1 rejected the opts —
@@ -1834,6 +1850,18 @@ defmodule Grappa.Session.Server do
     {:reply, {:ok, channels}, state}
   end
 
+  # #550 — the cached upstream peer (destination) for the admin Sessions
+  # inventory. Instant state read; `{:error, :no_peer}` in every
+  # not-connected window (pre-connect, mid-reconnect, socket just closed) is
+  # the honest degraded signal. Public via `Grappa.Session.peer_address/3`.
+  def handle_call({:peer_address}, _, %{peer_address: nil} = state) do
+    {:reply, {:error, :no_peer}, state}
+  end
+
+  def handle_call({:peer_address}, _, state) do
+    {:reply, {:ok, {state.peer_address, state.peer_port}}, state}
+  end
+
   # #247 — the authoritative /notify presence map for this session.
   # Public via `Grappa.Session.presence_snapshot/2`; consumed by the
   # channel after-join snapshot and the REST notify listing (DB list +
@@ -2187,6 +2215,21 @@ defmodule Grappa.Session.Server do
     {:noreply, state}
   end
 
+  # #550 — the Client captured the upstream peer at connect. Cache it
+  # (address as a string) so the admin Sessions inventory can read the
+  # destination this session landed on without round-tripping the socket.
+  # Invalidated on client EXIT + the next connect attempt (do_start_client).
+  def handle_info({:irc_peer, {:ok, {ip, port}}}, state) do
+    {:noreply, %{state | peer_address: List.to_string(:inet.ntoa(ip)), peer_port: port}}
+  end
+
+  # A socket that never came up / just closed (bounded pre-connect window,
+  # peer RST in flight): keep the peer nil — the honest "unknown" the
+  # inventory renders as a degraded row, never a fabricated address.
+  def handle_info({:irc_peer, {:error, _}}, state) do
+    {:noreply, %{state | peer_address: nil, peer_port: nil}}
+  end
+
   # S3.2 / #182 — a device became VISIBLE (foreground) when none was
   # before. Cancel any pending auto-away debounce timer and (if currently
   # :away_auto) unset auto-away. Explicit away is left untouched —
@@ -2267,7 +2310,7 @@ defmodule Grappa.Session.Server do
     # advances the failure counter. The `:client_exit` reason wrapper
     # is preserved for supervisor-log fidelity (distinguishes upstream
     # disconnect from a Session-internal crash).
-    {:stop, {:client_exit, reason}, %{state | client: nil}}
+    {:stop, {:client_exit, reason}, %{state | client: nil, peer_address: nil, peer_port: nil}}
   end
 
   # Clean linked-Client exit (operator stop / planned teardown / supervisor
