@@ -23440,3 +23440,59 @@ parity and #439's ghcr image). Units B–E — the source-mode
 `infra/docker/deploy.sh` consumer, the release image → ghcr, the
 `docker run` / `curl|bash` one-liners, and the hot-update-on-image
 evaluation — build on this shared lib.
+
+## 2026-07-30 — #503 unit B: one verb-dispatched Docker consumer
+
+The vanilla single-host Docker box had three scripts — `quickstart.sh`
+(install), `quickstart-update.sh` (update), `quickstart-stop.sh` (stop) —
+none of which used the shared deploy lib, and the update one carried its
+OWN hot-vs-cold logic: a hand-maintained regex table
+(`Dockerfile`→rebuild, `mix.lock`→deps, `priv/repo/migrations/`→migrate,
+`cicchetto/`→bundle) that then ALWAYS recreated the stack. That is exactly
+the copy-paste-drift class unit A exists to kill, one layer down: a fourth
+deploy path with a fourth private idea of what "unsafe to hot-swap" means.
+
+**Now one consumer: `infra/docker/deploy.sh {install|update|stop}`, bare =
+idempotent.** Verb-dispatched. Only `update` consumes `deploy_main` — it
+is the pull→classify→hot-or-cold flow the lib owns. `install` (fresh
+clones-and-goes bring-up: secrets, `.env`, image build, migrate, optional
+seed, front-door render) and `stop` (`--profile prod down
+--remove-orphans`) are linear flows with no hot-vs-cold decision, so they
+are verb bodies that reuse the shared helpers (the one-box-per-host
+ownership guard, the `.env` set/force/migrate helpers) rather than the
+algorithm. Reuse the verbs, not the nouns: `update` shares the algorithm
+because it IS the algorithm; install/stop share only the helpers they
+genuinely have in common.
+
+**The #503 win: update classifies hot-vs-cold via `Grappa.Deploy.Preflight`
+(substrate "docker"), replacing the always-recreate regex table.** HOT →
+`POST /admin/reload` (sessions preserved); COLD → recreate. The regex
+table is deleted — the same SoT classifier the jail/linux/operator
+substrates use now decides here too. Two docker-specific reasons still
+force cold when the operator did not: a **stopped** stack cannot be
+hot-reloaded (the start-again-after-stop path, read from the ownership
+guard's `BOX_RUNNING`), and `--no-pull` deploys the working tree, whose
+empty `prev..new` range preflight cannot classify — a recreate is never
+wrong, unlike a hot reload, so both force cold.
+
+**bare = idempotent "make it so":** no `.env` on disk → install, otherwise
+update. `.env` absence IS what "not installed" means to this stack, so the
+single command a checkout-less `curl|bash` one-liner (unit D) will run
+always does the right thing.
+
+**Lib seam `DEPLOY_REEXEC_PREFIX` (default empty).** The re-exec guard
+re-invokes the consumer after a self-modifying pull with `exec
+"$DEPLOY_SELF_REL" $DEPLOY_REEXEC_PREFIX "$@"`. Empty for the verb-less
+consumers (jail/linux/operator — byte-for-byte unchanged), so their replay
+is verbatim; the verb-dispatched consumer sets it to `update` so re-exec
+replays `deploy.sh update …` instead of dropping the verb and falling
+through to a usage error. This is the only lib change unit B needed.
+
+**Shims kept one release.** `scripts/quickstart{,-update,-stop}.sh` are now
+thin forwarders that `exec` the matching verb, environment and all — so
+muscle memory and existing docs keep working. Their rich characterization
+suites moved to the consumer that now owns the logic
+(`test/infra/deploy_docker_{verbs,update}_test.bats`); `test/scripts/` keeps
+only a thin forwarder suite. The old always-recreate assertions were NOT
+carried over — re-asserting a behaviour we set out to replace would have
+pinned the bug.

@@ -243,9 +243,9 @@ bind-mounts the repo over `/app`, and hex/deps/`_build` all live under
 `/app`, so anything baked would be shadowed by the mount. Deps are
 installed into the bind-mounted tree at first boot instead: a fresh
 `docker compose up` self-heals via `bin/start.sh` (installs hex + runs
-`deps.get` when `deps/` is empty), `scripts/quickstart.sh` does it
-explicitly, `scripts/deploy.sh` syncs on every deploy, and the e2e seeder
-installs before `grappa-test` boots. Image builds are seconds, not
+`deps.get` when `deps/` is empty), `infra/docker/deploy.sh install` does
+it explicitly, `scripts/deploy.sh` syncs on every deploy, and the e2e
+seeder installs before `grappa-test` boots. Image builds are seconds, not
 minutes; the first `up` on a fresh clone is the one slow boot (deps
 fetch + compile), warm reboots finish in seconds.
 
@@ -258,10 +258,13 @@ on macOS, system bash 4+ on Linux. `brew install bash` if missing.
 
 Both substrates share one preflight: `lib/grappa/deploy/preflight.ex`
 classifies a `(prev_sha, new_sha)` diff as HOT or COLD **for the
-calling substrate**. The substrate scripts (`scripts/deploy.sh` for
-Docker, `infra/freebsd/deploy.sh` for the m42 bastille jail) shell
-out to `mix run --no-start -e 'Grappa.Deploy.Preflight.cli([from, to,
-substrate])'` with substrate `"docker"` / `"jail"`, dispatch on exit
+calling substrate**. The substrate scripts (`scripts/deploy.sh` +
+`infra/docker/deploy.sh update` for Docker, `infra/linux/deploy.sh` for
+the native systemd host, `infra/freebsd/deploy.sh` for the m42 bastille
+jail — all thin consumers of the shared `infra/lib/deploy_common.sh`
+algorithm, #503) shell out to `mix run --no-start -e
+'Grappa.Deploy.Preflight.cli([from, to, substrate])'` with substrate
+`"docker"` / `"linux"` / `"jail"`, dispatch on exit
 code: 0 → HOT, 3 → COLD, anything else (1 = mix crash, 2 = usage
 error) **aborts the deploy** — a crash or miswired call must never
 degrade into a silent always-COLD guess. COLD is deliberately not

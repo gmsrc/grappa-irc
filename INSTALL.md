@@ -32,8 +32,12 @@ No Elixir, Node, or Bun on the host — the container is the only runtime.
 ```sh
 git clone https://github.com/vjt/grappa-irc
 cd grappa-irc
-scripts/quickstart.sh
+infra/docker/deploy.sh install
 ```
+
+> The old `scripts/quickstart.sh` / `-update.sh` / `-stop.sh` still work —
+> they are thin shims that forward to `infra/docker/deploy.sh
+> install`/`update`/`stop` for one release. New commands are shown below.
 
 That one command does everything and exits only once the stack answers
 `/healthz`. First run takes a while (it downloads the base image and
@@ -46,7 +50,7 @@ Web UI:  http://127.0.0.1:3000/
 To serve on a different address/port, set `HTTP_BIND` before running:
 
 ```sh
-HTTP_BIND=0.0.0.0:8080 scripts/quickstart.sh   # all interfaces, port 8080
+HTTP_BIND=0.0.0.0:8080 infra/docker/deploy.sh install   # all interfaces, port 8080
 ```
 
 ### What the script does
@@ -103,7 +107,7 @@ first login lands on a live session instead of an empty box:
 ```sh
 PHX_HOST=grappa.example.org \
 SEED_USER=you SEED_AUTOJOIN='#grappa' \
-  scripts/quickstart.sh
+  infra/docker/deploy.sh install
 ```
 
 `SEED_USER` is the switch — without it nothing is seeded. The rest is
@@ -144,54 +148,59 @@ to the committed config (no local overrides).
 docker compose -f compose.yaml --profile prod logs -f grappa
 
 # Stop / start
-scripts/quickstart-stop.sh                  # takes the prod profile down too
-scripts/quickstart.sh                       # idempotent: brings it back up
+infra/docker/deploy.sh stop                 # takes the prod profile down too
+infra/docker/deploy.sh update               # brings it back up (idempotent)
 ```
 
-Use the script rather than a bare `docker compose down`: the
+Use the verb rather than a bare `docker compose down`: the
 `cicchetto-build` one-shot lives behind the `prod` profile, so a down
 without `--profile prod` can walk past profile-gated services and leave
-the box half-stopped. The script also passes `--remove-orphans`, which
+the box half-stopped. `stop` also passes `--remove-orphans`, which
 sweeps a stale `grappa-nginx` container left behind by a pre-#485
 two-container box (removing the nginx service from `compose.yaml` does
-not stop the container it once created). `scripts/quickstart-stop.sh`
-also refuses to stop a box that belongs to a different checkout, and
-takes `--volumes` when you want the build caches gone as well.
-`runtime/` is a bind mount in the checkout, so no flag of this script
-can touch the database.
+not stop the container it once created). `stop` refuses to stop a box that
+belongs to a different checkout, and takes `--volumes` when you want the
+build caches gone as well. `runtime/` is a bind mount in the checkout, so
+no flag can touch the database.
 
 ### Updating an installed box
 
 ```sh
-scripts/quickstart-update.sh                # pull, then update
-scripts/quickstart-update.sh --no-pull      # update from the working tree as-is
+infra/docker/deploy.sh update               # pull, then update
+infra/docker/deploy.sh update --no-pull     # update from the working tree as-is
+infra/docker/deploy.sh                       # bare: install if new, else update
 ```
 
-`quickstart.sh` never touches git — re-running it can only re-install what
-is already on disk. `deploy.sh` is the production path and its
-`require_main_checkout` guard refuses any checkout that is not the main one
-sitting on `main`, which rules out a staging box parked on a branch. This
-script covers the gap in between.
+`install` never touches git — re-running it can only re-install what is
+already on disk. The operator `scripts/deploy.sh` is the production path
+and its `require_main_checkout` guard refuses any checkout that is not the
+main one on `main`, which rules out a staging box parked on a branch.
+`update` covers the gap in between.
 
 It refuses before it touches anything: a missing `.env` (the box was never
-installed), no docker, not a git checkout, or — when pulling — a dirty
-tree, all abort with the reason. The pull is `--ff-only`, so a diverged
-branch stops the run rather than being merged by a script. Nothing in the
-stack has moved at that point. It then reads the diff to decide which of
-the expensive steps are actually needed:
+installed), no docker, not a git checkout, a foreign-checkout box, or —
+when pulling — a dirty tree, all abort with the reason. The pull is
+`--ff-only`, so a diverged branch stops the run rather than being merged by
+a script. Nothing in the stack has moved at that point.
 
-| Changed | Triggers |
-| --- | --- |
-| `Dockerfile`, `.dockerignore` | image rebuild |
-| `mix.lock`, `mix.exs` | `mix deps.get` |
-| `priv/repo/migrations/` | `mix ecto.migrate` |
-| `cicchetto/` | frontend bundle |
+**`update` classifies hot-vs-cold** the same way the production substrates
+do — via `Grappa.Deploy.Preflight`, which diffs the pull for changes that
+cannot be hot-swapped (`mix.lock`/`mix.exs`, the supervision tree, migrations,
+long-lived GenServer state shape):
 
-Everything else is a plain recreate: the tree is bind-mounted into the
-container and the image is toolchain-only, so ordinary code changes compile
-at boot with no rebuild. The stack is then recreated (never hot-reloaded —
-a staging box exists to be restarted), `/healthz` is polled until it
-answers, and the URL is printed from `.env`.
+- **HOT** → `POST /admin/reload` swaps the changed modules into the live
+  BEAM. Sessions are preserved; nothing restarts. This is the common case
+  — the tree is bind-mounted and the image is toolchain-only, so ordinary
+  code changes compile at boot with no rebuild.
+- **COLD** → the stack is rebuilt and recreated (image build, cic bundle,
+  deps, migrations, `up --force-recreate`) when the diff is not hot-safe.
+
+Two cases always go cold: **`--no-pull`** (the working-tree diff has an
+empty commit range preflight cannot classify, and a recreate is never
+wrong) and a **stopped stack** (you cannot hot-reload a box that is down —
+this is the start-again-after-`stop` path). `--force-hot` / `--force-cold`
+override the classifier. `/healthz` is polled until it answers, then the
+URL is printed from `.env`.
 
 ## Upgrading from the two-container topology
 
@@ -208,35 +217,29 @@ headers, and held the LAN-facing port. #485 collapsed that into one:
   `GRAPPA_PUBLISH=127.0.0.1:4000` (grappa behind nginx); the new box
   has grappa alone on the published port.
 
-`scripts/quickstart-update.sh` does the `.env` migration for you — but the
+`infra/docker/deploy.sh update` does the `.env` migration for you — but the
 **very first** upgrade off a two-container box needs `git pull`
-**before** you run it, because the pre-change copy of the script still
-references the removed nginx service. So run the pull yourself once:
+**before** you run it, for two reasons: the pre-change checkout has no
+`infra/docker/deploy.sh` yet, and its old `compose.yaml` still references
+the removed nginx service. So run the pull yourself once, then update the
+just-pulled tree cold:
 
 ```sh
-git pull --ff-only        # get the #485 script + compose first
-
-# A box that predates #485 has almost certainly crossed migration, dep,
-# and bundle commits (migrations land on main most days). Run those once
-# by hand — see the caveat below for WHY the script can't:
-docker compose -f compose.yaml --profile prod run --rm --no-deps grappa mix deps.get
-docker compose -f compose.yaml --profile prod run --rm cicchetto-build
-docker compose -f compose.yaml --profile prod run --rm --no-deps grappa mix ecto.migrate
-
-scripts/quickstart-update.sh --no-pull   # migrate .env + sweep grappa-nginx + recreate
+git pull --ff-only                          # get the #485/#503 scripts + compose first
+infra/docker/deploy.sh update --no-pull     # force-cold: migrate .env, deps, migrate, cic, recreate
 ```
 
-> **Caveat — `--no-pull` skips the script's automatic step detection.**
-> `quickstart-update.sh` decides whether to run `deps.get`, `ecto.migrate`,
-> and the bundle rebuild by **diffing the commits its own `git pull`
-> moved across**. Because you pulled by hand first, that diff is empty on
-> this run (`HEAD` didn't move), so the script runs **none** of those
-> expensive steps — which is exactly why they're listed above. This only
-> applies to the FIRST upgrade; from then on run
-> `scripts/quickstart-update.sh` normally (it pulls and auto-detects).
-> The critical one is `ecto.migrate`: skip it while crossing a
-> schema-adding commit and the new code boots against the old schema —
-> `Bootstrap` and the first queries 500, and the health poll times out.
+> **Why `--no-pull` here.** You already pulled by hand, so re-pulling would
+> be a no-op with an empty commit range — which the hot-vs-cold classifier
+> cannot read. `--no-pull` forces the **cold** path, and the cold path runs
+> the full sequence unconditionally: image build, `deps.get`, the cic
+> bundle, `ecto.migrate`, and `up --force-recreate`. A box that predates
+> #485 has almost certainly crossed migration, dep, and bundle commits, and
+> the cold path applies all of them — no hand-run steps, unlike the old
+> update's diff-driven table. The critical one is `ecto.migrate`: crossing a
+> schema-adding commit without it boots new code against the old schema, and
+> the health poll times out. From then on run `infra/docker/deploy.sh update`
+> normally (it pulls and classifies hot-vs-cold).
 
 On that run the script:
 
@@ -346,7 +349,7 @@ secrets exist.
   container compiles the app on first prod boot. Watch progress with
   `docker compose -f compose.yaml --profile prod logs -f grappa`.
 - **Port 3000 already in use.** Re-run with a free port:
-  `HTTP_BIND=127.0.0.1:3100 scripts/quickstart.sh`.
+  `HTTP_BIND=127.0.0.1:3100 infra/docker/deploy.sh install`.
 - **`cannot talk to the Docker daemon`.** Start Docker, or add yourself to
   the `docker` group (then re-login).
 - **Health check timed out.** Inspect the last logs:

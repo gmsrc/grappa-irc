@@ -24,8 +24,8 @@
 # only on loopback. Operator overrides via env or override file to bind
 # to a LAN/VLAN IP, all interfaces (`0.0.0.0:4000`), or a different port.
 # #485 dropped the in-stack nginx container: in prod the operator either
-# publishes grappa directly (scripts/quickstart.sh sets GRAPPA_PUBLISH to
-# your HTTP_BIND) or leaves it loopback-only and fronts it with their OWN
+# publishes grappa directly (infra/docker/deploy.sh install sets
+# GRAPPA_PUBLISH to your HTTP_BIND) or leaves it loopback-only and fronts it with their OWN
 # TLS reverse proxy (infra/nginx-tls-frontend.example.conf).
 
 services:
@@ -48,8 +48,8 @@ services:
     # waits for that build to finish; `required: false` so a plain dev
     # `docker compose up` (the oneshot is prod-profile-gated and NOT in the
     # active profile, cic is served by vite there) still starts grappa.
-    # deploy.sh / quickstart also run the build explicitly first — this
-    # depends_on is the safety net for a manual `--profile prod up`.
+    # deploy.sh / infra/docker/deploy.sh also run the build explicitly
+    # first — this depends_on is the safety net for a manual `--profile prod up`.
     depends_on:
       cicchetto-build:
         condition: service_completed_successfully
