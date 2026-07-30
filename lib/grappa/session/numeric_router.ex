@@ -652,7 +652,7 @@ defmodule Grappa.Session.NumericRouter do
   # channel-shaped) yields false → normal param scan.
   @spec whois_leg?([term()], MapSet.t(String.t())) :: boolean()
   defp whois_leg?([_, target | _], whois_targets) when is_binary(target),
-    do: MapSet.member?(whois_targets, Identifier.canonical_nick(target))
+    do: MapSet.member?(whois_targets, Identifier.canonical_target(target))
 
   defp whois_leg?(_, _), do: false
 
@@ -725,7 +725,7 @@ defmodule Grappa.Session.NumericRouter do
   defp nick_eq?(_, nil), do: false
 
   defp nick_eq?(a, b) when is_binary(a) and is_binary(b),
-    do: Identifier.canonical_nick(a) == Identifier.canonical_nick(b)
+    do: Identifier.canonical_target(a) == Identifier.canonical_target(b)
 
   @spec window_ref_to_decision(window_ref()) ::
           {:channel, String.t()} | {:query, String.t()} | {:server, nil}

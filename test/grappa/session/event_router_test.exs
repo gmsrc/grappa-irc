@@ -4065,7 +4065,7 @@ defmodule Grappa.Session.EventRouterTest do
     defp banlist_pending_state(channel_display) do
       base_state(%{
         banlist_pending: %{
-          Grappa.IRC.Identifier.canonical_channel(channel_display) => %{
+          Grappa.IRC.Identifier.canonical_target(channel_display) => %{
             channel_display: channel_display,
             entries: []
           }

@@ -933,7 +933,7 @@ defmodule Grappa.Session.Server do
       # rebind. Sigil-aware: nick-shape entries (not valid here, but
       # the predicate is defensive) pass through unchanged.
       auth_method: opts.auth_method,
-      autojoin: Enum.map(opts.autojoin_channels, &Grappa.IRC.Identifier.canonical_channel/1),
+      autojoin: Enum.map(opts.autojoin_channels, &Grappa.IRC.Identifier.canonical_target/1),
       # #347 — deferred-autojoin fallback window + one-shot latch. Timer stays
       # nil until 001 arms it (only for :nickserv_identify with autojoin).
       autojoin_defer_ms: Map.get(opts, :autojoin_defer_ms, @autojoin_defer_ms),
@@ -4089,7 +4089,7 @@ defmodule Grappa.Session.Server do
     state = %{
       state
       | window_state: WindowState.set_joined(state.window_state, channel),
-        in_flight_joins: Map.delete(state.in_flight_joins, Identifier.canonical_channel(channel))
+        in_flight_joins: Map.delete(state.in_flight_joins, Identifier.canonical_target(channel))
     }
 
     apply_effects(rest, state)
@@ -4601,7 +4601,7 @@ defmodule Grappa.Session.Server do
   @spec maybe_request_chanserv_invite(t(), String.t(), pos_integer()) :: t()
   defp maybe_request_chanserv_invite(state, channel, numeric)
        when numeric in @chanserv_invitable_numerics do
-    key = Identifier.canonical_channel(channel)
+    key = Identifier.canonical_target(channel)
     awaiting = Map.get(state, :awaiting_invite, MapSet.new())
     in_autojoin? = key in state.autojoin
 

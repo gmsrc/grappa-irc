@@ -3090,7 +3090,7 @@ defmodule Grappa.Session.EventRouter do
   defp nick_eq?(_, nil), do: false
 
   defp nick_eq?(a, b) when is_binary(a) and is_binary(b),
-    do: Identifier.canonical_nick(a) == Identifier.canonical_nick(b)
+    do: Identifier.canonical_target(a) == Identifier.canonical_target(b)
 
   # C2 — fold one set of WHOIS-numeric fields into the per-target accumulator
   # at `state.whois_pending[target_lower]`. Skips folding when no entry

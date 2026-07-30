@@ -125,7 +125,7 @@ defmodule Grappa.IRC.Identifier do
 
   > #### Never use in a match/compare path {: .warning}
   >
-  > This is ADDITIVE and ORTHOGONAL to the rfc1459 fold (`canonical_nick/1`
+  > This is ADDITIVE and ORTHOGONAL to the identity fold (`canonical_target/1`
   > / `nick_fold/1` / `nick_fold_sql/1`) — it does NOT touch identity. It is
   > a one-way, lossy SEED helper for producing a *presentable* nick from a
   > longer string. It MUST NEVER be wired into a nick lookup, equality,
@@ -163,8 +163,8 @@ defmodule Grappa.IRC.Identifier do
   input: a bare `~foo` is a legitimate "I typed the tilde out of habit"
   and becomes `foo`.
 
-  Non-binary input passes through unchanged (mirrors `canonical_nick/1`
-  / `canonical_channel/1` — the changeset boundary may see `nil`).
+  Non-binary input passes through unchanged (mirrors `canonical_target/1`
+  — the changeset boundary may see `nil`).
   """
   @spec sanitize_ident(term()) :: term()
   def sanitize_ident("~" <> rest), do: rest
@@ -188,132 +188,48 @@ defmodule Grappa.IRC.Identifier do
   def valid_ident?(_), do: false
 
   @doc """
-  Returns the canonical ASCII-folded form of a channel name — the single
-  source of truth for case-insensitive channel matching. Shares ONE fold
-  primitive with `canonical_nick/1` (`fold_ascii/1`), so the whole server
-  casemaps channels and nicks one way. Non-channel input (nicks, the
-  synthetic `$server` pseudo-channel, anything not prefixed with a
-  chanstring sigil `#&+!`) is passed through verbatim — case is
-  meaningful for nicks (`dm_with`, sender badge display) and the
-  `$server` marker is fixed-case by intent.
+  Returns the canonical ASCII-folded form of any Grappa identifier KEY — a
+  channel, a DM-peer nick, or the `$server` pseudo-channel — the single
+  source of truth for case-insensitive identifier matching across the
+  server (GH #121 nicks + #364 channels, narrowed to ASCII by #525,
+  unified into ONE fold by #537).
 
-  ## Why plain ASCII (#525 — corrects the #364 rfc1459 over-fold)
+  ## One byte-level ASCII fold for every shape
 
-  Azzurra runs **bahamut**, which advertises `CASEMAPPING=ascii` in 005
-  AND implements plain ASCII folding in the ircd (`src/match.c`
-  `tolowertab[]` maps `A-Z` → `a-z` and leaves `[ \\ ] ^ ~` untouched).
-  #121/#364 assumed rfc1459 (also fold `[ ] \\ ~` → `{ } | ^`) and so
-  OVER-folded: `#chan[1]` and `#chan{1}` — two DISTINCT channels to this
-  ircd — collapsed onto one grappa window / scrollback / cursor (the #525
-  window-merge, verified live against prod). #525 narrows the fold to the
-  ircd's real rule: ONLY `A-Z`, brackets left alone.
+  Azzurra runs **bahamut**, which advertises `CASEMAPPING=ascii` in 005 AND
+  implements plain ASCII folding in the ircd (`src/match.c` `tolowertab[]`
+  maps `A-Z` → `a-z` and leaves `[ \\ ] ^ ~` untouched). It applies that
+  SAME fold to channels and nicks, so grappa does too: `fold_ascii/1` folds
+  `A-Z` only. A channel sigil (`# & ! +`) sits outside `A-Z` and passes
+  through, so folding the whole string equals `sigil <> fold(body)`; a nick
+  or `$server` folds identically. `#chan[1]` vs `#chan{1}` and `foo[1]` vs
+  `foo{1}` stay DISTINCT (only `A-Z` folds — the #525 posture, reversing the
+  #364 rfc1459 over-fold / "ghost in the nicklist").
 
-  A bouncer is not an ircd — it matches no bans and enforces no
-  uniqueness — so being *too lax* (treating two identifiers as distinct
-  that the network would merge) costs far less than merging two the
-  network keeps apart; on a genuine rfc1459 network the lax case can't
-  even arise (the ircd refuses the second nick). Sigils (`# & ! +`) sit
-  outside `A-Z`, so folding the whole name leaves the sigil intact and
-  folds the body identically to a nick.
+  This REPLACES the former sigil-gated `canonical_channel/1` (which left a
+  nick verbatim) and `canonical_nick/1` (#537): every identifier KEY folds
+  the SAME way now, so the write key and the case-insensitive read key
+  derive from one fold. Display forms (`dm_with`, sender badge) stay RAW —
+  only KEYS fold; call this at every identifier KEY boundary, never on a
+  display value.
 
   ## ASCII-only, by design
 
-  Byte-level ASCII (`A-Z` only), NOT Unicode `String.downcase/1` — see
-  `canonical_nick/1` for the full rationale. UTF-8 multibyte (≥ `0x80`)
-  passes untouched, so the fold matches the ASCII-only SQLite `lower()`
-  the migrations embed (`#CAFÉ` and `#café` stay DISTINCT, per the ircd).
+  Byte-level ASCII (`A-Z` only), NOT Unicode `String.downcase/1`: bahamut
+  compares byte-wise, and the migration backfill folds in pure SQL via
+  `lower()` (ASCII-only), so an Elixir Unicode downcase would diverge from
+  the stored folded column for any non-ASCII identifier. UTF-8 multibyte
+  (≥ `0x80`) passes through untouched (`#CAFÉ` and `#café` stay DISTINCT).
+  Non-binary input passes through unchanged (the folded-column changeset
+  boundary may see `nil`).
 
-  Canonicalize at every channel-bearing boundary (`Grappa.Session` entry
-  API, `Grappa.Session.EventRouter` channel-param extraction, schema
-  changesets defense-in-depth, PubSub topic builder) so the rest of the
-  codebase observes one key per channel regardless of upstream-or-input
-  casing. Non-binary input returns unchanged.
-  """
-  @spec canonical_channel(term()) :: term()
-  def canonical_channel(<<sigil::utf8, _::binary>> = name)
-      when sigil in [?#, ?&, ?!, ?+],
-      do: fold_ascii(name)
-
-  def canonical_channel(name), do: name
-
-  @doc """
-  Returns the canonical ASCII-folded form of an IRC nickname — the single
-  source of truth for case-insensitive nick matching across the server
-  (GH #121, narrowed to ASCII in #525). Use it at EVERY nick
-  comparison/lookup boundary (visitor table lookups, query-window DM
-  keys, self-detection in the event router, WHOIS/userhost/whowas/ban
-  caches).
-
-  ## Why plain ASCII (not rfc1459, not Unicode downcase, not RFC 2812)
-
-  Azzurra runs **bahamut**, which advertises `CASEMAPPING=ascii` and
-  folds ONLY `A-Z` (`src/match.c` `tolowertab[]` leaves `[ \\ ] ^ ~`
-  untouched). #121 originally assumed `rfc1459` (also folding
-  `[ ] \\ ~` → `{ } | ^`); #525 measured the ircd and corrected it. Two
-  nicks differing only in bracket-vs-brace are DISTINCT to this ircd, so
-  the bouncer must keep them apart or it merges two people onto one
-  identity — the #525 "ghost in the nicklist" symptom (a present, talking
-  user vanishes when their bracket-variant twin quits).
-
-  Shares ONE fold primitive (`fold_ascii/1`) with `canonical_channel/1`
-  (#364): channels converge onto the SAME ASCII casemapping, since
-  bahamut applies it to channel names as well as nicks.
-
-  ## ASCII-only, by design
-
-  Folding is **byte-level ASCII** — `A-Z` only, NOT Unicode
-  `String.downcase/1`. bahamut compares nicks byte-wise. Two reasons this
-  matters:
-
-    * UTF-8 multibyte sequences pass through untouched (their lead +
-      continuation bytes are all ≥ `0x80`, never colliding with the
-      `A-Z` range `0x41..0x5a`), so the fold is UTF-8-safe.
-    * The migration backfill computes the folded key in pure SQL via
-      `lower(x)`; SQLite `lower()` is ASCII-only, so an Elixir Unicode
-      downcase here would diverge from the stored folded column for any
-      non-ASCII nick.
-
-  Non-binary input passes through unchanged (mirrors
-  `canonical_channel/1` — the folded-column changeset boundary may see
-  `nil`).
-  """
-  @spec canonical_nick(term()) :: term()
-  def canonical_nick(nick) when is_binary(nick), do: fold_ascii(nick)
-
-  def canonical_nick(other), do: other
-
-  @doc """
-  Returns the canonical fold of a Grappa **window key** — a target that
-  may be EITHER a channel or a DM-peer nick — picking the shape-appropriate
-  fold (GH #532 D).
-
-  A window key is stored/looked-up as one column (`read_cursors.channel`),
-  but the two shapes route through different canonicalisers at the read
-  boundary: channels via `canonical_channel/1` and DM-peer nicks via
-  `canonical_nick/1`. `canonical_channel/1` alone is sigil-gated, so it is
-  a NO-OP for a nick — which let the cursor WRITE path store a nick key at
-  whatever casing the client sent, forking one DM window into one cursor
-  row PER CASING while the read path (`Scrollback.channel_or_dm_where/3`)
-  resolved them all case-insensitively via `canonical_nick/1`. The stale
-  rows then reported unread forever with no UI action able to reach them.
-
-  This is the single SHAPE-AWARE canonicaliser the cursor write boundary
-  uses so the write key and the read key derive from the same fold:
-
-    * sigil-shaped (`# & ! +`) → `canonical_channel/1`
-    * everything else (nick, `$server`) → `canonical_nick/1`
-
-  The two agree byte-for-byte on channel-shaped input (the sigils sit
-  outside the fold set), so this is purely additive over
-  `canonical_channel/1` for channels and CORRECTIVE for nicks. Non-binary
-  passes through (mirrors both delegates).
+  Network-aware ingress (rfc1459 national chars) is `canonical_target/2`,
+  which normalises via `normalize_casemapping/2` THEN folds here. Its
+  query-side twin for SQL is `nick_fold/1` / `nick_fold_sql/1` (plain
+  `lower()`, byte-pinned to the migration indexes).
   """
   @spec canonical_target(term()) :: term()
-  def canonical_target(<<sigil::utf8, _::binary>> = name)
-      when sigil in [?#, ?&, ?!, ?+],
-      do: canonical_channel(name)
-
-  def canonical_target(name) when is_binary(name), do: canonical_nick(name)
+  def canonical_target(name) when is_binary(name), do: fold_ascii(name)
 
   def canonical_target(other), do: other
 
@@ -405,9 +321,9 @@ defmodule Grappa.IRC.Identifier do
   # merges two identities the network keeps apart (the #525 over-fold).
   # Byte-level so UTF-8 multibyte (≥ 0x80) passes untouched, matching the
   # ASCII-only SQLite `lower()` the fold migrations embed.
-  # `canonical_nick/1` folds the whole nick; `canonical_channel/1` folds
-  # the sigil-prefixed name (sigils are outside `A-Z`, so they pass
-  # straight through).
+  # `canonical_target/1` folds the whole identifier (channel or nick);
+  # sigils sit outside `A-Z`, so they pass straight through and the body
+  # folds identically for both shapes.
   @spec fold_ascii(binary()) :: binary()
   defp fold_ascii(s), do: for(<<c <- s>>, into: "", do: <<fold_ascii_byte(c)>>)
 
@@ -416,7 +332,7 @@ defmodule Grappa.IRC.Identifier do
 
   @doc """
   Ecto query fragment applying the ASCII nick fold to a column
-  expression — the **query-side twin** of `canonical_nick/1`, for
+  expression — the **query-side twin** of `canonical_target/1`, for
   matching a column against a folded unique index (GH #121, #525).
 
   Derives the folded key in SQL so no denormalised column is stored
@@ -435,7 +351,7 @@ defmodule Grappa.IRC.Identifier do
 
       from c in Credential,
         where:
-          Identifier.nick_fold(c.nick) == ^Identifier.canonical_nick(input) and
+          Identifier.nick_fold(c.nick) == ^Identifier.canonical_target(input) and
             c.network_id == ^network_id
   """
   defmacro nick_fold(column) do

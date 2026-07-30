@@ -401,7 +401,7 @@ defmodule Grappa.Networks.Credential do
   end
 
   defp canonicalize_channel_entry(name) when is_binary(name),
-    do: Identifier.canonical_channel(name)
+    do: Identifier.canonical_target(name)
 
   defp canonicalize_channel_entry(other), do: other
 

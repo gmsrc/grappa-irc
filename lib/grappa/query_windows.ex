@@ -209,7 +209,7 @@ defmodule Grappa.QueryWindows do
   @spec close(Subject.t(), integer(), String.t(), String.t()) :: :ok
   def close({_, _} = subject, network_id, target_nick, subject_label)
       when is_integer(network_id) and is_binary(target_nick) and is_binary(subject_label) do
-    folded = Identifier.canonical_nick(target_nick)
+    folded = Identifier.canonical_target(target_nick)
 
     Window
     |> Subject.subject_where(subject)
@@ -253,8 +253,8 @@ defmodule Grappa.QueryWindows do
           {:ok, :renamed | :noop}
   def rename({_, _} = subject, network_id, old_nick, new_nick)
       when is_integer(network_id) and is_binary(old_nick) and is_binary(new_nick) do
-    folded_old = Identifier.canonical_nick(old_nick)
-    folded_new = Identifier.canonical_nick(new_nick)
+    folded_old = Identifier.canonical_target(old_nick)
+    folded_new = Identifier.canonical_target(new_nick)
 
     if folded_old == folded_new do
       {:ok, :noop}
@@ -354,7 +354,7 @@ defmodule Grappa.QueryWindows do
   @spec open?(Subject.t(), integer(), String.t()) :: boolean()
   def open?({_, _} = subject, network_id, target_nick)
       when is_integer(network_id) and is_binary(target_nick) do
-    new_window_exists?(subject, network_id, Identifier.canonical_nick(target_nick))
+    new_window_exists?(subject, network_id, Identifier.canonical_target(target_nick))
   end
 
   @doc """
@@ -474,7 +474,7 @@ defmodule Grappa.QueryWindows do
   @spec fetch_existing(Subject.t(), integer(), String.t()) ::
           {:ok, Window.t()} | {:error, Ecto.Changeset.t()}
   defp fetch_existing(subject, network_id, target_nick) do
-    folded = Identifier.canonical_nick(target_nick)
+    folded = Identifier.canonical_target(target_nick)
 
     query =
       Window

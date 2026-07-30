@@ -16,7 +16,7 @@ defmodule Grappa.Push.Triggers do
   ## Decision logic — `should_notify?/4`
 
   The FIRST question is "is this row mine?", decided by IDENTITY
-  (`Identifier.canonical_nick(sender) == canonical_nick(own_nick)`), NOT
+  (`Identifier.canonical_target(sender) == canonical_nick(own_nick)`), NOT
   by window shape:
 
     0. **Own row** (`sender` folds to `own_nick`) — never notify (#532 C).
@@ -30,11 +30,11 @@ defmodule Grappa.Push.Triggers do
 
     1. **DM** (`message.channel == own_nick`):
        `prefs.private_messages_all` OR
-       `Identifier.canonical_nick(message.sender) in prefs.private_messages_only`.
+       `Identifier.canonical_target(message.sender) in prefs.private_messages_only`.
 
     2. **Channel message** (everything else): any of
        `prefs.channel_messages_all` OR
-       `Identifier.canonical_channel(message.channel) in prefs.channel_messages_only` OR
+       `Identifier.canonical_target(message.channel) in prefs.channel_messages_only` OR
        (`prefs.channel_mentions` AND
        `Mentions.mentioned?(body, own_nick, highlight_patterns)`).
 
@@ -245,7 +245,7 @@ defmodule Grappa.Push.Triggers do
   # decide — this is the "is this row mine?" the moduledoc's decision tree
   # asks first.
   defp own_row?(%Message{sender: sender}, own_nick) when is_binary(sender) do
-    Identifier.canonical_nick(sender) == Identifier.canonical_nick(own_nick)
+    Identifier.canonical_target(sender) == Identifier.canonical_target(own_nick)
   end
 
   defp own_row?(_, _), do: false
@@ -258,7 +258,7 @@ defmodule Grappa.Push.Triggers do
   # sides (`canonical_nick/1`) or a mixed-case own_nick fails to match
   # its own folded DM rows.
   defp dm?(%Message{channel: channel}, own_nick) when is_binary(channel) and is_binary(own_nick),
-    do: Identifier.canonical_nick(channel) == Identifier.canonical_nick(own_nick)
+    do: Identifier.canonical_target(channel) == Identifier.canonical_target(own_nick)
 
   defp dm?(_, _), do: false
 
@@ -273,7 +273,7 @@ defmodule Grappa.Push.Triggers do
     # the ASCII fold. Brackets `[ ] \ ~` are NOT folded, so foo[bar] and
     # foo{bar} are DELIBERATELY distinct (CASEMAPPING=ascii). The stored
     # list is canonicalized to the same fold by UserSettings.normalize_list.
-    Identifier.canonical_nick(sender) in Map.get(prefs, :private_messages_only, [])
+    Identifier.canonical_target(sender) in Map.get(prefs, :private_messages_only, [])
   end
 
   defp sender_in_whitelist?(_, _), do: false

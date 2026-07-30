@@ -228,10 +228,10 @@ defmodule Grappa.WindowCounts do
   defp count_tail_mentions(_, nil, _), do: 0
 
   defp count_tail_mentions(tail, own_nick, patterns) do
-    own = Identifier.canonical_nick(own_nick)
+    own = Identifier.canonical_target(own_nick)
 
     Enum.count(tail, fn %{sender: sender, body: body} ->
-      Identifier.canonical_nick(sender) != own and Mentions.mentioned?(body, own_nick, patterns)
+      Identifier.canonical_target(sender) != own and Mentions.mentioned?(body, own_nick, patterns)
     end)
   end
 
@@ -249,12 +249,12 @@ defmodule Grappa.WindowCounts do
   defp count_mentions(_, _, _, _, nil, _), do: 0
 
   defp count_mentions(subject, network_id, channel, after_id, own_nick, patterns) do
-    own = Identifier.canonical_nick(own_nick)
+    own = Identifier.canonical_target(own_nick)
 
     subject
     |> Scrollback.unread_content_tail(network_id, channel, after_id, own_nick, @mention_scan_cap)
     |> Enum.count(fn %{sender: sender, body: body} ->
-      Identifier.canonical_nick(sender) != own and Mentions.mentioned?(body, own_nick, patterns)
+      Identifier.canonical_target(sender) != own and Mentions.mentioned?(body, own_nick, patterns)
     end)
   end
 

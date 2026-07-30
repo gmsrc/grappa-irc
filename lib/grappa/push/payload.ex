@@ -92,8 +92,8 @@ defmodule Grappa.Push.Payload do
       when is_binary(network_slug) and is_binary(own_nick) do
     dm? =
       is_binary(message.channel) and
-        Grappa.IRC.Identifier.canonical_nick(message.channel) ==
-          Grappa.IRC.Identifier.canonical_nick(own_nick)
+        Grappa.IRC.Identifier.canonical_target(message.channel) ==
+          Grappa.IRC.Identifier.canonical_target(own_nick)
 
     sender = message.sender || ""
     body = message.body || ""

@@ -435,7 +435,7 @@ defmodule Grappa.ReadCursor do
   defp own_presence_dynamic(own_nicks) do
     Enum.reduce(own_nicks, dynamic(false), fn
       {_, {network_id, own_nick}}, acc when is_binary(own_nick) ->
-        folded = Identifier.canonical_nick(own_nick)
+        folded = Identifier.canonical_target(own_nick)
 
         dynamic(
           [rc, _, m],
@@ -573,8 +573,8 @@ defmodule Grappa.ReadCursor do
   @spec rename_dm_peer(subject(), integer(), String.t(), String.t()) :: :ok
   def rename_dm_peer(subject, network_id, old_nick, new_nick)
       when is_integer(network_id) and is_binary(old_nick) and is_binary(new_nick) do
-    folded_old = Identifier.canonical_nick(old_nick)
-    folded_new = Identifier.canonical_nick(new_nick)
+    folded_old = Identifier.canonical_target(old_nick)
+    folded_new = Identifier.canonical_target(new_nick)
 
     if folded_old == folded_new do
       :ok

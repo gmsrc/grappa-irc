@@ -412,8 +412,13 @@ defmodule Grappa.WindowCountsTest do
       # #396: both sides fold → "VJT" resolves to the own window.
       assert bulk[net.slug][own].messages == 1
 
-      # OLD narrowing compared dm_with RAW → "VJT" != "vjt" → missed the row.
-      assert WindowCounts.snapshot(subject, net.id, own, anchor.id, own, []).messages == 0
+      # #537/#372 reversed assert (was `== 0`): the own-nick self-window
+      # narrowing in `Scrollback.channel_or_dm_where/3` now folds `dm_with`
+      # via `nick_fold/1` (dm_with is stored RAW for display, so the MATCH
+      # must fold — the #121/#372 nick invariant), so `snapshot/6` counts the
+      # cased self-msg exactly like `bulk_snapshot/3` does. The pre-fold RAW
+      # compare (`"VJT" != "vjt"` → 0) was the bug this line of work closes.
+      assert WindowCounts.snapshot(subject, net.id, own, anchor.id, own, []).messages == 1
     end
 
     test "nil own_nick (unbound network) yields mentions 0 but counts messages/events" do

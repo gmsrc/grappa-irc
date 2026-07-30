@@ -56,7 +56,7 @@ defmodule Grappa.ChannelDirectory.Wire do
   end
 
   defp mark_featured(entry, featured_names) do
-    featured? = MapSet.member?(featured_names, Identifier.canonical_channel(entry.name))
+    featured? = MapSet.member?(featured_names, Identifier.canonical_target(entry.name))
     Map.put(entry, :featured, featured?)
   end
 end

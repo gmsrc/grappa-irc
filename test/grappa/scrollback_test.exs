@@ -2729,7 +2729,7 @@ defmodule Grappa.ScrollbackTest do
             ) do
         channel = "#" <> letter
 
-        canonical = Grappa.IRC.Identifier.canonical_channel(channel)
+        canonical = Grappa.IRC.Identifier.canonical_target(channel)
 
         # Persist one row under the canonical channel (write side has
         # already canonicalised, so this matches the on-disk shape).
@@ -3129,7 +3129,7 @@ defmodule Grappa.ScrollbackTest do
       assert entry.row_count == 2
       assert entry.last_activity == 200
       # Representative display casing is incidental; the fold is the identity.
-      assert Identifier.canonical_nick(entry.target) == "debugserv"
+      assert Identifier.canonical_target(entry.target) == "debugserv"
     end
 
     test "list_archive/3 excludes a folded-active query window (no archived split)",

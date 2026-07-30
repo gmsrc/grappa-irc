@@ -247,7 +247,7 @@ defmodule GrappaWeb.MessagesController do
   # (built from the server's folded key); the fold here is the idempotent
   # ASCII backstop (bahamut/ascii: byte-identical, prod unchanged).
   defp presence_channel_key(network, channel),
-    do: "#{network.slug} #{Identifier.canonical_channel(channel)}"
+    do: "#{network.slug} #{Identifier.canonical_target(channel)}"
 
   defp member_count_for_unset(nil, subject, network_id, channel) do
     case Session.list_members(subject, network_id, channel) do

@@ -77,7 +77,7 @@ defmodule Grappa.ScrollbackTelemetryTest do
 
       assert_receive {:telemetry, [:grappa, :scrollback, :persist, :stop], measurements, metadata}
       # Channel is stored canonical (ASCII fold) — the tag matches storage.
-      assert metadata.channel == Identifier.canonical_channel("#sniffo")
+      assert metadata.channel == Identifier.canonical_target("#sniffo")
       assert metadata.kind == :privmsg
       assert metadata.network_id == net.id
       assert metadata.subject == :user
@@ -97,7 +97,7 @@ defmodule Grappa.ScrollbackTelemetryTest do
 
       assert_receive {:telemetry, [:grappa, :scrollback, :persist, :stop], _m, metadata}
       assert metadata.outcome == :validation_error
-      assert metadata.channel == Identifier.canonical_channel("#sniffo")
+      assert metadata.channel == Identifier.canonical_target("#sniffo")
     end
 
     test "the :start event fires before the insert with the same channel tag",
@@ -107,7 +107,7 @@ defmodule Grappa.ScrollbackTelemetryTest do
       assert {:ok, _} = Scrollback.persist_event(valid_attrs(user, net, %{}))
 
       assert_receive {:telemetry, [:grappa, :scrollback, :persist, :start], _m, metadata}
-      assert metadata.channel == Identifier.canonical_channel("#sniffo")
+      assert metadata.channel == Identifier.canonical_target("#sniffo")
       assert metadata.kind == :privmsg
     end
   end

@@ -139,10 +139,10 @@ defmodule Grappa.Session.GhostRecovery do
 
   def step(state, _), do: {:cont, state, []}
 
-  defp nickserv?({:nick, nick, _, _}), do: Identifier.canonical_nick(nick) == "nickserv"
+  defp nickserv?({:nick, nick, _, _}), do: Identifier.canonical_target(nick) == "nickserv"
   defp nickserv?(_), do: false
 
   # ASCII-folded nick equality (#121/#525) — mirror of EventRouter.nick_eq?/2.
   @spec nick_match?(String.t(), String.t()) :: boolean()
-  defp nick_match?(a, b), do: Identifier.canonical_nick(a) == Identifier.canonical_nick(b)
+  defp nick_match?(a, b), do: Identifier.canonical_target(a) == Identifier.canonical_target(b)
 end

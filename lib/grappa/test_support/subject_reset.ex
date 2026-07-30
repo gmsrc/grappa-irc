@@ -350,7 +350,7 @@ if Mix.env() in [:dev, :test] do
 
       pending =
         autojoin
-        |> Enum.map(&Grappa.IRC.Identifier.canonical_channel/1)
+        |> Enum.map(&Grappa.IRC.Identifier.canonical_target/1)
         |> MapSet.new()
 
       poll_autojoin({:user, user.id}, cred.network_id, slug, pending, deadline)

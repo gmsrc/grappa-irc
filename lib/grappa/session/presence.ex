@@ -104,7 +104,7 @@ defmodule Grappa.Session.Presence do
   """
   @spec seed([String.t()]) :: state_map()
   def seed(nicks) when is_list(nicks) do
-    Map.new(nicks, fn nick -> {Identifier.canonical_nick(nick), :unknown} end)
+    Map.new(nicks, fn nick -> {Identifier.canonical_target(nick), :unknown} end)
   end
 
   @doc """
@@ -122,7 +122,7 @@ defmodule Grappa.Session.Presence do
           {:changed, change_kind(), state_map()} | :unchanged
   def apply_report(map, nick, presence)
       when is_map(map) and is_binary(nick) and presence in [:online, :offline] do
-    key = Identifier.canonical_nick(nick)
+    key = Identifier.canonical_target(nick)
 
     case Map.fetch(map, key) do
       :error -> :unchanged
@@ -139,7 +139,7 @@ defmodule Grappa.Session.Presence do
   @spec track(state_map(), [String.t()]) :: state_map()
   def track(map, nicks) when is_map(map) and is_list(nicks) do
     Enum.reduce(nicks, map, fn nick, acc ->
-      Map.put_new(acc, Identifier.canonical_nick(nick), :unknown)
+      Map.put_new(acc, Identifier.canonical_target(nick), :unknown)
     end)
   end
 
@@ -149,7 +149,7 @@ defmodule Grappa.Session.Presence do
   """
   @spec untrack(state_map(), [String.t()]) :: state_map()
   def untrack(map, nicks) when is_map(map) and is_list(nicks) do
-    Map.drop(map, Enum.map(nicks, &Identifier.canonical_nick/1))
+    Map.drop(map, Enum.map(nicks, &Identifier.canonical_target/1))
   end
 
   # ---------------------------------------------------------------------------

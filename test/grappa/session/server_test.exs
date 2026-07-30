@@ -5632,7 +5632,7 @@ defmodule Grappa.Session.ServerTest do
 
       # ...AND the WHO accumulator is primed so a subsequent 352/315 surfaces.
       # Key is the folded args (production fn, never hardcoded); display is raw.
-      key = Grappa.IRC.Identifier.canonical_channel("+s hub.azzurra.chat")
+      key = Grappa.IRC.Identifier.canonical_target("+s hub.azzurra.chat")
       entry = Map.get(SessionStateHelpers.fetch(pid).who_pending, key)
       assert entry.target_display == "+s hub.azzurra.chat"
       assert entry.replies == []
@@ -6413,7 +6413,7 @@ defmodule Grappa.Session.ServerTest do
     # against the canonical form on the wire. The fed-back JOIN-self
     # echo also uses the canonical form so EventRouter's downstream
     # state seeding observes the same key everywhere.
-    canonical = Grappa.IRC.Identifier.canonical_channel(channel)
+    canonical = Grappa.IRC.Identifier.canonical_target(channel)
 
     # Wait for the session to send JOIN (proves 001 processed)
     {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN #{canonical}"), 1_000)

@@ -185,7 +185,7 @@ defmodule Grappa.Networks.Credentials do
           {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def remove_visitor_last_joined_channel(visitor_id, network_id, channel_name)
       when is_binary(visitor_id) and is_integer(network_id) and is_binary(channel_name) do
-    canonical = Grappa.IRC.Identifier.canonical_channel(channel_name)
+    canonical = Grappa.IRC.Identifier.canonical_target(channel_name)
 
     case get_visitor_credential(visitor_id, network_id) do
       {:ok, cred} ->
@@ -214,7 +214,7 @@ defmodule Grappa.Networks.Credentials do
     # UX-4 bucket A — canonicalise so a REST DELETE with `#Chan` in the
     # URL path removes the canonical `#chan` row (which is what the
     # Credential.changeset/2 writer normalises to).
-    channel_name = Grappa.IRC.Identifier.canonical_channel(channel_name)
+    channel_name = Grappa.IRC.Identifier.canonical_target(channel_name)
 
     case get_credential(user, network) do
       {:ok, cred} ->
@@ -795,7 +795,7 @@ defmodule Grappa.Networks.Credentials do
           {:ok, Credential.t()} | {:error, :not_found}
   def fetch_visitor_credential_by_nick(nick, network_id)
       when is_binary(nick) and is_integer(network_id) do
-    folded = Identifier.canonical_nick(nick)
+    folded = Identifier.canonical_target(nick)
 
     query =
       from(c in Credential,
@@ -843,7 +843,7 @@ defmodule Grappa.Networks.Credentials do
         []
 
       trimmed ->
-        pattern = Like.contains(Identifier.canonical_nick(trimmed))
+        pattern = Like.contains(Identifier.canonical_target(trimmed))
 
         query =
           from(c in Credential,

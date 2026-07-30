@@ -66,7 +66,7 @@ defmodule Grappa.Networks.FeaturedChannel do
   # Channel case-fold invariant — store lowercased so #Chan/#chan/#CHAN
   # collapse to one featured row and match the directory entry fold.
   @spec canonicalize_name(String.t()) :: String.t()
-  defp canonicalize_name(name) when is_binary(name), do: Identifier.canonical_channel(name)
+  defp canonicalize_name(name) when is_binary(name), do: Identifier.canonical_target(name)
 
   @spec validate_channel_name(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   defp validate_channel_name(changeset) do

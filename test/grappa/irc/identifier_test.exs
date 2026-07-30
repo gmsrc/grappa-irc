@@ -116,7 +116,7 @@ defmodule Grappa.IRC.IdentifierTest do
       refute Identifier.valid_ident?(Identifier.sanitize_ident("~"))
     end
 
-    test "passes non-binary through unchanged (mirrors canonical_nick/1)" do
+    test "passes non-binary through unchanged (mirrors canonical_target/1)" do
       assert Identifier.sanitize_ident(nil) == nil
       assert Identifier.sanitize_ident(:atom) == :atom
     end
@@ -175,202 +175,95 @@ defmodule Grappa.IRC.IdentifierTest do
     end
   end
 
-  describe "canonical_channel/1 (ASCII casemapping — GH #525)" do
-    test "ASCII-downcases sigil-prefixed channel names" do
-      assert Identifier.canonical_channel("#Chan") == "#chan"
-      assert Identifier.canonical_channel("#CHAN") == "#chan"
-      assert Identifier.canonical_channel("#cHaN") == "#chan"
-      assert Identifier.canonical_channel("&LocalChan") == "&localchan"
-      assert Identifier.canonical_channel("!Safe") == "!safe"
-      assert Identifier.canonical_channel("+Modeless") == "+modeless"
-    end
-
-    test "does NOT fold bracket chars [ ] \\ ~ (bahamut is CASEMAPPING=ascii — #525)" do
-      # #525: Azzurra advertises AND implements CASEMAPPING=ascii, so
-      # `#chan[1]` and `#chan{1}` are DISTINCT channels to the ircd — the
-      # fold must keep them apart (only A-Z folds). Reverses the #364
-      # over-fold that merged the two into one window.
-      assert Identifier.canonical_channel("#chan[1]") == "#chan[1]"
-      assert Identifier.canonical_channel("#a\\b") == "#a\\b"
-      assert Identifier.canonical_channel("&tilde~") == "&tilde~"
-      assert Identifier.canonical_channel("#Foo[Bar]") == "#foo[bar]"
-    end
-
-    test "does NOT touch the fold targets { } | ^ (collision-free)" do
-      assert Identifier.canonical_channel("#chan{1}") == "#chan{1}"
-      assert Identifier.canonical_channel("#a|b") == "#a|b"
-      assert Identifier.canonical_channel("&caret^") == "&caret^"
-    end
-
-    test "is ASCII-only — does NOT merge non-ASCII case variants (the ASCII fold is byte-level)" do
-      # The old Unicode `String.downcase/1` folded É->é so `#CAFÉ` and
-      # `#café` merged into one window — WRONG for bahamut, whose ASCII
-      # casemapping leaves both distinct. the ASCII fold is byte-level: the
-      # multibyte É (>= 0x80) passes through untouched.
-      assert Identifier.canonical_channel("#café") == "#café"
-      assert Identifier.canonical_channel("#CAFÉ") == "#cafÉ"
-      refute Identifier.canonical_channel("#CAFÉ") == Identifier.canonical_channel("#café")
-    end
-
-    test "shares ONE fold primitive with canonical_nick/1 (sigils are fold-invariant)" do
-      # #364: canonical_channel and canonical_nick MUST fold identically.
-      # Sigils (# & ! +) are outside the fold set, so folding the whole
-      # channel string equals sigil <> fold(body).
-      for body <- ["Foo[Bar]", "CHAN", "a\\b", "tilde~", "café", "MiXeD{ok}"] do
-        assert Identifier.canonical_channel("#" <> body) == "#" <> Identifier.canonical_nick(body)
-      end
-    end
-
-    test "passes already-canonical channels through verbatim" do
-      assert Identifier.canonical_channel("#chan") == "#chan"
-      assert Identifier.canonical_channel("&local") == "&local"
-    end
-
-    test "leaves nicks unchanged (case is meaningful for display)" do
-      assert Identifier.canonical_channel("Vjt") == "Vjt"
-      assert Identifier.canonical_channel("CristoBOT") == "CristoBOT"
-    end
-
-    test "leaves the $server pseudo-channel marker unchanged" do
-      assert Identifier.canonical_channel("$server") == "$server"
-    end
-
-    test "passes non-binary input through unchanged" do
-      assert Identifier.canonical_channel(nil) == nil
-      assert Identifier.canonical_channel(:atom) == :atom
-    end
-
-    test "is idempotent" do
-      assert Identifier.canonical_channel(Identifier.canonical_channel("#Chan[1]")) == "#chan[1]"
-    end
-
-    property "folds any sigil-prefixed ASCII channel per ASCII casemapping, and is idempotent" do
-      sigils = StreamData.member_of([?#, ?&, ?!, ?+])
-      # Body bytes: printable ASCII incl. the bracket chars so the
-      # non-fold of `[ ] \\ ~` is exercised. Channel-legality is
-      # irrelevant here — comma/etc. are fold-invariant, so they pass
-      # through both the implementation and the oracle identically (same
-      # generator shape as the canonical_nick property below).
-      body_bytes = StreamData.list_of(StreamData.integer(?!..?~), min_length: 1, max_length: 20)
-
-      check all(sigil <- sigils, cs <- body_bytes) do
-        input = <<sigil>> <> :binary.list_to_bin(cs)
-        canon = Identifier.canonical_channel(input)
-
-        # ASCII fold = downcase A-Z only. The generator is ASCII-only, so
-        # String.downcase/1 (Unicode-aware) coincides with the byte-level
-        # ASCII fold here — brackets are left untouched.
-        expected = String.downcase(input)
-
-        assert canon == expected
-        # Round-trip stability.
-        assert Identifier.canonical_channel(canon) == canon
-      end
-    end
-
-    property "leaves any non-sigil input unchanged" do
-      # First char anything that is NOT a channel sigil.
-      first = StreamData.filter(StreamData.integer(?A..?z), &(&1 not in [?#, ?&, ?!, ?+]))
-      tail = StreamData.string(:ascii, max_length: 15)
-
-      check all(c <- first, t <- tail) do
-        input = <<c>> <> t
-        assert Identifier.canonical_channel(input) == input
-      end
-    end
-  end
-
-  describe "canonical_nick/1 (ASCII casemapping — GH #525)" do
-    test "ASCII-downcases A-Z" do
-      assert Identifier.canonical_nick("Mezmerize") == "mezmerize"
-      assert Identifier.canonical_nick("MEZMERIZE") == "mezmerize"
-      assert Identifier.canonical_nick("mezmerize") == "mezmerize"
-    end
-
-    test "does NOT fold bracket chars [ ] \\ ~ (bahamut is CASEMAPPING=ascii — #525)" do
-      # #525: bahamut folds ONLY A-Z (CASEMAPPING=ascii). Two nicks
-      # differing only in a bracket-vs-brace are DISTINCT to the ircd —
-      # merging them is the #525 "ghost in the nicklist" bug.
-      assert Identifier.canonical_nick("nick[1]") == "nick[1]"
-      assert Identifier.canonical_nick("a\\b") == "a\\b"
-      assert Identifier.canonical_nick("tilde~") == "tilde~"
-      assert Identifier.canonical_nick("Foo[Bar]") == "foo[bar]"
-    end
-
-    test "does NOT touch the fold targets { } | ^ (collision-free)" do
-      assert Identifier.canonical_nick("nick{1}") == "nick{1}"
-      assert Identifier.canonical_nick("a|b") == "a|b"
-      assert Identifier.canonical_nick("caret^") == "caret^"
-    end
-
-    test "is ASCII-only — leaves UTF-8 multibyte untouched (the ASCII fold is byte-level)" do
-      # Unlike String.downcase/1, the ASCII fold does NOT fold non-ASCII; the
-      # SQLite lower() backfill (ASCII-only) must match this exactly.
-      assert Identifier.canonical_nick("Ä") == "Ä"
-      assert Identifier.canonical_nick("café") == "café"
-      assert Identifier.canonical_nick("Über") == "Über"
-    end
-
-    test "passes non-binary through (mirror canonical_channel/1)" do
-      assert Identifier.canonical_nick(nil) == nil
-      assert Identifier.canonical_nick(:atom) == :atom
-    end
-
-    test "is idempotent" do
-      assert Identifier.canonical_nick(Identifier.canonical_nick("Foo[Bar]")) == "foo[bar]"
-    end
-
-    property "matches ASCII downcase (A-Z only) for any ASCII nick, and is idempotent" do
-      bytes = StreamData.list_of(StreamData.integer(?!..?~), min_length: 1, max_length: 20)
-
-      check all(cs <- bytes) do
-        input = :binary.list_to_bin(cs)
-        canon = Identifier.canonical_nick(input)
-        assert Identifier.canonical_nick(canon) == canon
-
-        # ASCII fold = downcase A-Z only; the generator is ASCII-only, so
-        # String.downcase/1 coincides with the byte-level fold (brackets
-        # `[ ] \\ ~` are left untouched, unlike the old rfc1459 fold).
-        expected = String.downcase(input)
-
-        assert canon == expected
-      end
-    end
-  end
-
-  describe "canonical_target/1 (shape-appropriate fold — GH #532 D)" do
-    test "channel-shaped targets fold exactly like canonical_channel/1" do
-      for name <- ["#Chan", "&Local", "!ABCDE", "+Modey", "#Chan[1]"] do
-        assert Identifier.canonical_target(name) == Identifier.canonical_channel(name)
-      end
-
+  describe "canonical_target/1 (the single ASCII identifier fold — #121/#364/#525/#537)" do
+    test "ASCII-downcases A-Z in channels and nicks alike" do
       assert Identifier.canonical_target("#Chan") == "#chan"
+      assert Identifier.canonical_target("#CHAN") == "#chan"
+      assert Identifier.canonical_target("&LocalChan") == "&localchan"
+      assert Identifier.canonical_target("!Safe") == "!safe"
+      assert Identifier.canonical_target("+Modeless") == "+modeless"
+      assert Identifier.canonical_target("Mezmerize") == "mezmerize"
+      assert Identifier.canonical_target("MEZMERIZE") == "mezmerize"
     end
 
-    test "nick-shaped targets fold like canonical_nick/1 — the D fix" do
-      # A DM window is keyed by a NICK. `canonical_channel/1` is a no-op for
-      # a nick (sigil-gated), so the write path used to store raw casing and
-      # fork one window into N cursor rows. `canonical_target/1` routes a
-      # nick through `canonical_nick/1` so the write key matches the
-      # case-insensitive read key.
-      assert Identifier.canonical_target("NickTemp") == Identifier.canonical_nick("NickTemp")
-      assert Identifier.canonical_target("NickTemp") == "nicktemp"
+    test "a channel sigil is fold-invariant — sigil <> fold(body)" do
+      # #364: channels and nicks fold through ONE primitive. Sigils
+      # (# & ! +) sit outside A-Z, so folding the whole channel equals
+      # sigil <> fold(body) — the same fold a bare nick gets.
+      for body <- ["Foo[Bar]", "CHAN", "a\\b", "tilde~", "café", "MiXeD{ok}"] do
+        assert Identifier.canonical_target("#" <> body) == "#" <> Identifier.canonical_target(body)
+      end
     end
 
-    test "nick shape is where it DIVERGES from canonical_channel/1" do
-      # This divergence IS the bug D fixes: canonical_channel leaves a nick
-      # untouched, canonical_target folds it.
-      assert Identifier.canonical_channel("NickTemp") == "NickTemp"
-      assert Identifier.canonical_target("NickTemp") == "nicktemp"
+    test "does NOT fold bracket chars [ ] \\ ~ in either shape (bahamut is CASEMAPPING=ascii — #525)" do
+      # #525: Azzurra advertises AND implements CASEMAPPING=ascii, so
+      # `#chan[1]`/`#chan{1}` and `foo[1]`/`foo{1}` are DISTINCT to the ircd
+      # — only A-Z folds. Reverses the #364 over-fold that merged the pairs.
+      assert Identifier.canonical_target("#chan[1]") == "#chan[1]"
+      assert Identifier.canonical_target("#a\\b") == "#a\\b"
+      assert Identifier.canonical_target("&tilde~") == "&tilde~"
+      assert Identifier.canonical_target("#Foo[Bar]") == "#foo[bar]"
+      assert Identifier.canonical_target("nick[1]") == "nick[1]"
+      assert Identifier.canonical_target("Foo[Bar]") == "foo[bar]"
     end
 
-    test "the $server pseudo-channel is stable (fold is a no-op)" do
+    test "does NOT touch the fold targets { } | ^ (collision-free)" do
+      assert Identifier.canonical_target("#chan{1}") == "#chan{1}"
+      assert Identifier.canonical_target("#a|b") == "#a|b"
+      assert Identifier.canonical_target("&caret^") == "&caret^"
+      assert Identifier.canonical_target("nick{1}") == "nick{1}"
+    end
+
+    test "is ASCII-only — leaves UTF-8 multibyte untouched (the fold is byte-level)" do
+      # The old Unicode String.downcase/1 folded É->é so `#CAFÉ`/`#café`
+      # merged — WRONG for bahamut, whose ASCII casemapping leaves both
+      # distinct. The byte-level fold leaves the multibyte É (>= 0x80)
+      # untouched, matching the ASCII-only SQLite lower() backfill.
+      assert Identifier.canonical_target("#café") == "#café"
+      assert Identifier.canonical_target("#CAFÉ") == "#cafÉ"
+      refute Identifier.canonical_target("#CAFÉ") == Identifier.canonical_target("#café")
+      assert Identifier.canonical_target("café") == "café"
+      assert Identifier.canonical_target("Über") == "Über"
+    end
+
+    test "leaves the $server pseudo-channel marker unchanged (fold is a no-op)" do
       assert Identifier.canonical_target("$server") == "$server"
     end
 
-    test "passes non-binary through" do
+    test "passes already-canonical identifiers through verbatim" do
+      assert Identifier.canonical_target("#chan") == "#chan"
+      assert Identifier.canonical_target("&local") == "&local"
+      assert Identifier.canonical_target("mezmerize") == "mezmerize"
+    end
+
+    test "passes non-binary input through unchanged" do
       assert Identifier.canonical_target(nil) == nil
       assert Identifier.canonical_target(:atom) == :atom
+    end
+
+    test "is idempotent for both shapes" do
+      assert Identifier.canonical_target(Identifier.canonical_target("#Chan[1]")) == "#chan[1]"
+      assert Identifier.canonical_target(Identifier.canonical_target("Foo[Bar]")) == "foo[bar]"
+    end
+
+    property "folds A-Z only (matches ASCII downcase) for any identifier, and is idempotent" do
+      # First byte spans channel sigils AND ordinary nick bytes, so both
+      # shapes route through the one fold. Body bytes include the bracket
+      # chars so the non-fold of `[ ] \\ ~` is exercised.
+      first = StreamData.integer(?!..?~)
+      tail = StreamData.list_of(StreamData.integer(?!..?~), max_length: 20)
+
+      check all(f <- first, cs <- tail) do
+        input = <<f>> <> :binary.list_to_bin(cs)
+        canon = Identifier.canonical_target(input)
+
+        # ASCII fold = downcase A-Z only. The generator is ASCII-only, so
+        # String.downcase/1 (Unicode-aware) coincides with the byte-level
+        # fold here — brackets `[ ] \\ ~` are left untouched.
+        assert canon == String.downcase(input)
+        # Round-trip stability.
+        assert Identifier.canonical_target(canon) == canon
+      end
     end
   end
 

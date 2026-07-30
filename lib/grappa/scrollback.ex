@@ -384,11 +384,11 @@ defmodule Grappa.Scrollback do
   def dm_peer(kind, target, sender, own_nick)
       when kind in @content_kinds and is_binary(target) and is_binary(sender) and
              is_binary(own_nick) do
-    own = Identifier.canonical_nick(own_nick)
+    own = Identifier.canonical_target(own_nick)
 
     cond do
-      Identifier.canonical_nick(target) == own -> sender
-      Identifier.canonical_nick(sender) == own and nick_shaped?(target) -> target
+      Identifier.canonical_target(target) == own -> sender
+      Identifier.canonical_target(sender) == own and nick_shaped?(target) -> target
       true -> nil
     end
   end
@@ -722,7 +722,7 @@ defmodule Grappa.Scrollback do
   # nick to match → no exclusion.
   @spec exclude_own_presence(Ecto.Query.t(), String.t() | nil) :: Ecto.Query.t()
   defp exclude_own_presence(query, own_nick) when is_binary(own_nick) do
-    folded = Identifier.canonical_nick(own_nick)
+    folded = Identifier.canonical_target(own_nick)
 
     where(
       query,
@@ -930,7 +930,7 @@ defmodule Grappa.Scrollback do
   @spec list_archive(subject(), integer(), MapSet.t(String.t())) :: [archive_entry()]
   def list_archive(subject, network_id, %MapSet{} = active_keyset)
       when is_integer(network_id) do
-    folded_active = MapSet.new(active_keyset, &Identifier.canonical_nick/1)
+    folded_active = MapSet.new(active_keyset, &Identifier.canonical_target/1)
 
     Message
     |> subject_where(subject)
@@ -943,7 +943,7 @@ defmodule Grappa.Scrollback do
     })
     |> Repo.all()
     |> Enum.reject(fn %{target: t} ->
-      t == "$server" or MapSet.member?(folded_active, Identifier.canonical_nick(t))
+      t == "$server" or MapSet.member?(folded_active, Identifier.canonical_target(t))
     end)
     |> Enum.map(fn entry -> Map.put(entry, :kind, target_kind(entry.target)) end)
     |> Enum.sort_by(& &1.last_activity, :desc)
@@ -1034,7 +1034,7 @@ defmodule Grappa.Scrollback do
       # dm_with = peer`. CP14-B3 (47866bc) shipped without this narrowing;
       # vjt observed the bug 2026-05-10 (every CristoBOT reply leaked into
       # the `grappa` window's scrollback).
-      is_binary(own_nick) and Identifier.canonical_nick(channel) == Identifier.canonical_nick(own_nick) ->
+      is_binary(own_nick) and Identifier.canonical_target(channel) == Identifier.canonical_target(own_nick) ->
         # #537 — `channel` is now the folded own-nick (canonical_target),
         # and `m.channel` is folded at write; but `m.dm_with` is stored
         # RAW (display), so the self-msg dm_with match MUST fold via
@@ -1051,7 +1051,7 @@ defmodule Grappa.Scrollback do
       # invariant demands (#121). Shared `where_dm_peer/2` with
       # `delete_for_dm/3` so read + delete pick one identical window key.
       dm_eligible?(channel) ->
-        where_dm_peer(query, Identifier.canonical_nick(channel))
+        where_dm_peer(query, Identifier.canonical_target(channel))
 
       # Channel-shaped target (#chan, &local, etc.) — no DM aggregation.
       true ->
@@ -1196,8 +1196,8 @@ defmodule Grappa.Scrollback do
     # consistency with `delete_for_channel/3` + the controller. The
     # call is a no-op on nick-shaped input (no sigil → pass-through);
     # `canonical_nick/1` then folds it to the value side of the match.
-    canonical_peer = Identifier.canonical_channel(peer)
-    folded_peer = Identifier.canonical_nick(canonical_peer)
+    canonical_peer = Identifier.canonical_target(peer)
+    folded_peer = Identifier.canonical_target(canonical_peer)
 
     # `where_dm_peer/2` (shared with the read path, #372) matches both
     # DM directions AND the orphan-channel arm. UX-3 Z (2026-05-18): the
@@ -1253,8 +1253,8 @@ defmodule Grappa.Scrollback do
           {:ok, non_neg_integer()}
   def rename_dm_peer(subject, network_id, old_nick, new_nick)
       when is_integer(network_id) and is_binary(old_nick) and is_binary(new_nick) do
-    folded_old = Identifier.canonical_nick(old_nick)
-    folded_new = Identifier.canonical_nick(new_nick)
+    folded_old = Identifier.canonical_target(old_nick)
+    folded_new = Identifier.canonical_target(new_nick)
 
     if folded_old == folded_new do
       {:ok, 0}
@@ -1322,7 +1322,7 @@ defmodule Grappa.Scrollback do
     # strip, etc.) would silently make the delete miss its target
     # rows. Stored `channel` is already canonical → plain `==` (no
     # `lower()` fragment) is the correct comparison.
-    canonical = Identifier.canonical_channel(channel)
+    canonical = Identifier.canonical_target(channel)
 
     {count, _} =
       Message

@@ -88,7 +88,7 @@ defmodule Grappa.Session.PartCleanup do
     # uses the canonical key so callers passing mixed-case ("#Italia")
     # wipe state regardless of whether the underlying caches were keyed
     # at canonical ("#italia") or original casing.
-    canonical = Identifier.canonical_channel(channel)
+    canonical = Identifier.canonical_target(channel)
     parted_members = Map.keys(Map.get(state.members, canonical, %{}))
     new_members = Map.delete(state.members, canonical)
 
@@ -126,7 +126,7 @@ defmodule Grappa.Session.PartCleanup do
         do: acc,
         # ASCII fold (#121/#525) — MUST match EventRouter.normalize_nick/1,
         # which writes the userhost_cache keys this evicts.
-        else: Map.delete(acc, Identifier.canonical_nick(nick))
+        else: Map.delete(acc, Identifier.canonical_target(nick))
     end)
   end
 

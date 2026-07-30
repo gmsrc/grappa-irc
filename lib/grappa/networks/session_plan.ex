@@ -278,10 +278,10 @@ defmodule Grappa.Networks.SessionPlan do
   defp merge_autojoin(autojoin, last_joined) when is_list(autojoin) and is_list(last_joined) do
     seen =
       autojoin
-      |> Enum.map(&Identifier.canonical_channel/1)
+      |> Enum.map(&Identifier.canonical_target/1)
       |> MapSet.new()
 
-    extras = Enum.reject(last_joined, &MapSet.member?(seen, Identifier.canonical_channel(&1)))
+    extras = Enum.reject(last_joined, &MapSet.member?(seen, Identifier.canonical_target(&1)))
     autojoin ++ extras
   end
 

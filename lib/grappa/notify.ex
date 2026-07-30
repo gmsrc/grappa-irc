@@ -169,7 +169,7 @@ defmodule Grappa.Notify do
   def remove({_, _} = subject, network_id, nicks, subject_label)
       when is_integer(network_id) and is_list(nicks) and nicks != [] and
              is_binary(subject_label) do
-    folded = Enum.map(nicks, &Identifier.canonical_nick/1)
+    folded = Enum.map(nicks, &Identifier.canonical_target/1)
 
     Entry
     |> Subject.subject_where(subject)
@@ -383,7 +383,7 @@ defmodule Grappa.Notify do
   @spec fetch_existing(Subject.t(), integer(), String.t()) ::
           {:ok, Entry.t()} | {:error, Ecto.Changeset.t()}
   defp fetch_existing(subject, network_id, nick) do
-    folded = Identifier.canonical_nick(nick)
+    folded = Identifier.canonical_target(nick)
 
     query =
       Entry

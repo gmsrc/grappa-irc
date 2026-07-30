@@ -123,7 +123,7 @@ defmodule Grappa.Session.Persistor do
   # canonical predicate).
   @spec maybe_dispatch_push(Scrollback.Message.t(), session_ctx()) :: :ok
   defp maybe_dispatch_push(%Scrollback.Message{sender: sender} = message, ctx) do
-    if Identifier.canonical_nick(sender) == Identifier.canonical_nick(ctx.nick) do
+    if Identifier.canonical_target(sender) == Identifier.canonical_target(ctx.nick) do
       :ok
     else
       PushTriggers.evaluate_and_dispatch(message, %{
