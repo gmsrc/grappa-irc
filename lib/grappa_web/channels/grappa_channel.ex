@@ -828,10 +828,12 @@ defmodule GrappaWeb.GrappaChannel do
       when is_integer(network_id) and is_binary(channel) do
     dispatch_subject_verb(
       socket,
-      # #221 — WHO accepts a channel OR a host/nick mask (RFC 2812 §3.6.1),
-      # so the arg is validated as a single wire token (:who_target), not a
-      # channel. The map key stays `"channel"` for wire back-compat with cic
-      # (pushWho still sends `{network_id, channel}`); the value may be a mask.
+      # #221/#540 — WHO accepts a channel, a host/nick mask (RFC 2812
+      # §3.6.1), OR bahamut's extended-WHO flag args (`+s <server>`), so the
+      # arg is validated as line-safe `:who_target` (spaces allowed, only
+      # CRLF/NUL rejected), NOT a channel. The map key stays `"channel"` for
+      # wire back-compat with cic (pushWho still sends `{network_id,
+      # channel}`); the value may be a mask or a multi-token flag string.
       fn -> validate_args(who_target: channel) end,
       fn subject -> Session.send_who(subject, network_id, channel) end
     )
@@ -1490,13 +1492,15 @@ defmodule GrappaWeb.GrappaChannel do
       else: {:error, :invalid_mask}
   end
 
-  # #221 — /who target: a channel OR a host/nick mask (RFC 2812 §3.6.1).
-  # Gated as a single wire token (`safe_oper_token?/1`: non-empty, no
-  # whitespace/CRLF/NUL) to mirror `Client.send_who/2` — a space would
-  # splice extra WHO slots, CRLF would inject a command. `:invalid_mask` is
-  # the surfaced error class (a WHO target is a mask-or-channel).
+  # #221/#540 — /who args: a channel, a host/nick mask (RFC 2812 §3.6.1), OR
+  # bahamut's extended-WHO flag args (`+s <server>`, `+A <away>`, `+c <chan>`,
+  # `+H <maxhits>`). #540 widened the gate from `safe_oper_token?/1` (single
+  # token, no spaces) to `safe_line_token?/1` + non-empty, mirroring
+  # `Client.send_who/2`: a space is a legitimate WHO arg separator now, so
+  # only CRLF (command injection) and NUL (framing) are rejected.
+  # `:invalid_mask` stays the surfaced error class.
   defp validate_args([{:who_target, value} | rest]) do
-    if Identifier.safe_oper_token?(value),
+    if Identifier.safe_line_token?(value) and value != "",
       do: validate_args(rest),
       else: {:error, :invalid_mask}
   end

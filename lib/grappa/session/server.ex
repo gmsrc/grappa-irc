@@ -1454,12 +1454,21 @@ defmodule Grappa.Session.Server do
   # verbatim. We log the byte size (not the body) to keep operator
   # observability without dumping arbitrary user input — operators
   # who need to debug the wire can use the existing IRC log stream.
+  #
+  # #540 B1 — a raw `/quote WHO ...` primes the WHO accumulator here, exactly
+  # like `:send_who`, so its 352/315 reply surfaces the WhoModal instead of
+  # being dropped as unsolicited (the "no error, no output" hole). This
+  # mirrors the sibling `capture_outbound_ns_secret/2` outbound-line sniff:
+  # both give a subsequent inbound reply the state it needs to be handled.
   def handle_call({:send_raw, line}, _, state) when is_binary(line) do
     Logger.debug("raw IRC line submitted via /quote (#{byte_size(line)} bytes)",
       verb: :raw
     )
 
-    state = capture_outbound_ns_secret(state, line)
+    state =
+      state
+      |> capture_outbound_ns_secret(line)
+      |> maybe_prime_raw_who(line)
 
     case Client.send_raw(state.client, line) do
       :ok -> {:reply, :ok, state}
@@ -1689,21 +1698,21 @@ defmodule Grappa.Session.Server do
     {:reply, Client.send_whowas(state.client, target), next_state}
   end
 
-  # CP22 cluster B (channel-client-polish #14) — /who <#channel>. Two
-  # effects: (1) prime the accumulator entry in state.who_pending so
-  # EventRouter folds 352 RPL_WHOREPLY rows into it; (2) emit
-  # `WHO #channel\r\n`. The entry's `target_display` matches `target`
-  # — UX-4 bucket A canonicalises the channel arg at `Session.send_who/3`
-  # so `target` here is already lowercase; the scrollback 315 EOF row
-  # body (`*** End of /WHO list for #chan`) shows the canonical form.
-  # Pre-bucket-A the docstring claimed "case preserved" — that was
-  # the upstream-echoed case; now the canonical form is the single
-  # form everywhere (members map, persist channel, EOF body).
-  # Replaces any prior accumulator for the same target (running /who
-  # twice without an 315 in between drops the first).
-  # On send_line failure the accumulator stays primed — a transient
-  # send error doesn't strand the WHO flow because no numerics will
-  # arrive to drain it; harmless until the next /who replaces the entry.
+  # CP22 cluster B (channel-client-polish #14) — /who. Two effects:
+  # (1) prime the accumulator entry in state.who_pending so EventRouter folds
+  # 352 RPL_WHOREPLY rows into it; (2) emit `WHO <target>\r\n`. The 315
+  # RPL_ENDOFWHO drain emits ONE ephemeral `{:who_reply, target_display,
+  # users}` (a user-topic WhoModal — #169; nothing is persisted to
+  # scrollback). #540 A2: `target` arrives RAW (Session.send_who/3 no longer
+  # folds it — it may be a channel, a mask, or extended-WHO flag args like
+  # `+s <server>`), so `target_display` preserves case for the modal header.
+  # The accumulator KEY is folded here via `canonical_channel/1` so
+  # `#Chan`/`#chan` share one key (concurrent channel-WHO separation) WITHOUT
+  # corrupting the raw wire form. Replaces any prior accumulator for the same
+  # key (running /who twice without a 315 in between drops the first).
+  # On send_line failure the accumulator stays primed — a transient send
+  # error doesn't strand the WHO flow because no numerics will arrive to
+  # drain it; the @pending_ttl_ms sweep on the next prime reaps it.
   def handle_call({:send_who, target}, _, state) when is_binary(target) do
     chan_key = Identifier.canonical_channel(target)
     next_pending = prime_pending(state.who_pending, chan_key, %{target_display: target, replies: []})
@@ -3219,6 +3228,38 @@ defmodule Grappa.Session.Server do
 
       :passthrough ->
         state
+    end
+  end
+
+  # #540 B1 — if the raw `/quote` line is a WHO command, prime the WHO
+  # accumulator so its 352/315 reply drains into a WhoModal, exactly like the
+  # structured `:send_who` verb (`who_pending` keyed by the folded target;
+  # `target_display` preserves the raw args for the modal header). Without
+  # this, a raw-WHO reply is unsolicited server-side and drops silently — the
+  # "no error, no output" hole #540 B reports. Detected by an anchored regex,
+  # mirroring the NickServ `NSInterceptor` sibling (a raw IRC frame starts
+  # with its command verb; `Grappa.IRC.Parser` is NOT exported to this
+  # boundary). `^WHO` followed by whitespace-or-EOL matches `WHO` and bare
+  # `WHO` ONLY — `WHOIS`/`WHOWAS` (their own caches own the reply) never
+  # match. The stripped args are the accumulator KEY (folded) + display ONLY;
+  # the wire line was already shipped verbatim by `Client.send_raw`. A
+  # malformed WHO the ircd never answers leaves a stranded entry that
+  # `prime_pending/3`'s TTL sweep reaps.
+  @who_line_re ~r/^WHO(\s|$)/i
+  @who_strip_re ~r/^WHO\s*/i
+
+  @spec maybe_prime_raw_who(t(), String.t()) :: t()
+  defp maybe_prime_raw_who(state, line) do
+    if Regex.match?(@who_line_re, line) do
+      target = line |> String.replace(@who_strip_re, "") |> String.trim()
+      chan_key = Identifier.canonical_channel(target)
+
+      pending =
+        prime_pending(state.who_pending, chan_key, %{target_display: target, replies: []})
+
+      %{state | who_pending: pending}
+    else
+      state
     end
   end
 

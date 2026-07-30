@@ -517,9 +517,17 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     return { kind: "mode", target: first, modes, params };
   },
 
+  // #540 — forward the FULL argument string, not just the first token.
+  // bahamut's extended WHO takes flag args (`+s <server>`, `+A <away-msg>`,
+  // `+c <chan>`, `+H <maxhits>`); dropping everything after the first token
+  // sent `WHO +s` to the wire, and bahamut answered 522 ERR_WHOSYNTAX (the
+  // `s` flag's server arg was eaten). cic is a thin pass-through for WHO
+  // syntax — the server forwards the args verbatim (line-safety gated).
+  // Bare `/who` (empty rest) → null, so compose defaults to the current
+  // channel (#122).
   who: (_verb, rest) => {
-    const [target] = tokens(rest);
-    return { kind: "who", target: target ?? null };
+    const target = rest.trim();
+    return { kind: "who", target: target === "" ? null : target };
   },
 
   names: (_verb, rest) => {

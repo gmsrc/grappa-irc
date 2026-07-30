@@ -23659,3 +23659,77 @@ serial). Healthy fleets are unaffected (both are instant state reads); the
 shape mirrors the established `fetch_joined_channels` pattern. A single
 combined introspection call would halve the degraded-scan cost — deferred as
 an optimization, not folded here to avoid scope creep.
+## 2026-07-30 — #540: `/who` forwards its full arg list; unsolicited WHO surfaces
+
+Two independent breaks in `/who` with bahamut's extended-WHO flags (reported
+by a user who tried `/who +s server.azzurra.chat` on Azzurra).
+
+**A. The whole WHO path was single-token, top to bottom.** The cic `/who`
+parser kept only the FIRST token (`tokens(rest)` → `[target]`), so `/who +s
+<server>` reached the wire as `WHO +s` — bahamut's `s` flag needs a server
+arg, so with the arg eaten it answered 522 ERR_WHOSYNTAX. But even a fixed
+parser could not have helped: the server's outbound gate (`Client.send_who/2`
++ the GrappaChannel `:who_target` validator) both used `safe_oper_token?/1`,
+which REJECTS spaces (the #221 "a space would splice extra WHO slots" rule).
+That rule was correct for a single mask/channel target but wrong for WHO's
+real grammar: bahamut's extended WHO takes flag ARGS separated by spaces
+(`+s <server>`, `+A <away-msg>`, `+c <chan>`, `+H <maxhits>`). The fix widens
+BOTH gates to `safe_line_token?/1` + non-empty — a space is a legitimate arg
+separator now; only CRLF (command injection) and NUL (framing) are rejected.
+cic's `/who` parser becomes a thin pass-through: `rest.trim()` forwards the
+full argument string verbatim (bare `/who` → null → current-channel default,
+#122 unchanged).
+
+**A2 — the target no longer folds as a channel.** `Session.send_who/3` ran
+the target through `Identifier.canonical_channel/1` before shipping it, which
+folds A–Z of everything after a `#&+!` sigil. On a `+`-sigil flag token that
+silently lowercases a case-sensitive arg (`+A HelloWorld` → `+a helloworld`,
+corrupting an away-message match). The raw target now ships upstream; the
+Server still derives the accumulator KEY via `canonical_channel/1` in its
+`:send_who` handler (so concurrent channel-WHOs stay separated by key)
+WITHOUT touching the wire form.
+
+**B. Unsolicited WHO (raw `/quote WHO`) was a silent hole.** A raw `/quote
+WHO ...` (the escape hatch a user reaches for precisely when A blocks them)
+went through `send_raw`, which — unlike the structured `send_who` — primes no
+`who_pending` accumulator. So its 352/315 reply was unsolicited server-side:
+`who_fold` dropped every 352 (nothing to fold into) and the 315 drain found no
+entry — no error, no output. This bit HARDEST on a zero-match WHO: on the
+testnet, `WHO +s <hub>` from the +i (invisible) bouncer session returns a bare
+315 with ZERO 352 rows, so there was nothing to surface at all (the first fix
+attempt — lazily creating an accumulator on the first 352 — could not fix the
+zero-352 case, and blanket-surfacing every lone 315 would have reversed #169's
+deliberate drop-silently; both rejected).
+
+**Fix — one code path: a raw WHO primes just like the structured verb.** The
+`:send_raw` handler now sniffs the outbound line (an anchored `^WHO(\s|$)`
+regex, mirroring the sibling `NSInterceptor` NickServ-capture — a raw IRC
+frame starts with its command verb; `Grappa.IRC.Parser` is inbound-only and
+NOT exported to the `Grappa.Session` boundary, so classification of an
+OUTBOUND verb is regex, per existing precedent). A detected WHO primes
+`who_pending` under the folded args, exactly as `:send_who` does — so the
+reply drains into an empty (zero-match) or populated WhoModal. `WHOIS`/
+`WHOWAS` share the prefix but are distinct verbs (their own caches own the
+reply) and never match. The 352 fold + 315 drain keep the single-in-flight
+fallback (a flag/mask WHO's 315 echoes only the leading arg — `+s`, not the
+full primed key — so exact-match can't fire; WHO is mailbox-serialized so
+"exactly one pending" resolves it).
+
+**#169 preserved.** A 315 (or 352) with NOTHING pending still drops silently
+(the pre-#540 "mirror 318 RPL_ENDOFWHOIS" behavior is UNCHANGED). Because both
+`/who` AND a raw `/quote WHO` now prime an accumulator at send time, the only
+reply that reaches the silent-drop path is one for a WHO that was never issued
+— surfacing that would be spurious. This is why the fix primes on-send rather
+than surfacing every lone terminator: the surfacing is scoped to "the user
+issued a WHO", not to "a 315 arrived".
+
+No wire-type change, no protocol bump: the `who` verb's `channel` field simply
+carries a multi-token argument string now (additive, back-compatible — an old
+client sending a single token still validates). `who_pending` shape is
+unchanged. Deploy: server is HOT (Map.get-defaulted GenServer state, no
+migration, no new child); cic ships in a `--cic` bundle (COLD).
+Regression-guarded by `issue540-who-flag-args.spec.ts` (two real bahamut
+cases: structured `/who +s <hub>` opens the WhoModal, and raw `/quote WHO +s
+<hub>` opens it too — the B1 hole), the `:send_raw`-primes-WHO server tests
+(WHO primes, WHOIS does not), plus unit coverage in `client_test`,
+`grappa_channel_test`, `event_router_test`, and the cic parser suite.

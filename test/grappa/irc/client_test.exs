@@ -443,8 +443,10 @@ defmodule Grappa.IRC.ClientTest do
     # #221 — /who <mask>. WHO accepts a channel OR a host/nick mask (RFC 2812
     # §3.6.1). Pre-#221 send_who gated on valid_channel?, so a mask was
     # rejected outbound and never reached upstream — the first break in the
-    # "total silence" chain. The gate is now safe_oper_token? (single wire
-    # token, no whitespace/CRLF/NUL) so a mask forwards but injection can't.
+    # "total silence" chain. #540 widened the gate from safe_oper_token?
+    # (single token, no spaces) to safe_line_token? (only CRLF/NUL): bahamut's
+    # extended WHO takes flag ARGS separated by spaces (`+s <server>`), so a
+    # space is a legitimate arg separator, not a "splice" to reject.
     test "send_who/2 emits WHO #chan framing (channel target)" do
       {server, port} = start_server()
       client = start_client(port)
@@ -465,14 +467,34 @@ defmodule Grappa.IRC.ClientTest do
                IRCServer.wait_for_line(server, &(&1 == "WHO *!*@*.libera.chat\r\n"), 1_000)
     end
 
-    test "send_who/2 rejects a whitespace-splicing mask with {:error, :invalid_line}" do
+    # #540 — extended WHO flag args (bahamut: `+s <server>`, `+A <away>`,
+    # `+c <chan>`, `+H <maxhits>`). The space between the flag token and its
+    # argument is a legitimate WHO arg separator and forwards verbatim — the
+    # pre-#540 single-token gate (safe_oper_token?) dropped everything after
+    # the first token, so `WHO +s` reached upstream and bahamut answered
+    # 522 ERR_WHOSYNTAX (the `s` flag's server arg was NULL).
+    test "send_who/2 emits WHO with extended flag args, spaces forwarded (#540)" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_who(client, "+s server.azzurra.chat")
+
+      assert {:ok, "WHO +s server.azzurra.chat\r\n"} =
+               IRCServer.wait_for_line(
+                 server,
+                 &(&1 == "WHO +s server.azzurra.chat\r\n"),
+                 1_000
+               )
+    end
+
+    test "send_who/2 rejects CRLF/NUL injection with {:error, :invalid_line} (#540)" do
       {_, port} = start_server()
       client = start_client(port)
 
-      # A space would splice extra WHO wire slots; CRLF would inject a
-      # follow-up command. Both rejected by the single-token gate.
-      assert {:error, :invalid_line} = Client.send_who(client, "*!*@x y")
+      # A space is a legitimate WHO arg separator now (#540); only CRLF
+      # (command injection) and NUL (framing corruption) are rejected.
       assert {:error, :invalid_line} = Client.send_who(client, "#chan\r\nQUIT")
+      assert {:error, :invalid_line} = Client.send_who(client, "x\x00y")
     end
 
     test "send_who/2 rejects an empty target with {:error, :invalid_line}" do

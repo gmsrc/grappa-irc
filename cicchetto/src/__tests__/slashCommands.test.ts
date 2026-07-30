@@ -737,6 +737,26 @@ describe("parseSlash — info verbs (TODO — server-side missing)", () => {
     expect(parseSlash("/who alice")).toEqual({ kind: "who", target: "alice" });
   });
 
+  // #540 — /who must forward its FULL argument list, not just the first
+  // token. bahamut's extended WHO takes flag args (`+s <server>`, `+A
+  // <away-msg>`, `+c <channel>`, `+H <maxhits>`); `/who +s server.azzurra.chat`
+  // must reach the wire as `WHO +s server.azzurra.chat`. Pre-#540 the parser
+  // kept only `+s`, so the server arg was eaten → 522 ERR_WHOSYNTAX.
+  it("/who +s <server> → forwards the full arg string (#540)", () => {
+    expect(parseSlash("/who +s server.azzurra.chat")).toEqual({
+      kind: "who",
+      target: "+s server.azzurra.chat",
+    });
+  });
+
+  // #540 — a channel target with a trailing flag also forwards intact.
+  it("/who #chan +c → forwards flags after the channel (#540)", () => {
+    expect(parseSlash("/who #grappa +c")).toEqual({
+      kind: "who",
+      target: "#grappa +c",
+    });
+  });
+
   it("/names bare → names with no target", () => {
     expect(parseSlash("/names")).toEqual({ kind: "names", target: null });
   });
@@ -774,7 +794,8 @@ describe("parseSlash — info verbs (TODO — server-side missing)", () => {
   // `MOTD [<target>]`). Bare /motd = current server's MOTD (target null);
   // /motd <server> routes the MOTD query through that server. Pre-#374 the
   // argument was silently dropped, so the user got the wrong server's MOTD
-  // with no error. Mirrors the /who target shape (first token only).
+  // with no error. MOTD takes a single target token (unlike /who, which
+  // after #540 forwards its full multi-token arg string).
   it("/motd bare → motd with no target", () => {
     expect(parseSlash("/motd")).toEqual({ kind: "motd", target: null });
   });

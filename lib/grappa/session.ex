@@ -1440,12 +1440,14 @@ defmodule Grappa.Session do
   when 315 RPL_ENDOFWHO arrives. `<target>` is a channel OR a host/nick
   mask (#221, RFC 2812 §3.6.1).
 
-  A channel target is case-folded via `canonical_channel/1` (so `#Chan` and
-  `#chan` share one accumulator key, matching the channel-fold invariant).
-  A mask is NOT a channel, so `canonical_channel/1` is a no-op on it and the
-  raw mask is the accumulator key — the 315 terminator echoes the same mask,
-  and EventRouter's who_fold correlates mask-reply rows (whose 352 channel
-  field solanum sets to `"*"`) via its single-in-flight-WHO fallback.
+  The target ships upstream RAW (#540 A2): it may be a channel, a mask
+  (#221), or bahamut's extended-WHO flag args (`+s <server>`), and folding
+  it as a channel would corrupt a case-sensitive arg. The Server derives the
+  accumulator KEY by folding via `canonical_channel/1` (so `#Chan`/`#chan`
+  share one key for concurrent channel-WHO separation) WITHOUT touching the
+  wire form. Reply correlation is robust to a key that never matches the
+  echoed 315/352 (mask, flag, unsolicited): EventRouter falls back to the
+  single-in-flight-WHO rule (WHO is mailbox-serialized).
 
   Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}`
   if the target syntax is rejected by `Grappa.IRC.Client.send_who/2`.
@@ -1454,7 +1456,14 @@ defmodule Grappa.Session do
           :ok | {:error, :no_session | :invalid_line | send_transport_error()}
   def send_who(subject, network_id, target)
       when is_subject(subject) and is_integer(network_id) and is_binary(target) do
-    call_session(subject, network_id, {:send_who, Identifier.canonical_channel(target)})
+    # #540 A2 — the target is NOT necessarily a channel: it may be a mask
+    # (#221) or bahamut's extended-WHO flag args (`+s <server>`). Folding it
+    # via canonical_channel/1 corrupts a case-sensitive arg — the `+`-sigil
+    # token `+A HelloWorld` (away-message match) would lowercase to
+    # `+a helloworld` before it left the bouncer. The raw target ships
+    # upstream; the Server derives the accumulator KEY (canonical_channel/1
+    # for concurrent channel-WHO separation) separately in its handler.
+    call_session(subject, network_id, {:send_who, target})
   end
 
   @doc """

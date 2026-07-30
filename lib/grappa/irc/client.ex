@@ -695,24 +695,29 @@ defmodule Grappa.IRC.Client do
   Sends `WHO <target>\\r\\n` where `<target>` is a channel OR a host/nick
   mask (RFC 2812 §3.6.1). Returns `{:error, :invalid_line}` on rejection.
 
-  #221: the gate is `safe_oper_token?/1` (a single wire token — non-empty,
-  no whitespace/CRLF/NUL), NOT `valid_channel?/1`. A masked `/who *!*@host`
-  is a legitimate query; the pre-#221 channel-only gate rejected it outbound
-  so it never reached upstream — the first break in the `/who <mask>` "total
-  silence" chain. The single-token gate still blocks a space (which would
-  splice extra WHO wire slots) and CRLF (command injection).
+  #221: the pre-#221 channel-only gate rejected a mask outbound so it never
+  reached upstream — the first break in the `/who <mask>` "total silence"
+  chain. #540 widened the gate from `safe_oper_token?/1` (single token, no
+  spaces) to `safe_line_token?/1` + non-empty: bahamut's extended WHO takes
+  flag ARGS separated by spaces (`WHO +s <server>`, `+A <away-msg>`, `+c
+  <chan>`, `+H <maxhits>`), so a space is a legitimate arg separator, not a
+  "splice" to reject. The pre-#540 single-token gate meant cic's dropped-arg
+  bug (`WHO +s`) could never have been sent whole even after the client fix.
+  CRLF (command injection) and NUL (framing corruption) are still rejected;
+  an empty target is rejected (a bare `WHO` is not what grappa emits).
 
   Numerics 352 RPL_WHOREPLY (one per matching user) + 315 RPL_ENDOFWHO
   (terminator) reply with the WHO list. EventRouter folds each 352 into
   `state.who_pending` (also upserting `userhost_cache`) and, on 315, drains
   the accumulator into ONE ephemeral `{:who_reply, target, users}` effect
   (#169) — broadcast on the user topic for cic's WhoModal, never persisted.
-  For a mask WHO, solanum sets the 352 channel field to `"*"`; EventRouter's
-  who_fold correlates via the single-in-flight-WHO fallback.
+  For a mask/flag WHO the 352 channel field is `"*"` (or a per-user channel)
+  and the 315 echoes only the leading arg; EventRouter correlates via the
+  single-in-flight-WHO fallback.
   """
   @spec send_who(pid(), String.t()) :: send_result()
   def send_who(client, target) do
-    if Identifier.safe_oper_token?(target),
+    if Identifier.safe_line_token?(target) and target != "",
       do: send_line(client, "WHO #{target}\r\n"),
       else: reject_invalid_line(:who)
   end

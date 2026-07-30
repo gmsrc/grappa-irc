@@ -4188,6 +4188,11 @@ defmodule Grappa.Session.EventRouterTest do
       assert reply.channel == "#bofh"
     end
 
+    # A genuinely unsolicited 352 (no WHO was ever issued — neither /who nor a
+    # raw /quote WHO, so `who_pending` is empty) folds nowhere but still
+    # upserts userhost_cache (S2.4). #540 surfaces raw-WHO replies by priming
+    # the accumulator at send time (see server_test `:send_raw` primes WHO),
+    # NOT by lazily accumulating every stray 352 here.
     test "352 with no pending who entry still updates userhost_cache (S2.4 path)" do
       state = base_state(%{who_pending: %{}})
 
@@ -4257,6 +4262,10 @@ defmodule Grappa.Session.EventRouterTest do
       refute Enum.any?(effects, &match?({:persist, _, _}, &1))
     end
 
+    # A 315 with nothing pending is dropped silently (#169, mirror of 318
+    # RPL_ENDOFWHOIS). #540 keeps this: both /who AND a raw /quote WHO prime an
+    # accumulator at send time, so the only 315 that reaches this path is one
+    # for a WHO that was never issued — nothing to surface.
     test "315 with no pending entry is silently ignored (unsolicited)" do
       state = base_state(%{who_pending: %{}})
 
@@ -4264,6 +4273,44 @@ defmodule Grappa.Session.EventRouterTest do
 
       {:cont, new_state, []} = EventRouter.route(m, state)
       assert new_state.who_pending == %{}
+    end
+
+    # #540 A1 — a flag WHO (`WHO +s <server>`) is primed under the full arg
+    # string, but bahamut echoes only the flag token in the 315 (and sets the
+    # 352 channel to the user's channel / "*"), so neither fold nor drain can
+    # exact-match the key. The single-in-flight fallback (WHO is mailbox-
+    # serialized; cic shows one modal at a time) drains it so the modal opens.
+    test "315 drains a flag WHO via single-in-flight when the target doesn't match the key (#540)" do
+      state =
+        base_state(%{
+          who_pending: %{
+            "+s server.azzurra.chat" => %{
+              target_display: "+s server.azzurra.chat",
+              replies: [
+                %{
+                  nick: "alice",
+                  user: "u",
+                  host: "h",
+                  server: "s",
+                  modes: "H",
+                  hops: 0,
+                  realname: "Alice",
+                  channel: "*"
+                }
+              ]
+            }
+          }
+        })
+
+      # bahamut's 315 echoes the flag token, not the full primed key.
+      m = msg({:numeric, 315}, ["vjt", "+s", "End of /WHO list"], {:server, "irc.test.org"})
+
+      {:cont, new_state, effects} = EventRouter.route(m, state)
+      assert new_state.who_pending == %{}
+      assert [{:who_reply, target, users}] = effects
+      # target_display carries the full original arg string for the modal.
+      assert target == "+s server.azzurra.chat"
+      assert Enum.map(users, & &1.nick) == ["alice"]
     end
 
     test "315 lookup is case-insensitive on target channel (RFC 2812 §2.2)" do

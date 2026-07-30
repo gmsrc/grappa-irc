@@ -5534,6 +5534,57 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  # #540 B1 — a raw `/quote WHO ...` must surface the WhoModal like the
+  # structured `/who`, not drop silently. `:send_raw` sniffs the outbound line
+  # (sibling of the NickServ `capture_outbound_ns_secret` sniff) and primes
+  # the WHO accumulator so the 352/315 reply drains into a who_reply. WHOIS /
+  # WHOWAS share the prefix but are DISTINCT verbs (their own caches own the
+  # reply) — they must NOT prime the WHO accumulator.
+  describe "#540 — raw /quote WHO primes the WHO accumulator" do
+    test "a /quote WHO line primes who_pending (keyed by folded args, display raw)" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+
+      assert :ok =
+               Session.send_raw(
+                 {:user, user.id},
+                 network.id,
+                 "WHO +s hub.azzurra.chat"
+               )
+
+      # It reaches the wire verbatim (Client.send_raw)...
+      {:ok, _} =
+        IRCServer.wait_for_line(server, &(&1 == "WHO +s hub.azzurra.chat\r\n"), 1_000)
+
+      # ...AND the WHO accumulator is primed so a subsequent 352/315 surfaces.
+      # Key is the folded args (production fn, never hardcoded); display is raw.
+      key = Grappa.IRC.Identifier.canonical_channel("+s hub.azzurra.chat")
+      entry = Map.get(SessionStateHelpers.fetch(pid).who_pending, key)
+      assert entry.target_display == "+s hub.azzurra.chat"
+      assert entry.replies == []
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "a /quote WHOIS line does NOT prime the WHO accumulator" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+
+      assert :ok = Session.send_raw({:user, user.id}, network.id, "WHOIS somebody")
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "WHOIS somebody\r\n"), 1_000)
+
+      assert SessionStateHelpers.fetch(pid).who_pending == %{}
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "+r MODE on own nick → USER registration commit (#349)" do
     test "user session: REGISTER stages the secret → +r commits password + flips auth_method" do
       {server, port} = start_server()

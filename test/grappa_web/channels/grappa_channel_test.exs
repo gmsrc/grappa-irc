@@ -1802,14 +1802,39 @@ defmodule GrappaWeb.GrappaChannelTest do
         IRCServer.wait_for_line(irc_server, &(&1 == "WHO *!*@*.libera.chat\r\n"), 1_000)
     end
 
-    test "who: rejects a whitespace-splicing target with invalid_mask", %{
+    # #540 A1/A2 — extended WHO flag args forward verbatim, NOT folded as a
+    # channel. cic sends the full argument string (`+S HelloWorld`) in the
+    # `channel` slot; the server must (1) accept the space (multi-token WHO),
+    # and (2) NOT run it through canonical_channel/1 — folding the `+`-sigil
+    # token would lowercase the away-message/server arg (`+s helloworld`),
+    # corrupting a case-sensitive value. The raw args reach upstream.
+    test "who: forwards extended flag args upstream, case-preserved (#540 A1/A2)", %{
+      irc_server: irc_server,
       socket: socket,
       network: network
     } do
       ref =
         push(socket, "who", %{
           "network_id" => network.id,
-          "channel" => "*!*@x y"
+          "channel" => "+A HelloWorld"
+        })
+
+      assert_reply(ref, :ok)
+
+      {:ok, _} =
+        IRCServer.wait_for_line(irc_server, &(&1 == "WHO +A HelloWorld\r\n"), 1_000)
+    end
+
+    test "who: rejects a CRLF-injecting target with invalid_mask (#540)", %{
+      socket: socket,
+      network: network
+    } do
+      # A space is a legit WHO arg separator now (#540); the injection vector
+      # that still MUST bounce is CRLF (a spliced follow-up command).
+      ref =
+        push(socket, "who", %{
+          "network_id" => network.id,
+          "channel" => "#chan\r\nQUIT"
         })
 
       assert_reply(ref, :error, %{error: "invalid_mask"})

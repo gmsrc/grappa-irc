@@ -1523,13 +1523,26 @@ defmodule Grappa.Session.EventRouter do
   # `{:who_reply, target_display, users}` effect (mirror of the /names 366
   # drain → `{:names_reply, ...}`). server.ex broadcasts it on the user-level
   # topic and cic renders a dismissable WhoModal — NOTHING is persisted to
-  # scrollback. If no accumulator exists (target never primed via /who, or an
-  # unsolicited reply), drop silently — mirror of 318 RPL_ENDOFWHOIS.
+  # scrollback. If no accumulator exists (target never primed via /who or a
+  # raw-WHO /quote, or a genuinely unsolicited reply), drop silently — mirror
+  # of 318 RPL_ENDOFWHOIS. #540 keeps this: a raw `/quote WHO` is primed at
+  # send time (see `who_fold`), so its terminator DOES find an accumulator
+  # (empty modal on a zero-match, populated otherwise) — only a 315 with no
+  # WHO ever issued reaches the silent-drop path.
   #
   # Pre-#169 this built N+1 `:persist :notice` rows into the channel or
   # `$server` window (the scrollback-dump hack). The channel-vs-$server
   # routing distinction disappears: a who_reply is always a user-topic modal,
   # so even a joined-channel /who no longer pollutes that channel's buffer.
+  #
+  # #540 — correlation mirrors who_fold: exact channel-key match first
+  # (concurrent channel WHOs stay separated), else single-in-flight fallback
+  # (a mask/flag WHO's 315 echoes only the leading arg, and a raw-WHO bucket
+  # primed at send time is keyed by the /quote args — neither matches the
+  # terminator's target, but WHO is mailbox-serialized so "exactly one
+  # pending" resolves it). A 315 with nothing pending drops silently (#169) —
+  # since both /who AND a raw /quote WHO prime an accumulator, the only such
+  # 315 is one for a WHO that was never issued.
   defp do_route(
          %Message{command: {:numeric, 315}, params: [_, target | _]},
          state
@@ -1538,9 +1551,16 @@ defmodule Grappa.Session.EventRouter do
     pending = Map.get(state, :who_pending, %{})
     chan_key = normalize_channel(target)
 
-    case Map.fetch(pending, chan_key) do
+    drain_key =
+      cond do
+        Map.has_key?(pending, chan_key) -> chan_key
+        map_size(pending) == 1 -> pending |> Map.keys() |> hd()
+        true -> nil
+      end
+
+    case drain_key && Map.fetch(pending, drain_key) do
       {:ok, accum} ->
-        next_state = %{state | who_pending: Map.delete(pending, chan_key)}
+        next_state = %{state | who_pending: Map.delete(pending, drain_key)}
         target_display = Map.get(accum, :target_display, target)
 
         # Replies prepended LIFO in who_fold for O(1) fold — reverse to
@@ -1549,7 +1569,7 @@ defmodule Grappa.Session.EventRouter do
 
         {:cont, next_state, [{:who_reply, target_display, users}]}
 
-      :error ->
+      _ ->
         {:cont, state, []}
     end
   end
@@ -3372,6 +3392,12 @@ defmodule Grappa.Session.EventRouter do
   #   3. Otherwise → no fold (unsolicited 352, or ambiguous "*" row with
   #      multiple concurrent WHOs — drop rather than guess). The
   #      userhost_cache upsert in the 352 route still fired upstream.
+  #
+  # #540 — a raw `/quote WHO ...` still surfaces because its accumulator IS
+  # primed at send time: `Session.Server`'s `:send_raw` handler detects a WHO
+  # command and primes `who_pending` just like `:send_who`, so the raw-WHO
+  # 352 rows fold via case 2 (single-in-flight). A truly unsolicited 352 (no
+  # WHO was issued) stays dropped — no accumulator, no modal.
   @spec who_fold(state(), String.t(), map()) :: state()
   defp who_fold(state, channel, reply) when is_binary(channel) and is_map(reply) do
     pending = Map.get(state, :who_pending, %{})
