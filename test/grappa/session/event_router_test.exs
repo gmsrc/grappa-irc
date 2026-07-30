@@ -52,6 +52,51 @@ defmodule Grappa.Session.EventRouterTest do
     })
   end
 
+  describe "route/2 — #537 per-network CASEMAPPING (rfc1459 national-char ingress fold)" do
+    # On an rfc1459 network (solanum/Libera advertise CASEMAPPING=rfc1459)
+    # the national chars `[ ] \\ ~` fold to `{ } | ^`, so `#Foo[1]` and
+    # `#Foo{1}` are ONE channel. The upstream-ingress dispatcher folds the
+    # channel KEY network-aware from state.isupport, so every downstream
+    # consumer observes one key. On the default :ascii network the SAME two
+    # spellings stay DISTINCT (the #525 posture).
+    defp rfc1459_state(overrides \\ %{}) do
+      base_state(Map.merge(%{isupport: %{ISupport.default() | casemapping: :rfc1459}}, overrides))
+    end
+
+    test "JOIN #Foo[1] and PRIVMSG #Foo{1} route to ONE members key on rfc1459" do
+      state = rfc1459_state()
+      join = msg(:join, ["#Foo[1]"], {:nick, "vjt", "u", "h"})
+      {:cont, after_join, _} = EventRouter.route(join, state)
+      # National chars fold: `[`→`{`, `]`→`}`, then ASCII A-Z fold.
+      assert Map.has_key?(after_join.members, "#foo{1}")
+      refute Map.has_key?(after_join.members, "#foo[1]")
+
+      privmsg = msg(:privmsg, ["#Foo{1}", "hi"], {:nick, "alice", "u", "h"})
+      {:cont, _, effects} = EventRouter.route(privmsg, after_join)
+      assert [{:persist, :privmsg, attrs}] = effects
+      assert attrs.channel == "#foo{1}"
+    end
+
+    test "the SAME two spellings stay DISTINCT on the default :ascii network (#525)" do
+      state = base_state()
+      join = msg(:join, ["#Foo[1]"], {:nick, "vjt", "u", "h"})
+      {:cont, after_join, _} = EventRouter.route(join, state)
+      assert Map.has_key?(after_join.members, "#foo[1]")
+      refute Map.has_key?(after_join.members, "#foo{1}")
+    end
+
+    test "the topics cache write + read fold the SAME network-aware key on rfc1459" do
+      # 332 RPL_TOPIC writes state.topics keyed by the folded channel; the
+      # write-side fold must be network-aware so Session.Server's get_topic
+      # (also network-aware, fold_key/2) reads the same key.
+      state = rfc1459_state()
+      topic = msg({:numeric, 332}, ["grappa", "#Foo[1]", "the topic"])
+      {:cont, new_state, _} = EventRouter.route(topic, state)
+      assert Map.has_key?(new_state.topics, "#foo{1}")
+      refute Map.has_key?(new_state.topics, "#foo[1]")
+    end
+  end
+
   describe "route/2 — UX-4 bucket A: channel-name canonicalisation" do
     # The `route/2` wrapper pre-canonicalises every channel-shape param
     # in `msg.params` to lowercase before clause dispatch

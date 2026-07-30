@@ -258,11 +258,12 @@ defmodule Grappa.Session.EventRouter do
   """
   @spec route(Message.t(), state()) :: {:cont, state(), [effect()]}
   def route(%Message{} = msg, state) do
-    statusmsg = ISupport.statusmsg(Map.get(state, :isupport, ISupport.default()))
+    isupport = Map.get(state, :isupport, ISupport.default())
+    statusmsg = ISupport.statusmsg(isupport)
 
     msg
     |> strip_statusmsg_target(statusmsg)
-    |> canonicalize_channel_params()
+    |> canonicalize_channel_params(ISupport.casemapping(isupport))
     |> do_route(state)
   end
 
@@ -273,16 +274,16 @@ defmodule Grappa.Session.EventRouter do
   # nick + visibility-prefix; 341 RPL_INVITING puts target_nick at 1
   # then channel at 2 per Bahamut ordering). Anything not channel-shape
   # (nicks, modes, body, reasons, raw param strings) passes through.
-  @spec canonicalize_channel_params(Message.t()) :: Message.t()
-  defp canonicalize_channel_params(%Message{command: command, params: params} = msg) do
-    %{msg | params: do_canonicalize_params(command, params)}
+  @spec canonicalize_channel_params(Message.t(), Identifier.casemapping()) :: Message.t()
+  defp canonicalize_channel_params(%Message{command: command, params: params} = msg, casemapping) do
+    %{msg | params: do_canonicalize_params(command, params, casemapping)}
   end
 
   # Verb channels live at param 0.
-  defp do_canonicalize_params(cmd, [ch | rest])
+  defp do_canonicalize_params(cmd, [ch | rest], cm)
        when cmd in [:privmsg, :notice, :join, :part, :topic, :kick] and
               is_binary(ch) do
-    [Identifier.canonical_channel(ch) | rest]
+    [normalize_channel(ch, cm) | rest]
   end
 
   # INVITE: params `[target_nick, channel]` — the channel is at param 1
@@ -292,17 +293,17 @@ defmodule Grappa.Session.EventRouter do
   # load-bearing (window-state keyed on the raw channel vs the changeset-
   # folded persist row + the per-channel topic cic joins). Fold param 1
   # so every channel-keyed consumer observes one key.
-  defp do_canonicalize_params(:invite, [target_nick, channel | rest])
+  defp do_canonicalize_params(:invite, [target_nick, channel | rest], cm)
        when is_binary(channel) do
-    [target_nick, Identifier.canonical_channel(channel) | rest]
+    [target_nick, normalize_channel(channel, cm) | rest]
   end
 
-  # MODE: channel-or-nick target at param 0. canonical_channel/1 is a
+  # MODE: channel-or-nick target at param 0. normalize_channel/2 is a
   # no-op on nicks so this is safe for both channel-MODE (which leads
   # downstream to the channel_modes cache + members map) and user-MODE
   # on self (target == own_nick, unchanged).
-  defp do_canonicalize_params(:mode, [target | rest]) when is_binary(target) do
-    [Identifier.canonical_channel(target) | rest]
+  defp do_canonicalize_params(:mode, [target | rest], cm) when is_binary(target) do
+    [normalize_channel(target, cm) | rest]
   end
 
   # Numerics where channel is at param 1 (after the own-nick echo).
@@ -311,28 +312,28 @@ defmodule Grappa.Session.EventRouter do
   # 352 RPL_WHOREPLY / join-failure 403/405/471/473/474/475/476/477 /
   # #376 BANLIST 367 RPL_BANLIST + 368 RPL_ENDOFBANLIST (fold the
   # channel key so the bundle keys/broadcasts on one window — #364).
-  defp do_canonicalize_params({:numeric, n}, [own_nick, ch | rest])
+  defp do_canonicalize_params({:numeric, n}, [own_nick, ch | rest], cm)
        when n in [332, 333, 331, 329, 324, 366, 352, 367, 368, 403, 405, 471, 473, 474, 475, 476, 477] and
               is_binary(ch) do
-    [own_nick, Identifier.canonical_channel(ch) | rest]
+    [own_nick, normalize_channel(ch, cm) | rest]
   end
 
   # 353 RPL_NAMREPLY: params [_, visibility_prefix, channel, names_blob].
-  defp do_canonicalize_params({:numeric, 353}, [own_nick, prefix, ch | rest])
+  defp do_canonicalize_params({:numeric, 353}, [own_nick, prefix, ch | rest], cm)
        when is_binary(ch) do
-    [own_nick, prefix, Identifier.canonical_channel(ch) | rest]
+    [own_nick, prefix, normalize_channel(ch, cm) | rest]
   end
 
   # 341 RPL_INVITING (Bahamut ordering): params [_, target_nick, channel | _].
-  defp do_canonicalize_params({:numeric, 341}, [own_nick, target_nick, ch | rest])
+  defp do_canonicalize_params({:numeric, 341}, [own_nick, target_nick, ch | rest], cm)
        when is_binary(ch) do
-    [own_nick, target_nick, Identifier.canonical_channel(ch) | rest]
+    [own_nick, target_nick, normalize_channel(ch, cm) | rest]
   end
 
   # All other commands (NICK, QUIT, PING/PONG, CAP, AUTHENTICATE,
   # numerics without a channel param, vendor verbs) pass through
   # unchanged — there is no channel-shape param to canonicalise.
-  defp do_canonicalize_params(_, params), do: params
+  defp do_canonicalize_params(_, params, _), do: params
 
   # #218 — a STATUSMSG target (`@#chan` ops-only, `+#chan` voice) is a
   # channel message prefixed with a membership sigil; it belongs in the
@@ -416,7 +417,7 @@ defmodule Grappa.Session.EventRouter do
         dm_channel =
           if nick_eq?(target, state.nick),
             do: state.nick,
-            else: Identifier.canonical_target(target)
+            else: Identifier.canonical_target(target, casemapping(state))
 
         notice_body = "CTCP VERSION query → grappa #{version}"
         {state2, persist_eff} = build_persist(state, :notice, dm_channel, sender, notice_body, %{})
@@ -466,7 +467,7 @@ defmodule Grappa.Session.EventRouter do
     userhost_cache =
       case msg.prefix do
         {:nick, nick, user, host} when is_binary(user) and is_binary(host) ->
-          nick_key = normalize_nick(nick)
+          nick_key = normalize_nick(nick, casemapping(state))
           Map.put(Map.get(state, :userhost_cache, %{}), nick_key, %{user: user, host: host})
 
         _ ->
@@ -531,10 +532,10 @@ defmodule Grappa.Session.EventRouter do
           # remaining channel. We include self (state.nick) so our own entry
           # is evicted when appropriate.
           cache = Map.get(state, :userhost_cache, %{})
-          new_cache = evict_if_no_overlap(parted_members, new_members, cache)
+          new_cache = evict_if_no_overlap(parted_members, new_members, cache, casemapping(state))
 
-          {new_members, Map.delete(Map.get(state, :topics, %{}), normalize_channel(channel)),
-           Map.delete(Map.get(state, :channel_modes, %{}), normalize_channel(channel)), new_cache}
+          {new_members, Map.delete(Map.get(state, :topics, %{}), normalize_channel(channel, casemapping(state))),
+           Map.delete(Map.get(state, :channel_modes, %{}), normalize_channel(channel, casemapping(state))), new_cache}
 
         Map.has_key?(state.members, channel) ->
           new_members = Map.update!(state.members, channel, &Map.delete(&1, sender))
@@ -542,7 +543,7 @@ defmodule Grappa.Session.EventRouter do
 
           new_cache =
             if channels_with_member(new_members, sender) == [] do
-              Map.delete(cache, normalize_nick(sender))
+              Map.delete(cache, normalize_nick(sender, casemapping(state)))
             else
               cache
             end
@@ -564,7 +565,7 @@ defmodule Grappa.Session.EventRouter do
     # the cond above to keep the existing tuple shape narrow.
     channels_created =
       if nick_eq?(sender, state.nick) do
-        Map.delete(Map.get(state, :channels_created, %{}), normalize_channel(channel))
+        Map.delete(Map.get(state, :channels_created, %{}), normalize_channel(channel, casemapping(state)))
       else
         Map.get(state, :channels_created, %{})
       end
@@ -614,7 +615,7 @@ defmodule Grappa.Session.EventRouter do
     # userhost_cache, even when sender has no channel overlap in members
     # (e.g. WHOIS populated the cache before a JOIN was seen, or the members
     # map race). Eviction is unconditional: gone = gone.
-    userhost_cache = Map.delete(Map.get(state, :userhost_cache, %{}), normalize_nick(sender))
+    userhost_cache = Map.delete(Map.get(state, :userhost_cache, %{}), normalize_nick(sender, casemapping(state)))
 
     case channels_with_member(state.members, sender) do
       [] ->
@@ -716,7 +717,7 @@ defmodule Grappa.Session.EventRouter do
       # modes update channel_modes cache. Walk once, produce two effects:
       # members delta (done above) + channel_modes delta (done here). One
       # channel_modes_changed broadcast per MODE event if the cache changed.
-      chan_key = normalize_channel(target)
+      chan_key = normalize_channel(target, casemapping(state))
       existing_entry = Map.get(Map.get(state, :channel_modes, %{}), chan_key, empty_mode_entry())
       new_entry = apply_channel_mode_string(existing_entry, modes, args, isupport)
 
@@ -753,7 +754,13 @@ defmodule Grappa.Session.EventRouter do
 
     # S2.4: NICK rename migrates the userhost entry from old_nick to new_nick.
     # user+host don't change with a nick change — only the key moves.
-    userhost_cache = rename_userhost_entry(Map.get(state, :userhost_cache, %{}), old_nick, new_nick)
+    userhost_cache =
+      rename_userhost_entry(
+        Map.get(state, :userhost_cache, %{}),
+        old_nick,
+        new_nick,
+        casemapping(state)
+      )
 
     new_state =
       if nick_eq?(old_nick, state.nick) do
@@ -840,7 +847,7 @@ defmodule Grappa.Session.EventRouter do
   defp do_route(%Message{command: :topic, params: [channel, body]} = msg, state)
        when is_binary(channel) and is_binary(body) do
     sender = Message.sender_nick(msg)
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
 
     entry = %{
       text: body,
@@ -873,7 +880,7 @@ defmodule Grappa.Session.EventRouter do
     # tuple shape narrow (mirrors the PART path above).
     channels_created =
       if nick_eq?(target, state.nick) do
-        Map.delete(Map.get(state, :channels_created, %{}), normalize_channel(channel))
+        Map.delete(Map.get(state, :channels_created, %{}), normalize_channel(channel, casemapping(state)))
       else
         Map.get(state, :channels_created, %{})
       end
@@ -959,7 +966,7 @@ defmodule Grappa.Session.EventRouter do
          state
        )
        when is_binary(channel) and is_binary(topic_text) do
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
     existing = Map.get(Map.get(state, :topics, %{}), chan_key, %{text: nil, set_by: nil, set_at: nil})
     entry = %{existing | text: topic_text}
     topics = Map.put(Map.get(state, :topics, %{}), chan_key, entry)
@@ -975,7 +982,7 @@ defmodule Grappa.Session.EventRouter do
          state
        )
        when is_binary(channel) and is_binary(setter) and is_binary(unix_ts_str) do
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
     existing = Map.get(Map.get(state, :topics, %{}), chan_key, %{text: nil, set_by: nil, set_at: nil})
     ts = parse_unix_ts(unix_ts_str)
     entry = %{existing | set_by: setter, set_at: ts}
@@ -990,7 +997,7 @@ defmodule Grappa.Session.EventRouter do
          state
        )
        when is_binary(channel) do
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
     entry = %{text: nil, set_by: nil, set_at: nil}
     topics = Map.put(Map.get(state, :topics, %{}), chan_key, entry)
     {:cont, %{state | topics: topics}, [{:topic_changed, channel, entry}]}
@@ -1021,7 +1028,7 @@ defmodule Grappa.Session.EventRouter do
     # silent no-op drop as a non-integer trailing.
     with {ts, ""} when ts > 0 <- Integer.parse(unix_ts_str),
          {:ok, dt} <- DateTime.from_unix(ts) do
-      chan_key = normalize_channel(channel)
+      chan_key = normalize_channel(channel, casemapping(state))
       channels_created = Map.put(Map.get(state, :channels_created, %{}), chan_key, dt)
       {:cont, %{state | channels_created: channels_created}, [{:channel_created, channel, dt}]}
     else
@@ -1037,7 +1044,7 @@ defmodule Grappa.Session.EventRouter do
          state
        )
        when is_binary(channel) and is_binary(mode_str) do
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
     isupport = Map.get(state, :isupport, ISupport.default())
     entry = parse_mode_snapshot(mode_str, mode_args, isupport)
     channel_modes = Map.put(Map.get(state, :channel_modes, %{}), chan_key, entry)
@@ -1139,7 +1146,7 @@ defmodule Grappa.Session.EventRouter do
          state
        )
        when is_binary(target) and is_binary(user) and is_binary(host) do
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
     cache = Map.put(Map.get(state, :userhost_cache, %{}), nick_key, %{user: user, host: host})
     realname = whois_trailing(rest)
 
@@ -1168,7 +1175,7 @@ defmodule Grappa.Session.EventRouter do
          state
        )
        when is_binary(target) and is_binary(server) do
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
     whois_pending = Map.get(state, :whois_pending, %{})
     trailing = whois_trailing(rest)
 
@@ -1255,7 +1262,7 @@ defmodule Grappa.Session.EventRouter do
        )
        when is_binary(target) do
     pending = Map.get(state, :whois_pending, %{})
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
 
     case Map.fetch(pending, nick_key) do
       {:ok, accum} ->
@@ -1307,7 +1314,7 @@ defmodule Grappa.Session.EventRouter do
          state
        )
        when is_binary(target) do
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
     pending = Map.get(state, :whois_pending, %{})
     msg = whois_trailing(rest)
 
@@ -1550,7 +1557,7 @@ defmodule Grappa.Session.EventRouter do
        )
        when is_binary(target) do
     pending = Map.get(state, :who_pending, %{})
-    chan_key = normalize_channel(target)
+    chan_key = normalize_channel(target, casemapping(state))
 
     drain_key =
       cond do
@@ -1596,7 +1603,7 @@ defmodule Grappa.Session.EventRouter do
        )
        when is_binary(target) and is_binary(user) and is_binary(host) and
               is_binary(channel) and is_binary(server) and is_binary(flags) do
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
     cache = Map.put(Map.get(state, :userhost_cache, %{}), nick_key, %{user: user, host: host})
 
     state_with_cache = %{state | userhost_cache: cache}
@@ -1647,7 +1654,7 @@ defmodule Grappa.Session.EventRouter do
          state
        )
        when code in @join_failure_numerics and is_binary(channel) and is_binary(reason) do
-    key = normalize_channel(channel)
+    key = normalize_channel(channel, casemapping(state))
     in_flight = Map.get(state, :in_flight_joins, %{})
 
     case Map.fetch(in_flight, key) do
@@ -1938,7 +1945,7 @@ defmodule Grappa.Session.EventRouter do
        )
        when is_binary(target) do
     pending = Map.get(state, :whowas_pending, %{})
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
 
     case Map.fetch(pending, nick_key) do
       {:ok, accum} ->
@@ -1962,7 +1969,7 @@ defmodule Grappa.Session.EventRouter do
        )
        when is_binary(target) do
     pending = Map.get(state, :whowas_pending, %{})
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
 
     case Map.fetch(pending, nick_key) do
       {:ok, accum} ->
@@ -2013,7 +2020,7 @@ defmodule Grappa.Session.EventRouter do
        )
        when is_binary(channel) do
     pending = Map.get(state, :banlist_pending, %{})
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
 
     case Map.fetch(pending, chan_key) do
       {:ok, accum} ->
@@ -2220,7 +2227,7 @@ defmodule Grappa.Session.EventRouter do
        )
        when is_integer(code) and is_binary(target) do
     pending = Map.get(state, :whois_pending, %{})
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
 
     case {Map.has_key?(pending, nick_key), whois_trailing(rest)} do
       {true, text} when is_binary(text) ->
@@ -2267,7 +2274,7 @@ defmodule Grappa.Session.EventRouter do
        when is_binary(channel) do
     awaiting = Map.get(state, :awaiting_invite, MapSet.new())
 
-    if MapSet.member?(awaiting, normalize_channel(channel)) do
+    if MapSet.member?(awaiting, normalize_channel(channel, casemapping(state))) do
       {:cont, state, [{:rejoin_invited, channel}]}
     else
       # #78 route-by-channel-reference: the INVITE row lands in the invited
@@ -2437,10 +2444,10 @@ defmodule Grappa.Session.EventRouter do
           {%{String.t() => %{String.t() => [String.t()]}}, %{String.t() => topic_entry()},
            %{String.t() => channel_mode_entry()}, userhost_cache()}
   defp apply_kick_effect(:self, state, channel, target) do
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
     cache = Map.get(state, :userhost_cache, %{})
     new_members = Map.delete(state.members, channel)
-    new_cache = evict_cache_if_no_overlap(cache, new_members, target)
+    new_cache = evict_cache_if_no_overlap(cache, new_members, target, casemapping(state))
 
     {new_members, Map.delete(Map.get(state, :topics, %{}), chan_key),
      Map.delete(Map.get(state, :channel_modes, %{}), chan_key), new_cache}
@@ -2449,7 +2456,7 @@ defmodule Grappa.Session.EventRouter do
   defp apply_kick_effect(:other, state, channel, target) do
     cache = Map.get(state, :userhost_cache, %{})
     new_members = Map.update!(state.members, channel, &Map.delete(&1, target))
-    new_cache = evict_cache_if_no_overlap(cache, new_members, target)
+    new_cache = evict_cache_if_no_overlap(cache, new_members, target, casemapping(state))
 
     {new_members, Map.get(state, :topics, %{}), Map.get(state, :channel_modes, %{}), new_cache}
   end
@@ -2462,11 +2469,12 @@ defmodule Grappa.Session.EventRouter do
   @spec evict_cache_if_no_overlap(
           userhost_cache(),
           %{String.t() => %{String.t() => [String.t()]}},
-          String.t()
+          String.t(),
+          Identifier.casemapping()
         ) :: userhost_cache()
-  defp evict_cache_if_no_overlap(cache, members_after, nick) do
+  defp evict_cache_if_no_overlap(cache, members_after, nick, casemapping) do
     if channels_with_member(members_after, nick) == [] do
-      Map.delete(cache, normalize_nick(nick))
+      Map.delete(cache, normalize_nick(nick, casemapping))
     else
       cache
     end
@@ -2897,9 +2905,25 @@ defmodule Grappa.Session.EventRouter do
   # `Identifier.canonical_channel/1` so the sigil-aware predicate
   # (`#&!+`-only; nick targets pass through unchanged) is the single
   # source of truth.
-  @spec normalize_channel(String.t()) :: String.t()
-  defp normalize_channel(channel) when is_binary(channel),
-    do: Identifier.canonical_channel(channel)
+  # #537 axis 2 — the upstream→us KEY fold, network-aware. `casemapping`
+  # comes from `state.isupport` (005-derived), threaded from `route/2`.
+  # SIGIL-GATED like the old `canonical_channel/1`: channel-shaped input
+  # normalises the rfc1459 national chars for the network then ASCII-folds;
+  # a nick (MODE-on-self target, etc.) passes through RAW (case is
+  # meaningful for nick display). On `:ascii` this is byte-identical to the
+  # pre-#537 `canonical_channel/1`.
+  @spec normalize_channel(String.t(), Identifier.casemapping()) :: String.t()
+  defp normalize_channel(<<sigil::utf8, _::binary>> = channel, casemapping)
+       when sigil in [?#, ?&, ?!, ?+],
+       do: Identifier.canonical_target(channel, casemapping)
+
+  defp normalize_channel(channel, _) when is_binary(channel), do: channel
+
+  # The network's identifier casemapping (`:ascii` default / hot-reload-safe),
+  # read from `state.isupport`. Mirrors `Session.Server.session_casemapping/1`.
+  @spec casemapping(state()) :: Identifier.casemapping()
+  defp casemapping(state),
+    do: ISupport.casemapping(Map.get(state, :isupport, ISupport.default()))
 
   # Empty baseline entry returned when a channel_modes entry doesn't exist yet
   # (e.g. when a MODE arrives before 324 RPL_CHANNELMODEIS).
@@ -3050,8 +3074,12 @@ defmodule Grappa.Session.EventRouter do
   # time so a lookup matches regardless of how the upstream cases the
   # nick. MUST stay folded the SAME way as the server-side key sites or
   # the numerics won't drain the accumulator they primed.
-  @spec normalize_nick(String.t()) :: String.t()
-  defp normalize_nick(nick) when is_binary(nick), do: Identifier.canonical_nick(nick)
+  # #537 — network-aware nick KEY fold (userhost/whois/whowas caches are
+  # fold-MATCH sites per CLAUDE.md). `casemapping` from `state.isupport`.
+  # On `:ascii` byte-identical to the pre-#537 `canonical_nick/1`.
+  @spec normalize_nick(String.t(), Identifier.casemapping()) :: String.t()
+  defp normalize_nick(nick, casemapping) when is_binary(nick),
+    do: Identifier.canonical_target(nick, casemapping)
 
   # ASCII nick equality (#121/#525) — the in-memory twin of the folded DB
   # lookups, for self-detection against `state.nick` and service-nick
@@ -3073,7 +3101,7 @@ defmodule Grappa.Session.EventRouter do
   @spec whois_fold(state(), String.t(), map()) :: state()
   defp whois_fold(state, target, fold) when is_binary(target) and is_map(fold) do
     pending = Map.get(state, :whois_pending, %{})
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
 
     case Map.fetch(pending, nick_key) do
       :error ->
@@ -3113,7 +3141,7 @@ defmodule Grappa.Session.EventRouter do
   defp whois_extra_line_fold(state, target, code, text)
        when is_binary(target) and is_integer(code) and is_binary(text) do
     pending = Map.get(state, :whois_pending, %{})
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
 
     case Map.fetch(pending, nick_key) do
       :error ->
@@ -3148,7 +3176,7 @@ defmodule Grappa.Session.EventRouter do
   defp whowas_append_entry(state, target, entry)
        when is_binary(target) and is_map(entry) do
     pending = Map.get(state, :whowas_pending, %{})
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
 
     case Map.fetch(pending, nick_key) do
       :error ->
@@ -3172,7 +3200,7 @@ defmodule Grappa.Session.EventRouter do
   defp banlist_append_entry(state, channel, entry)
        when is_binary(channel) and is_map(entry) do
     pending = Map.get(state, :banlist_pending, %{})
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
 
     case Map.fetch(pending, chan_key) do
       :error ->
@@ -3230,7 +3258,7 @@ defmodule Grappa.Session.EventRouter do
   defp whowas_fold_last_entry(state, target, fold)
        when is_binary(target) and is_map(fold) do
     pending = Map.get(state, :whowas_pending, %{})
-    nick_key = normalize_nick(target)
+    nick_key = normalize_nick(target, casemapping(state))
 
     case Map.fetch(pending, nick_key) do
       :error ->
@@ -3402,7 +3430,7 @@ defmodule Grappa.Session.EventRouter do
   @spec who_fold(state(), String.t(), map()) :: state()
   defp who_fold(state, channel, reply) when is_binary(channel) and is_map(reply) do
     pending = Map.get(state, :who_pending, %{})
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
 
     fold_key =
       cond do
@@ -3456,7 +3484,7 @@ defmodule Grappa.Session.EventRouter do
   defp names_fold(state, channel, tokens)
        when is_binary(channel) and is_list(tokens) do
     pending = Map.get(state, :names_pending, %{})
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
 
     case Map.fetch(pending, chan_key) do
       :error ->
@@ -3484,7 +3512,7 @@ defmodule Grappa.Session.EventRouter do
           {state(), [effect()]}
   defp drain_names_pending(state, channel) when is_binary(channel) do
     pending = Map.get(state, :names_pending, %{})
-    chan_key = normalize_channel(channel)
+    chan_key = normalize_channel(channel, casemapping(state))
 
     case Map.fetch(pending, chan_key) do
       :error ->
@@ -3501,24 +3529,30 @@ defmodule Grappa.Session.EventRouter do
   # Evict userhost_cache entries for nicks that appear in no channel of
   # `members_map` after the PART. Called for self-PART where every nick
   # in the departed channel must be checked against the updated members.
-  @spec evict_if_no_overlap([String.t()], members(), userhost_cache()) :: userhost_cache()
-  defp evict_if_no_overlap(nicks, members_map, cache) do
+  @spec evict_if_no_overlap([String.t()], members(), userhost_cache(), Identifier.casemapping()) ::
+          userhost_cache()
+  defp evict_if_no_overlap(nicks, members_map, cache, casemapping) do
     Enum.reduce(nicks, cache, fn nick, acc ->
-      maybe_evict(acc, nick, channels_with_member(members_map, nick))
+      maybe_evict(acc, nick, channels_with_member(members_map, nick), casemapping)
     end)
   end
 
-  @spec maybe_evict(userhost_cache(), String.t(), [String.t()]) :: userhost_cache()
-  defp maybe_evict(cache, nick, []), do: Map.delete(cache, normalize_nick(nick))
-  defp maybe_evict(cache, _, _), do: cache
+  @spec maybe_evict(userhost_cache(), String.t(), [String.t()], Identifier.casemapping()) ::
+          userhost_cache()
+  defp maybe_evict(cache, nick, [], casemapping),
+    do: Map.delete(cache, normalize_nick(nick, casemapping))
+
+  defp maybe_evict(cache, _, _, _), do: cache
 
   # Migrate a userhost_cache entry from old_nick to new_nick on a NICK rename.
   # If old_nick is not in the cache (never seen via JOIN/WHOIS/WHO), no-op.
   # The user+host fields are preserved — they don't change with a nick change.
-  @spec rename_userhost_entry(userhost_cache(), String.t(), String.t()) :: userhost_cache()
-  defp rename_userhost_entry(cache, old_nick, new_nick) do
-    old_key = normalize_nick(old_nick)
-    new_key = normalize_nick(new_nick)
+  # #537 — `casemapping` folds the cache keys network-aware.
+  @spec rename_userhost_entry(userhost_cache(), String.t(), String.t(), Identifier.casemapping()) ::
+          userhost_cache()
+  defp rename_userhost_entry(cache, old_nick, new_nick, casemapping) do
+    old_key = normalize_nick(old_nick, casemapping)
+    new_key = normalize_nick(new_nick, casemapping)
 
     case Map.fetch(cache, old_key) do
       {:ok, entry} -> cache |> Map.delete(old_key) |> Map.put(new_key, entry)
