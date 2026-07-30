@@ -278,3 +278,32 @@ run_deploy() {
     run_deploy --bogus
     [ "$status" -eq 64 ]
 }
+
+# --- #503 enrich: marker-gated nothing-to-do (defect #8 parity) ---------------
+
+@test "auto + same HEAD + marker match exits 0 without building" {
+    head="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    printf '%s\n' "$head" > "$REPO_ROOT/runtime/last-deployed-sha"
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to do"* ]]
+    ! grep -q "mix deps.get" "$ARGV_LOG"       # build never runs
+    ! grep -q "systemctl" "$ARGV_LOG"
+    ! grep -q "run --no-start" "$ARGV_LOG"      # never reaches preflight
+}
+
+@test "--force-cold overrides the nothing-to-do fast path" {
+    head="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    printf '%s\n' "$head" > "$REPO_ROOT/runtime/last-deployed-sha"
+
+    run_deploy --force-cold
+    [ "$status" -eq 0 ]
+    # The nothing-to-do OVERRIDE line (not just any "force" — the
+    # skip-preflight log also says force); proves the fast path saw the
+    # match but honored the operator order.
+    [[ "$output" == *"marker match"* ]]
+    [[ "$output" == *"overrides"* ]]
+    grep -q "systemctl stop grappa" "$ARGV_LOG"
+    ! grep -q "run --no-start" "$ARGV_LOG"      # forced mode skips preflight
+}
