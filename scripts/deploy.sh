@@ -1,42 +1,27 @@
 #!/usr/bin/env bash
-# Unified deploy entry point — auto-detects hot-vs-cold via git-diff
-# preflight, then dispatches.
+# Operator Docker deploy — auto-detects hot-vs-cold via the shared
+# Grappa.Deploy.Preflight classifier, then dispatches.
 #
-# CP23 cluster `cluster/code-reload` shipped Phoenix.CodeReloader for
-# the running grappa container, so most deploys are now hot: `git pull
-# --ff-only` + `POST /admin/reload` swaps modules in the live BEAM
-# without restart, sessions preserved.
+# Thin consumer of the shared deploy algorithm in
+# infra/lib/deploy_common.sh (#503) — the same lib that drives
+# infra/freebsd/deploy.sh (jail) and infra/linux/deploy.sh (systemd), so
+# the hot-vs-cold DECISION logic can no longer drift between substrates.
+# This script sets config, flips the toggles this substrate has today
+# (--force-* flags only; NO marker / re-exec / nothing-to-do yet — those
+# arrive with #503's enrich step), and defines the Docker-specific hooks.
 #
-# Some module-shape changes can't be hot-swapped — `Phoenix.CodeReloader`
-# accepts the reload but the new code crashes (or silently no-ops)
-# at the first message that exposes the shape change. Concrete
-# examples:
-#   - mix.lock changed → new dep version never loaded; first call to
-#     the new API crashes runtime.
-#   - mix.exs changed → :application callback or :version stale.
-#   - lib/grappa/application.ex changed → supervision tree re-read
-#     only at boot; new children never started, old strategy
-#     unchanged.
-#   - state-shape change in a long-lived GenServer (defstruct,
-#     `@type t :: %{...}`, or `init/1` map literal) → next callback
-#     pattern-matches new shape against OLD state in the running
-#     process; crash deferred to that moment (could be hours later).
-#     Authoritative module list lives in
-#     `lib/grappa/hot_reload/long_lived_modules.ex` — that file IS
-#     the SoT for both this script and CLAUDE.md "Hot vs cold deploy".
+# CP23's `cluster/code-reload` shipped Phoenix.CodeReloader for the
+# running grappa container, so most deploys are hot: `git pull` + `POST
+# /admin/reload` swaps modules in the live BEAM without restart. Some
+# module-shape changes can't be hot-swapped (mix.lock/mix.exs,
+# application.ex supervision tree, long-lived GenServer state shape) —
+# Phoenix.CodeReloader accepts the reload but the new code crashes at the
+# first message that exposes the shape change. The preflight
+# (lib/grappa/deploy/preflight.ex, the single source of truth shared by
+# all three substrates) diffs for those unsafe markers and refuses hot.
 #
-# Phoenix.CodeReloader cannot detect any of these — only compile
-# errors. So the preflight has to be in this script: diff
-# `HEAD@{1}..HEAD` for the unsafe markers and refuse hot-deploy if
-# any matches. Conservative bias: in doubt, COLD.
-#
-# Override flags:
-#   --force-hot   bypass preflight, hot-deploy regardless (use when
-#                 you know better than the heuristic)
-#   --force-cold  skip preflight, cold-deploy unconditionally
-#
-# Cic deploys are orthogonal — `scripts/deploy-cic.sh` (B8) handles
-# the Vite bundle + cic-bundle-changed broadcast independently.
+# Cic deploys are orthogonal — scripts/deploy-cic.sh handles the Vite
+# bundle + cic-bundle-changed broadcast independently.
 #
 # Usage:
 #   scripts/deploy.sh                # auto-detect
@@ -45,6 +30,7 @@
 
 set -euo pipefail
 
+# shellcheck source=scripts/_lib.sh
 . "$(dirname "$0")/_lib.sh"
 
 # #364 docker S10: assert main-checkout + main-branch BEFORE any side
@@ -54,210 +40,117 @@ require_main_checkout "deploy.sh"
 
 cd "$REPO_ROOT"
 
-mode="${1:-auto}"
-case "$mode" in
-    --force-hot)   mode=hot ;;
-    --force-cold)  mode=cold ;;
-    auto|"")       mode=auto ;;
-    *) die "usage: scripts/deploy.sh [--force-hot|--force-cold]" ;;
-esac
+# ---- lib config + feature toggles -----------------------------------
+DEPLOY_USAGE="[--force-hot|--force-cold]"
+DEPLOY_FEATURE_FORCE_FLAGS=1
+DEPLOY_FEATURE_DEFER=0
+DEPLOY_FEATURE_NOTHING_TO_DO=0
+DEPLOY_FEATURE_REEXEC=0
+DEPLOY_FEATURE_MARKER=0
+DEPLOY_FEATURE_PREV_SHA_CARRY=0
+# Docker's hot healthcheck loop is fast/short; the cold loop is long
+# because a bind-mounted first boot recompiles `mix phx.server` (2-3 min).
+HOT_HEALTHCHECK_RETRIES="${HOT_HEALTHCHECK_RETRIES:-30}"
+HOT_HEALTHCHECK_SLEEP="${HOT_HEALTHCHECK_SLEEP:-1}"
+COLD_HEALTHCHECK_RETRIES="${COLD_HEALTHCHECK_RETRIES:-120}"
+COLD_HEALTHCHECK_SLEEP="${COLD_HEALTHCHECK_SLEEP:-2}"
 
-# Pull first so the preflight diffs against what we're ABOUT to deploy,
-# not against the previous HEAD. `--ff-only` keeps us out of the merge
-# resolution business — if main diverged, fail loud.
-prev_sha="$(git rev-parse HEAD)"
-echo "Pulling latest main..."
-git pull --ff-only
+# ---- substrate hooks ------------------------------------------------
 
-# ---- Preflight: classify diff as hot-safe or cold-required ----
-#
-# Source of truth: `lib/grappa/deploy/preflight.ex`. The Elixir module
-# owns ALL path classification rules + long-lived-module state-shape
-# diffing. This shell function is a thin invoker — every rule lives
-# in Elixir so the script + docs + Dialyzer cannot drift (CLAUDE.md
-# "Implement once, reuse everywhere").
-#
-# Pre-REV-C this script carried duplicate bash regex rules + a brittle
-# `grep -E '^\s+Grappa\.X' …` parse of the LongLivedModules SoT (CP28
-# regression class, review C4) + an awk helper for state-block
-# extraction. All three deleted; the SoT is consulted directly via
-# `Grappa.HotReload.LongLivedModules.all/0`.
-preflight() {
-    local from="$1" to="$2"
-
-    # Same SHA = nothing to deploy. Treat as hot-safe (the reload is
-    # idempotent — `:code.modified_modules/0` returns []).
-    if [ "$from" = "$to" ]; then
-        echo "  no commits since last HEAD ($from)"
-        return 0
-    fi
-
-    local changed
-    changed="$(git diff --name-only "$from..$to")"
-
-    if [ -z "$changed" ]; then
-        return 0
-    fi
-
-    echo "Changed files since $from:"
-    echo "$changed" | sed 's/^/  /'
-
-    # Delegate the entire classification to Grappa.Deploy.Preflight via
-    # a oneshot mix run. The module's `cli/1` prints "→ <kind>: <files>"
-    # lines for each cold class triggered (or "→ no unsafe markers →
-    # HOT" if all green), then halts with exit 0 (HOT) or 3 (COLD).
-    # Anything else (1 = mix crash, 2 = usage error) is NOT a verdict —
-    # propagate it verbatim so the caller aborts instead of guessing.
-    #
-    # ~2-3s mix-boot cost is invisible — the cold path already does a
-    # multi-minute container-rebuild + cicchetto-build oneshot.
-    docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps \
-        -e MIX_ENV=dev grappa \
-        mix run --no-start -e "Grappa.Deploy.Preflight.cli([\"$from\", \"$to\", \"docker\"])"
+substrate_pull() {
+	# Pull first so the preflight diffs against what we're ABOUT to deploy.
+	# NEW_SHA is the literal "HEAD" ref (git resolves it) — this substrate
+	# has no marker, so the preflight `to` token is symbolic; the `from`
+	# is the real pre-pull sha.
+	PREV_SHA="$(git rev-parse HEAD)"
+	echo "Pulling latest main..."
+	git pull --ff-only
+	NEW_SHA="HEAD"
 }
 
-if [ "$mode" = "auto" ]; then
-    preflight_rc=0
-    preflight "$prev_sha" "HEAD" || preflight_rc=$?
-    case "$preflight_rc" in
-        0) mode=hot ;;
-        3) mode=cold ;;
-        *)
-            # Mix crash (1), usage error (2), or anything else that is
-            # not a verdict. Falling through to COLD here would convert
-            # a miswired call into a needless restart forever (and
-            # silently — COLD "looks safe"). Abort loudly instead.
-            echo "ERROR: preflight exited $preflight_rc (crash/usage, not a verdict) — aborting deploy" >&2
-            exit "$preflight_rc"
-            ;;
-    esac
-elif [ "$mode" = "hot" ]; then
-    echo "--force-hot: skipping preflight"
-elif [ "$mode" = "cold" ]; then
-    echo "--force-cold: skipping preflight"
-fi
+substrate_preflight() {
+	# Delegate the entire classification to Grappa.Deploy.Preflight via a
+	# oneshot mix run. Prints "→ <kind>: <files>" per cold class (or "→ no
+	# unsafe markers → HOT"), halts 0 (HOT) / 3 (COLD); anything else is
+	# NOT a verdict (1=mix crash, 2=usage) and the lib aborts on it.
+	docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps \
+		-e MIX_ENV=dev grappa \
+		mix run --no-start -e "Grappa.Deploy.Preflight.cli([\"$1\", \"$2\", \"docker\"])"
+}
 
-echo
-echo "==> deploy mode: $mode"
-echo
+substrate_build() {
+	# Hot path needs no build — the pulled commit is already in the
+	# bind-mounted source tree (compose.yaml mounts ./:/app). Cold path
+	# rebuilds the toolchain image.
+	[ "$MODE" = cold ] || return 0
 
-if [ "$mode" = "hot" ]; then
-    # Hot-deploy: pulled commit is already in the bind-mounted source
-    # tree (compose.yaml mounts ./:/app). POST /admin/reload triggers
-    # Phoenix.CodeReloader.reload/1 which walks
-    # `:code.modified_modules/0` and purges + reloads modified beams in
-    # place. Sessions (Session.Server, IRC.Client, etc.) keep state.
-    echo "Reloading modules in live BEAM..."
-    if ! response="$(in_container curl -fsS -X POST http://localhost:4000/admin/reload)"; then
-        die "hot-deploy: POST /admin/reload failed — is grappa up? scripts/healthcheck.sh"
-    fi
-    echo "reload response: $response"
+	if [ ! -f .env ]; then
+		die "no .env file. Copy .env.example and fill in SECRET_KEY_BASE + SECRET_SIGNING_SALT + GRAPPA_ENCRYPTION_KEY."
+	fi
 
-    # HTTP 200 is NOT success — /admin/reload reports per-module failures
-    # in-band (`{"reloaded":[...],"failed":[{"module":..,"reason":..},...]}`
-    # — :old_code_in_use / :not_purged). Declaring "✓ complete" over a
-    # failed reload leaves the stack silently on stale code. This mirrors
-    # infra/freebsd/deploy.sh's jail path exactly (#364 docker S6,
-    # CLAUDE.md no-silent-swallow). The empty-list glob is the same one
-    # the jail path relies on in prod.
-    case "$response" in
-        *'"failed":[]'*) ;;
-        *)
-            echo "ERROR: hot-deploy reload reported per-module failures (see response above)" >&2
-            echo "  old code still in use? retry once processes settle, or scripts/deploy.sh --force-cold" >&2
-            exit 1
-            ;;
-    esac
+	MIX_ENV=${MIX_ENV:-prod}
+	export MIX_ENV
 
-    # Post-reload healthcheck (the jail path does one). Probe /healthz on
-    # the live grappa node — 2xx only (`curl -f`) means the reloaded code
-    # is serving. Bounded, short loop (reload is fast; this is not the
-    # cold-boot recompile window below). Overridable for tests.
-    echo "Verifying /healthz after reload..."
-    for _ in $(seq 1 "${HOT_HEALTHCHECK_RETRIES:-30}"); do
-        if in_container curl -fsS -o /dev/null http://localhost:4000/healthz; then
-            echo "✓ hot-deploy complete (sessions preserved, container ID unchanged)"
-            exit 0
-        fi
-        sleep "${HOT_HEALTHCHECK_SLEEP:-1}"
-    done
-    die "hot-deploy: /healthz never returned 200 within $(( ${HOT_HEALTHCHECK_RETRIES:-30} * ${HOT_HEALTHCHECK_SLEEP:-1} ))s post-reload. Check: scripts/monitor.sh"
-fi
+	echo "Building grappa image..."
+	docker compose "${COMPOSE_ARGS[@]}" --profile prod build grappa
+}
 
-# ---- Cold deploy ----
+substrate_reload() {
+	# Hot-deploy: POST /admin/reload triggers Phoenix.CodeReloader.reload/1
+	# which walks :code.modified_modules/0 and purges + reloads modified
+	# beams in place. Sessions (Session.Server, IRC.Client) keep state.
+	echo "Reloading modules in live BEAM..." >&2
+	in_container curl -fsS -X POST http://localhost:4000/admin/reload
+}
 
-if [ ! -f .env ]; then
-    die "no .env file. Copy .env.example and fill in SECRET_KEY_BASE + SECRET_SIGNING_SALT + GRAPPA_ENCRYPTION_KEY."
-fi
+substrate_cic() {
+	# Refresh cicchetto SPA dist into ./runtime/cicchetto-dist. Host
+	# bind-mount (not a named volume) so the container UID can write into a
+	# dir that already exists with the right ownership.
+	mkdir -p runtime/cicchetto-dist
+	# #538 — derive the single-source version for the cic build. The
+	# cicchetto-build container mounts only ./cicchetto, so it can't read
+	# mix.exs; pass GRAPPA_VERSION (from mix.exs @version) through the env.
+	GRAPPA_VERSION="$("$REPO_ROOT/infra/packaging/version.sh")"
+	export GRAPPA_VERSION
+	echo "Building cicchetto dist..."
+	docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm cicchetto-build
+	# Vite's emptyOutDir wipes .gitkeep on every build; restore it so
+	# `git status` stays clean.
+	touch runtime/cicchetto-dist/.gitkeep
+}
 
-MIX_ENV=${MIX_ENV:-prod}
-export MIX_ENV
+substrate_migrate() {
+	# Sync host deps/ to mix.lock. The image is toolchain-only (no baked
+	# hex/deps) and the bind-mount means deps/ + HEX_HOME live on the host;
+	# a fresh checkout has neither. Idempotent + cheap when already in sync.
+	echo "Syncing hex + deps to mix.lock..."
+	# shellcheck disable=SC1010  # `mix do` is a mix subcommand, not shell `do`
+	docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa \
+		mix do local.hex --force, local.rebar --force, deps.get
 
-echo "Building grappa image..."
-docker compose "${COMPOSE_ARGS[@]}" --profile prod build grappa
+	# Apply pending migrations BEFORE bringing the long-running container
+	# up — a one-shot `run` against the same image + bind-mounted prod DB
+	# runs to completion + exits before Bootstrap's first DB hit could race
+	# an unapplied migration (S3 crash-loop fix).
+	echo "Running migrations..."
+	docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa mix ecto.migrate
+}
 
-# Refresh cicchetto SPA dist into ./runtime/cicchetto-dist. Always run
-# on every cold deploy — bun install cache + Vite incremental build
-# keep this fast (~few seconds after the first cold run). Host
-# bind-mount instead of a named volume so the container (UID 1000) can
-# write into a directory that already exists with the right ownership;
-# a fresh named volume is root:root and fails Vite's prepare-out-dir
-# step. mkdir -p inherits the operator's UID — on the canonical
-# deployment that's UID 1000 = vjt = container user.
-mkdir -p runtime/cicchetto-dist
-# #538 — derive the single-source version for the cic build. The
-# cicchetto-build container mounts only ./cicchetto, so it can't read mix.exs;
-# pass GRAPPA_VERSION (from mix.exs @version) through the compose env.
-GRAPPA_VERSION="$("$REPO_ROOT/infra/packaging/version.sh")"
-export GRAPPA_VERSION
-echo "Building cicchetto dist..."
-docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm cicchetto-build
-# Vite's `emptyOutDir` wipes .gitkeep on every build (the tracked
-# placeholder is bait for fresh-clone Docker auto-mkdir-as-root —
-# see .gitignore L44-46). Restore it so `git status` stays clean.
-touch runtime/cicchetto-dist/.gitkeep
+substrate_restart() {
+	# --no-deps avoids re-running cicchetto-build; --remove-orphans sweeps
+	# a stale grappa-nginx left by a pre-#485 (two-container) stack.
+	docker compose "${COMPOSE_ARGS[@]}" --profile prod up -d --force-recreate --no-deps --remove-orphans grappa
+}
 
-# Sync host deps/ to mix.lock. The image is toolchain-only (#364 docker
-# S1 — no baked hex/deps), and the bind-mount `./:/app` means deps/ +
-# HEX_HOME live on the host; a fresh checkout has neither, and previous
-# deploys against a different mix.lock leave host deps/ out of sync. So
-# install hex/rebar first (a no-op once present) then deps.get — all
-# idempotent + cheap when already in sync.
-echo "Syncing hex + deps to mix.lock..."
-docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa \
-  mix do local.hex --force, local.rebar --force, deps.get
+substrate_healthcheck() {
+	# Probe /healthz from INSIDE the container so the check is independent
+	# of host port binding (#485 dropped the nginx container).
+	in_container curl -fsS -o /dev/null http://localhost:4000/healthz
+}
 
-# Apply pending migrations BEFORE bringing the long-running container
-# up. Pre-S3 the order was reversed (up -d first, then exec migrate in
-# a retry loop). That worked as long as Bootstrap's queries only
-# touched columns the running schema already had — but the moment a
-# deploy introduces a new column Bootstrap reads (S1's
-# `connection_state`, landed 2026-05-04), Bootstrap's first DB hit
-# races the migration eval and crash-loops the supervision tree before
-# the eval lands. Fix: one-shot `docker compose run` against the same
-# image, same bind-mounted prod DB, runs to completion + exits BEFORE
-# the up -d starts Bootstrap.
-echo "Running migrations..."
-docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa mix ecto.migrate
+# ---- run ------------------------------------------------------------
+# shellcheck source=infra/lib/deploy_common.sh
+. "$REPO_ROOT/infra/lib/deploy_common.sh"
 
-# Bring up grappa. --no-deps avoids re-running cicchetto-build (we just ran
-# it above; compose's depends_on graph would otherwise try again because
-# `run --rm` removes the container). --remove-orphans sweeps a stale
-# grappa-nginx left by a pre-#485 (two-container) stack.
-docker compose "${COMPOSE_ARGS[@]}" --profile prod up -d --force-recreate --no-deps --remove-orphans grappa
-
-# Wait for /healthz on grappa, probed from INSIDE the container so the
-# check is independent of host port binding (#485 dropped the nginx
-# container). Cold-boot loop is long because `mix phx.server` recompiles
-# when bind-mounted source has no `_build/${MIX_ENV}/` cached on host disk
-# yet — first deploy can take 2-3 minutes, subsequent finish in 10-15s.
-echo "Waiting for /healthz..."
-for i in $(seq 1 120); do
-    if docker compose "${COMPOSE_ARGS[@]}" exec -T grappa curl -fsS http://localhost:4000/healthz >/dev/null 2>&1; then
-        echo "✓ cold-deploy complete (sessions reset, new container)"
-        exit 0
-    fi
-    sleep 2
-done
-
-die "grappa did not become healthy within 240s. Check: scripts/monitor.sh"
+deploy_main "$@"

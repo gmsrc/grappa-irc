@@ -236,7 +236,9 @@ _deploy_healthcheck_loop() {
 	i=0
 	while [ "$i" -lt "$retries" ]; do
 		if substrate_healthcheck; then
-			[ "$DEPLOY_FEATURE_MARKER" = 1 ] && substrate_write_marker
+			if [ "$DEPLOY_FEATURE_MARKER" = 1 ]; then
+				substrate_write_marker
+			fi
 			deploy_log "✓ $MODE deploy complete after $i retries"
 			exit 0
 		fi

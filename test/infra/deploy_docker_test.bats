@@ -48,10 +48,14 @@ setup() {
     git -C "$UPSTREAM" config user.name "bats"
 
     mkdir -p "$UPSTREAM/scripts" "$UPSTREAM/infra/packaging" \
-             "$UPSTREAM/runtime" "$UPSTREAM/lib"
+             "$UPSTREAM/infra/lib" "$UPSTREAM/runtime" "$UPSTREAM/lib"
     cp "$DEPLOY_SH" "$UPSTREAM/scripts/deploy.sh"
     cp "$LIB_SH" "$UPSTREAM/scripts/_lib.sh"
     chmod +x "$UPSTREAM/scripts/deploy.sh"
+    # The ported consumer sources the shared algorithm lib (#503). It must
+    # exist in the throwaway clone for the script to run — committed so
+    # pulls stay clean. Assertions below are UNCHANGED by the extraction.
+    cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_common.sh" "$UPSTREAM/infra/lib/deploy_common.sh"
     # version.sh delegate → committed recorder that echoes a version.
     cat > "$UPSTREAM/infra/packaging/version.sh" <<'EOF'
 #!/bin/sh
