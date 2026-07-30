@@ -38,10 +38,26 @@ defmodule Grappa.LiveIntrospectionTest do
     end
 
     test "returns one entry per live Session.Server with introspection fields" do
-      {_, port} = start_irc_server()
+      {server, port} = start_irc_server()
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
       on_exit(fn -> Session.stop_session({:visitor, visitor.id}, network.id) end)
+
+      # #550 — the upstream peer is captured ASYNCHRONOUSLY: the Client dials
+      # the in-process IRCServer, then pushes {:irc_peer, _} to Session.Server
+      # which caches it. Until that message is processed the session is a live
+      # pid with peer_address: nil, so handle_call({:peer_address}) replies
+      # {:error, :no_peer} and `introspection_degraded` carries :peer_address
+      # (server.ex + fetch_peer_address). This test reads introspection_degraded
+      # right after spawn, so without a barrier it races the capture — green
+      # when the {:irc_peer, _} lands first (pull_request / local fast timing),
+      # red when the registry scan wins (CI push slow timing, same sha: the
+      # flake this fixes). USER is sent right AFTER the Client pushes
+      # {:irc_peer, _}, so waiting for it guarantees the peer is captured before
+      # the scan — the same deterministic barrier the #550 peer-capture test
+      # below uses. NOT an assertion weakening: it makes `== []` honest.
+      {:ok, _} =
+        Grappa.IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
 
       entries = LiveIntrospection.list_sessions()
 
