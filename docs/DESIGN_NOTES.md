@@ -23301,3 +23301,44 @@ working directory"). `/tmp` is consistent and fast.
 deploy-time assertion that the compiled sha equals `git rev-parse HEAD`, failing
 the build otherwise — is a belt-and-suspenders guard on top of this root-cause
 fix, deferred to that issue.
+
+## 2026-07-30 — #522: `joined:true` is not "settled" — an e2e reconnect must wait for members-seeded
+
+`cp15-b6-part-archive-rejoin` (#53 in the serial run) flaked ~60% in full-suite
+runs at its "members pane populates after re-JOIN" assert, while passing in
+isolation. Cross-tree bisection (in the issue) exonerated every product branch:
+the vector is spec ORDERING, not a regression. The culprit is its immediate
+predecessor, `cp15-b6-parked-disconnect-reconnect` (#52), leaking a
+mid-stabilization `Session.Server`.
+
+**The gotcha — `joined` and `members-seeded` are two different states, and the
+REST surface exposes both.** #52's afterEach reconnects the parked network and
+polled the channels endpoint until `#bofh` reported `joined:true`, then returned.
+But `joined` derives from `Map.keys(state.members)` (`channels_controller`
+`merge_channel_sources` → `Session.list_channels`), and the channel key is
+planted by the **self-JOIN echo** (`event_router.ex` self-JOIN wipe:
+`members[chan] = %{self => []}`) — which lands BEFORE the `353/366` NAMES burst
+seeds the member list and adds the channel to `state.seeded_channels`. So
+`joined:true` is true during a window where members are still `:uninitialized`.
+Returning there leaks a session whose autojoin NAMES round-trip is still in
+flight; #53 then PARTs `#bofh` and re-JOINs it, and the still-arriving `353/366`
+races #53's re-join members-seeding, missing the 5s assert.
+
+`GET /channels/:chan/members` already distinguishes the two: `:uninitialized`
+(pre-`366`) → **HTTP 204**, seeded list → **HTTP 200** (`MembersController`,
+gated on `seeded_channels`). That 204/200 split IS the deterministic settle
+signal.
+
+**Fix (vjt's iron rule — make the SETUP deterministic, never weaken an assert).**
+#52's afterEach now settles on the exact condition #53 depends on: poll
+`/members` until it returns **200 with the own nick present** (204 = keep
+polling), inside the unchanged 30s budget. #53's assertions are byte-for-byte
+untouched. Because the leak was a general "half-spawned session" hazard (it had
+historically cascaded 18 m1-m9 failures — see the older joined-poll comment),
+hardening the settle helps EVERY downstream spec, not just #53.
+
+**General rule for e2e teardown after a reconnect/autojoin:** waiting on
+`joined:true` is insufficient — a spec that will assert on member presence must
+wait for `/members` HTTP 200, not the channels row. `joined` means "the JOIN
+echo landed"; only the members 200 means "the channel is fully seeded and no
+NAMES burst is in flight."
