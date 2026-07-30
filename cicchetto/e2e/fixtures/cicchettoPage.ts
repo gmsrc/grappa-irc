@@ -508,6 +508,39 @@ export async function waitForChannelReady(
   );
 }
 
+// Wait until cic's join-ok REST backfill (`refreshScrollback`) has COMPLETED
+// for a channel — the REST-catch-up twin of `waitForChannelReady`. Pure test
+// seam: scrollback.ts stamps `__cic_scrollbackRefreshed` (a Set of the module
+// composite key `channelKey(slug, name)`) in refreshScrollback's `finally`.
+// Production never reads it.
+//
+// Why: subscribe.ts's join-ok callback fires `void refreshScrollback` then
+// stamps `__cic_channelReady` SYNCHRONOUSLY right after — so
+// `waitForChannelReady` (and thus `selectChannel`) returns while the backfill
+// is still in flight. A spec that then acts on scroll geometry (issue168
+// send-snap, #552) races the backfill's late DOM recreation: the ref-keyed
+// <For> reset drops scrollTop → onScroll flips atBottom=false → the send-snap
+// is undone → the pane strands off the bottom. Green in isolation (the backfill
+// lands before the send), red under full-gate load (the flake #552 tracks).
+// Awaiting this seam makes the send-snap deterministic — it does NOT weaken any
+// assertion, it removes the race the assertion was silently depending on.
+export async function waitForScrollbackRefreshed(
+  page: Page,
+  networkSlug: string,
+  channelName: string,
+): Promise<void> {
+  const key = `${networkSlug} ${canonicalChannelName(channelName)}`;
+  await page.waitForFunction(
+    (k) => {
+      const set = (window as unknown as { __cic_scrollbackRefreshed?: Set<string> })
+        .__cic_scrollbackRefreshed;
+      return set?.has(k) === true;
+    },
+    key,
+    { timeout: 10_000 },
+  );
+}
+
 // Wait until cic's user-topic Channel has joined (Phoenix `phx.join()`
 // `ok` ack landed for `grappa:user:{userName}`). Pure test seam:
 // userTopic.ts stamps `__cic_userTopicReady` (a `Set<userName>`) in the

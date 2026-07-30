@@ -1079,6 +1079,49 @@ describe("refreshScrollback (CP29 R-5)", () => {
     const list = scrollback.scrollbackByChannel()[key] ?? [];
     expect(list.map((m) => m.id)).toEqual([6, 7, 8, 20, 21]);
   });
+
+  it("stamps window.__cic_scrollbackRefreshed with the channel key on completion (#552 seam)", async () => {
+    // #552 — subscribe.ts fires `void refreshScrollback` in the join-ok
+    // callback and stamps `__cic_channelReady` SYNCHRONOUSLY right after, so
+    // waitForChannelReady (used by selectChannel) returns while the join-ok
+    // backfill is still in flight. A spec that then acts on scroll geometry
+    // (issue168 send-snap) races the backfill's late DOM recreation, which
+    // resets scrollTop → onScroll flips atBottom=false → the send-snap is
+    // undone. This seam marks backfill COMPLETION so specs can await it
+    // (waitForScrollbackRefreshed) — the REST-catch-up twin of
+    // __cic_channelReady. Production never reads it.
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    const scrollback = await import("../lib/scrollback");
+    const key = channelKey("freenode", "#grappa");
+    mockGetResumeCursor.mockReturnValue(42);
+    vi.mocked(api.listMessagesAfter).mockResolvedValue([]);
+
+    await scrollback.refreshScrollback("freenode", "#grappa");
+
+    const w = window as unknown as { __cic_scrollbackRefreshed?: Set<string> };
+    expect(w.__cic_scrollbackRefreshed?.has(key)).toBe(true);
+  });
+
+  it("stamps __cic_scrollbackRefreshed even on REST error (backfill is done, not in flight)", async () => {
+    // The seam means "the backfill for this key is no longer in flight",
+    // whether it succeeded or errored — a spec waiting on it must not hang
+    // forever on a transient REST failure (no DOM recreation happens on the
+    // error path either, so it is safe to proceed).
+    localStorage.setItem("grappa-token", "tok");
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const api = await import("../lib/api");
+    const scrollback = await import("../lib/scrollback");
+    const key = channelKey("freenode", "#grappa");
+    mockGetResumeCursor.mockReturnValue(5);
+    vi.mocked(api.listMessagesAfter).mockRejectedValueOnce(new Error("network down"));
+
+    await scrollback.refreshScrollback("freenode", "#grappa");
+
+    const w = window as unknown as { __cic_scrollbackRefreshed?: Set<string> };
+    expect(w.__cic_scrollbackRefreshed?.has(key)).toBe(true);
+    consoleSpy.mockRestore();
+  });
 });
 
 describe("purgeScrollback (UX-7-B 2026-05-22)", () => {

@@ -577,6 +577,24 @@ const exports = identityScopedStore((onIdentityChange) => {
   const refreshInFlight = new Set<ChannelKey>();
   const REFRESH_LIMIT = 200;
 
+  // #552 — pure test seam: stamp `__cic_scrollbackRefreshed` (a Set of the
+  // module composite key) when a refreshScrollback COMPLETES for a key.
+  // subscribe.ts fires `void refreshScrollback` in the join-ok callback and
+  // stamps `__cic_channelReady` SYNCHRONOUSLY right after, so waitForChannelReady
+  // (used by selectChannel) returns while THIS REST backfill is still in flight.
+  // A spec that then acts on scroll geometry (issue168 send-snap) races the
+  // backfill's late DOM recreation, which resets scrollTop → onScroll flips
+  // atBottom=false → the send-snap is undone. This is the REST-catch-up twin of
+  // `__cic_channelReady`: specs await backfill COMPLETION via
+  // `waitForScrollbackRefreshed`. Production never reads it (mirror of
+  // subscribe.ts `stampChannelReady`).
+  const stampScrollbackRefreshed = (key: ChannelKey): void => {
+    if (typeof window === "undefined") return;
+    const w = window as Window & { __cic_scrollbackRefreshed?: Set<ChannelKey> };
+    if (!w.__cic_scrollbackRefreshed) w.__cic_scrollbackRefreshed = new Set();
+    w.__cic_scrollbackRefreshed.add(key);
+  };
+
   const refreshScrollback = async (slug: string, name: string): Promise<void> => {
     const t = token();
     if (!t) return;
@@ -625,6 +643,9 @@ const exports = identityScopedStore((onIdentityChange) => {
       console.error("[scrollback] refreshScrollback failed", slug, name, err);
     } finally {
       refreshInFlight.delete(key);
+      // #552 — mark this backfill DONE (success or error): no more in-flight
+      // DOM recreation for this key, so a spec awaiting it can safely proceed.
+      stampScrollbackRefreshed(key);
     }
   };
 

@@ -44,6 +44,7 @@ import {
   loginAs,
   scrollbackLines,
   selectChannel,
+  waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
@@ -126,6 +127,9 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    // #552 — await the join-ok REST backfill so its late DOM recreation can't
+    // undo the send-snap under full-gate load (see waitForScrollbackRefreshed).
+    await waitForScrollbackRefreshed(page, NETWORK_SLUG, CHANNEL);
 
     // REST page landed + the divider rendered (frozen-display contract).
     await expect
@@ -175,6 +179,9 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    // #552 — await the join-ok REST backfill so its late DOM recreation can't
+    // undo the send-snap under full-gate load (see waitForScrollbackRefreshed).
+    await waitForScrollbackRefreshed(page, NETWORK_SLUG, CHANNEL);
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
