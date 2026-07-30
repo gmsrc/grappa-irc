@@ -46,7 +46,7 @@ DEPLOY_FEATURE_FORCE_FLAGS=1
 DEPLOY_FEATURE_DEFER=0
 DEPLOY_FEATURE_NOTHING_TO_DO=0
 DEPLOY_FEATURE_REEXEC=0
-DEPLOY_FEATURE_MARKER=0
+DEPLOY_FEATURE_MARKER=1
 DEPLOY_FEATURE_PREV_SHA_CARRY=0
 # Docker's hot healthcheck loop is fast/short; the cold loop is long
 # because a bind-mounted first boot recompiles `mix phx.server` (2-3 min).
@@ -59,13 +59,27 @@ COLD_HEALTHCHECK_SLEEP="${COLD_HEALTHCHECK_SLEEP:-2}"
 
 substrate_pull() {
 	# Pull first so the preflight diffs against what we're ABOUT to deploy.
-	# NEW_SHA is the literal "HEAD" ref (git resolves it) — this substrate
-	# has no marker, so the preflight `to` token is symbolic; the `from`
-	# is the real pre-pull sha.
+	# Both endpoints are RESOLVED shas so NEW_SHA can be written to the
+	# completed-deploy marker (parity with jail + linux).
 	PREV_SHA="$(git rev-parse HEAD)"
 	echo "Pulling latest main..."
 	git pull --ff-only
-	NEW_SHA="HEAD"
+	NEW_SHA="$(git rev-parse HEAD)"
+}
+
+# Marker hooks — the operator runs this script directly with git + fs
+# access to REPO_ROOT (cwd is REPO_ROOT), so plain git/cat, not a run_as
+# delegate like the jail/linux substrates.
+substrate_read_marker() {
+	cat runtime/last-deployed-sha 2>/dev/null || true
+}
+
+substrate_write_marker() {
+	printf '%s\n' "$NEW_SHA" > runtime/last-deployed-sha
+}
+
+substrate_commit_exists() {
+	git cat-file -e "$1^{commit}" 2>/dev/null
 }
 
 substrate_preflight() {

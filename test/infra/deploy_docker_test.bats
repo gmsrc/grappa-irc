@@ -15,10 +15,10 @@
 # recorded + answered) and the version.sh delegate stubbed as a committed
 # recorder. Real docker/compose is out of scope.
 #
-# Deliberately NOT locked (scripts/deploy.sh has NEITHER today, both ADDED
-# by #503 as scope-4 side effects — asserting their absence would lock
-# behavior we intend to change): a runtime/last-deployed-sha marker and a
-# re-exec guard.
+# #503 enrich gains have their own RED-GREEN section at the bottom: the
+# runtime/last-deployed-sha marker (done — the preflight `to` token is now
+# a resolved sha, not the symbolic "HEAD", so it can be written to the
+# marker). Still to land: the self-modifying-script re-exec guard.
 
 setup() {
     # Normalize the tmpdir to its PHYSICAL path. On macOS $TMPDIR is a
@@ -146,13 +146,16 @@ run_deploy() {
     [[ "$output" == *"usage"* ]]
 }
 
-@test "auto mode: preflight classifies pre-pull HEAD .. HEAD as substrate docker" {
+@test "auto mode: preflight classifies pre-pull HEAD .. new HEAD as substrate docker" {
     prev="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-    commit_upstream lib/base.txt > /dev/null
+    new="$(commit_upstream lib/base.txt)"
 
     run_deploy
     [ "$status" -eq 0 ]
-    grep -q "cli(\[\"$prev\", \"HEAD\", \"docker\"\])" "$ARGV_LOG"
+    # #503 enrich: the `to` token is now the RESOLVED new sha (not the
+    # symbolic "HEAD"), so it can be written to the completed-deploy
+    # marker — parity with jail + linux.
+    grep -q "cli(\[\"$prev\", \"$new\", \"docker\"\])" "$ARGV_LOG"
 }
 
 @test "--force-hot skips preflight and reloads" {
@@ -236,4 +239,48 @@ run_deploy() {
     [ "$cic_line" -lt "$deps_line" ]
     [ "$deps_line" -lt "$mig_line" ]
     [ "$mig_line" -lt "$up_line" ]
+}
+
+# --- #503 enrich: completed-deploy marker (parity with jail + linux) ----------
+
+@test "hot deploy writes the completed-deploy marker as final step" {
+    new="$(commit_upstream lib/base.txt)"
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+}
+
+@test "cold deploy writes the completed-deploy marker as final step" {
+    export PREFLIGHT_RC=3
+    make_env
+    new="$(commit_upstream lib/base.txt)"
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+}
+
+@test "marker present: preflight base is the marker, not the pre-pull HEAD" {
+    marker="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    commit_upstream lib/base.txt > /dev/null
+    git -C "$REPO_ROOT" pull -q --ff-only   # cic-deploy analogue: HEAD advances
+    prev="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    printf '%s\n' "$marker" > "$REPO_ROOT/runtime/last-deployed-sha"
+    new="$(commit_upstream lib/base.txt)"
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    grep -q "cli(\[\"$marker\", \"$new\", \"docker\"\])" "$ARGV_LOG"
+    ! grep -q "cli(\[\"$prev\"" "$ARGV_LOG"
+}
+
+@test "garbage marker aborts loudly before preflight runs" {
+    printf 'deadbeef\n' > "$REPO_ROOT/runtime/last-deployed-sha"
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"last-deployed-sha"* ]]
+    ! grep -q "run --no-start" "$ARGV_LOG"
 }
