@@ -111,7 +111,7 @@ jobs:
         # exists to kill.
         run: |
           shellcheck -s sh infra/lib/deploy_common.sh
-          shellcheck -x infra/freebsd/deploy.sh infra/linux/deploy.sh scripts/deploy.sh
+          shellcheck -x infra/freebsd/deploy.sh infra/linux/deploy.sh scripts/deploy.sh infra/docker/deploy.sh
           dash -n infra/lib/deploy_common.sh
           dash -n infra/freebsd/deploy.sh
 
