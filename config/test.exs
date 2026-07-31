@@ -171,16 +171,16 @@ config :grappa, :session_backoff,
   base_ms: 5,
   cap_ms: 100
 
-# #340 — scrollback persist retry: shrink the budget + backoff so the
-# `with_pool_retry/1` resilience tests (which raise a transient DB error
-# repeatedly) ride out several attempts and degrade in ~sub-second rather
-# than the 1.5s production budget. Math is identical; only magnitudes shrink,
-# so the multi-attempt / budget-exhaustion / no-spin behaviours all still
-# hold, just faster.
-config :grappa, :scrollback,
-  persist_retry_budget_ms: 300,
-  persist_backoff_ms: 2,
-  persist_backoff_cap_ms: 10
+# #340 / #523 — shrink the shared busy-retry budget + backoff so the
+# `BusyRetry` + `Scrollback.with_pool_retry/1` resilience tests (which raise a
+# transient DB error repeatedly) ride out several attempts and degrade in
+# ~sub-second rather than the 1.5s production budget. Math is identical; only
+# magnitudes shrink, so the multi-attempt / budget-exhaustion / no-spin
+# behaviours all still hold, just faster.
+config :grappa, :busy_retry,
+  budget_ms: 300,
+  backoff_ms: 2,
+  backoff_cap_ms: 10
 
 # #340 — shrink the send-throttle burst so the MessagesController 429 test
 # trips after a handful of POSTs, and slow the refill right down so no token

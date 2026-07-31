@@ -206,6 +206,33 @@ defmodule GrappaWeb.ThemesControllerTest do
       assert {:ok, reloaded} = Themes.get_theme(src.id)
       assert reloaded.apply_count == 1
     end
+
+    # #523 / #518 — the proven repro: POST /themes/:id/copy under a sustained
+    # transient SQLITE_BUSY must return a clean 503, NOT a 500 raise. The write
+    # is wrapped in `Grappa.Repo.BusyRetry`, so a busy that outlives the retry
+    # budget degrades to `{:error, :db_unavailable}` → FallbackController 503.
+    # The pool_size:1 Sandbox can't produce a real fast busy, so we force one
+    # via the engine's compile-gated (:test-only) per-process fault seam; ExUnit
+    # runs each test in its own process, so the injection cannot leak.
+    test "copy returns 503 db_unavailable (not 500) under sustained transient DB busy", %{conn: conn} do
+      owner = user_fixture()
+      {:ok, src} = Themes.create_theme({:user, owner}, %{name: "Src", payload: valid_payload()})
+
+      # More faults than the (test-shrunk) budget can ride out → every attempt
+      # raises busy → budget exhausts → :db_unavailable.
+      Grappa.Repo.BusyRetry.inject_transient_faults(10_000)
+
+      conn = post(conn, "/themes/#{src.id}/copy")
+
+      assert conn.status == 503
+      assert json_response(conn, 503) == %{"error" => "db_unavailable"}
+      assert get_resp_header(conn, "retry-after") == ["1"]
+
+      # The source was NOT mutated — the whole transaction degraded, it did not
+      # half-apply the apply_count bump.
+      assert {:ok, reloaded} = Themes.get_theme(src.id)
+      assert reloaded.apply_count == 0
+    end
   end
 
   describe "POST /themes/background" do

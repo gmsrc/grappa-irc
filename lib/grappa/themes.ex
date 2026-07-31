@@ -236,7 +236,7 @@ defmodule Grappa.Themes do
   """
   @spec copy_theme(subject(), integer()) ::
           {:ok, Theme.t()}
-          | {:error, :not_found | :rate_limited | :theme_cap_reached}
+          | {:error, :not_found | :rate_limited | :theme_cap_reached | :db_unavailable}
   def copy_theme({:user, %User{id: id}} = subject, theme_id) when is_integer(theme_id),
     do: do_copy(subject, {:user, id}, theme_id)
 
@@ -247,22 +247,28 @@ defmodule Grappa.Themes do
     with {:ok, source} <- get_theme(theme_id),
          :ok <- check_cap(subject),
          :ok <- check_quota(subject) do
-      Repo.immediate_transaction(fn ->
-        name = available_name(bare_subject, source.name)
+      # #523 — ride out a transient SQLITE_BUSY on the write instead of letting
+      # it escape as a 500. On sustained saturation the whole transaction
+      # degrades to `{:error, :db_unavailable}` → a clean 503 (#518); a
+      # non-transient DB error still re-raises (a real bug, not backpressure).
+      Repo.BusyRetry.run(fn ->
+        Repo.immediate_transaction(fn ->
+          name = available_name(bare_subject, source.name)
 
-        attrs = Subject.put_subject_id(%{name: name, payload: source.payload}, bare_subject)
+          attrs = Subject.put_subject_id(%{name: name, payload: source.payload}, bare_subject)
 
-        copy =
-          %Theme{}
-          |> Theme.changeset(attrs)
-          |> Repo.insert!()
+          copy =
+            %Theme{}
+            |> Theme.changeset(attrs)
+            |> Repo.insert!()
 
-        {1, _} =
-          Theme
-          |> where([t], t.id == ^source.id)
-          |> Repo.update_all(inc: [apply_count: 1])
+          {1, _} =
+            Theme
+            |> where([t], t.id == ^source.id)
+            |> Repo.update_all(inc: [apply_count: 1])
 
-        copy
+          copy
+        end)
       end)
     end
   end

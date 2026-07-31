@@ -51,6 +51,7 @@ defmodule Grappa.Scrollback do
 
   alias Grappa.IRC.Identifier
   alias Grappa.Repo
+  alias Grappa.Repo.BusyRetry
   alias Grappa.Scrollback.{Message, Meta, Telemetry}
 
   # Identifier.nick_fold/1 is a query macro (ASCII fold fragment, #121/#525).
@@ -73,26 +74,16 @@ defmodule Grappa.Scrollback do
   # message + is Postgres-unfriendly, and serialization does NOT buy
   # reliability — SQLite is single-writer regardless, busy_timeout already
   # rides out lock contention). The chosen model stays PARALLEL synchronous
-  # inserts on the pool, tightened so ONLY a sustained flood ever loses a
-  # row: retry over a generous WALL-CLOCK BUDGET (not a fixed attempt
-  # count) so a normal or bursty message caught behind a burst is ridden
-  # out, and a row degrades to `{:error, :persist_unavailable}` only when
-  # the pool stays saturated the whole budget. The retry sleep runs AFTER
-  # the failed checkout is released, so it holds no connection — it is
-  # bounded backpressure on the flooding session, not a held-conn leak.
-  # A non-transient Exqlite.Error (syntax/corruption) is not saturation:
-  # retrying only spins, so it degrades immediately with a LOUD log.
-  @persist_retry_budget_ms Application.compile_env(
-                             :grappa,
-                             [:scrollback, :persist_retry_budget_ms],
-                             1_500
-                           )
-  @persist_backoff_ms Application.compile_env(:grappa, [:scrollback, :persist_backoff_ms], 25)
-  @persist_backoff_cap_ms Application.compile_env(
-                            :grappa,
-                            [:scrollback, :persist_backoff_cap_ms],
-                            200
-                          )
+  # inserts on the pool, tightened so ONLY a sustained flood ever loses a row.
+  #
+  # #523 — the retry/classify machinery (budget, backoff, transient-fault
+  # discriminator) now lives in the SHARED engine `Grappa.Repo.BusyRetry`,
+  # which every write path reuses (budget from the `:busy_retry` config).
+  # `with_pool_retry/1` below is the scrollback-specific WRAPPER: it hands the
+  # engine `&Telemetry.contention/3` as the #357 contention observer, maps the
+  # engine's terminal `:db_unavailable` to scrollback's best-effort
+  # `:persist_unavailable` drop, and rescues a re-raised NON-transient fault to
+  # honour the #336 never-crash-the-session contract.
 
   # Closed error set for the write path. A validation failure returns the
   # changeset (caller inspects `.errors`); a pool-saturation drop returns
@@ -238,30 +229,26 @@ defmodule Grappa.Scrollback do
 
   @doc """
   Runs a best-effort persistence op with bounded retry over transient
-  SQLite write contention (#336 / #340).
+  SQLite write contention (#336 / #340), delegating to the shared engine
+  `Grappa.Repo.BusyRetry` (#523).
 
   `op` is a zero-arity fun returning `{:ok, term()}` or `{:error,
-  Ecto.Changeset.t()}`. Two exception classes are caught as TRANSIENT
-  contention and retried:
+  Ecto.Changeset.t()}`. A transient fault (a pool `queue_timeout`
+  `DBConnection.ConnectionError`, or a busy/locked `%Exqlite.Error{}`) is
+  retried over the engine's wall-clock budget; each ridden-out attempt fires
+  `Telemetry.contention/3` (#357 mechanism 2) via the engine's
+  `:on_contention` observer, and budget-exhaustion degrades to `{:error,
+  :persist_unavailable}` — mapped from the engine's `:db_unavailable` because
+  scrollback's contract is best-effort DURABILITY, not a client 503. A
+  returned `{:error, changeset}` (validation) is passed straight through,
+  never retried.
 
-    * `DBConnection.ConnectionError` — the pool could not serve a
-      checkout (`reason: :queue_timeout`).
-    * a busy/locked `%Exqlite.Error{}` — a slow writer held the single
-      SQLite write-lock past `busy_timeout`.
-
-  The retry loop runs over a wall-clock BUDGET
-  (`#{@persist_retry_budget_ms}ms`), sleeping a linear backoff capped at
-  `#{@persist_backoff_cap_ms}ms` between attempts, so a normal or bursty
-  message caught behind a burst is ridden out. Only when the budget is
-  exhausted (the pool stayed saturated the whole time = a sustained
-  flood) does the row degrade to `{:error, :persist_unavailable}` — the
-  raise never crashes the calling process (#336 contract).
-
-  A NON-transient `%Exqlite.Error{}` (syntax/corruption) is not
-  saturation: it degrades IMMEDIATELY (no spin) with a loud error log,
-  since retrying a broken statement only wastes the budget. A returned
-  `{:error, _}` (a validation failure) is passed straight through — it
-  is not a fault at all, so it is never retried.
+  A NON-transient `%Exqlite.Error{}` (syntax/corruption) is re-raised BY the
+  engine (a real bug, not saturation); this wrapper RESCUES it and also
+  degrades to `:persist_unavailable` with a LOUD error log — the #336
+  contract that a persist must NEVER crash the calling Session.Server. That
+  rescue is the ONE place the scrollback posture diverges from a stateless
+  web write, which instead lets the engine's raise surface as a 500.
 
   Public because `persist_event/1` runs BOTH its insert and its preload
   through it, and the retry/degrade contract is unit-tested here directly
@@ -271,82 +258,25 @@ defmodule Grappa.Scrollback do
           {:ok, result} | {:error, persist_error()}
         when result: var
   def with_pool_retry(op) when is_function(op, 0) do
-    deadline = System.monotonic_time(:millisecond) + @persist_retry_budget_ms
-    with_pool_retry(op, deadline, 1)
-  end
-
-  @spec with_pool_retry((-> {:ok, result} | {:error, Ecto.Changeset.t()}), integer(), pos_integer()) ::
-          {:ok, result} | {:error, persist_error()}
-        when result: var
-  defp with_pool_retry(op, deadline, attempt) do
-    op.()
+    case BusyRetry.run(op, on_contention: &Telemetry.contention/3) do
+      {:ok, _} = ok -> ok
+      {:error, %Ecto.Changeset{}} = validation_error -> validation_error
+      {:error, :db_unavailable} -> {:error, :persist_unavailable}
+    end
   rescue
     error in [DBConnection.ConnectionError, Exqlite.Error] ->
-      cond do
-        not transient_fault?(error) ->
-          # Syntax / corruption — retrying spins pointlessly. Degrade at
-          # once (never crash — #336), but LOUD (error level, full error):
-          # this is a real bug the operator/CI must see, not a saturation
-          # drop. Distinct from the :warning transient-drop below.
-          Logger.error(
-            "scrollback persist unavailable: non-transient DB error — dropping row",
-            error: inspect(error)
-          )
+      # The engine RE-RAISES a non-transient DB error (syntax/corruption) —
+      # not saturation, so it never spent the budget. Scrollback must NEVER
+      # crash the session (#336): degrade the row to :persist_unavailable,
+      # LOUD (a real bug CI/operator must see), distinct from the transient
+      # budget-exhaustion drop the engine already logged + counted.
+      Logger.error(
+        "scrollback persist unavailable: non-transient DB error — dropping row",
+        error: inspect(error)
+      )
 
-          {:error, :persist_unavailable}
-
-        System.monotonic_time(:millisecond) < deadline ->
-          # #357 D1 — surface mechanism 2 (single-writer contention) as
-          # telemetry, not just an eventual log grep: fires per transient
-          # fault while the budget rides it out. On the contention path only,
-          # so zero cost to an uncontended insert.
-          Telemetry.contention(fault_kind(error), attempt, false)
-          # The backoff sleep runs after the failed checkout was already
-          # released, so it holds no connection — bounded backpressure on
-          # the flooding session, not a held-conn leak (#340).
-          Process.sleep(min(@persist_backoff_ms * attempt, @persist_backoff_cap_ms))
-          with_pool_retry(op, deadline, attempt + 1)
-
-        true ->
-          # #357 D1 — the terminal contention event (row dropped): the
-          # telemetry companion of the warning below, so a dashboard counts
-          # drops without grepping logs.
-          Telemetry.contention(fault_kind(error), attempt, true)
-
-          Logger.warning(
-            "scrollback persist unavailable: SQLite pool saturated for the full " <>
-              "#{@persist_retry_budget_ms}ms retry budget (#{attempt} attempts) — dropping row",
-            error: inspect(error)
-          )
-
-          {:error, :persist_unavailable}
-      end
+      {:error, :persist_unavailable}
   end
-
-  # #357 D1 — classify a TRANSIENT fault for the contention telemetry. Only
-  # reached after `transient_fault?/1` returned true, so an `Exqlite.Error`
-  # here is always busy/locked (write-lock contention) and a
-  # `ConnectionError` is always a pool queue_timeout.
-  @spec fault_kind(DBConnection.ConnectionError.t() | Exqlite.Error.t()) ::
-          :queue_timeout | :busy_locked
-  defp fault_kind(%DBConnection.ConnectionError{}), do: :queue_timeout
-  defp fault_kind(%Exqlite.Error{}), do: :busy_locked
-
-  # #340 — is this caught exception TRANSIENT write contention (retry) or a
-  # permanent fault (degrade at once)? A pool queue_timeout is always
-  # transient. For an Exqlite.Error the message text is the only
-  # discriminator SQLite gives us: "busy"/"locked" = lock contention;
-  # anything else (syntax, corruption, constraint at the driver layer) is
-  # not saturation.
-  @spec transient_fault?(Exception.t()) :: boolean()
-  defp transient_fault?(%DBConnection.ConnectionError{}), do: true
-
-  defp transient_fault?(%Exqlite.Error{message: message}) when is_binary(message) do
-    downcased = String.downcase(message)
-    String.contains?(downcased, "busy") or String.contains?(downcased, "locked")
-  end
-
-  defp transient_fault?(%Exqlite.Error{}), do: false
 
   @doc """
   CP14 B3 — derive the normalized "DM peer" for a (target, sender,

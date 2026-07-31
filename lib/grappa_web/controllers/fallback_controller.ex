@@ -58,6 +58,7 @@ defmodule GrappaWeb.FallbackController do
            | :resolve_failed
            | :connect_timeout
            | :welcome_timeout
+           | :db_unavailable
            | :probe_timeout
            | :timeout
            | :internal
@@ -508,6 +509,22 @@ defmodule GrappaWeb.FallbackController do
     |> put_resp_header("retry-after", "60")
     |> put_status(:service_unavailable)
     |> json(%{error: "welcome_timeout"})
+  end
+
+  # #523 / #518 — a write path wrapped in `Grappa.Repo.BusyRetry.run/1`
+  # exhausted its retry budget against a transient SQLITE_BUSY (single-writer
+  # lock contention or a pool queue_timeout). That is a RETRYABLE server state,
+  # not an application bug: surface a typed 503 so a caller (and the e2e
+  # harness) can tell "DB busy, retry" apart from a real 500 raise — the
+  # CLAUDE.md "surface the failure honestly at boundaries" principle. A
+  # NON-transient DB error (syntax/corruption) is NOT mapped here: the engine
+  # re-raises it, so it stays a loud 500. Retry-After 1 matches the sub-second
+  # scale of write-lock contention.
+  def call(conn, {:error, :db_unavailable}) do
+    conn
+    |> put_resp_header("retry-after", "1")
+    |> put_status(:service_unavailable)
+    |> json(%{error: "db_unavailable"})
   end
 
   # REV-J M14: post-call_session/3 consolidation, every REST IRC-verb

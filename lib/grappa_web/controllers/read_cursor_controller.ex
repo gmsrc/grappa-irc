@@ -57,7 +57,7 @@ defmodule GrappaWeb.ReadCursorController do
   id is clamped to the current cursor).
   """
   @spec create(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :bad_request | :invalid_message | Ecto.Changeset.t()}
+          Plug.Conn.t() | {:error, :bad_request | :invalid_message | :db_unavailable | Ecto.Changeset.t()}
   def create(conn, %{"channel_id" => channel, "message_id" => message_id})
       when is_integer(message_id) and message_id > 0 do
     subject = Subject.to_session(conn.assigns.current_subject)

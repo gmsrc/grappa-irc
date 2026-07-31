@@ -140,6 +140,30 @@ defmodule Grappa.ScrollbackTelemetryTest do
       assert measurements.attempt == 1
     end
 
+    # #523 — with_pool_retry now delegates to `Grappa.Repo.BusyRetry`, passing
+    # `&Telemetry.contention/3` as the engine's `:on_contention` observer. This
+    # locks that the shipped #357 counters keep INCREMENTING once per ridden-out
+    # attempt — proof the delegation did not silently mutilate the telemetry (a
+    # green suite alone would only prove the RETURN behaviour survived).
+    test "each ridden-out transient attempt emits its own contention event with an INCREMENTING attempt" do
+      attach([[:grappa, :scrollback, :persist, :contention]])
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      op = fn ->
+        n = Agent.get_and_update(counter, fn n -> {n, n + 1} end)
+        if n < 3, do: raise_busy(), else: {:ok, :served}
+      end
+
+      assert {:ok, :served} = Scrollback.with_pool_retry(op)
+
+      # Three raises → three contention events, attempts 1, 2, 3, all
+      # dropped: false. The counters advance per attempt, never stall.
+      for expected <- 1..3 do
+        assert_receive {:telemetry, [:grappa, :scrollback, :persist, :contention],
+                        %{attempt: ^expected}, %{fault: :busy_locked, dropped: false}}
+      end
+    end
+
     test "a queue_timeout sustained past the budget emits contention dropped: true, fault: :queue_timeout" do
       attach([[:grappa, :scrollback, :persist, :contention]])
 

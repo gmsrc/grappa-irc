@@ -129,7 +129,7 @@ defmodule GrappaWeb.ThemesController do
 
   @doc false
   @spec copy(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :not_found | :rate_limited | :theme_cap_reached}
+          Plug.Conn.t() | {:error, :not_found | :rate_limited | :theme_cap_reached | :db_unavailable}
   def copy(conn, %{"id" => id}) do
     viewer = conn.assigns.current_subject
 

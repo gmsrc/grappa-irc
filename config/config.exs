@@ -104,24 +104,27 @@ config :grappa, :session_backoff,
 # 60s default intact (inert within existing tests' lifetimes).
 config :grappa, :session, connection_stable_ms: 60_000
 
-# #340 — scrollback persist resilience. `Grappa.Scrollback.with_pool_retry/1`
-# rides out a transient SQLite write-lock / pool-saturation burst before it
-# degrades a row to `{:error, :persist_unavailable}` (never crashing the
-# session — the #336 contract). The retry loop runs on a wall-clock BUDGET,
-# not a fixed attempt count, so a NORMAL or bursty message is never dropped:
-# only a flood that keeps the pool saturated for the whole budget sheds its
-# excess. Read via `Application.compile_env/3` in `Grappa.Scrollback`.
+# #336 / #340 / #523 — the SHARED SQLite busy-retry engine
+# (`Grappa.Repo.BusyRetry`), reused by EVERY write path: the scrollback hot
+# path via `Scrollback.with_pool_retry/1`, and the non-Scrollback web writes
+# directly. `Repo.insert`/`Repo.preload`/`immediate_transaction` RAISE a
+# `DBConnection.ConnectionError` (pool queue_timeout) or a busy/locked
+# `%Exqlite.Error{}` under a write burst; the engine rides those out over a
+# wall-clock BUDGET (not a fixed attempt count), so a normal or bursty write is
+# never lost — only a flood that keeps the pool saturated the whole budget
+# degrades (scrollback → best-effort `:persist_unavailable` drop; a web write →
+# `{:error, :db_unavailable}` → a clean 503). Read via `Application.compile_env/3`.
 #
-#   * persist_retry_budget_ms — total wall-clock the loop will spend riding
-#     out transient raises before degrading (1.5s: comfortably longer than
-#     the ~1s pool-saturation window the #336 incident measured).
-#   * persist_backoff_ms — base per-attempt linear backoff (× attempt).
-#   * persist_backoff_cap_ms — ceiling per sleep so late attempts don't
-#     stretch a single wait past a fifth of a second.
-config :grappa, :scrollback,
-  persist_retry_budget_ms: 1_500,
-  persist_backoff_ms: 25,
-  persist_backoff_cap_ms: 200
+#   * budget_ms — total wall-clock spent riding out transient raises before
+#     degrading (1.5s: comfortably longer than the ~1s pool-saturation window
+#     the #336 incident measured).
+#   * backoff_ms — base per-attempt linear backoff (× attempt).
+#   * backoff_cap_ms — ceiling per sleep so late attempts don't stretch a
+#     single wait past a fifth of a second.
+config :grappa, :busy_retry,
+  budget_ms: 1_500,
+  backoff_ms: 25,
+  backoff_cap_ms: 200
 
 # #340 — inbound message-send throttle. `POST .../messages` consumes one
 # token from a per-`(subject, network)` bucket; an empty bucket returns 429

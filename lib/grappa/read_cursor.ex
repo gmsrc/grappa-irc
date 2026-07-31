@@ -167,7 +167,7 @@ defmodule Grappa.ReadCursor do
   paths can decide whether a fan-out is appropriate.
   """
   @spec set(subject(), integer(), String.t(), integer()) ::
-          {:ok, Cursor.t()} | {:error, :invalid_message | Ecto.Changeset.t()}
+          {:ok, Cursor.t()} | {:error, :invalid_message | :db_unavailable | Ecto.Changeset.t()}
   def set(subject, network_id, channel, message_id)
       when is_integer(network_id) and is_binary(channel) and channel != "" and
              is_integer(message_id) and message_id > 0 do
@@ -684,7 +684,12 @@ defmodule Grappa.ReadCursor do
         {:ok, cursor}
 
       existing ->
-        upsert_cursor(existing, subject, network_id, channel, message_id)
+        # #523 — ride out a transient SQLITE_BUSY on the cursor write; sustained
+        # saturation degrades to `{:error, :db_unavailable}` → a clean 503 at
+        # `ReadCursorController` instead of a 500 raise.
+        Repo.BusyRetry.run(fn ->
+          upsert_cursor(existing, subject, network_id, channel, message_id)
+        end)
     end
   end
 

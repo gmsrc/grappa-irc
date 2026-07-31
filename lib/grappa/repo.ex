@@ -9,7 +9,7 @@ defmodule Grappa.Repo do
   the full reasoning. Resist the urge to introduce dynamic Repos.
   """
 
-  use Boundary, top_level?: true, deps: []
+  use Boundary, top_level?: true, deps: [], exports: [BusyRetry]
 
   use Ecto.Repo,
     otp_app: :grappa,

@@ -397,4 +397,20 @@ defmodule GrappaWeb.FallbackControllerTest do
       assert msg =~ "should be at least 3"
     end
   end
+
+  describe "#523/#518 transient DB unavailability" do
+    # A write path wrapped in `Grappa.Repo.BusyRetry.run/1` returns
+    # `{:error, :db_unavailable}` when a transient SQLITE_BUSY outlives the
+    # retry budget. That is a retryable server state, NOT a 500 raise — the
+    # boundary must surface a typed 503 so a caller (and the e2e harness) can
+    # tell "DB busy, retry" apart from a real application bug. Retry-After 1
+    # matches the sub-second scale of write-lock contention.
+    test "{:error, :db_unavailable} → 503 db_unavailable + Retry-After 1" do
+      conn = FallbackController.call(build_conn_for_call(), {:error, :db_unavailable})
+
+      assert conn.status == 503
+      assert Jason.decode!(conn.resp_body) == %{"error" => "db_unavailable"}
+      assert Plug.Conn.get_resp_header(conn, "retry-after") == ["1"]
+    end
+  end
 end

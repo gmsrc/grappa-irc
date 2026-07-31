@@ -1,0 +1,194 @@
+defmodule Grappa.Repo.BusyRetry do
+  @moduledoc """
+  Shared SQLite busy-retry engine (#523 / #518).
+
+  SQLite is single-writer at the file level. Under WAL with `pool_size >
+  1` a transient write-lock contention (a slow writer held past
+  `busy_timeout`) or a pool `queue_timeout` raises — and unless the
+  caller rides it out, that transient fault escapes as a **500**. The
+  retry/classify discipline shipped inside `Grappa.Scrollback` (#336 /
+  #340) for the message hot path ONLY; this module extracts it so EVERY
+  write path can wrap its op the same way — "implement once, reuse
+  everywhere."
+
+  ## Contract
+
+  `run/1` takes a zero-arity `op` returning `{:ok, term()}` or `{:error,
+  Ecto.Changeset.t()}` and returns:
+
+    * `{:ok, term()}` — the op succeeded (possibly after retries).
+    * `{:error, Ecto.Changeset.t()}` — a validation failure returned by
+      the op. Passed straight through, **never retried** (it is not a
+      fault).
+    * `{:error, :db_unavailable}` — a TRANSIENT fault
+      (`DBConnection.ConnectionError` / a busy-or-locked `%Exqlite.Error{}`)
+      that persisted for the whole retry budget. A web caller routes this
+      through `FallbackController` to a clean **503** (#518) instead of a
+      500 raise.
+
+  A **non-transient** `%Exqlite.Error{}` (syntax / corruption) is NOT
+  saturation: retrying only spins. It **re-raises** with its original
+  stacktrace — a real bug the operator/CI must see as a loud 500, not one
+  masked as transient backpressure (CLAUDE.md "no silent-swallow at
+  boundaries"). This is the deliberate divergence from
+  `Scrollback.with_pool_retry/1`, whose #336 never-crash-the-session
+  contract makes it rescue even this and drop the row; a stateless web
+  write has no such contract, so the honest surface is the raise.
+
+  The retry loop runs over a wall-clock BUDGET, sleeping a linear backoff
+  capped per attempt, so a normal write caught behind a burst is ridden
+  out; only sustained saturation degrades.
+  """
+
+  @budget_ms Application.compile_env(:grappa, [:busy_retry, :budget_ms], 1_500)
+  @backoff_ms Application.compile_env(:grappa, [:busy_retry, :backoff_ms], 25)
+  @backoff_cap_ms Application.compile_env(:grappa, [:busy_retry, :backoff_cap_ms], 200)
+
+  require Logger
+
+  @type fault_kind :: :queue_timeout | :busy_locked
+
+  @typedoc """
+  Per-contention observer. Called once per RIDDEN-OUT transient attempt with
+  `terminal?: false` (attempt strictly increments 1, 2, …) and once on
+  budget-exhaustion with `terminal?: true`. `Grappa.Scrollback` passes
+  `&Scrollback.Telemetry.contention/3` here, so its #357 contention counters
+  are driven straight off this hook (one engine, no forked emitter).
+  """
+  @type on_contention :: (fault_kind(), pos_integer(), boolean() -> any())
+
+  @doc """
+  Runs `op` with bounded retry over transient SQLite write contention.
+  See the moduledoc for the full contract.
+  """
+  @spec run((-> {:ok, result} | {:error, Ecto.Changeset.t()})) ::
+          {:ok, result} | {:error, Ecto.Changeset.t()} | {:error, :db_unavailable}
+        when result: var
+  def run(op) when is_function(op, 0), do: run(op, [])
+
+  @doc """
+  As `run/1`, with `opts`:
+
+    * `:on_contention` — an `t:on_contention/0` observer (see the type).
+  """
+  @spec run((-> {:ok, result} | {:error, Ecto.Changeset.t()}), keyword()) ::
+          {:ok, result} | {:error, Ecto.Changeset.t()} | {:error, :db_unavailable}
+        when result: var
+  def run(op, opts) when is_function(op, 0) and is_list(opts) do
+    deadline = System.monotonic_time(:millisecond) + @budget_ms
+    loop(op, opts, deadline, 1)
+  end
+
+  @spec loop((-> {:ok, result} | {:error, Ecto.Changeset.t()}), keyword(), integer(), pos_integer()) ::
+          {:ok, result} | {:error, Ecto.Changeset.t()} | {:error, :db_unavailable}
+        when result: var
+  defp loop(op, opts, deadline, attempt) do
+    maybe_inject_fault()
+    op.()
+  rescue
+    error in [DBConnection.ConnectionError, Exqlite.Error] ->
+      cond do
+        not transient_fault?(error) ->
+          # Syntax / corruption — retrying spins pointlessly. Re-raise with
+          # the original stacktrace so it surfaces as a loud 500, not a 503.
+          reraise error, __STACKTRACE__
+
+        System.monotonic_time(:millisecond) < deadline ->
+          on_contention(opts, fault_kind(error), attempt, false)
+          # The backoff sleep runs after the failed checkout was already
+          # released, so it holds no connection — bounded backpressure on the
+          # flooding caller, not a held-conn leak (#340).
+          Process.sleep(min(@backoff_ms * attempt, @backoff_cap_ms))
+          loop(op, opts, deadline, attempt + 1)
+
+        true ->
+          on_contention(opts, fault_kind(error), attempt, true)
+
+          Logger.warning(
+            "db write unavailable: SQLite pool saturated for the full " <>
+              "#{@budget_ms}ms retry budget (#{attempt} attempts) — returning :db_unavailable",
+            fault: fault_kind(error)
+          )
+
+          {:error, :db_unavailable}
+      end
+  end
+
+  # Invoke the caller's contention observer if one was supplied. Its return is
+  # discarded — it is a side-channel (telemetry), not part of the retry result.
+  @spec on_contention(keyword(), fault_kind(), pos_integer(), boolean()) :: :ok
+  defp on_contention(opts, kind, attempt, terminal?) do
+    case Keyword.get(opts, :on_contention) do
+      nil -> :ok
+      fun when is_function(fun, 3) -> _ = fun.(kind, attempt, terminal?)
+    end
+
+    :ok
+  end
+
+  @doc """
+  Is this caught exception a TRANSIENT write-contention fault (retry) or a
+  permanent one (surface at once)? A pool `queue_timeout` is always
+  transient; for an `%Exqlite.Error{}` the message text ("busy"/"locked")
+  is the only discriminator SQLite gives us. Public so the scrollback
+  wrapper reuses the SAME classifier rather than forking one.
+  """
+  @spec transient_fault?(Exception.t()) :: boolean()
+  def transient_fault?(%DBConnection.ConnectionError{}), do: true
+
+  def transient_fault?(%Exqlite.Error{message: message}) when is_binary(message) do
+    downcased = String.downcase(message)
+    String.contains?(downcased, "busy") or String.contains?(downcased, "locked")
+  end
+
+  def transient_fault?(%Exqlite.Error{}), do: false
+
+  # Only reached after `transient_fault?/1` returned true, so an
+  # `%Exqlite.Error{}` here is always busy/locked and a `ConnectionError`
+  # always a pool queue_timeout.
+  @spec fault_kind(DBConnection.ConnectionError.t() | Exqlite.Error.t()) :: fault_kind()
+  defp fault_kind(%DBConnection.ConnectionError{}), do: :queue_timeout
+  defp fault_kind(%Exqlite.Error{}), do: :busy_locked
+
+  ## ----- Test-only fault injection ------------------------------------
+  #
+  # The pool_size:1 SQL Sandbox cannot reproduce a real, fast SQLITE_BUSY
+  # (busy_timeout 30s, queue_target 5s, a single shared connection = no
+  # self-contention), so an end-to-end 503/degrade path (#518) cannot be
+  # proven with a genuine fault. This seam lets a test force the next ops in
+  # THIS process to raise a transient busy. It is COMPILE-GATED to
+  # `Mix.env() == :test`: every other build compiles `maybe_inject_fault/0`
+  # to a no-op (dead-code-eliminated), so prod carries no injectable
+  # behaviour and pays nothing. Scoped to the calling process's dictionary,
+  # so it auto-clears with the test process and cannot leak into a sibling
+  # test (unlike a global `:persistent_term`).
+
+  if Mix.env() == :test do
+    @fault_pdict_key {__MODULE__, :inject_transient_faults}
+
+    @doc false
+    @spec inject_transient_faults(non_neg_integer()) :: :ok
+    def inject_transient_faults(n) when is_integer(n) and n >= 0 do
+      Process.put(@fault_pdict_key, n)
+      :ok
+    end
+
+    defp maybe_inject_fault do
+      case Process.get(@fault_pdict_key, 0) do
+        n when n > 0 ->
+          Process.put(@fault_pdict_key, n - 1)
+          # "Database busy" is the VERBATIM message a real write-lock
+          # SQLITE_BUSY raises through Ecto (proven by
+          # `Grappa.Repo.BusyRetryFidelityTest`, and the #523 prod evidence) —
+          # so the injected fault is byte-faithful to reality, not a shape we
+          # merely know our own classifier accepts.
+          raise %Exqlite.Error{message: "Database busy", statement: nil}
+
+        _ ->
+          :ok
+      end
+    end
+  else
+    defp maybe_inject_fault, do: :ok
+  end
+end
