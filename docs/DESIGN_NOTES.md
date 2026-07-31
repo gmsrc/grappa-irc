@@ -24556,3 +24556,84 @@ own-sender default that used to lazily equal own nick is now an explicit peer).
 e2e (`issue576-own-msg-unread-badge.spec.ts`): send own lines in a peer DM, force
 the read cursor back below them (the reported cross-device regress), badge shows
 NOTHING; a later peer line makes it "1".
+---
+
+## 2026-07-31 — shottino: a window is a folded name, not a spelling
+
+Reported from live use: the sidebar grew a second tab for a channel already
+open, and a stray `AzzuRRa` / `azzurra` pair sat next to the `$server` window
+of the same network.
+
+**One identity rule, ASCII, shared with the bridge.** shottino compared window
+names with `strcmp` at ~30 call sites, so any case difference forked a window —
+and worse, a row whose `[network/channel]` prefix disagreed in case with its
+window's spelling filed under a scope no window looks up, so it was drawn in
+*none* of them. Every lookup now goes through `window_matches`, and every row
+files under `window_scope_key`, which FOLDS at the one door so downstream
+comparisons stay a plain `strcmp` — the same "canonical storage + `==`" shape
+the server uses for its channel-keyed tables (CLAUDE.md, #525), not a fold
+repeated at each call site.
+
+The fold is `ircd_fold` in `ircd.c`, and it CHANGED: it was RFC1459
+(`[ ] \ ~` → `{ } | ^`). bahamut advertises and implements `CASEMAPPING=ascii`,
+so `foo[1]` and `foo{1}` are two different people — the exact over-fold #525
+corrected server-side, which the client had never followed. `test_ircd` asserted
+the RFC1459 behaviour, i.e. asserted the bug, and was corrected with it. One fold
+in the binary now, shared by the app and the `--ircd` bridge; `nick_case_equal`
+stopped being `strcasecmp`, which folds bytes above 127 under a UTF-8 locale and
+would merge `#CAFÉ` into `#café`.
+
+**The `AzzuRRa` tab is a server-side classification gap.** azzurra's ircd sends
+global notices from a source spelled like the network. grappa's
+`route_non_channel_notice/3` sees a nick-shaped sender that is not a known
+service, files the row under a window of that name, and `maybe_open_query_window`
+mints a query window for it — which every client then mirrors faithfully.
+shottino now routes a target that IS the network name to `$server`
+(`route_target`), at the one door where windows are opened and rows are filed.
+Deliberately narrow (exact folded match on the network name) so no ordinary query
+is swallowed; the cost is a hypothetical user nicked exactly like the network,
+which networks reserve. **The real fix is server-side** — cicchetto cannot know
+what shottino knows here — and is still open: whether cic shows the same stray
+window was not verifiable from the dev host (no prod access, empty local DB).
+
+**Reply cards answer where the question was asked.** `/whois` typed in a channel
+rendered its card into `$server`, two tabs away, which reads as the command
+having done nothing. Cards now file under the focused window — decided under one
+lock and carried as the row's own prefix, so a card cannot be filed under a
+window the user switched to between the decision and the write. A card for a
+network the reader is not currently in still lands on that network's `$server`.
+
+**CTCP replies are answers, not messages.** A `\x01PING …\x01` NOTICE used to
+render as a raw control-character row in a query window that opened by itself.
+It renders as a card now (so it lands where the question was typed), does not
+re-key into a query window, and is drawn only when LIVE — replaying one out of
+scrollback would announce a round trip that finished hours ago, timed against a
+stamp from a previous run. `/ping` sends its probe as a RAW line rather than
+through the message path, so timing somebody neither persists a scrollback row
+nor mints a window; the stamp travels in the payload and comes back in the reply,
+which is why no table of outstanding pings is kept.
+
+**The menu had been unreachable by mouse.** `overlay_key` consumed EVERY key
+while an overlay was up — `KEY_MOUSE` included — and returned "handled", so
+`handle_mouse`'s overlay branch had never run: clicking an entry did nothing and
+only Esc dismissed the menu. With `KEY_MOUSE` passed through, that branch works
+as written, plus the horizontal half of the hit test it never had (row-only
+testing made a click on the far side of the screen count as a click on whatever
+entry shared the line) and hover-to-highlight. The box's drawn width/height are
+written back by `draw()` beside its clamped position, for the reason the position
+already was.
+
+**Block is local, and says so.** `/block` (`/ignore`) hides somebody in this
+client only — nothing upstream, the server keeps storing, the PWA keeps showing.
+Chosen over a channel `+q`/mute after checking what azzurra's bahamut actually
+implements. The blocked are hidden, not forgotten: ids, the bridge and the roster
+still see them, because the nicklist answers "who is here", which is not a matter
+of taste. Persisted in `~/.local/share/shottino/blocked`; a list that has to be
+retyped every morning is one nobody keeps. The scrollback-id stamp now fires only
+when a row was actually appended — otherwise a hidden message stamps its id onto
+somebody else's line and drags the unread divider there.
+
+**Op actions are offered only where they work.** Kick/ban appear in the menu when
+the focused window is a channel and this user holds `@` there, read off the
+roster the server already sent rather than tracked separately. A menu that offers
+`/kick` to somebody who cannot kick teaches the user that the client lies.
