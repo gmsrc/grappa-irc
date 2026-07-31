@@ -3556,7 +3556,7 @@ static void ws_push_user(struct app *app, const char *event, const char *payload
     if (app->wire_echo) {
         char summary[MAX_LINE];
         wire_push_summary(event, payload, summary, sizeof(summary));
-        log_line(app, "%s", summary);
+        log_line(app, "%s ref=%s", summary, ref);
     }
 }
 
@@ -4521,12 +4521,18 @@ static void handle_ws_frame(struct app *app, const char *frame) {
          * KIND — never the payload, which is the conversation itself. */
         const char *kind = json_string(json_get(f.payload, "kind"));
         const char *status = json_string(json_get(f.payload, "status"));
-        log_line(app, "wire <- %s%s%s%s%s", f.event, kind ? " kind=" : "", kind ? kind : "",
+        log_line(app, "wire <- %s%s%s%s%s%s%s", f.event, f.ref ? " ref=" : "",
+                 f.ref ? f.ref : "", kind ? " kind=" : "", kind ? kind : "",
                  status ? " status=" : "", status ? status : "");
     }
     if (strcmp(f.event, "phx_reply") == 0) {
+        /* An error reply answers whatever was pushed — a join, or a verb.
+         * Calling every one of them a "channel join error" sent the
+         * reader looking at the wrong thing; the topic and the ref say
+         * which push it belongs to. */
         if (json_str_is(json_get(f.payload, "status"), "error"))
-            log_line(app, "channel join error: %.200s", frame);
+            log_line(app, "server refused a request on %s (ref %s): %.200s",
+                     f.topic ? f.topic : "?", f.ref ? f.ref : "?", frame);
     } else if (strcmp(f.event, "event") == 0) {
         struct wire_event ev;
         if (wire_narrow(f.payload, &ev)) {
