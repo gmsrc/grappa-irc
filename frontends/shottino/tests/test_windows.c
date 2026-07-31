@@ -418,6 +418,34 @@ TEST(kill_is_offered_only_to_an_oper) {
     free_app(app);
 }
 
+/* ── /wire ─────────────────────────────────────────────────────────── */
+
+TEST(the_wire_echo_never_prints_a_payload) {
+    char out[MAX_LINE];
+    /* The verb and the network it names — that is the diagnostic. */
+    wire_push_summary("whois", "{\"network_id\":7,\"nick\":\"alice\"}", out, sizeof(out));
+    CHECK_STR(out, "wire -> whois (network_id=7)");
+    CHECK(strstr(out, "alice") == NULL);
+
+    /* And NOT the payload, which is where the passwords are: /oper
+     * carries one directly, and a raw line carries whatever was typed —
+     * including the IDENTIFY every network's services want. A debug
+     * switch that leaks a credential is worse than the bug it was turned
+     * on to find. */
+    wire_push_summary("oper", "{\"network_id\":7,\"name\":\"vjt\",\"password\":\"hunter2\"}", out,
+                      sizeof(out));
+    CHECK(strstr(out, "hunter2") == NULL);
+    CHECK(strstr(out, "vjt") == NULL);
+    wire_push_summary("raw", "{\"network_id\":7,\"line\":\"PRIVMSG NickServ :IDENTIFY hunter2\"}",
+                      out, sizeof(out));
+    CHECK(strstr(out, "hunter2") == NULL);
+    CHECK(strstr(out, "IDENTIFY") == NULL);
+
+    /* A payload without a network still names its verb. */
+    wire_push_summary("read_cursor", "{\"channel\":\"#c\"}", out, sizeof(out));
+    CHECK_STR(out, "wire -> read_cursor");
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -438,5 +466,6 @@ int main(void) {
     RUN(an_oper_verb_is_matched_as_a_whole_word);
     RUN(every_oper_verb_explains_itself);
     RUN(kill_is_offered_only_to_an_oper);
+    RUN(the_wire_echo_never_prints_a_payload);
     return test_report();
 }

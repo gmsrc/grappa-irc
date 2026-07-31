@@ -708,6 +708,10 @@ struct app {
      * deliver them. */
     bool roster_focus;
     bool key_echo;
+    /* /wire — echo what the websocket is carrying. Same reason as
+     * key_echo: whether a frame did or did not cross the socket is not
+     * something to guess at across a bug report. */
+    bool wire_echo;
     bool animate_media;
     bool inline_media_enabled;
     /* #451 opt-in: also auto-render media from hosts that are NOT this
@@ -3505,6 +3509,23 @@ static bool ws_send_text(struct app *app, const char *text) {
     return ok;
 }
 
+/* One line describing an outbound push, for /wire.
+ *
+ * The VERB and the network it names, and deliberately nothing else. A
+ * payload is not safe to print: `oper` carries the operator password,
+ * and `raw` carries whatever the user typed — which on any network
+ * includes `PRIVMSG NickServ :IDENTIFY <password>`. A debug switch that
+ * leaks a credential is a worse bug than the one it was turned on to
+ * find, and "did the verb go out, naming which network" is the whole
+ * question anyway. */
+static void wire_push_summary(const char *event, const char *payload, char *out, size_t out_sz) {
+    const char *key = "\"network_id\":";
+    const char *net = payload ? strstr(payload, key) : NULL;
+    if (net) snprintf(out, out_sz, "wire -> %s (network_id=%ld)", event,
+                      strtol(net + strlen(key), NULL, 10));
+    else snprintf(out, out_sz, "wire -> %s", event);
+}
+
 static void ws_join(struct app *app, const char *topic) {
     char ref[32];
     snprintf(ref, sizeof(ref), "%lu", ++app->ws_ref);
@@ -3513,6 +3534,7 @@ static void ws_join(struct app *app, const char *topic) {
     free(topic_json);
     ws_send_text(app, frame);
     free(frame);
+    if (app->wire_echo) log_line(app, "wire -> join %s", topic);
 }
 
 static void ws_push_user(struct app *app, const char *event, const char *payload) {
@@ -3531,6 +3553,11 @@ static void ws_push_user(struct app *app, const char *event, const char *payload
     free(event_json);
     ws_send_text(app, frame);
     free(frame);
+    if (app->wire_echo) {
+        char summary[MAX_LINE];
+        wire_push_summary(event, payload, summary, sizeof(summary));
+        log_line(app, "%s", summary);
+    }
 }
 
 /* ── Panes ─────────────────────────────────────────────────────────────
@@ -4488,6 +4515,14 @@ static void handle_ws_frame(struct app *app, const char *frame) {
     if (!wire_frame_split(json_root(doc), &f)) {
         json_free(doc);
         return;
+    }
+    if (app->wire_echo) {
+        /* Inbound: the frame's own event name, and for a data push the
+         * KIND — never the payload, which is the conversation itself. */
+        const char *kind = json_string(json_get(f.payload, "kind"));
+        const char *status = json_string(json_get(f.payload, "status"));
+        log_line(app, "wire <- %s%s%s%s%s", f.event, kind ? " kind=" : "", kind ? kind : "",
+                 status ? " status=" : "", status ? status : "");
     }
     if (strcmp(f.event, "phx_reply") == 0) {
         if (json_str_is(json_get(f.payload, "status"), "error"))
@@ -6871,7 +6906,7 @@ static const char *commands[] = {
     "/settings", "/share", "/split", "/splith", "/splitv", "/splitw", "/squit", "/stats", "/topic",
     "/trace", "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unkline", "/unsplit",
     "/upload", "/users", "/version", "/view", "/voice", "/w", "/wallops", "/watch", "/who",
-    "/whois", "/whowas", "/win", "/window"
+    "/whois", "/whowas", "/win", "/window", "/wire"
 };
 
 static bool prefix_ci(const char *s, const char *prefix) {
@@ -7897,6 +7932,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "unalias") == 0) log_line(app, "/unalias name — remove a user-defined alias");
     else if (strcmp(cmd, "media") == 0) log_line(app, "/media [on|off|all|first-party|anim|still] — inline pictures, ON for ALL hosts by default: every image link is fetched when it scrolls into view, so the host learns your IP");
     else if (strcmp(cmd, "mouse") == 0) log_line(app, "/mouse [on|off] — mouse tracking; bare /mouse toggles, off gives text selection back unconditionally");
+    else if (strcmp(cmd, "wire") == 0) log_line(app, "/wire — echo websocket traffic by name (verb out, kind in); payloads are never logged; /wire again stops");
     else if (strcmp(cmd, "keys") == 0) log_line(app, "/keys — echo key codes as you press them, to see what your terminal actually sends; /keys again stops");
     else if (strcmp(cmd, "split") == 0 || strcmp(cmd, "splith") == 0) log_line(app, "/split, /splith — split the chat area into stacked panes; Ctrl-Alt-Up/Down switches, Ctrl-Alt-+/- resizes");
     else if (strcmp(cmd, "splitv") == 0 || strcmp(cmd, "splitw") == 0) log_line(app, "/splitv, /splitw — split the chat area side by side; both spellings do the same thing");
@@ -8583,6 +8619,16 @@ static void handle_command_dispatch(struct app *app, char *line) {
         open_panel(app, PANEL_ADMIN);
     } else if (strcmp(line, "/share") == 0) {
         mint_share_link(app);
+    } else if (strcmp(line, "/wire") == 0) {
+        /* The socket's own /keys. Whether a verb reached the server, and
+         * whether an answer came back, is the first question about every
+         * "nothing happened" report — and it was unanswerable from
+         * inside the client. */
+        app->wire_echo = !app->wire_echo;
+        log_line(app,
+                 "wire echo %s — pushes and inbound frames are logged by NAME (never their "
+                 "payload: those carry passwords); /wire again to stop",
+                 app->wire_echo ? "ON" : "OFF");
     } else if (strcmp(line, "/keys") == 0) {
         /* Debugging tools are infrastructure: which escape sequence your
          * terminal sends for Ctrl-Alt-+ is not something to guess at

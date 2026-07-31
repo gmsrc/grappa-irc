@@ -278,6 +278,17 @@ chooses it, the wheel walks the list, and a click anywhere outside the box
 closes it — the same as Esc. Right-click needs mouse reporting, which is on by
 default; `Ctrl-R` works either way.
 
+## Seeing what the socket is doing
+
+`/wire` echoes websocket traffic: `wire -> whois (network_id=7)` when a verb
+goes out, `wire <- event kind=whois_bundle` when an answer comes back, and the
+topic of every join. It logs frames by NAME only — never their payloads, which
+carry the `/oper` password and every `IDENTIFY` typed through `/quote`. `/wire`
+again stops it.
+
+It exists for one question: when a command "does nothing", did it reach the
+server, and did the server answer? That was unanswerable from inside the client.
+
 ## Tests
 
 ```sh
