@@ -131,14 +131,14 @@ defmodule Grappa.Repo.BusyRetryTest do
       non_terminal = Enum.filter(events, fn {_, _, terminal?} -> terminal? == false end)
       attempts = Enum.map(non_terminal, fn {_, attempt, _} -> attempt end)
       assert attempts == Enum.to_list(1..length(non_terminal))
-      assert length(non_terminal) >= 1
+      assert non_terminal != []
       assert Enum.all?(events, fn {kind, _, _} -> kind == :busy_locked end)
     end
 
     test "a queue_timeout tags the callback :queue_timeout" do
       {:ok, calls} = Agent.start_link(fn -> [] end)
 
-      on_contention = fn kind, _attempt, _terminal? -> Agent.update(calls, &[kind | &1]) end
+      on_contention = fn kind, _, _ -> Agent.update(calls, &[kind | &1]) end
 
       assert {:error, :db_unavailable} =
                BusyRetry.run(fn -> raise_queue_timeout() end, on_contention: on_contention)

@@ -24775,3 +24775,84 @@ first diagnostic built rather than the fourth.
 slot order is the contract, and it lives in one place with a test that spells
 out all three shapes. A join_ref of 0 marshals as JSON `null`, which is what
 the heartbeat's never-joined "phoenix" topic wants.
+
+## 2026-07-31 — #523 / #518 (B1): BusyRetry wired into every web-reachable write — 503, not 500
+
+**What.** ROOT A shipped `Grappa.Repo.BusyRetry` (the shared SQLite busy-retry
+engine) + the `FallbackController` mapping `{:error, :db_unavailable} → 503
+db_unavailable, Retry-After 1`. B1 wires that engine into **every
+web-reachable entry-point write** outside `Grappa.Scrollback`. A transient
+`SQLITE_BUSY` (a slow writer past `busy_timeout`, or a pool `queue_timeout`)
+that outlasts the retry budget now degrades to a clean **503** instead of the
+old raised **500** (#518). The pattern per site: wrap the INNERMOST clean Repo
+op (returns `{:ok, _} | {:error, changeset}`) in `Repo.BusyRetry.run/1`, then
+thread `:db_unavailable` up every `@spec` + caller to a controller/edge.
+
+**Terminal-policy split — three doors, three contracts.** The engine is shared;
+the *terminal* policy is not, and the split is deliberate:
+
+- **web-503** (this change): wrap → `:db_unavailable` → `FallbackController`
+  (REST) or a typed channel error reply (WS: `"open_failed"` / `"close_failed"`).
+- **scrollback-drop (#336)**: the message hot path
+  (`Scrollback.with_pool_retry/1`) rescues even a *non-transient* error and
+  drops the row — its never-crash-the-session contract. Unchanged.
+- **background-DROP (#590)**: a best-effort writer (a client-connect sample; a
+  session-driven query-window auto-open) logs + continues — NO 503, NO crash.
+
+A **non-transient** `%Exqlite.Error{}` (syntax/corruption) re-raises everywhere
+— a loud 500 the operator/CI must see, never masked as backpressure (CLAUDE.md
+"no silent-swallow at boundaries").
+
+**Whole-transaction wrap, retry OUTSIDE the tx.** `Visitors.create_anon` (POST
+/auth/login provisioning) and `Accounts.create_session` (all three auth doors:
+login provision, account login, share-token consume) wrap the WHOLE op in
+`BusyRetry.run`, not an inner statement — mirror of `Themes.copy_theme/2`. The
+busy is acquired at `BEGIN IMMEDIATE`, BEFORE the closure body runs, and the
+connection is only free to retry once the failed transaction has rolled back.
+Each closure was audited **ALL-DB** — no PubSub / ETS / token-delivery /
+telemetry side-effect inside — so a retried transaction is safe to re-run. The
+session bearer (`Session.id`) is delivered by the CALLER, *after* the op
+returns, so a retry never double-delivers a token.
+
+**login dispatch skips the purge on `:db_unavailable`.** In `Visitors.Login`, a
+busy on the token mint (`issue_token`) fires AFTER the visitor + session are
+already live. The ordinary error arm purges the just-provisioned anon row so a
+retry starts clean; on `:db_unavailable` we do NOT — the row backs a running
+session (purging destroys it), and the purge is itself a DB delete that would
+re-saturate and mask the 503. The client retries into case 2/3 for the
+now-existing row and gets a token.
+
+**record_client_source is best-effort DROP (#590).** The client-connect prefix
+sample must never fail the connect: `:db_unavailable` is logged + dropped,
+handled DISTINCTLY *before* the changeset clause (a bare `.errors` on the atom
+would crash).
+
+**update_nick EXCLUDED from B1 (#590).** The session-driven
+`visitor_nick_persister` write sits on the NICK-echo path with a terminal-DROP
+contract — not a web door. Left to #590 (confirmed with vjt).
+
+**Widening `open/4` obligated every caller.** `QueryWindows.open/4` and
+`close/4` gained `:db_unavailable`. The rule: whoever widens a return type
+handles ALL callers, full stop. The two WS handlers reply typed errors
+(`"open_failed"` via a pre-existing catch-all `else`; `"close_failed"` via a new
+explicit arm). `Session.Server.maybe_open_query_window/2` — an IRC-driven
+background DM auto-open — gained a `:db_unavailable` arm that **logs +
+continues** (#590): its `case` had only `{:ok, _}` + `{:error, changeset}`, so a
+saturating auto-open would have `CaseClauseError`-crashed the whole session,
+violating both the function's own "session continues" moduledoc and the #590
+policy. Dialyzer does NOT flag a non-exhaustive `case`, so the gate was blind to
+it — caught by a caller read-review of the widened contract, not by check.sh.
+
+**New wire tokens are declared, not just emitted.** Both new error strings — WS
+`"close_failed"` and REST `"db_unavailable"` — are added to
+`GrappaWeb.ErrorTokens` (`channel_error_token/0` / `rest_error_token/0`), the
+governance registry `GrappaWeb.ErrorTokensDriftTest` pins: an error token
+emitted from `lib/grappa_web/**` but undeclared fails the suite. (The REST
+`db_unavailable` is ROOT A core's `FallbackController` mapping — emitted since
+the engine landed, but undeclared until B1's full-suite run surfaced the drift.)
+
+**Known pre-existing edge (not changed here).** The one-shot share token is
+`mark_consumed` BEFORE the session mint, so a saturated mint burns the token —
+a property of the consume-before-mint order that predates B1. The retryable-later
+503 is still strictly better than the old 500; reordering was judged too risky
+to fold into B1.

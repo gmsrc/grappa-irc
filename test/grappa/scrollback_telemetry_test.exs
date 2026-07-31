@@ -159,8 +159,8 @@ defmodule Grappa.ScrollbackTelemetryTest do
       # Three raises → three contention events, attempts 1, 2, 3, all
       # dropped: false. The counters advance per attempt, never stall.
       for expected <- 1..3 do
-        assert_receive {:telemetry, [:grappa, :scrollback, :persist, :contention],
-                        %{attempt: ^expected}, %{fault: :busy_locked, dropped: false}}
+        assert_receive {:telemetry, [:grappa, :scrollback, :persist, :contention], %{attempt: ^expected},
+                        %{fault: :busy_locked, dropped: false}}
       end
     end
 

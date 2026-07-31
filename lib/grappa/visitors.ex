@@ -136,7 +136,7 @@ defmodule Grappa.Visitors do
   folded-nick collision).
   """
   @spec find_or_provision_anon(String.t(), String.t(), String.t() | nil) ::
-          {:ok, Visitor.t()} | {:error, :network_unconfigured | Ecto.Changeset.t()}
+          {:ok, Visitor.t()} | {:error, :network_unconfigured | Ecto.Changeset.t() | :db_unavailable}
   def find_or_provision_anon(nick, network_slug, ip)
       when is_binary(nick) and is_binary(network_slug) do
     find_or_provision_anon(nick, network_slug, ip, false)
@@ -152,7 +152,7 @@ defmodule Grappa.Visitors do
   it from there. `find_or_provision_anon/3` delegates here with `false`.
   """
   @spec find_or_provision_anon(String.t(), String.t(), String.t() | nil, boolean()) ::
-          {:ok, Visitor.t()} | {:error, :network_unconfigured | Ecto.Changeset.t()}
+          {:ok, Visitor.t()} | {:error, :network_unconfigured | Ecto.Changeset.t() | :db_unavailable}
   def find_or_provision_anon(nick, network_slug, ip, incognito)
       when is_binary(nick) and is_binary(network_slug) and is_boolean(incognito) do
     case Networks.get_network_by_slug(network_slug) do
@@ -171,9 +171,15 @@ defmodule Grappa.Visitors do
   defp maybe_refresh_ip(%Visitor{} = visitor, nil), do: {:ok, visitor}
 
   defp maybe_refresh_ip(%Visitor{} = visitor, new_ip) when is_binary(new_ip) do
-    visitor
-    |> Visitor.ip_changeset(new_ip)
-    |> Repo.update()
+    # #523 — the returning-visitor login branch (same POST /auth/login door as
+    # `create_anon`) rides out a transient SQLITE_BUSY on the IP refresh;
+    # sustained saturation degrades to `{:error, :db_unavailable}` → a clean 503
+    # (#518). A single UPDATE, so the retry re-runs one idempotent statement.
+    Repo.BusyRetry.run(fn ->
+      visitor
+      |> Visitor.ip_changeset(new_ip)
+      |> Repo.update()
+    end)
   end
 
   # #211 phase 7 — a fresh visitor identity is a BARE row (TTL + audit ip)
@@ -185,28 +191,47 @@ defmodule Grappa.Visitors do
   # behind. The `(visitor_id, network_id)` + folded-nick partial unique
   # indexes (phase 4b) are the collision guards.
   @spec create_anon(String.t(), pos_integer(), String.t() | nil, boolean()) ::
-          {:ok, Visitor.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Visitor.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   defp create_anon(nick, network_id, ip, incognito) do
     ttl_seconds = if incognito, do: @incognito_linger_seconds, else: @anon_ttl_seconds
     expires_at = DateTime.add(DateTime.utc_now(), ttl_seconds, :second)
 
-    Repo.immediate_transaction(fn ->
-      with {:ok, visitor} <-
-             %{expires_at: expires_at, ip: ip, incognito: incognito}
-             |> Visitor.create_changeset()
-             |> Repo.insert(),
-           {:ok, _} <-
-             Credentials.upsert_visitor_credential(visitor.id, network_id, %{
-               nick: nick,
-               sasl_user: nick,
-               auth_method: :none
-             }),
-           {:ok, _} <- seed_incognito_upload_ttl(visitor, incognito) do
-        visitor
-      else
-        {:error, changeset} -> Repo.rollback(changeset)
-      end
+    # #523 — ride out a transient SQLITE_BUSY at the transaction's `BEGIN
+    # IMMEDIATE` (where the write-lock is acquired under contention); sustained
+    # saturation degrades to `{:error, :db_unavailable}` → a clean 503 (#518) at
+    # POST /auth/login provisioning instead of a 500 raise. The retry wraps the
+    # WHOLE transaction from OUTSIDE (mirror of `Themes.copy_theme/2`): a busy
+    # at BEGIN runs before the closure body, and the connection is only free to
+    # retry once the failed transaction has rolled back. The closure is
+    # ALL-DB (Visitor insert + credential upsert + settings seed) with NO
+    # PubSub/ETS/token side-effect, so a retried transaction is safe to re-run.
+    Repo.BusyRetry.run(fn ->
+      Repo.immediate_transaction(fn ->
+        provision_anon_row(nick, network_id, expires_at, ip, incognito)
+      end)
     end)
+  end
+
+  # The provisioning transaction body, extracted so `create_anon/4`'s
+  # `BusyRetry.run → immediate_transaction` wrapper stays within credo's
+  # max-nesting depth. Returns the visitor on success; a folded-nick
+  # collision rolls the whole transaction back (throws, never returns).
+  defp provision_anon_row(nick, network_id, expires_at, ip, incognito) do
+    with {:ok, visitor} <-
+           %{expires_at: expires_at, ip: ip, incognito: incognito}
+           |> Visitor.create_changeset()
+           |> Repo.insert(),
+         {:ok, _} <-
+           Credentials.upsert_visitor_credential(visitor.id, network_id, %{
+             nick: nick,
+             sasl_user: nick,
+             auth_method: :none
+           }),
+         {:ok, _} <- seed_incognito_upload_ttl(visitor, incognito) do
+      visitor
+    else
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
   end
 
   # #363 — a fresh incognito session seeds its OWN upload-TTL preference to a
@@ -219,7 +244,7 @@ defmodule Grappa.Visitors do
   # leaves them be (vjt 2026-07-26). Non-incognito provisions leave the pref
   # unset and fall through to the standard 24h upload default.
   @spec seed_incognito_upload_ttl(Visitor.t(), boolean()) ::
-          {:ok, term()} | {:error, Ecto.Changeset.t()}
+          {:ok, term()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   defp seed_incognito_upload_ttl(_, false), do: {:ok, :not_incognito}
 
   defp seed_incognito_upload_ttl(%Visitor{id: id}, true),
@@ -1158,18 +1183,23 @@ defmodule Grappa.Visitors do
   # → `:no_identity` (should not happen post-auth) surfaces as a
   # `:resolve_failed`-class abort via the caller's `with`.
   @spec attach_credential(Visitor.t(), Networks.Network.t()) ::
-          {:ok, Credential.t()} | {:error, :no_identity | Ecto.Changeset.t()}
+          {:ok, Credential.t()} | {:error, :no_identity | :db_unavailable | Ecto.Changeset.t()}
   defp attach_credential(%Visitor{id: id}, %Networks.Network{id: network_id}) do
     case Credentials.representative_visitor_credential(id) do
       {:ok, %Credential{nick: nick, ident: ident, realname: realname}} ->
-        Credentials.upsert_visitor_credential(id, network_id, %{
-          nick: nick,
-          ident: ident,
-          realname: realname,
-          sasl_user: nick,
-          auth_method: :none,
-          last_joined_channels: []
-        })
+        # #523 — ride out a transient SQLITE_BUSY on the accretion write;
+        # sustained saturation degrades to `{:error, :db_unavailable}` → a clean
+        # 503 (#518) at POST /session accretion instead of a 500 raise.
+        Repo.BusyRetry.run(fn ->
+          Credentials.upsert_visitor_credential(id, network_id, %{
+            nick: nick,
+            ident: ident,
+            realname: realname,
+            sasl_user: nick,
+            auth_method: :none,
+            last_joined_channels: []
+          })
+        end)
 
       {:error, :not_found} ->
         {:error, :no_identity}

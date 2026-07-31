@@ -371,7 +371,7 @@ defmodule Grappa.Accounts do
   IS the bearer token to hand back to the client.
   """
   @spec create_session(subject(), String.t() | nil, String.t() | nil, keyword()) ::
-          {:ok, Session.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Session.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def create_session({:user, user_id}, ip, user_agent, opts) when is_binary(user_id) do
     do_create_session(%{user_id: user_id, ip: ip, user_agent: user_agent}, opts)
   end
@@ -389,10 +389,19 @@ defmodule Grappa.Accounts do
         client_id -> %{created_at: now, last_seen_at: now, client_id: client_id}
       end
 
-    %Session{}
-    |> Session.changeset(Map.merge(attrs, extra))
-    |> validate_subject_exists()
-    |> Repo.insert()
+    # #523 — ride out a transient SQLITE_BUSY on the session-token insert;
+    # sustained saturation degrades to `{:error, :db_unavailable}` → a clean 503
+    # (#518) at every auth door (login provision, account login, share-token
+    # consume) instead of a 500 raise. The op is a single INSERT (subject-exists
+    # read + insert), all-DB with NO token delivery inside — the bearer
+    # (`Session.id`) is delivered by the CALLER after this returns, so a retried
+    # insert is safe (no double-delivery / registration side-effect).
+    Repo.BusyRetry.run(fn ->
+      %Session{}
+      |> Session.changeset(Map.merge(attrs, extra))
+      |> validate_subject_exists()
+      |> Repo.insert()
+    end)
   end
 
   # `Session.changeset/2` carries `assoc_constraint(:user)` and

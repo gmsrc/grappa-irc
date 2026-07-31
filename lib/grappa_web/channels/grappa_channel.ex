@@ -1064,9 +1064,8 @@ defmodule GrappaWeb.GrappaChannel do
     user_name = socket.assigns.user_name
 
     with {:ok, _} <- validate_args(nick: target_nick),
-         {:ok, subject} <- resolve_subject(user_name) do
-      :ok = QueryWindows.close(subject, network_id, target_nick, user_name)
-
+         {:ok, subject} <- resolve_subject(user_name),
+         :ok <- QueryWindows.close(subject, network_id, target_nick, user_name) do
       # UX-3 Z2 (2026-05-18): closing a query window makes its
       # scrollback (any peer DM rows) archive-eligible — list_archive/3
       # excludes open query targets via the `active_keyset`. Without
@@ -1090,6 +1089,9 @@ defmodule GrappaWeb.GrappaChannel do
     else
       {:error, :invalid_nick} -> {:reply, {:error, %{error: "invalid_nick"}}, socket}
       :error -> {:reply, {:error, %{error: "user_not_found"}}, socket}
+      # #523/#518 — transient DB saturation on the delete degrades to a clean
+      # channel error reply instead of crashing the socket with a raised busy.
+      {:error, :db_unavailable} -> {:reply, {:error, %{error: "close_failed"}}, socket}
     end
   end
 

@@ -207,6 +207,10 @@ defmodule GrappaWeb.Admin.SettingsController do
   defp apply_addressing_key("static_mapping_prefix", value) when is_binary(value) do
     case ServerSettings.put_static_mapping_prefix(value) do
       :ok -> :ok
+      # #523/#518 — transient DB saturation halts the fold with :db_unavailable
+      # so `update/2`'s `with` routes it to a clean 503 (FallbackController),
+      # NOT the 422 an invalid-setting tuple would render.
+      {:error, :db_unavailable} = err -> err
       {:error, :invalid_prefix} -> {:error, {:invalid_setting, "addressing.static_mapping_prefix"}}
     end
   end

@@ -37,7 +37,7 @@ defmodule GrappaWeb.MeThemeController do
 
   @doc false
   @spec update(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :bad_request | :not_found | Ecto.Changeset.t()}
+          Plug.Conn.t() | {:error, :bad_request | :not_found | Ecto.Changeset.t() | :db_unavailable}
   def update(conn, %{"light" => light} = params) do
     viewer = conn.assigns.current_subject
     subject = Subject.from_assigns(conn.assigns)

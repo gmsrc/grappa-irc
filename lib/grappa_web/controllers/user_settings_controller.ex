@@ -70,7 +70,7 @@ defmodule GrappaWeb.UserSettingsController do
   `Map.get/3` fall-throughs).
   """
   @spec update_notification_prefs(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t()}
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t() | :db_unavailable}
   def update_notification_prefs(conn, params) when map_size(params) > 0 do
     subject = Subject.from_assigns(conn.assigns)
 
@@ -108,7 +108,7 @@ defmodule GrappaWeb.UserSettingsController do
   `field_errors.upload_ttl_seconds` on rejection.
   """
   @spec update_upload_ttl_seconds(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t()}
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t() | :db_unavailable}
   def update_upload_ttl_seconds(conn, %{"upload_ttl_seconds" => seconds})
       when is_integer(seconds) or is_nil(seconds) do
     subject = Subject.from_assigns(conn.assigns)
@@ -139,7 +139,7 @@ defmodule GrappaWeb.UserSettingsController do
   not just the UI). 200 with the refreshed view on success.
   """
   @spec update_vhost(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :bad_request | :forbidden_vhost | Ecto.Changeset.t()}
+          Plug.Conn.t() | {:error, :bad_request | :forbidden_vhost | Ecto.Changeset.t() | :db_unavailable}
   def update_vhost(conn, %{"selection" => selection}) when is_list(selection) do
     subject = Subject.from_assigns(conn.assigns)
 
@@ -173,7 +173,7 @@ defmodule GrappaWeb.UserSettingsController do
   client-side (cic owns the DISPATCH table).
   """
   @spec update_aliases(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t()}
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t() | :db_unavailable}
   def update_aliases(conn, %{"aliases" => aliases}) when is_map(aliases) do
     subject = Subject.from_assigns(conn.assigns)
 
@@ -213,7 +213,7 @@ defmodule GrappaWeb.UserSettingsController do
   unset is the ABSENCE of a channel key and is never flattened server-side.
   """
   @spec update_display_prefs(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t()}
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t() | :db_unavailable}
   def update_display_prefs(conn, %{"display_prefs" => prefs}) when is_map(prefs) do
     subject = Subject.from_assigns(conn.assigns)
 

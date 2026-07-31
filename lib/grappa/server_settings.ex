@@ -149,7 +149,7 @@ defmodule Grappa.ServerSettings do
   end
 
   @doc "Pins the upload host. Validates the value at the boundary."
-  @spec put_upload_active_host(upload_host()) :: :ok | {:error, :invalid_value}
+  @spec put_upload_active_host(upload_host()) :: :ok | {:error, :invalid_value | :db_unavailable}
   def put_upload_active_host(host) when host in [:embedded, :litterbox] do
     put_raw(@key_upload_active_host, Atom.to_string(host))
   end
@@ -178,7 +178,7 @@ defmodule Grappa.ServerSettings do
 
   @doc "Pins the per-file upload byte cap for `category`. Positive integer only."
   @spec put_upload_per_file_cap_bytes(upload_category(), pos_integer()) ::
-          :ok | {:error, :invalid_value}
+          :ok | {:error, :invalid_value | :db_unavailable}
   def put_upload_per_file_cap_bytes(category, n)
       when category in @upload_categories and is_integer(n) and n > 0 do
     put_raw(cap_key_for(category), Integer.to_string(n))
@@ -210,7 +210,7 @@ defmodule Grappa.ServerSettings do
   end
 
   @doc "Pins the global disk-budget byte ceiling. Must be a positive integer."
-  @spec put_upload_global_cap_bytes(pos_integer()) :: :ok | {:error, :invalid_value}
+  @spec put_upload_global_cap_bytes(pos_integer()) :: :ok | {:error, :invalid_value | :db_unavailable}
   def put_upload_global_cap_bytes(n) when is_integer(n) and n > 0 do
     put_raw(@key_upload_global_cap_bytes, Integer.to_string(n))
   end
@@ -234,7 +234,7 @@ defmodule Grappa.ServerSettings do
   end
 
   @doc "Pins the outbound addressing mode. Validates against the closed set."
-  @spec put_addressing_mode(addressing_mode()) :: :ok | {:error, :invalid_value}
+  @spec put_addressing_mode(addressing_mode()) :: :ok | {:error, :invalid_value | :db_unavailable}
   def put_addressing_mode(mode) when mode in @addressing_modes do
     put_raw(@key_addressing_mode, Atom.to_string(mode))
   end
@@ -257,13 +257,16 @@ defmodule Grappa.ServerSettings do
   constraint: `64 | 80 | 96 | 112 | 128`); stores it masked + canonical.
   Any other input → `{:error, :invalid_prefix}`.
   """
-  @spec put_static_mapping_prefix(String.t()) :: :ok | {:error, :invalid_prefix}
+  @spec put_static_mapping_prefix(String.t()) :: :ok | {:error, :invalid_prefix | :db_unavailable}
   def put_static_mapping_prefix(value) when is_binary(value) do
     with {:ok, {_, len}} <- IpLiteral.parse_cidr6(value),
          true <- len in @allowed_prefix_lengths,
          {:ok, canonical} <- IpLiteral.canonicalize_cidr6(value) do
       case put_raw(@key_static_mapping_prefix, canonical) do
         :ok -> :ok
+        # A transient DB fault is backpressure, NOT a malformed prefix — keep
+        # it distinct so the controller surfaces a 503, never a 422 (#518).
+        {:error, :db_unavailable} = err -> err
         {:error, _} -> {:error, :invalid_prefix}
       end
     else
@@ -306,16 +309,24 @@ defmodule Grappa.ServerSettings do
   defp put_raw(key, value) when is_binary(value) do
     attrs = %{key: key, value: value}
 
+    # #523 — ride out a transient SQLITE_BUSY on the setting write; sustained
+    # saturation degrades to `{:error, :db_unavailable}` → a clean 503 (#518)
+    # at the admin controller instead of a 500 raise.
     result =
-      case Repo.get_by(Setting, key: key) do
-        nil -> %Setting{} |> Setting.changeset(attrs) |> Repo.insert()
-        %Setting{} = existing -> existing |> Setting.changeset(attrs) |> Repo.update()
-      end
+      Repo.BusyRetry.run(fn ->
+        case Repo.get_by(Setting, key: key) do
+          nil -> %Setting{} |> Setting.changeset(attrs) |> Repo.insert()
+          %Setting{} = existing -> existing |> Setting.changeset(attrs) |> Repo.update()
+        end
+      end)
 
     case result do
       {:ok, _} ->
         :ok = broadcast_changed()
         :ok
+
+      {:error, :db_unavailable} = err ->
+        err
 
       {:error, %Ecto.Changeset{}} ->
         # Validation/uniqueness collision — shouldn't happen given

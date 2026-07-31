@@ -94,6 +94,7 @@ defmodule GrappaWeb.AuthController do
              | :welcome_timeout
              | :probe_timeout
              | :internal
+             | :db_unavailable
              | {:anon_collision, non_neg_integer()}
              | Grappa.Admission.error()}
   def login(conn, %{"identifier" => id} = params) when is_binary(id) do
@@ -353,15 +354,17 @@ defmodule GrappaWeb.AuthController do
     ip = format_ip(conn)
 
     with :ok <- check_mode1_throttle(ip),
-         {:ok, user} <- authenticate_mode1(name, password, ip) do
-      {:ok, session} =
-        Accounts.create_session(
-          {:user, user.id},
-          ip,
-          user_agent(conn),
-          client_id: conn.assigns[:current_client_id]
-        )
-
+         {:ok, user} <- authenticate_mode1(name, password, ip),
+         # #523/#518 — a transient SQLITE_BUSY on the token mint degrades to a
+         # clean 503 (FallbackController) instead of a MatchError→500, keeping
+         # this door coherent with the visitor-provision path on the same login.
+         {:ok, session} <-
+           Accounts.create_session(
+             {:user, user.id},
+             ip,
+             user_agent(conn),
+             client_id: conn.assigns[:current_client_id]
+           ) do
       conn
       |> put_status(:ok)
       |> render(:login, token: session.id, subject: {:user, user})
@@ -541,6 +544,14 @@ defmodule GrappaWeb.AuthController do
   # is exactly why it must not look like a crash. 503 via FallbackController.
   defp visitor_error_response(_, _, _, :network_unconfigured),
     do: {:error, :network_unconfigured}
+
+  # #523/#518 — a transient SQLITE_BUSY that outlasted the retry budget during
+  # provision (`create_anon`) or the returning-visitor IP refresh
+  # (`maybe_refresh_ip`). Spelled explicitly so it reaches FallbackController's
+  # 503 `db_unavailable` envelope instead of the catch-all `:internal` 500 below
+  # (same reachability trap as `:network_unconfigured` above, #472).
+  defp visitor_error_response(_, _, _, :db_unavailable),
+    do: {:error, :db_unavailable}
 
   defp visitor_error_response(_, _, _, _),
     do: {:error, :internal}

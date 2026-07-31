@@ -107,6 +107,7 @@ defmodule GrappaWeb.ErrorTokens do
           | :captcha_required
           | :captcha_failed
           | :service_degraded
+          | :db_unavailable
           | :malformed_nick
           | :malformed_ident
           | :password_required
@@ -153,6 +154,7 @@ defmodule GrappaWeb.ErrorTokens do
           | :not_cached
           | :lookup_failed
           | :open_failed
+          | :close_failed
           | :unknown_event
           | :save_failed
           | :invalid_reason

@@ -186,6 +186,11 @@ defmodule Grappa.Visitors.Login do
           | :password_required
           | :password_mismatch
           | :anon_collision
+          # #523/#518 — a transient SQLITE_BUSY that outlasts the retry budget
+          # during provision (`create_anon`) or the returning-visitor IP refresh
+          # (`maybe_refresh_ip`) surfaces here so the controller renders a clean
+          # 503, not a 500 raise.
+          | :db_unavailable
 
   @doc """
   Run the synchronous login flow against the configured visitor
@@ -345,6 +350,15 @@ defmodule Grappa.Visitors.Login do
         {:ok, _} = ok ->
           :ok = NetworkCircuit.record_success(network.id)
           ok
+
+        # #523/#518 — a transient SQLITE_BUSY on the token mint (`issue_token`)
+        # after the visitor + session are already LIVE. Do NOT purge: the row
+        # backs a running session (purging would destroy it), and the purge is
+        # itself a DB delete that would re-saturate and mask the clean 503. The
+        # client retries into case 2/3 for the now-existing row and gets a token.
+        {:error, :db_unavailable} = err ->
+          :ok = NetworkCircuit.record_failure(network.id)
+          err
 
         {:error, _} = err ->
           :ok = NetworkCircuit.record_failure(network.id)
@@ -700,14 +714,19 @@ defmodule Grappa.Visitors.Login do
   end
 
   defp issue_token(visitor, input) do
-    {:ok, session} =
-      Accounts.create_session(
-        {:visitor, visitor.id},
-        input.ip,
-        input.user_agent,
-        client_id: input.client_id
-      )
-
-    {:ok, %{visitor: visitor, token: session.id}}
+    # #523/#518 — a transient SQLITE_BUSY on the token mint surfaces as
+    # `{:error, :db_unavailable}` (mapped to a 503 at the auth controller via
+    # `login_error()`), instead of a MatchError→500. A changeset error (the
+    # visitor row vanished mid-login — just validated, so a genuine race) keeps
+    # its pre-existing let-it-crash contract.
+    case Accounts.create_session(
+           {:visitor, visitor.id},
+           input.ip,
+           input.user_agent,
+           client_id: input.client_id
+         ) do
+      {:ok, session} -> {:ok, %{visitor: visitor, token: session.id}}
+      {:error, :db_unavailable} = err -> err
+    end
   end
 end

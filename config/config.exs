@@ -283,6 +283,9 @@ config :logger, :console,
     :reason,
     :raw,
     :error,
+    # #523/#518 — BusyRetry tags the transient fault kind (:queue_timeout |
+    # :busy_locked) on the warning it logs as a saturating write degrades to 503.
+    :fault,
     :pid,
     :unexpected,
     # Bootstrap summary: how many credentials we enumerated and how

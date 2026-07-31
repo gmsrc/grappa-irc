@@ -40,11 +40,11 @@ defmodule Grappa.Repo.BusyRetry do
   out; only sustained saturation degrades.
   """
 
+  require Logger
+
   @budget_ms Application.compile_env(:grappa, [:busy_retry, :budget_ms], 1_500)
   @backoff_ms Application.compile_env(:grappa, [:busy_retry, :backoff_ms], 25)
   @backoff_cap_ms Application.compile_env(:grappa, [:busy_retry, :backoff_cap_ms], 200)
-
-  require Logger
 
   @type fault_kind :: :queue_timeout | :busy_locked
 

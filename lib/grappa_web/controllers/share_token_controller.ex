@@ -136,19 +136,24 @@ defmodule GrappaWeb.ShareTokenController do
              | :unauthorized
              | :share_token_expired
              | :share_token_consumed
-             | :not_found}
+             | :not_found
+             | :db_unavailable}
   def consume(conn, %{"token" => token}) when is_binary(token) and token != "" do
     with {:ok, visitor_id} <- verify_token(token),
          :ok <- mark_consumed(token),
-         {:ok, visitor} <- fetch_visitor(visitor_id) do
-      {:ok, session} =
-        Accounts.create_session(
-          {:visitor, visitor.id},
-          format_ip(conn),
-          user_agent(conn),
-          client_id: conn.assigns[:current_client_id]
-        )
-
+         {:ok, visitor} <- fetch_visitor(visitor_id),
+         # #523/#518 — a transient SQLITE_BUSY on the token mint degrades to a
+         # clean 503 instead of a MatchError→500. NB: the one-shot share token
+         # is already consumed (step 2 above) by this point, so a saturated mint
+         # burns it — a pre-existing property of the consume-before-mint order;
+         # the retryable-later 503 is still strictly better than the old 500.
+         {:ok, session} <-
+           Accounts.create_session(
+             {:visitor, visitor.id},
+             format_ip(conn),
+             user_agent(conn),
+             client_id: conn.assigns[:current_client_id]
+           ) do
       :telemetry.execute(
         [:grappa, :visitor, :share_token, :consumed],
         %{count: 1},

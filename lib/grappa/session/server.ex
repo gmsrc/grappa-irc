@@ -4077,6 +4077,18 @@ defmodule Grappa.Session.Server do
             network_id: state.network_id,
             error: inspect(changeset.errors)
           )
+
+        # #523/#518 — a transient SQLITE_BUSY that outlasted the BusyRetry budget
+        # on the auto-open write (`QueryWindows.open/4` gained `:db_unavailable`
+        # in B1). #590 policy: a background query-window write must NEVER crash
+        # the session — log + continue (mirrors the changeset arm's "session
+        # continues" contract above), no 503 (this is IRC-driven, no web caller).
+        {:error, :db_unavailable} ->
+          Logger.warning(
+            "query-window auto-open db unavailable — session continues",
+            target: window_key,
+            network_id: state.network_id
+          )
       end
     else
       :ok

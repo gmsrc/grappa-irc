@@ -162,7 +162,7 @@ defmodule Grappa.QueryWindows do
   per contended open.
   """
   @spec open(Subject.t(), integer(), String.t(), String.t()) ::
-          {:ok, Window.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Window.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def open({_, _} = subject, network_id, target_nick, subject_label)
       when is_integer(network_id) and is_binary(target_nick) and is_binary(subject_label) do
     now = DateTime.truncate(DateTime.utc_now(), :second)
@@ -180,7 +180,10 @@ defmodule Grappa.QueryWindows do
 
     result =
       if cs.valid? do
-        do_insert(cs, subject, network_id, target_nick)
+        # #523 — ride out a transient SQLITE_BUSY on the window insert; sustained
+        # saturation degrades to `{:error, :db_unavailable}` (a WS "open_failed"
+        # reply, or a 503 at any REST caller) rather than crashing the channel.
+        Repo.BusyRetry.run(fn -> do_insert(cs, subject, network_id, target_nick) end)
       else
         {:error, cs}
       end
@@ -206,19 +209,35 @@ defmodule Grappa.QueryWindows do
   `Topic.user(subject_label)` so connected cicchetto clients can
   update their state.
   """
-  @spec close(Subject.t(), integer(), String.t(), String.t()) :: :ok
+  @spec close(Subject.t(), integer(), String.t(), String.t()) :: :ok | {:error, :db_unavailable}
   def close({_, _} = subject, network_id, target_nick, subject_label)
       when is_integer(network_id) and is_binary(target_nick) and is_binary(subject_label) do
     folded = Identifier.canonical_target(target_nick)
 
-    Window
-    |> Subject.subject_where(subject)
-    |> where([w], w.network_id == ^network_id)
-    |> where([w], Identifier.nick_fold(w.target_nick) == ^folded)
-    |> Repo.delete_all()
+    # #523 — ride out a transient SQLITE_BUSY on the window delete; sustained
+    # saturation degrades to `{:error, :db_unavailable}` (a WS "close_failed"
+    # reply) rather than crashing the channel with a raised busy. Wrap the
+    # delete in an `{:ok, _}` so the op honours the `BusyRetry.run/1` contract.
+    result =
+      Repo.BusyRetry.run(fn ->
+        {count, _} =
+          Window
+          |> Subject.subject_where(subject)
+          |> where([w], w.network_id == ^network_id)
+          |> where([w], Identifier.nick_fold(w.target_nick) == ^folded)
+          |> Repo.delete_all()
 
-    broadcast_windows_list(subject, subject_label)
-    :ok
+        {:ok, count}
+      end)
+
+    case result do
+      {:ok, _} ->
+        broadcast_windows_list(subject, subject_label)
+        :ok
+
+      {:error, :db_unavailable} = err ->
+        err
+    end
   end
 
   @doc """

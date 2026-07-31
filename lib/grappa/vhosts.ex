@@ -305,7 +305,7 @@ defmodule Grappa.Vhosts do
   selection list.
   """
   @spec set_selection(Subject.t(), [String.t()]) ::
-          {:ok, [String.t()]} | {:error, :forbidden_vhost | Ecto.Changeset.t()}
+          {:ok, [String.t()]} | {:error, :forbidden_vhost | Ecto.Changeset.t() | :db_unavailable}
   def set_selection({_, _} = subject, addresses) when is_list(addresses) do
     allowed = MapSet.new(allowed_vhosts(subject), & &1.address)
     requested = Enum.uniq(addresses)
@@ -515,6 +515,18 @@ defmodule Grappa.Vhosts do
 
     case UserSettings.put_last_client_prefix64(subject, hex) do
       {:ok, _} ->
+        :ok
+
+      # #523 — a transient DB saturation is best-effort-dropped here (this is a
+      # client-connect sample that must NEVER fail the connect, #590 policy),
+      # NOT surfaced as a 503. Handled distinctly BEFORE the changeset clause:
+      # `:db_unavailable` is an atom, so `.errors` on it would crash.
+      {:error, :db_unavailable} ->
+        Logger.warning(
+          "record_client_source: db unavailable persisting client prefix for " <>
+            "#{inspect(subject)} — dropped (best-effort)"
+        )
+
         :ok
 
       {:error, changeset} ->

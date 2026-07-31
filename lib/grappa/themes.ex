@@ -247,30 +247,36 @@ defmodule Grappa.Themes do
     with {:ok, source} <- get_theme(theme_id),
          :ok <- check_cap(subject),
          :ok <- check_quota(subject) do
-      # #523 — ride out a transient SQLITE_BUSY on the write instead of letting
-      # it escape as a 500. On sustained saturation the whole transaction
-      # degrades to `{:error, :db_unavailable}` → a clean 503 (#518); a
-      # non-transient DB error still re-raises (a real bug, not backpressure).
-      Repo.BusyRetry.run(fn ->
-        Repo.immediate_transaction(fn ->
-          name = available_name(bare_subject, source.name)
-
-          attrs = Subject.put_subject_id(%{name: name, payload: source.payload}, bare_subject)
-
-          copy =
-            %Theme{}
-            |> Theme.changeset(attrs)
-            |> Repo.insert!()
-
-          {1, _} =
-            Theme
-            |> where([t], t.id == ^source.id)
-            |> Repo.update_all(inc: [apply_count: 1])
-
-          copy
-        end)
-      end)
+      copy_theme_txn(bare_subject, source)
     end
+  end
+
+  # #523 — ride out a transient SQLITE_BUSY on the copy write instead of letting
+  # it escape as a 500. On sustained saturation the whole transaction degrades
+  # to `{:error, :db_unavailable}` → a clean 503 (#518); a non-transient DB
+  # error still re-raises (a real bug, not backpressure). Extracted out of
+  # `do_copy/3`'s `with` so the `run → immediate_transaction` closure pair stays
+  # within credo's max-nesting depth (the `with` guard was the third level).
+  defp copy_theme_txn(bare_subject, source) do
+    Repo.BusyRetry.run(fn ->
+      Repo.immediate_transaction(fn ->
+        name = available_name(bare_subject, source.name)
+
+        attrs = Subject.put_subject_id(%{name: name, payload: source.payload}, bare_subject)
+
+        copy =
+          %Theme{}
+          |> Theme.changeset(attrs)
+          |> Repo.insert!()
+
+        {1, _} =
+          Theme
+          |> where([t], t.id == ^source.id)
+          |> Repo.update_all(inc: [apply_count: 1])
+
+        copy
+      end)
+    end)
   end
 
   @doc """
@@ -311,7 +317,7 @@ defmodule Grappa.Themes do
   """
   @spec set_active_theme_pair(Subject.t(), integer(), integer() | nil) ::
           {:ok, %{light: Theme.t(), dark: Theme.t() | nil}}
-          | {:error, :not_found | Ecto.Changeset.t()}
+          | {:error, :not_found | Ecto.Changeset.t() | :db_unavailable}
   def set_active_theme_pair(subject, light_id, dark_id)
       when is_integer(light_id) and (is_integer(dark_id) or is_nil(dark_id)) do
     with {:ok, light} <- get_theme(light_id),
