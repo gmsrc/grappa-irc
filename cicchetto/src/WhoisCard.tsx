@@ -1,5 +1,6 @@
 import { type Component, For, Show } from "solid-js";
 import type { WhoisBundle } from "./lib/api";
+import { formatDuration } from "./lib/duration";
 import { dismissWhoisCard, whoisCardBySlug } from "./lib/whoisCard";
 import { MircBody } from "./MircText";
 import NickText from "./NickText";
@@ -35,17 +36,6 @@ import NickText from "./NickText";
 
 export type Props = {
   networkSlug: string;
-};
-
-const formatIdle = (seconds: number | null): string | null => {
-  if (seconds === null) return null;
-  if (seconds < 60) return `${seconds}s`;
-  const mins = Math.floor(seconds / 60);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ${mins % 60}m`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
 };
 
 const formatSignon = (epochSeconds: number | null): string | null => {
@@ -228,7 +218,7 @@ const WhoisCard: Component<Props> = (props) => {
               <Show when={b().idle_seconds !== null}>
                 <dt>idle</dt>
                 <dd>
-                  {formatIdle(b().idle_seconds)}
+                  {formatDuration(b().idle_seconds)}
                   <Show when={b().signon !== null}> · signon {formatSignon(b().signon)}</Show>
                 </dd>
               </Show>

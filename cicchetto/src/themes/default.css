@@ -7020,6 +7020,55 @@ html.resize-dragging * {
 /* P-0d — LUSERS card. Pinned at the top of the current window when a
    snapshot exists (#231). Visual mirrors `.whois-card` (border-left
    accent, dim panel) — same family of structured single-entity cards. */
+/* #474 — server-info rail card. The rail's per-window-kind context surface
+   (RailContext) on a server window; mirror of the `.lusers-card` dl shape.
+   `flex: 0 0 auto` so it takes only its content height and the sibling
+   `.rail-actions` drawer still floors the rail (margin-top:auto), never
+   pushed off-screen on a phone. */
+.rail-server-info {
+  flex: 0 0 auto;
+  margin: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-alt);
+  font-size: 0.85rem;
+}
+
+.rail-server-info-header {
+  display: flex;
+  align-items: baseline;
+  font-weight: bold;
+  color: var(--accent);
+  margin-bottom: 0.25rem;
+}
+
+.rail-server-info-title {
+  text-transform: lowercase;
+  word-break: break-all;
+}
+
+.rail-server-info-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 0;
+}
+
+.rail-server-info-fields dt {
+  color: var(--muted);
+  text-align: right;
+}
+
+.rail-server-info-fields dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.rail-server-info-glyph {
+  font-size: 0.8rem;
+}
+
 .lusers-card {
   margin: 0.25rem 0.5rem 0.5rem 0.5rem;
   padding: 0.5rem 0.75rem;

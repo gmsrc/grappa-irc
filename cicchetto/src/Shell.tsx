@@ -58,6 +58,7 @@ import NextActiveButton from "./NextActiveButton";
 import PresenceToasts from "./PresenceToasts";
 import PrivacyModal from "./PrivacyModal";
 import RailActions from "./RailActions";
+import RailContext from "./RailContext";
 import RegistrationWizardModal from "./RegistrationWizardModal";
 import ResizeHandle from "./ResizeHandle";
 import ScrollbackPane from "./ScrollbackPane";
@@ -709,6 +710,11 @@ const Shell: Component = () => {
                 <MembersPane networkSlug={sel().networkSlug} channelName={sel().channelName} />
               )}
             </Show>
+            {/* #474 — the per-window-kind rail context surface (server info
+                today; a /whois card is the deferred follow-on), grafted as a
+                SIBLING of the drawer below. Renders nothing on kinds with no
+                context, so the drawer still floors the rail. */}
+            <RailContext />
             {/* #473 — the ONE unified rail action drawer, floored at the bottom
                 (CSS `.rail-actions { margin-top: auto }`). Supersedes the desktop
                 top ActionCluster (cog + denoise) and, crucially, brings the
@@ -955,6 +961,10 @@ const Shell: Component = () => {
               />
             )}
           </Show>
+          {/* #474 — per-window-kind rail context (server info today), grafted
+              as a SIBLING of the drawer below; renders nothing off a server
+              window. Same component the desktop rail mounts. */}
+          <RailContext />
           {/* #473 — the ONE unified rail action drawer, floored at the bottom.
               Same component + same handler set the desktop rail mounts (the
               drawer-closing arm of the mobilePanel helpers is meaningful here on
