@@ -18,11 +18,14 @@ import { MircBody } from "./MircText";
 //   * nick   — own IRC nick on this network
 //   * services — which NickServ software (omitted when "unknown")
 //
-// Deliberately absent (NOT in the user-facing wire — admin-only): the
-// dialled server address, TLS yes/no, and live registered/identified
-// state. #474's rule is "prefer leaving it out over showing a stale value
-// confidently"; those graft in later behind an additive wire field, and
-// this card inherits them for free when they arrive.
+// Scope B — the live upstream connection facts under `network.connection`
+// (the additive #447 wire field resolved from Session.connection_info/2):
+//   * server — which box the socket dialled (`server:port`), the resolved
+//              peer IP, so a round-robin landing is visible (#550 capture)
+//   * tls    — a 🔒 lock when the transport is TLS
+//   * identified — yes/no, from the +r umode (the #561 identity signal)
+// `connection` is null whenever there is no live connected session, so
+// these rows appear ONLY on a real socket — honesty over a stale value.
 //
 // No close button: unlike the ephemeral scrollback cards (whois/whowas/
 // lusers), this is the rail's persistent per-kind context surface — it is
@@ -80,6 +83,24 @@ const ServerInfoCard: Component<Props> = (props) => {
             <>
               <dt>connected</dt>
               <dd>{up()}</dd>
+            </>
+          )}
+        </Show>
+        <Show when={props.network.connection}>
+          {(conn) => (
+            <>
+              <dt>server</dt>
+              <dd>
+                {conn().server}:{conn().port}
+                <Show when={conn().tls}>
+                  {" "}
+                  <span class="rail-server-info-tls" role="img" title="TLS" aria-label="TLS">
+                    🔒
+                  </span>
+                </Show>
+              </dd>
+              <dt>identified</dt>
+              <dd data-testid="rail-server-info-identified">{conn().registered ? "yes" : "no"}</dd>
             </>
           )}
         </Show>

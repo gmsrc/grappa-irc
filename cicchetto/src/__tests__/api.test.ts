@@ -427,6 +427,7 @@ describe("ownNickForNetwork (cic H3 fix + bucket F H4 type split)", () => {
     connection_state: "connected",
     connection_state_reason: null,
     connection_state_changed_at: null,
+    connection: null,
     services_flavor: "azzurra",
     inserted_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
@@ -441,6 +442,7 @@ describe("ownNickForNetwork (cic H3 fix + bucket F H4 type split)", () => {
     connection_state: "connected",
     connection_state_reason: null,
     connection_state_changed_at: null,
+    connection: null,
     services_flavor: "azzurra",
     inserted_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
@@ -455,6 +457,7 @@ describe("ownNickForNetwork (cic H3 fix + bucket F H4 type split)", () => {
     connection_state: "parked",
     connection_state_reason: null,
     connection_state_changed_at: null,
+    connection: null,
     services_flavor: null,
     inserted_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
@@ -544,6 +547,7 @@ describe("tagNetwork (bucket F H4)", () => {
       connection_state: "connected",
       connection_state_reason: null,
       connection_state_changed_at: null,
+      connection: null,
       services_flavor: null,
       inserted_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
@@ -575,6 +579,14 @@ describe("tagNetwork (bucket F H4)", () => {
     // rawComplete omits the field → the tagger defaults it to null (legacy
     // credential / pre-field server).
     expect(api.tagNetwork(rawComplete)?.services_flavor).toBeNull();
+  });
+
+  it("#474 B — passes connection through; defaults a missing one to null", () => {
+    const conn = { server: "89.31.72.10", port: 6697, tls: true, registered: true };
+    expect(api.tagNetwork({ ...rawComplete, connection: conn })?.connection).toEqual(conn);
+    // rawComplete omits it → null (session not live / pre-field server), the
+    // honest "no live connection" the server-info rail renders as no card.
+    expect(api.tagNetwork(rawComplete)?.connection).toBeNull();
   });
 
   it("kind=user + missing nick → returns null + logs", () => {

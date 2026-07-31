@@ -38,6 +38,7 @@ import type {
   NetworksServersAdminWireT,
   NetworksWireAvailableNetworkRow,
   NetworksWireChannelJson,
+  NetworksWireConnectionInfo,
   NetworksWireCredentialJson,
   NetworksWireHomeData,
   NetworksWireHomeNetworkRow,
@@ -240,6 +241,12 @@ export type ConnectionState = NetworksCredentialConnectionState;
 // #410 — single-sourced to the codegen mirror of
 // `Grappa.Networks.Network.services_flavor`.
 export type ServicesFlavor = NetworksNetworkServicesFlavor;
+
+// #474 scope B — the live upstream connection facts a network row carries
+// under `connection` (which box the socket dialled, TLS, +r registered).
+// Re-exported under the domain name (mirror of ConnectionState/ServicesFlavor)
+// so ServerInfoCard imports `ConnectionInfo`, not the leaky codegen alias.
+export type ConnectionInfo = NetworksWireConnectionInfo;
 
 // UX-4 bucket B — one row in the `home_data.networks` array, returned
 // from `GET /me` for user subjects. Mirror of server-side
@@ -469,6 +476,11 @@ export type RawNetwork = {
   // servers that predate the field; `tagNetwork` defaults a missing
   // value to null (→ wizard button hidden).
   services_flavor?: ServicesFlavor | null;
+  // #474 scope B — the live upstream connection facts (null when the
+  // session is not live). Optional on the raw type for legacy fixtures /
+  // mid-rollout servers that predate it; `tagNetwork` defaults a missing
+  // value to null (→ the server-info rail shows no connection card).
+  connection?: ConnectionInfo | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -513,6 +525,7 @@ export function tagNetwork(raw: RawNetwork): Network | null {
     connection_state: raw.connection_state,
     connection_state_reason: raw.connection_state_reason ?? null,
     connection_state_changed_at: raw.connection_state_changed_at ?? null,
+    connection: raw.connection ?? null,
     services_flavor: raw.services_flavor ?? null,
     inserted_at: raw.inserted_at,
     updated_at: raw.updated_at,
