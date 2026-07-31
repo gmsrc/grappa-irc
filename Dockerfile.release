@@ -1,0 +1,156 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.release — the self-contained grappa RELEASE image published to
+# ghcr.io (#503 scope 5 / unit C). DISTINCT from the top-level `Dockerfile`,
+# which is the single-stage dev/CI TOOLCHAIN image: it bind-mounts the repo,
+# boots `mix phx.server`, and HAS Phoenix.CodeReloader.
+#
+# This image ships a `mix release` — bundled ERTS + compiled beams + the built
+# cicchetto SPA — and NOTHING to compile with: no Elixir/mix, no source, no
+# Phoenix.CodeReloader, no inotify. It boots `bin/grappa start` directly. A hot
+# update on this image swaps beams into `lib/grappa-<vsn>/ebin` and fires
+# `Grappa.HotReload` (unit E), never the dev reloader — see docs/OPERATIONS.md.
+# The compose/dev stack (top-level Dockerfile) stays the development runtime.
+#
+# Multi-arch: buildx builds linux/amd64 + linux/arm64 from this ONE file
+# (alpine/musl publishes both). The release CI `docker` job (release.yml)
+# drives it with QEMU; a local `docker buildx build` mirrors it.
+
+# ── Stage 1: cicchetto SPA dist ─────────────────────────────────────────────
+# bun's binary is musl-built on alpine, so build the PWA in oven/bun's alpine
+# image (mirrors the release CI's setup-bun + infra/packaging/build.sh's
+# `bun run build`). node_modules is .dockerignore'd — installed fresh here.
+FROM oven/bun:1-alpine AS cic
+WORKDIR /cic
+# Lockfile + manifest first for a cache-friendly, frozen install layer.
+COPY cicchetto/package.json cicchetto/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY cicchetto/ ./
+# The vite build REFUSES to run without GRAPPA_VERSION (#538 — it bakes
+# <meta cicchetto-version> and won't ship it empty). Derive it via the SAME
+# version.sh SSOT the .deb/.rpm/AUR builds use — placed with mix.exs at the
+# layout version.sh expects (SCRIPT_DIR/../.. == repo root) so nothing
+# re-implements the regex. Same invocation as build.sh: `bun run build` =
+# `tsc --noEmit && vite build`; --emptyOutDir because the outDir is outside
+# the vite project root.
+COPY mix.exs ./mix.exs
+COPY infra/packaging/version.sh ./infra/packaging/version.sh
+RUN GRAPPA_VERSION="$(sh infra/packaging/version.sh)" \
+    && export GRAPPA_VERSION \
+    && echo "cic build: GRAPPA_VERSION=${GRAPPA_VERSION}" \
+    && bun run build -- --outDir /cic-dist --emptyOutDir
+
+# ── Stage 2: mix release (self-contained ERTS + beams) ──────────────────────
+# Same toolchain tuple as the dev image + the .deb builder. build-base + git
+# for hex NIF compilation; exqlite bundles its own sqlite amalgamation, so no
+# sqlite-dev is needed (statically linked into the NIF).
+FROM elixir:1.19-otp-28-alpine AS build
+RUN apk add --no-cache build-base git
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    MIX_HOME=/root/.mix \
+    HEX_HOME=/root/.hex \
+    MIX_ENV=prod
+WORKDIR /src
+RUN mix local.hex --force && mix local.rebar --force
+# Prod deps first (cache layer).
+COPY mix.exs mix.lock ./
+RUN mix deps.get --only prod
+# App source + config, then compile + assemble in ONE `mix compile` — the same
+# sequence infra/packaging/build.sh proves in the deb/rpm CI (deps.get →
+# compile → release). A separate `mix deps.compile` step was dropped: `mix
+# compile` compiles the deps anyway, and the extra step only added an
+# emulation-heavy compile pass under the arm64 QEMU leg.
+#
+# `.git` is EXCLUDED by .dockerignore, so at compile time Grappa.Version has no
+# git facts and takes the no-git path — the artifact reports the BARE X.Y.Z, the
+# same path the AUR source tarball uses (#391). The CI `docker` job checks out
+# the release tag and asserts `tag == mix.exs @version`, so the bare version
+# equals the tag. `mix release` runs the #542 version-sha guard, which logs the
+# no-git skip and proceeds (no HEAD to verify against).
+COPY config config
+COPY lib lib
+COPY priv priv
+RUN mix compile --warnings-as-errors
+RUN mix release --overwrite
+
+# ── Stage 3: runtime (deps only, no toolchain) ──────────────────────────────
+# Pinned to the SAME alpine the `elixir:1.19-otp-28-alpine` build image rides
+# (3.23, openssl 3.5 → libcrypto.so.3/libssl.so.3), so the musl + libssl ABI
+# the bundled ERTS and crypto NIF link at build time are present and matched at
+# runtime. Bump this in LOCKSTEP when that base image moves to a new alpine.
+FROM alpine:3.23 AS runtime
+
+# Runtime deps ONLY:
+#   ncurses         — ERTS links libncursesw (tty/terminal driver)
+#   openssl         — libcrypto.so.3/libssl.so.3 for the crypto NIF + #89 TLS
+#   libstdc++/libgcc — musl C++/gcc runtime some NIFs link
+#   ca-certificates — the system CA trust store #89 verify_peer reads
+#                     (:public_key.cacerts_get/0), for upstream TLS IRC
+#   curl            — /healthz probe (HEALTHCHECK) + the loopback hot-deploy
+#                     POST unit E fires
+#   sqlite          — the sqlite3 CLI for ops (exqlite bundles the LIBRARY;
+#                     this is just the operator/debug CLI, matching #503's dep
+#                     list)
+#   exiftool ffmpeg — Grappa.Uploads.MetadataStrip (#39). It fails CLOSED —
+#                     without them uploads 422 — so a self-contained image
+#                     bundles them for working uploads out of the box.
+RUN apk add --no-cache \
+        ncurses \
+        openssl \
+        libstdc++ \
+        libgcc \
+        ca-certificates \
+        curl \
+        sqlite \
+        exiftool \
+        ffmpeg
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    HOME=/app
+WORKDIR /app
+
+# Non-root runtime user (least privilege). Owns /app + the /data state volume.
+RUN addgroup -S grappa \
+    && adduser -S -G grappa -h /app grappa \
+    && mkdir -p /data \
+    && chown grappa:grappa /data
+
+# The assembled release + the built SPA dist + the entrypoint.
+COPY --from=build --chown=grappa:grappa /src/_build/prod/rel/grappa ./
+COPY --from=cic   --chown=grappa:grappa /cic-dist ./cicchetto-dist
+COPY --chown=grappa:grappa infra/docker/release-entrypoint.sh /app/release-entrypoint.sh
+RUN chmod 0755 /app/release-entrypoint.sh
+
+# Image-baked runtime defaults. SECRETS ARE NOT BAKED — SECRET_KEY_BASE,
+# SECRET_SIGNING_SALT, RELEASE_COOKIE, GRAPPA_ENCRYPTION_KEY, VAPID_*, PHX_HOST
+# stay unset, so config/runtime.exs RAISES and a bare `docker run` fails loudly
+# until they are supplied (unit D wires the compose/one-liner env). Paths
+# default under the /data volume; CIC_DIST_ROOT points at the baked SPA;
+# GRAPPA_SUBSTRATE=docker selects the source-alias no-op adapter (#543).
+ENV DATABASE_PATH=/data/grappa.db \
+    UPLOADS_STORAGE_ROOT=/data/uploads \
+    CIC_DIST_ROOT=/app/cicchetto-dist \
+    GRAPPA_SUBSTRATE=docker \
+    PORT=4000
+
+VOLUME /data
+EXPOSE 4000
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -fsS http://localhost:4000/healthz || exit 1
+
+USER grappa
+
+# Static OCI labels (the CI job adds dynamic version/revision/source labels).
+LABEL org.opencontainers.image.title="grappa" \
+      org.opencontainers.image.description="Always-on IRC bouncer + cicchetto PWA — self-contained release image" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/vjt/grappa-irc"
+
+# The entrypoint sizes the BEAM resource caps (Docker-specific) then execs
+# `bin/grappa "$@"`; CMD `start` boots the release in the foreground. Override
+# the CMD for one-shots, e.g. `... eval 'Grappa.Release.migrate()'`.
+ENTRYPOINT ["/app/release-entrypoint.sh"]
+CMD ["start"]
