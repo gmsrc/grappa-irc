@@ -76,15 +76,35 @@ RUN mix release --overwrite
 
 # ── Stage 3: runtime (deps only, no toolchain) ──────────────────────────────
 # Pinned to the SAME alpine the `elixir:1.19-otp-28-alpine` build image rides
-# (3.23, openssl 3.5 → libcrypto.so.3/libssl.so.3), so the musl + libssl ABI
-# the bundled ERTS and crypto NIF link at build time are present and matched at
-# runtime. Bump this in LOCKSTEP when that base image moves to a new alpine.
-FROM alpine:3.23 AS runtime
+# (3.24, openssl 3.x → libcrypto.so.3/libssl.so.3), so the musl + libssl ABI
+# the bundled ERTS, BeamAsm JIT, and crypto NIF link at build time are present
+# and matched at runtime. The `elixir` tag's underlying alpine FLOATS — it moved
+# 3.23→3.24 mid-development, which the RUN below CAUGHT — so this pin is only
+# correct by coincidence at any instant. That RUN ENFORCES the lockstep (fails
+# the build loudly on drift), so a stale pin can never ship a mislinked image;
+# when it fires, bump this `FROM` to the reported build alpine.
+FROM alpine:3.24 AS runtime
+
+# Enforce the build↔runtime alpine lockstep the comment above promises: compare
+# the build stage's alpine major.minor against this stage's and FAIL LOUD on
+# drift (a musl/openssl-major move that would mislink the bundled ERTS). Without
+# this, a floated build base + stale runtime pin diverges silently, months later,
+# on a CI-built image nobody re-smoke-tested. `cut` is busybox (present in base
+# alpine); ARG-less so it needs no build input.
+COPY --from=build /etc/alpine-release /tmp/build-alpine-release
+RUN build_v="$(cut -d. -f1,2 /tmp/build-alpine-release)" \
+    && run_v="$(cut -d. -f1,2 /etc/alpine-release)" \
+    && if [ "$build_v" != "$run_v" ]; then \
+         echo "ABI DRIFT: build alpine ${build_v} != runtime alpine ${run_v} — bump the runtime FROM in lockstep" >&2; \
+         exit 1; \
+       fi \
+    && echo "alpine lockstep OK: build=${build_v} runtime=${run_v}" \
+    && rm -f /tmp/build-alpine-release
 
 # Runtime deps ONLY:
 #   ncurses         — ERTS links libncursesw (tty/terminal driver)
 #   openssl         — libcrypto.so.3/libssl.so.3 for the crypto NIF + #89 TLS
-#   libstdc++/libgcc — musl C++/gcc runtime some NIFs link
+#   libstdc++/libgcc — musl C++/gcc runtime the BeamAsm JIT + NIFs link
 #   ca-certificates — the system CA trust store #89 verify_peer reads
 #                     (:public_key.cacerts_get/0), for upstream TLS IRC
 #   curl            — /healthz probe (HEALTHCHECK) + the loopback hot-deploy
@@ -138,8 +158,10 @@ ENV DATABASE_PATH=/data/grappa.db \
 VOLUME /data
 EXPOSE 4000
 
+# Shell-form CMD → ${PORT} expands from the container env at probe time, so an
+# operator-overridden PORT (unit D) is followed instead of a hardcoded 4000.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -fsS http://localhost:4000/healthz || exit 1
+    CMD curl -fsS "http://localhost:${PORT:-4000}/healthz" || exit 1
 
 USER grappa
 

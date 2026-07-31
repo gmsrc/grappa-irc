@@ -466,11 +466,17 @@ jobs:
       - name: Checkout (tags for #391 version derivation)
         uses: actions/checkout@v7
         with:
-          submodules: recursive
+          # No submodules: the image build COPYs only in-tree paths (cicchetto
+          # is a plain subdir, NOT a submodule; mix.exs/config/lib/priv/infra).
+          # The declared submodules are test-only (vendor/bats-core, and
+          # cicchetto/e2e/infra behind a `git@` SSH URL the ambient
+          # GITHUB_TOKEN cannot fetch) — `recursive` here would only add a
+          # failure surface and slowdown for artifacts the build never reads.
+          submodules: false
           # Build the TAGGED tree (a dispatch builds the tag, not main).
-          # fetch-depth 0 pulls tags; the image build itself takes the no-git
-          # bare-version path (.git is .dockerignore'd), so this checkout is for
-          # the tag==@version gate below, not the in-image version.
+          # fetch-depth 0 pulls tags — needed for the tag==@version gate AND the
+          # highest-tag check that gates `:latest`. The image build itself takes
+          # the no-git bare-version path (.git is .dockerignore'd).
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
@@ -493,24 +499,45 @@ jobs:
           # ACTUAL tagged commit so the revision label is truthful.
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Compute lowercase image name
+      - name: Compute image name + tag list
         id: img
         run: |
           # ghcr repositories MUST be lowercase; the owner may not be.
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          echo "name=ghcr.io/${owner}/grappa" >> "$GITHUB_OUTPUT"
+          name="ghcr.io/${owner}/grappa"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+          # Always tag the exact version. Tag `:latest` ONLY when THIS tag is the
+          # highest semver in the repo — otherwise a workflow_dispatch
+          # revalidation of an old tag (the documented pre-real-tag smoke) OR a
+          # backport tag push (v0.7.5 after v0.8.0) would silently re-point
+          # `:latest` at an OLDER image. The deb/rpm/arch jobs are immune (they
+          # attach to a tag-keyed Release); only the docker job has a MUTABLE
+          # `:latest`, so it must guard it. `-v:refname` sorts by semver. The
+          # tag list is emitted line-by-line as a multiline output.
+          highest="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+          echo "tags<<TAGS_EOF" >> "$GITHUB_OUTPUT"
+          echo "${name}:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          if [ "${RELEASE_TAG}" = "${highest}" ]; then
+            echo "${name}:latest" >> "$GITHUB_OUTPUT"
+            echo "this tag (${RELEASE_TAG}) is the highest — tagging :latest"
+          else
+            echo "this tag (${RELEASE_TAG}) is NOT the highest (${highest}) — NOT tagging :latest"
+          fi
+          echo "TAGS_EOF" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU (arm64 emulation)
         uses: docker/setup-qemu-action@v3
         with:
-          # Pin a RECENT binfmt/QEMU explicitly. The arm64 leg is emulated on
-          # the amd64 runner, and an OLD QEMU crashes the emulated BEAM's JIT
-          # (BeamAsm) at the first `mix` call with
+          # The arm64 leg is emulated on the amd64 runner, and an OLD QEMU
+          # crashes the emulated BEAM JIT (BeamAsm) at the first `mix` call with
           # `{failed_to_start_child,user,nouser}` — reproduced locally on a
-          # stale Docker-Desktop binfmt and FIXED by installing this recent
-          # image (#503 unit C validation). A recent QEMU emulates BeamAsm
-          # cleanly. amd64 builds NATIVE here (no emulation), so only arm64
-          # depends on this.
+          # stale Docker-Desktop binfmt and FIXED by a recent one (#503 unit C
+          # validation). `:latest` is deliberately FLOATING-for-freshness (not a
+          # reproducibility pin): it guarantees the JIT fix, at the small cost
+          # that a future binfmt regression could reappear — which the mandatory
+          # workflow_dispatch smoke before a real tag would catch. amd64 builds
+          # NATIVE here (no emulation), so only arm64 depends on this.
           image: tonistiigi/binfmt:latest
 
       - name: Set up Docker Buildx
@@ -533,9 +560,10 @@ jobs:
           # re-runs cheap).
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ steps.img.outputs.name }}:${{ env.RELEASE_TAG }}
-            ${{ steps.img.outputs.name }}:latest
+          # `:<tag>` always; `:latest` only when this is the highest tag (see the
+          # "Compute image name + tag list" step — guards a repair/backport from
+          # re-pointing :latest at an older image).
+          tags: ${{ steps.img.outputs.tags }}
           # OCI labels so the ghcr package page links back to source + the
           # exact tag/commit it was built from.
           labels: |

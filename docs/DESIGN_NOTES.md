@@ -24236,9 +24236,17 @@ Decisions:
   ships runtime deps only. Alpine (not the Debian/Fedora glibc the .deb/.rpm
   target) because the image is self-contained — a smaller musl runtime with no
   distro-compat constraint. The runtime alpine is PINNED to the SAME version the
-  `elixir` build image rides (3.23 today, openssl 3.5 → `libcrypto.so.3`), so
-  the ERTS + crypto NIF link the same libssl ABI at build and run; bump the two
-  in LOCKSTEP.
+  `elixir` build image rides (3.24, openssl 3.x → `libcrypto.so.3`), so the ERTS
+  + BeamAsm JIT + crypto NIF link the same libssl ABI at build and run. The
+  `elixir` tag's alpine FLOATS (it moved 3.23→3.24 mid-development), so a
+  build-time ASSERTION enforces the lockstep instead of trusting the pin: the
+  runtime stage COPYs the build stage's `/etc/alpine-release` and FAILS THE BUILD
+  on a major.minor mismatch (a musl/openssl-major move that would mislink the
+  ERTS). A stale pin can never silently ship a mislinked image — the build breaks
+  loudly and you bump the runtime `FROM` to the reported version. Rejected
+  digest-pinning the build base: it would freeze elixir/OTP security patches; the
+  float + assertion keeps patches flowing and turns drift into a loud failure the
+  workflow_dispatch smoke catches before a real tag.
 
 - **The image reports the BARE `X.Y.Z` via the no-git path (the AUR precedent).**
   `.git` is `.dockerignore`'d, so at compile time `Grappa.Version` has no git
@@ -24278,11 +24286,18 @@ Decisions:
 - **Multi-arch `linux/amd64 + linux/arm64` via buildx + QEMU (F1, vjt
   2026-07-31).** The `docker` job is STANDALONE — it publishes to the registry
   itself (not a GitHub Release asset), so it is NOT in `publish`'s `needs` and
-  runs parallel to deb/arch/rpm. Tags `:<git tag>` + `:latest`; OCI
+  runs parallel to deb/arch/rpm. Tags `:<git tag>` always; **`:latest` ONLY when
+  this tag is the highest semver in the repo** (`git tag --sort=-v:refname |
+  head -1`) — the docker job is the one leg with a MUTABLE tag (deb/rpm/arch
+  attach to a tag-keyed Release), so a `workflow_dispatch` revalidation of an old
+  tag OR a backport push must NOT re-point `:latest` at an older image. OCI
   `source`/`version`/`revision` labels (revision resolved from the tagged commit,
   not `github.sha`, which is `main` on a dispatch); `packages: write` at the job
   level (job perms REPLACE the workflow default, so `contents: read` is
-  re-granted for checkout). On the amd64 CI runner the amd64 leg builds NATIVE;
+  re-granted for checkout); `submodules: false` (the image build COPYs only
+  in-tree paths — cicchetto is a plain subdir; the declared submodules are
+  test-only, one behind an SSH URL the token cannot fetch). On the amd64 CI
+  runner the amd64 leg builds NATIVE;
   only arm64 is emulated. **An OLD QEMU crashes the emulated BEAM's JIT
   (BeamAsm)** at the first `mix` call with
   `{failed_to_start_child,user,nouser}` — reproduced locally on a stale
