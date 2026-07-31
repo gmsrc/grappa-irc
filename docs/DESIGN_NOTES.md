@@ -24870,3 +24870,48 @@ it. Its #590 best-effort-DROP hardening is tracked separately.
 a property of the consume-before-mint order that predates B1. The retryable-later
 503 is still strictly better than the old 500; reordering was judged too risky
 to fold into B1.
+---
+
+## 2026-08-01 — CTCP PING is answered by the bouncer, and by the client meanwhile
+
+`/ping` in shottino sent a CTCP PING and nothing came back. Pinging your OWN
+session showed why in one command: the query arrived, was drawn as a line of
+control characters in a query window with yourself, and nobody answered it.
+
+**grappa answers it now, next to VERSION.** The CTCP arm handled VERSION and
+let everything else fall through to a plain `:privmsg` row. The bouncer is the
+right place for both, for the same reason: it is awake when no client is
+attached, and a session that ignores PING reads as a dead connection to
+everyone who asks. The token is echoed back verbatim and uninspected — it is
+the asker's, conventionally their clock, and the entire protocol is that it
+returns byte for byte so they can subtract; a token-less `\x01PING\x01` is
+answered token-less rather than with a separator nobody sent. Routing mirrors
+the VERSION arm exactly (own-nick topic for a DM-shaped query), so there is no
+second rule to keep in step.
+
+**shottino answers it too, while it is running.** A client-side responder
+cannot replace the server one — it is silent whenever no client is attached —
+but it costs one NOTICE and closes the gap for an attached session. It answers
+PING ONLY: VERSION stays grappa's, because two answers to one query is worse
+than none. Loop-safe by construction (a reply is a NOTICE, and nothing
+auto-answers a NOTICE, which is also why only a PRIVMSG-shaped query reaches
+the responder) and throttled to one answer per 500ms — a client that answers
+every query in a flood is a client that can be pointed at the server.
+
+**The reply side needed a record after all.** shottino's first `/ping` kept no
+table: the stamp travels in the payload and comes back, so the payload WAS the
+record. That only holds if the reply arrives live, and it usually does not — a
+ping to somebody with no query window open is answered on a topic the client
+is not subscribed to, and the row surfaces only when grappa opens that window
+and the scrollback is backfilled. A `live`-only guard (added to stop history
+re-announcing old pings) then discarded it. Both decisions shipped together
+and between them lost every answer. There is a table now, keyed by (network,
+nick, stamp): a reply that CLAIMS an entry is reported however it arrived, one
+that matches nothing stays quiet, and an unanswered ping is reported after 30
+seconds instead of being forgotten.
+
+**Not verified locally:** the dev host for this session had neither a docker
+compose plugin nor elixir, so `scripts/mix.sh` could not start and the Elixir
+suite never ran against the server change. The tests are written (echo
+verbatim, token-less form) and CI is the gate — this must be green there
+before it reaches prod.

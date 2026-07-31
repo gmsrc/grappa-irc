@@ -502,6 +502,44 @@ defmodule Grappa.Session.EventRouterTest do
       assert attrs.body == "CTCP VERSION query → grappa #{version}"
     end
 
+    test "PRIVMSG carrying CTCP PING echoes the asker's token back unchanged" do
+      state = base_state()
+
+      # The token is the ASKER's — conventionally their clock, but it is
+      # opaque to us: the whole protocol is that it comes back byte for
+      # byte so they can subtract. Parsing or regenerating it would
+      # report a round trip that never happened.
+      body = <<0x01, "PING 1753776000123", 0x01>>
+      m = msg(:privmsg, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _state, [{:reply, line}, {:persist, :notice, attrs}]} =
+               EventRouter.route(m, state)
+
+      assert IO.iodata_to_binary(line) == "NOTICE alice :\x01PING 1753776000123\x01"
+
+      # Same routing as VERSION: the DM-shaped query persists on the
+      # own-nick topic so the row reaches a client that has no window
+      # with this peer open yet.
+      assert attrs.channel == "vjt"
+      assert attrs.sender == "alice"
+      assert attrs.body == "CTCP PING query → answered"
+    end
+
+    test "PRIVMSG carrying a token-less CTCP PING answers with an empty token" do
+      state = base_state()
+
+      # `\x01PING\x01` carries nothing to echo, so the answer carries
+      # nothing either — not a stray separator the asker never sent, and
+      # certainly not an invented token they would then subtract from.
+      body = <<0x01, "PING", 0x01>>
+      m = msg(:privmsg, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _state, [{:reply, line}, {:persist, :notice, _attrs}]} =
+               EventRouter.route(m, state)
+
+      assert IO.iodata_to_binary(line) == "NOTICE alice :\x01PING\x01"
+    end
+
     test "PRIVMSG carrying CTCP VERSION from a channel still replies to sender nick" do
       state = base_state()
 
