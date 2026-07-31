@@ -46,8 +46,9 @@ defmodule Grappa.LiveIntrospectionTest do
       # #550 — the upstream peer is captured ASYNCHRONOUSLY: the Client dials
       # the in-process IRCServer, then pushes {:irc_peer, _} to Session.Server
       # which caches it. Until that message is processed the session is a live
-      # pid with peer_address: nil, so handle_call({:peer_address}) replies
-      # {:error, :no_peer} and `introspection_degraded` carries :peer_address
+      # pid with peer_address: nil, so handle_call({:connection_info}) replies
+      # {:error, :no_peer} (peer_address/3 projects it) and `introspection_degraded`
+      # carries :peer_address
       # (server.ex + fetch_peer_address). This test reads introspection_degraded
       # right after spawn, so without a barrier it races the capture — green
       # when the {:irc_peer, _} lands first (pull_request / local fast timing),

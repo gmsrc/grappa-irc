@@ -1035,7 +1035,12 @@ defmodule Grappa.Session.Server do
       # (SessionPlan.resolve sets it from the network's server row). Immutable
       # for the session; surfaced (with peer_address + the +r umode) by
       # `Grappa.Session.connection_info/2` for the server-window rail card.
-      tls: Map.get(opts, :tls, false),
+      # `opts.tls` (not `Map.get` default): `:tls` is a REQUIRED start_opt
+      # (`client_opts/1` reads it directly at connect too) — a plan that
+      # omitted it must crash loud here, not silently render plaintext. The
+      # hot-safety default lives ONLY in the handler's `Map.get(state, :tls)`
+      # (a pre-#474 live proc lacks the state key; a fresh opts map never does).
+      tls: opts.tls,
       notify_pid: Map.get(opts, :notify_pid),
       notify_ref: Map.get(opts, :notify_ref),
       pending_auth: nil,
