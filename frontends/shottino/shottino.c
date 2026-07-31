@@ -8754,17 +8754,17 @@ static void handle_command_dispatch(struct app *app, char *line) {
             /* Bare /block is the LIST. A block you cannot see is a block
              * you cannot undo — the first thing to ask about a silent
              * person is whether you silenced them. */
+            /* Copied out in one pass: log_line takes the lock itself, so
+             * printing while holding it would deadlock, and re-taking it
+             * per row would print a list that changed halfway down. */
+            static char snap[MAX_BLOCKS][MAX_CHANNEL];
             pthread_mutex_lock(&app->lock);
             size_t count = app->block_count;
+            for (size_t i = 0; i < count; i++)
+                snprintf(snap[i], sizeof(snap[0]), "%s", app->blocks[i]);
             pthread_mutex_unlock(&app->lock);
             log_line(app, "--- blocked (%zu/%d)", count, MAX_BLOCKS);
-            for (size_t i = 0; i < count; i++) {
-                pthread_mutex_lock(&app->lock);
-                char who[MAX_CHANNEL];
-                snprintf(who, sizeof(who), "%s", app->blocks[i]);
-                pthread_mutex_unlock(&app->lock);
-                log_line(app, "  %s", who);
-            }
+            for (size_t i = 0; i < count; i++) log_line(app, "  %s", snap[i]);
             if (count == 0) log_line(app, "  (nobody — /block nick adds one)");
         } else {
             pthread_mutex_lock(&app->lock);
