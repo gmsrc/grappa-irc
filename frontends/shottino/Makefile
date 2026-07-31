@@ -10,7 +10,7 @@ CFLAGS += $(CFLAGS_DEPS)
 LDLIBS += $(LDLIBS_DEPS)
 
 BIN := shottino
-OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o ircd.o
+OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o ircd.o ws.o
 
 # Test binaries link only the pure modules they exercise — no ncurses, no
 # OpenSSL, no terminal. That is the point of keeping the narrowing and
@@ -31,7 +31,7 @@ OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o ircd.
 # reaches, which is the drawing primitives and nothing else. Do not trust
 # this net for changes elsewhere in that file; add a test or reason about
 # the path by hand.
-TESTS := tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_layout tests/test_keys tests/test_ircd tests/test_commands tests/test_windows
+TESTS := tests/test_ws tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_layout tests/test_keys tests/test_ircd tests/test_commands tests/test_windows
 SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O1 -g $(SANITIZE)
 
@@ -45,8 +45,9 @@ $(BIN): $(OBJS)
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-shottino.o: shottino.c json.h wire.h alias.h mirc.h termcolor.h http.h media.h ircd.h
+shottino.o: shottino.c json.h wire.h alias.h mirc.h termcolor.h http.h media.h ircd.h ws.h
 ircd.o: ircd.c ircd.h
+ws.o: ws.c ws.h
 json.o: json.c json.h
 wire.o: wire.c wire.h json.h
 alias.o: alias.c alias.h
@@ -54,6 +55,12 @@ mirc.o: mirc.c mirc.h
 termcolor.o: termcolor.c termcolor.h
 http.o: http.c http.h
 media.o: media.c media.h termcolor.h
+
+# ws is a pure buffer: bytes in, messages out. It gets the fussiest
+# suite in the tree because the bug it replaces was invisible to every
+# other one — a frame delivered in pieces.
+tests/test_ws: tests/test_ws.c tests/test.h ws.c ws.h
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) -o $@ tests/test_ws.c ws.c
 
 tests/test_json: tests/test_json.c tests/test.h json.c json.h
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) -o $@ tests/test_json.c json.c
@@ -80,8 +87,8 @@ tests/test_media: tests/test_media.c tests/test.h media.c media.h termcolor.c te
 # shottino.c, so it takes the same feature-test macros ($(CFLAGS_DEPS),
 # which is what puts strcasestr and cfmakeraw in scope) and links what
 # shottino links.
-tests/test_layout: tests/test_layout.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_layout.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS)
+tests/test_layout: tests/test_layout.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_layout.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c $(LDLIBS)
 
 # test_keys needs a pty (-lutil): it feeds real byte sequences through the
 # client's own key decoding, because every key bug so far has been about
@@ -89,23 +96,23 @@ tests/test_layout: tests/test_layout.c tests/test.h shottino.c json.c wire.c ali
 # test_ircd opens a real socket to the bridge and speaks IRC to it: a
 # bridge is judged by what a client sees, and that cannot be asserted
 # from the inside.
-tests/test_ircd: tests/test_ircd.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_ircd.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS)
+tests/test_ircd: tests/test_ircd.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_ircd.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c $(LDLIBS)
 
 # test_commands reads shottino.c off disk as well as compiling it: the
 # invariant it guards is that three lists inside that file agree, and the
 # only honest source for "what the dispatcher accepts" is the dispatcher.
-tests/test_commands: tests/test_commands.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_commands.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS)
+tests/test_commands: tests/test_commands.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_commands.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c $(LDLIBS)
 
 # test_windows drives the app's own window bookkeeping — no screen, no
 # socket, just state — because "which window does this name mean" is the
 # question every other bug in the sidebar has turned out to be.
-tests/test_windows: tests/test_windows.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_windows.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS)
+tests/test_windows: tests/test_windows.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_windows.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c $(LDLIBS)
 
-tests/test_keys: tests/test_keys.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_keys.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS) -lutil
+tests/test_keys: tests/test_keys.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_keys.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c $(LDLIBS) -lutil
 
 # `make check` is the gate: build every suite, run every suite, fail loud.
 check: $(TESTS)

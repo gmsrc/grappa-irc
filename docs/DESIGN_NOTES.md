@@ -24682,3 +24682,58 @@ session never typed it here, and one whose O:line was pulled is no longer one
 whatever they typed. It PREFILLS `/kill <nick> ` rather than firing — a kill
 needs a reason, and it should not happen on one click. Unlike the channel-op
 entries it is offered in query windows too, because a KILL is network-wide.
+
+---
+
+## 2026-07-31 — shottino: the websocket reader could not survive a frame in pieces
+
+Reported as "/whois never answers, and neither does /ping". cicchetto answered
+the same commands correctly, which put the fault in the client rather than in
+grappa — and `/wire` (added for this) showed the shape exactly: the push left
+with `status=ok`, and no `whois_bundle` event ever came back.
+
+**The defect.** `ws_read_frame` read frames STRAIGHT off the socket. When fewer
+bytes had arrived than the frame declared, it freed what it had already
+consumed and returned "nothing yet" — so the remaining bytes of that frame were
+later parsed as if they were a new frame header. Every read boundary was a
+chance to lose the stream: the 2-byte header, the 2/8-byte extended length, the
+4-byte mask, and the payload loop (a non-blocking `SSL_read` returning
+WANT_READ mid-payload is not an error, it is Tuesday). RFC 6455 fragmentation
+was not handled at all: a continuation frame (opcode 0) was dropped as "not
+text", so a message split across frames lost everything after its first piece.
+
+Small frames — a chat line — arrive in one piece and hid this for months. The
+reply cards are exactly the big ones: a WHOIS bundle with its channel list, a
+MOTD, a LUSERS. They are also the only frames past 125 bytes, which is where
+the extended-length read (one more chance to short-read) begins.
+
+**The fix is a BUFFER, not a read.** `ws.c` is a leaf module: bytes in, whole
+messages out. An incomplete frame consumes NOTHING, so the bytes already read
+wait in the buffer for the rest. It handles continuation frames, control frames
+interleaved inside a fragmented message (§5.4), masked frames (a server must
+not mask, but a proxy in the middle might, and a client that refuses is a
+client that mysteriously stops working), and both extended lengths. PING is now
+answered with a PONG instead of dropped. The buffer is reset on connect, so
+half a frame from a dead connection cannot become the first bytes of the next
+one.
+
+Splitting it out of shottino.c is what makes it testable without a socket —
+same reason json.c and wire.c are their own modules. `test_ws` feeds every case
+ONE BYTE AT A TIME as well as whole: the property is not "does it parse a
+frame" (the old one did) but "does it parse a frame delivered the way a slow
+link delivers it", which is the question no other suite in the tree was asking.
+
+**Two silent-failure paths were closed on the way**, both capable of producing
+the same silence and neither the cause: `whois_bundle` required all ten of its
+boolean legs (one absent flag discarded the whole bundle — they default to
+false now, which is the server's own contract), and a payload that failed to
+narrow was dropped without a word (a KNOWN kind that we refuse now says so; an
+unknown kind stays silent, as the additive-only wire requires).
+
+**`/wire` is the durable outcome.** Whether a verb reached the server and
+whether an answer came back was unanswerable from inside the client, and that
+is the first question about every "nothing happened" report. It logs frames by
+NAME only — never payloads, because `oper` carries the operator password and
+`raw` carries every `IDENTIFY` typed through `/quote`. A debug switch that
+leaks a credential is a worse bug than the one it was turned on to find; the
+redaction has a test.

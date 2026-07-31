@@ -280,6 +280,14 @@ default; `Ctrl-R` works either way.
 
 ## Seeing what the socket is doing
 
+Websocket framing lives in `ws.c`: bytes in, whole messages out. It is a buffer
+rather than a read because a frame does not arrive in one piece — an incomplete
+one consumes nothing and waits for the rest. It reassembles messages split
+across frames, answers PING with PONG, and tolerates a masked frame from a
+proxy. `test_ws` feeds every case a byte at a time, which is the only way that
+property gets tested at all.
+
+
 `/wire` echoes websocket traffic: `wire -> whois (network_id=7)` when a verb
 goes out, `wire <- event kind=whois_bundle` when an answer comes back, and the
 topic of every join. It logs frames by NAME only — never their payloads, which

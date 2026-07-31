@@ -41,6 +41,7 @@
 #include "alias.h"
 #include "http.h"
 #include "ircd.h"
+#include "ws.h"
 #include "json.h"
 #include "media.h"
 #include "mirc.h"
@@ -66,7 +67,6 @@
 #define MAX_TOPIC 4096
 #define LOG_LINES 2000
 #define HTTP_MAX (4 * 1024 * 1024)
-#define WS_MAX_PAYLOAD (1024 * 1024)
 #define JOB_QUEUE 256
 #define SEEN_MESSAGES 12000
 #define INPUT_HISTORY 200
@@ -752,6 +752,10 @@ struct app {
     size_t jobs_tail;
     bool worker_stop;
     struct tls_conn ws;
+    /* Receive-side framing. Lives across reads BECAUSE a frame does: the
+     * socket hands over whatever has arrived, which for anything bigger
+     * than a chat line is a fraction of one. */
+    struct ws_reader ws_in;
     bool ws_connected;
     unsigned long ws_ref;
     time_t next_heartbeat;
@@ -3475,17 +3479,23 @@ static bool ws_connect(struct app *app) {
     }
     int flags = fcntl(app->ws.fd, F_GETFL, 0);
     fcntl(app->ws.fd, F_SETFL, flags | O_NONBLOCK);
+    /* A fresh stream needs a fresh buffer: half a frame left over from
+     * the connection that just died would be read as the first bytes of
+     * this one. */
+    ws_reader_free(&app->ws_in);
     app->ws_connected = true;
     app->next_heartbeat = time(NULL) + 25;
     return true;
 }
 
-static bool ws_send_text(struct app *app, const char *text) {
+/* One frame, any opcode. Text is what the client speaks; the opcode is a
+ * parameter so a PONG can go back the same way rather than through a
+ * second copy of the masking. */
+static bool ws_send_frame(struct app *app, int opcode, const char *body, size_t len) {
     if (!app->ws_connected) return false;
-    size_t len = strlen(text);
     unsigned char hdr[14];
     size_t hlen = 0;
-    hdr[hlen++] = 0x81;
+    hdr[hlen++] = (unsigned char)(0x80 | (opcode & 0x0f));
     if (len < 126) {
         hdr[hlen++] = 0x80 | (unsigned char)len;
     } else if (len <= 65535) {
@@ -3503,10 +3513,14 @@ static bool ws_send_text(struct app *app, const char *text) {
     unsigned char *frame = malloc(hlen + len);
     if (!frame) die("out of memory");
     memcpy(frame, hdr, hlen);
-    for (size_t i = 0; i < len; i++) frame[hlen + i] = ((const unsigned char *)text)[i] ^ mask[i % 4];
+    for (size_t i = 0; i < len; i++) frame[hlen + i] = ((const unsigned char *)body)[i] ^ mask[i % 4];
     bool ok = conn_write_all(&app->ws, (const char *)frame, hlen + len);
     free(frame);
     return ok;
+}
+
+static bool ws_send_text(struct app *app, const char *text) {
+    return ws_send_frame(app, 0x1, text, strlen(text));
 }
 
 /* One line describing an outbound push, for /wire.
@@ -3659,59 +3673,55 @@ static void ws_join_topics(struct app *app) {
     }
 }
 
+/* Read the next complete websocket MESSAGE, if one has arrived.
+ *
+ * Returns 1 with a malloc'd message, 0 for "nothing complete yet", -1 to
+ * take the connection down. The framing itself is ws.c — see the header
+ * there for why this is a buffer and not a read. What is left here is the
+ * socket half: pull whatever bytes are available, hand them over, and
+ * answer a ping.
+ *
+ * The old version read a frame's bytes DIRECTLY from the socket and, when
+ * fewer had arrived than the frame needed, discarded what it had already
+ * taken and reported "nothing yet" — so the rest of that frame was later
+ * parsed as though it were a new frame header, and the stream was lost.
+ * A chat line arrives in one piece and survived that; a WHOIS bundle, a
+ * MOTD or a LUSERS reply does not, which is why the reply cards never
+ * appeared while the conversation flowed normally. */
 static int ws_read_frame(struct app *app, char **out) {
-    unsigned char h[2];
-    ssize_t n = conn_read(&app->ws, h, 2);
-    if (n < 0) {
-        int e = app->ws.tls ? SSL_get_error(app->ws.ssl, (int)n) : 0;
-        if ((!app->ws.tls && (errno == EAGAIN || errno == EWOULDBLOCK)) || e == SSL_ERROR_WANT_READ) return 0;
-        return -1;
-    }
-    if (n == 0) return -1;
-    if (n != 2) return 0;
-    int opcode = h[0] & 0x0f;
-    bool masked = (h[1] & 0x80) != 0;
-    uint64_t len = h[1] & 0x7f;
-    if (len == 126) {
-        unsigned char x[2];
-        if (conn_read(&app->ws, x, 2) != 2) return 0;
-        len = ((uint64_t)x[0] << 8) | x[1];
-    } else if (len == 127) {
-        unsigned char x[8];
-        if (conn_read(&app->ws, x, 8) != 8) return 0;
-        len = 0;
-        for (int i = 0; i < 8; i++) len = (len << 8) | x[i];
-    }
-    if (len > WS_MAX_PAYLOAD) return -1;
-    unsigned char mask[4] = {0};
-    if (masked && conn_read(&app->ws, mask, 4) != 4) return 0;
-    char *payload = malloc((size_t)len + 1);
-    if (!payload) die("out of memory");
-    size_t off = 0;
-    while (off < len) {
-        ssize_t r = conn_read(&app->ws, payload + off, (size_t)len - off);
-        if (r <= 0) {
+    for (;;) {
+        char *payload = NULL;
+        size_t plen = 0;
+        switch (ws_reader_take(&app->ws_in, &payload, &plen)) {
+        case WS_TEXT:
+            *out = payload;
+            return 1;
+        case WS_PING: {
+            /* Answered, not ignored: a peer that pings and hears nothing
+             * back is entitled to conclude we are gone. */
+            ws_send_frame(app, 0xA, payload, plen);
             free(payload);
-            return 0;
+            continue;
         }
-        off += (size_t)r;
+        case WS_CLOSED:
+        case WS_ERROR:
+            return -1;
+        case WS_NEED_MORE:
+            break;
+        }
+
+        unsigned char chunk[16384];
+        ssize_t n = conn_read(&app->ws, chunk, sizeof(chunk));
+        if (n < 0) {
+            int e = app->ws.tls ? SSL_get_error(app->ws.ssl, (int)n) : 0;
+            if ((!app->ws.tls && (errno == EAGAIN || errno == EWOULDBLOCK)) ||
+                e == SSL_ERROR_WANT_READ)
+                return 0;
+            return -1;
+        }
+        if (n == 0) return -1;
+        if (!ws_reader_feed(&app->ws_in, chunk, (size_t)n)) return -1;
     }
-    for (size_t i = 0; masked && i < len; i++) payload[i] ^= mask[i % 4];
-    payload[len] = 0;
-    if (opcode == 0x8) {
-        free(payload);
-        return -1;
-    }
-    if (opcode == 0x9) {
-        free(payload);
-        return 0;
-    }
-    if (opcode != 0x1) {
-        free(payload);
-        return 0;
-    }
-    *out = payload;
-    return 1;
 }
 
 /* ── Typed wire-event handling ─────────────────────────────────────────
