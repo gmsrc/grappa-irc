@@ -148,9 +148,12 @@ test.describe("#299 — theme cards (tap-select + progressive disclosure)", () =
       await expect(page.locator("[data-testid^='theme-delete-']").first()).toBeVisible();
     } finally {
       await ctx.close();
-      // The copy is a private (unpublished) theme, so it CASCADE-dies with the
-      // visitor — no gallery residue to clean up.
-      await adminDeleteVisitor(getSeededAdmin().token, visitor.id).catch(() => {});
+      // #517 — the copy is a private (unpublished) theme, so it CASCADE-dies
+      // with the visitor — no gallery residue to clean up. The visitor delete
+      // must NOT swallow its failure: a stranded live visitor poisons
+      // downstream exact-count canaries (m9b sessions, #481 accretion). Let it
+      // throw loud instead of the old `.catch(() => {})`.
+      await adminDeleteVisitor(getSeededAdmin().token, visitor.id);
     }
   });
 
@@ -201,12 +204,29 @@ test.describe("#299 — theme cards (tap-select + progressive disclosure)", () =
       await expect(authorAfter).toBeVisible({ timeout: 5_000 });
       await expect(authorAfter).toContainText(visitor.nick);
     } finally {
+      // #517 — cleanup must run BOTH steps AND surface any failure (no silent
+      // swallow). A stranded visitor/theme poisons downstream exact-count
+      // canaries (m9b sessions, #481 accretion). Collect errors so a failing
+      // theme delete can't SKIP the visitor delete (the dangerous one), then
+      // throw loud — never `.catch(() => {})`.
+      const cleanupErrors: unknown[] = [];
       // The re-homed theme is a published, system-owned gallery row — clean it
       // up so it doesn't accrete as gallery residue across runs.
       if (themeId !== undefined) {
-        await adminDeleteTheme(getSeededAdmin().token, themeId).catch(() => {});
+        try {
+          await adminDeleteTheme(getSeededAdmin().token, themeId);
+        } catch (err) {
+          cleanupErrors.push(err);
+        }
       }
-      await adminDeleteVisitor(getSeededAdmin().token, visitor.id).catch(() => {});
+      try {
+        await adminDeleteVisitor(getSeededAdmin().token, visitor.id);
+      } catch (err) {
+        cleanupErrors.push(err);
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(cleanupErrors, "issue299 cleanup failed");
+      }
     }
   });
 });
