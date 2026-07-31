@@ -818,6 +818,13 @@ static bool is_server_window(const char *channel) {
     return irc_name_eq(channel, SERVER_WINDOW);
 }
 
+/* A channel name, by its sigil — the four RFC sigils, which is what the
+ * ircd itself accepts. The one copy: the bridge, the menu and the
+ * dispatcher all ask the same question and used to each spell it out. */
+static bool is_channel_name(const char *name) {
+    return name && (name[0] == '#' || name[0] == '&' || name[0] == '+' || name[0] == '!');
+}
+
 /* ── The log ring ──────────────────────────────────────────────────────
  *
  * One text array and five parallel ones: mention, pending-echo, server
@@ -8122,7 +8129,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
         pthread_mutex_lock(&app->lock);
         w = app->windows[focused_window_locked(app)];
         pthread_mutex_unlock(&app->lock);
-        if (w.channel[0] == '#' || w.channel[0] == '&' || w.channel[0] == '+' || w.channel[0] == '!') {
+        if (is_channel_name(w.channel)) {
             struct job job = { .kind = JOB_PART };
             snprintf(job.network, sizeof(job.network), "%s", w.network);
             snprintf(job.channel, sizeof(job.channel), "%s", w.channel);
@@ -8331,7 +8338,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
         while (*rest == ' ') rest++;
         char target[MAX_CHANNEL];
         current_window_key(app, NULL, 0, target, sizeof(target));
-        if (*rest == '#' || *rest == '&' || *rest == '+' || *rest == '!') {
+        if (is_channel_name(rest)) {
             char *sp = strchr(rest, ' ');
             if (sp) {
                 *sp = 0;
@@ -8826,10 +8833,6 @@ static void ircd_signal_handler(int sig) {
     ircd_signalled = 1;
 }
 
-static bool ircd_is_channel(const char *name) {
-    return name && (name[0] == '#' || name[0] == '&' || name[0] == '+' || name[0] == '!');
-}
-
 /* ── Output ────────────────────────────────────────────────────────────
  * Every send appends a whole line to the client's buffer under the
  * bridge lock, so lines from the tee and lines from a command reply can
@@ -8977,7 +8980,7 @@ static size_t ircd_channels_of(struct app *app, const char *network, char out[][
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count && n < max; i++) {
         if (!irc_name_eq(app->windows[i].network, network)) continue;
-        if (!ircd_is_channel(app->windows[i].channel)) continue;
+        if (!is_channel_name(app->windows[i].channel)) continue;
         snprintf(out[n], MAX_CHANNEL, "%s", app->windows[i].channel);
         n++;
     }
@@ -9110,7 +9113,7 @@ static void ircd_message_line(const struct ircd_hist *h, const char *own, bool t
     ircd_tags(h->server_time, time_tag, h->id, tags, batch_ref, tag, sizeof(tag));
 
     const char *target = h->channel;
-    if (!ircd_is_channel(h->channel) && !ircd_name_equal(h->sender, own)) target = own;
+    if (!is_channel_name(h->channel) && !ircd_name_equal(h->sender, own)) target = own;
 
     switch (h->kind) {
     case MSG_PRIVMSG:
@@ -9151,7 +9154,7 @@ static void ircd_message_line(const struct ircd_hist *h, const char *own, bool t
         break;
     case MSG_SERVER_EVENT:
         snprintf(out, out_sz, "%s:%s NOTICE %.64s :%s", tag, IRCD_SERVER,
-                 ircd_is_channel(h->channel) ? h->channel : own, body);
+                 is_channel_name(h->channel) ? h->channel : own, body);
         break;
     }
 }
@@ -9739,7 +9742,7 @@ static void ircd_cmd_join(struct app *app, struct ircd_client *c, const char *ta
     char copy[IRCD_PARAM_MAX];
     snprintf(copy, sizeof(copy), "%s", targets);
     for (char *tok = strtok(copy, ","); tok; tok = strtok(NULL, ",")) {
-        if (!ircd_is_channel(tok)) continue;
+        if (!is_channel_name(tok)) continue;
         bool known = false;
         pthread_mutex_lock(&app->lock);
         for (size_t i = 0; i < app->window_count; i++)
@@ -9843,7 +9846,7 @@ static void ircd_cmd_whois(struct app *app, struct ircd_client *c, const char *n
     for (size_t i = 0; i < app->window_count; i++) {
         if (strcmp(app->windows[i].network, c->network) != 0) continue;
         struct window *w = &app->windows[i];
-        if (!ircd_is_channel(w->channel)) continue;
+        if (!is_channel_name(w->channel)) continue;
         for (size_t k = 0; k < w->member_count; k++) {
             if (!ircd_name_equal(w->members[k].nick, nick)) continue;
             seen = true;
