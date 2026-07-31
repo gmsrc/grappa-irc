@@ -756,6 +756,20 @@ struct app {
      * socket hands over whatever has arrived, which for anything bigger
      * than a chat line is a fraction of one. */
     struct ws_reader ws_in;
+    /* The ref of the phx_join that opened the USER topic.
+     *
+     * A v2 frame is [join_ref, ref, topic, event, payload], and on a
+     * client PUSH the join_ref must be the ref of the join that opened
+     * that channel — Phoenix matches it against the channel's own
+     * join_ref and DISCARDS anything else, with no reply and no error.
+     * Shottino sent a fresh ref in both slots, so every verb it pushed
+     * was thrown away in silence: /whois, /whowas, /who, /names,
+     * /lusers, /motd, /links, /away, /umode, /quote, the read cursors,
+     * all of it. What still worked did so because it goes over REST
+     * (sending a message, fetching scrollback) or is a server→client
+     * push (chat, window state) — which is exactly why the client felt
+     * fine while every question it asked went unanswered. */
+    unsigned long ws_user_join_ref;
     bool ws_connected;
     unsigned long ws_ref;
     time_t next_heartbeat;
@@ -1631,7 +1645,7 @@ static void parse_channels(struct app *app, const char *network, const char *jso
 }
 
 static void enqueue_fetch(struct app *app, const char *network, const char *channel);
-static void ws_join(struct app *app, const char *topic);
+static unsigned long ws_join(struct app *app, const char *topic);
 
 static const char *network_slug_by_id(struct app *app, int id) {
     for (size_t i = 0; i < app->network_count; i++) {
@@ -3540,15 +3554,41 @@ static void wire_push_summary(const char *event, const char *payload, char *out,
     else snprintf(out, out_sz, "wire -> %s", event);
 }
 
-static void ws_join(struct app *app, const char *topic) {
-    char ref[32];
-    snprintf(ref, sizeof(ref), "%lu", ++app->ws_ref);
+/* A Phoenix v2 frame: [join_ref, ref, topic, event, payload].
+ *
+ * The slot ORDER is the whole contract, and getting it wrong is silent:
+ * a push whose join_ref is not the join's ref is discarded by Phoenix
+ * without a reply. One builder, so the two callers cannot disagree
+ * about which number goes first. `join_ref` of 0 is written as JSON
+ * null — that is what the heartbeat (topic "phoenix", never joined)
+ * wants, and a literal "0" would be a ref that matches no channel. */
+static char *ws_v2_frame(unsigned long join_ref, unsigned long ref, const char *topic,
+                         const char *event, const char *payload) {
     char *topic_json = json_escape(topic);
-    char *frame = xasprintf("[\"%s\",\"%s\",\"%s\",\"phx_join\",{}]", ref, ref, topic_json);
+    char *event_json = json_escape(event);
+    char *frame;
+    if (join_ref)
+        frame = xasprintf("[\"%lu\",\"%lu\",\"%s\",\"%s\",%s]", join_ref, ref, topic_json,
+                          event_json, payload);
+    else
+        frame = xasprintf("[null,\"%lu\",\"%s\",\"%s\",%s]", ref, topic_json, event_json,
+                          payload);
     free(topic_json);
+    free(event_json);
+    return frame;
+}
+
+/* Join a topic. Returns the ref used, which IS that channel's join_ref
+ * for as long as it stays joined — every later push on it has to carry
+ * it. (A join is the one frame where join_ref and ref are the same
+ * number: it is the message that establishes the pair.) */
+static unsigned long ws_join(struct app *app, const char *topic) {
+    unsigned long join_ref = ++app->ws_ref;
+    char *frame = ws_v2_frame(join_ref, join_ref, topic, "phx_join", "{}");
     ws_send_text(app, frame);
     free(frame);
-    if (app->wire_echo) log_line(app, "wire -> join %s", topic);
+    if (app->wire_echo) log_line(app, "wire -> join %s ref=%lu", topic, join_ref);
+    return join_ref;
 }
 
 static void ws_push_user(struct app *app, const char *event, const char *payload) {
@@ -3556,21 +3596,17 @@ static void ws_push_user(struct app *app, const char *event, const char *payload
         log_line(app, "websocket is not connected; /%s not sent", event);
         return;
     }
-    char ref[32];
-    snprintf(ref, sizeof(ref), "%lu", ++app->ws_ref);
+    unsigned long ref = ++app->ws_ref;
     char *topic = xasprintf("grappa:user:%s", app->subject);
-    char *topic_json = json_escape(topic);
-    char *event_json = json_escape(event);
-    char *frame = xasprintf("[\"%s\",\"%s\",\"%s\",\"%s\",%s]", ref, ref, topic_json, event_json, payload);
+    /* The join's ref, not this push's — see ws_user_join_ref. */
+    char *frame = ws_v2_frame(app->ws_user_join_ref, ref, topic, event, payload);
     free(topic);
-    free(topic_json);
-    free(event_json);
     ws_send_text(app, frame);
     free(frame);
     if (app->wire_echo) {
         char summary[MAX_LINE];
         wire_push_summary(event, payload, summary, sizeof(summary));
-        log_line(app, "%s ref=%s", summary, ref);
+        log_line(app, "%s ref=%lu join_ref=%lu", summary, ref, app->ws_user_join_ref);
     }
 }
 
@@ -3659,7 +3695,7 @@ static void ws_join_topics(struct app *app) {
     char *subject = json_escape(app->subject);
     char *topic = xasprintf("grappa:user:%s", subject);
     free(subject);
-    ws_join(app, topic);
+    app->ws_user_join_ref = ws_join(app, topic);
     free(topic);
     for (size_t i = 0; i < app->window_count; i++) {
         char *chan = json_escape(app->windows[i].channel);
@@ -4677,9 +4713,7 @@ static void ws_pump(struct app *app) {
     }
     time_t now = time(NULL);
     if (now >= app->next_heartbeat) {
-        char ref[32];
-        snprintf(ref, sizeof(ref), "%lu", ++app->ws_ref);
-        char *hb = xasprintf("[null,\"%s\",\"phoenix\",\"heartbeat\",{}]", ref);
+        char *hb = ws_v2_frame(0, ++app->ws_ref, "phoenix", "heartbeat", "{}");
         ws_send_text(app, hb);
         free(hb);
         app->next_heartbeat = now + 25;

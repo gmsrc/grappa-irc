@@ -280,6 +280,11 @@ default; `Ctrl-R` works either way.
 
 ## Seeing what the socket is doing
 
+Every client push carries the join_ref of the `phx_join` that opened its
+channel — Phoenix discards a frame whose join_ref does not match, silently, so
+this is the difference between a verb that works and one that vanishes.
+`ws_v2_frame` is the only place a frame is built.
+
 Websocket framing lives in `ws.c`: bytes in, whole messages out. It is a buffer
 rather than a read because a frame does not arrive in one piece — an incomplete
 one consumes nothing and waits for the rest. It reassembles messages split

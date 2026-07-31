@@ -446,6 +446,32 @@ TEST(the_wire_echo_never_prints_a_payload) {
     CHECK_STR(out, "wire -> read_cursor");
 }
 
+/* ── Phoenix v2 framing ────────────────────────────────────────────── */
+
+TEST(a_push_carries_the_joins_ref_not_its_own) {
+    /* [join_ref, ref, topic, event, payload]. On a client push the FIRST
+     * slot must be the ref of the phx_join that opened the channel:
+     * Phoenix matches it against the channel's own join_ref and discards
+     * anything else with no reply and no error. Sending a fresh ref in
+     * both slots — which this client did — meant every verb it asked
+     * (whois, lusers, motd, away, quote, read cursors) was thrown away
+     * in silence, while REST verbs and server→client pushes kept
+     * working. That is the bug this test exists for. */
+    char *join = ws_v2_frame(3, 3, "grappa:user:vjt", "phx_join", "{}");
+    CHECK_STR(join, "[\"3\",\"3\",\"grappa:user:vjt\",\"phx_join\",{}]");
+    free(join);
+
+    char *push = ws_v2_frame(3, 7, "grappa:user:vjt", "whois", "{\"nick\":\"alice\"}");
+    CHECK_STR(push, "[\"3\",\"7\",\"grappa:user:vjt\",\"whois\",{\"nick\":\"alice\"}]");
+    free(push);
+
+    /* The heartbeat rides a topic nobody joins, so its join_ref is null
+     * rather than a number that matches no channel. */
+    char *hb = ws_v2_frame(0, 9, "phoenix", "heartbeat", "{}");
+    CHECK_STR(hb, "[null,\"9\",\"phoenix\",\"heartbeat\",{}]");
+    free(hb);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -467,5 +493,6 @@ int main(void) {
     RUN(every_oper_verb_explains_itself);
     RUN(kill_is_offered_only_to_an_oper);
     RUN(the_wire_echo_never_prints_a_payload);
+    RUN(a_push_carries_the_joins_ref_not_its_own);
     return test_report();
 }

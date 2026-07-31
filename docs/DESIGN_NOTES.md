@@ -24737,3 +24737,41 @@ NAME only — never payloads, because `oper` carries the operator password and
 `raw` carries every `IDENTIFY` typed through `/quote`. A debug switch that
 leaks a credential is a worse bug than the one it was turned on to find; the
 redaction has a test.
+
+---
+
+## 2026-07-31 — shottino: every verb it pushed was being thrown away
+
+The /whois hunt ended here, and the earlier entries in this file record the
+detours honestly: a stale `whois_bundle` strictness, a silent narrow-failure
+drop, and a websocket reader that could not read a frame delivered in pieces.
+All three were real defects. None of them was this one.
+
+**A Phoenix v2 frame is `[join_ref, ref, topic, event, payload]`, and on a
+client PUSH the join_ref must be the ref of the `phx_join` that opened that
+channel.** Phoenix matches it against the channel's own join_ref and DISCARDS
+anything else — no reply, no error, no log. shottino sent a fresh ref in BOTH
+slots, so every verb it ever pushed was dropped at the transport: `/whois`,
+`/whowas`, `/who`, `/names`, `/lusers`, `/motd`, `/links`, `/away`, `/umode`,
+`/quote`, `/oper`, the read cursors — all of it. The join itself worked, which
+is why the client looked connected: a join is the one frame where join_ref and
+ref are legitimately the same number, because it is the message that
+establishes the pair.
+
+What kept working is the shape of the misdiagnosis: sending a message, fetching
+scrollback, listing channels and networks all go over REST, and chat,
+window-state and query-window events are server→client pushes. So the client
+felt entirely healthy while every question it asked went unanswered — and cic,
+which uses phoenix.js and therefore sends the right join_ref, answered the same
+commands perfectly, which is what finally located the fault.
+
+**The evidence that ended it** was `/wire` printing refs on both sides: the
+whois push went out with `ref=N` and no reply with `ref=N` ever came back. A
+`status=ok` seen earlier belonged to a channel join, not to the verb. Pairing
+by ref is the whole reason the refs were added, and it should have been the
+first diagnostic built rather than the fourth.
+
+`ws_v2_frame/5` is now the single builder for join, push and heartbeat — the
+slot order is the contract, and it lives in one place with a test that spells
+out all three shapes. A join_ref of 0 marshals as JSON `null`, which is what
+the heartbeat's never-joined "phoenix" topic wants.
