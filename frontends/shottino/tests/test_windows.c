@@ -143,6 +143,175 @@ TEST(a_reply_card_lands_in_the_window_that_asked) {
     free_app(app);
 }
 
+/* ── The block list ────────────────────────────────────────────────── */
+
+TEST(a_block_matches_the_person_not_the_spelling) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    CHECK(block_add_locked(app, "SpamMer"));
+    CHECK(is_blocked_locked(app, "spammer"));
+    CHECK(is_blocked_locked(app, "SPAMMER"));
+    CHECK(!is_blocked_locked(app, "spammer2"));
+    /* Adding twice is not two entries, and says so by returning false. */
+    CHECK(!block_add_locked(app, "spammer"));
+    CHECK_LONG(app->block_count, 1);
+    /* Removing takes any spelling too, and only the once. */
+    CHECK(block_remove_locked(app, "SPAMMER"));
+    CHECK(!block_remove_locked(app, "spammer"));
+    CHECK_LONG(app->block_count, 0);
+    free_app(app);
+}
+
+TEST(a_blocked_person_is_not_drawn_but_is_still_counted) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    block_add_locked(app, "spammer");
+
+    struct wire_scrollback_message m = { 0 };
+    m.id = 41;
+    m.network = "azzurra";
+    m.channel = "#sniffo";
+    m.sender = "alice";
+    m.body = "ciao";
+    m.kind = MSG_PRIVMSG;
+    render_message(app, &m, true);
+    size_t after_alice = app->log_count;
+    CHECK(after_alice > 0);
+
+    m.id = 42;
+    m.sender = "SpamMer"; /* the same person, shouting */
+    m.body = "buy things";
+    render_message(app, &m, true);
+    /* Nothing drawn... */
+    CHECK_LONG(app->log_count, after_alice);
+    /* ...but the window still knows how far the conversation got, so
+     * reconnecting does not re-deliver what was hidden. */
+    CHECK_LONG(app->windows[0].last_id, 42);
+    /* And the row that IS on screen keeps its own id: a hidden message
+     * must not stamp its id onto somebody else's line, which is what
+     * drags the unread divider onto the wrong row. */
+    CHECK_LONG(app->log_ids[after_alice - 1], 41);
+    free_app(app);
+}
+
+/* ── The right-click menu ──────────────────────────────────────────── */
+
+static size_t menu_for(struct app *app, const char *nick, struct overlay_item *items, size_t max) {
+    app->overlay.kind = OVERLAY_MENU;
+    snprintf(app->overlay.nick, sizeof(app->overlay.nick), "%s", nick);
+    snprintf(app->overlay.body, sizeof(app->overlay.body), "%s", "something they said");
+    return overlay_items(app, items, max);
+}
+
+static bool menu_offers(struct overlay_item *items, size_t n, enum overlay_action action) {
+    for (size_t i = 0; i < n; i++)
+        if (items[i].action == action) return true;
+    return false;
+}
+
+TEST(the_menu_offers_the_op_actions_only_to_an_op) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    struct window *w = &app->windows[0];
+    snprintf(w->members[0].nick, sizeof(w->members[0].nick), "vjt");
+    snprintf(w->members[0].modes, sizeof(w->members[0].modes), "+"); /* voiced, not op */
+    snprintf(w->members[1].nick, sizeof(w->members[1].nick), "alice");
+    w->member_count = 2;
+
+    struct overlay_item items[64];
+    size_t n = menu_for(app, "alice", items, 64);
+    /* Everyone gets these. */
+    CHECK(menu_offers(items, n, ACT_REPLY));
+    CHECK(menu_offers(items, n, ACT_QUERY));
+    CHECK(menu_offers(items, n, ACT_WHOIS));
+    CHECK(menu_offers(items, n, ACT_PING));
+    CHECK(menu_offers(items, n, ACT_BLOCK));
+    /* A voiced user cannot kick, so the menu does not pretend. */
+    CHECK(!menu_offers(items, n, ACT_KICK));
+    CHECK(!menu_offers(items, n, ACT_BAN));
+    CHECK(!menu_offers(items, n, ACT_KICKBAN));
+
+    snprintf(w->members[0].modes, sizeof(w->members[0].modes), "@");
+    n = menu_for(app, "alice", items, 64);
+    CHECK(menu_offers(items, n, ACT_KICK));
+    CHECK(menu_offers(items, n, ACT_BAN));
+    CHECK(menu_offers(items, n, ACT_KICKBAN));
+    free_app(app);
+}
+
+TEST(op_actions_stay_out_of_a_query_window) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    /* @ carried in a channel says nothing about a private conversation:
+     * there is nobody to kick out of a query. */
+    add_window_ex(app, "azzurra", "alice", true);
+    struct window *w = &app->windows[0];
+    snprintf(w->members[0].nick, sizeof(w->members[0].nick), "vjt");
+    snprintf(w->members[0].modes, sizeof(w->members[0].modes), "@");
+    w->member_count = 1;
+    struct overlay_item items[64];
+    size_t n = menu_for(app, "alice", items, 64);
+    CHECK(!menu_offers(items, n, ACT_KICK));
+    CHECK(menu_offers(items, n, ACT_PING));
+    free_app(app);
+}
+
+TEST(the_block_entry_is_a_toggle) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    struct overlay_item items[64];
+    size_t n = menu_for(app, "alice", items, 64);
+    CHECK(menu_offers(items, n, ACT_BLOCK));
+    CHECK(!menu_offers(items, n, ACT_UNBLOCK));
+
+    block_add_locked(app, "ALICE");
+    n = menu_for(app, "alice", items, 64);
+    CHECK(menu_offers(items, n, ACT_UNBLOCK));
+    CHECK(!menu_offers(items, n, ACT_BLOCK));
+    free_app(app);
+}
+
+/* ── CTCP replies ──────────────────────────────────────────────────── */
+
+TEST(a_ctcp_reply_is_an_answer_not_a_message) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "$server", false);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+
+    struct wire_scrollback_message m = { 0 };
+    m.id = 7;
+    m.network = "azzurra";
+    m.channel = "vjt";
+    m.sender = "alice";
+    m.kind = MSG_NOTICE;
+    char body[64];
+    snprintf(body, sizeof(body), "\001PING %ld\001", monotonic_ms() - 420);
+    m.body = body;
+    render_message(app, &m, true);
+
+    /* Drawn as a card, in the window the user is reading — not as a raw
+     * control-character line, and not in a query window of its own. */
+    CHECK_LONG(app->window_count, 2);
+    const char *row = app->log[app->log_count - 1];
+    CHECK(strstr(row, "PING reply from alice") != NULL);
+    CHECK(strstr(row, "\001") == NULL);
+    char here[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key("azzurra", "#sniffo", here, sizeof(here));
+    CHECK(log_row_in_scope(app, app->log_count - 1, here));
+
+    /* A CTCP we did not stamp is shown for what it is rather than turned
+     * into a nonsense duration. */
+    m.id = 8;
+    m.body = "\001VERSION irssi 1.4.5\001";
+    render_message(app, &m, true);
+    CHECK(strstr(app->log[app->log_count - 1], "CTCP VERSION reply from alice: irssi 1.4.5") != NULL);
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -152,5 +321,11 @@ int main(void) {
     RUN(traffic_named_after_the_network_is_the_server_talking);
     RUN(the_server_talking_opens_no_window_of_its_own);
     RUN(a_reply_card_lands_in_the_window_that_asked);
+    RUN(a_block_matches_the_person_not_the_spelling);
+    RUN(a_blocked_person_is_not_drawn_but_is_still_counted);
+    RUN(the_menu_offers_the_op_actions_only_to_an_op);
+    RUN(op_actions_stay_out_of_a_query_window);
+    RUN(the_block_entry_is_a_toggle);
+    RUN(a_ctcp_reply_is_an_answer_not_a_message);
     return test_report();
 }

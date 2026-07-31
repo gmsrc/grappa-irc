@@ -476,26 +476,34 @@ TEST(menu_offers_reply_and_query_for_the_clicked_nick) {
     struct overlay_item items[64];
 
     /* A message: everything you can do with a person, plus the one thing
-     * that needs what they said. */
+     * that needs what they said. Typing their nick stays LAST — it is
+     * the harmless entry the hand reaches for blindly. The op actions
+     * are absent here because this fixture holds no @; the menu that
+     * does is asserted in test_windows. */
     app->overlay.kind = OVERLAY_MENU;
     snprintf(app->overlay.nick, sizeof(app->overlay.nick), "alice");
     snprintf(app->overlay.body, sizeof(app->overlay.body), "something she said");
-    CHECK_LONG(overlay_items(app, items, 64), 4);
+    CHECK_LONG(overlay_items(app, items, 64), 6);
     CHECK_STR(items[0].label, "Reply to alice");
     CHECK_LONG(items[0].action, ACT_REPLY);
     CHECK_STR(items[1].label, "Open query with alice");
     CHECK_LONG(items[1].action, ACT_QUERY);
     CHECK_STR(items[1].nick, "alice");
     CHECK_LONG(items[2].action, ACT_WHOIS);
-    CHECK_LONG(items[3].action, ACT_INSERT);
+    CHECK_LONG(items[3].action, ACT_PING);
+    CHECK_STR(items[4].label, "Block alice");
+    CHECK_LONG(items[4].action, ACT_BLOCK);
+    CHECK_LONG(items[5].action, ACT_INSERT);
 
     /* A roster row is a person with nothing said: replying to it would
      * be an entry that fails when chosen, so it is not offered. */
     app->overlay.body[0] = 0;
-    CHECK_LONG(overlay_items(app, items, 64), 3);
+    CHECK_LONG(overlay_items(app, items, 64), 5);
     CHECK_LONG(items[0].action, ACT_QUERY);
     CHECK_LONG(items[1].action, ACT_WHOIS);
-    CHECK_LONG(items[2].action, ACT_INSERT);
+    CHECK_LONG(items[2].action, ACT_PING);
+    CHECK_LONG(items[3].action, ACT_BLOCK);
+    CHECK_LONG(items[4].action, ACT_INSERT);
 
     /* No nick — a join row, a server notice — offers nothing rather than
      * a menu that acts on "". */

@@ -57,6 +57,9 @@
 #define TOPIC_SCROLL_MS 250
 #define TOPIC_SCROLL_HOLD 8
 #define MAX_WINDOWS 128
+/* Locally blocked nicks. A list you scroll past is a list you stop
+ * curating, so it is bounded and the bound is loud (/block says so). */
+#define MAX_BLOCKS 128
 #define MAX_CHANNEL 256
 #define MAX_SLUG 128
 #define MAX_LINE 1024
@@ -440,7 +443,23 @@ struct msg_region {
  * chat area's measure/draw agreement, for the same reason. */
 enum overlay_kind { OVERLAY_NONE = 0, OVERLAY_MENU, OVERLAY_REPLY, OVERLAY_MEDIA };
 
-enum overlay_action { ACT_NONE = 0, ACT_REPLY, ACT_QUERY, ACT_WHOIS, ACT_INSERT, ACT_PREVIEW, ACT_VIEW };
+enum overlay_action {
+    ACT_NONE = 0,
+    ACT_REPLY,
+    ACT_QUERY,
+    ACT_WHOIS,
+    ACT_INSERT,
+    ACT_PREVIEW,
+    ACT_VIEW,
+    ACT_PING,
+    ACT_BLOCK,
+    ACT_UNBLOCK,
+    /* Channel-op actions. Offered only where the user actually holds @ —
+     * see own_op_in_focused_window_locked. */
+    ACT_KICK,
+    ACT_BAN,
+    ACT_KICKBAN
+};
 
 /* How many entries a picker offers. Twenty is what fits the phrase "the
  * last twenty" and comfortably more than a box shows, which is why the
@@ -703,6 +722,13 @@ struct app {
     size_t history_count;
     size_t history_pos;
     struct alias_table aliases;
+    /* People this client does not show. LOCAL: nothing is sent upstream,
+     * the server keeps storing their messages, and any other client on
+     * the same grappa session still sees them — this is "not in front of
+     * me", not a ban. Kept in the spelling it was added with, matched
+     * folded like every other nick. */
+    char blocks[MAX_BLOCKS][MAX_CHANNEL];
+    size_t block_count;
     /* Mouse tracking preference. OFF by default: tracking necessarily
      * suppresses the terminal's own copy/paste selection, and for a
      * terminal client selection matters far more day-to-day than
@@ -1919,6 +1945,59 @@ static void format_presence_line(wire_message_kind kind, const char *sender, con
 static void ircd_publish(struct app *app, const struct wire_scrollback_message *m,
                          const char *display_channel);
 
+static void card(struct app *app, const char *network, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+static bool is_blocked(struct app *app, const char *nick);
+
+/* A CTCP reply, shown as the answer it is.
+ *
+ * `\x01VERB payload\x01` arriving as a NOTICE is somebody answering a
+ * question this client asked — a /ping round trip, a client version.
+ * Drawn as a card (so it lands in the window the question was typed in)
+ * rather than as a raw control-character line in a query window nobody
+ * opened.
+ *
+ * PING carries back the stamp it was sent with, which is how the round
+ * trip is measured without keeping a table of outstanding pings: the
+ * payload IS the record. A payload we did not write — an unsolicited
+ * reply, another client's stamp — is shown verbatim rather than turned
+ * into a nonsense duration. */
+static void render_ctcp_reply(struct app *app, const char *network, const char *sender,
+                              const char *body) {
+    char verb[32] = "", payload[MAX_LINE] = "";
+    const char *p = body + 1; /* past the leading \001 */
+    size_t i = 0;
+    while (p[i] && p[i] != ' ' && p[i] != '\001' && i + 1 < sizeof(verb)) {
+        verb[i] = (char)toupper((unsigned char)p[i]);
+        i++;
+    }
+    verb[i] = 0;
+    const char *rest = p + i;
+    while (*rest == ' ') rest++;
+    size_t n = 0;
+    while (rest[n] && rest[n] != '\001' && n + 1 < sizeof(payload)) {
+        payload[n] = rest[n];
+        n++;
+    }
+    payload[n] = 0;
+
+    if (strcmp(verb, "PING") == 0) {
+        char *end = NULL;
+        long stamp = strtol(payload, &end, 10);
+        long now = monotonic_ms();
+        /* A stamp of ours is a plain integer, in the past, and not
+         * older than the client itself. */
+        if (end && *end == 0 && stamp > 0 && stamp <= now) {
+            long ms = now - stamp;
+            card(app, network, "--- PING reply from %s: %ld.%02lds", sender, ms / 1000,
+                 (ms % 1000) / 10);
+            return;
+        }
+    }
+    if (payload[0]) card(app, network, "--- CTCP %s reply from %s: %s", verb, sender, payload);
+    else card(app, network, "--- CTCP %s reply from %s", verb, sender);
+}
+
 static void render_message(struct app *app, const struct wire_scrollback_message *m, bool live) {
     long id = m->id;
     long server_time = m->server_time;
@@ -1933,10 +2012,15 @@ static void render_message(struct app *app, const struct wire_scrollback_message
         m->kind == MSG_PRIVMSG || m->kind == MSG_NOTICE || m->kind == MSG_ACTION;
     if (conversational && !body[0]) return;
 
+    /* A CTCP reply is protocol, not conversation: it must not re-key
+     * into a query window on its way past (see the card below). */
+    bool ctcp_reply = m->kind == MSG_NOTICE && body[0] == '\001';
+
     char display_channel[MAX_CHANNEL];
     snprintf(display_channel, sizeof(display_channel), "%s", channel);
     const char *own_nick = own_nick_for_network(app, network);
-    if (live && own_nick && nick_case_equal(channel, own_nick) && sender[0] && !nick_case_equal(sender, own_nick)) {
+    if (live && !ctcp_reply && own_nick && nick_case_equal(channel, own_nick) && sender[0] &&
+        !nick_case_equal(sender, own_nick)) {
         snprintf(display_channel, sizeof(display_channel), "%s", sender);
         add_window_ex(app, network, display_channel, false);
     }
@@ -1998,31 +2082,67 @@ static void render_message(struct app *app, const struct wire_scrollback_message
      * above has already run. Anywhere else means two feeds to keep in
      * step. */
     ircd_publish(app, m, display_channel);
+
+    /* A CTCP reply is an ANSWER, not conversation: the round trip the
+     * user asked for with /ping, or a client version they queried. It
+     * arrives as a NOTICE from that person, which would otherwise be a
+     * raw `\x01PING 1234\x01` line in a query window that opened by
+     * itself. Rendered as a card instead, so it lands in the window
+     * where the question was typed and leaves no tab behind. */
+    if (ctcp_reply) {
+        /* Only as it HAPPENS. Replaying one out of scrollback would
+         * announce a round trip that finished hours ago, timed against a
+         * stamp from a previous run of the client. */
+        if (live) render_ctcp_reply(app, network, sender, body);
+        return;
+    }
+
+    /* Blocked: the bookkeeping above still ran — ids, the bridge, the
+     * roster below — because a block is about what is DRAWN, not about
+     * pretending the message never happened. From here down, nothing is
+     * shown and nothing is counted. */
+    bool hidden = is_blocked(app, sender);
+
     /* Presence rows are ambient: they must not bump the unread badge or
      * they drown the count that signals someone actually spoke. */
-    if (conversational) maybe_mark_unread(app, network, display_channel, live);
-    bool mention = conversational && message_mentions_me(app, network, sender, body);
+    if (conversational && !hidden) maybe_mark_unread(app, network, display_channel, live);
+    bool mention = conversational && !hidden && message_mentions_me(app, network, sender, body);
     char clock[16];
     time_t ts = server_time > 100000000000L ? (time_t)(server_time / 1000) : time(NULL);
     struct tm tm;
     localtime_r(&ts, &tm);
     strftime(clock, sizeof(clock), "%H:%M", &tm);
+    bool wrote = false;
     switch (m->kind) {
     case MSG_ACTION:
-        log_line_mention(app, mention, "[%s/%s] %s * %s %s", network, display_channel, clock, sender, body);
+        if (!hidden) {
+            log_line_mention(app, mention, "[%s/%s] %s * %s %s", network, display_channel, clock, sender, body);
+            wrote = true;
+        }
         break;
     case MSG_NOTICE:
-        log_line_mention(app, mention, "[%s/%s] %s -%s- %s", network, display_channel, clock, sender, body);
+        if (!hidden) {
+            log_line_mention(app, mention, "[%s/%s] %s -%s- %s", network, display_channel, clock, sender, body);
+            wrote = true;
+        }
         break;
     case MSG_PRIVMSG:
-        log_line_mention(app, mention, "[%s/%s] %s <%s> %s", network, display_channel, clock, sender, body);
+        if (!hidden) {
+            log_line_mention(app, mention, "[%s/%s] %s <%s> %s", network, display_channel, clock, sender, body);
+            wrote = true;
+        }
         break;
     default: {
         char line[MAX_LINE];
         format_presence_line(m->kind, sender, m->body, line, sizeof(line));
-        if (line[0]) log_line_mention(app, false, "[%s/%s] %s %s", network, display_channel, clock, line);
+        if (line[0] && !hidden) {
+            log_line_mention(app, false, "[%s/%s] %s %s", network, display_channel, clock, line);
+            wrote = true;
+        }
         /* The row is also a roster fact: the pane must not still show
-         * someone who just left. */
+         * someone who just left. True even for a blocked person — the
+         * nicklist answers "who is here", which is not a matter of
+         * taste. */
         apply_membership_event(app, network, display_channel, m->kind, sender, m->body);
         break;
     }
@@ -2031,8 +2151,11 @@ static void render_message(struct app *app, const struct wire_scrollback_message
     pthread_mutex_lock(&app->lock);
     /* Stamp the row just appended with its scrollback id, so the unread
      * divider lands on the exact row the server's cursor names rather
-     * than being guessed from position. */
-    if (app->log_count > 0) app->log_ids[app->log_count - 1] = id;
+     * than being guessed from position. Only when a row was actually
+     * appended: a presence kind with nothing to say, or a hidden one,
+     * would otherwise stamp its id onto somebody else's line and drag
+     * the unread divider there. */
+    if (wrote && app->log_count > 0) app->log_ids[app->log_count - 1] = id;
     /* The row's inline image slot is NOT claimed here. It is claimed by
      * the draw path, the first time the row is actually on screen — the
      * #451 first-party test and the `/media` toggle are both questions
@@ -2958,7 +3081,10 @@ static unsigned long token_key_hash(const char *server, const char *identifier) 
     return h;
 }
 
-static char *token_path_for(const char *server, const char *identifier) {
+/* The directory this client owns on the machine, created on demand.
+ * Everything shottino keeps between runs — cached tokens, the bridge
+ * log, the block list — lives here. */
+static char *shottino_state_dir(void) {
     const char *home = getenv("HOME");
     if (!home || !home[0]) home = ".";
     char *dir = xasprintf("%s/.local", home);
@@ -2969,9 +3095,105 @@ static char *token_path_for(const char *server, const char *identifier) {
     free(dir);
     dir = xasprintf("%s/.local/share/shottino", home);
     mkdir(dir, 0700);
+    return dir;
+}
+
+static char *token_path_for(const char *server, const char *identifier) {
+    char *dir = shottino_state_dir();
     char *path = xasprintf("%s/%lx.token", dir, token_key_hash(server, identifier));
     free(dir);
     return path;
+}
+
+/* ── The block list ────────────────────────────────────────────────────
+ *
+ * A LOCAL mute: the nicks whose messages this client does not draw.
+ * Nothing is sent upstream — no ban, no server-side ignore — so the
+ * person can still speak, grappa still stores what they said, and the
+ * PWA on the phone still shows it. What changes is what is in front of
+ * you here, which is the whole ask: a channel you cannot moderate is
+ * still a channel you can read in peace.
+ *
+ * Membership is a nick compare, so it is folded like every other nick
+ * (irc_name_eq): blocking `Spammer` blocks `spammer`, and a rename gets
+ * away — as it does in every client that blocks by nick.
+ *
+ * It survives the client, in the state directory: a block that has to be
+ * retyped every morning is a block nobody keeps. */
+static bool is_blocked_locked(struct app *app, const char *nick) {
+    if (!nick || !nick[0]) return false;
+    for (size_t i = 0; i < app->block_count; i++)
+        if (irc_name_eq(app->blocks[i], nick)) return true;
+    return false;
+}
+
+static bool is_blocked(struct app *app, const char *nick) {
+    pthread_mutex_lock(&app->lock);
+    bool blocked = is_blocked_locked(app, nick);
+    pthread_mutex_unlock(&app->lock);
+    return blocked;
+}
+
+/* Add / remove, reporting whether the list actually changed so the
+ * caller can tell the user "already blocked" from "blocked". */
+static bool block_add_locked(struct app *app, const char *nick) {
+    if (!nick || !nick[0]) return false;
+    if (is_blocked_locked(app, nick)) return false;
+    if (app->block_count >= MAX_BLOCKS) return false;
+    snprintf(app->blocks[app->block_count], sizeof(app->blocks[0]), "%s", nick);
+    app->block_count++;
+    return true;
+}
+
+static bool block_remove_locked(struct app *app, const char *nick) {
+    for (size_t i = 0; i < app->block_count; i++) {
+        if (!irc_name_eq(app->blocks[i], nick)) continue;
+        memmove(app->blocks + i, app->blocks + i + 1,
+                sizeof(app->blocks[0]) * (app->block_count - i - 1));
+        app->block_count--;
+        return true;
+    }
+    return false;
+}
+
+static char *blocks_path(void) {
+    char *dir = shottino_state_dir();
+    char *path = xasprintf("%s/blocked", dir);
+    free(dir);
+    return path;
+}
+
+/* One nick per line. A hand-editable file for a hand-curated list; a
+ * malformed line is skipped rather than fatal, because a state file is
+ * never a reason to refuse to start. */
+static void blocks_load(struct app *app) {
+    char *path = blocks_path();
+    FILE *f = fopen(path, "r");
+    free(path);
+    if (!f) return;
+    char line[MAX_CHANNEL];
+    pthread_mutex_lock(&app->lock);
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (line[0] && line[0] != '#') block_add_locked(app, line);
+    }
+    pthread_mutex_unlock(&app->lock);
+    fclose(f);
+}
+
+static void blocks_save(struct app *app) {
+    char *path = blocks_path();
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        log_line(app, "/block: cannot write %s — the list is in effect but will not survive a restart", path);
+        free(path);
+        return;
+    }
+    free(path);
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->block_count; i++) fprintf(f, "%s\n", app->blocks[i]);
+    pthread_mutex_unlock(&app->lock);
+    fclose(f);
 }
 
 static bool load_saved_token(struct app *app, const char *path) {
@@ -5987,6 +6209,27 @@ static void resize_pane(struct app *app, int delta) {
 }
 
 
+/* Does this user hold @ in the window they are reading?
+ *
+ * Asked by the menu, which offers the op actions only where they would
+ * actually work. Derived from the roster the server sent — the same
+ * sigils the nicklist draws — rather than tracked separately: a second
+ * copy of "am I op" is a copy that goes stale on the next MODE.
+ * Caller holds app->lock. */
+static bool own_op_in_focused_window_locked(struct app *app) {
+    size_t cur = focused_window_locked(app);
+    if (cur >= app->window_count) return false;
+    const struct window *w = &app->windows[cur];
+    if (!is_channel_name(w->channel)) return false;
+    const char *me = own_nick_for_network(app, w->network);
+    if (!me || !me[0]) return false;
+    for (size_t i = 0; i < w->member_count; i++) {
+        if (!irc_name_eq(w->members[i].nick, me)) continue;
+        return strchr(w->members[i].modes, '@') != NULL;
+    }
+    return false;
+}
+
 /* ── Overlay ───────────────────────────────────────────────────────────
  *
  * Items are derived, never stored: the reply picker reads the log every
@@ -6017,6 +6260,37 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
         snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
         out[n].action = ACT_WHOIS;
         if (++n >= max) return n;
+        snprintf(out[n].label, sizeof(out[n].label), "Ping %s", ov->nick);
+        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+        out[n].action = ACT_PING;
+        if (++n >= max) return n;
+        /* Block is a toggle: offering "Block" for somebody already
+         * blocked is an entry that does nothing, and the list is the one
+         * place the user can see the state at all without /block. */
+        bool blocked = is_blocked_locked(app, ov->nick);
+        snprintf(out[n].label, sizeof(out[n].label), "%s %s", blocked ? "Unblock" : "Block",
+                 ov->nick);
+        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+        out[n].action = blocked ? ACT_UNBLOCK : ACT_BLOCK;
+        if (++n >= max) return n;
+        /* The op entries, offered only where they would WORK: a channel,
+         * and one this user carries @ in. A menu that lists /kick for
+         * somebody who cannot kick teaches the user that the client
+         * lies — the server would answer 482 and nothing would happen. */
+        if (own_op_in_focused_window_locked(app)) {
+            snprintf(out[n].label, sizeof(out[n].label), "Kick %s", ov->nick);
+            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+            out[n].action = ACT_KICK;
+            if (++n >= max) return n;
+            snprintf(out[n].label, sizeof(out[n].label), "Ban %s", ov->nick);
+            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+            out[n].action = ACT_BAN;
+            if (++n >= max) return n;
+            snprintf(out[n].label, sizeof(out[n].label), "Kick and ban %s", ov->nick);
+            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+            out[n].action = ACT_KICKBAN;
+            if (++n >= max) return n;
+        }
         snprintf(out[n].label, sizeof(out[n].label), "Type %s", ov->nick);
         snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
         out[n].action = ACT_INSERT;
@@ -6256,12 +6530,37 @@ static void overlay_activate(struct app *app) {
         if (nick[0]) query_window(app, nick);
         break;
     case ACT_WHOIS:
+    case ACT_PING:
+    case ACT_BLOCK:
+    case ACT_UNBLOCK:
+    case ACT_KICK:
+    case ACT_BAN:
+    case ACT_KICKBAN:
         if (nick[0]) {
             /* Through the ordinary command path, so the menu cannot
-             * become a second implementation of /whois that drifts. */
-            char cmd[MAX_CHANNEL + 8];
-            snprintf(cmd, sizeof(cmd), "/whois %s", nick);
-            handle_command(app, cmd);
+             * become a second implementation of any of these that
+             * drifts from the verb the user could have typed. Every
+             * entry in the menu is a command that exists. */
+            static const struct {
+                enum overlay_action action;
+                const char *verb;
+                /* /ban takes a MASK, not a nick: the menu says "Ban
+                 * alice" and means the mask /kb would have built for
+                 * her, so the two doors ban the same thing. */
+                const char *suffix;
+            } verbs[] = {
+                { ACT_WHOIS, "whois", "" },     { ACT_PING, "ping", "" },
+                { ACT_BLOCK, "block", "" },     { ACT_UNBLOCK, "unblock", "" },
+                { ACT_KICK, "kick", "" },       { ACT_BAN, "ban", "!*@*" },
+                { ACT_KICKBAN, "kb", "" },
+            };
+            for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++) {
+                if (verbs[i].action != action) continue;
+                char cmd[MAX_CHANNEL + 24];
+                snprintf(cmd, sizeof(cmd), "/%s %s%s", verbs[i].verb, nick, verbs[i].suffix);
+                handle_command(app, cmd);
+                break;
+            }
         }
         break;
     case ACT_INSERT:
@@ -6504,15 +6803,15 @@ static void cycle_window(struct app *app, int delta) {
  * the dispatcher's own literals and fails when one is not listed here.
  * Adding a verb means adding it in three places; that test names them. */
 static const char *commands[] = {
-    "/admin", "/alias", "/archive", "/away", "/ban", "/banlist", "/chat", "/clear", "/close",
-    "/connect", "/cs", "/dehilight", "/deop", "/devoice", "/disconnect", "/exit", "/help",
-    "/highlight", "/hilight", "/hs", "/info", "/invite", "/j", "/join", "/kb", "/keys", "/kick",
-    "/kickban", "/links", "/list", "/lusers", "/me", "/media", "/members", "/mode", "/motd",
-    "/mouse", "/ms", "/msg", "/names", "/nick", "/notify", "/ns", "/op", "/open", "/oper", "/os",
-    "/part", "/preview", "/q", "/query", "/quit", "/quote", "/rehash", "/rs", "/settings",
-    "/share", "/split", "/splith", "/splitv", "/splitw", "/stats", "/topic", "/umode", "/unalias",
-    "/unban", "/unsplit", "/upload", "/users", "/version", "/view", "/voice", "/w", "/watch",
-    "/who", "/whois", "/whowas", "/win", "/window"
+    "/admin", "/alias", "/archive", "/away", "/ban", "/banlist", "/block", "/chat", "/clear",
+    "/close", "/connect", "/cs", "/dehilight", "/deop", "/devoice", "/disconnect", "/exit",
+    "/help", "/highlight", "/hilight", "/hs", "/ignore", "/info", "/invite", "/j", "/join", "/kb",
+    "/keys", "/kick", "/kickban", "/links", "/list", "/lusers", "/me", "/media", "/members",
+    "/mode", "/motd", "/mouse", "/ms", "/msg", "/names", "/nick", "/notify", "/ns", "/op", "/open",
+    "/oper", "/os", "/part", "/ping", "/preview", "/q", "/query", "/quit", "/quote", "/rehash",
+    "/rs", "/settings", "/share", "/split", "/splith", "/splitv", "/splitw", "/stats", "/topic",
+    "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unsplit", "/upload", "/users",
+    "/version", "/view", "/voice", "/w", "/watch", "/who", "/whois", "/whowas", "/win", "/window"
 };
 
 static bool prefix_ci(const char *s, const char *prefix) {
@@ -7457,6 +7756,7 @@ static void show_help(struct app *app) {
     log_line(app, "commands: /help /archive /settings /admin /chat /exit /quit /window N [/w N, /win N] /join #chan [/j] /part /close /clear /msg nick text /query nick [/q nick] /me text");
     log_line(app, "network: /connect slug /disconnect [slug] [reason] /nick nick /away [reason] /umode +modes /mode [#chan] +modes [params]");
     log_line(app, "info: /topic [text|-delete] /members [/users] /whois nick /whowas nick /who [#chan] /names [#chan] /lusers /list [-refresh|query] /links /motd /info /version /stats [q] /rehash [opt]");
+    log_line(app, "people: /ping nick times the round trip; /block [nick] (/ignore) hides somebody HERE only and bare /block lists them; /unblock nick (/unignore) shows them again");
     log_line(app, "ops: /op nicks /deop nicks /voice nicks /devoice nicks /kick nick [reason] /kb nick [reason] /ban mask /unban mask /banlist /invite nick");
     log_line(app, "watch: /notify [nick...|del nick|list] watches PEOPLE; /hilight pattern, /dehilight pattern watch WORDS (/watch add|del|list is the older spelling)");
     log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
@@ -7466,7 +7766,7 @@ static void show_help(struct app *app) {
     log_line(app, "       /media [on|off|all|first-party] — ON for ALL hosts by default (off entirely without ffmpeg): every image link is fetched when it scrolls into view, so the host learns your IP; /media first-party limits it to this deployment's uploads");
     log_line(app, "       /preview [url] full-screen here; bare /preview picks from the last 20 pictures and clips in this window; /preview-ascii forces the art renderer");
     log_line(app, "       /view [url] downloads it and opens your desktop's viewer for that file type (bare /view offers the same list); /open hands a URL to the browser");
-    log_line(app, "reply: right-click a message for reply/query, or Ctrl-R for the last 20 messages here — type to search the whole window buffer, Enter replies");
+    log_line(app, "reply: right-click a message for reply/query/whois/ping/block — and kick/ban where you hold @ — or Ctrl-R for the last 20 messages here; type to search the whole window buffer, Enter replies. The pointer picks, a click outside closes");
     log_line(app, "userlist: Ctrl-U gives it the arrow keys (Up/Down/PgUp/PgDn/Home/End, Esc back to chat); Ctrl-Shift-Up/Down and Shift-PgUp/PgDn work where the terminal does not keep them; the wheel scrolls it with /mouse on");
     log_line(app, "panes: /split (stacked) /splitv (side by side) /unsplit; Ctrl-Alt-Up/Down or Ctrl-Alt-Tab switch, Ctrl-Alt-+/- resize, /keys shows what your terminal sends");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
@@ -7496,6 +7796,9 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "connect") == 0) log_line(app, "/connect network — mark a parked network connected so grappa can spawn it");
     else if (strcmp(cmd, "disconnect") == 0) log_line(app, "/disconnect [network] [reason] — park a network while keeping Shottino running");
     else if (strcmp(cmd, "whois") == 0) log_line(app, "/whois nick — request WHOIS for nick");
+    else if (strcmp(cmd, "ping") == 0) log_line(app, "/ping nick — CTCP PING somebody and time the round trip; the answer lands in the window you asked from");
+    else if (strcmp(cmd, "block") == 0 || strcmp(cmd, "ignore") == 0) log_line(app, "/block [nick], /ignore [nick] — hide somebody's messages in THIS client only (nothing is sent to the server); bare /block lists who is blocked");
+    else if (strcmp(cmd, "unblock") == 0 || strcmp(cmd, "unignore") == 0) log_line(app, "/unblock nick, /unignore nick — show somebody's messages again");
     else if (strcmp(cmd, "whowas") == 0) log_line(app, "/whowas nick — request WHOWAS for nick");
     else if (strcmp(cmd, "who") == 0) log_line(app, "/who [#chan] — request WHO for target/current channel");
     else if (strcmp(cmd, "names") == 0) log_line(app, "/names [#chan] — request NAMES for target/current channel");
@@ -8415,6 +8718,82 @@ static void handle_command_dispatch(struct app *app, char *line) {
         char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", current_network_id(app), raw);
         ws_push_user(app, "raw", payload);
         free(raw); free(payload);
+    } else if (strncmp(line, "/ping ", 6) == 0) {
+        /* CTCP PING: how long a round trip to that person takes.
+         *
+         * Sent as a RAW line rather than through the message path on
+         * purpose — a protocol probe is not conversation, so it must not
+         * persist a scrollback row or mint a query window for somebody
+         * the user only wanted to time. The stamp travels in the payload
+         * and comes back in the reply, which is what render_ctcp_reply
+         * measures against: no table of outstanding pings to keep. */
+        const char *target = line + 6;
+        while (*target == ' ') target++;
+        if (!*target) {
+            log_line(app, "/ping requires a nick");
+        } else {
+            char frame[MAX_LINE];
+            snprintf(frame, sizeof(frame), "PRIVMSG %s :\001PING %ld\001", target, monotonic_ms());
+            char *raw = json_escape(frame);
+            char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}",
+                                      current_network_id(app), raw);
+            ws_push_user(app, "raw", payload);
+            free(raw);
+            free(payload);
+            char net_now[MAX_SLUG];
+            current_window_key(app, net_now, sizeof(net_now), NULL, 0);
+            card(app, net_now, "--- PING sent to %s", target);
+        }
+    } else if ((strncmp(line, "/block", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) ||
+               (strncmp(line, "/ignore", 7) == 0 && (line[7] == ' ' || line[7] == '\0'))) {
+        /* /ignore is the spelling irssi and hexchat users already have in
+         * their fingers; /block is the one the menu says. Same verb. */
+        const char *nick = line + (line[1] == 'b' ? 6 : 7);
+        while (*nick == ' ') nick++;
+        if (!*nick) {
+            /* Bare /block is the LIST. A block you cannot see is a block
+             * you cannot undo — the first thing to ask about a silent
+             * person is whether you silenced them. */
+            pthread_mutex_lock(&app->lock);
+            size_t count = app->block_count;
+            pthread_mutex_unlock(&app->lock);
+            log_line(app, "--- blocked (%zu/%d)", count, MAX_BLOCKS);
+            for (size_t i = 0; i < count; i++) {
+                pthread_mutex_lock(&app->lock);
+                char who[MAX_CHANNEL];
+                snprintf(who, sizeof(who), "%s", app->blocks[i]);
+                pthread_mutex_unlock(&app->lock);
+                log_line(app, "  %s", who);
+            }
+            if (count == 0) log_line(app, "  (nobody — /block nick adds one)");
+        } else {
+            pthread_mutex_lock(&app->lock);
+            bool full = app->block_count >= MAX_BLOCKS;
+            bool added = block_add_locked(app, nick);
+            pthread_mutex_unlock(&app->lock);
+            if (added) {
+                blocks_save(app);
+                log_line(app, "blocked %s — their messages are hidden here only, and nothing was sent to the server", nick);
+            } else if (full) {
+                log_line(app, "/block: the list is full (%d) — /unblock somebody first", MAX_BLOCKS);
+            } else {
+                log_line(app, "%s is already blocked", nick);
+            }
+        }
+    } else if ((strncmp(line, "/unblock", 8) == 0 && (line[8] == ' ' || line[8] == '\0')) ||
+               (strncmp(line, "/unignore", 9) == 0 && (line[9] == ' ' || line[9] == '\0'))) {
+        const char *nick = line + (line[3] == 'b' ? 8 : 9);
+        while (*nick == ' ') nick++;
+        pthread_mutex_lock(&app->lock);
+        bool removed = *nick ? block_remove_locked(app, nick) : false;
+        pthread_mutex_unlock(&app->lock);
+        if (!*nick) log_line(app, "/unblock requires a nick (bare /block lists them)");
+        else if (removed) {
+            blocks_save(app);
+            log_line(app, "unblocked %s — what they say from now on is shown again", nick);
+        } else {
+            log_line(app, "%s is not blocked", nick);
+        }
     } else if (strncmp(line, "/kb ", 4) == 0 || strncmp(line, "/kickban ", 9) == 0) {
         /* Kick + ban as one verb. Banning FIRST is deliberate: kick then
          * ban leaves a window in which the user can rejoin ahead of the
@@ -10167,12 +10546,9 @@ static void ircd_stop(struct app *app) {
  * cached tokens, because that is already the directory this client owns
  * on the machine. */
 static void ircd_log_path(char *out, size_t out_sz) {
-    const char *home = getenv("HOME");
-    if (!home || !*home) home = ".";
-    char dir[PATH_MAX - 16];
-    snprintf(dir, sizeof(dir), "%s/.local/share/shottino", home);
-    mkdir(dir, 0700);
+    char *dir = shottino_state_dir();
     snprintf(out, out_sz, "%s/ircd.log", dir);
+    free(dir);
 }
 
 /* Detach into the background.
@@ -10686,6 +11062,11 @@ int main(int argc, char **argv) {
     load_http_host_aliases(app);
     startup("first-party upload hosts: %s + %zu alias(es)", app->url.host,
             app->http_host_alias_count);
+    /* Before the first scrollback renders, or the people the user blocked
+     * flash past on the way in. */
+    blocks_load(app);
+    if (app->block_count)
+        startup("blocked: %zu nick(s) hidden locally — /block lists them", app->block_count);
     if (!app->headless) {
         if (have_ffmpeg) {
             /* Said out loud, every start. The exposure #451 identified is
