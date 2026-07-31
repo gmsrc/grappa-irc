@@ -72,6 +72,12 @@
  * every one of them is a client that can be made to flood the server on
  * somebody else's command. */
 #define CTCP_REPLY_MIN_MS 500
+/* What can be echoed and still fit an IRC line (512 bytes, prefix and
+ * CRLF included). A nick cannot exceed 32 on any ircd worth the name;
+ * the token is the asker's and is bounded so the reply cannot be
+ * truncated into a token they never sent. */
+#define CTCP_REPLY_MAX_NICK 64
+#define CTCP_REPLY_MAX_TOKEN 300
 #define MAX_CHANNEL 256
 #define MAX_SLUG 128
 #define MAX_LINE 1024
@@ -2136,6 +2142,14 @@ static void ctcp_split(const char *body, char *verb, size_t verb_sz, char *paylo
 static void ctcp_respond(struct app *app, const char *network, const char *sender,
                          const char *verb, const char *payload) {
     if (strcmp(verb, "PING") != 0 || !sender[0]) return;
+    /* An IRC line is 512 bytes including the server's prefix and CRLF, so
+     * a token that does not fit cannot round-trip — the asker would get
+     * a TRUNCATED one back and rightly ignore it. Not answering is the
+     * honest outcome; answering with a corrupted echo is a lie about
+     * what they sent. Checked BEFORE the throttle: a query we will not
+     * answer must not spend the slot that the next answerable one needs,
+     * or a flood of unanswerable tokens silences the real ones.  */
+    if (strlen(sender) > CTCP_REPLY_MAX_NICK || strlen(payload) > CTCP_REPLY_MAX_TOKEN) return;
 
     long now = monotonic_ms();
     pthread_mutex_lock(&app->lock);
@@ -2148,8 +2162,11 @@ static void ctcp_respond(struct app *app, const char *network, const char *sende
     if (too_soon || !network_id) return;
 
     char frame[MAX_LINE];
-    if (payload[0]) snprintf(frame, sizeof(frame), "NOTICE %s :\001PING %s\001", sender, payload);
-    else snprintf(frame, sizeof(frame), "NOTICE %s :\001PING\001", sender);
+    if (payload[0])
+        snprintf(frame, sizeof(frame), "NOTICE %.*s :\001PING %.*s\001", CTCP_REPLY_MAX_NICK,
+                 sender, CTCP_REPLY_MAX_TOKEN, payload);
+    else
+        snprintf(frame, sizeof(frame), "NOTICE %.*s :\001PING\001", CTCP_REPLY_MAX_NICK, sender);
     char *raw = json_escape(frame);
     char *body = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", network_id, raw);
     ws_push_user(app, "raw", body);

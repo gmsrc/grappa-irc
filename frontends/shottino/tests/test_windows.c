@@ -639,6 +639,16 @@ TEST(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer) {
     long first = app->ctcp_last_reply_ms;
     ctcp_respond(app, "azzurra", "bob", "PING", "2");
     CHECK_LONG(app->ctcp_last_reply_ms, first);
+
+    /* A token too long to fit an IRC line is NOT echoed: the asker would
+     * receive a truncated one back and rightly ignore it, and answering
+     * with a corrupted echo is a lie about what they sent. */
+    static char huge[CTCP_REPLY_MAX_TOKEN + 64];
+    memset(huge, 'x', sizeof(huge) - 1);
+    huge[sizeof(huge) - 1] = 0;
+    app->ctcp_last_reply_ms = 0;
+    ctcp_respond(app, "azzurra", "alice", "PING", huge);
+    CHECK_LONG(app->ctcp_last_reply_ms, 0);
     free_app(app);
 }
 
