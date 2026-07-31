@@ -29,6 +29,19 @@
  * completion. Empty today; an entry here needs its reason beside it. */
 static const char *const completion_exempt[] = {NULL};
 
+/* The oper verbs are dispatched from a TABLE rather than from an arm of
+ * the else-if chain, so the scan below cannot see them — it looks for
+ * the dispatcher's own string literals, and theirs live in
+ * `oper_verbs[]`. They are added from the table itself (this suite
+ * compiles shottino.c, so the table is right here), which keeps the
+ * agreement the scan exists to enforce: whatever the table dispatches
+ * must complete, and must explain itself. */
+static bool is_oper_verb(const char *slashed) {
+    for (size_t i = 0; i < sizeof(oper_verbs) / sizeof(oper_verbs[0]); i++)
+        if (strcmp(oper_verbs[i].verb, slashed) == 0) return true;
+    return false;
+}
+
 enum { MAX_VERBS = 256, VERB_MAX = 32, COMMAND_COUNT = sizeof(commands) / sizeof(commands[0]) };
 
 static char verbs[MAX_VERBS][VERB_MAX];
@@ -155,7 +168,13 @@ TEST(completion_table_is_sorted) {
  * says the command does not exist. show_command_help() matches the verb
  * without its slash, so that is the literal looked for here. */
 TEST(every_dispatched_verb_has_a_help_topic) {
+    /* The oper table carries its own usage string and show_command_help
+     * consults it, so those verbs answer /help without an arm of their
+     * own. That the strings are well-formed is asserted in
+     * test_windows, next to the lines they build. */
+    CHECK(strstr(source, "oper_verb_help(app, cmd)") != NULL);
     for (size_t i = 0; i < verb_count; i++) {
+        if (is_oper_verb(verbs[i])) continue;
         char needle[VERB_MAX + 16];
         snprintf(needle, sizeof(needle), "strcmp(cmd, \"%s\")", verbs[i] + 1);
         if (!strstr(source, needle))
@@ -172,6 +191,8 @@ int main(void) {
     }
     scan("strcmp(line, ");
     scan("strncmp(line, ");
+    for (size_t i = 0; i < sizeof(oper_verbs) / sizeof(oper_verbs[0]); i++)
+        verb_add(oper_verbs[i].verb);
 
     RUN(scan_finds_the_dispatcher);
     RUN(every_dispatched_verb_completes);

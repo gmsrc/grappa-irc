@@ -312,6 +312,112 @@ TEST(a_ctcp_reply_is_an_answer_not_a_message) {
     free_app(app);
 }
 
+/* ── Operator verbs ───────────────────────────────────────────────────
+ *
+ * These go out as raw lines, so the only thing that can be wrong is the
+ * line — a missing colon turns a reason into a truncated first word, and
+ * a colon where the ircd wanted a parameter turns a K:line duration into
+ * text. That is what is asserted here. */
+
+static const struct oper_verb *oper_verb_named(const char *verb) {
+    for (size_t i = 0; i < sizeof(oper_verbs) / sizeof(oper_verbs[0]); i++)
+        if (strcmp(oper_verbs[i].verb, verb) == 0) return &oper_verbs[i];
+    return NULL;
+}
+
+static const char *oper_line(const char *verb, const char *args) {
+    static char out[MAX_LINE];
+    const struct oper_verb *v = oper_verb_named(verb);
+    if (!v) return "(no such verb)";
+    if (!oper_verb_line(v, args, out, sizeof(out))) return "(refused)";
+    return out;
+}
+
+TEST(oper_verbs_put_their_arguments_where_the_ircd_wants_them) {
+    /* A reason is a trailing parameter: everything after the nick, in
+     * one piece, spaces and all. */
+    CHECK_STR(oper_line("/kill", "alice being rude on #chan"),
+              "KILL alice :being rude on #chan");
+    CHECK_STR(oper_line("/squit", "hub.azzurra.org rerouting"),
+              "SQUIT hub.azzurra.org :rerouting");
+    /* The broadcasts are all trailing parameter. */
+    CHECK_STR(oper_line("/wallops", "netsplit incoming"), "WALLOPS :netsplit incoming");
+    CHECK_STR(oper_line("/globops", "who is on duty?"), "GLOBOPS :who is on duty?");
+    CHECK_STR(oper_line("/locops", "local only"), "LOCOPS :local only");
+    /* bahamut's K:line takes an optional leading duration, which must
+     * NOT be read as the mask. */
+    CHECK_STR(oper_line("/kline", "*@spam.example flooding"),
+              "KLINE *@spam.example :flooding");
+    CHECK_STR(oper_line("/kline", "3600 *@spam.example flooding"),
+              "KLINE 3600 *@spam.example :flooding");
+    /* Server-specific grammar goes through untouched — a colon we
+     * invented would corrupt it. */
+    CHECK_STR(oper_line("/sconnect", "leaf.azzurra.org 6667"), "CONNECT leaf.azzurra.org 6667");
+    CHECK_STR(oper_line("/trace", ""), "TRACE");
+    CHECK_STR(oper_line("/trace", "alice"), "TRACE alice");
+    CHECK_STR(oper_line("/die", ""), "DIE");
+}
+
+TEST(an_oper_verb_missing_its_arguments_is_refused_not_sent) {
+    /* Half a KILL is not a KILL: the server would reject it, and the
+     * user would read the rejection as the client having sent nothing. */
+    CHECK_STR(oper_line("/kill", "alice"), "(refused)");
+    CHECK_STR(oper_line("/kill", ""), "(refused)");
+    CHECK_STR(oper_line("/wallops", ""), "(refused)");
+    CHECK_STR(oper_line("/kline", "3600"), "(refused)");
+    CHECK_STR(oper_line("/kline", "*@host"), "(refused)");
+    /* The ones whose arguments are genuinely optional still go. */
+    CHECK_STR(oper_line("/restart", ""), "RESTART");
+}
+
+TEST(an_oper_verb_is_matched_as_a_whole_word) {
+    /* /kill must not be answered by /kickban, and a verb must not
+     * swallow a longer word that starts the same way. */
+    CHECK(oper_verb_args("/kill alice", "/kill") != NULL);
+    CHECK(oper_verb_args("/kill", "/kill") != NULL);
+    CHECK(oper_verb_args("/killer alice", "/kill") == NULL);
+    CHECK(oper_verb_args("/kickban alice", "/kill") == NULL);
+}
+
+TEST(every_oper_verb_explains_itself) {
+    for (size_t i = 0; i < sizeof(oper_verbs) / sizeof(oper_verbs[0]); i++) {
+        const struct oper_verb *v = &oper_verbs[i];
+        /* The table IS the help: a topic that does not start with the
+         * verb is a topic about something else. */
+        CHECK(v->usage != NULL);
+        CHECK(strncmp(v->usage, v->verb, strlen(v->verb)) == 0);
+        /* And the wire verb is the ircd's, in the ircd's case. */
+        for (const char *c = v->wire; *c; c++) CHECK(*c >= 'A' && *c <= 'Z');
+    }
+}
+
+TEST(kill_is_offered_only_to_an_oper) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    struct overlay_item items[64];
+
+    size_t n = menu_for(app, "alice", items, 64);
+    CHECK(!menu_offers(items, n, ACT_KILL));
+
+    /* +o arrives from the server, not from having typed /oper. */
+    snprintf(app->networks[0].umodes, sizeof(app->networks[0].umodes), "iwS");
+    n = menu_for(app, "alice", items, 64);
+    CHECK(!menu_offers(items, n, ACT_KILL));
+
+    snprintf(app->networks[0].umodes, sizeof(app->networks[0].umodes), "iwo");
+    n = menu_for(app, "alice", items, 64);
+    CHECK(menu_offers(items, n, ACT_KILL));
+
+    /* Network-wide, so it is offered in a query window too — unlike the
+     * channel-op actions. */
+    add_window_ex(app, "azzurra", "bob", true);
+    n = menu_for(app, "bob", items, 64);
+    CHECK(menu_offers(items, n, ACT_KILL));
+    CHECK(!menu_offers(items, n, ACT_KICK));
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -327,5 +433,10 @@ int main(void) {
     RUN(op_actions_stay_out_of_a_query_window);
     RUN(the_block_entry_is_a_toggle);
     RUN(a_ctcp_reply_is_an_answer_not_a_message);
+    RUN(oper_verbs_put_their_arguments_where_the_ircd_wants_them);
+    RUN(an_oper_verb_missing_its_arguments_is_refused_not_sent);
+    RUN(an_oper_verb_is_matched_as_a_whole_word);
+    RUN(every_oper_verb_explains_itself);
+    RUN(kill_is_offered_only_to_an_oper);
     return test_report();
 }

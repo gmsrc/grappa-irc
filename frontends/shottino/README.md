@@ -264,7 +264,12 @@ them, block them, or type their nick into the input. Replying is offered only
 on a message, since it quotes what was said.
 
 **Kick**, **Ban** and **Kick and ban** appear only where they would work: in a
-channel, and only while you hold `@` there. The client reads that off the
+channel, and only while you hold `@` there. **Kill** appears when your own
+umodes say you are an IRC operator (`+o`, `+O`, `+a`, `+A`) — read from what the
+server told grappa, not from whether you typed `/oper` — and it is offered in
+query windows too, since a KILL is network-wide. It PREFILLS `/kill <nick> `
+rather than firing: a kill needs a reason, and it should not happen on one
+click. The client reads that off the
 roster the server sent, so the menu never offers an action the server would
 answer with 482.
 
@@ -401,6 +406,17 @@ Media link previews:
 
   Their answers land in the window you asked from, and stay filed there: switch
   away and they do not follow you, switch back and they are still there.
+- **Operator** — `/kill` `/kline` `/unkline` `/wallops` `/globops` `/locops`
+  `/trace` `/squit` `/sconnect` `/die` `/restart`. None of these grant anything:
+  they are raw lines, `/quote` could always send them, and the ircd's O:line is
+  what decides. What the verbs add is tab-completion, a `/help` topic that
+  states the arguments, and one place where the argument shapes are written
+  down — `KILL nick :reason`, `KLINE [seconds] mask :reason`, `WALLOPS :text`.
+  A verb missing a required argument prints its usage instead of sending a line
+  the server would only reject, and what did go out is echoed into the window
+  you typed it in. `CONNECT` is spelled `/sconnect` because `/connect` already
+  means "connect a network" here. `/die` and `/restart` have no confirmation
+  step.
 - **People** — `/ping <nick>` CTCP-pings somebody and times the round trip.
   `/block [nick]` (`/ignore`) hides somebody's messages **in this client
   only** — nothing is sent to the server, they keep talking, grappa keeps

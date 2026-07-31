@@ -24637,3 +24637,48 @@ somebody else's line and drags the unread divider there.
 the focused window is a channel and this user holds `@` there, read off the
 roster the server already sent rather than tracked separately. A menu that offers
 `/kick` to somebody who cannot kick teaches the user that the client lies.
+
+---
+
+## 2026-07-31 — shottino: the IRCop verbs, as a table
+
+`/kill` and its neighbours were missing from the client. They were never
+missing from the *session*: grappa leaves `/quote` ungated on purpose (the
+ircd's O:line and services are the authority; the bouncer enforces only
+CRLF/NUL line safety), so an oper could always send them by hand. What was
+missing is what a client is for — a verb that completes, a `/help` topic that
+states the arguments, and one place where the argument shapes live.
+
+**A table, not eleven dispatcher arms.** Each row carries the typed verb, the
+wire verb, an argument SHAPE and its usage string; `oper_verb_line/4` is a pure
+function from (row, arguments) to the raw line, which is the part worth getting
+right once and the part a test can hold still. The shapes are the ircd's:
+trailing-parameter (`WALLOPS :text`), target-plus-reason (`KILL nick :reason`),
+bahamut's optional-duration K:line (`KLINE [secs] mask :reason` — an all-digit
+first token is the duration, which is why it is not just target-plus-reason),
+and verbatim pass-through for the ones whose grammar is server-specific
+(`TRACE`, `CONNECT`, `DIE`, `RESTART`) where a colon we invented would corrupt
+the line. Missing required arguments print the usage instead of sending
+something the server would only reject.
+
+**`/sconnect`, not `/connect`.** `/connect` already means "connect a NETWORK" in
+this client; overloading it would let a typo route a server-linking command at
+grappa's session manager.
+
+**`/die` and `/restart` ship without a confirmation step**, at vjt's call — the
+same as every other verb, and the same as typing them at irssi.
+
+**The help test learned a second shape.** `test_commands` enumerates dispatched
+verbs by scanning shottino.c for the dispatcher's own string literals, and a
+table is invisible to that scan. Rather than weaken the check, the suite (which
+compiles shottino.c) now reads `oper_verbs[]` directly and holds the same
+agreement: whatever the table dispatches must complete and must explain itself.
+The alternative — a `strcmp(cmd, ...)` help arm per verb — would have duplicated
+every usage string the table already carries.
+
+**The menu's Kill entry is gated on the umodes grappa mirrors**, not on whether
+`/oper` was typed in this client: an oper who attached to an already-running
+session never typed it here, and one whose O:line was pulled is no longer one
+whatever they typed. It PREFILLS `/kill <nick> ` rather than firing — a kill
+needs a reason, and it should not happen on one click. Unlike the channel-op
+entries it is offered in query windows too, because a KILL is network-wide.

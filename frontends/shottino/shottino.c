@@ -458,7 +458,10 @@ enum overlay_action {
      * see own_op_in_focused_window_locked. */
     ACT_KICK,
     ACT_BAN,
-    ACT_KICKBAN
+    ACT_KICKBAN,
+    /* The IRCop action. Offered only while this user's own umodes say
+     * they are one — see own_oper_on_network_locked. */
+    ACT_KILL
 };
 
 /* How many entries a picker offers. Twenty is what fits the phrase "the
@@ -6230,6 +6233,25 @@ static void resize_pane(struct app *app, int delta) {
  * sigils the nicklist draws — rather than tracked separately: a second
  * copy of "am I op" is a copy that goes stale on the next MODE.
  * Caller holds app->lock. */
+/* Is this user an IRC OPERATOR on the network they are reading?
+ *
+ * Read off the umodes grappa mirrors from the server (the same ones
+ * /settings prints), not from whether /oper was typed: an oper who
+ * attached to an already-running session never typed it here, and one
+ * whose O:line was pulled is no longer one whatever they typed.
+ *
+ * bahamut spells it +o, +O for a local oper, and +a / +A for the
+ * services admin grades — any of them can KILL. Caller holds app->lock. */
+static bool own_oper_on_network_locked(struct app *app) {
+    size_t cur = focused_window_locked(app);
+    if (cur >= app->window_count) return false;
+    for (size_t i = 0; i < app->network_count; i++) {
+        if (!irc_name_eq(app->networks[i].slug, app->windows[cur].network)) continue;
+        return strpbrk(app->networks[i].umodes, "oOaA") != NULL;
+    }
+    return false;
+}
+
 static bool own_op_in_focused_window_locked(struct app *app) {
     size_t cur = focused_window_locked(app);
     if (cur >= app->window_count) return false;
@@ -6303,6 +6325,14 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
             snprintf(out[n].label, sizeof(out[n].label), "Kick and ban %s", ov->nick);
             snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
             out[n].action = ACT_KICKBAN;
+            if (++n >= max) return n;
+        }
+        /* The oper action is network-wide, not channel-scoped: it is
+         * offered wherever the person is, query windows included. */
+        if (own_oper_on_network_locked(app)) {
+            snprintf(out[n].label, sizeof(out[n].label), "Kill %s", ov->nick);
+            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
+            out[n].action = ACT_KILL;
             if (++n >= max) return n;
         }
         snprintf(out[n].label, sizeof(out[n].label), "Type %s", ov->nick);
@@ -6542,6 +6572,20 @@ static void overlay_activate(struct app *app) {
         break;
     case ACT_QUERY:
         if (nick[0]) query_window(app, nick);
+        break;
+    case ACT_KILL:
+        /* Prefilled, not sent. A KILL needs a reason — the server shows
+         * it to the person and to every oper — and a menu cannot invent
+         * one worth reading. So the line is typed into the input with
+         * the nick already in place, and the oper finishes it and
+         * presses Enter. It is also the one action here that should not
+         * happen on a single click. */
+        if (nick[0]) {
+            pthread_mutex_lock(&app->lock);
+            snprintf(app->input, sizeof(app->input), "/kill %s ", nick);
+            app->input_len = strlen(app->input);
+            pthread_mutex_unlock(&app->lock);
+        }
         break;
     case ACT_WHOIS:
     case ACT_PING:
@@ -6818,14 +6862,16 @@ static void cycle_window(struct app *app, int delta) {
  * Adding a verb means adding it in three places; that test names them. */
 static const char *commands[] = {
     "/admin", "/alias", "/archive", "/away", "/ban", "/banlist", "/block", "/chat", "/clear",
-    "/close", "/connect", "/cs", "/dehilight", "/deop", "/devoice", "/disconnect", "/exit",
-    "/help", "/highlight", "/hilight", "/hs", "/ignore", "/info", "/invite", "/j", "/join", "/kb",
-    "/keys", "/kick", "/kickban", "/links", "/list", "/lusers", "/me", "/media", "/members",
-    "/mode", "/motd", "/mouse", "/ms", "/msg", "/names", "/nick", "/notify", "/ns", "/op", "/open",
-    "/oper", "/os", "/part", "/ping", "/preview", "/q", "/query", "/quit", "/quote", "/rehash",
-    "/rs", "/settings", "/share", "/split", "/splith", "/splitv", "/splitw", "/stats", "/topic",
-    "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unsplit", "/upload", "/users",
-    "/version", "/view", "/voice", "/w", "/watch", "/who", "/whois", "/whowas", "/win", "/window"
+    "/close", "/connect", "/cs", "/dehilight", "/deop", "/devoice", "/die", "/disconnect",
+    "/exit", "/globops", "/help", "/highlight", "/hilight", "/hs", "/ignore", "/info", "/invite",
+    "/j", "/join", "/kb", "/keys", "/kick", "/kickban", "/kill", "/kline", "/links", "/list",
+    "/locops", "/lusers", "/me", "/media", "/members", "/mode", "/motd", "/mouse", "/ms", "/msg",
+    "/names", "/nick", "/notify", "/ns", "/op", "/open", "/oper", "/os", "/part", "/ping",
+    "/preview", "/q", "/query", "/quit", "/quote", "/rehash", "/restart", "/rs", "/sconnect",
+    "/settings", "/share", "/split", "/splith", "/splitv", "/splitw", "/squit", "/stats", "/topic",
+    "/trace", "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unkline", "/unsplit",
+    "/upload", "/users", "/version", "/view", "/voice", "/w", "/wallops", "/watch", "/who",
+    "/whois", "/whowas", "/win", "/window"
 };
 
 static bool prefix_ci(const char *s, const char *prefix) {
@@ -7770,6 +7816,7 @@ static void show_help(struct app *app) {
     log_line(app, "commands: /help /archive /settings /admin /chat /exit /quit /window N [/w N, /win N] /join #chan [/j] /part /close /clear /msg nick text /query nick [/q nick] /me text");
     log_line(app, "network: /connect slug /disconnect [slug] [reason] /nick nick /away [reason] /umode +modes /mode [#chan] +modes [params]");
     log_line(app, "info: /topic [text|-delete] /members [/users] /whois nick /whowas nick /who [#chan] /names [#chan] /lusers /list [-refresh|query] /links /motd /info /version /stats [q] /rehash [opt]");
+    log_line(app, "oper: /kill nick reason /kline [secs] user@host reason /unkline mask /wallops text /globops text /locops text /trace [target] /squit server reason /sconnect server [port] /die /restart");
     log_line(app, "people: /ping nick times the round trip; /block [nick] (/ignore) hides somebody HERE only and bare /block lists them; /unblock nick (/unignore) shows them again");
     log_line(app, "ops: /op nicks /deop nicks /voice nicks /devoice nicks /kick nick [reason] /kb nick [reason] /ban mask /unban mask /banlist /invite nick");
     log_line(app, "watch: /notify [nick...|del nick|list] watches PEOPLE; /hilight pattern, /dehilight pattern watch WORDS (/watch add|del|list is the older spelling)");
@@ -7785,6 +7832,8 @@ static void show_help(struct app *app) {
     log_line(app, "panes: /split (stacked) /splitv (side by side) /unsplit; Ctrl-Alt-Up/Down or Ctrl-Alt-Tab switch, Ctrl-Alt-+/- resize, /keys shows what your terminal sends");
     log_line(app, "raw/media: /quote line /oper name password /open last-url; keys: PgUp/PgDn scroll, End bottom, Tab complete, Up/Down history, Ctrl-N/Ctrl-P window cycle");
 }
+
+static bool oper_verb_help(struct app *app, const char *cmd);
 
 static void show_command_help(struct app *app, const char *raw) {
     while (*raw == ' ') raw++;
@@ -7810,6 +7859,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "connect") == 0) log_line(app, "/connect network — mark a parked network connected so grappa can spawn it");
     else if (strcmp(cmd, "disconnect") == 0) log_line(app, "/disconnect [network] [reason] — park a network while keeping Shottino running");
     else if (strcmp(cmd, "whois") == 0) log_line(app, "/whois nick — request WHOIS for nick");
+    else if (oper_verb_help(app, cmd)) { /* the table carries its own help */ }
     else if (strcmp(cmd, "ping") == 0) log_line(app, "/ping nick — CTCP PING somebody and time the round trip; the answer lands in the window you asked from");
     else if (strcmp(cmd, "block") == 0 || strcmp(cmd, "ignore") == 0) log_line(app, "/block [nick], /ignore [nick] — hide somebody's messages in THIS client only (nothing is sent to the server); bare /block lists who is blocked");
     else if (strcmp(cmd, "unblock") == 0 || strcmp(cmd, "unignore") == 0) log_line(app, "/unblock nick, /unignore nick — show somebody's messages again");
@@ -8310,7 +8360,182 @@ static void handle_command(struct app *app, const char *input) {
     handle_command_dispatch(app, line);
 }
 
+/* ── Operator verbs ────────────────────────────────────────────────────
+ *
+ * The IRCop side of the client: KILL, the broadcast verbs, the K:line
+ * pair, and the ones that move servers around.
+ *
+ * None of this GRANTS anything. Every one of them is a raw line, and
+ * `/quote` could already send it — grappa deliberately leaves raw lines
+ * ungated (the ircd's O:line and services are the authority; the bouncer
+ * only enforces CRLF/NUL line safety). What the table adds is what a
+ * client is for: a verb that tab-completes, a `/help` topic that says
+ * what the arguments are, and one place where "how does this verb put
+ * its arguments on the wire" is written down — rather than eleven
+ * near-identical dispatcher arms each free to get the colon wrong.
+ *
+ * The shapes are the ircd's, not ours:
+ *   TEXT     the whole rest is one trailing parameter (WALLOPS :...)
+ *   TARGET   first token is a target, the rest is the reason
+ *   KLINE    bahamut's `KLINE [duration] <mask> :<reason>` — an
+ *            all-digit first token is the duration, which is why this
+ *            is not just TARGET
+ *   RAW      arguments through verbatim, because their grammar is
+ *            server-specific (TRACE, CONNECT, DIE, RESTART) and a colon
+ *            we invented would corrupt it
+ *
+ * `/sconnect` is CONNECT: `/connect` already means "connect a NETWORK"
+ * in this client, and silently overloading it would make a typo route a
+ * server-linking command at grappa's session manager. */
+enum oper_shape { OPER_TEXT, OPER_TARGET, OPER_KLINE, OPER_RAW };
+
+struct oper_verb {
+    const char *verb;  /* what the user types, slash and all */
+    const char *wire;  /* what goes upstream */
+    enum oper_shape shape;
+    bool needs_args;
+    const char *usage; /* the /help topic — the table IS the help */
+};
+
+#define OPER_VERB(verb, wire, shape, needs_args, usage) { verb, wire, shape, needs_args, usage }
+
+static const struct oper_verb oper_verbs[] = {
+    OPER_VERB("/kill", "KILL", OPER_TARGET, true,
+              "/kill <nick> <reason> — disconnect somebody from the network; the reason is shown to them and to every oper"),
+    OPER_VERB("/kline", "KLINE", OPER_KLINE, true,
+              "/kline [seconds] <user@host> <reason> — ban a mask from this server; a leading number makes it temporary"),
+    OPER_VERB("/unkline", "UNKLINE", OPER_RAW, true,
+              "/unkline <user@host> — lift a K:line set on this server"),
+    OPER_VERB("/wallops", "WALLOPS", OPER_TEXT, true,
+              "/wallops <text> — broadcast to everybody wearing +w"),
+    OPER_VERB("/globops", "GLOBOPS", OPER_TEXT, true,
+              "/globops <text> — broadcast to opers network-wide"),
+    OPER_VERB("/locops", "LOCOPS", OPER_TEXT, true,
+              "/locops <text> — broadcast to opers on this server only"),
+    OPER_VERB("/trace", "TRACE", OPER_RAW, false,
+              "/trace [target] — trace the route to a server or a user; bare /trace traces your own server"),
+    OPER_VERB("/squit", "SQUIT", OPER_TARGET, true,
+              "/squit <server> <reason> — break the link to a server"),
+    OPER_VERB("/sconnect", "CONNECT", OPER_RAW, true,
+              "/sconnect <server> [port] [remote] — link a server (IRC's CONNECT; /connect is grappa's network verb)"),
+    OPER_VERB("/die", "DIE", OPER_RAW, false,
+              "/die [args] — STOP the ircd. No confirmation step: it goes as typed"),
+    OPER_VERB("/restart", "RESTART", OPER_RAW, false,
+              "/restart [args] — RESTART the ircd. No confirmation step: it goes as typed"),
+};
+
+/* Split "<first token> <rest>" without copying: returns the rest, and
+ * writes the first token into `head`. */
+static const char *split_head(const char *args, char *head, size_t head_sz) {
+    size_t n = 0;
+    while (args[n] && args[n] != ' ' && n + 1 < head_sz) {
+        head[n] = args[n];
+        n++;
+    }
+    head[n] = 0;
+    const char *rest = args + n;
+    while (*rest == ' ') rest++;
+    return rest;
+}
+
+static bool all_digits(const char *s) {
+    if (!*s) return false;
+    for (; *s; s++)
+        if (!isdigit((unsigned char)*s)) return false;
+    return true;
+}
+
+/* Build the raw line for one oper verb. Pure — the whole reason the
+ * table exists is that this is the part worth getting right once, and
+ * the part a test can hold still. Returns false when the arguments do
+ * not make a line, so the caller can print the usage instead of sending
+ * a command the server would only reject. */
+static bool oper_verb_line(const struct oper_verb *v, const char *args, char *out, size_t out_sz) {
+    while (*args == ' ') args++;
+    if (v->needs_args && !*args) return false;
+    char head[MAX_CHANNEL];
+    switch (v->shape) {
+    case OPER_TEXT:
+        snprintf(out, out_sz, "%s :%s", v->wire, args);
+        return true;
+    case OPER_TARGET: {
+        const char *reason = split_head(args, head, sizeof(head));
+        if (!head[0] || !*reason) return false; /* both halves, or it is not a line */
+        snprintf(out, out_sz, "%s %s :%s", v->wire, head, reason);
+        return true;
+    }
+    case OPER_KLINE: {
+        const char *rest = split_head(args, head, sizeof(head));
+        char duration[MAX_CHANNEL + 2] = ""; /* the token plus its separating space */
+        if (all_digits(head)) {
+            snprintf(duration, sizeof(duration), "%s ", head);
+            rest = split_head(rest, head, sizeof(head));
+        }
+        if (!head[0] || !*rest) return false; /* mask and reason are both required */
+        snprintf(out, out_sz, "%s %s%s :%s", v->wire, duration, head, rest);
+        return true;
+    }
+    case OPER_RAW:
+        if (*args) snprintf(out, out_sz, "%s %s", v->wire, args);
+        else snprintf(out, out_sz, "%s", v->wire);
+        return true;
+    }
+    return false;
+}
+
+/* Does `line` start with `verb` as a whole word? `/kill` must not be
+ * answered by `/kickban`, and `/die` must not swallow `/dietro`. */
+static const char *oper_verb_args(const char *line, const char *verb) {
+    size_t n = strlen(verb);
+    if (strncmp(line, verb, n) != 0) return NULL;
+    if (line[n] != ' ' && line[n] != '\0') return NULL;
+    return line + n;
+}
+
+/* Dispatched BEFORE the main chain, and returns whether it took the
+ * line. */
+static bool try_oper_verb(struct app *app, const char *line) {
+    for (size_t i = 0; i < sizeof(oper_verbs) / sizeof(oper_verbs[0]); i++) {
+        const struct oper_verb *v = &oper_verbs[i];
+        const char *args = oper_verb_args(line, v->verb);
+        if (!args) continue;
+        char frame[MAX_LINE];
+        if (!oper_verb_line(v, args, frame, sizeof(frame))) {
+            log_line(app, "%s", v->usage);
+            return true;
+        }
+        char *raw = json_escape(frame);
+        char *payload =
+            xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", current_network_id(app), raw);
+        ws_push_user(app, "raw", payload);
+        free(raw);
+        free(payload);
+        /* Said out loud in the window it was typed in. An oper verb whose
+         * only feedback is a server notice somewhere else reads as having
+         * done nothing — and these are the commands where "did that go
+         * through?" matters most. */
+        char net_now[MAX_SLUG] = "";
+        current_window_key(app, net_now, sizeof(net_now), NULL, 0);
+        card(app, net_now, "--- sent: %s", frame);
+        return true;
+    }
+    return false;
+}
+
+/* The /help topic for an oper verb, read from the same table that
+ * dispatches it — so a verb cannot gain an argument without its help
+ * changing with it. */
+static bool oper_verb_help(struct app *app, const char *cmd) {
+    for (size_t i = 0; i < sizeof(oper_verbs) / sizeof(oper_verbs[0]); i++) {
+        if (strcmp(oper_verbs[i].verb + 1, cmd) != 0) continue;
+        log_line(app, "%s", oper_verbs[i].usage);
+        return true;
+    }
+    return false;
+}
+
 static void handle_command_dispatch(struct app *app, char *line) {
+    if (try_oper_verb(app, line)) return;
     if (strcmp(line, "/quit") == 0) {
         logout_grappa(app);
         app->running = false;
