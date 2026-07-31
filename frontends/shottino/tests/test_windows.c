@@ -98,11 +98,35 @@ TEST(the_server_window_is_a_name_not_a_spelling) {
     CHECK(!is_server_window("#server"));
 }
 
+TEST(traffic_named_after_the_network_is_the_server_talking) {
+    CHECK_STR(route_target("azzurra", "AzzuRRa"), "$server");
+    CHECK_STR(route_target("azzurra", "azzurra"), "$server");
+    /* A person, a channel and the server window itself are left alone. */
+    CHECK_STR(route_target("azzurra", "alice"), "alice");
+    CHECK_STR(route_target("azzurra", "#azzurra"), "#azzurra");
+    CHECK_STR(route_target("azzurra", "$server"), "$server");
+}
+
+TEST(the_server_talking_opens_no_window_of_its_own) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "$server", false);
+    /* Both spellings the ircd has used, and the query window grappa
+     * minted for them. None of it is a new tab. */
+    add_window_ex(app, "azzurra", "AzzuRRa", false);
+    add_window_ex(app, "azzurra", "azzurra", false);
+    CHECK_LONG(app->window_count, 1);
+    CHECK_STR(app->windows[0].channel, "$server");
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
     RUN(a_query_answered_in_another_case_reuses_its_window);
     RUN(a_row_files_under_its_windows_canonical_key);
     RUN(the_server_window_is_a_name_not_a_spelling);
+    RUN(traffic_named_after_the_network_is_the_server_talking);
+    RUN(the_server_talking_opens_no_window_of_its_own);
     return test_report();
 }

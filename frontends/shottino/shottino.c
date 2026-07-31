@@ -1481,7 +1481,34 @@ static struct pane *focused_pane_locked(struct app *app);
 static size_t focused_window_locked(struct app *app);
 static bool window_is_visible_locked(struct app *app, size_t idx);
 
+/* The window a target actually belongs in.
+ *
+ * Traffic that names the NETWORK ITSELF is the server talking, not a
+ * person: azzurra's ircd sends its global notices from a source spelled
+ * like the network — `AzzuRRa` — and grappa, seeing a sender that is
+ * nick-shaped and is not one of the well-known services, files it under
+ * a window of that name and mints a query window to go with it. The
+ * result is a stranger tab sitting next to the `$server` window where
+ * every other server message already lands. Route it there.
+ *
+ * The rule is deliberately narrow — the target has to BE the network
+ * name — so it cannot swallow an ordinary query. What it does cost: a
+ * real user whose nick is exactly the network name would have their DM
+ * land on `$server`. Networks reserve their own name, so that user does
+ * not exist.
+ *
+ * This is the client half. The whole fix belongs upstream in grappa's
+ * `route_non_channel_notice/3`, which should recognise server-sourced
+ * traffic before it ever mints a window — cicchetto has no way to know
+ * what shottino knows here. Until then, shottino keeps its own sidebar
+ * honest. */
+static const char *route_target(const char *network, const char *channel) {
+    if (!network || !channel || !channel[0]) return channel;
+    return irc_name_eq(network, channel) ? SERVER_WINDOW : channel;
+}
+
 static void add_window_ex(struct app *app, const char *network, const char *channel, bool focus) {
+    channel = route_target(network, channel);
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
         if (window_matches(&app->windows[i], network, channel)) {
@@ -1901,6 +1928,12 @@ static void render_message(struct app *app, const struct wire_scrollback_message
         snprintf(display_channel, sizeof(display_channel), "%s", sender);
         add_window_ex(app, network, display_channel, false);
     }
+    /* Same door the windows use: a row addressed to the network's own
+     * name is server output, and it reads in the window that holds the
+     * rest of the server's output. Rewritten only when the routing
+     * actually moved it — copying a buffer onto itself is undefined. */
+    const char *routed = route_target(network, display_channel);
+    if (routed != display_channel) snprintf(display_channel, sizeof(display_channel), "%s", routed);
 
     /* Dedup by ID, BEFORE mutating anything.
      *
