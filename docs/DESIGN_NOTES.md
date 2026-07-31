@@ -24199,3 +24199,137 @@ and logs the held case honestly on `:visitor_nick_changed`.
 (don't blind-IDENTIFY a nick that isn't the credential's) and 4 (a client
 `/recover` affordance) are separate follow-ups — point 4's UI shape is still
 open.
+## 2026-07-31 — #503 unit C: the self-contained RELEASE image → ghcr
+
+Unit C ships the published container image (`#503` scope 5, absorbing `#439`):
+a `Dockerfile.release` + a `docker` job in `release.yml` that builds it
+multi-arch and pushes to `ghcr.io/<owner>/grappa`. It is DISTINCT from the
+top-level `Dockerfile`, which stays the single-stage dev/CI TOOLCHAIN image
+(bind-mounts the repo, boots `mix phx.server`, HAS `Phoenix.CodeReloader`).
+Decisions:
+
+- **Two images, two roles — do not conflate them.** `Dockerfile` = the
+  development runtime (`compose`/dev stack, hot-edit via the bind mount).
+  `Dockerfile.release` = a `mix release` (bundled ERTS + compiled beams + the
+  built cicchetto SPA) with NOTHING to compile: no Elixir/mix, no source, no
+  `Phoenix.CodeReloader`, no inotify. It boots `bin/grappa start`. The published
+  image therefore has no CodeReloader — a hot update on it swaps beams into
+  `lib/grappa-<vsn>/ebin` and fires `Grappa.HotReload` (unit E), never the dev
+  reloader. The docs say this plainly so nobody expects the compose hot-edit
+  loop from the release image.
+
+- **`code_reloader: true` in the prod Endpoint config is LEFT UNTOUCHED — it is
+  harmless in a release.** `config/runtime.exs`'s prod block flips it on, and
+  the release is built `MIX_ENV=prod`, so the image DOES carry that Endpoint
+  key. But `Phoenix.CodeReloader.reload/1` is a no-op without mix (see
+  `GrappaWeb.AdminController`'s "why not CodeReloader"), the release's
+  `/admin/reload` goes through `Grappa.HotReload` instead, and `mix.exs`'s
+  `validate_compile_env: false` already absorbs the compile_env mismatch. The
+  FreeBSD jail is ALSO a prod `mix release` and runs this in production today —
+  proof the config boots clean in a release. Flipping the flag off for the image
+  alone would fork `runtime.exs` from the jail/.deb/.rpm consumers; out of scope
+  and unnecessary.
+
+- **Multi-stage, all alpine/musl.** Stage 1 `oven/bun:*-alpine` builds the SPA
+  (bun's binary is musl-built — it must run on alpine). Stage 2
+  `elixir:1.19-otp-28-alpine` assembles the `mix release`. Stage 3 `alpine`
+  ships runtime deps only. Alpine (not the Debian/Fedora glibc the .deb/.rpm
+  target) because the image is self-contained — a smaller musl runtime with no
+  distro-compat constraint. The runtime alpine is PINNED to the SAME version the
+  `elixir` build image rides (3.24, openssl 3.x → `libcrypto.so.3`), so the ERTS
+  + BeamAsm JIT + crypto NIF link the same libssl ABI at build and run. The
+  `elixir` tag's alpine FLOATS (it moved 3.23→3.24 mid-development), so a
+  build-time ASSERTION enforces the lockstep instead of trusting the pin: the
+  runtime stage COPYs the build stage's `/etc/alpine-release` and FAILS THE BUILD
+  on a major.minor mismatch (a musl/openssl-major move that would mislink the
+  ERTS). A stale pin can never silently ship a mislinked image — the build breaks
+  loudly and you bump the runtime `FROM` to the reported version. Rejected
+  digest-pinning the build base: it would freeze elixir/OTP security patches; the
+  float + assertion keeps patches flowing and turns drift into a loud failure the
+  workflow_dispatch smoke catches before a real tag.
+
+- **The image reports the BARE `X.Y.Z` via the no-git path (the AUR precedent).**
+  `.git` is `.dockerignore`'d, so at compile time `Grappa.Version` has no git
+  facts and takes `{:skip, :no_git}` (`#391`): the artifact reports the bare
+  `.app` version, and the `#542` release-sha guard logs the skip and proceeds
+  (no HEAD to verify). The `docker` job checks out the release tag and asserts
+  `tag == mix.exs @version` (same gate as deb/arch/rpm), so the bare version
+  EQUALS the tag. Rejected weakening `.dockerignore` to include `.git` for the
+  clean-tag path — it yields the identical bare string, and `.dockerignore` is
+  shared with the dev/prod builds.
+
+- **BEAM resource caps travel via `ERL_ZFLAGS`, in a container entrypoint — NOT
+  a baked `rel/vm.args`.** A Docker container on Linux 6.x inherits NOFILE=2^30,
+  so without a `+Q` cap BEAM reserves a ~1.5 GB port-table carrier at boot (the
+  exact reason `bin/start.sh` exists). `infra/docker/release-entrypoint.sh`
+  mirrors `bin/start.sh`'s `+Q`/`+P`/`+SDcpu`/`+SDio` sizing (same
+  `GRAPPA_MAX_USERS` / `GRAPPA_DIRTY_SCHEDULERS` knobs, minus the dev deps
+  bootstrap) and exports them via `ERL_ZFLAGS`, which a `mix release` honors.
+  A `rel/vm.args` would be baked into the release and change the jail/.deb/.rpm
+  consumers too — these caps are THIS image's concern. Verified in the running
+  container: beam started with `-Q 40000 -P 10000`; `port_limit`/`process_limit`
+  report the next power-of-two (65536/16384), standard BEAM rounding.
+
+- **The SPA version meta reuses the `version.sh` SSOT (`#538`), not a second
+  regex.** The vite build REFUSES to bake an empty `<meta cicchetto-version>`,
+  so the cic stage copies `mix.exs` + `infra/packaging/version.sh` at the layout
+  `version.sh` expects and derives `GRAPPA_VERSION` from it — the same SSOT the
+  .deb/.rpm/AUR builds use. No re-implemented version extraction to drift.
+
+- **Secrets are NOT baked.** `SECRET_KEY_BASE`, `SECRET_SIGNING_SALT`,
+  `RELEASE_COOKIE`, `GRAPPA_ENCRYPTION_KEY`, `VAPID_*`, `PHX_HOST` stay unset, so
+  `config/runtime.exs` RAISES and a bare `docker run` fails loudly until they are
+  supplied. Paths default under a `/data` volume; `CIC_DIST_ROOT` points at the
+  baked SPA; `GRAPPA_SUBSTRATE=docker` picks the source-alias no-op adapter
+  (`#543`). Wiring the run-time env (compose / `curl|bash`) is unit D.
+
+- **Multi-arch `linux/amd64 + linux/arm64` via buildx + QEMU (F1, vjt
+  2026-07-31).** The `docker` job is STANDALONE — it publishes to the registry
+  itself (not a GitHub Release asset), so it is NOT in `publish`'s `needs` and
+  runs parallel to deb/arch/rpm. Tags `:<git tag>` always; **`:latest` ONLY when
+  this tag is the highest semver in the repo** (`git tag --sort=-v:refname |
+  head -1`) — the docker job is the one leg with a MUTABLE tag (deb/rpm/arch
+  attach to a tag-keyed Release), so a `workflow_dispatch` revalidation of an old
+  tag OR a backport push must NOT re-point `:latest` at an older image. OCI
+  `source`/`version`/`revision` labels (revision resolved from the tagged commit,
+  not `github.sha`, which is `main` on a dispatch); `packages: write` at the job
+  level (job perms REPLACE the workflow default, so `contents: read` is
+  re-granted for checkout); `submodules: false` (the image build COPYs only
+  in-tree paths — cicchetto is a plain subdir; the declared submodules are
+  test-only, one behind an SSH URL the token cannot fetch). On the amd64 CI
+  runner the amd64 leg builds NATIVE;
+  only arm64 is emulated. **An OLD QEMU crashes the emulated BEAM's JIT
+  (BeamAsm)** at the first `mix` call with
+  `{failed_to_start_child,user,nouser}` — reproduced locally on a stale
+  Docker-Desktop binfmt and FIXED by installing a recent `tonistiigi/binfmt`
+  (which `docker/setup-qemu-action` does), so the job pins
+  `image: tonistiigi/binfmt:latest`. On the amd64 runner amd64 builds NATIVE.
+
+- **The `docker` job is validatable by a ZERO-PUBLICATION dry-run that exercises
+  the SAME job, not a copy.** `release.yml` has had ZERO runs, and a
+  release-publishing job that first executes on a real tag is untested at the
+  worst moment. The naive "dispatch against an existing tag" is IMPOSSIBLE: every
+  job checked out `ref: <tag>`, and no existing tag's tree carries
+  `Dockerfile.release` (it postdates them) — the build would fail on a missing
+  file. And `push: true` was unconditional, so a validation run would publish
+  public images (maybe move `:latest`). Fix (a `docker_validation` boolean
+  workflow_dispatch input): the `docker` job checks out the TRIGGERING ref (the
+  pushed tag on a release, the DISPATCHED BRANCH on a dry-run — so it works
+  BEFORE merge, when only the branch has the file), logs in + pushes ONLY on
+  `github.event_name == 'push'`, and on a dry-run runs `push:false` with no
+  registry login — building BOTH arches (proving arm64 QEMU + the ABI assertion +
+  cic + `mix release`) and publishing NOTHING. deb/arch/rpm/publish are `if:`-
+  gated off during a dry-run. A SEPARATE validation workflow was rejected: it
+  would duplicate the build steps and thus validate a COPY, not the shipping job
+  (`#503`'s own no-parallel-implementations rule). **The tag-push path is
+  behaviorally identical** — the default publishes; the dry-run activates only on
+  explicit `docker_validation=true`. Run pre-merge:
+  `gh workflow run release.yml --ref <branch> -f docker_validation=true`.
+
+**Apply:** a NEW runtime dep the app links (a NIF's shared lib, a shelled-out
+CLI) must be added to `Dockerfile.release`'s runtime `apk add` AND kept
+ABI-compatible with the pinned alpine; a runtime-VM tuning knob for the image
+goes through `release-entrypoint.sh`'s `ERL_ZFLAGS`, never a baked `rel/vm.args`
+that would leak into the jail/.deb/.rpm; the release image reports the bare
+version by construction (no `.git`), so anything asserting the image's version
+expects `X.Y.Z`, never a `-<sha>` suffix.

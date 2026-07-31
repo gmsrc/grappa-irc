@@ -53,6 +53,25 @@ To serve on a different address/port, set `HTTP_BIND` before running:
 HTTP_BIND=0.0.0.0:8080 infra/docker/deploy.sh install   # all interfaces, port 8080
 ```
 
+### Prefer a pre-built image over compiling?
+
+The clone-and-build above is the **from-source** path (the dev/CI toolchain
+image compiles the tree). If you would rather **pull** than build, every
+`vX.Y.Z` release publishes a self-contained, multi-arch image
+(`linux/amd64` + `linux/arm64`) to:
+
+```
+ghcr.io/vjt/grappa:<tag>     # e.g. :v0.8.0, or :latest
+```
+
+It bundles the Erlang release + the cicchetto SPA and boots on its own — no
+source, no build toolchain. It is a **release** image, so it has **no
+`Phoenix.CodeReloader`**: it is a runtime, not the hot-edit dev environment.
+The Docker Compose stack (this document's clone-and-build path) remains the
+development runtime. See `docs/OPERATIONS.md` for how the image is built and
+published; the `docker run` bring-up + `curl | bash` one-liners for it land with
+the release-image install path (#503 unit D).
+
 ### What the script does
 
 1. Checks Docker is installed and running.
