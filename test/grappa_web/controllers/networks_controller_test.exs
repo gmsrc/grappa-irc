@@ -152,6 +152,47 @@ defmodule GrappaWeb.NetworksControllerTest do
       assert is_binary(found["connection_state_changed_at"])
     end
 
+    # #474 B — the additive `connection` field carries the LIVE upstream
+    # facts (dialled server / TLS / +r), resolved via `Session.connection_info`
+    # at the controller (`resolve_connection_info/2`). It is ALWAYS present in
+    # the wire (additive-field-is-always-serialised) but `null` whenever there
+    # is no live connected session — the honest "no live connection". This
+    # asserts the null branch of the controller seam AND the CLAUDE.md
+    # DB-vs-live separation invariant: neither of these credentials has a
+    # spawned `Session.Server`, so even the DB-`:connected` row reports
+    # `connection: null` (no live pid ⇒ no fabricated facts). The live branch
+    # (connection populated) is covered by `Session.Server`'s connection_info
+    # test (accessor) + the issue474 e2e (end-to-end over the running stack).
+    test "connection is null when there is no live session (DB state ≠ live facts)",
+         %{conn: conn} do
+      vjt = user_fixture(name: "vjt-conn-null-#{u()}")
+      session = session_fixture(vjt)
+      {connected_net, _} = network_with_server(port: 6674, slug: "azzurra-conn-live-#{u()}")
+      {parked_net, _} = network_with_server(port: 6675, slug: "azzurra-conn-parked-#{u()}")
+      _ = credential_fixture(vjt, connected_net)
+      parked_cred = credential_fixture(vjt, parked_net)
+      {:ok, _} = Networks.disconnect(parked_cred, "parking for the test")
+
+      body =
+        conn
+        |> put_bearer(session.id)
+        |> get("/networks")
+        |> json_response(200)
+
+      connected_row = Enum.find(body, &(&1["slug"] == connected_net.slug))
+      parked_row = Enum.find(body, &(&1["slug"] == parked_net.slug))
+
+      # DB row is `:connected` (bind default) but no Session.Server was spawned
+      # → live facts are unknown, so `connection` is present-and-null.
+      assert connected_row["connection_state"] == "connected"
+      assert Map.has_key?(connected_row, "connection")
+      assert is_nil(connected_row["connection"])
+
+      # Parked → also no live session → `connection` null.
+      assert parked_row["connection_state"] == "parked"
+      assert is_nil(parked_row["connection"])
+    end
+
     test "returns empty list when user has no bindings", %{conn: conn} do
       vjt = user_fixture(name: "vjt-empty-#{u()}")
       session = session_fixture(vjt)
