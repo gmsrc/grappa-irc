@@ -8997,7 +8997,12 @@ static void handle_mouse(struct app *app) {
         }
         pthread_mutex_unlock(&app->lock);
         if (wheel_up || wheel_down) return;
-        if (!click && !right) return; /* motion and button releases only move the highlight */
+        /* The LEFT button decides, and only it. The right button is the
+         * one that opened this menu, and terminals disagree about how
+         * many events one press produces — a terminal that also reports
+         * a CLICKED for it would dismiss the menu in the same breath
+         * that opened it. Motion and releases only move the highlight. */
+        if (!click) return;
         if (hit) overlay_activate(app);
         else overlay_close(app);
         return;
