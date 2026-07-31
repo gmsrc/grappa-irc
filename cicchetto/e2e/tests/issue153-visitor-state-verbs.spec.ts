@@ -34,7 +34,7 @@ import { expectShellReady,
   selectChannel,
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededAdmin } from "../fixtures/seedData";
 
@@ -141,6 +141,6 @@ test("issue #153 — visitor /quote and /mode reach upstream and take effect", a
   } finally {
     if (peer) await peer.disconnect("issue153 done").catch(() => {});
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

@@ -40,7 +40,7 @@ import { expectShellReady,
   selectChannel,
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 // Boot cic straight into Shell as a freshly-minted visitor (no captcha/anon
@@ -117,7 +117,7 @@ test("issue #154(1) — a rejected ops verb surfaces an inline compose error (no
     await expect(ta).toHaveValue("/op bad!nick");
   } finally {
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });
 
@@ -148,6 +148,6 @@ test("issue #154(2) — an own-nick /umode renders a 'sets user mode' row in $se
     ).toBeVisible({ timeout: 15_000 });
   } finally {
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

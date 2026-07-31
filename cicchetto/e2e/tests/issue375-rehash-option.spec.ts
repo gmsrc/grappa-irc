@@ -30,7 +30,7 @@
 
 import { expect, test } from "../fixtures/test";
 import { expectShellReady, composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 // 481 ERR_NOPRIVILEGES trailing text bahamut-azzurra sends (src/s_err.c):
@@ -122,6 +122,6 @@ test("issue #375 — /rehash <option> forwards the option on the raw wire, bare 
     await expect(page.getByText(/unknown command/i)).toHaveCount(0);
   } finally {
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

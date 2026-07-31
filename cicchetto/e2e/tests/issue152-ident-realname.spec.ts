@@ -29,7 +29,7 @@ import { expectShellReady,
   selectChannel,
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor } from "../fixtures/grappaApi";
+import { reapVisitors } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededAdmin } from "../fixtures/seedData";
 
@@ -159,6 +159,6 @@ test("issue #152 — login-Advanced ident + settings live-apply reach upstream",
   } finally {
     if (peer) await peer.disconnect("issue152 done").catch(() => {});
     await ctx.close();
-    if (visitorId) await adminDeleteVisitor(admin.token, visitorId).catch(() => {});
+    await reapVisitors(admin.token, visitorId);
   }
 });

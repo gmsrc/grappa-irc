@@ -27,7 +27,7 @@
 
 import { expect, test } from "../fixtures/test";
 import { expectShellReady, composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 // Verbatim trailing text bahamut sends for numeric 381 RPL_YOUREOPER —
@@ -99,6 +99,6 @@ test("issue #148 — visitor /oper ships OPER upstream and renders the 381 notic
     await expect(page.getByText(/visitor_not_allowed/i)).toHaveCount(0);
   } finally {
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

@@ -11,7 +11,7 @@
 // Copy is deliberately NOT asserted: the checkbox keys off its data-testid,
 // so vjt's final (pending) wording swap can never break this spec.
 
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -77,7 +77,8 @@ test("#363 incognito session disables share-session; a normal visitor keeps it",
   } finally {
     await incog.ctx.close();
     await plain.ctx.close();
-    await adminDeleteVisitor(admin.token, ghost.id).catch(() => {});
-    await adminDeleteVisitor(admin.token, normal.id).catch(() => {});
+    // Reap BOTH visitors — the variadic collects so a failed first delete
+    // can't skip the second (see reapVisitors).
+    await reapVisitors(admin.token, ghost.id, normal.id);
   }
 });

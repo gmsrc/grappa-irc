@@ -30,7 +30,7 @@
 import { expect, test } from "../fixtures/test";
 import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
-import { mintVisitor, adminDeleteVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 
 test("admin Visitors tab: per-network cell is separated + delete button stays in its row", async ({
   page,
@@ -105,6 +105,6 @@ test("admin Visitors tab: per-network cell is separated + delete button stays in
       expect(btnBox.x).toBeGreaterThan(rowBox.x + rowBox.width / 2);
     }
   } finally {
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

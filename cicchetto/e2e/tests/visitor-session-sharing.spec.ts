@@ -20,7 +20,7 @@
 
 import { expect, test } from "../fixtures/test";
 import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 test("visitor session-sharing — mint on device A, consume on device B, both connected", async ({
@@ -146,6 +146,6 @@ test("visitor session-sharing — mint on device A, consume on device B, both co
   } finally {
     await ctxA.close();
     await ctxB.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

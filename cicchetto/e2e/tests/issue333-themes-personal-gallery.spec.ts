@@ -18,7 +18,7 @@
 // before/after the fix targets. Desktop chromium: the sections + scroll are
 // layout-agnostic and the editor is a JS flow.
 
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -77,7 +77,7 @@ test.describe("#333 — themes personal/gallery + copy UX + delete confirm", () 
       // The personal section holds at least one card (the copy).
       await expect(personal.locator("[data-testid^='theme-card-']")).not.toHaveCount(0);
     } finally {
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 
@@ -120,7 +120,7 @@ test.describe("#333 — themes personal/gallery + copy UX + delete confirm", () 
       // The owned copy is gone → personal section empties + hides again.
       await expect(page.getByTestId("theme-section-personal")).toHaveCount(0, { timeout: 5_000 });
     } finally {
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 
@@ -160,7 +160,7 @@ test.describe("#333 — themes personal/gallery + copy UX + delete confirm", () 
       if (errBox === null || saveBox === null) throw new Error("no box");
       expect(errBox.y).toBeLessThan(saveBox.y);
     } finally {
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 });

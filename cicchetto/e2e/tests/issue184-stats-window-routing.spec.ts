@@ -34,7 +34,7 @@ import { expectShellReady,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import {
-  adminDeleteVisitor,
+  reapVisitors,
   GRAPPA_BASE_URL,
   mintVisitor,
 } from "../fixtures/grappaApi";
@@ -126,6 +126,6 @@ test("issue #184 — /stats reply renders in $server, never a query window named
     expect(rows).toHaveLength(0);
   } finally {
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

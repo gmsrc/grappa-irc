@@ -44,7 +44,7 @@ import { test, expect } from "../fixtures/test";
 import { expectShellReady, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
-  adminDeleteVisitor,
+  reapVisitors,
   assertMessagePersisted,
   GRAPPA_BASE_URL,
   mintVisitor,
@@ -451,7 +451,7 @@ test("issue #211 phase 7 — one visitor on TWO networks survives a real cic WS 
   } finally {
     for (const peer of peers) await peer.disconnect("e2e cleanup").catch(() => {});
     if (ctx) await ctx.close();
-    if (visitor) await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor?.id);
   }
 });
 

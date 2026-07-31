@@ -31,7 +31,7 @@ import {
   scrollbackLine,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 // A non-oper KILL reply. bahamut's m_kill rejects a non-oper (481
@@ -128,6 +128,6 @@ test("issue #557 — /kill <nick> <reason> ships KILL nick :reason on the raw wi
     await expect(page.getByText(/unknown command/i)).toHaveCount(0);
   } finally {
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

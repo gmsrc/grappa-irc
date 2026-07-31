@@ -313,6 +313,46 @@ export async function adminDeleteVisitor(
   }
 }
 
+// #574 — reap minted visitors LOUD in test cleanup. The single de-swallowing
+// primitive every spec's teardown must go through instead of the old
+// `adminDeleteVisitor(...).catch(() => {})`.
+//
+// WHY it's shared, not inlined 27×: a `.catch(() => {})` around the delete
+// silently strands a LIVE visitor when the delete fails (e.g. an aborted spec
+// whose cleanup also hits the #506 `database is locked` 500). The stranded
+// session then poisons downstream specs that assert an EXACT live-session /
+// visitor count on the serial (`workers: 1`) stack — m9b-admin-sessions-actions
+// (`toHaveCount(4)` observes 6), #481 accretion, #211 — and the red surfaces
+// FAR from its cause, reading as an unrelated flake. This is CLAUDE.md's
+// "No silent-swallow at boundaries", inside test cleanup (#517 fixed the one
+// instance in issue299; #574 is the class).
+//
+// COLLECT-then-throw, not drop-`.catch`-per-call: when a finally reaps more
+// than one visitor, letting the first delete throw would SKIP the rest
+// (masking-by-skip — the #517 lesson), stranding the tail. So every id is
+// attempted, failures are collected, and an AggregateError is thrown iff any
+// failed. null/undefined ids are skipped, so callers pass `visitor?.id`
+// without an `if` guard. adminDeleteVisitor is idempotent (404 == success),
+// so on a green run where the spec already deleted the visitor this is a
+// no-op — it only throws when a delete ACTUALLY fails.
+export async function reapVisitors(
+  adminToken: string,
+  ...visitorIds: Array<string | null | undefined>
+): Promise<void> {
+  const errors: unknown[] = [];
+  for (const visitorId of visitorIds) {
+    if (!visitorId) continue;
+    try {
+      await adminDeleteVisitor(adminToken, visitorId);
+    } catch (err) {
+      errors.push(err);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "reapVisitors: visitor cleanup failed (#574)");
+  }
+}
+
 // Poll GET /networks/:network_slug/channels/:channel/messages for a
 // row matching {sender, body}. Channel id in the URL is the channel
 // NAME (`#bofh`) — grappa's REST surface keys channels by slug-shape,

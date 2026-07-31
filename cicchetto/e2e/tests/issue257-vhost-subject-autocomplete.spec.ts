@@ -17,7 +17,7 @@
 
 import { expect, test } from "../fixtures/test";
 import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, GRAPPA_BASE_URL, mintVisitor } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 async function adminLogin(
@@ -127,6 +127,6 @@ test("#257 — picking a visitor from the grant autocomplete stores its stable i
     await expect(grantsTable).not.toContainText(visitor.nick);
   } finally {
     if (vhostId !== null) await deleteVhostBestEffort(admin.token, vhostId);
-    if (visitorId !== null) await adminDeleteVisitor(admin.token, visitorId);
+    await reapVisitors(admin.token, visitorId);
   }
 });

@@ -18,7 +18,7 @@
 // Desktop chromium (untagged): the drawer + modal are layout-agnostic and
 // the QR is inline SVG, not a device camera.
 
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -57,7 +57,7 @@ test.describe("#392 — home restyle + session-share modal", () => {
       await expect(url).not.toHaveValue("", { timeout: 10_000 });
       expect(await url.inputValue()).toMatch(/\/share\//);
     } finally {
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 
@@ -77,7 +77,7 @@ test.describe("#392 — home restyle + session-share modal", () => {
       await expect(page.getByTestId("share-modal")).toBeVisible();
       await expect(page.getByTestId("share-qr").locator("svg")).toBeVisible({ timeout: 10_000 });
     } finally {
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 
@@ -97,7 +97,7 @@ test.describe("#392 — home restyle + session-share modal", () => {
       // #392 — the Browse CTA carries the prominent accent-outlined class.
       await expect(browse).toHaveClass(/home-pane-network-browse/);
     } finally {
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 });

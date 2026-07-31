@@ -31,7 +31,7 @@
 import type { Browser, Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { openSettingsDrawer, expectShellReady, waitForUserTopicReady } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, GRAPPA_BASE_URL, mintVisitor } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 const ANCHOR = "azzurra";
@@ -175,7 +175,7 @@ test.describe("issue #282 — explicit vhost Reconnect button", () => {
       await expect(page.getByTestId("vhost-reconnect")).toHaveText(/reconnect to apply/i);
     } finally {
       if (ctx) await ctx.close();
-      if (visitor) await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor?.id);
     }
   });
 });

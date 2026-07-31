@@ -19,7 +19,7 @@
 
 import { test, expect } from "../fixtures/test";
 import { expectShellReady } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, GRAPPA_BASE_URL, mintVisitor } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 // Unique per run: avoids featured-list bleed across retries / parallel
@@ -125,6 +125,6 @@ test("issue #135 — visitor home shows welcome + featured + a directory link", 
   } finally {
     await ctx.close();
     await deleteFeaturedBestEffort(admin.token, networkId, featuredId);
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

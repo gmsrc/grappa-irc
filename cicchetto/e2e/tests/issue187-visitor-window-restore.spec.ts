@@ -29,7 +29,7 @@ import { expectShellReady,
   sidebarWindow,
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 // Boot cic straight into Shell as a freshly-minted visitor (no captcha/anon
@@ -109,6 +109,6 @@ test("issue #187 — a visitor's last-open channel is restored on refresh/reopen
     });
   } finally {
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

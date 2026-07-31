@@ -25,7 +25,7 @@
 // navigator.share is a JS API, not a touch gesture.
 
 import { openSettingsDrawer, openSettingsSection } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -79,7 +79,7 @@ test.describe("#335 — visitor identity card + share section + native share", (
         generalPage.locator("[data-testid='settings-section-identity'] #settings-nick"),
       ).toBeVisible();
     } finally {
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 
@@ -115,7 +115,7 @@ test.describe("#335 — visitor identity card + share section + native share", (
       expect(payload?.url).toBe(shareUrl);
       expect(payload?.url).toMatch(/\/share\//);
     } finally {
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 
@@ -139,7 +139,7 @@ test.describe("#335 — visitor identity card + share section + native share", (
       await expect(page.getByTestId("share-native")).toHaveCount(0);
       await expect(page.getByTestId("share-copy")).toBeVisible();
     } finally {
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 });

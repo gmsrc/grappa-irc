@@ -29,7 +29,7 @@
 import { test, expect } from "../fixtures/test";
 import { openSettingsDrawer, loginAs } from "../fixtures/cicchettoPage";
 import {
-  adminDeleteVisitor,
+  reapVisitors,
   GRAPPA_BASE_URL,
   login,
   mintVisitor,
@@ -135,9 +135,9 @@ test.describe("issue #126 — detach lifecycle", () => {
       await expect(page.getByText(/^log out$/i)).toHaveCount(0);
     } finally {
       await ctx.close();
-      // Best-effort: tear down the throwaway visitor's row + session.
+      // Tear down the throwaway visitor's row + session (loud — see reapVisitors).
       const admin = (await import("../fixtures/seedData")).getSeededAdmin();
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 

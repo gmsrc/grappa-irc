@@ -24,7 +24,7 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, type MintedVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { type MintedVisitor, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -90,7 +90,7 @@ const SUBJECTS: SubjectCase[] = [
       await page.goto("/");
       await gotoHome(page);
       return async () => {
-        await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+        await reapVisitors(admin.token, visitor.id);
       };
     },
   },
@@ -108,7 +108,7 @@ const SUBJECTS: SubjectCase[] = [
       await page.goto("/");
       await gotoHome(page);
       return async () => {
-        await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+        await reapVisitors(admin.token, visitor.id);
       };
     },
   },

@@ -28,7 +28,7 @@
 
 import { test, expect } from "../fixtures/test";
 import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, adminDeleteVisitor, login, mintVisitor } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, login, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 const PASSWORD = "test-password-not-secret";
@@ -159,7 +159,7 @@ test.describe("issue #157 — delete account", () => {
     } finally {
       await ctx.close();
       const admin = getSeededAdmin();
-      await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+      await reapVisitors(admin.token, visitor.id);
     }
   });
 });

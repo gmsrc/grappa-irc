@@ -30,7 +30,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { loginAs, waitForUserTopicReady } from "../fixtures/cicchettoPage";
 import {
-  adminDeleteVisitor,
+  reapVisitors,
   GRAPPA_BASE_URL,
   type MintedVisitor,
   mintVisitor,
@@ -313,6 +313,6 @@ test("@webkit #260 — the sticky header pins under scroll and the next network 
     expect(outgoing).toBeDefined();
     if (outgoing) expect(outgoing.right).toBeLessThanOrEqual(atEnd.barLeft + EDGE_EPS);
   } finally {
-    if (visitor) await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor?.id);
   }
 });

@@ -27,7 +27,7 @@ import { expect, test } from "../fixtures/test";
 import { ADMIN_IDENTIFIER, ADMIN_PASSWORD } from "../fixtures/seedData";
 import {
   GRAPPA_BASE_URL,
-  adminDeleteVisitor,
+  reapVisitors,
   login,
   mintVisitor,
 } from "../fixtures/grappaApi";
@@ -88,13 +88,12 @@ test("#171 — 2nd nil-client visitor from the same source IP is rejected 503 to
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("too_many_sessions");
   } finally {
-    if (visitorAId !== null) {
-      await adminDeleteVisitor(admin.token, visitorAId).catch(() => {});
-    }
-    // Restore the seeded headroom so the serial runner's shared IP does
-    // not throttle later specs' concurrent visitor logins.
+    // Restore the seeded headroom FIRST (best-effort) so the serial runner's
+    // shared IP does not throttle later specs — THEN reap the visitor loud,
+    // ordered benign-before-loud so the throw can't skip it (see reapVisitors).
     await adminPatchCaps(admin.token, AZZURRA, {
       max_per_ip: AZZURRA_SEED_MAX_PER_IP,
     }).catch(() => {});
+    await reapVisitors(admin.token, visitorAId);
   }
 });

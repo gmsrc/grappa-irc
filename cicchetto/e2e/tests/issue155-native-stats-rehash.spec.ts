@@ -38,7 +38,7 @@
 
 import { expect, test } from "../fixtures/test";
 import { expectShellReady, composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 // Verbatim trailing text bahamut-azzurra sends (src/s_err.c):
@@ -114,6 +114,6 @@ test("issue #155 — native /stats and /rehash ship upstream and render reply nu
     await expect(page.getByText(/unknown command/i)).toHaveCount(0);
   } finally {
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

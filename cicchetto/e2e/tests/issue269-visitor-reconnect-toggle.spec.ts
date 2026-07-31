@@ -25,7 +25,7 @@
 import { expect, test } from "../fixtures/test";
 import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
-import { mintVisitor, adminDeleteVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 
 async function adminOpenVisitorsTab(
   page: import("@playwright/test").Page,
@@ -98,6 +98,6 @@ test("#269 admin Visitors tab Disconnect ⇄ Reconnect toggles a per-network vis
     // Idempotent cleanup — Operator.delete_visitor stops every live
     // session + deletes the row, so a downed OR live victim is fully
     // reaped and never poisons a downstream spec.
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

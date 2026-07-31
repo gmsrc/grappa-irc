@@ -23,7 +23,7 @@
 import { expect, test } from "../fixtures/test";
 import { openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
-import { mintVisitor, adminDeleteVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 
 test("M-8 admin Visitors tab lists + deletes a minted visitor (inline confirm two-step)", async ({
   page,
@@ -74,6 +74,6 @@ test("M-8 admin Visitors tab lists + deletes a minted visitor (inline confirm tw
   } finally {
     // Idempotent — 404 if test already deleted it; safety net for
     // mid-arrange failures (so we don't leak a visitor row across runs).
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });

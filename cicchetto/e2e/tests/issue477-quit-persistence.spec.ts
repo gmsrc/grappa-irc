@@ -43,7 +43,7 @@
 // symmetrically for its ephemeral case).
 
 import { openSettingsDrawer, loginAs } from "../fixtures/cicchettoPage";
-import { adminDeleteVisitor, mintVisitor } from "../fixtures/grappaApi";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 import { type Browser, type Page } from "@playwright/test";
@@ -88,7 +88,7 @@ async function bootVisitor(
     page,
     teardown: async () => {
       await ctx.close();
-      await adminDeleteVisitor(getSeededAdmin().token, visitor.id).catch(() => {});
+      await reapVisitors(getSeededAdmin().token, visitor.id);
     },
   };
 }

@@ -30,7 +30,7 @@ import { test, expect } from "../fixtures/test";
 import { expectShellReady, composeSend, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
-  adminDeleteVisitor,
+  reapVisitors,
   GRAPPA_BASE_URL,
   mintVisitor,
   type MintedVisitor,
@@ -138,7 +138,7 @@ test("issue #211 phase 3 — fresh visitor lands JOINED with own nick + a live P
   } finally {
     if (peer) await peer.disconnect("e2e cleanup").catch(() => {});
     await ctx.close();
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });
 
@@ -225,17 +225,26 @@ test("issue #211 phase 3 — admin visitor_enabled toggle flips a network live (
       visitorId = (await after.json())?.subject?.id ?? null;
     }
   } finally {
-    if (visitorId) await adminDeleteVisitor(admin.token, visitorId).catch(() => {});
-    // Disable again so the network has no visitor credential blocking the
-    // delete, then remove it (DELETE keys on the integer id).
-    await fetch(`${GRAPPA_BASE_URL}/admin/networks/${slug}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json", authorization: `Bearer ${admin.token}` },
-      body: JSON.stringify({ visitor_enabled: false }),
-    }).catch(() => {});
-    await fetch(`${GRAPPA_BASE_URL}/admin/networks/${networkId}`, {
-      method: "DELETE",
-      headers: { authorization: `Bearer ${admin.token}` },
-    }).catch(() => {});
+    // Reap the visitor loud (reapVisitors), but the network teardown below
+    // MUST still run even if the reap throws (a leaked test network poisons
+    // downstream) — and it depends on the visitor being gone first (a live
+    // visitor credential blocks the network DELETE), so it can't be reordered
+    // ahead. An inner finally guarantees teardown runs, then the reap throw
+    // propagates.
+    try {
+      await reapVisitors(admin.token, visitorId);
+    } finally {
+      // Disable again so the network has no visitor credential blocking the
+      // delete, then remove it (DELETE keys on the integer id).
+      await fetch(`${GRAPPA_BASE_URL}/admin/networks/${slug}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ visitor_enabled: false }),
+      }).catch(() => {});
+      await fetch(`${GRAPPA_BASE_URL}/admin/networks/${networkId}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${admin.token}` },
+      }).catch(() => {});
+    }
   }
 });

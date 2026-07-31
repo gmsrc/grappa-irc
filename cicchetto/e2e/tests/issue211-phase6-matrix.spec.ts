@@ -39,7 +39,7 @@ import { test, expect } from "../fixtures/test";
 import { expectShellReady, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
-  adminDeleteVisitor,
+  reapVisitors,
   GRAPPA_BASE_URL,
   joinChannel,
   mintVisitor,
@@ -176,8 +176,10 @@ test("issue #211 phase 6 — fresh visitor AUTO-CONNECTS the visitor_autoconnect
   } finally {
     for (const peer of peers) await peer.disconnect("e2e cleanup").catch(() => {});
     if (ctx) await ctx.close();
-    if (visitor) await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    // Disable autoconnect FIRST (best-effort) so the network never respawns —
+    // THEN reap the visitor loud, ordered benign-before-loud (see reapVisitors).
     await setAutoconnect(admin.token, "azzurra2", false).catch(() => {});
+    await reapVisitors(admin.token, visitor?.id);
   }
 });
 
@@ -227,7 +229,7 @@ test("issue #211 phase 6 — per-network park azzurra keeps azzurra2 live; recon
     expect(connRes.status).toBe(200);
     expect((await connRes.json()).connection_state).toBe("connected");
   } finally {
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });
 
@@ -261,6 +263,6 @@ test("issue #211 phase 6 — visitor one-tap connects the AVAILABLE (non-autocon
     const rows = await waitForNetworks(visitor.token, 2);
     expect(rows.map((r) => r.slug)).toContain("azzurra3");
   } finally {
-    await adminDeleteVisitor(admin.token, visitor.id).catch(() => {});
+    await reapVisitors(admin.token, visitor.id);
   }
 });
