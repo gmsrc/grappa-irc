@@ -57,15 +57,27 @@ name: release
 # (older glibc) are out of scope (#438). See DESIGN_NOTES R1/R2 + the
 # packaging README.
 #
-# NOTE: this workflow runs on a `v*` tag push, OR via manual workflow_dispatch
-# against an EXISTING tag (the `tag` input) — the repair path (#504) for a
-# release whose first run shipped no assets: dispatch the FIXED workflow from
-# main targeting e.g. `v0.6.0` and it (re)builds THAT tag's tree and uploads to
-# the existing release, with NO tag force-push. Every job resolves the release
-# tag from whichever trigger fired (`inputs.tag` on dispatch, else the pushed
-# tag) into `RELEASE_TAG`, and checks that tag out explicitly. A normal
-# main-branch push never triggers it (ci.yml + integration.yml handle those);
-# its concurrency group is separate from ci.yml, so it never cancels a CI run.
+# This workflow runs on a `v*` tag push (the real release — every job PUBLISHES)
+# OR via manual workflow_dispatch, which has TWO mutually-exclusive modes:
+#
+#   * REPAIR (default, `docker_validation=false`, #504): (re)build an EXISTING
+#     tag's deb/arch/rpm and upload to its release, no tag surgery — dispatch
+#     from main with the `tag` input (e.g. `v0.6.0`). deb/arch/rpm resolve the
+#     tag into `RELEASE_TAG` and check it out explicitly; the docker job does NOT
+#     run in this mode (image repair is out of scope — re-tag to rebuild it).
+#   * DOCKER DRY-RUN (`docker_validation=true`): a ZERO-PUBLICATION validation of
+#     the release-image job ITSELF (not a copy of it — the same job that ships).
+#     Only the docker job runs; it builds `Dockerfile.release` multi-arch from
+#     the DISPATCHED ref (a branch, so it works BEFORE merge, when only the
+#     branch carries the file) with `push:false` and no registry login — it
+#     proves the build (arm64 QEMU + ABI-lockstep assertion + cic + mix release)
+#     and publishes NOTHING. deb/arch/rpm/publish are skipped. Run it with:
+#       gh workflow run release.yml --ref <branch> -f docker_validation=true
+#
+# The tag-push path is unchanged by the dry-run plumbing: the default publishes.
+# A normal main-branch push never triggers this workflow (ci.yml + integration.yml
+# handle those); its concurrency group is separate from ci.yml, so it never
+# cancels a CI run.
 
 on:
   push:
@@ -78,9 +90,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to (re)build + attach assets to (e.g. v0.6.0)"
-        required: true
+        description: "Repair path only: existing release tag to (re)build deb/arch/rpm for + attach assets to (e.g. v0.6.0). Ignored when docker_validation is true."
+        required: false
         type: string
+      docker_validation:
+        description: "Zero-publication validation of the release-image job: build Dockerfile.release multi-arch from the DISPATCHED ref (branch), push:false, NOTHING published. Skips deb/arch/rpm/publish."
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -96,6 +113,10 @@ env:
 jobs:
   deb:
     name: build + prove .deb (amd64)
+    # Runs on a tag push and on a repair dispatch (unchanged). Skipped ONLY on a
+    # docker-image dry-run dispatch (docker_validation=true), which validates the
+    # release-image job alone and must publish nothing.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation) }}
     runs-on: ubuntu-latest
     env:
       # The release tag, resolved from whichever trigger fired: the input on a
@@ -197,6 +218,8 @@ jobs:
 
   arch:
     name: build + prove Arch pkg (x86_64)
+    # See the deb job: skipped only on a docker-image dry-run dispatch.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation) }}
     runs-on: ubuntu-latest
     container: archlinux:latest
     env:
@@ -328,6 +351,8 @@ jobs:
 
   rpm:
     name: build + prove .rpm (x86_64)
+    # See the deb job: skipped only on a docker-image dry-run dispatch.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation) }}
     runs-on: ubuntu-latest
     # Pinned Fedora MAJOR (not :latest): a release artifact's glibc floor must
     # not move under us (#438 open-q2). The rule: the OLDEST still-supported
@@ -448,55 +473,62 @@ jobs:
 
   docker:
     name: build + push release image (ghcr, amd64 + arm64)
+    # Runs on a tag push (real release → PUBLISHES) and on an EXPLICIT
+    # docker_validation dispatch (dry-run → push:false, publishes NOTHING). A
+    # plain repair dispatch (docker_validation=false) does NOT run docker: no
+    # existing tag's tree carries Dockerfile.release yet, and image repair is
+    # out of scope (re-tag to rebuild an image). The tag-push path is byte-for-
+    # byte the shipping behavior; the dry-run only flips push→false + skips login.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) }}
     runs-on: ubuntu-latest
     # Job-level permissions REPLACE the workflow default (contents: write) for
     # this job — so re-grant `contents: read` for checkout and ADD
-    # `packages: write` to push to ghcr with the ambient GITHUB_TOKEN.
+    # `packages: write` to push to ghcr with the ambient GITHUB_TOKEN (used only
+    # on the tag-push path; a dry-run never logs in or pushes).
     permissions:
       contents: read
       packages: write
-    env:
-      # Same resolution as every other job: the input on a repair/validation
-      # dispatch, else the pushed tag (never bare GITHUB_REF_NAME, `main` on a
-      # dispatch). This workflow has had ZERO runs — validate this job via
-      # `workflow_dispatch` against an EXISTING tag (e.g. v0.8.0) BEFORE relying
-      # on it for a real tag push.
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - name: Checkout (tags for #391 version derivation)
+      - name: Checkout (the TRIGGERING ref; tags for #391 + :latest gate)
         uses: actions/checkout@v7
         with:
-          # No submodules: the image build COPYs only in-tree paths (cicchetto
-          # is a plain subdir, NOT a submodule; mix.exs/config/lib/priv/infra).
-          # The declared submodules are test-only (vendor/bats-core, and
-          # cicchetto/e2e/infra behind a `git@` SSH URL the ambient
-          # GITHUB_TOKEN cannot fetch) — `recursive` here would only add a
-          # failure surface and slowdown for artifacts the build never reads.
+          # image build COPYs only in-tree paths (cicchetto is a plain subdir);
+          # the declared submodules are test-only, one behind a `git@` SSH URL the
+          # ambient token cannot fetch — `recursive` would only add failure surface.
           submodules: false
-          # Build the TAGGED tree (a dispatch builds the tag, not main).
-          # fetch-depth 0 pulls tags — needed for the tag==@version gate AND the
-          # highest-tag check that gates `:latest`. The image build itself takes
-          # the no-git bare-version path (.git is .dockerignore'd).
-          ref: ${{ env.RELEASE_TAG }}
+          # NO ref override: the default checkout is the ref that TRIGGERED the run
+          # — the pushed TAG on a release, the DISPATCHED BRANCH on a
+          # docker_validation dry-run. THIS is what makes the dry-run EXECUTABLE:
+          # the branch tree carries Dockerfile.release, whereas an existing tag
+          # (cut before this work) does not — the whole reason `ref: <tag>` was
+          # wrong here. fetch-depth 0 pulls tags for the version gate + the
+          # :latest check; the image build takes the no-git bare-version path
+          # (.git is .dockerignore'd).
           fetch-depth: 0
 
-      - name: Verify the tag matches mix.exs @version
-        run: |
-          tag="${RELEASE_TAG#v}"
-          mixv="$(infra/packaging/version.sh)"
-          echo "tag=$tag mix.exs=$mixv"
-          if [ "$tag" != "$mixv" ]; then
-            echo "::error::tag v$tag does not match mix.exs @version $mixv — bump @version before cutting the tag"
-            exit 1
-          fi
-          echo "version=$tag" >> "$GITHUB_OUTPUT"
+      - name: Resolve version (mix.exs @version = SSOT)
         id: ver
+        run: |
+          version="$(infra/packaging/version.sh)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Real release: the pushed tag MUST match mix.exs @version, same gate
+            # as deb/arch/rpm. GITHUB_REF_NAME is the tag on a tag push.
+            tag_ver="${GITHUB_REF_NAME#v}"
+            echo "pushed tag=${tag_ver} mix.exs=${version}"
+            if [ "${tag_ver}" != "${version}" ]; then
+              echo "::error::pushed tag v${tag_ver} does not match mix.exs @version ${version} — bump @version before cutting the tag"
+              exit 1
+            fi
+          else
+            echo "docker_validation dry-run: building ${GITHUB_REF_NAME} @ mix.exs ${version} — push:false, NOTHING will be published"
+          fi
 
-      - name: Resolve the tagged commit (OCI revision label)
+      - name: Resolve the built commit (OCI revision label)
         id: rev
         run: |
-          # `github.sha` is main's HEAD on a workflow_dispatch — resolve the
-          # ACTUAL tagged commit so the revision label is truthful.
+          # The commit actually built (the tag's commit on push, the branch HEAD
+          # on a dry-run) — never github.sha, which is main's HEAD on a dispatch.
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Compute image name + tag list
@@ -505,24 +537,23 @@ jobs:
           # ghcr repositories MUST be lowercase; the owner may not be.
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           name="ghcr.io/${owner}/grappa"
+          version="${{ steps.ver.outputs.version }}"
           echo "name=${name}" >> "$GITHUB_OUTPUT"
 
-          # Always tag the exact version. Tag `:latest` ONLY when THIS tag is the
-          # highest semver in the repo — otherwise a workflow_dispatch
-          # revalidation of an old tag (the documented pre-real-tag smoke) OR a
-          # backport tag push (v0.7.5 after v0.8.0) would silently re-point
-          # `:latest` at an OLDER image. The deb/rpm/arch jobs are immune (they
-          # attach to a tag-keyed Release); only the docker job has a MUTABLE
-          # `:latest`, so it must guard it. `-v:refname` sorts by semver. The
-          # tag list is emitted line-by-line as a multiline output.
+          # :v<version> always; :latest ONLY when v<version> is the highest semver
+          # tag in the repo — a backport tag push (v0.7.5 after v0.8.0) must not
+          # re-point `:latest` at an OLDER image. deb/rpm/arch are immune (they
+          # attach to a tag-keyed Release); only the docker image has a MUTABLE
+          # `:latest`. These tags are USED only when push:true — a dry-run
+          # (push:false) computes but discards them. `-v:refname` sorts by semver.
           highest="$(git tag -l 'v*' --sort=-v:refname | head -1)"
           echo "tags<<TAGS_EOF" >> "$GITHUB_OUTPUT"
-          echo "${name}:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
-          if [ "${RELEASE_TAG}" = "${highest}" ]; then
+          echo "${name}:v${version}" >> "$GITHUB_OUTPUT"
+          if [ "v${version}" = "${highest}" ]; then
             echo "${name}:latest" >> "$GITHUB_OUTPUT"
-            echo "this tag (${RELEASE_TAG}) is the highest — tagging :latest"
+            echo "v${version} is the highest tag — tagging :latest"
           else
-            echo "this tag (${RELEASE_TAG}) is NOT the highest (${highest}) — NOT tagging :latest"
+            echo "v${version} is NOT the highest (${highest}) — NOT tagging :latest"
           fi
           echo "TAGS_EOF" >> "$GITHUB_OUTPUT"
 
@@ -544,13 +575,16 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to ghcr.io
+        # Only on the tag-push (publishing) path — a docker_validation dry-run
+        # never authenticates to the registry, so it CANNOT publish.
+        if: ${{ github.event_name == 'push' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build + push multi-arch release image
+      - name: Build multi-arch release image (push only on a real tag)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -559,10 +593,13 @@ jobs:
           # arm64 builds under QEMU emulation (slow — the gha cache below keeps
           # re-runs cheap).
           platforms: linux/amd64,linux/arm64
-          push: true
-          # `:<tag>` always; `:latest` only when this is the highest tag (see the
-          # "Compute image name + tag list" step — guards a repair/backport from
-          # re-pointing :latest at an older image).
+          # ZERO PUBLICATION on a dry-run: push ONLY on a tag push. A
+          # docker_validation dispatch still builds BOTH arches (proving the
+          # arm64 QEMU path + the ABI-lockstep assertion + cic + mix release) and
+          # then discards them — nothing reaches ghcr, no `:latest` moves.
+          push: ${{ github.event_name == 'push' }}
+          # `:v<version>` always; `:latest` only when highest (see the "Compute
+          # image name + tag list" step). Consumed only when push:true.
           tags: ${{ steps.img.outputs.tags }}
           # OCI labels so the ghcr package page links back to source + the
           # exact tag/commit it was built from.
@@ -585,7 +622,9 @@ jobs:
     # withhold the artifacts that built green: the attach step collects whatever
     # actually downloaded and fails loudly only if NOTHING did. The failed leg
     # stays red on its own, so the run is still marked failed and gets fixed.
-    if: ${{ !cancelled() }}
+    # ALSO skipped on a docker-image dry-run dispatch (its needs are skipped and
+    # there is nothing to publish) — else it would fail "no artifacts present".
+    if: ${{ !cancelled() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation)) }}
     runs-on: ubuntu-latest
     env:
       # The release to attach to — the input on a repair dispatch, else the

@@ -552,24 +552,37 @@ substrate's payload (bring-up + one-liners are unit D).
   runtime; a hot update on the release image swaps beams into
   `lib/grappa-<vsn>/ebin` and fires `Grappa.HotReload` (unit E), never the dev
   reloader.
-- **Tags + labels.** `:<git tag>` + `:latest`, multi-arch `linux/amd64 +
-  linux/arm64` (buildx + QEMU), OCI `source`/`version`/`revision` labels so the
-  ghcr package page links back to the exact commit. Pushed with the ambient
-  `GITHUB_TOKEN` (`packages: write`). The `docker` job is standalone (publishes
-  to the registry itself, not a Release asset) — it is NOT in `publish`'s
-  `needs`.
+- **Tags + labels.** `:v<git tag>` always, plus `:latest` ONLY when that tag is
+  the highest semver in the repo (a backport tag push must not re-point `:latest`
+  at an older image). Multi-arch `linux/amd64 + linux/arm64` (buildx + QEMU), OCI
+  `source`/`version`/`revision` labels so the ghcr package page links back to the
+  exact commit. Pushed with the ambient `GITHUB_TOKEN` (`packages: write`). The
+  `docker` job is standalone (publishes to the registry itself, not a Release
+  asset) — it is NOT in `publish`'s `needs`.
 - **Version.** The image reports the BARE `X.Y.Z` (no `.git` in the build
   context → the `#391` no-git path, like the AUR tarball). `docker inspect`
   shows the image tag; the RUNNING app is the version source of truth.
-- **VALIDATE BEFORE A REAL TAG.** `release.yml` has had ZERO runs. Before
-  relying on the `docker` job for a real tag, trigger it via
-  `workflow_dispatch` against an EXISTING tag (the `tag` input, e.g. `v0.8.0`) —
-  it (re)builds that tag's tree and pushes the image. The arm64 leg is
-  QEMU-emulated on the amd64 runner; a stale QEMU crashes the emulated BEAM JIT
-  at the first `mix` call, so the job pins a recent `tonistiigi/binfmt` via
-  `setup-qemu-action`. If the emulated arm64 leg proves unreliable on CI, the
-  fallback (needs vjt's sign-off — it deviates from the buildx+QEMU decision) is
-  native arm64 runners (`ubuntu-24.04-arm`) + `docker manifest`.
+- **VALIDATE BEFORE A REAL TAG — the zero-publication dry-run.** `release.yml`
+  has had ZERO runs, so validate the `docker` job (the SAME job that ships, not a
+  copy) BEFORE trusting it on a real tag, via the `docker_validation` dispatch:
+
+  ```sh
+  # runs from ANY branch, so it works BEFORE merge; publishes NOTHING
+  gh workflow run release.yml --ref <branch> -f docker_validation=true
+  ```
+
+  It builds `Dockerfile.release` multi-arch from the DISPATCHED ref (the branch —
+  which is why it works pre-merge, when only the branch carries the file) with
+  `push:false` and no registry login: it proves the build (arm64 QEMU + the
+  ABI-lockstep assertion + cic + `mix release`) and pushes nothing, moves no
+  `:latest`. deb/arch/rpm/publish are skipped for this run. The default
+  (`docker_validation=false`) tag-push path is unchanged — it publishes. The
+  arm64 leg is QEMU-emulated on the amd64 runner; a stale QEMU crashes the
+  emulated BEAM JIT at the first `mix` call, so the job pins a recent
+  `tonistiigi/binfmt` via `setup-qemu-action`. If the emulated arm64 leg proves
+  unreliable on CI, the fallback (needs vjt's sign-off — it deviates from the
+  buildx+QEMU decision) is native arm64 runners (`ubuntu-24.04-arm`) +
+  `docker manifest`.
 - **Local build** (validate the Dockerfile without CI):
   `docker buildx build -f Dockerfile.release --load -t grappa-release:test .`
   builds the native arch; add `--platform linux/amd64,linux/arm64` for the

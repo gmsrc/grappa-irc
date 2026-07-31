@@ -24303,9 +24303,28 @@ Decisions:
   `{failed_to_start_child,user,nouser}` — reproduced locally on a stale
   Docker-Desktop binfmt and FIXED by installing a recent `tonistiigi/binfmt`
   (which `docker/setup-qemu-action` does), so the job pins
-  `image: tonistiigi/binfmt:latest`. `release.yml` has had ZERO runs — validate
-  the job via `workflow_dispatch` against an EXISTING tag before a real tag push
-  (its `workflow_dispatch` accepts a `tag` input for exactly this).
+  `image: tonistiigi/binfmt:latest`. On the amd64 runner amd64 builds NATIVE.
+
+- **The `docker` job is validatable by a ZERO-PUBLICATION dry-run that exercises
+  the SAME job, not a copy.** `release.yml` has had ZERO runs, and a
+  release-publishing job that first executes on a real tag is untested at the
+  worst moment. The naive "dispatch against an existing tag" is IMPOSSIBLE: every
+  job checked out `ref: <tag>`, and no existing tag's tree carries
+  `Dockerfile.release` (it postdates them) — the build would fail on a missing
+  file. And `push: true` was unconditional, so a validation run would publish
+  public images (maybe move `:latest`). Fix (a `docker_validation` boolean
+  workflow_dispatch input): the `docker` job checks out the TRIGGERING ref (the
+  pushed tag on a release, the DISPATCHED BRANCH on a dry-run — so it works
+  BEFORE merge, when only the branch has the file), logs in + pushes ONLY on
+  `github.event_name == 'push'`, and on a dry-run runs `push:false` with no
+  registry login — building BOTH arches (proving arm64 QEMU + the ABI assertion +
+  cic + `mix release`) and publishing NOTHING. deb/arch/rpm/publish are `if:`-
+  gated off during a dry-run. A SEPARATE validation workflow was rejected: it
+  would duplicate the build steps and thus validate a COPY, not the shipping job
+  (`#503`'s own no-parallel-implementations rule). **The tag-push path is
+  behaviorally identical** — the default publishes; the dry-run activates only on
+  explicit `docker_validation=true`. Run pre-merge:
+  `gh workflow run release.yml --ref <branch> -f docker_validation=true`.
 
 **Apply:** a NEW runtime dep the app links (a NIF's shared lib, a shelled-out
 CLI) must be added to `Dockerfile.release`'s runtime `apk add` AND kept
