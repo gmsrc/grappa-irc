@@ -136,6 +136,9 @@ const CASES: Array<{ code: string; matches: RegExp; info?: Record<string, unknow
   // Shared transport tokens, REST side (channel side already mapped).
   { code: "invalid_line", matches: /characters that aren't allowed/i },
   { code: "body_too_large", matches: /too long to send/i },
+  // #523 / #518 — a web-reachable write's typed 503 when SQLITE_BUSY exhausts
+  // the BusyRetry budget (FallbackController :db_unavailable, retry-after 1).
+  { code: "db_unavailable", matches: /service is momentarily busy/i },
 ];
 
 describe("friendlyApiError", () => {

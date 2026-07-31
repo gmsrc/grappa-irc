@@ -95,6 +95,12 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
       // never emits that literal wire token, so the dead arm gave silent
       // UX degradation. One arm, one contract.
       return "Login service temporarily unavailable. Please try again.";
+    case "db_unavailable":
+      // #523 / #518 — a web-reachable write exhausted its BusyRetry budget
+      // against a transient SQLITE_BUSY (single-writer contention), so the
+      // FallbackController surfaces a typed 503 (retry-after 1) instead of an
+      // opaque 500 raise. Very short-lived; the client just retries.
+      return "The service is momentarily busy. Please try again.";
     case "captcha_failed":
       return "Captcha challenge failed. Please try again.";
     case "captcha_required":

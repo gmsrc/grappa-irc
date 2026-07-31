@@ -44,6 +44,9 @@ const CASES: Array<{ code: string; matches: RegExp }> = [
   { code: "unknown_topic", matches: /view isn't available/i },
   // #513b — a second /links refused while one is in flight.
   { code: "links_in_flight", matches: /network map request is already loading/i },
+  // #523 / #518 — WS close_query_window under sustained DB busy (sibling of
+  // open_failed); the socket stays open and the user retries.
+  { code: "close_failed", matches: /couldn't close that conversation/i },
 ];
 
 describe("friendlyChannelError", () => {

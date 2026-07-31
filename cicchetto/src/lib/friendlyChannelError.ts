@@ -138,6 +138,14 @@ function friendlyKnown(code: ErrorTokensChannelErrorToken): string {
       // `GrappaChannel.join` / `AdminChannel.join` on an unrecognized topic.
       return "That view isn't available.";
 
+    // ── #523 / #518 — the WS sibling of `open_failed`. `close_query_window`
+    //    couldn't ride out a sustained transient SQLite busy (the DM-window
+    //    delete exhausted its BusyRetry budget → `{:error, :db_unavailable}`
+    //    → the `close_failed` reply). Non-fatal: the socket stays open and the
+    //    user just retries.
+    case "close_failed":
+      return "Couldn't close that conversation. Try again.";
+
     default:
       // Exhaustiveness: adding a token to the generated union without a
       // `case` arm narrows `code` to `never` only when every member is
