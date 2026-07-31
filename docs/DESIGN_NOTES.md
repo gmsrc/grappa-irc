@@ -24431,3 +24431,56 @@ through `Ecto.Migrator.with_repo` (the seeder's `mix ecto.migrate`,
 e2e-only `pool_size` hack. Verified: the faithful repro went from LOCK 15/16 to
 **PASS 16/16** (both pool sizes) with the fix in place. A new migrate/boot path
 that bypasses `with_repo`/repo start would not inherit the pre-init.
+
+## 2026-07-31 — #580: own-send bottom-snap fires at submit, not on POST resolve
+
+**Symptom (field report, intermittent, never reproduced on demand).** "own send
+sometimes does not scroll the list — the bottom-snap is gated on the POST
+resolving, not on the send."
+
+**Root cause.** `cicchetto/src/lib/scrollback.ts` `sendMessage` published its ONLY
+scroll signal, `lastOwnSend`, AFTER `await apiSendMessage(...)`. That single
+signal drove BOTH concerns a send carries, which have DIFFERENT data
+dependencies:
+- **network-DEPENDENT** — the frozen-divider re-latch + the optimistic
+  read-cursor advance, which genuinely need the persisted row `id`; and
+- **network-INDEPENDENT** — the bottom-snap + follow-state reset, which are the
+  operator's response to pressing enter and need nothing from the server.
+
+Binding the snap to the POST produced two "sometimes" failure modes: (1) the POST
+fails/times out while the server ACCEPTED the send — the row still arrives over
+WS and renders, but `setLastOwnSend` (after the throwing await) is never reached,
+so the pane never snaps; (2) the WS echo beats the HTTP response — the ref-keyed
+`<For>` recreates the list DOM and resets `scrollTop`, and the only re-establish
+path at that instant (the length-effect) follows the tail ONLY when `atBottom`,
+so an operator who had paged up stays parked until the POST resolves.
+
+**Fix — split the signal by data dependency (not by event type).** A new
+`ownSendSubmitted` signal (`equals: false`, like `lastOwnSend`) is published
+SYNCHRONOUSLY before the await; `ScrollbackPane`'s `on(ownSendSubmitted, …)`
+effect does the network-independent half (`setMarkerActivationPending(false)` +
+`scrollToBottom()`). `lastOwnSend` stays post-resolve and its effect now does
+ONLY the divider re-latch (`setMarkerCursorId(getReadCursor(...))`), which reads
+the cursor `sendMessage` advanced from the CONFIRMED row id. A rejected send
+never confirms → `lastOwnSend` never fires → the divider is not re-latched, which
+is correct (nothing was persisted to mark read); the snap already happened at
+submit, so the operator is at the bottom to watch the send land or fail.
+
+**Why this is the same "reuse the verbs, not the nouns" shape.** The snap is not
+event-type-branched (#168 forbids that); it stays the single always-bottom
+authority (`scrollToBottom` = scroll + `atBottom=true`, the same one the
+length-effect uses). #580 only moves WHEN the follow-STATE is reset — to submit
+time — so the invariant holds and is in fact strengthened (the snap no longer
+waits on the network at all).
+
+**Preserves** #168 ("send scrolls to bottom UNCONDITIONALLY") and the
+frozen-divider / marker-latch freeze contract (2026-06-08): the re-latch still
+reads the confirmed cursor after the POST, identical ordering to pre-#580.
+
+**Regression class surfaced.** ScrollbackPane reads `ownSendSubmitted` via
+`on(...)` at component CREATION, so EVERY test file that mocks `../lib/scrollback`
+AND renders `ScrollbackPane` (directly or transitively) must export it or
+`on(undefined, …)` throws "deps is not a function" and crashes the render. Two
+such files exist — `ScrollbackPane.test.tsx` and `Shell.test.tsx` (Shell renders
+the pane) — both updated. This is the general rule for any new signal a rendered
+component subscribes to at creation.

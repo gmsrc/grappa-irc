@@ -168,6 +168,12 @@ vi.mock("../lib/scrollback", () => ({
   loadNewer: vi.fn(),
   sendMessage: vi.fn(),
   lastOwnSend: () => null,
+  // #580 — ScrollbackPane (rendered by Shell) now reads this submit-time
+  // send signal via `on(ownSendSubmitted, …)` at component creation; the
+  // mock must export it or `on(undefined, …)` throws "deps is not a function"
+  // and crashes every Shell render test. Static null is enough — Shell tests
+  // don't exercise the send-snap (that's ScrollbackPane.test.tsx + the e2e).
+  ownSendSubmitted: () => null,
 }));
 
 vi.mock("../lib/members", () => ({

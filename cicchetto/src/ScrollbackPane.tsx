@@ -42,6 +42,7 @@ import {
   lastOwnSend,
   loadMore as loadMoreScrollback,
   loadNewer as loadNewerScrollback,
+  ownSendSubmitted,
   refreshScrollback,
   scrollbackByChannel,
 } from "./lib/scrollback";
@@ -2130,37 +2131,56 @@ const ScrollbackPane: Component<Props> = (props) => {
     }),
   );
 
-  // Send-relatch (2026-06-09, vjt: "marker showing + you send → hide
-  // it"). An own send is an explicit caught-up action, so it re-latches
-  // the frozen marker to the now-advanced live cursor — collapsing the
-  // divider immediately instead of waiting for a window-switch. Keyed:
-  // only a send to THIS pane's `(slug, channel)` hides its marker (a
-  // `/msg` elsewhere doesn't). `lastOwnSend` fires ONLY on an own send,
-  // so passive advances (scroll-settle echo, cross-device) stay frozen.
-  // `defer: true` skips the mount run — the key/cold-latch effects own
-  // the mount-time baseline.
+  // #580 — submit-time scroll authority. The bottom-snap + follow-state
+  // reset are the operator's response to pressing enter, NOT a reaction to
+  // the server, so they fire on `ownSendSubmitted` (published SYNCHRONOUSLY
+  // before the POST in scrollback.sendMessage) — the instant enter is
+  // pressed, independent of the network round-trip. This fixes the field
+  // report (#580) where a slow / failed POST left the pane parked while the
+  // WS echo rendered the row: the snap no longer waits on the POST.
   //
-  // #168 — a send ALSO re-enters follow mode unconditionally: even if the
-  // operator had paged UP to re-read, sending snaps the pane back to the
-  // tail so the just-sent line is visible (issue #168 acceptance: "send
-  // scrolls to the bottom unconditionally"). `scrollToBottom` is the same
-  // tail authority the length-effect uses (scroll + atBottom=true); a
-  // pending WS-echo row is then followed by the length-effect. This is NOT
-  // event-type branching — the send resets the follow-STATE and the single
-  // always-bottom authority does the scrolling.
+  // #168 — a send re-enters follow mode UNCONDITIONALLY: even if the operator
+  // had paged UP to re-read, sending snaps the pane back to the tail so the
+  // just-sent line is visible ("send scrolls to the bottom unconditionally").
+  // Clear the marker-activation latch FIRST so the length-effect's re-assert
+  // can't fight the snap, THEN snap. `scrollToBottom` is the same tail
+  // authority the length-effect uses (scroll + atBottom=true); the WS-echo
+  // row that lands later is then followed by the length-effect. NOT event-type
+  // branching — the send resets the follow-STATE and the single always-bottom
+  // authority does the scrolling. Keyed: only a send to THIS pane's
+  // `(slug, channel)` (a `/msg` elsewhere doesn't). `defer: true` skips the
+  // mount run — the key/cold-latch effects own the mount-time baseline.
+  createEffect(
+    on(
+      ownSendSubmitted,
+      (sent) => {
+        if (sent !== key()) return;
+        setMarkerActivationPending(false);
+        scrollToBottom();
+      },
+      { defer: true },
+    ),
+  );
+
+  // Send-relatch (2026-06-09, vjt: "marker showing + you send → hide it").
+  // An own send is an explicit caught-up action, so it re-latches the frozen
+  // marker to the now-advanced live cursor — collapsing the `── XX unread ──`
+  // divider immediately instead of waiting for a window-switch. #580 split the
+  // network-independent snap (submit-time, above) from this divider re-latch:
+  // the re-latch reads the cursor `sendMessage` advanced from the CONFIRMED
+  // row id, so it stays on `lastOwnSend` (fired AFTER the POST resolves). A
+  // rejected send never confirms → `lastOwnSend` never fires → the divider
+  // stays put, which is correct (nothing was persisted to mark read). Keyed:
+  // only a send to THIS pane's `(slug, channel)` hides its marker (a `/msg`
+  // elsewhere doesn't); passive advances (scroll-settle echo, cross-device)
+  // stay frozen. `defer: true` skips the mount run — the key/cold-latch
+  // effects own the mount-time baseline.
   createEffect(
     on(
       lastOwnSend,
       (sent) => {
         if (sent !== key()) return;
-        // An own send ends the activation: clear the marker latch FIRST so the
-        // length-effect's re-assert can't fight the bottom snap, then re-latch
-        // the frozen divider to the now-advanced cursor (collapse it) and snap
-        // to the tail. Post-send stays unconditionally at the BOTTOM (#168 gate
-        // — do NOT re-open the send-jump).
-        setMarkerActivationPending(false);
         setMarkerCursorId(getReadCursor(props.networkSlug, props.channelName));
-        scrollToBottom();
       },
       { defer: true },
     ),

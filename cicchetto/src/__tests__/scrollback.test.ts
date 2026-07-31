@@ -453,6 +453,120 @@ describe("scrollback verbs", () => {
     dispose();
   });
 
+  // #580 — split the send's TWO scroll concerns. The bottom-snap +
+  // follow-state reset are the response to the operator pressing enter and
+  // do NOT need the server; the divider re-latch + cursor advance DO (they
+  // need the persisted row id). Pre-#580 both hung off `lastOwnSend`, fired
+  // ONLY after the POST resolved, so a slow/failed POST left the pane parked
+  // while the WS echo rendered the row ("own send sometimes doesn't scroll").
+  // `ownSendSubmitted` is the new submit-time producer: fired SYNCHRONOUSLY
+  // before the await, it drives the network-independent snap. `lastOwnSend`
+  // stays post-resolve for the parts that legitimately need the row id.
+  it("ownSendSubmitted fires synchronously before the POST resolves (#580)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    // A POST that stays pending across the assertion window: proves the
+    // submit-time signal does not wait on the network round-trip.
+    let resolvePost: ((v: ScrollbackMessage) => void) | null = null;
+    vi.mocked(api.sendMessage).mockImplementation(
+      () =>
+        new Promise<ScrollbackMessage>((res) => {
+          resolvePost = res;
+        }),
+    );
+    const scrollback = await import("../lib/scrollback");
+    const key = channelKey("freenode", "#grappa");
+    expect(scrollback.ownSendSubmitted()).toBeNull();
+
+    // Fire WITHOUT awaiting — the POST is still in flight.
+    const pending = scrollback.sendMessage("freenode", "#grappa", "hi");
+    // The submit-time snap authority is already published; the post-resolve
+    // `lastOwnSend` (divider re-latch) has NOT fired yet.
+    expect(scrollback.ownSendSubmitted()).toBe(key);
+    expect(scrollback.lastOwnSend()).toBeNull();
+
+    // Settle the pending POST so the promise resolves cleanly.
+    if (!resolvePost) throw new Error("resolvePost never bound");
+    (resolvePost as (v: ScrollbackMessage) => void)({
+      id: 1,
+      network: "freenode",
+      channel: "#grappa",
+      server_time: 0,
+      kind: "privmsg",
+      sender: "alice",
+      body: "hi",
+      meta: {},
+    });
+    await pending;
+  });
+
+  // #580 case 1 — the server accepted the send but the client's POST
+  // failed/timed out. The row still arrives over WS and renders; the operator
+  // must be snapped to the bottom to watch it (whether it lands or fails).
+  // `ownSendSubmitted` fired at submit time so the snap is unaffected;
+  // `lastOwnSend` (post-resolve divider re-latch + cursor advance) is
+  // correctly SKIPPED — the send never confirmed, so nothing re-latches.
+  it("ownSendSubmitted fires even when the POST rejects; lastOwnSend does not (#580 case 1)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.sendMessage).mockRejectedValue(new Error("network down"));
+    const scrollback = await import("../lib/scrollback");
+    const key = channelKey("freenode", "#grappa");
+
+    await expect(scrollback.sendMessage("freenode", "#grappa", "hi")).rejects.toThrow(
+      "network down",
+    );
+
+    expect(scrollback.ownSendSubmitted()).toBe(key);
+    expect(scrollback.lastOwnSend()).toBeNull();
+  });
+
+  it("ownSendSubmitted does not fire without a token (#580)", async () => {
+    // No grappa-token → token() returns null → the whole send short-circuits
+    // before it can publish the submit-time signal.
+    const scrollback = await import("../lib/scrollback");
+    await scrollback.sendMessage("freenode", "#grappa", "ignored");
+    expect(scrollback.ownSendSubmitted()).toBeNull();
+  });
+
+  // `ownSendSubmitted` is an EVENT signal (`equals: false`) exactly like
+  // `lastOwnSend`: two sends to the SAME channel write the same key string,
+  // and the snap must re-fire on the second (operator paged up between sends
+  // → each enter must re-snap). Object.is dedup would drop the repeat.
+  it("ownSendSubmitted notifies on EVERY send, even repeats to the same channel (#580)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    const row = (id: number): ScrollbackMessage => ({
+      id,
+      network: "freenode",
+      channel: "#grappa",
+      server_time: 0,
+      kind: "privmsg",
+      sender: "vjt",
+      body: "x",
+      meta: {},
+    });
+    vi.mocked(api.sendMessage).mockResolvedValueOnce(row(100)).mockResolvedValueOnce(row(101));
+    mockGetReadCursor.mockReturnValue(50);
+    const scrollback = await import("../lib/scrollback");
+
+    let fires = 0;
+    const dispose = createRoot((d) => {
+      createEffect(on(scrollback.ownSendSubmitted, () => void fires++, { defer: true }));
+      return d;
+    });
+
+    await scrollback.sendMessage("freenode", "#grappa", "one");
+    await new Promise((r) => queueMicrotask(() => r(undefined)));
+    expect(fires).toBe(1);
+
+    await scrollback.sendMessage("freenode", "#grappa", "two");
+    await new Promise((r) => queueMicrotask(() => r(undefined)));
+    expect(fires).toBe(2);
+
+    dispose();
+  });
+
   it("appendToScrollback dedupes by id (first wins)", async () => {
     localStorage.setItem("grappa-token", "tok");
     const scrollback = await import("../lib/scrollback");

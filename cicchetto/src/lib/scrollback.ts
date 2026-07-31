@@ -174,10 +174,27 @@ const exports = identityScopedStore((onIdentityChange) => {
     equals: false,
   });
 
-  // Identity-transition cleanup. Seven registered resets fired by the
+  // #580 — submit-time send signal. `lastOwnSend` above fires only AFTER
+  // the POST resolves, and it drove BOTH the network-dependent work (divider
+  // re-latch + cursor advance, which genuinely need the persisted row id) AND
+  // the network-INDEPENDENT bottom-snap + follow-state reset (the response to
+  // the operator pressing enter). Binding the snap to the POST meant a slow /
+  // failed round-trip left the pane parked while the WS echo rendered the row
+  // ("own send sometimes doesn't scroll"). This signal is set SYNCHRONOUSLY at
+  // submit time — before the await — so ScrollbackPane snaps to the bottom the
+  // instant enter is pressed, independent of the network outcome (which is
+  // also correct when the send FAILS: you want to be at the bottom to watch
+  // it). `equals: false` for the same reason as `lastOwnSend` — a repeat send
+  // to the same channel must re-fire the snap.
+  const [ownSendSubmitted, setOwnSendSubmitted] = createSignal<ChannelKey | null>(null, {
+    equals: false,
+  });
+
+  // Identity-transition cleanup. Eight registered resets fired by the
   // factory's createEffect(on(token, ...)) — five Set.clear() (loadedChannels
   // + loadMore{InFlight,Exhausted} + loadNewer{InFlight,Exhausted}, #161) +
-  // two signal flushes. Order matches the pre-A3 inline shape.
+  // three signal flushes (scrollbackByChannel + lastOwnSend + ownSendSubmitted,
+  // #580). Order matches the pre-A3 inline shape.
   onIdentityChange(() => loadedChannels.clear());
   onIdentityChange(() => loadMoreInFlight.clear());
   onIdentityChange(() => loadMoreExhausted.clear());
@@ -185,6 +202,7 @@ const exports = identityScopedStore((onIdentityChange) => {
   onIdentityChange(() => loadNewerExhausted.clear());
   onIdentityChange(() => setScrollbackByChannel({}));
   onIdentityChange(() => setLastOwnSend(null));
+  onIdentityChange(() => setOwnSendSubmitted(null));
 
   // Insert an incoming message into the per-channel ascending list at its
   // (server_time, id) position, deduping by id. REST + WS can overlap: the
@@ -481,6 +499,16 @@ const exports = identityScopedStore((onIdentityChange) => {
   const sendMessage = async (slug: string, name: string, body: string): Promise<void> => {
     const t = token();
     if (!t) return;
+    const key = channelKey(slug, name);
+    // #580 — publish the submit-time snap authority SYNCHRONOUSLY, before the
+    // POST. This is the response to the operator pressing enter (bottom-snap +
+    // follow-state reset in ScrollbackPane) and must not wait on — or be lost
+    // to — the network round-trip. It fires even if `apiSendMessage` below
+    // rejects: the row can still arrive over WS, and the operator wants to be
+    // at the bottom to watch the send land or fail. The network-DEPENDENT
+    // half (divider re-latch + cursor advance) stays on `lastOwnSend` after
+    // the await, gated on the persisted row id.
+    setOwnSendSubmitted(key);
     // Server persists+broadcasts atomically — the WS push will deliver
     // the same row to this socket and `appendToScrollback` will display
     // it. The 201 body is the same persisted row; we keep ONLY its `id`
@@ -509,7 +537,6 @@ const exports = identityScopedStore((onIdentityChange) => {
     // is cheaper than hoisting `setCursorIfAdvances` to a leaf module
     // for a single second caller.
     const row = await apiSendMessage(t, slug, name, body);
-    const key = channelKey(slug, name);
     // Anti-poison gate (issue #50 / m6, 2026-06-09): only advance the
     // cursor when the local pane already holds a rendered row. Advancing
     // PAST an unrendered row poisons `refreshScrollback`'s resume cursor —
@@ -527,10 +554,13 @@ const exports = identityScopedStore((onIdentityChange) => {
     if (hasRenderedRow && (current === null || row.id > current)) {
       void setReadCursor(t, slug, name, row.id);
     }
-    // Send-relatch: fire AFTER the optimistic cursor advance above so the
-    // pane's hide-on-send effect reads the fresh cursor. Always fires on
-    // a successful send (even when the POST was skipped) — the marker
-    // must hide regardless.
+    // Send-relatch (post-resolve half): fire AFTER the optimistic cursor
+    // advance above so the pane's marker re-latch effect reads the fresh
+    // cursor and collapses the `── XX unread ──` divider. #580 moved the
+    // network-independent bottom-snap to `ownSendSubmitted` (submit time);
+    // this signal now drives ONLY the divider re-latch, which legitimately
+    // needs the confirmed row id. Reached only on a resolved POST — a
+    // rejected send never confirms, so it correctly does not re-latch.
     setLastOwnSend(key);
   };
 
@@ -720,6 +750,7 @@ const exports = identityScopedStore((onIdentityChange) => {
     refreshScrollback,
     sendMessage,
     lastOwnSend,
+    ownSendSubmitted,
     wasLoaded,
   };
 });
@@ -734,4 +765,5 @@ export const renameScrollbackKey = exports.renameScrollbackKey;
 export const refreshScrollback = exports.refreshScrollback;
 export const sendMessage = exports.sendMessage;
 export const lastOwnSend = exports.lastOwnSend;
+export const ownSendSubmitted = exports.ownSendSubmitted;
 export const wasLoaded = exports.wasLoaded;

@@ -78,6 +78,13 @@ vi.mock("../lib/documentVisibility", () => ({
 // would otherwise drop it and the marker wouldn't re-hide).
 const [ownSend, setOwnSend] = createSignal<string | null>(null, { equals: false });
 const pushOwnSend = (key: string) => setOwnSend(key);
+// #580 — the submit-time send signal (published SYNCHRONOUSLY before the POST
+// in production). ScrollbackPane reads it to snap to the bottom + reset the
+// follow-state the instant enter is pressed, independent of the network. The
+// divider re-latch stays on `lastOwnSend` (post-resolve). Signal-backed
+// stand-in; `pushOwnSendSubmitted` is the test verb that fires a submit.
+const [ownSubmitted, setOwnSubmitted] = createSignal<string | null>(null, { equals: false });
+const pushOwnSendSubmitted = (key: string) => setOwnSubmitted(key);
 vi.mock("../lib/scrollback", () => ({
   scrollbackByChannel: () => scrollback(),
   // BUGHUNT-2 B5: ScrollbackPane's onScroll calls `loadMore` when
@@ -97,6 +104,7 @@ vi.mock("../lib/scrollback", () => ({
   // assert scroll/marker behavior, not the REST catch-up).
   refreshScrollback: vi.fn(() => Promise.resolve()),
   lastOwnSend: () => ownSend(),
+  ownSendSubmitted: () => ownSubmitted(),
 }));
 
 vi.mock("../lib/networks", () => ({
@@ -1567,6 +1575,47 @@ describe("ScrollbackPane", () => {
       pushOwnSend("freenode #grappa");
 
       // Divider collapses on the next flush — NO window-switch needed.
+      await waitFor(() => {
+        expect(screen.queryByTestId("unread-marker")).toBeNull();
+      });
+    });
+
+    // #580 — the divider re-latch must stay bound to the CONFIRMED cursor
+    // (post-POST `lastOwnSend`), NOT the submit-time snap signal. Model the
+    // production timing: enter is pressed (submit fires) and the POST later
+    // resolves + advances the LIVE cursor, but the frozen divider must not
+    // move on the submit signal — else a send would clear the "unread" marker
+    // reading a cursor before its own row was confirmed. This guards against
+    // re-coupling the two concerns #580 deliberately split.
+    it("submit-time signal does NOT re-latch the divider; only lastOwnSend does (#580 split)", async () => {
+      const proto = fixture[0];
+      if (!proto) throw new Error("fixture[0] missing");
+      const fourUnread: ScrollbackMessage[] = [
+        { ...proto, id: 10, server_time: 100, sender: "alice", body: "u1" },
+        { ...proto, id: 11, server_time: 101, sender: "alice", body: "u2" },
+        { ...proto, id: 12, server_time: 102, sender: "alice", body: "u3" },
+        { ...proto, id: 13, server_time: 103, sender: "alice", body: "u4" },
+      ];
+      setUserNick("vjt");
+      seedReadCursor("freenode", "#grappa", 9);
+      setScrollback({ "freenode #grappa": fourUnread });
+      setDocVisible(true);
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      expect(screen.getByTestId("unread-marker")).toHaveTextContent("4 unread");
+
+      // The POST resolves and advances the LIVE cursor to the sent row (13).
+      // The frozen divider (markerCursorId, latched at mount to 9) must NOT
+      // move on the submit-time signal — that signal owns only the network-
+      // independent snap. If the re-latch were (wrongly) coupled to submit,
+      // the divider would collapse here reading the advanced cursor.
+      seedReadCursor("freenode", "#grappa", 13);
+      pushOwnSendSubmitted("freenode #grappa");
+      await new Promise((r) => queueMicrotask(() => r(undefined)));
+      expect(screen.getByTestId("unread-marker")).toHaveTextContent("4 unread");
+
+      // Only the post-resolve `lastOwnSend` re-latches the divider to the
+      // confirmed cursor → it collapses.
+      pushOwnSend("freenode #grappa");
       await waitFor(() => {
         expect(screen.queryByTestId("unread-marker")).toBeNull();
       });
