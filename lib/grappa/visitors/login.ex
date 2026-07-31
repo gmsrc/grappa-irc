@@ -559,32 +559,41 @@ defmodule Grappa.Visitors.Login do
   end
 
   defp preempt_and_respawn(visitor, network, input, timeouts) do
-    :ok = Accounts.revoke_sessions_for_visitor(visitor.id)
-    :ok = Visitors.purge_if_anon(visitor.id)
-    :ok = Session.stop_session({:visitor, visitor.id}, network.id, "session replaced")
-    :ok = Backoff.reset({:visitor, visitor.id}, network.id)
+    # #523/#518 — a busy on the session revoke degrades to :db_unavailable → a
+    # clean 503 at the re-login door (was a `:ok =` MatchError crash). The
+    # purge / stop_session / backoff-reset that follow keep their `:ok =`
+    # contract (best-effort cleanup / non-DB), so only the revoke gates the
+    # flow on DB saturation.
+    with :ok <- Accounts.revoke_sessions_for_visitor(visitor.id) do
+      :ok = Visitors.purge_if_anon(visitor.id)
+      :ok = Session.stop_session({:visitor, visitor.id}, network.id, "session replaced")
+      :ok = Backoff.reset({:visitor, visitor.id}, network.id)
 
-    # Registered visitors keep their row-resolved `:nickserv_identify`
-    # plan (password from the EncryptedBinary roundtrip) — pass `nil` for
-    # the login-form password so `SessionPlan.with_login_identify/2`
-    # no-ops and the resolved plan stays intact.
-    with {:ok, _} <- spawn_and_await(visitor, network, nil, timeouts) do
-      :ok = NetworkCircuit.record_success(network.id)
-      # #211 phase 6 — reconcile the anchor credential to :connected. A
-      # registered visitor who PARKED this network then re-logs in lands a
-      # live session via the raw spawn above (which doesn't touch
-      # connection_state); leaving the DB row :parked would desync the
-      # /networks view AND let the next reboot's Bootstrap parked-skip
-      # silently drop the session. Logging in via the anchor IS "bring me
-      # back on". Idempotent on an already-:connected row.
-      :ok = Visitors.mark_anchor_connected(visitor, network.id)
-      issue_token(visitor, input)
+      # Registered visitors keep their row-resolved `:nickserv_identify`
+      # plan (password from the EncryptedBinary roundtrip) — pass `nil` for
+      # the login-form password so `SessionPlan.with_login_identify/2`
+      # no-ops and the resolved plan stays intact.
+      with {:ok, _} <- spawn_and_await(visitor, network, nil, timeouts) do
+        :ok = NetworkCircuit.record_success(network.id)
+        # #211 phase 6 — reconcile the anchor credential to :connected. A
+        # registered visitor who PARKED this network then re-logs in lands a
+        # live session via the raw spawn above (which doesn't touch
+        # connection_state); leaving the DB row :parked would desync the
+        # /networks view AND let the next reboot's Bootstrap parked-skip
+        # silently drop the session. Logging in via the anchor IS "bring me
+        # back on". Idempotent on an already-:connected row.
+        :ok = Visitors.mark_anchor_connected(visitor, network.id)
+        issue_token(visitor, input)
+      end
     end
   end
 
   defp rotate_token(visitor, input) do
-    :ok = Accounts.revoke_sessions_for_visitor(visitor.id)
-    issue_token(visitor, input)
+    # #523/#518 — a busy on the revoke degrades to :db_unavailable → 503 at the
+    # /auth/login door, instead of a `:ok =` MatchError crash.
+    with :ok <- Accounts.revoke_sessions_for_visitor(visitor.id) do
+      issue_token(visitor, input)
+    end
   end
 
   defp spawn_and_await(visitor, network, login_password, timeouts) do

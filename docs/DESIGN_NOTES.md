@@ -24851,6 +24851,20 @@ emitted from `lib/grappa_web/**` but undeclared fails the suite. (The REST
 `db_unavailable` is ROOT A core's `FallbackController` mapping — emitted since
 the engine landed, but undeclared until B1's full-suite run surfaced the drift.)
 
+**Follow-up (revoke IN as 503; purge/destroy stays #590).**
+`Accounts.revoke_sessions_for_visitor/1` — the bulk session-revoke on the
+/auth/login re-login doors (`preempt_and_respawn` + `rotate_token`) — is wrapped
+→ 503: its `:ok =` call sites would MatchError-*crash* on any non-`:ok`, so a
+busy there is a crash, not even a 500. By contrast `Visitors.purge_if_anon/1`
+and its `destroy_visitor/1` mechanic stay OUT (#590): the SAME hard-delete
+mechanic is the shared reap/admin choke point reached from the background
+`Visitors.Reaper` (via `delete/1`), which has no HTTP response to 503; and the
+web callers (logout, login cleanup) are co-terminus cleanup with a TTL + Reaper
+backstop, so a dropped purge self-heals on the next sweep rather than failing
+the request. Classification is by CALLER, not by "is it a write": a delete
+reachable from a background sweeper is #590 no matter which web door also calls
+it. Its #590 best-effort-DROP hardening is tracked separately.
+
 **Known pre-existing edge (not changed here).** The one-shot share token is
 `mark_consumed` BEFORE the session mint, so a saturated mint burns the token —
 a property of the consume-before-mint order that predates B1. The retryable-later

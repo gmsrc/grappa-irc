@@ -496,20 +496,32 @@ defmodule Grappa.Accounts do
   zero prior sessions stays distinguishable from one whose sessions
   were all already revoked.
   """
-  @spec revoke_sessions_for_visitor(Ecto.UUID.t()) :: :ok
+  @spec revoke_sessions_for_visitor(Ecto.UUID.t()) :: :ok | {:error, :db_unavailable}
   def revoke_sessions_for_visitor(visitor_id) when is_binary(visitor_id) do
     query =
       from(s in Session, where: s.visitor_id == ^visitor_id and is_nil(s.revoked_at))
 
-    {affected, _} = Repo.update_all(query, set: [revoked_at: DateTime.utc_now()])
+    # #523/#518 — ride out a transient SQLITE_BUSY on the bulk revoke; sustained
+    # saturation degrades to {:error, :db_unavailable} → a clean 503 at the
+    # /auth/login re-login door (preempt/rotate) instead of the MatchError-crash
+    # the `:ok =` call sites would raise. A single idempotent UPDATE (a re-run
+    # re-matches `is_nil(revoked_at)`, so the now-already-revoked rows set to
+    # zero), so a retried statement is safe.
+    case Repo.BusyRetry.run(fn ->
+           {:ok, Repo.update_all(query, set: [revoked_at: DateTime.utc_now()])}
+         end) do
+      {:ok, {affected, _}} ->
+        Logger.info(
+          "visitor sessions revoked",
+          visitor_id: visitor_id,
+          affected: affected
+        )
 
-    Logger.info(
-      "visitor sessions revoked",
-      visitor_id: visitor_id,
-      affected: affected
-    )
+        :ok
 
-    :ok
+      {:error, :db_unavailable} = err ->
+        err
+    end
   end
 
   @doc """
