@@ -217,7 +217,7 @@ in (`^U` when the chat has the keys, `↑↓` when the list does).
 | key | does |
 |---|---|
 | `Ctrl-U` | give the arrows to the userlist, or take them back |
-| right-click a name | query, whois, or type the nick |
+| right-click a name | query, whois, ping, block — plus kick/ban where you hold `@` — or type the nick |
 | `Ctrl-Shift-Up` / `Ctrl-Shift-Down` | scroll it without changing mode |
 | `Shift-PgUp` / `Shift-PgDn` | the same, by ten |
 | wheel over the list | scrolls it |
@@ -259,12 +259,19 @@ picking a different message replaces the citation instead of stacking a second
 one in front of the first.
 
 Right-click works on a **name in the userlist** too, where the menu offers what
-a person can do rather than what a message can: open a query, whois them, or
-type their nick into the input. Replying is offered only on a message, since it
-quotes what was said.
+a person can do rather than what a message can: open a query, whois them, ping
+them, block them, or type their nick into the input. Replying is offered only
+on a message, since it quotes what was said.
 
-Right-click needs mouse reporting, which is on by default; `Ctrl-R` works
-either way.
+**Kick**, **Ban** and **Kick and ban** appear only where they would work: in a
+channel, and only while you hold `@` there. The client reads that off the
+roster the server sent, so the menu never offers an action the server would
+answer with 482.
+
+The menu takes the mouse: the pointer highlights what it is over, a click
+chooses it, the wheel walks the list, and a click anywhere outside the box
+closes it — the same as Esc. Right-click needs mouse reporting, which is on by
+default; `Ctrl-R` works either way.
 
 ## Tests
 
@@ -391,6 +398,15 @@ Media link previews:
   `/unban` `/banlist` `/invite` `/mode [#chan] +modes [params]`
 - **Server info** — `/whois` `/whowas` `/who` `/names` `/lusers` `/links`
   `/motd` `/info` `/version` `/stats [query]` `/rehash [opt]`
+
+  Their answers land in the window you asked from, and stay filed there: switch
+  away and they do not follow you, switch back and they are still there.
+- **People** — `/ping <nick>` CTCP-pings somebody and times the round trip.
+  `/block [nick]` (`/ignore`) hides somebody's messages **in this client
+  only** — nothing is sent to the server, they keep talking, grappa keeps
+  storing it, and the PWA on your phone keeps showing it. Bare `/block` lists
+  who is blocked; `/unblock <nick>` (`/unignore`) lifts it. The list lives in
+  `~/.local/share/shottino/blocked` and survives a restart.
 - **Watching** — `/notify [nick…|del nick|list]` watches *people*;
   `/hilight <pattern>` and `/dehilight <pattern>` watch *words*. Different
   lists, despite the shared irssi heritage.
@@ -433,6 +449,18 @@ means the budget was exceeded — the bottom of the buffer got clipped.
 The log is written only when the variable is set.
 
 ## Window state
+
+A window is identified by its **folded** name, so `#Chan`, `#chan` and `#CHAN`
+are one window and not three — as are `Alice` and `alice`. The fold is the
+ircd's: ASCII, `A-Z` only, which leaves `[ ] \ ~` alone (bahamut advertises
+`CASEMAPPING=ascii`, so `foo[1]` and `foo{1}` are two different people, and
+`#CAFÉ` is not `#café`). The window keeps whatever spelling it was first
+opened with; only the matching folds.
+
+Traffic addressed to the network's own name — azzurra's ircd sends its global
+notices from a source spelled `AzzuRRa` — is the server talking, and lands in
+that network's `$server` window rather than opening a tab named after the
+network.
 
 Windows mirror the server's state machine and shottino never originates a
 transition. A non-joined window is greyed with a marker — `.` joining, `?`
