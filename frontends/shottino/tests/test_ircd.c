@@ -162,11 +162,15 @@ TEST(a_body_cannot_become_a_second_protocol_line) {
 }
 
 TEST(names_fold_the_way_the_ircd_folds_them) {
-    /* bahamut's rfc1459: A-Z plus the four bracket characters. */
+    /* CASEMAPPING=ascii: A-Z, and nothing else. bahamut advertises it
+     * and implements it, so the four rfc1459 bracket characters are
+     * ORDINARY here — this suite used to assert the opposite, which is
+     * the same over-fold grappa corrected server-side in #525. */
     CHECK(ircd_name_equal("#Chan", "#chan"));
-    CHECK(ircd_name_equal("#chan[1]", "#chan{1}"));
-    CHECK(ircd_name_equal("nick\\away", "nick|away"));
-    CHECK(ircd_name_equal("A~b", "a^B"));
+    CHECK(!ircd_name_equal("#chan[1]", "#chan{1}"));
+    CHECK(!ircd_name_equal("nick\\away", "nick|away"));
+    CHECK(!ircd_name_equal("A~b", "a^B"));
+    CHECK(ircd_name_equal("A~B", "a~b"));
     CHECK(!ircd_name_equal("#chan", "#chan2"));
     /* ASCII only: those are two different rooms on that server, and
      * merging them here would put two conversations in one window. */

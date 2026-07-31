@@ -31,7 +31,7 @@ OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o ircd.
 # reaches, which is the drawing primitives and nothing else. Do not trust
 # this net for changes elsewhere in that file; add a test or reason about
 # the path by hand.
-TESTS := tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_layout tests/test_keys tests/test_ircd tests/test_commands
+TESTS := tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_layout tests/test_keys tests/test_ircd tests/test_commands tests/test_windows
 SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O1 -g $(SANITIZE)
 
@@ -97,6 +97,12 @@ tests/test_ircd: tests/test_ircd.c tests/test.h shottino.c json.c wire.c alias.c
 # only honest source for "what the dispatcher accepts" is the dispatcher.
 tests/test_commands: tests/test_commands.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_commands.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS)
+
+# test_windows drives the app's own window bookkeeping — no screen, no
+# socket, just state — because "which window does this name mean" is the
+# question every other bug in the sidebar has turned out to be.
+tests/test_windows: tests/test_windows.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_windows.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS)
 
 tests/test_keys: tests/test_keys.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_keys.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c $(LDLIBS) -lutil

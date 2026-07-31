@@ -131,15 +131,22 @@ void ircd_split_pass(const char *pass, char *network, size_t network_sz, char *s
     snprintf(secret, secret_sz, "%s", colon + 1);
 }
 
+/* The casemapping every IRC name in this client is compared under.
+ *
+ * ASCII: `A-Z` and nothing else. It used to also fold `[ ] \ ~` to
+ * `{ } | ^`, which is RFC1459 and is NOT what the ircd does — bahamut
+ * (azzurra) advertises AND implements `CASEMAPPING=ascii`, so `foo[1]`
+ * and `foo{1}` are two DIFFERENT people and `#chan[1]` two different
+ * channels. Folding them together merged a stranger into your nicklist
+ * (grappa's #525, corrected server-side in
+ * `Grappa.IRC.Identifier.canonical_nick/1`); this is the client twin of
+ * that fix, and the ONE fold the whole binary uses — the app's window
+ * lookups call it through `irc_name_eq`.
+ *
+ * Bytes above 127 are left alone deliberately: the ircd keeps `#CAFÉ`
+ * and `#café` apart, and a locale-aware tolower would not. */
 static char fold_char(char c) {
-    if (c >= 'A' && c <= 'Z') return (char)(c - 'A' + 'a');
-    switch (c) {
-    case '[': return '{';
-    case ']': return '}';
-    case '\\': return '|';
-    case '~': return '^';
-    default: return c;
-    }
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
 }
 
 void ircd_fold(const char *in, char *out, size_t out_sz) {

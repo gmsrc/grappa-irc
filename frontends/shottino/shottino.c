@@ -767,6 +767,57 @@ static void log_line(struct app *app, const char *fmt, ...) __attribute__((forma
 static void log_line_mention(struct app *app, bool mention, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 static size_t focused_window_locked(struct app *app);
 
+/* ── IRC identifier casemapping ────────────────────────────────────────
+ *
+ * IRC names are case-INSENSITIVE, so `#Chan` and `#chan`, `AzzuRRa` and
+ * `azzurra` are ONE window and not two. This client compared them with
+ * strcmp everywhere, which is why the same channel opened twice and why
+ * a message spelled differently from its window landed in neither.
+ *
+ * The fold itself is `ircd_fold` / `ircd_name_equal` in ircd.c, and it
+ * is ASCII-ONLY — see `fold_char` there for why `[ ] \ ~` are ordinary
+ * characters and why bytes above 127 are left alone. ONE fold in this
+ * binary: the bridge and the app agreeing on what a name IS is the
+ * point, and a second implementation here is what would drift.
+ * Server-side twin: `Grappa.IRC.Identifier.canonical_nick/1` and
+ * `canonical_channel/1` (CLAUDE.md, #525).
+ *
+ * strcasecmp is NOT this function: under a non-C locale it folds bytes
+ * above 127 as well, which would merge exactly the pairs the ircd keeps
+ * apart. */
+static bool irc_name_eq(const char *a, const char *b) {
+    return ircd_name_equal(a, b);
+}
+
+/* The canonical key a log row is filed under, "[network/channel]".
+ *
+ * FOLDED at the one door, so every later comparison is a plain strcmp
+ * that cannot forget to fold — the same "canonical storage + `==`"
+ * shape the server uses for its channel-keyed tables. The key is
+ * internal bookkeeping; what the row DISPLAYS keeps the case it
+ * arrived with (the prefix is stripped before drawing anyway). */
+static void window_scope_key(const char *network, const char *channel, char *out, size_t out_sz) {
+    char net[MAX_SLUG], chan[MAX_CHANNEL];
+    ircd_fold(network, net, sizeof(net));
+    ircd_fold(channel, chan, sizeof(chan));
+    snprintf(out, out_sz, "[%s/%s]", net, chan);
+}
+
+/* Is this window the one named by (network, channel)? Every window
+ * lookup in the client goes through here, so a new one cannot forget
+ * the fold and quietly open a second `#Chan` beside `#chan`. */
+static bool window_matches(const struct window *w, const char *network, const char *channel) {
+    return irc_name_eq(w->network, network) && irc_name_eq(w->channel, channel);
+}
+
+/* The synthetic per-network window server replies land in. A name, not a
+ * spelling: compared folded like every other IRC identifier. */
+#define SERVER_WINDOW "$server"
+
+static bool is_server_window(const char *channel) {
+    return irc_name_eq(channel, SERVER_WINDOW);
+}
+
 /* ── The log ring ──────────────────────────────────────────────────────
  *
  * One text array and five parallel ones: mention, pending-echo, server
@@ -817,9 +868,13 @@ static void log_scope_of_locked(struct app *app, const char *line, char *out, si
     if (line[0] == '[') {
         const char *close = strchr(line, ']');
         size_t n = close ? (size_t)(close - line) + 1 : 0;
-        if (n && n < out_sz) {
-            memcpy(out, line, n);
-            out[n] = 0;
+        char raw[MAX_SLUG + MAX_CHANNEL + 8];
+        if (n && n < out_sz && n < sizeof(raw)) {
+            /* FOLDED on the way in, so a row that says `[azzurra/#Chan]`
+             * files under the same key as its `#chan` window. */
+            memcpy(raw, line, n);
+            raw[n] = 0;
+            ircd_fold(raw, out, out_sz);
             return;
         }
     }
@@ -830,7 +885,7 @@ static void log_scope_of_locked(struct app *app, const char *line, char *out, si
          * not an overlapping copy. */
         const struct window *w = &app->windows[cur];
         char scope[MAX_SLUG + MAX_CHANNEL + 8];
-        snprintf(scope, sizeof(scope), "[%s/%s]", w->network, w->channel);
+        window_scope_key(w->network, w->channel, scope, sizeof(scope));
         snprintf(out, out_sz, "%s", scope);
     } else {
         out[0] = 0; /* before any window exists: nowhere to file it, show it everywhere */
@@ -936,7 +991,7 @@ static void clear_matching_pending_echo(struct app *app, const char *network, co
         }
     }
     for (size_t i = 0; i < app->pending_count; i++) {
-        if (strcmp(app->pending[i].network, network) == 0 && strcmp(app->pending[i].channel, channel) == 0 && strcmp(app->pending[i].body, body) == 0) {
+        if (irc_name_eq(app->pending[i].network, network) && irc_name_eq(app->pending[i].channel, channel) && strcmp(app->pending[i].body, body) == 0) {
             memmove(app->pending + i, app->pending + i + 1, sizeof(app->pending[0]) * (app->pending_count - i - 1));
             app->pending_count--;
             break;
@@ -1429,7 +1484,7 @@ static bool window_is_visible_locked(struct app *app, size_t idx);
 static void add_window_ex(struct app *app, const char *network, const char *channel, bool focus) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
-        if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
+        if (window_matches(&app->windows[i], network, channel)) {
             if (focus) focused_pane_locked(app)->window = i;
             pthread_mutex_unlock(&app->lock);
             return;
@@ -1455,7 +1510,7 @@ static void add_window(struct app *app, const char *network, const char *channel
 static void remove_window(struct app *app, const char *network, const char *channel) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
-        if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
+        if (window_matches(&app->windows[i], network, channel)) {
             memmove(app->windows + i, app->windows + i + 1, sizeof(app->windows[0]) * (app->window_count - i - 1));
             app->window_count--;
             /* Every pane holds an INDEX into the array that just shifted,
@@ -1570,7 +1625,7 @@ static void clear_active_window_log(struct app *app) {
         return;
     }
     char key[MAX_SLUG + MAX_CHANNEL + 8];
-    snprintf(key, sizeof(key), "[%s/%s]", app->windows[cur].network, app->windows[cur].channel);
+    window_scope_key(app->windows[cur].network, app->windows[cur].channel, key, sizeof(key));
     size_t write_i = 0;
     for (size_t read_i = 0; read_i < app->log_count; read_i++) {
         /* Everything filed under this window goes, its operational rows
@@ -1626,7 +1681,7 @@ static void sort_members_locked(struct app *app, const char *network, struct mem
 static void set_window_members(struct app *app, const char *network, const char *channel, const struct member *members, size_t count) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
-        if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
+        if (window_matches(&app->windows[i], network, channel)) {
             app->windows[i].member_count = count > 512 ? 512 : count;
             for (size_t j = 0; j < app->windows[i].member_count; j++) app->windows[i].members[j] = members[j];
             sort_members_locked(app, network, app->windows[i].members, app->windows[i].member_count);
@@ -1695,8 +1750,8 @@ static void apply_membership_event(struct app *app, const char *network, const c
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
         struct window *w = &app->windows[i];
-        if (strcmp(w->network, network) != 0) continue;
-        bool this_channel = channel[0] && strcmp(w->channel, channel) == 0;
+        if (!irc_name_eq(w->network, network)) continue;
+        bool this_channel = channel[0] && irc_name_eq(w->channel, channel);
         bool touched = false;
         switch (kind) {
         case MSG_JOIN:
@@ -1738,7 +1793,7 @@ static void maybe_mark_unread(struct app *app, const char *network, const char *
     if (!live || !network[0] || !channel[0]) return;
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
-        if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
+        if (window_matches(&app->windows[i], network, channel)) {
             if (!window_is_visible_locked(app, i) || app->panel != PANEL_CHAT) app->windows[i].unread++;
             break;
         }
@@ -1749,7 +1804,7 @@ static void maybe_mark_unread(struct app *app, const char *network, const char *
 static void set_window_topic(struct app *app, const char *network, const char *channel, const char *text) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
-        if (strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, channel) == 0) {
+        if (window_matches(&app->windows[i], network, channel)) {
             snprintf(app->windows[i].topic, sizeof(app->windows[i].topic), "%s", text && text[0] ? text : "no topic set");
             break;
         }
@@ -1867,7 +1922,7 @@ static void render_message(struct app *app, const struct wire_scrollback_message
     if (id > 0 && network[0] && channel[0]) {
         pthread_mutex_lock(&app->lock);
         for (size_t i = 0; i < app->seen_count; i++) {
-            if (app->seen[i].id == id && strcmp(app->seen[i].network, network) == 0 && strcmp(app->seen[i].channel, channel) == 0) {
+            if (app->seen[i].id == id && irc_name_eq(app->seen[i].network, network) && irc_name_eq(app->seen[i].channel, channel)) {
                 pthread_mutex_unlock(&app->lock);
                 return;
             }
@@ -1889,7 +1944,7 @@ static void render_message(struct app *app, const struct wire_scrollback_message
 
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
-        if (network[0] && display_channel[0] && strcmp(app->windows[i].network, network) == 0 && strcmp(app->windows[i].channel, display_channel) == 0 && id > app->windows[i].last_id) app->windows[i].last_id = id;
+        if (network[0] && display_channel[0] && window_matches(&app->windows[i], network, display_channel) && id > app->windows[i].last_id) app->windows[i].last_id = id;
     }
     pthread_mutex_unlock(&app->lock);
     remember_url(app, body);
@@ -2022,13 +2077,16 @@ static bool contains_ci(const char *haystack, const char *needle) {
     return false;
 }
 
+/* Nick identity, under the SAME casemapping windows use: strcasecmp
+ * folded whatever the locale said was a letter, which is not what the
+ * ircd does (see irc_name_eq). */
 static bool nick_case_equal(const char *a, const char *b) {
-    return a && b && strcasecmp(a, b) == 0;
+    return irc_name_eq(a, b);
 }
 
 static bool message_mentions_me(struct app *app, const char *network, const char *sender, const char *body) {
     for (size_t i = 0; i < app->network_count; i++) {
-        if (strcmp(app->networks[i].slug, network) == 0 && app->networks[i].nick[0]) {
+        if (irc_name_eq(app->networks[i].slug, network) && app->networks[i].nick[0]) {
             if (contains_ci(sender, app->networks[i].nick)) return false;
             return contains_ci(body, app->networks[i].nick);
         }
@@ -3011,7 +3069,7 @@ static void seed_state(struct app *app) {
     struct pane *p = focused_pane_locked(app);
     p->window = 0;
     for (size_t i = 0; i < app->window_count; i++) {
-        if (strcmp(app->windows[i].channel, "$server") != 0) {
+        if (!is_server_window(app->windows[i].channel)) {
             p->window = i;
             break;
         }
@@ -3254,7 +3312,7 @@ static bool window_is_visible_locked(struct app *app, size_t idx) {
 static int current_network_id_locked(struct app *app) {
     const char *slug = app->windows[focused_window_locked(app)].network;
     for (size_t i = 0; i < app->network_count; i++) {
-        if (strcmp(app->networks[i].slug, slug) == 0) return app->networks[i].id;
+        if (irc_name_eq(app->networks[i].slug, slug)) return app->networks[i].id;
     }
     return app->network_count > 0 ? app->networks[0].id : 0;
 }
@@ -3369,7 +3427,7 @@ static int ws_read_frame(struct app *app, char **out) {
 
 static struct network *network_by_slug_locked(struct app *app, const char *slug) {
     for (size_t i = 0; i < app->network_count; i++)
-        if (strcmp(app->networks[i].slug, slug) == 0) return &app->networks[i];
+        if (irc_name_eq(app->networks[i].slug, slug)) return &app->networks[i];
     return NULL;
 }
 
@@ -3470,8 +3528,7 @@ static void set_window_state(struct app *app, const char *network, const char *c
                             enum window_state state, const char *detail, long numeric) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
-        if (strcmp(app->windows[i].network, network) == 0 &&
-            strcmp(app->windows[i].channel, channel) == 0) {
+        if (window_matches(&app->windows[i], network, channel)) {
             app->windows[i].state = state;
             snprintf(app->windows[i].state_detail, sizeof(app->windows[i].state_detail), "%s",
                      detail ? detail : "");
@@ -3779,8 +3836,8 @@ static void render_channel_modes(struct app *app, const struct wire_event *ev) {
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
         struct window *win = &app->windows[i];
-        if (strcmp(win->network, ev->u.channel_modes.network) != 0) continue;
-        if (strcmp(win->channel, ev->u.channel_modes.channel) != 0) continue;
+        if (!irc_name_eq(win->network, ev->u.channel_modes.network)) continue;
+        if (!irc_name_eq(win->channel, ev->u.channel_modes.channel)) continue;
         snprintf(win->chan_modes, sizeof(win->chan_modes), "%s", modes + 1);
         win->chan_modes_known = true;
         break;
@@ -3982,7 +4039,7 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
          * happened to receive a terminal event. */
         if (ev->u.connection_state.state != CONN_CONNECTED) {
             for (size_t i = 0; i < app->window_count; i++)
-                if (strcmp(app->windows[i].network, ev->u.connection_state.network_slug) == 0)
+                if (irc_name_eq(app->windows[i].network, ev->u.connection_state.network_slug))
                     app->windows[i].state = WS_PARKED;
         }
         pthread_mutex_unlock(&app->lock);
@@ -4059,7 +4116,7 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
          * incremented badge drifts from the truth in both directions. */
         pthread_mutex_lock(&app->lock);
         for (size_t i = 0; i < app->window_count; i++) {
-            if (strcmp(app->windows[i].channel, ev->u.window_counts.channel) != 0) continue;
+            if (!irc_name_eq(app->windows[i].channel, ev->u.window_counts.channel)) continue;
             app->windows[i].unread = (unsigned)ev->u.window_counts.messages;
             app->windows[i].mentions = (unsigned)ev->u.window_counts.mentions;
             app->windows[i].severity = ev->u.window_counts.severity;
@@ -4226,7 +4283,7 @@ static void ws_backfill_all(struct app *app) {
     }
     pthread_mutex_unlock(&app->lock);
     for (size_t i = 0; i < count; i++) {
-        if (strcmp(snap[i].channel, "$server") == 0) continue; /* no scrollback */
+        if (is_server_window(snap[i].channel)) continue; /* no scrollback */
         /* last_id 0 means this window never saw a message; a full tail
          * fetch is the right recovery there, not an ?after=0 flood. */
         if (snap[i].last_id > 0) backfill_window(app, snap[i].network, snap[i].channel, snap[i].last_id);
@@ -4752,7 +4809,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
     if (scroll_h < 1) return;
 
     char wanted_prefix[MAX_SLUG + MAX_CHANNEL + 8];
-    snprintf(wanted_prefix, sizeof(wanted_prefix), "[%s/%s]", w->network, w->channel);
+    window_scope_key(w->network, w->channel, wanted_prefix, sizeof(wanted_prefix));
     size_t visible[LOG_LINES];
     int heights[LOG_LINES];
     size_t visible_count = 0;
@@ -5072,7 +5129,7 @@ static void draw(struct app *app) {
     int y = 3;
     for (size_t i = 0; i < app->window_count && y < rows - 1; i++) {
         struct window *win = &app->windows[i];
-        if (strcmp(last_net, win->network) != 0) {
+        if (!irc_name_eq(last_net, win->network)) {
             snprintf(last_net, sizeof(last_net), "%s", win->network);
             draw_text(y++, 1, side - 2, CP_ACCENT, A_BOLD, "%s", win->network);
             if (y >= rows - 1) break;
@@ -5596,7 +5653,7 @@ static void part_target(struct app *app, const char *network, const char *channe
 static void close_query_target(struct app *app, const char *network, const char *target) {
     int id = 0;
     for (size_t i = 0; i < app->network_count; i++) {
-        if (strcmp(app->networks[i].slug, network) == 0) {
+        if (irc_name_eq(app->networks[i].slug, network)) {
             id = app->networks[i].id;
             break;
         }
@@ -5715,7 +5772,7 @@ static void enqueue_fetch(struct app *app, const char *network, const char *chan
 }
 
 static void enqueue_members(struct app *app, const char *network, const char *channel) {
-    if (!network[0] || !channel[0] || strcmp(channel, "$server") == 0) return;
+    if (!network[0] || !channel[0] || is_server_window(channel)) return;
     struct job job = { .kind = JOB_MEMBERS };
     snprintf(job.network, sizeof(job.network), "%s", network);
     snprintf(job.channel, sizeof(job.channel), "%s", channel);
@@ -5731,8 +5788,7 @@ static void ensure_roster(struct app *app, const char *network, const char *chan
     bool empty = false;
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count; i++) {
-        if (strcmp(app->windows[i].network, network) == 0 &&
-            strcmp(app->windows[i].channel, channel) == 0) {
+        if (window_matches(&app->windows[i], network, channel)) {
             empty = app->windows[i].member_count == 0;
             break;
         }
@@ -5751,7 +5807,7 @@ static void enqueue_send(struct app *app, const char *network, const char *chann
 
 static const char *own_nick_for_network(struct app *app, const char *network) {
     for (size_t i = 0; i < app->network_count; i++) {
-        if (strcmp(app->networks[i].slug, network) == 0 && app->networks[i].nick[0]) return app->networks[i].nick;
+        if (irc_name_eq(app->networks[i].slug, network) && app->networks[i].nick[0]) return app->networks[i].nick;
     }
     if (app->login_nick[0]) return app->login_nick;
     const char *colon = strchr(app->subject, ':');
@@ -5906,7 +5962,7 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
         if (cur >= app->window_count) return 0;
         struct window *w = &app->windows[cur];
         char want[MAX_SLUG + MAX_CHANNEL + 8];
-        snprintf(want, sizeof(want), "[%s/%s]", w->network, w->channel);
+        window_scope_key(w->network, w->channel, want, sizeof(want));
         for (size_t k = app->log_count; k > 0 && n < max; k--) {
             if (!log_row_in_scope(app, k - 1, want)) continue;
             const char *line = app->log[k - 1];
@@ -5953,7 +6009,7 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
     if (cur >= app->window_count) return 0;
     struct window *w = &app->windows[cur];
     char want[MAX_SLUG + MAX_CHANNEL + 8];
-    snprintf(want, sizeof(want), "[%s/%s]", w->network, w->channel);
+    window_scope_key(w->network, w->channel, want, sizeof(want));
     for (size_t k = app->log_count; k > 0 && n < max; k--) {
         const char *line = app->log[k - 1];
         if (!log_row_in_scope(app, k - 1, want)) continue;
@@ -6465,7 +6521,7 @@ static void complete_input(struct app *app) {
         for (size_t i = 0; i < app->network_count; i++) {
             const char *name = app->networks[i].slug;
             add_completion_candidate(candidates, &matches, name, stem);
-            if (strcmp(app->networks[i].slug, current_network) == 0) add_completion_candidate(candidates, &matches, app->networks[i].nick, stem);
+            if (irc_name_eq(app->networks[i].slug, current_network)) add_completion_candidate(candidates, &matches, app->networks[i].nick, stem);
         }
         for (size_t i = 0; i < app->log_count; i++) {
             collect_log_nick_candidate(app, candidates, &matches, app->log[i], stem);
@@ -7503,7 +7559,7 @@ static void upload_command(struct app *app, const char *path) {
      * the current window, and $server rejects a PRIVMSG. */
     char up_net[MAX_SLUG], up_chan[MAX_CHANNEL];
     if (!current_window_key(app, up_net, sizeof(up_net), up_chan, sizeof(up_chan)) ||
-        strcmp(up_chan, "$server") == 0) {
+        is_server_window(up_chan)) {
         log_line(app, "/upload: the server window is read-only — switch to a channel or query first");
         return;
     }
@@ -8014,7 +8070,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
             snprintf(job.network, sizeof(job.network), "%s", w.network);
             snprintf(job.channel, sizeof(job.channel), "%s", w.channel);
             enqueue_job(app, job);
-        } else if (strcmp(w.channel, "$server") == 0) {
+        } else if (is_server_window(w.channel)) {
             log_line(app, "cannot close server window");
         } else {
             struct job job = { .kind = JOB_CLOSE_QUERY };
@@ -8230,7 +8286,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
                 rest += strlen(rest);
             }
         }
-        if (!target[0] || strcmp(target, "$server") == 0) {
+        if (!target[0] || is_server_window(target)) {
             log_line(app, "/mode needs a channel; use /mode #chan +modes from a server window");
         } else {
             /* Split "+k secret" into the mode string and its params. */
@@ -8406,7 +8462,7 @@ static void handle_enter(struct app *app) {
          * knows the rule; making the user decode an HTTP status to learn
          * it is the failure this replaces. Commands still work from a
          * $server window — only a bare PRIVMSG has nowhere to go. */
-        if (strcmp(channel, "$server") == 0) {
+        if (is_server_window(channel)) {
             log_line(app, "[%s/$server] --- the server window is read-only — "
                           "switch to a channel, or use /msg <nick> <text> or /join #chan",
                      network);
@@ -8833,7 +8889,7 @@ static int ircd_network_id(struct app *app, const char *slug) {
     int id = 0;
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->network_count; i++)
-        if (strcmp(app->networks[i].slug, slug) == 0) id = app->networks[i].id;
+        if (irc_name_eq(app->networks[i].slug, slug)) id = app->networks[i].id;
     pthread_mutex_unlock(&app->lock);
     return id;
 }
@@ -8863,7 +8919,7 @@ static size_t ircd_channels_of(struct app *app, const char *network, char out[][
     size_t n = 0;
     pthread_mutex_lock(&app->lock);
     for (size_t i = 0; i < app->window_count && n < max; i++) {
-        if (strcmp(app->windows[i].network, network) != 0) continue;
+        if (!irc_name_eq(app->windows[i].network, network)) continue;
         if (!ircd_is_channel(app->windows[i].channel)) continue;
         snprintf(out[n], MAX_CHANNEL, "%s", app->windows[i].channel);
         n++;
