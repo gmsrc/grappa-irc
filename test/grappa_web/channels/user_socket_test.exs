@@ -300,6 +300,105 @@ defmodule GrappaWeb.UserSocketTest do
     end
   end
 
+  # #543 Part C — at WS connect the trusted client IP is resolved (via the
+  # `RemoteIpFromProxy` SSOT, from `connect_info.peer_data`/`x_headers`) and
+  # fed to `Vhosts.record_client_source/2`, so INC-3's per-subject
+  # `last_client_prefix64` persistence is actually populated. Capture is
+  # best-effort: an absent/garbage peer_data must NOT fail the connect.
+  describe "connect/3 client-source capture (#543 Part C)" do
+    alias Grappa.Vhosts
+    alias Grappa.Vhosts.SourceMapping
+
+    # Mirrors the transport: `peer_data.address` is the peer IP tuple,
+    # `x_headers` are the forwarded (`x-*`) request headers, both riding
+    # `connect_info` alongside the subprotocol bearer.
+    defp connect_with_peer(token, peer_ip, x_headers) do
+      Phoenix.ChannelTest.connect(UserSocket, %{},
+        connect_info: %{
+          auth_token: token,
+          peer_data: %{address: peer_ip, port: 12_345, ssl_cert: nil},
+          x_headers: x_headers
+        }
+      )
+    end
+
+    test "records the resolved client /64 for a user subject (loopback proxy + XFF)" do
+      user_name = "vjt-#{System.unique_integer([:positive])}"
+      {user, session} = user_and_session(name: user_name)
+      subject = {:user, user.id}
+
+      assert Vhosts.last_client_prefix64(subject) == nil
+
+      assert {:ok, _} =
+               connect_with_peer(session.id, {127, 0, 0, 1}, [
+                 {"x-forwarded-for", "2001:db8:1:2:3:4:5:6"}
+               ])
+
+      # The stored key equals the production derivation of the RESOLVED IP —
+      # the /64 of the XFF client, NOT the loopback peer. No hardcoded bytes.
+      assert Vhosts.last_client_prefix64(subject) ==
+               SourceMapping.client_key({0x2001, 0xDB8, 1, 2, 3, 4, 5, 6})
+    end
+
+    test "records the peer directly for a direct (non-loopback, no-XFF) client" do
+      {user, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+      subject = {:user, user.id}
+
+      assert {:ok, _} = connect_with_peer(session.id, {203, 0, 113, 7}, [])
+
+      assert Vhosts.last_client_prefix64(subject) ==
+               SourceMapping.client_key({203, 0, 113, 7})
+    end
+
+    test "records for a visitor subject too (one door — user + visitor)" do
+      visitor = visitor_fixture()
+      {:ok, session} = Accounts.create_session({:visitor, visitor.id}, "1.2.3.4", "ua", [])
+      subject = {:visitor, visitor.id}
+
+      assert {:ok, _} =
+               connect_with_peer(session.id, {127, 0, 0, 1}, [
+                 {"x-forwarded-for", "203.0.113.42"}
+               ])
+
+      assert Vhosts.last_client_prefix64(subject) ==
+               SourceMapping.client_key({203, 0, 113, 42})
+    end
+
+    test "connect still succeeds and captures nothing when peer_data is absent" do
+      user_name = "vjt-#{System.unique_integer([:positive])}"
+      {user, session} = user_and_session(name: user_name)
+      subject = {:user, user.id}
+
+      # No peer_data key at all — the pre-Part-C connect_info shape. Connect
+      # proceeds; capture is silently skipped (no crash, nothing recorded).
+      assert {:ok, _} =
+               Phoenix.ChannelTest.connect(UserSocket, %{}, connect_info: %{auth_token: session.id})
+
+      assert Vhosts.last_client_prefix64(subject) == nil
+    end
+
+    test "connect succeeds and captures nothing for a structurally-invalid peer address" do
+      user_name = "vjt-#{System.unique_integer([:positive])}"
+      {user, session} = user_and_session(name: user_name)
+      subject = {:user, user.id}
+
+      # A tuple that is NOT an IP-arity tuple (4 v4 / 8 v6) is garbage
+      # peer_data the real transport can't produce; the `ip_tuple?/1` guard
+      # skips capture rather than letting `SourceMapping.client_key/1` raise
+      # and fail the connect.
+      assert {:ok, _} =
+               Phoenix.ChannelTest.connect(UserSocket, %{},
+                 connect_info: %{
+                   auth_token: session.id,
+                   peer_data: %{address: {1, 2, 3}, port: 12_345, ssl_cert: nil},
+                   x_headers: []
+                 }
+               )
+
+      assert Vhosts.last_client_prefix64(subject) == nil
+    end
+  end
+
   describe "id/1 visitor branch" do
     test "scopes the per-socket id by visitor:<id>" do
       visitor = visitor_fixture()

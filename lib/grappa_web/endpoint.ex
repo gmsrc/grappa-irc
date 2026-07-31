@@ -96,10 +96,18 @@ defmodule GrappaWeb.Endpoint do
   # overrides the default `{Phoenix.Transports.WebSocket, :handle_error}`.
   # It fires ONLY for `{:error, reason}` returns; a bare `:error` (auth
   # failure) still gets the default 403, keeping the two failures distinct.
+  # #543 Part C — `:peer_data` (transport peer IP) + `:x_headers` (the
+  # forwarded `x-*` request headers) are surfaced to `UserSocket.connect/3`
+  # so it can resolve the TRUSTED client IP (via the `RemoteIpFromProxy`
+  # SSOT) and feed it to `Vhosts.record_client_source/2`. A WS `connect/3`
+  # gets `connect_info` (a map built ONLY from the declared keys), NOT a
+  # `Plug.Conn`, so the `RemoteIpFromProxy` PLUG above never runs for the
+  # socket — these keys are the socket's only path to the client IP. Additive
+  # to `:auth_token`; ordering of the other socket opts is untouched.
   socket "/socket", GrappaWeb.UserSocket,
     auth_token: true,
     websocket: [
-      connect_info: [:auth_token],
+      connect_info: [:auth_token, :peer_data, :x_headers],
       error_handler: {GrappaWeb.UserSocket, :handle_ws_error, []}
     ],
     longpoll: false
