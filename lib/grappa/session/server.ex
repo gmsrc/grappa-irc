@@ -200,16 +200,17 @@ defmodule Grappa.Session.Server do
 
   @typedoc """
   Optional opaque callback the visitor-side `SessionPlan` injects into
-  every visitor plan. Invoked by `apply_effects/2` when EventRouter
-  emits `:visitor_r_observed` so the captured NickServ password can
-  land on the visitors row atomically. The function shape mirrors
-  `Grappa.Visitors.commit_password/2` exactly. Carried as an opaque
-  function reference (not a module name) to avoid a static
+  every visitor plan. Invoked by `apply_effects/2` when EventRouter emits
+  `:visitor_r_observed` so the confirmed NickServ password AND the nick held
+  at the identify instant land on the credential (#561). The function shape
+  mirrors `Grappa.Visitors.commit_identity/4` (the closure captures
+  `network_id`, so the args are `(visitor_id, password, nick)`). Carried as
+  an opaque function reference (not a module name) to avoid a static
   `Session → Visitors` boundary alias — Visitors already deps Session
   via `Visitors.Login`, so a literal alias would close a cycle.
   """
   @type visitor_committer ::
-          (Ecto.UUID.t(), String.t() ->
+          (Ecto.UUID.t(), String.t(), String.t() ->
              {:ok, struct()} | {:error, :not_found | Ecto.Changeset.t()})
 
   @typedoc """
@@ -218,9 +219,10 @@ defmodule Grappa.Session.Server do
   the outbound NickServ-secret capture choke point (NOT the `+r` path) when
   a well-formed in-session `SET PASSWD` leaves the wire.
 
-  Deliberately NOT `visitor_committer` (`commit_password/2`): that one
-  promotes anon→permanent, which is only safe behind the `+r` identity
-  proof. This shape maps to `Grappa.Visitors.rotate_password/2`, which is
+  Deliberately NOT `visitor_committer` (`commit_identity/4`): that one
+  promotes anon→permanent (+ binds the identified nick), which is only safe
+  behind the `+r` identity proof. This shape maps to
+  `Grappa.Visitors.rotate_password/2`, which is
   identity-gated (`{:error, :not_identified}` for an anon row) so an
   optimistic commit can't pin an unidentified visitor permanent. Same
   Boundary-cycle-avoiding function-reference indirection as
@@ -237,11 +239,13 @@ defmodule Grappa.Session.Server do
   self-echo. Same Boundary-cycle reasoning as `visitor_committer`:
   Visitors deps Session via Login, so a static
   `Session → Grappa.Visitors` alias would close the cycle. The
-  function shape mirrors `Grappa.Visitors.update_nick/2` exactly.
+  function shape mirrors `Grappa.Visitors.update_nick/3` exactly —
+  including #561's `{:ok, :held_identified}` (the echo persist is a no-op
+  when the credential is identified; its nick is bound at `+r` instead).
   """
   @type visitor_nick_persister ::
           (Ecto.UUID.t(), String.t() ->
-             {:ok, struct()} | {:error, :not_found | Ecto.Changeset.t()})
+             {:ok, struct() | :held_identified} | {:error, :not_found | Ecto.Changeset.t()})
 
   @typedoc """
   Optional opaque callback injected by `Networks.SessionPlan.resolve/1`
@@ -4631,12 +4635,13 @@ defmodule Grappa.Session.Server do
     apply_effects(rest, state)
   end
 
-  # Task 15: NickServ-as-IDP confirmed our pending IDENTIFY by setting
-  # +r on our nick. Invoke the opaque `visitor_committer` callback
-  # (`Grappa.Visitors.commit_password/2`, injected by
-  # `Grappa.Visitors.SessionPlan` into every visitor plan) so the
-  # captured password lands on the visitors row + bumps `expires_at`
-  # to the registered TTL. Then clear pending state + cancel the
+  # Task 15 / #561: NickServ-as-IDP confirmed our pending IDENTIFY by
+  # setting +r on our nick. Invoke the opaque `visitor_committer` callback
+  # (`Grappa.Visitors.commit_identity/4`, injected by
+  # `Grappa.Visitors.SessionPlan` into every visitor plan) so the confirmed
+  # password AND the nick held at this +r instant land on the credential
+  # (#561 — the identified nick is bound here, NOT on a later voluntary NICK
+  # echo). Then clear pending state + cancel the
   # fail-safe timer. The function-reference indirection keeps Session
   # free of a static `Grappa.Visitors` alias — Visitors deps Session
   # via `Visitors.Login`, so a literal alias would close a Boundary
@@ -4645,9 +4650,16 @@ defmodule Grappa.Session.Server do
   # NickServ IDENTIFY), the +r is logged and dropped.
   defp apply_effects([{:visitor_r_observed, password} | rest], state) do
     case {state.subject, state.visitor_committer} do
-      {{:visitor, visitor_id}, committer} when is_function(committer, 2) ->
-        case committer.(visitor_id, password) do
+      {{:visitor, visitor_id}, committer} when is_function(committer, 3) ->
+        # #561 — bind the password AND the nick held at this +r instant.
+        # bahamut strips +r on a genuine nick change, so `state.nick` here
+        # is guaranteed the identified account, never a forced Guest.
+        case committer.(visitor_id, password, state.nick) do
           {:ok, _} ->
+            # #561 — log ONLY the primary outcome (the password commit) here.
+            # The secondary, best-effort nick bind logs its own honest line
+            # inside `commit_identity/4` (success or a folded-nick-collision
+            # warning), so this line never over-claims a bind that dropped.
             Logger.info("visitor +r observed → password committed",
               visitor_id: visitor_id
             )
@@ -4681,11 +4693,14 @@ defmodule Grappa.Session.Server do
     })
   end
 
-  # V9 (visitor-parity cluster, 2026-05-15): EventRouter observed our
+  # V9 (visitor-parity cluster, 2026-05-15) / #561: EventRouter observed our
   # own NICK self-echo (`old_nick == state.nick`) on a visitor session.
-  # Persist the new nick onto the visitors row via the injected
+  # Persist the new nick onto the credential via the injected
   # `visitor_nick_persister` callback (mirror of `visitor_committer`).
-  # The `(nick, network_slug)` UNIQUE constraint catches the
+  # #561 — the persister is ANON-GATED: an IDENTIFIED credential's nick is
+  # its login key and is HELD (`{:ok, :held_identified}`), NOT overwritten by
+  # a services-forced `GuestNNNNN`; the identified nick is bound at +r via
+  # `commit_identity/4`. The `(nick, network_slug)` UNIQUE constraint catches the
   # near-zero-probability concurrent-rename race; controller-boundary
   # `Visitors.nick_in_use?/3` is the fast-path 409. User sessions
   # don't carry a persister — their nick lives in `Networks.Credential`,
@@ -4695,6 +4710,14 @@ defmodule Grappa.Session.Server do
     case {state.subject, state.visitor_nick_persister} do
       {{:visitor, visitor_id}, persister} when is_function(persister, 2) ->
         case persister.(visitor_id, new_nick) do
+          {:ok, :held_identified} ->
+            # #561 — identified credential: the nick is the login key, held
+            # against a services-forced Guest. Bound at +r, not on the echo.
+            Logger.info("visitor NICK echoed but credential identified — nick held (#561)",
+              visitor_id: visitor_id,
+              new_nick: new_nick
+            )
+
           {:ok, _} ->
             Logger.info("visitor NICK echoed → row rotated",
               visitor_id: visitor_id,

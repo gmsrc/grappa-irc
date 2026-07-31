@@ -296,6 +296,52 @@ defmodule Grappa.Visitors do
   end
 
   @doc """
+  #561 — the `+r`-observed identity commit: writes the confirmed NickServ
+  password AND binds the nick held at the identify instant onto the
+  `(visitor_id, network_id)` Credential. Called from
+  `Grappa.Session.Server`'s `apply_effects/2` on `:visitor_r_observed` (the
+  visitor branch) via the injected `visitor_committer` closure.
+
+  Both bindings matter. The password promotes the credential to
+  `:nickserv_identify` (see `commit_password/3`). The nick is bound because
+  a later VOLUNTARY rename is NOT persisted (#561's echo gate on
+  `update_nick/3`), so the credential must carry the nick the visitor last
+  IDENTIFIED with — you come back as the nick you authed as. bahamut strips
+  `+r` on any genuine nick change, so `nick` is guaranteed the identified
+  account, never a forced Guest.
+
+  The password commit is PRIMARY (it is the login secret): a cross-visitor
+  folded-nick collision on the SECONDARY nick bind is logged but MUST NOT
+  undo the committed password. Returns the password-commit result;
+  `{:error, :not_found}` if the credential is gone.
+  """
+  @spec commit_identity(Ecto.UUID.t(), pos_integer(), String.t(), String.t()) ::
+          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def commit_identity(visitor_id, network_id, password, nick)
+      when is_binary(visitor_id) and is_integer(network_id) and is_binary(password) and
+             password != "" and is_binary(nick) do
+    with {:ok, _} = committed <- commit_password(visitor_id, network_id, password) do
+      case Credentials.bind_identified_visitor_nick(visitor_id, network_id, nick) do
+        {:ok, _} ->
+          Logger.info("visitor +r → identified nick bound (#561)",
+            visitor_id: visitor_id,
+            nick: nick
+          )
+
+        {:error, reason} ->
+          Logger.warning(
+            "visitor +r: password committed but identified-nick bind failed (#561)",
+            visitor_id: visitor_id,
+            nick: nick,
+            reason: inspect(reason)
+          )
+      end
+
+      committed
+    end
+  end
+
+  @doc """
   #131 — rotate an ALREADY-identified visitor's NickServ password on the
   `(visitor_id, network_id)` Credential from an in-session `SET PASSWD`
   (optimistic commit-on-send).
@@ -908,12 +954,20 @@ defmodule Grappa.Visitors do
   `nick_in_use?/3` pre-check is the fast path; this is the second line of
   defense for the near-zero-probability race.
 
+  #561 — the echo persist is GATED downstream: it rotates the nick only
+  while the credential is ANON (`auth_method: :none`). An IDENTIFIED
+  credential's nick is its login key and returns `{:ok, :held_identified}`
+  (no write) — see
+  `Grappa.Networks.Credentials.update_visitor_credential_nick/3`. The
+  identified nick is bound at the proven identify (`+r`) via
+  `commit_identity/4`, not on the wire echo.
+
   `{:error, :not_found}` on a reaped row (terminal — Reaper got the
   credential between `send_nick` and the upstream echo). Logged + dropped
   at the call site.
   """
   @spec update_nick(Ecto.UUID.t(), pos_integer(), String.t()) ::
-          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, Credential.t() | :held_identified} | {:error, :not_found | Ecto.Changeset.t()}
   def update_nick(visitor_id, network_id, new_nick)
       when is_binary(visitor_id) and is_integer(network_id) and is_binary(new_nick) do
     Credentials.update_visitor_credential_nick(visitor_id, network_id, new_nick)

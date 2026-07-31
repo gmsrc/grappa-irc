@@ -128,16 +128,19 @@ defmodule Grappa.Visitors.SessionPlan do
       )
 
     Map.merge(base, %{
-      # Task 15: opaque function-reference indirection. Session.Server
+      # Task 15 / #561: opaque function-reference indirection. Session.Server
       # cannot statically alias Grappa.Visitors (closes a Boundary
-      # cycle — Visitors deps Session via Login). Every visitor plan
-      # carries the commit-callback so the +r-MODE-observed effect
-      # path can reach commit_password/3 without a module reference in the
-      # Session boundary. #211 phase 7 — the password lives PER-NETWORK on
-      # the credential now, so the closure captures THIS session's
-      # `network.id` and presents the arity-2 shape Session.Server expects.
-      visitor_committer: fn visitor_id, password ->
-        Grappa.Visitors.commit_password(visitor_id, network.id, password)
+      # cycle — Visitors deps Session via Login). Every visitor plan carries
+      # the commit-callback so the +r-MODE-observed effect path can reach
+      # `commit_identity/4` without a module reference in the Session
+      # boundary. #561 — the +r commit binds BOTH the password AND the nick
+      # held at the identify instant (the identified nick is NOT persisted on
+      # a later voluntary NICK echo — see `update_nick/3`'s anon gate). #211
+      # phase 7 — password + nick live PER-NETWORK on the credential, so the
+      # closure captures THIS session's `network.id` and presents the arity-3
+      # shape Session.Server passes `(visitor_id, password, nick)`.
+      visitor_committer: fn visitor_id, password, nick ->
+        Grappa.Visitors.commit_identity(visitor_id, network.id, password, nick)
       end,
       # #131: visitor-side SET PASSWD committer. NOT `commit_password/3`
       # (that one promotes anon→permanent, correct only behind the +r

@@ -24126,3 +24126,76 @@ must survive a manager restart goes in the `Grappa.SourceAliasHolders` Registry
 manager's own process state alone. The "is this a managed alias?" question has
 ONE answer site: `Vhosts.derived_source?/2`. A mode-2 session that cannot bind
 its derived source HOLDS or STOPS — it never egresses from a shared source.
+
+---
+
+## 2026-07-31 — #561: a visitor's identity nick persists on identify (+r), not on the NICK echo
+
+**Incident (Azzurra `#sniffo`, 2026-07-30).** grappa persisted EVERY visitor
+NICK change onto `network_credentials.nick`, including renames the visitor never
+asked for. When Azzurra's services guest an unidentified visitor to
+`GuestNNNNN`, that Guest was written next to the NickServ password belonging to
+the *real* registered nick. On reconnect the visitor came back as `Guest15769`
+and the stored password no longer matched the nick it was used with — the
+visitor was locked out of their own identity (the login screen wanted
+`Guest15769` + the real password). Not a cosmetic naming glitch.
+
+**Root class.** "current nick on the wire" was treated as "the nick the visitor
+wants". Those differ: services (and a voluntary `/nick vjt|away`) move the wire
+nick without the credential's consent. For a registered visitor the credential
+nick is a LOGIN KEY — the nick the stored secret identifies.
+
+**Decision (vjt, settled 2026-07-31 — ONE column, gated on the password).** No
+new field; the single `nick` column stays. The persist TRIGGER is gated on
+whether the credential carries a login identity:
+
+| credential | rule |
+|---|---|
+| WITH a password (`auth_method != :none`) | `nick` written ONLY on a successful identify (`+r` observed). NEVER on the NICK echo. |
+| WITHOUT a password (anon, `auth_method: :none`) | today's echo-persist stays — there is no login identity to protect. |
+| reconnect | connect as the credential nick, i.e. the authed one (vjt explicitly accepted the reset to the authed nick). |
+
+Consequence, chosen deliberately: after login a VOLUNTARY nick change is never
+persisted — you always come back as the nick you identify with.
+
+**Rejected alternatives.** (a) Persist the nick we REQUESTED (match `send_nick`
+against the echo): a deliberate `/nick vjt|away` matches what we requested, so
+we would persist a nick that CANNOT identify (bahamut grants `+r` on sameNick) —
+the same bug through another door. (b) Two columns (auth nick + display nick):
+unnecessary once the reconnect-as-authed-nick reset is accepted; nothing
+consumes a stored display nick at reconnect.
+
+**Prerequisite — verified against the ircd, not assumed.** The design leans on
+`+r` being sameNick: at the `+r` instant the nick you wear IS your identified
+account, so binding `state.nick` there can never store a Guest. Confirmed in
+bahamut source `src/m_nick.c` — a local nick change strips `+r` whenever the
+nick genuinely differs:
+`if ((sptr->umode & UMODE_r) && (mycmp(parv[0], nick) != 0)) sptr->umode &= ~UMODE_r;`.
+A forced `Guest15769` loses `+r`; re-identifying as a Guest can't set it (Guest
+is not a registered nick). So `+r` on the wire ⟺ current nick is the identified
+account.
+
+**Load-bearing detail — measured.** `{:visitor_r_observed, _}` fires ONLY while a
+`pending_auth` / `pending_registration_secret` is staged (a ~10s window after
+IDENTIFY). At 001 `run_perform_and_identify/1` sends the built-in
+`PRIVMSG NickServ :IDENTIFY` through the outbound choke point, which stages
+`pending_auth`; the services `+r` lands inside the window → the identified nick
+is re-affirmed on every reconnect. Anon visitors never get `+r`, which is
+exactly why their echo-persist must stay.
+
+**Mechanics.** The gate lives where `auth_method` lives.
+`Credentials.update_visitor_credential_nick/3` (the NICK-echo path) now writes
+only for `%Credential{auth_method: :none}` and returns `{:ok, :held_identified}`
+otherwise. `Credentials.bind_identified_visitor_nick/3` is the unconditional
+`+r` write (both share a narrow `identity_changeset` + H14 stale-struct rescue).
+`Visitors.commit_identity/4` commits the password (PRIMARY — the login secret)
+then binds the nick (SECONDARY, best-effort: a cross-visitor folded-nick
+collision is logged, never undoes the password). The visitor plan's
+`visitor_committer` closure widened to arity 3 `(visitor_id, password, nick)`;
+`Session.Server.apply_effects/2` passes `state.nick` on `:visitor_r_observed`
+and logs the held case honestly on `:visitor_nick_changed`.
+
+**Scope.** This is the persist-gating half of #561 (issue points 1–2). Points 3
+(don't blind-IDENTIFY a nick that isn't the credential's) and 4 (a client
+`/recover` affordance) are separate follow-ups — point 4's UI shape is still
+open.

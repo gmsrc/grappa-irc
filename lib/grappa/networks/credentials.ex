@@ -391,10 +391,19 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
-  #211 phase 7 — rotate the visitor's nick on its `(visitor_id,
-  network_id)` Credential after upstream confirmed the NICK self-echo (V9).
-  The per-network home for the visitor nick now that the `visitors.nick`
-  scalar is dropped.
+  #211 phase 7 / #561 — rotate the visitor's nick on its `(visitor_id,
+  network_id)` Credential from the upstream NICK self-echo (V9), GATED on
+  the credential being ANON (`auth_method: :none`).
+
+  #561 — an identified credential's nick is its LOGIN KEY: it is the nick
+  the stored NickServ password belongs to. Azzurra's services rename an
+  unidentified visitor to `GuestNNNNN`, and that rename echoes here; writing
+  the Guest onto an identified credential drifts the stored nick away from
+  the password's identity, locking the visitor out on the next reconnect.
+  So echo-persist applies ONLY while the credential is anon (there is no
+  login identity to protect); an identified credential's nick is bound at
+  the proven identify instant (`+r`) via `bind_identified_visitor_nick/3`
+  instead, and this returns `{:ok, :held_identified}` (a deliberate no-op).
 
   Routes through the narrow `Credential.identity_changeset/2` (nick only —
   the folded-nick partial unique index, phase 4b, catches a concurrent
@@ -402,20 +411,54 @@ defmodule Grappa.Networks.Credentials do
   a missing credential OR a concurrent unbind (H14 stale-struct race).
   """
   @spec update_visitor_credential_nick(Ecto.UUID.t(), pos_integer(), String.t()) ::
-          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, Credential.t() | :held_identified} | {:error, :not_found | Ecto.Changeset.t()}
   def update_visitor_credential_nick(visitor_id, network_id, new_nick)
       when is_binary(visitor_id) and is_integer(network_id) and is_binary(new_nick) do
     case get_visitor_credential(visitor_id, network_id) do
       {:error, :not_found} ->
         {:error, :not_found}
 
-      {:ok, %Credential{} = cred} ->
-        try do
-          cred |> Credential.identity_changeset(%{nick: new_nick}) |> Repo.update()
-        rescue
-          Ecto.StaleEntryError -> {:error, :not_found}
-        end
+      # Anon credential — no login identity to protect; echo-persist stays.
+      {:ok, %Credential{auth_method: :none} = cred} ->
+        write_visitor_nick(cred, new_nick)
+
+      # Identified credential — the nick is the login key; #561 holds it.
+      {:ok, %Credential{}} ->
+        {:ok, :held_identified}
     end
+  end
+
+  @doc """
+  #561 — bind the visitor's identified nick onto its `(visitor_id,
+  network_id)` Credential at the instant services confirm identification
+  (`+r`). UNCONDITIONAL, unlike `update_visitor_credential_nick/3` (which
+  the anon gate protects): `+r` is the proof of identity, and bahamut strips
+  `+r` on any genuine nick change (`m_nick.c`:
+  `mycmp(old, new) != 0 → umode &= ~UMODE_r`), so the nick held at `+r` is
+  guaranteed the identified account — never a forced Guest.
+
+  Same narrow `Credential.identity_changeset/2` + H14 stale-struct handling
+  as the echo path; `{:error, :not_found}` on a missing credential or a
+  concurrent unbind.
+  """
+  @spec bind_identified_visitor_nick(Ecto.UUID.t(), pos_integer(), String.t()) ::
+          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def bind_identified_visitor_nick(visitor_id, network_id, new_nick)
+      when is_binary(visitor_id) and is_integer(network_id) and is_binary(new_nick) do
+    case get_visitor_credential(visitor_id, network_id) do
+      {:error, :not_found} -> {:error, :not_found}
+      {:ok, %Credential{} = cred} -> write_visitor_nick(cred, new_nick)
+    end
+  end
+
+  # Shared narrow nick write: `identity_changeset/2` (nick only) + the H14
+  # stale-struct rescue (a concurrent unbind between fetch and update).
+  @spec write_visitor_nick(Credential.t(), String.t()) ::
+          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  defp write_visitor_nick(%Credential{} = cred, new_nick) do
+    cred |> Credential.identity_changeset(%{nick: new_nick}) |> Repo.update()
+  rescue
+    Ecto.StaleEntryError -> {:error, :not_found}
   end
 
   @doc """

@@ -6209,6 +6209,68 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  # #561 — a visitor's NICK self-echo must NOT drift an IDENTIFIED
+  # credential's nick. Azzurra's services rename an unidentified visitor to
+  # `GuestNNNNN`; persisting that Guest onto the credential (which is ALSO
+  # the login identity for a registered visitor) locks the visitor out on
+  # reconnect. The gate: echo-persist only while ANON; the identified nick
+  # is bound on the proven identify (+r) instead. bahamut strips `+r` on a
+  # genuine nick change, so a forced Guest can never carry +r → never binds.
+  describe "visitor NICK self-echo — identity protection (#561)" do
+    test "IDENTIFIED visitor: a services-forced Guest rename does NOT overwrite the credential nick" do
+      {server, port} = start_server()
+      {visitor, network} = visitor_with_network(port)
+      # NickServ-identified BEFORE connect — a login identity that must
+      # survive a force-guest (auth_method :nickserv_identify + password).
+      {:ok, _} = Grappa.Visitors.commit_password(visitor.id, network.id, "s3cret")
+      original_nick = visitor_nick(visitor)
+
+      pid = start_visitor_session_for(visitor, network)
+      :ok = await_handshake(server)
+
+      # Services rename us to a Guest — a self-NICK echo (sender == our nick).
+      nick_msg = %Message{
+        command: :nick,
+        params: ["Guest15769"],
+        prefix: {:nick, original_nick, "guest_u", "guest.host"},
+        tags: %{}
+      }
+
+      send(pid, {:irc, nick_msg})
+      # Drain the mailbox so the persist effect has run before we assert.
+      _ = SessionStateHelpers.fetch(pid)
+
+      # The credential nick — the login key — is untouched.
+      assert visitor_nick(visitor) == original_nick
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "ANON visitor: a NICK self-echo still persists (no login identity to protect)" do
+      {server, port} = start_server()
+      {visitor, network} = visitor_with_network(port)
+      original_nick = visitor_nick(visitor)
+
+      pid = start_visitor_session_for(visitor, network)
+      :ok = await_handshake(server)
+
+      nick_msg = %Message{
+        command: :nick,
+        params: ["renamedanon"],
+        prefix: {:nick, original_nick, "anon_u", "anon.host"},
+        tags: %{}
+      }
+
+      send(pid, {:irc, nick_msg})
+      _ = SessionStateHelpers.fetch(pid)
+
+      # Anon credential (auth_method :none) → echo-persist stays.
+      assert visitor_nick(visitor) == "renamedanon"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   # #131 — in-session NickServ SET PASSWD. Unlike IDENTIFY/REGISTER, a
   # SET PASSWD from an already-identified session emits NO `+r` transition,
   # so there's no rendezvous to stage against — the host commits the new

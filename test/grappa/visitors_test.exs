@@ -317,7 +317,7 @@ defmodule Grappa.VisitorsTest do
   end
 
   describe "update_nick/3 (#211 phase 7 — per-network credential)" do
-    test "rotates the credential nick", %{network: net} do
+    test "rotates an ANON credential nick (no login identity to protect)", %{network: net} do
       {:ok, v} = Visitors.find_or_provision_anon("vjt-nick", @network, "1.2.3.4")
 
       assert {:ok, cred} = Visitors.update_nick(v.id, net.id, "vjt-renamed")
@@ -325,11 +325,75 @@ defmodule Grappa.VisitorsTest do
       assert nick_of(v) == "vjt-renamed"
     end
 
+    # #561 — the NICK self-echo path must NOT rotate an IDENTIFIED
+    # credential's nick. Azzurra's services rename an unidentified visitor
+    # to `GuestNNNNN`; persisting that Guest onto the credential drifts the
+    # stored nick away from the identity its NickServ password belongs to,
+    # locking the visitor out on the next reconnect. The identified
+    # credential's nick is its login key — echo-immutable; it is bound only
+    # on a proven identify (+r) via `commit_identity/4`.
+    test "does NOT rotate an IDENTIFIED credential nick — protects the login key (#561)", %{
+      network: net
+    } do
+      {:ok, v} = Visitors.find_or_provision_anon("vjt-id", @network, "1.2.3.4")
+      {:ok, _} = Visitors.commit_password(v.id, net.id, "s3cret")
+      assert Credentials.visitor_registered?(v.id)
+
+      assert {:ok, :held_identified} = Visitors.update_nick(v.id, net.id, "Guest15769")
+      assert nick_of(v) == "vjt-id"
+    end
+
     test "returns {:error, :not_found} when the credential is gone", %{network: net} do
       {:ok, v} = Visitors.find_or_provision_anon("vjt-h14b", @network, "1.2.3.4")
       {:ok, _} = Grappa.Repo.delete(v)
 
       assert {:error, :not_found} = Visitors.update_nick(v.id, net.id, "vjt-renamed")
+    end
+  end
+
+  # #561 — the `+r`-observed commit binds BOTH the NickServ password AND the
+  # nick held at the identify instant. bahamut strips `+r` on any genuine
+  # nick change (`m_nick.c`: `mycmp(old, new) != 0` → `umode &= ~UMODE_r`),
+  # so `+r` on the wire ⟺ the current nick IS the identified account — the
+  # bound nick can never be a forced Guest.
+  describe "commit_identity/4 (#561 — +r binds the identified nick)" do
+    test "commits the password AND binds the identified nick", %{network: net} do
+      {:ok, v} = Visitors.find_or_provision_anon("vjt-ci", @network, "1.2.3.4")
+
+      # +r fires while wearing a grouped/registered nick the visitor
+      # identified with — distinct from the provisioned nick to prove the
+      # bind is a real write, not a no-op.
+      assert {:ok, _} = Visitors.commit_identity(v.id, net.id, "s3cret", "vjt-grouped")
+
+      assert password_of(v, net.id) == "s3cret"
+      assert Credentials.visitor_registered?(v.id)
+      assert nick_of(v) == "vjt-grouped"
+    end
+
+    test "returns {:error, :not_found} for an unknown (visitor, network)", %{network: net} do
+      assert {:error, :not_found} =
+               Visitors.commit_identity(Ecto.UUID.generate(), net.id, "s3cret", "vjt")
+    end
+
+    # The password commit is PRIMARY (the login secret); the nick bind is
+    # SECONDARY. A cross-visitor folded-nick collision on the bind must NOT
+    # undo the password — else a rare stale-row collision would drop a
+    # visitor's committed identity on the floor.
+    test "a folded-nick collision on the bind does NOT undo the committed password", %{
+      network: net
+    } do
+      # Another visitor already holds "Taken" (folded "taken") on this network.
+      {:ok, _} = Visitors.find_or_provision_anon("Taken", @network, "9.9.9.9")
+      {:ok, v} = Visitors.find_or_provision_anon("vjt-coll", @network, "1.2.3.4")
+
+      # commit tries to bind the colliding folded nick — the secondary bind
+      # fails on the folded-nick unique index; the PRIMARY password survives.
+      assert {:ok, _} = Visitors.commit_identity(v.id, net.id, "s3cret", "taken")
+
+      assert password_of(v, net.id) == "s3cret"
+      assert Credentials.visitor_registered?(v.id)
+      # Nick unchanged — the collision was rejected, not applied.
+      assert nick_of(v) == "vjt-coll"
     end
   end
 
