@@ -203,6 +203,65 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "connection_info/2 (#474 scope B)" do
+    test "returns the live connection facts once connected (registered false pre-+r)" do
+      # #474 B — the server-window rail shows the upstream connection facts in
+      # one call: which box the session dialled (the resolved peer IP:port,
+      # captured at connect like peer_address/3), whether the link is TLS, and
+      # whether the nick is identified to services. All are LIVE state — no new
+      # IRC traffic. The session dialled the in-process IRCServer on
+      # 127.0.0.1:<port> over plain TCP and no +r umode has been observed yet,
+      # so tls + registered are both false.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      _ = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      assert {:ok, %{server: "127.0.0.1", port: ^port, tls: false, registered: false}} =
+               Session.connection_info({:user, user.id}, network.id)
+    end
+
+    test "reports registered: true once the self +r umode is observed" do
+      # registered = the nick is identified to services, DERIVED from the +r
+      # usermode (the same identity signal #561 binds the visitor nick on),
+      # never a bare boolean grappa invents. A 221 RPL_UMODEIS carrying +r
+      # populates state.umodes; the umode_changed broadcast is the "processed"
+      # barrier before we read connection_info.
+      handler = fn state, line ->
+        if String.starts_with?(line, "USER ") do
+          {:reply, ":irc 001 grappa-test :Welcome\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(handler)
+      {user, network, _} = setup_user_and_network(port)
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      IRCServer.feed(server, ":irc.test.org 221 grappa-test +r\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :umode_changed}
+                     },
+                     1_000
+
+      assert {:ok, %{registered: true}} =
+               Session.connection_info({:user, user.id}, network.id)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "returns {:error, :no_session} when no session is registered" do
+      assert {:error, :no_session} =
+               Session.connection_info({:user, Ecto.UUID.generate()}, -1)
+    end
+  end
+
   describe "casemapping/2 (#537 INC-2.3)" do
     # The web-edge (controllers, GrappaChannel topic join) is stateless — it
     # has no `state.isupport` to read the network's CASEMAPPING from. This

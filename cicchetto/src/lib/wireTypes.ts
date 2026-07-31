@@ -567,6 +567,13 @@ export type NetworksWireCredentialJson = {
   updated_at: string;
 };
 
+export type NetworksWireConnectionInfo = {
+  server: string;
+  port: number;
+  tls: boolean;
+  registered: boolean;
+};
+
 export type NetworksWireNetworkWithNickJson = {
   kind: "user";
   id: number;
@@ -578,6 +585,7 @@ export type NetworksWireNetworkWithNickJson = {
   connection_state: NetworksCredentialConnectionState;
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
+  connection: NetworksWireConnectionInfo | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -593,6 +601,7 @@ export type NetworksWireVisitorNetworkWithNickJson = {
   connection_state: NetworksCredentialConnectionState;
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
+  connection: NetworksWireConnectionInfo | null;
   inserted_at: string;
   updated_at: string;
 };

@@ -43,8 +43,8 @@ defmodule GrappaWeb.NetworksController do
   must not dep `Admission` to avoid a cycle, and the orchestrator's
   own top-level boundary deps both freely.
 
-  Wire shapes live in `Grappa.Networks.Wire` — `network_with_nick_to_json/3`
-  (user GET row), `visitor_network_to_json/3` (visitor GET row), and
+  Wire shapes live in `Grappa.Networks.Wire` — `network_with_nick_to_json/4`
+  (user GET row), `visitor_network_to_json/4` (visitor GET row), and
   `credential_to_json/1` (PATCH). The view layer (`NetworksJSON`) is a
   thin delegator.
   """
@@ -80,12 +80,15 @@ defmodule GrappaWeb.NetworksController do
         # needs to derive the per-network + cascading per-channel greyed
         # treatment. nick stays the live-vs-configured Session.Server
         # value; T32 fields come straight off the credential row of record.
-        network_triples =
+        network_rows =
           Enum.map(credentials, fn cred ->
-            {cred.network, Networks.resolve_network_nick({:user, user.id}, cred), cred}
+            subject = {:user, user.id}
+
+            {cred.network, Networks.resolve_network_nick(subject, cred), cred,
+             resolve_connection_info(subject, cred.network_id)}
           end)
 
-        render(conn, :index, networks: {:user, network_triples})
+        render(conn, :index, networks: {:user, network_rows})
 
       {:visitor, visitor} ->
         # #211 phase 6 — list-shaped visitor branch (ruling A). A visitor
@@ -100,12 +103,29 @@ defmodule GrappaWeb.NetworksController do
         # is dropped from the wire this phase, the column at phase 7).
         credentials = Credentials.list_visitor_credentials(visitor.id)
 
-        network_triples =
+        network_rows =
           Enum.map(credentials, fn cred ->
-            {cred.network, Networks.resolve_network_nick({:visitor, visitor.id}, cred), cred}
+            subject = {:visitor, visitor.id}
+
+            {cred.network, Networks.resolve_network_nick(subject, cred), cred,
+             resolve_connection_info(subject, cred.network_id)}
           end)
 
-        render(conn, :index, networks: {:visitor, network_triples})
+        render(conn, :index, networks: {:visitor, network_rows})
+    end
+  end
+
+  # #474 B — resolve the LIVE upstream connection facts for a /networks row, or
+  # nil when there is no live connected session (parked / failed / no pid) — the
+  # honest "no connection" the server-window rail renders as an absent card.
+  # Same live-vs-DB split as `resolve_network_nick/2`: these facts come from the
+  # running Session.Server, never the credential row of record.
+  @spec resolve_connection_info(Session.subject(), integer()) ::
+          Session.connection_info() | nil
+  defp resolve_connection_info(subject, network_id) do
+    case Session.connection_info(subject, network_id) do
+      {:ok, info} -> info
+      {:error, _} -> nil
     end
   end
 

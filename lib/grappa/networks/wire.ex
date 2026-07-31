@@ -45,6 +45,25 @@ defmodule Grappa.Networks.Wire do
         }
 
   @typedoc """
+  #474 scope B — the LIVE upstream connection facts embedded under
+  `:connection` on both `GET /networks` twins: which box the socket dialled
+  (`:server` = the resolved peer IP string, #550), the transport `:tls`
+  posture, and whether the nick is identified to services (`:registered`,
+  from the +r umode — the same identity signal #561 keys on). All are live
+  Session.Server state (no new IRC traffic); the `:connection` field is
+  `nil` whenever there is no live connected session (parked / failed /
+  reconnecting), the honest "no live connection" signal — prefer omitting
+  over a stale value. Sourced by the controller via
+  `Grappa.Session.connection_info/2`.
+  """
+  @type connection_info :: %{
+          server: String.t(),
+          port: integer(),
+          tls: boolean(),
+          registered: boolean()
+        }
+
+  @typedoc """
   Wire shape for `GET /networks` when the caller has a USER `Credential`
   row — carries `:nick` (the per-network configured IRC nick) AND the
   T32 connection-state fields (`:connection_state`,
@@ -79,6 +98,7 @@ defmodule Grappa.Networks.Wire do
           connection_state: Credential.connection_state(),
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: String.t() | nil,
+          connection: connection_info() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -121,6 +141,7 @@ defmodule Grappa.Networks.Wire do
           connection_state: Credential.connection_state(),
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: String.t() | nil,
+          connection: connection_info() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -282,10 +303,14 @@ defmodule Grappa.Networks.Wire do
   fields are always credential-row-of-record (DB-persisted user intent),
   so they come straight off the credential without divergence.
   """
-  @spec network_with_nick_to_json(Network.t(), String.t(), Credential.t()) ::
-          network_with_nick_json()
-  def network_with_nick_to_json(%Network{} = n, nick, %Credential{} = cred)
-      when is_binary(nick) and nick != "" do
+  @spec network_with_nick_to_json(
+          Network.t(),
+          String.t(),
+          Credential.t(),
+          connection_info() | nil
+        ) :: network_with_nick_json()
+  def network_with_nick_to_json(%Network{} = n, nick, %Credential{} = cred, connection)
+      when is_binary(nick) and nick != "" and (is_map(connection) or is_nil(connection)) do
     %{
       kind: :user,
       id: n.id,
@@ -297,13 +322,14 @@ defmodule Grappa.Networks.Wire do
       connection_state: cred.connection_state,
       connection_state_reason: cred.connection_state_reason,
       connection_state_changed_at: WireTime.iso8601_or_nil(cred.connection_state_changed_at),
+      connection: connection_json(connection),
       inserted_at: DateTime.to_iso8601(n.inserted_at),
       updated_at: DateTime.to_iso8601(n.updated_at)
     }
   end
 
   @doc """
-  #211 phase 6 — the VISITOR twin of `network_with_nick_to_json/3`.
+  #211 phase 6 — the VISITOR twin of `network_with_nick_to_json/4`.
   Renders a `Networks.Network` + the visitor credential's live-nick +
   the credential's `connection_state` fields to the
   `visitor_network_with_nick_json` shape used by `GET /networks` for
@@ -321,10 +347,14 @@ defmodule Grappa.Networks.Wire do
   discriminator differs from the user twin (`:visitor` vs `:user`) so
   cic resolves the correct subject-scoped nick.
   """
-  @spec visitor_network_to_json(Network.t(), String.t(), Credential.t()) ::
-          visitor_network_with_nick_json()
-  def visitor_network_to_json(%Network{} = n, nick, %Credential{} = cred)
-      when is_binary(nick) and nick != "" do
+  @spec visitor_network_to_json(
+          Network.t(),
+          String.t(),
+          Credential.t(),
+          connection_info() | nil
+        ) :: visitor_network_with_nick_json()
+  def visitor_network_to_json(%Network{} = n, nick, %Credential{} = cred, connection)
+      when is_binary(nick) and nick != "" and (is_map(connection) or is_nil(connection)) do
     %{
       kind: :visitor,
       id: n.id,
@@ -336,6 +366,7 @@ defmodule Grappa.Networks.Wire do
       connection_state: cred.connection_state,
       connection_state_reason: cred.connection_state_reason,
       connection_state_changed_at: WireTime.iso8601_or_nil(cred.connection_state_changed_at),
+      connection: connection_json(connection),
       inserted_at: DateTime.to_iso8601(n.inserted_at),
       updated_at: DateTime.to_iso8601(n.updated_at)
     }
@@ -442,5 +473,16 @@ defmodule Grappa.Networks.Wire do
       networks: Enum.map(pairs, fn {cred, nick} -> home_network_row(cred, nick) end),
       available_networks: Enum.map(available_slugs, fn slug -> %{slug: slug} end)
     }
+  end
+
+  # #474 B — projects the `Grappa.Session.connection_info/2` result (the map
+  # the controller resolved, or nil when there is no live connected session)
+  # onto the exact `:connection` wire shape. Rebuilt field-by-field rather
+  # than passed through so this module stays the SSOT for the JSON shape.
+  @spec connection_json(connection_info() | nil) :: connection_info() | nil
+  defp connection_json(nil), do: nil
+
+  defp connection_json(%{server: server, port: port, tls: tls, registered: registered}) do
+    %{server: server, port: port, tls: tls, registered: registered}
   end
 end

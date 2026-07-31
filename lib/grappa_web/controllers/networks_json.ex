@@ -30,18 +30,18 @@ defmodule GrappaWeb.NetworksJSON do
   """
   @spec index(%{
           networks:
-            {:user, [{Network.t(), String.t(), Credential.t()}]}
-            | {:visitor, [{Network.t(), String.t(), Credential.t()}]}
+            {:user, [{Network.t(), String.t(), Credential.t(), Wire.connection_info() | nil}]}
+            | {:visitor, [{Network.t(), String.t(), Credential.t(), Wire.connection_info() | nil}]}
         }) :: [Wire.network_with_nick_json()] | [Wire.visitor_network_with_nick_json()]
-  def index(%{networks: {:user, network_triples}}) do
-    Enum.map(network_triples, fn {network, nick, cred} ->
-      Wire.network_with_nick_to_json(network, nick, cred)
+  def index(%{networks: {:user, network_rows}}) do
+    Enum.map(network_rows, fn {network, nick, cred, connection} ->
+      Wire.network_with_nick_to_json(network, nick, cred, connection)
     end)
   end
 
-  def index(%{networks: {:visitor, network_triples}}) do
-    Enum.map(network_triples, fn {network, nick, cred} ->
-      Wire.visitor_network_to_json(network, nick, cred)
+  def index(%{networks: {:visitor, network_rows}}) do
+    Enum.map(network_rows, fn {network, nick, cred, connection} ->
+      Wire.visitor_network_to_json(network, nick, cred, connection)
     end)
   end
 

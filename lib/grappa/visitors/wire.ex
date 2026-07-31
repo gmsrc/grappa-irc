@@ -12,7 +12,7 @@ defmodule Grappa.Visitors.Wire do
   incognito}` (`incognito` #363 — the ephemeral-session flag; cic marks the
   session and disables share-session from it, never any secret).
   Per-network nick + connection state live on the `GET /networks` rows
-  (`Grappa.Networks.Wire.visitor_network_to_json/3`); cic resolves "my nick
+  (`Grappa.Networks.Wire.visitor_network_to_json/4`); cic resolves "my nick
   on network X" from there (`ownNickForNetwork`), never from the subject.
 
   `registered` is DERIVED from the credentials (≥1 credential holding a

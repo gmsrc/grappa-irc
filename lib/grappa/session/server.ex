@@ -569,6 +569,10 @@ defmodule Grappa.Session.Server do
           # (`:inet.ntoa/1`) at capture so the read side stays format-free.
           peer_address: String.t() | nil,
           peer_port: :inet.port_number() | nil,
+          # #474 B — the dialled transport's TLS posture (from the resolved
+          # plan); immutable for the session. Read alongside peer_address +
+          # the +r umode by `handle_call({:connection_info}, ...)`.
+          tls: boolean(),
           notify_pid: pid() | nil,
           notify_ref: reference() | nil,
           pending_auth: nil | {String.t(), integer()},
@@ -1027,6 +1031,11 @@ defmodule Grappa.Session.Server do
       # #550 — nil until the Client pushes {:irc_peer, _} at connect.
       peer_address: nil,
       peer_port: nil,
+      # #474 B — the dialled transport's TLS posture, from the resolved plan
+      # (SessionPlan.resolve sets it from the network's server row). Immutable
+      # for the session; surfaced (with peer_address + the +r umode) by
+      # `Grappa.Session.connection_info/2` for the server-window rail card.
+      tls: Map.get(opts, :tls, false),
       notify_pid: Map.get(opts, :notify_pid),
       notify_ref: Map.get(opts, :notify_ref),
       pending_auth: nil,
@@ -2043,16 +2052,30 @@ defmodule Grappa.Session.Server do
     {:reply, {:ok, channels}, state}
   end
 
-  # #550 — the cached upstream peer (destination) for the admin Sessions
-  # inventory. Instant state read; `{:error, :no_peer}` in every
-  # not-connected window (pre-connect, mid-reconnect, socket just closed) is
-  # the honest degraded signal. Public via `Grappa.Session.peer_address/3`.
-  def handle_call({:peer_address}, _, %{peer_address: nil} = state) do
+  # #550 + #474 B — the live upstream connection facts, read in one state pass:
+  # the cached peer (destination the socket dialled) for the admin Sessions
+  # inventory (#550), plus the transport TLS posture + whether the nick is
+  # identified to services (the +r umode) for the server-window rail card
+  # (#474 B). `{:error, :no_peer}` in every not-connected window (pre-connect,
+  # mid-reconnect, socket just closed) is the honest degraded signal — no
+  # fabricated address. ONE accessor: `Grappa.Session.connection_info/3`
+  # returns the full map; `Grappa.Session.peer_address/3` is the {server, port}
+  # projection over this same call (no second overlapping handler). `tls` +
+  # `umodes` via `Map.get` for the #216 hot-reload-safety contract (a session
+  # started before #474 has neither key in state).
+  def handle_call({:connection_info}, _, %{peer_address: nil} = state) do
     {:reply, {:error, :no_peer}, state}
   end
 
-  def handle_call({:peer_address}, _, state) do
-    {:reply, {:ok, {state.peer_address, state.peer_port}}, state}
+  def handle_call({:connection_info}, _, state) do
+    info = %{
+      server: state.peer_address,
+      port: state.peer_port,
+      tls: Map.get(state, :tls, false),
+      registered: "r" in Map.get(state, :umodes, [])
+    }
+
+    {:reply, {:ok, info}, state}
   end
 
   # #537 INC-2.3 — the network's CASEMAPPING for the stateless web-edge

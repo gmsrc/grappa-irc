@@ -19,8 +19,8 @@ defmodule GrappaWeb.NetworksControllerTest do
   collapses to 404 so credential-existence is not leaked.
 
   Wire shapes come from `Grappa.Networks.Wire` —
-  `network_with_nick_to_json/3` (user GET row),
-  `visitor_network_to_json/3` (visitor GET row), and
+  `network_with_nick_to_json/4` (user GET row),
+  `visitor_network_to_json/4` (visitor GET row), and
   `credential_to_json/1` (PATCH — returns the updated credential
   including connection_state fields).
 

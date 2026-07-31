@@ -169,7 +169,7 @@ defmodule Grappa.Networks.WireTest do
   end
 
   describe "services_flavor exposure (GH #349) on both GET /networks twins" do
-    test "network_with_nick_to_json/3 (user twin) carries services_flavor",
+    test "network_with_nick_to_json/4 (user twin) carries services_flavor",
          %{network: network} do
       net = %{network | services_flavor: :atheme}
 
@@ -180,13 +180,13 @@ defmodule Grappa.Networks.WireTest do
         connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
       }
 
-      json = Wire.network_with_nick_to_json(net, "vjt", cred)
+      json = Wire.network_with_nick_to_json(net, "vjt", cred, nil)
 
       assert json.kind == :user
       assert json.services_flavor == :atheme
     end
 
-    test "visitor_network_to_json/3 (visitor twin) carries services_flavor",
+    test "visitor_network_to_json/4 (visitor twin) carries services_flavor",
          %{network: network} do
       net = %{network | services_flavor: :azzurra}
 
@@ -197,7 +197,7 @@ defmodule Grappa.Networks.WireTest do
         connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
       }
 
-      json = Wire.visitor_network_to_json(net, "vjt", cred)
+      json = Wire.visitor_network_to_json(net, "vjt", cred, nil)
 
       assert json.kind == :visitor
       assert json.services_flavor == :azzurra
@@ -213,12 +213,56 @@ defmodule Grappa.Networks.WireTest do
       }
 
       # setup builds the network via find_or_create_network → nil flavor.
-      assert Wire.network_with_nick_to_json(network, "vjt", cred).services_flavor == nil
-      assert Wire.visitor_network_to_json(network, "vjt", cred).services_flavor == nil
+      assert Wire.network_with_nick_to_json(network, "vjt", cred, nil).services_flavor == nil
+      assert Wire.visitor_network_to_json(network, "vjt", cred, nil).services_flavor == nil
     end
   end
 
-  describe "visitor_network_to_json/3 (#211 phase 6 — visitor GET /networks row)" do
+  describe "connection field (#474 scope B) on both GET /networks twins" do
+    test "network_with_nick_to_json/4 embeds the live connection facts",
+         %{network: network} do
+      cred = %Credential{
+        network: network,
+        nick: "vjt",
+        connection_state: :connected,
+        connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
+      }
+
+      conn = %{server: "89.31.72.10", port: 6697, tls: true, registered: true}
+      json = Wire.network_with_nick_to_json(network, "vjt", cred, conn)
+
+      assert json.connection == %{server: "89.31.72.10", port: 6697, tls: true, registered: true}
+    end
+
+    test "visitor_network_to_json/4 embeds the live connection facts",
+         %{network: network} do
+      cred = %Credential{
+        network: network,
+        nick: "vjt",
+        connection_state: :connected,
+        connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
+      }
+
+      conn = %{server: "127.0.0.1", port: 6667, tls: false, registered: false}
+
+      assert Wire.visitor_network_to_json(network, "vjt", cred, conn).connection == conn
+    end
+
+    test "connection: nil when the session is not live (honest, no fabricated facts)",
+         %{network: network} do
+      cred = %Credential{
+        network: network,
+        nick: "vjt",
+        connection_state: :parked,
+        connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
+      }
+
+      assert Wire.network_with_nick_to_json(network, "vjt", cred, nil).connection == nil
+      assert Wire.visitor_network_to_json(network, "vjt", cred, nil).connection == nil
+    end
+  end
+
+  describe "visitor_network_to_json/4 (#211 phase 6 — visitor GET /networks row)" do
     test "renders the visitor twin shape (kind: :visitor, nick, connection_state)",
          %{network: network} do
       cred = %Credential{
@@ -229,7 +273,7 @@ defmodule Grappa.Networks.WireTest do
         connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
       }
 
-      json = Wire.visitor_network_to_json(network, "vjt-live", cred)
+      json = Wire.visitor_network_to_json(network, "vjt-live", cred, nil)
 
       assert json.kind == :visitor
       assert json.id == network.id
@@ -254,7 +298,7 @@ defmodule Grappa.Networks.WireTest do
         connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
       }
 
-      json = Wire.visitor_network_to_json(network, "vjt", cred)
+      json = Wire.visitor_network_to_json(network, "vjt", cred, nil)
 
       assert json.connection_state == :parked
       assert json.connection_state_reason == "user-disconnect"
@@ -268,7 +312,7 @@ defmodule Grappa.Networks.WireTest do
         connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
       }
 
-      assert is_binary(Jason.encode!(Wire.visitor_network_to_json(network, "vjt", cred)))
+      assert is_binary(Jason.encode!(Wire.visitor_network_to_json(network, "vjt", cred, nil)))
     end
   end
 

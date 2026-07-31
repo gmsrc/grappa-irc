@@ -889,26 +889,71 @@ defmodule Grappa.Session do
     call_session(subject, network_id, {:list_channels}, timeout_ms)
   end
 
+  @typedoc """
+  #474 B — the live upstream connection facts for a session: which box the
+  socket dialled (`server` = peer IP string), the transport TLS posture,
+  and whether the nick is identified to services (`registered`, from the
+  +r umode). Present only while connected; the accessors below degrade to
+  `{:error, :no_peer}` otherwise.
+  """
+  @type connection_info :: %{
+          server: String.t(),
+          port: :inet.port_number(),
+          tls: boolean(),
+          registered: boolean()
+        }
+
+  @doc """
+  Returns the live upstream connection facts for the session at
+  `(subject, network_id)` — `%{server, port, tls, registered}` (#474 B,
+  the server-window rail card).
+
+  `server` is the peer IP as a string (`:inet.ntoa/1` of the v6/v4 tuple),
+  captured once at connect and cached (immutable for the connection), so
+  this is an instant state read; `registered` is derived from the live
+  umode set (the same +r identity signal #561 keys on).
+
+  Returns `{:error, :no_peer}` in every not-connected window (pre-connect,
+  mid-reconnect, socket just closed) — the honest "unknown", never
+  fabricated facts — and `{:error, :no_session}` when no session is
+  registered for `(subject, network_id)`.
+  """
+  @spec connection_info(subject(), integer()) ::
+          {:ok, connection_info()} | {:error, :no_session | :no_peer}
+  def connection_info(subject, network_id)
+      when is_subject(subject) and is_integer(network_id) do
+    call_session(subject, network_id, {:connection_info})
+  end
+
+  @doc """
+  Variant of `connection_info/2` accepting an explicit per-call receive
+  `timeout_ms` — `{:error, :timeout}` instead of the default 5s exit
+  cascade for a mailbox-bloated pid. `:infinity` delegates to the
+  underlying GenServer.call.
+  """
+  @spec connection_info(subject(), integer(), timeout()) ::
+          {:ok, connection_info()} | {:error, :no_session | :no_peer | :timeout}
+  def connection_info(subject, network_id, timeout_ms)
+      when is_subject(subject) and is_integer(network_id) and
+             (is_integer(timeout_ms) or timeout_ms == :infinity) do
+    call_session(subject, network_id, {:connection_info}, timeout_ms)
+  end
+
   @doc """
   Returns the upstream peer (`{address, port}`) the session at
   `(subject, network_id)` is connected to — the destination the IRC
   socket actually landed on (#550, netsplit triage).
 
-  `address` is the peer IP as a string (`:inet.ntoa/1` of the v6/v4
-  tuple). The peer is captured once at connect and cached on the
-  Session.Server (immutable for the connection's lifetime), so this is
-  an instant state read.
-
-  Returns `{:error, :no_peer}` in every not-connected window (pre-connect,
-  mid-reconnect, socket just closed) — the honest "unknown", never a
-  fabricated address — and `{:error, :no_session}` when no session is
-  registered for `(subject, network_id)`.
+  The `{server, port}` projection of `connection_info/2` — ONE underlying
+  accessor, no second overlapping handler. `address` is the peer IP as a
+  string. Same `{:error, :no_peer}` / `{:error, :no_session}` degraded
+  signals.
   """
   @spec peer_address(subject(), integer()) ::
           {:ok, {String.t(), :inet.port_number()}} | {:error, :no_session | :no_peer}
   def peer_address(subject, network_id)
       when is_subject(subject) and is_integer(network_id) do
-    call_session(subject, network_id, {:peer_address})
+    subject |> connection_info(network_id) |> project_peer_address()
   end
 
   @doc """
@@ -926,8 +971,13 @@ defmodule Grappa.Session do
   def peer_address(subject, network_id, timeout_ms)
       when is_subject(subject) and is_integer(network_id) and
              (is_integer(timeout_ms) or timeout_ms == :infinity) do
-    call_session(subject, network_id, {:peer_address}, timeout_ms)
+    subject |> connection_info(network_id, timeout_ms) |> project_peer_address()
   end
+
+  @spec project_peer_address({:ok, connection_info()} | {:error, atom()}) ::
+          {:ok, {String.t(), :inet.port_number()}} | {:error, atom()}
+  defp project_peer_address({:ok, %{server: server, port: port}}), do: {:ok, {server, port}}
+  defp project_peer_address({:error, _} = err), do: err
 
   @doc """
   Returns the network's IRC `CASEMAPPING` as observed by the LIVE session at
