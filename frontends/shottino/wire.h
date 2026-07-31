@@ -522,6 +522,13 @@ bool wire_narrow_message(const json_value *row, struct wire_scrollback_message *
 /* Narrow one event payload. Returns false (leaving `*ev` untouched) when
  * the payload is malformed OR the kind is one shottino does not consume —
  * the caller treats both as "drop", exactly like cic's default-null arm. */
+/* Does this build recognise the payload's `kind`? Lets a caller
+ * distinguish "a newer server sent something we do not implement yet"
+ * (ignore it — the wire is additive-only) from "we know this kind and
+ * refused its payload" (say so out loud). `kind_out` receives the raw
+ * string, or NULL when there is not one. */
+bool wire_kind_known(const json_value *p, const char **kind_out);
+
 bool wire_narrow(const json_value *payload, struct wire_event *ev);
 
 /* ── Element accessors ─────────────────────────────────────────────────

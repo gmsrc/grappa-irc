@@ -346,9 +346,26 @@ TEST(whois_minimal_and_rejects) {
     CHECK_LONG(ev.u.whois.extra_count, 0);
     json_free(d);
 
-    /* A missing boolean flag is a contract break: the server always emits
-     * these (false when the numeric did not fire), so absence is a bug. */
-    reject("{\"kind\":\"whois_bundle\",\"network\":\"a\",\"target\":\"t\"}");
+    /* A missing boolean flag DEFAULTS to false rather than dropping the
+     * bundle. The server emits them all today (false when the numeric
+     * did not fire), but the wire is additive-only and a client must
+     * survive a field it does not get: requiring them meant one absent
+     * flag threw away a whole WHOIS, which reads to the user as the
+     * command having done nothing at all. Network and target are still
+     * required — without them there is nothing to show. */
+    {
+        struct wire_event bare;
+        bool bare_ok;
+        json_doc *bd =
+            narrow("{\"kind\":\"whois_bundle\",\"network\":\"a\",\"target\":\"t\"}", &bare,
+                   &bare_ok);
+        CHECK(bare_ok);
+        CHECK_STR(bare.u.whois.target, "t");
+        CHECK(!bare.u.whois.is_operator);
+        CHECK(!bare.u.whois.secure);
+        json_free(bd);
+    }
+    reject("{\"kind\":\"whois_bundle\",\"network\":\"a\"}");
     /* A non-string element in `channels` drops the whole bundle. */
     reject("{\"kind\":\"whois_bundle\",\"network\":\"a\",\"target\":\"t\",\"user\":null,"
            "\"host\":null,\"realname\":null,\"server\":null,\"server_info\":null,"

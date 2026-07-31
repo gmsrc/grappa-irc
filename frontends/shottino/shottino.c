@@ -4491,7 +4491,21 @@ static void handle_ws_frame(struct app *app, const char *frame) {
             log_line(app, "channel join error: %.200s", frame);
     } else if (strcmp(f.event, "event") == 0) {
         struct wire_event ev;
-        if (wire_narrow(f.payload, &ev)) handle_wire_event(app, &ev);
+        if (wire_narrow(f.payload, &ev)) {
+            handle_wire_event(app, &ev);
+        } else {
+            /* A payload we KNOW the kind of and refused anyway is a bug —
+             * ours or the server's — and it used to vanish without a
+             * word, which is how a /whois that answers nothing looks
+             * like a command that did nothing. An unknown kind is NOT a
+             * bug: the wire is additive-only and a newer server is
+             * allowed to push things this build has never heard of, so
+             * that stays silent. */
+            const char *kind = NULL;
+            if (wire_kind_known(f.payload, &kind))
+                log_line(app, "dropped a %s event this client could not read — please report it",
+                         kind ? kind : "(unnamed)");
+        }
     }
     json_free(doc);
 }

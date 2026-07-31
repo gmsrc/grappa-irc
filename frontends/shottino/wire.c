@@ -322,6 +322,20 @@ static bool narrow_window_state(const json_value *p, wire_kind kind, struct wire
 
 /* ── The narrower ─────────────────────────────────────────────────────── */
 
+/* Is this a kind this build knows about?
+ *
+ * The wire is additive-only: a server may push a kind a client has never
+ * heard of, and ignoring it is CORRECT. A kind we DO know whose payload
+ * we then refuse is a different animal — that is a bug, in the narrower
+ * or in the server, and it must be visible rather than dropped in
+ * silence. The caller can only tell the two apart by asking. */
+bool wire_kind_known(const json_value *p, const char **kind_out) {
+    if (json_type_of(p) != JSON_OBJECT) return false;
+    const char *kind_str = json_string(json_get(p, "kind"));
+    if (kind_out) *kind_out = kind_str;
+    return kind_str && kind_of(kind_str) != WIRE_UNKNOWN;
+}
+
 bool wire_narrow(const json_value *p, struct wire_event *ev) {
     if (json_type_of(p) != JSON_OBJECT) return false;
     const char *kind_str = json_string(json_get(p, "kind"));
@@ -579,8 +593,15 @@ bool wire_narrow(const json_value *p, struct wire_event *ev) {
             {"is_java", &w.u.whois.is_java},
             {"secure", &w.u.whois.secure},
         };
+        /* DEFAULTED, not required. The wire is additive-only and a
+         * client must tolerate a field it does not get: these are the
+         * WHOIS legs an ircd may simply never send, and the server's own
+         * contract is "booleans default to false". Requiring them meant
+         * one absent flag threw away the WHOLE bundle — a /whois that
+         * answers with nothing at all, which reads as the command having
+         * failed rather than as a missing leg. */
         for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++)
-            if (!json_bool_req(p, flags[i].key, flags[i].slot)) return false;
+            if (!json_bool_dflt(p, flags[i].key, false, flags[i].slot)) return false;
 
         if (!json_long_opt(p, "idle_seconds", &w.u.whois.idle_seconds, &w.u.whois.has_idle))
             return false;
