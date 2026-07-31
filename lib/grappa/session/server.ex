@@ -1719,12 +1719,15 @@ defmodule Grappa.Session.Server do
     {:reply, Client.send_invite(state.client, channel, nick), state}
   end
 
-  # P-0d — bare LUSERS upstream. Reply numerics fold into
-  # state.lusers_pending; 266 RPL_GLOBALUSERS flushes the bundle.
-  # No accumulator priming needed — 251 RPL_LUSERCLIENT resets the
-  # accumulator on arrival.
-  def handle_call(:send_lusers, _, state) do
-    {:reply, Client.send_lusers(state.client), state}
+  # P-0d/#571 — LUSERS [<mask> [<server>]] upstream. Reply numerics fold into
+  # state.lusers_pending; 266 RPL_GLOBALUSERS flushes the bundle. No
+  # accumulator priming needed — 251 RPL_LUSERCLIENT resets the accumulator on
+  # arrival. #571 forwards the optional mask/server (was dropped): a non-`*`
+  # mask forces bahamut's live recount past the 180s cache; a server routes
+  # the query remotely. Client.send_lusers/3 gates each token at the byte
+  # boundary (nil/nil = bare LUSERS).
+  def handle_call({:send_lusers, mask, server}, _, state) do
+    {:reply, Client.send_lusers(state.client, mask, server), state}
   end
 
   # #127 — /info, /version, /motd. Each primes its accumulator BEFORE putting

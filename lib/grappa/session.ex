@@ -1298,16 +1298,26 @@ defmodule Grappa.Session do
   end
 
   @doc """
-  Sends bare `LUSERS` upstream. Server replies with the 7-numeric
-  bundle (251/252/253?/254/255/265/266) which `EventRouter` folds and
-  emits as a typed `:lusers_bundle` wire event on `Topic.user/1`.
-  Returns `:ok` or `{:error, :no_session}`.
+  #571 — sends `LUSERS [<mask> [<server>]]` upstream (RFC 2812 §3.4.2). `nil`
+  mask + `nil` server = the current server's cached figures; a `mask` filters
+  the reply AND (on bahamut, when non-`*`) forces a live recount past the
+  180s cache; a `mask` + `server` routes the query to a named remote server.
+  Server replies with the 7-numeric bundle (251/252/253?/254/255/265/266)
+  which `EventRouter` folds and emits as a typed `:lusers_bundle` wire event
+  on `Topic.user/1`.
+
+  Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}` if a
+  non-nil mask/server's syntax is rejected by `Grappa.IRC.Client.send_lusers/3`
+  (mirror of `send_motd/3` + `send_links/3`; the channel door validates first,
+  but the context contract stays honest for every door). A `server` with no
+  `mask` is `{:error, :invalid_line}` (positional framing, RFC 2812 §3.4.2).
   """
-  @spec send_lusers(subject(), integer()) ::
-          :ok | {:error, :no_session | send_transport_error()}
-  def send_lusers(subject, network_id)
-      when is_subject(subject) and is_integer(network_id) do
-    call_session(subject, network_id, :send_lusers)
+  @spec send_lusers(subject(), integer(), String.t() | nil, String.t() | nil) ::
+          :ok | {:error, :no_session | :invalid_line | send_transport_error()}
+  def send_lusers(subject, network_id, mask, server)
+      when is_subject(subject) and is_integer(network_id) and
+             (is_binary(mask) or is_nil(mask)) and (is_binary(server) or is_nil(server)) do
+    call_session(subject, network_id, {:send_lusers, mask, server})
   end
 
   @doc """

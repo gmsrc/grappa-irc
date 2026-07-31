@@ -539,6 +539,68 @@ defmodule Grappa.IRC.ClientTest do
       assert {:error, :invalid_line} = Client.send_motd(client, "srv\r\nQUIT")
     end
 
+    # #571 — /lusers [<mask> [<server>]] (RFC 2812 §3.4.2). Pre-#571
+    # send_lusers/1 always emitted a bare `LUSERS`, dropping any mask/server a
+    # client supplied — so an oper could never reach bahamut's forced live
+    # recount (gated on a non-`*` mask) and `LUSERS <mask> <server>` could not
+    # route to a remote server. send_lusers/3 forwards both optional params
+    # positionally: nil/nil → bare LUSERS; mask/nil → `LUSERS <mask>`;
+    # mask/server → `LUSERS <mask> <server>`. Each token is gated by
+    # safe_oper_token? (single wire token) so injection can't splice a slot.
+    test "send_lusers/3 with nil/nil emits bare LUSERS framing" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_lusers(client, nil, nil)
+
+      assert {:ok, "LUSERS\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "LUSERS\r\n"), 1_000)
+    end
+
+    test "send_lusers/3 with a mask emits LUSERS <mask> framing" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_lusers(client, "*.azzurra.org", nil)
+
+      assert {:ok, "LUSERS *.azzurra.org\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "LUSERS *.azzurra.org\r\n"), 1_000)
+    end
+
+    test "send_lusers/3 with mask + server emits LUSERS <mask> <server> framing" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_lusers(client, "*.azzurra.org", "void.azzurra.chat")
+
+      assert {:ok, "LUSERS *.azzurra.org void.azzurra.chat\r\n"} =
+               IRCServer.wait_for_line(
+                 server,
+                 &(&1 == "LUSERS *.azzurra.org void.azzurra.chat\r\n"),
+                 1_000
+               )
+    end
+
+    test "send_lusers/3 rejects an injection mask/server with {:error, :invalid_line}" do
+      {_, port} = start_server()
+      client = start_client(port)
+
+      # A space would splice an extra LUSERS wire slot; CRLF would inject a
+      # follow-up command. Both rejected by the single-token gate.
+      assert {:error, :invalid_line} = Client.send_lusers(client, "m a", nil)
+      assert {:error, :invalid_line} = Client.send_lusers(client, "m\r\nQUIT", nil)
+      assert {:error, :invalid_line} = Client.send_lusers(client, "*.azzurra.org", "s\r\nQUIT")
+    end
+
+    test "send_lusers/3 rejects a server without a mask with {:error, :invalid_line}" do
+      {_, port} = start_server()
+      client = start_client(port)
+
+      # LUSERS routes <server> positionally AFTER <mask> (RFC 2812 §3.4.2), so
+      # a server with no mask cannot be framed — reject at the boundary.
+      assert {:error, :invalid_line} = Client.send_lusers(client, nil, "void.azzurra.chat")
+    end
+
     test "send_topic_clear/2 emits TOPIC #chan : framing (empty trailing param)" do
       {server, port} = start_server()
       client = start_client(port)
