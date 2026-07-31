@@ -1366,6 +1366,20 @@ createRoot(() => {
           // stale flag left by a /lusers issued on a prior (now-dead)
           // session. Clear on the "connecting" edge (before the burst).
           if (payload.state === "connecting") clearLusersRequested(payload.network);
+          // #474 B — refetch the per-network rows once the socket is truly up.
+          // The LIVE `connection` facts (dialled server / port / TLS / +r
+          // identified) reach the store ONLY via a full GET /networks, and the
+          // only other trigger — connection_state_changed — fires at the DB
+          // :parked → :connected flip, BEFORE the peer is captured (its refetch
+          // returns connection: null). "connected" is 001 RPL_WELCOME: the peer
+          // IS captured and (for SASL) +r is already set, so refetch now to fill
+          // the server-window rail card. Without this the card is blank exactly
+          // after a runtime reconnect — the #550 netsplit-triage case the card
+          // exists for. GET /networks emits no connection_progress, so no loop.
+          // Known follow-on (#474): a nick that gains +r LATER via post-connect
+          // NickServ IDENTIFY (auth_method :nickserv_identify) reads
+          // identified="no" until the next natural refetch — not chased here.
+          if (payload.state === "connected") refetchNetworks();
           return;
 
         // #247 — /notify watch list + presence. Full-list snapshot

@@ -760,6 +760,32 @@ describe("userTopic", () => {
       expect(lb.clearLusersRequested).not.toHaveBeenCalled();
     });
 
+    // #474 B — the LIVE `connection` facts (dialled server / TLS / +r) reach
+    // the store ONLY via a full GET /networks. "connected" (001 RPL_WELCOME)
+    // is the first moment the peer is captured, so the arm refetches to fill
+    // the server-window rail card. Without this the card is blank exactly
+    // after a runtime reconnect (the #550 case) until a page reload, because
+    // the connection_state_changed refetch already fired pre-peer-capture.
+    it("refetches /networks on state connected (fills #474 B connection facts)", async () => {
+      const nw = await import("../lib/networks");
+      channelMock.fireEvent({
+        kind: "connection_progress",
+        network: "bahamut-test",
+        state: "connected",
+      });
+      expect(nw.refetchNetworks).toHaveBeenCalled();
+    });
+
+    it("does NOT refetch /networks on state connecting (peer not yet up)", async () => {
+      const nw = await import("../lib/networks");
+      channelMock.fireEvent({
+        kind: "connection_progress",
+        network: "bahamut-test",
+        state: "connecting",
+      });
+      expect(nw.refetchNetworks).not.toHaveBeenCalled();
+    });
+
     it("drops payload with an unknown state (no setReconnecting call)", async () => {
       const rs = await import("../lib/reconnectingStatus");
       channelMock.fireEvent({
