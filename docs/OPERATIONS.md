@@ -537,6 +537,45 @@ sequence:
 5. **Dual-net announce** (#grappa on Azzurra + Libera via the ircbot) + `gh issue
    close` the deployed issues + strip their `status:soon`.
 
+### The published release image (ghcr.io) — #503 unit C
+
+Cutting a `vX.Y.Z` tag also builds and pushes a **self-contained release
+image** to `ghcr.io/vjt/grappa` — a fourth `release.yml` job (`docker`)
+alongside `deb`/`arch`/`rpm`. It is the `curl | bash` / `docker run`
+substrate's payload (bring-up + one-liners are unit D).
+
+- **What it is.** A `mix release` (bundled ERTS + compiled beams + the built
+  cicchetto SPA), built from `Dockerfile.release` — DISTINCT from the top-level
+  `Dockerfile`, which is the dev/CI toolchain image. It boots `bin/grappa start`
+  and **has NO `Phoenix.CodeReloader`**: the published image is a runtime, not a
+  hot-edit dev environment. The `compose`/dev stack stays the development
+  runtime; a hot update on the release image swaps beams into
+  `lib/grappa-<vsn>/ebin` and fires `Grappa.HotReload` (unit E), never the dev
+  reloader.
+- **Tags + labels.** `:<git tag>` + `:latest`, multi-arch `linux/amd64 +
+  linux/arm64` (buildx + QEMU), OCI `source`/`version`/`revision` labels so the
+  ghcr package page links back to the exact commit. Pushed with the ambient
+  `GITHUB_TOKEN` (`packages: write`). The `docker` job is standalone (publishes
+  to the registry itself, not a Release asset) — it is NOT in `publish`'s
+  `needs`.
+- **Version.** The image reports the BARE `X.Y.Z` (no `.git` in the build
+  context → the `#391` no-git path, like the AUR tarball). `docker inspect`
+  shows the image tag; the RUNNING app is the version source of truth.
+- **VALIDATE BEFORE A REAL TAG.** `release.yml` has had ZERO runs. Before
+  relying on the `docker` job for a real tag, trigger it via
+  `workflow_dispatch` against an EXISTING tag (the `tag` input, e.g. `v0.8.0`) —
+  it (re)builds that tag's tree and pushes the image. The arm64 leg is
+  QEMU-emulated on the amd64 runner; a stale QEMU crashes the emulated BEAM JIT
+  at the first `mix` call, so the job pins a recent `tonistiigi/binfmt` via
+  `setup-qemu-action`. If the emulated arm64 leg proves unreliable on CI, the
+  fallback (needs vjt's sign-off — it deviates from the buildx+QEMU decision) is
+  native arm64 runners (`ubuntu-24.04-arm`) + `docker manifest`.
+- **Local build** (validate the Dockerfile without CI):
+  `docker buildx build -f Dockerfile.release --load -t grappa-release:test .`
+  builds the native arch; add `--platform linux/amd64,linux/arm64` for the
+  multi-arch manifest (needs `docker run --privileged --rm tonistiigi/binfmt
+  --install all` first for a recent QEMU).
+
 ### Running operator actions against the live jail (prod)
 
 Prod is a **bastille jail** (name `grappa`, `/usr/local/bastille/jails/grappa/root`,
