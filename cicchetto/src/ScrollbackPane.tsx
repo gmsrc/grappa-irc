@@ -559,6 +559,33 @@ const renderRawEvent = (
   }
 };
 
+// #569 — numeric rows (meta.numeric, no raw_verb) persisted by
+// Session.Server's generic `{:numeric, _}` handler. `body` is only the
+// TRAILING param; the payload for STATS (211-219, 240-250), 396
+// RPL_HOSTHIDDEN, and every other middle-param numeric lives in
+// `meta.raw_params` — #424 kept the full list there but cic discarded it,
+// so a Q-line rendered a bare `-1` and a cloak sat invisible. This is the
+// numeric twin of `renderRawEvent`: `raw_params[0]` is the recipient's own
+// nick on virtually every numeric and is dropped, not printed; per-numeric
+// pretty arms (217, 396, …) grow here incrementally keyed on
+// `raw.numeric`, like renderRawEvent's per-verb arms, while the default
+// joins the surviving params so no payload is ever invisible. Returns the
+// body span only — the caller frames it with the dash-bracketed server
+// sender. The #455 textual-emphasis layer stays OFF: numerics are a
+// server-generated surface (STATS masks, host cloaks, config fields —
+// exactly the snake_case / path / `*`-junk the per-surface ruling keeps
+// unstyled), like the sibling ERROR / server_event / generic-numeric arms.
+// Only the wire mIRC layer (\x02/\x1D/\x1F) renders.
+type NumericEvent = { numeric?: number; raw_params?: string[] };
+const renderNumeric = (raw: NumericEvent): JSX.Element => {
+  const params = (raw.raw_params ?? []).slice(1);
+  return (
+    <span class="scrollback-body">
+      <MircBody body={params.join(" ")} />
+    </span>
+  );
+};
+
 const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element => {
   // UX-5 bucket BC2 + #25: per-message sender prefix glyph (@/%/+).
   //
@@ -643,6 +670,23 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
       const meta = msg.meta as RawEvent | undefined;
       if (meta && typeof meta.raw_verb === "string") {
         return renderRawEvent(meta, msg, bareSenderSpan, handlers);
+      }
+      // #569 — numeric rows carry meta.numeric + meta.raw_params (no
+      // raw_verb). Render the whole param list (own-nick dropped) so
+      // middle-param payloads (STATS masks, the 396 cloak) are visible,
+      // not just the trailing token. A numeric missing raw_params
+      // (pre-#424 backfill) falls through to the trailing-body branch.
+      const numericMeta = msg.meta as NumericEvent | undefined;
+      if (
+        numericMeta &&
+        typeof numericMeta.numeric === "number" &&
+        Array.isArray(numericMeta.raw_params)
+      ) {
+        return (
+          <>
+            {senderSpan("-", "-", msg.sender)} {renderNumeric(numericMeta)}
+          </>
+        );
       }
       return (
         <>

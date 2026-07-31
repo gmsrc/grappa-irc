@@ -2259,6 +2259,147 @@ describe("ScrollbackPane", () => {
     });
   });
 
+  // #569 — numeric rows (meta.numeric, no raw_verb) render the WHOLE
+  // param list, not just the trailing param. #424 already persists the
+  // full list in meta.raw_params; the client discarded it, so every
+  // numeric with a middle-param payload showed only its trailing token
+  // (a column of `-1` for STATS Q-lines, an invisible cloak for 396).
+  // raw_params[0] is the recipient's own nick on virtually every numeric
+  // and is dropped, not printed. Per-numeric pretty arms grow
+  // incrementally; the default joins the surviving params.
+  describe("notice numeric raw-params rendering (#569)", () => {
+    // Libera, 396 RPL_HOSTHIDDEN — the cloak is a MIDDLE param.
+    // Wire: `:molybdenum.libera.chat 396 vjt-claude user/vjt-claude
+    //        :is now your hidden host (set by services.)`
+    const hostHiddenRow: ScrollbackMessage = {
+      id: 300,
+      network: "libera",
+      channel: "$server",
+      server_time: 300,
+      kind: "notice",
+      sender: "molybdenum.libera.chat",
+      body: "is now your hidden host (set by services.)",
+      meta: {
+        numeric: 396,
+        severity: "ok",
+        raw_params: ["vjt-claude", "user/vjt-claude", "is now your hidden host (set by services.)"],
+      },
+    };
+
+    // Azzurra/bahamut, 217 RPL_STATSQLINE — the Q-line mask is a MIDDLE
+    // param; the trailing is bahamut's BAD_CONF_CLASS `-1`.
+    const statsQLineRow: ScrollbackMessage = {
+      id: 301,
+      network: "azzurra",
+      channel: "$server",
+      server_time: 301,
+      kind: "notice",
+      sender: "irc.azzurra.net",
+      body: "-1",
+      meta: {
+        numeric: 217,
+        severity: "ok",
+        raw_params: ["mynick", "Q", "spamming", "*", "*.evil.example", "0", "-1"],
+      },
+    };
+
+    // A generic numeric whose own-nick at raw_params[0] is a distinctive
+    // token that must NOT survive to the rendered row.
+    const ownNickDropRow: ScrollbackMessage = {
+      id: 302,
+      network: "libera",
+      channel: "$server",
+      server_time: 302,
+      kind: "notice",
+      sender: "irc.example.net",
+      body: "trailing-text",
+      meta: {
+        numeric: 999,
+        severity: "ok",
+        raw_params: ["ownnick123", "payload-here", "trailing-text"],
+      },
+    };
+
+    // Pre-#424 backfill / malformed numeric: meta.numeric present but no
+    // raw_params. Must still render the trailing body (graceful
+    // degradation), never crash or blank the row.
+    const backfillNumericRow: ScrollbackMessage = {
+      id: 303,
+      network: "libera",
+      channel: "$server",
+      server_time: 303,
+      kind: "notice",
+      sender: "irc.example.net",
+      body: "Highest connection count: 42",
+      meta: {
+        numeric: 250,
+        severity: "ok",
+      },
+    };
+
+    it("396 RPL_HOSTHIDDEN renders the cloak host (a middle param)", () => {
+      setScrollback({ "libera $server": [hostHiddenRow] });
+      render(() => <ScrollbackPane networkSlug="libera" channelName="$server" kind="channel" />);
+      const line = screen.getByTestId("scrollback-line");
+      expect(line.textContent).toContain("user/vjt-claude");
+      expect(line.textContent).toContain("is now your hidden host");
+    });
+
+    it("217 RPL_STATSQLINE renders the Q-line mask, not just the trailing -1", () => {
+      setScrollback({ "azzurra $server": [statsQLineRow] });
+      render(() => <ScrollbackPane networkSlug="azzurra" channelName="$server" kind="channel" />);
+      const line = screen.getByTestId("scrollback-line");
+      expect(line.textContent).toContain("*.evil.example");
+      expect(line.textContent).toContain("Q");
+    });
+
+    it("drops raw_params[0] (the recipient's own nick) from the rendered row", () => {
+      setScrollback({ "libera $server": [ownNickDropRow] });
+      render(() => <ScrollbackPane networkSlug="libera" channelName="$server" kind="channel" />);
+      const line = screen.getByTestId("scrollback-line");
+      expect(line.textContent).not.toContain("ownnick123");
+      expect(line.textContent).toContain("payload-here");
+      expect(line.textContent).toContain("trailing-text");
+    });
+
+    it("numeric with no raw_params (backfill) falls back to the trailing body", () => {
+      setScrollback({ "libera $server": [backfillNumericRow] });
+      render(() => <ScrollbackPane networkSlug="libera" channelName="$server" kind="channel" />);
+      const line = screen.getByTestId("scrollback-line");
+      expect(line.textContent).toContain("Highest connection count: 42");
+    });
+
+    // #455 per-surface ruling: numerics are a server-generated surface, so
+    // the textual-emphasis layer stays OFF (like the ERROR / server_event /
+    // generic-numeric arms — server structural text is where snake_case /
+    // path / mask junk concentrates). A payload token wrapped in *…* must
+    // render as plain text, never a .scrollback-mirc-bold emphasis span.
+    const emphasisMarkerNumericRow: ScrollbackMessage = {
+      id: 304,
+      network: "libera",
+      channel: "$server",
+      server_time: 304,
+      kind: "notice",
+      sender: "irc.example.net",
+      body: "trailing",
+      meta: {
+        numeric: 247,
+        severity: "ok",
+        raw_params: ["mynick", "*spam*", "trailing"],
+      },
+    };
+
+    it("does NOT apply textual emphasis to numeric payloads (#455 server surface)", () => {
+      setScrollback({ "libera $server": [emphasisMarkerNumericRow] });
+      render(() => <ScrollbackPane networkSlug="libera" channelName="$server" kind="channel" />);
+      const line = screen.getByTestId("scrollback-line");
+      // Emphasis OFF: the *spam* token stays plain text, not a bold span.
+      expect(line.querySelector(".scrollback-mirc-bold")).toBeNull();
+      // The marker chars stay visible regardless (textContent guard).
+      expect(line.textContent).toContain("*spam*");
+    });
+  });
+
   // No-silent-drops B6.11 (HIGH-7): :server_event typed kind for the
   // EventRouter catch-all. Pre-flip these arrived as `notice +
   // raw_verb`; both flows render via `renderRawEvent`. The
