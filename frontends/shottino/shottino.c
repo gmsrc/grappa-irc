@@ -459,6 +459,11 @@ struct overlay_item {
 struct overlay {
     enum overlay_kind kind;
     int x, y;                 /* anchor (menu only) */
+    /* The box the last frame actually drew, written back by draw() after
+     * the clamping. The pointer is tested against THESE: a hit test
+     * against where the box was asked to go acts on items that are not
+     * where the user is looking. */
+    int w, h;
     size_t sel;
     /* First entry shown. A picker offers more entries than the box has
      * rows, so the window into the list follows the selection — without
@@ -5413,6 +5418,8 @@ static void draw(struct app *app) {
             app->overlay.top = n > (size_t)list_h ? n - (size_t)list_h : 0;
         app->overlay.x = box_x;
         app->overlay.y = box_y;
+        app->overlay.w = box_w;
+        app->overlay.h = box_h;
 
         const char *verb = app->overlay.kind == OVERLAY_MEDIA
                                ? (app->overlay.pick_action == ACT_VIEW ? "open" : "preview")
@@ -6289,6 +6296,12 @@ static bool overlay_key(struct app *app, int ch) {
     enum overlay_kind kind = app->overlay.kind;
     pthread_mutex_unlock(&app->lock);
     if (kind == OVERLAY_NONE) return false;
+
+    /* Not a key. Left to handle_mouse, which is what makes the pointer
+     * able to pick an item at all — this used to consume KEY_MOUSE along
+     * with everything else, so the menu's own click handling below was
+     * unreachable and the mouse did nothing while a menu was up. */
+    if (ch == KEY_MOUSE) return false;
 
     if (ch == 27) {
         overlay_close(app);
@@ -8558,15 +8571,25 @@ static void handle_mouse(struct app *app) {
 #ifdef BUTTON3_PRESSED
     right = (ev.bstate & (BUTTON3_PRESSED | BUTTON3_CLICKED)) != 0;
 #endif
+    /* Read before the overlay branch: the wheel steers an open menu, and
+     * asking after it would mean asking twice. */
+    bool wheel_up = false, wheel_down = false;
+#ifdef BUTTON4_PRESSED
+    wheel_up = (ev.bstate & BUTTON4_PRESSED) != 0;
+#endif
+#ifdef BUTTON5_PRESSED
+    wheel_down = (ev.bstate & BUTTON5_PRESSED) != 0;
+#endif
 
-    /* An open overlay takes the click: on an item it acts, anywhere else
-     * it closes. A modal that ignores clicks outside itself is a modal
-     * you have to guess your way out of. */
+    /* An open overlay owns the pointer: the pointer highlights, the
+     * click acts, the wheel walks the list, and a click anywhere outside
+     * the box is Esc. A modal that ignores the mouse is a modal you have
+     * to guess your way out of — and this one did ignore it, because the
+     * key handler swallowed KEY_MOUSE before this function ever ran. */
     pthread_mutex_lock(&app->lock);
     bool overlay_open = app->overlay.kind != OVERLAY_NONE;
     pthread_mutex_unlock(&app->lock);
     if (overlay_open) {
-        if (!click && !right) return;
         struct overlay_item items[64];
         bool hit = false;
         pthread_mutex_lock(&app->lock);
@@ -8576,12 +8599,26 @@ static void handle_mouse(struct app *app) {
          * `top`, not from the head of the list. */
         bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA;
         int first = picker ? app->overlay.y + 1 : app->overlay.y;
+        /* The BOX, both dimensions. Testing the row alone made every
+         * click on the far side of the screen count as a click on
+         * whatever item shared its line. */
+        bool in_box = ev.x >= app->overlay.x && ev.x < app->overlay.x + app->overlay.w &&
+                      ev.y >= app->overlay.y && ev.y < app->overlay.y + app->overlay.h;
         size_t idx = ev.y >= first ? app->overlay.top + (size_t)(ev.y - first) : 0;
-        if (ev.y >= first && idx < n) {
+        bool on_item = in_box && ev.y >= first && idx < n;
+        if (on_item) {
+            /* Hover highlights, so the item that acts is the item the
+             * pointer is on — whether the click follows or not. */
             app->overlay.sel = idx;
             hit = true;
         }
+        if (n && (wheel_up || wheel_down)) {
+            if (wheel_down) app->overlay.sel = (app->overlay.sel + 1) % n;
+            else app->overlay.sel = app->overlay.sel == 0 ? n - 1 : app->overlay.sel - 1;
+        }
         pthread_mutex_unlock(&app->lock);
+        if (wheel_up || wheel_down) return;
+        if (!click && !right) return; /* motion and button releases only move the highlight */
         if (hit) overlay_activate(app);
         else overlay_close(app);
         return;
@@ -8609,13 +8646,6 @@ static void handle_mouse(struct app *app) {
      * depends on the terminal width, so ask the same question the draw
      * path asks: wide terminals put it on the right, narrow ones in the
      * sidebar under the window list. */
-    bool wheel_up = false, wheel_down = false;
-#ifdef BUTTON4_PRESSED
-    wheel_up = (ev.bstate & BUTTON4_PRESSED) != 0;
-#endif
-#ifdef BUTTON5_PRESSED
-    wheel_down = (ev.bstate & BUTTON5_PRESSED) != 0;
-#endif
     if (wheel_up || wheel_down) {
         int cols = getmaxx(stdscr);
         int side = cols > 118 ? 22 : (cols > 90 ? 18 : 14);
