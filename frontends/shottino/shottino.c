@@ -61,6 +61,13 @@
 /* Locally blocked nicks. A list you scroll past is a list you stop
  * curating, so it is bounded and the bound is loud (/block says so). */
 #define MAX_BLOCKS 128
+/* Outstanding CTCP pings. Small: these live for seconds, and a user who
+ * has more than this in flight is not reading the answers anyway. */
+#define MAX_PENDING_PINGS 16
+/* How long to wait before saying so. A CTCP ping that has not come back
+ * in half a minute is not coming back — the other client does not answer
+ * them, or the person is gone. */
+#define PING_TIMEOUT_MS 30000
 #define MAX_CHANNEL 256
 #define MAX_SLUG 128
 #define MAX_LINE 1024
@@ -736,6 +743,23 @@ struct app {
      * folded like every other nick. */
     char blocks[MAX_BLOCKS][MAX_CHANNEL];
     size_t block_count;
+    /* CTCP pings we are waiting on.
+     *
+     * The stamp travels in the payload and comes back in the reply, so
+     * the first version kept no table at all — the payload WAS the
+     * record. That only holds if the reply arrives live, and it often
+     * does not: a ping to somebody with no query window open answers on
+     * a topic this client is not subscribed to, and only surfaces when
+     * grappa opens the window and the scrollback is backfilled. A
+     * matched stamp is what lets a backfilled reply still be reported
+     * as the round trip it was, while a replay of an OLD ping matches
+     * nothing and stays quiet. */
+    struct pending_ping {
+        char network[MAX_SLUG];
+        char nick[MAX_CHANNEL];
+        long stamp;
+    } pings[MAX_PENDING_PINGS];
+    size_t ping_count;
     /* Mouse tracking preference. OFF by default: tracking necessarily
      * suppresses the terminal's own copy/paste selection, and for a
      * terminal client selection matters far more day-to-day than
@@ -1974,6 +1998,70 @@ static void card(struct app *app, const char *network, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 static bool is_blocked(struct app *app, const char *nick);
 
+/* Remember a ping we just sent, so its answer can be recognised whenever
+ * it turns up. Oldest out when full — a table that refuses new entries
+ * would silently stop reporting the pings the user is watching NOW. */
+static void ping_remember(struct app *app, const char *network, const char *nick, long stamp) {
+    pthread_mutex_lock(&app->lock);
+    if (app->ping_count == MAX_PENDING_PINGS) {
+        memmove(app->pings, app->pings + 1, sizeof(app->pings[0]) * (MAX_PENDING_PINGS - 1));
+        app->ping_count--;
+    }
+    struct pending_ping *p = &app->pings[app->ping_count++];
+    snprintf(p->network, sizeof(p->network), "%s", network);
+    snprintf(p->nick, sizeof(p->nick), "%s", nick);
+    p->stamp = stamp;
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Was this reply one of ours? Claims the entry, so a duplicate delivery
+ * of the same row cannot report the same round trip twice. */
+static bool ping_claim(struct app *app, const char *network, const char *nick, long stamp) {
+    bool found = false;
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->ping_count; i++) {
+        if (app->pings[i].stamp != stamp) continue;
+        if (!irc_name_eq(app->pings[i].network, network)) continue;
+        if (!irc_name_eq(app->pings[i].nick, nick)) continue;
+        memmove(app->pings + i, app->pings + i + 1,
+                sizeof(app->pings[0]) * (app->ping_count - i - 1));
+        app->ping_count--;
+        found = true;
+        break;
+    }
+    pthread_mutex_unlock(&app->lock);
+    return found;
+}
+
+/* Say so when an answer never came. A /ping that quietly does nothing is
+ * indistinguishable from a /ping that was never sent — which is exactly
+ * the confusion this whole path has already cost once. */
+static void ping_sweep(struct app *app) {
+    long now = monotonic_ms();
+    for (;;) {
+        char network[MAX_SLUG] = "", nick[MAX_CHANNEL] = "";
+        long age = 0;
+        pthread_mutex_lock(&app->lock);
+        size_t expired = SIZE_MAX;
+        for (size_t i = 0; i < app->ping_count; i++) {
+            if (now - app->pings[i].stamp < PING_TIMEOUT_MS) continue;
+            expired = i;
+            snprintf(network, sizeof(network), "%s", app->pings[i].network);
+            snprintf(nick, sizeof(nick), "%s", app->pings[i].nick);
+            age = now - app->pings[i].stamp;
+            break;
+        }
+        if (expired != SIZE_MAX) {
+            memmove(app->pings + expired, app->pings + expired + 1,
+                    sizeof(app->pings[0]) * (app->ping_count - expired - 1));
+            app->ping_count--;
+        }
+        pthread_mutex_unlock(&app->lock);
+        if (expired == SIZE_MAX) return;
+        card(app, network, "--- no PING reply from %s after %lds", nick, age / 1000);
+    }
+}
+
 /* A CTCP reply, shown as the answer it is.
  *
  * `\x01VERB payload\x01` arriving as a NOTICE is somebody answering a
@@ -1987,8 +2075,26 @@ static bool is_blocked(struct app *app, const char *nick);
  * payload IS the record. A payload we did not write — an unsolicited
  * reply, another client's stamp — is shown verbatim rather than turned
  * into a nonsense duration. */
+/* An inbound CTCP QUERY, named rather than dumped.
+ *
+ * `\001PING 1234\001` drawn verbatim is what a self-ping looked like: a
+ * query window full of control characters. The verb is the useful part;
+ * the payload is an opaque token the asker chose. */
+static void render_ctcp_request(struct app *app, const char *network, const char *sender,
+                                const char *body) {
+    char verb[32] = "";
+    const char *p = body + 1;
+    size_t i = 0;
+    while (p[i] && p[i] != ' ' && p[i] != '\001' && i + 1 < sizeof(verb)) {
+        verb[i] = (char)toupper((unsigned char)p[i]);
+        i++;
+    }
+    verb[i] = 0;
+    card(app, network, "--- CTCP %s from %s", verb[0] ? verb : "(unnamed)", sender);
+}
+
 static void render_ctcp_reply(struct app *app, const char *network, const char *sender,
-                              const char *body) {
+                              const char *body, bool live) {
     char verb[32] = "", payload[MAX_LINE] = "";
     const char *p = body + 1; /* past the leading \001 */
     size_t i = 0;
@@ -2009,16 +2115,21 @@ static void render_ctcp_reply(struct app *app, const char *network, const char *
     if (strcmp(verb, "PING") == 0) {
         char *end = NULL;
         long stamp = strtol(payload, &end, 10);
-        long now = monotonic_ms();
-        /* A stamp of ours is a plain integer, in the past, and not
-         * older than the client itself. */
-        if (end && *end == 0 && stamp > 0 && stamp <= now) {
-            long ms = now - stamp;
+        /* Matched against the pings we are actually waiting on, not
+         * merely "is this a plausible timestamp". That is what makes a
+         * reply reported correctly whether it arrived live or came back
+         * with a window's backfilled scrollback — and what keeps a
+         * replayed old row from announcing a round trip twice. */
+        if (end && *end == 0 && stamp > 0 && ping_claim(app, network, sender, stamp)) {
+            long ms = monotonic_ms() - stamp;
             card(app, network, "--- PING reply from %s: %ld.%02lds", sender, ms / 1000,
                  (ms % 1000) / 10);
-            return;
         }
+        /* A PING reply we were not waiting for is somebody else's
+         * business, or ours from a previous run. Nothing to say. */
+        return;
     }
+    if (!live) return;
     if (payload[0]) card(app, network, "--- CTCP %s reply from %s: %s", verb, sender, payload);
     else card(app, network, "--- CTCP %s reply from %s", verb, sender);
 }
@@ -2040,12 +2151,18 @@ static void render_message(struct app *app, const struct wire_scrollback_message
     /* A CTCP reply is protocol, not conversation: it must not re-key
      * into a query window on its way past (see the card below). */
     bool ctcp_reply = m->kind == MSG_NOTICE && body[0] == '\001';
+    /* A CTCP REQUEST arrives as a PRIVMSG. ACTION is the one that IS
+     * conversation (grappa types it as :action, so it never lands here);
+     * the rest — PING, VERSION, TIME — are questions asked of this
+     * session, and they were drawn as a line of control characters in a
+     * query window: `^APING 1234^A`. Shown as what they are instead. */
+    bool ctcp_request = m->kind == MSG_PRIVMSG && body[0] == '\001';
 
     char display_channel[MAX_CHANNEL];
     snprintf(display_channel, sizeof(display_channel), "%s", channel);
     const char *own_nick = own_nick_for_network(app, network);
-    if (live && !ctcp_reply && own_nick && nick_case_equal(channel, own_nick) && sender[0] &&
-        !nick_case_equal(sender, own_nick)) {
+    if (live && !ctcp_reply && !ctcp_request && own_nick && nick_case_equal(channel, own_nick) &&
+        sender[0] && !nick_case_equal(sender, own_nick)) {
         snprintf(display_channel, sizeof(display_channel), "%s", sender);
         add_window_ex(app, network, display_channel, false);
     }
@@ -2115,10 +2232,23 @@ static void render_message(struct app *app, const struct wire_scrollback_message
      * itself. Rendered as a card instead, so it lands in the window
      * where the question was typed and leaves no tab behind. */
     if (ctcp_reply) {
-        /* Only as it HAPPENS. Replaying one out of scrollback would
-         * announce a round trip that finished hours ago, timed against a
-         * stamp from a previous run of the client. */
-        if (live) render_ctcp_reply(app, network, sender, body);
+        /* A PING reply is matched against the pings we are waiting on,
+         * so it reports correctly whether it arrived live or turned up
+         * in a window's backfill — which is the ONLY way it arrives when
+         * the ping opened no query window to subscribe to. Every other
+         * CTCP reply has no such record, so it is reported live only:
+         * replaying one out of scrollback would announce an answer to a
+         * question asked hours ago. */
+        if (live || strncmp(body, "\001PING", 5) == 0)
+            render_ctcp_reply(app, network, sender, body, live);
+        return;
+    }
+    if (ctcp_request) {
+        /* Reported, not answered: answering belongs to grappa, which is
+         * awake when no client is attached and already answers CTCP
+         * VERSION there. A client that answered on its own would answer
+         * only while it happened to be running. */
+        if (live) render_ctcp_request(app, network, sender, body);
         return;
     }
 
@@ -4716,6 +4846,9 @@ static void ws_pump(struct app *app) {
         char *hb = ws_v2_frame(0, ++app->ws_ref, "phoenix", "heartbeat", "{}");
         ws_send_text(app, hb);
         free(hb);
+        /* Same cadence: a ping that never came back is reported rather
+         * than forgotten. */
+        ping_sweep(app);
         app->next_heartbeat = now + 25;
     }
     for (;;) {
@@ -9068,7 +9201,8 @@ static void handle_command_dispatch(struct app *app, char *line) {
             log_line(app, "/ping requires a nick");
         } else {
             char frame[MAX_LINE];
-            snprintf(frame, sizeof(frame), "PRIVMSG %s :\001PING %ld\001", target, monotonic_ms());
+            long stamp = monotonic_ms();
+            snprintf(frame, sizeof(frame), "PRIVMSG %s :\001PING %ld\001", target, stamp);
             char *raw = json_escape(frame);
             char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}",
                                       current_network_id(app), raw);
@@ -9077,6 +9211,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
             free(payload);
             char net_now[MAX_SLUG];
             current_window_key(app, net_now, sizeof(net_now), NULL, 0);
+            ping_remember(app, net_now, target, stamp);
             card(app, net_now, "--- PING sent to %s", target);
         }
     } else if ((strncmp(line, "/block", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) ||

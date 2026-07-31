@@ -442,6 +442,15 @@ Media link previews:
   means "connect a network" here. `/die` and `/restart` have no confirmation
   step.
 - **People** — `/ping <nick>` CTCP-pings somebody and times the round trip.
+  The answer is matched against the pings still outstanding, so it reports
+  correctly whether it arrives live or turns up when the query window's
+  scrollback is backfilled; one that never arrives is reported as such after
+  30 seconds rather than silently forgotten. An inbound CTCP query (somebody
+  pinging *you*) is shown as `--- CTCP PING from nick`, not as the raw control
+  characters it is on the wire. **shottino does not ANSWER a CTCP query** —
+  that belongs to the bouncer, which is awake when no client is attached, and
+  grappa currently answers VERSION only. Until it answers PING, a ping aimed at
+  your own session (including pinging yourself) will not come back.
   `/block [nick]` (`/ignore`) hides somebody's messages **in this client
   only** — nothing is sent to the server, they keep talking, grappa keeps
   storing it, and the PWA on your phone keeps showing it. Bare `/block` lists

@@ -288,10 +288,17 @@ TEST(a_ctcp_reply_is_an_answer_not_a_message) {
     m.channel = "vjt";
     m.sender = "alice";
     m.kind = MSG_NOTICE;
+    /* Registered first: a PING reply is only OURS if we are waiting on
+     * that exact stamp. This test used to send an unregistered one and
+     * expect it reported, which is the behaviour that announced a round
+     * trip for somebody else's ping crossing our scrollback. */
+    long stamp = monotonic_ms() - 420;
+    ping_remember(app, "azzurra", "alice", stamp);
     char body[64];
-    snprintf(body, sizeof(body), "\001PING %ld\001", monotonic_ms() - 420);
+    snprintf(body, sizeof(body), "\001PING %ld\001", stamp);
     m.body = body;
     render_message(app, &m, true);
+    CHECK(app->log_count > 0);
 
     /* Drawn as a card, in the window the user is reading — not as a raw
      * control-character line, and not in a query window of its own. */
@@ -472,6 +479,112 @@ TEST(a_push_carries_the_joins_ref_not_its_own) {
     free(hb);
 }
 
+/* ── CTCP ping lifecycle ───────────────────────────────────────────── */
+
+TEST(a_ping_reply_is_matched_against_the_pings_we_are_waiting_on) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "$server", false);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+
+    long stamp = monotonic_ms() - 420;
+    ping_remember(app, "azzurra", "Alice", stamp);
+    CHECK_LONG(app->ping_count, 1);
+
+    /* The reply comes back from the same person in whatever case the
+     * ircd spells them, and claims the entry exactly once. */
+    CHECK(ping_claim(app, "azzurra", "alice", stamp));
+    CHECK_LONG(app->ping_count, 0);
+    CHECK(!ping_claim(app, "azzurra", "alice", stamp));
+
+    /* Somebody else's ping, and our own stamp from another network, are
+     * not ours to report. */
+    ping_remember(app, "azzurra", "alice", stamp);
+    CHECK(!ping_claim(app, "azzurra", "bob", stamp));
+    CHECK(!ping_claim(app, "other", "alice", stamp));
+    CHECK(!ping_claim(app, "azzurra", "alice", stamp + 1));
+    CHECK_LONG(app->ping_count, 1);
+    free_app(app);
+}
+
+TEST(a_backfilled_ping_reply_still_reports_its_round_trip) {
+    /* The reply to a ping that opened no query window arrives ONLY in
+     * that window's backfill — not live. Reporting live-only (which the
+     * first version did) meant /ping answered nothing at all for anyone
+     * you were not already talking to. */
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "$server", false);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+
+    long stamp = monotonic_ms() - 250;
+    ping_remember(app, "azzurra", "alice", stamp);
+
+    char body[64];
+    snprintf(body, sizeof(body), "\001PING %ld\001", stamp);
+    struct wire_scrollback_message m = { 0 };
+    m.id = 5;
+    m.network = "azzurra";
+    m.channel = "vjt";
+    m.sender = "alice";
+    m.kind = MSG_NOTICE;
+    m.body = body;
+    render_message(app, &m, false); /* NOT live: this is the backfill */
+
+    const char *row = app->log[app->log_count - 1];
+    CHECK(strstr(row, "PING reply from alice") != NULL);
+    CHECK_LONG(app->ping_count, 0);
+    free_app(app);
+}
+
+TEST(an_unsolicited_ping_reply_says_nothing) {
+    /* A reply we never asked for — somebody else's ping crossing our
+     * scrollback, or ours from a previous run of the client — matches no
+     * entry, so it is not announced as a round trip that never happened. */
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    size_t before = app->log_count;
+
+    struct wire_scrollback_message m = { 0 };
+    m.id = 6;
+    m.network = "azzurra";
+    m.channel = "vjt";
+    m.sender = "mallory";
+    m.kind = MSG_NOTICE;
+    m.body = "\001PING 12345\001";
+    render_message(app, &m, true);
+
+    CHECK_LONG(app->log_count, before);
+    free_app(app);
+}
+
+TEST(an_inbound_ctcp_query_is_named_not_dumped) {
+    /* What a self-ping used to look like: `^APING 1234^A` drawn as a
+     * chat line in a query window with yourself. It is a question asked
+     * of this session, so it reads as one — and it opens no window. */
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "$server", false);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    size_t windows_before = app->window_count;
+
+    struct wire_scrollback_message m = { 0 };
+    m.id = 7;
+    m.network = "azzurra";
+    m.channel = "vjt";
+    m.sender = "vjt";
+    m.kind = MSG_PRIVMSG;
+    m.body = "\001PING 1753776000123\001";
+    render_message(app, &m, true);
+
+    const char *row = app->log[app->log_count - 1];
+    CHECK(strstr(row, "CTCP PING from vjt") != NULL);
+    CHECK(strstr(row, "\001") == NULL);
+    CHECK_LONG(app->window_count, windows_before);
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -494,5 +607,9 @@ int main(void) {
     RUN(kill_is_offered_only_to_an_oper);
     RUN(the_wire_echo_never_prints_a_payload);
     RUN(a_push_carries_the_joins_ref_not_its_own);
+    RUN(a_ping_reply_is_matched_against_the_pings_we_are_waiting_on);
+    RUN(a_backfilled_ping_reply_still_reports_its_round_trip);
+    RUN(an_unsolicited_ping_reply_says_nothing);
+    RUN(an_inbound_ctcp_query_is_named_not_dumped);
     return test_report();
 }
