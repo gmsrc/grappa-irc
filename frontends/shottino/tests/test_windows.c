@@ -120,6 +120,29 @@ TEST(the_server_talking_opens_no_window_of_its_own) {
     free_app(app);
 }
 
+TEST(a_reply_card_lands_in_the_window_that_asked) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "$server", false);
+    add_window_ex(app, "azzurra", "#sniffo", true); /* what the user is reading */
+
+    card(app, "azzurra", "--- WHOIS alice");
+    char here[MAX_SLUG + MAX_CHANNEL + 8], server[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key("azzurra", "#sniffo", here, sizeof(here));
+    window_scope_key("azzurra", "$server", server, sizeof(server));
+    CHECK(log_row_in_scope(app, app->log_count - 1, here));
+    CHECK(!log_row_in_scope(app, app->log_count - 1, server));
+
+    /* An answer from a network the reader is not in stays on that
+     * network's server window rather than barging into the channel. */
+    card(app, "other", "--- WHOIS bob");
+    char elsewhere[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key("other", "$server", elsewhere, sizeof(elsewhere));
+    CHECK(log_row_in_scope(app, app->log_count - 1, elsewhere));
+    CHECK(!log_row_in_scope(app, app->log_count - 1, here));
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -128,5 +151,6 @@ int main(void) {
     RUN(the_server_window_is_a_name_not_a_spelling);
     RUN(traffic_named_after_the_network_is_the_server_talking);
     RUN(the_server_talking_opens_no_window_of_its_own);
+    RUN(a_reply_card_lands_in_the_window_that_asked);
     return test_report();
 }

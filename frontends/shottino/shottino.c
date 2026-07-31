@@ -3604,12 +3604,22 @@ static void copy_members_from_wire(struct app *app, const char *network, const c
  * /version were all write-only verbs: they did something on the server and
  * showed the user nothing.
  *
- * They render into the $server window of the network that answered, which
- * is where a terminal client conventionally puts server output — and,
- * unlike the global log, keeps one network's MOTD out of another's.
+ * They render where the user ASKED — the window that had focus when the
+ * answer arrived — because that is where they are looking and where they
+ * will look for it again. A /whois typed in a channel used to answer on
+ * $server, two tabs away, which reads as the command having done
+ * nothing. The row is filed under that window and stays there: switch
+ * away and it does not follow, switch back and it is still there. Same
+ * rule the rest of the operational output already follows (see
+ * log_scope_of_locked).
+ *
+ * A card for a network the focused window does not belong to still lands
+ * on that network's $server: the answer to a question asked elsewhere
+ * has no business in the conversation you are reading, and it keeps one
+ * network's MOTD out of another's.
  */
 
-/* One card row, scoped to a network's $server window. */
+/* One card row, filed under the window that is being read. */
 static void card(struct app *app, const char *network, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
@@ -3619,7 +3629,21 @@ static void card(struct app *app, const char *network, const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(body, sizeof(body), fmt, ap);
     va_end(ap);
-    log_line(app, "[%s/$server] %s", network, body);
+    /* The scope travels as the row's own prefix rather than being left
+     * to the focused window at push time: it is decided HERE, under one
+     * lock, so a card cannot be filed under a window the user switched
+     * to between the decision and the write. The prefix is stripped
+     * before drawing. */
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    pthread_mutex_lock(&app->lock);
+    size_t cur = focused_window_locked(app);
+    if (cur < app->window_count && irc_name_eq(app->windows[cur].network, network))
+        snprintf(scope, sizeof(scope), "[%s/%s]", app->windows[cur].network,
+                 app->windows[cur].channel);
+    else
+        snprintf(scope, sizeof(scope), "[%s/" SERVER_WINDOW "]", network);
+    pthread_mutex_unlock(&app->lock);
+    log_line(app, "%s %s", scope, body);
 }
 
 /* Skip a NULL/empty field rather than printing "(null)" or a blank row —
