@@ -15,7 +15,13 @@ defmodule GrappaWeb.Plugs.RemoteIpFromProxy do
       |-------------|-------------|-------------------------------------------|
       | loopback    | no          | trust peer (direct curl from inside box)  |
       | loopback    | yes         | trust XFF (local nginx is reverse-proxying) |
-      | non-loopback| any         | trust peer (direct client, ignore headers) |
+      | non-loopback| any         | delegate to `RemoteIp`: the forwarded-chain client if XFF is present (walked right-to-left, reserved ranges skipped), else the peer |
+
+  The `non-loopback` row is NOT "ignore headers and trust the peer":
+  a non-loopback peer WITH an XFF still has its chain walked (the
+  docker-bridge / operator-fronted-proxy shape) — see the plug tests.
+  The single source of truth for all three rows is
+  `trusted_client_ip/3`; the socket and HTTP doors both delegate to it.
 
   The middle row is the load-bearing one for the bastille jail
   (cp52 S2 incident): nginx runs in the same jail as grappa and
@@ -57,21 +63,87 @@ defmodule GrappaWeb.Plugs.RemoteIpFromProxy do
   it's an IPv4 address in IPv6 transport. Real clients that hit
   Phoenix via the v4-mapped form get treated as non-loopback
   peers, which is correct.
+
+  ## Shared trust SSOT (#543 Part C)
+
+  The trust DECISION lives in exactly one place — `trusted_client_ip/3`
+  — so callers OUTSIDE the plug pipeline reuse it verbatim instead of
+  reimplementing this (subtle, security-load-bearing) matrix. The HTTP
+  `call/2` delegates to it; `GrappaWeb.UserSocket.connect/3` calls the
+  zero-config `trusted_client_ip/2` with the `peer_data`/`x_headers` it
+  reads from `connect_info` (a WS `connect/3` gets `connect_info`, NOT a
+  `Plug.Conn`, so `RemoteIp` can't run as a plug there). Both paths land
+  the SAME trusted client IP — one door, one matrix.
   """
   @behaviour Plug
 
+  # The header allowlist SSOT — `init/1`'s default AND the set the
+  # zero-config `trusted_client_ip/2` uses. The endpoint plug is wired with
+  # this exact literal (`headers: ~w[x-forwarded-for x-real-ip]`), pinned by
+  # `RemoteIpFromProxyTest`'s "config wiring" drift test, so the HTTP and WS
+  # doors can't drift onto different header sets.
+  @default_headers ~w[x-forwarded-for x-real-ip]
+
+  @typedoc "Packed plug options: the header allowlist + the `RemoteIp` keyword opts."
+  @type opts :: {[binary()], keyword()}
+
   @impl Plug
+  @spec init(keyword()) :: opts()
   def init(opts) do
-    headers = Keyword.get(opts, :headers, ~w[x-forwarded-for x-real-ip])
-    {headers, RemoteIp.init(opts)}
+    headers = Keyword.get(opts, :headers, @default_headers)
+    # Keep the RAW keyword opts (not `RemoteIp.init/1`'s packed form): the
+    # SSOT resolves via `RemoteIp.from/2`, which re-packs internally and is
+    # the blessed non-`Plug.Conn` entry (RemoteIp moduledoc). `:headers` is
+    # forced so `from/2` honours the same allowlist the plug advertises.
+    {headers, Keyword.put(opts, :headers, headers)}
   end
 
   @impl Plug
-  def call(%Plug.Conn{remote_ip: peer} = conn, {headers, remote_ip_opts}) do
-    if loopback?(peer) and not has_forwarded_header?(conn, headers) do
-      conn
+  @spec call(Plug.Conn.t(), opts()) :: Plug.Conn.t()
+  def call(%Plug.Conn{remote_ip: peer, req_headers: req_headers} = conn, opts) do
+    ip = trusted_client_ip(peer, req_headers, opts)
+    # Preserve `RemoteIp.call/2`'s side-effect: it stamped the `:remote_ip`
+    # Logger metadata (config allowlists it — the HTTP log line carries the
+    # post-rewrite client IP). `RemoteIp.from/2` does NOT, so re-stamp it
+    # here. This is an HTTP-request logging concern local to the plug, not
+    # part of the shared trust decision.
+    put_remote_ip_metadata(ip)
+    %{conn | remote_ip: ip}
+  end
+
+  @doc """
+  Resolves the trusted client IP for a caller OUTSIDE the plug pipeline
+  (the WS `connect/3`), using the SAME default header allowlist the
+  endpoint plug is wired with. `req_headers` is the forwarded-header list
+  (`connect_info.x_headers`); `peer_ip` is `connect_info.peer_data.address`.
+  """
+  @spec trusted_client_ip(:inet.ip_address(), [{binary(), binary()}]) :: :inet.ip_address()
+  def trusted_client_ip(peer_ip, req_headers) when is_tuple(peer_ip) and is_list(req_headers) do
+    trusted_client_ip(peer_ip, req_headers, init([]))
+  end
+
+  @doc """
+  The trust-matrix SSOT: given the transport peer IP + the request's
+  forwarded headers, return the IP to trust as the client.
+
+      | peer         | XFF present | trusted                                   |
+      |--------------|-------------|-------------------------------------------|
+      | loopback     | no          | the peer (operator shell / direct curl)   |
+      | loopback     | yes         | the header-chain client (local nginx)     |
+      | non-loopback | any         | the header-chain client, else the peer    |
+
+  The non-loopback rows delegate to `RemoteIp.from/2`, which walks the
+  forwarded chain right-to-left and stops at the first non-reserved IP —
+  so a trusted proxy's appended real client wins over any forged leftmost
+  entry, and a header yielding no client falls back to the peer.
+  """
+  @spec trusted_client_ip(:inet.ip_address(), [{binary(), binary()}], opts()) ::
+          :inet.ip_address()
+  def trusted_client_ip(peer_ip, req_headers, {headers, remote_ip_opts}) do
+    if loopback?(peer_ip) and not has_forwarded_header?(req_headers, headers) do
+      peer_ip
     else
-      RemoteIp.call(conn, remote_ip_opts)
+      RemoteIp.from(req_headers, remote_ip_opts) || peer_ip
     end
   end
 
@@ -79,12 +151,17 @@ defmodule GrappaWeb.Plugs.RemoteIpFromProxy do
   defp loopback?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
   defp loopback?(_), do: false
 
-  defp has_forwarded_header?(conn, headers) do
-    Enum.any?(headers, fn name ->
-      case Plug.Conn.get_req_header(conn, name) do
-        [] -> false
-        _ -> true
-      end
-    end)
+  defp has_forwarded_header?(req_headers, headers) do
+    Enum.any?(req_headers, fn {name, _} -> name in headers end)
+  end
+
+  # Replicates `RemoteIp.call/2`'s `add_metadata/1` (a private dep helper):
+  # stamp the client IP as `:remote_ip` Logger metadata via `:inet.ntoa/1`,
+  # skipping a malformed tuple rather than crashing the request.
+  defp put_remote_ip_metadata(ip) do
+    case :inet.ntoa(ip) do
+      {:error, _} -> :ok
+      str -> Logger.metadata(remote_ip: to_string(str))
+    end
   end
 end
