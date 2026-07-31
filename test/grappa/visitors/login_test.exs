@@ -496,6 +496,34 @@ defmodule Grappa.Visitors.LoginTest do
       assert {:ok, _} = Accounts.authenticate(new_token)
     end
 
+    # #523 / #518 — the re-login door must degrade to a clean :db_unavailable (a
+    # 503 at the controller via FallbackController), NOT crash, when the session
+    # revoke can't ride out a sustained transient busy. FLAG-2 turned the old
+    # `:ok = Accounts.revoke_sessions_for_visitor(...)` — a MatchError CRASH on
+    # any non-:ok — into a `with :ok <- ...`; this test is the regression guard
+    # that keeps a revert from silently reintroducing the crash.
+    #
+    # `revoke_sessions_for_visitor/1` is the FIRST BusyRetry-wrapped op the
+    # rotate path reaches (validate_nick / network + identity resolution / the
+    # anon-token check are all UNWRAPPED reads the seam leaves alone), so the
+    # injected fault lands squarely on the revoke. The pool_size:1 Sandbox can't
+    # produce a real fast busy; the engine's :test-only per-process fault seam
+    # forces one (auto-clears with the test process, cannot leak to a sibling).
+    test "sustained busy on the session revoke → :db_unavailable (503), not a crash", %{
+      visitor: visitor,
+      token: token
+    } do
+      Grappa.Repo.BusyRetry.inject_transient_faults(10_000)
+
+      assert {:error, :db_unavailable} = Login.login(login_input(%{token: token}), [])
+
+      # The revoke degraded cleanly: the prior token is UNtouched (not revoked)
+      # and no new token was minted, so the client's retry starts from the same
+      # state — no half-applied session churn.
+      assert {:ok, %{visitor_id: id}} = Accounts.authenticate(token)
+      assert id == visitor.id
+    end
+
     test "no token → {:error, :anon_collision}" do
       assert {:error, :anon_collision} = Login.login(login_input(), [])
     end

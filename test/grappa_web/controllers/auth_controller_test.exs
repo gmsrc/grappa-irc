@@ -266,6 +266,29 @@ defmodule GrappaWeb.AuthControllerTest do
       assert json_response(conn, 503)["error"] == "network_unconfigured"
     end
 
+    # #523 / #518 — a visitor login whose provisioning write can't ride out a
+    # sustained transient busy must return a clean 503, NOT the opaque 500 the
+    # `visitor_error_response/4` catch-all (`:internal`) would render. This pins
+    # the ORDER: the `:db_unavailable` clause sits ABOVE the catch-all, and a
+    # regression that drops it below (or removes it) silently downgrades to 500.
+    # `create_anon` is the first BusyRetry-wrapped op the provision path reaches,
+    # and it fails BEFORE the IRC probe — so no server/Task.async is needed. The
+    # :test-only per-process fault seam forces the busy (auto-clears with the
+    # test process).
+    test "visitor login → 503 db_unavailable (not 500) under sustained transient DB busy",
+         %{conn: conn} do
+      {_, port} = start_server()
+      {_, _} = setup_visitor_network(port)
+
+      Grappa.Repo.BusyRetry.inject_transient_faults(10_000)
+
+      conn = post(conn, "/auth/login", %{"identifier" => "vjt"})
+
+      assert conn.status == 503
+      assert json_response(conn, 503)["error"] == "db_unavailable"
+      assert get_resp_header(conn, "retry-after") == ["1"]
+    end
+
     # #138 — mobile Chrome/Android soft keyboards inject a trailing space
     # (or other surrounding whitespace / non-printable control chars) into
     # the login field via autocapitalize/autocorrect/autofill. Pre-fix that
