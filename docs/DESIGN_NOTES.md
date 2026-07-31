@@ -24387,3 +24387,47 @@ scope here. The server contract is now ready for cic (or any client) to supply
 the params. Regression-guarded by `client_test` (bare/mask/mask+server framing
 + injection + server-without-mask rejection) and `grappa_channel_test` (the
 same five cases through the channel door).
+
+---
+
+## 2026-07-31 — #506: eliminate the fresh-DB WAL-switch race (log noise, not a flake)
+
+**Symptom.** `Exqlite.Connection ("db_conn_N") failed to connect: (Exqlite.Error)
+database is locked` during `mix ecto.migrate` on a FRESH DB — seen in the e2e
+seeder logs, filed as the flake-campaign ROOT.
+
+**Diagnosis was overturned by an evidence-first repro.** The static diagnosis
+(pool of 5 racing the WAL switch → set the seeder to `pool_size: 1`) was wrong on
+two counts, both measured on a faithful repro (`mix ecto.create && mix ecto.migrate`
+in one container, real `config/dev.exs`, fresh dedicated DB, 8 iters/pool):
+
+- **`pool_size` is not the lever.** At `pool_size: 1` (confirmed effective via
+  `run -e`) the error STILL fired (7/8) and `db_conn_2` still appeared: **`mix
+  ecto.migrate` opens ≥2 connections regardless** — Ecto.Migrator's own lock
+  connection. So the switch always has ≥2 connections racing; `pool_size: 1` is
+  dead by construction.
+- **The lock is BENIGN.** `create && migrate` exited **rc=0 on all 16** pre-fix
+  runs — the connect fails transiently, DBConnection reconnects, migrations
+  complete. In CI the GREEN run (34bce335, 6554-line log) logged it **zero**
+  times; the RED run's only failure was `issue294`, not a seed. **No evidence the
+  lock ever failed a test.** This is log noise from a real race, NOT a flake
+  cause — the "disturbs seeds" premise is unproven and the fix is not sold as a
+  flake fix.
+
+**Mechanism.** ecto_sqlite3 applies `journal_mode: :wal` (its default) in every
+connection's setup. On a fresh non-WAL DB the first connection's rollback→WAL
+switch takes an exclusive lock; a concurrent connection's connect-time PRAGMA
+hits it and fails (busy_timeout does not cover the connect-time PRAGMA — same
+class as the #524 deferred→immediate upgrade). WAL is persisted in the DB header,
+so once switched every later connection's `journal_mode=WAL` is a no-op.
+
+**Fix.** `Grappa.Repo.init/2` pre-switches the DB to WAL on ONE connection
+(raw `Exqlite.Sqlite3`) before the pool opens. It runs ONLY on `:supervisor`
+(the actual pool start) — `:runtime` is `repo.config()`'s lookup path, invoked by
+`ecto.create`'s `storage_up` too, and MUST stay pure or it would pre-create /
+pre-WAL the file out from under storage_up. Covers every migrate path that goes
+through `Ecto.Migrator.with_repo` (the seeder's `mix ecto.migrate`,
+`Grappa.Release.migrate/0`, and normal app boot) — one seam, general fix, not the
+e2e-only `pool_size` hack. Verified: the faithful repro went from LOCK 15/16 to
+**PASS 16/16** (both pool sizes) with the fix in place. A new migrate/boot path
+that bypasses `with_repo`/repo start would not inherit the pre-init.
