@@ -216,6 +216,18 @@ defmodule Grappa.Networks.SessionPlan do
         %Server{} = server,
         realname_fallback
       ) do
+    # #543 — resolve the source ONCE so the derived-alias discriminator sees the
+    # SAME address that binds the socket. `addressing` is read once (this module
+    # is inside the `Grappa.Networks` boundary, which deps `ServerSettings`), so
+    # `Vhosts` stays OFF a `ServerSettings` dep. `managed_source_alias` is the
+    # derived `::cb` address the session must acquire/release for its upstream
+    # lifetime (INC-6), or `nil` for a non-derived source (mode 1, a
+    # reservation, an admin `server_source` pin, a `{:hold, _}` outcome) —
+    # `Vhosts.derived_source?/2` is the single decision point, so Session.Server
+    # never re-derives + takes no `Vhosts`/`ServerSettings` dep.
+    addressing = addressing_config()
+    source = Grappa.Vhosts.effective_source(subject, server.source_address, addressing)
+
     %{
       subject: subject,
       subject_label: subject_label,
@@ -269,7 +281,10 @@ defmodule Grappa.Networks.SessionPlan do
       # pass-config-in shape). Re-resolved on every `Session.Server.init/1`
       # via `refresh_plan`, so a live source/vhost/mode change takes effect
       # on the next (re)connect.
-      source_address: Grappa.Vhosts.effective_source(subject, server.source_address, addressing_config())
+      source_address: source,
+      # #543 INC-6 — the derived `::cb` alias to acquire/release for the upstream
+      # lifetime (equals `source` when derived), or `nil` otherwise.
+      managed_source_alias: if(Grappa.Vhosts.derived_source?(source, addressing), do: source)
     }
   end
 

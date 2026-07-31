@@ -460,6 +460,35 @@ defmodule Grappa.Vhosts do
     end
   end
 
+  @doc """
+  True when `source` is a DERIVED `::cb` alias that the session must
+  acquire/release via `Grappa.Net.SourceAliasManager` for its upstream
+  lifetime (#543 INC-6).
+
+  The single decision point for "is this an alias I own?", kept HERE (not in
+  `Session.Server`) so the mode+prefix+membership logic lives next to
+  `effective_source/3` and `SourceMapping` stays internal to this boundary —
+  the Session boundary takes no `Vhosts`/`ServerSettings` dep and never
+  re-derives.
+
+  A source is a managed alias iff ALL hold: the config is mode
+  `:static_mapping_with_reservations`, `source` is a bound literal (not `nil`
+  and not a `{:hold, _}` outcome), AND it sits inside the configured `::cb`
+  prefix. Only the no-grant derivation branch of `effective_source/3` produces
+  such an address: an admin `server_source` pin, a grant, and every mode-1
+  pool/selection address live OUTSIDE `::cb` (Global Constraint), so
+  `in_prefix?/2` uniquely fingerprints a derived source. A malformed
+  `addressing` map (missing prefix) yields `false` — `in_prefix?(_, nil)` is
+  `false`, so a broken config never spuriously marks a source managed.
+  """
+  @spec derived_source?(String.t() | nil | {:hold, hold_reason()}, addressing()) :: boolean()
+  def derived_source?(source, %{mode: :static_mapping_with_reservations, prefix: prefix})
+      when is_binary(source) and is_binary(prefix) do
+    SourceMapping.in_prefix?(source, prefix)
+  end
+
+  def derived_source?(_, _), do: false
+
   # ---------------------------------------------------------------------------
   # Client-source capture (#543 INC-3 — last-known client /64 per subject)
   # ---------------------------------------------------------------------------

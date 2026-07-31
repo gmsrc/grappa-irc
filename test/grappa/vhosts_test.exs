@@ -388,6 +388,55 @@ defmodule Grappa.VhostsTest do
     end
   end
 
+  # #543 INC-6 — the single decision point that tells `Networks.SessionPlan`
+  # whether a resolved source is a DERIVED `::cb` alias the session must
+  # acquire/release via `SourceAliasManager`. Keeps the mode+prefix+in_prefix?
+  # logic INSIDE Vhosts (SourceMapping stays internal), so Session.Server never
+  # re-derives and takes no ServerSettings/Vhosts dep.
+  describe "derived_source?/2 — is this source a managed ::cb alias?" do
+    test "a mode-2 derived ::cb address is a managed alias" do
+      client_ip = {0x2001, 0xDB8, 1, 2, 3, 4, 5, 6}
+      {:ok, derived} = SourceMapping.derive(SourceMapping.client_key(client_ip), @cb_prefix)
+
+      assert Vhosts.derived_source?(derived, @mode2)
+    end
+
+    test "a mode-2 grant address (outside ::cb) is NOT a managed alias" do
+      # Reservations live in the OPS-curated ::ca block — a grant needs no alias.
+      refute Vhosts.derived_source?("2a03:4000:20:2d3:ca::5", @mode2)
+    end
+
+    test "a mode-1 pool address is NOT a managed alias" do
+      refute Vhosts.derived_source?("192.0.2.50", @mode1)
+    end
+
+    test "an admin server_source pin (outside ::cb) is NOT a managed alias" do
+      # #266 pins are absolute + live outside ::cb, so even under mode 2 the
+      # discriminator rejects them.
+      refute Vhosts.derived_source?("2a03:4000:20:2d3:ca::7", @mode2)
+    end
+
+    test "a nil source is NOT a managed alias" do
+      refute Vhosts.derived_source?(nil, @mode2)
+    end
+
+    test "a {:hold, _} outcome is NOT a managed alias" do
+      refute Vhosts.derived_source?({:hold, :no_client_source}, @mode2)
+    end
+
+    test "an in-::cb address under mode 1 is NOT a managed alias (mode gates it)" do
+      # Defense-in-depth: only mode 2 produces derived aliases. Even a literal
+      # inside ::cb must not be managed under mode 1.
+      refute Vhosts.derived_source?("2a03:4000:20:2d3:cb::1", @mode1)
+    end
+
+    test "a malformed addressing map (no prefix) is NOT a managed alias" do
+      refute Vhosts.derived_source?("2a03:4000:20:2d3:cb::1", %{
+               mode: :static_mapping_with_reservations
+             })
+    end
+  end
+
   describe "granted_vhost_addresses/1" do
     test "returns the addresses of the subject's granted vhosts only" do
       user = user_fixture()

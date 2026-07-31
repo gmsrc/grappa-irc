@@ -24,6 +24,7 @@ Grappa.Application
 ├── Grappa.Repo                        (Ecto + sqlite)
 ├── Phoenix.PubSub                     (name: Grappa.PubSub)
 ├── Registry                           (name: Grappa.SessionRegistry)
+├── Registry                           (name: Grappa.SourceAliasHolders — #543 derived-alias holder index; before SessionSupervisor: sessions register on acquire)
 ├── Grappa.Session.Backoff             (ETS — per-(subject, network) failure counter)
 ├── Grappa.WSPresence                  (per-user WS pid tracking → auto-away signal)
 ├── Grappa.Admission.NetworkCircuit    (T31 ETS-backed per-network circuit breaker)

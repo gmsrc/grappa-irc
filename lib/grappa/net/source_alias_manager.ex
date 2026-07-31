@@ -55,7 +55,8 @@ defmodule Grappa.Net.SourceAliasManager do
   @type state :: %{
           refcounts: %{optional(String.t()) => pos_integer()},
           prefix: String.t() | nil,
-          adapter: module()
+          adapter: module(),
+          held_source_fn: (-> [String.t()])
         }
 
   # -- API --------------------------------------------------------------------
@@ -112,9 +113,18 @@ defmodule Grappa.Net.SourceAliasManager do
     adapter = Keyword.get_lazy(opts, :adapter, &Config.adapter/0)
     prefix = Keyword.get_lazy(opts, :prefix, &ServerSettings.static_mapping_prefix/0)
 
+    # #543 INC-6 — the live-holder source for `held_addresses/1`, INJECTED so
+    # this manager (a `Grappa.Net` boundary) stays OFF a `Grappa.Session`
+    # (domain) dep: a Net→Session edge would be backwards. `application.ex`
+    # wires `&Grappa.Session.live_derived_sources/0` (the pure `Registry`
+    # read); the default is the empty list = the INC-5 behaviour (refcount-only
+    # held set), safe when no fn is injected (the manager's own unit tests, or
+    # a mis-wire — never a live-alias release, only a skipped orphan sweep).
+    held_source_fn = Keyword.get(opts, :held_source_fn, fn -> [] end)
+
     publish_arm(compute_arm(adapter, prefix))
 
-    {:ok, %{refcounts: %{}, prefix: prefix, adapter: adapter}, {:continue, :reconcile}}
+    {:ok, %{refcounts: %{}, prefix: prefix, adapter: adapter, held_source_fn: held_source_fn}, {:continue, :reconcile}}
   end
 
   @impl GenServer
@@ -162,24 +172,43 @@ defmodule Grappa.Net.SourceAliasManager do
 
   # -- internals --------------------------------------------------------------
 
-  # The set of addresses that SHOULD remain bound. In INC-5 this is EXACTLY the
-  # manager's own ref-count table: every acquire/release flows through it, so
-  # its keys ARE the live-held set on this node, and iterating live
-  # Session.Server states would only duplicate state the manager already owns
-  # (CLAUDE.md design-discipline: derive, don't duplicate).
+  # The set of addresses that SHOULD remain bound for the reconcile diff. Its
+  # crash-survival source of truth is source 2 below (the LIVE HOLDERS): every
+  # in-use derived alias has a live `Session.Server` registered under it, and
+  # that survives THIS manager's own restart (when `state.refcounts` has reset
+  # to empty). Source 1 (the refcount keys) is unioned in only as a CONSERVATIVE
+  # belt-and-braces: in steady state it is a SUBSET of the holders (every
+  # acquire both increments the refcount AND registers a holder), so the union
+  # merely guarantees `held ⊇ refcount` — source 1 is NOT independently required
+  # for the held set. Keeping it is zero-cost INSURANCE: the union can only err
+  # by EXCESS (`held` a superset ⇒ reconcile releases only TRUE orphans, never a
+  # live alias), and reconcile exists precisely for the states where the two
+  # structures DIVERGE — so folding one away to save nothing would only narrow
+  # the safety margin.
   #
-  # ⚠️ INC-6 MUST widen this SOURCE to the UNION with the addresses live
-  # Session.Server processes are actually bound to. Rationale: this manager is
-  # the crash boundary. A restart of THIS process (its ref-count table resets
-  # to empty while sessions stay up and their aliases stay bound at the OS
-  # layer) would make the very next reconcile classify every in-use alias as an
-  # orphan and RELEASE it — pulling the source out from under live upstream
-  # sockets. Until INC-6 provides the live holders, that failure mode is real;
-  # it is harmless ONLY because no session binds a derived alias until INC-6.
-  # The reconcile diff below does NOT change — INC-6 swaps the SOURCE here, one
-  # explicit seam, never a rewrite of reconcile.
+  # That is DISTINCT from the two STRUCTURES both being needed by the SYSTEM,
+  # which they are — do not fold them together:
+  #
+  #   1. `state.refcounts` — authoritative for the PROMPT bind/unbind decisions
+  #      (`ensure_source` once on 0→1, `release_source` once on 1→0),
+  #      self-contained + serialized through the mailbox so the count-mutation
+  #      AND the ifconfig are decided atomically in one op (no distributed-count
+  #      race). It resets to empty on this manager's own crash.
+  #   2. `state.held_source_fn.()` — the live `Session.Server` holders, read
+  #      from the `Grappa.SourceAliasHolders` `:duplicate` Registry via the
+  #      injected fn. It survives a manager restart (sessions + their OS-bound
+  #      aliases stay up) and is auto-GC'd by the BEAM on holder death. It
+  #      CANNOT drive prompt unbind — Registry GC is passive: no callback fires
+  #      `release_source` on last-holder death — which is exactly why source 1,
+  #      not this, owns the unbind.
+  #
+  # Why source 2 matters HERE: on a MANAGER restart `refcounts` is empty but
+  # sessions still hold aliases; without it the very next reconcile would
+  # classify every in-use alias as an orphan and RELEASE it, pulling the source
+  # out from under live upstream sockets. The reconcile diff below is UNCHANGED
+  # — INC-6 only widened the SOURCE here (MapSet dedups the overlap).
   @spec held_addresses(state()) :: [String.t()]
-  defp held_addresses(state), do: Map.keys(state.refcounts)
+  defp held_addresses(state), do: Map.keys(state.refcounts) ++ state.held_source_fn.()
 
   defp do_reconcile(state) do
     case state.adapter.list_aliases(state.prefix) do

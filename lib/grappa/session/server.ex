@@ -92,6 +92,7 @@ defmodule Grappa.Session.Server do
   }
 
   alias Grappa.IRC.{AuthFSM, Client, CTCP, Identifier, Message}
+  alias Grappa.Net.SourceAliasManager
   alias Grappa.PubSub.Topic
   alias Grappa.Scrollback.Wire
 
@@ -461,6 +462,11 @@ defmodule Grappa.Session.Server do
           # resolve `{:hold, reason}` (no derivable source); `init/1`
           # intercepts it (parked-with-reason) and never reaches `do_init`.
           required(:source_address) => String.t() | nil | {:hold, atom()},
+          # #543 INC-6 — the derived `::cb` alias to acquire/release for this
+          # session's upstream lifetime (equals `source_address` when set), or
+          # absent/nil for a non-derived source. Pre-computed by
+          # `Networks.SessionPlan` via `Vhosts.derived_source?/2`.
+          optional(:managed_source_alias) => String.t() | nil,
           optional(:notify_pid) => pid(),
           optional(:notify_ref) => reference(),
           optional(:visitor_committer) => visitor_committer(),
@@ -814,7 +820,15 @@ defmodule Grappa.Session.Server do
           # is the armed-on-001 ref (nil until 001, nil again once it fires
           # or is cancelled). See `@connection_stable_ms`.
           connection_stable_ms: pos_integer(),
-          connection_stable_timer: reference() | nil
+          connection_stable_timer: reference() | nil,
+          # #543 INC-6 — the derived `::cb` source alias this session owns for
+          # its upstream lifetime, or `nil` when the source is not a managed
+          # alias (mode 1, a reservation, an admin `server_source` pin, or no
+          # static-mapping). Pre-computed by `Networks.SessionPlan` via
+          # `Vhosts.derived_source?/2` so `Session.Server` never re-derives.
+          # Acquired on the connect path (`do_start_client`) + released on
+          # `terminate/2`; drives the `Grappa.SourceAliasHolders` registration.
+          managed_source_alias: String.t() | nil
         }
 
   ## API
@@ -1122,7 +1136,11 @@ defmodule Grappa.Session.Server do
       connection_stable_timer: nil,
       # #215 — spawn stamp; `connected_at` fills on `:irc_connected`.
       started_at: DateTime.utc_now(),
-      connected_at: nil
+      connected_at: nil,
+      # #543 INC-6 — the derived `::cb` alias this session manages (nil for a
+      # non-derived source). Acquired in `do_start_client`, released in
+      # `terminate/2`. Pre-resolved by the plan (`Vhosts.derived_source?/2`).
+      managed_source_alias: Map.get(opts, :managed_source_alias)
     }
 
     # S3.1 / S3.2 / #182: subscribe to the WSPresence PubSub topic for this
@@ -1205,13 +1223,38 @@ defmodule Grappa.Session.Server do
   end
 
   defp do_start_client(client_opts, state) do
-    # #100 — presentational "connecting…" badge: we're about to establish
-    # the upstream socket (initial spawn OR a :transient respawn after a
-    # drop). Emit before the connect attempt so cic shows the badge for the
-    # whole connect+register window; it clears on 001 (connection_connected).
-    # This is NOT a connection_state change — the DB row stays :connected.
-    broadcast_connection_progress(state, :connecting)
+    # #543 INC-6 — bind the derived source alias BEFORE the linked Client
+    # spawns (its `source_bind/2` binds the outbound socket to this address).
+    # Synchronous on the connect path (~11ms attributable here per #543
+    # measurements). A NON-derived source (mode 1, reservation, admin pin,
+    # nil) skips this entirely — the manager is never touched. On acquire
+    # failure we STOP LOUDLY: NEVER fall through to a shared kernel-default
+    # source (the #1 Global Constraint — the exact bug #543 kills). The
+    # `{:source_alias_acquire_failed, _}` stop routes through terminate/2's
+    # abnormal clause → Backoff, so a transient platform failure retries on
+    # the exponential ladder rather than egressing wrong.
+    case acquire_source_alias(state) do
+      :ok ->
+        # #100 — presentational "connecting…" badge: we're about to establish
+        # the upstream socket (initial spawn OR a :transient respawn after a
+        # drop). Emit before the connect attempt so cic shows the badge for the
+        # whole connect+register window; it clears on 001 (connection_connected).
+        # This is NOT a connection_state change — the DB row stays :connected.
+        broadcast_connection_progress(state, :connecting)
+        start_linked_client(client_opts, state)
 
+      {:error, reason} ->
+        # Acquire failed → this session holds NOTHING (the manager did not
+        # increment the ref-count on a failed bind). Null `managed_source_alias`
+        # in the stopped state so `terminate/2`'s release is a true no-op —
+        # otherwise the manager logs a spurious "release of unheld address"
+        # warning on every acquire failure, eroding that warning's real value
+        # (it exists to catch a genuine release-without-acquire refcount bug).
+        {:stop, {:source_alias_acquire_failed, reason}, %{state | managed_source_alias: nil}}
+    end
+  end
+
+  defp start_linked_client(client_opts, state) do
     case Client.start_link(client_opts) do
       {:ok, client} ->
         # #550 — a fresh connection attempt: clear any stale peer until this
@@ -1229,6 +1272,66 @@ defmodule Grappa.Session.Server do
         # clause which is the single record_failure funnel (H12, REV-D).
         {:stop, {:client_start_failed, reason}, state}
     end
+  end
+
+  # #543 INC-6 — acquire this session's derived source alias via the
+  # ref-counting manager and register into the crash-survival holder index.
+  #
+  # A `nil` `managed_source_alias` (mode 1, a reservation, an admin
+  # `server_source` pin, or no static-mapping) is a NO-OP: the manager is
+  # NEVER touched, so a non-derived session pays zero cost. When set, the
+  # manager binds the OS alias on the 0→1 ref-count transition (many
+  # NAT-collapsed sessions sharing one `/64` acquire the same address, binding
+  # it once); on success we register self under the address in
+  # `Grappa.SourceAliasHolders` (a `:duplicate` Registry, auto-GC'd by the BEAM
+  # on our death) so a MANAGER restart can rebuild its held set from the live
+  # holders and not release the alias out from under us. Registration happens
+  # ONLY after a successful acquire — a failed bind leaves no holder entry.
+  @spec acquire_source_alias(t()) :: :ok | {:error, term()}
+  defp acquire_source_alias(%{managed_source_alias: nil}), do: :ok
+
+  defp acquire_source_alias(%{managed_source_alias: addr}) when is_binary(addr) do
+    case SourceAliasManager.acquire(addr) do
+      :ok ->
+        {:ok, _} = Registry.register(Grappa.SourceAliasHolders, addr, nil)
+        :ok
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # #543 INC-6 — best-effort release of this session's derived source alias on
+  # terminate/2. `Map.get` (not `state.managed_source_alias`) is HOT-SAFE: a
+  # session hot-reloaded from a pre-INC-6 state map lacks the key and must
+  # degrade to a no-op rather than KeyError-crashing terminate (mirror of the
+  # `connected_at` / umodes / isupport hot-safety guards). A nil / absent alias
+  # never touches the manager. The BEAM auto-GCs our `Grappa.SourceAliasHolders`
+  # entry on death, so no explicit unregister — only the ref-count drop remains.
+  @spec maybe_release_source_alias(t()) :: :ok
+  defp maybe_release_source_alias(state) do
+    case Map.get(state, :managed_source_alias) do
+      addr when is_binary(addr) -> release_alias_best_effort(addr)
+      _ -> :ok
+    end
+  end
+
+  # The manager stops BEFORE SessionSupervisor in the supervision order, so at
+  # app-wide shutdown every session terminates AFTER the manager is gone and the
+  # `GenServer.call` exits `:noproc` (or `:timeout` under a wedged mailbox).
+  # Both are EXPECTED shutdown races — swallow them (the OS alias, if leaked, is
+  # reclaimed by the next boot reconcile, the manager's documented backstop),
+  # mirroring the best-effort QUIT catch in the `:shutdown` terminate clause.
+  # Any OTHER exit reason is unexpected and propagates LOUDLY (a narrow
+  # allowlist, not a blanket `:exit, _` — a widened catch hides the next bug).
+  # `release/1` itself always returns `:ok` (it logs adapter failures
+  # internally), so a real unbind failure is already visible in the manager log.
+  @spec release_alias_best_effort(String.t()) :: :ok
+  defp release_alias_best_effort(addr) do
+    SourceAliasManager.release(addr)
+  catch
+    :exit, reason when reason in [:noproc, :timeout] -> :ok
+    :exit, {reason, _} when reason in [:noproc, :timeout] -> :ok
   end
 
   # Clean shutdown — bouncer stopping (SIGTERM, `Application.stop`,
@@ -1282,6 +1385,8 @@ defmodule Grappa.Session.Server do
   def terminate(reason, state)
       when reason == :shutdown or (is_tuple(reason) and elem(reason, 0) == :shutdown) do
     emit_lifecycle(:terminated, state)
+    # #543 INC-6 — drop this session's ref on the derived source alias.
+    maybe_release_source_alias(state)
     # #215 — clean shutdown (SIGTERM / Application.stop / deploy recreate).
     emit_disconnected(state, reason, true)
 
@@ -1321,6 +1426,8 @@ defmodule Grappa.Session.Server do
 
   def terminate(:normal, state) do
     emit_lifecycle(:terminated, state)
+    # #543 INC-6 — drop this session's ref on the derived source alias.
+    maybe_release_source_alias(state)
     # #215 — operator-driven stop_session/2 (clean QUIT already sent).
     emit_disconnected(state, :normal, true)
     :ok
@@ -1343,6 +1450,8 @@ defmodule Grappa.Session.Server do
   # we care about reaches this clause.
   def terminate(reason, state) do
     emit_lifecycle(:terminated, state)
+    # #543 INC-6 — drop this session's ref on the derived source alias.
+    maybe_release_source_alias(state)
     # #215 — abnormal drop (:tcp_closed, {:client_exit, {:connect_failed, _}},
     # ping timeout, callback crash, …). This is the disconnect class the
     # issue was filed on: reason + duration + clean=false, greppable by nick.

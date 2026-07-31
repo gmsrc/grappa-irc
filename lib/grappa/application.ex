@@ -154,6 +154,20 @@ defmodule Grappa.Application do
         # SpawnOrchestrator.spawn/4) MUST stay `async: false`.
         {Registry, keys: :unique, name: Grappa.SessionRegistry},
 
+        # #543 INC-6 — the derived-source-alias holder index. A `:duplicate`
+        # Registry keyed BY ADDRESS: each `Session.Server` that acquires a
+        # derived `::cb` alias registers itself under that address, so many
+        # NAT-collapsed sessions sharing one `/64` appear as many entries under
+        # the one key. `Grappa.Net.SourceAliasManager` reads it (via the
+        # injected `held_source_fn`) at reconcile to rebuild the held set AFTER
+        # its OWN restart — the refcount table it keeps is authoritative for
+        # prompt bind/unbind but does NOT survive a manager crash, whereas this
+        # Registry is auto-GC'd by the BEAM on holder death and DOES survive.
+        # Before SessionSupervisor (sessions register into it) and before the
+        # manager (the reconcile reader). See `SourceAliasManager.held_addresses/1`
+        # for why the two sources are deliberately not folded.
+        {Registry, keys: :duplicate, name: Grappa.SourceAliasHolders},
+
         # Backoff before SessionSupervisor — owns the ETS table that
         # tracks per-(subject, network_id) failure counts across
         # `:transient` Session.Server respawns. Reads are direct ETS
@@ -395,10 +409,15 @@ defmodule Grappa.Application do
   # name, and the arm gate is injected via `SourceAliasManager.put_test_armed/2`
   # — so the live singleton (which would read ServerSettings + the real adapter
   # at boot) must not also run in the test tree.
-  @spec source_alias_manager_child() :: [] | [Grappa.Net.SourceAliasManager]
+  @spec source_alias_manager_child() :: [] | [{Grappa.Net.SourceAliasManager, keyword()}]
   defp source_alias_manager_child do
     if Application.get_env(:grappa, :start_source_alias_manager, true) do
-      [Grappa.Net.SourceAliasManager]
+      # #543 INC-6 — inject the live-holder source so the manager's reconcile
+      # held set survives its OWN restart. Wired HERE (application.ex deps both
+      # Grappa.Net + Grappa.Session) so the manager stays OFF a Grappa.Session
+      # dep — a Net→Session edge would be backwards. `live_derived_sources/0`
+      # is the pure `Grappa.SourceAliasHolders` Registry read.
+      [{Grappa.Net.SourceAliasManager, held_source_fn: &Grappa.Session.live_derived_sources/0}]
     else
       []
     end

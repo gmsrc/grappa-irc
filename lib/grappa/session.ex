@@ -55,6 +55,11 @@ defmodule Grappa.Session do
       Grappa.IRC,
       Grappa.Log,
       Grappa.Mentions,
+      # #543 INC-6 — Session.Server acquires/releases the derived source alias
+      # around the upstream connect. A Session→Net edge (forward): the manager
+      # takes NO Session dep (its live-holder source is an injected fn), so no
+      # Boundary cycle.
+      Grappa.Net.SourceAliasManager,
       Grappa.PubSub,
       Grappa.Push,
       Grappa.QueryWindows,
@@ -152,6 +157,11 @@ defmodule Grappa.Session do
           required(:port) => :inet.port_number(),
           required(:tls) => boolean(),
           required(:source_address) => String.t() | nil,
+          # #543 INC-6 — the derived `::cb` source alias the session acquires/
+          # releases for its upstream lifetime (equals `source_address` when
+          # derived), or absent/nil for a non-derived source. Set by
+          # `Networks.SessionPlan.base_plan/6` via `Vhosts.derived_source?/2`.
+          optional(:managed_source_alias) => String.t() | nil,
           optional(:notify_pid) => pid(),
           optional(:notify_ref) => reference(),
           optional(:visitor_committer) => Server.visitor_committer(),
@@ -217,6 +227,29 @@ defmodule Grappa.Session do
       [{pid, _}] -> pid
       [] -> nil
     end
+  end
+
+  @doc """
+  Every derived `::cb` source alias currently held by a live `Session.Server`
+  on this node, de-duplicated (#543 INC-6).
+
+  Each session that binds a derived source registers itself under that address
+  in the `Grappa.SourceAliasHolders` `:duplicate` Registry (many NAT-collapsed
+  sessions sharing one `/64` → many entries under one address key), and the
+  BEAM auto-removes the entry when the session dies. This is a PURE ETS read —
+  no per-pid `GenServer.call`, so no timeout window and no wedged-mailbox blind
+  spot: it cannot mis-report a live holder as gone.
+
+  `Grappa.Net.SourceAliasManager` reads this (via the injected `held_source_fn`)
+  at reconcile to rebuild its held set AFTER its own restart, so a manager
+  crash never releases an alias out from under a live upstream socket. INC-7's
+  prefix-impact scan reuses it as the single live-holder source.
+  """
+  @spec live_derived_sources() :: [String.t()]
+  def live_derived_sources do
+    Grappa.SourceAliasHolders
+    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.uniq()
   end
 
   @doc """

@@ -28,6 +28,7 @@ defmodule Grappa.Session.ServerTest do
 
   import ExUnit.CaptureLog
   import Grappa.{AuthFixtures, MessageEventAssertions}
+  import Mox
 
   alias Grappa.IRC.Message
   alias Grappa.{IRCServer, PubSub.Topic, QueryWindows, Repo, Scrollback, Session, WSPresence}
@@ -35,6 +36,10 @@ defmodule Grappa.Session.ServerTest do
   alias Grappa.Session.{AwayState, Backoff, GhostRecovery, ISupport, Server, WindowState}
   alias Grappa.SessionStateHelpers
   alias Grappa.WindowCounts.PushSource
+
+  # #543 INC-6 — the armed static-mapping prefix the test alias-manager binds
+  # against; derived addresses in the acquire/release tests sit inside it.
+  @inc6_prefix "2a03:4000:20:2d3:cb::/80"
 
   # C3 (arch review #369 A3) — a `WindowCounts.PushSource` seam probe that
   # records the ctx of every `push/1` to the test process. The push runs in
@@ -86,6 +91,33 @@ defmodule Grappa.Session.ServerTest do
   defp await_handshake(server) do
     {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
     :ok
+  end
+
+  # #543 INC-6 — a full synthetic connect plan (no `refresh_plan`, so the
+  # injected `managed_source_alias` isn't re-resolved away by the DB-wins
+  # closure) pointing at the in-process `IRCServer` fake. `source_address` is
+  # `nil` so the loopback connect actually binds: INC-6 acquire/release keys on
+  # `managed_source_alias`, which the plan sets equal to `source_address` in
+  # prod (asserted at the SessionPlan layer) but which we decouple here to
+  # isolate the alias-lifecycle from the orthogonal socket-bind concern.
+  defp derived_alias_opts(user, network, port, managed_alias) do
+    %{
+      subject: {:user, user.id},
+      subject_label: Grappa.Subject.label({:user, user.name}),
+      network_slug: network.slug,
+      nick: "vjt",
+      ident: "vjt",
+      realname: "vjt",
+      sasl_user: "vjt",
+      auth_method: :none,
+      password: nil,
+      autojoin_channels: [],
+      host: "127.0.0.1",
+      port: port,
+      tls: false,
+      source_address: nil,
+      managed_source_alias: managed_alias
+    }
   end
 
   # #211 phase 7 — the visitor nick lives on its per-network credential now
@@ -455,6 +487,154 @@ defmodule Grappa.Session.ServerTest do
       assert_receive {:held_failer, reason}, 1_000
       assert reason =~ "static-mapping"
       assert reason =~ "not armed"
+    end
+  end
+
+  describe "derived source alias lifecycle (#543 INC-6)" do
+    # The alias manager is gated OFF in test (`:start_source_alias_manager`
+    # false); start a Mox-wired instance under the default name so the
+    # acquire/release calls Session.Server issues on its connect/terminate path
+    # reach it. GLOBAL Mox mode — the manager calls the adapter from its OWN
+    # process (the acquire/release handle_calls), where a per-test allowance
+    # can't land.
+    setup :set_mox_global
+    setup :verify_on_exit!
+
+    setup do
+      stub(Grappa.Net.SourceAliasMock, :arm_check, fn _ -> :ok end)
+      stub(Grappa.Net.SourceAliasMock, :list_aliases, fn _ -> {:ok, []} end)
+
+      start_supervised!(
+        {Grappa.Net.SourceAliasManager,
+         adapter: Grappa.Net.SourceAliasMock,
+         prefix: @inc6_prefix,
+         held_source_fn: &Grappa.Session.live_derived_sources/0}
+      )
+
+      :ok
+    end
+
+    test "a mode-2 derived source is acquired before connect and registered as a live holder" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      addr = "2a03:4000:20:2d3:cb::a1"
+
+      # Acquire runs on the connect path BEFORE the linked Client binds;
+      # release_source fires on the in-body stop below (1→0).
+      expect(Grappa.Net.SourceAliasMock, :ensure_source, fn ^addr, @inc6_prefix -> :ok end)
+      expect(Grappa.Net.SourceAliasMock, :release_source, fn ^addr, @inc6_prefix -> :ok end)
+
+      {:ok, pid} =
+        Session.start_session({:user, user.id}, network.id, derived_alias_opts(user, network, port, addr))
+
+      await_handshake(server)
+
+      # The crash-survival holder index the manager reads at reconcile.
+      assert addr in Session.live_derived_sources()
+
+      # Stop IN-BODY (not on_exit): the IRCServer fake is linked to the test
+      # process, so an on_exit stop races the fake's teardown closing the socket
+      # (the session would already be crashing with {:client_exit, :tcp_closed}).
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "the derived source alias is released on stop" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      addr = "2a03:4000:20:2d3:cb::a2"
+
+      expect(Grappa.Net.SourceAliasMock, :ensure_source, fn ^addr, @inc6_prefix -> :ok end)
+      # release_source fires synchronously inside terminate/2 on the 1→0 drop;
+      # verify_on_exit! confirms it was called.
+      expect(Grappa.Net.SourceAliasMock, :release_source, fn ^addr, @inc6_prefix -> :ok end)
+
+      {:ok, pid} =
+        Session.start_session({:user, user.id}, network.id, derived_alias_opts(user, network, port, addr))
+
+      await_handshake(server)
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "two sessions sharing one derived address bind once, release on the last stop" do
+      {server1, port1} = start_server()
+      {server2, port2} = start_server()
+      {user1, net1, _} = setup_user_and_network(port1)
+      {user2, net2, _} = setup_user_and_network(port2)
+      addr = "2a03:4000:20:2d3:cb::a3"
+
+      # ensure_source ONCE (0→1) despite two acquires; release_source ONCE
+      # (1→0) despite two stops — the manager ref-counts the shared /64.
+      # Mox `expect` defaults to exactly-one, so a second call fails verify.
+      expect(Grappa.Net.SourceAliasMock, :ensure_source, fn ^addr, @inc6_prefix -> :ok end)
+      expect(Grappa.Net.SourceAliasMock, :release_source, fn ^addr, @inc6_prefix -> :ok end)
+
+      {:ok, pid1} =
+        Session.start_session({:user, user1.id}, net1.id, derived_alias_opts(user1, net1, port1, addr))
+
+      {:ok, pid2} =
+        Session.start_session({:user, user2.id}, net2.id, derived_alias_opts(user2, net2, port2, addr))
+
+      await_handshake(server1)
+      await_handshake(server2)
+
+      # The de-duplicated holder set reports the shared address ONCE despite two
+      # live holders. Scoped to `addr` (not `== [addr]`) so an async-GC-lagged
+      # entry from a prior test can't flake the count.
+      assert Enum.count(Session.live_derived_sources(), &(&1 == addr)) == 1
+
+      :ok = GenServer.stop(pid1, :normal, 1_000)
+      :ok = GenServer.stop(pid2, :normal, 1_000)
+    end
+
+    test "a non-derived source never touches the alias manager" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+
+      # managed_source_alias nil → NO ensure_source (no expect set — an
+      # unexpected call fails verify_on_exit!), and no holder registration.
+      {:ok, pid} =
+        Session.start_session({:user, user.id}, network.id, derived_alias_opts(user, network, port, nil))
+
+      await_handshake(server)
+
+      # This session registered NO holder entry — pid-scoped so it's robust to
+      # async-GC-lagged entries from other tests (proves the manager + holder
+      # index were never touched, alongside the unset ensure_source expect).
+      assert Registry.keys(Grappa.SourceAliasHolders, pid) == []
+
+      # Stop IN-BODY while the linked IRCServer fake is alive (see the acquire
+      # test) — an on_exit stop races the fake's teardown.
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "an acquire failure stops the session loudly (never a shared-source connect)" do
+      {_, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      addr = "2a03:4000:20:2d3:cb::a4"
+
+      # The platform bind fails at runtime; the session MUST NOT fall through
+      # to a shared kernel-default source — it stops loudly instead.
+      expect(Grappa.Net.SourceAliasMock, :ensure_source, fn ^addr, @inc6_prefix ->
+        {:error, :eacces}
+      end)
+
+      opts =
+        user
+        |> derived_alias_opts(network, port, addr)
+        |> Map.put(:network_id, network.id)
+
+      Process.flag(:trap_exit, true)
+
+      # A failed acquire holds NOTHING, so terminate must NOT attempt a release
+      # (which would log a spurious "release of unheld address" warning and
+      # erode that real-bug detector). Assert the loud stop AND the clean log.
+      log =
+        capture_log(fn ->
+          {:ok, pid} = Server.start_link(opts)
+          assert_receive {:EXIT, ^pid, {:source_alias_acquire_failed, :eacces}}, 1_000
+        end)
+
+      refute log =~ "release of unheld address"
     end
   end
 

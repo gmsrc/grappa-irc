@@ -71,6 +71,50 @@ defmodule Grappa.Net.SourceAliasManagerTest do
 
       assert :ok = Manager.reconcile()
     end
+
+    # #543 INC-6 Part B — the crash-boundary the held-set widening closes. When
+    # THIS manager restarts, its ref-count table resets to empty while live
+    # `Session.Server` processes stay up + their aliases stay OS-bound. The
+    # held set MUST union the refcount keys with the live holders (via the
+    # injected `held_source_fn`, default `&Grappa.Session.live_derived_sources/0`
+    # in prod), else the next reconcile classifies every in-use alias as an
+    # orphan and RELEASES it — pulling the source out from under live sockets.
+    test "reconcile keeps a live-held alias even when the refcount table is empty" do
+      stub(Grappa.Net.SourceAliasMock, :arm_check, fn @prefix -> :ok end)
+      stub(Grappa.Net.SourceAliasMock, :list_aliases, fn @prefix -> {:ok, []} end)
+
+      # A live session holds @addr; the refcount table is empty (restart).
+      start_supervised!(
+        {Manager, adapter: Grappa.Net.SourceAliasMock, prefix: @prefix, held_source_fn: fn -> [@addr] end}
+      )
+
+      expect(Grappa.Net.SourceAliasMock, :list_aliases, fn @prefix -> {:ok, [@addr, @addr2]} end)
+      # ONLY the orphan @addr2 is released; the live-held @addr survives even
+      # though it is absent from the (empty) refcount table.
+      expect(Grappa.Net.SourceAliasMock, :release_source, fn @addr2, @prefix -> :ok end)
+
+      assert :ok = Manager.reconcile()
+    end
+
+    test "held set is the UNION of refcount keys and live holders" do
+      stub(Grappa.Net.SourceAliasMock, :arm_check, fn @prefix -> :ok end)
+      stub(Grappa.Net.SourceAliasMock, :list_aliases, fn @prefix -> {:ok, []} end)
+
+      # @addr2 is live-held (from the fn); @addr is ref-counted (acquired here).
+      start_supervised!(
+        {Manager, adapter: Grappa.Net.SourceAliasMock, prefix: @prefix, held_source_fn: fn -> [@addr2] end}
+      )
+
+      expect(Grappa.Net.SourceAliasMock, :ensure_source, fn @addr, @prefix -> :ok end)
+      assert :ok = Manager.acquire(@addr)
+
+      # OS reports both held addresses + one true orphan; only the orphan goes.
+      orphan = "2a03:4000:20:2d3:cb::dead"
+      expect(Grappa.Net.SourceAliasMock, :list_aliases, fn @prefix -> {:ok, [@addr, @addr2, orphan]} end)
+      expect(Grappa.Net.SourceAliasMock, :release_source, fn ^orphan, @prefix -> :ok end)
+
+      assert :ok = Manager.reconcile()
+    end
   end
 
   describe "arm gate" do

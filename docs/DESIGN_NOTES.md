@@ -24033,3 +24033,96 @@ connect). Decisions worth keeping:
   Opt-out via `:start_source_alias_manager` (false in test — the manager's own
   unit tests start a Mox-wired instance under the default name, and mode-2
   gate tests inject arm state via `SourceAliasManager.put_test_armed/2`).
+
+## 2026-07-31 — #543 INC-6: bind the derived source alias for the upstream session lifetime
+
+INC-6 makes a `Session.Server` actually consume the INC-5 machinery: it
+`acquire`s its derived `::cb` source alias BEFORE the upstream connect and
+`release`s it on terminate, and it widens the manager's reconcile held-set to
+survive a manager restart. Two coupled parts, one commit. Decisions:
+
+- **One discriminator, in `Vhosts`, not `Session.Server`.**
+  `Vhosts.derived_source?/2` (mode 2 AND `is_binary(source)` AND
+  `SourceMapping.in_prefix?`) is the SINGLE decision point for "is this a
+  derived alias I own?". `Networks.SessionPlan.base_plan` resolves the source
+  ONCE and threads `managed_source_alias` (= the source when derived, else
+  `nil`) into the plan. `Session.Server` therefore never re-derives and takes
+  NO `Vhosts`/`ServerSettings` boundary dep — it just acquires/releases the
+  pre-computed alias. `in_prefix?` uniquely fingerprints a derived source
+  because every admin pin, grant, and mode-1 pool address lives OUTSIDE `::cb`
+  (Global Constraint). Known reliance (nit, accepted): an admin who pins or
+  grants an address INSIDE `::cb` under mode 2 would be flagged managed — safe
+  (the alias just gets bound) but a latent ops-discipline dependency, not a
+  checked invariant.
+
+- **Crash-survival via a `:duplicate` Registry, not a call-per-pid scan.**
+  Rejected: enumerating live sessions with a per-pid `GenServer.call` (the
+  admin-tab pattern) — a wedged mailbox would time out and mis-report a live
+  holder as gone, and the manager-restart reconcile would then release its
+  alias out from under a live socket (the exact bug this closes), OR a
+  conservative "skip the sweep on any read failure" guard would degrade the
+  sweep silently. Rejected: storing the source in the SessionRegistry entry
+  value (couples #498's `current_nick` hot path to unrelated data). Chosen:
+  `Grappa.SourceAliasHolders`, a dedicated `:duplicate` Registry keyed BY
+  ADDRESS. Each session `Registry.register`s itself under its derived address
+  on acquire; the BEAM auto-GCs the entry on holder death. `live_derived_sources/0`
+  is a pure `Registry.select` — zero timeout, no wedged-mailbox blind spot,
+  survives a manager restart, and is the general solution (INC-7's
+  prefix-impact reuses it), not a patch on the incident. The +1 supervision
+  child (before SessionSupervisor: sessions register on acquire) is the price.
+
+- **The manager stays OFF a `Grappa.Session` dep.** The held-source is an
+  INJECTED 0-arity fn (`held_source_fn`, default `&Session.live_derived_sources/0`
+  wired in `application.ex`, which already deps both boundaries). A Net→Session
+  edge would be backwards; the injected fn keeps `SourceAliasManager` in
+  `Grappa.Net` with no reverse edge and no cycle. `Session → Net` (the acquire/
+  release calls) is the only new edge.
+
+- **`held_addresses/1` = refcount keys ∪ live holders — the union is
+  zero-cost insurance, NOT two independent requirements.** The held-set's
+  crash-survival source of truth is the live holders; the refcount keys are a
+  SUBSET of them in steady state (every acquire both increments the refcount
+  AND registers a holder), so unioning the refcount adds nothing the holders
+  don't already carry AND nothing after a restart (the table is empty then).
+  It is kept because the union can only err by EXCESS (`held` a superset ⇒
+  reconcile releases only TRUE orphans, never a live alias), and reconcile
+  exists precisely for the states where the two structures diverge. This is
+  DISTINCT from the two STRUCTURES both being needed by the SYSTEM (they are —
+  the refcount owns prompt bind/unbind, serialized in the mailbox; the holder
+  Registry owns crash-survival, passive-GC'd — do not fold them). The INC-5
+  reconcile diff is UNCHANGED; INC-6 widened only the SOURCE.
+
+- **Acquire on the connect path, release on terminate, one ref per pid.**
+  `acquire` runs in `do_start_client` (BEFORE the linked Client's
+  `source_bind`, ~11ms attributable there) — NOT in `init/1`, which is
+  deliberately non-blocking to keep Bootstrap O(1). On acquire failure the
+  connect STOPS LOUDLY (`{:source_alias_acquire_failed, _}` → Backoff) — it
+  NEVER falls through to a shared kernel-default source (the #1 Global
+  Constraint). On that stop, `managed_source_alias` is nulled so the terminate
+  release is a true no-op (else the manager logs a spurious "release of unheld
+  address" warning that would erode a real refcount-bug detector). `release`
+  runs in all three `terminate/2` clauses, best-effort with a NARROW `:noproc`/
+  `:timeout` catch (the manager stops BEFORE SessionSupervisor at app shutdown,
+  so a session terminating after it must not crash) — any other exit propagates
+  loudly. A reconnect is a new pid (transient restart) → exactly one acquire /
+  one release per lifetime, no double-acquire.
+
+- **Known limitation (accepted, self-healing).** After a MANAGER restart the
+  refcount table is empty (only the manager's process state, not durable). Live
+  aliases survive (the holder-union keeps them), but a `release/1` from a
+  still-live session then finds refcount 0, no-ops, and its `lo0` alias
+  lingers. It is NOT a permanent leak: the next boot reconcile (init-only
+  orphan sweep) reclaims it, because a genuinely-gone session's holder entry is
+  BEAM-GC'd, so the alias becomes a true orphan and is released. Accepted — the
+  manager is `:permanent` (rare crashes) and `lo0` aliases are cheap. Rejected
+  fix: rebuilding the refcount from the holders at reconcile would restore
+  prompt post-restart unbind, but it needs per-address COUNTS, which would
+  change `live_derived_sources/0`'s contract from a deduped list to a counts
+  map — scope that does not pay for a self-healing low-severity leak.
+
+**Apply:** a NEW nick-/address-keyed store that a live session holds and that
+must survive a manager restart goes in the `Grappa.SourceAliasHolders` Registry
+(pure read, BEAM-GC'd), never a per-pid `GenServer.call` scan and never the
+manager's own process state alone. The "is this a managed alias?" question has
+ONE answer site: `Vhosts.derived_source?/2`. A mode-2 session that cannot bind
+its derived source HOLDS or STOPS — it never egresses from a shared source.

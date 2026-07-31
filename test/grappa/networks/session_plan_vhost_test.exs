@@ -61,6 +61,8 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
 
     plan = SessionPlan.base_plan({:user, user.id}, "label", cred, network, server, "n")
     assert plan.source_address == "2001:db8::def"
+    # #543 INC-6 — a mode-1 self-selected vhost is not a derived ::cb alias.
+    assert plan.managed_source_alias == nil
   end
 
   # #543 INC-4 — in `static_mapping_with_reservations` mode, `base_plan`
@@ -98,6 +100,9 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
       {:ok, expected} = SourceMapping.derive(SourceMapping.client_key(client_ip), @cb_prefix)
       assert plan.source_address == expected
       assert SourceMapping.in_prefix?(plan.source_address, @cb_prefix)
+      # #543 INC-6 — a derived ::cb source is flagged as a managed alias (equal
+      # to source_address) so Session.Server acquires/releases it.
+      assert plan.managed_source_alias == expected
     end
 
     test "no grant + no captured client /64 → source_address is {:hold, :no_client_source}" do
@@ -109,6 +114,8 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
 
       plan = SessionPlan.base_plan({:user, user.id}, "label", cred, network, server, "n")
       assert plan.source_address == {:hold, :no_client_source}
+      # #543 INC-6 — a {:hold, _} is not a bound source, so no alias to manage.
+      assert plan.managed_source_alias == nil
     end
 
     test "an admin server source still WINS over a hold (#266 pin absolute)" do
@@ -122,6 +129,9 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
 
       plan = SessionPlan.base_plan({:user, user.id}, "label", cred, network, server, "n")
       assert plan.source_address == "2001:db8::99"
+      # #543 INC-6 — an admin pin lives OUTSIDE ::cb, so it is never a managed
+      # alias (it binds verbatim, no ref-counted lifecycle).
+      assert plan.managed_source_alias == nil
     end
   end
 end
