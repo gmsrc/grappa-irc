@@ -3,9 +3,9 @@ defmodule Grappa.Themes.BuiltinBackgroundsTest do
 
   alias Grappa.Themes.BuiltinBackgrounds
 
-  test "all/0 is the curated v1 set of 8 cover backgrounds" do
+  test "all/0 is the curated set of 14 cover backgrounds" do
     all = BuiltinBackgrounds.all()
-    assert length(all) == 8
+    assert length(all) == 14
   end
 
   test "every entry carries key + name + variant + path" do
@@ -34,10 +34,17 @@ defmodule Grappa.Themes.BuiltinBackgroundsTest do
     end
   end
 
-  test "the v1 manifest is 4 dark + 4 light" do
+  test "the manifest is 7 dark + 7 light" do
     variants = Enum.frequencies_by(BuiltinBackgrounds.all(), & &1.variant)
-    assert variants == %{dark: 4, light: 4}
+    assert variants == %{dark: 7, light: 7}
   end
+
+  # NOT tested here on purpose: that every key has a WebP on disk. That is the
+  # real failure mode of adding a catalog entry (a picker tile that 404s), but
+  # the oneshot test container mounts only `cicchetto/src` — `cicchetto/public`
+  # is absent, so the assertion would either fail for the wrong reason or, if
+  # written defensively, pass precisely when it matters. It belongs to a cic-side
+  # check that can see the bundle, not to this suite. Verified by hand for #334.
 
   test "keys/0 is the flat key list, in all/0 order" do
     assert BuiltinBackgrounds.keys() == Enum.map(BuiltinBackgrounds.all(), & &1.key)
