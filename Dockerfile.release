@@ -74,34 +74,41 @@ COPY priv priv
 RUN mix compile --warnings-as-errors
 RUN mix release --overwrite
 
+# Capture the ABI contract the release just linked against — the musl + openssl
+# SONAME majors AND package versions — for the runtime stage's lockstep gate.
+# The alpine minor is a cosmetic label (see the runtime stage); THESE are the
+# real contract. Emitted as KEY=VALUE lines the gate reads back.
+# The openssl package name is DERIVED from its SONAME (libcrypto<so>) so the
+# version stays as major-agnostic as the soname: on a future libcrypto.so.4
+# world the gate reports a real "SONAME major" verdict, never a misleading
+# "extraction failed". The musl package name is soname-stable, so it is fixed.
+RUN set -eu; \
+    musl_so="$(ls /lib/libc.musl-*.so.* | sed 's/.*\.so\.//' | head -1)"; \
+    musl_pkg="$(apk list --installed musl | head -1 | cut -d' ' -f1)"; \
+    ssl_so="$(ls /usr/lib/libcrypto.so.* | sed 's/.*\.so\.//' | head -1)"; \
+    ssl_pkg="$(apk list --installed "libcrypto${ssl_so}" | head -1 | cut -d' ' -f1)"; \
+    { \
+      echo "musl_soname=${musl_so}"; \
+      echo "musl_version=${musl_pkg#musl-}"; \
+      echo "openssl_soname=${ssl_so}"; \
+      echo "openssl_version=${ssl_pkg#libcrypto${ssl_so}-}"; \
+    } > /abi-manifest
+
 # ── Stage 3: runtime (deps only, no toolchain) ──────────────────────────────
-# Pinned to the SAME alpine the `elixir:1.19-otp-28-alpine` build image rides
-# (3.24, openssl 3.x → libcrypto.so.3/libssl.so.3), so the musl + libssl ABI
-# the bundled ERTS, BeamAsm JIT, and crypto NIF link at build time are present
-# and matched at runtime. The `elixir` tag's underlying alpine FLOATS — it moved
-# 3.23→3.24 mid-development, which the RUN below CAUGHT — so this pin is only
-# correct by coincidence at any instant. That RUN ENFORCES the lockstep (fails
-# the build loudly on drift), so a stale pin can never ship a mislinked image;
-# when it fires, bump this `FROM` to the reported build alpine.
+# `alpine:3.24` is a deliberate FLOOR, not a mirror of the build base. The
+# `elixir:1.19-otp-28-alpine` build image resolves to DIFFERENT alpine minors
+# per arch at the same instant (amd64 3.23, arm64 3.24) and the tag floats, so
+# NO single runtime minor can ever "match" it — and the minor is cosmetic
+# anyway (3.23 and 3.24 share musl 1.x + openssl 3.x). What matters is the ABI
+# contract, which the gate below PROVES: same musl + openssl SONAME major, and
+# a runtime never older than what the release linked. This floor is chosen >=
+# the newest build-base minor across arches; `alpine:3.24` still floats within
+# the 3.24 patch line so security fixes flow; when a build base outgrows this
+# floor (an arch's elixir alpine passes 3.24) the gate fails loud → bump it.
 FROM alpine:3.24 AS runtime
 
-# Enforce the build↔runtime alpine lockstep the comment above promises: compare
-# the build stage's alpine major.minor against this stage's and FAIL LOUD on
-# drift (a musl/openssl-major move that would mislink the bundled ERTS). Without
-# this, a floated build base + stale runtime pin diverges silently, months later,
-# on a CI-built image nobody re-smoke-tested. `cut` is busybox (present in base
-# alpine); ARG-less so it needs no build input.
-COPY --from=build /etc/alpine-release /tmp/build-alpine-release
-RUN build_v="$(cut -d. -f1,2 /tmp/build-alpine-release)" \
-    && run_v="$(cut -d. -f1,2 /etc/alpine-release)" \
-    && if [ "$build_v" != "$run_v" ]; then \
-         echo "ABI DRIFT: build alpine ${build_v} != runtime alpine ${run_v} — bump the runtime FROM in lockstep" >&2; \
-         exit 1; \
-       fi \
-    && echo "alpine lockstep OK: build=${build_v} runtime=${run_v}" \
-    && rm -f /tmp/build-alpine-release
-
-# Runtime deps ONLY:
+# Runtime deps ONLY, installed BEFORE the ABI gate — the gate inspects the
+# runtime's own libcrypto/musl, which `openssl` provides here:
 #   ncurses         — ERTS links libncursesw (tty/terminal driver)
 #   openssl         — libcrypto.so.3/libssl.so.3 for the crypto NIF + #89 TLS
 #   libstdc++/libgcc — musl C++/gcc runtime the BeamAsm JIT + NIFs link
@@ -125,6 +132,30 @@ RUN apk add --no-cache \
         sqlite \
         exiftool \
         ffmpeg
+
+# Build↔runtime ABI lockstep gate. The alpine minor is cosmetic; the real
+# contract is the musl + openssl SONAME majors AND versions the release linked
+# against (captured into /abi-manifest in the build stage). The gate fails the
+# build loudly on a SONAME-major drift OR a runtime older than the build base
+# (musl has no symbol versioning — build-new/run-old can miss symbols). Logic
+# lives in a tested POSIX script: test/infra/abi_lockstep_test.bats.
+COPY --from=build /abi-manifest /tmp/abi-manifest
+COPY infra/docker/assert-abi-lockstep.sh /tmp/assert-abi-lockstep.sh
+RUN set -eu; \
+    b_musl_so="$(sed -n 's/^musl_soname=//p' /tmp/abi-manifest)"; \
+    b_musl_v="$(sed -n 's/^musl_version=//p' /tmp/abi-manifest)"; \
+    b_ssl_so="$(sed -n 's/^openssl_soname=//p' /tmp/abi-manifest)"; \
+    b_ssl_v="$(sed -n 's/^openssl_version=//p' /tmp/abi-manifest)"; \
+    r_musl_so="$(ls /lib/libc.musl-*.so.* | sed 's/.*\.so\.//' | head -1)"; \
+    r_musl_pkg="$(apk list --installed musl | head -1 | cut -d' ' -f1)"; \
+    r_musl_v="${r_musl_pkg#musl-}"; \
+    r_ssl_so="$(ls /usr/lib/libcrypto.so.* | sed 's/.*\.so\.//' | head -1)"; \
+    r_ssl_pkg="$(apk list --installed "libcrypto${r_ssl_so}" | head -1 | cut -d' ' -f1)"; \
+    r_ssl_v="${r_ssl_pkg#libcrypto${r_ssl_so}-}"; \
+    sh /tmp/assert-abi-lockstep.sh \
+        "$b_musl_so" "$b_musl_v" "$b_ssl_so" "$b_ssl_v" \
+        "$r_musl_so" "$r_musl_v" "$r_ssl_so" "$r_ssl_v"; \
+    rm -f /tmp/abi-manifest /tmp/assert-abi-lockstep.sh
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
