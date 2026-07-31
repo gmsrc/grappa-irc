@@ -71,6 +71,13 @@ config :ex_unit, max_cases: 1
 # try to connect to real upstream IRC servers during `mix test`.
 config :grappa, :start_bootstrap, false
 
+# #543 INC-5 — don't autostart the source-alias manager singleton in tests:
+# its unit tests start their own instance (Mox adapter) under the default
+# name, and the mode-2 gate tests inject arm state via
+# `SourceAliasManager.put_test_armed/2`. Mirrors :start_bootstrap. Keeps the
+# app-boot ServerSettings arm-read out of the test tree too.
+config :grappa, :start_source_alias_manager, false
+
 # UX-6-B1 (2026-05-20): embedded image uploader storage dir for
 # `mix test`. The Reaper child in the application supervisor mkdir_p's
 # this at boot; per-test isolation comes from `start_supervised`-ing
@@ -135,6 +142,13 @@ config :grappa, :vhost_ptr_resolver, &Grappa.PtrTestResolver.resolve/1
 config :grappa, :themes,
   image_fetcher: Grappa.Themes.ImageFetcherMock,
   image_ssrf_resolver: Grappa.Themes.ImageFetcher.TestResolver
+
+# #543 INC-5 — source-alias command seam → a Mox so the FreeBSD/Linux adapter
+# tests assert argv + exit-mapping without a real `sudo ifconfig` / `sysctl` /
+# `ip route`. Substrate stays `:docker` (Disabled adapter) by default; tests
+# exercising the FreeBSD/Linux adapters swap it via
+# `Grappa.Net.SourceAlias.Config.put_test_config/1`.
+config :grappa, :source_alias, substrate: :docker, cmd: Grappa.Sys.HardenedCmdMock
 
 # Visitor self-service config (cluster visitor-auth, Task 9). The per-IP
 # cap is kept low so the cap-exceeded test path stays cheap (provision 2

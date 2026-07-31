@@ -19,3 +19,10 @@ ExUnit.start(capture_log: true)
 Ecto.Adapters.SQL.Sandbox.mode(Grappa.Repo, :manual)
 Mox.defmock(Grappa.Admission.CaptchaMock, for: Grappa.Admission.Captcha)
 Mox.defmock(Grappa.Themes.ImageFetcherMock, for: Grappa.Themes.ImageFetcher)
+# #543 INC-5 — source-alias platform adapter + the hardened command seam.
+# `SourceAliasMock` stands in for a FreeBSD/Linux/Disabled adapter in the
+# ref-count manager tests; `HardenedCmdMock` stands in for the shell-out so
+# the FreeBSD/Linux adapters' argv + exit-mapping are asserted without a real
+# `sudo ifconfig` / `sysctl` / `ip route`.
+Mox.defmock(Grappa.Net.SourceAliasMock, for: Grappa.Net.SourceAlias)
+Mox.defmock(Grappa.Sys.HardenedCmdMock, for: Grappa.Sys.HardenedCmd)

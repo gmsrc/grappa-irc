@@ -921,7 +921,10 @@ defmodule Grappa.Session.Server do
   # AND keeps the spec off a `contract_supertype` (a `map()` arg would be
   # wider than the narrow success typing Dialyzer infers). No failer (test
   # fixtures / a bare Bootstrap plan) → just `:ignore`.
-  @spec hold_session(:no_client_source | :no_static_prefix, credential_failer() | nil) :: :ignore
+  @spec hold_session(
+          :no_client_source | :no_static_prefix | :mode2_disarmed,
+          credential_failer() | nil
+        ) :: :ignore
   defp hold_session(reason, credential_failer) do
     text = "static-mapping: #{hold_reason_text(reason)}"
 
@@ -946,9 +949,10 @@ defmodule Grappa.Session.Server do
   # `:mode2_disarmed`) MUST add its clause here, or the missing-clause crash
   # surfaces the gap loudly rather than rendering a silent blank. cic renders
   # the credential's connection_state_reason verbatim, so it is user-facing.
-  @spec hold_reason_text(:no_client_source | :no_static_prefix) :: String.t()
+  @spec hold_reason_text(:no_client_source | :no_static_prefix | :mode2_disarmed) :: String.t()
   defp hold_reason_text(:no_client_source), do: "no known client source address"
   defp hold_reason_text(:no_static_prefix), do: "no static-mapping prefix configured"
+  defp hold_reason_text(:mode2_disarmed), do: "source-alias platform not armed"
 
   defp do_init(opts) do
     # Trap exits so a `Client` crash arrives as `{:EXIT, client_pid,

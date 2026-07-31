@@ -215,6 +215,16 @@ config :grappa, Grappa.ChannelDirectory,
 # so Bypass is reachable while private ranges stay blocked.
 config :grappa, :themes, image_fetcher: Grappa.Themes.ImageFetcher.Req
 
+# #543 INC-5 — source-alias platform adapter selection. `substrate` selects
+# the adapter (`:jail` → FreeBSD, `:linux` → AnyIP no-op, `:docker` →
+# Disabled/refuse-to-arm); it is the SAME explicit `:jail|:linux|:docker` axis
+# Grappa.Deploy.Preflight uses, NEVER a runtime `:os.type` probe. Default
+# `:docker` (dev/CI) so mode 2 stays disarmed unless a real substrate opts in
+# via GRAPPA_SUBSTRATE (runtime.exs). `cmd` is the Grappa.Sys.HardenedCmd
+# command runner (test.exs swaps a Mox). Read ONCE at boot into
+# `:persistent_term` by Grappa.Net.SourceAlias.Config.boot/0.
+config :grappa, :source_alias, substrate: :docker, cmd: Grappa.Sys.HardenedCmd
+
 config :grappa, Grappa.Repo,
   adapter: Ecto.Adapters.SQLite3,
   database: "runtime/grappa_dev.db"

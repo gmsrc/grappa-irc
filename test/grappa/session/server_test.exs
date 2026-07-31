@@ -431,6 +431,31 @@ defmodule Grappa.Session.ServerTest do
 
       assert :ignore = Server.start_link(init_opts)
     end
+
+    # #543 INC-5 — the arm-gate hold reason. `hold_reason_text/1` has NO
+    # catch-all, so a missing `:mode2_disarmed` clause would raise
+    # FunctionClauseError INSIDE init/1 → an ABNORMAL init-fail for a
+    # `:transient` child → RESPAWN-LOOP (not the clean `:ignore`). This test is
+    # the regression guard for that crash-loop: the platform-disarmed hold must
+    # fire the failer with a rendered reason and return :ignore, exactly like
+    # the other hold reasons.
+    test "a {:hold, :mode2_disarmed} source fires the failer and returns :ignore" do
+      test_pid = self()
+
+      init_opts = %{
+        subject: {:user, 1},
+        network_id: 1,
+        subject_label: "user:hold-test",
+        network_slug: "holdnet",
+        source_address: {:hold, :mode2_disarmed},
+        credential_failer: fn reason -> send(test_pid, {:held_failer, reason}) end
+      }
+
+      assert :ignore = Server.start_link(init_opts)
+      assert_receive {:held_failer, reason}, 1_000
+      assert reason =~ "static-mapping"
+      assert reason =~ "not armed"
+    end
   end
 
   describe "registration" do

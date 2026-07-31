@@ -286,7 +286,13 @@ defmodule Grappa.Networks.SessionPlan do
   defp addressing_config do
     %{
       mode: Grappa.ServerSettings.addressing_mode(),
-      prefix: Grappa.ServerSettings.static_mapping_prefix()
+      prefix: Grappa.ServerSettings.static_mapping_prefix(),
+      # #543 INC-5 — the platform arm gate, read lock-free from the manager's
+      # `:persistent_term`. Folded into the addressing map so `effective_source/3`
+      # is the single decision point: a disarmed mode 2 HOLDs (:mode2_disarmed)
+      # rather than egressing from a shared kernel-default source. `false` when
+      # the manager has not booted (safe — mode 2 stays held).
+      armed?: Grappa.Net.SourceAliasManager.armed?()
     }
   end
 

@@ -52,6 +52,11 @@ defmodule Grappa.Networks do
       # (mode + static-mapping prefix) once per plan build and threads it
       # into `Vhosts.effective_source/3`, so Vhosts stays off ServerSettings.
       Grappa.ServerSettings,
+      # #543 INC-5 — SessionPlan folds the platform arm gate
+      # (SourceAliasManager.armed?/0, a lock-free persistent_term read) into
+      # the addressing config so effective_source/3 stays the single decision
+      # point (a disarmed mode 2 HOLDs :mode2_disarmed).
+      Grappa.Net.SourceAliasManager,
       Grappa.Session,
       Grappa.Subject,
       Grappa.Vault,

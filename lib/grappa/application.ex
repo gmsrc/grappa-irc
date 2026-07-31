@@ -11,6 +11,10 @@ defmodule Grappa.Application do
       Grappa.Health,
       Grappa.HttpHosts,
       Grappa.Net.PtrCache,
+      # #543 INC-5: start/2 calls SourceAlias.Config.boot/0 (adapter/cmd DI-seam)
+      # and supervises SourceAliasManager (arm gate + ref-count lifecycle).
+      Grappa.Net.SourceAlias,
+      Grappa.Net.SourceAliasManager,
       Grappa.OutboundV6Pool,
       Grappa.PubSub,
       Grappa.Push,
@@ -75,6 +79,15 @@ defmodule Grappa.Application do
     # instead of a runtime `Application.get_env(:grappa, :themes)` read.
     # Delegates to BackgroundImage.boot/0 (kept internal to the Themes context).
     :ok = Grappa.Themes.boot()
+
+    # #543 INC-5: stash the source-alias substrate → adapter + command runner
+    # in `:persistent_term` so `Grappa.Net.SourceAlias.Config` resolves them
+    # lock-free (the FreeBSD/Linux adapters + the ref-count manager read the
+    # adapter/cmd per call). Boot-time read of `Application.get_env(:grappa,
+    # :source_alias)` is the CLAUDE.md-designated boundary (mirrors
+    # `Grappa.Admission.Config.boot/0`). The ARM state is NOT set here — the
+    # manager computes it once the Repo is up (it needs the DB prefix).
+    :ok = Grappa.Net.SourceAlias.Config.boot()
 
     # Outbound v6 source-address pool. Initialize an EMPTY pool at boot;
     # `Grappa.Bootstrap` installs the DB-curated `in_pool` vhosts via
@@ -272,6 +285,22 @@ defmodule Grappa.Application do
       ] ++
         endpoint_child() ++
         [
+          # #543 INC-5: source-alias ref-count manager. Placed AFTER Endpoint
+          # and BEFORE Bootstrap deliberately (supervision ordering is
+          # load-bearing — CLAUDE.md). After Endpoint: its `handle_continue`
+          # boot reconcile sweeps orphan aliases a crashed prior run left
+          # bound, and ordering the sweep after the public surface is up keeps
+          # the "everything clients can reach is reconciled" invariant honest
+          # (sibling rationale to the Reapers below). Before Bootstrap: INC-6
+          # sessions call `SourceAliasManager.acquire/1` on their connect path,
+          # so the manager must already exist when Bootstrap spawns them. Its
+          # `init/1` reads `ServerSettings.static_mapping_prefix/0` (Repo is up
+          # this late) to run the platform `arm_check`. Opt-out via
+          # `:start_source_alias_manager` (false in test — its unit tests start
+          # their own Mox-wired instance under the default name).
+        ] ++
+        source_alias_manager_child() ++
+        [
           # Reaper after Repo (it queries Visitors via Repo) and after
           # Endpoint, WHEN PRESENT (so a slow boot doesn't sweep before the
           # public surface is up — Reaper's sweep deletes rows that REST/WS
@@ -355,6 +384,21 @@ defmodule Grappa.Application do
   defp endpoint_child do
     if Application.get_env(:grappa, :start_endpoint, true) do
       [GrappaWeb.Endpoint]
+    else
+      []
+    end
+  end
+
+  # #543 INC-5 — the source-alias ref-count manager. Opt-out via
+  # `:start_source_alias_manager` (false in test), mirroring bootstrap_child/0:
+  # the manager's own unit tests start a Mox-wired instance under the default
+  # name, and the arm gate is injected via `SourceAliasManager.put_test_armed/2`
+  # — so the live singleton (which would read ServerSettings + the real adapter
+  # at boot) must not also run in the test tree.
+  @spec source_alias_manager_child() :: [] | [Grappa.Net.SourceAliasManager]
+  defp source_alias_manager_child do
+    if Application.get_env(:grappa, :start_source_alias_manager, true) do
+      [Grappa.Net.SourceAliasManager]
     else
       []
     end

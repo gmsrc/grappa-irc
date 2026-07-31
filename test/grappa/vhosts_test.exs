@@ -20,8 +20,12 @@ defmodule Grappa.VhostsTest do
   # block that grants live in — deliberately OUTSIDE `::cb`, so a grant
   # can never collide with a derived address (Global Constraint).
   @cb_prefix "2a03:4000:20:2d3:cb::/80"
-  @mode1 %{mode: :pool_with_reservations, prefix: nil}
-  @mode2 %{mode: :static_mapping_with_reservations, prefix: @cb_prefix}
+  # #543 INC-4 mode-1 ignores the map shape; INC-5 adds `armed?` (the platform
+  # arm gate). @mode2 is the ARMED mode-2 config; @mode2_disarmed is the
+  # platform-not-ready config that must HOLD with :mode2_disarmed.
+  @mode1 %{mode: :pool_with_reservations, prefix: nil, armed?: false}
+  @mode2 %{mode: :static_mapping_with_reservations, prefix: @cb_prefix, armed?: true}
+  @mode2_disarmed %{mode: :static_mapping_with_reservations, prefix: @cb_prefix, armed?: false}
 
   # Unique v6 literal — mask the counter into a single valid hextet
   # (0..0xffff) so the strict-literal changeset always accepts it.
@@ -313,7 +317,7 @@ defmodule Grappa.VhostsTest do
       user = user_fixture()
       :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 0, 0, 0, 0})
 
-      no_prefix = %{mode: :static_mapping_with_reservations, prefix: nil}
+      no_prefix = %{mode: :static_mapping_with_reservations, prefix: nil, armed?: true}
 
       assert Vhosts.effective_source({:user, user.id}, nil, no_prefix) ==
                {:hold, :no_static_prefix}
@@ -323,10 +327,64 @@ defmodule Grappa.VhostsTest do
       user = user_fixture()
       :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 0, 0, 0, 0})
 
-      bad = %{mode: :static_mapping_with_reservations, prefix: "not-a-cidr"}
+      bad = %{mode: :static_mapping_with_reservations, prefix: "not-a-cidr", armed?: true}
 
       assert Vhosts.effective_source({:user, user.id}, nil, bad) ==
                {:hold, :no_static_prefix}
+    end
+
+    # #543 INC-5 — the platform arm gate. A disarmed mode 2 (adapter refused to
+    # arm: no sudo wrapper, no AnyIP route, Disabled substrate) HOLDs with
+    # :mode2_disarmed rather than egressing from a shared kernel-default source
+    # (Global Constraint). The gate sits in the NO-GRANT branch: a grant-holder
+    # egresses from a curated reserved address that never touches the alias
+    # manager, so disarm must NOT block them.
+    test "no grant + disarmed → {:hold, :mode2_disarmed} even with a known client /64" do
+      user = user_fixture()
+      :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 3, 4, 5, 6})
+
+      assert Vhosts.effective_source({:user, user.id}, nil, @mode2_disarmed) ==
+               {:hold, :mode2_disarmed}
+    end
+
+    test "no grant + disarmed → {:hold, :mode2_disarmed} even with no client /64" do
+      user = user_fixture()
+
+      assert Vhosts.effective_source({:user, user.id}, nil, @mode2_disarmed) ==
+               {:hold, :mode2_disarmed}
+    end
+
+    test "a grant WINS over a disarmed platform (reservation needs no alias)" do
+      user = user_fixture()
+      {:ok, reserved} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::9"})
+      {:ok, _} = Vhosts.grant_vhost(reserved, {:user, user.id})
+
+      assert Vhosts.effective_source({:user, user.id}, nil, @mode2_disarmed) == reserved.address
+    end
+
+    test "an admin server_source WINS even when disarmed (#266 pin is absolute)" do
+      user = user_fixture()
+
+      assert Vhosts.effective_source({:user, user.id}, "2a03:4000:20:2d3:ca::7", @mode2_disarmed) ==
+               "2a03:4000:20:2d3:ca::7"
+    end
+
+    # Defense-in-depth (#1 Global Constraint): a MALFORMED mode-2 map (missing
+    # armed?/prefix) must HOLD, never fall through to the mode-1 shared pool.
+    test "a mode-2 map missing armed? HOLDs :mode2_disarmed (never the shared pool)" do
+      user = user_fixture()
+      :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 3, 4, 5, 6})
+      no_armed = %{mode: :static_mapping_with_reservations, prefix: @cb_prefix}
+
+      assert Vhosts.effective_source({:user, user.id}, nil, no_armed) == {:hold, :mode2_disarmed}
+    end
+
+    test "a mode-2 map missing prefix HOLDs :no_static_prefix when armed (never the pool)" do
+      user = user_fixture()
+      :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 3, 4, 5, 6})
+      no_prefix = %{mode: :static_mapping_with_reservations, armed?: true}
+
+      assert Vhosts.effective_source({:user, user.id}, nil, no_prefix) == {:hold, :no_static_prefix}
     end
   end
 

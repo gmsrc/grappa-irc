@@ -386,4 +386,39 @@ if config_env() == :prod do
       )
     end
   end
+
+  # #543 INC-5 — source-alias platform substrate. Selects the outbound
+  # source-binding adapter (`:jail` FreeBSD wrapper / `:linux` AnyIP no-op /
+  # `:docker` Disabled). Explicit env, NOT `:os.type` autodetect (a Docker
+  # container reports linux yet is not the AnyIP host). Unknown/absent →
+  # `:docker` (Disabled → mode 2 refuses to arm), which is the safe default;
+  # a non-empty unknown value is surfaced, never silently coerced.
+  substrate =
+    case System.get_env("GRAPPA_SUBSTRATE") do
+      "jail" ->
+        :jail
+
+      "linux" ->
+        :linux
+
+      "docker" ->
+        :docker
+
+      nil ->
+        :docker
+
+      "" ->
+        :docker
+
+      other ->
+        require Logger
+
+        Logger.warning(
+          "unknown GRAPPA_SUBSTRATE #{inspect(other)} — source-alias defaulting to :docker (mode 2 disarmed)"
+        )
+
+        :docker
+    end
+
+  config :grappa, :source_alias, substrate: substrate
 end

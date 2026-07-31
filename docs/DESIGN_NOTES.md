@@ -23966,3 +23966,70 @@ session's upstream nick, and the credential goes `connection_state=failed` with
 a `killed:` reason and STAYS failed (no reconnect for 8s). If a future ircd did
 NOT deliver the KILL to the victim, the fallback would key off the
 `ERROR :Closing Link ... (Killed ...)` line — out of scope unless disproved.
+
+## 2026-07-31 — #543 INC-5: source-alias platform adapter + ref-count manager + arm gate
+
+INC-5 lands the machinery that actually BINDS the derived `::cb::/80` sources
+INC-4 resolves: a platform `@behaviour` (`Grappa.Net.SourceAlias`) with FreeBSD
+/ Linux / Disabled impls, a boot config reader (`SourceAlias.Config`), a
+ref-counted lifecycle GenServer (`SourceAliasManager`), a boot reconcile, and
+the sudoers-scoped `infra/freebsd/bin/grappa-source-alias` wrapper. No session
+consumes it yet — that is INC-6 (`acquire`/`release` around the upstream
+connect). Decisions worth keeping:
+
+- **Refuse-to-arm is a gate, not a fallback.** `arm_check/1` runs once at
+  manager init against the DB prefix; `armed?` is published to
+  `:persistent_term` (lock-free) and folded into the addressing map at plan
+  build. `effective_source/3` grew a NO-GRANT-branch clause: disarmed ⇒
+  `{:hold, :mode2_disarmed}`, checked BEFORE `:no_static_prefix` /
+  `:no_client_source`. A grant-holder egresses from a curated reserved address
+  (outside `::cb`, never through the alias manager), so the gate deliberately
+  sits AFTER the grant check — a disarmed platform must not hold a reservation
+  user. `:mode2_disarmed` is a new `hold_reason` (closed set), which forced the
+  synchronized clause in `Session.Server.hold_reason_text/1` (no catch-all —
+  a missing clause would raise FunctionClauseError inside `init/1`, an abnormal
+  init-fail for a `:transient` child ⇒ respawn-loop instead of the clean
+  `:ignore`) plus both its `@spec`s.
+
+- **The behaviour threads the prefix; there is ONE prefix.** Every callback
+  takes the prefix explicitly (arm_check/ensure_source/release_source/
+  list_aliases). The manager holds the single DB prefix
+  (`ServerSettings.static_mapping_prefix`) and passes it down — no second
+  env-duplicated prefix to drift. `ensure_source`/`release_source` guard
+  `IpLiteral.in_cidr6?/2` BEFORE shelling (the pure CIDR-membership primitive,
+  extracted here so `SourceMapping.in_prefix?/2` and the adapter share one
+  impl); the sudo wrapper re-checks the same range at the OS layer (perl
+  `inet_pton`, not a fragile string-prefix match). Defense-in-depth: an
+  out-of-prefix address is refused at the guard, at the wrapper, and would be
+  refused by the kernel — a bare `sudo ifconfig` grant (which none of this
+  uses) is the privilege hole the wrapper closes.
+
+- **Substrate is explicit (`GRAPPA_SUBSTRATE`), never `:os.type`.** The
+  runtime substrate is the SAME `:jail|:linux|:docker` axis `Deploy.Preflight`
+  classifies against, read once at boot into `SourceAlias.Config` — a Docker
+  container reports linux yet cannot AnyIP-bind, so autodetect would arm the
+  wrong adapter. Default `:docker` ⇒ Disabled ⇒ mode 2 refuses to arm.
+
+- **reconcile diffs OS truth vs a SINGLE explicit held-set function.**
+  `held_addresses/1` is the one seam: in INC-5 it returns the manager's own
+  ref-count keys (every acquire/release flows through the manager, so its keys
+  ARE the live-held set on this node — iterating live Session.Server states
+  would duplicate state the manager already owns). At boot the table is empty,
+  so reconcile releases every alias a crashed prior run left bound. **INC-6
+  MUST widen this function's SOURCE to the union with the addresses live
+  Session.Server processes are bound to** — the reconcile diff does NOT change,
+  only the source. Rationale (loud comment in the code): the manager is the
+  crash boundary; a restart of the manager alone resets the ref-count table
+  while sessions stay up and their aliases stay bound, so a reconcile against
+  the (empty) table would classify every in-use alias as an orphan and release
+  it, pulling the source out from under live sockets. Harmless in INC-5 only
+  because nothing binds a derived alias until INC-6.
+
+- **Supervision ordering.** `SourceAliasManager` is placed AFTER the Endpoint
+  (its `handle_continue` boot reconcile runs once the public surface is up)
+  and BEFORE Bootstrap (INC-6 sessions `acquire/1` on their connect path, so
+  the manager must already exist). Its `init/1` reads
+  `ServerSettings.static_mapping_prefix` (Repo is up this late) to arm.
+  Opt-out via `:start_source_alias_manager` (false in test — the manager's own
+  unit tests start a Mox-wired instance under the default name, and mode-2
+  gate tests inject arm state via `SourceAliasManager.put_test_armed/2`).

@@ -107,24 +107,20 @@ defmodule Grappa.Vhosts.SourceMapping do
   True when `addr` (a v6 literal) sits inside `prefix_cidr`. Any non-v6
   address, malformed literal, or malformed prefix returns `false`. Used
   by the INC-7 prefix-impact scan and the adapter's in-prefix guard.
+
+  Thin alias for `Grappa.Net.IpLiteral.in_cidr6?/2` — the CIDR-membership
+  math is a pure `Net.IpLiteral` primitive (the #543 source-alias adapter
+  in-prefix guard reuses the SAME function), kept there once rather than
+  duplicated per caller (CLAUDE.md "implement once, reuse everywhere").
   """
   @spec in_prefix?(String.t(), String.t()) :: boolean()
-  def in_prefix?(addr, prefix_cidr) do
-    with {:ok, {_, _, _, _, _, _, _, _} = addr_tuple} <- IpLiteral.to_tuple(addr),
-         {:ok, {net_tuple, len}} <- IpLiteral.parse_cidr6(prefix_cidr) do
-      <<addr_net::size(len), _::bitstring>> = ip6_bits(addr_tuple)
-      <<pfx_net::size(len), _::bitstring>> = ip6_bits(net_tuple)
-      addr_net == pfx_net
-    else
-      _ -> false
-    end
-  end
+  def in_prefix?(addr, prefix_cidr), do: IpLiteral.in_cidr6?(addr, prefix_cidr)
 
   # ---- v6 bit helper (8×16 tuple → 128-bit binary) --------------------------
   #
   # Bitstring-space, distinct from IpLiteral's integer-space helpers: the
-  # network/host split lands on arbitrary (non-byte) bit boundaries, which
-  # the shift-based `IpLiteral.mask_prefix/2` can't express.
+  # network/host split in `derive/2` lands on arbitrary (non-byte) bit
+  # boundaries, which the shift-based `IpLiteral.mask_prefix/2` can't express.
 
   defp ip6_bits({a, b, c, d, e, f, g, h}),
     do: <<a::16, b::16, c::16, d::16, e::16, f::16, g::16, h::16>>

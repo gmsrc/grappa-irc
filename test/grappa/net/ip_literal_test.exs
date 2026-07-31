@@ -122,4 +122,28 @@ defmodule Grappa.Net.IpLiteralTest do
       assert :error = IpLiteral.canonicalize_cidr6("nope/64")
     end
   end
+
+  describe "in_cidr6?/2" do
+    test "true when the v6 address sits inside the prefix" do
+      assert IpLiteral.in_cidr6?("2a03:4000:20:2d3:cb::1", "2a03:4000:20:2d3:cb::/80")
+      assert IpLiteral.in_cidr6?("2a03:4000:20:2d3:cb:dead:beef:1", "2a03:4000:20:2d3:cb::/80")
+    end
+
+    test "false when the v6 address is outside the prefix" do
+      refute IpLiteral.in_cidr6?("2a03:4000:20:2d3:ffff::1", "2a03:4000:20:2d3:cb::/80")
+    end
+
+    test "false for an IPv4 address, a malformed literal, or a malformed prefix" do
+      refute IpLiteral.in_cidr6?("192.0.2.1", "2a03:4000:20:2d3:cb::/80")
+      refute IpLiteral.in_cidr6?("not-an-ip", "2a03:4000:20:2d3:cb::/80")
+      refute IpLiteral.in_cidr6?("2a03:4000:20:2d3:cb::1", "nope/80")
+      refute IpLiteral.in_cidr6?("2a03:4000:20:2d3:cb::1", "2a03:4000:20:2d3:cb::/999")
+    end
+
+    test "len 128 matches only the exact address; len 0 matches every v6" do
+      assert IpLiteral.in_cidr6?("2a03::1", "2a03::1/128")
+      refute IpLiteral.in_cidr6?("2a03::2", "2a03::1/128")
+      assert IpLiteral.in_cidr6?("2a03:4000:20:2d3:cb::1", "::/0")
+    end
+  end
 end

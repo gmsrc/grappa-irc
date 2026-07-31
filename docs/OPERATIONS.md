@@ -628,6 +628,57 @@ host's primary `::42` (rDNS `m42.openssl.it`, owned by `/etc/rc.conf`)
 is safe to share into the jail. Match the host's prefixlen (`::42/64`,
 not `/128`, or you collide with the host's on-link route).
 
+**Static-mapping source aliases (#543 mode 2).** The
+`static_mapping_with_reservations` addressing mode derives ONE stable
+`::cb::/80` source per untrusted client `/64` and binds it for the
+session lifetime. This is OFF by default (`addressing_mode` in
+`server_settings` defaults to `pool_with_reservations`); it must be
+armed per substrate before an admin flips the mode, or every mode-2
+session is HELD (`:mode2_disarmed`, credential marked failed) rather
+than egressing from the shared kernel-default source.
+
+- **Substrate select.** Set `GRAPPA_SUBSTRATE` in the deploy env
+  (`jail` / `linux` / `docker`; unset ⇒ `docker` ⇒ Disabled adapter ⇒
+  mode 2 refuses to arm). It is explicit, NOT `:os.type` autodetect —
+  a Docker container reports linux yet cannot AnyIP-bind.
+- **FreeBSD jail (`GRAPPA_SUBSTRATE=jail`).** Install the argv-validated
+  wrapper `infra/freebsd/bin/grappa-source-alias` onto sudo's
+  `secure_path` (e.g. `/usr/local/sbin/grappa-source-alias`, `root:wheel`,
+  mode `0755`) and grant the grappa user a NOPASSWD line:
+
+  ```
+  # /usr/local/etc/sudoers.d/grappa-source-alias
+  grappa ALL=(root) NOPASSWD: /usr/local/sbin/grappa-source-alias
+  ```
+
+  The wrapper — not a bare `sudo ifconfig` — is the privilege boundary:
+  it hard-codes `lo0` + `/128` and refuses any address outside the
+  configured prefix (its compiled `PREFIX=` default,
+  `2a03:4000:20:2d3:cb::/80` — MUST match
+  `ServerSettings.static_mapping_prefix`). **For a non-default block, edit
+  the `PREFIX=` line in the root-owned wrapper — do NOT `env_keep`
+  `GRAPPA_SOURCE_ALIAS_PREFIX` through sudoers.** The prefix is the
+  wrapper's privilege SCOPE; env-keeping it hands that scope to the
+  (untrusted) grappa caller, so a compromised BEAM could set
+  `GRAPPA_SOURCE_ALIAS_PREFIX=::/0` and `sudo` an alias for ANY address —
+  including the trusted `::ca` block — defeating the exact accountable-vs-
+  untrusted egress separation this feature enforces. sudo scrubs the env by
+  default, so the hard-coded root-owned `PREFIX=` is the only scope that
+  applies; keep it that way. `arm_check` probes the grant with `sudo -n
+  grappa-source-alias check`; a missing wrapper/grant leaves mode 2 disarmed
+  with reason `:wrapper_unavailable`.
+- **Native Linux (`GRAPPA_SUBSTRATE=linux`).** No per-address alias —
+  an AnyIP local route makes the whole block bindable at once. Provision
+  BOTH (persist in your netplan/rc): `sysctl -w
+  net.ipv6.ip_nonlocal_bind=1` and `ip -6 route add local
+  2a03:4000:20:2d3:cb::/80 dev lo`. `arm_check` verifies both; a missing
+  route disarms with `:anyip_route_missing`, a disabled sysctl with
+  `:ip_nonlocal_bind_disabled`.
+- **Boot reconcile.** At startup (after the HTTP surface is up, before
+  Bootstrap spawns sessions) the `SourceAliasManager` sweeps orphan
+  aliases a crashed prior run left bound (`ifconfig lo0` on FreeBSD;
+  no-op on Linux/AnyIP), so a hard crash does not leak `/128` aliases.
+
 **fail2ban gotcha.** fail2ban runs on the **host** (9 jails incl.
 `http-404`, `http-ratelimit`, `recidive`). A cic client looping on a
 dead token (e.g. after a password rotation) racks up `REFUSED

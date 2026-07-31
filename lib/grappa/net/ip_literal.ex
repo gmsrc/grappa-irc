@@ -128,6 +128,29 @@ defmodule Grappa.Net.IpLiteral do
     end
   end
 
+  @doc """
+  True when `addr` (a v6 literal) sits inside the v6 CIDR `prefix_cidr`.
+
+  Both sides parse through the SAME strict rule as `to_tuple/1` /
+  `parse_cidr6/1`; a non-v6 address, an IPv4 literal, or any malformed
+  input on either side returns `false` (never raises). This is the pure
+  CIDR-membership primitive shared by `Grappa.Vhosts.SourceMapping.in_prefix?/2`
+  (derivation + prefix-impact) and the #543 source-alias adapter's
+  in-prefix guard (refuse to `ifconfig` an address outside the configured
+  block — a privilege-scope invariant), so the membership math lives here
+  once (CLAUDE.md "implement once, reuse everywhere").
+  """
+  @spec in_cidr6?(String.t(), String.t()) :: boolean()
+  def in_cidr6?(addr, prefix_cidr) when is_binary(addr) and is_binary(prefix_cidr) do
+    with {:ok, {_, _, _, _, _, _, _, _} = addr_tuple} <- to_tuple(addr),
+         {:ok, {net_tuple, len}} <- parse_cidr6(prefix_cidr) do
+      mask_prefix(ip6_to_integer(addr_tuple), len) ==
+        mask_prefix(ip6_to_integer(net_tuple), len)
+    else
+      _ -> false
+    end
+  end
+
   # ---- v6 bit helpers (128-bit int ↔ 8×16 tuple) -------------------
 
   defp ip6_to_integer({a, b, c, d, e, f, g, h}) do

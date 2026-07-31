@@ -12,6 +12,7 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
 
   import Grappa.AuthFixtures
 
+  alias Grappa.Net.SourceAliasManager
   alias Grappa.Networks.{Credential, Server, SessionPlan}
   alias Grappa.{ServerSettings, Vhosts}
   alias Grappa.Vhosts.SourceMapping
@@ -73,6 +74,13 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
     setup do
       :ok = ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
       :ok = ServerSettings.put_static_mapping_prefix(@cb_prefix)
+      # #543 INC-5 — arm the platform so the addressing config's arm gate lets
+      # the derive/hold path run. Without this, base_plan reads the test app's
+      # (Disabled-adapter, disarmed) manager and every mode-2 plan HOLDs with
+      # :mode2_disarmed BEFORE reaching :no_client_source. Reset on exit so the
+      # armed state never leaks to a sibling test (persistent_term is global).
+      :ok = SourceAliasManager.put_test_armed(true, nil)
+      on_exit(fn -> SourceAliasManager.put_test_armed(false, :not_armed) end)
       :ok
     end
 

@@ -41,6 +41,18 @@ defmodule Grappa.Sys.HardenedCmd do
           | {:error, {:exit, non_neg_integer(), output :: String.t()}}
 
   @doc """
+  Self-describing behaviour: the `@callback` mirrors `run/3`'s `@spec` so a
+  Mox double (`Grappa.Sys.HardenedCmdMock`) can stand in for the real
+  `System.cmd` shell-out at test boundaries — the #543 source-alias FreeBSD /
+  Linux adapters resolve their command runner through this seam
+  (`SourceAlias.Config.cmd/0`) so no test ever runs a real `sudo ifconfig` or
+  `sysctl`. Inert for the direct callers (`Uploads.MetadataStrip` / `Themes`
+  call `run/3` statically, not through the behaviour).
+  """
+  @callback run(exe_name :: String.t(), args :: [String.t()], timeout_s :: pos_integer()) ::
+              result()
+
+  @doc """
   Run `exe_name args` under `timeout -s KILL timeout_s` with a scrubbed env.
 
   Returns `{:ok, combined_stdout_stderr}` on exit 0; `{:error, :timeout}` when

@@ -342,7 +342,7 @@ defmodule Grappa.Vhosts do
   other than `:static_mapping_with_reservations` resolves mode-1 (today's
   behaviour, byte-for-byte).
   """
-  @type addressing :: %{mode: atom(), prefix: String.t() | nil}
+  @type addressing :: %{mode: atom(), prefix: String.t() | nil, armed?: boolean()}
 
   @typedoc """
   Why a mode-2 subject could NOT be given a derived source (#543 INC-4).
@@ -355,8 +355,15 @@ defmodule Grappa.Vhosts do
     * `:no_static_prefix` — mode 2 is selected but the configured prefix is
       missing (`nil`) or unparseable (`SourceMapping.derive/2` error) —
       an admin misconfiguration.
+    * `:mode2_disarmed` — mode 2 is selected but the platform adapter refused
+      to arm (#543 INC-5): no FreeBSD sudo wrapper, no Linux AnyIP route /
+      `ip_nonlocal_bind`, or the Disabled substrate. The arm gate
+      (`Grappa.Net.SourceAliasManager.armed?/0`, folded into `addressing.armed?`
+      at plan build) sits in the no-grant branch — a grant-holder egresses from
+      a curated reserved address that never touches the alias manager, so a
+      disarmed platform must not hold them.
   """
-  @type hold_reason :: :no_client_source | :no_static_prefix
+  @type hold_reason :: :no_client_source | :no_static_prefix | :mode2_disarmed
 
   @doc """
   Resolves the effective source address for `subject` on this connect,
@@ -401,12 +408,19 @@ defmodule Grappa.Vhosts do
   # Mode 2 (#543) — grants-only reservations, else deterministic derivation
   # from the subject's own client /64; NO random pool. `in_pool` /
   # `generally_available` are inert here.
-  def effective_source({_, _} = subject, nil, %{
-        mode: :static_mapping_with_reservations,
-        prefix: prefix
-      }) do
+  def effective_source({_, _} = subject, nil, %{mode: :static_mapping_with_reservations} = addressing) do
+    # Defense-in-depth for the #1 Global Constraint (never fall through to a
+    # shared source): key mode-2 detection ONLY on `mode:`, then read `prefix`
+    # / `armed?` with HOLD-safe defaults. A malformed addressing map (missing
+    # either key) therefore HOLDs — `armed? = false` ⇒ `:mode2_disarmed`,
+    # `prefix = nil` ⇒ `:no_static_prefix` — rather than matching the mode-1
+    # clause below and silently egressing from the pool. The canonical map
+    # (`Networks.SessionPlan.addressing_config/0`) always supplies both.
+    prefix = Map.get(addressing, :prefix)
+    armed? = Map.get(addressing, :armed?, false)
+
     case granted_vhost_addresses(subject) do
-      [] -> derive_or_hold(subject, prefix)
+      [] -> derive_or_hold(subject, prefix, armed?)
       addresses -> Enum.random(addresses)
     end
   end
@@ -421,15 +435,19 @@ defmodule Grappa.Vhosts do
   end
 
   # Mode-2 no-grant path: derive from the captured client /64, or HOLD.
-  # A nil prefix is an admin misconfig (mode selected, no block set); a
-  # derive error (unparseable prefix) is the SAME class — both map to
-  # `:no_static_prefix`. An absent client /64 is `:no_client_source`. A
-  # derive error NEVER falls through to a shared source (Global Constraint).
-  @spec derive_or_hold(Subject.t(), String.t() | nil) ::
+  # Gate order (#543 INC-5): the platform arm gate FIRST — a disarmed adapter
+  # (no sudo wrapper / no AnyIP route / Disabled substrate) HOLDs with
+  # `:mode2_disarmed` regardless of prefix or client, because no derived
+  # address can be bound at all. Then: a nil prefix is an admin misconfig (mode
+  # selected, no block set); a derive error (unparseable prefix) is the SAME
+  # class — both map to `:no_static_prefix`. An absent client /64 is
+  # `:no_client_source`. NONE fall through to a shared source (Global Constraint).
+  @spec derive_or_hold(Subject.t(), String.t() | nil, boolean()) ::
           String.t() | {:hold, hold_reason()}
-  defp derive_or_hold(_, nil), do: {:hold, :no_static_prefix}
+  defp derive_or_hold(_, _, false), do: {:hold, :mode2_disarmed}
+  defp derive_or_hold(_, nil, true), do: {:hold, :no_static_prefix}
 
-  defp derive_or_hold(subject, prefix) when is_binary(prefix) do
+  defp derive_or_hold(subject, prefix, true) when is_binary(prefix) do
     case last_client_prefix64(subject) do
       nil ->
         {:hold, :no_client_source}

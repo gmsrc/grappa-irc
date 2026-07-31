@@ -91,6 +91,11 @@ services:
       # (GRAPPA_MAX_USERS=100, GRAPPA_DIRTY_SCHEDULERS=$(nproc)).
       GRAPPA_MAX_USERS: ${GRAPPA_MAX_USERS:-}
       GRAPPA_DIRTY_SCHEDULERS: ${GRAPPA_DIRTY_SCHEDULERS:-}
+      # #543 — outbound source-alias substrate. The Docker stack cannot
+      # ifconfig-alias lo0 nor run AnyIP, so it stays :docker (Disabled
+      # adapter → static-mapping mode 2 refuses to arm). Only the FreeBSD
+      # jail / native-Linux prod hosts set jail|linux (via their env file).
+      GRAPPA_SUBSTRATE: ${GRAPPA_SUBSTRATE:-docker}
       # T31 Plan 2 — admission captcha. Defaults to disabled provider;
       # operator exports GRAPPA_CAPTCHA_PROVIDER=turnstile + secret +
       # site_key in .env / host shell to enable.
