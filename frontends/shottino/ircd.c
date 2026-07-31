@@ -139,9 +139,20 @@ void ircd_split_pass(const char *pass, char *network, size_t network_sz, char *s
  * and `foo{1}` are two DIFFERENT people and `#chan[1]` two different
  * channels. Folding them together merged a stranger into your nicklist
  * (grappa's #525, corrected server-side in
- * `Grappa.IRC.Identifier.canonical_nick/1`); this is the client twin of
- * that fix, and the ONE fold the whole binary uses — the app's window
- * lookups call it through `irc_name_eq`.
+ * `Grappa.IRC.Identifier.canonical_target/1` — one fold for nicks AND
+ * channels since #537, since a sigil sits outside `A-Z` anyway); this is
+ * the client twin of that fix, and the ONE fold the whole binary uses —
+ * the app's window lookups call it through `irc_name_eq`.
+ *
+ * NOT implemented here: #537's per-network CASEMAPPING normalisation.
+ * An rfc1459 network (solanum/Libera) folds `[ ] \ ~` too, and the
+ * SERVER normalises those at ingress before a key ever reaches a
+ * client — so shottino sees already-normalised keys and this ASCII fold
+ * agrees. What it cannot do is fold a name the USER types against an
+ * rfc1459 network, which the bridge would need for `#foo[1]` typed
+ * downstream to find `#foo{1}`. All of prod is bahamut/ascii, where the
+ * two are identical; a solanum deployment would need the casemapping
+ * plumbed to the client first.
  *
  * Bytes above 127 are left alone deliberately: the ircd keeps `#CAFÉ`
  * and `#café` apart, and a locale-aware tolower would not. */

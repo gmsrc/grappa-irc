@@ -835,8 +835,8 @@ static size_t focused_window_locked(struct app *app);
  * characters and why bytes above 127 are left alone. ONE fold in this
  * binary: the bridge and the app agreeing on what a name IS is the
  * point, and a second implementation here is what would drift.
- * Server-side twin: `Grappa.IRC.Identifier.canonical_nick/1` and
- * `canonical_channel/1` (CLAUDE.md, #525).
+ * Server-side twin: `Grappa.IRC.Identifier.canonical_target/1` — one
+ * fold for nicks AND channels since #537 (CLAUDE.md, #525/#537).
  *
  * strcasecmp is NOT this function: under a non-C locale it folds bytes
  * above 127 as well, which would merge exactly the pairs the ircd keeps
