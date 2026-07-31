@@ -68,6 +68,10 @@
  * in half a minute is not coming back — the other client does not answer
  * them, or the person is gone. */
 #define PING_TIMEOUT_MS 30000
+/* Floor between two auto-answered CTCP queries. A client that answers
+ * every one of them is a client that can be made to flood the server on
+ * somebody else's command. */
+#define CTCP_REPLY_MIN_MS 500
 #define MAX_CHANNEL 256
 #define MAX_SLUG 128
 #define MAX_LINE 1024
@@ -754,6 +758,8 @@ struct app {
      * matched stamp is what lets a backfilled reply still be reported
      * as the round trip it was, while a replay of an OLD ping matches
      * nothing and stays quiet. */
+    /* When we last auto-answered a CTCP query, for the throttle. */
+    long ctcp_last_reply_ms;
     struct pending_ping {
         char network[MAX_SLUG];
         char nick[MAX_CHANNEL];
@@ -1997,6 +2003,8 @@ static void ircd_publish(struct app *app, const struct wire_scrollback_message *
 static void card(struct app *app, const char *network, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 static bool is_blocked(struct app *app, const char *nick);
+static struct network *network_by_slug_locked(struct app *app, const char *slug);
+static void ws_push_user(struct app *app, const char *event, const char *payload);
 
 /* Remember a ping we just sent, so its answer can be recognised whenever
  * it turns up. Oldest out when full — a table that refuses new entries
@@ -2080,25 +2088,19 @@ static void ping_sweep(struct app *app) {
  * `\001PING 1234\001` drawn verbatim is what a self-ping looked like: a
  * query window full of control characters. The verb is the useful part;
  * the payload is an opaque token the asker chose. */
-static void render_ctcp_request(struct app *app, const char *network, const char *sender,
-                                const char *body) {
-    char verb[32] = "";
+/* Split `\001VERB payload\001` into its two halves. The verb is upcased
+ * (clients send `ping` as readily as `PING`); the payload is copied
+ * VERBATIM, because for PING it is the asker's token and its only job is
+ * to come back unchanged. Shared by the renderer and the responder so
+ * the line shown and the line answered describe the same message. */
+static void ctcp_split(const char *body, char *verb, size_t verb_sz, char *payload,
+                       size_t payload_sz) {
+    verb[0] = 0;
+    payload[0] = 0;
+    if (!body || body[0] != '\001') return;
     const char *p = body + 1;
     size_t i = 0;
-    while (p[i] && p[i] != ' ' && p[i] != '\001' && i + 1 < sizeof(verb)) {
-        verb[i] = (char)toupper((unsigned char)p[i]);
-        i++;
-    }
-    verb[i] = 0;
-    card(app, network, "--- CTCP %s from %s", verb[0] ? verb : "(unnamed)", sender);
-}
-
-static void render_ctcp_reply(struct app *app, const char *network, const char *sender,
-                              const char *body, bool live) {
-    char verb[32] = "", payload[MAX_LINE] = "";
-    const char *p = body + 1; /* past the leading \001 */
-    size_t i = 0;
-    while (p[i] && p[i] != ' ' && p[i] != '\001' && i + 1 < sizeof(verb)) {
+    while (p[i] && p[i] != ' ' && p[i] != '\001' && i + 1 < verb_sz) {
         verb[i] = (char)toupper((unsigned char)p[i]);
         i++;
     }
@@ -2106,11 +2108,67 @@ static void render_ctcp_reply(struct app *app, const char *network, const char *
     const char *rest = p + i;
     while (*rest == ' ') rest++;
     size_t n = 0;
-    while (rest[n] && rest[n] != '\001' && n + 1 < sizeof(payload)) {
+    while (rest[n] && rest[n] != '\001' && n + 1 < payload_sz) {
         payload[n] = rest[n];
         n++;
     }
     payload[n] = 0;
+}
+
+/* Answer an inbound CTCP query.
+ *
+ * PING only, and deliberately so. VERSION is answered by GRAPPA, which
+ * is awake when no client is attached — two answers to one query is
+ * worse than none, and the bouncer's is the one that is always there.
+ * PING is the gap: grappa lets it fall through, so a ping aimed at this
+ * session goes unanswered and the asker waits forever. Answering here
+ * closes that only while shottino is running, which is the honest limit
+ * of a client-side responder.
+ *
+ * The token is echoed back byte for byte and never parsed — it is the
+ * asker's, conventionally their clock, and the whole protocol is that
+ * it returns unchanged so they can subtract.
+ *
+ * A reply is a NOTICE, which no client auto-answers: that is what makes
+ * this loop-safe, and it is why only a PRIVMSG-shaped query reaches
+ * here at all. Throttled, because a CTCP flood aimed at a client that
+ * answers every one is a way to make that client flood the server. */
+static void ctcp_respond(struct app *app, const char *network, const char *sender,
+                         const char *verb, const char *payload) {
+    if (strcmp(verb, "PING") != 0 || !sender[0]) return;
+
+    long now = monotonic_ms();
+    pthread_mutex_lock(&app->lock);
+    bool too_soon = app->ctcp_last_reply_ms && now - app->ctcp_last_reply_ms < CTCP_REPLY_MIN_MS;
+    int network_id = 0;
+    struct network *n = network_by_slug_locked(app, network);
+    if (n) network_id = n->id;
+    if (!too_soon) app->ctcp_last_reply_ms = now;
+    pthread_mutex_unlock(&app->lock);
+    if (too_soon || !network_id) return;
+
+    char frame[MAX_LINE];
+    if (payload[0]) snprintf(frame, sizeof(frame), "NOTICE %s :\001PING %s\001", sender, payload);
+    else snprintf(frame, sizeof(frame), "NOTICE %s :\001PING\001", sender);
+    char *raw = json_escape(frame);
+    char *body = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", network_id, raw);
+    ws_push_user(app, "raw", body);
+    free(raw);
+    free(body);
+}
+
+static void render_ctcp_request(struct app *app, const char *network, const char *sender,
+                                const char *body) {
+    char verb[32], payload[MAX_LINE];
+    ctcp_split(body, verb, sizeof(verb), payload, sizeof(payload));
+    card(app, network, "--- CTCP %s from %s", verb[0] ? verb : "(unnamed)", sender);
+    ctcp_respond(app, network, sender, verb, payload);
+}
+
+static void render_ctcp_reply(struct app *app, const char *network, const char *sender,
+                              const char *body, bool live) {
+    char verb[32], payload[MAX_LINE];
+    ctcp_split(body, verb, sizeof(verb), payload, sizeof(payload));
 
     if (strcmp(verb, "PING") == 0) {
         char *end = NULL;

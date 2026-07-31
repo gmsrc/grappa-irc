@@ -204,6 +204,15 @@ static size_t menu_for(struct app *app, const char *nick, struct overlay_item *i
     return overlay_items(app, items, max);
 }
 
+/* Does any row in the buffer say this? Used where a row is not
+ * necessarily the LAST one — answering a CTCP query writes a line of
+ * its own after the card. */
+static bool log_has(struct app *app, const char *needle) {
+    for (size_t i = 0; i < app->log_count; i++)
+        if (strstr(app->log[i], needle)) return true;
+    return false;
+}
+
 static bool menu_offers(struct overlay_item *items, size_t n, enum overlay_action action) {
     for (size_t i = 0; i < n; i++)
         if (items[i].action == action) return true;
@@ -578,10 +587,58 @@ TEST(an_inbound_ctcp_query_is_named_not_dumped) {
     m.body = "\001PING 1753776000123\001";
     render_message(app, &m, true);
 
-    const char *row = app->log[app->log_count - 1];
-    CHECK(strstr(row, "CTCP PING from vjt") != NULL);
-    CHECK(strstr(row, "\001") == NULL);
+    CHECK(log_has(app, "CTCP PING from vjt"));
+    CHECK(!log_has(app, "\001"));
     CHECK_LONG(app->window_count, windows_before);
+    free_app(app);
+}
+
+TEST(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer) {
+    char verb[32], payload[MAX_LINE];
+
+    /* The split the responder and the renderer share. */
+    ctcp_split("\001PING 1753776000123\001", verb, sizeof(verb), payload, sizeof(payload));
+    CHECK_STR(verb, "PING");
+    CHECK_STR(payload, "1753776000123");
+
+    /* Lowercase verbs are the same verb; a token-less query has no
+     * token rather than a made-up one. */
+    ctcp_split("\001ping\001", verb, sizeof(verb), payload, sizeof(payload));
+    CHECK_STR(verb, "PING");
+    CHECK_STR(payload, "");
+
+    /* The payload is copied verbatim — spaces and all — because for
+     * PING it is the asker's token and must return unchanged. */
+    ctcp_split("\001PING a b c\001", verb, sizeof(verb), payload, sizeof(payload));
+    CHECK_STR(payload, "a b c");
+
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+
+    /* VERSION is grappa's to answer — it is awake when this client is
+     * not, and two answers to one query is worse than none. Asking the
+     * responder to handle it must do nothing at all. */
+    app->ctcp_last_reply_ms = 0;
+    ctcp_respond(app, "azzurra", "alice", "VERSION", "");
+    CHECK_LONG(app->ctcp_last_reply_ms, 0);
+
+    /* A nameless sender is nobody to answer. */
+    ctcp_respond(app, "azzurra", "", "PING", "1");
+    CHECK_LONG(app->ctcp_last_reply_ms, 0);
+
+    /* A PING is answered — the throttle stamp is the observable part
+     * here; the socket is not connected in a test, so the push itself
+     * is a no-op. */
+    ctcp_respond(app, "azzurra", "alice", "PING", "1");
+    CHECK(app->ctcp_last_reply_ms != 0);
+
+    /* And the next one, immediately after, is throttled: a client that
+     * answers every query in a flood is a client that can be pointed at
+     * the server. */
+    long first = app->ctcp_last_reply_ms;
+    ctcp_respond(app, "azzurra", "bob", "PING", "2");
+    CHECK_LONG(app->ctcp_last_reply_ms, first);
     free_app(app);
 }
 
@@ -611,5 +668,6 @@ int main(void) {
     RUN(a_backfilled_ping_reply_still_reports_its_round_trip);
     RUN(an_unsolicited_ping_reply_says_nothing);
     RUN(an_inbound_ctcp_query_is_named_not_dumped);
+    RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);
     return test_report();
 }
