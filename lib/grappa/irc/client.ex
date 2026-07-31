@@ -800,16 +800,44 @@ defmodule Grappa.IRC.Client do
   end
 
   @doc """
-  Sends bare `LUSERS\\r\\n` upstream — server replies with the
-  251/252/253?/254/255/265/266 sequence which `EventRouter` folds into
-  `state.lusers_pending` and `Server.apply_effects` flushes as a
-  `{:lusers_bundle, accum}` effect on 266.
+  #571 — sends `LUSERS [<mask> [<server>]]\\r\\n` upstream (RFC 2812 §3.4.2).
+  Server replies with the 251/252/253?/254/255/265/266 sequence which
+  `EventRouter` folds into `state.lusers_pending` and `Server.apply_effects`
+  flushes as a `{:lusers_bundle, accum}` effect on 266.
 
-  No params, no validation: LUSERS is universally accepted.
+  `nil`/`nil` emits a bare `LUSERS` (the current server's cached figures). A
+  `mask` emits `LUSERS <mask>` — on bahamut a non-`*` mask forces a live
+  recount of the "unknown connection(s)" figure past the 180s cache. A
+  `mask` + `server` emits `LUSERS <mask> <server>` so the query routes to a
+  named remote server (RFC 2812 §3.4.2 places `<server>` positionally AFTER
+  `<mask>`).
+
+  Pre-#571 this dropped every param, so an oper could never trigger the
+  forced recount and `LUSERS <mask> <server>` could not be routed. `mask`
+  and `server` are each gated by `safe_oper_token?/1` (a single wire token —
+  no whitespace/CRLF/NUL) so they cannot splice an extra wire slot or inject
+  a follow-up command; rejection yields `{:error, :invalid_line}`. A
+  `server` with no `mask` cannot be framed positionally and is rejected.
   """
-  @spec send_lusers(pid()) :: send_result()
-  def send_lusers(client) do
+  @spec send_lusers(pid(), String.t() | nil, String.t() | nil) :: send_result()
+  def send_lusers(client, nil, nil) do
     send_line(client, "LUSERS\r\n")
+  end
+
+  def send_lusers(client, mask, nil) when is_binary(mask) do
+    if Identifier.safe_oper_token?(mask),
+      do: send_line(client, "LUSERS #{mask}\r\n"),
+      else: reject_invalid_line(:lusers)
+  end
+
+  def send_lusers(client, mask, server) when is_binary(mask) and is_binary(server) do
+    if Identifier.safe_oper_token?(mask) and Identifier.safe_oper_token?(server),
+      do: send_line(client, "LUSERS #{mask} #{server}\r\n"),
+      else: reject_invalid_line(:lusers)
+  end
+
+  def send_lusers(_, nil, server) when is_binary(server) do
+    reject_invalid_line(:lusers)
   end
 
   @doc """
@@ -917,6 +945,7 @@ defmodule Grappa.IRC.Client do
            | :names
            | :motd
            | :links
+           | :lusers
            | :oper
            | :raw
 

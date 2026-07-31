@@ -24333,3 +24333,57 @@ goes through `release-entrypoint.sh`'s `ERL_ZFLAGS`, never a baked `rel/vm.args`
 that would leak into the jail/.deb/.rpm; the release image reports the bare
 version by construction (no `.git`), so anything asserting the image's version
 expects `X.Y.Z`, never a `-<sha>` suffix.
+
+## 2026-07-31 — #571: `/lusers` forwards its optional mask + server (was dropped)
+
+The `/lusers` path was param-less end to end: `GrappaChannel.handle_in("lusers",
+...)` pattern-matched only `network_id`, `Session.send_lusers/2` +
+`Client.send_lusers/1` emitted a bare `LUSERS`, and any client-supplied
+`<mask>`/`<server>` was silently discarded. Two consequences on bahamut (all of
+prod, Azzurra): an operator could never trigger the **forced live recount** of
+the "unknown connection(s)" figure — bahamut serves it from a 180s cache
+(`LUSERS_CACHE_TIME`) unless forced — and `LUSERS <mask> <server>` could not be
+routed to a remote server. Reported on IRC during the SSL unknown-client leak
+investigation.
+
+**Spec-challenge — the issue's `parc > 3` is a misquote.** The issue attributed
+the forced path to `forced = IsAnOper(sptr) && parc > 3`. The public bahamut
+(DALnet master) `send_lusers` actually gates on `IsAnOper(sptr) && (parc > 1) &&
+(*parv[1] != '*')` — i.e. an oper supplying a **non-`*` mask** forces the
+recount; no third argument is involved. The issue text also contradicts itself
+("the *3-argument* oper form ... triggers `parc > 3`", but `LUSERS mask server`
+is `parc == 3`, not `> 3`). vjt confirmed the source reading wins: the fix
+targets the real trigger, a non-`*` mask.
+
+**Fix — mirror `/motd` + `/links` exactly (RFC 2812 §3.4.2 `LUSERS [<mask>
+[<target>]]`).** `Client.send_lusers/3` forwards both optional params
+positionally: `nil`/`nil` → bare `LUSERS`; `mask`/`nil` → `LUSERS <mask>`;
+`mask`/`server` → `LUSERS <mask> <server>`. Each token is gated by
+`Identifier.safe_oper_token?/1` (a single wire token — no whitespace/CRLF/NUL)
+so it cannot splice an extra wire slot or inject a follow-up command; rejection
+funnels through `reject_invalid_line(:lusers)` for byte-boundary observability.
+A `server` with **no** mask cannot be framed positionally (RFC places
+`<server>` AFTER `<mask>`) and is rejected `{:error, :invalid_line}` rather than
+silently dropped. The channel door validates first via a new
+`validate_lusers_args/2` (reuses the `:server` → `safe_oper_token?/1` validator,
+like `/motd`'s target + `/links`'s mask); `Session.send_lusers/4` +
+`Client.send_lusers/3` re-validate so the context contract stays honest for
+every door. The internal GenServer message widened `:send_lusers` →
+`{:send_lusers, mask, server}`. The `lusers_pending` accumulator + the 251..266
+fold → `:lusers_bundle` broadcast are UNCHANGED (a mask/server only shapes the
+outbound line; the reply numerics fold identically).
+
+**Wire contract — additive, no protocol bump (#447).** The `lusers` verb gains
+two optional snake_case fields (`mask`, `server`); absent both, behaviour is
+byte-identical to pre-#571. An old client sending bare `%{network_id}` still
+validates and gets a bare `LUSERS`. Deploy: server is HOT (no migration, no new
+child, GenServer state unchanged).
+
+**Scope — server only.** This issue is grappa-server-scoped (its source refs are
+grappa files). cic currently DISCARDS `/lusers` args (`parseSlash("/lusers
+ignored")` → param-less by explicit test), so the operator-facing UX needs a
+separate cic follow-up (parse + push `mask`/`server`) — tracked by vjt, out of
+scope here. The server contract is now ready for cic (or any client) to supply
+the params. Regression-guarded by `client_test` (bare/mask/mask+server framing
++ injection + server-without-mask rejection) and `grappa_channel_test` (the
+same five cases through the channel door).

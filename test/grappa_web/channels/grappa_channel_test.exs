@@ -1953,6 +1953,78 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert_reply(ref, :error, %{error: "invalid_line"})
     end
 
+    # #571 — /lusers bridge: cic pushes the bare verb (or with a mask/server)
+    # with %{network_id}; the channel relays to Session.send_lusers/4 which
+    # emits LUSERS upstream. Pre-#571 the handler pattern-matched only
+    # network_id and dropped mask/server, so an oper could never reach
+    # bahamut's forced live recount. Smoke-tests dispatch plumbing; the
+    # 251..266 fold + broadcast are covered by the server_test P-0d test.
+    test "lusers: sends bare LUSERS upstream", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "lusers", %{"network_id" => network.id})
+
+      assert_reply(ref, :ok)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "LUSERS\r\n"), 1_000)
+    end
+
+    test "lusers: with a mask sends LUSERS <mask> upstream", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "lusers", %{"network_id" => network.id, "mask" => "*.azzurra.org"})
+
+      assert_reply(ref, :ok)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "LUSERS *.azzurra.org\r\n"), 1_000)
+    end
+
+    test "lusers: with mask + server sends LUSERS <mask> <server> upstream", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      ref =
+        push(socket, "lusers", %{
+          "network_id" => network.id,
+          "mask" => "*.azzurra.org",
+          "server" => "void.azzurra.chat"
+        })
+
+      assert_reply(ref, :ok)
+
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          irc_server,
+          &(&1 == "LUSERS *.azzurra.org void.azzurra.chat\r\n"),
+          1_000
+        )
+    end
+
+    # An injection-shaped mask/server is rejected at the channel boundary
+    # (safe_oper_token? via validate_args(server:)) before it reaches the wire.
+    test "lusers: rejects an injection mask with invalid_line", %{
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "lusers", %{"network_id" => network.id, "mask" => "x\r\nQUIT"})
+
+      assert_reply(ref, :error, %{error: "invalid_line"})
+    end
+
+    # A server without a mask cannot be framed positionally (RFC 2812 §3.4.2)
+    # — rejected at the boundary rather than silently dropped.
+    test "lusers: rejects a server without a mask with invalid_line", %{
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "lusers", %{"network_id" => network.id, "server" => "void.azzurra.chat"})
+
+      assert_reply(ref, :error, %{error: "invalid_line"})
+    end
+
     # #513b — a 2nd /links while the 1st is still in flight is REFUSED (not
     # clobbered) so the 1st bundle survives; the channel MUST surface the
     # typed `links_in_flight` token (→ cic "network map already loading"),

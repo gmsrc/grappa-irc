@@ -740,20 +740,28 @@ defmodule GrappaWeb.GrappaChannel do
     )
   end
 
-  # P-0d — /lusers. No args, read-only network query. Visitors are
-  # entitled to issue it (mirrors WHOIS post-C3); the LUSERS bundle's
-  # broadcast topic uses the issuing subject's `subject_label` so the
-  # visitor's own cic surface is the only consumer.
+  # P-0d/#571 — /lusers [<mask> [<server>]]. Read-only network query; visitors
+  # are entitled to issue it (mirrors WHOIS post-C3); the LUSERS bundle's
+  # broadcast topic uses the issuing subject's `subject_label` so the visitor's
+  # own cic surface is the only consumer. #571 threads the OPTIONAL mask +
+  # server through to the wire (RFC 2812 §3.4.2) — pre-#571 both were dropped,
+  # so an oper could never reach bahamut's forced live recount (non-`*` mask)
+  # and `LUSERS <mask> <server>` could not route remotely. Each is validated as
+  # a single wire token (`safe_oper_token?/1`) before it reaches the wire; a
+  # server with no mask is rejected (positional framing).
   def handle_in(
         "lusers",
-        %{"network_id" => network_id},
+        %{"network_id" => network_id} = params,
         socket
       )
       when is_integer(network_id) do
+    mask = Map.get(params, "mask")
+    server = Map.get(params, "server")
+
     dispatch_subject_verb(
       socket,
-      fn -> {:ok, :ok} end,
-      fn subject -> Session.send_lusers(subject, network_id) end
+      fn -> validate_lusers_args(mask, server) end,
+      fn subject -> Session.send_lusers(subject, network_id, mask, server) end
     )
   end
 
@@ -1490,6 +1498,19 @@ defmodule GrappaWeb.GrappaChannel do
   defp validate_links_mask(nil), do: {:ok, :ok}
   defp validate_links_mask(mask) when is_binary(mask), do: validate_args(server: mask)
   defp validate_links_mask(_), do: {:error, :invalid_line}
+
+  # #571 — /lusers [<mask> [<server>]] (RFC 2812 §3.4.2). Both optional; each
+  # binary token is gated as a single wire token (reuses the `:server`
+  # validator → `safe_oper_token?/1`), mirroring /motd's target + /links' mask.
+  # `<server>` is positional AFTER `<mask>`, so a server with no mask cannot be
+  # framed and is rejected rather than silently dropped.
+  defp validate_lusers_args(nil, nil), do: {:ok, :ok}
+  defp validate_lusers_args(mask, nil) when is_binary(mask), do: validate_args(server: mask)
+
+  defp validate_lusers_args(mask, server) when is_binary(mask) and is_binary(server),
+    do: validate_args(server: mask, server: server)
+
+  defp validate_lusers_args(_, _), do: {:error, :invalid_line}
 
   defp validate_args([]), do: {:ok, :ok}
 
