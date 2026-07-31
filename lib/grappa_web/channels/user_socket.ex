@@ -110,52 +110,9 @@ defmodule GrappaWeb.UserSocket do
     with :ok <- check_protocol_version(params),
          {:ok, token} <- extract_token(connect_info),
          {:ok, socket} <- authenticate_and_assign(token, socket) do
-      maybe_record_client_source(socket, connect_info)
       {:ok, socket}
     end
   end
-
-  # #543 Part C — capture the subject's client network prefix at connect so
-  # the static-mapping addressing mode (INC-4) has a last-known `/64` to
-  # derive an outbound source from. The trusted client IP is resolved via the
-  # `RemoteIpFromProxy` SSOT (peer-loopback + XFF ⇒ trust the header chain;
-  # else the peer) from `connect_info.peer_data.address` + `.x_headers` — the
-  # SAME trust matrix the HTTP plug applies, one door.
-  #
-  # Best-effort by construction — capture must NEVER fail a connect:
-  # `record_client_source/2` already returns `:ok` even on a persist failure
-  # (logged, not swallowed), and the guards here SKIP capture (return `:ok`)
-  # for every shape the real transport can't produce: an absent / non-map
-  # `peer_data`, or a `peer_data.address` that isn't an IP-arity tuple (4 v4
-  # / 8 v6 — the arities `SourceMapping.client_key/1` accepts). A non-list
-  # `x_headers` degrades to `[]` (resolves to the peer), it doesn't skip.
-  # `:current_subject` is always assigned post-auth (both branches), but the
-  # `{_, _}` match keeps it honest. The real Phoenix transport always
-  # supplies a valid `:inet.ip_address()` peer + a list of x-headers, so the
-  # happy path is the only one it exercises.
-  @spec maybe_record_client_source(Phoenix.Socket.t(), map()) :: :ok
-  defp maybe_record_client_source(socket, connect_info) do
-    with %{address: peer_ip} <- Map.get(connect_info, :peer_data),
-         true <- ip_tuple?(peer_ip),
-         {_, _} = subject <- socket.assigns[:current_subject] do
-      x_headers =
-        case Map.get(connect_info, :x_headers) do
-          headers when is_list(headers) -> headers
-          _ -> []
-        end
-
-      client_ip = GrappaWeb.Plugs.RemoteIpFromProxy.trusted_client_ip(peer_ip, x_headers)
-      Grappa.Vhosts.record_client_source(subject, client_ip)
-    else
-      _ -> :ok
-    end
-  end
-
-  # An IP tuple of an arity `SourceMapping.client_key/1` handles (v4 /32,
-  # v6 /64). Guards the derive+persist path from a structurally-invalid
-  # `peer_data.address` so capture can't crash a connect.
-  @spec ip_tuple?(term()) :: boolean()
-  defp ip_tuple?(ip), do: is_tuple(ip) and tuple_size(ip) in [4, 8]
 
   # #447 — pre-auth protocol-version gate. A client MAY declare the wire
   # protocol version it speaks via the `client_proto` QUERY PARAM on the WS
