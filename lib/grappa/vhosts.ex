@@ -6,7 +6,7 @@ defmodule Grappa.Vhosts do
   → `Grappa.IRC.Client` `ifaddr` bind) with a per-SUBJECT layer that sits
   ABOVE it: a subject (user OR visitor, post-#211) self-selects from an
   allowed set. The connect path is UNCHANGED — this context only decides
-  WHICH address resolves into the session plan (`effective_source/2`),
+  WHICH address resolves into the session plan (`effective_source/3`),
   which `Grappa.Networks.SessionPlan` threads through exactly as it does
   the per-server `source_address` today.
 
@@ -17,7 +17,7 @@ defmodule Grappa.Vhosts do
   `in_pool` / a per-subject grant); the user freely picks among that set.
   No admin hard-pin, no admin default — EXCEPT a network-pinned
   `source_address`, which #266 makes an ABSOLUTE bind that overrides the
-  user's selection entirely (see the `effective_source/2` NOTE below).
+  user's selection entirely (see the `effective_source/3` NOTE below).
 
   ## Inventory model
 
@@ -30,7 +30,7 @@ defmodule Grappa.Vhosts do
       may select this vhost even if it isn't generally-available / in the
       pool." Visitor grants CASCADE on reap.
 
-  ## Resolution precedence (`effective_source/2`, per connect)
+  ## Resolution precedence (`effective_source/3`, per connect)
 
     1. the passed `server_source` (`network_servers.source_address` — the
        admin-configured per-network bind). #266: when set, it WINS. Bind
@@ -263,6 +263,28 @@ defmodule Grappa.Vhosts do
   end
 
   @doc """
+  The ADDRESSES of the vhosts the subject holds an explicit grant row for
+  (#543 INC-4). This is the mode-2 (`static_mapping_with_reservations`)
+  reservation set: in mode 2 a grant WINS over derivation, so
+  `effective_source/3` random-picks from these before ever consulting the
+  derived `::cb` address.
+
+  Distinct from `granted_vhost_ids/1` (ids, for the self-service `granted`
+  flag) and from `allowed_vhosts/1` (which also folds in `in_pool` +
+  generally-available — both INERT in mode 2). Reserved grant addresses
+  live OUTSIDE the `::cb::/80` derivation block by operator convention, so
+  a grant can never collide with a derived address.
+  """
+  @spec granted_vhost_addresses(Subject.t()) :: [String.t()]
+  def granted_vhost_addresses({_, _} = subject) do
+    subject
+    |> grants_for_subject_query()
+    |> join(:inner, [g], v in Vhost, on: v.id == g.vhost_id)
+    |> select([_g, v], v.address)
+    |> Repo.all()
+  end
+
+  @doc """
   The subject's persisted self-selection, RE-CLAMPED to the currently
   allowed set (a revoked grant silently drops its address). Stored in
   `UserSettings` under `"vhost_selection"` as a list of addresses.
@@ -310,41 +332,113 @@ defmodule Grappa.Vhosts do
   # Resolution — the value that feeds the session plan
   # ---------------------------------------------------------------------------
 
+  @typedoc """
+  The outbound-addressing config read ONCE at plan build and threaded into
+  `effective_source/3` (#543 INC-4). Passed IN by the caller (the session
+  plan, which deps `ServerSettings`) so `Vhosts` stays OFF a
+  `ServerSettings` dep — the same "pass-config-in" shape as
+  `effective_pool/1`'s `fixed_sources`. `mode` is a plain atom (the
+  authoritative closed set is `ServerSettings.addressing_mode/0`); any mode
+  other than `:static_mapping_with_reservations` resolves mode-1 (today's
+  behaviour, byte-for-byte).
+  """
+  @type addressing :: %{mode: atom(), prefix: String.t() | nil}
+
+  @typedoc """
+  Why a mode-2 subject could NOT be given a derived source (#543 INC-4).
+  A closed set — `effective_source/3` returns `{:hold, hold_reason()}` and
+  the session refuses to connect from a shared pool rather than silently
+  egress from the wrong address:
+
+    * `:no_client_source` — mode 2, no grant, and the subject has no
+      captured client `/64` to derive from (`last_client_prefix64/1` nil).
+    * `:no_static_prefix` — mode 2 is selected but the configured prefix is
+      missing (`nil`) or unparseable (`SourceMapping.derive/2` error) —
+      an admin misconfiguration.
+  """
+  @type hold_reason :: :no_client_source | :no_static_prefix
+
   @doc """
   Resolves the effective source address for `subject` on this connect,
   given the admin-configured per-network `server_source`
-  (`network_servers.source_address`, or `nil`).
+  (`network_servers.source_address`, or `nil`) and the global `addressing`
+  config (#543 INC-4).
 
-  Precedence (#266 — INVERTS the #251 order; admin source is absolute):
+  Precedence (#266 admin pin is absolute; #543 adds the mode-2 branch):
 
     1. `server_source` (the admin-configured per-network bind) — when set,
-       WINS. Returns it verbatim, overriding the subject's vhost selection,
-       the pool, AND #271 RR-DNS leaf distribution.
-    2. else the subject's selection (∩ allowed) → random pick (spec:
-       "random per connection" when more than one is active).
-    3. else `nil` → `Grappa.IRC.Client` falls through to the DB-driven pool
-       / kernel default (zero-config binds nothing).
+       WINS in BOTH modes. Returns it verbatim, overriding the subject's
+       vhost selection, the pool/derivation, AND #271 RR-DNS leaf
+       distribution.
+    2. mode `:static_mapping_with_reservations` — a subject with grants
+       random-picks one of ITS OWN granted addresses (reservations win);
+       mode `:pool_with_reservations` (default) — the subject's selection
+       (∩ allowed) random-picks (spec: "random per connection").
+    3. mode 2, no grants — the subject's captured client `/64`
+       (`last_client_prefix64/1`) derives a deterministic `::cb` address
+       (`SourceMapping.derive/2`); when no client `/64` is known, or the
+       prefix is missing/unparseable, returns `{:hold, reason}` — the
+       session is HELD (parked-with-reason), NEVER egressed from a shared
+       pool. mode 1, no selection — `nil` → `Grappa.IRC.Client` falls
+       through to `OutboundV6Pool.pick/0` / kernel default (UNCHANGED).
 
-  A network WITH `source_address` set binds it verbatim for EVERY subject
-  on that network (the Libera go-live "one accountable egress per network"
-  posture) — the subject's self-selection no longer overrides it, reversing
-  the #251 nuance. A network with `nil` routes the subject through the vhost
-  selection, else `OutboundV6Pool.pick/0` (the in_pool rotation). Returns a
-  canonical IP-literal string or `nil`. The connect path
-  (`Grappa.IRC.Client.source_bind/2`) is UNCHANGED — this only chooses the
-  value that `SessionPlan` threads through; the actual bind (and its #271
-  leaf-family constraint) already honors whatever source it is handed.
+  Mode 1 is byte-for-byte the pre-#543 behaviour: `in_pool` /
+  `generally_available` still feed the selection + pool; `nil` still means
+  "let the Client pick from the rotation pool." Mode 2 replaces the pool
+  fallback with derivation and NEVER returns `nil` (a missing input HOLDs
+  instead). The connect path (`Grappa.IRC.Client.source_bind/2`) is
+  UNCHANGED for a resolved address; `Session.Server.init/1` intercepts a
+  `{:hold, _}` and marks the credential failed-with-reason.
   """
-  @spec effective_source(Subject.t(), String.t() | nil) :: String.t() | nil
-  # #266 — an admin-set per-network source is ABSOLUTE: it wins over the
-  # subject's vhost selection and the pool. Return it before consulting the
-  # (potentially expensive) selection lookup.
-  def effective_source({_, _}, server_source) when is_binary(server_source), do: server_source
+  @spec effective_source(Subject.t(), String.t() | nil, addressing()) ::
+          String.t() | nil | {:hold, hold_reason()}
+  # #266 — an admin-set per-network source is ABSOLUTE in BOTH modes: it
+  # wins over the subject's selection, the pool, and mode-2 derivation.
+  # Return it before consulting the (potentially expensive) lookups.
+  def effective_source({_, _}, server_source, _) when is_binary(server_source),
+    do: server_source
 
-  def effective_source({_, _} = subject, nil) do
+  # Mode 2 (#543) — grants-only reservations, else deterministic derivation
+  # from the subject's own client /64; NO random pool. `in_pool` /
+  # `generally_available` are inert here.
+  def effective_source({_, _} = subject, nil, %{
+        mode: :static_mapping_with_reservations,
+        prefix: prefix
+      }) do
+    case granted_vhost_addresses(subject) do
+      [] -> derive_or_hold(subject, prefix)
+      addresses -> Enum.random(addresses)
+    end
+  end
+
+  # Mode 1 (default / any non-mode-2 config) — byte-for-byte pre-#543:
+  # selection ∩ allowed random-picks, else nil → the Client's rotation pool.
+  def effective_source({_, _} = subject, nil, _) do
     case get_selection(subject) do
       [] -> nil
       selected -> Enum.random(selected)
+    end
+  end
+
+  # Mode-2 no-grant path: derive from the captured client /64, or HOLD.
+  # A nil prefix is an admin misconfig (mode selected, no block set); a
+  # derive error (unparseable prefix) is the SAME class — both map to
+  # `:no_static_prefix`. An absent client /64 is `:no_client_source`. A
+  # derive error NEVER falls through to a shared source (Global Constraint).
+  @spec derive_or_hold(Subject.t(), String.t() | nil) ::
+          String.t() | {:hold, hold_reason()}
+  defp derive_or_hold(_, nil), do: {:hold, :no_static_prefix}
+
+  defp derive_or_hold(subject, prefix) when is_binary(prefix) do
+    case last_client_prefix64(subject) do
+      nil ->
+        {:hold, :no_client_source}
+
+      key ->
+        case SourceMapping.derive(key, prefix) do
+          {:ok, address} -> address
+          {:error, _} -> {:hold, :no_static_prefix}
+        end
     end
   end
 

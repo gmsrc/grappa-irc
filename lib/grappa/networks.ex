@@ -48,6 +48,10 @@ defmodule Grappa.Networks do
       Grappa.PubSub,
       Grappa.Repo,
       Grappa.Scrollback,
+      # #543 INC-4 — SessionPlan reads the global addressing config
+      # (mode + static-mapping prefix) once per plan build and threads it
+      # into `Vhosts.effective_source/3`, so Vhosts stays off ServerSettings.
+      Grappa.ServerSettings,
       Grappa.Session,
       Grappa.Subject,
       Grappa.Vault,

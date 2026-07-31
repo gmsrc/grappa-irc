@@ -13,6 +13,16 @@ defmodule Grappa.VhostsTest do
   alias Grappa.UserSettings.Settings
   alias Grappa.Vhosts.SourceMapping
 
+  # #543 INC-4 — addressing configs threaded into `effective_source/3`.
+  # Mode 1 (`pool_with_reservations`) is today's behaviour byte-for-byte;
+  # mode 2 (`static_mapping_with_reservations`) derives into the `::cb::/80`
+  # untrusted block. The `::ca` block below is the OPS-curated reserved
+  # block that grants live in — deliberately OUTSIDE `::cb`, so a grant
+  # can never collide with a derived address (Global Constraint).
+  @cb_prefix "2a03:4000:20:2d3:cb::/80"
+  @mode1 %{mode: :pool_with_reservations, prefix: nil}
+  @mode2 %{mode: :static_mapping_with_reservations, prefix: @cb_prefix}
+
   # Unique v6 literal — mask the counter into a single valid hextet
   # (0..0xffff) so the strict-literal changeset always accepts it.
   defp addr do
@@ -176,14 +186,14 @@ defmodule Grappa.VhostsTest do
   # pool). Libera go-live posture: an admin-pinned, accountable egress is the
   # honest answer; a user-driven rotating vhost reads as ban-evasion. When no
   # admin source is set the vhost selection/pool fallback is unchanged.
-  describe "effective_source/2 — resolution precedence (#266: admin source wins)" do
+  describe "effective_source/3 — mode-1 resolution precedence (#266: admin source wins)" do
     test "1. an admin server_source WINS over an active vhost selection" do
       user = user_fixture()
       {:ok, sel} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
       {:ok, _} = Vhosts.set_selection({:user, user.id}, [sel.address])
 
       # Subject HAS a selection, but the network pins a source → the pin binds.
-      assert Vhosts.effective_source({:user, user.id}, "192.0.2.99") == "192.0.2.99"
+      assert Vhosts.effective_source({:user, user.id}, "192.0.2.99", @mode1) == "192.0.2.99"
     end
 
     test "2. falls back to the vhost selection when there is no admin source" do
@@ -191,7 +201,7 @@ defmodule Grappa.VhostsTest do
       {:ok, sel} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
       {:ok, _} = Vhosts.set_selection({:user, user.id}, [sel.address])
 
-      assert Vhosts.effective_source({:user, user.id}, nil) == sel.address
+      assert Vhosts.effective_source({:user, user.id}, nil, @mode1) == sel.address
     end
 
     test "2b. multi-selection (no admin source) returns one of the selected (random per connection)" do
@@ -200,18 +210,18 @@ defmodule Grappa.VhostsTest do
       {:ok, b} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
       {:ok, _} = Vhosts.set_selection({:user, user.id}, [a.address, b.address])
 
-      picked = Vhosts.effective_source({:user, user.id}, nil)
+      picked = Vhosts.effective_source({:user, user.id}, nil, @mode1)
       assert picked in [a.address, b.address]
     end
 
     test "3. an admin server_source binds when there is no selection" do
       user = user_fixture()
-      assert Vhosts.effective_source({:user, user.id}, "192.0.2.50") == "192.0.2.50"
+      assert Vhosts.effective_source({:user, user.id}, "192.0.2.50", @mode1) == "192.0.2.50"
     end
 
     test "3b. nil (pool/kernel default) when neither an admin source nor a selection" do
       user = user_fixture()
-      assert Vhosts.effective_source({:user, user.id}, nil) == nil
+      assert Vhosts.effective_source({:user, user.id}, nil, @mode1) == nil
     end
 
     test "a revoked-grant selection does NOT bind — nil admin source falls through to nil" do
@@ -222,7 +232,118 @@ defmodule Grappa.VhostsTest do
       :ok = Vhosts.revoke_grant(grant)
 
       # The clamped-out selection is gone AND there is no admin source → nil.
-      assert Vhosts.effective_source({:user, user.id}, nil) == nil
+      assert Vhosts.effective_source({:user, user.id}, nil, @mode1) == nil
+    end
+
+    test "mode 1 NEVER derives: a recorded client /64 with no selection still returns nil" do
+      # The mode-1 byte-for-byte regression that matters most for #543:
+      # a subject WITH a captured client prefix (the mode-2 derive input)
+      # must NOT get a derived source in mode 1 — nil still falls through to
+      # `OutboundV6Pool.pick/0` at the Client. Enabling capture must not
+      # silently change mode-1 egress.
+      user = user_fixture()
+      :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 3, 4, 5, 6})
+
+      assert Vhosts.effective_source({:user, user.id}, nil, @mode1) == nil
+    end
+  end
+
+  # #543 INC-4 — mode 2 replaces the random pool with a deterministic
+  # derivation from the subject's own client /64, with reservations (grants)
+  # winning over derivation and NO pool. A missing input HOLDs the session
+  # (`{:hold, reason}`) rather than silently egressing from a shared source.
+  describe "effective_source/3 — mode-2 static-mapping precedence (#543)" do
+    test "an admin server_source WINS even in mode 2 (#266 pin is absolute)" do
+      user = user_fixture()
+      :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 0, 0, 0, 0})
+
+      assert Vhosts.effective_source({:user, user.id}, "2a03:4000:20:2d3:ca::7", @mode2) ==
+               "2a03:4000:20:2d3:ca::7"
+    end
+
+    test "a grant WINS over derivation — returns a granted address, never a ::cb one" do
+      user = user_fixture()
+      # Reserved grant address lives OUTSIDE ::cb (in the OPS-curated ::ca
+      # block) so it can never collide with a derived address.
+      {:ok, reserved} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::5"})
+      {:ok, _} = Vhosts.grant_vhost(reserved, {:user, user.id})
+      # Even WITH a captured client prefix (the derive input present), the
+      # reservation must win.
+      :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 0, 0, 0, 0})
+
+      picked = Vhosts.effective_source({:user, user.id}, nil, @mode2)
+      assert picked == reserved.address
+      refute SourceMapping.in_prefix?(picked, @cb_prefix)
+    end
+
+    test "multiple grants return one of the granted addresses (random per connection)" do
+      user = user_fixture()
+      {:ok, a} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::a"})
+      {:ok, b} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::b"})
+      {:ok, _} = Vhosts.grant_vhost(a, {:user, user.id})
+      {:ok, _} = Vhosts.grant_vhost(b, {:user, user.id})
+
+      picked = Vhosts.effective_source({:user, user.id}, nil, @mode2)
+      assert picked in [a.address, b.address]
+    end
+
+    test "no grant + a known client /64 → the derived address inside ::cb" do
+      user = user_fixture()
+      client_ip = {0x2001, 0xDB8, 1, 2, 3, 4, 5, 6}
+      :ok = Vhosts.record_client_source({:user, user.id}, client_ip)
+
+      picked = Vhosts.effective_source({:user, user.id}, nil, @mode2)
+
+      # Production derivation is the oracle — never a hardcoded byte string.
+      {:ok, expected} =
+        SourceMapping.derive(SourceMapping.client_key(client_ip), @cb_prefix)
+
+      assert picked == expected
+      assert SourceMapping.in_prefix?(picked, @cb_prefix)
+    end
+
+    test "no grant + no known client /64 → {:hold, :no_client_source} (never a shared pool)" do
+      user = user_fixture()
+
+      assert Vhosts.effective_source({:user, user.id}, nil, @mode2) ==
+               {:hold, :no_client_source}
+    end
+
+    test "mode 2 with a nil prefix → {:hold, :no_static_prefix} (admin misconfig)" do
+      user = user_fixture()
+      :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 0, 0, 0, 0})
+
+      no_prefix = %{mode: :static_mapping_with_reservations, prefix: nil}
+
+      assert Vhosts.effective_source({:user, user.id}, nil, no_prefix) ==
+               {:hold, :no_static_prefix}
+    end
+
+    test "mode 2 with a malformed prefix → {:hold, :no_static_prefix} (derive error never falls through)" do
+      user = user_fixture()
+      :ok = Vhosts.record_client_source({:user, user.id}, {0x2001, 0xDB8, 1, 2, 0, 0, 0, 0})
+
+      bad = %{mode: :static_mapping_with_reservations, prefix: "not-a-cidr"}
+
+      assert Vhosts.effective_source({:user, user.id}, nil, bad) ==
+               {:hold, :no_static_prefix}
+    end
+  end
+
+  describe "granted_vhost_addresses/1" do
+    test "returns the addresses of the subject's granted vhosts only" do
+      user = user_fixture()
+      {:ok, granted} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::11"})
+      {:ok, _} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
+      {:ok, _} = Vhosts.grant_vhost(granted, {:user, user.id})
+
+      addrs = Vhosts.granted_vhost_addresses({:user, user.id})
+      assert addrs == [granted.address]
+    end
+
+    test "is empty for a subject with no grants" do
+      user = user_fixture()
+      assert Vhosts.granted_vhost_addresses({:user, user.id}) == []
     end
   end
 

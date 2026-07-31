@@ -375,6 +375,64 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "static-mapping hold (#543 INC-4)" do
+    # In `static_mapping_with_reservations` mode, a subject whose source
+    # cannot be derived (no captured client /64, or a misconfigured prefix)
+    # resolves to `source_address: {:hold, reason}`. `init/1` must NEVER
+    # connect from a shared source — it fires the `credential_failer` with a
+    # "static-mapping: " reason (reusing the same terminal-failure machinery
+    # #554 uses for KILL) and returns `:ignore`, so the `:transient`
+    # supervisor drops the child instead of respawn-looping into a shared
+    # egress. Synthetic opts (no `refresh_plan`) so the injected hold isn't
+    # re-resolved away by the DB-wins closure.
+
+    test "a {:hold, :no_client_source} source fires the failer and returns :ignore" do
+      test_pid = self()
+
+      init_opts = %{
+        subject: {:user, 1},
+        network_id: 1,
+        subject_label: "user:hold-test",
+        network_slug: "holdnet",
+        source_address: {:hold, :no_client_source},
+        credential_failer: fn reason -> send(test_pid, {:held_failer, reason}) end
+      }
+
+      assert :ignore = Server.start_link(init_opts)
+      assert_receive {:held_failer, "static-mapping: " <> _rest}, 1_000
+    end
+
+    test "the hold reason atom is carried into the failer reason text" do
+      test_pid = self()
+
+      init_opts = %{
+        subject: {:user, 1},
+        network_id: 1,
+        subject_label: "user:hold-test",
+        network_slug: "holdnet",
+        source_address: {:hold, :no_static_prefix},
+        credential_failer: fn reason -> send(test_pid, {:held_failer, reason}) end
+      }
+
+      assert :ignore = Server.start_link(init_opts)
+      assert_receive {:held_failer, reason}, 1_000
+      assert reason =~ "static-mapping"
+      assert reason =~ "prefix"
+    end
+
+    test "a hold with no credential_failer still returns :ignore (no crash)" do
+      init_opts = %{
+        subject: {:user, 1},
+        network_id: 1,
+        subject_label: "user:hold-test",
+        network_slug: "holdnet",
+        source_address: {:hold, :no_client_source}
+      }
+
+      assert :ignore = Server.start_link(init_opts)
+    end
+  end
+
   describe "registration" do
     test "registers via {user_id, network_id} in Grappa.SessionRegistry" do
       {_, port} = start_server()

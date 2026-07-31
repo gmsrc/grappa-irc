@@ -252,15 +252,41 @@ defmodule Grappa.Networks.SessionPlan do
       host: server.host,
       port: server.port,
       tls: server.tls,
-      # #228 / #266 — resolve the source-bind through `effective_source/2`.
-      # #266 inverts the precedence: an admin-configured per-network
-      # `server.source_address` WINS (absolute bind), else the per-subject
-      # vhost selection, else nil → the DB-driven rotation pool / kernel
-      # default. The connect path in `Grappa.IRC.Client` is UNCHANGED — this
-      # only chooses WHICH value it binds. Re-resolved on every
-      # `Session.Server.init/1` via `refresh_plan`, so a live source/vhost
-      # change takes effect on the next (re)connect.
-      source_address: Grappa.Vhosts.effective_source(subject, server.source_address)
+      # #228 / #266 / #543 — resolve the source-bind through
+      # `effective_source/3`. #266: an admin-configured per-network
+      # `server.source_address` WINS (absolute bind, BOTH modes). Else the
+      # global addressing config decides: mode 1 (`pool_with_reservations`,
+      # default) → the per-subject vhost selection, else nil → the DB-driven
+      # rotation pool / kernel default; mode 2
+      # (`static_mapping_with_reservations`, #543) → grants-only
+      # reservations, else a deterministic derived `::cb` address, else
+      # `{:hold, reason}` (the session is parked-with-reason —
+      # `Session.Server.init/1` intercepts, never a shared-pool egress). The
+      # connect path in `Grappa.IRC.Client` is UNCHANGED for a resolved
+      # address. The addressing config is read ONCE here (`base_plan` is the
+      # single build site for BOTH user + visitor plans) and passed IN so
+      # `Vhosts` stays OFF a `ServerSettings` dep (the `effective_pool/1`
+      # pass-config-in shape). Re-resolved on every `Session.Server.init/1`
+      # via `refresh_plan`, so a live source/vhost/mode change takes effect
+      # on the next (re)connect.
+      source_address: Grappa.Vhosts.effective_source(subject, server.source_address, addressing_config())
+    }
+  end
+
+  # #543 INC-4 — the global outbound-addressing config, read ONCE per plan
+  # build from `ServerSettings` (the DB k/v canonical store). Lives in this
+  # module (inside the `Grappa.Networks` boundary, which deps
+  # `ServerSettings`) rather than inside `Grappa.Vhosts` so `Vhosts` stays
+  # OFF a `ServerSettings` dep — `effective_source/3` takes the config as a
+  # param, mirroring `Vhosts.effective_pool/1`'s `fixed_sources`. The
+  # visitor plan reuses this via the shared `base_plan/6`, so the read site
+  # is single-sourced and the `Grappa.Visitors` boundary needs no
+  # `ServerSettings` edge either.
+  @spec addressing_config() :: Grappa.Vhosts.addressing()
+  defp addressing_config do
+    %{
+      mode: Grappa.ServerSettings.addressing_mode(),
+      prefix: Grappa.ServerSettings.static_mapping_prefix()
     }
   end
 

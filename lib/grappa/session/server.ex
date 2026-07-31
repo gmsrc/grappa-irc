@@ -457,7 +457,10 @@ defmodule Grappa.Session.Server do
           required(:host) => String.t(),
           required(:port) => :inet.port_number(),
           required(:tls) => boolean(),
-          required(:source_address) => String.t() | nil,
+          # #543 INC-4 — mode 2 (`static_mapping_with_reservations`) may
+          # resolve `{:hold, reason}` (no derivable source); `init/1`
+          # intercepts it (parked-with-reason) and never reaches `do_init`.
+          required(:source_address) => String.t() | nil | {:hold, atom()},
           optional(:notify_pid) => pid(),
           optional(:notify_ref) => reference(),
           optional(:visitor_committer) => visitor_committer(),
@@ -874,7 +877,7 @@ defmodule Grappa.Session.Server do
       refresh when is_function(refresh, 0) ->
         case refresh.() do
           {:ok, fresh_plan} ->
-            do_init(Map.merge(opts, fresh_plan))
+            init_or_hold(Map.merge(opts, fresh_plan))
 
           {:error, :not_found} ->
             Logger.info("session init: subject DB row gone — stopping cleanly to break respawn loop")
@@ -883,9 +886,69 @@ defmodule Grappa.Session.Server do
         end
 
       nil ->
-        do_init(opts)
+        init_or_hold(opts)
     end
   end
+
+  # #543 INC-4 — a mode-2 (`static_mapping_with_reservations`) plan whose
+  # source could not be derived threads `{:hold, reason}` into
+  # `source_address` (`Grappa.Vhosts.effective_source/3`). The session must
+  # NEVER connect from a shared kernel-default source (the exact bug #543
+  # kills), so before building any state we intercept the hold, mark the
+  # credential FAILED with a distinct reason (reusing the same terminal
+  # machinery #554's KILL path uses — no new state atom), and `:ignore` so
+  # the `:transient` supervisor drops the child instead of respawn-looping.
+  # A resolved `String.t()` / `nil` source proceeds to `do_init` unchanged
+  # (mode 1 never produces a hold). The check sits AFTER `refresh_plan` so
+  # the DB-re-resolved source (live truth) is the one inspected.
+  @spec init_or_hold(map()) :: {:ok, t(), {:continue, term()}} | :ignore
+  defp init_or_hold(%{source_address: {:hold, reason}} = opts) do
+    hold_session(reason, Map.get(opts, :credential_failer))
+  end
+
+  defp init_or_hold(opts), do: do_init(opts)
+
+  # Fire the credential_failer (if injected) with a "static-mapping: …"
+  # reason and stop cleanly. The failer runs in a detached, SUPERVISED Task
+  # (`Grappa.TaskSupervisor`) — same shape + rationale as
+  # `handle_terminal_failure/2`: it must outlive this init returning
+  # `:ignore`, and an unsupervised raise would silently drop the `:failed`
+  # transition (Bootstrap would then respawn the held session every deploy).
+  # Takes only what it needs — the reason + the (optional) failer — NOT the
+  # whole opts map: the reason is typed to the EXACT closed set (not
+  # `atom()`), which satisfies the closed-set rule, keeps zero boundary edge
+  # to `Grappa.Vhosts`, FORCES a sync here when INC-5 adds `:mode2_disarmed`,
+  # AND keeps the spec off a `contract_supertype` (a `map()` arg would be
+  # wider than the narrow success typing Dialyzer infers). No failer (test
+  # fixtures / a bare Bootstrap plan) → just `:ignore`.
+  @spec hold_session(:no_client_source | :no_static_prefix, credential_failer() | nil) :: :ignore
+  defp hold_session(reason, credential_failer) do
+    text = "static-mapping: #{hold_reason_text(reason)}"
+
+    Logger.warning(
+      "session init held — no derivable outbound source (#{text}); " <>
+        "marking credential :failed instead of egressing from a shared pool"
+    )
+
+    # `_ =` — the detached Task's on_start result is intentionally discarded
+    # (mirror of `handle_terminal_failure/2`); the failer runs for effect.
+    _ =
+      if is_function(credential_failer, 1) do
+        Task.Supervisor.start_child(Grappa.TaskSupervisor, fn -> credential_failer.(text) end)
+      end
+
+    :ignore
+  end
+
+  # Human-facing phrasing for each hold reason (closed set — mirrors
+  # `Grappa.Vhosts.hold_reason/0`; Session.Server only RENDERS the reason it
+  # is handed). No catch-all: a NEW hold reason (e.g. INC-5's
+  # `:mode2_disarmed`) MUST add its clause here, or the missing-clause crash
+  # surfaces the gap loudly rather than rendering a silent blank. cic renders
+  # the credential's connection_state_reason verbatim, so it is user-facing.
+  @spec hold_reason_text(:no_client_source | :no_static_prefix) :: String.t()
+  defp hold_reason_text(:no_client_source), do: "no known client source address"
+  defp hold_reason_text(:no_static_prefix), do: "no static-mapping prefix configured"
 
   defp do_init(opts) do
     # Trap exits so a `Client` crash arrives as `{:EXIT, client_pid,
