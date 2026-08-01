@@ -373,6 +373,9 @@ vi.mock("../lib/windowState", () => ({
 // #187 — real (un-mocked) focus-persistence writer, used to seed the
 // last-focused slot the way production does (keyed on the subject id).
 import { saveLastFocused } from "../lib/lastFocusedChannel";
+// #608 — real (un-mocked) overlay refcount: the leak-regression tests below
+// assert Shell's members-drawer + admin-pane locks do not strand it.
+import { overlayCount, __resetForTest as resetOverlay } from "../lib/overlayScrollLock";
 import Shell from "../Shell";
 
 beforeEach(async () => {
@@ -1323,5 +1326,57 @@ describe("Shell — upload-TTL bootstrap (UX-4 bucket M)", () => {
     // no token there's no call from either source.
     await Promise.resolve();
     expect(orch.loadUploadTtlSeconds).not.toHaveBeenCalled();
+  });
+});
+
+// #608 — overlay-refcount leak on same-tick open→close (the stuck-scroll
+// root cause). Shell's members-drawer + admin-pane locks DEFERRED their
+// pushOverlay a microtask while popping synchronously on close. A same-tick
+// open→close therefore ran pop (clamped at 0) BEFORE the deferred push, which
+// then stranded overlayCount() at 1 forever — freezing ScrollbackPane's
+// snapshot for the session (button hidden, no tail-follow, sends overwritten;
+// cured only by force-close). The fix routes both locks through
+// createOverlayLock, whose deferred push RE-CHECKS the open edge and skips a
+// push whose overlay already closed. These pin the observable contract: the
+// refcount always returns to 0 across a rapid open→close cycle.
+//
+// The same-tick sequence (open, then close BEFORE flushing the deferred push,
+// then flush a macrotask) is the deterministic reproduction — measured against
+// the pre-fix code, which stranded the count at 1 here.
+const flushMacrotask = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+describe("Shell — #608 overlay-refcount leak on same-tick open→close", () => {
+  it("members drawer does NOT strand the overlay refcount", async () => {
+    resetOverlay();
+    mobileState.value = true;
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    const { container } = render(() => <Shell />);
+    const hamburger = await waitFor(() => {
+      const h = container.querySelector<HTMLButtonElement>(".topic-bar .topic-bar-hamburger");
+      expect(h).not.toBeNull();
+      return h as HTMLButtonElement;
+    });
+    // Same-tick open→close: the toggle opens (schedules the deferred push)
+    // then closes (synchronous pop) before the push microtask flushes.
+    fireEvent.click(hamburger);
+    fireEvent.click(hamburger);
+    await flushMacrotask();
+    expect(overlayCount()).toBe(0);
+  });
+
+  it("admin pane does NOT strand the overlay refcount", async () => {
+    resetOverlay();
+    mobileState.value = true;
+    userHolder.current = { kind: "user", id: "u1", name: "vjt", is_admin: true, inserted_at: "x" };
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    render(() => <Shell />);
+    await flushMacrotask();
+    // Same-tick open→close of the admin window: select admin (schedules the
+    // deferred push) then return to the channel (synchronous pop) before the
+    // push microtask flushes.
+    selectionState.setSelSig({ networkSlug: "$admin", channelName: "$admin", kind: "admin" });
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    await flushMacrotask();
+    expect(overlayCount()).toBe(0);
   });
 });

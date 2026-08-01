@@ -34,7 +34,7 @@ import { mentionsBundleBySlug } from "./lib/mentionsWindow";
 import { openMembersPanel, toggleMembersPanel } from "./lib/mobilePanel";
 import { channelsBySlug, isAdmin, networkBySlug, networks, user } from "./lib/networks";
 import { nickEquals } from "./lib/nickEquals";
-import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
+import { createOverlayLock } from "./lib/overlayScrollLock";
 import { queryWindowsByNetwork } from "./lib/queryWindows";
 import { closeToPreviousWindow, selectedChannel, setSelectedChannel } from "./lib/selection";
 import { settingsOpenTick } from "./lib/settingsNav";
@@ -150,60 +150,29 @@ const Shell: Component = () => {
   // layouts that don't suffer the iOS gesture-escalation class.
   //
   // v4: scroll-lock target is the actual scroller — `.members-pane`
-  // for members drawer, `.admin-pane` for admin window. Looked up
-  // via queueMicrotask so SolidJS commits the render-effects of the
-  // signal change before we hand the element to
-  // body-scroll-lock-upgrade.
-  let wasMembersOpen = false;
-  let membersLockedEl: HTMLElement | null = null;
-  createEffect(() => {
-    const open = isMobile() && membersOpen();
-    if (open && !wasMembersOpen) {
-      wasMembersOpen = true;
-      queueMicrotask(() => {
-        membersLockedEl = document.querySelector<HTMLElement>(
-          ".shell-mobile .shell-members .members-pane",
-        );
-        pushOverlay(membersLockedEl);
-      });
-    } else if (!open && wasMembersOpen) {
-      wasMembersOpen = false;
-      popOverlay(membersLockedEl);
-      membersLockedEl = null;
-    }
-  });
-  onCleanup(() => {
-    if (wasMembersOpen) {
-      wasMembersOpen = false;
-      popOverlay(membersLockedEl);
-      membersLockedEl = null;
-    }
-  });
-
-  let wasAdminOpen = false;
-  let adminLockedEl: HTMLElement | null = null;
-  createEffect(() => {
-    const sel = selectedChannel();
-    const open = isMobile() && isAdmin() && sel?.kind === "admin";
-    if (open && !wasAdminOpen) {
-      wasAdminOpen = true;
-      queueMicrotask(() => {
-        adminLockedEl = document.querySelector<HTMLElement>(".admin-pane");
-        pushOverlay(adminLockedEl);
-      });
-    } else if (!open && wasAdminOpen) {
-      wasAdminOpen = false;
-      popOverlay(adminLockedEl);
-      adminLockedEl = null;
-    }
-  });
-  onCleanup(() => {
-    if (wasAdminOpen) {
-      wasAdminOpen = false;
-      popOverlay(adminLockedEl);
-      adminLockedEl = null;
-    }
-  });
+  // for members drawer, `.admin-pane` for admin window. Looked up via
+  // querySelector after Solid commits the render (deferred a microtask
+  // inside createOverlayLock).
+  //
+  // #608 — these two locks used to hand-roll the deferred push: they
+  // popped synchronously on close but pushed a microtask later WITHOUT
+  // re-checking the open edge. A same-tick open→close ran the pop
+  // (clamped at 0) BEFORE the deferred push, stranding overlayCount()
+  // at 1 for the session — which froze ScrollbackPane's overlay
+  // snapshot (button hidden, no tail-follow, sends overwritten; cured
+  // only by force-close). This is the stuck-scroll root cause. Routing
+  // both through createOverlayLock fixes it: its deferred push
+  // re-checks wasOpen + a `pushed` flag and skips a push whose overlay
+  // already closed (the leak-safe pattern documented once in
+  // overlayScrollLock.ts, and the same one every other modal already
+  // uses). No onEscape — these are scroll-lock-only drawers that close
+  // via the keybindings drawer fallback. The admin predicate reuses the
+  // existing `isAdminPaneVisible` memo (derive, don't duplicate).
+  createOverlayLock(
+    () => isMobile() && membersOpen(),
+    ".shell-mobile .shell-members .members-pane",
+  );
+  createOverlayLock(() => isMobile() && isAdminPaneVisible(), ".admin-pane");
 
   // UX-4 bucket N — admin pane lifecycle is now selection-driven.
   // `selectedChannel.kind === "admin"` is the SINGLE source of truth
