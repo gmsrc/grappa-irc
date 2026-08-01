@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <locale.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -15721,81 +15722,107 @@ static int mcp_shim_main(void) {
     return 0;
 }
 
+/* The options, as DATA.
+ *
+ * They used to be an if/else-if chain of strcmp and strncmp, which is
+ * workable at eight options and grows badly: every option taking a value
+ * needed two arms (`--login-email` and `--login-email=`), and the
+ * space-or-equals handling was re-implemented per option. A table is the
+ * same shape SETTINGS[] already uses for preferences, and a new option
+ * costs one row and one case.
+ *
+ * Two behaviours the old loop had are now the library's job rather than
+ * a comment's:
+ *
+ *   optional_argument ENFORCES the `--ircd=SPEC` rule. An optional value
+ *   must be attached with '=' and is never taken from the next argument,
+ *   which is exactly what the old code explained it was doing by hand —
+ *   `--ircd 6667` would otherwise eat a positional, and the positional it
+ *   would eat is the password.
+ *
+ *   required_argument accepts both `--login-email x` and
+ *   `--login-email=x` from one row.
+ *
+ * The optstring begins with '-', which returns every non-option through
+ * the loop as it is encountered instead of permuting the array. That
+ * keeps options-anywhere working — the property whose absence once made
+ * `shottino https://host --user name pass` silently open a VISITOR
+ * session — without depending on GNU permutation, which POSIXLY_CORRECT
+ * in the environment would switch off. */
+enum {
+    OPT_AUTO = 1000,
+    OPT_USER,
+    OPT_VISITOR,
+    OPT_SHARE,
+    OPT_LOGIN_EMAIL,
+    OPT_IRCD,
+    OPT_IRCD_ARCHIVE,
+    OPT_FOREGROUND
+};
+
+static const struct option shottino_options[] = {
+    { "auto", no_argument, NULL, OPT_AUTO },
+    { "user", no_argument, NULL, OPT_USER },
+    { "visitor", no_argument, NULL, OPT_VISITOR },
+    { "share", no_argument, NULL, OPT_SHARE },
+    { "login-email", required_argument, NULL, OPT_LOGIN_EMAIL },
+    { "ircd", optional_argument, NULL, OPT_IRCD },
+    { "ircd-archive", no_argument, NULL, OPT_IRCD_ARCHIVE },
+    { "foreground", no_argument, NULL, OPT_FOREGROUND },
+    { "help", no_argument, NULL, 'h' },
+    { "version", no_argument, NULL, 'V' },
+    { NULL, 0, NULL, 0 }
+};
+
 int main(int argc, char **argv) {
+    /* BEFORE everything, including the option table. This decides what
+     * the process IS — the MCP server child the claude CLI spawns, which
+     * must not start a UI, read a config or look at the rest of argv. */
     for (int i = 1; i < argc; i++)
         if (strcmp(argv[i], "--mcp-shim") == 0) return mcp_shim_main();
+
     const char *mode = "auto";
     const char *login_override = NULL;
     bool ircd_enabled = false;
     bool ircd_archive = false;
     bool foreground = false;
     const char *ircd_spec = "";
-    /* Checked before the option loop so --help works from any position and
-     * never requires the other arguments to be present. */
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            print_usage(stdout, argv[0]);
-            return 0;
-        }
-        /* Answerable without a server, a terminal or a config: the first
-         * thing anyone asks a binary that misbehaves is which one it
-         * is. */
-        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
-            printf("shottino %s\n", SHOTTINO_VERSION);
-            return 0;
-        }
-    }
-    /* Options are accepted ANYWHERE, not only before the first positional.
-     *
-     * The old loop stopped at the first non-option argument, so
-     * `shottino https://host --user name pass` silently ignored --user:
-     * the client fell back to auto mode and the server classified the
-     * name as a VISITOR nick. Nothing said so — the run looked
-     * successful, just as the wrong kind of session, with different
-     * persistence and a different subject key.
-     *
-     * A flag that is read in one position and ignored in another is worse
-     * than one that is rejected: the failure is silent and the result is
-     * plausible. Positionals are collected separately so order stops
-     * mattering. */
     const char *positional[8];
     int positional_count = 0;
-    for (int i = 1; i < argc; i++) {
-        const char *a = argv[i];
-        if (strncmp(a, "--", 2) != 0) {
+
+    int opt;
+    while ((opt = getopt_long(argc, argv, "-hV", shottino_options, NULL)) != -1) {
+        switch (opt) {
+        case 1: /* a non-option: the leading '-' in the optstring */
             if (positional_count < (int)(sizeof(positional) / sizeof(positional[0])))
-                positional[positional_count++] = a;
-            continue;
-        }
-        if (strcmp(a, "--ircd") == 0) {
-            ircd_enabled = true;
-            ircd_spec = "";
-        } else if (strncmp(a, "--ircd=", 7) == 0) {
-            /* Only the =SPEC form. `--ircd 6667` would be indistinguishable
-             * from a positional — and the positional it would eat is the
-             * password. A loud usage error beats guessing. */
-            ircd_enabled = true;
-            ircd_spec = a + 7;
-        } else if (strcmp(a, "--ircd-archive") == 0) {
-            ircd_archive = true;
-        } else if (strcmp(a, "--foreground") == 0) {
-            foreground = true;
-        } else if (strcmp(a, "--user") == 0) mode = "user";
-        else if (strcmp(a, "--visitor") == 0) mode = "visitor";
-        else if (strcmp(a, "--share") == 0) mode = "share";
-        else if (strcmp(a, "--auto") == 0) mode = "auto";
-        else if (strcmp(a, "--login-email") == 0) {
-            if (i + 1 >= argc) {
-                fprintf(stderr, "--login-email requires an email-like identifier\n");
-                return 2;
-            }
+                positional[positional_count++] = optarg;
+            break;
+        case 'h':
+            print_usage(stdout, argv[0]);
+            return 0;
+        /* Answerable without a server, a terminal or a config: the first
+         * thing anyone asks a binary that misbehaves is which one it is. */
+        case 'V':
+            printf("shottino %s\n", SHOTTINO_VERSION);
+            return 0;
+        case OPT_AUTO: mode = "auto"; break;
+        case OPT_USER: mode = "user"; break;
+        case OPT_VISITOR: mode = "visitor"; break;
+        case OPT_SHARE: mode = "share"; break;
+        case OPT_LOGIN_EMAIL:
             mode = "user";
-            login_override = argv[++i];
-        } else if (strncmp(a, "--login-email=", 14) == 0) {
-            mode = "user";
-            login_override = a + 14;
-        } else {
-            fprintf(stderr, "unknown option: %s\n", a);
+            login_override = optarg;
+            break;
+        case OPT_IRCD:
+            ircd_enabled = true;
+            ircd_spec = optarg ? optarg : "";
+            break;
+        case OPT_IRCD_ARCHIVE: ircd_archive = true; break;
+        case OPT_FOREGROUND: foreground = true; break;
+        default:
+            /* getopt_long has already named the offending option on
+             * stderr; the usage says what the accepted ones are. */
+            print_usage(stderr, argv[0]);
             return 2;
         }
     }
