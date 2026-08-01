@@ -24872,7 +24872,7 @@ a property of the consume-before-mint order that predates B1. The retryable-late
 to fold into B1.
 ---
 
-## 2026-08-01 — CTCP PING is answered by the bouncer, and by the client meanwhile
+## 2026-08-01 — CTCP PING answered, and a CTCP reply is not a DM
 
 `/ping` in shottino sent a CTCP PING and nothing came back. Pinging your OWN
 session showed why in one command: the query arrived, was drawn as a line of
@@ -24910,8 +24910,42 @@ nick, stamp): a reply that CLAIMS an entry is reported however it arrived, one
 that matches nothing stays quiet, and an unanswered ping is reported after 30
 seconds instead of being forgotten.
 
-**Not verified locally:** the dev host for this session had neither a docker
-compose plugin nor elixir, so `scripts/mix.sh` could not start and the Elixir
-suite never ran against the server change. The tests are written (echo
-verbatim, token-less form) and CI is the gate — this must be green there
-before it reaches prod.
+**Pushed untested, reverted, then re-landed verified.** The server change went
+out with "NOT RUN LOCALLY — CI is the gate" in its commit message, because the
+dev host had neither a docker compose plugin nor elixir and `scripts/mix.sh`
+could not start. CI failed on **Credo (strict)** and it was reverted to keep
+main green. The violation was real: cyclomatic complexity 10 against a maximum
+of 9 on the CTCP `do_route` clause, which was ALREADY at 9 before the new arm.
+The limit was right — a dispatch clause that size should dispatch, not
+implement — so the arm became `ctcp_ping_reply/4`. Four more findings surfaced
+once the linter could actually be run (unused pattern variables named
+`_state` / `_attrs` / `_verb`, where this codebase names them bare `_`), plus a
+pre-existing test that used PING as its example of an UNIMPLEMENTED verb and
+had to move its example to TIME.
+
+**The lesson, plainly:** a gate that cannot be run is not a gate. Writing the
+risk into a commit message documented it without reducing it. The fix was not
+"be more careful" — it was to get the toolchain: one per-user docker compose
+plugin install later, `scripts/check.sh` reproduces CI exactly and found all
+five findings in a single run. Get the toolchain, run the gate, then land.
+
+**A CTCP reply is not a DM (folded into the same work).** With PING answered,
+the reply side surfaced a routing bug older than it: a CTCP-framed NOTICE took
+the regular-nick branch of `route_non_channel_notice/3`, so it persisted under
+the peer and `maybe_open_query_window/2` minted a query window — **pinging
+somebody left a tab open with them containing a row of control characters**.
+Case 4's own comment already said "peer sent us a non-CTCP NOTICE"; the
+predicate was simply missing. `Grappa.IRC.CTCP.framed?/1` — the complement of
+`action?/1`, asking "is this protocol rather than something somebody said" —
+now catches it first and routes to `$server`, where `dm_eligible?/1` mints
+nothing. The BODY stays byte-verbatim, framing included: a client recognises
+its own outstanding ping by the token it sent, so rewriting the row to
+something human-readable would make the round trip unmeasurable.
+
+Scope kept deliberately narrow: **CTCP framing only**. A plain peer NOTICE
+keeps today's routing, with a test asserting it, because whether THAT should go
+to the status window is #546/#548's question and this change must not quietly
+pre-empt it. shottino needed no change to match: it keys on the framing and its
+own outstanding-ping table, never on which window the row was filed under, so
+the reply still cards in the window the question was asked from — with a test
+driven at `channel = "$server"` to prove the routing change cannot break it.

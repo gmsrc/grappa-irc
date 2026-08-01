@@ -652,6 +652,45 @@ TEST(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer) {
     free_app(app);
 }
 
+TEST(a_ping_reply_routed_to_server_still_lands_in_the_active_window) {
+    /* grappa carves a CTCP-framed NOTICE out of the peer-DM route and
+     * persists it on $server, so it mints no query window. The reply then
+     * arrives with channel = "$server" rather than the peer's name — and
+     * it must STILL be reported where the question was asked, exactly
+     * like /whois. The client keys on the FRAMING and the outstanding
+     * ping, never on which window the row was filed under, which is what
+     * makes it survive that routing change. */
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "$server", false);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+
+    long stamp = monotonic_ms() - 310;
+    ping_remember(app, "azzurra", "alice", stamp);
+
+    char body[64];
+    snprintf(body, sizeof(body), "\001PING %ld\001", stamp);
+    struct wire_scrollback_message m = { 0 };
+    m.id = 9;
+    m.network = "azzurra";
+    m.channel = "$server"; /* where grappa now files it */
+    m.sender = "alice";
+    m.kind = MSG_NOTICE;
+    m.body = body;
+    render_message(app, &m, true);
+
+    CHECK(log_has(app, "PING reply from alice"));
+    /* In the window being READ, not in $server. */
+    char here[MAX_SLUG + MAX_CHANNEL + 8], server[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key("azzurra", "#sniffo", here, sizeof(here));
+    window_scope_key("azzurra", "$server", server, sizeof(server));
+    CHECK(log_row_in_scope(app, app->log_count - 1, here));
+    CHECK(!log_row_in_scope(app, app->log_count - 1, server));
+    /* And no tab for the person we pinged. */
+    CHECK_LONG(app->window_count, 2);
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -676,6 +715,7 @@ int main(void) {
     RUN(a_push_carries_the_joins_ref_not_its_own);
     RUN(a_ping_reply_is_matched_against_the_pings_we_are_waiting_on);
     RUN(a_backfilled_ping_reply_still_reports_its_round_trip);
+    RUN(a_ping_reply_routed_to_server_still_lands_in_the_active_window);
     RUN(an_unsolicited_ping_reply_says_nothing);
     RUN(an_inbound_ctcp_query_is_named_not_dumped);
     RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);

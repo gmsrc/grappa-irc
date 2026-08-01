@@ -33,4 +33,23 @@ defmodule Grappa.IRC.CTCP do
   @spec action?(binary()) :: boolean()
   def action?(<<0x01, "ACTION ", _::binary>>), do: true
   def action?(_), do: false
+
+  @doc """
+  True iff `body` is CTCP-framed at all — it opens with `\x01`, whatever
+  the verb.
+
+  Where `action?/1` asks "is this the one verb that IS conversation",
+  this asks the complement: "is this protocol rather than something
+  somebody said". A CTCP reply (`\x01PING 1234\x01`, `\x01VERSION …\x01`)
+  arrives as a NOTICE from a peer's nick and would otherwise be routed
+  like any peer NOTICE — persisted under that peer and minting a query
+  window for them, with a row of control characters in it. Pinging
+  somebody would leave a tab open with them.
+
+  Lenient on the closing `\x01` for the same reason `action?/1` is: the
+  trailing delimiter is optional and clients omit it.
+  """
+  @spec framed?(binary()) :: boolean()
+  def framed?(<<0x01, _::binary>>), do: true
+  def framed?(_), do: false
 end
