@@ -25361,3 +25361,62 @@ asserts the own row `toBeInViewport` AND distance-to-tail ≤ threshold after th
 settle. The deliberate test-layer split holds throughout: core geometry is a
 vitest `isSettled` unit test, the wiring is a chromium e2e, and real iOS is a
 device verify — Playwright webkit is not iOS scroll.
+
+## 2026-08-01 — #608 (follow-up): the media-viewer close snap — reconcile the follow intent, and no deferred writer is exempt from precedence
+
+The scoped scroll e2e caught one regression the reshape's own unit tests missed:
+`issue219-overlay-scroll-hold` (a reader scrolled up, opens the media viewer,
+closes it → the pane must stay put) failed as a **race** (~2/3), snapping the
+reader to the tail on the CLOSE edge. Instrumentation pinned the mechanism, and
+it was NOT where the freeze lives.
+
+**Root cause — a stale follow intent, not a freeze gap.** `followMode` is meant
+to flip OFF when the reader scrolls up. But `onScroll` bails while the pane is
+frozen (`isOverlayFrozen()`) because scroll events under a covering overlay are
+DOM artifacts (the ref-keyed `<For>` resetting `scrollTop`), not operator intent.
+When the reader's genuine scroll-up event RACES the freeze engaging (the media
+open's deferred `pushOverlay` microtask), that real scroll-up edge is dropped and
+`followMode` is stranded TRUE. The freeze then holds the reader's position for the
+overlay's whole lifetime (correct), but on close the stale `followMode=true`
+drives a tail write. The writer was **`tailFollowWhenSettled`** (the STEP 6
+measured-settle poll): a lingering poll fail-safe-tailed the pane the instant the
+overlay closed. The overlay freeze/restore did its job; the follow *intent* was
+the bug.
+
+**Fix 1 — reconcile the follow intent with the reader's trusted position on the
+overlay edges.** The overlay snapshot IS the authoritative position across the
+overlay's lifetime, so `applyOverlayRestore` (which runs on both refcount edges)
+now sets `followMode` from the restored geometry — `followMode = (snapshot within
+SCROLL_BOTTOM_THRESHOLD_PX of the tail)` — even when the position is already held
+(a scrolled-up reader whose px never moved still gets the stale intent corrected).
+This is DERIVED from geometry, one-shot per edge — NOT a separately-cleared latch,
+so it does not reintroduce the drift/hang class STEP 2 killed (the freeze itself
+stays derived from the live `overlayCount()`). It composes cleanly with the thaw
+contract: a reader who WAS at the tail (snapshot at tail) reconciles to
+`followMode=true` and a post-close resize legitimately re-pins (the
+`#219-general` "thaws the instant count→0" case); a mid-list reader reconciles to
+`followMode=false` and the resize is a no-op.
+
+**Fix 2 — a deferred writer re-validates precedence for its whole lifetime, not
+just at dispatch.** `tailFollowWhenSettled` wins `resolveIntent` at dispatch (when
+nothing higher is active) but then polls up to `SETTLE_MAX_FRAMES`. It already
+re-checked `followMode()` and `listRef.isConnected` each frame; it now ALSO bails
+on `isOverlayFrozen()` each frame. So **the tail-follow is NOT exempt from the
+overlay-freeze precedence** — if a covering overlay opens mid-poll, overlay-freeze
+outranks tail-follow and the poll yields rather than writing through the freeze.
+The general rule: the applier's single-writer precedence must hold across a
+deferred write's entire lifetime; a poll that outlives its `resolveIntent`
+decision re-checks every sticky higher-precedence intent that can engage while it
+waits (freeze), plus its own liveness (followMode / connection). The remaining
+higher-precedence intents are user-triggered one-shots that cannot spuriously
+engage during a settle wait: operator-tail shares the tail destination (no
+conflict) and mention-jump requires a tap. Routing the poll's terminal write back
+through `resolveIntent` per frame was considered but rejected as heavier than the
+one live sticky intent (freeze) that the poll's lifetime can actually cross.
+
+Coverage: a jsdom LOCK (`ScrollbackPane.test.tsx`, `#219-general` block) pins the
+reconcile — a mid-list snapshot across an overlay open→close leaves `followMode`
+off so a later resize does not tail (RED before the fix, GREEN after); it is the
+deterministic inverse of the existing thaw case whose snapshot sits at the tail.
+The e2e `issue219-overlay-scroll-hold` is the wiring gate (the real resize
+authority; the assert and the 50px threshold were left untouched).

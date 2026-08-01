@@ -2472,6 +2472,15 @@ const ScrollbackPane: Component<Props> = (props) => {
       // prototype method, would pollute a later-mounted pane's spy under test).
       if (!listRef?.isConnected) return;
       if (!followMode()) return;
+      // #608 — a DEFERRED settle poll must re-validate the freeze precedence each
+      // frame, not just at dispatch time. tail-follow only wins `resolveIntent`
+      // when nothing higher is active, but this poll can outlive that decision by
+      // up to SETTLE_MAX_FRAMES: if a covering overlay opens mid-poll,
+      // overlay-freeze now outranks tail-follow, so the poll must YIELD rather
+      // than write through the freeze. Keeps the single-writer precedence holding
+      // across the poll's whole lifetime (same class as the followMode/isConnected
+      // re-checks above), not just the frame it was scheduled.
+      if (isOverlayFrozen()) return;
       const tail = listRef.lastElementChild as HTMLElement | null;
       const currScrollHeight = listRef.scrollHeight;
       const targetNodeHeight = tail?.offsetHeight ?? 0;
@@ -2625,7 +2634,25 @@ const ScrollbackPane: Component<Props> = (props) => {
   // channel's px onto it) and skips a no-op write. `target` is the px captured on
   // the open edge; `snapKey` the channel it was captured on.
   const applyOverlayRestore = (target: number, snapKey: string): void => {
-    if (!listRef || snapKey !== key() || listRef.scrollTop === target) return;
+    if (!listRef || snapKey !== key()) return;
+    // #608 (regression fix) — reconcile the follow INTENT with the reader's
+    // trusted position. The snapshot is the authoritative position across the
+    // overlay's whole lifetime, so `followMode` must match whether it sits at the
+    // tail. Without this, a reader who scrolled up (snapshot mid-list) whose
+    // scroll-up `onScroll` edge was DROPPED by the freeze bail (a scroll racing
+    // the freeze engaging) is left with `followMode` stale-true; the deferred
+    // `tailFollowWhenSettled` poll — which gates on `followMode`, not the freeze —
+    // then fail-safe-tails the pane the instant the overlay closes, yanking the
+    // reader to the bottom (the #219 media-viewer close snap; e2e
+    // issue219-overlay-scroll-hold). Derived from the restored geometry — one-shot
+    // per overlay edge, NO separately-cleared latch (the freeze stays derived from
+    // the live `overlayCount()`). Runs even when the position is already held
+    // (`scrollTop === target`), so a scrolled-up reader whose px never moved still
+    // gets the stale intent corrected.
+    setFollowMode(
+      listRef.scrollHeight - target - listRef.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX,
+    );
+    if (listRef.scrollTop === target) return;
     const intent: ScrollIntent = { kind: "overlay-freeze", key: snapKey, lifetime: "sticky" };
     logScrollDecision("overlay-restore", [intent], intent, "overlay-restore");
     listRef.scrollTop = target;

@@ -4532,6 +4532,53 @@ describe("ScrollbackPane", () => {
 
       expect(scrollIntoViewSpy).not.toHaveBeenCalled();
     });
+
+    // #608 (regression, media-viewer close snap) — the freeze holds the reader's
+    // position for the overlay's whole lifetime, but the follow INTENT could be
+    // left stale. When the reader is scrolled up (snapshot mid-list) but
+    // `followMode` is still true — the scroll-up onScroll edge dropped by the
+    // freeze bail (a scroll racing the freeze engaging) — the close edge restores
+    // the mid position AND a lingering `tailFollowWhenSettled` poll (which gates
+    // only on `followMode`/`isConnected`, not the freeze) fail-safe-tailed the
+    // pane the instant the overlay closed: the reader was yanked to the bottom on
+    // close (the #219 media-viewer report, e2e issue219-overlay-scroll-hold). The
+    // fix reconciles `followMode` with the RESTORED geometry on the overlay edges
+    // (the snapshot is the reader's trusted position): mid-list snapshot ⇒
+    // `followMode=false`, so a later content-change never tails. Derived from
+    // geometry — no separately-cleared latch. The e2e twin drives the real resize
+    // authority; this is the jsdom-observable half (the scrollIntoView spy).
+    it("reconciles followMode to a mid-list snapshot on overlay close (a later resize does NOT snap)", async () => {
+      seedRows();
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+      await flushRaf();
+
+      // A tall, genuinely-scrollable pane with the reader parked mid-list. No
+      // scroll event is dispatched, so `followMode` stays at its stale mount value
+      // (true) — the exact stuck-follow state the freeze/onScroll race produces
+      // (the scroll-up onScroll edge dropped by the freeze bail). This is the
+      // inverse of the thaw case above (whose snapshot sits at the tail → the
+      // resize legitimately re-pins): here the reader is mid-list, so the follow
+      // intent must be reconciled OFF and the resize must be a no-op.
+      Object.defineProperty(list, "scrollHeight", { value: 2000, configurable: true });
+      Object.defineProperty(list, "clientHeight", { value: 500, configurable: true });
+      Object.defineProperty(list, "scrollTop", { value: 750, writable: true, configurable: true });
+
+      // Overlay opens at the mid position (snapshot=750) then closes.
+      pushOverlay(null);
+      await flushRaf();
+      popOverlay(null);
+      await flushRaf();
+      scrollIntoViewSpy.mockClear();
+
+      // A resize fires after the close (the e2e's real authority). Reader was
+      // mid-list → followMode reconciled false → onResize's follow gate is off →
+      // no tail snap. Pre-fix followMode was stale-true → the resize snapped.
+      window.dispatchEvent(new Event("resize"));
+      await flushRaf();
+
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+    });
   });
 
   // affordances. Rendered as flex siblings BEFORE `.scrollback` they
