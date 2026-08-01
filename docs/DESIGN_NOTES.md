@@ -25822,3 +25822,72 @@ playback to a Manual check; the automated coverage is the classifier table
 (`mediaLink.test.ts`) + the CSP-on-the-wire parity spec.
 
 Deploy class: `security_headers.ex` is in `lib/` → HOT.
+---
+
+## 2026-08-01 — #609: the source-alias wrapper's prefix has one source of truth, and arm_check proves aliasing
+
+Two defects in the #543 static-mapping mode-2 machinery, both surfaced by a
+production IPv6-cutover incident (the wrapper still pinned `cb::/80` while the
+intended block was `cafe::/80`, which was not even routed).
+
+**1. The prefix was a compiled-in default.** `infra/freebsd/bin/grappa-source-alias`
+carried `PREFIX="${GRAPPA_SOURCE_ALIAS_PREFIX:-2a03:4000:20:2d3:cb::/80}"`, a
+literal that had to match `ServerSettings.static_mapping_prefix` by hand across
+two systems (a DB row and a root-owned file). On drift, every `ensure_source`
+was refused exit 65 and sessions stayed held. The wrapper now reads the prefix
+from a **root-owned config file** (`/usr/local/etc/grappa/source-alias.conf`,
+`PREFIX=<cidr>`), rendered from the DB prefix at deploy time. Missing /
+unreadable / malformed → **exit 66, fail closed** — never a wildcard fallback.
+`GRAPPA_SOURCE_ALIAS_PREFIX` stays a root-invoked / test-only override and stays
+OUT of `env_keep`: an env-controllable scope on a root wrapper is a privilege
+hole (a compromised BEAM could widen it to `::/0`), and `sudo` scrubs the env
+from the grappa caller anyway. **No new deploy substrate** (CLAUDE.md forbids
+one without discussion): the render is a documented manual step, and the drift
+is now caught structurally by the probes below rather than by a provisioning
+script.
+
+**2. `arm_check` was a false positive.** It ran `sudo -n grappa-source-alias
+check` — a no-op that exits 0 whenever the sudoers grant resolves. It proved
+nothing about whether the substrate can configure addresses: a NON-VNET jail
+passes `check` and then fails EVERY `ensure_source` with EPERM
+(`ifconfig: ioctl (SIOCAIFADDR): Operation not permitted`). `arm_check` now
+drives a real `probe <canary>` subcommand: add-then-delete a canary and exit 0
+only if the add succeeds; a refusing substrate → exit 69 → `:alias_not_permitted`.
+
+**The canary is the network-base address of the DB prefix** (`IpLiteral.network_address/1`).
+Two properties make it safe: it is guaranteed in-prefix for any length, and a
+live derived source (a near-uniform 48-bit SHA-256 spread over the host bits)
+practically never occupies host-0 — and the wrapper deletes ONLY what it added,
+so a pre-existing alias is never disturbed. The elegant part: because the canary
+is derived from the **DB** prefix while the wrapper's in-prefix guard scopes
+against its **config-file** prefix, a DB↔substrate drift surfaces for free as
+exit 65 → `:prefix_mismatch`. No duplicated "compare the two prefixes" state —
+the mismatch falls out of the existing guard. Reasons: 65→`:prefix_mismatch`,
+66→`:prefix_config_unavailable`, 69→`:alias_not_permitted`, sudo's own exit 1 /
+missing binary → `:wrapper_unavailable`, timeout → `:probe_timeout`.
+
+**3. The probe runs when the mode is SET, not only at boot (vjt, #grappa
+12:09).** `PUT /admin/settings` validated only the SHAPE of an addressing change
+and saved, so an operator got 200 and discovered the failure later as held
+sessions. The addressing subtree is now applied as a UNIT: resolve the target
+`(mode, prefix)` — each from the body or the current row — then, when the target
+is mode 2, run the probe FIRST via `SourceAliasManager.arm/1`. On refusal →
+**422 `addressing_unusable`** with the concrete reason, persisting nothing (a
+mode that cannot arm never reaches the DB); on success → persist prefix-then-mode.
+`arm/1` also ADOPTS the probed prefix and publishes `armed?`, so a mode-2 change
+goes live WITHOUT a reboot (B1) — and it changes no state on refusal, so a
+failed set-time probe never disarms a manager that is currently working. This
+does not replace the boot/arm check: the substrate mutates independently of the
+DB row (a jail restarted without VNET, a wrapper removed by a re-provision), so
+both checkpoints stay. The per-address hard-fail (`do_start_client/2` stops on
+acquire failure, no shared-source fallthrough) was already in place and is
+unchanged.
+
+**Known accepted wrinkle:** `arm/1` commits the manager's arm state (prefix +
+`armed?`) BEFORE the controller persists the settings row, so a transient
+`:db_unavailable` on the persist leaves the manager armed against a prefix the
+DB does not yet carry. This is safe — a session then derives against the (old)
+DB prefix and the manager's `ensure_source` guard refuses it (`:outside_prefix`),
+so the session is HELD, never egressing wrong — and it self-corrects on the next
+successful set or at boot. The alternative (persist-then-arm) would violate the
+"probe FIRST, do not persist" contract, so this ordering is deliberate.
