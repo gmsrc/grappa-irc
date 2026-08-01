@@ -278,6 +278,23 @@ chooses it, the wheel walks the list, and a click anywhere outside the box
 closes it — the same as Esc. Right-click needs mouse reporting, which is on by
 default; `Ctrl-R` works either way.
 
+## Audio
+
+An audio link **never plays on arrival** — it is a clickable link like any
+other, and nothing is fetched until you ask. Click it (or `/preview <url>`,
+`/view <url>`, or pick the `♪` row from the bare `/preview` / `/view` list) and
+it plays out of band: `mpv --no-video`, else `ffplay -nodisp`, else your
+desktop's handler. The player runs with stdin, stdout and stderr on
+`/dev/null` — output would scribble over the screen, and a player left on the
+terminal would eat the keystrokes meant for the compose line.
+
+Recognised: `mp3 m4a m4r aac wav flac ogg oga opus`. That list is deliberately
+wider than what `/upload` can send (the server's MIME allowlist refuses
+`ogg`/`opus`): sending and playing are different questions. Audio is
+classified **before** the `/uploads/` heuristic that otherwise marks anything
+this deployment hosts as a picture — an uploaded `.mp3` is audio, not a broken
+image.
+
 ## Seeing what the socket is doing
 
 Every client push carries the join_ref of the `phx_join` that opened its

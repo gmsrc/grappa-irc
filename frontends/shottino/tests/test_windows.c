@@ -759,6 +759,48 @@ TEST(a_ping_reply_we_did_not_time_is_still_shown_when_live) {
     free_app(app);
 }
 
+/* ── Audio ─────────────────────────────────────────────────────────── */
+
+TEST(audio_is_classified_before_the_uploads_heuristic) {
+    /* The trap this test exists for: `/uploads/` marks anything this
+     * deployment hosts as a picture, so an uploaded .mp3 would be handed
+     * to the image decoder and look broken rather than unsupported.
+     * Audio has to win first. */
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc123.mp3"), MEDIA_AUDIO);
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc123.png"), MEDIA_IMAGE);
+    /* A bare /uploads/ URL with no extension stays a picture — that is
+     * the pre-existing heuristic, deliberately untouched. */
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc123"), MEDIA_IMAGE);
+
+    /* Every extension /upload can send, plus the ones it cannot: the
+     * server refuses ogg/opus UPLOADS, but a link to somebody else's is
+     * still audio and still playable. */
+    const char *audio[] = {"http://h/a.mp3",  "http://h/a.m4a", "http://h/a.m4r",
+                           "http://h/a.aac",  "http://h/a.wav", "http://h/a.flac",
+                           "http://h/a.ogg",  "http://h/a.oga", "http://h/a.opus", NULL};
+    for (size_t i = 0; audio[i]; i++) CHECK_LONG(media_kind_of(audio[i]), MEDIA_AUDIO);
+
+    /* .ogv is VIDEO and must not be swallowed by the .ogg rule. */
+    CHECK_LONG(media_kind_of("http://h/clip.ogv"), MEDIA_VIDEO);
+    CHECK_LONG(media_kind_of("http://h/clip.mp4"), MEDIA_VIDEO);
+
+    /* Case and a query string do not change the answer (same token
+     * lowering every other kind goes through). */
+    CHECK_LONG(media_kind_of("http://h/Song.MP3?sig=abc"), MEDIA_AUDIO);
+
+    /* Not audio. */
+    CHECK_LONG(media_kind_of("http://h/page.html"), MEDIA_NONE);
+
+    /* Recording pre-existing behaviour rather than asserting what the
+     * name promises: `token_has_suffix` is a strstr, so ANY extension
+     * appearing anywhere in the token matches — `notes.mp3.txt` reads as
+     * audio, exactly as `shot.png.txt` already reads as an image. Adding
+     * a kind is not the change that should quietly tighten that for
+     * every other kind too; noted, not fixed here. */
+    CHECK_LONG(media_kind_of("http://h/notes.mp3.txt"), MEDIA_AUDIO);
+    CHECK_LONG(media_kind_of("http://h/shot.png.txt"), MEDIA_IMAGE);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -788,6 +830,7 @@ int main(void) {
     RUN(an_inbound_ctcp_query_is_named_not_dumped);
     RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);
     RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
+    RUN(audio_is_classified_before_the_uploads_heuristic);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
     return test_report();
 }

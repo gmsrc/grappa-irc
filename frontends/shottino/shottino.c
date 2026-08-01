@@ -382,7 +382,7 @@ struct inline_media {
  * rather than beside media_kind_of() because both the link regions below
  * and the scrollback attach path need the COMPLETE type, and a forward
  * declaration cannot give an enum a size. */
-enum media_kind { MEDIA_NONE = 0, MEDIA_IMAGE, MEDIA_VIDEO };
+enum media_kind { MEDIA_NONE = 0, MEDIA_IMAGE, MEDIA_VIDEO, MEDIA_AUDIO };
 
 /* A clickable link rendered in the chat area. Recorded each draw() frame
  * (cleared at frame start) so mouse coordinates can be mapped back to the
@@ -2489,9 +2489,21 @@ static enum media_kind media_kind_of(const char *url) {
     static const char *const vid[] = {".mp4", ".m4v", ".webm", ".mkv", ".mov",
                                       ".avi", ".ogv", ".flv", ".wmv", ".mpg",
                                       ".mpeg", NULL};
+    /* Audio this client will PLAY. Deliberately WIDER than the /upload
+     * table: ogg/opus are absent there because the SERVER refuses them
+     * (its MIME allowlist), but a link to somebody else's .ogg is still
+     * audio and every player handles it. Sending and playing are
+     * different questions. */
+    static const char *const aud[] = {".mp3", ".m4a", ".m4r", ".aac", ".wav",
+                                      ".flac", ".ogg", ".oga", ".opus", NULL};
     char lower[MAX_LINE];
     url_token_lower(url, lower, sizeof(lower));
     if (token_has_suffix(lower, vid)) return MEDIA_VIDEO;
+    /* BEFORE the `/uploads/` heuristic below, which calls anything this
+     * deployment hosts a picture: an uploaded .mp3 lives under
+     * /uploads/ too, and handing it to the image decoder is how audio
+     * would look "broken" rather than unsupported. */
+    if (token_has_suffix(lower, aud)) return MEDIA_AUDIO;
     if (token_has_suffix(lower, img) || strstr(lower, "/uploads/")) return MEDIA_IMAGE;
     return MEDIA_NONE;
 }
@@ -6697,7 +6709,7 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
             snprintf(out[n].nick, sizeof(out[n].nick), "%s", nick);
             snprintf(out[n].body, sizeof(out[n].body), "%s", tok);
             snprintf(out[n].label, sizeof(out[n].label), "%-12.20s %s%.900s", nick[0] ? nick : "-",
-                     kind == MEDIA_VIDEO ? "▶ " : "", tok);
+                     kind == MEDIA_VIDEO ? "▶ " : (kind == MEDIA_AUDIO ? "♪ " : ""), tok);
             out[n].action = ov->pick_action;
             n++;
         }
@@ -6874,6 +6886,7 @@ static void query_window(struct app *app, const char *target);
 static void handle_command(struct app *app, const char *input);
 static void request_preview(struct app *app, const char *url, bool is_video, bool force_ascii);
 static void request_view(struct app *app, const char *url);
+static void play_audio_url(struct app *app, const char *url);
 
 static void overlay_activate(struct app *app) {
     struct overlay_item items[64];
@@ -6960,10 +6973,15 @@ static void overlay_activate(struct app *app) {
         }
         break;
     case ACT_PREVIEW:
-        if (body[0]) request_preview(app, body, media_kind_of(body) == MEDIA_VIDEO, false);
+        /* The picker lists clips AND audio now, and an audio row has no
+         * frame to render: handing it to the image/video decoder is how
+         * a picked song would look like a broken preview. */
+        if (body[0] && media_kind_of(body) == MEDIA_AUDIO) play_audio_url(app, body);
+        else if (body[0]) request_preview(app, body, media_kind_of(body) == MEDIA_VIDEO, false);
         break;
     case ACT_VIEW:
-        if (body[0]) request_view(app, body);
+        if (body[0] && media_kind_of(body) == MEDIA_AUDIO) play_audio_url(app, body);
+        else if (body[0]) request_view(app, body);
         break;
     case ACT_NONE:
         break;
@@ -7308,6 +7326,51 @@ static void complete_input(struct app *app) {
         }
         log_line(app, "completions for '%s': %s", stem, list);
     }
+}
+
+/* Play an audio URL out of band.
+ *
+ * CLICK ONLY — never on arrival. An audio file that starts playing
+ * because somebody posted it is the kind of thing that makes a client
+ * unusable in an office, and it would leak your IP to the host for
+ * every link that scrolls past. Clicking is a decision; arriving is not.
+ *
+ * Same double-fork as open_external_url (grandchild reparented to init,
+ * so nothing to reap and the UI thread never blocks), with one addition
+ * that matters here: STDIN is redirected too. A player left attached to
+ * the terminal competes with ncurses for keystrokes — mpv would happily
+ * eat the keys meant for the compose line.
+ *
+ * The players are tried IN THE GRANDCHILD, in order: exec only returns
+ * on failure, so this needs no PATH probing and no guess about which is
+ * installed. mpv --no-video first (ubiquitous, exits at EOF), then
+ * ffplay, then the desktop handler as the same fallback a non-media
+ * link gets. */
+static void play_audio_url(struct app *app, const char *url) {
+    if (!url || !url[0]) {
+        log_line(app, "no audio URL captured yet");
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (fork() == 0) {
+            int devnull = open("/dev/null", O_RDWR);
+            if (devnull >= 0) {
+                dup2(devnull, STDIN_FILENO);
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                if (devnull > STDERR_FILENO) close(devnull);
+            }
+            execlp("mpv", "mpv", "--no-video", "--really-quiet", url, (char *)NULL);
+            execlp("ffplay", "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", url,
+                   (char *)NULL);
+            execlp("xdg-open", "xdg-open", url, (char *)NULL);
+            _exit(127);
+        }
+        _exit(0);
+    }
+    if (pid > 0) waitpid(pid, NULL, 0);
+    log_line(app, "playing %.120s — mpv/ffplay if installed, otherwise your desktop handler", url);
 }
 
 static void open_external_url(struct app *app, const char *url) {
@@ -8149,6 +8212,7 @@ static void show_help(struct app *app) {
     log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
     log_line(app, "terminal: mouse tracking is ON by default (click links, right-click a message, wheel over the userlist); hold Shift to select text as usual, or /mouse off to give selection back unconditionally");
     log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; video and GIFs PLAY as colour art (/media still for one frame)");
+    log_line(app, "audio: an audio link NEVER plays on arrival — click it (or /preview /view it) and it plays out of band via mpv/ffplay, falling back to your desktop handler");
     log_line(app, "       /media [on|off|all|first-party] — ON for ALL hosts by default (off entirely without ffmpeg): every image link is fetched when it scrolls into view, so the host learns your IP; /media first-party limits it to this deployment's uploads");
     log_line(app, "       /preview [url] full-screen here; bare /preview picks from the last 20 pictures and clips in this window; /preview-ascii forces the art renderer");
     log_line(app, "       /view [url] downloads it and opens your desktop's viewer for that file type (bare /view offers the same list); /open hands a URL to the browser");
@@ -8202,8 +8266,8 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "quote") == 0) log_line(app, "/quote raw-line — send a raw IRC line through grappa");
     else if (strcmp(cmd, "oper") == 0) log_line(app, "/oper name password — send IRC OPER credentials; password is not logged");
     else if (strcmp(cmd, "open") == 0) log_line(app, "/open — open the most recent URL using xdg-open (the browser: the handler comes from the scheme)");
-    else if (strcmp(cmd, "view") == 0) log_line(app, "/view [url] — download it and open the desktop viewer for that file TYPE; bare /view offers the last 20 pictures and clips posted in this window");
-    else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; bare /preview offers the last 20 pictures and clips posted in this window");
+    else if (strcmp(cmd, "view") == 0) log_line(app, "/view [url] — download it and open the desktop viewer for that file TYPE; an audio URL PLAYS instead (mpv/ffplay); bare /view offers the last 20 pictures, clips and audio posted in this window");
+    else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
     else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "admin") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);
     else if (strcmp(cmd, "help") == 0) log_line(app, "/help [command] — bare /help lists every command by group; /help command explains one");
@@ -9000,18 +9064,20 @@ static void handle_command_dispatch(struct app *app, char *line) {
          * argument skips the list. */
         const char *arg = line[8] ? line + 9 : "";
         while (*arg == ' ') arg++;
-        if (*arg) request_preview(app, arg, media_kind_of(arg) == MEDIA_VIDEO, false);
+        if (*arg && media_kind_of(arg) == MEDIA_AUDIO) play_audio_url(app, arg);
+        else if (*arg) request_preview(app, arg, media_kind_of(arg) == MEDIA_VIDEO, false);
         else if (!open_media_picker(app, ACT_PREVIEW))
-            log_line(app, "/preview: nothing to preview — no picture or clip has been posted in this window");
+            log_line(app, "/preview: nothing to play or preview — no picture, clip or audio has been posted in this window");
     } else if (strcmp(line, "/view") == 0 || strncmp(line, "/view ", 6) == 0) {
         /* Same list, different destination: the desktop's own viewer for
          * that file type, which is the one thing a terminal cannot do
          * itself. */
         const char *arg = line[5] ? line + 6 : "";
         while (*arg == ' ') arg++;
-        if (*arg) request_view(app, arg);
+        if (*arg && media_kind_of(arg) == MEDIA_AUDIO) play_audio_url(app, arg);
+        else if (*arg) request_view(app, arg);
         else if (!open_media_picker(app, ACT_VIEW))
-            log_line(app, "/view: nothing to open — no picture or clip has been posted in this window");
+            log_line(app, "/view: nothing to open — no picture, clip or audio has been posted in this window");
     } else if (strcmp(line, "/open") == 0) {
         open_external_url(app, app->last_url);
     } else if (strcmp(line, "/clear") == 0) {
@@ -9684,7 +9750,11 @@ static void handle_mouse(struct app *app) {
     pthread_mutex_unlock(&app->lock);
 
     if (click && hit) {
-        if (kind == MEDIA_NONE) {
+        if (kind == MEDIA_AUDIO) {
+            /* Plays out of band — no picture to draw, and nothing to
+             * take over the screen. */
+            play_audio_url(app, url);
+        } else if (kind == MEDIA_NONE) {
             /* Not a picture: hand it to the browser, the same door /open
              * uses. A link that cannot be opened from where it is read is
              * a link the user has to retype. */
