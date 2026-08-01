@@ -29,6 +29,7 @@ defmodule GrappaWeb do
         Grappa.Net.HostAddresses,
         Grappa.Net.IpLiteral,
         Grappa.Net.PtrCache,
+        Grappa.Net.SourceAliasManager,
         Grappa.Networks,
         Grappa.Notify,
         Grappa.Operator,
