@@ -25577,3 +25577,69 @@ env-file (as a placeholder, to clear the `runtime.exs` raise) AND the real
 sibling, never by teaching the source-mode hook two behaviours. If the VAPID
 `eval` string changes, update the bats fake-docker `*generate_key*` match in
 lockstep (it is the only stdout the installer parses).
+## 2026-08-01 — #590 / #594 (B2): BusyRetry into the background writers — DROP, not 503; and the cross-process `fire_on:` seam
+
+**What (#590, B2).** B1 (2026-07-31) wired `Grappa.Repo.BusyRetry` into every
+web-reachable write (terminal → 503). B2 wires the SAME shared engine into the
+**background writers** — the ones with NO client waiting on the result. The
+engine, the classifier, and the budget are reused verbatim; only the *terminal*
+differs, per the three-doors split B1 recorded: a background write that
+outlasts the retry budget **DROPS best-effort (log + continue), never 503, never
+crash** — the same `:persist_unavailable` posture #336 gave the scrollback hot
+path, generalised.
+
+**Uniform contract, per-caller terminal.** Every context write fn returns the
+uniform `{:error, :db_unavailable}` (CLAUDE.md "total consistency"); each CALLER
+maps its own terminal. So `Visitors.delete/1` PROPAGATES `:db_unavailable`
+(operator/admin callers want the 503 / a raised CLI error) while
+`Visitors.purge_if_anon/1` ABSORBS it to `:ok` + a log (a failed/preempted login
+has no client; the anon row is left for `Visitors.Reaper` to collect on its
+next TTL sweep). The writers migrated: `Accounts.delete_expired_sessions`,
+`Visitors.destroy_visitor` (the whole rehome+delete — not a txn, idempotent
+retry self-heals), `Uploads.soft_delete/2`, `SessionLog` persist+prune,
+`AdminEvents` persist+prune+load_recent (a boot reload that degrades yields an
+empty ring, NOT a crash-loop), and `Push.delete_dead`. Each reaper's `sweep/0`
+maps the drop back to `{:ok, 0}` + a log so its `handle_info` stays total.
+
+**Small web fan-out.** Only `admin/uploads_controller.delete` changed on the web
+side (its `{:ok, _} =` hard match became a `with <-` so it 503s); every other
+`with`-based action already flows `:db_unavailable → 503` through the shared
+`action_fallback GrappaWeb.FallbackController` in the controller macro.
+
+**Notify is OUT (deliberate).** `Notify.remove/clear_all` have NO background
+sweep — every reachable caller is a web controller (`notify_controller`), so
+Notify belongs to the B1 web-503 door, not B2. It stays out of this change; the
+`notify_controller`'s `:ok = Notify.remove/clear` hard matches (which should
+become `with + 503`) are filed as #523 follow-up, NOT smuggled in here.
+Likewise `Push.touch_last_used` (a post-delivery UPDATE, not a sweep) is a
+separate candidate, out of scope.
+
+**Why the `fire_on:` seam (#594).** Two of the terminals live OUT OF PROCESS
+from any test: (a) the WS `close_query_window` `close_failed` reply runs in the
+Phoenix Channel's own pid; (b) the session query-window auto-open
+(`maybe_open_query_window/2`) runs in the `Session.Server`'s pid. The existing
+process-dictionary fault seam only reaches work in the TEST process, so #594
+added a cross-process ETS seam keyed by the TARGET pid (`arm_faults(pid, n)`).
+That pins (a) directly. But (b) can't be isolated by a plain per-pid counter:
+the auto-open runs ONLY after the persist returns `{:ok, _}`, and with a single
+counter "persist succeeds ⟺ fault count is 0 ⟹ the open never faults." So the
+seam gained a POSITIONAL selector: `arm_faults(pid, n, fire_on: k)` rides out
+the first `k-1` fault-CHECKS in the pid (a "check" = one `maybe_inject_fault/0`
+at the top of a `BusyRetry.run/1` attempt) and fires from the `k`-th. For the
+inbound-DM flow the pre-open checks are persist insert (1) + persist preload (2)
+— the `push: true` obligations (`Push.Triggers`, `WindowCounts`) each run in
+their OWN Task, so they add ZERO checks to the session pid — making the open's
+insert check **3**. `fire_on:` counts checks, NOT operations, and was named for
+exactly that; it is a separate explicit arity (NO default-arg drift), so every
+existing channel/reaper caller of `arm_faults/2` is untouched.
+
+**Why a test, not a type.** Dialyzer does NOT flag a non-exhaustive `case` — a
+refactor dropping `maybe_open_query_window/2`'s `{:error, :db_unavailable}` arm
+would crash the session with a `CaseClauseError` on every DB-saturated inbound
+DM, unseen. The test is the only thing pinning it, and it asserts the terminal
+SPECIFICALLY (the exact drop-log line + a surviving session pid + no window row
+minted), so a wrong `fire_on` fails LOUD: too low faults the persist (the
+message never lands), too high lets the open succeed (the drop log is absent).
+A change in how many `BusyRetry.run` calls precede the open is MEANT to break
+that test — the empirical `fire_on: 3` is not hardcoded theory, it is the value
+the triangulating assertions accept.

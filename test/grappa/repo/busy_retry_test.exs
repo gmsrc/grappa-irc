@@ -213,4 +213,27 @@ defmodule Grappa.Repo.BusyRetryTest do
       assert_receive {:target_result, {:ok, :wrote}}, 2_000
     end
   end
+
+  # #594 — the positional selector. A single per-pid counter cannot say
+  # "fault the auto-open, not the persist that precedes it" (both are
+  # `BusyRetry.run` in the same Session.Server pid, and the persist succeeds
+  # ⟺ the open never faults). `fire_on: k` lets the first k-1 fault-CHECKS in
+  # the pid ride through, then fires from the k-th — so a test can skip past
+  # the persist's checks and land the fault squarely on the open. A "check" is
+  # one `maybe_inject_fault/0` at the top of a `run/1` attempt.
+  describe "arm_faults/3 with fire_on: (positional selector, #594)" do
+    test "fire_on: k rides out the first k-1 checks, then degrades from the k-th" do
+      BusyRetry.arm_faults(self(), 10_000, fire_on: 3)
+      on_exit(fn -> BusyRetry.disarm_faults(self()) end)
+
+      # Checks 1 and 2 fall inside the pre-fire window — each run rides
+      # through and its op succeeds (one check per run, op succeeds attempt 1).
+      assert BusyRetry.run(fn -> {:ok, :wrote} end) == {:ok, :wrote}
+      assert BusyRetry.run(fn -> {:ok, :wrote} end) == {:ok, :wrote}
+
+      # The 3rd check is the fire point: this run faults on every attempt for
+      # the whole budget and degrades — proving the skip window is exactly 2.
+      assert BusyRetry.run(fn -> {:ok, :wrote} end) == {:error, :db_unavailable}
+    end
+  end
 end
