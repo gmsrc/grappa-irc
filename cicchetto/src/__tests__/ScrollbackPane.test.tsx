@@ -4096,6 +4096,35 @@ describe("ScrollbackPane", () => {
       expect(scrollIntoViewSpy).not.toHaveBeenCalled();
     });
 
+    // #608 step 3 (characterization for the applier funnel) — the W1 overlay
+    // RESTORE write. When a covering overlay opens the pane's scrollTop is
+    // captured; if the ref-keyed <For> then resets it to 0 under the overlay (a
+    // message arriving beneath a modal), the overlay effect re-asserts the
+    // captured px across rAF×2. This pins that restore write observably BEFORE
+    // the applier extracts it into its own `applyOverlayRestore` entrypoint (W1
+    // restores on BOTH refcount edges, so it can't reuse the commit-frame
+    // overlay-freeze dispatch which requires `isOverlayFrozen()`). scrollIntoView
+    // is spied no-op by the block's beforeEach, so the mount tail-follow can't
+    // overwrite the restore.
+    it("re-asserts the captured scrollTop across the overlay edge (the W1 restore)", async () => {
+      seedRows();
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+      await flushRaf();
+
+      // Reader parked at 250px.
+      Object.defineProperty(list, "scrollTop", { value: 250, writable: true, configurable: true });
+
+      // Overlay opens → the effect captures scrollTop (250) on the open edge.
+      pushOverlay(null);
+      // The ref-keyed <For> resets scrollTop to 0 under the overlay.
+      list.scrollTop = 0;
+      await flushRaf();
+
+      // The overlay restore re-asserts the captured 250 (same key).
+      expect(list.scrollTop).toBe(250);
+    });
+
     // Regression (review PLAUSIBLE): a rapid close→reopen of a covering
     // overlay (refcount 1→0→1) — one modal closing as another opens in the
     // same tick, e.g. /names dismissed by a nick-click that opens a query
