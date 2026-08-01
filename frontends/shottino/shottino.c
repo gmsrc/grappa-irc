@@ -15057,10 +15057,77 @@ static void event_loop(struct app *app) {
  * while a usage ERROR goes to stderr and exits 2 — the distinction every
  * other CLI makes, and the one that lets a packaging smoke test tell
  * "the binary runs" apart from "the binary is broken". */
+/* Read a password from the terminal with the echo turned off.
+ *
+ * Returns false when there is no terminal to ask (a service manager, a
+ * pipe, a cron job) — the caller then has to have got it some other way,
+ * and says so rather than blocking forever on a tty nobody is at.
+ *
+ * Runs before ncurses does: authentication finishes before event_loop
+ * calls initscr, so the terminal is still an ordinary one here. */
+static bool read_password_tty(const char *prompt, char *out, size_t out_sz) {
+    if (!isatty(STDIN_FILENO)) return false;
+    FILE *tty = fopen("/dev/tty", "r+");
+    if (!tty) return false;
+    struct termios old, quiet;
+    bool hushed = tcgetattr(fileno(tty), &old) == 0;
+    if (hushed) {
+        quiet = old;
+        quiet.c_lflag &= (tcflag_t)~ECHO;
+        hushed = tcsetattr(fileno(tty), TCSAFLUSH, &quiet) == 0;
+    }
+    fputs(prompt, tty);
+    fflush(tty);
+    char *got = fgets(out, (int)out_sz, tty);
+    if (hushed) tcsetattr(fileno(tty), TCSAFLUSH, &old);
+    /* The newline the user typed was not echoed, so print one or the
+     * next output lands on the same line as the prompt. */
+    fputs("\n", tty);
+    fclose(tty);
+    if (!got) {
+        out[0] = 0;
+        return false;
+    }
+    out[strcspn(out, "\r\n")] = 0;
+    return out[0] != 0;
+}
+
+/* Where the account password comes from, in order of preference.
+ *
+ * A password on the command line is readable by every other user on the
+ * host for as long as the process runs — /proc/<pid>/cmdline is world
+ * readable without hidepid, ps shows it to anyone, and the shell writes
+ * it to history. The --ircd bridge already knew this and took its
+ * secret from the environment; the account password, the more valuable
+ * of the two, was documented as a positional in the usage text.
+ *
+ * It still WORKS as a positional, because breaking every existing
+ * invocation and every service file over this would be its own outage —
+ * but it says what it costs, once, on stderr where a script will not
+ * eat it. */
+static bool resolve_password(const char *from_argv, char *out, size_t out_sz) {
+    if (from_argv) {
+        snprintf(out, out_sz, "%s", from_argv);
+        fprintf(stderr,
+                "shottino: the password is on the command line, where every user on this "
+                "host can read it (ps, /proc/<pid>/cmdline) and your shell has already "
+                "written it to history.\n"
+                "          Prefer SHOTTINO_PASSWORD in the environment, or leave it out "
+                "and be asked for it.\n");
+        return true;
+    }
+    const char *env = getenv("SHOTTINO_PASSWORD");
+    if (env && env[0]) {
+        snprintf(out, out_sz, "%s", env);
+        return true;
+    }
+    return read_password_tty("grappa password: ", out, out_sz);
+}
+
 static void print_usage(FILE *out, const char *prog) {
     fprintf(out, "shottino %s — a terminal client for grappa\n\n", SHOTTINO_VERSION);
-    fprintf(out, "usage: %s [--auto|--user|--visitor] https://grappa.example.net IDENTIFIER PASSWORD\n", prog);
-    fprintf(out, "       %s --user --login-email user@example.net https://grappa.example.net PASSWORD\n", prog);
+    fprintf(out, "usage: %s [--auto|--user|--visitor] https://grappa.example.net IDENTIFIER [PASSWORD]\n", prog);
+    fprintf(out, "       %s --user --login-email user@example.net https://grappa.example.net [PASSWORD]\n", prog);
     fprintf(out, "       %s --share https://grappa.example.net/share/<token>\n", prog);
     fprintf(out, "\n");
     fprintf(out, "  --auto           let the server classify the identifier (default)\n");
@@ -15085,12 +15152,20 @@ static void print_usage(FILE *out, const char *prog) {
     fprintf(out, "                   started, and a daemon that forks away looks like a crash.\n");
     fprintf(out, "  --help, -h       show this help and exit\n");
     fprintf(out, "\n");
+    fprintf(out, "PASSWORD is optional and better left out: without it shottino reads\n");
+    fprintf(out, "SHOTTINO_PASSWORD, and asks the terminal if that is unset too. On the command\n");
+    fprintf(out, "line it is readable by every user on the host (ps, /proc/<pid>/cmdline) for as\n");
+    fprintf(out, "long as the client runs, and your shell has already written it to history.\n");
+    fprintf(out, "\n");
     fprintf(out, "examples:\n");
-    fprintf(out, "  shottino https://grappa.example.net vjt hunter2\n");
-    fprintf(out, "  shottino --user --login-email vjt@example.net https://grappa.example.net hunter2\n");
-    fprintf(out, "  shottino --ircd=6668 https://grappa.example.net vjt hunter2   # then: /connect localhost 6668\n");
+    fprintf(out, "  shottino https://grappa.example.net vjt              # asks for the password\n");
+    fprintf(out, "  SHOTTINO_PASSWORD=... shottino https://grappa.example.net vjt\n");
+    fprintf(out, "  shottino --user --login-email vjt@example.net https://grappa.example.net\n");
+    fprintf(out, "  shottino --ircd=6668 https://grappa.example.net vjt   # then: /connect localhost 6668\n");
     fprintf(out, "\n");
     fprintf(out, "environment:\n");
+    fprintf(out, "  SHOTTINO_PASSWORD    the grappa account password, so it stays off the command\n");
+    fprintf(out, "                       line and out of ps and shell history.\n");
     fprintf(out, "  SHOTTINO_IRCD_PASS   password downstream IRC clients must send with --ircd.\n");
     fprintf(out, "                       REQUIRED to bind anything but a loopback address, since a\n");
     fprintf(out, "                       bridge hands over the whole IRC session to whoever connects.\n");
@@ -15272,8 +15347,12 @@ int main(int argc, char **argv) {
         }
     }
     bool share_mode = strcmp(mode, "share") == 0;
-    int expected = share_mode ? 1 : (login_override ? 2 : 3);
-    if (positional_count != expected) {
+    /* The password is now OPTIONAL as a positional: it may come from
+     * SHOTTINO_PASSWORD or from a prompt instead. So each shape has a
+     * minimum and a maximum rather than one exact count. */
+    int need = share_mode ? 1 : (login_override ? 1 : 2);
+    int most = share_mode ? 1 : need + 1;
+    if (positional_count < need || positional_count > most) {
         /* Usage ERROR: stderr + exit 2. One definition of the text,
          * shared with --help, so the two cannot drift. */
         print_usage(stderr, argv[0]);
@@ -15348,12 +15427,28 @@ int main(int argc, char **argv) {
         free(share_token);
     } else {
         const char *identifier = login_override ? login_override : positional[1];
-        const char *password = login_override ? positional[1] : positional[2];
+        int pw_slot = login_override ? 1 : 2;
+        const char *pw_argv = positional_count > pw_slot ? positional[pw_slot] : NULL;
+        char password[256];
+        if (!resolve_password(pw_argv, password, sizeof(password))) {
+            fprintf(stderr, "shottino: no password. Give it as SHOTTINO_PASSWORD, as the last "
+                            "argument, or run where a terminal can ask you for it.\n");
+            pthread_cond_destroy(&app->jobs_cond);
+            pthread_mutex_destroy(&app->jobs_lock);
+            pthread_mutex_destroy(&app->ws_lock);
+            pthread_mutex_destroy(&app->lock);
+            SSL_CTX_free(app->ssl_ctx);
+            free(app);
+            return 2;
+        }
         if (!login_override && strchr(identifier, '@') == NULL) snprintf(app->login_nick, sizeof(app->login_nick), "%s", identifier);
         char *login_id = login_identifier_for_mode(mode, identifier);
         startup("authenticating as %s", login_id);
         authed = attach_or_login(app, login_id, password);
         free(login_id);
+        /* Out of memory the moment it is spent. It cannot be taken out
+         * of argv, but it need not sit in the heap for the session. */
+        memset(password, 0, sizeof(password));
     }
     if (!authed) {
         pthread_cond_destroy(&app->jobs_cond);

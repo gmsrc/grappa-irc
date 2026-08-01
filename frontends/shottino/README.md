@@ -128,17 +128,23 @@ says there is more; it reads `(paused)` while you hold it.
 
 ## Bridging a normal IRC client (`--ircd`)
 
-`shottino --ircd https://grappa.example.net you password` runs headless and
-listens as an IRC **server**, so irssi, hexchat, weechat or anything else can
-connect to it and reach grappa through it. No terminal is opened, which is why
-it works over ssh, in a service unit, or in a container with no tty.
+`shottino --ircd https://grappa.example.net you` runs headless and listens as
+an IRC **server**, so irssi, hexchat, weechat or anything else can connect to
+it and reach grappa through it. No terminal is opened, which is why it works
+over ssh, in a service unit, or in a container with no tty.
 
 ```
-shottino --ircd              https://grappa.example.net you password   # 127.0.0.1:6667
-shottino --ircd=6668         https://grappa.example.net you password
-shottino --ircd=10.0.0.2     https://grappa.example.net you password
-shottino --ircd=[::1]:6668   https://grappa.example.net you password
+export SHOTTINO_PASSWORD=...   # headless: there is no terminal to ask
+shottino --ircd              https://grappa.example.net you   # 127.0.0.1:6667
+shottino --ircd=6668         https://grappa.example.net you
+shottino --ircd=10.0.0.2     https://grappa.example.net you
+shottino --ircd=[::1]:6668   https://grappa.example.net you
 ```
+
+Headless is exactly where the environment variable earns its keep: with no tty
+there is nobody to prompt, so without `SHOTTINO_PASSWORD` the only remaining
+option is the command line — where `ps` shows it to every user on the host for
+as long as the bridge runs, which for a bridge is *permanently*.
 
 The argument is a port, an address, or address:port, v4 or v6; a bare IPv6
 address needs no brackets (`--ircd=::1`) but one **with** a port does
@@ -627,14 +633,28 @@ make install
 ## Run
 
 ```sh
-frontends/shottino/shottino --user https://grappa.example.net USER PASSWORD
+frontends/shottino/shottino --user https://grappa.example.net USER
+```
+
+It asks for the password. Or put it in the environment, which is what a
+service file wants:
+
+```sh
+SHOTTINO_PASSWORD=... frontends/shottino/shottino --user https://grappa.example.net USER
 ```
 
 Or use an explicit grappa login email unrelated to the IRC nickname:
 
 ```sh
-frontends/shottino/shottino --user --login-email user@example.net https://grappa.example.net PASSWORD
+frontends/shottino/shottino --user --login-email user@example.net https://grappa.example.net
 ```
+
+**Don't put the password on the command line.** It still works, and it still
+warns you, because breaking every existing invocation over it would be its own
+outage — but for as long as the client runs it is readable by every other user
+on the host through `ps` and `/proc/<pid>/cmdline`, and your shell has already
+written it to history. The order is: the argument if you insist,
+`SHOTTINO_PASSWORD` if not, and a prompt if neither.
 
 Auth modes:
 
