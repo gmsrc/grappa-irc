@@ -1275,10 +1275,8 @@ static void log_push_locked(struct app *app, char *line, bool mention, bool pend
     /* Headless there is no window to file it under and nobody to read
      * it: the same line goes to stderr, which is where a service manager
      * or a terminal running --ircd will look for it. */
-    /* Headless there is no window and nobody to read it; before the
-     * screen exists there is a window but no frame has drawn yet. Both
-     * mean the same thing: say it on stderr or it is said nowhere. */
-    if (app->headless || !app->ui_active) fprintf(stderr, "%s\n", line);
+    /* Headless there is no window and nobody to read it. */
+    if (app->headless) fprintf(stderr, "%s\n", line);
 }
 
 /* Does row `i` belong in the window whose scope is `scope`? A row with
@@ -1323,6 +1321,32 @@ static void log_line_mention(struct app *app, bool mention, const char *fmt, ...
     pthread_mutex_lock(&app->lock);
     log_push_locked(app, s, mention, false);
     pthread_mutex_unlock(&app->lock);
+}
+
+/* A failure the user must see even if no frame has drawn yet.
+ *
+ * log_line files it in the ring, which is where it belongs once the
+ * screen exists. Before that the ring is invisible — it is drawn by a
+ * frame that has not happened — so a failure is ALSO printed to stderr.
+ *
+ * Only a failure. Making every log line do this dumped the whole boot
+ * transcript onto the terminal ahead of the first frame: connecting,
+ * joining, scrollback loaded, grants read, a screenful of ordinary
+ * progress that the UI was about to show anyway. The rule is not "the
+ * screen is not up yet", it is "this one is worth interrupting for". */
+static void log_failure(struct app *app, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+static void log_failure(struct app *app, const char *fmt, ...) {
+    char msg[MAX_LINE];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    log_line(app, "%s", msg);
+    /* Headless, log_line already reached stderr; saying it twice would
+     * only make the log harder to read. */
+    if (!app->ui_active && !app->headless) startup("%s", msg);
 }
 
 static void add_pending_echo(struct app *app, const char *network, const char *channel, const char *sender, const char *body) {
@@ -1859,7 +1883,7 @@ static struct http_response http_request_raw(struct app *app, const char *method
         char why[512];
         snprintf(why, sizeof(why), "cannot reach %.128s:%.16s — %.128s", app->url.host,
                  app->url.port, strerror(errno));
-        log_line(app, "%s", why);
+        log_failure(app, "%s", why);
         return http_failed(why);
     }
     char auth[MAX_TOKEN + 64] = "";
@@ -1881,8 +1905,8 @@ static struct http_response http_request_raw(struct app *app, const char *method
     if (ok && body_len) ok = conn_write_all(&conn, body, body_len);
     if (!ok) {
         conn_close(&conn);
-        log_line(app, "lost the connection to %s while sending %s %.80s", app->url.host, method,
-                 path);
+        log_failure(app, "lost the connection to %s while sending %s %.80s", app->url.host,
+                    method, path);
         return http_failed("connection lost mid-request");
     }
     struct http_response resp = http_read_response(&conn);
@@ -1893,7 +1917,7 @@ static struct http_response http_request_raw(struct app *app, const char *method
      * mid-session is a proxy or a restart mangling one response, and the
      * cure for one bad answer is not to take the client down. */
     if (resp.status == 0)
-        log_line(app, "unreadable reply from %s to %s %.80s", app->url.host, method, path);
+        log_failure(app, "unreadable reply from %s to %s %.80s", app->url.host, method, path);
     return resp;
 }
 
