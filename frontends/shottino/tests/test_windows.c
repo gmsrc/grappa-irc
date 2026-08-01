@@ -1082,6 +1082,42 @@ TEST(two_identities_get_two_bot_directories) {
 
 /* "Approve always" that forgets at the next restart is not a grant, it
  * is a longer session. */
+/* Quitting has to be able to tell the model thread apart from a corpse.
+ *
+ * llm_stop was declared and read and assigned NOWHERE, so shutdown freed
+ * every log line, destroyed app->lock and freed the app while that thread
+ * was still parked on a condvar — and there was no way to ask whether it
+ * had gone. An idle thread must notice the stop and SAY so, which is the
+ * signal the shutdown path waits on before it frees anything. */
+TEST(the_model_thread_announces_that_it_stopped) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    pthread_mutex_init(&app->llm_lock, NULL);
+    pthread_cond_init(&app->llm_cond, NULL);
+
+    pthread_t t;
+    CHECK(pthread_create(&t, NULL, llm_main, app) == 0);
+
+    /* Generous deadline: this asserts that the handshake HAPPENS, not how
+     * quickly — a slow CI box must not turn into a red build. */
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 5;
+    pthread_mutex_lock(&app->llm_lock);
+    app->llm_stop = true;
+    pthread_cond_broadcast(&app->llm_cond);
+    while (!app->llm_exited)
+        if (pthread_cond_timedwait(&app->llm_cond, &app->llm_lock, &deadline) == ETIMEDOUT) break;
+    bool exited = app->llm_exited;
+    pthread_mutex_unlock(&app->llm_lock);
+
+    CHECK(exited);
+    pthread_join(t, NULL);
+    pthread_cond_destroy(&app->llm_cond);
+    pthread_mutex_destroy(&app->llm_lock);
+    free_app(app);
+}
+
 /* Retiring a row must carry its whole row with it.
  *
  * Six arrays are parallel-indexed: the text, mention, pending-echo,
@@ -1434,6 +1470,7 @@ int main(void) {
     RUN(a_grant_is_per_person_and_per_tool);
     RUN(a_memory_filename_is_built_not_taken);
     RUN(two_identities_get_two_bot_directories);
+    RUN(the_model_thread_announces_that_it_stopped);
     RUN(retiring_an_echo_moves_every_row_not_just_its_text);
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);

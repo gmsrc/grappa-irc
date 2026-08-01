@@ -946,6 +946,10 @@ struct app {
     size_t llm_head, llm_tail;
     bool llm_busy;
     bool llm_stop;
+    /* Set by the llm thread as the LAST thing it does, so shutdown can
+     * tell "it noticed and left" from "it is still inside a model call"
+     * without blocking on a join that may not return for minutes. */
+    bool llm_exited;
     /* CTCP pings we are waiting on.
      *
      * The stamp travels in the payload and comes back in the reply, so
@@ -7531,6 +7535,10 @@ static void *llm_main(void *arg) {
         while (app->llm_head == app->llm_tail && !app->llm_stop)
             pthread_cond_wait(&app->llm_cond, &app->llm_lock);
         if (app->llm_stop) {
+            /* Announced before unlocking: shutdown is waiting on exactly
+             * this flag to decide whether it may free the app. */
+            app->llm_exited = true;
+            pthread_cond_broadcast(&app->llm_cond);
             pthread_mutex_unlock(&app->llm_lock);
             return NULL;
         }
@@ -15047,6 +15055,51 @@ int main(int argc, char **argv) {
     pthread_cond_signal(&app->jobs_cond);
     pthread_mutex_unlock(&app->jobs_lock);
     pthread_join(app->worker, NULL);
+    /* The model thread. It was never stopped and never joined: llm_stop
+     * was declared, read in the loop below, and assigned NOWHERE, so
+     * shutdown went on to free every log line, destroy app->lock, free
+     * the SSL_CTX and free(app) while that thread was either parked on a
+     * condvar it was about to lose or halfway through a model call — and
+     * it would come back to log_line on a destroyed mutex and SSL_new on
+     * a freed context.
+     *
+     * Waiting unconditionally is not the fix either: a turn in flight
+     * takes seconds to MINUTES by design, and a client that hangs that
+     * long on quit is a client people will SIGKILL, which lands in the
+     * same place.
+     *
+     * So: ask it to stop, give it a moment to say it did, and let the
+     * answer decide. Idle — the common case — it wakes, sets the flag and
+     * is joined in microseconds, and everything is freed as before. Mid
+     * call, nothing is freed at all: _exit hands the whole address space
+     * back at once, which no running thread can observe. Leaking at
+     * process exit costs nothing; freeing underneath a live thread costs
+     * a crash on the way out. */
+    if (app->llm_thread_started) {
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += 2;
+        pthread_mutex_lock(&app->llm_lock);
+        app->llm_stop = true;
+        pthread_cond_broadcast(&app->llm_cond);
+        while (!app->llm_exited)
+            if (pthread_cond_timedwait(&app->llm_cond, &app->llm_lock, &deadline) == ETIMEDOUT) break;
+        bool exited = app->llm_exited;
+        pthread_mutex_unlock(&app->llm_lock);
+        if (exited) {
+            pthread_join(app->llm_thread, NULL);
+        } else {
+            if (app->ws_connected) conn_close(&app->ws);
+            /* Said out loud: quitting mid-answer is a thing the user did,
+             * and a client that vanishes without explaining looks like it
+             * crashed. The terminal is already restored by here. */
+            fprintf(stderr, "shottino: a model call was still running — exiting without waiting for it\n");
+            fflush(NULL);
+            _exit(0);
+        }
+        pthread_cond_destroy(&app->llm_cond);
+        pthread_mutex_destroy(&app->llm_lock);
+    }
     if (app->ws_connected) conn_close(&app->ws);
     /* After the worker is joined, so nothing is still writing into it. */
     view_dir_cleanup(app);
