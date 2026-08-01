@@ -1430,6 +1430,73 @@ describe("ScrollbackPane", () => {
     });
   });
 
+  // #608 step 3 (characterization for the applier funnel) — the W2/W3
+  // `scrollToActivation` CALL-SITES (cold-mount, channel switch, visibility-
+  // return, resize). They are about to be routed through a thin
+  // `applyActivation(mode, withHide)` entrypoint that resolves the
+  // overlay-freeze ▸ activation precedence via `resolveIntent` and delegates to
+  // `scrollToActivation` ONLY when the activation kind wins — behaviour-identical
+  // because `scrollToActivation` already bails on `isOverlayFrozen()` (so the
+  // overlay-freeze-wins branch is the same no-op either way). These pin the
+  // CURRENT call-site behaviour observably BEFORE the extraction:
+  //   * a channel switch still scrolls the ARRIVING pane — isolable: #a and #b
+  //     have the same row count, so `rows().length` is unchanged and the
+  //     length-effect does NOT fire; only the key-effect activation can move it.
+  //   * a cold mount into an unread window still jumps to the frozen divider
+  //     (the #168 marker branch — `block: "start"`), EXACT.
+  // The frozen-no-op HALF is already locked by the #219-general resize cases
+  // (`a resize WHILE a covering overlay is open does NOT snap to the tail`),
+  // which post-refactor exercise `applyActivation`'s overlay-freeze gate.
+  describe("#608 — activation call-sites fire the activation scroll (W2/W3)", () => {
+    let scrollIntoViewSpy: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      scrollIntoViewSpy = vi.fn();
+      // biome-ignore lint/suspicious/noExplicitAny: jsdom Element type compat
+      (Element.prototype as any).scrollIntoView = scrollIntoViewSpy;
+    });
+    // rAF drain — scrollToActivation schedules its scroll inside a double-rAF
+    // (geometry-after-layout idiom); mirrors the #219-general block's helper.
+    const flushRaf = async (): Promise<void> => {
+      await new Promise((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => r(undefined))),
+      );
+    };
+
+    it("a channel switch fires the arriving pane's activation tail scroll", async () => {
+      const [chan, setChan] = createSignal("#a");
+      setScrollback({ "freenode #a": fixture, "freenode #b": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName={chan()} kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+      // jsdom leaves scrollTo undefined; the W9 key-change interrupt effect
+      // (interruptSmoothScroll) calls it on the switch. Stub a no-op so the
+      // switch completes (the .scrollback node is stable across the switch).
+      list.scrollTo = vi.fn();
+      await flushRaf();
+      // #b has the SAME row count as #a → rows().length unchanged → the
+      // length-effect does NOT fire; only the key-effect activation moves the
+      // arriving pane. Isolates the W2/W3 call-site from the length-effect funnel.
+      scrollIntoViewSpy.mockClear();
+
+      setChan("#b");
+      await flushRaf();
+
+      // No cursor on #b → no divider → the marker-or-tail activation tails.
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: "end" });
+    });
+
+    it("a cold mount into an unread window jumps to the frozen divider (#168 marker branch)", async () => {
+      // Cursor mid-list (id 1) → ids 2,3 unread → the rows() memo injects the
+      // divider, and the cold-mount marker-or-tail activation scrolls to it
+      // (block: "start"), NOT the tail.
+      seedReadCursor("freenode", "#grappa", 1);
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      await flushRaf();
+
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: "start" });
+    });
+  });
+
   // #310 — the scroll-to-bottom GESTURE (floating button + #243 re-tap)
   // must advance the server read cursor to the NEWEST rendered message.
   // Pre-#310 both funnelled through the pure `scrollToBottom()` helper,
