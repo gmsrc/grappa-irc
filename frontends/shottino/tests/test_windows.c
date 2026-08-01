@@ -207,7 +207,7 @@ static size_t menu_for(struct app *app, const char *nick, struct overlay_item *i
     app->overlay.kind = OVERLAY_MENU;
     snprintf(app->overlay.nick, sizeof(app->overlay.nick), "%s", nick);
     snprintf(app->overlay.body, sizeof(app->overlay.body), "%s", "something they said");
-    return overlay_items(app, items, max);
+    return overlay_items_locked(app, items, max);
 }
 
 /* Does any row in the buffer say this? Used where a row is not

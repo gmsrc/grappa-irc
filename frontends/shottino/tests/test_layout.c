@@ -483,7 +483,7 @@ TEST(menu_offers_reply_and_query_for_the_clicked_nick) {
     app->overlay.kind = OVERLAY_MENU;
     snprintf(app->overlay.nick, sizeof(app->overlay.nick), "alice");
     snprintf(app->overlay.body, sizeof(app->overlay.body), "something she said");
-    CHECK_LONG(overlay_items(app, items, 64), 6);
+    CHECK_LONG(overlay_items_locked(app, items, 64), 6);
     CHECK_STR(items[0].label, "Reply to alice");
     CHECK_LONG(items[0].action, ACT_REPLY);
     CHECK_STR(items[1].label, "Open query with alice");
@@ -498,7 +498,7 @@ TEST(menu_offers_reply_and_query_for_the_clicked_nick) {
     /* A roster row is a person with nothing said: replying to it would
      * be an entry that fails when chosen, so it is not offered. */
     app->overlay.body[0] = 0;
-    CHECK_LONG(overlay_items(app, items, 64), 5);
+    CHECK_LONG(overlay_items_locked(app, items, 64), 5);
     CHECK_LONG(items[0].action, ACT_QUERY);
     CHECK_LONG(items[1].action, ACT_WHOIS);
     CHECK_LONG(items[2].action, ACT_PING);
@@ -508,7 +508,7 @@ TEST(menu_offers_reply_and_query_for_the_clicked_nick) {
     /* No nick — a join row, a server notice — offers nothing rather than
      * a menu that acts on "". */
     app->overlay.nick[0] = 0;
-    CHECK_LONG(overlay_items(app, items, 64), 0);
+    CHECK_LONG(overlay_items_locked(app, items, 64), 0);
 
     pthread_mutex_destroy(&app->lock);
     free(app);
@@ -530,7 +530,7 @@ TEST(reply_picker_lists_newest_first_and_filters) {
     seed_log(app, "[azzurra/#chan] 10:04 <carol> last word");
 
     app->overlay.kind = OVERLAY_REPLY;
-    size_t n = overlay_items(app, items, 64);
+    size_t n = overlay_items_locked(app, items, 64);
     /* Newest first, this window only, and the join row is not something
      * you can reply to. */
     CHECK_LONG(n, 3);
@@ -540,17 +540,17 @@ TEST(reply_picker_lists_newest_first_and_filters) {
 
     /* The filter matches a nick... */
     snprintf(app->overlay.filter, sizeof(app->overlay.filter), "ali");
-    CHECK_LONG(overlay_items(app, items, 64), 1);
+    CHECK_LONG(overlay_items_locked(app, items, 64), 1);
     CHECK_STR(items[0].nick, "alice");
 
     /* ...or the message text, which is how you find a line whose author
      * you have forgotten. */
     snprintf(app->overlay.filter, sizeof(app->overlay.filter), "coffee");
-    CHECK_LONG(overlay_items(app, items, 64), 1);
+    CHECK_LONG(overlay_items_locked(app, items, 64), 1);
     CHECK_STR(items[0].nick, "bob");
 
     snprintf(app->overlay.filter, sizeof(app->overlay.filter), "zzz");
-    CHECK_LONG(overlay_items(app, items, 64), 0);
+    CHECK_LONG(overlay_items_locked(app, items, 64), 0);
 
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
     pthread_mutex_destroy(&app->lock);
@@ -569,7 +569,7 @@ TEST(reply_picker_offers_every_line_not_one_per_nick) {
     seed_log(app, "[azzurra/#chan] 10:02 <bob> three");
     seed_log(app, "[azzurra/#chan] 10:03 <bob> four");
     app->overlay.kind = OVERLAY_REPLY;
-    size_t n = overlay_items(app, items, 64);
+    size_t n = overlay_items_locked(app, items, 64);
     /* Every line, newest first. bob saying three things in a row used to
      * collapse to his most recent, which reads well and answers the
      * wrong question: the chosen line is QUOTED into the reply, so the
@@ -602,7 +602,7 @@ TEST(reply_picker_stops_at_twenty) {
         seed_log(app, line);
     }
     app->overlay.kind = OVERLAY_REPLY;
-    CHECK_LONG(overlay_items(app, items, 64), PICKER_MAX);
+    CHECK_LONG(overlay_items_locked(app, items, 64), PICKER_MAX);
     /* Newest first, so the cap drops the OLDEST — the twenty you can
      * still see, not the twenty you have forgotten. */
     CHECK(strstr(items[0].label, "message 29") != NULL);
@@ -632,7 +632,7 @@ TEST(media_picker_lists_this_windows_pictures_once_each) {
 
     app->overlay.kind = OVERLAY_MEDIA;
     app->overlay.pick_action = ACT_VIEW;
-    size_t n = overlay_items(app, items, 64);
+    size_t n = overlay_items_locked(app, items, 64);
     /* cat.png (repeated, listed once at its most recent mention),
      * clip.mp4 — and NOT the html, nor the other window's picture. */
     CHECK_LONG(n, 2);
@@ -645,12 +645,12 @@ TEST(media_picker_lists_this_windows_pictures_once_each) {
 
     /* Opened by /preview instead, the same list previews. */
     app->overlay.pick_action = ACT_PREVIEW;
-    CHECK_LONG(overlay_items(app, items, 64), 2);
+    CHECK_LONG(overlay_items_locked(app, items, 64), 2);
     CHECK_LONG(items[0].action, ACT_PREVIEW);
 
     /* Typing filters by URL. */
     snprintf(app->overlay.filter, sizeof(app->overlay.filter), "mp4");
-    CHECK_LONG(overlay_items(app, items, 64), 1);
+    CHECK_LONG(overlay_items_locked(app, items, 64), 1);
     CHECK_STR(items[0].body, "https://example.net/clip.mp4");
 
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);

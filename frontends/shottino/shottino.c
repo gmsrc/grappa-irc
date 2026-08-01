@@ -477,7 +477,7 @@ struct msg_region {
  *
  * Two things asked for a floating list — a right-click menu on a message
  * and a Ctrl-R reply picker — so there is ONE, with a kind. The items are
- * built by overlay_items(), called by BOTH the draw and the activation:
+ * built by overlay_items_locked(), called by BOTH the draw and the activation:
  * a list you draw from one source and act on from another is a list that
  * eventually acts on the row above the one you clicked. Same rule as the
  * chat area's measure/draw agreement, for the same reason. */
@@ -5686,7 +5686,7 @@ static void ws_pump(struct app *app) {
  * an image stay blank in its model, so it leaves them alone.
  *
  * Caller holds app->lock. */
-static void draw_inline_media(struct inline_media *m, int y, int x, int skip_rows,
+static void draw_inline_media_locked(struct inline_media *m, int y, int x, int skip_rows,
                               int max_rows, int max_cols) {
     if (m->state != IM_READY || m->rows <= 0) return;
     if (skip_rows < 0) skip_rows = 0;
@@ -5781,7 +5781,7 @@ static const char *roster_hint(const struct app *app, int width) {
  *
  * Caller holds app->lock, which draw() holds for the whole frame, so a
  * worker cannot flip the state between the two passes. */
-static int media_extra_rows(const struct inline_media *m) {
+static int media_extra_rows_locked(const struct inline_media *m) {
     if (!m) return 0;
     switch (m->state) {
     case IM_READY:
@@ -5972,7 +5972,7 @@ static void hide_media_url(struct app *app, const char *url) {
 
 /* Record the screen rectangle of a media link so a later mouse event can map
  * back to its URL. Caller holds app->lock (draw path). */
-static void add_link_region(struct app *app, int y0, int y1, int x0, int x1,
+static void add_link_region_locked(struct app *app, int y0, int y1, int x0, int x1,
                             const char *url, enum media_kind kind) {
     if (app->link_region_count >= MAX_LINK_REGIONS) return;
     struct link_region *r = &app->link_regions[app->link_region_count++];
@@ -6001,7 +6001,7 @@ static bool channel_is_moderated(const struct window *w) {
  * the lesson the chat area learned the hard way. Caller holds app->lock.
  *
  * `y < 0` measures without drawing. Returns the total row count. */
-static void add_nick_region(struct app *app, int y, int x0, int x1, const char *nick);
+static void add_nick_region_locked(struct app *app, int y, int x0, int x1, const char *nick);
 
 static size_t draw_member_list(struct app *app, struct window *w, int y, int x, int width,
                                int height, size_t offset) {
@@ -6031,7 +6031,7 @@ static size_t draw_member_list(struct app *app, struct window *w, int y, int x, 
             /* Recorded on the DRAW pass only: the measuring call passes a
              * negative y and paints nothing, and a region for a row that
              * was never drawn is a click that hits the wrong nick. */
-            add_nick_region(app, line_y, x, x + width - 1, w->members[i].nick);
+            add_nick_region_locked(app, line_y, x, x + width - 1, w->members[i].nick);
         }
         row++;
     }
@@ -6047,7 +6047,7 @@ static size_t draw_member_list(struct app *app, struct window *w, int y, int x, 
  * measure/draw budget rules are unchanged, just applied per rectangle.
  *
  * Caller holds app->lock. */
-static size_t overlay_items(struct app *app, struct overlay_item *out, size_t max);
+static size_t overlay_items_locked(struct app *app, struct overlay_item *out, size_t max);
 
 /* Record a message row's rectangle plus who said it, so a right-click can
  * name it. Rows without a nick (joins, parts, server notices) are skipped:
@@ -6059,7 +6059,7 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
  * and the only difference is that this one has nothing they said. A
  * parallel array would be a second thing to keep in step for no new
  * behaviour. Caller holds app->lock (draw path). */
-static void add_nick_region(struct app *app, int y, int x0, int x1, const char *nick) {
+static void add_nick_region_locked(struct app *app, int y, int x0, int x1, const char *nick) {
     if (app->msg_region_count >= MAX_LINK_REGIONS) return;
     if (!nick || !nick[0]) return;
     struct msg_region *r = &app->msg_regions[app->msg_region_count++];
@@ -6239,7 +6239,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
                      * close enough that the reserved box rarely changes. */
                     media_fit_cells(4, 3, width - 4, box_rows, &m->cols, &m->rows);
                 }
-                heights[visible_count] += media_extra_rows(m);
+                heights[visible_count] += media_extra_rows_locked(m);
             }
             total_visible_lines += heights[visible_count];
             visible_count++;
@@ -6353,7 +6353,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
              * pictures: `kind` decides whether the click previews or hands
              * the URL to the browser. */
             if (url_tok[0])
-                add_link_region(app, msg_y, msg_y + draw_lines - 1, x + 1,
+                add_link_region_locked(app, msg_y, msg_y + draw_lines - 1, x + 1,
                                 x + width - 2, url_tok, mk);
             /* And every row that carries a nick is right-clickable. */
             add_msg_region(app, msg_y, msg_y + draw_lines - 1, x + 1, x + width - 2, app->log[i]);
@@ -6403,7 +6403,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
              * row's text has scrolled off entirely), clamped to the room
              * actually left. A one-line placeholder that has scrolled off
              * asks for nothing, which is what the measurement skipped. */
-            int want = media_extra_rows(m) - row_skip;
+            int want = media_extra_rows_locked(m) - row_skip;
             if (want < 0) want = 0;
             int spend = want < room ? want : room;
             /* The PICTURE is a target too, not just the link text above
@@ -6418,7 +6418,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
                  * two arrays cannot overlap. */
                 char murl[MAX_LINE];
                 snprintf(murl, sizeof(murl), "%s", m->url);
-                add_link_region(app, img_y, img_y + spend - 1, x + 2, x + width - 3, murl,
+                add_link_region_locked(app, img_y, img_y + spend - 1, x + 2, x + width - 3, murl,
                                 m->is_video ? MEDIA_VIDEO : MEDIA_IMAGE);
             }
             if (spend > 0) {
@@ -6433,7 +6433,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
                     /* Claimed by THIS frame, so the reconciliation at the
                      * end of draw() knows the placement is still wanted. */
                     m->painted_frame = app->frame_seq;
-                    draw_inline_media(m, img_y, x + 2, row_skip, spend, width - 4);
+                    draw_inline_media_locked(m, img_y, x + 2, row_skip, spend, width - 4);
                 } else if (m->state == IM_FAILED) {
                     draw_text(img_y, x + 2, width - 4, CP_MUTED, A_DIM,
                               "  [image could not be decoded — /open to view externally]");
@@ -6789,7 +6789,7 @@ static void draw(struct app *app) {
                       "Enter send · Esc discard · max %ds", RECORD_MAX_SECONDS);
     } else if (app->overlay.kind != OVERLAY_NONE) {
         struct overlay_item items[64];
-        size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
+        size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
         bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA;
         int box_w = picker ? (main_w > 76 ? 76 : main_w - 2) : 34;
         if (box_w > main_w - 2) box_w = main_w - 2;
@@ -9305,7 +9305,7 @@ static bool menu_add(struct overlay_item *out, size_t *n, size_t max, enum overl
     return *n < max;
 }
 
-static size_t overlay_items(struct app *app, struct overlay_item *out, size_t max) {
+static size_t overlay_items_locked(struct app *app, struct overlay_item *out, size_t max) {
     if (max == 0) return 0;
     struct overlay *ov = &app->overlay;
     size_t n = 0;
@@ -9583,7 +9583,7 @@ static void overlay_activate(struct app *app) {
     char body[MAX_LINE] = "";
     enum overlay_action action = ACT_NONE;
     pthread_mutex_lock(&app->lock);
-    size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
+    size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
     if (app->overlay.sel < n) {
         action = items[app->overlay.sel].action;
         snprintf(nick, sizeof(nick), "%s", items[app->overlay.sel].nick);
@@ -9721,7 +9721,7 @@ static bool overlay_key(struct app *app, int ch) {
     if (ch == KEY_UP || ch == KEY_DOWN) {
         struct overlay_item items[64];
         pthread_mutex_lock(&app->lock);
-        size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
+        size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
         if (n) {
             if (ch == KEY_DOWN) app->overlay.sel = (app->overlay.sel + 1) % n;
             else app->overlay.sel = app->overlay.sel == 0 ? n - 1 : app->overlay.sel - 1;
@@ -9768,7 +9768,7 @@ static bool open_media_picker(struct app *app, enum overlay_action action) {
     app->overlay.filter[0] = 0;
     app->overlay.sel = 0;
     app->overlay.top = 0;
-    size_t n = overlay_items(app, items, PICKER_MAX);
+    size_t n = overlay_items_locked(app, items, PICKER_MAX);
     if (n == 0) app->overlay.kind = OVERLAY_NONE;
     pthread_mutex_unlock(&app->lock);
     return n > 0;
@@ -13466,7 +13466,7 @@ static void handle_enter(struct app *app) {
 
 /* Topmost recorded media region containing screen cell (x, y), or NULL.
  * Caller holds app->lock. */
-static const struct link_region *region_at(struct app *app, int x, int y) {
+static const struct link_region *region_at_locked(struct app *app, int x, int y) {
     for (size_t i = 0; i < app->link_region_count; i++) {
         const struct link_region *r = &app->link_regions[i];
         if (y >= r->y0 && y <= r->y1 && x >= r->x0 && x <= r->x1) return r;
@@ -13507,7 +13507,7 @@ static void handle_mouse(struct app *app) {
         struct overlay_item items[64];
         bool hit = false;
         pthread_mutex_lock(&app->lock);
-        size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
+        size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
         /* A picker spends its first row on the filter, and its list may
          * be scrolled — so the row under the pointer is an offset from
          * `top`, not from the head of the list. */
@@ -13581,7 +13581,7 @@ static void handle_mouse(struct app *app) {
          * always underneath it. Asking in the other order would mean a
          * right-click on an image opened the sender's menu. */
         pthread_mutex_lock(&app->lock);
-        const struct link_region *mr = region_at(app, ev.x, ev.y);
+        const struct link_region *mr = region_at_locked(app, ev.x, ev.y);
         if (mr && mr->kind != MEDIA_NONE) {
             app->overlay.kind = OVERLAY_MENU;
             app->overlay.sel = 0;
@@ -13650,7 +13650,7 @@ static void handle_mouse(struct app *app) {
         if (ev.y >= tr->y0 && ev.y <= tr->y1 && ev.x >= tr->x0 && ev.x <= tr->x1)
             app->topic_hover = true;
     }
-    const struct link_region *r = region_at(app, ev.x, ev.y);
+    const struct link_region *r = region_at_locked(app, ev.x, ev.y);
     char url[MAX_LINE];
     bool is_video = false;
     enum media_kind kind = MEDIA_NONE;
