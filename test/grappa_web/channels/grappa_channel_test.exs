@@ -2708,7 +2708,13 @@ defmodule GrappaWeb.GrappaChannelTest do
 
       # Observable terminal: a typed error reply, NOT a crash — and the
       # channel process is still alive to serve the next push.
-      assert_reply(ref, :error, %{error: "close_failed"})
+      #
+      # QueryWindows.close routes the delete through BusyRetry.run, which
+      # retries against the test :busy_retry budget (config/test.exs — 300ms)
+      # before degrading to {:error, :db_unavailable}. The reply therefore
+      # lands at ~300ms, past assert_reply's 100ms default, so wait well past
+      # the budget for the deliberately-delayed terminal.
+      assert_reply(ref, :error, %{error: "close_failed"}, 2_000)
       assert Process.alive?(socket.channel_pid)
     end
 
