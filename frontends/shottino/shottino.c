@@ -952,6 +952,9 @@ struct app {
      * tell "it noticed and left" from "it is still inside a model call"
      * without blocking on a join that may not return for minutes. */
     bool llm_exited;
+    /* Said once: an over-long AGENT.md is a fact about a file, not
+     * about this turn. */
+    bool bot_prompt_warned;
     /* CTCP pings we are waiting on.
      *
      * The stamp travels in the payload and comes back in the reply, so
@@ -7354,6 +7357,16 @@ static void bot_memories_append(struct app *app, char *out, size_t out_sz) {
 
 /* The prompt a turn actually runs under. AGENT.md wins when it exists —
  * that is the point of having a file: it is the editable one. */
+/* What the notes need at the end of the prompt: the bodies plus the
+ * framing that says whose they are. AGENT.md is not allowed to spend it.
+ *
+ * Without this reservation, an AGENT.md the size of the buffer left
+ * bot_memories_append with one byte of room, so it appended NOTHING and
+ * every note the bot had written to itself vanished from its context —
+ * while /bot show went on counting them. A silent, total loss of a
+ * feature, caused by a file being long. */
+#define BOT_NOTES_RESERVE (BOT_MEMORY_BYTES + 512)
+
 static void bot_effective_prompt(struct app *app, char *out, size_t out_sz) {
     char dir[LLM_MAX_PATH], path[LLM_MAX_PATH + 16];
     bot_dir_path(app, dir, sizeof(dir));
@@ -7362,9 +7375,21 @@ static void bot_effective_prompt(struct app *app, char *out, size_t out_sz) {
     out[0] = 0;
     FILE *f = fopen(path, "r");
     if (f) {
-        size_t n = fread(out, 1, out_sz - 1, f);
+        size_t budget = out_sz > BOT_NOTES_RESERVE ? out_sz - BOT_NOTES_RESERVE : out_sz / 2;
+        size_t n = fread(out, 1, budget - 1, f);
         out[n] = 0;
+        /* Said once per session, not once per turn: it is a fact about a
+         * file the user has to go and edit, and repeating it every time
+         * the bot answers would bury the answers. Saying it NOWHERE is
+         * what made this invisible. */
+        bool more = fgetc(f) != EOF;
         fclose(f);
+        if (more && !app->bot_prompt_warned) {
+            app->bot_prompt_warned = true;
+            log_line(app, "/bot: AGENT.md is longer than %zu bytes — using the first %zu, "
+                          "and the rest is ignored so your notes still fit",
+                     budget - 1, budget - 1);
+        }
     }
     if (!out[0])
         snprintf(out, out_sz, "%s", app->bot_prompt[0] ? app->bot_prompt : app->llm.prompt);

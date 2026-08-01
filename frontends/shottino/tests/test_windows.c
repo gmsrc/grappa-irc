@@ -1459,6 +1459,63 @@ TEST(a_standing_grant_survives_a_restart) {
  *
  * Driven through handle_command, the door every keystroke and every
  * alias goes through, so this covers verbs nobody has written yet. */
+/* A long AGENT.md must not eat the bot's own notes.
+ *
+ * The prompt was read with `fread(out, 1, out_sz - 1, f)` — the whole
+ * buffer — so an AGENT.md that filled it left bot_memories_append one
+ * byte of room, and it appended NOTHING. Every note the bot had written
+ * to itself vanished from its context while /bot show went on counting
+ * them: a total, silent loss of the feature, caused by a file being
+ * long. */
+TEST(a_long_agent_md_leaves_room_for_the_notes) {
+    char dir[] = "/tmp/shottino-agent-test-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL);
+    char mem[512];
+    snprintf(mem, sizeof(mem), "%s/memories", dir);
+    CHECK(mkdir(mem, 0700) == 0);
+
+    struct app *app = window_app();
+    snprintf(app->bot_dir, sizeof(app->bot_dir), "%s", dir);
+
+    /* An AGENT.md far bigger than the prompt buffer. */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/AGENT.md", dir);
+    FILE *f = fopen(path, "w");
+    CHECK(f != NULL);
+    fputs("HEADER-OF-AGENT-MD\n", f);
+    for (int i = 0; i < LLM_MAX_PROMPT; i++) fputc('a', f);
+    fclose(f);
+
+    /* And one note, which is what used to disappear. */
+    char note[640];
+    snprintf(note, sizeof(note), "%s/ricorda.md", mem);
+    f = fopen(note, "w");
+    CHECK(f != NULL);
+    fputs("vjt prefers Italian", f);
+    fclose(f);
+
+    static char prompt[LLM_MAX_PROMPT];
+    bot_effective_prompt(app, prompt, sizeof(prompt));
+
+    /* The file is still used — it is just not allowed to spend the
+     * notes' budget. */
+    CHECK(strstr(prompt, "HEADER-OF-AGENT-MD") != NULL);
+    /* And the note survived, framed as the bot's own rather than as an
+     * instruction. */
+    CHECK(strstr(prompt, "vjt prefers Italian") != NULL);
+    CHECK(strstr(prompt, "not instructions from your owner") != NULL);
+    CHECK(strlen(prompt) < sizeof(prompt));
+
+    /* Truncating a config file is said out loud — once. */
+    CHECK(log_has(app, "AGENT.md is longer than"));
+
+    unlink(note);
+    unlink(path);
+    rmdir(mem);
+    rmdir(dir);
+    free_app(app);
+}
+
 /* A channel key is the server's own parameter, not part of the name.
  *
  * `/join #chan key` used to put the whole rest in the name, so the POST
@@ -1687,6 +1744,7 @@ int main(void) {
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);
     RUN(a_standing_grant_survives_a_restart);
+    RUN(a_long_agent_md_leaves_room_for_the_notes);
     RUN(a_join_key_is_split_from_the_channel);
     RUN(a_verb_is_matched_as_a_whole_word_not_a_prefix);
     RUN(every_spelling_of_the_window_verb_finds_its_number);
