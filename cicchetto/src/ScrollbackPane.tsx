@@ -2544,6 +2544,19 @@ const ScrollbackPane: Component<Props> = (props) => {
     listRef.scrollTop = target;
   };
 
+  // #608 — the applier's smooth-scroll INTERRUPT (W9). The mention-jump is the
+  // ONE animated scroll in this pane; a channel switch must cancel an in-flight
+  // animation so it cannot survive the shared `.scrollback` DOM row swap and
+  // race the arriving pane's activation. NOT a position intent — a `scrollTo` to
+  // the CURRENT offset is an instant (default-behavior) scroll instruction that
+  // stops the native smooth animation without moving. Owned here so no scrollTo
+  // lives outside the applier surface.
+  const interruptSmoothScroll = (): void => {
+    if (!listRef) return;
+    logScrollDecision("interrupt-smooth", [], null, "interrupt-smooth");
+    listRef.scrollTo({ top: listRef.scrollTop });
+  };
+
   // After Solid commits new DOM nodes, scroll to the tail iff the user
   // was at the bottom before the update (auto-follow). The effect tracks
   // `rows().length` so it re-runs on every append AND on cursor
@@ -3018,15 +3031,7 @@ const ScrollbackPane: Component<Props> = (props) => {
   // (default-behavior) scroll instruction that interrupts the native smooth
   // animation without moving anywhere, so nothing async survives to fight the
   // re-anchor. `defer` skips the mount run; a no-op when no animation runs.
-  createEffect(
-    on(
-      key,
-      () => {
-        if (listRef) listRef.scrollTo({ top: listRef.scrollTop });
-      },
-      { defer: true },
-    ),
-  );
+  createEffect(on(key, () => interruptSmoothScroll(), { defer: true }));
 
   return (
     <div class="scrollback-pane">
