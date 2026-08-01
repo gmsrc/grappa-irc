@@ -7522,7 +7522,26 @@ static void llm_run(struct app *app, const struct llm_req *req) {
      * mutated, because app->llm is what gets SAVED and an effective
      * prompt must never be written back to the config file. */
     struct llm_config cfg = app->llm;
-    if (req->from_bot) bot_effective_prompt(app, cfg.prompt, sizeof(cfg.prompt));
+    if (req->from_bot) {
+        bot_effective_prompt(app, cfg.prompt, sizeof(cfg.prompt));
+        /* And NO built-in CLI tools, whatever llm.cli_tools says.
+         *
+         * Those tools run inside the claude CLI, which shottino spawns
+         * with --dangerously-skip-permissions, so they never reach the
+         * approval gate — the gate only sees the tools we register over
+         * MCP and execute ourselves. That is an acceptable trade for a
+         * turn the OWNER typed: they enabled the tools, and the keyboard
+         * is the trusted channel (rule 4). It is not acceptable for a
+         * turn a STRANGER provoked by saying the bot's nick in a
+         * channel, which is the only other way into this function.
+         *
+         * So the setting keeps working where it was asked for and stops
+         * existing where it would be someone else's instruction. This
+         * mattered from the moment the bot could see a message at all —
+         * before that fix the whole path was dead, which is why it had
+         * never bitten. */
+        cfg.cli_tools[0] = 0;
+    }
 
     /* Tools: -1 not offered, 0 read-only, 1 reads and writes.
      *
@@ -7938,11 +7957,10 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
          * NETWORK provoked can reach them. */
         if (app->llm.cli_tools[0])
             log_line(app, "/set: the claude CLI's own tools (%s) run INSIDE the CLI — "
-                          "shottino's approval gate does not see them%s",
-                     app->llm.cli_tools,
-                     app->bot_enabled ? ", and /bot is ON: a message from the network "
-                                        "can provoke a turn that uses them"
-                                      : "");
+                          "shottino's approval gate does not see them. They are offered "
+                          "only on turns YOU type; a turn the network provoked through "
+                          "/bot never gets them.",
+                     app->llm.cli_tools);
     } else if (strcmp(def->name, "bot.dir") == 0)
         snprintf(app->bot_dir, sizeof(app->bot_dir), "%.*s", (int)sizeof(app->bot_dir) - 1, value);
     else if (strcmp(def->name, "stt.enabled") == 0) {

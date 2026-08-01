@@ -423,9 +423,15 @@ own.) To enable some:
 ```
 
 Be deliberate about that one: those run **inside** the CLI, under
-`--dangerously-skip-permissions`, and shottino's approval gate never sees them.
-With `/bot` on, a message from the network can provoke a turn that uses them.
-The setter says so out loud each time.
+`--dangerously-skip-permissions`, and shottino's approval gate never sees
+them — the gate only sees the tools shottino registers over MCP and executes
+itself. The setter says so out loud each time.
+
+**They are offered only on turns you type.** A turn the NETWORK provoked —
+someone saying the bot's nick in a channel, with `/bot` on — gets no built-in
+CLI tools whatever this is set to. The keyboard is the trusted channel; a
+stranger's message is data, and handing it a shell because the owner once
+enabled one for themselves is not a trade anyone agreed to.
 
 It runs on its **own thread**, never the job worker: a model call takes seconds
 to minutes, and sharing the worker would park scrollback fetches and sends
