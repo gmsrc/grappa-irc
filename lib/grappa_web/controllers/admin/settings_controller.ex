@@ -68,8 +68,8 @@ defmodule GrappaWeb.Admin.SettingsController do
 
   use GrappaWeb, :controller
 
-  alias Grappa.{PubSub, ServerSettings, WSPresence}
   alias Grappa.Net.SourceAliasManager
+  alias Grappa.{PubSub, ServerSettings, WSPresence}
   alias Grappa.PubSub.Topic
   alias Grappa.ServerSettings.Wire, as: SettingsWire
 

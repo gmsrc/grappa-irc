@@ -44,8 +44,8 @@ defmodule Grappa.Net.SourceAlias.FreeBSD do
         # of THIS prefix (the DB prefix), so a wrapper scoped to a different
         # config-file prefix refuses it (exit 65) — surfacing a DB↔substrate
         # drift here as :prefix_mismatch rather than as per-address failures.
-        Config.cmd().run("sudo", ["-n", @wrapper, "probe", canary], @timeout_s)
-        |> arm_reason()
+        result = Config.cmd().run("sudo", ["-n", @wrapper, "probe", canary], @timeout_s)
+        arm_reason(result)
 
       :error ->
         {:error, :invalid_prefix}
