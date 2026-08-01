@@ -1276,6 +1276,54 @@ describe("ScrollbackPane", () => {
     });
   });
 
+  // #608 step 4 (characterization for the applier funnel) — the POST-AWAIT
+  // loadMore preserve (W6). When older rows PREPEND (scrollHeight grows),
+  // scrollTop shifts by the growth so the reader's on-screen row stays fixed:
+  // `newScrollHeight - oldScrollHeight + oldScrollTop`. Pinned in jsdom over
+  // defineProperty'd geometry (the e2e twins are cp14-b2 +
+  // issue230-wheel-underfill-loadmore); this locks the height-delta math
+  // observably BEFORE the applier extracts it into the distinct post-await
+  // `applyPrependPreserve` entrypoint. Asserts CURRENT behavior.
+  describe("#608 — loadMore preserve restores position via the prepend height delta", () => {
+    let origScrollIntoView: typeof Element.prototype.scrollIntoView;
+    beforeEach(() => {
+      // The tail-follow fallback is `scrollTop = scrollHeight` ONLY when
+      // scrollIntoView is absent (jsdom's default). Stub it as a no-op so the
+      // mount tail-follow authority never touches scrollTop — isolating the W6
+      // height-delta restore under test (else the mount rAF×2 tail overwrites
+      // the restore with scrollHeight, since followMode defaults true).
+      origScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = vi.fn();
+    });
+    afterEach(() => {
+      Element.prototype.scrollIntoView = origScrollIntoView;
+    });
+
+    it("shifts scrollTop by the prepend height growth, preserving the reader's row", async () => {
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+
+      // Near the top (scrollTop 40 <= LOAD_MORE_THRESHOLD_PX 200) so onScroll
+      // fires maybeLoadOlder; overflowing so distance is large (no tail flip,
+      // and 40 is not a decrease from lastScrollTop 0 → followMode untouched).
+      Object.defineProperty(list, "clientHeight", { value: 300, configurable: true });
+      Object.defineProperty(list, "scrollTop", { value: 40, writable: true, configurable: true });
+      Object.defineProperty(list, "scrollHeight", { value: 1000, configurable: true });
+
+      // loadMore resolves AND simulates the prepend (scrollHeight 1000 → 1500).
+      vi.mocked(loadMore).mockImplementationOnce(() => {
+        Object.defineProperty(list, "scrollHeight", { value: 1500, configurable: true });
+        return Promise.resolve();
+      });
+
+      list.dispatchEvent(new Event("scroll"));
+
+      // Post-await restore: 1500 - 1000 + 40 = 540 (the reader's row held).
+      await waitFor(() => expect(list.scrollTop).toBe(540));
+    });
+  });
+
   // #310 — the scroll-to-bottom GESTURE (floating button + #243 re-tap)
   // must advance the server read cursor to the NEWEST rendered message.
   // Pre-#310 both funnelled through the pure `scrollToBottom()` helper,
