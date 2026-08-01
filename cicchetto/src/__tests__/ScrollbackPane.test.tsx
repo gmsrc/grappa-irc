@@ -175,6 +175,15 @@ vi.mock("../lib/socket", () => ({
 
 vi.mock("../lib/channelKey", () => ({
   channelKey: (slug: string, name: string) => `${slug} ${name}`,
+  // Faithful to the `${slug} ${name}` mock shape: split on the first space.
+  // Needed once a test drives a real channel switch (the key-change effects
+  // decode the leaving/arriving key); identity fold matches the mock's
+  // non-folding channelKey.
+  decodeChannelKey: (key: string) => {
+    const i = key.indexOf(" ");
+    return i < 0 ? null : { slug: key.slice(0, i), name: key.slice(i + 1) };
+  },
+  canonicalChannel: (name: string) => name,
 }));
 
 // C3.2: mock membersByChannel for JOIN-self banner tests
@@ -1321,6 +1330,35 @@ describe("ScrollbackPane", () => {
 
       // Post-await restore: 1500 - 1000 + 40 = 540 (the reader's row held).
       await waitFor(() => expect(list.scrollTop).toBe(540));
+    });
+  });
+
+  // #608 step 3 (characterization for the applier funnel) — the W9 smooth-scroll
+  // interrupt. The mention-jump is the ONE animated scroll in this pane; a
+  // channel switch must cancel any in-flight animation (the shared `.scrollback`
+  // DOM survives the row swap, so a live animation would race the arriving
+  // pane's activation). The cancel is a `scrollTo` to the CURRENT offset — an
+  // instant scroll instruction that stops the native smooth animation without
+  // moving. Pinned here BEFORE the applier extracts it into `interruptSmoothScroll`.
+  describe("#608 — key switch interrupts an in-flight smooth scroll (W9)", () => {
+    it("calls scrollTo to the current offset on a channel switch", async () => {
+      const scrollToSpy = vi.fn();
+      const [chan, setChan] = createSignal("#a");
+      setScrollback({ "freenode #a": fixture, "freenode #b": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName={chan()} kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+      // jsdom leaves scrollTo undefined; assign a spy on this instance (the
+      // .scrollback node is stable across the non-keyed channel↔query switch).
+      list.scrollTo = scrollToSpy;
+      Object.defineProperty(list, "scrollTop", { value: 123, writable: true, configurable: true });
+      scrollToSpy.mockClear();
+
+      // Switch channels → key() changes → the interrupt (a deferred on(key)
+      // effect) fires synchronously, reading the current scrollTop.
+      setChan("#b");
+      await Promise.resolve();
+
+      expect(scrollToSpy).toHaveBeenCalledWith({ top: 123 });
     });
   });
 
