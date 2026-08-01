@@ -1283,30 +1283,35 @@ defmodule Grappa.Visitors do
           # Registered — identity persists; its backoff history must survive.
           :ok
         else
-          # S11 — the anon subject is destroyed here (login case-1 failure /
-          # preempt). destroy_visitor re-homes published themes (#299), hard-
-          # deletes the row (CASCADE), and evicts its Backoff entries so the
-          # retired UUID leaves no orphan.
-          #
-          # #590 — this is a co-terminus BEST-EFFORT cleanup (a failed/preempted
-          # login has no HTTP client waiting on the purge), and every caller
-          # matches `:ok =`. A sustained SQLITE_BUSY therefore ABSORBS to `:ok`
-          # + a log rather than propagating: the anon row is simply left for
-          # `Visitors.Reaper` to collect once its TTL elapses. Distinct from
-          # `delete/1`, whose operator/admin callers want the 503.
-          case destroy_visitor(visitor) do
-            :ok ->
-              :ok
-
-            {:error, :db_unavailable} ->
-              Logger.warning(
-                "purge_if_anon: db unavailable — anon purge deferred to reaper",
-                visitor_id: visitor_id
-              )
-
-              :ok
-          end
+          purge_anon_visitor(visitor)
         end
+    end
+  end
+
+  # S11 — the anon subject is destroyed here (login case-1 failure /
+  # preempt). destroy_visitor re-homes published themes (#299), hard-
+  # deletes the row (CASCADE), and evicts its Backoff entries so the
+  # retired UUID leaves no orphan.
+  #
+  # #590 — this is a co-terminus BEST-EFFORT cleanup (a failed/preempted
+  # login has no HTTP client waiting on the purge), and every caller
+  # matches `:ok =`. A sustained SQLITE_BUSY therefore ABSORBS to `:ok`
+  # + a log rather than propagating: the anon row is simply left for
+  # `Visitors.Reaper` to collect once its TTL elapses. Distinct from
+  # `delete/1`, whose operator/admin callers want the 503.
+  @spec purge_anon_visitor(Visitor.t()) :: :ok
+  defp purge_anon_visitor(%Visitor{} = visitor) do
+    case destroy_visitor(visitor) do
+      :ok ->
+        :ok
+
+      {:error, :db_unavailable} ->
+        Logger.warning(
+          "purge_if_anon: db unavailable — anon purge deferred to reaper",
+          visitor_id: visitor.id
+        )
+
+        :ok
     end
   end
 end

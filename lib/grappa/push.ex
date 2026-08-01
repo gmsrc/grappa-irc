@@ -262,7 +262,7 @@ defmodule Grappa.Push do
     query = from(s in Subscription, where: s.endpoint == ^endpoint)
 
     case Repo.BusyRetry.run(fn -> {:ok, Repo.delete_all(query)} end) do
-      {:ok, {_count, nil} = deleted} -> deleted
+      {:ok, {_, nil} = deleted} -> deleted
       {:error, :db_unavailable} = err -> err
     end
   end

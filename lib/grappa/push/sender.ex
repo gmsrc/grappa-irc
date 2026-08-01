@@ -246,7 +246,7 @@ defmodule Grappa.Push.Sender do
         # the stale endpoint is swept on the next failed delivery. Either way the
         # subscription is treated as gone from this delivery's perspective.
         case Push.delete_dead(sub.endpoint) do
-          {deleted, _} ->
+          {deleted, nil} ->
             :telemetry.execute(
               [:grappa, :push, :delete_dead],
               %{count: deleted},
