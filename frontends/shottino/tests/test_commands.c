@@ -183,6 +183,32 @@ TEST(every_dispatched_verb_has_a_help_topic) {
     }
 }
 
+/* The version is stated in five places — the sidebar, --version, the
+ * --help banner, the --ircd numerics and every HTTP User-Agent — and
+ * before version.h each of those spelled it itself. That is how a client
+ * ends up announcing one version to the server and showing another to
+ * the person using it. */
+TEST(nothing_spells_its_own_version) {
+    /* A literal `shottino/0.…` in the source is a User-Agent that has
+     * escaped the one definition. */
+    if (strstr(source, "shottino/0."))
+        fprintf(stderr, "  a version literal is hardcoded; use SHOTTINO_USER_AGENT\n");
+    CHECK(strstr(source, "shottino/0.") == NULL);
+    CHECK(strstr(source, "SHOTTINO_USER_AGENT") != NULL);
+
+    /* The wire string is BUILT from the number, so it cannot say
+     * something else. */
+    CHECK_STR(SHOTTINO_USER_AGENT, "shottino/" SHOTTINO_VERSION);
+
+    /* And the number is a number: digits and dots, nothing else. A
+     * version with a space in it would be a malformed User-Agent
+     * header, which is a request the server may reject for reasons
+     * nobody would think to look for here. */
+    const char *v = SHOTTINO_VERSION;
+    CHECK(v[0] != 0);
+    for (size_t i = 0; v[i]; i++) CHECK((v[i] >= '0' && v[i] <= '9') || v[i] == '.');
+}
+
 int main(void) {
     source = read_source();
     if (!source) {
@@ -199,6 +225,7 @@ int main(void) {
     RUN(every_completion_entry_dispatches);
     RUN(completion_table_is_sorted);
     RUN(every_dispatched_verb_has_a_help_topic);
+    RUN(nothing_spells_its_own_version);
 
     free(source);
     return test_report();

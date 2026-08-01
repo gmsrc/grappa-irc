@@ -11,6 +11,23 @@ Shottino ships in grappa's distro packages as `/usr/bin/shottino` — on a host
 with the `.deb` or the Arch package installed there is nothing to build. To
 build it from source instead, read on.
 
+## Version
+
+```sh
+shottino --version        # shottino 0.1.0
+```
+
+It is also in the corner, beside the name, on any terminal wide enough to
+show all of it — a truncated version number is worse than none, since `0.1`
+and `0.1.0` are different releases.
+
+Shottino versions **separately from grappa**. It is a client that talks to
+whatever grappa it is pointed at, and compatibility is decided by the wire's
+`protocol_version`, not by matching release numbers. One definition lives in
+`version.h` and feeds the sidebar, `--version`, `--help`, the `--ircd`
+numerics and every HTTP `User-Agent`; a test fails the build if any of them
+starts spelling its own.
+
 ## Build
 
 ```sh

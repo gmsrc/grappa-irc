@@ -44,6 +44,7 @@
 #include "ws.h"
 #include "llm.h"
 #include "json.h"
+#include "version.h"
 #include "media.h"
 #include "mirc.h"
 #include "termcolor.h"
@@ -52,7 +53,6 @@
 #define MAX_TOKEN 4096
 #define MAX_SUBJECT 512
 #define MAX_NETWORKS 32
-#define SHOTTINO_VERSION "0.1"
 /* One column per step, and eight steps of stillness at each end. Fast
  * enough to finish a long topic while you read the channel, slow enough
  * not to be movement in the corner of your eye. */
@@ -1662,7 +1662,7 @@ static struct http_response http_request_raw(struct app *app, const char *method
     char *head = xasprintf(
         "%s %s HTTP/1.1\r\n"
         "Host: %s\r\n"
-        "User-Agent: shottino/0.1\r\n"
+        "User-Agent: " SHOTTINO_USER_AGENT "\r\n"
         "Accept: application/json\r\n"
         "Content-Type: %s\r\n"
         "%s"
@@ -3981,7 +3981,7 @@ static bool ws_connect(struct app *app) {
         "Sec-WebSocket-Key: %s\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Protocol: base64url.bearer.phx.%s\r\n"
-        "User-Agent: shottino/0.1\r\n\r\n",
+        "User-Agent: " SHOTTINO_USER_AGENT "\r\n\r\n",
         app->url.host, key, tok_b64);
     free(tok_b64);
     free(key);
@@ -6069,6 +6069,12 @@ static void draw(struct app *app) {
     attroff(COLOR_PAIR(CP_BORDER));
 
     draw_text(0, 1, side - 2, CP_ACCENT, A_BOLD, "shottino");
+    /* Beside the name, dim, and only when ALL of it fits: a truncated
+     * version number is worse than none, because "0.1" and "0.1.0" are
+     * different releases and the sidebar is 14 columns on a narrow
+     * terminal. */
+    if (side - 10 >= (int)strlen(SHOTTINO_VERSION))
+        draw_text(0, 10, side - 10, CP_MUTED, A_DIM, "%s", SHOTTINO_VERSION);
     if (app->ws_connected) {
         draw_text(1, 1, side - 2, CP_MUTED, 0, "ws");
     } else {
@@ -6424,7 +6430,7 @@ static char *llm_call_openai_raw(struct app *app, const char *body) {
              u.base[0] ? u.base : "");
     char *head = xasprintf("POST %s HTTP/1.1\r\n"
                            "Host: %s\r\n"
-                           "User-Agent: shottino/0.1\r\n"
+                           "User-Agent: " SHOTTINO_USER_AGENT "\r\n"
                            "Accept: application/json\r\n"
                            "Content-Type: application/json\r\n"
                            "Authorization: Bearer %s\r\n"
@@ -9117,7 +9123,7 @@ static bool http_fetch(struct app *app, const char *url, struct fetch_result *ou
     }
     char *head = xasprintf("GET %s HTTP/1.1\r\n"
                            "Host: %s\r\n"
-                           "User-Agent: shottino/0.1\r\n"
+                           "User-Agent: " SHOTTINO_USER_AGENT "\r\n"
                            "Accept: */*\r\n"
                            "Connection: close\r\n\r\n",
                            path && *path ? path : "/", u.host);
@@ -10253,7 +10259,7 @@ static char *stt_transcribe_remote(struct app *app, const char *path) {
              u.base[0] ? u.base : "");
     char *hdr = xasprintf("POST %s HTTP/1.1\r\n"
                           "Host: %s\r\n"
-                          "User-Agent: shottino/0.1\r\n"
+                          "User-Agent: " SHOTTINO_USER_AGENT "\r\n"
                           "Accept: application/json\r\n"
                           "Content-Type: multipart/form-data; boundary=%s\r\n"
                           "Authorization: Bearer %s\r\n"
@@ -14050,6 +14056,7 @@ static void event_loop(struct app *app) {
  * other CLI makes, and the one that lets a packaging smoke test tell
  * "the binary runs" apart from "the binary is broken". */
 static void print_usage(FILE *out, const char *prog) {
+    fprintf(out, "shottino %s — a terminal client for grappa\n\n", SHOTTINO_VERSION);
     fprintf(out, "usage: %s [--auto|--user|--visitor] https://grappa.example.net IDENTIFIER PASSWORD\n", prog);
     fprintf(out, "       %s --user --login-email user@example.net https://grappa.example.net PASSWORD\n", prog);
     fprintf(out, "       %s --share https://grappa.example.net/share/<token>\n", prog);
@@ -14198,6 +14205,13 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(stdout, argv[0]);
+            return 0;
+        }
+        /* Answerable without a server, a terminal or a config: the first
+         * thing anyone asks a binary that misbehaves is which one it
+         * is. */
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
+            printf("shottino %s\n", SHOTTINO_VERSION);
             return 0;
         }
     }
