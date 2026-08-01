@@ -11095,6 +11095,25 @@ static bool oper_verb_help(struct app *app, const char *cmd) {
 }
 
 static void handle_command_dispatch(struct app *app, char *line) {
+    /* A verb followed by NOTHING but whitespace was typed without
+     * arguments, whoever put the whitespace there — so drop it before
+     * anything tries to match.
+     *
+     * Tab-completion appends a space to the verb it inserts, and 36 of
+     * the arms below match with an exact strcmp. `/vid<TAB>` therefore
+     * produced "/video " and fell through to "unknown command: /video"
+     * — with an invisible space in it, which is why the message looks
+     * like a lie. Every argument-less verb in the client had this, and
+     * fixing them one at a time would leave the 37th to rediscover it.
+     *
+     * Lines that carry real arguments are untouched: a trailing space
+     * in a message body is the sender's business, not ours. */
+    char *sp = strchr(line, ' ');
+    if (sp) {
+        char *p = sp;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) *sp = 0;
+    }
     if (try_oper_verb(app, line)) return;
     if (strcmp(line, "/quit") == 0) {
         logout_grappa(app);

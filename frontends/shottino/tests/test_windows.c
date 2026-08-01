@@ -1146,6 +1146,45 @@ TEST(a_standing_grant_survives_a_restart) {
     free_app(d);
 }
 
+/* Tab-completion appends a space to the verb it inserts. 36 arms of the
+ * dispatcher match with an exact strcmp, so every argument-less verb in
+ * the client used to answer "unknown command: /video" — with an
+ * invisible space in it, which is what made the message look like a lie.
+ *
+ * Driven through handle_command, the door every keystroke and every
+ * alias goes through, so this covers verbs nobody has written yet. */
+TEST(a_tab_completed_verb_still_dispatches) {
+    struct app *app = window_app();
+    app->url.base[0] = 0; /* nothing here should reach the network */
+
+    /* The exact string completion produces for `/vid<TAB>`. Reaching
+     * the recorder means it matched; ffmpeg is absent under test, so it
+     * refuses for a reason that is NOT "unknown command". */
+    handle_command(app, "/video ");
+    CHECK(!log_has(app, "unknown command"));
+
+    handle_command(app, "/voicemsg ");
+    CHECK(!log_has(app, "unknown command"));
+    handle_command(app, "/vmsg ");
+    CHECK(!log_has(app, "unknown command"));
+
+    /* Not just the new verbs: this was every argument-less verb in the
+     * client. */
+    handle_command(app, "/help ");
+    CHECK(!log_has(app, "unknown command"));
+
+    /* Several spaces, and a tab, are still "no arguments". */
+    handle_command(app, "/help    ");
+    CHECK(!log_has(app, "unknown command"));
+
+    /* And a verb that really is unknown still says so — the trim must
+     * not turn the error into silence. */
+    handle_command(app, "/vidyo ");
+    CHECK(log_has(app, "unknown command"));
+
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -1186,6 +1225,7 @@ int main(void) {
     RUN(a_memory_filename_is_built_not_taken);
     RUN(two_identities_get_two_bot_directories);
     RUN(a_standing_grant_survives_a_restart);
+    RUN(a_tab_completed_verb_still_dispatches);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
     return test_report();
 }
