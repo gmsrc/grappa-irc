@@ -311,16 +311,28 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // #591 — /ping <target>: CTCP PING sugar. The token is a client
         // timestamp; it travels in the frame, comes back verbatim in the
         // reply's server-typed meta.ctcp_args, and the RTT is `now - sentAt`.
-        // Register the pending entry AFTER a successful send (the reply cannot
-        // precede the send) keyed on the SOURCE window so the RTT line lands
-        // where /ping was typed (irssi behavior; synthesized in subscribe.ts).
+        // Keyed on the SOURCE window so the RTT line lands where /ping was typed
+        // (irssi behavior; synthesized in subscribe.ts).
+        //
+        // #600 — register the pending entry BEFORE the send, NOT after. The
+        // earlier "register after a successful send — the reply cannot precede
+        // the send" ordering held only for the WIRE: `sendPrivmsg` is a REST
+        // POST, and on a slow/loaded runner its ack resolves AFTER the peer's
+        // CTCP PING reply has already been processed on the (separate,
+        // already-open) WS. With registration behind the `await`,
+        // `maybeConsumePingReply → resolvePing` found no pending entry and
+        // dropped the reply — the RTT line never rendered → the 15s CI timeout
+        // (deterministic on the CI runner, invisible on a fast local box).
+        // Registering first makes the pending present for any reply; if the send
+        // below throws, the orphaned entry is inert (one-shot, identity-scoped
+        // clear, never resolves without a matching reply).
         case "ping": {
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/ping: network not found" };
           const sentAtMs = Date.now();
           const token = String(sentAtMs);
-          await sendPrivmsg(networkSlug, cmd.target, ctcpFrame("PING", token));
           registerPing(networkId, cmd.target, token, key, channelName, sentAtMs);
+          await sendPrivmsg(networkSlug, cmd.target, ctcpFrame("PING", token));
           result = { ok: true };
           break;
         }

@@ -432,6 +432,48 @@ describe("compose submit — slash command dispatch", () => {
     vi.mocked(Date.now).mockRestore();
   });
 
+  // #600 — the pending correlation MUST be registered BEFORE the send is
+  // awaited. `sendPrivmsg` is a REST POST; on a slow/loaded runner its ack can
+  // resolve AFTER the peer's CTCP PING reply has already been processed on the
+  // (separate, already-open) WS. If registration waited on the send,
+  // `maybeConsumePingReply → resolvePing` would find no pending entry and drop
+  // the RTT line — the #600 CI timeout (deterministic on the slow CI runner,
+  // invisible on a fast local box). Model the slow send with a deferred promise
+  // and assert registerPing already fired while the send is still pending.
+  it("/ping registers the pending BEFORE the send resolves — a fast reply can't lose it (#600)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    vi.spyOn(Date, "now").mockReturnValue(1706743200000);
+    const sb = await import("../lib/scrollback");
+    const pc = await import("../lib/pingCorrelation");
+
+    // A send that stays pending until we release it — models a slow REST POST
+    // while the CTCP reply already flows over the already-open WS.
+    let releaseSend!: () => void;
+    vi.mocked(sb.sendMessage).mockReturnValue(
+      new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      }),
+    );
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/ping bob");
+    const submitP = compose.submit(k, "freenode", "#a"); // do NOT await — send is pending
+
+    // Flush microtasks so compose reaches (and blocks on) the send await.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // THE RACE: with the send still unresolved, a reply arriving now MUST find a
+    // registered pending entry. Pre-fix (register AFTER the await) this is 0 calls.
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "bob", "\x01PING 1706743200000\x01");
+    expect(pc.registerPing).toHaveBeenCalledWith(1, "bob", "1706743200000", k, "#a", 1706743200000);
+
+    releaseSend();
+    await submitP;
+    vi.mocked(Date.now).mockRestore();
+  });
+
   // #127 — /info, /version, /motd resolve the network id from the slug and
   // push the bare verb; the reply renders in ServerReplyModal (server side).
   it("/info pushes INFO via pushInfo(networkId)", async () => {
