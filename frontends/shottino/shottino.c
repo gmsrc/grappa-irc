@@ -719,11 +719,17 @@ struct app {
     enum panel_kind panel;
     char *panel_lines[PANEL_LINES];
     size_t panel_line_count;
-    /* Where the panel's first visible row was actually drawn. Recorded
-     * by the draw path and read by the click handler: the layout knows
+    /* The rectangle the panel's rows were actually drawn in. Recorded by
+     * the draw path and read by the click handler: the layout knows
      * this, and a second copy of the arithmetic in the mouse code is a
-     * second thing to get wrong when the chrome changes. */
-    int panel_draw_y;
+     * second thing to get wrong when the chrome changes.
+     *
+     * BOTH dimensions, and the height too. Testing the row alone made a
+     * click anywhere on that screen line count as a click on the
+     * preference sharing it — the sidebar, the roster, the status bar
+     * below the panel — which is the same bug the overlay hit test
+     * already learned (see struct overlay). */
+    int panel_draw_y, panel_draw_x0, panel_draw_x1, panel_draw_h;
     /* A panel is taller than the terminal — the settings one always is
      * now that it lists every preference — so it scrolls. The draw path
      * clamps this against the real height, which only it knows. */
@@ -6422,6 +6428,9 @@ static void draw(struct app *app) {
                 app->panel_offset = sel - (size_t)panel_h + 1;
         }
         app->panel_draw_y = area_y + 2;
+        app->panel_draw_x0 = main_x + 1;
+        app->panel_draw_x1 = main_x + main_w - 2;
+        app->panel_draw_h = panel_h;
         for (size_t i = app->panel_offset;
              i < app->panel_line_count && (int)(i - app->panel_offset) < panel_h; i++) {
             bool selected = app->panel == PANEL_SETTINGS && app->settings_shown &&
@@ -9757,7 +9766,16 @@ static bool panel_key(struct app *app, int ch) {
         pthread_mutex_lock(&app->lock);
         size_t sel = app->settings_sel;
         pthread_mutex_unlock(&app->lock);
-        if (sel >= settings_count() || SETTINGS[sel].kind != SET_BOOL) return false;
+        /* Consumed either way. Returning false here let the space fall
+         * through to the input line, so Space on a URL row typed a space
+         * into a message nobody could see behind the panel — and Enter
+         * then SENT it to the focused channel. A key that does nothing is
+         * fine; a key that quietly says " " in a channel is not. */
+        if (sel >= settings_count()) return true;
+        if (SETTINGS[sel].kind != SET_BOOL) {
+            log_line(app, "%s is not a switch — Enter edits it", SETTINGS[sel].name);
+            return true;
+        }
         char cur[64];
         setting_value(app, SETTINGS[sel].name, cur, sizeof(cur));
         char cmd[160];
@@ -13121,11 +13139,16 @@ static void handle_mouse(struct app *app) {
         else if (wheel_down)
             app->panel_offset += 3; /* clamped when drawn */
         else if (click && app->panel == PANEL_SETTINGS && app->settings_shown) {
-            /* Which panel line is under the pointer: the first row is
-             * drawn two lines below the panel's own heading, and the
-             * view starts at panel_offset. */
+            /* Which panel line is under the pointer, tested against the
+             * BOX the last frame drew — both dimensions and the bottom
+             * edge. Testing the row alone counted a click on the sidebar,
+             * on the roster, or on the status line below the panel as a
+             * click on whatever preference shared that screen row, and
+             * the draw path would then scroll to follow the selection. */
             int first_y = app->panel_draw_y;
-            if (ev.y >= first_y) {
+            bool in_box = ev.y >= first_y && ev.y < first_y + app->panel_draw_h &&
+                          ev.x >= app->panel_draw_x0 && ev.x <= app->panel_draw_x1;
+            if (in_box) {
                 size_t line = app->panel_offset + (size_t)(ev.y - first_y);
                 if (line >= app->settings_row0 &&
                     line - app->settings_row0 < settings_count())
