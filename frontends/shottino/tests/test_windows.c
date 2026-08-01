@@ -38,6 +38,9 @@ static struct app *window_app(void) {
 
 static void free_app(struct app *app) {
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    /* Mirrors the production teardown: the captured defaults are heap
+     * strings and ASan is watching. */
+    settings_free_defaults(app);
     /* Panel rows are heap-allocated too — the app owns them via
      * clear_panel_lines_locked in production. */
     for (size_t i = 0; i < app->panel_line_count; i++) free(app->panel_lines[i]);
@@ -1139,15 +1142,15 @@ TEST(a_settings_menu_offers_what_the_setting_accepts) {
     struct overlay_item items[64];
 
     /* A switch: both words, with the current one marked. */
-    app->overlay.kind = OVERLAY_MENU;
+    app->overlay.kind = OVERLAY_SETTING;
     app->mouse_enabled = true;
     snprintf(app->overlay.setting, sizeof(app->overlay.setting), "mouse");
     size_t n = overlay_items_locked(app, items, 64);
     CHECK_LONG(n, 2);
     CHECK(strstr(items[0].label, "on") != NULL);
     CHECK(strstr(items[1].label, "off") != NULL);
-    CHECK(strstr(items[0].label, "•") != NULL);  /* mouse is on */
-    CHECK(strstr(items[1].label, "•") == NULL);
+    CHECK(strstr(items[0].label, ">") != NULL);  /* mouse is on */
+    CHECK(strstr(items[1].label, ">") == NULL);
     /* Choosing one goes through /set, so the value and the name travel
      * as the command would spell them. */
     CHECK_LONG(items[1].action, ACT_SET_VALUE);
@@ -1165,25 +1168,162 @@ TEST(a_settings_menu_offers_what_the_setting_accepts) {
         CHECK_STR(items[i].body, want[i]);
     }
 
-    /* Free text has no list, so it offers the two things always true of
-     * it: type something, or empty it. */
+    /* Free text has no list at all: no values means the modal shows a
+     * FIELD instead, which is what makes the two modes one decision. */
     snprintf(app->overlay.setting, sizeof(app->overlay.setting), "stt.url");
-    n = overlay_items_locked(app, items, 64);
-    CHECK_LONG(n, 2);
-    CHECK_LONG(items[0].action, ACT_SET_EDIT);
-    CHECK_LONG(items[1].action, ACT_SET_VALUE);
-    CHECK_STR(items[1].body, "");
+    CHECK_LONG(overlay_items_locked(app, items, 64), 0);
 
-    /* EVERY setting answers with something — a row whose right-click
-     * produced an empty menu would look broken. */
+    /* Every setting either lists values or is a field — and the kind
+     * that decides is the one in the table, not a second opinion. */
     for (size_t i = 0; i < settings_count(); i++) {
         snprintf(app->overlay.setting, sizeof(app->overlay.setting), "%s", SETTINGS[i].name);
-        CHECK(overlay_items_locked(app, items, 64) > 0);
+        size_t got = overlay_items_locked(app, items, 64);
+        if (SETTINGS[i].kind == SET_TEXT) CHECK_LONG(got, 0);
+        else CHECK(got > 0);
     }
 
     /* A name that is not a setting offers nothing rather than guessing. */
     snprintf(app->overlay.setting, sizeof(app->overlay.setting), "nonesuch");
     CHECK_LONG(overlay_items_locked(app, items, 64), 0);
+
+    free_app(app);
+}
+
+/* Tab on a value completes what that setting accepts.
+ *
+ * `/set media <TAB>` used to complete nothing: the completer bails when
+ * the stem is empty, and a trailing space is exactly the moment the
+ * values are wanted. The words come from the same table /set validates
+ * against, so what completes is what would be accepted. */
+TEST(tab_completes_the_values_a_setting_accepts) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+
+    /* A choice setting, with the value half-typed. */
+    snprintf(app->input, sizeof(app->input), "/set media fir");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/set media first-party ");
+
+    /* And with NOTHING typed after the name — the empty-stem case. Four
+     * words match, so the line is left alone and the choices listed. */
+    snprintf(app->input, sizeof(app->input), "/set media ");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/set media ");
+    CHECK(log_has(app, "first-party"));
+
+    /* A switch offers its two words. */
+    snprintf(app->input, sizeof(app->input), "/set mouse of");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/set mouse off ");
+
+    /* The NAME still completes, which is the case that already worked. */
+    snprintf(app->input, sizeof(app->input), "/set voice.so");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/set voice.source ");
+
+    /* /unset completes names the same way. */
+    snprintf(app->input, sizeof(app->input), "/unset anim");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/unset animate ");
+
+    /* A free-text setting completes to what is SET, so a path is edited
+     * rather than retyped. */
+    snprintf(app->stt_model, sizeof(app->stt_model), "whisper-large-v3");
+    snprintf(app->input, sizeof(app->input), "/set stt.model ");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/set stt.model whisper-large-v3 ");
+
+    /* But never a secret: a token must not appear in the input line
+     * because somebody pressed Tab. */
+    snprintf(app->stt_token, sizeof(app->stt_token), "sk-not-a-real-key-8842");
+    snprintf(app->input, sizeof(app->input), "/set stt.token ");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/set stt.token ");
+    CHECK(!log_has(app, "sk-not-a-real-key"));
+
+    free_app(app);
+}
+
+/* The modal seeds its field with what is SET, never with a secret.
+ *
+ * Showing a token in a box on screen is showing it to whoever is behind
+ * you, and the field is bigger and more legible than the masked row it
+ * came from. */
+TEST(the_setting_modal_seeds_its_field_but_never_a_secret) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    snprintf(app->stt_url, sizeof(app->stt_url), "https://whisper.example/v1");
+    snprintf(app->stt_token, sizeof(app->stt_token), "sk-not-a-real-key-8842");
+
+    settings_open_modal(app, "stt.url");
+    CHECK_LONG(app->overlay.kind, OVERLAY_SETTING);
+    CHECK_STR(app->overlay.setting, "stt.url");
+    CHECK_STR(app->overlay.edit, "https://whisper.example/v1");
+    CHECK_LONG(app->overlay.edit_len, strlen("https://whisper.example/v1"));
+
+    /* A token opens EMPTY, so saving without typing clears it rather
+     * than writing back a mask. */
+    settings_open_modal(app, "stt.token");
+    CHECK_STR(app->overlay.edit, "");
+    CHECK(strstr(app->stt_token, "sk-not-a-real-key") != NULL); /* untouched until saved */
+
+    /* The field takes characters and gives them back one at a time,
+     * through the same helpers the input line uses. */
+    settings_open_modal(app, "stt.model");
+    utf8_append(app->overlay.edit, sizeof(app->overlay.edit), &app->overlay.edit_len, L'é');
+    CHECK_LONG(app->overlay.edit_len, 2);
+    utf8_backspace(app->overlay.edit, &app->overlay.edit_len);
+    CHECK_LONG(app->overlay.edit_len, 0);
+
+    /* An unknown name opens nothing at all. */
+    overlay_close(app);
+    settings_open_modal(app, "nonesuch");
+    CHECK_LONG(app->overlay.kind, OVERLAY_NONE);
+
+    free_app(app);
+}
+
+/* /unset restores what the client STARTED with, not a table constant.
+ *
+ * Several defaults are computed — inline media follows whether ffmpeg is
+ * installed, stt.local follows whichever whisper binary is found — so a
+ * `default` column could not have held them. Capturing the boot values
+ * means /unset cannot disagree with the defaults: it is holding them. */
+TEST(unset_puts_a_preference_back_to_how_it_started) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    app->url.base[0] = 0;
+
+    /* Boot state, then remember it — the order main uses. */
+    snprintf(app->voice_source, sizeof(app->voice_source), "pulse:default");
+    app->animate_media = true;
+    settings_capture_defaults(app);
+
+    handle_command(app, "/set voice.source alsa:hw:1");
+    CHECK_STR(app->voice_source, "alsa:hw:1");
+    handle_command(app, "/set animate off");
+    CHECK(!app->animate_media);
+
+    handle_command(app, "/unset voice.source");
+    CHECK_STR(app->voice_source, "pulse:default");
+    CHECK(log_has(app, "back to the default"));
+    handle_command(app, "/unset animate");
+    CHECK(app->animate_media);
+
+    /* A name nobody has says so rather than doing nothing quietly. */
+    handle_command(app, "/unset nonesuch");
+    CHECK(log_has(app, "no such setting"));
+
+    /* Bare /unset explains itself instead of resetting everything. */
+    handle_command(app, "/unset");
+    CHECK(log_has(app, "put one preference back"));
 
     free_app(app);
 }
@@ -2004,6 +2144,9 @@ int main(void) {
     RUN(two_identities_get_two_bot_directories);
     RUN(an_accented_character_survives_typing_and_one_backspace);
     RUN(a_settings_menu_offers_what_the_setting_accepts);
+    RUN(tab_completes_the_values_a_setting_accepts);
+    RUN(the_setting_modal_seeds_its_field_but_never_a_secret);
+    RUN(unset_puts_a_preference_back_to_how_it_started);
     RUN(a_websocket_ref_is_never_handed_out_twice);
     RUN(the_model_thread_announces_that_it_stopped);
     RUN(retiring_an_echo_moves_every_row_not_just_its_text);

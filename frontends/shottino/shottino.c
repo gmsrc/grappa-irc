@@ -481,7 +481,31 @@ struct msg_region {
  * a list you draw from one source and act on from another is a list that
  * eventually acts on the row above the one you clicked. Same rule as the
  * chat area's measure/draw agreement, for the same reason. */
-enum overlay_kind { OVERLAY_NONE = 0, OVERLAY_MENU, OVERLAY_REPLY, OVERLAY_MEDIA, OVERLAY_RECORD };
+/* One preference, as the table declares it. Up here with the other
+ * types because the DRAW path needs the complete struct — the modal
+ * prints a setting's help text — while the table itself lives beside
+ * the command that reads it. */
+enum setting_kind { SET_BOOL, SET_TEXT, SET_CHOICE };
+
+struct setting_def {
+    const char *name;
+    enum setting_kind kind;
+    const char *values; /* CHOICE: the accepted words, for the error message */
+    const char *help;
+};
+
+static const struct setting_def *setting_find(const char *name);
+
+enum overlay_kind {
+    OVERLAY_NONE = 0,
+    OVERLAY_MENU,
+    OVERLAY_REPLY,
+    OVERLAY_MEDIA,
+    OVERLAY_RECORD,
+    /* One preference, opened for changing: a list of the values it
+     * accepts, or a field to type one into when it accepts anything. */
+    OVERLAY_SETTING
+};
 
 /* A recording stops itself here rather than running until the disk or
  * the upload limit says so. Declared with the overlay because the box
@@ -574,9 +598,13 @@ struct overlay {
      * serves both because the question is the same one — "what can I do
      * with the thing under the pointer" — and only the answers differ. */
     char media[MAX_LINE];
-    /* Menu: the preference under the pointer, in the settings panel. The
-     * third subject the same menu answers for. */
+    /* The preference being changed, and — when it takes free text — the
+     * value being typed. The field is edited in place rather than in the
+     * input line: a modal that asks a question should take the answer
+     * itself, and the input line is for talking to the channel. */
     char setting[64];
+    char edit[MAX_LINE];
+    size_t edit_len;
     /* Media picker: what Enter does with the URL, decided by the command
      * that opened it (/preview or /view) rather than by the list. */
     enum overlay_action pick_action;
@@ -1006,6 +1034,12 @@ struct app {
     /* Said once: an over-long AGENT.md is a fact about a file, not
      * about this turn. */
     bool bot_prompt_warned;
+    /* What each preference was set to at boot, captured before any
+     * config file is read. /unset restores exactly this — whatever the
+     * defaults happen to BE, including the ones computed from the
+     * machine (media depends on ffmpeg being installed) and the ones a
+     * table column could not hold. */
+    char *setting_default[32];
     /* CTCP pings we are waiting on.
      *
      * The stamp travels in the payload and comes back in the reply, so
@@ -5986,6 +6020,7 @@ static int media_claim_locked(struct app *app, const char *url, bool is_video) {
  * The URL keeps its link and its region: hiding is about the space on
  * screen, so the row is still clickable and /preview still finds it. */
 static void settings_prefill_edit(struct app *app, const char *name);
+static void settings_open_modal(struct app *app, const char *name);
 
 static void hide_media_url(struct app *app, const char *url) {
     pthread_mutex_lock(&app->lock);
@@ -6823,12 +6858,22 @@ static void draw(struct app *app) {
     } else if (app->overlay.kind != OVERLAY_NONE) {
         struct overlay_item items[64];
         size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
-        bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA;
+        /* A MODAL: centred, with a heading above and a key hint below.
+         * The pickers already had that shape, and one preference asked
+         * about is the same question with different answers. */
+        bool modal = app->overlay.kind == OVERLAY_SETTING;
+        bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA || modal;
+        /* Free text has no list, so the single row IS the field. */
+        bool typing = modal && n == 0;
         int box_w = picker ? (main_w > 76 ? 76 : main_w - 2) : 34;
         if (box_w > main_w - 2) box_w = main_w - 2;
         if (box_w < 20) box_w = 20;
         int list_h = (int)(n > 12 ? 12 : n);
         if (list_h < 1) list_h = 1;
+        /* The field row, plus a line for the help text the table already
+         * carries — a modal that names a setting without saying what it
+         * does makes the user go and read /help. */
+        if (modal) list_h = typing ? 2 : list_h + 1;
         int box_h = list_h + (picker ? 2 : 0);
         int box_x = picker ? main_x + (main_w - box_w) / 2 : app->overlay.x;
         int box_y = picker ? (rows - box_h) / 2 : app->overlay.y;
@@ -6853,6 +6898,7 @@ static void draw(struct app *app) {
         app->overlay.w = box_w;
         app->overlay.h = box_h;
 
+        const struct setting_def *mdef = modal ? setting_find(app->overlay.setting) : NULL;
         const char *verb = app->overlay.kind == OVERLAY_MEDIA
                                ? (app->overlay.pick_action == ACT_VIEW ? "open" : "preview")
                                : "reply to";
@@ -6860,20 +6906,44 @@ static void draw(struct app *app) {
                                                                : "(nothing to reply to)";
         for (int row = 0; row < box_h; row++) draw_fill(box_y + row, box_x, box_w, CP_SELECTED);
         int line_y = box_y;
-        if (picker) {
+        if (modal) {
+            draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s",
+                      app->overlay.setting);
+            line_y++;
+            draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM, "%s",
+                      mdef ? mdef->help : "");
+            line_y++;
+        } else if (picker) {
             draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s: %s%s", verb,
                       app->overlay.filter, "_");
             line_y++;
         }
-        for (size_t i = 0; i < (size_t)list_h; i++) {
-            size_t idx = app->overlay.top + i;
-            bool on = idx == app->overlay.sel;
-            draw_fill(line_y, box_x, box_w, on ? CP_MENTION : CP_SELECTED);
-            draw_text(line_y, box_x + 1, box_w - 2, on ? CP_MENTION : CP_SELECTED,
-                      on ? A_BOLD : 0, "%s", idx < n ? items[idx].label : empty);
+        if (typing) {
+            /* The value being typed, with a cursor. It scrolls with the
+             * text rather than being clipped from the left, so the end
+             * you are editing is the end you can see. */
+            const char *val = app->overlay.edit;
+            int room = box_w - 4;
+            size_t vlen = strlen(val);
+            const char *shown = (int)vlen > room ? val + (vlen - (size_t)room) : val;
+            draw_fill(line_y, box_x, box_w, CP_MENTION);
+            draw_text(line_y, box_x + 1, box_w - 2, CP_MENTION, A_BOLD, "%s_", shown);
             line_y++;
+        } else {
+            for (size_t i = 0; i < (size_t)(modal ? list_h - 1 : list_h); i++) {
+                size_t idx = app->overlay.top + i;
+                bool on = idx == app->overlay.sel;
+                draw_fill(line_y, box_x, box_w, on ? CP_MENTION : CP_SELECTED);
+                draw_text(line_y, box_x + 1, box_w - 2, on ? CP_MENTION : CP_SELECTED,
+                          on ? A_BOLD : 0, "%s", idx < n ? items[idx].label : empty);
+                line_y++;
+            }
         }
-        if (picker)
+        if (modal)
+            draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
+                      typing ? "type the value | Enter save | Esc cancel"
+                             : "Up/Down | Enter choose | Esc cancel");
+        else if (picker)
             draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
                       "%zu/%zu | type to filter | Up/Down | Enter | Esc", n ? app->overlay.sel + 1 : 0,
                       n);
@@ -8083,15 +8153,6 @@ static void llm_enqueue_full(struct app *app, const char *network, const char *c
  * The old verbs stay — muscle memory is a feature, and /mouse is two
  * characters shorter than /set mouse on. They now write through the
  * same fields this reads. */
-enum setting_kind { SET_BOOL, SET_TEXT, SET_CHOICE };
-
-struct setting_def {
-    const char *name;
-    enum setting_kind kind;
-    const char *values; /* CHOICE: the accepted words, for the error message */
-    const char *help;
-};
-
 static const struct setting_def SETTINGS[] = {
     { "mouse", SET_BOOL, NULL, "click links, right-click menu, wheel scrolling" },
     { "media", SET_CHOICE, "on|off|all|first-party", "inline images, and from which hosts" },
@@ -8377,6 +8438,53 @@ static void prefs_save(struct app *app) {
     }
     fclose(f);
     free(path);
+}
+
+/* Remember the boot value of every preference, before a config file has
+ * had a chance to change one.
+ *
+ * The alternative was a `default` column in the table, which cannot hold
+ * what several of these actually are: `media` and `animate` default to
+ * whether ffmpeg is installed, `stt.local` to whichever whisper binary
+ * is found. Capturing what the client ACTUALLY started with is both
+ * simpler and correct by construction — /unset can never disagree with
+ * the defaults because it is holding them. */
+static void settings_rows_refresh_locked(struct app *app);
+
+static void settings_capture_defaults(struct app *app) {
+    for (size_t i = 0; i < settings_count() && i < 32; i++) {
+        char raw[MAX_LINE];
+        setting_raw(app, SETTINGS[i].name, raw, sizeof(raw));
+        free(app->setting_default[i]);
+        app->setting_default[i] = xasprintf("%s", raw);
+    }
+}
+
+static void settings_free_defaults(struct app *app) {
+    for (size_t i = 0; i < 32; i++) {
+        free(app->setting_default[i]);
+        app->setting_default[i] = NULL;
+    }
+}
+
+/* Put one preference back to what it was at boot. Returns false when the
+ * name is not a setting; the caller says so. */
+static bool setting_reset(struct app *app, const char *name) {
+    for (size_t i = 0; i < settings_count() && i < 32; i++) {
+        if (strcasecmp(SETTINGS[i].name, name) != 0) continue;
+        const char *def = app->setting_default[i] ? app->setting_default[i] : "";
+        /* Through setting_apply like every other write, so a default
+         * that is no longer valid is refused rather than forced in. */
+        if (!setting_apply(app, &SETTINGS[i], def)) return true;
+        if (setting_in_llm_conf(SETTINGS[i].name)) llm_save(app);
+        else prefs_save(app);
+        pthread_mutex_lock(&app->lock);
+        settings_rows_refresh_locked(app);
+        pthread_mutex_unlock(&app->lock);
+        log_line(app, "/unset %s — back to the default", SETTINGS[i].name);
+        return true;
+    }
+    return false;
 }
 
 /* `name = value` per line, `#` comments, unknown names ignored so a file
@@ -9136,18 +9244,38 @@ static void utf8_trim_partial_tail(char *s) {
  * downstream already treats it as bytes); only the way characters ENTER
  * it changes. A character that will not fit whole is refused whole: half
  * a multibyte sequence in the buffer is a line that cannot be sent. */
-static void input_append_wide(struct app *app, wchar_t wc) {
+/* Append one character, UTF-8 encoded, to any bounded buffer.
+ *
+ * Shared by the input line and the settings field, because a second
+ * place that typed characters into a buffer would be a second place to
+ * get the multibyte arithmetic wrong. A character that will not fit
+ * whole is refused whole: half a sequence is a value that cannot be
+ * sent or saved. */
+static void utf8_append(char *buf, size_t buf_sz, size_t *len, wchar_t wc) {
     char enc[MB_LEN_MAX + 1];
     mbstate_t st;
     memset(&st, 0, sizeof(st));
     size_t n = wcrtomb(enc, wc, &st);
     if (n == 0 || n == (size_t)-1) return;
+    if (*len + n >= buf_sz) return;
+    memcpy(buf + *len, enc, n);
+    *len += n;
+    buf[*len] = 0;
+}
+
+/* Delete one CHARACTER, walking back over UTF-8 continuation bytes. */
+static void utf8_backspace(char *buf, size_t *len) {
+    size_t n = *len;
+    if (!n) return;
+    n--;
+    while (n > 0 && ((unsigned char)buf[n] & 0xC0) == 0x80) n--;
+    *len = n;
+    buf[n] = 0;
+}
+
+static void input_append_wide(struct app *app, wchar_t wc) {
     pthread_mutex_lock(&app->lock);
-    if (app->input_len + n < sizeof(app->input)) {
-        memcpy(app->input + app->input_len, enc, n);
-        app->input_len += n;
-        app->input[app->input_len] = 0;
-    }
+    utf8_append(app->input, sizeof(app->input), &app->input_len, wc);
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -9161,15 +9289,7 @@ static void input_append_wide(struct app *app, wchar_t wc) {
  * reply-prefill guillemets, a completed non-ASCII nick. */
 static void input_backspace(struct app *app) {
     pthread_mutex_lock(&app->lock);
-    size_t n = app->input_len;
-    if (n) {
-        n--;
-        /* Continuation bytes are 10xxxxxx; walk back over them to the
-         * lead byte, which is the start of the character. */
-        while (n > 0 && ((unsigned char)app->input[n] & 0xC0) == 0x80) n--;
-        app->input_len = n;
-        app->input[n] = 0;
-    }
+    utf8_backspace(app->input, &app->input_len);
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -9342,49 +9462,45 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
     if (max == 0) return 0;
     struct overlay *ov = &app->overlay;
     size_t n = 0;
-    if (ov->kind == OVERLAY_MENU) {
-        /* A preference under the pointer. The values it can take are
-         * already in the table — SET_BOOL is on/off, SET_CHOICE lists
-         * its words in `values` — so the menu is BUILT from the same
-         * source /set validates against and cannot offer something the
-         * command would then reject.
-         *
-         * A free-text setting has no such list, so it gets the two
-         * things that are always true of one: type a new value, or empty
-         * it. */
-        if (ov->setting[0]) {
-            const struct setting_def *def = setting_find(ov->setting);
-            if (!def) return n;
-            char cur[256];
-            setting_value(app, def->name, cur, sizeof(cur));
-            if (def->kind == SET_BOOL) {
-                for (size_t k = 0; k < 2; k++) {
-                    const char *word = k ? "off" : "on";
-                    menu_add(out, &n, max, ACT_SET_VALUE, def->name, word, "%s%s",
-                             strcmp(cur, word) == 0 ? "• " : "  ", word);
-                }
-                return n;
+    /* One preference, opened for changing. The values it can take are
+     * already in the table — SET_BOOL is on/off, SET_CHOICE lists its
+     * words in `values` — so the list is BUILT from the same source /set
+     * validates against and cannot offer something the command would
+     * then reject. A free-text setting has no such list and returns
+     * none, which is what puts the modal into its typing mode. */
+    if (ov->kind == OVERLAY_SETTING) {
+        const struct setting_def *def = setting_find(ov->setting);
+        if (!def) return n;
+        char cur[256];
+        setting_value(app, def->name, cur, sizeof(cur));
+        if (def->kind == SET_BOOL) {
+            for (size_t k = 0; k < 2; k++) {
+                const char *word = k ? "off" : "on";
+                menu_add(out, &n, max, ACT_SET_VALUE, def->name, word, "%s%s",
+                         strcmp(cur, word) == 0 ? "> " : "  ", word);
             }
-            if (def->kind == SET_CHOICE && def->values) {
-                /* Split the `on|off|all|first-party` spelling the usage
-                 * message already uses, so one string feeds the error
-                 * text and the menu both. */
-                const char *p = def->values;
-                while (*p && n < max) {
-                    const char *bar = strchr(p, '|');
-                    size_t len = bar ? (size_t)(bar - p) : strlen(p);
-                    char word[32];
-                    snprintf(word, sizeof(word), "%.*s", (int)len, p);
-                    menu_add(out, &n, max, ACT_SET_VALUE, def->name, word, "%s%s",
-                             strcmp(cur, word) == 0 ? "• " : "  ", word);
-                    p = bar ? bar + 1 : p + len;
-                }
-                return n;
-            }
-            if (!menu_add(out, &n, max, ACT_SET_EDIT, def->name, "", "Type a new value")) return n;
-            menu_add(out, &n, max, ACT_SET_VALUE, def->name, "", "Clear it");
             return n;
         }
+        if (def->kind == SET_CHOICE && def->values) {
+            /* Split the `on|off|all|first-party` spelling the usage
+             * message already uses, so one string feeds the error text
+             * and the list both. */
+            const char *p = def->values;
+            while (*p && n < max) {
+                const char *bar = strchr(p, '|');
+                size_t len = bar ? (size_t)(bar - p) : strlen(p);
+                char word[32];
+                snprintf(word, sizeof(word), "%.*s", (int)len, p);
+                menu_add(out, &n, max, ACT_SET_VALUE, def->name, word, "%s%s",
+                         strcmp(cur, word) == 0 ? "> " : "  ", word);
+                p = bar ? bar + 1 : p + len;
+            }
+            return n;
+        }
+        return 0; /* free text: the modal offers a field instead */
+    }
+
+    if (ov->kind == OVERLAY_MENU) {
         /* A picture under the pointer, rather than a person. The URL
          * rides in `body` so the actions are the SAME ones the media
          * picker already uses — a second implementation of "preview
@@ -9523,6 +9639,8 @@ static void overlay_close(struct app *app) {
     app->overlay.filter[0] = 0;
     app->overlay.media[0] = 0;
     app->overlay.setting[0] = 0;
+    app->overlay.edit[0] = 0;
+    app->overlay.edit_len = 0;
     app->overlay.sel = 0;
     app->overlay.top = 0;
     pthread_mutex_unlock(&app->lock);
@@ -9810,6 +9928,64 @@ static bool overlay_key(struct app *app, int ch) {
      * unreachable and the mouse did nothing while a menu was up. */
     if (ch == KEY_MOUSE) return false;
 
+    /* One preference, open for changing. Two modes, decided by whether
+     * the setting has a list of values at all: pick one, or type one.
+     * Handled before the generic Enter below, because in typing mode
+     * Enter must commit the FIELD rather than an item that is not
+     * there. */
+    if (kind == OVERLAY_SETTING) {
+        if (ch == 27) {
+            overlay_close(app);
+            return true;
+        }
+        struct overlay_item items[64];
+        pthread_mutex_lock(&app->lock);
+        size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
+        pthread_mutex_unlock(&app->lock);
+        if (n) {
+            if (ch == KEY_UP || ch == KEY_DOWN) {
+                pthread_mutex_lock(&app->lock);
+                if (ch == KEY_DOWN) app->overlay.sel = (app->overlay.sel + 1) % n;
+                else app->overlay.sel = app->overlay.sel == 0 ? n - 1 : app->overlay.sel - 1;
+                pthread_mutex_unlock(&app->lock);
+                return true;
+            }
+            if (ch == '\n' || ch == '\r') overlay_activate(app);
+            return true;
+        }
+        /* Typing mode. */
+        if (ch == '\n' || ch == '\r') {
+            char name[64], value[MAX_LINE];
+            pthread_mutex_lock(&app->lock);
+            snprintf(name, sizeof(name), "%s", app->overlay.setting);
+            snprintf(value, sizeof(value), "%s", app->overlay.edit);
+            pthread_mutex_unlock(&app->lock);
+            overlay_close(app);
+            if (name[0]) {
+                char cmd[MAX_LINE];
+                snprintf(cmd, sizeof(cmd), "/set %.63s %.900s", name, value);
+                handle_command(app, cmd);
+            }
+            return true;
+        }
+        if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
+            pthread_mutex_lock(&app->lock);
+            utf8_backspace(app->overlay.edit, &app->overlay.edit_len);
+            pthread_mutex_unlock(&app->lock);
+            return true;
+        }
+        if (ch >= 32 && ch < 256 && isprint(ch)) {
+            pthread_mutex_lock(&app->lock);
+            utf8_append(app->overlay.edit, sizeof(app->overlay.edit), &app->overlay.edit_len,
+                        (wchar_t)ch);
+            pthread_mutex_unlock(&app->lock);
+            return true;
+        }
+        /* A modal swallows the rest rather than letting it reach the
+         * channel behind it. */
+        return true;
+    }
+
     if (ch == 27) {
         overlay_close(app);
         return true;
@@ -10022,7 +10198,8 @@ static const char *commands[] = {
     "/query", "/quit", "/quote", "/rehash", "/restart", "/rs", "/sconnect", "/set", "/settings",
     "/share", "/split", "/splith", "/splitv", "/splitw", "/squit", "/stats", "/stt", "/topic",
     "/trace",
-    "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unkline", "/unsplit", "/upload",
+    "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unkline", "/unset", "/unsplit",
+    "/upload",
     "/users", "/version", "/video", "/view", "/vmsg", "/voice", "/voicemsg", "/w",
     "/wallops", "/watch", "/who", "/whois",
     "/whowas", "/win", "/window", "/wire"
@@ -10077,7 +10254,26 @@ static void complete_input(struct app *app) {
     const char *stem = last_space ? last_space + 1 : prefix;
     size_t stem_len = strlen(stem);
 
-    if (typed == 0 || stem_len == 0) return;
+    /* Decided BEFORE the empty-stem bail below, because `/set media `
+     * followed by Tab has an empty stem and is exactly the moment the
+     * values should be offered. */
+    bool set_verb = strncmp(prefix, "/set ", 5) == 0 || strncmp(prefix, "/unset ", 7) == 0;
+    const struct setting_def *set_def = NULL;
+    bool set_values = false;
+    if (set_verb) {
+        const char *rest = prefix + (prefix[1] == 'u' ? 7 : 5);
+        while (*rest == ' ') rest++;
+        char first[64];
+        const char *after = split_head(rest, first, sizeof(first));
+        while (*after == ' ') after++;
+        /* On the VALUE once a whole first word exists and the stem has
+         * moved past it; still on the NAME while the stem IS that word. */
+        if (first[0] && stem >= after) {
+            set_values = true;
+            set_def = setting_find(first);
+        }
+    }
+    if (typed == 0 || (stem_len == 0 && !set_values)) return;
 
     char candidates[64][MAX_CHANNEL];
     size_t matches = 0;
@@ -10096,6 +10292,38 @@ static void complete_input(struct app *app) {
             snprintf(verb, sizeof(verb), "/%s", app->aliases.entries[i].name);
             add_completion_candidate(candidates, &matches, verb, stem);
         }
+    } else if (set_values) {
+        /* On the VALUE. The words come from the same table /set
+         * validates against, so what completes is what would be
+         * accepted — the alternative is discovering the spelling by
+         * typing a wrong one and reading the error. */
+        if (set_def && set_def->kind == SET_BOOL) {
+            add_completion_candidate(candidates, &matches, "on", stem);
+            add_completion_candidate(candidates, &matches, "off", stem);
+        } else if (set_def && set_def->kind == SET_CHOICE && set_def->values) {
+            const char *p = set_def->values;
+            while (*p) {
+                const char *bar = strchr(p, '|');
+                size_t len = bar ? (size_t)(bar - p) : strlen(p);
+                char word[32];
+                snprintf(word, sizeof(word), "%.*s", (int)len, p);
+                add_completion_candidate(candidates, &matches, word, stem);
+                p = bar ? bar + 1 : p + len;
+            }
+        } else if (set_def) {
+            /* Free text has no list, so it completes to what is set now:
+             * for a path or a URL the thing most likely being edited
+             * rather than replaced. Never a secret, and never a value
+             * with a space, which would complete into two words. */
+            char raw[MAX_LINE];
+            size_t need = setting_raw(app, set_def->name, raw, sizeof(raw));
+            bool secret = strstr(set_def->name, "token") != NULL;
+            if (!secret && need > 0 && need < sizeof(raw) && !strchr(raw, ' '))
+                add_completion_candidate(candidates, &matches, raw, stem);
+        }
+    } else if (set_verb) {
+        for (size_t i = 0; i < settings_count(); i++)
+            add_completion_candidate(candidates, &matches, SETTINGS[i].name, stem);
     } else {
         /* Tab completion reads the roster, the window list, the network
          * table AND the whole log — every one of them mutated by the
@@ -10174,6 +10402,34 @@ static void complete_input(struct app *app) {
  * One implementation, reached from the panel's Enter and from the
  * right-click menu, because two of these would drift on the first of
  * those rules that changed. */
+/* Open the modal for one preference.
+ *
+ * A switch or a choice gets its values listed; anything else gets a
+ * field holding what is set now, ready to be edited in place. The field
+ * is seeded with the RAW value for the same reasons the prefill is —
+ * setting_value masks the tokens and substitutes discovered defaults —
+ * except that a secret is seeded EMPTY: showing a token in a box on
+ * screen is showing it to whoever is behind you. */
+static void settings_open_modal(struct app *app, const char *name) {
+    const struct setting_def *def = setting_find(name);
+    if (!def) return;
+    char raw[MAX_LINE];
+    size_t need = setting_raw(app, name, raw, sizeof(raw));
+    bool secret = strstr(name, "token") != NULL;
+    pthread_mutex_lock(&app->lock);
+    app->overlay.kind = OVERLAY_SETTING;
+    app->overlay.sel = 0;
+    app->overlay.top = 0;
+    app->overlay.nick[0] = 0;
+    app->overlay.body[0] = 0;
+    app->overlay.media[0] = 0;
+    snprintf(app->overlay.setting, sizeof(app->overlay.setting), "%s", name);
+    if (secret || need >= sizeof(raw)) app->overlay.edit[0] = 0;
+    else snprintf(app->overlay.edit, sizeof(app->overlay.edit), "%s", raw);
+    app->overlay.edit_len = strlen(app->overlay.edit);
+    pthread_mutex_unlock(&app->lock);
+}
+
 static void settings_prefill_edit(struct app *app, const char *name) {
     char raw[MAX_LINE];
     size_t need = setting_raw(app, name, raw, sizeof(raw));
@@ -11207,6 +11463,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "approve") == 0) log_line(app, "/approve [always] — allow the action the bot is waiting on; `always` remembers this person for this tool");
     else if (strcmp(cmd, "deny") == 0) log_line(app, "/deny — refuse the action the bot is waiting on (silence for 60s also refuses)");
     else if (strcmp(cmd, "set") == 0) log_line(app, "/set [name [value]] — bare lists every setting with its value; a text value may be @/path/to/file to read it from disk (how a multi-line prompt gets in). Names: mouse media animate llm.backend llm.url llm.token llm.model llm.prompt bot.dir");
+    else if (strcmp(cmd, "unset") == 0) log_line(app, "/unset <name> — put one preference back to what it was at startup, before any config file was read; the defaults that are computed from the machine (inline media follows whether ffmpeg is installed) come back computed, not frozen");
     else if (strcmp(cmd, "llm") == 0) log_line(app, "/llm <prompt> — ask the model; the reply lands in the $llm window. /llm -p (or --public) sends it to the current window where everyone reads it. /llm set <backend|url|token|model|prompt> <value> configures it; bare /llm shows the config (token masked)");
     else if (strcmp(cmd, "exec") == 0) log_line(app, "/exec <command> — run it in a shell and SEND its stdout to the current window (everyone sees it); capped at 20 lines / 16 KiB, killed after 15s, stderr discarded");
     else if (strcmp(cmd, "ctcp") == 0) log_line(app, "/ctcp <nick|#channel> <VERB> [args] — send any CTCP query (VERSION, TIME, FINGER…); the reply lands in the window you asked from. /ping is the timed special case");
@@ -13259,6 +13516,15 @@ static void handle_command_dispatch(struct app *app, char *line) {
             }
         }
     set_done:;
+    } else if (verb_args(line, "/unset")) {
+        const char *name = verb_args(line, "/unset");
+        while (*name == ' ') name++;
+        if (!*name) {
+            log_line(app, "/unset <name> — put one preference back to what it was at startup");
+            log_line(app, "  bare /set lists the names");
+        } else if (!setting_reset(app, name)) {
+            log_line(app, "/unset: no such setting `%.40s` — bare /set lists them", name);
+        }
     } else if (strncmp(line, "/exec ", 6) == 0) {
         const char *cmd = line + 6;
         while (*cmd == ' ') cmd++;
@@ -13623,7 +13889,10 @@ static void handle_mouse(struct app *app) {
          * be scrolled — so the row under the pointer is an offset from
          * `top`, not from the head of the list. */
         bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA;
-        int first = picker ? app->overlay.y + 1 : app->overlay.y;
+        /* The modal spends TWO rows on its heading — the name and the
+         * help text — before the first value. */
+        bool modal = app->overlay.kind == OVERLAY_SETTING;
+        int first = modal ? app->overlay.y + 2 : (picker ? app->overlay.y + 1 : app->overlay.y);
         /* The BOX, both dimensions. Testing the row alone made every
          * click on the far side of the screen count as a click on
          * whatever item shared its line. */
@@ -13658,6 +13927,7 @@ static void handle_mouse(struct app *app) {
      * scrolls it, and a click on a preference selects that preference.
      * Falling through to the chat handlers here would hunt for message
      * regions that belong to a screen the panel is covering. */
+    const char *open_setting = NULL;
     pthread_mutex_lock(&app->lock);
     bool in_panel = app->panel != PANEL_CHAT;
     if (in_panel) {
@@ -13686,22 +13956,15 @@ static void handle_mouse(struct app *app) {
                      * two things always true of it. Selecting first, so
                      * the menu is about the row under the pointer even
                      * if the keyboard was somewhere else. */
-                    if (right) {
-                        app->overlay.kind = OVERLAY_MENU;
-                        app->overlay.sel = 0;
-                        app->overlay.x = ev.x;
-                        app->overlay.y = ev.y + 1;
-                        app->overlay.nick[0] = 0;
-                        app->overlay.body[0] = 0;
-                        app->overlay.media[0] = 0;
-                        snprintf(app->overlay.setting, sizeof(app->overlay.setting), "%s",
-                                 SETTINGS[app->settings_sel].name);
-                    }
+                    open_setting = right ? SETTINGS[app->settings_sel].name : NULL;
                 }
             }
         }
     }
     pthread_mutex_unlock(&app->lock);
+    /* Opened after the lock is released: settings_open_modal takes it
+     * itself, and reading the current value needs it too. */
+    if (open_setting) settings_open_modal(app, open_setting);
     if (in_panel) return;
 
     if (right) {
@@ -15548,7 +15811,11 @@ static void event_loop(struct app *app) {
          * than something wrong. */
         if (rc == OK && wch >= 256) {
             pthread_mutex_lock(&app->lock);
-            bool captured = app->overlay.kind != OVERLAY_NONE || app->panel != PANEL_CHAT;
+            bool field = app->overlay.kind == OVERLAY_SETTING;
+            if (field)
+                utf8_append(app->overlay.edit, sizeof(app->overlay.edit), &app->overlay.edit_len,
+                            (wchar_t)wch);
+            bool captured = field || app->overlay.kind != OVERLAY_NONE || app->panel != PANEL_CHAT;
             pthread_mutex_unlock(&app->lock);
             if (!captured) input_append_wide(app, (wchar_t)wch);
             continue;
@@ -16111,6 +16378,9 @@ int main(int argc, char **argv) {
             app->http_host_alias_count);
     /* Before the first scrollback renders, or the people the user blocked
      * flash past on the way in. */
+    /* BEFORE llm_load and prefs_load: this is the only moment the
+     * client is holding its own defaults and nothing else. */
+    settings_capture_defaults(app);
     blocks_load(app);
     llm_load(app);
     /* AFTER the command-line defaults are in place, so a saved preference
@@ -16258,6 +16528,7 @@ int main(int argc, char **argv) {
     /* After the worker is joined, so nothing is still writing into it. */
     view_dir_cleanup(app);
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    settings_free_defaults(app);
     pthread_cond_destroy(&app->jobs_cond);
     pthread_mutex_destroy(&app->jobs_lock);
     pthread_mutex_destroy(&app->ws_lock);

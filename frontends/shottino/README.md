@@ -354,18 +354,23 @@ added last.
   ↑↓        pick a preference        (when the input line is empty)
   Enter     edit it
   Space     toggle a switch
-  right-click  choose from the values it accepts
+  right-click  open it: a list of its values, or a field to type one
   PgUp/PgDn scroll, and the mouse wheel
   click     select the row under the pointer
   Esc       back to chat
 ```
 
-**Right-click a preference** for a menu of the values it can take: a switch
-offers `on` and `off`, a choice setting offers its own words, and free text
-offers "type a new value" or "clear it". The list is built from the same table
-`/set` validates against, so it cannot offer a word the command would reject —
-and cannot quietly stop offering one that gets added. The value in force is
-marked with a `•`.
+**Right-click a preference** to open it in a modal. A switch or a choice
+setting lists the values it accepts, with the one in force marked and
+`Up`/`Down`/`Enter` to pick; anything else opens a **text field** holding what
+is set now, edited in place — the modal asks the question, so it takes the
+answer, rather than sending you back to the input line.
+
+The list is built from the same table `/set` validates against, so it cannot
+offer a word the command would reject, and cannot quietly stop offering one
+that gets added. A token's field opens **empty**: showing a secret in a box on
+screen shows it to whoever is behind you, and saving without typing then clears
+it rather than writing back a mask.
 
 **Enter puts `/set <name> <current>` in the input line** rather than running
 anything: you see exactly what will happen, you can edit it, and it lands in
@@ -376,6 +381,28 @@ they are shown masked, and writing the mask back would set your token to
 
 Panels scroll now. They did not before, and the settings panel is taller than
 a terminal, so the bottom of it was simply not drawn.
+
+### /unset, and Tab
+
+`/unset <name>` puts one preference back to what it was **at startup**, before
+any config file was read. Not to a constant in a table: several defaults are
+computed from the machine — inline media follows whether `ffmpeg` is installed,
+`stt.local` follows whichever whisper binary is on PATH — so the boot values are
+captured once and handed back. `/unset` cannot disagree with the defaults
+because it is holding them.
+
+Tab completes both halves of `/set`:
+
+```
+/set voice.so<TAB>     → /set voice.source
+/set media <TAB>       → on  off  all  first-party
+/set mouse of<TAB>     → /set mouse off
+/set stt.model <TAB>   → completes to what is set now, for editing
+```
+
+Same source as everything else, so what completes is what would be accepted.
+A token never completes — a secret must not appear in the input line because
+somebody pressed Tab.
 
 ### Where preferences are kept
 
