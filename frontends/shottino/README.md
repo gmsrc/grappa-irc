@@ -321,6 +321,28 @@ they are shown masked, and writing the mask back would set your token to
 Panels scroll now. They did not before, and the settings panel is taller than
 a terminal, so the bottom of it was simply not drawn.
 
+### Where preferences are kept
+
+Two files under `~/.local/share/shottino`, both mode 0600:
+
+| file | holds |
+| --- | --- |
+| `llm.conf` | `llm.*` — the model transport's own configuration |
+| `shottino.conf` | everything else `/set` knows |
+
+Until recently only the first existed, so an STT endpoint, its token, the
+capture devices and the three display toggles were set-and-lose while the
+panel presented both halves identically. Both halves persist now, and the
+short verbs (`/mouse`, `/media`) write the same file `/set` does — a
+preference that survives only when you spell it the long way is a preference
+nobody can trust.
+
+A field you never set is written as **nothing**, not as the value the listing
+displays for it: `stt.local` shows the whisper binary it *found* and `bot.dir`
+shows the per-identity path it *derives*, and storing either would freeze a
+probe result into an explicit setting — or pin one identity's bot directory
+onto every other.
+
 ## /llm
 
 Ask a language model, from the client.

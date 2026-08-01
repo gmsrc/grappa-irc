@@ -2608,12 +2608,7 @@ static void render_message(struct app *app, const struct wire_scrollback_message
             log_line_mention(app, false, "[%s/%s] %s %s", network, display_channel, clock, line);
             wrote = true;
         }
-        /* The bot sees conversation only, and only live: replaying history
-     * into it on every scrollback fetch would have it answering
-     * yesterday. */
-    if (conversational && live && !hidden) bot_consider(app, network, display_channel, sender, body);
-
-    /* The row is also a roster fact: the pane must not still show
+        /* The row is also a roster fact: the pane must not still show
          * someone who just left. True even for a blocked person — the
          * nicklist answers "who is here", which is not a matter of
          * taste. */
@@ -2621,6 +2616,18 @@ static void render_message(struct app *app, const struct wire_scrollback_message
         break;
     }
     }
+
+    /* The bot sees conversation only, and only live: replaying history
+     * into it on every scrollback fetch would have it answering
+     * yesterday.
+     *
+     * AFTER the switch, not inside it. This call spent its whole life in
+     * the `default:` arm — the arm reached by exactly the kinds that are
+     * NOT conversational — so `conversational` was false every time it was
+     * evaluated and the bot never saw a single message. Everything built
+     * on top of it (the approval gate, the grants, the memories) was
+     * therefore live code behind a dead door. */
+    if (conversational && live && !hidden) bot_consider(app, network, display_channel, sender, body);
 
     pthread_mutex_lock(&app->lock);
     /* Stamp the row just appended with its scrollback id, so the unread
@@ -7585,6 +7592,222 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     else snprintf(out, out_sz, "?");
 }
 
+/* The value as STORED, for writing back to disk.
+ *
+ * Distinct from setting_value(), which is for the eye: that one masks the
+ * two tokens, prints "(unset)" for an empty field, and substitutes the
+ * DISCOVERED default for `stt.local` and the DERIVED per-identity path for
+ * `bot.dir`. Saving any of those would be a lie on reload — a mask stored
+ * as the token, or a probe result frozen into an explicit setting, or one
+ * identity's bot directory pinned for every other. So the config file
+ * takes what the user actually typed, and an empty field is written as
+ * nothing at all rather than as the default it currently resolves to. */
+static void setting_raw(struct app *app, const char *name, char *out, size_t out_sz) {
+    if (strcmp(name, "mouse") == 0) snprintf(out, out_sz, "%s", app->mouse_enabled ? "on" : "off");
+    else if (strcmp(name, "animate") == 0)
+        snprintf(out, out_sz, "%s", app->animate_media ? "on" : "off");
+    else if (strcmp(name, "media") == 0)
+        snprintf(out, out_sz, "%s",
+                 app->inline_media_enabled ? (app->inline_media_peers ? "all" : "first-party") : "off");
+    else if (strcmp(name, "stt.enabled") == 0)
+        snprintf(out, out_sz, "%s", app->stt_enabled ? "on" : "off");
+    else if (strcmp(name, "stt.url") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->stt_url);
+    else if (strcmp(name, "stt.token") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->stt_token);
+    else if (strcmp(name, "stt.model") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->stt_model);
+    else if (strcmp(name, "stt.local") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->stt_local);
+    else if (strcmp(name, "voice.source") == 0)
+        snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->voice_source);
+    else if (strcmp(name, "video.source") == 0)
+        snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->video_source);
+    else if (strcmp(name, "bot.dir") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->bot_dir);
+    else out[0] = 0;
+}
+
+/* Which file owns a setting.
+ *
+ * `llm.*` lives in llm.conf, written by llm_save through llm.c's own
+ * serializer — it is the LLM transport's configuration and llm.c owns its
+ * shape. Everything else lives in shottino.conf. Asked by prefix rather
+ * than by a per-entry flag so a new setting lands in the right file by
+ * being named, with no second table to keep in step. */
+static bool setting_in_llm_conf(const char *name) { return strncmp(name, "llm.", 4) == 0; }
+
+/* Turning the mouse on or off is a terminal operation, and the terminal is
+ * set up long after this section. Declared rather than moved: the setting
+ * belongs with the settings. */
+static void mouse_apply(struct app *app);
+
+/* Apply one setting's value. Returns false when the VALUE was rejected,
+ * having already said why.
+ *
+ * Shared by /set, the settings panel and the config loader, so a value
+ * that is legal at one door is legal at all three and none of them can
+ * grow its own parsing. The @file form is deliberately NOT here: it is a
+ * convenience of the typed command, and a config file that could name
+ * another file to read would be a config file with an indirection nobody
+ * asked for. */
+static bool setting_apply(struct app *app, const struct setting_def *def, const char *value) {
+    bool on = false;
+    if (def->kind == SET_BOOL && !setting_parse_bool(value, &on)) {
+        log_line(app, "/set %s: expected on or off", def->name);
+        return false;
+    }
+    if (strcmp(def->name, "mouse") == 0) {
+        app->mouse_enabled = on;
+        mouse_apply(app);
+    } else if (strcmp(def->name, "animate") == 0) {
+        app->animate_media = on;
+    } else if (strcmp(def->name, "media") == 0) {
+        if (strcasecmp(value, "off") == 0) app->inline_media_enabled = false;
+        else if (strcasecmp(value, "all") == 0) {
+            app->inline_media_enabled = true;
+            app->inline_media_peers = true;
+        } else if (strcasecmp(value, "first-party") == 0 || strcasecmp(value, "on") == 0) {
+            app->inline_media_enabled = true;
+            app->inline_media_peers = strcasecmp(value, "all") == 0;
+        } else {
+            log_line(app, "/set media: expected %s", def->values);
+            return false;
+        }
+    } else if (strcmp(def->name, "llm.backend") == 0) {
+        if (strcasecmp(value, "claude-cli") == 0) app->llm.backend = LLM_BACKEND_CLAUDE_CLI;
+        else if (strcasecmp(value, "openai") == 0) app->llm.backend = LLM_BACKEND_OPENAI;
+        else {
+            log_line(app, "/set llm.backend: expected %s", def->values);
+            return false;
+        }
+    } else if (strcmp(def->name, "llm.url") == 0)
+        snprintf(app->llm.url, sizeof(app->llm.url), "%.*s", (int)sizeof(app->llm.url) - 1, value);
+    else if (strcmp(def->name, "llm.token") == 0)
+        snprintf(app->llm.token, sizeof(app->llm.token), "%.*s", (int)sizeof(app->llm.token) - 1, value);
+    else if (strcmp(def->name, "llm.model") == 0)
+        snprintf(app->llm.model, sizeof(app->llm.model), "%.*s", (int)sizeof(app->llm.model) - 1, value);
+    else if (strcmp(def->name, "llm.prompt") == 0)
+        snprintf(app->llm.prompt, sizeof(app->llm.prompt), "%s", value);
+    else if (strcmp(def->name, "llm.cli_tools") == 0) {
+        snprintf(app->llm.cli_tools, sizeof(app->llm.cli_tools), "%.*s",
+                 (int)sizeof(app->llm.cli_tools) - 1, value);
+        /* Said plainly, every time, because it is the one setting here
+         * that hands out a capability shottino cannot see: the CLI's own
+         * tools run inside the CLI, under --dangerously-skip-permissions,
+         * and never pass the approval gate. With /bot on, a turn the
+         * NETWORK provoked can reach them. */
+        if (app->llm.cli_tools[0])
+            log_line(app, "/set: the claude CLI's own tools (%s) run INSIDE the CLI — "
+                          "shottino's approval gate does not see them%s",
+                     app->llm.cli_tools,
+                     app->bot_enabled ? ", and /bot is ON: a message from the network "
+                                        "can provoke a turn that uses them"
+                                      : "");
+    } else if (strcmp(def->name, "bot.dir") == 0)
+        snprintf(app->bot_dir, sizeof(app->bot_dir), "%.*s", (int)sizeof(app->bot_dir) - 1, value);
+    else if (strcmp(def->name, "stt.enabled") == 0) {
+        app->stt_enabled = on;
+        if (on && app->stt_url[0])
+            log_line(app, "/stt on — audio will be SENT to %s", app->stt_url);
+        else if (on)
+            log_line(app, "/stt on — local only; no audio leaves this machine");
+    } else if (strcmp(def->name, "stt.url") == 0)
+        snprintf(app->stt_url, sizeof(app->stt_url), "%.*s", (int)sizeof(app->stt_url) - 1, value);
+    else if (strcmp(def->name, "stt.token") == 0)
+        snprintf(app->stt_token, sizeof(app->stt_token), "%.*s", (int)sizeof(app->stt_token) - 1, value);
+    else if (strcmp(def->name, "stt.model") == 0)
+        snprintf(app->stt_model, sizeof(app->stt_model), "%.*s", (int)sizeof(app->stt_model) - 1, value);
+    else if (strcmp(def->name, "stt.local") == 0)
+        snprintf(app->stt_local, sizeof(app->stt_local), "%.*s", (int)sizeof(app->stt_local) - 1, value);
+    else if (strcmp(def->name, "voice.source") == 0)
+        snprintf(app->voice_source, sizeof(app->voice_source), "%.*s",
+                 (int)sizeof(app->voice_source) - 1, value);
+    else if (strcmp(def->name, "video.source") == 0)
+        snprintf(app->video_source, sizeof(app->video_source), "%.*s",
+                 (int)sizeof(app->video_source) - 1, value);
+    return true;
+}
+
+/* ── Preferences on disk ────────────────────────────────────────────────
+ *
+ * Everything /set owns EXCEPT llm.* (llm.conf holds those, written by
+ * llm.c's own serializer). Before this existed, only the llm.* half
+ * survived a restart: an STT endpoint, its token, the capture devices and
+ * the three display toggles were all set-and-lose, which the settings
+ * panel made worse by presenting both halves identically.
+ *
+ * Mode 0600 because stt.token is a bearer token in clear, and 0600 from
+ * the moment of creation rather than by a chmod afterwards — creating it
+ * world-readable and narrowing it later leaves a window where the token
+ * is readable. Same rule llm_save follows for the same reason. */
+static char *prefs_path(void) {
+    char *dir = shottino_state_dir();
+    char *path = xasprintf("%s/shottino.conf", dir);
+    free(dir);
+    return path;
+}
+
+static void prefs_save(struct app *app) {
+    char *path = prefs_path();
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        log_line(app, "/set: cannot write %s: %s", path, strerror(errno));
+        free(path);
+        return;
+    }
+    fchmod(fd, 0600);
+    FILE *f = fdopen(fd, "w");
+    if (!f) {
+        close(fd);
+        free(path);
+        return;
+    }
+    fputs("# shottino preferences. Mode 0600: stt.token is in CLEAR here.\n", f);
+    for (size_t i = 0; i < settings_count(); i++) {
+        if (setting_in_llm_conf(SETTINGS[i].name)) continue;
+        char raw[LLM_MAX_PATH];
+        setting_raw(app, SETTINGS[i].name, raw, sizeof(raw));
+        /* An empty field is written as nothing at all: the reload must
+         * see "the user never set this" and fall back to the same
+         * discovery it would have done on a fresh install. */
+        if (!raw[0]) continue;
+        /* A value with a newline in it would parse back as two lines, one
+         * of them garbage. Nothing here can legally contain one. */
+        if (strchr(raw, '\n')) continue;
+        fprintf(f, "%s = %s\n", SETTINGS[i].name, raw);
+    }
+    fclose(f);
+    free(path);
+}
+
+/* `name = value` per line, `#` comments, unknown names ignored so a file
+ * written by a newer shottino does not stop an older one from starting.
+ * A rejected VALUE reports itself through setting_apply — a state file is
+ * never a reason to refuse to start, but it is also not a reason to go
+ * quiet about a line that did nothing. */
+static void prefs_load(struct app *app) {
+    char *path = prefs_path();
+    FILE *f = fopen(path, "r");
+    free(path);
+    if (!f) return;
+    char line[LLM_MAX_PATH * 2];
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p || *p == '#') continue;
+        char *eq = strchr(p, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char *name = p;
+        char *value = eq + 1;
+        for (char *e = eq - 1; e >= name && (*e == ' ' || *e == '\t'); e--) *e = 0;
+        while (*value == ' ' || *value == '\t') value++;
+        const struct setting_def *def = setting_find(name);
+        /* llm.* in this file would be a second source of truth for a
+         * value llm.conf already owns, and the two would drift. */
+        if (!def || setting_in_llm_conf(def->name)) continue;
+        setting_apply(app, def, value);
+    }
+    fclose(f);
+}
+
 /* One panel row per setting, from the same table /set reads.
  *
  * Rewritten in place after an edit rather than by rebuilding the panel:
@@ -11362,6 +11585,10 @@ static void handle_command_dispatch(struct app *app, char *line) {
         }
         app->mouse_enabled = want;
         mouse_apply(app);
+        /* The short verb writes the same field /set mouse writes, so it
+         * must reach the same file: a preference that survives only when
+         * you spell it the long way is a preference nobody can trust. */
+        prefs_save(app);
         if (want)
             log_line(app, "mouse tracking ON — click media links to preview; "
                           "terminal text selection is suppressed (Shift-drag usually still works)");
@@ -11442,6 +11669,10 @@ static void handle_command_dispatch(struct app *app, char *line) {
             log_line(app, "  'anim'/'still' control whether video and GIFs play or show one frame");
             return;
         }
+        /* Same fields /set media and /set animate write, so the same file
+         * has to hear about it — every arm above reaches here except the
+         * usage arm, which returns without changing anything. */
+        prefs_save(app);
         log_line(app, "inline images %s, hosts: %s, clips: %s (terminal graphics: %s)",
                  app->inline_media_enabled ? "ON" : "OFF",
                  app->inline_media_peers ? "ALL" : "first-party only",
@@ -12023,88 +12254,13 @@ static void handle_command_dispatch(struct app *app, char *line) {
                     }
                     value = filebuf;
                 }
-                bool on = false;
-                if (def->kind == SET_BOOL && !setting_parse_bool(value, &on)) {
-                    log_line(app, "/set %s: expected on or off", def->name);
-                    goto set_done;
-                }
-                bool touched_llm = strncmp(def->name, "llm.", 4) == 0;
-                if (strcmp(def->name, "mouse") == 0) {
-                    app->mouse_enabled = on;
-                    mouse_apply(app);
-                } else if (strcmp(def->name, "animate") == 0) {
-                    app->animate_media = on;
-                } else if (strcmp(def->name, "media") == 0) {
-                    if (strcasecmp(value, "off") == 0) app->inline_media_enabled = false;
-                    else if (strcasecmp(value, "all") == 0) {
-                        app->inline_media_enabled = true;
-                        app->inline_media_peers = true;
-                    } else if (strcasecmp(value, "first-party") == 0 || strcasecmp(value, "on") == 0) {
-                        app->inline_media_enabled = true;
-                        app->inline_media_peers = strcasecmp(value, "all") == 0;
-                    } else {
-                        log_line(app, "/set media: expected %s", def->values);
-                        goto set_done;
-                    }
-                } else if (strcmp(def->name, "llm.backend") == 0) {
-                    if (strcasecmp(value, "claude-cli") == 0) app->llm.backend = LLM_BACKEND_CLAUDE_CLI;
-                    else if (strcasecmp(value, "openai") == 0) app->llm.backend = LLM_BACKEND_OPENAI;
-                    else {
-                        log_line(app, "/set llm.backend: expected %s", def->values);
-                        goto set_done;
-                    }
-                } else if (strcmp(def->name, "llm.url") == 0)
-                    snprintf(app->llm.url, sizeof(app->llm.url), "%.*s", (int)sizeof(app->llm.url) - 1, value);
-                else if (strcmp(def->name, "llm.token") == 0)
-                    snprintf(app->llm.token, sizeof(app->llm.token), "%.*s", (int)sizeof(app->llm.token) - 1, value);
-                else if (strcmp(def->name, "llm.model") == 0)
-                    snprintf(app->llm.model, sizeof(app->llm.model), "%.*s", (int)sizeof(app->llm.model) - 1, value);
-                else if (strcmp(def->name, "llm.prompt") == 0)
-                    snprintf(app->llm.prompt, sizeof(app->llm.prompt), "%s", value);
-                else if (strcmp(def->name, "llm.cli_tools") == 0) {
-                    snprintf(app->llm.cli_tools, sizeof(app->llm.cli_tools), "%.*s",
-                             (int)sizeof(app->llm.cli_tools) - 1, value);
-                    /* Said plainly, every time, because it is the one
-                     * setting here that hands out a capability shottino
-                     * cannot see: the CLI's own tools run inside the CLI,
-                     * under --dangerously-skip-permissions, and never
-                     * pass the approval gate. With /bot on, a turn the
-                     * NETWORK provoked can reach them. */
-                    if (app->llm.cli_tools[0])
-                        log_line(app, "/set: the claude CLI's own tools (%s) run INSIDE the CLI — "
-                                      "shottino's approval gate does not see them%s",
-                                 app->llm.cli_tools,
-                                 app->bot_enabled ? ", and /bot is ON: a message from the network "
-                                                    "can provoke a turn that uses them"
-                                                  : "");
-                } else if (strcmp(def->name, "bot.dir") == 0)
-                    snprintf(app->bot_dir, sizeof(app->bot_dir), "%.*s",
-                             (int)sizeof(app->bot_dir) - 1, value);
-                else if (strcmp(def->name, "stt.enabled") == 0) {
-                    app->stt_enabled = on;
-                    if (on && app->stt_url[0])
-                        log_line(app, "/stt on — audio will be SENT to %s", app->stt_url);
-                    else if (on)
-                        log_line(app, "/stt on — local only; no audio leaves this machine");
-                } else if (strcmp(def->name, "stt.url") == 0)
-                    snprintf(app->stt_url, sizeof(app->stt_url), "%.*s",
-                             (int)sizeof(app->stt_url) - 1, value);
-                else if (strcmp(def->name, "stt.token") == 0)
-                    snprintf(app->stt_token, sizeof(app->stt_token), "%.*s",
-                             (int)sizeof(app->stt_token) - 1, value);
-                else if (strcmp(def->name, "stt.model") == 0)
-                    snprintf(app->stt_model, sizeof(app->stt_model), "%.*s",
-                             (int)sizeof(app->stt_model) - 1, value);
-                else if (strcmp(def->name, "stt.local") == 0)
-                    snprintf(app->stt_local, sizeof(app->stt_local), "%.*s",
-                             (int)sizeof(app->stt_local) - 1, value);
-                else if (strcmp(def->name, "voice.source") == 0)
-                    snprintf(app->voice_source, sizeof(app->voice_source), "%.*s",
-                             (int)sizeof(app->voice_source) - 1, value);
-                else if (strcmp(def->name, "video.source") == 0)
-                    snprintf(app->video_source, sizeof(app->video_source), "%.*s",
-                             (int)sizeof(app->video_source) - 1, value);
+                if (!setting_apply(app, def, value)) goto set_done;
+                bool touched_llm = setting_in_llm_conf(def->name);
+                /* Two files, one rule: llm.c owns llm.conf, this owns
+                 * the rest. Every /set writes SOMETHING now — the half
+                 * that had no writer at all was the bug. */
                 if (touched_llm) llm_save(app);
+                else prefs_save(app);
                 /* Whether the change came from the panel or from a typed
                  * /set, the panel is showing the old value until this
                  * runs. One refresh at the point of change covers both
@@ -12523,7 +12679,6 @@ static void handle_mouse(struct app *app) {
     if (in_panel) return;
 
     if (right) {
-        /* Right-click names the message under the pointer. */
         pthread_mutex_lock(&app->lock);
         for (size_t i = 0; i < app->msg_region_count; i++) {
             const struct msg_region *r = &app->msg_regions[i];
@@ -14661,6 +14816,11 @@ int main(int argc, char **argv) {
      * flash past on the way in. */
     blocks_load(app);
     llm_load(app);
+    /* AFTER the command-line defaults are in place, so a saved preference
+     * beats the probe that guessed one (`media`, for instance, defaults to
+     * whether ffmpeg exists), and after initscr, because `mouse` reaches
+     * the terminal. */
+    prefs_load(app);
     /* AFTER login: the grants live in the per-identity bot directory,
      * and before the subject is known that path names nobody. */
     bot_grants_load(app);

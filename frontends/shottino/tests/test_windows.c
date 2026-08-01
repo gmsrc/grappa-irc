@@ -1082,6 +1082,119 @@ TEST(two_identities_get_two_bot_directories) {
 
 /* "Approve always" that forgets at the next restart is not a grant, it
  * is a longer session. */
+/* The bot's door, not its judgement.
+ *
+ * bot_consider spent its whole life inside the `default:` arm of
+ * render_message's kind switch — the arm reached by exactly the kinds that
+ * are NOT conversation — so its `conversational &&` guard was false every
+ * time it ran and the bot never saw one message. Everything downstream (the
+ * approval gate, the grants, the memories) was correct code behind a door
+ * that never opened, which is why no test caught it: they all tested the
+ * room and none tested the door.
+ *
+ * So this asserts reachability, at the only place it can be observed from
+ * outside: a mention while /bot is on lands a turn on the llm queue. */
+TEST(a_conversation_reaches_the_bot_and_a_join_does_not) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    app->bot_enabled = true;
+
+    struct wire_scrollback_message m = { 0 };
+    m.id = 1;
+    m.network = "azzurra";
+    m.channel = "#sniffo";
+    m.sender = "alice";
+    m.kind = MSG_PRIVMSG;
+    m.body = "vjt: are you there?";   /* our own nick — a mention */
+    render_message(app, &m, true);
+    CHECK(app->llm_tail != app->llm_head);
+
+    /* A PRESENCE row is not conversation and must NOT wake it: that is the
+     * half of the guard the misplaced brace was accidentally enforcing,
+     * and moving the call must not lose it. */
+    size_t after_privmsg = app->llm_tail;
+    m.id = 2;
+    m.kind = MSG_JOIN;
+    m.body = "";
+    render_message(app, &m, true);
+    CHECK_LONG(app->llm_tail, after_privmsg);
+
+    /* Still ours only when we are addressed — an unrelated line in a
+     * channel the bot is sitting in is not a question for it. */
+    m.id = 3;
+    m.kind = MSG_PRIVMSG;
+    m.body = "alice is talking to bob about lunch";
+    render_message(app, &m, true);
+    CHECK_LONG(app->llm_tail, after_privmsg);
+
+    free_app(app);
+}
+
+/* Every preference the panel shows must come back after a restart.
+ *
+ * Only the llm.* half had a writer: an STT endpoint, its token, the capture
+ * devices and the three display toggles were set-and-lose, while the
+ * settings panel presented both halves identically. */
+TEST(a_preference_survives_a_restart) {
+    char home[] = "/tmp/shottino-prefs-test-XXXXXX";
+    CHECK(mkdtemp(home) != NULL);
+    char *old_home = getenv("HOME");
+    char *saved = old_home ? strdup(old_home) : NULL;
+    setenv("HOME", home, 1);
+
+    struct app *a = window_app();
+    /* Through the same door /set uses, so the test cannot pass by
+     * writing fields the real command would have parsed differently. */
+    CHECK(setting_apply(a, setting_find("stt.url"), "https://whisper.example/v1"));
+    CHECK(setting_apply(a, setting_find("stt.token"), "sk-not-a-real-key-8842"));
+    CHECK(setting_apply(a, setting_find("voice.source"), "pulse:default"));
+    CHECK(setting_apply(a, setting_find("media"), "all"));
+    CHECK(setting_apply(a, setting_find("animate"), "off"));
+    prefs_save(a);
+
+    struct app *b = window_app();
+    prefs_load(b);
+    CHECK(strcmp(b->stt_url, "https://whisper.example/v1") == 0);
+    CHECK(strcmp(b->stt_token, "sk-not-a-real-key-8842") == 0);
+    CHECK(strcmp(b->voice_source, "pulse:default") == 0);
+    CHECK(b->inline_media_enabled && b->inline_media_peers);
+    CHECK(!b->animate_media);
+
+    /* A value never set stays unset rather than coming back as whatever
+     * the listing would have DISPLAYED for it: setting_value substitutes a
+     * discovered binary for stt.local and a derived path for bot.dir, and
+     * storing either would freeze a probe result into an explicit
+     * preference. */
+    CHECK(b->stt_local[0] == 0);
+    CHECK(b->bot_dir[0] == 0);
+
+    /* llm.* is llm.conf's business — writing it here too would give one
+     * value two files to disagree from. */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/.local/share/shottino/shottino.conf", home);
+    FILE *f = fopen(path, "r");
+    CHECK(f != NULL);
+    char buf[4096];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = 0;
+    fclose(f);
+    CHECK(strstr(buf, "llm.") == NULL);
+    CHECK(strstr(buf, "stt.token = sk-not-a-real-key-8842") != NULL);
+
+    /* 0600: the token is in clear in there. */
+    struct stat st;
+    CHECK(stat(path, &st) == 0);
+    CHECK_LONG(st.st_mode & 0777, 0600);
+
+    unlink(path);
+    free_app(a);
+    free_app(b);
+    if (saved) setenv("HOME", saved, 1);
+    else unsetenv("HOME");
+    free(saved);
+}
+
 TEST(a_standing_grant_survives_a_restart) {
     char dir[] = "/tmp/shottino-grants-test-XXXXXX";
     CHECK(mkdtemp(dir) != NULL);
@@ -1270,6 +1383,8 @@ int main(void) {
     RUN(a_grant_is_per_person_and_per_tool);
     RUN(a_memory_filename_is_built_not_taken);
     RUN(two_identities_get_two_bot_directories);
+    RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
+    RUN(a_preference_survives_a_restart);
     RUN(a_standing_grant_survives_a_restart);
     RUN(a_tab_completed_verb_still_dispatches);
     RUN(the_settings_panel_lists_every_setting);
