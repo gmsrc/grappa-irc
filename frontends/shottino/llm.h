@@ -35,6 +35,13 @@
 #define LLM_MAX_PATH 512
 #define LLM_MAX_TOOLS 256
 
+/* The default context window, and how much of it the CONVERSATION may
+ * occupy. The rest is headroom for the system prompt, the tool
+ * declarations and the answer itself — all three grow, and a budget
+ * that spent the whole window on history would push one of them out. */
+#define LLM_CONTEXT_DEFAULT 65536
+#define LLM_CONTEXT_TARGET_PCT 80
+
 typedef enum {
     LLM_BACKEND_OPENAI = 0,
     LLM_BACKEND_CLAUDE_CLI
@@ -53,6 +60,12 @@ struct llm_config {
      * approval gate, which is why "none" is the default and why the
      * setter says so out loud. */
     char cli_tools[LLM_MAX_TOOLS];
+    /* The model's context window, in tokens. The client keeps the
+     * conversation under a fraction of this (see LLM_CONTEXT_TARGET_PCT)
+     * so the fixed parts — the system prompt and the tool declarations —
+     * and the reply all still fit. 0 means "use the default"; a config
+     * written by an older build has no line for it. */
+    int context_tokens;
 };
 
 /* One turn of a conversation, in the order it happened. */

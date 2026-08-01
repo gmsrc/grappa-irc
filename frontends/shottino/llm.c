@@ -96,6 +96,8 @@ bool llm_config_parse(const char *text, struct llm_config *out) {
         else if (strcmp(key, "model") == 0) set_field(out->model, sizeof(out->model), val);
         else if (strcmp(key, "cli_tools") == 0)
             set_field(out->cli_tools, sizeof(out->cli_tools), val);
+        else if (strcmp(key, "context") == 0)
+            out->context_tokens = (int)strtol(val, NULL, 10);
         else if (strcmp(key, "prompt") == 0)
             unescape_into(out->prompt, sizeof(out->prompt), val);
         /* Anything else: ignored ON PURPOSE. A config written by a newer
@@ -115,9 +117,11 @@ bool llm_config_serialize(const struct llm_config *cfg, char *out, size_t out_sz
                      "token = %s\n"
                      "model = %s\n"
                      "cli_tools = %s\n"
+                     "context = %d\n"
                      "prompt = %s\n",
                      cfg->backend == LLM_BACKEND_CLAUDE_CLI ? "claude-cli" : "openai", cfg->url,
-                     cfg->token, cfg->model, cfg->cli_tools, prompt);
+                     cfg->token, cfg->model, cfg->cli_tools,
+                     cfg->context_tokens > 0 ? cfg->context_tokens : LLM_CONTEXT_DEFAULT, prompt);
     return n > 0 && (size_t)n < out_sz;
 }
 

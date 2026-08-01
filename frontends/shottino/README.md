@@ -473,6 +473,38 @@ CLI tools whatever this is set to. The keyboard is the trusted channel; a
 stranger's message is data, and handing it a shell because the owner once
 enabled one for themselves is not a trade anyone agreed to.
 
+### Context
+
+The conversation is **remembered**, per window and per door. Until recently it
+was not: every request was built from the current prompt and nothing else, so
+the model met you fresh each time and a follow-up like "and the other one?"
+referred to nothing. Both backends had the hole for different reasons — the
+openai path sent a one-message array, and the claude CLI runs one subprocess
+per request with `--no-session-persistence`. The history is kept **here**
+rather than delegated to a backend session, because only one of the two has
+sessions and a conversation that behaves differently depending on the transport
+is worse than one the client has to carry.
+
+It **rolls**. The system prompt and the tool declarations are fixed costs on
+every request, so they are subtracted, not counted; what is left is the
+conversation's budget, and the newest turns that fit are the ones sent — the
+end of a conversation is what a follow-up refers to.
+
+```sh
+/set llm.context 128000      # tokens; default 65536, also in /settings
+/llm-clear                   # forget it; the next question starts fresh
+/llm-compact                 # summarise it and REPLACE it with the summary
+```
+
+The budget is **80%** of the window, and tokens are estimated at four bytes
+each — a rule of thumb, not a tokenizer, which is exactly why a fifth of the
+window is left spare for the guess to be wrong in.
+
+`/llm` and `/bot` keep **separate** conversations even in the same channel. One
+is you thinking out loud with a model; the other is a bot answering strangers,
+under a different prompt and a different trust model. Letting either read the
+other's history would be neither.
+
 It runs on its **own thread**, never the job worker: a model call takes seconds
 to minutes, and sharing the worker would park scrollback fetches and sends
 behind somebody's prompt. Requests queue (depth 8) and run one at a time.

@@ -510,6 +510,14 @@ enum overlay_kind {
 /* A recording stops itself here rather than running until the disk or
  * the upload limit says so. Declared with the overlay because the box
  * that draws the timer prints it. */
+/* Conversation memory for /llm and /bot: how many separate conversations
+ * are kept, how many turns each remembers, and how much of one turn is
+ * worth carrying. Small on purpose — the point is that a follow-up makes
+ * sense, not that the model can recite the channel. */
+#define LLM_HISTORY_CONVS 4
+#define LLM_HISTORY_TURNS 8
+#define LLM_HISTORY_BYTES 1500
+
 #define RECORD_MAX_SECONDS 300
 struct app;
 struct job;
@@ -1023,8 +1031,37 @@ struct app {
          * on_behalf_of would silently change the prompt the day a
          * non-bot path grows a sender. */
         bool from_bot;
+        /* /llm-compact: this turn's job is to SUMMARISE the conversation
+         * and replace it, not to answer a question. Carried as a flag
+         * because it takes the same transport, the same config and the
+         * same thread — only what happens to the reply differs. */
+        bool compact;
     } llm_queue[8];
     size_t llm_head, llm_tail;
+    /* What has been said in each conversation, so the next question can
+     * refer to the last answer.
+     *
+     * There was NO history at all: every request built its turn array
+     * from the current prompt and nothing else, so the model met the
+     * user fresh each time and "it" in a follow-up referred to nothing.
+     * Both backends had the same hole for different reasons — openai was
+     * sent a one-message array, and the claude CLI runs one subprocess
+     * per request with --no-session-persistence.
+     *
+     * Kept HERE rather than delegated to a backend session, because only
+     * one of the two has sessions and a conversation that behaves
+     * differently depending on the transport is worse than one that has
+     * to be carried. Bounded three ways — conversations, turns each, and
+     * bytes per turn — because this is a chat client, not a notebook. */
+    struct llm_conv {
+        char key[MAX_SLUG + MAX_CHANNEL + 16];
+        long used_ms;
+        struct {
+            const char *role; /* "user" or "assistant": literals, never freed */
+            char *text;
+        } turn[LLM_HISTORY_TURNS];
+        size_t count;
+    } llm_convs[LLM_HISTORY_CONVS];
     bool llm_busy;
     bool llm_stop;
     /* Set by the llm thread as the LAST thing it does, so shutdown can
@@ -7922,6 +7959,18 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
 }
 
 /* One request, start to finish. Runs ONLY on the llm thread. */
+static int llm_context_tokens(const struct llm_config *cfg);
+static int llm_context_budget(const struct llm_config *cfg);
+static size_t llm_tokens_of(const char *s);
+static size_t llm_fixed_cost(struct app *app, const struct llm_config *cfg, int writes);
+static void llm_history_append(struct app *app, const char *network, const char *channel,
+                               bool from_bot, const char *role, const char *text);
+static size_t llm_history_load(struct app *app, const char *network, const char *channel,
+                               bool from_bot, char **out, const char **roles, size_t max,
+                               size_t budget);
+static void llm_history_clear(struct app *app, const char *network, const char *channel,
+                              bool from_bot);
+
 static void llm_run(struct app *app, const struct llm_req *req) {
     const char *why = NULL;
     if (!llm_config_ready(&app->llm, &why)) {
@@ -7975,9 +8024,25 @@ static void llm_run(struct app *app, const struct llm_req *req) {
      * MCP and openai over the tools array, but a tool is executed in one
      * place, under one gate, and its result is fed back the same way —
      * two tool stories would be two sets of rules to keep straight. */
-    struct llm_turn turns[8];
+    /* The conversation SO FAR, then this question. Without the history
+     * the model met the user fresh on every request, so a follow-up like
+     * "and the other one?" referred to nothing — which is what made /llm
+     * feel like a search box rather than a conversation. */
+    struct llm_turn turns[LLM_HISTORY_TURNS + 4];
+    char *hist_text[LLM_HISTORY_TURNS] = { 0 };
+    const char *hist_role[LLM_HISTORY_TURNS] = { 0 };
     size_t nturns = 0;
+    size_t budget = (size_t)llm_context_budget(&cfg);
+    size_t fixed = llm_fixed_cost(app, &cfg, writes) + llm_tokens_of(req->text);
+    budget = budget > fixed ? budget - fixed : 0;
+    size_t nhist = llm_history_load(app, req->network, req->channel, req->from_bot, hist_text,
+                                    hist_role, LLM_HISTORY_TURNS, budget);
+    for (size_t i = 0; i < nhist; i++)
+        turns[nturns++] = (struct llm_turn){ hist_role[i] ? hist_role[i] : "user", hist_text[i] };
     turns[nturns++] = (struct llm_turn){ "user", req->text };
+    /* Recorded BEFORE the call, so a question that fails still shapes
+     * what the next one means — the user asked it either way. */
+    llm_history_append(app, req->network, req->channel, req->from_bot, "user", req->text);
 
     for (int round = 0; round < 2; round++) {
         struct llm_tool_call calls[LLM_MAX_TOOL_CALLS];
@@ -7986,11 +8051,32 @@ static void llm_run(struct app *app, const struct llm_req *req) {
         reply = NULL;
 
         if (cfg.backend == LLM_BACKEND_CLAUDE_CLI) {
-            /* No session survives the subprocess, so the follow-up turn
-             * carries its own context: the question, then what the tools
-             * answered, in one message. */
-            char *text = nturns > 1 ? xasprintf("%s\n\n%s", req->text, turns[nturns - 1].content)
-                                    : xasprintf("%s", req->text);
+            /* No session survives the subprocess — one is spawned per
+             * request, with --no-session-persistence — so everything the
+             * model needs travels in the one message: what was said
+             * before, the question, and whatever the tools answered.
+             *
+             * Flattened rather than sent as turns because the CLI takes a
+             * single user message; the labels are what make it read as a
+             * conversation rather than as one long question. */
+            char flat[LLM_MAX_PROMPT];
+            size_t used = 0;
+            for (size_t i = 0; i < nturns && used + 64 < sizeof(flat); i++) {
+                const char *who = strcmp(turns[i].role, "assistant") == 0 ? "You said" : "They said";
+                /* The LAST turn is the question being asked now, not a
+                 * quotation of one. */
+                if (i + 1 == nturns) break;
+                int w = snprintf(flat + used, sizeof(flat) - used, "%s: %.*s\n\n", who,
+                                 (int)LLM_HISTORY_BYTES, turns[i].content ? turns[i].content : "");
+                if (w < 0 || (size_t)w >= sizeof(flat) - used) break;
+                used += (size_t)w;
+            }
+            char *text = xasprintf("%s%s", flat, req->text);
+            if (nturns > 1 && strcmp(turns[nturns - 1].role, "user") == 0 &&
+                turns[nturns - 1].content != req->text) {
+                free(text);
+                text = xasprintf("%s%s\n\n%s", flat, req->text, turns[nturns - 1].content);
+            }
             reply = llm_call_claude_cli(app, &cfg, text, writes, calls, LLM_MAX_TOOL_CALLS,
                                         &ncalls);
             free(text);
@@ -8052,7 +8138,32 @@ static void llm_run(struct app *app, const struct llm_req *req) {
         if (nturns < sizeof(turns) / sizeof(turns[0]))
             turns[nturns++] = (struct llm_turn){ "user", tool_notes };
     }
-    if (!reply) return; /* the transport already said why */
+    /* The loaded copies belong to this call. */
+    for (size_t i = 0; i < nhist; i++) free(hist_text[i]);
+    if (!reply) {
+        free(tool_notes);
+        return; /* the transport already said why */
+    }
+    if (req->compact) {
+        /* The summary BECOMES the conversation. Everything it stands for
+         * is dropped, so the next question starts from a paragraph
+         * instead of from forty turns — which is the whole point, and
+         * why this is a command rather than something the client does
+         * behind the user's back. */
+        llm_history_clear(app, req->network, req->channel, req->from_bot);
+        char *kept = xasprintf("Summary of the conversation so far: %s", reply);
+        llm_history_append(app, req->network, req->channel, req->from_bot, "assistant", kept);
+        free(kept);
+        log_line(app, "[%s/%s] --- context compacted to about %zu tokens", req->network,
+                 req->channel, llm_tokens_of(reply));
+        free(reply);
+        free(tool_notes);
+        return;
+    }
+    /* What the model actually said, so the next question can refer to
+     * it. Recorded before the reply is trimmed for the channel: the
+     * conversation should remember the answer, not the excerpt. */
+    llm_history_append(app, req->network, req->channel, req->from_bot, "assistant", reply);
 
     if (req->publish) {
         /* PUBLIC: real messages, everyone reads them. Capped like /exec
@@ -8118,9 +8229,150 @@ static void *llm_main(void *arg) {
     }
 }
 
+/* ── The context budget ─────────────────────────────────────────────────
+ *
+ * Tokens are ESTIMATED at four bytes each. That is a rule of thumb, not
+ * a tokenizer, and it is deliberately the crude one: the client cannot
+ * know the model's vocabulary, the estimate only has to be close enough
+ * to keep the request inside a window, and the target leaves a fifth of
+ * that window spare precisely so the guess can be wrong.
+ *
+ * What the budget covers is the CONVERSATION. The system prompt and the
+ * tool declarations are fixed costs that ride along with every request
+ * — they are not trimmable, so they are subtracted rather than counted. */
+static int llm_context_tokens(const struct llm_config *cfg) {
+    return cfg->context_tokens > 0 ? cfg->context_tokens : LLM_CONTEXT_DEFAULT;
+}
+
+static int llm_context_budget(const struct llm_config *cfg) {
+    return llm_context_tokens(cfg) * LLM_CONTEXT_TARGET_PCT / 100;
+}
+
+static size_t llm_tokens_of(const char *s) { return s ? (strlen(s) + 3) / 4 : 0; }
+
+/* What the fixed parts cost, so the history knows what is left for it:
+ * the system prompt, the tool declarations, and room for an answer. */
+static size_t llm_fixed_cost(struct app *app, const struct llm_config *cfg, int writes) {
+    size_t fixed = llm_tokens_of(cfg->prompt);
+    char *tools = writes >= 0 ? llm_tools_json(writes > 0) : NULL;
+    fixed += llm_tokens_of(tools);
+    free(tools);
+    (void)app;
+    /* Headroom for the reply. A budget that fits the question exactly
+     * leaves nowhere to put the answer. */
+    return fixed + 2048;
+}
+
+/* ── Conversation memory ────────────────────────────────────────────────
+ *
+ * One conversation per (network, window): /llm in the $llm window and a
+ * bot answering in #channel are different conversations and must not
+ * bleed into each other. Caller holds app->lock. */
+static struct llm_conv *llm_conv_for_locked(struct app *app, const char *network,
+                                            const char *channel, bool from_bot) {
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key(network, channel, scope, sizeof(scope));
+    /* /llm and /bot are SEPARATE conversations even in the same window.
+     * One is the owner thinking out loud with a model; the other is a
+     * bot answering strangers, under a different prompt and a different
+     * trust model. Letting a channel's bot history leak into what the
+     * owner asked privately — or the reverse — would be neither. */
+    char key[sizeof(scope) + 8];
+    snprintf(key, sizeof(key), "%s|%s", scope, from_bot ? "bot" : "llm");
+    struct llm_conv *oldest = &app->llm_convs[0];
+    for (size_t i = 0; i < LLM_HISTORY_CONVS; i++) {
+        struct llm_conv *c = &app->llm_convs[i];
+        if (strcmp(c->key, key) == 0) {
+            c->used_ms = monotonic_ms();
+            return c;
+        }
+        if (c->used_ms < oldest->used_ms) oldest = c;
+    }
+    /* Reuse the least recently used slot. A conversation nobody has
+     * returned to in four other conversations' time is one nobody is
+     * carrying on. */
+    for (size_t i = 0; i < oldest->count; i++) {
+        free(oldest->turn[i].text);
+        oldest->turn[i].text = NULL;
+    }
+    oldest->count = 0;
+    snprintf(oldest->key, sizeof(oldest->key), "%s", key);
+    oldest->used_ms = monotonic_ms();
+    return oldest;
+}
+
+static void llm_history_append(struct app *app, const char *network, const char *channel,
+                               bool from_bot, const char *role, const char *text) {
+    if (!text || !text[0]) return;
+    pthread_mutex_lock(&app->lock);
+    struct llm_conv *c = llm_conv_for_locked(app, network, channel, from_bot);
+    if (c->count == LLM_HISTORY_TURNS) {
+        /* Oldest out. Dropping a PAIR would be tidier, but the turns are
+         * not reliably paired — a request can fail after the question
+         * was recorded — and dropping one at a time cannot get that
+         * wrong. */
+        free(c->turn[0].text);
+        memmove(c->turn, c->turn + 1, sizeof(c->turn[0]) * (LLM_HISTORY_TURNS - 1));
+        c->count--;
+    }
+    c->turn[c->count].role = role;
+    c->turn[c->count].text = xasprintf("%.*s", (int)LLM_HISTORY_BYTES, text);
+    c->count++;
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Copy the conversation so far into `out`, newest last. Returns how many
+ * turns were written. The strings are duplicated because the caller uses
+ * them outside the lock, and the ring can move under it. */
+/* The most recent turns that FIT, newest last.
+ *
+ * Walked backwards from the newest and stopped when the budget runs
+ * out, so what survives a long conversation is its end — which is what
+ * a follow-up refers to. Older turns are not deleted here: /llm-compact
+ * summarises them and /llm-clear drops them, and both are the user's
+ * call rather than a side effect of asking a question. */
+static size_t llm_history_load(struct app *app, const char *network, const char *channel,
+                               bool from_bot, char **out, const char **roles, size_t max,
+                               size_t budget) {
+    pthread_mutex_lock(&app->lock);
+    struct llm_conv *c = llm_conv_for_locked(app, network, channel, from_bot);
+    size_t used = 0, take = 0;
+    while (take < c->count && take < max) {
+        size_t i = c->count - 1 - take;
+        size_t cost = llm_tokens_of(c->turn[i].text);
+        if (take && used + cost > budget) break;
+        used += cost;
+        take++;
+    }
+    size_t n = 0;
+    for (size_t i = c->count - take; i < c->count; i++) {
+        roles[n] = c->turn[i].role ? c->turn[i].role : "user";
+        out[n++] = xasprintf("%s", c->turn[i].text ? c->turn[i].text : "");
+    }
+    pthread_mutex_unlock(&app->lock);
+    return n;
+}
+
+static void llm_history_clear(struct app *app, const char *network, const char *channel,
+                              bool from_bot) {
+    pthread_mutex_lock(&app->lock);
+    struct llm_conv *c = llm_conv_for_locked(app, network, channel, from_bot);
+    for (size_t i = 0; i < c->count; i++) {
+        free(c->turn[i].text);
+        c->turn[i].text = NULL;
+    }
+    c->count = 0;
+    pthread_mutex_unlock(&app->lock);
+}
+
+static void llm_history_free(struct app *app) {
+    for (size_t i = 0; i < LLM_HISTORY_CONVS; i++)
+        for (size_t k = 0; k < app->llm_convs[i].count; k++) free(app->llm_convs[i].turn[k].text);
+}
+
 static void llm_enqueue_full(struct app *app, const char *network, const char *channel,
                              const char *text, bool publish, const char *on_behalf_of,
-                             bool tools_wanted, bool from_bot) {
+                             bool tools_wanted, bool from_bot, bool compact) {
     pthread_mutex_lock(&app->llm_lock);
     size_t cap = sizeof(app->llm_queue) / sizeof(app->llm_queue[0]);
     size_t next = (app->llm_tail + 1) % cap;
@@ -8137,6 +8389,7 @@ static void llm_enqueue_full(struct app *app, const char *network, const char *c
     snprintf(r->on_behalf_of, sizeof(r->on_behalf_of), "%s", on_behalf_of ? on_behalf_of : "");
     r->tools_wanted = tools_wanted;
     r->from_bot = from_bot;
+    r->compact = compact;
     app->llm_tail = next;
     pthread_cond_signal(&app->llm_cond);
     pthread_mutex_unlock(&app->llm_lock);
@@ -8163,6 +8416,7 @@ static const struct setting_def SETTINGS[] = {
     { "llm.model", SET_TEXT, NULL, "model name" },
     { "llm.cli_tools", SET_TEXT, NULL,
       "claude-cli: its OWN built-in tools to enable (empty = none)" },
+    { "llm.context", SET_TEXT, NULL, "context window in tokens; history rolls to fit 80% of it" },
     { "bot.dir", SET_TEXT, NULL, "where AGENT.md and the bot's notes live" },
     { "stt.enabled", SET_BOOL, NULL, "/stt speech to text (off: nothing is transcribed)" },
     { "stt.url", SET_TEXT, NULL, "whisper endpoint base; empty = local whisper only" },
@@ -8213,6 +8467,9 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "llm.model") == 0) snprintf(out, out_sz, "%s", app->llm.model[0] ? app->llm.model : "(unset)");
     else if (strcmp(name, "llm.cli_tools") == 0)
         snprintf(out, out_sz, "%s", app->llm.cli_tools[0] ? app->llm.cli_tools : "(none)");
+    else if (strcmp(name, "llm.context") == 0)
+        snprintf(out, out_sz, "%d tokens (history rolls at %d)", llm_context_tokens(&app->llm),
+                 llm_context_budget(&app->llm));
     else if (strcmp(name, "llm.prompt") == 0) snprintf(out, out_sz, "%.120s", app->llm.prompt);
     else if (strcmp(name, "stt.enabled") == 0)
         snprintf(out, out_sz, "%s", app->stt_enabled ? "on" : "off");
@@ -8267,6 +8524,10 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "llm.token") == 0) src = app->llm.token;
     else if (strcmp(name, "llm.model") == 0) src = app->llm.model;
     else if (strcmp(name, "llm.cli_tools") == 0) src = app->llm.cli_tools;
+    else if (strcmp(name, "llm.context") == 0) {
+        snprintf(out, out_sz, "%d", llm_context_tokens(&app->llm));
+        return strlen(out);
+    }
     else if (strcmp(name, "llm.prompt") == 0) src = app->llm.prompt;
     else if (strcmp(name, "stt.enabled") == 0) src = app->stt_enabled ? "on" : "off";
     else if (strcmp(name, "stt.url") == 0) src = app->stt_url;
@@ -8363,6 +8624,16 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
                           "only on turns YOU type; a turn the network provoked through "
                           "/bot never gets them.",
                      app->llm.cli_tools);
+    } else if (strcmp(def->name, "llm.context") == 0) {
+        /* A number, and a usable one. Too small and the conversation
+         * cannot hold a single exchange; too large and the client
+         * cheerfully builds a request the endpoint will refuse. */
+        long v = strtol(value, NULL, 10);
+        if (v < 4096 || v > 2000000) {
+            log_line(app, "/set llm.context: expected a token count between 4096 and 2000000");
+            return false;
+        }
+        app->llm.context_tokens = (int)v;
     } else if (strcmp(def->name, "bot.dir") == 0)
         snprintf(app->bot_dir, sizeof(app->bot_dir), "%.*s", (int)sizeof(app->bot_dir) - 1, value);
     else if (strcmp(def->name, "stt.enabled") == 0) {
@@ -8568,7 +8839,7 @@ static void settings_rows_refresh_locked(struct app *app) {
  * authorised by the keyboard itself. */
 static void llm_enqueue(struct app *app, const char *network, const char *channel,
                         const char *text, bool publish) {
-    llm_enqueue_full(app, network, channel, text, publish, NULL, true, false);
+    llm_enqueue_full(app, network, channel, text, publish, NULL, true, false, false);
 }
 
 /* ── /bot: the network speaking ────────────────────────────────────────
@@ -8607,7 +8878,7 @@ static void bot_consider(struct app *app, const char *network, const char *chann
      * private window nobody is looking at is a bot that appears broken.
      * `on_behalf_of` makes every write tool this turn go through the
      * approval gate. */
-    llm_enqueue_full(app, network, channel, prompt, true, sender, true, true);
+    llm_enqueue_full(app, network, channel, prompt, true, sender, true, true, false);
 }
 
 /* ── /exec ─────────────────────────────────────────────────────────────
@@ -10196,7 +10467,8 @@ static const char *commands[] = {
     "/chat", "/clear", "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deny", "/deop",
     "/devoice", "/die", "/disconnect", "/exec", "/exit", "/globops", "/help", "/highlight",
     "/hilight", "/hs", "/ignore", "/info", "/invite", "/j", "/join", "/kb", "/keys", "/kick",
-    "/kickban", "/kill", "/kline", "/links", "/list", "/llm", "/locops", "/lusers", "/me",
+    "/kickban", "/kill", "/kline", "/links", "/list", "/llm", "/llm-clear", "/llm-compact",
+    "/locops", "/lusers", "/me",
     "/media", "/members", "/mode", "/motd", "/mouse", "/ms", "/msg", "/names", "/nick",
     "/notify", "/ns", "/op", "/open", "/oper", "/os", "/part", "/ping", "/preview",
     "/preview-ascii", "/q",
@@ -11470,6 +11742,8 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "set") == 0) log_line(app, "/set [name [value]] — bare lists every setting with its value; a text value may be @/path/to/file to read it from disk (how a multi-line prompt gets in). Names: mouse media animate llm.backend llm.url llm.token llm.model llm.prompt bot.dir");
     else if (strcmp(cmd, "unset") == 0) log_line(app, "/unset <name> — put one preference back to what it was at startup, before any config file was read; the defaults that are computed from the machine (inline media follows whether ffmpeg is installed) come back computed, not frozen");
     else if (strcmp(cmd, "llm") == 0) log_line(app, "/llm <prompt> — ask the model; the reply lands in the $llm window. /llm -p (or --public) sends it to the current window where everyone reads it. /llm set <backend|url|token|model|prompt> <value> configures it; bare /llm shows the config (token masked)");
+    else if (strcmp(cmd, "llm-clear") == 0) log_line(app, "/llm-clear — forget this window's conversation with the model; the next question starts fresh. /llm and /bot keep separate conversations, and this clears the one you are using");
+    else if (strcmp(cmd, "llm-compact") == 0) log_line(app, "/llm-compact — ask the model to summarise the conversation so far and REPLACE it with that summary; use it when the history has rolled past what you wanted kept");
     else if (strcmp(cmd, "exec") == 0) log_line(app, "/exec <command> — run it in a shell and SEND its stdout to the current window (everyone sees it); capped at 20 lines / 16 KiB, killed after 15s, stderr discarded");
     else if (strcmp(cmd, "ctcp") == 0) log_line(app, "/ctcp <nick|#channel> <VERB> [args] — send any CTCP query (VERSION, TIME, FINGER…); the reply lands in the window you asked from. /ping is the timed special case");
     else if (strcmp(cmd, "ping") == 0) log_line(app, "/ping nick — CTCP PING somebody and time the round trip; the answer lands in the window you asked from");
@@ -13521,6 +13795,25 @@ static void handle_command_dispatch(struct app *app, char *line) {
             }
         }
     set_done:;
+    } else if (verb_args(line, "/llm-clear") || verb_args(line, "/llm-compact")) {
+        bool compact = strncmp(line, "/llm-compact", 12) == 0;
+        char net[MAX_SLUG], chan[MAX_CHANNEL];
+        if (!current_window_key(app, net, sizeof(net), chan, sizeof(chan))) return;
+        /* The conversation belonging to the window you are IN, and to
+         * the door you came through: /llm and /bot keep separate ones,
+         * so clearing yours must not clear the bot's. */
+        bool bot_here = strcmp(chan, LLM_WINDOW) != 0 && app->bot_enabled;
+        if (compact) {
+            llm_enqueue_full(app, net, chan,
+                             "Summarise the conversation so far in at most 120 words. Keep "
+                             "decisions, facts and names; drop pleasantries. Write it as notes "
+                             "to yourself, not as a reply to anyone.",
+                             false, NULL, false, bot_here, true);
+            log_line(app, "/llm-compact: summarising — the conversation is replaced when it lands");
+        } else {
+            llm_history_clear(app, net, chan, bot_here);
+            log_line(app, "/llm-clear: forgotten — the next question starts a new conversation");
+        }
     } else if (verb_args(line, "/unset")) {
         const char *name = verb_args(line, "/unset");
         while (*name == ' ') name++;
@@ -16562,6 +16855,7 @@ int main(int argc, char **argv) {
     view_dir_cleanup(app);
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
     settings_free_defaults(app);
+    llm_history_free(app);
     pthread_cond_destroy(&app->jobs_cond);
     pthread_mutex_destroy(&app->jobs_lock);
     pthread_mutex_destroy(&app->ws_lock);

@@ -1189,6 +1189,97 @@ TEST(a_settings_menu_offers_what_the_setting_accepts) {
     free_app(app);
 }
 
+/* A conversation, and a budget that keeps it inside the window.
+ *
+ * There was no history at all: every request built its turns from the
+ * current prompt and nothing else, so the model met the user fresh each
+ * time and a follow-up referred to nothing. Both backends had the hole
+ * for different reasons — openai got a one-message array, and the claude
+ * CLI runs one subprocess per request with no session. */
+TEST(a_conversation_is_remembered_and_rolls_to_fit) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    char *text[LLM_HISTORY_TURNS];
+    const char *role[LLM_HISTORY_TURNS];
+
+    llm_history_append(app, "azzurra", "$llm", false, "user", "who wrote Dune?");
+    llm_history_append(app, "azzurra", "$llm", false, "assistant", "Frank Herbert.");
+    size_t n = llm_history_load(app, "azzurra", "$llm", false, text, role, LLM_HISTORY_TURNS, 9999);
+    CHECK_LONG(n, 2);
+    CHECK_STR(text[0], "who wrote Dune?");
+    CHECK_STR(role[0], "user");
+    CHECK_STR(text[1], "Frank Herbert.");
+    CHECK_STR(role[1], "assistant");
+    for (size_t i = 0; i < n; i++) free(text[i]);
+
+    /* A budget too small for everything keeps the NEWEST turns, because
+     * that is what a follow-up refers to. */
+    n = llm_history_load(app, "azzurra", "$llm", false, text, role, LLM_HISTORY_TURNS, 1);
+    CHECK_LONG(n, 1);
+    CHECK_STR(text[0], "Frank Herbert.");
+    free(text[0]);
+
+    /* /llm and /bot are separate conversations in the SAME window: one
+     * is the owner thinking out loud, the other is a bot answering
+     * strangers, and neither should read the other's. */
+    llm_history_append(app, "azzurra", "#sniffo", false, "user", "private question");
+    llm_history_append(app, "azzurra", "#sniffo", true, "user", "a stranger asked something");
+    n = llm_history_load(app, "azzurra", "#sniffo", false, text, role, LLM_HISTORY_TURNS, 9999);
+    CHECK_LONG(n, 1);
+    CHECK_STR(text[0], "private question");
+    free(text[0]);
+    n = llm_history_load(app, "azzurra", "#sniffo", true, text, role, LLM_HISTORY_TURNS, 9999);
+    CHECK_LONG(n, 1);
+    CHECK_STR(text[0], "a stranger asked something");
+    free(text[0]);
+
+    /* Different windows are different conversations too. */
+    n = llm_history_load(app, "azzurra", "$llm", false, text, role, LLM_HISTORY_TURNS, 9999);
+    CHECK_LONG(n, 2);
+    for (size_t i = 0; i < n; i++) free(text[i]);
+
+    /* Clearing one leaves the others alone. */
+    llm_history_clear(app, "azzurra", "$llm", false);
+    CHECK_LONG(llm_history_load(app, "azzurra", "$llm", false, text, role, LLM_HISTORY_TURNS, 9999), 0);
+    n = llm_history_load(app, "azzurra", "#sniffo", true, text, role, LLM_HISTORY_TURNS, 9999);
+    CHECK_LONG(n, 1);
+    free(text[0]);
+
+    llm_history_free(app);
+    free_app(app);
+}
+
+/* The budget is a fraction of the window, and the fixed parts are
+ * subtracted rather than counted — the system prompt and the tool
+ * declarations ride along with every request and cannot be trimmed. */
+TEST(the_context_budget_leaves_room_for_the_fixed_parts) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+
+    /* The default, and that it is a fraction rather than the whole. */
+    CHECK_LONG(llm_context_tokens(&app->llm), LLM_CONTEXT_DEFAULT);
+    CHECK_LONG(llm_context_budget(&app->llm), LLM_CONTEXT_DEFAULT * LLM_CONTEXT_TARGET_PCT / 100);
+    CHECK(llm_context_budget(&app->llm) < llm_context_tokens(&app->llm));
+
+    /* Configurable, and refused when it is a number nothing could work
+     * with. */
+    handle_command(app, "/set llm.context 128000");
+    CHECK_LONG(llm_context_tokens(&app->llm), 128000);
+    handle_command(app, "/set llm.context 12");
+    CHECK_LONG(llm_context_tokens(&app->llm), 128000); /* unchanged */
+    CHECK(log_has(app, "between 4096"));
+
+    /* A system prompt costs the conversation room. */
+    size_t bare = llm_fixed_cost(app, &app->llm, -1);
+    snprintf(app->llm.prompt, sizeof(app->llm.prompt), "%s",
+             "You are a helpful assistant answering on IRC in plain text with no markdown.");
+    CHECK(llm_fixed_cost(app, &app->llm, -1) > bare);
+    /* And so do the tool declarations. */
+    CHECK(llm_fixed_cost(app, &app->llm, 1) > llm_fixed_cost(app, &app->llm, -1));
+
+    free_app(app);
+}
+
 /* Tab on a value completes what that setting accepts.
  *
  * `/set media <TAB>` used to complete nothing: the completer bails when
@@ -2144,6 +2235,8 @@ int main(void) {
     RUN(two_identities_get_two_bot_directories);
     RUN(an_accented_character_survives_typing_and_one_backspace);
     RUN(a_settings_menu_offers_what_the_setting_accepts);
+    RUN(a_conversation_is_remembered_and_rolls_to_fit);
+    RUN(the_context_budget_leaves_room_for_the_fixed_parts);
     RUN(tab_completes_the_values_a_setting_accepts);
     RUN(the_setting_modal_seeds_its_field_but_never_a_secret);
     RUN(unset_puts_a_preference_back_to_how_it_started);
