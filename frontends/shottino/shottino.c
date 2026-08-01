@@ -608,6 +608,17 @@ struct overlay {
 
 #define IRCD_SERVER "grappa"
 #define IRCD_MAX_CLIENTS 8
+/* How long a connection may stay unregistered, and how many wrong
+ * passwords the bridge tolerates before it stops listening to guesses.
+ *
+ * A registration takes one round trip; thirty seconds is a slow link and
+ * a stuck client, not a working one. The lockout is deliberately blunt —
+ * this is one user's private bridge, not a service with users to keep
+ * happy, and someone guessing at the password is not entitled to a
+ * prompt answer. */
+#define IRCD_REGISTER_TIMEOUT_MS 30000
+#define IRCD_AUTH_FAILS_MAX 5
+#define IRCD_AUTH_LOCKOUT_MS 60000
 #define IRCD_IN_MAX 8192
 #define IRCD_OUT_MAX (1024 * 1024)
 #define IRCD_HISTORY 1024
@@ -631,6 +642,13 @@ struct ircd_client {
     char user[64];
     char network[MAX_SLUG];
     char pass[256];
+    /* When this slot was taken, so a connection that never registers can
+     * be reaped: eight sockets that say nothing lock the owner out of
+     * their own bridge, and no password is needed to open one. */
+    long connected_ms;
+    /* For the log. A failed password nobody can attribute is a failed
+     * password nobody can act on. */
+    char peer[64];
     /* Never reused. An archive query is answered by the worker, seconds
      * after it was asked, and by then this slot may hold somebody else:
      * the reply carries this number and is dropped if it no longer
@@ -673,6 +691,12 @@ struct ircd {
     pthread_mutex_t lock;
     struct ircd_client clients[IRCD_MAX_CLIENTS];
     unsigned long next_client_id;
+    /* Wrong passwords since the last good one, and the moment guessing
+     * is allowed to resume. A bridge off loopback hands over the whole
+     * IRC session, and it used to answer an unlimited number of guesses
+     * as fast as they could be made, silently. */
+    unsigned auth_fails;
+    long auth_block_until_ms;
     /* --ircd-archive: let CHATHISTORY reach past what this session has
      * seen, at the cost of a REST query per request. Off by default —
      * see ircd_cmd_chathistory. */
@@ -14464,6 +14488,52 @@ static void ircd_register(struct app *app, struct ircd_client *c) {
     char secret[128] = "";
     ircd_split_pass(c->pass, want, sizeof(want), secret, sizeof(secret));
 
+    /* THE PASSWORD FIRST, before anything is said about this account.
+     *
+     * The network list used to be reported for a name that did not
+     * match — a helpful reply to the likeliest first-connection mistake
+     * — and it was sent BEFORE this check. So anyone who could reach the
+     * port learned every network the user had bound, without knowing the
+     * password, by naming one that does not exist.
+     *
+     * Guessing is also bounded now. A bridge off loopback hands over the
+     * whole session, and this answered guesses as fast as they could be
+     * made, forever, without writing anything down. */
+    if (app->ircd.secret_required) {
+        long now_ms = monotonic_ms();
+        pthread_mutex_lock(&app->ircd.lock);
+        bool locked = now_ms < app->ircd.auth_block_until_ms;
+        pthread_mutex_unlock(&app->ircd.lock);
+        if (locked) {
+            ircd_send(app, c, "ERROR :too many bad passwords — try again later");
+            c->closing = true;
+            return;
+        }
+        /* PASS with no colon is either a network name or the password.
+         * Tried as the password here, since a network name is not a
+         * credential and naming one must not be a way in. */
+        if (strcmp(secret, app->ircd.secret) != 0) {
+            pthread_mutex_lock(&app->ircd.lock);
+            unsigned fails = ++app->ircd.auth_fails;
+            if (fails >= IRCD_AUTH_FAILS_MAX) {
+                app->ircd.auth_block_until_ms = now_ms + IRCD_AUTH_LOCKOUT_MS;
+                app->ircd.auth_fails = 0;
+            }
+            pthread_mutex_unlock(&app->ircd.lock);
+            /* Said out loud, with who said it. A failed password nobody
+             * can attribute is a failed password nobody can act on. */
+            startup("ircd: bad password from %s (%u in a row)%s", c->peer, fails,
+                    fails >= IRCD_AUTH_FAILS_MAX ? " — refusing registrations for a minute" : "");
+            ircd_numeric(app, c, 464, ":Password incorrect");
+            ircd_send(app, c, "ERROR :bad password");
+            c->closing = true;
+            return;
+        }
+        pthread_mutex_lock(&app->ircd.lock);
+        app->ircd.auth_fails = 0;
+        pthread_mutex_unlock(&app->ircd.lock);
+    }
+
     char network[MAX_SLUG] = "";
     char known[512];
     /* With no colon, PASS is either a network name or a password and
@@ -14482,14 +14552,6 @@ static void ircd_register(struct app *app, struct ircd_client *c) {
             c->closing = true;
             return;
         }
-    }
-    if (strcmp(want, secret) == 0 && want[0] && strcasecmp(want, network) == 0) secret[0] = '\0';
-
-    if (app->ircd.secret_required && strcmp(secret, app->ircd.secret) != 0) {
-        ircd_numeric(app, c, 464, ":Password incorrect");
-        ircd_send(app, c, "ERROR :bad password");
-        c->closing = true;
-        return;
     }
     snprintf(c->network, sizeof(c->network), "%s", network);
 
@@ -14867,9 +14929,18 @@ static bool ircd_listen(struct app *app) {
 
 static void ircd_accept(struct app *app, int listen_fd) {
     for (;;) {
-        int fd = accept(listen_fd, NULL, NULL);
+        struct sockaddr_storage peer;
+        socklen_t peer_len = sizeof(peer);
+        int fd = accept(listen_fd, (struct sockaddr *)&peer, &peer_len);
         if (fd >= 0) set_cloexec(fd);
         if (fd < 0) return;
+        char peer_name[64] = "?";
+        {
+            char host[NI_MAXHOST] = "", serv[NI_MAXSERV] = "";
+            if (getnameinfo((struct sockaddr *)&peer, peer_len, host, sizeof(host), serv,
+                            sizeof(serv), NI_NUMERICHOST | NI_NUMERICSERV) == 0)
+                snprintf(peer_name, sizeof(peer_name), "%.40s:%.8s", host, serv);
+        }
         fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
         pthread_mutex_lock(&app->ircd.lock);
         struct ircd_client *slot = NULL;
@@ -14879,6 +14950,8 @@ static void ircd_accept(struct app *app, int listen_fd) {
             memset(slot, 0, sizeof(*slot));
             slot->fd = fd;
             slot->id = ++app->ircd.next_client_id;
+            slot->connected_ms = monotonic_ms();
+            snprintf(slot->peer, sizeof(slot->peer), "%s", peer_name);
         }
         pthread_mutex_unlock(&app->ircd.lock);
         if (!slot) {
@@ -15103,10 +15176,22 @@ static void ircd_poll_once(struct app *app, int timeout_ms) {
             if (fds[i].revents & (POLLIN | POLLHUP | POLLERR)) ircd_read(app, owner[i]);
         }
 
+        long sweep_ms = monotonic_ms();
         pthread_mutex_lock(&app->ircd.lock);
         for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++) {
             struct ircd_client *c = &app->ircd.clients[i];
             if (c->fd < 0) continue;
+            /* A connection that never registers holds a slot forever,
+             * and there are only eight. Opening one needs no password,
+             * so eight silent sockets locked the owner out of their own
+             * bridge — from anywhere that could reach the port. */
+            if (!c->registered && !c->closing &&
+                sweep_ms - c->connected_ms > IRCD_REGISTER_TIMEOUT_MS) {
+                ircd_send_locked(c, "ERROR :registration timed out");
+                c->closing = true;
+                startup("ircd: dropping %s — connected %ds without registering", c->peer,
+                        IRCD_REGISTER_TIMEOUT_MS / 1000);
+            }
             ircd_flush_locked(c);
             /* Dropped last, after the flush, so a client that asked to
              * QUIT still receives the ERROR that says why. */

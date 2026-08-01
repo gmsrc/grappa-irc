@@ -591,6 +591,61 @@ TEST(an_unknown_network_is_refused_with_the_list) {
     free(app);
 }
 
+/* A wrong password learns NOTHING — not even which networks exist.
+ *
+ * The "no such network X — this account has: ..." reply is a kindness to
+ * somebody who mistyped, and it used to be sent BEFORE the password was
+ * checked. So anyone who could reach the port could name a network that
+ * does not exist and be handed the complete list of the ones that do,
+ * without knowing the password at all. */
+TEST(a_bad_password_is_told_nothing_about_the_account) {
+    setenv("SHOTTINO_IRCD_PASS", "hunter2", 1);
+    struct app *app = bridge_app();
+    CHECK(app != NULL);
+    if (!app) { unsetenv("SHOTTINO_IRCD_PASS"); return; }
+    if (!ircd_start(app, "127.0.0.1:0")) {
+        free(app);
+        unsetenv("SHOTTINO_IRCD_PASS");
+        return;
+    }
+    CHECK(app->ircd.secret_required);
+
+    int fd = bridge_connect(app);
+    CHECK(fd >= 0);
+    if (fd >= 0) {
+        char out[65536];
+        /* A network that does not exist AND a password that is wrong. */
+        client_send(fd, "PASS libera:wrong");
+        client_send(fd, "NICK vjt");
+        client_send(fd, "USER u 0 * :r");
+        client_drain(app, fd, out, sizeof(out));
+        CHECK(strstr(out, "464") != NULL);
+        /* Not the list, not the name of any network, not a welcome. */
+        CHECK(strstr(out, "azzurra") == NULL);
+        CHECK(strstr(out, "no such network") == NULL);
+        CHECK(strstr(out, " 001 ") == NULL);
+        close(fd);
+    }
+
+    /* The right password still gets in. */
+    int ok_fd = bridge_connect(app);
+    CHECK(ok_fd >= 0);
+    if (ok_fd >= 0) {
+        char out[65536];
+        client_send(ok_fd, "PASS azzurra:hunter2");
+        client_send(ok_fd, "NICK vjt");
+        client_send(ok_fd, "USER u 0 * :r");
+        client_drain(app, ok_fd, out, sizeof(out));
+        CHECK(strstr(out, " 001 ") != NULL);
+        close(ok_fd);
+    }
+
+    ircd_stop(app);
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    free(app);
+    unsetenv("SHOTTINO_IRCD_PASS");
+}
+
 /* The bridge hands over the user's whole IRC session. On loopback that
  * is bounded by who can run processes as them; anywhere else it is
  * bounded by nothing, so it refuses to come up rather than listening
@@ -889,6 +944,7 @@ int main(void) {
     RUN(echo_message_turns_our_own_lines_back_on);
     RUN(a_late_client_is_given_the_conversation_it_missed);
     RUN(an_unknown_network_is_refused_with_the_list);
+    RUN(a_bad_password_is_told_nothing_about_the_account);
     RUN(a_reachable_bind_without_a_password_refuses_to_start);
     RUN(unknown_commands_are_forwarded_in_the_clients_own_words);
     RUN(chathistory_returns_the_slice_that_was_asked_for);
