@@ -4012,6 +4012,42 @@ describe("ScrollbackPane", () => {
       expect(scrollIntoViewSpy).toHaveBeenCalled();
     });
 
+    // #608 step 3 (characterization for the applier funnel) — a message
+    // arriving WHILE a covering overlay is up must NOT tail-follow the covered
+    // pane: the length-effect re-asserts the held snapshot (a `scrollTop`
+    // write), it never tails (`scrollIntoView`). This pins the
+    // overlay-freeze ▸ tail-follow precedence AT the length-effect — the exact
+    // branch order about to be routed through the pure `resolveIntent` core. The
+    // e2e twin is issue196-preview-scroll-live-arrival; this is the
+    // jsdom-observable half (the scrollIntoView spy).
+    it("a message arriving while an overlay is up does NOT tail-follow the covered pane (frozen)", async () => {
+      seedRows();
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      await flushRaf();
+
+      pushOverlay(null);
+      await flushRaf();
+      scrollIntoViewSpy.mockClear();
+
+      // A new message lands (rows length 20 → 21) → the length-effect runs.
+      setScrollback({
+        "freenode #grappa": Array.from({ length: 21 }, (_, i) => ({
+          id: i + 1,
+          network: "freenode",
+          channel: "#grappa",
+          server_time: i + 1,
+          kind: "privmsg" as const,
+          sender: "alice",
+          body: `row ${i + 1}`,
+          meta: {},
+        })),
+      });
+      await flushRaf();
+
+      // Frozen → the length-effect re-asserts the snapshot; it does not tail.
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+    });
+
     // Regression (review PLAUSIBLE): a rapid close→reopen of a covering
     // overlay (refcount 1→0→1) — one modal closing as another opens in the
     // same tick, e.g. /names dismissed by a nick-click that opens a query
