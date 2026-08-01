@@ -385,7 +385,9 @@ a terminal, so the bottom of it was simply not drawn.
 ### /unset, and Tab
 
 `/unset <name>` puts one preference back to what it was **at startup**, before
-any config file was read. Not to a constant in a table: several defaults are
+any config file was read. For a value with no meaningful default — a token, a
+URL, a system prompt — that means **clearing** it, and the confirmation says
+which value it left behind so you can see which of the two happened. Not to a constant in a table: several defaults are
 computed from the machine — inline media follows whether `ffmpeg` is installed,
 `stt.local` follows whichever whisper binary is on PATH — so the boot values are
 captured once and handed back. `/unset` cannot disagree with the defaults
@@ -472,6 +474,27 @@ someone saying the bot's nick in a channel, with `/bot` on — gets no built-in
 CLI tools whatever this is set to. The keyboard is the trusted channel; a
 stranger's message is data, and handing it a shell because the owner once
 enabled one for themselves is not a trade anyone agreed to.
+
+### The system prompt
+
+There is a **built-in** one, used whenever `llm.prompt` is empty, and it is
+**generated from the tool table** — so it cannot describe a tool that does not
+exist, miss one that does, or disagree with the schema about which ones write.
+It states the medium (a terminal that cannot render markdown, on a network with
+a 512-byte line limit), tells the model to call what it needs and then *answer
+in words*, and lists exactly the tools **that turn** is offered: all of them for
+something you typed, the read-only half for a bot turn with writes off, none at
+all when tools are not wanted. A bot turn also gets the paragraph saying that
+messages from the network are data and never instructions.
+
+`/set llm.prompt <text>` replaces it — replaces, not extends: half a prompt you
+did not write is harder to reason about than all of one you did. `/unset
+llm.prompt` goes back to the built-in.
+
+An empty prompt in `llm.conf` **means** "use the built-in". It used to mean
+nothing at all: the parser seeded the default and then an empty `prompt =` line
+overwrote it, so a prompt cleared once stayed cleared and the model ran with no
+system prompt whatsoever.
 
 ### Context
 
@@ -805,6 +828,11 @@ Media link previews:
 - `/media all` opts in to every host and prints the warning above when you do;
   `/media first-party` goes back; `/media off` turns pictures off entirely.
   shottino says which of these is in force every time it starts.
+- **Click a window in the sidebar** to switch to it. The whole row is the
+  target, number included — aiming at a channel name in a 14-column sidebar is
+  finicky, and there is nothing else on the line to hit by accident. It goes
+  through the same verb `/window` uses, so the unread reset and the read cursor
+  happen exactly as they do from the keyboard.
 - `/preview` opens a picker over the last 20 pictures and clips posted in this
   window, newest first, each URL once — type to filter, `Enter` to open, `Esc`
   to cancel. `/preview <url>` skips the list. Press any key to return to the

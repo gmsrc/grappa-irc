@@ -74,10 +74,18 @@ struct llm_turn {
     const char *content;
 };
 
-/* The prompt shipped when nothing is configured. Deliberately states the
- * medium: a model that does not know it is on IRC writes essays into a
- * channel with a 512-byte line limit. */
-const char *llm_default_prompt(void);
+/* The prompt used when nothing is configured, written into `out`.
+ *
+ * Deliberately states the medium — a model that does not know it is on
+ * IRC writes essays into a channel with a 512-byte line limit — and
+ * deliberately GENERATES the tool list from the same table that
+ * declares the tools to the model, so the two cannot disagree about
+ * what exists or about which half writes.
+ *
+ * `writes` matches the tool budget for the turn: -1 no tools, 0 read
+ * only, 1 everything. `from_bot` adds the paragraph that only matters
+ * when strangers can reach it. */
+void llm_default_prompt(char *out, size_t out_sz, int writes, bool from_bot);
 
 /* `key = value` per line, `#` comments, unknown keys IGNORED (a config
  * written by a newer build must not break an older one). Returns false

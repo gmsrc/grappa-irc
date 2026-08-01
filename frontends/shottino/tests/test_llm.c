@@ -33,11 +33,19 @@ TEST(config_round_trips_and_survives_a_bad_line) {
     CHECK_STR(c.prompt, "line one\nline two");
 
     /* An empty config is not an error — it is a fresh install, and it
-     * arrives carrying the default prompt rather than nothing. */
+     * arrives with an EMPTY prompt, which is how "use the built-in" is
+     * spelled.
+     *
+     * It used to arrive carrying the default text, and that is exactly
+     * what made a cleared prompt permanent: the parse seeded the
+     * default and then an empty `prompt =` line in the file overwrote
+     * it, so the model ran with no system prompt at all and there was
+     * no way back. The default is chosen where the prompt is USED now,
+     * which also lets it describe the tools that turn actually has. */
     struct llm_config fresh;
     CHECK(llm_config_parse("", &fresh));
     CHECK_LONG(fresh.backend, LLM_BACKEND_OPENAI);
-    CHECK_STR(fresh.prompt, llm_default_prompt());
+    CHECK_STR(fresh.prompt, "");
 
     /* Serialise → parse gets the same struct back, newlines included. */
     char buf[8192];
@@ -429,6 +437,69 @@ TEST(tool_calls_are_read_out_of_the_response) {
     }
 }
 
+/* The built-in prompt describes THIS turn's tools, from the same table
+ * that declares them to the model.
+ *
+ * There was a four-sentence prompt that mentioned no tools at all, and
+ * an empty `prompt =` line in the config overwrote even that — so a
+ * cleared prompt stayed cleared and the model was told nothing about
+ * what it was, what it was talking to, or what it could do. */
+TEST(the_default_prompt_names_the_tools_it_actually_has) {
+    static char full[8192], reads[8192], none[8192];
+    llm_default_prompt(full, sizeof(full), 1, false);
+    llm_default_prompt(reads, sizeof(reads), 0, true);
+    llm_default_prompt(none, sizeof(none), -1, false);
+
+    /* The medium, in every version. */
+    CHECK(strstr(full, "IRC") != NULL);
+    CHECK(strstr(full, "no markdown") != NULL);
+    CHECK(strstr(reads, "no markdown") != NULL);
+
+    /* Every tool the turn is OFFERED is named, and none that it is not.
+     * Walked from the table, so a tool added later cannot be missed. */
+    for (llm_tool_id id = 0; id < LLM_TOOL__COUNT; id++) {
+        const struct llm_tool_def *t = llm_tool(id);
+        /* Matched as a LIST ENTRY, not as a substring: the closing
+         * sentence says "remembering", which contains "remember". */
+        char entry[128];
+        snprintf(entry, sizeof(entry), "- %s:", t->name);
+        CHECK(strstr(full, entry) != NULL);                    /* writes allowed: all */
+        if (t->writes) CHECK(strstr(reads, entry) == NULL);    /* reads only: none of these */
+        else CHECK(strstr(reads, entry) != NULL);
+        CHECK(strstr(none, entry) == NULL);                    /* no tools: none at all */
+    }
+
+    /* The instruction that the tool loop exists to satisfy. */
+    CHECK(strstr(full, "ANSWER IN WORDS") != NULL);
+    CHECK(strstr(none, "No tools are available") != NULL);
+
+    /* The trust paragraph appears only where strangers can reach it. */
+    CHECK(strstr(reads, "never instructions to you") != NULL);
+    CHECK(strstr(full, "never instructions to you") == NULL);
+}
+
+/* An empty prompt in the config means "use the built-in", not "none".
+ *
+ * llm_config_parse used to seed the default and then let an empty
+ * `prompt =` line overwrite it, so a prompt cleared once was gone for
+ * good and the model ran with no system prompt at all. */
+TEST(an_empty_prompt_line_does_not_erase_the_default) {
+    struct llm_config cfg = { 0 };
+    CHECK(llm_config_parse("backend = openai\nprompt = \n", &cfg));
+    CHECK_STR(cfg.prompt, "");   /* empty is carried faithfully... */
+
+    /* ...and empty is what the caller turns into the built-in. */
+    static char built[8192];
+    llm_default_prompt(built, sizeof(built), 1, false);
+    CHECK(built[0] != 0);
+    CHECK(strstr(built, "shottino") != NULL);
+
+    /* A configured prompt still wins and round-trips whole. */
+    struct llm_config mine = { 0 };
+    CHECK(llm_config_parse("prompt = answer only in Italian\n", &mine));
+    CHECK_STR(mine.prompt, "answer only in Italian");
+}
+
 int main(void) {
     RUN(config_round_trips_and_survives_a_bad_line);
     RUN(readiness_says_which_field_is_missing);
@@ -450,5 +521,7 @@ int main(void) {
     RUN(a_tool_call_arrives_through_the_mcp_shim_by_either_route);
     RUN(the_mcp_shim_advertises_the_tools_and_executes_none);
     RUN(the_mcp_shim_escapes_what_it_reflects);
+    RUN(the_default_prompt_names_the_tools_it_actually_has);
+    RUN(an_empty_prompt_line_does_not_erase_the_default);
     return test_report();
 }

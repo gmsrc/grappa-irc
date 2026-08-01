@@ -427,6 +427,17 @@ struct topic_region {
  * the pointer rather than the one that happens to have focus — with two
  * panes on screen those are different answers, and the pointer is the
  * one the user meant. */
+/* Where each window's row landed in the sidebar, so a click can switch
+ * to it. Recorded by the draw pass for the same reason the link and
+ * message regions are: the layout is the only thing that knows where a
+ * row ended up, and a second copy of that arithmetic in the mouse code
+ * is a second thing to get wrong when the chrome changes. */
+struct win_region {
+    int y;
+    int x0, x1;
+    size_t window;
+};
+
 struct pane_region {
     int y0, y1, x0, x1;
     size_t pane;
@@ -832,6 +843,8 @@ struct app {
     size_t msg_region_count;
     struct topic_region topic_regions[MAX_PANES];
     size_t topic_region_count;
+    struct win_region win_regions[MAX_WINDOWS];
+    size_t win_region_count;
     struct pane_region pane_regions[MAX_PANES];
     size_t pane_region_count;
     bool topic_hover;
@@ -6733,6 +6746,7 @@ static void draw(struct app *app) {
     app->frame_seq++;
     app->link_region_count = 0;
     app->msg_region_count = 0;
+    app->win_region_count = 0;
     app->topic_region_count = 0;
     app->pane_region_count = 0;
     int rows, cols;
@@ -6817,6 +6831,16 @@ static void draw(struct app *app) {
         }
         else if (unread) draw_text(y, 4, side - 5, pair, A_BOLD, "%s [%u]", win->channel, app->windows[i].unread);
         else draw_text(y, 4, side - 5, pair, selected ? A_BOLD : 0, "%s", win->channel);
+        /* The whole row is the target, number included: aiming at the
+         * channel name in a 14-column sidebar is finicky, and there is
+         * nothing else on the line to hit by accident. */
+        if (app->win_region_count < MAX_WINDOWS) {
+            struct win_region *r = &app->win_regions[app->win_region_count++];
+            r->y = y;
+            r->x0 = 0;
+            r->x1 = side - 1;
+            r->window = i;
+        }
         y++;
     }
 
@@ -8028,6 +8052,15 @@ static void llm_run(struct app *app, const struct llm_req *req) {
      * mutated, because app->llm is what gets SAVED and an effective
      * prompt must never be written back to the config file. */
     struct llm_config cfg = app->llm;
+    /* An empty llm.prompt means "use the built-in", not "say nothing".
+     * It is filled in HERE rather than at load, so the description of
+     * the tools always matches what THIS turn is actually offered. */
+    if (!cfg.prompt[0])
+        llm_default_prompt(cfg.prompt, sizeof(cfg.prompt),
+                           !req->tools_wanted ? -1
+                           : (!req->from_bot || app->bot_writes_ok) ? 1
+                                                                    : 0,
+                           req->from_bot);
     if (req->from_bot) {
         bot_effective_prompt(app, cfg.prompt, sizeof(cfg.prompt));
         /* And NO built-in CLI tools, whatever llm.cli_tools says.
@@ -14428,6 +14461,34 @@ static void handle_mouse(struct app *app) {
         }
         pthread_mutex_unlock(&app->lock);
         return;
+    }
+
+    /* A click on the window list switches to that window.
+     *
+     * Asked before the chat handlers because the sidebar is not the chat
+     * area: a click there has nothing to do with links or messages, and
+     * the row the pointer is on is unambiguous. Left button only — the
+     * right one belongs to the context menus. */
+    if (click) {
+        size_t target = SIZE_MAX;
+        pthread_mutex_lock(&app->lock);
+        for (size_t i = 0; i < app->win_region_count; i++) {
+            const struct win_region *r = &app->win_regions[i];
+            if (ev.y == r->y && ev.x >= r->x0 && ev.x <= r->x1) {
+                target = r->window;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&app->lock);
+        if (target != SIZE_MAX) {
+            /* Through the ordinary verb, so the unread reset, the read
+             * cursor and the scrollback fetch all happen exactly as they
+             * do when the window is chosen from the keyboard. */
+            char cmd[32];
+            snprintf(cmd, sizeof(cmd), "/window %zu", target + 1);
+            handle_command(app, cmd);
+            return;
+        }
     }
 
     /* Wheel over a member pane scrolls the roster. Which column that is

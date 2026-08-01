@@ -1063,6 +1063,49 @@ TEST(the_decoder_says_what_animates_not_the_url) {
     rmdir(dir);
 }
 
+/* Every window in the sidebar gets a clickable row.
+ *
+ * Recorded by the DRAW pass, because the layout is the only thing that
+ * knows where a row ended up — the sidebar's width and the per-network
+ * heading both move them. A region for a row that was never drawn is a
+ * click that switches to the wrong channel. */
+TEST(the_sidebar_records_a_row_for_every_window) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    add_test_window(app, "azzurra", "$server");
+    add_test_window(app, "azzurra", "#sniffo");
+    add_test_window(app, "azzurra", "#grappa");
+
+    erase();
+    draw(app);
+
+    /* One region per window, and each names the window it drew. */
+    CHECK_LONG(app->win_region_count, app->window_count);
+    for (size_t i = 0; i < app->win_region_count; i++) {
+        CHECK_LONG(app->win_regions[i].window, i);
+        CHECK(app->win_regions[i].x0 == 0);
+        CHECK(app->win_regions[i].x1 > 0);
+    }
+    /* The rows are distinct lines, and the network heading pushes the
+     * first one down — so they are not simply y = index. */
+    for (size_t i = 1; i < app->win_region_count; i++)
+        CHECK(app->win_regions[i].y > app->win_regions[i - 1].y);
+    CHECK(app->win_regions[0].y > 1);
+
+    /* And the row really is where that channel is drawn. */
+    int y = app->win_regions[1].y;
+    char row[MAX_W + 1];
+    for (int x = 0; x < MAX_W && x <= app->win_regions[1].x1; x++)
+        row[x] = (char)(mvinch(y, x) & A_CHARTEXT);
+    row[app->win_regions[1].x1 + 1] = 0;
+    CHECK(strstr(row, "#sniffo") != NULL);
+
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    free(app);
+}
+
 /* A modal opened over the settings panel must actually be DRAWN.
  *
  * The panel draw path ends in `refresh(); return;` — a panel replaces
@@ -1152,6 +1195,7 @@ int main(void) {
         fclose(sink);
         return 0;
     }
+    RUN(the_sidebar_records_a_row_for_every_window);
     RUN(a_modal_over_the_settings_panel_is_drawn);
     RUN(wrapped_text_tail_matches_full_draw);
     RUN(message_line_tail_matches_full_draw);
