@@ -388,6 +388,66 @@ defmodule Grappa.VhostsTest do
     end
   end
 
+  # #596 — mode 2 must HONOUR the subject's persisted `vhost_selection`, not
+  # random-pick over EVERY grant. Granting a subject the whole reserved pool
+  # used to DESTROY their choice: a subject who deliberately picked one address
+  # and then received N grants started drawing a fresh random one from all N on
+  # every connection (the more availability given, the less the selection meant
+  # — the inverse of the intent). Resolution mirrors mode-1's shape with the
+  # granted set standing in for the allowed set: (1) selection ∩ granted wins
+  # (random among it — "random per connection"); (2) else all granted
+  # (availability given, no preference expressed — today's behaviour); (3) else
+  # derive-or-hold (unchanged). No branch may return nil / fall through to a
+  # shared source (Global Constraint).
+  describe "effective_source/3 — mode-2 honours vhost_selection (#596)" do
+    test "a single selected grant pins that address, never a random other grant" do
+      user = user_fixture()
+      {:ok, a} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::a"})
+      {:ok, b} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::b"})
+      {:ok, c} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::c"})
+      for v <- [a, b, c], do: {:ok, _} = Vhosts.grant_vhost(v, {:user, user.id})
+      # The subject was granted the WHOLE reserved pool but deliberately picked
+      # exactly one — that choice must survive the wide availability.
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [b.address])
+
+      # Every connection binds the selected address — a & c never appear.
+      picks = for _ <- 1..50, do: Vhosts.effective_source({:user, user.id}, nil, @mode2)
+      assert Enum.uniq(picks) == [b.address]
+    end
+
+    test "a multi-selection among grants random-picks WITHIN the selection only" do
+      user = user_fixture()
+      {:ok, a} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::a"})
+      {:ok, b} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::b"})
+      {:ok, c} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::c"})
+      for v <- [a, b, c], do: {:ok, _} = Vhosts.grant_vhost(v, {:user, user.id})
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [a.address, b.address])
+
+      picks = for _ <- 1..50, do: Vhosts.effective_source({:user, user.id}, nil, @mode2)
+      assert Enum.all?(picks, &(&1 in [a.address, b.address]))
+      # The unselected grant is never drawn — this is the discriminator that
+      # separates "honours selection" from the old "random over all grants".
+      refute c.address in picks
+    end
+
+    test "a stored selection with NO granted address falls back to all grants" do
+      # A selection captured under mode 1 (an in_pool address) that is not in
+      # the grant set: selection ∩ granted is empty → step 2 (all grants),
+      # never nil / a shared pool.
+      user = user_fixture()
+      {:ok, pool} = Vhosts.create_vhost(%{address: addr(), in_pool: true})
+      {:ok, a} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::a"})
+      {:ok, b} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::b"})
+      for v <- [a, b], do: {:ok, _} = Vhosts.grant_vhost(v, {:user, user.id})
+      # in_pool is in the mode-1 allow-set, so this write persists.
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [pool.address])
+
+      picks = for _ <- 1..50, do: Vhosts.effective_source({:user, user.id}, nil, @mode2)
+      assert Enum.all?(picks, &(&1 in [a.address, b.address]))
+      refute pool.address in picks
+    end
+  end
+
   # #543 INC-6 — the single decision point that tells `Networks.SessionPlan`
   # whether a resolved source is a DERIVED `::cb` alias the session must
   # acquire/release via `SourceAliasManager`. Keeps the mode+prefix+in_prefix?

@@ -378,7 +378,10 @@ defmodule Grappa.Vhosts do
        vhost selection, the pool/derivation, AND #271 RR-DNS leaf
        distribution.
     2. mode `:static_mapping_with_reservations` — a subject with grants
-       random-picks one of ITS OWN granted addresses (reservations win);
+       resolves the SAME shape as mode 1 with the granted set standing in
+       for the allowed set (#596): its selection ∩ granted random-picks,
+       else ALL granted random-picks (availability given, no preference —
+       reservations still win over derivation);
        mode `:pool_with_reservations` (default) — the subject's selection
        (∩ allowed) random-picks (spec: "random per connection").
     3. mode 2, no grants — the subject's captured client `/64`
@@ -420,8 +423,26 @@ defmodule Grappa.Vhosts do
     armed? = Map.get(addressing, :armed?, false)
 
     case granted_vhost_addresses(subject) do
-      [] -> derive_or_hold(subject, prefix, armed?)
-      addresses -> Enum.random(addresses)
+      [] ->
+        derive_or_hold(subject, prefix, armed?)
+
+      granted ->
+        # #596 — honour the subject's persisted vhost_selection: selection ∩
+        # granted wins (random per connection when more than one is active),
+        # else ALL granted (availability given, no preference expressed — the
+        # prior behaviour). Granting a subject the whole reserved pool must NOT
+        # destroy a choice they deliberately made; the more availability given,
+        # the LESS the selection meant under the old `Enum.random(granted)`.
+        # This is mode-1's shape with the granted set standing in for the
+        # allowed set. `get_selection/1` is the union-clamped selection;
+        # intersecting with the grant set yields selection ∩ granted (C2 folds
+        # this into a mode-aware `get_selection/2`).
+        granted_set = MapSet.new(granted)
+
+        case Enum.filter(get_selection(subject), &MapSet.member?(granted_set, &1)) do
+          [] -> Enum.random(granted)
+          selected -> Enum.random(selected)
+        end
     end
   end
 

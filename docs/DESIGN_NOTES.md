@@ -25056,3 +25056,27 @@ asserts the VISIBLE terminal `recover-modal-success` after RECOVER frees the
 hold — no API-return assertion, no success-or-failure soft-assert (D4). A server
 integration test masking a critical behind an unrealistic mock is exactly why the
 happy-path e2e is mandatory: a feature without one is hollow green.
+
+## 2026-08-01 — #596: mode 2 ignored vhost_selection — granting the pool destroyed the choice
+
+`Grappa.Vhosts.effective_source/3`'s mode-2 (`static_mapping_with_reservations`)
+branch random-picked over EVERY granted address and never consulted the subject's
+persisted `vhost_selection` — `get_selection/1` was reached only from the mode-1
+clause below it. The operator policy for mode 2: a curated set of subjects holds
+grants covering the whole reserved pool and picks from it, keeping the selection
+they have today while free to move to any other reserved address. But a subject
+who deliberately selected one address and then received N grants stopped egressing
+from it and drew a fresh random one from all N per connect. The more availability
+granted, the LESS the selection meant — the inverse of the intent, and exactly
+what "grant the whole pool" produced.
+
+Fix: mode 2 resolves the shape mode 1 already has, with the granted set standing
+in for the allowed set — (1) selection ∩ granted non-empty → random-pick among it
+(matches mode-1 "random per connection" when more than one is active); (2) else
+ALL granted → random-pick (availability given, no preference expressed — the prior
+behaviour); (3) else derive-or-hold (unchanged). The Global Constraint holds: no
+branch returns `nil` or falls through to a shared source. A grant-holder with no
+selection is unchanged; only a subject WITH a selection now keeps it. Part 1
+(this) reads the intersection at bind; part 2 (#596 follow-on) makes the write
+path + self-service allowed set mode-aware so a mode-2 subject can only select —
+and only be offered — its grants.
