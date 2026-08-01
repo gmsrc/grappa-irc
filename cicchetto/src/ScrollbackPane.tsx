@@ -38,6 +38,7 @@ import {
 } from "./lib/presenceFilter";
 import { canonicalQueryNick, openQueryWindowState } from "./lib/queryWindows";
 import { getReadCursor } from "./lib/readCursor";
+import { nextFollowMode } from "./lib/scrollAuthority";
 import {
   lastOwnSend,
   loadMore as loadMoreScrollback,
@@ -114,7 +115,7 @@ import WhowasCard from "./WhowasCard";
 //
 // C7.4: Scroll-to-bottom floating button — appears when scrolled more than
 // SCROLL_BOTTOM_THRESHOLD_PX from the tail. Click → instant scroll to the
-// tail + resume auto-follow (resets atBottom to true), AND (since #310) —
+// tail + resume auto-follow (re-arms followMode + atBottomNow), AND (since #310) —
 // like a manual scroll to the bottom — advances the read cursor to the newest
 // line and releases the marker-activation latch so the view does not snap back
 // to the divider. See `scrollToBottomGesture`.
@@ -326,7 +327,7 @@ const lastFullyVisibleRowId = (listRef: HTMLDivElement): number | null => {
   // BEFORE assigning it → the cursor lands one message short and the
   // channel keeps a phantom "1 unread" that re-appears on every leave.
   // Derive the SAME pane-level distance-to-bottom the authoritative
-  // `atBottom` signal uses (onScroll, below) — robust by construction
+  // `atBottomNow` geometry uses (onScroll, below) — robust by construction
   // against the rounding a per-row epsilon can't fix — and return the
   // DOM true-tail id directly. The true tail is always >= the geometric-
   // walk id, so the forward-only `setCursorIfAdvances` gate is preserved
@@ -951,7 +952,25 @@ const ScrollbackPane: Component<Props> = (props) => {
   // Both the freeze gate and the restore require this === key(); a switched-to
   // window activates normally. `null` when no overlay snapshot is held.
   let overlaySnapshotKey: string | null = null;
-  const [atBottom, setAtBottom] = createSignal(true);
+  // #608 (deep-review §6.1) — the overloaded `atBottom` split into its two
+  // independent concerns, the PRIMARY reshape of the single-scroll-authority
+  // work:
+  //   * `followMode` — the persistent "stick to the tail" INTENT. Drives
+  //     tail-follow (the length-effect gate), the resize re-anchor gate, and
+  //     the visibility-return gate. Transitions ONLY via `nextFollowMode`
+  //     edges (lib/scrollAuthority): an operator scroll-up turns it OFF;
+  //     reaching the tail or an own send turns it back ON; a programmatic
+  //     content-grow above the fold leaves it unchanged (the #168 distinction —
+  //     a prepend is not a leave).
+  //   * `atBottomNow` — the GEOMETRIC measurement (within threshold of the
+  //     tail). Drives ONLY the floating scroll-to-bottom button (`!atBottomNow`).
+  // Conflating the two was the source of the R-B/R-C races the leave-arm
+  // documents as "atBottom unreliable here". Both default true (a fresh pane
+  // follows the tail; the button is hidden). Until the send/settle reshapes
+  // land they are written together — this split is the foundation those later
+  // steps build the divergence on.
+  const [followMode, setFollowMode] = createSignal(true);
+  const [atBottomNow, setAtBottomNow] = createSignal(true);
   // #285 reopen — FAIL-OPEN touch-action gate. The CSS base is `pan-y`; this
   // signal drives the `.scrollback-locked` class that LOCKS the pane to
   // `touch-action: none` ONLY when a trustworthy measurement proves the content
@@ -982,7 +1001,7 @@ const ScrollbackPane: Component<Props> = (props) => {
   // recreation). A one-shot marker jump therefore does NOT survive the next
   // rows recreation — the post-switch catch-up `refreshScrollback`
   // (selection.ts) or a late read-cursor hydration recreates the DOM AFTER the
-  // jump, and because the jump set `atBottom=false` the length-effect's only
+  // jump, and because the jump set `followMode=false` the length-effect's only
   // re-establish path is suppressed → the marker strands off-screen (the 307
   // race). This latch marks "a channel activation is in effect; keep
   // re-asserting marker-or-tail on every rows recreation until the operator
@@ -990,7 +1009,7 @@ const ScrollbackPane: Component<Props> = (props) => {
   // app-startup / first-focus jumps to the marker too — vjt point-2, reverses
   // the #46 cold-mount-tail wontfix); cleared on real operator input or an own
   // send (both hand scroll authority back). Visibility-return / resize stay
-  // tail-only one-shot — their `atBottom=true` means the length-effect's
+  // tail-only one-shot — their `followMode=true` means the length-effect's
   // tail-follow already re-establishes them, no latch needed.
   const [markerActivationPending, setMarkerActivationPending] = createSignal(false);
 
@@ -1053,7 +1072,7 @@ const ScrollbackPane: Component<Props> = (props) => {
   // of mentions (own nick ∪ /hilight keywords, #370) currently below the fold
   // in THIS window; its length is the badge count, its head (`[0]`) the next
   // jump target. DERIVED from live geometry + scroll position (neither is a
-  // Solid signal), so it is recomputed at the same edges `atBottom` is: every
+  // Solid signal), so it is recomputed at the same edges `atBottomNow` is: every
   // onScroll (operator scroll AND the settle scrolls that activation /
   // message-arrival fire) and, belt-and-suspenders, after each rows()
   // recreation via rAF (a rows change that lands without a scroll event still
@@ -1519,22 +1538,23 @@ const ScrollbackPane: Component<Props> = (props) => {
     //
     // REUSE the length-effect's irssi-shape follow rule (~:2033), do
     // not invent a parallel one:
-    //   * atBottom() true  → the operator was following live; re-pin to
+    //   * followMode() true  → the operator was following live; re-pin to
     //     the tail (a shrinking viewport keeps the bottom visible) =
     //     resume family → TAIL, never the divider (#46), one-shot, no
     //     latch.
-    //   * atBottom() false → PRESERVE their scrollTop: do nothing, the
+    //   * followMode() false → PRESERVE their scrollTop: do nothing, the
     //     browser holds scrollTop across the clientHeight change (a
     //     shrink never clamps; content still overflows).
-    // atBottom() flips false ONLY on a real operator scroll-UP
-    // (onScroll, ~:2242), so it is an honest "parked above the tail"
-    // signal HERE — unlike the leave-arm at ~:1593, whose caveat is a
-    // key-change batch where a sibling activation effect races
-    // setAtBottom(true); a resize is not a key change, so atBottom() is
-    // trustworthy (the length-effect trusts it the same way).
+    // #608 — the resize gate reads the follow INTENT (`followMode`), not the
+    // geometric `atBottomNow`: it turns false ONLY on a real operator scroll-UP
+    // (onScroll), so it is an honest "parked above the tail" signal HERE —
+    // unlike the leave-arm below, whose caveat is a key-change batch where a
+    // sibling activation effect re-arms follow; a resize is not a key change,
+    // so `followMode()` is trustworthy (the length-effect trusts it the same
+    // way).
     //
     // #245 — ALSO re-measure the gate on resize, UNCONDITIONALLY: it runs
-    // BEFORE the atBottom() gate above, regardless of scroll position.
+    // BEFORE the followMode() gate above, regardless of scroll position.
     // `scrollLocked` drives the `.scrollback-locked` class (#285 reopen:
     // fail-open base `pan-y`, lock to `none` only on a trustworthy fit). The
     // gate is a function of `clientHeight`, which is viewport-derived (the
@@ -1559,7 +1579,7 @@ const ScrollbackPane: Component<Props> = (props) => {
       // driven recompute. Matters most on mobile: the keyboard opening while the
       // operator is parked mid-buffer must not strand a stale badge.
       recomputeMentionsBelow();
-      if (atBottom()) scrollToActivation("tail-only", true);
+      if (followMode()) scrollToActivation("tail-only", true);
     };
     window.addEventListener("resize", onResize);
     window.visualViewport?.addEventListener("resize", onResize);
@@ -1779,8 +1799,8 @@ const ScrollbackPane: Component<Props> = (props) => {
   //   3. `document.visibilitychange` → visible — PWA backgrounded then
   //      re-opened (the effect below tracks `isDocumentVisible` false→true).
   //      GATED on the follow-state at hide time (#535), no latch: resume ≠
-  //      switch (#46). atBottom() true → "tail-only" (the reader was following
-  //      live). atBottom() false → "marker-or-preserve" (the reader had
+  //      switch (#46). followMode() true → "tail-only" (the reader was following
+  //      live). followMode() false → "marker-or-preserve" (the reader had
   //      deliberately scrolled up; land on the divider or hold their scrollTop
   //      — NEVER tail-snap them).
   //
@@ -1804,15 +1824,16 @@ const ScrollbackPane: Component<Props> = (props) => {
   // the send-race (DESIGN_NOTES 2026-07-03):
   //   * "marker-or-tail" — channel activation (SWITCH + cold-mount). If the
   //     RENDERED frozen unread divider exists, scroll to it (`block:"start"`)
-  //     and set `atBottom` from the resulting distance; else the tail. The
-  //     divider is the frozen row the `rows()` memo already injected — we
-  //     read its DOM node, never a recomputed cursor geometry. While the latch
+  //     and set `followMode`/`atBottomNow` from the resulting distance; else the
+  //     tail. The divider is the frozen row the `rows()` memo already injected —
+  //     we read its DOM node, never a recomputed cursor geometry. While the latch
   //     is set the length-effect re-asserts this on every rows recreation, so
   //     the post-switch catch-up refresh / late cursor hydration can't strand
   //     it (307). Cleared on operator input / own send.
   //   * "tail-only" — resize (#46 resume family) + the follow-live arm of
-  //     visibility-return. Never the divider; `atBottom=true`; no latch (the
-  //     length-effect's `atBottom` tail-follow already re-establishes the tail).
+  //     visibility-return. Never the divider; `followMode`/`atBottomNow=true`; no
+  //     latch (the length-effect's `followMode` tail-follow already re-establishes
+  //     the tail).
   //   * "marker-or-preserve" — the scrolled-up arm of visibility-return (#535).
   //     Same marker DOM read as "marker-or-tail", but when NO divider renders it
   //     PRESERVES the reader's scrollTop instead of tailing. It is safe to skip
@@ -1823,7 +1844,7 @@ const ScrollbackPane: Component<Props> = (props) => {
   //     untouched. The sibling `refreshScrollback` (fired one line before this)
   //     is an ASYNC co-trigger that CAN recompute `rows()` later by appending
   //     rows missed while hidden, but a TAIL append preserves a scrolled-up
-  //     reader's position (the length-effect's `atBottom` gate does nothing +
+  //     reader's position (the length-effect's `followMode` gate does nothing +
   //     browser scroll anchoring holds the viewport) — empirically pinned by the
   //     #535 "messages missed while hidden" e2e case, not just asserted here. No
   //     latch (one-shot resume). Owner ruling 2026-07-29 (#535): the only
@@ -1832,9 +1853,9 @@ const ScrollbackPane: Component<Props> = (props) => {
   // Post-send / live-append stay at the BOTTOM via the length-effect +
   // `lastOwnSend`→`scrollToBottom` (both untouched; the send clears the latch
   // first). The divider still RENDERS at its frozen position (freeze-display
-  // contract, DESIGN_NOTES 2026-06-08) for every trigger. `atBottom` is set
+  // contract, DESIGN_NOTES 2026-06-08) for every trigger. `atBottomNow` is set
   // per branch so the floating "scroll to bottom" button doesn't flash
-  // mid-activation.
+  // mid-activation (and `followMode` alongside it drives the tail-follow gate).
   // `withHide` (#130 flicker gate) applies ONLY to the initial establish from
   // an activation trigger — a cross-key window swap paints the new content at
   // the old preserved scrollTop before the deferred scroll corrects it, so we
@@ -1919,24 +1940,26 @@ const ScrollbackPane: Component<Props> = (props) => {
             : null;
         if (marker?.scrollIntoView) {
           marker.scrollIntoView({ block: "start" });
-          // Set `atBottom` from the settled distance (layout is stable inside
-          // the rAF×2). A far divider ⇒ false: the floating "scroll to
-          // bottom" button shows AND the length-effect's `if (!atBottom())
-          // return` guard yields, so its tail-follow does not race this jump
-          // (same atBottom coordination the pre-#168 marker branch used). A
-          // near-tail divider (tiny unread) ⇒ true: effectively at the
-          // bottom, tail-follow is correct.
+          // Set both concerns from the settled distance (layout is stable
+          // inside the rAF×2). A far divider ⇒ false: `followMode` off so the
+          // length-effect's `if (!followMode()) return` guard yields (its
+          // tail-follow does not race this jump) AND `atBottomNow` off so the
+          // floating "scroll to bottom" button shows. A near-tail divider (tiny
+          // unread) ⇒ true: effectively at the bottom, tail-follow is correct.
           const distance = listRef.scrollHeight - listRef.scrollTop - listRef.clientHeight;
-          setAtBottom(distance <= SCROLL_BOTTOM_THRESHOLD_PX);
+          const near = distance <= SCROLL_BOTTOM_THRESHOLD_PX;
+          setFollowMode(near);
+          setAtBottomNow(near);
         } else if (mode === "marker-or-preserve") {
           // #535 — scrolled-up visibility-return with NO divider to land on
           // (e.g. a fully-read channel the reader paged up into). The re-latch
           // left `markerCursorId` — hence this synchronous `rows()`, hence
           // scrollTop — untouched. PRESERVE the reader's position: do NOT
-          // tail-snap, and leave `atBottom` false (they are still parked above
-          // the tail). Nothing to scroll here. (A later async `refreshScrollback`
-          // append can still recompute `rows()`, but a tail append preserves a
-          // scrolled-up viewport — guarded by the #535 gap e2e case.)
+          // tail-snap, and leave `followMode`/`atBottomNow` false (they are
+          // still parked above the tail). Nothing to scroll here. (A later async
+          // `refreshScrollback` append can still recompute `rows()`, but a tail
+          // append preserves a scrolled-up viewport — guarded by the #535 gap
+          // e2e case.)
         } else {
           const tail = listRef.lastElementChild as HTMLElement | null;
           if (tail?.scrollIntoView) {
@@ -1944,7 +1967,8 @@ const ScrollbackPane: Component<Props> = (props) => {
           } else {
             listRef.scrollTop = listRef.scrollHeight;
           }
-          setAtBottom(true);
+          setFollowMode(true);
+          setAtBottomNow(true);
         }
         // Scroll has settled at the correct position — reveal.
         if (withHide) setActivating(false);
@@ -1973,10 +1997,12 @@ const ScrollbackPane: Component<Props> = (props) => {
   // assigns `prevInput`, so the first real change carries a DEFINED
   // `prevKey` and the arm runs.
   //
-  // Which id: NOT `atBottom()`. That signal is unreliable HERE — the
-  // sibling activation effect runs in the SAME key-change batch and
-  // `setAtBottom(true)`s before this arm reads it (instrumentation caught
-  // `atBottom() === true` while the leaving pane sat 407px off the bottom).
+  // Which id: NOT the follow/geometry signals. They are unreliable HERE — the
+  // sibling activation effect runs in the SAME key-change batch and re-arms
+  // `followMode`/`atBottomNow` true before this arm reads them (instrumentation
+  // caught the old conflated `atBottom() === true` while the leaving pane sat
+  // 407px off the bottom; the #608 split keeps the same caveat — the batch
+  // re-arm is the reason, not the conflation).
   // Use the leaving pane's OWN captured onScroll `visibleTailSnapshot`
   // instead (a post-hoc `lastFullyVisibleRowId(listRef)` can't be used —
   // Solid's `<For>` has already swapped rows to the new key). At the bottom
@@ -2042,23 +2068,24 @@ const ScrollbackPane: Component<Props> = (props) => {
         // every window activation. The `[data-testid="scrollback"]`
         // <div> is the SAME DOM node across kind transitions (Shell.tsx
         // bundles channel|query|server into ONE Match), so its
-        // `scrollTop` survives the swap — and the `atBottom` signal,
-        // unless explicitly reset here, carries the LEAVING pane's
+        // `scrollTop` survives the swap — and the follow/geometry signals,
+        // unless explicitly reset here, carry the LEAVING pane's
         // user-scrolled-up state into the arriving pane. When the
         // arriving pane is cold (`messages()` empty/undefined),
-        // `scrollToActivation`'s rAF×2 body early-returns at :1089
-        // without resetting scroll OR `atBottom`. The length-effect
-        // at :1292 then reads stale `atBottom=false` once REST lands
-        // and skips the auto-snap, leaving the DOM at whatever
-        // scrollTop the browser preserved from the source pane. vjt
-        // prod-reported as "scroll contamination after few back and
+        // `scrollToActivation`'s rAF×2 body early-returns without resetting
+        // scroll OR the signals. The length-effect then reads stale
+        // `followMode=false` once REST lands and skips the auto-snap, leaving
+        // the DOM at whatever scrollTop the browser preserved from the source
+        // pane. vjt prod-reported as "scroll contamination after few back and
         // forths of focusing many windows". The auto-snap branch in
         // `scrollToActivation` writes the new pane's true bottom on
         // its own; if the operator scrolls up in the new pane, the
-        // first real onScroll restores `atBottom=false`. Re-arming
-        // here is therefore safe + correct — every activation starts
-        // tail-following, and the operator's own input takes it back.
-        setAtBottom(true);
+        // first real onScroll clears `followMode`. Re-arming both here is
+        // therefore safe + correct — every activation starts tail-following
+        // (followMode) with the button hidden (atBottomNow), and the operator's
+        // own input takes it back.
+        setFollowMode(true);
+        setAtBottomNow(true);
 
         // CP29 R-4: capture the boundary as the highest message id present
         // RIGHT NOW. `messages()` is the same store the rows memo reads;
@@ -2132,19 +2159,20 @@ const ScrollbackPane: Component<Props> = (props) => {
         void refreshScrollback(props.networkSlug, props.channelName);
         setMarkerCursorId(getReadCursor(props.networkSlug, props.channelName));
         // #535 — gate the resume scroll on the follow-state that was in effect
-        // when the document hid. `atBottom()` flips false ONLY on a real
-        // operator scroll-UP (onScroll), so it is an honest "the reader chose to
-        // leave the tail" signal — the SAME gate the resize re-anchor uses
-        // (onMount `onResize`). Both arms are one-shot with no latch: resume ≠
-        // switch, so only a channel activation (switch / cold-mount) latches a
-        // re-asserted marker jump (#168, 2026-07-03).
-        //   * atBottom() true  → the reader was following live → TAIL (#46).
-        //   * atBottom() false → the reader deliberately scrolled up mid-backlog
+        // when the document hid. `followMode()` (#608: the follow INTENT, not
+        // the geometric `atBottomNow`) turns false ONLY on a real operator
+        // scroll-UP (onScroll), so it is an honest "the reader chose to leave
+        // the tail" signal — the SAME gate the resize re-anchor uses (onMount
+        // `onResize`). Both arms are one-shot with no latch: resume ≠ switch, so
+        // only a channel activation (switch / cold-mount) latches a re-asserted
+        // marker jump (#168, 2026-07-03).
+        //   * followMode() true  → the reader was following live → TAIL (#46).
+        //   * followMode() false → the reader deliberately scrolled up mid-backlog
         //     → land on the re-latched divider if one renders, else PRESERVE
         //     their scrollTop. NEVER tail-snap them (the pre-#535 bug: the
         //     unconditional "tail-only" here dropped a mid-backlog reader at the
         //     tail on every return from an external link).
-        if (atBottom()) {
+        if (followMode()) {
           scrollToActivation("tail-only", true);
         } else {
           scrollToActivation("marker-or-preserve", true);
@@ -2166,7 +2194,7 @@ const ScrollbackPane: Component<Props> = (props) => {
   // just-sent line is visible ("send scrolls to the bottom unconditionally").
   // Clear the marker-activation latch FIRST so the length-effect's re-assert
   // can't fight the snap, THEN snap. `scrollToBottom` is the same tail
-  // authority the length-effect uses (scroll + atBottom=true); the WS-echo
+  // authority the length-effect uses (scroll + followMode/atBottomNow=true); the WS-echo
   // row that lands later is then followed by the length-effect. NOT event-type
   // branching — the send resets the follow-STATE and the single always-bottom
   // authority does the scrolling. Keyed: only a send to THIS pane's
@@ -2359,20 +2387,21 @@ const ScrollbackPane: Component<Props> = (props) => {
   // #168 (2026-07-02) — this length-effect (post-append / cursor-hydration)
   // is TAIL-ONLY and stays so. The former C7.3 scroll-to-marker branch here
   // was a second scrollTop authority that parked the viewport on the divider
-  // and set atBottom=false, so a send did not follow to the tail — removed.
-  // New content ⇒ bottom while following (atBottom); scrolled-up
-  // (atBottom=false) preserves position — irssi-shape, only the operator's
-  // own scroll leaves the tail. The scroll-to-marker jump was RESCOPED to the
-  // deliberate channel-SWITCH trigger inside `scrollToActivation`
-  // ("marker-or-tail" mode, #168 regression fix 2026-07-03) — NOT here: when
-  // a switch parks on the divider it sets atBottom=false first, so the
-  // `if (!atBottom()) return` guard below yields and never races that jump
-  // back to the tail. The frozen divider renders in place (DESIGN_NOTES
-  // 2026-06-08) for every trigger; this effect just never scrolls to it.
+  // and turned follow off, so a send did not follow to the tail — removed.
+  // New content ⇒ bottom while following (#608: gated on `followMode`);
+  // scrolled-up (followMode false) preserves position — irssi-shape, only the
+  // operator's own scroll leaves the tail. The scroll-to-marker jump was
+  // RESCOPED to the deliberate channel-SWITCH trigger inside
+  // `scrollToActivation` ("marker-or-tail" mode, #168 regression fix
+  // 2026-07-03) — NOT here: when a switch parks on the divider it sets
+  // `followMode=false` first, so the `if (!followMode()) return` guard below
+  // yields and never races that jump back to the tail. The frozen divider
+  // renders in place (DESIGN_NOTES 2026-06-08) for every trigger; this effect
+  // just never scrolls to it.
   //
-  // The `atBottom` gate stays honest through the #156 anchored initial load
+  // The `followMode` gate stays honest through the #156 anchored initial load
   // (which prepends the read-context page above the tail while following)
-  // because `onScroll` only flips `atBottom` false on a real scroll UP
+  // because `onScroll` only flips `followMode` false on a real scroll UP
   // (scrollTop decreases) — a content-grow-above keeps scrollTop put, so the
   // spurious scroll event it fires no longer lies "left the bottom" (#168).
   createEffect(
@@ -2428,16 +2457,16 @@ const ScrollbackPane: Component<Props> = (props) => {
         // (post-switch catch-up refresh, late read-cursor hydration inserting
         // the divider) must RE-ASSERT the marker jump; the ref-keyed `<For>`
         // reset scrollTop to 0 on this recreation and a one-shot jump would
-        // strand (the 307 bug — a far marker sets atBottom=false, which without
+        // strand (the 307 bug — a far marker sets followMode=false, which without
         // this branch suppresses ALL re-establish). Pre-paint (rAF×2,
         // withHide=false) so the reset frame is never shown.
         //
         // Gated on the marker actually EXISTING (not just the latch): when
         // there is no divider — a read channel's cold-mount, OR a scroll-up
-        // loadMore prepend on a read channel — we FALL THROUGH to the atBottom
+        // loadMore prepend on a read channel — we FALL THROUGH to the followMode
         // tail-follow below. That preserves the two cases correctly with ONE
-        // rule: initial cold-mount (atBottom=true) tails; a loadMore prepend
-        // after the operator scrolled up (atBottom=false) does nothing → the
+        // rule: initial cold-mount (followMode=true) tails; a loadMore prepend
+        // after the operator scrolled up (followMode=false) does nothing → the
         // prepend's own height-delta restore preserves position (cp14-b2). A
         // no-marker re-assert would instead TAIL and yank the prepend — the
         // oscillation this gate prevents. The latch still clears on operator
@@ -2446,7 +2475,7 @@ const ScrollbackPane: Component<Props> = (props) => {
           scrollToActivation("marker-or-tail", false);
           return;
         }
-        if (atBottom()) {
+        if (followMode()) {
           // Same scrollHeight-vs-layout race as scrollToActivation /
           // measureOverflow: reading scrollHeight synchronously inside
           // the Solid effect callback fires BEFORE the browser's layout
@@ -2462,7 +2491,7 @@ const ScrollbackPane: Component<Props> = (props) => {
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               if (!listRef) return;
-              if (!atBottom()) return;
+              if (!followMode()) return;
               const tail = listRef.lastElementChild as HTMLElement | null;
               if (tail?.scrollIntoView) {
                 tail.scrollIntoView({ block: "end" });
@@ -2481,7 +2510,7 @@ const ScrollbackPane: Component<Props> = (props) => {
   // gesture (pointerdown / wheel / touchmove / scroll-keys) and reset to null
   // on key-change; a non-null transition means the operator is driving, so we
   // stop re-asserting the marker and hand scroll authority back (subsequent
-  // live appends then follow the `atBottom` rule below — preserve when scrolled
+  // live appends then follow the `followMode` rule below — preserve when scrolled
   // up, tail when at the bottom). The `null` guard skips the key-change reset
   // and the initial-mount run.
   createEffect(
@@ -2554,7 +2583,7 @@ const ScrollbackPane: Component<Props> = (props) => {
     if (listRef.scrollTop > LOAD_MORE_THRESHOLD_PX) return;
     // See the length-effect for how an active marker activation is kept from
     // yanking this (it re-asserts ONLY when a marker exists; a no-marker latch
-    // falls through to the atBottom-follow, which preserves here because the
+    // falls through to the followMode tail-follow, which preserves here because the
     // operator scrolled UP).
     const oldScrollHeight = listRef.scrollHeight;
     const oldScrollTop = listRef.scrollTop;
@@ -2630,8 +2659,8 @@ const ScrollbackPane: Component<Props> = (props) => {
     // event is an artifact of the ref-keyed <For> recreating the list DOM on a
     // rows() change (a message arriving under the overlay resets scrollTop to
     // 0), NOT operator intent: the modal + backdrop cover the pane, so the
-    // reader cannot scroll it. Acting on these artifacts flips `atBottom`,
-    // spuriously fires loadMore/loadNewer (whose prepend would STALE the
+    // reader cannot scroll it. Acting on these artifacts flips the follow +
+    // geometry signals, spuriously fires loadMore/loadNewer (whose prepend would STALE the
     // absolute-pixel freeze snapshot → wrong close-edge restore), snapshots a
     // bogus visible-tail, and advances the read cursor. Skip all of it; the
     // length-effect re-assert + the overlay-snapshot close restore own the
@@ -2639,24 +2668,29 @@ const ScrollbackPane: Component<Props> = (props) => {
     if (isOverlayFrozen()) return;
     const st = listRef.scrollTop;
     const distance = listRef.scrollHeight - st - listRef.clientHeight;
-    // #168 — the follow authority (`atBottom`) flips FALSE only on an
-    // operator scroll UP (scrollTop DECREASES). Reaching the tail (distance
-    // within threshold) always re-arms the follow. A programmatic content-
-    // grow ABOVE the viewport — the #156 anchored read-context page, or the
-    // WS join-ok `refreshScrollback` prepend, both landing while the pane is
+    // #168 / #608 — the follow INTENT (`followMode`) flips FALSE only on an
+    // operator scroll UP (scrollTop DECREASES); the GEOMETRIC `atBottomNow`
+    // tracks the same edges but drives only the button. Reaching the tail
+    // (distance within threshold) re-arms both. A programmatic content-grow
+    // ABOVE the viewport — the #156 anchored read-context page, or the WS
+    // join-ok `refreshScrollback` prepend, both landing while the pane is
     // following — fires a `scroll` event whose geometry shows a huge
     // distance-to-tail (older rows now sit above) even though scrollTop did
-    // NOT decrease. The old `setAtBottom(distance <= threshold)` treated
-    // that as "the operator left the bottom" and killed the always-bottom
-    // follow, stranding the pane mid-buffer on window open (P0 regression;
-    // ~1056px above the tail). Gating the false-flip on `st < lastScrollTop`
-    // keeps a prepend from lying about intent — only a real upward scroll
-    // (operator OR the programmatic scroll-to-top a loadMore test performs,
-    // both of which DECREASE scrollTop) leaves the tail.
+    // NOT decrease. Treating that as "the operator left the bottom" killed the
+    // always-bottom follow, stranding the pane mid-buffer on window open (P0
+    // regression; ~1056px above the tail). Gating the false-flip on
+    // `st < lastScrollTop` keeps a prepend from lying about intent — only a
+    // real upward scroll (operator OR the programmatic scroll-to-top a loadMore
+    // test performs, both of which DECREASE scrollTop) leaves the tail. The
+    // followMode edges route through `nextFollowMode` (lib/scrollAuthority, the
+    // SSOT transition table): reach-tail→on, scroll-up→off; the untouched
+    // middle branch is the table's content-grow no-op.
     if (distance <= SCROLL_BOTTOM_THRESHOLD_PX) {
-      setAtBottom(true);
+      setAtBottomNow(true);
+      setFollowMode(nextFollowMode(followMode(), "reach-tail"));
     } else if (st < lastScrollTop) {
-      setAtBottom(false);
+      setAtBottomNow(false);
+      setFollowMode(nextFollowMode(followMode(), "scroll-up"));
     }
     lastScrollTop = st;
 
@@ -2708,7 +2742,7 @@ const ScrollbackPane: Component<Props> = (props) => {
       // then would strand a late-hydration marker. A real operator scroll-down
       // to this boundary already clears the latch via the input gate; loadNewer
       // fetches only in the #156 >200-unread anchored case, where the length-
-      // effect's preserve (atBottom=false in the 50–200px band) still holds.
+      // effect's preserve (followMode=false in the 50–200px band) still holds.
       void loadNewerScrollback(props.networkSlug, props.channelName);
     }
 
@@ -2742,7 +2776,7 @@ const ScrollbackPane: Component<Props> = (props) => {
   };
 
   // C7.4: scroll-to-bottom click handler — forces scroll to tail and
-  // resumes auto-follow by setting atBottom(true).
+  // resumes auto-follow (#608: re-arms `followMode` + `atBottomNow`).
   //
   // 2026-06-02 (scroll-to-bottom button contamination): the snap is
   // INSTANT, not `behavior: "smooth"`. The `[data-testid="scrollback"]`
@@ -2765,7 +2799,8 @@ const ScrollbackPane: Component<Props> = (props) => {
     } else {
       listRef.scrollTop = listRef.scrollHeight;
     }
-    setAtBottom(true);
+    setFollowMode(true);
+    setAtBottomNow(true);
   };
 
   // #310 — the scroll-to-bottom GESTURE, shared by the floating button's
@@ -3088,7 +3123,7 @@ const ScrollbackPane: Component<Props> = (props) => {
         <Show when={isMobile()}>
           <NextActiveButton variant="mobile" />
         </Show>
-        <Show when={!atBottom()}>
+        <Show when={!atBottomNow()}>
           <button
             type="button"
             class="scroll-to-bottom-btn"
