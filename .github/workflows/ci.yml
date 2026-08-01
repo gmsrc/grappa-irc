@@ -110,12 +110,13 @@ jobs:
         # breaking the jail deploy — the exact copy-paste-drift class #503
         # exists to kill.
         run: |
-          shellcheck -s sh infra/lib/deploy_common.sh infra/docker/assert-abi-lockstep.sh infra/docker/release-entrypoint.sh
+          shellcheck -s sh infra/lib/deploy_common.sh infra/docker/assert-abi-lockstep.sh infra/docker/release-entrypoint.sh infra/docker/get.sh
           shellcheck -x infra/freebsd/deploy.sh infra/linux/deploy.sh scripts/deploy.sh infra/docker/deploy.sh
           dash -n infra/lib/deploy_common.sh
           dash -n infra/freebsd/deploy.sh
           dash -n infra/docker/assert-abi-lockstep.sh
           dash -n infra/docker/release-entrypoint.sh
+          dash -n infra/docker/get.sh
 
       - name: Upload coverage
         uses: codecov/codecov-action@v7
