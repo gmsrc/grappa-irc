@@ -2187,32 +2187,41 @@ const ScrollbackPane: Component<Props> = (props) => {
     }),
   );
 
-  // #580 — submit-time scroll authority. The bottom-snap + follow-state
-  // reset are the operator's response to pressing enter, NOT a reaction to
-  // the server, so they fire on `ownSendSubmitted` (published SYNCHRONOUSLY
-  // before the POST in scrollback.sendMessage) — the instant enter is
-  // pressed, independent of the network round-trip. This fixes the field
-  // report (#580) where a slow / failed POST left the pane parked while the
-  // WS echo rendered the row: the snap no longer waits on the POST.
+  // #580 / #608 (deep-review §6.5) — submit-time follow authority. Pressing
+  // enter is the operator declaring "follow the tail again", NOT a reaction to
+  // the server, so it fires on `ownSendSubmitted` (published SYNCHRONOUSLY before
+  // the POST in scrollback.sendMessage) — the instant enter is pressed,
+  // independent of the network round-trip (the #580 property: a slow / failed
+  // POST must not park the pane; the follow-arm here never waits on it).
   //
-  // #168 — a send re-enters follow mode UNCONDITIONALLY: even if the operator
-  // had paged UP to re-read, sending snaps the pane back to the tail so the
-  // just-sent line is visible ("send scrolls to the bottom unconditionally").
-  // Clear the marker-activation latch FIRST so the length-effect's re-assert
-  // can't fight the snap, THEN snap. `scrollToBottom` is the same tail
-  // authority the length-effect uses (scroll + followMode/atBottomNow=true); the WS-echo
-  // row that lands later is then followed by the length-effect. NOT event-type
-  // branching — the send resets the follow-STATE and the single always-bottom
-  // authority does the scrolling. Keyed: only a send to THIS pane's
-  // `(slug, channel)` (a `/msg` elsewhere doesn't). `defer: true` skips the
-  // mount run — the key/cold-latch effects own the mount-time baseline.
+  // #608 STEP 5 — the submit ARMS the follow INTENT; it does NOT scroll to a
+  // non-existent node. There is NO optimistic append (scrollback.sendMessage
+  // publishes this signal SYNC before the POST; the row renders only on the WS
+  // echo), so the pre-#608 `scrollToBottom()` here read PRE-append geometry and
+  // scrolled to the STALE tail — one message behind (#608 §5 off-by-one). Now the
+  // send sets `followMode` via the `nextFollowMode` "send" edge (re-enters follow
+  // even if the operator had paged UP — "send follows the tail
+  // unconditionally"), and the APPLIER tail-follows when the echo row actually
+  // mounts + lays out (length-effect → tail-follow, reading POST-append
+  // geometry). This is where `followMode` and `atBottomNow` first DIVERGE:
+  // `followMode` is armed HERE (the intent); `atBottomNow` only flips true once
+  // the echo lays out and the tail-follow's scroll fires `onScroll` reach-tail —
+  // the floating button may briefly show between submit and echo on a
+  // scrolled-up send, which is correct (the tail does not yet exist).
+  //
+  // Clear the marker-activation latch FIRST so the length-effect's marker
+  // re-assert can't fight the tail-follow the echo triggers. Keyed: only a send
+  // to THIS pane's `(slug, channel)` arms it (a `/msg` elsewhere doesn't).
+  // `defer: true` skips the mount run — the key/cold-latch effects own the
+  // mount-time baseline. The divider re-latch stays on `lastOwnSend`
+  // (post-resolve, below) — the #580 split is preserved.
   createEffect(
     on(
       ownSendSubmitted,
       (sent) => {
         if (sent !== key()) return;
         setMarkerActivationPending(false);
-        scrollToBottom();
+        setFollowMode(nextFollowMode(followMode(), "send"));
       },
       { defer: true },
     ),

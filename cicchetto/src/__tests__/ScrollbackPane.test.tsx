@@ -1497,6 +1497,85 @@ describe("ScrollbackPane", () => {
     });
   });
 
+  // #608 STEP 5 (RED-GREEN behaviour change) — the SEND submit path ARMS the
+  // follow INTENT; it does NOT synchronously scroll to a non-existent node. The
+  // WS echo row is not in the DOM at submit (scrollback.ts publishes
+  // ownSendSubmitted SYNC before the POST — no optimistic append), so the old
+  // scrollToBottom() read PRE-append geometry and scrolled to the STALE tail
+  // (the #608 §5 off-by-one). Reshaped: submit sets followMode via nextFollowMode
+  // "send" (+ releases the marker latch); the applier tail-follows when the echo
+  // row mounts. followMode/atBottomNow first DIVERGE here — followMode is armed at
+  // submit; atBottomNow only flips once the echo lays out. e2e twin:
+  // issue580-send-snap-independent-of-post (asserts the end-state snap after the
+  // WS echo, which this reshape preserves — the follow-arm is independent of the
+  // POST, the tail fires on the WS echo).
+  describe("#608 — send arms followMode without scrolling the pre-echo tail (STEP 5)", () => {
+    let origScrollIntoView: typeof Element.prototype.scrollIntoView;
+    let scrollIntoViewSpy: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      origScrollIntoView = Element.prototype.scrollIntoView;
+      scrollIntoViewSpy = vi.fn();
+      // biome-ignore lint/suspicious/noExplicitAny: jsdom Element type compat
+      (Element.prototype as any).scrollIntoView = scrollIntoViewSpy;
+    });
+    afterEach(() => {
+      Element.prototype.scrollIntoView = origScrollIntoView;
+    });
+    const overflowing = (list: HTMLDivElement, scrollTop: number): void => {
+      Object.defineProperty(list, "scrollHeight", { value: 5000, configurable: true });
+      Object.defineProperty(list, "clientHeight", { value: 500, configurable: true });
+      Object.defineProperty(list, "scrollTop", {
+        value: scrollTop,
+        writable: true,
+        configurable: true,
+      });
+    };
+    const flushRaf = async (): Promise<void> => {
+      await new Promise((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => r(undefined))),
+      );
+    };
+
+    it("submit does NOT scroll the stale pre-echo tail; it arms followMode so the applier tails when the echo mounts", async () => {
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+
+      // Operator scrolls UP → followMode flips false (scroll DOWN then UP; the
+      // #168 guard: followMode leaves the tail only when scrollTop DECREASES).
+      overflowing(list, 400);
+      list.dispatchEvent(new Event("scroll"));
+      list.scrollTop = 100;
+      list.dispatchEvent(new Event("scroll"));
+      await waitFor(() => expect(screen.queryByTestId("scroll-to-bottom")).not.toBeNull());
+      await flushRaf();
+      scrollIntoViewSpy.mockClear();
+
+      // SUBMIT — no echo row appended yet (WS-driven render; ownSendSubmitted is
+      // published SYNC before the POST in production).
+      pushOwnSendSubmitted("freenode #grappa");
+      await Promise.resolve();
+      await flushRaf();
+
+      // Reshaped: no scroll to the stale tail at submit. (RED pre-reshape: the
+      // submit effect's scrollToBottom() fired scrollIntoView on the OLD tail.)
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+
+      // The WS echo lands (rows 3 → 4). followMode was ARMED at submit, so the
+      // applier's length-effect tail-follows the newly-mounted echo row.
+      const proto = fixture[0];
+      if (!proto) throw new Error("fixture[0] missing");
+      setScrollback({
+        "freenode #grappa": [
+          ...fixture,
+          { ...proto, id: 4, server_time: 1_700_000_003_000, sender: "vjt", body: "my echo" },
+        ],
+      });
+      await flushRaf();
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: "end" });
+    });
+  });
+
   // #310 — the scroll-to-bottom GESTURE (floating button + #243 re-tap)
   // must advance the server read cursor to the NEWEST rendered message.
   // Pre-#310 both funnelled through the pure `scrollToBottom()` helper,
