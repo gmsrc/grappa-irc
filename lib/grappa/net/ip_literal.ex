@@ -120,11 +120,31 @@ defmodule Grappa.Net.IpLiteral do
   def canonicalize_cidr6(value) when is_binary(value) do
     case parse_cidr6(value) do
       {:ok, {tuple, len}} ->
-        network = tuple |> ip6_to_integer() |> mask_prefix(len) |> integer_to_ip6()
-        {:ok, to_string(:inet.ntoa(network)) <> "/" <> Integer.to_string(len)}
+        {:ok, network_literal(tuple, len) <> "/" <> Integer.to_string(len)}
 
       :error ->
         :error
+    end
+  end
+
+  @doc """
+  Returns the network base address (host bits zeroed) of a v6 CIDR as a
+  canonical literal — the `<net>` of `canonicalize_cidr6/1` without the
+  trailing `/len`.
+
+  `Grappa.Net.SourceAlias.FreeBSD.arm_check/1` uses it as its probe canary: it
+  is the one address guaranteed inside the prefix for ANY length, and a
+  deterministic point that a live derived source (a near-uniform 48-bit
+  SHA-256 spread over the host bits) practically never occupies — so probing
+  it (add + immediate delete) does not disturb a real alias.
+
+  Returns `:error` for the same inputs `parse_cidr6/1` rejects.
+  """
+  @spec network_address(String.t()) :: {:ok, String.t()} | :error
+  def network_address(prefix_cidr) when is_binary(prefix_cidr) do
+    case parse_cidr6(prefix_cidr) do
+      {:ok, {tuple, len}} -> {:ok, network_literal(tuple, len)}
+      :error -> :error
     end
   end
 
@@ -175,5 +195,11 @@ defmodule Grappa.Net.IpLiteral do
   defp mask_prefix(n, len) do
     host_bits = 128 - len
     (n >>> host_bits) <<< host_bits
+  end
+
+  # Network base address of a (tuple, len) as a canonical v6 literal — the
+  # single mask+render pipeline shared by canonicalize_cidr6/1 + network_address/1.
+  defp network_literal(tuple, len) do
+    tuple |> ip6_to_integer() |> mask_prefix(len) |> integer_to_ip6() |> :inet.ntoa() |> to_string()
   end
 end

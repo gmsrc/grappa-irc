@@ -12,9 +12,12 @@ defmodule Grappa.Net.SourceAlias.FreeBSD do
   BEFORE shelling) so an out-of-prefix address never even reaches `sudo`.
 
   `ensure_source` / `release_source` add / delete the alias; `arm_check`
-  proves the sudoers grant works via the wrapper's no-op `check` subcommand;
-  `list_aliases` reads `ifconfig lo0` (unprivileged, no sudo) and returns the
-  inet6 addresses inside the prefix — the ground truth for boot reconcile.
+  proves the substrate can ACTUALLY alias — the wrapper's `probe` subcommand
+  adds then deletes a canary derived from the prefix, so a non-VNET jail (or a
+  DB↔substrate prefix drift) refuses to arm with a concrete reason instead of
+  arming and failing every acquire; `list_aliases` reads `ifconfig lo0`
+  (unprivileged, no sudo) and returns the inet6 addresses inside the prefix —
+  the ground truth for boot reconcile.
   """
 
   @behaviour Grappa.Net.SourceAlias
@@ -31,20 +34,37 @@ defmodule Grappa.Net.SourceAlias.FreeBSD do
 
   @impl Grappa.Net.SourceAlias
   def arm_check(prefix) do
-    case IpLiteral.parse_cidr6(prefix) do
-      {:ok, _} ->
-        # Prove the NOPASSWD sudoers grant + wrapper are actually present.
-        # `-n` (non-interactive) turns a missing grant into an immediate
-        # non-zero instead of a password prompt that would hang boot.
-        case Config.cmd().run("sudo", ["-n", @wrapper, "check"], @timeout_s) do
-          {:ok, _} -> :ok
-          {:error, _} -> {:error, :wrapper_unavailable}
-        end
+    case IpLiteral.network_address(prefix) do
+      {:ok, canary} ->
+        # Prove the substrate can ACTUALLY alias, not just that the sudoers
+        # grant resolves (the old no-op `check` was a false positive). The
+        # wrapper's `probe` adds then deletes the canary; `-n` (non-interactive)
+        # turns a missing grant into an immediate non-zero instead of a
+        # password prompt that would hang boot. The canary is the network base
+        # of THIS prefix (the DB prefix), so a wrapper scoped to a different
+        # config-file prefix refuses it (exit 65) — surfacing a DB↔substrate
+        # drift here as :prefix_mismatch rather than as per-address failures.
+        Config.cmd().run("sudo", ["-n", @wrapper, "probe", canary], @timeout_s)
+        |> arm_reason()
 
       :error ->
         {:error, :invalid_prefix}
     end
   end
+
+  # Map the wrapper's exit code (HardenedCmd surfaces it as {:exit, code, _})
+  # to the concrete refuse-to-arm reason — the wrapper's exit-code contract:
+  # 65 out-of-prefix (a DB↔substrate prefix drift), 66 prefix config
+  # unavailable, 69 substrate refused the alias (e.g. non-VNET jail). Any other
+  # non-zero (sudo's own exit 1 on a missing NOPASSWD grant) means the wrapper
+  # is not reachable at all.
+  defp arm_reason({:ok, _}), do: :ok
+  defp arm_reason({:error, {:exit, 65, _}}), do: {:error, :prefix_mismatch}
+  defp arm_reason({:error, {:exit, 66, _}}), do: {:error, :prefix_config_unavailable}
+  defp arm_reason({:error, {:exit, 69, _}}), do: {:error, :alias_not_permitted}
+  defp arm_reason({:error, {:exit, _, _}}), do: {:error, :wrapper_unavailable}
+  defp arm_reason({:error, :timeout}), do: {:error, :probe_timeout}
+  defp arm_reason({:error, {:exe_not_found, _}}), do: {:error, :wrapper_unavailable}
 
   @impl Grappa.Net.SourceAlias
   def ensure_source(addr, prefix), do: alias_op("add", addr, prefix)
