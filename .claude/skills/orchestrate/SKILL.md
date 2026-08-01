@@ -559,3 +559,114 @@ clearing on unverified edits leaves the next session unable to tell whether they
 block as the dispatch send-keys; `strip status:*` rides the SAME turn as processing the shipped report.
 **`cooking→soon` only at the worker's DONE hand-off — CI-wait is still cooking.** A closed issue carries NO `status:*`.
 **Enqueue is vjt's or the ircbot's** — except when he says "fix it" in conversation: that IS the enqueue (#526, #522).
+
+## 🔀 PR / MERGE / GATING MECHANICS (learned the hard way 2026-08-01 — permanent)
+- 🔴 **A CONFLICTING PR RUNS *NO* CI AT ALL.** GitHub cannot build `refs/pull/N/merge` for a conflicting PR, so
+  `pull_request` workflows never fire — **zero runs, zero check-runs**, and `gh pr checks` says *"no checks reported"*,
+  which reads like "not started yet" and **strands a poller forever**. When an expected run never appears, check in this
+  order: **`gh pr view --json mergeable,mergeStateStatus` FIRST**, then the workflow `paths:` filter, then `[skip ci]`.
+  Cure = rebase onto current main + `--force-with-lease`; CI restarts by itself. Neither `ci.yml` nor `integration.yml`
+  has `workflow_dispatch`, so for a PR whose run NEVER STARTED, fixing mergeability is the only route.
+- 🔧 **`gh run rerun <run-id> --failed` re-runs just the failed jobs of an EXISTING run, and needs no
+  `workflow_dispatch`.** Use it when a settled run went red on a diagnosed-transient cause — it beats pushing an
+  empty commit (no history pollution) and beats close/reopen (which does nothing). The "no manual lever" rule above
+  applies ONLY when no run exists to re-run.
+- 🥇 **A FIXTURE-LEVEL FLAKE MUST BE MATCHED BY MECHANISM, NEVER BY SPEC NAME.** An auto-fixture (`_vjtReset`) runs
+  for every test, so its race surfaces in whatever spec happens to be running — #195 originally, #263 on 2026-08-01,
+  both the same bug (#277: `resetSubject` 500 → `{:nick_rejected, 433, "vjt-grappa"}`). Checking the tracked-flake
+  list by spec name will never match it. **Key the triage off the ERROR SIGNATURE + the fixture frame in the stack**
+  (`fixtures/test.ts` in the trace = not your test's fault), not off which spec went red.
+- 🥇 **Verify a rebase with `git merge-base --is-ancestor origin/main <branch>`** — never with GitHub's `mergeable`
+  field (async, lags a push) and never with the worker's belief that it rebased. **Rebase + force-push must be ONE
+  immediate sequence:** main moving mid-rebase puts the PR straight back to CONFLICTING (cost two rounds on PR #600).
+- 🥇 **After a rebase-then-direct-merge, judge "did it land?" by COMMIT CONTENT** (`git log origin/main --grep '#NNN'`),
+  **never by `merge-base --is-ancestor` on the PR head** — a rebase gives the landed commits NEW shas, so the PR head is
+  legitimately not an ancestor.
+- 🥇 **THE STRUCTURAL CURE FOR THE STALE-PR PROBLEM: FORCE-PUSH THE REBASED BRANCH *BEFORE* THE FF-MERGE.**
+  Order that works (w2, #600, verified): rebase onto `origin/main` → `push --force-with-lease` the BRANCH →
+  ff-merge into main → push main with an explicit refspec. Because the remote PR head is now the rebased commit,
+  the ff-merge makes it a genuine ancestor of main and **GitHub marks the PR `MERGED` by itself — no manual close,
+  and no stale pre-rebase head left behind.** The leak below happens when the rebase stays LOCAL and only main is
+  pushed: the PR keeps its pre-rebase head forever. **Prefer this order; treat "remember to close it" as backup.**
+- 🔴 **CLOSING THE PR IS PART OF THE MERGE STEP, NOT A LATER SWEEP — this leaked FIVE times in one day**
+  (#587 #586 #583 swept 05:10; #602 #603 swept 12:0x, all on already-shipped issues). A rebase-then-ff-merge leaves the
+  PR open with its pre-rebase head still reading *mergeable* — a standing invitation to ship the same work twice.
+  **Put "close the PR" in every merge brief; the periodic sweep is the symptom, the merge step is the fix.**
+  **Audit method — use it, never eyeball:** `git log origin/main --grep '#NNN'` to find the landed commit, then
+  `git patch-id --stable` on both heads. Identical ids ⇒ definitively landed. **Differing ids do NOT mean unlanded** —
+  a rebase legitimately rewrites context lines. Then diff the PR's touched files against main and look ONLY for lines
+  **the PR has that main LACKS**; none ⇒ landed. (#603 differed by exactly one comment terminator that a sibling PR
+  had extended.)
+- 🥇 **"ancestor of main" does NOT prove a worktree's work merged** — it equally matches a branch with NO commits.
+  Check for commits before concluding a worktree is disposable.
+- 🥇 **Gate via PR CI, not the local STACK, whenever a lane is contended** — the PR runs the full suite for free and
+  leaves the host lane for whoever actually needs a testnet.
+- 🥇 **Diff the e2e test COUNT across the gate:** +1 proves a new spec really ran; an UNCHANGED count is expected only
+  when the change is server-side with ExUnit coverage. State which case applies before calling a green real.
+
+## 🧪 FLAKE FORENSICS
+- 🥇 **A fixed identifier in a shared namespace is the classic flake**: a hard-coded nick/channel/port collides with a
+  ghost from a prior run, so **re-running is exactly what triggers it**, and it **does not fail where it is caused**.
+  Suspect that before suspecting the code under test. (#600: fixed peer nick `m591peer` → 433 → irc-framework registers
+  under an ALTERNATE nick while the fixture keeps the requested one → `/ping` DMs a phantom → 15 s timeout.)
+- 🔴 **Fix a flake by making the SETUP deterministic** (unique per-run identifier, wait on an observable ready signal) —
+  **never by bumping a timeout blindly and never by weakening the assert.**
+- 🥇 **Give every diagnosis a falsification condition and let the worker run it.** A dispatch body is a HYPOTHESIS: mine
+  was killed by one `git merge-base` call, and the worker was right. Accept it plainly and move on.
+
+## 🪟 TMUX VIEWPORT / PICKER MECHANICS
+- 🔴 **A `-S` capture of a pane SHORTER than its content reads SCROLLBACK, not the live view** — keystrokes then appear
+  to no-op against a picker you "can see". **`tmux capture-pane -p` with NO `-S`, plus a `Down` probe that visibly moves
+  `❯`, is the liveness proof.**
+- 🔴 **NEVER pin a window's size to un-cramp a pane — the window is almost certainly being watched.** I did exactly
+  this (`window-size manual` + `resize-window -x 200 -y 60` on `0:2`) on the theory that "no client is viewing it".
+  **FALSE, and vjt had to revert it** (`set-window-option -t 0:2 -u window-size`): `0:2` was the ACTIVE window of a
+  session with THREE attached clients, including his phone at 71x60 — the pin broke his resize-to-viewport.
+  **`tmux list-clients` tells you who is attached to the SESSION, and if the window is the active one those clients
+  ARE viewing it.** Never infer a window is free just because you are not in it. A cramped pane is the user's terminal
+  geometry: **report it and let him fix it** (detach / resize on his side) — geometry is his environment, not yours.
+- 🥇 **Picker input:** number keys select in a SINGLE-select; in a MULTI-select they do nothing — `↑/↓` to the row,
+  **`Enter` toggles `[ ]`→`[✔]`**, then navigate to `Submit` and `Enter`, then `1` on the confirm screen.
+
+## 🔁 RECURRING WORKER-BRIEF CORRECTIONS (say these in EVERY dispatch)
+Workers regress to these every time, and a worker's OWN staged resume file is written from its memory, not from
+these rules — **read a worker's `/tmp/orchestrate-next-<w>.txt` for wrong rules before you dispatch it** (w2's
+said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
+- **STACK (docker/e2e/`integration.sh`) and COMPILE (`mix`/`check.sh`, shared `_build`) are EXCLUSIVE and I
+  allocate them. Ask ME, never vjt, never self-serve.** Cic-only gates (`bun.sh run check|test`) need NEITHER.
+- **The worker MERGES + pushes ONLY on my word; the DEPLOY is always held.** No `gh issue close` at merge.
+  **CLOSE THE PR at merge** (see PR/MERGE MECHANICS). **Remove the worktree + delete the branch at merge.**
+- **No `Closes #NNN` in a PR body** — it auto-closed #540 while prod lacked the code. `board-check.sh` after
+  EVERY merge. **No CI polling — the ORCHESTRATOR watches CI.**
+- **A flake is fixed by making the SETUP deterministic, never by weakening an assert or bumping a timeout.**
+- **ALWAYS push with an explicit refspec** (`git push origin refs/heads/X:refs/heads/X`) — the bare-refspec trap
+  landed a branch on **main** twice in one day.
+- **`| tail && echo OK` MASKS the exit code** — redirect to a file and capture `$?`.
+
+## 🧷 ORCHESTRATOR TRAPS (mechanics of driving the panes)
+- 🔴 **Never background a waiter with `&` inside a foreground Bash** — it detaches, advances the cursor and eats
+  events. Arm ONLY via `run_in_background: true`, **one per assistant message** (two in one message = both
+  `killed`, observed 3×).
+- 🔴 **On resume, orphan waiters from the PRE-CLEAR session keep running and EAT EVENTS** while notifying a dead
+  session (their cmdline carries the old `/tmp/claude-<id>-cwd`). Kill them and re-arm fresh — cursor-tracking
+  loses nothing. Verify with `pgrep -fl 'wait-for-ev''ent.sh'` (the unsplit pattern kills its own shell).
+- 🔴 **`API Error: Stream idle timeout` looks exactly like IDLE.** Cure = a SHORT `riprendi.` — do not clear.
+- 🔴 **QUEUED INPUT ≠ SWALLOWED ≠ DELIVERED.** Proof of delivery is a `-S` capture showing `❯ <text>` as a TURN.
+  ℹ️ A picker about LANES or a BRANCH BASE is addressed to **ME**; escalate only DESIGN/product pickers.
+- 🔴 **A worker's redirect log / rc file can belong to a DEAD run** — `ls -lat` and match the mtime, never `cat`.
+  Same for a staged `/tmp/orchestrate-next-<w>.txt`: **`stat` it before dispatching**, a stale body looks identical.
+- 🔴 **The harness's own "background command completed (exit code 0)" is the COMPOUND's last command**, i.e. the
+  trailing `echo`, NOT the gate's rc. **Only a redirected rc FILE counts.**
+- 🔴 **NEVER column-split `gh pr checks`** — TAB-separated and the check name itself contains spaces
+  (`cicchetto + grappa + azzurra-testnet`), so `awk '{print $2}'` returns `+` and a poller "settles" instantly.
+  It has **no `--json`**; poll the run: `gh run view <id> --json status,conclusion`.
+  🥇 *Key off a structured field, never off a column position.*
+- 🔴 **`gh` needs a git repo to resolve the base repo** — from a scratchpad dir it dies with "failed to determine
+  base repo". Run from the repo, or pass `-R vjt/grappa-irc`.
+- 🥇 **A background gate SURVIVES `/clear`. DIAGNOSE-THEN-CLEAR-THEN-FIX** when a worker hits 40% mid-debug on a
+  red — a bare clear strands the next session on a red it must re-derive. **The cheapest clear is the one taken
+  while the worker is already blocked**, at a boundary where its output is durable (pushed, or posted to the issue).
+- 🥇 **When a worker asks a question, answer it where it will be SEEN.** vjt lives on IRC; check the bot log with a
+  WIDE tail (`tail -40`, not `-6`) — a reply 10 lines back reads as "no reply" and idles a worker for nothing.
+- ℹ️ The Pi has **no git credential helper** — `git push --delete` dies on "could not read Username"; prune remote
+  branches with `gh api -X DELETE`.
