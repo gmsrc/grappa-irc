@@ -1532,7 +1532,7 @@ const ScrollbackPane: Component<Props> = (props) => {
     // landed) — scrollToActivation early-returns and the latched length-effect
     // re-asserts on the first load / cursor hydration.
     setMarkerActivationPending(true);
-    scrollToActivation("marker-or-tail", true);
+    applyActivation("marker-or-tail", true);
     // UX-6 D9 / #253 — every vv.resize (keyboard open OR close,
     // orientation change, browser zoom) and window.resize (desktop
     // resize, devtools, zoom) re-anchors the scroll — but ONLY when the
@@ -1592,7 +1592,7 @@ const ScrollbackPane: Component<Props> = (props) => {
       // driven recompute. Matters most on mobile: the keyboard opening while the
       // operator is parked mid-buffer must not strand a stale badge.
       recomputeMentionsBelow();
-      if (followMode()) scrollToActivation("tail-only", true);
+      if (followMode()) applyActivation("tail-only", true);
     };
     window.addEventListener("resize", onResize);
     window.visualViewport?.addEventListener("resize", onResize);
@@ -2114,7 +2114,7 @@ const ScrollbackPane: Component<Props> = (props) => {
         // initial mount; first-focus-after-login is the COLD MOUNT handled by
         // onMount — also a marker activation now. #168, 2026-07-03.)
         setMarkerActivationPending(true);
-        scrollToActivation("marker-or-tail", true);
+        applyActivation("marker-or-tail", true);
       },
       { defer: true },
     ),
@@ -2179,9 +2179,9 @@ const ScrollbackPane: Component<Props> = (props) => {
         //     unconditional "tail-only" here dropped a mid-backlog reader at the
         //     tail on every return from an external link).
         if (followMode()) {
-          scrollToActivation("tail-only", true);
+          applyActivation("tail-only", true);
         } else {
-          scrollToActivation("marker-or-preserve", true);
+          applyActivation("marker-or-preserve", true);
         }
       }
     }),
@@ -2573,6 +2573,51 @@ const ScrollbackPane: Component<Props> = (props) => {
     const { winner, reason } = resolveIntent([intent], k);
     logScrollDecision("mention-jump", [intent], winner, reason);
     if (winner) anchor.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  // #608 (STEP 3) — the window-activation applier entrypoint (W2/W3), the LAST
+  // step-3 writer. The activation triggers (cold-mount, channel switch,
+  // visibility-return, resize) DECLARE their intent HERE instead of calling
+  // `scrollToActivation` directly, so the single applier — not each call-site —
+  // resolves precedence and logs the decision. Behaviour-IDENTICAL to the
+  // pre-STEP-3 direct calls: `scrollToActivation` already bails on
+  // `isOverlayFrozen()` (= overlay-freeze precedence) and still owns the
+  // marker-or-tail / tail-only / marker-or-preserve write mechanics + the #130
+  // flicker hide (`withHide`) + the follow/geometry signals — this only moves the
+  // DECISION into the pure `resolveIntent` core, making `scrollToActivation` an
+  // applier-internal write routine (reached ONLY here and from
+  // `dispatchScrollWrite`'s marker-activation case).
+  //
+  // The activation kind maps by mode: "tail-only" is the tail-follow intent
+  // (resize resume + the follow-live visibility arm); "marker-or-tail" /
+  // "marker-or-preserve" are marker-activation (jump to the rendered divider, or
+  // tail/preserve when none). The intent is UNCONDITIONAL per mode — NOT gated on
+  // the marker latch — because a direct `scrollToActivation` always ran when not
+  // frozen; gating it would be a behaviour change. When overlay-freeze outranks
+  // the activation intent we skip the delegate: `scrollToActivation`'s own frozen
+  // bail produced the identical no-op, so no activation authority moves a covered
+  // pane (the #219 / #219-general freeze), and the decision is now logged.
+  const applyActivation = (
+    mode: "marker-or-tail" | "tail-only" | "marker-or-preserve",
+    withHide: boolean,
+  ): void => {
+    if (!listRef) return;
+    const k = key();
+    const intents: ScrollIntent[] = [];
+    if (isOverlayFrozen()) {
+      intents.push({ kind: "overlay-freeze", key: k, lifetime: "sticky" });
+    }
+    intents.push({
+      kind: mode === "tail-only" ? "tail-follow" : "marker-activation",
+      key: k,
+      lifetime: "sticky",
+    });
+    const { winner, reason } = resolveIntent(intents, k);
+    logScrollDecision(`activation:${mode}`, intents, winner, reason);
+    // overlay-freeze wins ⇒ no activation write (scrollToActivation would have
+    // bailed identically). Otherwise the activation intent won ⇒ delegate.
+    if (winner?.kind === "overlay-freeze") return;
+    scrollToActivation(mode, withHide);
   };
 
   // After Solid commits new DOM nodes, scroll to the tail iff the user
