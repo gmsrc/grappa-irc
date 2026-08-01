@@ -29,12 +29,18 @@ static struct app *window_app(void) {
     struct network *n = &app->networks[app->network_count++];
     snprintf(n->slug, sizeof(n->slug), "azzurra");
     snprintf(n->nick, sizeof(n->nick), "vjt");
-    n->id = 7;
+    /* 1, matching the live capture the admin tests replay — azzurra is
+     * network 1 on a fresh instance, and the sessions tab resolves
+     * `network_id` back to a slug through this table. */
+    n->id = 1;
     return app;
 }
 
 static void free_app(struct app *app) {
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    /* Panel rows are heap-allocated too — the app owns them via
+     * clear_panel_lines_locked in production. */
+    for (size_t i = 0; i < app->panel_line_count; i++) free(app->panel_lines[i]);
     pthread_mutex_destroy(&app->lock);
     pthread_mutex_destroy(&app->jobs_lock);
     pthread_cond_destroy(&app->jobs_cond);
@@ -801,6 +807,100 @@ TEST(audio_is_classified_before_the_uploads_heuristic) {
     CHECK_LONG(media_kind_of("http://h/shot.png.txt"), MEDIA_IMAGE);
 }
 
+/* ── Admin panel wire shapes ───────────────────────────────────────────
+ *
+ * These renderers read the ADMIN API's JSON directly, and nothing linked
+ * them to it: three of them had drifted to keys the server has never
+ * sent, so the panel rendered "?" columns, a 0 B total and a visitor
+ * count with no rows under it — all of it silent, because a missing JSON
+ * key is indistinguishable from an empty one at the read site.
+ *
+ * The payloads below are VERBATIM captures from a live grappa
+ * (0.8.0) — an invented fixture would only re-encode the same wrong
+ * assumption the renderers made. */
+
+static const char *const ADMIN_SESSIONS_JSON =
+    "{\"sessions\":[{\"subject_kind\":\"user\",\"network_id\":1,"
+    "\"subject_label\":\"nextime\","
+    "\"subject_id\":\"df744b5e-ff5a-4d01-bf6f-fffb049e7f9e\","
+    "\"last_seen_at\":\"2026-08-01T07:19:31.959297Z\","
+    "\"live_state\":{\"alive\":true,\"peer_address\":\"15.161.158.234\","
+    "\"peer_port\":6697,\"introspection_degraded\":[],"
+    "\"joined_channels\":[\"#grappa\",\"#sniffo\",\"#vua\"],"
+    "\"mailbox_len\":0,\"memory_bytes\":264648,\"peer_name\":null,"
+    "\"pid_inspect\":\"#PID<0.893.0>\"}}]}";
+
+static const char *const ADMIN_UPLOADS_JSON =
+    "{\"live_bytes_sum\":0,\"global_cap_bytes\":10737418240,"
+    "\"uploads\":[{\"id\":\"u1\",\"slug\":\"abc\",\"mime\":\"image/png\","
+    "\"bytes\":2048,\"original_filename\":\"a.png\",\"subject_kind\":\"user\","
+    "\"subject_id\":\"u\",\"expires_at\":null,\"deleted_at\":null,"
+    "\"inserted_at\":\"2026-08-01T01:00:00Z\"}]}";
+
+static const char *const ADMIN_VISITORS_JSON =
+    "{\"visitors\":[{\"id\":\"v-123456789\",\"expires_at\":null,"
+    "\"identified\":true,\"ip\":\"10.0.0.1\","
+    "\"inserted_at\":\"2026-08-01T01:00:00Z\","
+    "\"networks\":[{\"network_slug\":\"azzurra\",\"network_id\":1,"
+    "\"nick\":\"guest42\",\"connection_state\":\"connected\","
+    "\"live_state\":{\"alive\":true}}]}]}";
+
+static void render_json(struct app *app, const char *json,
+                        void (*render)(struct app *, const json_value *)) {
+    json_doc *doc = json_parse(json, strlen(json), NULL, 0);
+    CHECK(doc != NULL);
+    if (!doc) return;
+    render(app, json_root(doc));
+    json_free(doc);
+}
+
+static bool panel_has(struct app *app, const char *needle) {
+    for (size_t i = 0; i < app->panel_line_count; i++)
+        if (strstr(app->panel_lines[i], needle)) return true;
+    return false;
+}
+
+TEST(the_admin_sessions_tab_reads_the_shape_the_server_sends) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    render_json(app, ADMIN_SESSIONS_JSON, render_admin_sessions);
+
+    /* network_id 1 resolves to the slug the client already knows. */
+    CHECK(panel_has(app, "azzurra"));
+    CHECK(panel_has(app, "user:nextime"));
+    CHECK(panel_has(app, "alive"));
+    /* joined_channels has three entries. */
+    CHECK(panel_has(app, "3"));
+    /* The old reader's tell was a row of literal question marks — one
+     * per key it asked for and did not get. */
+    CHECK(!panel_has(app, "?"));
+    free_app(app);
+}
+
+TEST(the_admin_uploads_tab_totals_the_bytes_field) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    render_json(app, ADMIN_UPLOADS_JSON, render_admin_uploads);
+    /* 2048 bytes — not the 0 B a `byte_size` reader reported. */
+    CHECK(panel_has(app, "2.0 KB"));
+    CHECK(!panel_has(app, "0 B total"));
+    free_app(app);
+}
+
+TEST(the_admin_visitors_tab_renders_per_network_rows) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    render_json(app, ADMIN_VISITORS_JSON, render_admin_visitors);
+    /* The row exists at all — the old top-level `nick` read made the
+     * guard skip every visitor, so the count had nothing under it. */
+    CHECK(panel_has(app, "v-123456789"));
+    CHECK(panel_has(app, "identified"));
+    /* The nick lives per-network, and so does its connection state. */
+    CHECK(panel_has(app, "guest42"));
+    CHECK(panel_has(app, "connected"));
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -831,6 +931,9 @@ int main(void) {
     RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);
     RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
     RUN(audio_is_classified_before_the_uploads_heuristic);
+    RUN(the_admin_sessions_tab_reads_the_shape_the_server_sends);
+    RUN(the_admin_uploads_tab_totals_the_bytes_field);
+    RUN(the_admin_visitors_tab_renders_per_network_rows);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
     return test_report();
 }

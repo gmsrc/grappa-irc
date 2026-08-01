@@ -278,6 +278,18 @@ chooses it, the wheel walks the list, and a click anywhere outside the box
 closes it — the same as Esc. Right-click needs mouse reporting, which is on by
 default; `Ctrl-R` works either way.
 
+## /exec
+
+`/exec <command>` runs it in a shell and **sends its stdout to the current
+window** — everyone in the channel sees it. It runs on the worker thread (a
+blocking command must never freeze the UI), stdin comes from `/dev/null` so a
+command that reads gets EOF instead of hanging, and stderr is discarded.
+
+Output is capped at 20 lines / 16 KiB and the command is killed after 15
+seconds; whatever was cut is reported locally, because a channel that saw half
+the output must not look like it saw all of it. It refuses in `$server`, which
+is read-only server-side.
+
 ## Audio
 
 An audio link **never plays on arrival** — it is a clickable link like any

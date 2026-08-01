@@ -78,6 +78,16 @@
  * truncated into a token they never sent. */
 #define CTCP_REPLY_MAX_NICK 64
 #define CTCP_REPLY_MAX_TOKEN 300
+/* /exec limits. A shell command's output goes to a CHANNEL, where the
+ * ircd — not this client — decides what counts as flooding: twenty lines
+ * is already a lot to inflict on a room, and an unbounded `find /` would
+ * earn an excess-flood kill before it finished. The byte cap catches the
+ * single enormous line that the line cap cannot. */
+#define EXEC_MAX_LINES 20
+#define EXEC_MAX_BYTES (16 * 1024)
+/* A command that has not finished talking by now is not going to; the
+ * worker thread is not its to keep. */
+#define EXEC_TIMEOUT_MS 15000
 #define MAX_CHANNEL 256
 #define MAX_SLUG 128
 #define MAX_LINE 1024
@@ -300,7 +310,8 @@ enum job_kind {
     JOB_READ_CURSOR,
     JOB_MEDIA,
     JOB_VIEW,
-    JOB_CHATHISTORY
+    JOB_CHATHISTORY,
+    JOB_EXEC
 };
 
 struct job {
@@ -3120,16 +3131,36 @@ static void render_admin_sessions(struct app *app, const json_value *root) {
     /* DB state and live pid are separate sources of truth and are allowed
      * to disagree; showing both (with an explicit "—" for a missing live
      * state) is the honesty signal that something diverged. */
-    panel_line(app, "    %-18s %-16s %-12s %s", "NETWORK", "NICK", "DB STATE", "LIVE");
+    panel_line(app, "    %-14s %-18s %-7s %-6s %s", "NETWORK", "SUBJECT", "LIVE", "CHANS",
+               "LAST SEEN");
     for (size_t i = 0; i < n && i < 50; i++) {
         const json_value *e = json_at(rows, i);
-        const char *net = json_string(json_get(e, "network_slug"));
-        const char *nick = json_string(json_get(e, "nick"));
-        const char *db = json_string(json_get(e, "connection_state"));
+        /* Keys straight from `AdminSessionsController`: this listing is
+         * per (subject, network) and carries `network_id` +
+         * `subject_kind`/`subject_label` + a live_state OBJECT. It was
+         * read as `network_slug`/`nick`/`connection_state`, none of
+         * which it has ever sent — so NETWORK, NICK and DB STATE all
+         * rendered "?" while LIVE rendered "—" (json_string of an
+         * object is NULL). A drifted reader shows the shape it WISHED
+         * for; there is no such thing as a field that is silently
+         * absent. */
+        long net_id = 0;
+        json_long(json_get(e, "network_id"), &net_id);
+        const char *slug = network_slug_by_id(app, (int)net_id);
+        const char *kind = json_string(json_get(e, "subject_kind"));
+        const char *label = json_string(json_get(e, "subject_label"));
         const json_value *live = json_get(e, "live_state");
-        const char *live_s = json_string(live);
-        panel_line(app, "    %-18s %-16s %-12s %s", net ? net : "?", nick ? nick : "?",
-                   db ? db : "?", live_s ? live_s : "—");
+        bool alive = json_bool(json_get(live, "alive"), false);
+        size_t chans = json_len(json_get(live, "joined_channels"));
+        char when[32];
+        human_time(json_get(e, "last_seen_at"), when, sizeof(when));
+        char subject[32];
+        snprintf(subject, sizeof(subject), "%s:%s", kind ? kind : "?", label ? label : "?");
+        /* live_state is null when the DB says a session exists and the
+         * BEAM has no pid — the divergence the operator needs to SEE,
+         * so it reads "gone" rather than an empty column. */
+        panel_line(app, "    %-14s %-18s %-7s %-6zu %s", slug ? slug : "?", subject,
+                   live ? (alive ? "alive" : "dead") : "gone", chans, when);
     }
     if (n > 50) panel_line(app, "    ... %zu more", n - 50);
 }
@@ -3140,10 +3171,27 @@ static void render_admin_visitors(struct app *app, const json_value *root) {
     panel_line(app, "  visitors (%zu)", n);
     for (size_t i = 0; i < n && i < 30; i++) {
         const json_value *e = json_at(rows, i);
-        const char *nick = json_string(json_get(e, "nick"));
+        /* A visitor is MULTI-NETWORK: the envelope carries id /
+         * expires_at / identified, and the nick lives per-network under
+         * `networks[]`. Reading a top-level `nick` found nothing, and
+         * the `if (nick)` guard then skipped the row entirely — the tab
+         * showed a count with no rows under it. */
+        const char *id = json_string(json_get(e, "id"));
         char when[32];
         human_time(json_get(e, "expires_at"), when, sizeof(when));
-        if (nick) panel_line(app, "    %-20s expires %s", nick, when);
+        bool identified = json_bool(json_get(e, "identified"), false);
+        panel_line(app, "    %-14.14s %-12s expires %s", id ? id : "?",
+                   identified ? "identified" : "anonymous", when);
+        const json_value *nets = json_get(e, "networks");
+        for (size_t k = 0; k < json_len(nets); k++) {
+            const json_value *ne = json_at(nets, k);
+            const char *slug = json_string(json_get(ne, "network_slug"));
+            const char *nick = json_string(json_get(ne, "nick"));
+            const char *db = json_string(json_get(ne, "connection_state"));
+            const json_value *live = json_get(ne, "live_state");
+            panel_line(app, "      %-12s %-16s %-12s %s", slug ? slug : "?", nick ? nick : "—",
+                       db ? db : "—", live ? "live" : "gone");
+        }
     }
     if (n > 30) panel_line(app, "    ... %zu more", n - 30);
 }
@@ -3154,7 +3202,9 @@ static void render_admin_uploads(struct app *app, const json_value *root) {
     long total = 0;
     for (size_t i = 0; i < n; i++) {
         long sz = 0;
-        json_long(json_get(json_at(rows, i), "byte_size"), &sz);
+        /* `bytes`, not `byte_size` — the controller has always sent the
+         * former, so the total read 0 B however much was stored. */
+        json_long(json_get(json_at(rows, i), "bytes"), &sz);
         total += sz;
     }
     char human[32];
@@ -6057,6 +6107,118 @@ static void send_message(struct app *app, const char *body) {
     free(r.body);
 }
 
+static void send_message_target(struct app *app, const char *network, const char *channel,
+                                const char *body);
+
+/* ── /exec ─────────────────────────────────────────────────────────────
+ *
+ * Run a shell command and send its stdout to the window, as messages the
+ * channel actually sees. irssi has had this forever and it is genuinely
+ * useful (`/exec uptime`, `/exec git log -1 --oneline`) — and it is also
+ * the single most dangerous verb in the client, so the shape matters:
+ *
+ *   * It runs on the WORKER thread, never the UI thread. A command that
+ *     blocks would otherwise freeze the whole client, keystrokes and
+ *     draw loop included.
+ *   * Output is CAPPED (lines and bytes) and the excess is REPORTED
+ *     rather than silently dropped — the user must know the channel saw
+ *     only part of it.
+ *   * A command that never exits is killed at EXEC_TIMEOUT_MS. The
+ *     worker thread belongs to the client.
+ *   * stdin comes from /dev/null: a command that reads (`cat`, `ssh`)
+ *     gets EOF instead of hanging forever on a terminal it cannot have.
+ *   * stderr is DISCARDED. The ask was stdout, and a channel is a bad
+ *     place to discover what a command warns about.
+ *
+ * What it deliberately does NOT do: sanitise the command. `sh -c` is the
+ * point — quoting, pipes and redirection are why anyone wants this. It
+ * runs with exactly the privileges of whoever is running the client,
+ * which is the same power they already have at the shell they launched
+ * it from.
+ */
+static void exec_job(struct app *app, const struct job *job) {
+    int fds[2];
+    if (pipe(fds) != 0) {
+        log_line(app, "/exec: cannot create a pipe: %s", strerror(errno));
+        return;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        log_line(app, "/exec: cannot fork: %s", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        close(fds[0]);
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDERR_FILENO);
+        }
+        dup2(fds[1], STDOUT_FILENO);
+        if (fds[1] > STDERR_FILENO) close(fds[1]);
+        if (devnull > STDERR_FILENO) close(devnull);
+        execl("/bin/sh", "sh", "-c", job->arg1, (char *)NULL);
+        _exit(127);
+    }
+    close(fds[1]);
+
+    long deadline = monotonic_ms() + EXEC_TIMEOUT_MS;
+    char buf[EXEC_MAX_BYTES + 1];
+    size_t len = 0;
+    bool truncated = false, timed_out = false;
+    for (;;) {
+        long left = deadline - monotonic_ms();
+        if (left <= 0) {
+            timed_out = true;
+            break;
+        }
+        struct pollfd pfd = { .fd = fds[0], .events = POLLIN };
+        int r = poll(&pfd, 1, (int)left);
+        if (r <= 0) {
+            if (r < 0 && errno == EINTR) continue;
+            timed_out = r == 0;
+            break;
+        }
+        ssize_t n = read(fds[0], buf + len, EXEC_MAX_BYTES - len);
+        if (n <= 0) break; /* EOF, or a read error the child cannot recover from */
+        len += (size_t)n;
+        if (len >= EXEC_MAX_BYTES) {
+            truncated = true;
+            break;
+        }
+    }
+    buf[len] = 0;
+    close(fds[0]);
+    if (timed_out || truncated) kill(pid, SIGTERM);
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+
+    size_t sent = 0;
+    char *save = NULL;
+    for (char *line = strtok_r(buf, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        /* A blank line is not sendable (an empty PRIVMSG is dropped by
+         * the server) and carries nothing anyway. */
+        line[strcspn(line, "\r")] = 0;
+        if (!line[0]) continue;
+        if (sent >= EXEC_MAX_LINES) {
+            truncated = true;
+            break;
+        }
+        send_message_target(app, job->network, job->channel, line);
+        sent++;
+    }
+
+    if (sent == 0 && !timed_out)
+        log_line(app, "/exec: `%.80s` produced no output — nothing sent", job->arg1);
+    if (truncated)
+        log_line(app, "/exec: output cut at %zu lines / %d KiB — the channel saw only that much",
+                 sent, EXEC_MAX_BYTES / 1024);
+    if (timed_out)
+        log_line(app, "/exec: `%.80s` did not finish in %ds — killed; %zu line(s) sent",
+                 job->arg1, EXEC_TIMEOUT_MS / 1000, sent);
+}
+
 static void send_message_target(struct app *app, const char *network, const char *channel, const char *body) {
     char *net = url_encode(network);
     char *chan = url_encode(channel);
@@ -6370,6 +6532,9 @@ static void *worker_main(void *arg) {
             send_message_target(app, job.network, job.channel, job.arg1);
             break;
         }
+        case JOB_EXEC:
+            exec_job(app, &job);
+            break;
         case JOB_JOIN:
             join_channel_on(app, job.network, job.channel);
             break;
@@ -7206,7 +7371,7 @@ static void cycle_window(struct app *app, int delta) {
 static const char *commands[] = {
     "/admin", "/alias", "/archive", "/away", "/ban", "/banlist", "/block", "/chat", "/clear",
     "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deop", "/devoice", "/die", "/disconnect",
-    "/exit", "/globops", "/help", "/highlight", "/hilight", "/hs", "/ignore", "/info", "/invite",
+    "/exec", "/exit", "/globops", "/help", "/highlight", "/hilight", "/hs", "/ignore", "/info", "/invite",
     "/j", "/join", "/kb", "/keys", "/kick", "/kickban", "/kill", "/kline", "/links", "/list",
     "/locops", "/lusers", "/me", "/media", "/members", "/mode", "/motd", "/mouse", "/ms", "/msg",
     "/names", "/nick", "/notify", "/ns", "/op", "/open", "/oper", "/os", "/part", "/ping",
@@ -8249,6 +8414,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "disconnect") == 0) log_line(app, "/disconnect [network] [reason] — park a network while keeping Shottino running");
     else if (strcmp(cmd, "whois") == 0) log_line(app, "/whois nick — request WHOIS for nick");
     else if (oper_verb_help(app, cmd)) { /* the table carries its own help */ }
+    else if (strcmp(cmd, "exec") == 0) log_line(app, "/exec <command> — run it in a shell and SEND its stdout to the current window (everyone sees it); capped at 20 lines / 16 KiB, killed after 15s, stderr discarded");
     else if (strcmp(cmd, "ctcp") == 0) log_line(app, "/ctcp <nick|#channel> <VERB> [args] — send any CTCP query (VERSION, TIME, FINGER…); the reply lands in the window you asked from. /ping is the timed special case");
     else if (strcmp(cmd, "ping") == 0) log_line(app, "/ping nick — CTCP PING somebody and time the round trip; the answer lands in the window you asked from");
     else if (strcmp(cmd, "block") == 0 || strcmp(cmd, "ignore") == 0) log_line(app, "/block [nick], /ignore [nick] — hide somebody's messages in THIS client only (nothing is sent to the server); bare /block lists who is blocked");
@@ -9360,6 +9526,29 @@ static void handle_command_dispatch(struct app *app, char *line) {
         char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", current_network_id(app), raw);
         ws_push_user(app, "raw", payload);
         free(raw); free(payload);
+    } else if (strncmp(line, "/exec ", 6) == 0) {
+        const char *cmd = line + 6;
+        while (*cmd == ' ') cmd++;
+        char ex_net[MAX_SLUG] = "", ex_chan[MAX_CHANNEL] = "";
+        if (!*cmd) {
+            log_line(app, "/exec <command> — run it in a shell and send its stdout to this window");
+        } else if (!current_window_key(app, ex_net, sizeof(ex_net), ex_chan, sizeof(ex_chan))) {
+            log_line(app, "/exec: no window to send to");
+        } else if (is_server_window(ex_chan)) {
+            /* Same refusal the message path gives: $server is read-only
+             * server-side, so this would be a 400 the user cannot act
+             * on. */
+            log_line(app, "/exec: the server window is read-only — switch to a channel or query first");
+        } else {
+            /* Queued, never run inline: the UI thread draws and reads
+             * keys, and a command that blocks would freeze both. */
+            struct job job = { .kind = JOB_EXEC };
+            snprintf(job.network, sizeof(job.network), "%s", ex_net);
+            snprintf(job.channel, sizeof(job.channel), "%s", ex_chan);
+            snprintf(job.arg1, sizeof(job.arg1), "%s", cmd);
+            enqueue_job(app, job);
+            log_line(app, "/exec: running `%.80s` — its stdout goes to %s", cmd, ex_chan);
+        }
     } else if (strncmp(line, "/ctcp ", 6) == 0) {
         /* The general form: any CTCP verb at anybody. `/ping` is the
          * special case worth its own verb because it TIMES the round
