@@ -34,6 +34,7 @@
 // `@webkit` tag opts this spec into the `webkit-iphone-15` project
 // (playwright.config.ts grep). Default chromium project skips it.
 
+import { type Page } from "@playwright/test";
 import { test, expect } from "../fixtures/test";
 import {
   composeTextarea,
@@ -48,6 +49,18 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Per-run unique tag so retries / parallel runs don't strict-mode-collide
 // with persisted prior-run rows in #bofh.
 const MESSAGE_BODY = `BUG7-ios: own-msg visibility @ ${crypto.randomUUID().slice(0, 8)}`;
+
+// Mirror of ScrollbackPane.SCROLL_BOTTOM_THRESHOLD_PX = 50 (not exported; kept
+// in lockstep by hand — same as issue168 / issue580).
+const SCROLL_BOTTOM_THRESHOLD_PX = 50;
+
+async function distanceToBottom(page: Page): Promise<number> {
+  return await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
+    if (!el) throw new Error("scrollback container not found");
+    return el.scrollHeight - el.scrollTop - el.clientHeight;
+  });
+}
 
 test("@webkit BUG7 — own message visible in scrollback after iOS-shaped compose-send", async ({ page }) => {
   const vjt = getSeededVjt();
@@ -100,4 +113,16 @@ test("@webkit BUG7 — own message visible in scrollback after iOS-shaped compos
   // 5s here matches the rest of the suite's WS poll ceiling.
   const ownRow = scrollbackLine(page, "privmsg", MESSAGE_BODY);
   await expect(ownRow).toBeVisible({ timeout: 5_000 });
+
+  // #608 STEP 6 STRENGTHEN — after the measured settle the OWN sent row must be
+  // at the TRUE tail, not merely attached / partially on screen. `toBeVisible`
+  // (offsetParent + any viewport intersection) passed even when the row sat one
+  // line BELOW the fold — the #608 §5 off-by-one, where the pre-append/rAF×2
+  // scroll landed on the previous line. `toBeInViewport` (full intersection) +
+  // distance-to-tail within threshold pin that the send tailed to the real
+  // bottom once the echo laid out. NEVER weaken these, NEVER inflate the poll.
+  await expect(ownRow).toBeInViewport();
+  await expect
+    .poll(async () => await distanceToBottom(page))
+    .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
 });

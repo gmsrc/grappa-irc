@@ -16,6 +16,7 @@
 //
 // `@webkit` opts into the webkit-iphone-15 project.
 
+import { type Page } from "@playwright/test";
 import { test, expect } from "../fixtures/test";
 import {
   composeTextarea,
@@ -31,6 +32,18 @@ import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../
 const PEER_NICK = "bug7m6-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = `BUG7-M6-ios: DM own-msg @ ${crypto.randomUUID().slice(0, 8)}`;
+
+// Mirror of ScrollbackPane.SCROLL_BOTTOM_THRESHOLD_PX = 50 (not exported; kept
+// in lockstep by hand — same as issue168 / issue580).
+const SCROLL_BOTTOM_THRESHOLD_PX = 50;
+
+async function distanceToBottom(page: Page): Promise<number> {
+  return await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
+    if (!el) throw new Error("scrollback container not found");
+    return el.scrollHeight - el.scrollTop - el.clientHeight;
+  });
+}
 
 test("@webkit BUG7-M6 — cicchetto /msg DM own-msg visible on iOS-shaped input", async ({ page }) => {
   const vjt = getSeededVjt();
@@ -67,7 +80,19 @@ test("@webkit BUG7-M6 — cicchetto /msg DM own-msg visible on iOS-shaped input"
     // Second door: own-msg visible in the auto-focused DM scrollback.
     // toBeVisible enforces the viewport-intersection check — a row
     // that's painted but virtual-keyboard-occluded fails here.
-    await expect(scrollbackLine(page, "privmsg", MESSAGE_BODY)).toBeVisible({ timeout: 5_000 });
+    const ownRow = scrollbackLine(page, "privmsg", MESSAGE_BODY);
+    await expect(ownRow).toBeVisible({ timeout: 5_000 });
+
+    // #608 STEP 6 STRENGTHEN — after the measured settle the OWN sent line must
+    // be at the TRUE tail of the auto-focused DM, not merely attached / partially
+    // on screen. `toBeVisible` passed even one line below the fold (the #608 §5
+    // off-by-one); `toBeInViewport` (full intersection) + distance-to-tail within
+    // threshold pin that the send tailed to the real bottom once the echo laid
+    // out. NEVER weaken these, NEVER inflate the poll.
+    await expect(ownRow).toBeInViewport();
+    await expect
+      .poll(async () => await distanceToBottom(page))
+      .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
   } finally {
     await peer.disconnect("BUG7-M6 done");
   }

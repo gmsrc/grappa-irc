@@ -38,7 +38,7 @@ import {
 } from "./lib/presenceFilter";
 import { canonicalQueryNick, openQueryWindowState } from "./lib/queryWindows";
 import { getReadCursor } from "./lib/readCursor";
-import { nextFollowMode, resolveIntent, type ScrollIntent } from "./lib/scrollAuthority";
+import { isSettled, nextFollowMode, resolveIntent, type ScrollIntent } from "./lib/scrollAuthority";
 import {
   lastOwnSend,
   loadMore as loadMoreScrollback,
@@ -192,6 +192,15 @@ const LOAD_MORE_THRESHOLD_PX = 200;
 // gate against the settled geometry a few hundred ms after mount, bracketing a
 // fast and a slower settle. Belt-and-suspenders on top of the fail-open base.
 const SETTLE_REMEASURE_DELAYS_MS = [150, 500] as const;
+
+// #608 STEP 6 — bounded-wait cap for the measured-settle tail-follow. Each frame
+// forces a reflow and re-checks `isSettled`; if the appended content never
+// registers a measurable growth (an in-place rows change — e.g. a marker-row
+// toggle — or an already-at-tail replacement), the write fails SAFE after this
+// many frames and tails once, so a tail is never stranded waiting on a settle
+// that will not come. ~30 frames ≈ 500ms @60fps: generous headroom for a slow
+// iOS layout flush, still a hard bound (condition-based-waiting: bounded).
+const SETTLE_MAX_FRAMES = 30;
 
 // #230 — the pure underfill-rescue DECISION seam, shared by the desktop wheel
 // path and the mobile touch path (implement-once). Both detect an operator
@@ -934,6 +943,16 @@ const ScrollbackPane: Component<Props> = (props) => {
   // UP (scrollTop decreased → leave the tail) from a programmatic content-
   // grow above the viewport (scrollTop unchanged → keep following).
   let lastScrollTop = 0;
+  // #608 STEP 6 — the scrollHeight at the LAST tail-follow write: the baseline
+  // the measured-settle `isSettled` compares the current extent against. Using
+  // the last-tail extent (NOT a dispatch-time read, which on a fast engine
+  // already includes the just-appended row — reading scrollHeight forces layout —
+  // leaving nothing to detect as "grew") makes the settle exit reachable on BOTH
+  // a deferred iOS layout AND an immediate chromium one: "grew since we last
+  // tailed" is true the frame the new row's box lands. Reset to 0 on key change
+  // so a switched-to pane's first tail always registers growth (extent > 0).
+  // Plain let — pure mutation, no Solid reactivity.
+  let lastTailScrollHeight = 0;
   // #196 / #219-general — scrollTop snapshot captured when ANY covering
   // overlay opens, re-asserted across the overlay's open/close so a covered
   // pane never strands the reader (see the effect near the activation block
@@ -2071,6 +2090,11 @@ const ScrollbackPane: Component<Props> = (props) => {
         // must not inherit the leaving pane's timestamp.
         setLastInputEventAtMs(null);
 
+        // #608 STEP 6 — reset the measured-settle baseline for the arriving pane
+        // (a different channel has a different extent). 0 ⇒ its first tail-follow
+        // registers growth (real extent > 0) and settles once the tail lays out.
+        lastTailScrollHeight = 0;
+
         // 2026-06-01 (scroll-contamination fix): re-arm auto-follow on
         // every window activation. The `[data-testid="scrollback"]`
         // <div> is the SAME DOM node across kind transitions (Shell.tsx
@@ -2427,9 +2451,53 @@ const ScrollbackPane: Component<Props> = (props) => {
     });
   };
 
+  // #608 STEP 6 — the tail-follow's MEASURED-settle wait. Replaces the fixed
+  // rAF×2 (not a layout flush on iOS WebKit — it read the just-committed node's
+  // pre-layout geometry and scrolled to the PREVIOUS tail, the #608 §5
+  // off-by-one). Each frame forces a synchronous reflow (reading `scrollHeight` +
+  // the tail's `offsetHeight` are layout properties) and re-checks the pure
+  // `isSettled` core against the last-tail baseline: the extent has GROWN since we
+  // last tailed AND the new tail row has a laid-out box. Scrolls the frame that
+  // holds, updating the baseline. Bounded by `SETTLE_MAX_FRAMES` (fail-safe: a
+  // rows change with no measurable growth still tails once — never strands).
+  // Re-checks `followMode()`/`listRef` each frame (the operator may scroll up, or
+  // the pane unmount, mid-wait). condition-based-waiting: wait for the real
+  // layout state, not two guessed frames.
+  const tailFollowWhenSettled = (): void => {
+    let frame = 0;
+    const step = (): void => {
+      // Stop if the pane unmounted mid-wait: `listRef` is not nulled on cleanup,
+      // so gate on DOM attachment — otherwise a poll outliving the component
+      // keeps firing on the detached node (and, since scrollIntoView is a
+      // prototype method, would pollute a later-mounted pane's spy under test).
+      if (!listRef?.isConnected) return;
+      if (!followMode()) return;
+      const tail = listRef.lastElementChild as HTMLElement | null;
+      const currScrollHeight = listRef.scrollHeight;
+      const targetNodeHeight = tail?.offsetHeight ?? 0;
+      const settled = isSettled({
+        prevScrollHeight: lastTailScrollHeight,
+        currScrollHeight,
+        targetNodeHeight,
+      });
+      if (settled || frame >= SETTLE_MAX_FRAMES) {
+        if (tail?.scrollIntoView) {
+          tail.scrollIntoView({ block: "end" });
+        } else {
+          listRef.scrollTop = listRef.scrollHeight;
+        }
+        lastTailScrollHeight = listRef.scrollHeight;
+        return;
+      }
+      frame += 1;
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+
   // Perform the winning intent's DOM write. Each kind keeps the exact timing its
-  // pre-applier writer used (rAF×2 where geometry must settle after the <For>
-  // commit — STEP 6 replaces that with the measured-settle predicate). The
+  // pre-applier writer used (rAF×2 / instant where geometry must settle after the
+  // <For> commit; tail-follow now uses the measured-settle wait above). The
   // caller guarantees `listRef` is non-null on entry, but the deferred rAF
   // bodies re-check it (it can null on unmount between frames).
   const dispatchScrollWrite = (winner: ScrollIntent): void => {
@@ -2463,23 +2531,11 @@ const ScrollbackPane: Component<Props> = (props) => {
         scrollToActivation("marker-or-tail", false);
         return;
       case "tail-follow":
-        // W5 — stick to the tail. rAF×2 so layout has settled before the read;
-        // `lastElementChild.scrollIntoView` is layout-aware even when
-        // scrollHeight bookkeeping is mid-update (the fallback covers an empty
-        // list). Re-check `followMode()` in the rAF — the operator may have
-        // scrolled up between the decision and the frame.
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            if (!listRef) return;
-            if (!followMode()) return;
-            const tail = listRef.lastElementChild as HTMLElement | null;
-            if (tail?.scrollIntoView) {
-              tail.scrollIntoView({ block: "end" });
-            } else {
-              listRef.scrollTop = listRef.scrollHeight;
-            }
-          }),
-        );
+        // W5 — stick to the tail via the MEASURED-settle wait (#608 STEP 6),
+        // replacing the fixed rAF×2 which is not a layout flush on iOS WebKit and
+        // scrolled to the STALE pre-layout tail (the #608 §5 off-by-one). See
+        // `tailFollowWhenSettled` — it re-checks `followMode()` each frame.
+        tailFollowWhenSettled();
         return;
       case "operator-tail": {
         // W7 — the explicit operator tail (scroll-to-bottom button / #243 re-tap /

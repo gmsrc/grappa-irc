@@ -1561,8 +1561,9 @@ describe("ScrollbackPane", () => {
       // submit effect's scrollToBottom() fired scrollIntoView on the OLD tail.)
       expect(scrollIntoViewSpy).not.toHaveBeenCalled();
 
-      // The WS echo lands (rows 3 → 4). followMode was ARMED at submit, so the
-      // applier's length-effect tail-follows the newly-mounted echo row.
+      // The WS echo lands (rows 3 → 4) AND lays out (the extent grows + the new
+      // tail row gains a box). followMode was ARMED at submit, so the applier's
+      // length-effect tail-follows once the measured settle holds (#608 STEP 6).
       const proto = fixture[0];
       if (!proto) throw new Error("fixture[0] missing");
       setScrollback({
@@ -1570,6 +1571,11 @@ describe("ScrollbackPane", () => {
           ...fixture,
           { ...proto, id: 4, server_time: 1_700_000_003_000, sender: "vjt", body: "my echo" },
         ],
+      });
+      Object.defineProperty(list, "scrollHeight", { value: 5200, configurable: true });
+      Object.defineProperty(list.lastElementChild as HTMLElement, "offsetHeight", {
+        value: 20,
+        configurable: true,
       });
       await flushRaf();
       expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: "end" });
@@ -1612,6 +1618,84 @@ describe("ScrollbackPane", () => {
       // THE GESTURE — the #243 re-tap command the floating button's onClick shares.
       requestScrollToBottom();
       await Promise.resolve();
+
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: "end" });
+    });
+  });
+
+  // #608 STEP 6 (RED-GREEN behaviour change) — the tail-follow write waits for a
+  // MEASURED settle (isSettled: the appended content's extent has GROWN vs the
+  // last tail AND the new tail row has a laid-out box) before scrolling, instead
+  // of a fixed rAF×2 — which is not a layout flush on iOS WebKit and scrolled to
+  // the STALE pre-layout tail (the #608 §5 off-by-one). The pure isSettled core
+  // is unit-tested in scrollAuthority.test.ts; this pins the WIRING: no scroll on
+  // stale geometry, then a scroll the frame the row lays out. e2e wiring =
+  // chromium bug7-ios-own-msg-visible (STRENGTHENED); real-iOS = device verify.
+  describe("#608 — tail-follow waits for measured settle before scrolling (STEP 6)", () => {
+    let origScrollIntoView: typeof Element.prototype.scrollIntoView;
+    let scrollIntoViewSpy: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      // The module-level readCursorStore is NOT reset by the global beforeEach,
+      // so a prior test's seeded cursor leaks in; on a clean-cursor pane it would
+      // render an unread marker and the echo append below would fire a
+      // marker-activation scroll (block:"start"), polluting the "no scroll on
+      // stale geometry" assertion. Reset it here (mirrors the #219-general block's
+      // own resetOverlayLock) so this test owns a no-cursor baseline.
+      setReadCursorStore({});
+      origScrollIntoView = Element.prototype.scrollIntoView;
+      scrollIntoViewSpy = vi.fn();
+      // biome-ignore lint/suspicious/noExplicitAny: jsdom Element type compat
+      (Element.prototype as any).scrollIntoView = scrollIntoViewSpy;
+    });
+    afterEach(() => {
+      Element.prototype.scrollIntoView = origScrollIntoView;
+    });
+    const oneFrame = async (): Promise<void> => {
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    };
+    const flushFrames = async (n: number): Promise<void> => {
+      for (let i = 0; i < n; i += 1) await oneFrame();
+    };
+    const setBox = (el: Element | null, px: number): void => {
+      if (el) Object.defineProperty(el, "offsetHeight", { value: px, configurable: true });
+    };
+
+    it("does not tail-follow on stale pre-layout geometry; scrolls once scrollHeight grows and the row has a box", async () => {
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+
+      // Baseline: mount at the tail with a real extent + a laid-out tail row so
+      // the mount tail-follow SETTLES (establishes lastTailScrollHeight = 1000).
+      Object.defineProperty(list, "scrollHeight", {
+        value: 1000,
+        writable: true,
+        configurable: true,
+      });
+      setBox(list.lastElementChild, 18);
+      await flushFrames(3);
+      scrollIntoViewSpy.mockClear();
+
+      // Echo appends (rows 3 → 4). Simulate iOS: the new row is COMMITTED but not
+      // laid out — scrollHeight is STALE (still 1000) and the new tail's box is 0.
+      const proto = fixture[0];
+      if (!proto) throw new Error("fixture[0] missing");
+      setScrollback({
+        "freenode #grappa": [
+          ...fixture,
+          { ...proto, id: 4, server_time: 1_700_000_003_000, sender: "vjt", body: "echo" },
+        ],
+      });
+      await flushFrames(3);
+
+      // NOT settled (scrollHeight has not grown, new tail box is 0) → no scroll.
+      // RED pre-STEP-6: the fixed rAF×2 scrolled here regardless of layout.
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+
+      // Layout lands: the extent grows AND the new tail row gains a box.
+      Object.defineProperty(list, "scrollHeight", { value: 1200, configurable: true });
+      setBox(list.lastElementChild, 18);
+      await flushFrames(3);
 
       expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: "end" });
     });
