@@ -2557,6 +2557,24 @@ const ScrollbackPane: Component<Props> = (props) => {
     listRef.scrollTo({ top: listRef.scrollTop });
   };
 
+  // #608 — the W8 mention-jump applier entrypoint. Tapping the floating button
+  // with a mention below the fold smooth-scrolls the anchor into view (the #360
+  // iOS msg+1 anchoring is resolved by the caller). Declared as a one-shot
+  // `mention-jump` intent so the write is owned + logged by the applier. STEP 3
+  // keeps it BEHAVIOUR-IDENTICAL: the tap is the operator's explicit gesture, so
+  // it resolves a single-intent list and fires unconditionally, exactly as the
+  // inline code did. (Arbitrating it against a live overlay-freeze / operator-
+  // tail would SUPPRESS the scroll — a behaviour change deliberately left out of
+  // this behaviour-preserving step; the write is now an applier intent that a
+  // later step can fold into full precedence.)
+  const applyMentionJump = (anchor: HTMLElement): void => {
+    const k = key();
+    const intent: ScrollIntent = { kind: "mention-jump", key: k, lifetime: "one-shot" };
+    const { winner, reason } = resolveIntent([intent], k);
+    logScrollDecision("mention-jump", [intent], winner, reason);
+    if (winner) anchor.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   // After Solid commits new DOM nodes, scroll to the tail iff the user
   // was at the bottom before the update (auto-follow). The effect tracks
   // `rows().length` so it re-runs on every append AND on cursor
@@ -2998,7 +3016,7 @@ const ScrollbackPane: Component<Props> = (props) => {
       return;
     }
     setMarkerActivationPending(false);
-    anchor.scrollIntoView({ behavior: "smooth", block: "center" });
+    applyMentionJump(anchor);
     // The badge is DERIVED: onScroll recomputes it as the smooth animation
     // clears the target past the fold. Recompute now too so a browser that
     // coalesces the settle scroll still refreshes it.
