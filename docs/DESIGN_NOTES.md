@@ -25080,3 +25080,37 @@ selection is unchanged; only a subject WITH a selection now keeps it. Part 1
 (this) reads the intersection at bind; part 2 (#596 follow-on) makes the write
 path + self-service allowed set mode-aware so a mode-2 subject can only select —
 and only be offered — its grants.
+
+## 2026-08-01 — #596 (part 2): allowed_vhosts is mode-aware — mode 2 clamps the selectable set to grants
+
+Part 1 reads the intersection at bind, but the write path + self-service UI still
+treated the FULL union (generally-available ∪ in_pool ∪ granted) as selectable in
+mode 2, where `in_pool` / `generally_available` are INERT at bind. So
+`set_selection` accepted an address the resolver ignores and the view offered
+options that silently did nothing — the same #596 bug from the presentation/authz
+side. `allowed_vhosts` is now mode-aware: mode 2 returns ONLY the granted vhosts;
+every other mode returns today's union (#251). With
+`allowed_vhosts(subject, :static_mapping_with_reservations) == granted`,
+`get_selection/2` in mode 2 IS selection ∩ granted, so `effective_source/3`'s
+mode-2 step 1 reuses it directly (part 1's manual intersection folds away).
+
+The mode is passed IN by callers — `user_settings_controller` reads
+`ServerSettings.addressing_mode/0`; the resolver threads `addressing.mode` — so
+`Vhosts` stays OFF a `ServerSettings` dep, the same pass-config-in shape as
+`effective_source/3`. Widening the signature made `get_selection` and
+`set_selection` take the mode too (they derive their clamp from `allowed_vhosts`);
+whoever widens a signature owns EVERY caller, so all of them moved in this commit
+(controller ×3, three test files) with NO default argument. A defaulted mode is
+exactly the trap CLAUDE.md bans: it would silently degrade a mode-2 server to
+mode-1 selectability, re-introducing #596 from the write side. The full caller
+audit found no admin / LiveView / mix-task / Wire caller — the admin settings
+surface pins the mode via `ServerSettings`, it never resolves a selection.
+
+The mode-1 clause reads `Map.get(addressing, :mode)` so a malformed addressing map
+(no `:mode`) falls to the non-mode-2 union clamp — today's behaviour — never a
+crash, preserving the defensive posture the mode-2 branch already had.
+
+Out of scope (separate issue, per the maintainer): `vhost_selection` stores
+address literals, so a prefix renumber that rewrites `vhosts.address` silently
+drops a stored selection at the read clamp. Keying selections by `vhost_id` is the
+fix — flagged, opened separately, not done here.

@@ -42,9 +42,12 @@ defmodule Grappa.Vhosts do
     3. else `nil` → the `Grappa.IRC.Client` DB-driven rotation pool /
        kernel default (zero-config still binds nothing).
 
-  The allowed set = generally-available ∪ in_pool ∪ granted-to-subject.
-  Selection is authz-clamped to this set at write (`set_selection/2`), and
-  re-clamped at read so a revoked grant can't leak a stale selection.
+  The allowed set is mode-dependent (#596): mode 1 = generally-available ∪
+  in_pool ∪ granted-to-subject; mode 2 = granted-to-subject ONLY (in_pool /
+  generally-available are inert at bind, so they are not self-selectable).
+  Selection is authz-clamped to this set at write (`set_selection/3`), and
+  re-clamped at read (`get_selection/2`) so a revoked grant — or, in mode 2,
+  a non-granted address — can't leak a stale selection.
 
   NOTE (#266 — REVERSES the #251 nuance): pre-#266, a subject's vhost
   self-selection OVERRODE `server_source` (`server_source` was only the
@@ -231,12 +234,34 @@ defmodule Grappa.Vhosts do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The subject's allowed vhosts = generally-available ∪ in_pool ∪
-  granted-to-subject (#251 — in_pool joins the self-selectable set).
-  Ordered by address, de-duplicated.
+  The subject's allowed (self-selectable) vhosts, mode-dependent (#596):
+
+    * mode `:static_mapping_with_reservations` (mode 2) — ONLY the vhosts
+      the subject holds a grant for. `in_pool` / `generally_available` are
+      INERT at bind time in mode 2 (the resolver ignores them), so offering
+      them for self-selection would let the UI present options that silently
+      do nothing AND let a write persist an address the resolver drops. The
+      granted set IS the selectable set.
+    * any other mode (mode 1, default) — generally-available ∪ in_pool ∪
+      granted-to-subject (#251 — in_pool joins the self-selectable set).
+
+  Ordered by address, de-duplicated. `mode` is passed IN by the caller
+  (`Grappa.ServerSettings.addressing_mode/0` at the web edge; the resolver
+  threads `addressing.mode`) so `Vhosts` stays OFF a `ServerSettings` dep —
+  the same pass-config-in shape as `effective_source/3`. No default
+  argument: a defaulted mode would silently degrade a mode-2 server to
+  mode-1 selectability, re-introducing #596 from the write side.
   """
-  @spec allowed_vhosts(Subject.t()) :: [Vhost.t()]
-  def allowed_vhosts({_, _} = subject) do
+  @spec allowed_vhosts(Subject.t(), atom()) :: [Vhost.t()]
+  def allowed_vhosts({_, _} = subject, :static_mapping_with_reservations) do
+    granted_ids = granted_vhost_ids(subject)
+
+    query = from(v in Vhost, where: v.id in ^granted_ids, order_by: [asc: v.address])
+
+    Repo.all(query)
+  end
+
+  def allowed_vhosts({_, _} = subject, _) do
     granted_ids = granted_vhost_ids(subject)
 
     query =
@@ -270,8 +295,8 @@ defmodule Grappa.Vhosts do
   derived `::cb` address.
 
   Distinct from `granted_vhost_ids/1` (ids, for the self-service `granted`
-  flag) and from `allowed_vhosts/1` (which also folds in `in_pool` +
-  generally-available — both INERT in mode 2). Reserved grant addresses
+  flag) and from `allowed_vhosts/2` (which in mode 1 also folds in `in_pool`
+  + generally-available — both INERT in mode 2). Reserved grant addresses
   live OUTSIDE the `::cb::/80` derivation block by operator convention, so
   a grant can never collide with a derived address.
   """
@@ -286,12 +311,15 @@ defmodule Grappa.Vhosts do
 
   @doc """
   The subject's persisted self-selection, RE-CLAMPED to the currently
-  allowed set (a revoked grant silently drops its address). Stored in
-  `UserSettings` under `"vhost_selection"` as a list of addresses.
+  allowed set for `mode` (a revoked grant silently drops its address; in
+  mode 2 an address that is not granted drops too — #596). Stored in
+  `UserSettings` under `"vhost_selection"` as a list of addresses. In mode
+  2 the allowed set IS the granted set, so this is exactly selection ∩
+  granted — what `effective_source/3` binds.
   """
-  @spec get_selection(Subject.t()) :: [String.t()]
-  def get_selection({_, _} = subject) do
-    allowed = MapSet.new(allowed_vhosts(subject), & &1.address)
+  @spec get_selection(Subject.t(), atom()) :: [String.t()]
+  def get_selection({_, _} = subject, mode) do
+    allowed = MapSet.new(allowed_vhosts(subject, mode), & &1.address)
 
     subject
     |> raw_selection()
@@ -300,14 +328,15 @@ defmodule Grappa.Vhosts do
 
   @doc """
   Sets the subject's self-selection. Every address MUST be in the
-  subject's allowed set — `{:error, :forbidden_vhost}` otherwise (authz
-  at the boundary, not just the UI). Returns the persisted (canonical)
-  selection list.
+  subject's allowed set for `mode` — `{:error, :forbidden_vhost}` otherwise
+  (authz at the boundary, not just the UI). In mode 2 the allowed set is
+  the granted set, so a non-granted address is rejected here, not silently
+  ignored at bind (#596). Returns the persisted (canonical) selection list.
   """
-  @spec set_selection(Subject.t(), [String.t()]) ::
+  @spec set_selection(Subject.t(), [String.t()], atom()) ::
           {:ok, [String.t()]} | {:error, :forbidden_vhost | Ecto.Changeset.t() | :db_unavailable}
-  def set_selection({_, _} = subject, addresses) when is_list(addresses) do
-    allowed = MapSet.new(allowed_vhosts(subject), & &1.address)
+  def set_selection({_, _} = subject, addresses, mode) when is_list(addresses) do
+    allowed = MapSet.new(allowed_vhosts(subject, mode), & &1.address)
     requested = Enum.uniq(addresses)
 
     if Enum.all?(requested, &MapSet.member?(allowed, &1)) do
@@ -434,12 +463,10 @@ defmodule Grappa.Vhosts do
         # destroy a choice they deliberately made; the more availability given,
         # the LESS the selection meant under the old `Enum.random(granted)`.
         # This is mode-1's shape with the granted set standing in for the
-        # allowed set. `get_selection/1` is the union-clamped selection;
-        # intersecting with the grant set yields selection ∩ granted (C2 folds
-        # this into a mode-aware `get_selection/2`).
-        granted_set = MapSet.new(granted)
-
-        case Enum.filter(get_selection(subject), &MapSet.member?(granted_set, &1)) do
+        # allowed set. `get_selection/2` in mode 2 is ALREADY clamped to the
+        # granted set (`allowed_vhosts == granted`), so it IS selection ∩
+        # granted — no re-intersection needed.
+        case get_selection(subject, :static_mapping_with_reservations) do
           [] -> Enum.random(granted)
           selected -> Enum.random(selected)
         end
@@ -448,8 +475,11 @@ defmodule Grappa.Vhosts do
 
   # Mode 1 (default / any non-mode-2 config) — byte-for-byte pre-#543:
   # selection ∩ allowed random-picks, else nil → the Client's rotation pool.
-  def effective_source({_, _} = subject, nil, _) do
-    case get_selection(subject) do
+  # `Map.get(addressing, :mode)` keeps the defensive posture: a malformed
+  # addressing map (no `:mode`) → nil → the non-mode-2 clause of
+  # `allowed_vhosts/2` (the union) → today's behaviour; it never crashes.
+  def effective_source({_, _} = subject, nil, addressing) do
+    case get_selection(subject, Map.get(addressing, :mode)) do
       [] -> nil
       selected -> Enum.random(selected)
     end

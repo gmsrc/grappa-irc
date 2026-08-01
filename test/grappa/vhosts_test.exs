@@ -1,7 +1,7 @@
 defmodule Grappa.VhostsTest do
   @moduledoc """
   #228 — `Grappa.Vhosts` context: inventory CRUD, per-subject grants,
-  selection (authz-clamped), and the `effective_source/2` resolution
+  selection (authz-clamped), and the `effective_source/3` resolution
   precedence that feeds the session plan.
   """
   use Grappa.DataCase, async: true
@@ -26,6 +26,10 @@ defmodule Grappa.VhostsTest do
   @mode1 %{mode: :pool_with_reservations, prefix: nil, armed?: false}
   @mode2 %{mode: :static_mapping_with_reservations, prefix: @cb_prefix, armed?: true}
   @mode2_disarmed %{mode: :static_mapping_with_reservations, prefix: @cb_prefix, armed?: false}
+  # #596 — the bare mode atoms threaded into allowed_vhosts/2, get_selection/2,
+  # set_selection/3. The web edge reads them from `ServerSettings.addressing_mode/0`.
+  @pool_mode :pool_with_reservations
+  @static_mode :static_mapping_with_reservations
 
   # Unique v6 literal — mask the counter into a single valid hextet
   # (0..0xffff) so the strict-literal changeset always accepts it.
@@ -113,13 +117,13 @@ defmodule Grappa.VhostsTest do
     end
   end
 
-  describe "allowed_vhosts/1 — union of generally-available + in_pool + granted" do
+  describe "allowed_vhosts/2 — mode 1 union of generally-available + in_pool + granted" do
     test "includes generally-available vhosts" do
       user = user_fixture()
       {:ok, ga} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
       {:ok, _} = Vhosts.create_vhost(%{address: addr(), generally_available: false})
 
-      allowed = Enum.map(Vhosts.allowed_vhosts({:user, user.id}), & &1.id)
+      allowed = Enum.map(Vhosts.allowed_vhosts({:user, user.id}, @pool_mode), & &1.id)
       assert ga.id in allowed
     end
 
@@ -128,7 +132,7 @@ defmodule Grappa.VhostsTest do
       {:ok, granted} = Vhosts.create_vhost(%{address: addr(), generally_available: false})
       {:ok, _} = Vhosts.grant_vhost(granted, {:user, user.id})
 
-      allowed = Enum.map(Vhosts.allowed_vhosts({:user, user.id}), & &1.id)
+      allowed = Enum.map(Vhosts.allowed_vhosts({:user, user.id}, @pool_mode), & &1.id)
       assert granted.id in allowed
     end
 
@@ -138,7 +142,7 @@ defmodule Grappa.VhostsTest do
       {:ok, priv} = Vhosts.create_vhost(%{address: addr(), generally_available: false})
       {:ok, _} = Vhosts.grant_vhost(priv, {:user, other.id})
 
-      allowed = Enum.map(Vhosts.allowed_vhosts({:user, user.id}), & &1.id)
+      allowed = Enum.map(Vhosts.allowed_vhosts({:user, user.id}, @pool_mode), & &1.id)
       refute priv.id in allowed
     end
 
@@ -150,19 +154,46 @@ defmodule Grappa.VhostsTest do
       user = user_fixture()
       {:ok, pool} = Vhosts.create_vhost(%{address: addr(), in_pool: true, generally_available: false})
 
-      allowed = Enum.map(Vhosts.allowed_vhosts({:user, user.id}), & &1.id)
+      allowed = Enum.map(Vhosts.allowed_vhosts({:user, user.id}, @pool_mode), & &1.id)
       assert pool.id in allowed
     end
   end
 
-  describe "set_selection/2 — authz-clamped to allowed set" do
+  # #596 (part 2) — the allowed (self-selectable) set is mode-dependent. In
+  # mode 2 the granted set IS the allowed set: in_pool / generally_available
+  # are inert at bind, so offering them for self-selection would let the UI
+  # present options that do nothing AND let a write persist an address the
+  # resolver drops. The write path + view are clamped to grants, mirroring the
+  # bind-time fix.
+  describe "allowed_vhosts/2 — mode 2 clamps the selectable set to grants (#596)" do
+    test "mode 2 returns ONLY granted vhosts (in_pool + generally-available inert)" do
+      user = user_fixture()
+      {:ok, ga} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
+      {:ok, pool} = Vhosts.create_vhost(%{address: addr(), in_pool: true})
+      {:ok, granted} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::d"})
+      {:ok, _} = Vhosts.grant_vhost(granted, {:user, user.id})
+
+      mode2 = Enum.map(Vhosts.allowed_vhosts({:user, user.id}, @static_mode), & &1.id)
+      assert mode2 == [granted.id]
+      refute ga.id in mode2
+      refute pool.id in mode2
+
+      # Mode 1 still folds them all in (the #251 union) — same subject.
+      mode1 = Enum.map(Vhosts.allowed_vhosts({:user, user.id}, @pool_mode), & &1.id)
+      assert ga.id in mode1
+      assert pool.id in mode1
+      assert granted.id in mode1
+    end
+  end
+
+  describe "set_selection/3 — authz-clamped to allowed set" do
     test "persists an allowed selection" do
       user = user_fixture()
       {:ok, ga} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
 
-      assert {:ok, [addr]} = Vhosts.set_selection({:user, user.id}, [ga.address])
+      assert {:ok, [addr]} = Vhosts.set_selection({:user, user.id}, [ga.address], @pool_mode)
       assert addr == ga.address
-      assert Vhosts.get_selection({:user, user.id}) == [ga.address]
+      assert Vhosts.get_selection({:user, user.id}, @pool_mode) == [ga.address]
     end
 
     test "rejects a selection outside the allowed set" do
@@ -170,18 +201,59 @@ defmodule Grappa.VhostsTest do
       {:ok, forbidden} = Vhosts.create_vhost(%{address: addr(), generally_available: false})
 
       assert {:error, :forbidden_vhost} =
-               Vhosts.set_selection({:user, user.id}, [forbidden.address])
+               Vhosts.set_selection({:user, user.id}, [forbidden.address], @pool_mode)
     end
 
     test "get_selection re-clamps a stale selection whose grant was revoked" do
       user = user_fixture()
       {:ok, granted} = Vhosts.create_vhost(%{address: addr(), generally_available: false})
       {:ok, grant} = Vhosts.grant_vhost(granted, {:user, user.id})
-      {:ok, _} = Vhosts.set_selection({:user, user.id}, [granted.address])
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [granted.address], @pool_mode)
 
       :ok = Vhosts.revoke_grant(grant)
       # Selection persisted, but the address is no longer allowed → clamped out.
-      assert Vhosts.get_selection({:user, user.id}) == []
+      assert Vhosts.get_selection({:user, user.id}, @pool_mode) == []
+    end
+  end
+
+  describe "get_selection/2 + set_selection/3 — mode 2 authz clamps to grants (#596)" do
+    test "set_selection in mode 2 rejects an in_pool address that is not granted" do
+      user = user_fixture()
+      {:ok, pool} = Vhosts.create_vhost(%{address: addr(), in_pool: true})
+
+      # Mode 1 allows the write (#251); mode 2 does nothing at bind, so it is
+      # rejected at the authz boundary rather than silently kept.
+      assert {:ok, _} = Vhosts.set_selection({:user, user.id}, [pool.address], @pool_mode)
+
+      assert {:error, :forbidden_vhost} =
+               Vhosts.set_selection({:user, user.id}, [pool.address], @static_mode)
+    end
+
+    test "set_selection in mode 2 persists a granted address" do
+      user = user_fixture()
+      {:ok, granted} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::e"})
+      {:ok, _} = Vhosts.grant_vhost(granted, {:user, user.id})
+
+      assert {:ok, [addr]} =
+               Vhosts.set_selection({:user, user.id}, [granted.address], @static_mode)
+
+      assert addr == granted.address
+    end
+
+    test "get_selection in mode 2 drops a stored non-granted address (selected under mode 1)" do
+      user = user_fixture()
+      {:ok, pool} = Vhosts.create_vhost(%{address: addr(), in_pool: true})
+      {:ok, granted} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::f"})
+      {:ok, _} = Vhosts.grant_vhost(granted, {:user, user.id})
+      # Persist BOTH under mode 1 (both allowed there).
+      {:ok, _} =
+        Vhosts.set_selection({:user, user.id}, [pool.address, granted.address], @pool_mode)
+
+      # Mode 2 keeps only the granted one — the in_pool literal drops silently.
+      assert Vhosts.get_selection({:user, user.id}, @static_mode) == [granted.address]
+      # Mode 1 still sees both.
+      assert Enum.sort(Vhosts.get_selection({:user, user.id}, @pool_mode)) ==
+               Enum.sort([pool.address, granted.address])
     end
   end
 
@@ -194,7 +266,7 @@ defmodule Grappa.VhostsTest do
     test "1. an admin server_source WINS over an active vhost selection" do
       user = user_fixture()
       {:ok, sel} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
-      {:ok, _} = Vhosts.set_selection({:user, user.id}, [sel.address])
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [sel.address], @pool_mode)
 
       # Subject HAS a selection, but the network pins a source → the pin binds.
       assert Vhosts.effective_source({:user, user.id}, "192.0.2.99", @mode1) == "192.0.2.99"
@@ -203,7 +275,7 @@ defmodule Grappa.VhostsTest do
     test "2. falls back to the vhost selection when there is no admin source" do
       user = user_fixture()
       {:ok, sel} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
-      {:ok, _} = Vhosts.set_selection({:user, user.id}, [sel.address])
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [sel.address], @pool_mode)
 
       assert Vhosts.effective_source({:user, user.id}, nil, @mode1) == sel.address
     end
@@ -212,7 +284,7 @@ defmodule Grappa.VhostsTest do
       user = user_fixture()
       {:ok, a} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
       {:ok, b} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
-      {:ok, _} = Vhosts.set_selection({:user, user.id}, [a.address, b.address])
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [a.address, b.address], @pool_mode)
 
       picked = Vhosts.effective_source({:user, user.id}, nil, @mode1)
       assert picked in [a.address, b.address]
@@ -232,7 +304,7 @@ defmodule Grappa.VhostsTest do
       user = user_fixture()
       {:ok, granted} = Vhosts.create_vhost(%{address: addr(), generally_available: false})
       {:ok, grant} = Vhosts.grant_vhost(granted, {:user, user.id})
-      {:ok, _} = Vhosts.set_selection({:user, user.id}, [granted.address])
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [granted.address], @pool_mode)
       :ok = Vhosts.revoke_grant(grant)
 
       # The clamped-out selection is gone AND there is no admin source → nil.
@@ -408,7 +480,7 @@ defmodule Grappa.VhostsTest do
       for v <- [a, b, c], do: {:ok, _} = Vhosts.grant_vhost(v, {:user, user.id})
       # The subject was granted the WHOLE reserved pool but deliberately picked
       # exactly one — that choice must survive the wide availability.
-      {:ok, _} = Vhosts.set_selection({:user, user.id}, [b.address])
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [b.address], @static_mode)
 
       # Every connection binds the selected address — a & c never appear.
       picks = for _ <- 1..50, do: Vhosts.effective_source({:user, user.id}, nil, @mode2)
@@ -421,7 +493,7 @@ defmodule Grappa.VhostsTest do
       {:ok, b} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::b"})
       {:ok, c} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::c"})
       for v <- [a, b, c], do: {:ok, _} = Vhosts.grant_vhost(v, {:user, user.id})
-      {:ok, _} = Vhosts.set_selection({:user, user.id}, [a.address, b.address])
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [a.address, b.address], @static_mode)
 
       picks = for _ <- 1..50, do: Vhosts.effective_source({:user, user.id}, nil, @mode2)
       assert Enum.all?(picks, &(&1 in [a.address, b.address]))
@@ -440,7 +512,7 @@ defmodule Grappa.VhostsTest do
       {:ok, b} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::b"})
       for v <- [a, b], do: {:ok, _} = Vhosts.grant_vhost(v, {:user, user.id})
       # in_pool is in the mode-1 allow-set, so this write persists.
-      {:ok, _} = Vhosts.set_selection({:user, user.id}, [pool.address])
+      {:ok, _} = Vhosts.set_selection({:user, user.id}, [pool.address], @pool_mode)
 
       picks = for _ <- 1..50, do: Vhosts.effective_source({:user, user.id}, nil, @mode2)
       assert Enum.all?(picks, &(&1 in [a.address, b.address]))

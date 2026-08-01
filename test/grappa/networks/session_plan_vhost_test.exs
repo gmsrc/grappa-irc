@@ -1,7 +1,7 @@
 defmodule Grappa.Networks.SessionPlanVhostTest do
   @moduledoc """
   #228 / #266 — `Grappa.Networks.SessionPlan.base_plan/7` resolves the
-  plan's `source_address` through `Grappa.Vhosts.effective_source/2` (the
+  plan's `source_address` through `Grappa.Vhosts.effective_source/3` (the
   per-subject vhost layer). #266 INVERTS the #251 precedence: an admin-set
   per-network `server.source_address` now WINS over a subject's vhost
   self-selection (Libera go-live: an admin-pinned, accountable egress).
@@ -41,7 +41,7 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
     user = user_fixture()
     network = network_fixture()
     {:ok, vhost} = Vhosts.create_vhost(%{address: "2001:db8::def", generally_available: true})
-    {:ok, _} = Vhosts.set_selection({:user, user.id}, [vhost.address])
+    {:ok, _} = Vhosts.set_selection({:user, user.id}, [vhost.address], :pool_with_reservations)
 
     cred = %Credential{nick: "n", auth_method: :none, autojoin_channels: [], last_joined_channels: []}
     server = %Server{host: "irc.example.test", port: 6697, tls: true, source_address: "2001:db8::99"}
@@ -54,7 +54,7 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
     user = user_fixture()
     network = network_fixture()
     {:ok, vhost} = Vhosts.create_vhost(%{address: "2001:db8::def", generally_available: true})
-    {:ok, _} = Vhosts.set_selection({:user, user.id}, [vhost.address])
+    {:ok, _} = Vhosts.set_selection({:user, user.id}, [vhost.address], :pool_with_reservations)
 
     cred = %Credential{nick: "n", auth_method: :none, autojoin_channels: [], last_joined_channels: []}
     server = %Server{host: "irc.example.test", port: 6697, tls: true, source_address: nil}

@@ -146,7 +146,56 @@ defmodule GrappaWeb.UserSettingsVhostTest do
 
       conn = conn |> put_bearer(session.id) |> put("/me/settings/vhost", %{selection: [ga.address]})
       assert json_response(conn, 200)["selection"] == [ga.address]
-      assert Vhosts.get_selection({:visitor, visitor.id}) == [ga.address]
+      # Default addressing mode is :pool_with_reservations (nothing pinned).
+      assert Vhosts.get_selection({:visitor, visitor.id}, :pool_with_reservations) == [ga.address]
+    end
+  end
+
+  # #596 — under addressing mode 2 the self-service surface clamps to the
+  # subject's grants: the view offers ONLY granted addresses (in_pool /
+  # generally-available are inert at bind, so offering them would silently do
+  # nothing) and a PUT of a non-granted address is 403, not a silent no-op.
+  describe "mode 2 (#596)" do
+    setup do
+      :ok = Grappa.ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
+    end
+
+    test "GET shows ONLY granted addresses (in_pool + generally-available absent)", %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, ga} = Vhosts.create_vhost(%{address: addr(), generally_available: true})
+      {:ok, pool} = Vhosts.create_vhost(%{address: addr(), in_pool: true})
+      {:ok, granted} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::d1"})
+      {:ok, _} = Vhosts.grant_vhost(granted, {:user, user.id})
+
+      conn = conn |> put_bearer(session.id) |> get("/me/settings/vhost")
+      addrs = Enum.map(json_response(conn, 200)["available"], & &1["address"])
+
+      assert granted.address in addrs
+      refute ga.address in addrs
+      refute pool.address in addrs
+    end
+
+    test "PUT rejects an in_pool non-granted address with 403 forbidden_vhost", %{conn: conn} do
+      {_, session} = user_and_session()
+      {:ok, pool} = Vhosts.create_vhost(%{address: addr(), in_pool: true})
+
+      conn =
+        conn |> put_bearer(session.id) |> put("/me/settings/vhost", %{selection: [pool.address]})
+
+      assert json_response(conn, 403)["error"] == "forbidden_vhost"
+    end
+
+    test "PUT persists a granted address and GET echoes it", %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, granted} = Vhosts.create_vhost(%{address: "2a03:4000:20:2d3:ca::d2"})
+      {:ok, _} = Vhosts.grant_vhost(granted, {:user, user.id})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/vhost", %{selection: [granted.address]})
+
+      assert json_response(conn, 200)["selection"] == [granted.address]
     end
   end
 end

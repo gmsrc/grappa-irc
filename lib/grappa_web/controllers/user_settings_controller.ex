@@ -45,7 +45,7 @@ defmodule GrappaWeb.UserSettingsController do
 
   use GrappaWeb, :controller
 
-  alias Grappa.{Subject, UserSettings, Vhosts}
+  alias Grappa.{ServerSettings, Subject, UserSettings, Vhosts}
 
   @doc """
   `GET /me/settings/notification-prefs` — return the authenticated
@@ -122,14 +122,17 @@ defmodule GrappaWeb.UserSettingsController do
 
   @doc """
   `GET /me/settings/vhost` — the subject's vhost self-service view
-  (#228, #251): the allowed set (generally-available ∪ in_pool ∪
-  granted-to-subject), each option marked `in_pool` + `granted`, plus the
-  current selection. No admin pin (#251) — the user always self-selects.
+  (#228, #251): the allowed set, each option marked `in_pool` + `granted`,
+  plus the current selection. The allowed set is mode-dependent (#596):
+  mode 1 = generally-available ∪ in_pool ∪ granted-to-subject; mode 2
+  (`static_mapping_with_reservations`) = granted-to-subject ONLY (in_pool /
+  generally-available are inert at bind, so they are not offered). No admin
+  pin (#251) — the user always self-selects within that set.
   """
   @spec show_vhost(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def show_vhost(conn, _) do
     subject = Subject.from_assigns(conn.assigns)
-    render(conn, :vhost, vhost_view(subject))
+    render(conn, :vhost, vhost_view(subject, ServerSettings.addressing_mode()))
   end
 
   @doc """
@@ -142,9 +145,10 @@ defmodule GrappaWeb.UserSettingsController do
           Plug.Conn.t() | {:error, :bad_request | :forbidden_vhost | Ecto.Changeset.t() | :db_unavailable}
   def update_vhost(conn, %{"selection" => selection}) when is_list(selection) do
     subject = Subject.from_assigns(conn.assigns)
+    mode = ServerSettings.addressing_mode()
 
-    with {:ok, _} <- Vhosts.set_selection(subject, selection) do
-      render(conn, :vhost, vhost_view(subject))
+    with {:ok, _} <- Vhosts.set_selection(subject, selection, mode) do
+      render(conn, :vhost, vhost_view(subject, mode))
     end
   end
 
@@ -229,9 +233,12 @@ defmodule GrappaWeb.UserSettingsController do
   # Builds the render assigns for the vhost view — allowed set (each option
   # marked in_pool + granted + a resolved rDNS name), current selection.
   # `granted` reflects a real per-subject grant row, NOT allow-set
-  # membership (which now also includes in_pool + generally-available
+  # membership (which in mode 1 also includes in_pool + generally-available
   # vhosts — #251), so cic V2 can bucket exclusive (granted) / in-pool /
-  # out-of-pool.
+  # out-of-pool. `mode` (from `ServerSettings.addressing_mode/0`) gates the
+  # allowed set: in mode 2 it is the granted set ONLY (#596), so the view
+  # never offers an in_pool / generally-available option the resolver would
+  # silently ignore at bind.
   #
   # `name` is the address's reverse-DNS (cloak) string — #252. The DNS is
   # the source of truth (nothing persisted); `Grappa.Net.PtrCache.names_for/1`
@@ -239,9 +246,9 @@ defmodule GrappaWeb.UserSettingsController do
   # cold/expired/no-PTR address reads back as `nil` and falls back to the
   # raw IP here; the cache resolves it out of band so a later GET shows the
   # name (cic re-reads the view on entering the vhost sub-page).
-  defp vhost_view(subject) do
+  defp vhost_view(subject, mode) do
     granted_ids = MapSet.new(Vhosts.granted_vhost_ids(subject))
-    allowed = Vhosts.allowed_vhosts(subject)
+    allowed = Vhosts.allowed_vhosts(subject, mode)
     names = Grappa.Net.PtrCache.names_for(Enum.map(allowed, & &1.address))
 
     available =
@@ -254,6 +261,6 @@ defmodule GrappaWeb.UserSettingsController do
         }
       end)
 
-    %{available: available, selection: Vhosts.get_selection(subject)}
+    %{available: available, selection: Vhosts.get_selection(subject, mode)}
   end
 end
