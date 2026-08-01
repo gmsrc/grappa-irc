@@ -189,6 +189,14 @@ export type SlashCommand =
   | { kind: "unalias"; name: string }
   | { kind: "quote"; line: string }
   | { kind: "oper"; name: string; password: string }
+  // #591 — /ctcp <target> <VERB> [args]: send an arbitrary CTCP query. The
+  // parser carries the raw parts (verb uppercased per convention); compose.ts
+  // reuses the /me framing seam to build the single \x01VERB args\x01 frame.
+  | { kind: "ctcp"; target: string; verb: string; args: string }
+  // #591 — /ping <target>: sugar for CTCP PING. The parser only carries the
+  // target; compose.ts stamps the outbound timestamp token and owns the
+  // reply-correlation state (RTT synthesized locally in the source window).
+  | { kind: "ping"; target: string }
   | { kind: "error"; verb: string; message: string };
 
 function err(verb: string, message: string): SlashCommand {
@@ -269,12 +277,45 @@ function parseDehilight(_verb: string, rest: string): SlashCommand {
   return { kind: "watchlist", action: "del", pattern };
 }
 
+// #591 — /ctcp <target> <VERB> [args]. First whitespace-delimited token is the
+// target, the second is the CTCP verb (uppercased per convention), the trimmed
+// remainder is the (optional) args. A missing target OR verb is a usage error.
+// The parser stays framing-free: compose.ts builds the \x01VERB args\x01 frame
+// via the shared /me send seam (no second CTCP writer).
+function parseCtcp(rest: string): SlashCommand {
+  const trimmed = rest.trim();
+  const sp1 = trimmed.search(/\s/);
+  // No target, or a target with no following verb token.
+  if (trimmed === "" || sp1 === -1) {
+    return err("ctcp", "/ctcp requires a target and a verb");
+  }
+  const target = trimmed.slice(0, sp1);
+  const afterTarget = trimmed.slice(sp1 + 1).trim();
+  const sp2 = afterTarget.search(/\s/);
+  const verb = (sp2 === -1 ? afterTarget : afterTarget.slice(0, sp2)).toUpperCase();
+  const args = sp2 === -1 ? "" : afterTarget.slice(sp2 + 1).trim();
+  return { kind: "ctcp", target, verb, args };
+}
+
+// #591 — /ping <target>. Only the target survives the parser; compose.ts owns
+// the timestamp token + reply correlation. Trailing tokens are ignored (a nick
+// is a single word), mirroring /whois <server> <nick> <junk>.
+function parsePing(rest: string): SlashCommand {
+  const [target] = tokens(rest);
+  if (target === undefined) return err("ping", "/ping requires a target");
+  return { kind: "ping", target };
+}
+
 // Dispatch table: verb (lowercased) → handler(verb, rest) → SlashCommand.
 // Every registered verb must appear here; unknown verbs produce {kind: "error"}.
 type Handler = (verb: string, rest: string) => SlashCommand;
 
 const DISPATCH: Readonly<Record<string, Handler>> = {
   me: (_verb, rest) => ({ kind: "me", body: rest }),
+
+  // #591 — CTCP send verbs. /ctcp is the general form; /ping is the RTT sugar.
+  ctcp: (_verb, rest) => parseCtcp(rest),
+  ping: (_verb, rest) => parsePing(rest),
 
   join: (verb, rest) => {
     // UX-4 bucket F: `/join #chan` OR `/join #chan key` (+k channel

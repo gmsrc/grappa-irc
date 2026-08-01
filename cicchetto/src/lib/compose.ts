@@ -24,6 +24,7 @@ import { splitMessageLines } from "./messageLines";
 import { openModeModal } from "./modeModal";
 import { networkBySlug, networkIdBySlug, user } from "./networks";
 import { asciiFold, nickEquals } from "./nickEquals";
+import { registerPing } from "./pingCorrelation";
 import { ensureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 import { quitAll } from "./quit";
@@ -107,13 +108,21 @@ const empty = (): ComposeState => ({
   stashedDraft: "",
 });
 
+// #591 — the single CTCP frame builder: `\x01VERB\x01` (no args) or
+// `\x01VERB args\x01`. This is the ONE place that wraps a body in CTCP `\x01`
+// framing — shared by /me (verb ACTION, one frame per line) and /ctcp
+// (arbitrary verb, single frame). Empty args yield NO trailing space, so a
+// bare `/ctcp bob version` frames as `\x01VERSION\x01`, not `\x01VERSION \x01`.
+export const ctcpFrame = (verb: string, args: string): string =>
+  args === "" ? `\x01${verb}\x01` : `\x01${verb} ${args}\x01`;
+
 // Multiline fan-out: split a free-text body into one PRIVMSG per line
 // (see messageLines.ts for the wire-framing why) and send each.
-// `action` wraps every line in CTCP ACTION framing for /me. Sequential
-// await preserves wire order; a single-line body loops exactly once, so
-// the common path is unchanged from the pre-split behavior. Shared by
-// the privmsg, me, and msg send sites — the only free-text paths whose
-// body can contain an operator-typed newline.
+// `action` wraps every line in CTCP ACTION framing for /me (via the shared
+// `ctcpFrame` builder). Sequential await preserves wire order; a single-line
+// body loops exactly once, so the common path is unchanged from the pre-split
+// behavior. Shared by the privmsg, me, and msg send sites — the only free-text
+// paths whose body can contain an operator-typed newline.
 export const sendBodyLines = async (
   slug: string,
   target: string,
@@ -121,7 +130,7 @@ export const sendBodyLines = async (
   action: boolean,
 ): Promise<void> => {
   for (const line of splitMessageLines(body)) {
-    await sendPrivmsg(slug, target, action ? `\x01ACTION ${line}\x01` : line);
+    await sendPrivmsg(slug, target, action ? ctcpFrame("ACTION", line) : line);
   }
 };
 
@@ -290,6 +299,31 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           await sendBodyLines(networkSlug, channelName, cmd.body, true);
           result = { ok: true };
           break;
+        // #591 — /ctcp <target> <VERB> [args]: a single CTCP frame to an
+        // EXPLICIT target (not the current window), built via the shared
+        // `ctcpFrame` seam. Non-ACTION CTCP is single-line by convention
+        // (Grappa.IRC.LineSplit) so there is no multiline fan-out. AWAIT the
+        // send: a CTCP verb MUST NOT silently no-op when the WS is down.
+        case "ctcp":
+          await sendPrivmsg(networkSlug, cmd.target, ctcpFrame(cmd.verb, cmd.args));
+          result = { ok: true };
+          break;
+        // #591 — /ping <target>: CTCP PING sugar. The token is a client
+        // timestamp; it travels in the frame, comes back verbatim in the
+        // reply's server-typed meta.ctcp_args, and the RTT is `now - sentAt`.
+        // Register the pending entry AFTER a successful send (the reply cannot
+        // precede the send) keyed on the SOURCE window so the RTT line lands
+        // where /ping was typed (irssi behavior; synthesized in subscribe.ts).
+        case "ping": {
+          const networkId = networkIdBySlug(networkSlug);
+          if (networkId === undefined) return { error: "/ping: network not found" };
+          const sentAtMs = Date.now();
+          const token = String(sentAtMs);
+          await sendPrivmsg(networkSlug, cmd.target, ctcpFrame("PING", token));
+          registerPing(networkId, cmd.target, token, key, channelName, sentAtMs);
+          result = { ok: true };
+          break;
+        }
         case "join":
           await postJoin(t, networkSlug, cmd.channel, cmd.key);
           // CP17: server-driven `:pending` window-state origination.

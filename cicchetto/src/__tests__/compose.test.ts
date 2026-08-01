@@ -134,6 +134,14 @@ vi.mock("../lib/scrollback", () => ({
   sendMessage: vi.fn(),
 }));
 
+// #591 — /ping registers a pending correlation entry; spy it so the test can
+// assert the (networkId, nick, token, sourceKey, sourceChannel, sentAtMs) tuple
+// without exercising the real store.
+vi.mock("../lib/pingCorrelation", () => ({
+  registerPing: vi.fn(),
+  resolvePing: vi.fn(),
+}));
+
 vi.mock("../lib/members", () => ({
   membersByChannel: vi.fn(() => ({})),
   applyPresenceEvent: vi.fn(),
@@ -360,6 +368,68 @@ describe("compose submit — slash command dispatch", () => {
     // CTCP ACTION wraps body as \x01ACTION <text>\x01
     expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01ACTION waves\x01");
     expect(result).toEqual({ ok: true });
+  });
+
+  // #591 — /ctcp <target> <verb> reuses the /me framing seam to build a single
+  // \x01VERB\x01 frame, sent to the EXPLICIT target (not the current window).
+  // No args → no trailing space inside the frame.
+  it("/ctcp <target> <verb> sends \\x01VERB\\x01 to the target (#591)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/ctcp bob version");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "bob", "\x01VERSION\x01");
+    expect(result).toEqual({ ok: true });
+  });
+
+  // #591 — /ctcp <target> <verb> <args> frames \x01VERB args\x01 (single space
+  // after the verb), preserving arg case + interior spaces.
+  it("/ctcp <target> <verb> <args> frames \\x01VERB args\\x01 (#591)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/ctcp #chan action waves at Everyone");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith(
+      "freenode",
+      "#chan",
+      "\x01ACTION waves at Everyone\x01",
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  // #591 — /ping <target> sends a CTCP PING carrying a client timestamp token
+  // to the target, and registers a pending correlation entry keyed on the
+  // source window (where /ping was typed). Date.now is pinned so the token is
+  // deterministic; the RTT math itself is unit-tested in pingCorrelation.test.
+  it("/ping <target> sends CTCP PING with a timestamp token + registers pending (#591)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    vi.spyOn(Date, "now").mockReturnValue(1706743200000);
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const pc = await import("../lib/pingCorrelation");
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/ping bob");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    // CTCP PING frame with the timestamp token, to the EXPLICIT target.
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "bob", "\x01PING 1706743200000\x01");
+    // Pending registered: (networkId, nick, token, sourceKey, sourceChannel, sentAtMs).
+    expect(pc.registerPing).toHaveBeenCalledWith(1, "bob", "1706743200000", k, "#a", 1706743200000);
+    expect(result).toEqual({ ok: true });
+
+    vi.mocked(Date.now).mockRestore();
   });
 
   // #127 — /info, /version, /motd resolve the network id from the slug and

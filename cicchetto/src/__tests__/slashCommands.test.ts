@@ -1320,3 +1320,65 @@ describe("#385 — expandAlias grammar edge cases", () => {
     expect(expandAlias("s", "", { s: "msg #c $*" })).toEqual({ verb: "msg", rest: "#c" });
   });
 });
+
+// #591 — /ctcp <target> <VERB> [args]. Pure-parser shape: first token is the
+// target, second is the CTCP verb (uppercased per convention), the trimmed
+// remainder is the (optional) args. compose.ts builds the \x01VERB args\x01
+// frame — the parser stays framing-free (no \x01, no SolidJS).
+describe("parseSlash — /ctcp (#591)", () => {
+  it("/ctcp <target> <verb> uppercases the verb, empty args", () => {
+    expect(parseSlash("/ctcp bob version")).toEqual({
+      kind: "ctcp",
+      target: "bob",
+      verb: "VERSION",
+      args: "",
+    });
+  });
+
+  it("/ctcp <target> <verb> <args> uppercases verb, preserves arg case + spaces", () => {
+    expect(parseSlash("/ctcp #chan action waves at Everyone")).toEqual({
+      kind: "ctcp",
+      target: "#chan",
+      verb: "ACTION",
+      args: "waves at Everyone",
+    });
+  });
+
+  it("/ctcp bare → error (target + verb required)", () => {
+    expect(parseSlash("/ctcp")).toEqual({
+      kind: "error",
+      verb: "ctcp",
+      message: "/ctcp requires a target and a verb",
+    });
+  });
+
+  it("/ctcp <target> with no verb → error", () => {
+    expect(parseSlash("/ctcp bob")).toEqual({
+      kind: "error",
+      verb: "ctcp",
+      message: "/ctcp requires a target and a verb",
+    });
+  });
+});
+
+// #591 — /ping <target>: sugar for CTCP PING with a client timestamp. The
+// parser only carries the target; compose.ts stamps the outbound token and
+// owns the reply-correlation state (RTT is synthesized locally in the source
+// window, not routed as a NOTICE).
+describe("parseSlash — /ping (#591)", () => {
+  it("/ping <target> parses to {kind:'ping', target}", () => {
+    expect(parseSlash("/ping bob")).toEqual({ kind: "ping", target: "bob" });
+  });
+
+  it("/ping bare → error (target required)", () => {
+    expect(parseSlash("/ping")).toEqual({
+      kind: "error",
+      verb: "ping",
+      message: "/ping requires a target",
+    });
+  });
+
+  it("/ping <target> <extra> ignores trailing tokens", () => {
+    expect(parseSlash("/ping bob junk here")).toEqual({ kind: "ping", target: "bob" });
+  });
+});
