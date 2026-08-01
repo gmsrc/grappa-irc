@@ -12,10 +12,18 @@ import { seedIsupport } from "./isupport";
 import { applyPresenceEvent, seedMembers } from "./members";
 import { matchesWatchlist } from "./mentionMatch";
 import { setServerMention } from "./mentions";
-import { channelsBySlug, networks, refetchChannels, refetchNetworks, user } from "./networks";
+import {
+  channelsBySlug,
+  networkIdBySlug,
+  networks,
+  refetchChannels,
+  refetchNetworks,
+  user,
+} from "./networks";
 import { nickEquals } from "./nickEquals";
 import { isOperatorActionEcho } from "./operatorActionEcho";
 import { isOwnPresenceEvent } from "./ownPresenceEvent";
+import { resolvePing } from "./pingCorrelation";
 import { setEnsureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, queryWindowsByNetwork } from "./queryWindows";
 import { applyJoinReply, applyReadCursorSet, renameReadCursorChannel } from "./readCursor";
@@ -170,6 +178,33 @@ createRoot(() => {
   //     DM window which may not be selected, but own-sent messages in an
   //     unselected window do still bump (correct — the operator changed
   //     windows between sending and receiving the echo).
+  // #591 — a peer's CTCP PING reply arrives as a server-typed :notice with
+  // `meta.ctcp_verb === "PING"` + `meta.ctcp_args === <our token>` (the SSOT
+  // `Grappa.IRC.CTCP.verb_args/1` classified it; cic NEVER parses \x01). If the
+  // token claims a `/ping` WE sent (pingCorrelation), CONSUME it: synthesize the
+  // round-trip line into the SOURCE window where /ping was typed (irssi
+  // behavior) and swallow the raw reply — no beep, no raw \x01 render. A reply
+  // that matches nothing is NOT consumed (returns false): the caller leaves it
+  // to normal DM routing, so this stays strictly additive (ruling #2, decoupled
+  // from the #546/#548 CTCP-routing work). The RTT body is a cic-owned display
+  // string (the server sends structured data only), keyed on the correlation's
+  // resolved source window, never the peer's.
+  const maybeConsumePingReply = (slug: string, message: ChannelEvent["message"]): boolean => {
+    if (message.kind !== "notice" || message.meta.ctcp_verb !== "PING") return false;
+    const token = message.meta.ctcp_args;
+    if (typeof token !== "string") return false;
+    const networkId = networkIdBySlug(slug);
+    if (networkId === undefined) return false;
+    const hit = resolvePing(networkId, message.sender, token, Date.now());
+    if (hit === null) return false;
+    appendToScrollback(hit.sourceKey, {
+      ...message,
+      channel: hit.sourceChannel,
+      body: `CTCP PING reply from ${message.sender}: ${hit.rttMs} ms`,
+    });
+    return true;
+  };
+
   const routeMessage = (
     slug: string,
     key: ChannelKey,
@@ -177,6 +212,10 @@ createRoot(() => {
     message: ChannelEvent["message"],
     ownNick: string | null,
   ): void => {
+    // #591 — swallow a matched CTCP PING reply before it renders raw in this
+    // window. Catches every routing path (channel/query/DM-listener); the
+    // DM-listener notice arm ALSO gates earlier to suppress its pre-route beep.
+    if (maybeConsumePingReply(slug, message)) return;
     appendToScrollback(key, message);
     // Message-replay-on-reconnect cluster — track high-water mark per
     // topic so the backfill on the NEXT reconnect knows where to
@@ -665,6 +704,11 @@ createRoot(() => {
             // NOTICEs (NickServ etc.) never hit this branch — our server
             // routes those to "$server" not the own-nick channel.
             //
+            // #591 — a peer's CTCP PING reply is DM-shaped (lands here at
+            // channel == ownNick). Consume a matched one BEFORE the beep below:
+            // routeMessage's own gate swallows the raw render, but this arm
+            // beeps PRE-route, so the suppression must happen here too.
+            if (maybeConsumePingReply(slug, message)) return;
             // #372: canonical peer re-key — see the PRIVMSG/ACTION arm.
             const peer = canonicalQueryNick(networkId, message.sender);
             const senderKey = channelKey(slug, peer);

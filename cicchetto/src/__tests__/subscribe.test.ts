@@ -1733,6 +1733,100 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
     expect(store.scrollbackByChannel()[ownKey]).toBeUndefined();
   });
 
+  // #591 — a peer's CTCP PING reply arrives as a server-typed :notice with
+  // meta.ctcp_verb === "PING" + meta.ctcp_args === <our token>. When it claims
+  // a /ping WE sent, the reply is CONSUMED: the round-trip line is synthesized
+  // into the SOURCE window where /ping was typed (irssi behavior) and the raw
+  // reply neither beeps nor renders in the peer window. cic NEVER parses \x01 —
+  // the server SSOT Grappa.IRC.CTCP.verb_args/1 classified the verb into the
+  // typed meta; the correlation table (pingCorrelation) does the matching.
+  it("CTCP PING reply matching a pending /ping is consumed into the source window (RTT), no beep, no raw render", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedDmListenerStubs();
+    const beep = await import("../lib/beep");
+    // Real pingCorrelation (unmocked) — same singleton subscribe.ts resolves
+    // against, since both load from the module registry vi.resetModules() just
+    // refreshed. Register the pending /ping BEFORE firing the reply.
+    const { registerPing } = await import("../lib/pingCorrelation");
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalledTimes(3);
+    });
+    // Operator typed `/ping vjt` in the #grappa window: compose stamped the
+    // token and registered the pending entry keyed on (networkId, nick, token).
+    const sourceKey = channelKey("freenode", "#grappa");
+    registerPing(1, "vjt", "tok-591", sourceKey, "#grappa", 9958);
+    const eventCalls = mockChannel.on.mock.calls.filter((c) => c[0] === "event");
+    const dmHandler = eventCalls[1]?.[1] as (p: unknown) => void;
+    // The reply lands at now = 10_000 → rtt = 42 ms (sentAtMs 9958). Fixed
+    // Date.now so the RTT math is deterministic (spec requirement).
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    dmHandler({
+      kind: "message",
+      message: {
+        id: 600,
+        network: "freenode",
+        channel: "alice",
+        server_time: 0,
+        kind: "notice",
+        sender: "vjt",
+        // Raw \x01-framed reply body — cic MUST NOT render this; the gate
+        // consumes on the typed meta, never by parsing the body.
+        body: "\x01PING tok-591\x01",
+        meta: { ctcp_verb: "PING", ctcp_args: "tok-591" },
+      },
+    });
+    nowSpy.mockRestore();
+    // Synthesized RTT line landed in the SOURCE window (#grappa), cic-owned copy.
+    expect(store.scrollbackByChannel()[sourceKey]?.map((m) => m.body)).toEqual([
+      "CTCP PING reply from vjt: 42 ms",
+    ]);
+    // The peer window got NOTHING — the reply was swallowed, not re-keyed raw.
+    expect(store.scrollbackByChannel()[channelKey("freenode", "vjt")]).toBeUndefined();
+    // No audible alert for a consumed correlation reply.
+    expect(beep.playBeep).not.toHaveBeenCalled();
+  });
+
+  // #591 additive rule (ruling #2, decoupled from #546/#548): a CTCP PING
+  // NOTICE that matches NO pending /ping of ours must NOT be swallowed — it
+  // routes through normal DM handling like any other peer notice.
+  it("CTCP PING notice matching NO pending /ping is NOT consumed — routes to the peer window", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedDmListenerStubs();
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalledTimes(3);
+    });
+    const eventCalls = mockChannel.on.mock.calls.filter((c) => c[0] === "event");
+    const dmHandler = eventCalls[1]?.[1] as (p: unknown) => void;
+    // A CTCP PING NOTICE we never sent a /ping for — leave it to normal routing.
+    dmHandler({
+      kind: "message",
+      message: {
+        id: 601,
+        network: "freenode",
+        channel: "alice",
+        server_time: 0,
+        kind: "notice",
+        sender: "vjt",
+        body: "\x01PING stray-token\x01",
+        meta: { ctcp_verb: "PING", ctcp_args: "stray-token" },
+      },
+    });
+    // Not consumed: the raw reply lands in the sender's window like any DM notice.
+    expect(store.scrollbackByChannel()[channelKey("freenode", "vjt")]?.map((m) => m.body)).toEqual([
+      "\x01PING stray-token\x01",
+    ]);
+  });
+
   // Self-echo guard: own outbound NOTICEs (server fans out to the
   // own-nick topic too) MUST NOT auto-open a window with our own nick
   // as the target — that would be a self-DM phantom window. The
