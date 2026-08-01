@@ -1332,10 +1332,17 @@ export function setOn401Handler(fn: (() => void) | null): void {
 // the dead-token detection for those verbs.
 //
 // `fireDeadTokenHandler` (default true) gates ONLY the on401 side effect, not
-// the decoding. Pass `false` for boot-APPLIED cosmetic fetches (#449
-// display-prefs sync fires on every token presence) whose transient 401 must
-// NEVER clear a valid session's token — they still throw the decoded `ApiError`
-// so the caller can keep its boot cache, but they do not log the user out.
+// the decoding. THE RULE (#449, #502): pass `false` for boot-APPLIED cosmetic
+// fetches — the ones a `mount*Sync` effect fires on EVERY token presence, whose
+// failure mode is "the UI looks slightly wrong", NOT "the session is gone".
+// Today that is the #449 display-prefs sync (`getDisplayPrefs`/`putDisplayPrefs`)
+// and the #502 active-theme refresh (`getActiveThemePair`). Their transient 401
+// must NEVER clear a valid session's token — they still throw the decoded
+// `ApiError` so the caller keeps its boot cache, but they do not log the user
+// out. Everything else keeps the default: session-validating GETs (`/me`) and
+// on-demand user-action verbs, where a 401 genuinely means the token is dead.
+// A NEW boot cosmetic fetch MUST pass `false`, or a flaky-connection 401 at
+// boot will spuriously log the user out.
 export async function readError(res: Response, fireDeadTokenHandler = true): Promise<ApiError> {
   if (res.status === 401 && fireDeadTokenHandler && on401Handler !== null) on401Handler();
   let body: Record<string, unknown> = {};

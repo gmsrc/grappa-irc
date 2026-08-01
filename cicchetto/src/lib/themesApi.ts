@@ -1,7 +1,12 @@
 // Typed REST client for the #75 themes surface. Mirrors `api.ts` and
 // reuses its `buildHeaders` (JSON + x-grappa-client-id) and `readError`
 // (wire-token → `ApiError.code`, plus the shared 401 dead-token handler)
-// so these verbs behave identically to the rest of the REST surface.
+// so these verbs behave identically to the rest of the REST surface —
+// with ONE deliberate exception: `getActiveThemePair` is a boot-APPLIED
+// cosmetic fetch and opts OUT of the dead-token handler (#502). The rule:
+// a boot fetch whose failure mode is "the UI looks slightly wrong" must
+// never share the dead-token path with fetches whose failure mode is "the
+// session is genuinely gone". See its comment + the `readError` moduledoc.
 //
 // Keep the wire shapes in lockstep with `lib/grappa/themes/wire.ex`
 // (`ThemesWireT`, generated in `wireTypes.ts`) and the token vocabulary
@@ -204,9 +209,19 @@ export type ActiveThemePair = {
 
 // GET /me/theme — the resolved pair. A bare `null` body (no theme set, or a
 // benign test stub) resolves to an empty pair so callers never branch on it.
+//
+// #502 — ISOLATED from the dead-token handler (`fireDeadTokenHandler: false`):
+// this is a boot-APPLIED cosmetic fetch (`customTheme.mountCustomThemeSync`
+// fires it on EVERY token presence — login, reload, cold boot), so a transient
+// 401 must NOT clear a valid session's token. Doing so also defeated the
+// caller's own tolerant `.catch`, which is written to keep the FOUC-free boot
+// cache on a transient failure. It still throws the decoded `ApiError` so that
+// catch runs. Mirrors the #449 display-prefs isolation; contrast the on-demand
+// theme verbs above/below, which KEEP the handler — a 401 while the user is
+// actively managing themes genuinely means the session is dead.
 export async function getActiveThemePair(token: string): Promise<ActiveThemePair> {
   const res = await fetch("/me/theme", { headers: buildHeaders(token) });
-  if (!res.ok) throw await readError(res);
+  if (!res.ok) throw await readError(res, false);
   const body = (await res.json()) as ActiveThemePair | null;
   return body ?? { light: null, dark: null };
 }

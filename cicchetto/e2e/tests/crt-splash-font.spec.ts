@@ -45,13 +45,14 @@ test("crt splash text is bumped ~30% (#180)", async ({ page }) => {
   // resource is PENDING (not errored) for the lifetime of the test.
   await page.route("**/me", () => new Promise(() => {}));
 
-  // #75 — boot now fires GET /me/theme (customTheme.mountCustomThemeSync)
-  // whenever a token is present. The `**/me` glob does NOT match
-  // `/me/theme`, so against this test's FAKE bearer that request would
-  // hit the real server, 401, and the shared on401 handler would clear
-  // the token → RequireAuth bounces → the frozen splash vanishes. Stub it
-  // to a benign "no active theme" so the freeze holds. (Real specs use
-  // seeded tokens, so their /me/theme 200s.)
+  // #75 — boot fires GET /me/theme (customTheme.mountCustomThemeSync) whenever
+  // a token is present, and the `**/me` glob does NOT match `/me/theme`. Stub it
+  // to a benign "no active theme" so this test never makes a real round-trip
+  // against its FAKE bearer. (Real specs use seeded tokens, so their /me/theme
+  // 200s.) NOTE (#502): this stub is now network-isolation hygiene, NOT a
+  // logout guard — the boot theme refresh no longer shares the dead-token path
+  // (`getActiveThemePair` passes `fireDeadTokenHandler: false`), so even an
+  // un-stubbed 401 here would leave the token intact and the freeze holding.
   await page.route("**/me/theme", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "null" }),
   );

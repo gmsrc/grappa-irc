@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { ApiError } from "../api";
+import { ApiError, setOn401Handler } from "../api";
 import {
   copyTheme,
   createTheme,
@@ -103,7 +103,12 @@ describe("themesApi", () => {
     fetchSpy.mockReset();
     vi.stubGlobal("fetch", fetchSpy);
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    // #502 — the isolation tests below install a spy handler; clear it so it
+    // never leaks the dead-token callback into a sibling test or file.
+    setOn401Handler(null);
+  });
 
   test("listGallery GETs /themes and unwraps the themes envelope", async () => {
     fetchSpy.mockResolvedValue(ok({ themes: [sampleTheme()] }));
@@ -217,6 +222,34 @@ describe("themesApi", () => {
     const pair = await getActiveThemePair(TOKEN);
     expect(pair.light?.id).toBe(3);
     expect(pair.dark?.id).toBe(7);
+  });
+
+  // #502 — the boot active-theme refresh is a COSMETIC fetch:
+  // `customTheme.mountCustomThemeSync` fires GET /me/theme on EVERY token
+  // presence (login, reload, cold boot). Like the #449 display-prefs sync, a
+  // cosmetic refresh must NEVER be able to kill a valid session, so its 401 is
+  // ISOLATED from the shared dead-token handler — it still throws (customTheme
+  // keeps its FOUC-free boot cache via the caller's .catch) but does NOT clear
+  // the token. Before the fix, a transient boot 401 logged the user out.
+  test("getActiveThemePair on 401 throws but does NOT fire the on401 dead-token handler", async () => {
+    const on401 = vi.fn();
+    setOn401Handler(on401);
+    fetchSpy.mockResolvedValue(err(401, "unauthorized"));
+
+    await expect(getActiveThemePair(TOKEN)).rejects.toBeInstanceOf(ApiError);
+    expect(on401).not.toHaveBeenCalled();
+  });
+
+  // CONTRAST: on-demand theme verbs stay on the dead-token path — a 401 while
+  // the user is actively managing themes genuinely means the session is dead,
+  // so the fix must NOT blanket-suppress the handler across the whole module.
+  test("CONTRAST: setActiveThemePair (user action) DOES fire the handler on 401", async () => {
+    const on401 = vi.fn();
+    setOn401Handler(on401);
+    fetchSpy.mockResolvedValue(err(401, "unauthorized"));
+
+    await expect(setActiveThemePair(TOKEN, 1, null)).rejects.toBeInstanceOf(ApiError);
+    expect(on401).toHaveBeenCalledTimes(1);
   });
 
   test("setActiveThemePair PUTs /me/theme with the {light,dark} pair", async () => {
