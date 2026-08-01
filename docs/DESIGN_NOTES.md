@@ -25655,3 +25655,56 @@ message never lands), too high lets the open succeed (the drop log is absent).
 A change in how many `BusyRetry.run` calls precede the open is MEANT to break
 that test — the empirical `fire_on: 3` is not hardcoded theory, it is the value
 the triangulating assertions accept.
+
+## 2026-08-01 — #625 (#608 regression): a single send double-scrolls — the tail-follow fail-safe must not fire when already at the tail
+
+Field report (vjt, staging serving main): after sending a message the
+scrollback "scrolls too far up and then falls back down". Reproduces on a SINGLE
+send, not only in bursts, and — the discriminating fact — "the scroll resets
+after a WHILE": the errant write is DELAYED (~0.5s), not synchronous with the
+keypress. A double scroll is exactly the defect #608's single-scroll-authority
+reshape claims to abolish, so this is a regression in its own headline promise.
+
+**Root cause (evidence, not theory — instrumented e2e trace).** A single send
+fires MORE THAN ONE `rows().length` change, hence more than one content-change
+tail-follow: (1) the WS echo append (`n → n+1`), then (2) a follow-on change —
+the marker collapse / read-cursor advance (`n+1 → n`, or a same-length re-key).
+Each spawns a `tailFollowWhenSettled` poll, and the polls SHARE the module-level
+`lastTailScrollHeight` baseline. Poll (1) settles at frame 0 (`scrollHeight`
+grew past the baseline), tails, and advances the baseline to the FINAL extent.
+Poll (2) then can never satisfy `currScrollHeight > lastTailScrollHeight` — the
+first poll already moved the goalpost — so it runs its whole `SETTLE_MAX_FRAMES`
+(~30 frames ≈ 0.5s) budget and fires the fail-safe `scrollIntoView` anyway. That
+is the DELAYED second write. On chromium it lands on the same tail (benign,
+which is why a plain e2e false-greens); under staging's timing/geometry it lands
+off-tail as the visible "up then down" bounce. The illegitimate writer is poll
+(2)'s fail-safe firing when there is nothing to follow.
+
+**Fix (remove the writer, no debounce/timeout).** The fail-safe branch now
+scrolls only when the poll actually has somewhere to go: `settled` (measured
+growth) OR `!atTail` (the pane is still BEHIND the tail — the genuine
+iOS-never-reported-growth case, which must still tail so nothing strands). A
+fail-safe that reaches its budget WITHOUT measured growth AND is already within
+`SCROLL_BOTTOM_THRESHOLD_PX` of the tail has nothing to follow → it skips the
+write. Poll (1) always fires (settled, or behind-the-tail); poll (2) skips. One
+send → one tail write. No timer hides the race; the redundant write is simply
+not performed. A genuine two-message burst still tails twice (both polls measure
+growth) — the fix only suppresses the no-growth-at-tail redundant poll.
+
+**Why not debounce / cancel-prior.** A `setTimeout`/debounce that swallows the
+second write is the exact anti-pattern this refactor exists to prevent (vjt).
+Cancel-the-previous-poll does NOT help either: poll (1) fires at frame 0, BEFORE
+poll (2)'s content-change even arrives, so they are sequential, not overlapping —
+there is no in-flight poll to cancel. The geometry guard is the correct place:
+the single applier decides "is there actually a tail to catch?" at fire time,
+after layout has settled.
+
+**The test (`cicchetto/e2e/tests/issue625-single-send-scroll-jump.spec.ts`).**
+A snapshot right after the send false-greens (the pane IS at the tail by then);
+the bug only shows by sampling scroll geometry OVER TIME. The spec installs an
+in-page write-spy + rAF sampler, sends ONE line (at the tail, and again while
+reading history above an unread marker), waits out a 2.5s window, and asserts NO
+container scroll write lands past a settle grace (300ms) — i.e. exactly one
+tail-follow per send. RED on main (a second `scrollIntoView` at t≈540–610ms),
+GREEN with the fix. Chromium (webkit ≠ real-iOS scroll, but the DEFECT — the
+redundant delayed write — is engine-independent and deterministically pinned).

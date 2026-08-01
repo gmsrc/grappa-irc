@@ -2459,7 +2459,9 @@ const ScrollbackPane: Component<Props> = (props) => {
   // `isSettled` core against the last-tail baseline: the extent has GROWN since we
   // last tailed AND the new tail row has a laid-out box. Scrolls the frame that
   // holds, updating the baseline. Bounded by `SETTLE_MAX_FRAMES` (fail-safe: a
-  // rows change with no measurable growth still tails once — never strands).
+  // rows change with no measurable growth still tails once IF the pane is behind
+  // the tail — never strands; but #625: it does NOT fire when already at the tail,
+  // else a follow-on no-growth rows change on a single send double-scrolls).
   // Re-checks `followMode()`/`listRef` each frame (the operator may scroll up, or
   // the pane unmount, mid-wait). condition-based-waiting: wait for the real
   // layout state, not two guessed frames.
@@ -2490,10 +2492,27 @@ const ScrollbackPane: Component<Props> = (props) => {
         targetNodeHeight,
       });
       if (settled || frame >= SETTLE_MAX_FRAMES) {
-        if (tail?.scrollIntoView) {
-          tail.scrollIntoView({ block: "end" });
-        } else {
-          listRef.scrollTop = listRef.scrollHeight;
+        // #625 — the fail-safe must NOT fire a redundant DELAYED write. A single
+        // send fires MORE THAN ONE `rows().length` change (the echo append, then
+        // a follow-on change: the marker collapse / cursor advance). Each spawns
+        // a poll sharing `lastTailScrollHeight`; the echo's poll settles first and
+        // advances the baseline to the final extent, so the follow-on poll can
+        // NEVER measure growth (`currScrollHeight > lastTailScrollHeight` is false)
+        // and runs its whole SETTLE_MAX_FRAMES budget — firing a second
+        // `scrollIntoView` ~0.5s AFTER the send ("the scroll resets after a
+        // while", the #608-regression double-scroll). When that fail-safe reaches
+        // its budget WITHOUT measured growth AND the pane is already AT the tail,
+        // there is nothing to follow — skip the write. The genuine no-flush case
+        // (fail-safe reached but the pane is still BEHIND the tail, e.g. an iOS
+        // layout that never reported growth) still tails, so nothing strands.
+        const atTail =
+          currScrollHeight - listRef.scrollTop - listRef.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX;
+        if (settled || !atTail) {
+          if (tail?.scrollIntoView) {
+            tail.scrollIntoView({ block: "end" });
+          } else {
+            listRef.scrollTop = listRef.scrollHeight;
+          }
         }
         lastTailScrollHeight = listRef.scrollHeight;
         return;
