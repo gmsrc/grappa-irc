@@ -523,7 +523,11 @@ enum overlay_action {
     ACT_KICKBAN,
     /* The IRCop action. Offered only while this user's own umodes say
      * they are one — see own_oper_on_network_locked. */
-    ACT_KILL
+    ACT_KILL,
+    /* Stop drawing a picture in place. The row keeps its link — hiding is
+     * about the space the picture takes on screen, not about forgetting
+     * the URL was ever posted. */
+    ACT_HIDE
 };
 
 /* How many entries a picker offers. Twenty is what fits the phrase "the
@@ -557,6 +561,11 @@ struct overlay {
     char filter[64];          /* picker: matches nick OR message text */
     char nick[MAX_CHANNEL];   /* menu: whose message was clicked */
     char body[MAX_LINE];
+    /* Menu: the media URL under the pointer, when the pointer was on a
+     * picture or its link rather than on a person. The same OVERLAY_MENU
+     * serves both because the question is the same one — "what can I do
+     * with the thing under the pointer" — and only the answers differ. */
+    char media[MAX_LINE];
     /* Media picker: what Enter does with the URL, decided by the command
      * that opened it (/preview or /view) rather than by the list. */
     enum overlay_action pick_action;
@@ -5522,6 +5531,28 @@ static void view_fetch_and_open(struct app *app, const char *url);
 static void ircd_archive_job(struct app *app, const struct job *job);
 static bool enqueue_job(struct app *app, struct job job);
 
+/* What `log_media[i]` says about a row: a slot index, or one of these.
+ *
+ * HIDDEN is distinct from NONE because the draw path CLAIMS a slot for any
+ * row that hasn't got one — that is what makes media lazy. A hidden row
+ * marked NONE would therefore be re-claimed and re-drawn on the very next
+ * frame, so "hide" needs a state the claim skips rather than the absence
+ * of a state. */
+#define LOG_MEDIA_NONE (-1)
+#define LOG_MEDIA_HIDDEN (-2)
+
+/* Is this URL currently drawn inline anywhere in the log? Asked by the
+ * context menu, which offers "hide" only when there is something to hide.
+ * Caller holds app->lock. */
+static bool media_shown_locked(struct app *app, const char *url) {
+    for (size_t i = 0; i < app->log_count; i++) {
+        int mi = app->log_media[i];
+        if (mi < 0 || mi >= (int)app->media_count) continue;
+        if (strcmp(app->media[mi].url, url) == 0) return true;
+    }
+    return false;
+}
+
 static void media_slot_reset(struct inline_media *m) {
     free(m->payload);
     free(m->rgb);
@@ -5586,6 +5617,32 @@ static int media_claim_locked(struct app *app, const char *url, bool is_video) {
     m->is_animatable = is_video || url_has_gif_suffix(url);
     m->state = IM_IDLE;
     return (int)idx;
+}
+
+/* Stop drawing `url` inline, everywhere it is currently drawn.
+ *
+ * Every row showing it is marked HIDDEN rather than NONE (the claim in the
+ * draw path skips only the former), the slots are released, and the
+ * terminal's own placements are dropped — a protocol image lives above the
+ * cell grid, so nothing ncurses does can erase it and only the escape
+ * can. The next frame re-places whatever is still wanted.
+ *
+ * The URL keeps its link and its region: hiding is about the space on
+ * screen, so the row is still clickable and /preview still finds it. */
+static void hide_media_url(struct app *app, const char *url) {
+    pthread_mutex_lock(&app->lock);
+    bool any = false;
+    for (size_t i = 0; i < app->log_count; i++) {
+        int mi = app->log_media[i];
+        if (mi < 0 || mi >= (int)app->media_count) continue;
+        if (strcmp(app->media[mi].url, url) != 0) continue;
+        app->log_media[i] = LOG_MEDIA_HIDDEN;
+        media_slot_reset(&app->media[mi]);
+        any = true;
+    }
+    if (any) media_placements_drop_locked(app);
+    pthread_mutex_unlock(&app->lock);
+    if (any) log_line(app, "hidden — the link is still there, /preview reopens it");
 }
 
 /* Record the screen rectangle of a media link so a later mouse event can map
@@ -5995,10 +6052,13 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
          * bug class that clips the newest message off the bottom. The next
          * frame measures it and draws it. */
         int mi = app->log_media[i];
-        if (mi < 0 && mk != MEDIA_NONE && app->inline_media_enabled &&
+        /* LOG_MEDIA_NONE only: a row the user HID stays hidden, and this
+         * is the line that decides it — the claim is what would otherwise
+         * bring the picture straight back on the next frame. */
+        if (mi == LOG_MEDIA_NONE && mk != MEDIA_NONE && app->inline_media_enabled &&
             (app->inline_media_peers || url_is_first_party(app, url_tok))) {
             app->log_media[i] = media_claim_locked(app, url_tok, mk == MEDIA_VIDEO);
-            mi = -1;
+            mi = LOG_MEDIA_NONE;
         }
         /* Draw the row's image beneath it, and kick off its decode the
          * first time it is on screen — lazy by design, so scrollback full
@@ -6021,6 +6081,21 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
             int want = media_extra_rows(m) - row_skip;
             if (want < 0) want = 0;
             int spend = want < room ? want : room;
+            /* The PICTURE is a target too, not just the link text above
+             * it: "right-click the image" is what a person means, and a
+             * menu that only appears on the URL is a menu they will not
+             * find. Same region type, so the left click keeps working the
+             * way it does on the link. */
+            if (spend > 0) {
+                /* Through a local: both the slot and the region live
+                 * inside *app, and handing the compiler two pointers into
+                 * one object is a -Wrestrict warning even though these
+                 * two arrays cannot overlap. */
+                char murl[MAX_LINE];
+                snprintf(murl, sizeof(murl), "%s", m->url);
+                add_link_region(app, img_y, img_y + spend - 1, x + 2, x + width - 3, murl,
+                                m->is_video ? MEDIA_VIDEO : MEDIA_IMAGE);
+            }
             if (spend > 0) {
                 if (m->state == IM_READY) {
                     /* Advance here, at the draw, so only pictures that
@@ -8580,6 +8655,39 @@ static size_t overlay_items(struct app *app, struct overlay_item *out, size_t ma
     struct overlay *ov = &app->overlay;
     size_t n = 0;
     if (ov->kind == OVERLAY_MENU) {
+        /* A picture under the pointer, rather than a person. The URL rides
+         * in `body` so the actions themselves are the SAME ones the media
+         * picker already uses — a second implementation of "preview this"
+         * is a second thing that can drift from /preview. */
+        if (ov->media[0]) {
+            enum media_kind mk = media_kind_of(ov->media);
+            if (mk == MEDIA_AUDIO) {
+                snprintf(out[n].label, sizeof(out[n].label), "Play %.900s", ov->media);
+                snprintf(out[n].body, sizeof(out[n].body), "%s", ov->media);
+                out[n].action = ACT_PREVIEW;
+                if (++n >= max) return n;
+            } else {
+                snprintf(out[n].label, sizeof(out[n].label), "Preview here");
+                snprintf(out[n].body, sizeof(out[n].body), "%s", ov->media);
+                out[n].action = ACT_PREVIEW;
+                if (++n >= max) return n;
+                snprintf(out[n].label, sizeof(out[n].label), "Open in viewer");
+                snprintf(out[n].body, sizeof(out[n].body), "%s", ov->media);
+                out[n].action = ACT_VIEW;
+                if (++n >= max) return n;
+                /* Offered only when there is something drawn to hide: on a
+                 * link whose picture is not inline (media off, a
+                 * third-party host under `first-party`, a failed decode)
+                 * the entry would do nothing visible. */
+                if (media_shown_locked(app, ov->media)) {
+                    snprintf(out[n].label, sizeof(out[n].label), "Hide this picture");
+                    snprintf(out[n].body, sizeof(out[n].body), "%s", ov->media);
+                    out[n].action = ACT_HIDE;
+                    if (++n >= max) return n;
+                }
+            }
+            return n;
+        }
         if (!ov->nick[0]) return n;
         /* Replying needs something they SAID, which a roster row does not
          * have: the menu offers what the thing under the pointer can
@@ -8724,6 +8832,7 @@ static void overlay_close(struct app *app) {
     pthread_mutex_lock(&app->lock);
     app->overlay.kind = OVERLAY_NONE;
     app->overlay.filter[0] = 0;
+    app->overlay.media[0] = 0;
     app->overlay.sel = 0;
     app->overlay.top = 0;
     pthread_mutex_unlock(&app->lock);
@@ -8948,6 +9057,9 @@ static void overlay_activate(struct app *app) {
     case ACT_VIEW:
         if (body[0] && media_kind_of(body) == MEDIA_AUDIO) play_audio_url(app, body);
         else if (body[0]) request_view(app, body);
+        break;
+    case ACT_HIDE:
+        if (body[0]) hide_media_url(app, body);
         break;
     case ACT_NONE:
         break;
@@ -12679,7 +12791,23 @@ static void handle_mouse(struct app *app) {
     if (in_panel) return;
 
     if (right) {
+        /* A picture (or its link) under the pointer answers first: it is
+         * the more specific thing, and the message row it belongs to is
+         * always underneath it. Asking in the other order would mean a
+         * right-click on an image opened the sender's menu. */
         pthread_mutex_lock(&app->lock);
+        const struct link_region *mr = region_at(app, ev.x, ev.y);
+        if (mr && mr->kind != MEDIA_NONE) {
+            app->overlay.kind = OVERLAY_MENU;
+            app->overlay.sel = 0;
+            app->overlay.x = ev.x;
+            app->overlay.y = ev.y + 1;
+            app->overlay.nick[0] = 0;
+            app->overlay.body[0] = 0;
+            snprintf(app->overlay.media, sizeof(app->overlay.media), "%s", mr->url);
+            pthread_mutex_unlock(&app->lock);
+            return;
+        }
         for (size_t i = 0; i < app->msg_region_count; i++) {
             const struct msg_region *r = &app->msg_regions[i];
             if (ev.y < r->y0 || ev.y > r->y1 || ev.x < r->x0 || ev.x > r->x1) continue;
@@ -12687,6 +12815,7 @@ static void handle_mouse(struct app *app) {
             app->overlay.sel = 0;
             app->overlay.x = ev.x;
             app->overlay.y = ev.y + 1;
+            app->overlay.media[0] = 0;
             snprintf(app->overlay.nick, sizeof(app->overlay.nick), "%s", r->nick);
             snprintf(app->overlay.body, sizeof(app->overlay.body), "%s", r->body);
             break;
