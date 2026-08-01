@@ -1856,9 +1856,10 @@ const ScrollbackPane: Component<Props> = (props) => {
   //     latch (one-shot resume). Owner ruling 2026-07-29 (#535): the only
   //     legitimate jump-to-bottom is the operator's own send in the active
   //     window; every other trigger preserves position or lands on the divider.
-  // Post-send / live-append stay at the BOTTOM via the length-effect +
-  // `lastOwnSend`→`scrollToBottom` (both untouched; the send clears the latch
-  // first). The divider still RENDERS at its frozen position (freeze-display
+  // Post-send / live-append stay at the BOTTOM via the length-effect: the send
+  // ARMS `followMode` (#608 STEP 5, clearing the marker latch first) and the
+  // applier tail-follows the echo when it mounts. The divider still RENDERS at
+  // its frozen position (freeze-display
   // contract, DESIGN_NOTES 2026-06-08) for every trigger. `atBottomNow` is set
   // per branch so the floating "scroll to bottom" button doesn't flash
   // mid-activation (and `followMode` alongside it drives the tail-follow gate).
@@ -2480,10 +2481,31 @@ const ScrollbackPane: Component<Props> = (props) => {
           }),
         );
         return;
+      case "operator-tail": {
+        // W7 — the explicit operator tail (scroll-to-bottom button / #243 re-tap /
+        // active-window re-tap). INSTANT + SYNC (no rAF): the 2026-06-02
+        // contamination fix — a smooth/async animation on the SHARED `.scrollback`
+        // node would survive a window switch and race the arriving pane's
+        // activation, stranding scrollTop at a stale offset (vjt prod report). The
+        // rows are already in the DOM at gesture time (the operator taps after
+        // content exists), so `lastElementChild` is the true tail — no settle
+        // needed. Re-arm follow + geometry, exactly as the former scrollToBottom()
+        // helper did; running SYNC keeps the caller's post-scroll
+        // `lastFullyVisibleRowId` read on the pinned tail.
+        const tail = listRef.lastElementChild as HTMLElement | null;
+        if (tail?.scrollIntoView) {
+          tail.scrollIntoView({ block: "end" });
+        } else {
+          listRef.scrollTop = listRef.scrollHeight;
+        }
+        setFollowMode(true);
+        setAtBottomNow(true);
+        return;
+      }
       default:
-        // operator-tail / mention-jump / prepend-preserve are routed in later
-        // increments — the length-effect never declares them, so this is
-        // unreachable until then.
+        // mention-jump (applyMentionJump) + prepend-preserve (applyPrependPreserve)
+        // own dedicated entrypoints and never reach dispatchScrollWrite, so this
+        // arm stays unreachable.
         return;
     }
   };
@@ -2627,6 +2649,28 @@ const ScrollbackPane: Component<Props> = (props) => {
     // bailed identically). Otherwise the activation intent won ⇒ delegate.
     if (winner?.kind === "overlay-freeze") return;
     scrollToActivation(mode, withHide);
+  };
+
+  // #608 STEP 5 — the W7 operator-tail applier entrypoint: the explicit
+  // scroll-to-bottom gesture (floating button onClick, #243 re-tap). Declared as
+  // an `operator-tail` one-shot intent (2nd-highest precedence, below only
+  // overlay-freeze) so the write is OWNED + logged by the applier — this is where
+  // the last raw scrollIntoView/scrollTop= moves off the direct call surface into
+  // `dispatchScrollWrite`. Behaviour-identical to the former `scrollToBottom()`
+  // helper: a single-intent list fired unconditionally (the gesture is the
+  // operator's explicit action; full arbitration against a live overlay-freeze is
+  // the designed rank but unreachable — the overlay covers the button — and
+  // matching the pre-migration no-guard write keeps this behaviour-preserving,
+  // mirroring the W8 mention-jump migration). The dispatch is SYNC (instant), so
+  // the caller's post-scroll `lastFullyVisibleRowId` read still sees the pinned
+  // tail.
+  const applyOperatorTail = (): void => {
+    if (!listRef) return;
+    const k = key();
+    const intent: ScrollIntent = { kind: "operator-tail", key: k, lifetime: "one-shot" };
+    const { winner, reason } = resolveIntent([intent], k);
+    logScrollDecision("operator-tail", [intent], winner, reason);
+    if (winner) dispatchScrollWrite(winner);
   };
 
   // After Solid commits new DOM nodes, scroll to the tail iff the user
@@ -2945,40 +2989,12 @@ const ScrollbackPane: Component<Props> = (props) => {
     }, SCROLL_SETTLE_DEBOUNCE_MS);
   };
 
-  // C7.4: scroll-to-bottom click handler — forces scroll to tail and
-  // resumes auto-follow (#608: re-arms `followMode` + `atBottomNow`).
-  //
-  // 2026-06-02 (scroll-to-bottom button contamination): the snap is
-  // INSTANT, not `behavior: "smooth"`. The `[data-testid="scrollback"]`
-  // <div> is the SAME DOM node across selectedChannel changes (Shell.tsx
-  // bundles channel|query|server into one non-keyed Match). A smooth
-  // scroll is an ASYNCHRONOUS animation that lives on that node — tap the
-  // button on a tall window, switch away mid-animation and back, and the
-  // in-flight animation SURVIVES the row swap, racing `scrollToActivation`
-  // on the shared node and leaving scrollTop at a stale/overshot offset
-  // (viewport below content = blank; restored only by a real scroll
-  // event). vjt prod-reported 2026-06-02. Mirror `scrollToActivation`'s
-  // no-marker branch (instant, layout-aware tail anchor) — every other
-  // scroll path in this file is instant for exactly this reason; nothing
-  // async then survives a window switch.
-  const scrollToBottom = () => {
-    if (!listRef) return;
-    const tail = listRef.lastElementChild as HTMLElement | null;
-    if (tail?.scrollIntoView) {
-      tail.scrollIntoView({ block: "end" });
-    } else {
-      listRef.scrollTop = listRef.scrollHeight;
-    }
-    setFollowMode(true);
-    setAtBottomNow(true);
-  };
-
   // #310 — the scroll-to-bottom GESTURE, shared by the floating button's
   // onClick AND the #243 re-tap command below. Reaching the bottom via an
   // explicit operator gesture means they have read to the newest line, so —
-  // exactly like a manual scroll to the bottom — it does two things the pure
-  // `scrollToBottom()` helper (kept for the send-relatch, which owns its own
-  // marker + cursor bookkeeping) deliberately does NOT:
+  // exactly like a manual scroll to the bottom — it does two things the bare
+  // `applyOperatorTail()` tail write (#608 STEP 5b — the W7 operator-tail
+  // applier intent) deliberately does NOT:
   //
   //   1. Clears the marker-activation latch. A channel activation into an
   //      unread window leaves `markerActivationPending` set; only an operator
@@ -2997,15 +3013,16 @@ const ScrollbackPane: Component<Props> = (props) => {
   //      input-gated scroll-settle, which a button tap never arms — see
   //      cursor-forward-only.spec.ts).
   //
-  // The newest id is read AFTER the instant scroll: `scrollToBottom()` pins
-  // the tail synchronously, so `lastFullyVisibleRowId`'s at-bottom
-  // short-circuit returns the true DOM tail — never a stale pre-scroll id the
-  // #233 monotonic clamp would drop as non-advancing (candidate b). No second
-  // cursor authority, no window-state mutation. The frozen divider is left in
-  // place, same as a manual scroll — it re-latches only on the next focus
-  // acquisition or own send (freeze contract).
+  // The newest id is read AFTER the instant scroll: the operator-tail write pins
+  // the tail synchronously (dispatchScrollWrite's operator-tail case is instant,
+  // no rAF), so `lastFullyVisibleRowId`'s at-bottom short-circuit returns the
+  // true DOM tail — never a stale pre-scroll id the #233 monotonic clamp would
+  // drop as non-advancing (candidate b). No second cursor authority, no
+  // window-state mutation. The frozen divider is left in place, same as a manual
+  // scroll — it re-latches only on the next focus acquisition or own send
+  // (freeze contract).
   const scrollToBottomGesture = () => {
-    scrollToBottom();
+    applyOperatorTail();
     setMarkerActivationPending(false);
     if (!listRef) return;
     const id = lastFullyVisibleRowId(listRef);
