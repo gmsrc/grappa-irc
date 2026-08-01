@@ -281,6 +281,15 @@ the COLD list below) so a Dockerfile diff no longer cold-restarts the
 jail (2026-06-10 incident: prod restarted, all IRC sessions dropped,
 for bytes the jail never reads).
 
+**A fifth consumer of the same `deploy_common.sh`, but ALWAYS COLD: the
+release-image Docker path (#503 unit D).** A checkout-less host running the
+published ghcr image — `infra/docker/deploy.sh` in release mode, or the
+`curl | bash` `get.sh` bootstrap — has no `Phoenix.CodeReloader` and no git
+range to classify, so its `update` NEVER shells out to preflight: it
+force-colds (`docker pull` → migrate → `rm -f` + `run -d` recreate) through the
+shared cold path. It is the one substrate with no hot branch at all; hot-on-image
+is #503 unit E. Runbook below.
+
 **Module reload uses `:code.modified_modules/0` + soft-purge +
 `:code.load_file/1` (`Grappa.HotReload`) — NOT `Phoenix.CodeReloader`.**
 A module can be hot-reloaded repeatedly between restarts: the context
@@ -542,7 +551,8 @@ sequence:
 Cutting a `vX.Y.Z` tag also builds and pushes a **self-contained release
 image** to `ghcr.io/vjt/grappa` — a fourth `release.yml` job (`docker`)
 alongside `deb`/`arch`/`rpm`. It is the `curl | bash` / `docker run`
-substrate's payload (bring-up + one-liners are unit D).
+substrate's payload; the bring-up + one-liners that consume it are **#503 unit
+D** — see **Running the published image** below.
 
 - **What it is.** A `mix release` (bundled ERTS + compiled beams + the built
   cicchetto SPA), built from `Dockerfile.release` — DISTINCT from the top-level
@@ -588,6 +598,63 @@ substrate's payload (bring-up + one-liners are unit D).
   builds the native arch; add `--platform linux/amd64,linux/arm64` for the
   multi-arch manifest (needs `docker run --privileged --rm tonistiigi/binfmt
   --install all` first for a recent QEMU).
+
+### Running the published image (`docker run` / `curl | bash`) — #503 unit D
+
+A checkout-less host runs the release image above with plain `docker` — no
+compose, no source, no `mix`. `infra/docker/deploy.sh` in **release mode**
+(auto-selected when there is no `compose.yaml` two levels up, or forced with
+`GRAPPA_DEPLOY_MODE=release`) grows the same `install`/`update`/`stop`/bare
+verbs against `docker run`. The `curl | bash` bootstrap `infra/docker/get.sh`
+lays the two shell files it needs (`deploy.sh` + the `deploy_common.sh` it
+sources) into `$GRAPPA_HOME`, then hands off:
+
+```sh
+# install — asks for PHX_HOST, or set it inline to skip the prompt
+curl -fsSL https://raw.githubusercontent.com/vjt/grappa-irc/main/infra/docker/get.sh | bash
+# update — ALWAYS cold (see below)
+curl -fsSL https://raw.githubusercontent.com/vjt/grappa-irc/main/infra/docker/get.sh | bash -s -- update
+```
+
+- **State + secrets.** All config + every prod secret live in
+  `$GRAPPA_HOME/grappa.env` (default `~/.grappa/grappa.env`, mode `0600`). It is
+  generated ONCE on `install` and **never regenerated** — rotating
+  `SECRET_KEY_BASE` / `GRAPPA_ENCRYPTION_KEY` under a live box invalidates every
+  session and makes Cloak-encrypted upstream creds undecryptable, so a re-run of
+  `install` on an existing box reuses it untouched. Back it up.
+- **Secret generation (fork C).** The four random secrets (`SECRET_KEY_BASE`,
+  `SECRET_SIGNING_SALT`, `GRAPPA_ENCRYPTION_KEY`, `RELEASE_COOKIE`) are minted on
+  the host with `openssl`; the VAPID keypair is minted by the image's OWN
+  `:crypto` (a `docker run … eval` mirroring `mix grappa.gen_vapid` — the release
+  image has no `mix`). No secret ever touches argv or stdout.
+- **`PHX_HOST`** is required and asked interactively on `/dev/tty` (a piped
+  one-liner reads the answer from your terminal, NOT the pipe); set `PHX_HOST=…`
+  to skip the prompt. There is no silent `localhost` fallback — a wrong
+  `PHX_HOST` mints dead upload links + rejects WebSocket origins (#468).
+- **Data.** The sqlite DB + uploads live on a named docker volume
+  (`grappa-data` → `/data`). `stop` removes the container but keeps the volume;
+  `stop --volumes` drops it (destroys the DB).
+- **Knobs.** `GRAPPA_IMAGE` (default `ghcr.io/vjt/grappa:latest`), `GRAPPA_HOME`
+  (default `~/.grappa`), `GRAPPA_PUBLISH` (default `127.0.0.1:4000`),
+  `GRAPPA_CONTAINER` (default `grappa`), `GRAPPA_DATA_VOLUME` (default
+  `grappa-data`), `GRAPPA_RAW_BASE` (the `get.sh` download origin, for a
+  fork/branch).
+- **`update` is ALWAYS cold.** No `CodeReloader` in the image + no git range to
+  classify → `update` skips preflight and force-colds: `docker pull` a newer
+  image, migrate (`docker run … eval 'Grappa.Release.migrate()'` against the full
+  prod env + the data volume), then `docker rm -f` + `docker run -d` to recreate.
+  The DB + uploads on the volume survive; only the running container is replaced.
+  Hot-on-image is **#503 unit E**.
+- **Front door.** The container serves plain HTTP on `GRAPPA_PUBLISH` and owns
+  its own CSP + security headers (#485) — put your TLS front door in front as a
+  dumb reverse proxy, exactly as the from-source path.
+
+> **Verification of the PUBLISHED image is pending the first `vX.Y.Z` tag.** The
+> `docker` release job is tag-driven with zero prior real runs and ghcr carries
+> no grappa image yet; unit D was built + shell-tested against the image's SHAPE
+> (bats stub the daemon, `shellcheck`/`dash` gate the shell). Run a real
+> `docker run` of the published image once a tag has cut before trusting these
+> one-liners in anger.
 
 ### Running operator actions against the live jail (prod)
 

@@ -25477,3 +25477,103 @@ spurious 410 during a mint that later fails, and must retry after the winner's
 release. The threat model is "operator clicks their own link twice"; genuinely
 simultaneous double-redemption is rare, and a retry succeeds once the failed
 claim is released. Not worth a pending-state machine.
+## 2026-08-01 — #503 unit D: run the release image (docker run + curl|bash)
+
+Unit D wires the run-time env unit C left as a forward-ref ("Wiring the
+run-time env (compose / `curl|bash`) is unit D"; "the single command a
+checkout-less `curl|bash` one-liner (unit D) will run"). It grows a SECOND
+substrate onto `infra/docker/deploy.sh` — the checkout-less host that runs the
+published `ghcr.io/vjt/grappa` image with plain `docker` — plus the
+`infra/docker/get.sh` bootstrap the `curl | bash` one-liner pipes to.
+Decisions:
+
+- **One script, two substrates, chosen by a discriminator — not two scripts.**
+  `deploy.sh` keeps its source-mode path (bind-mount dev image, compose,
+  hot-on-HOT) and gains a release-mode path (no source, no compose, no mix —
+  `docker run` against the ghcr image). Mode auto-detects: a real checkout has
+  `compose.yaml` two levels up (`infra/docker/` → repo root); a curl'd copy
+  sitting in `$GRAPPA_HOME` does not. `GRAPPA_DEPLOY_MODE` (`source`|`release`)
+  forces it for tests + operators who want no guessing. The point is ONE verb
+  vocabulary (`install`/`update`/`stop`/bare) across both, so muscle memory +
+  docs carry over; only the substrate hooks differ.
+
+- **Release-image updates are COLD-only — documented as the finding the issue
+  sanctions, not a silent drift.** The published image ships no
+  `Phoenix.CodeReloader` (unit C), so there is nothing to hot-swap and no git
+  range to classify. Release-mode `update` therefore skips preflight and
+  force-colds through the SAME `deploy_common.sh` cold path (pull image →
+  migrate → `rm -f` + `run -d` recreate). Hot-on-image is **#503 unit E** — the
+  issue permits shipping cold-only "as a finding, not a silent drift", so it is
+  written down here + in every operator doc rather than quietly omitted.
+
+- **Secret model (vjt fork C).** The four random secrets (`SECRET_KEY_BASE`,
+  `SECRET_SIGNING_SALT`, `GRAPPA_ENCRYPTION_KEY`, `RELEASE_COOKIE`) are minted
+  on the host with `openssl`. The VAPID keypair is minted by the IMAGE's own
+  `:crypto` via `docker run … eval` (raw P-256 ECDH point + base64url,
+  mirroring `mix grappa.gen_vapid` EXACTLY — the release image has no `mix` to
+  reuse the task, and host openssl cannot safely reproduce a raw P-256 point).
+  Kept shell-only deliberately: an Elixir change would drag a COMPILE lane into
+  a shell-only unit. A code comment cross-refs the task so the two stay in sync.
+
+- **The VAPID gen container needs a THROWAWAY env; the migrate container needs
+  the REAL one.** `config/runtime.exs` (prod) RAISES on any missing prod var,
+  and `bin/grappa eval` runs `runtime.exs`. So the VAPID `eval` gets a throwaway
+  0600 `--env-file` (the real four secrets + placeholder `VAPID_*` +
+  `DATABASE_PATH=/tmp/…`) purely to get PAST the raises — it prints a fresh
+  keypair and never starts the Repo. The MIGRATE `eval`
+  (`Grappa.Release.migrate()`) gets the FULL real env-file + the data volume.
+  Conflating the two (throwaway env for migrate) would migrate a throwaway DB.
+
+- **No secret on argv or stdout; idempotent env file.** Secrets are generated
+  into shell vars / a 0600 `--env-file`, never a CLI arg (`ps`-visible) and
+  never echoed. `umask 077` precedes every create so the file is never
+  world-readable for even an instant. The prod env file
+  (`$GRAPPA_HOME/grappa.env`, mode 0600) is written ONCE and NEVER regenerated
+  on an existing box — rotating `SECRET_KEY_BASE`/`GRAPPA_ENCRYPTION_KEY` under
+  a live box invalidates every session + makes Cloak-encrypted creds
+  undecryptable. `install` on an existing box reuses it untouched (the guard the
+  whole design is built around).
+
+- **`PHX_HOST` is asked on `/dev/tty`, never silently defaulted.** A
+  `curl … | bash` one-liner binds stdin to the SCRIPT, so a bare `read` would
+  eat the script text (or hit EOF). The prompt goes to stderr (still reaches the
+  terminal behind a pipe) and the answer is read from `$GRAPPA_TTY` (default
+  `/dev/tty`). `PHX_HOST=…` in the env skips the prompt (the piped
+  non-interactive path). With neither a value nor a usable tty it FAILS LOUD
+  with the exact fix — a wrong `PHX_HOST` mints dead upload links + rejects
+  every WebSocket handshake on Origin (#468), so a silent `localhost` fallback
+  is worse than an abort.
+
+- **`get.sh` is a thin POSIX-sh bootstrap, separate from `deploy.sh`.**
+  Bootstrap has a different runtime contract: piped to a shell with no repo, no
+  `deploy.sh` yet. `get.sh` mirrors the two files the release path needs
+  (`infra/docker/deploy.sh` + the `infra/lib/deploy_common.sh` it SOURCES via
+  `$SELF_DIR/../lib/…`, so the mirror MUST reproduce that relative shape) into
+  `$GRAPPA_HOME`, then `exec`s `deploy.sh` in forced release mode with the
+  requested verb (default bare). Download-to-temp-then-move so a failed fetch
+  never strands a half-written executable; curl-absent + fetch-failure both fail
+  loud before any hand-off. It is POSIX sh (linted `shellcheck -s sh` + `dash
+  -n` alongside `deploy_common.sh`) so it runs under whatever `| bash` / `| sh`
+  the operator pipes it to. `GRAPPA_RAW_BASE` overrides the origin for a
+  fork/branch.
+
+- **State + knobs.** `$GRAPPA_HOME` (default `~/.grappa`) holds the env file +
+  the get.sh-mirrored shell files; the sqlite DB + uploads live on a named
+  docker volume (`grappa-data` → `/data`). Overridable: `GRAPPA_IMAGE` (default
+  `ghcr.io/vjt/grappa:latest`), `GRAPPA_PUBLISH` (default `127.0.0.1:4000`),
+  `GRAPPA_CONTAINER`, `GRAPPA_DATA_VOLUME`. One box per host on the container
+  name (parallels source-mode's ownership guard).
+
+**Verification is PENDING the v0.9.0 tag.** The `docker` release job is
+tag-driven with ZERO prior real runs and ghcr has no grappa image yet, so unit
+D was built + shell-tested against the image's SHAPE (bats stub the daemon;
+`shellcheck`/`dash` gate the shell). A `docker run` of the REAL published image
+is verified after the tag cuts — local shell tests are NOT published-image
+verification.
+
+**Apply:** a NEW prod secret must be added to BOTH the throwaway VAPID-gen
+env-file (as a placeholder, to clear the `runtime.exs` raise) AND the real
+`grappa.env` writer; a NEW release-image verb hook goes on the `_release`
+sibling, never by teaching the source-mode hook two behaviours. If the VAPID
+`eval` string changes, update the bats fake-docker `*generate_key*` match in
+lockstep (it is the only stdout the installer parses).

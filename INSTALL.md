@@ -20,7 +20,9 @@ to run grappa yourself.
 
 - **Docker Engine** with the **Compose v2** plugin (`docker compose
   version` works).
-- **git**, and a clone of this repository.
+- **git**, and a clone of this repository — for the **from-source** path
+  below. The [pre-built image path](#prefer-a-pre-built-image-over-compiling)
+  needs neither: just Docker + `curl`.
 - ~2 GB free disk and RAM for the build.
 - A free TCP port **3000** on localhost (change it with `HTTP_BIND`, see
   below).
@@ -65,12 +67,53 @@ ghcr.io/vjt/grappa:<tag>     # e.g. :v0.8.0, or :latest
 ```
 
 It bundles the Erlang release + the cicchetto SPA and boots on its own — no
-source, no build toolchain. It is a **release** image, so it has **no
-`Phoenix.CodeReloader`**: it is a runtime, not the hot-edit dev environment.
-The Docker Compose stack (this document's clone-and-build path) remains the
-development runtime. See `docs/OPERATIONS.md` for how the image is built and
-published; the `docker run` bring-up + `curl | bash` one-liners for it land with
-the release-image install path (#503 unit D).
+source, no build toolchain, no `git`, no compile. It is a **release** image, so
+it has **no `Phoenix.CodeReloader`**: it is a runtime, not the hot-edit dev
+environment. The Docker Compose stack (this document's clone-and-build path)
+remains the development runtime.
+
+**One-line install** — on a host with only Docker + `curl` (no clone):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vjt/grappa-irc/main/infra/docker/get.sh | bash
+```
+
+`get.sh` downloads two shell files into `$GRAPPA_HOME` (default `~/.grappa`)
+and hands off to `infra/docker/deploy.sh` in release mode. That `install`:
+
+- pulls `ghcr.io/vjt/grappa:latest` (override with `GRAPPA_IMAGE=…`);
+- **asks for `PHX_HOST`** — the public hostname upload links + origin checks
+  come from. A piped one-liner reads the answer from your terminal, not the
+  pipe; set `PHX_HOST=…` before the `curl` to skip the prompt. There is **no
+  silent `localhost` fallback** — a wrong `PHX_HOST` mints dead links (#468);
+- generates every production secret into `$GRAPPA_HOME/grappa.env` (mode
+  `0600` — **back it up**, it holds `GRAPPA_ENCRYPTION_KEY`), never regenerating
+  it on an existing box;
+- migrates, then `docker run -d` the container (name `grappa`, published on
+  `127.0.0.1:4000` — override with `GRAPPA_PUBLISH=…`), with the sqlite DB and
+  uploads on a named volume (`grappa-data`).
+
+Front it with your own TLS front door exactly as the from-source path does
+(the container serves plain HTTP + owns its own CSP; #485).
+
+#### Updating an image box is always COLD
+
+The release image ships no `CodeReloader`, so there is nothing to hot-swap: an
+update **pulls a newer image and recreates the container** (sessions drop for
+the few seconds of the recreate; the DB + uploads on the volume are untouched).
+`deploy.sh`'s banner always reads *cold* on this path — hot-on-image is a
+future increment (#503 unit E).
+
+```sh
+# from anywhere, via the same bootstrap:
+curl -fsSL https://raw.githubusercontent.com/vjt/grappa-irc/main/infra/docker/get.sh | bash -s -- update
+# or, on a box already bootstrapped (deploy.sh lives under $GRAPPA_HOME):
+~/.grappa/infra/docker/deploy.sh update
+```
+
+`stop` removes the container but keeps the volume; `stop --volumes` also drops
+the data volume (destroys the DB). See `docs/OPERATIONS.md` for the full
+image runbook and how the image is built and published.
 
 ### What the script does
 
