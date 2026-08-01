@@ -18,6 +18,7 @@
 #include <openssl/buffer.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <openssl/sha.h>
 #include <openssl/ssl.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -3797,11 +3798,50 @@ static bool login(struct app *app, const char *identifier, const char *password)
     return true;
 }
 
-static unsigned long token_key_hash(const char *server, const char *identifier) {
+/* The name of an identity's private state: its cached token, and its
+ * bot directory of notes and grants.
+ *
+ * SHA-256, truncated to 16 hex characters. djb2 was doing this job, and
+ * djb2 is a hash for spreading strings across buckets, not for telling
+ * two of them apart on purpose: a collision here would hand one
+ * identity's bearer token, notes and standing grants to another. Nothing
+ * about a single user's two or three logins makes that likely, and
+ * nothing about it makes a non-cryptographic hash the right tool for
+ * naming a secret either. The digest is already linked in.
+ *
+ * 16 hex characters keeps the paths short enough to read in a directory
+ * listing while leaving a collision out of reach. */
+static void token_key_hash(const char *server, const char *identifier, char *out, size_t out_sz) {
+    char *key = xasprintf("%s|%s", server, identifier);
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    SHA256((const unsigned char *)key, strlen(key), digest);
+    free(key);
+    size_t n = 0;
+    for (size_t i = 0; i < 8 && n + 2 < out_sz; i++) n += (size_t)snprintf(out + n, out_sz - n, "%02x", digest[i]);
+}
+
+/* What the same identity was called before the digest replaced djb2.
+ *
+ * Kept only so the state written under the old name can be MOVED to the
+ * new one on first use. Without that, upgrading would silently log
+ * everyone out and orphan every bot directory — the notes and grants
+ * would still be on disk, under a name nothing looks for any more. */
+static unsigned long token_key_hash_legacy(const char *server, const char *identifier) {
     char *key = xasprintf("%s|%s", server, identifier);
     unsigned long h = djb2(key);
     free(key);
     return h;
+}
+
+/* Move `legacy` to `current` if the new name has nothing and the old one
+ * does. rename() is atomic and works for a file or a directory, and a
+ * failure is not worth reporting: the caller then simply starts fresh,
+ * which is what would have happened without this at all. */
+static void migrate_identity_path(const char *legacy, const char *current) {
+    struct stat st;
+    if (stat(current, &st) == 0) return;
+    if (stat(legacy, &st) != 0) return;
+    (void)!rename(legacy, current);
 }
 
 /* The directory this client owns on the machine, created on demand.
@@ -3823,7 +3863,13 @@ static char *shottino_state_dir(void) {
 
 static char *token_path_for(const char *server, const char *identifier) {
     char *dir = shottino_state_dir();
-    char *path = xasprintf("%s/%lx.token", dir, token_key_hash(server, identifier));
+    char key[32];
+    token_key_hash(server, identifier, key, sizeof(key));
+    char *path = xasprintf("%s/%s.token", dir, key);
+    /* The same identity under its old name, moved across on first use. */
+    char *legacy = xasprintf("%s/%lx.token", dir, token_key_hash_legacy(server, identifier));
+    migrate_identity_path(legacy, path);
+    free(legacy);
     free(dir);
     return path;
 }
@@ -7473,8 +7519,15 @@ static void bot_dir_path(struct app *app, char *out, size_t out_sz) {
     /* Same key as token_path_for: one identity, one directory. Before
      * login there is no subject yet, and the bot cannot run without one
      * anyway — the url alone still separates two bouncers. */
-    snprintf(out, out_sz, "%s/bot-%lx", state,
-             token_key_hash(app->url.base, app->subject[0] ? app->subject : "anonymous"));
+    const char *who = app->subject[0] ? app->subject : "anonymous";
+    char key[32];
+    token_key_hash(app->url.base, who, key, sizeof(key));
+    snprintf(out, out_sz, "%s/bot-%s", state, key);
+    /* The notes and grants written under the old name follow the
+     * identity across rather than being orphaned by the upgrade. */
+    char *legacy = xasprintf("%s/bot-%lx", state, token_key_hash_legacy(app->url.base, who));
+    migrate_identity_path(legacy, out);
+    free(legacy);
     free(state);
 }
 

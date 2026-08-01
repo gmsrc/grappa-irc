@@ -1405,6 +1405,67 @@ static void identify(struct app *app, const char *nick, const char *account) {
     w->registered = true;
 }
 
+/* An identity's private state follows it across the hash change.
+ *
+ * The token cache and the bot directory are named after a digest of
+ * (server, identity). That name used to come from djb2 — a hash for
+ * spreading strings across buckets, not for telling them apart on
+ * purpose, and a collision would hand one identity's bearer token,
+ * notes and standing grants to another. Replacing it renames every
+ * path, so the old name is looked up once and MOVED: without that,
+ * upgrading would log everyone out and orphan every bot directory,
+ * leaving the notes on disk under a name nothing looks for. */
+TEST(an_identity_keeps_its_notes_across_the_rename) {
+    char home[] = "/tmp/shottino-migrate-XXXXXX";
+    CHECK(mkdtemp(home) != NULL);
+    char *old_home = getenv("HOME");
+    char *saved = old_home ? strdup(old_home) : NULL;
+    setenv("HOME", home, 1);
+
+    struct app *app = window_app();
+    snprintf(app->url.base, sizeof(app->url.base), "https://grappa.example.net");
+    snprintf(app->subject, sizeof(app->subject), "user:vjt");
+
+    /* A bot directory written under the OLD name, with a note in it. */
+    char *state = shottino_state_dir();
+    char legacy[512];
+    snprintf(legacy, sizeof(legacy), "%s/bot-%lx", state,
+             token_key_hash_legacy(app->url.base, app->subject));
+    CHECK(mkdir(legacy, 0700) == 0);
+    char note[640];
+    snprintf(note, sizeof(note), "%s/grants", legacy);
+    FILE *f = fopen(note, "w");
+    CHECK(f != NULL);
+    if (f) { fputs("alice alice_ send_message\n", f); fclose(f); }
+
+    /* Asking for the directory moves it. */
+    char now[LLM_MAX_PATH];
+    bot_dir_path(app, now, sizeof(now));
+    CHECK(strcmp(now, legacy) != 0); /* it really did change name */
+    struct stat st;
+    CHECK(stat(now, &st) == 0);
+    CHECK(stat(legacy, &st) != 0);   /* and the old one is gone, not copied */
+
+    /* The grant inside came with it. */
+    bot_grants_load(app);
+    CHECK_LONG(app->bot_grant_count, 1);
+
+    /* Asking again is a no-op rather than a second move. */
+    char again[LLM_MAX_PATH];
+    bot_dir_path(app, again, sizeof(again));
+    CHECK_STR(again, now);
+
+    char rm[640];
+    snprintf(rm, sizeof(rm), "%s/grants", now);
+    unlink(rm);
+    rmdir(now);
+    free(state);
+    free_app(app);
+    if (saved) setenv("HOME", saved, 1);
+    else unsetenv("HOME");
+    free(saved);
+}
+
 TEST(a_standing_grant_survives_a_restart) {
     char dir[] = "/tmp/shottino-grants-test-XXXXXX";
     CHECK(mkdtemp(dir) != NULL);
@@ -1887,6 +1948,7 @@ int main(void) {
     RUN(retiring_an_echo_moves_every_row_not_just_its_text);
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);
+    RUN(an_identity_keeps_its_notes_across_the_rename);
     RUN(a_standing_grant_survives_a_restart);
     RUN(a_truncated_string_keeps_only_whole_characters);
     RUN(a_command_refuses_what_it_cannot_do);
