@@ -919,6 +919,13 @@ struct app {
      * join channels. */
     struct bot_grant {
         char nick[MAX_CHANNEL];
+        /* The services ACCOUNT the grant was given to, and the thing it
+         * is really keyed on. A nick is borrowed furniture: the person
+         * you approved can drop it, and the next person to take it
+         * inherited a standing permission nobody meant to give them.
+         * Empty means the grant was given to somebody not identified to
+         * services — it lasts the session and is never written down. */
+        char account[MAX_CHANNEL];
         char tool[64];
     } bot_grants[32];
     size_t bot_grant_count;
@@ -6972,6 +6979,30 @@ static char *llm_call_claude_cli(struct app *app, const struct llm_config *cfg,
  * Unverifiable means NOT the owner. The bot then answers only this
  * shottino's own input line, which is the one channel nobody on the
  * network can reach. */
+/* The services ACCOUNT a nick is currently identified as, or "" when it
+ * is not identified at all.
+ *
+ * Answered from the WHOIS cache, which is the only thing here that has
+ * ever asked the network who somebody is. A nick alone proves nothing:
+ * it can be dropped and taken, and on most networks will be. */
+static void bot_sender_account(struct app *app, const char *nick, char *out, size_t out_sz) {
+    out[0] = 0;
+    if (!nick || !nick[0]) return;
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->whois_cache_count; i++) {
+        if (!irc_name_eq(app->whois_cache[i].nick, nick)) continue;
+        if (app->whois_cache[i].account[0])
+            snprintf(out, out_sz, "%s", app->whois_cache[i].account);
+        else if (app->whois_cache[i].registered)
+            /* Identified, but the network told us so without naming an
+             * account (a +r flag rather than an account-name reply).
+             * The nick IS the account there. */
+            snprintf(out, out_sz, "%s", app->whois_cache[i].nick);
+        break;
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
 static bool bot_sender_is_owner(struct app *app, const char *network, const char *nick) {
     if (!app->bot_owner[0] || !nick || !nick[0]) return false;
     if (!irc_name_eq(app->bot_owner, nick)) return false;
@@ -6993,11 +7024,34 @@ static bool bot_sender_is_owner(struct app *app, const char *network, const char
     return authed;
 }
 
+/* Does a standing grant cover this (person, tool)?
+ *
+ * The nick must match AND the person must still be the same person. A
+ * grant carries the services account it was given to, and it applies
+ * only while the nick is identified as that account again — otherwise
+ * approving `alice` once meant approving whoever holds the nick `alice`
+ * weeks later, which on a network where nicks expire is a different
+ * human being with the owner's standing permission.
+ *
+ * A grant with no account (given to somebody unidentified) is
+ * session-only and never written to disk, so the worst it can do is
+ * outlive the conversation it was given in. */
 static bool bot_has_grant(struct app *app, const char *nick, const char *tool) {
-    for (size_t i = 0; i < app->bot_grant_count; i++)
-        if (irc_name_eq(app->bot_grants[i].nick, nick) &&
-            strcmp(app->bot_grants[i].tool, tool) == 0)
-            return true;
+    char account[MAX_CHANNEL];
+    bot_sender_account(app, nick, account, sizeof(account));
+    for (size_t i = 0; i < app->bot_grant_count; i++) {
+        const struct bot_grant *g = &app->bot_grants[i];
+        if (!irc_name_eq(g->nick, nick) || strcmp(g->tool, tool) != 0) continue;
+        if (g->account[0]) {
+            if (account[0] && irc_name_eq(g->account, account)) return true;
+            continue;
+        }
+        /* Given to an unidentified nick: it covers an unidentified nick
+         * only. Somebody who has since identified is a different case
+         * and should be asked once, so the grant can be recorded
+         * properly. */
+        if (!account[0]) return true;
+    }
     return false;
 }
 
@@ -7035,10 +7089,15 @@ static void bot_grants_save(struct app *app) {
         log_line(app, "/bot: cannot save the grants to %s", path);
         return;
     }
-    fprintf(f, "# shottino /bot grants: one `nick tool` per line.\n"
-               "# Each line lets that person use that tool without being asked.\n");
-    for (size_t i = 0; i < app->bot_grant_count; i++)
-        fprintf(f, "%s %s\n", app->bot_grants[i].nick, app->bot_grants[i].tool);
+    fprintf(f, "# shottino /bot grants: one `nick account tool` per line.\n"
+               "# Each line lets that person use that tool without being asked —\n"
+               "# but only while that nick is identified to services as that account.\n");
+    for (size_t i = 0; i < app->bot_grant_count; i++) {
+        /* Session-only grants are not written: see bot_grant_add. */
+        if (!app->bot_grants[i].account[0]) continue;
+        fprintf(f, "%s %s %s\n", app->bot_grants[i].nick, app->bot_grants[i].account,
+                app->bot_grants[i].tool);
+    }
     fclose(f);
     chmod(tmp, 0600);
     if (rename(tmp, path) != 0) {
@@ -7054,16 +7113,25 @@ static void bot_grants_load(struct app *app) {
     if (!f) return;
     app->bot_grant_count = 0;
     char line[256];
-    size_t dropped = 0;
+    size_t dropped = 0, dropped_old = 0;
     while (fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\r\n")] = 0;
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
         if (!*p || *p == '#') continue;
-        char nick[MAX_CHANNEL];
-        const char *tool = split_head(p, nick, sizeof(nick));
+        char nick[MAX_CHANNEL], account[MAX_CHANNEL];
+        const char *rest = split_head(p, nick, sizeof(nick));
+        while (*rest == ' ') rest++;
+        const char *tool = split_head(rest, account, sizeof(account));
         while (*tool == ' ') tool++;
-        if (!nick[0] || !*tool) continue;
+        /* Two fields is the OLD format, where a grant was keyed on a
+         * bare nick. Those are exactly the ones that could be inherited
+         * by whoever holds the nick now, so they are dropped rather than
+         * migrated — a permission is not something to guess about. */
+        if (!nick[0] || !account[0] || !*tool) {
+            if (nick[0]) dropped_old++;
+            continue;
+        }
         /* A tool this build no longer has cannot be granted: keeping the
          * line would show the owner an authorisation that authorises
          * nothing. */
@@ -7074,6 +7142,7 @@ static void bot_grants_load(struct app *app) {
         if (app->bot_grant_count >= sizeof(app->bot_grants) / sizeof(app->bot_grants[0])) break;
         struct bot_grant *g = &app->bot_grants[app->bot_grant_count++];
         snprintf(g->nick, sizeof(g->nick), "%s", nick);
+        snprintf(g->account, sizeof(g->account), "%s", account);
         /* Bounded explicitly: `tool` is a line off disk, and the grant
          * slot is smaller than a line. It matched llm_tool_by_name
          * above, so anything longer than the slot cannot be a real tool
@@ -7085,18 +7154,33 @@ static void bot_grants_load(struct app *app) {
     if (dropped)
         log_line(app, "/bot: dropped %zu grant(s) naming a tool this build does not have",
                  dropped);
+    if (dropped_old)
+        log_line(app, "/bot: dropped %zu grant(s) written before grants were bound to a "
+                      "services account — approve those people again to restore them",
+                 dropped_old);
 }
 
-static void bot_grant_add(struct app *app, const char *nick, const char *tool) {
-    if (bot_has_grant(app, nick, tool)) return;
+/* Returns true when the grant will OUTLIVE the session (it was bound to
+ * a services account and written down), so the caller can say which kind
+ * of promise the owner just made. */
+static bool bot_grant_add(struct app *app, const char *nick, const char *tool) {
+    if (bot_has_grant(app, nick, tool)) return false;
     if (app->bot_grant_count >= sizeof(app->bot_grants) / sizeof(app->bot_grants[0])) {
         log_line(app, "/bot: the grant list is full — /bot revoke something first");
-        return;
+        return false;
     }
+    char account[MAX_CHANNEL];
+    bot_sender_account(app, nick, account, sizeof(account));
     struct bot_grant *g = &app->bot_grants[app->bot_grant_count++];
     snprintf(g->nick, sizeof(g->nick), "%s", nick);
+    snprintf(g->account, sizeof(g->account), "%s", account);
     snprintf(g->tool, sizeof(g->tool), "%s", tool);
-    bot_grants_save(app);
+    /* Only an account-bound grant is persisted. Writing down a promise
+     * made to a bare nick would hand it to whoever holds that nick when
+     * the file is next read, which may be months and one nick expiry
+     * later. */
+    if (account[0]) bot_grants_save(app);
+    return account[0] != 0;
 }
 
 /* The window a private reply lands in. Client-LOCAL and deliberately so:
@@ -12592,8 +12676,17 @@ static void handle_command_dispatch(struct app *app, char *line) {
         } else if (!pending) {
             log_line(app, "/approve: nothing is waiting");
         } else if (always) {
-            bot_grant_add(app, nick, tool);
-            log_line(app, "approved — and %s may use %s from now on without asking", nick, tool);
+            /* Which kind of promise it turned out to be is said out
+             * loud: "always" means something different for somebody
+             * services can vouch for than for a bare nick, and the owner
+             * is the one who has to know which they just gave. */
+            bool lasting = bot_grant_add(app, nick, tool);
+            if (lasting)
+                log_line(app, "approved — and %s may use %s from now on without asking", nick, tool);
+            else
+                log_line(app, "approved — and %s may use %s without asking FOR THIS SESSION: "
+                              "they are not identified to services, so the permission is not "
+                              "written down and cannot follow the nick", nick, tool);
         } else {
             log_line(app, "approved, this once");
         }
@@ -12713,8 +12806,11 @@ static void handle_command_dispatch(struct app *app, char *line) {
             } else if (!llm_tool_by_name(tool)) {
                 log_line(app, "/bot: no such tool `%.40s`", tool);
             } else if (strcmp(verb, "grant") == 0) {
-                bot_grant_add(app, who, tool);
-                log_line(app, "%s may use %s without asking", who, tool);
+                bool lasting = bot_grant_add(app, who, tool);
+                log_line(app, lasting ? "%s may use %s without asking"
+                                      : "%s may use %s without asking, for this session only "
+                                        "(not identified to services)",
+                         who, tool);
             } else {
                 for (size_t i = 0; i < app->bot_grant_count; i++) {
                     if (!irc_name_eq(app->bot_grants[i].nick, who) ||

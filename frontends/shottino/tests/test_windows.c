@@ -1388,21 +1388,43 @@ TEST(a_preference_survives_a_restart) {
     free(saved);
 }
 
+/* A standing grant belongs to a PERSON, not to a nick.
+ *
+ * A nick is borrowed furniture: the person you approved can drop it and
+ * the next person to take it inherits the permission. So a grant carries
+ * the services account it was given to and applies only while that nick
+ * is identified as that account again — and a grant given to somebody
+ * services cannot vouch for is never written down at all, because a
+ * promise made to a bare nick would be handed to whoever holds it when
+ * the file is next read.
+ */
+static void identify(struct app *app, const char *nick, const char *account) {
+    struct whois_fact *w = &app->whois_cache[app->whois_cache_count++];
+    snprintf(w->nick, sizeof(w->nick), "%s", nick);
+    snprintf(w->account, sizeof(w->account), "%s", account);
+    w->registered = true;
+}
+
 TEST(a_standing_grant_survives_a_restart) {
     char dir[] = "/tmp/shottino-grants-test-XXXXXX";
     CHECK(mkdtemp(dir) != NULL);
 
     struct app *a = window_app();
     snprintf(a->bot_dir, sizeof(a->bot_dir), "%s", dir);
-    bot_grant_add(a, "alice", "send_message");
-    bot_grant_add(a, "bob", "join_channel");
-    CHECK(a->bot_grant_count == 2);
+    identify(a, "alice", "alice_");
+    identify(a, "bob", "bob_");
+    CHECK(bot_grant_add(a, "alice", "send_message"));
+    CHECK(bot_grant_add(a, "bob", "join_channel"));
+    CHECK_LONG(a->bot_grant_count, 2);
 
-    /* A second client, same identity: it reads what the first wrote. */
+    /* A second client, same identity: it reads what the first wrote —
+     * and must know the same people, or it cannot honour the grants. */
     struct app *b = window_app();
     snprintf(b->bot_dir, sizeof(b->bot_dir), "%s", dir);
+    identify(b, "alice", "alice_");
+    identify(b, "bob", "bob_");
     bot_grants_load(b);
-    CHECK(b->bot_grant_count == 2);
+    CHECK_LONG(b->bot_grant_count, 2);
     CHECK(bot_has_grant(b, "alice", "send_message"));
     CHECK(bot_has_grant(b, "bob", "join_channel"));
     /* Still per PAIR after a round trip — the property that matters. */
@@ -1410,6 +1432,20 @@ TEST(a_standing_grant_survives_a_restart) {
     CHECK(!bot_has_grant(b, "bob", "send_message"));
     /* And still a nick MATCH, not a spelling. */
     CHECK(bot_has_grant(b, "ALICE", "send_message"));
+
+    /* THE POINT: somebody else holding the nick inherits nothing. */
+    struct app *imposter = window_app();
+    snprintf(imposter->bot_dir, sizeof(imposter->bot_dir), "%s", dir);
+    identify(imposter, "alice", "someone_else");
+    bot_grants_load(imposter);
+    CHECK_LONG(imposter->bot_grant_count, 2);
+    CHECK(!bot_has_grant(imposter, "alice", "send_message"));
+
+    /* And so does somebody holding it while identified to nobody. */
+    struct app *stranger = window_app();
+    snprintf(stranger->bot_dir, sizeof(stranger->bot_dir), "%s", dir);
+    bot_grants_load(stranger);
+    CHECK(!bot_has_grant(stranger, "alice", "send_message"));
 
     /* A revoke reaches the file too, or the grant comes back tomorrow. */
     for (size_t i = 0; i < a->bot_grant_count; i++) {
@@ -1422,25 +1458,52 @@ TEST(a_standing_grant_survives_a_restart) {
     bot_grants_save(a);
     struct app *c = window_app();
     snprintf(c->bot_dir, sizeof(c->bot_dir), "%s", dir);
+    identify(c, "bob", "bob_");
     bot_grants_load(c);
-    CHECK(c->bot_grant_count == 1);
-    CHECK(!bot_has_grant(c, "alice", "send_message"));
+    CHECK_LONG(c->bot_grant_count, 1);
     CHECK(bot_has_grant(c, "bob", "join_channel"));
+
+    /* A grant to somebody services cannot vouch for lasts the session
+     * and is NOT written down. */
+    struct app *e = window_app();
+    snprintf(e->bot_dir, sizeof(e->bot_dir), "%s", dir);
+    CHECK(!bot_grant_add(e, "mallory", "names"));   /* false: not lasting */
+    CHECK(bot_has_grant(e, "mallory", "names"));    /* but honoured here */
+    bot_grants_save(e);
+    struct app *f = window_app();
+    snprintf(f->bot_dir, sizeof(f->bot_dir), "%s", dir);
+    bot_grants_load(f);
+    CHECK(!bot_has_grant(f, "mallory", "names"));
 
     /* A line naming a tool this build does not have authorises nothing,
      * so it must not be shown as an authorisation. */
     char path[512];
     snprintf(path, sizeof(path), "%s/grants", dir);
-    FILE *f = fopen(path, "w");
-    CHECK(f != NULL);
-    fprintf(f, "# comment\n\nmallory rm_minus_rf\ncarol names\n");
-    fclose(f);
+    FILE *fp = fopen(path, "w");
+    CHECK(fp != NULL);
+    fprintf(fp, "# comment\n\nmallory mallory_ rm_minus_rf\ncarol carol_ names\n");
+    fclose(fp);
     struct app *d = window_app();
     snprintf(d->bot_dir, sizeof(d->bot_dir), "%s", dir);
+    identify(d, "carol", "carol_");
     bot_grants_load(d);
-    CHECK(d->bot_grant_count == 1);
+    CHECK_LONG(d->bot_grant_count, 1);
     CHECK(bot_has_grant(d, "carol", "names"));
     CHECK(!bot_has_grant(d, "mallory", "rm_minus_rf"));
+
+    /* And a line in the OLD two-field format — a grant keyed on a bare
+     * nick — is dropped rather than migrated: those are exactly the ones
+     * that could be inherited. */
+    fp = fopen(path, "w");
+    CHECK(fp != NULL);
+    fprintf(fp, "carol names\n");
+    fclose(fp);
+    struct app *g = window_app();
+    snprintf(g->bot_dir, sizeof(g->bot_dir), "%s", dir);
+    identify(g, "carol", "carol_");
+    bot_grants_load(g);
+    CHECK_LONG(g->bot_grant_count, 0);
+    CHECK(log_has(g, "written before grants were bound"));
 
     unlink(path);
     rmdir(dir);
@@ -1450,20 +1513,12 @@ TEST(a_standing_grant_survives_a_restart) {
     free_app(b);
     free_app(c);
     free_app(d);
+    free_app(e);
+    free_app(f);
+    free_app(g);
+    free_app(imposter);
+    free_app(stranger);
 }
-
-/* Tab-completion appends a space to the verb it inserts. 36 arms of the
- * dispatcher match with an exact strcmp, so every argument-less verb in
- * the client used to answer "unknown command: /video" — with an
- * invisible space in it, which is what made the message look like a lie.
- *
- * Driven through handle_command, the door every keystroke and every
- * alias goes through, so this covers verbs nobody has written yet. */
-/* A bounded copy must not end in half a character.
- *
- * snprintf truncates by BYTES, so a transcript longer than the input
- * line ended mid-sequence — invalid UTF-8, and it went on the wire that
- * way when the user pressed Enter. */
 TEST(a_truncated_string_keeps_only_whole_characters) {
     char s[16];
 

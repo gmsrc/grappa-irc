@@ -467,7 +467,16 @@ in `llm.h`, next to the code that has to obey it.
   Grants **persist**, in the same per-identity directory as the notes, mode
   0600: an "always" that forgets at the next restart is not a grant but a
   longer session, and one the owner must re-answer every morning is one they
-  learn to answer by reflex. `/bot on` and the owner deliberately do **not**
+  learn to answer by reflex.
+- **A grant belongs to a person, not to a nick.** It carries the services
+  account it was given to and applies only while that nick is identified as
+  that account again — the same rule the owner check follows, and for the same
+  reason: a nick is borrowed furniture, and approving `alice` once must not
+  approve whoever holds `alice` after it expires. A grant given to somebody
+  services cannot vouch for is honoured **for the session only** and never
+  written down; `/approve always` says which of the two you just gave. Grants
+  written before this rule existed are dropped on load rather than migrated,
+  with a line saying so — those are exactly the ones that could be inherited. `/bot on` and the owner deliberately do **not**
   persist — a client that starts up already answering the network, to a nick
   it decided was the owner before any WHOIS could confirm it, is not something
   anyone asked for.
