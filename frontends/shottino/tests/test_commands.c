@@ -100,7 +100,13 @@ static void scan(const char *needle) {
          * commands[] entry and needs no second buffer to compare. */
         char verb[VERB_MAX] = "/";
         size_t n = 1;
-        while (*q && islower((unsigned char)*q) && n + 1 < sizeof(verb)) verb[n++] = *q++;
+        /* Lowercase and the hyphen: /preview-ascii is a verb, and a scan
+         * that stopped at the '-' harvested "/preview" and then threw it
+         * away for not ending at a quote — so the one verb missing from
+         * the completion table was also the one verb this suite could
+         * not see. */
+        while (*q && (islower((unsigned char)*q) || *q == '-') && n + 1 < sizeof(verb))
+            verb[n++] = *q++;
         verb[n] = '\0';
         /* A real verb ends at the quote, or at the space that separates it
          * from its arguments. Anything else was another literal's prefix. */

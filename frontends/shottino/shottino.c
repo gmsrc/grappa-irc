@@ -9561,7 +9561,8 @@ static const char *commands[] = {
     "/hilight", "/hs", "/ignore", "/info", "/invite", "/j", "/join", "/kb", "/keys", "/kick",
     "/kickban", "/kill", "/kline", "/links", "/list", "/llm", "/locops", "/lusers", "/me",
     "/media", "/members", "/mode", "/motd", "/mouse", "/ms", "/msg", "/names", "/nick",
-    "/notify", "/ns", "/op", "/open", "/oper", "/os", "/part", "/ping", "/preview", "/q",
+    "/notify", "/ns", "/op", "/open", "/oper", "/os", "/part", "/ping", "/preview",
+    "/preview-ascii", "/q",
     "/query", "/quit", "/quote", "/rehash", "/restart", "/rs", "/sconnect", "/set", "/settings",
     "/share", "/split", "/splith", "/splitv", "/splitw", "/squit", "/stats", "/stt", "/topic",
     "/trace",
@@ -10753,6 +10754,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "open") == 0) log_line(app, "/open — open the most recent URL using xdg-open (the browser: the handler comes from the scheme)");
     else if (strcmp(cmd, "view") == 0) log_line(app, "/view [url] — download it and open the desktop viewer for that file TYPE; an audio URL PLAYS instead (mpv/ffplay); bare /view offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
+    else if (strcmp(cmd, "preview-ascii") == 0) log_line(app, "/preview-ascii [url] — the same preview, forced to colour character art: skips the terminal's graphics protocol, which is what to try when a picture renders as garbage or not at all");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
     else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "admin") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);
     else if (strcmp(cmd, "help") == 0) log_line(app, "/help [command] — bare /help lists every command by group; /help command explains one");
