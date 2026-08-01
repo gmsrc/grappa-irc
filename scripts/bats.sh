@@ -14,6 +14,7 @@
 # container is only invoked transitively when a test exercises a verb
 # that shells out to docker (those tests stub `docker` via PATH).
 
+# shellcheck source=scripts/_lib.sh
 . "$(dirname "$0")/_lib.sh"
 
 cd "$SRC_ROOT"
@@ -27,9 +28,14 @@ if [ ! -x "$bats_bin" ]; then
     # tree). Init it rather than making the operator run the incantation
     # by hand — mirrors the testnet.sh submodule auto-init pattern so
     # check.sh works first-try from any worktree.
+    # `-c protocol.file.allow=always` is REQUIRED, not cosmetic (#592): in a
+    # worktree git clones the submodule from the superproject's LOCAL module
+    # store over the file:// transport, which the CVE-2022-39253 mitigation
+    # blocks by default — without it a fresh worktree dies with
+    # `fatal: transport 'file' not allowed`.
     printf 'scripts/bats.sh: vendor/bats-core missing — initialising submodule...\n' >&2
-    git -C "$SRC_ROOT" submodule update --init vendor/bats-core >&2 \
-        || die "vendor/bats-core init failed. Run: git -C \"$SRC_ROOT\" submodule update --init vendor/bats-core"
+    git -C "$SRC_ROOT" -c protocol.file.allow=always submodule update --init vendor/bats-core >&2 \
+        || die "vendor/bats-core init failed. Run: git -C \"$SRC_ROOT\" -c protocol.file.allow=always submodule update --init vendor/bats-core"
 fi
 
 if [ ! -x "$bats_bin" ]; then

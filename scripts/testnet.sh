@@ -23,6 +23,7 @@
 
 set -euo pipefail
 
+# shellcheck source=scripts/_lib.sh
 . "$(dirname "$0")/_lib.sh"
 
 E2E_DIR="$SRC_ROOT/cicchetto/e2e"
@@ -41,9 +42,15 @@ if [ ! -d "$E2E_DIR/infra/bahamut" ]; then
     # Git worktrees do NOT inherit the parent checkout's submodules, so a
     # fresh worktree always lands here. Auto-init instead of dying on a
     # manual step everyone forgets — idempotent and a no-op once present.
+    # `-c protocol.file.allow=always` is REQUIRED, not cosmetic (#592): in a
+    # worktree git clones the submodule from the superproject's LOCAL module
+    # store ($REPO/.git/modules/…) over the file:// transport, which the
+    # CVE-2022-39253 mitigation blocks by default — without the flag every
+    # fresh worktree dies with `fatal: transport 'file' not allowed`, so the
+    # auto-init that exists precisely to spare the manual step never spared it.
     echo "testnet: azzurra-testnet submodule empty (fresh worktree?) — initialising…" >&2
-    git -C "$SRC_ROOT" submodule update --init cicchetto/e2e/infra >&2 \
-        || die "submodule auto-init failed — run: git -C '$SRC_ROOT' submodule update --init cicchetto/e2e/infra"
+    git -C "$SRC_ROOT" -c protocol.file.allow=always submodule update --init cicchetto/e2e/infra >&2 \
+        || die "submodule auto-init failed — run: git -C '$SRC_ROOT' -c protocol.file.allow=always submodule update --init cicchetto/e2e/infra"
     [ -d "$E2E_DIR/infra/bahamut" ] \
         || die "azzurra-testnet submodule still empty after init — check $E2E_DIR/infra"
 fi
