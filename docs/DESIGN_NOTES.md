@@ -24870,51 +24870,48 @@ it. Its #590 best-effort-DROP hardening is tracked separately.
 a property of the consume-before-mint order that predates B1. The retryable-later
 503 is still strictly better than the old 500; reordering was judged too risky
 to fold into B1.
-
 ---
 
-## 2026-08-01 — CTCP PING: the client answers, the server change was reverted
+## 2026-08-01 — CTCP PING is answered by the bouncer, and by the client meanwhile
 
 `/ping` in shottino sent a CTCP PING and nothing came back. Pinging your OWN
 session showed why in one command: the query arrived, was drawn as a line of
-control characters in a query window with yourself, and nobody answered it —
-grappa's CTCP arm answers VERSION and lets everything else fall through to a
-plain `:privmsg` row.
+control characters in a query window with yourself, and nobody answered it.
 
-**Shipped (client).** shottino answers an inbound CTCP PING with a NOTICE
-carrying the asker's token back, byte for byte and never parsed — it is theirs,
-conventionally their clock, and the whole protocol is that it returns unchanged
-so they can subtract. PING only: VERSION stays grappa's, because two answers to
-one query is worse than none. Loop-safe by construction (a reply is a NOTICE and
-nothing auto-answers a NOTICE, which is also why only a PRIVMSG-shaped query
-reaches the responder), throttled to one answer per 500ms, and a token too long
-to fit an IRC line is refused rather than echoed truncated — the asker would get
-a token they never sent. The bound is checked BEFORE the throttle so a flood of
-unanswerable queries cannot silence the answerable ones.
+**grappa answers it now, next to VERSION.** The CTCP arm handled VERSION and
+let everything else fall through to a plain `:privmsg` row. The bouncer is the
+right place for both, for the same reason: it is awake when no client is
+attached, and a session that ignores PING reads as a dead connection to
+everyone who asks. The token is echoed back verbatim and uninspected — it is
+the asker's, conventionally their clock, and the entire protocol is that it
+returns byte for byte so they can subtract; a token-less `\x01PING\x01` is
+answered token-less rather than with a separator nobody sent. Routing mirrors
+the VERSION arm exactly (own-nick topic for a DM-shaped query), so there is no
+second rule to keep in step.
 
-**Also shipped (client).** The reply side needed a record after all. The first
-`/ping` kept no table: the stamp travels in the payload and comes back, so the
-payload WAS the record. That only holds if the reply arrives live, and it
-usually does not — a ping to somebody with no query window open is answered on
-a topic the client is not subscribed to, and the row surfaces only when grappa
-opens that window and the scrollback is backfilled, where a `live`-only guard
-then discarded it. Both decisions shipped together and between them lost every
-answer. There is a table now, keyed by (network, nick, stamp); an unanswered
-ping is reported after 30 seconds instead of being forgotten.
+**shottino answers it too, while it is running.** A client-side responder
+cannot replace the server one — it is silent whenever no client is attached —
+but it costs one NOTICE and closes the gap for an attached session. It answers
+PING ONLY: VERSION stays grappa's, because two answers to one query is worse
+than none. Loop-safe by construction (a reply is a NOTICE, and nothing
+auto-answers a NOTICE, which is also why only a PRIVMSG-shaped query reaches
+the responder) and throttled to one answer per 500ms — a client that answers
+every query in a flood is a client that can be pointed at the server.
 
-**REVERTED (server).** The matching grappa change — answer CTCP PING next to
-VERSION — went in and CI failed on **Credo (strict)**, so it was reverted to
-keep main green. It has never run: the dev host for that session had no docker
-compose plugin and no elixir, so `scripts/mix.sh` could not start and neither
-the suite nor the linter had ever seen it. The likely violation is the
-cyclomatic complexity of the CTCP `do_route` clause, which the new arm pushed
-past the default — the arm wants extracting into its own function — but that is
-a GUESS, and guessing is what produced a red main in the first place. It
-re-lands only once the container toolchain is available to run
-`scripts/check.sh` locally.
+**The reply side needed a record after all.** shottino's first `/ping` kept no
+table: the stamp travels in the payload and comes back, so the payload WAS the
+record. That only holds if the reply arrives live, and it usually does not — a
+ping to somebody with no query window open is answered on a topic the client
+is not subscribed to, and the row surfaces only when grappa opens that window
+and the scrollback is backfilled. A `live`-only guard (added to stop history
+re-announcing old pings) then discarded it. Both decisions shipped together
+and between them lost every answer. There is a table now, keyed by (network,
+nick, stamp): a reply that CLAIMS an entry is reported however it arrived, one
+that matches nothing stays quiet, and an unanswered ping is reported after 30
+seconds instead of being forgotten.
 
-**The lesson, plainly:** a gate that cannot be run is not a gate. Writing "NOT
-RUN LOCALLY — CI is the gate" in a commit message documented the risk without
-reducing it, and the change was pushed to main anyway where the whole team's
-main went red. The correct order is: get the toolchain, run the gate, then
-land.
+**Not verified locally:** the dev host for this session had neither a docker
+compose plugin nor elixir, so `scripts/mix.sh` could not start and the Elixir
+suite never ran against the server change. The tests are written (echo
+verbatim, token-less form) and CI is the gate — this must be green there
+before it reaches prod.

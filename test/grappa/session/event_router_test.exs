@@ -502,6 +502,84 @@ defmodule Grappa.Session.EventRouterTest do
       assert attrs.body == "CTCP VERSION query → grappa #{version}"
     end
 
+    test "a CTCP-framed NOTICE lands on $server and mints no query window" do
+      state = base_state()
+
+      # The reply to a ping WE sent. It arrives as a NOTICE from a regular
+      # nick, which used to persist under that peer — and
+      # maybe_open_query_window then turned it into a query window, so
+      # pinging somebody left a tab open with them containing a row of
+      # control characters.
+      body = <<0x01, "PING 1753776000123", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
+
+      assert attrs.channel == "$server"
+      assert attrs.sender == "alice"
+
+      # dm_with is what `maybe_open_query_window/2` keys on (it prefers
+      # `dm_with` over `channel`), so a nil here is the assertion that no
+      # window is minted — not merely that the row went elsewhere.
+      assert attrs.dm_with == nil
+
+      # The body stays VERBATIM, framing included: a client recognises
+      # its own outstanding ping by the token it sent, and reports the
+      # round trip. Rewriting it to something human-readable here would
+      # make that impossible.
+      assert attrs.body == body
+    end
+
+    test "a plain NOTICE from a regular nick still lands in that peer's window" do
+      state = base_state()
+
+      # The carve-out above is for CTCP framing ONLY. An ordinary peer
+      # notice keeps its existing routing — whether THAT is right is
+      # #546/#548's question, not this change's.
+      m = msg(:notice, ["vjt", "just a notice"], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
+      assert attrs.channel == "alice"
+    end
+
+    test "PRIVMSG carrying CTCP PING echoes the asker's token back unchanged" do
+      state = base_state()
+
+      # The token is the ASKER's — conventionally their clock, but it is
+      # opaque to us: the whole protocol is that it comes back byte for
+      # byte so they can subtract. Parsing or regenerating it would
+      # report a round trip that never happened.
+      body = <<0x01, "PING 1753776000123", 0x01>>
+      m = msg(:privmsg, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _, [{:reply, line}, {:persist, :notice, attrs}]} =
+               EventRouter.route(m, state)
+
+      assert IO.iodata_to_binary(line) == "NOTICE alice :\x01PING 1753776000123\x01"
+
+      # Same routing as VERSION: the DM-shaped query persists on the
+      # own-nick topic so the row reaches a client that has no window
+      # with this peer open yet.
+      assert attrs.channel == "vjt"
+      assert attrs.sender == "alice"
+      assert attrs.body == "CTCP PING query → answered"
+    end
+
+    test "PRIVMSG carrying a token-less CTCP PING answers with an empty token" do
+      state = base_state()
+
+      # `\x01PING\x01` carries nothing to echo, so the answer carries
+      # nothing either — not a stray separator the asker never sent, and
+      # certainly not an invented token they would then subtract from.
+      body = <<0x01, "PING", 0x01>>
+      m = msg(:privmsg, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _, [{:reply, line}, {:persist, :notice, _}]} =
+               EventRouter.route(m, state)
+
+      assert IO.iodata_to_binary(line) == "NOTICE alice :\x01PING\x01"
+    end
+
     test "PRIVMSG carrying CTCP VERSION from a channel still replies to sender nick" do
       state = base_state()
 
@@ -537,12 +615,16 @@ defmodule Grappa.Session.EventRouterTest do
     test "PRIVMSG carrying unknown CTCP verb falls through to :privmsg persist" do
       state = base_state()
 
-      # Unknown CTCP verbs (PING, TIME, SOURCE, FINGER, USERINFO not yet
+      # Unknown CTCP verbs (TIME, SOURCE, FINGER, USERINFO not yet
       # implemented) fall through as plain :privmsg rows. The CTCP framing
       # in the body is preserved per CLAUDE.md "CTCP control characters
       # preserved as-is in scrollback body". Future buckets may add more
       # verb-specific arms.
-      body = <<0x01, "PING 1234567890", 0x01>>
+      #
+      # This case used PING as its example of an unimplemented verb until
+      # PING gained an arm of its own — the example moved rather than the
+      # rule: a verb grappa does not answer still persists verbatim.
+      body = <<0x01, "TIME", 0x01>>
       m = msg(:privmsg, ["#italia", body], {:nick, "alice", "u", "h"})
 
       assert {:cont, ^state, [{:persist, :privmsg, attrs}]} =

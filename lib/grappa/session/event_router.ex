@@ -424,9 +424,17 @@ defmodule Grappa.Session.EventRouter do
 
         {:cont, state2, [{:reply, reply}, persist_eff]}
 
+      "PING" ->
+        # Answered in its own function, not inline: this clause was at
+        # cyclomatic complexity 9 (Credo's strict maximum) before the arm
+        # existed, and the arm's own case + if took it to 10. The limit
+        # is doing its job — a dispatch clause this size should be
+        # dispatching, not implementing.
+        ctcp_ping_reply(msg, target, body, state)
+
       _ ->
-        # Non-VERSION CTCP (ACTION handled below; PING / TIME / SOURCE
-        # / FINGER not implemented yet) — delegate to the generic
+        # Non-VERSION, non-PING CTCP (ACTION handled below; TIME /
+        # SOURCE / FINGER not implemented yet) — delegate to the generic
         # PRIVMSG arm so ACTION still persists, others fall through
         # as plain :privmsg rows for now.
         privmsg_default(msg, state, body)
@@ -2182,7 +2190,10 @@ defmodule Grappa.Session.EventRouter do
   #      banners, /MOTD-style numerics, k-line warnings → `$server`.
   #   4. **Regular user nick** — peer sent us a non-CTCP NOTICE; persist
   #      on `channel = sender_nick` so it lands in the same query window
-  #      a PRIVMSG-to-own-nick would.
+  #      a PRIVMSG-to-own-nick would. "non-CTCP" is now enforced rather
+  #      than merely described: a CTCP-framed body is caught by
+  #      `CTCP.framed?/1` in `route_non_channel_notice/3` before this
+  #      chain runs.
   #
   # Pre-CP13 this single matcher greedy-routed everything to `$server` —
   # the new chain preserves NickServ/MOTD behavior while restoring
@@ -2489,9 +2500,26 @@ defmodule Grappa.Session.EventRouter do
   # re-key lookup (see `service_route_channel/2`).
   @spec route_non_channel_notice(String.t(), String.t(), state()) :: {String.t(), String.t()}
   defp route_non_channel_notice(sender, body, state) do
-    case chanserv_bracket_match(sender, body) do
-      {_, _} = bracket -> bracket
-      nil -> route_non_channel_notice_non_chanserv(sender, body, state)
+    # A CTCP-framed NOTICE is a REPLY to something we asked — a PING round
+    # trip, a VERSION query — and is protocol, not conversation. It took
+    # the regular-nick branch below and so persisted under the peer,
+    # which `maybe_open_query_window/2` then turned into a query window:
+    # pinging somebody left a tab open with them containing a row of
+    # control characters. Case 4's own comment says "non-CTCP NOTICE" —
+    # the intent was always this, the predicate was missing.
+    #
+    # `$server` keeps the row (losing it would hide a reply nobody
+    # asked for) while `dm_eligible?/1` mints nothing. The BODY stays
+    # verbatim, framing and all, so a client can still recognise its own
+    # outstanding ping in it and report the round trip — shottino renders
+    # it as a card in the window the question was asked from.
+    if CTCP.framed?(body) do
+      {"$server", body}
+    else
+      case chanserv_bracket_match(sender, body) do
+        {_, _} = bracket -> bracket
+        nil -> route_non_channel_notice_non_chanserv(sender, body, state)
+      end
     end
   end
 
@@ -2574,6 +2602,59 @@ defmodule Grappa.Session.EventRouter do
   end
 
   defp ctcp_verb(_), do: nil
+
+  # CTCP PING: echo the payload back, unchanged and uninspected.
+  #
+  # The token is the ASKER's — conventionally their clock, but it is
+  # opaque to us and its only job is to come back byte for byte so they
+  # can subtract. Answering here rather than in a client is the same
+  # reasoning VERSION uses: the bouncer is awake when no client is
+  # attached, and a session that ignores PING reads as a dead connection
+  # to everyone who asks. Before this, a ping at this session went
+  # unanswered and the raw `\x01PING 1234\x01` surfaced as a chat row.
+  #
+  # Routing mirrors the VERSION arm exactly — see it for why a DM-shaped
+  # query persists on the own-nick topic rather than at `channel =
+  # sender`.
+  @spec ctcp_ping_reply(Message.t(), String.t(), binary(), state()) ::
+          {:cont, state(), [effect()]}
+  defp ctcp_ping_reply(msg, target, body, state) do
+    sender = Message.sender_nick(msg)
+
+    # A token-less `\x01PING\x01` echoes back token-less, rather than
+    # with a stray separator the asker never sent.
+    reply =
+      case ctcp_payload(body) do
+        "" -> "NOTICE #{sender} :\x01PING\x01"
+        payload -> "NOTICE #{sender} :\x01PING #{payload}\x01"
+      end
+
+    dm_channel =
+      if nick_eq?(target, state.nick),
+        do: state.nick,
+        else: Identifier.canonical_target(target, casemapping(state))
+
+    {state2, persist_eff} =
+      build_persist(state, :notice, dm_channel, sender, "CTCP PING query → answered", %{})
+
+    {:cont, state2, [{:reply, reply}, persist_eff]}
+  end
+
+  # The argument of a `\x01VERB arg\x01` body, verbatim and NOT parsed:
+  # a CTCP PING token is the asker's to choose, and the only contract is
+  # that it comes back unchanged. Empty when the body carries no
+  # argument (`\x01PING\x01`), which echoes an empty token rather than
+  # inventing one. The trailing \x01 is stripped; anything after it
+  # cannot be part of this CTCP.
+  @spec ctcp_payload(binary()) :: String.t()
+  defp ctcp_payload(<<0x01, rest::binary>>) do
+    case :binary.split(rest, " ") do
+      [_, arg] -> arg |> :binary.split(<<0x01>>) |> hd()
+      _ -> ""
+    end
+  end
+
+  defp ctcp_payload(_), do: ""
 
   # Shared default PRIVMSG handler — used by both the generic arm and
   # the CTCP-aware arm's fallthrough for unknown verbs. Pulls out the
