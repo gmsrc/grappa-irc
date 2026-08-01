@@ -546,14 +546,15 @@ TEST(a_backfilled_ping_reply_still_reports_its_round_trip) {
     free_app(app);
 }
 
-TEST(an_unsolicited_ping_reply_says_nothing) {
-    /* A reply we never asked for — somebody else's ping crossing our
-     * scrollback, or ours from a previous run of the client — matches no
-     * entry, so it is not announced as a round trip that never happened. */
+TEST(an_unsolicited_ping_reply_is_never_reported_as_our_round_trip) {
+    /* A reply we never asked for must not be announced as a round trip
+     * that never happened — no "PING reply from X: N.NNs" line, because
+     * the stamp is not ours to subtract from. Live, it IS shown for what
+     * it is (see a_ping_reply_we_did_not_time_is_still_shown_when_live);
+     * out of a backfill it stays silent entirely. */
     struct app *app = window_app();
     CHECK(app != NULL);
     add_window_ex(app, "azzurra", "#sniffo", true);
-    size_t before = app->log_count;
 
     struct wire_scrollback_message m = { 0 };
     m.id = 6;
@@ -563,7 +564,17 @@ TEST(an_unsolicited_ping_reply_says_nothing) {
     m.kind = MSG_NOTICE;
     m.body = "\001PING 12345\001";
     render_message(app, &m, true);
+    /* The TIMED form is "--- PING reply from X: N.NNs"; the untimed one
+     * is "--- CTCP PING reply from X: <token>". Distinguished by the
+     * prefix, so this asserts the absence of the former rather than
+     * matching a substring both share. */
+    CHECK(!log_has(app, "--- PING reply from mallory"));
+    CHECK(log_has(app, "--- CTCP PING reply from mallory: 12345"));
 
+    /* Backfilled: nothing at all. */
+    size_t before = app->log_count;
+    m.id = 7;
+    render_message(app, &m, false);
     CHECK_LONG(app->log_count, before);
     free_app(app);
 }
@@ -691,6 +702,63 @@ TEST(a_ping_reply_routed_to_server_still_lands_in_the_active_window) {
     free_app(app);
 }
 
+TEST(a_ctcp_query_is_framed_the_way_the_protocol_expects) {
+    char out[MAX_LINE];
+
+    /* `<target> <VERB> [args]` → `PRIVMSG target :\001VERB args\001`.
+     * The verb upcases (protocol convention, and services match on it);
+     * the arguments go through VERBATIM, because for PING they are a
+     * token that has to round-trip. */
+    CHECK(ctcp_request_line("alice VERSION", out, sizeof(out)));
+    CHECK_STR(out, "PRIVMSG alice :\001VERSION\001");
+
+    CHECK(ctcp_request_line("alice version", out, sizeof(out)));
+    CHECK_STR(out, "PRIVMSG alice :\001VERSION\001");
+
+    CHECK(ctcp_request_line("alice PING 1753776000123", out, sizeof(out)));
+    CHECK_STR(out, "PRIVMSG alice :\001PING 1753776000123\001");
+
+    /* A channel is a legal CTCP target. */
+    CHECK(ctcp_request_line("#sniffo TIME", out, sizeof(out)));
+    CHECK_STR(out, "PRIVMSG #sniffo :\001TIME\001");
+
+    /* Multi-word arguments stay whole. */
+    CHECK(ctcp_request_line("alice ACTION waves at you", out, sizeof(out)));
+    CHECK_STR(out, "PRIVMSG alice :\001ACTION waves at you\001");
+
+    /* Missing verb or target is usage, not `PRIVMSG  :\001\001`. */
+    CHECK(!ctcp_request_line("alice", out, sizeof(out)));
+    CHECK(!ctcp_request_line("", out, sizeof(out)));
+    CHECK(!ctcp_request_line("   ", out, sizeof(out)));
+}
+
+TEST(a_ping_reply_we_did_not_time_is_still_shown_when_live) {
+    /* `/ctcp nick PING <own-token>` gets an answer this client never
+     * registered. Silently dropping it — which the matched-only rule did
+     * — makes /ctcp PING look broken. Live, it is reported for what it
+     * is; out of a backfill it stays quiet, because timing it against a
+     * stamp from a previous run would be a lie. */
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+
+    struct wire_scrollback_message m = { 0 };
+    m.id = 11;
+    m.network = "azzurra";
+    m.channel = "$server";
+    m.sender = "alice";
+    m.kind = MSG_NOTICE;
+    m.body = "\001PING deadbeef\001";
+    render_message(app, &m, true);
+    CHECK(log_has(app, "CTCP PING reply from alice: deadbeef"));
+
+    size_t before = app->log_count;
+    m.id = 12;
+    render_message(app, &m, false); /* backfilled: stays quiet */
+    CHECK_LONG(app->log_count, before);
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -716,8 +784,10 @@ int main(void) {
     RUN(a_ping_reply_is_matched_against_the_pings_we_are_waiting_on);
     RUN(a_backfilled_ping_reply_still_reports_its_round_trip);
     RUN(a_ping_reply_routed_to_server_still_lands_in_the_active_window);
-    RUN(an_unsolicited_ping_reply_says_nothing);
+    RUN(an_unsolicited_ping_reply_is_never_reported_as_our_round_trip);
     RUN(an_inbound_ctcp_query_is_named_not_dumped);
     RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);
+    RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
+    RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
     return test_report();
 }

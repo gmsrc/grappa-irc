@@ -441,7 +441,10 @@ Media link previews:
   you typed it in. `CONNECT` is spelled `/sconnect` because `/connect` already
   means "connect a network" here. `/die` and `/restart` have no confirmation
   step.
-- **People** — `/ping <nick>` CTCP-pings somebody and times the round trip.
+- **People** — `/ctcp <nick|#chan> <VERB> [args]` sends any CTCP query (VERSION,
+  TIME, FINGER…); the verb upcases, the arguments go verbatim, and the reply
+  lands as a card in the window you asked from. `/ping <nick>` is the timed
+  special case.
   The answer is matched against the pings still outstanding, so it reports
   correctly whether it arrives live or turns up when the query window's
   scrollback is backfilled; one that never arrives is reported as such after

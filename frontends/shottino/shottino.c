@@ -2011,6 +2011,8 @@ static void card(struct app *app, const char *network, const char *fmt, ...)
 static bool is_blocked(struct app *app, const char *nick);
 static struct network *network_by_slug_locked(struct app *app, const char *slug);
 static void ws_push_user(struct app *app, const char *event, const char *payload);
+/* Defined with the oper verbs, which parse arguments the same way. */
+static const char *split_head(const char *args, char *head, size_t head_sz);
 
 /* Remember a ping we just sent, so its answer can be recognised whenever
  * it turns up. Oldest out when full — a table that refuses new entries
@@ -2121,6 +2123,29 @@ static void ctcp_split(const char *body, char *verb, size_t verb_sz, char *paylo
     payload[n] = 0;
 }
 
+/* Build the raw line for an outbound CTCP QUERY.
+ *
+ * `<target> <VERB> [args]` becomes `PRIVMSG target :\001VERB args\001`.
+ * The verb is upcased (the protocol's own convention, and services match
+ * on it); the arguments go through verbatim, because for PING they are a
+ * token that must round-trip and for anything else they are the asker's
+ * business, not ours.
+ *
+ * Pure, so the framing is testable without a socket — the one part of
+ * this that a typo makes silently wrong on the wire. Returns false when
+ * there is no target or no verb, so the caller prints usage instead of
+ * sending `PRIVMSG  :\001\001`. */
+static bool ctcp_request_line(const char *rest, char *out, size_t out_sz) {
+    char target[MAX_CHANNEL], verb[64];
+    const char *after_target = split_head(rest, target, sizeof(target));
+    const char *args = split_head(after_target, verb, sizeof(verb));
+    if (!target[0] || !verb[0]) return false;
+    for (char *v = verb; *v; v++) *v = (char)toupper((unsigned char)*v);
+    if (*args) snprintf(out, out_sz, "PRIVMSG %s :\001%s %s\001", target, verb, args);
+    else snprintf(out, out_sz, "PRIVMSG %s :\001%s\001", target, verb);
+    return true;
+}
+
 /* Answer an inbound CTCP query.
  *
  * PING only, and deliberately so. VERSION is answered by GRAPPA, which
@@ -2199,9 +2224,16 @@ static void render_ctcp_reply(struct app *app, const char *network, const char *
             long ms = monotonic_ms() - stamp;
             card(app, network, "--- PING reply from %s: %ld.%02lds", sender, ms / 1000,
                  (ms % 1000) / 10);
+            return;
         }
-        /* A PING reply we were not waiting for is somebody else's
-         * business, or ours from a previous run. Nothing to say. */
+        /* Not one of ours. LIVE, that is still an answer somebody sent
+         * us — a `/ctcp nick PING <token>` with the user's own token, or
+         * a reply to a ping from another client on this session — so it
+         * is reported for what it is rather than swallowed. Out of a
+         * BACKFILL it stays silent: announcing a round trip that
+         * finished hours ago, timed against a stamp from a previous run,
+         * is worse than saying nothing. */
+        if (live) card(app, network, "--- CTCP PING reply from %s: %s", sender, payload);
         return;
     }
     if (!live) return;
@@ -7155,7 +7187,7 @@ static void cycle_window(struct app *app, int delta) {
  * Adding a verb means adding it in three places; that test names them. */
 static const char *commands[] = {
     "/admin", "/alias", "/archive", "/away", "/ban", "/banlist", "/block", "/chat", "/clear",
-    "/close", "/connect", "/cs", "/dehilight", "/deop", "/devoice", "/die", "/disconnect",
+    "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deop", "/devoice", "/die", "/disconnect",
     "/exit", "/globops", "/help", "/highlight", "/hilight", "/hs", "/ignore", "/info", "/invite",
     "/j", "/join", "/kb", "/keys", "/kick", "/kickban", "/kill", "/kline", "/links", "/list",
     "/locops", "/lusers", "/me", "/media", "/members", "/mode", "/motd", "/mouse", "/ms", "/msg",
@@ -8153,6 +8185,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "disconnect") == 0) log_line(app, "/disconnect [network] [reason] — park a network while keeping Shottino running");
     else if (strcmp(cmd, "whois") == 0) log_line(app, "/whois nick — request WHOIS for nick");
     else if (oper_verb_help(app, cmd)) { /* the table carries its own help */ }
+    else if (strcmp(cmd, "ctcp") == 0) log_line(app, "/ctcp <nick|#channel> <VERB> [args] — send any CTCP query (VERSION, TIME, FINGER…); the reply lands in the window you asked from. /ping is the timed special case");
     else if (strcmp(cmd, "ping") == 0) log_line(app, "/ping nick — CTCP PING somebody and time the round trip; the answer lands in the window you asked from");
     else if (strcmp(cmd, "block") == 0 || strcmp(cmd, "ignore") == 0) log_line(app, "/block [nick], /ignore [nick] — hide somebody's messages in THIS client only (nothing is sent to the server); bare /block lists who is blocked");
     else if (strcmp(cmd, "unblock") == 0 || strcmp(cmd, "unignore") == 0) log_line(app, "/unblock nick, /unignore nick — show somebody's messages again");
@@ -9261,6 +9294,29 @@ static void handle_command_dispatch(struct app *app, char *line) {
         char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", current_network_id(app), raw);
         ws_push_user(app, "raw", payload);
         free(raw); free(payload);
+    } else if (strncmp(line, "/ctcp ", 6) == 0) {
+        /* The general form: any CTCP verb at anybody. `/ping` is the
+         * special case worth its own verb because it TIMES the round
+         * trip; this one just asks. Raw line for the same reason /ping
+         * uses one — a protocol query is not conversation, so it leaves
+         * no scrollback row and mints no query window. */
+        char frame[MAX_LINE];
+        if (!ctcp_request_line(line + 6, frame, sizeof(frame))) {
+            log_line(app, "/ctcp <nick|#channel> <VERB> [args] — e.g. /ctcp alice VERSION");
+        } else {
+            char *raw = json_escape(frame);
+            char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}",
+                                      current_network_id(app), raw);
+            ws_push_user(app, "raw", payload);
+            free(raw);
+            free(payload);
+            char net_now[MAX_SLUG] = "";
+            current_window_key(app, net_now, sizeof(net_now), NULL, 0);
+            /* Echoed so the query is visible: the answer arrives as a
+             * card, and a question with no visible asking reads as the
+             * client having done nothing. */
+            card(app, net_now, "--- sent: %s", frame);
+        }
     } else if (strncmp(line, "/ping ", 6) == 0) {
         /* CTCP PING: how long a round trip to that person takes.
          *
