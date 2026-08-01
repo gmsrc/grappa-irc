@@ -1618,7 +1618,7 @@ static int connect_tcp(const char *host, const char *port) {
     if (err != 0) return -1;
     int fd = -1;
     for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
-        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
         if (fd < 0) continue;
         if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
         close(fd);
@@ -1632,6 +1632,31 @@ static int connect_tcp(const char *host, const char *port) {
  * both the grappa connection and a one-off fetch of a link somebody
  * pasted (/view). The hostname is bound for verification either way —
  * a third-party host gets the same check the bouncer does. */
+/* Keep a descriptor out of the CHILDREN.
+ *
+ * Nothing here was close-on-exec, so every process shottino spawns
+ * inherited every descriptor it happened to hold: the recorder's ffmpeg
+ * (up to 300 seconds), the claude CLI for a whole model turn, and /exec
+ * running an arbitrary user command all got the websocket's TLS socket,
+ * the ircd listening socket — a stale child keeps the port bound, so
+ * the next start says "address in use" — and whatever HTTP connection
+ * another thread had open at fork time, whose peer then never sees EOF.
+ *
+ * Where the flag can be passed to the creating call it is (SOCK_CLOEXEC,
+ * O_CLOEXEC), because that is atomic. accept() and pipe() have no such
+ * form without _GNU_SOURCE, which this build deliberately does not
+ * define, so those set it immediately afterwards and carry a window of a
+ * few instructions in which another thread could fork. Narrow, and much
+ * narrower than the descriptor's whole lifetime.
+ *
+ * A descriptor a child is MEANT to have is unaffected: dup2 produces a
+ * copy without the flag, which is exactly how the pipes below reach the
+ * process on the other side. */
+static void set_cloexec(int fd) {
+    int flags = fcntl(fd, F_GETFD, 0);
+    if (flags >= 0) fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
 static void conn_close(struct tls_conn *conn);
 
 static bool conn_open_to(struct app *app, const char *host, const char *port, bool use_tls,
@@ -3873,7 +3898,7 @@ static void llm_save(struct app *app) {
     }
     /* 0600 BEFORE the content lands: creating world-readable and
      * chmod-ing after leaves a window where the token is readable. */
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0) {
         log_line(app, "/llm: cannot write %s: %s", path, strerror(errno));
         free(path);
@@ -6923,11 +6948,15 @@ static char *llm_call_claude_cli(struct app *app, const struct llm_config *cfg,
 
     int in_fds[2], out_fds[2];
     if (pipe(in_fds) != 0) return NULL;
+    set_cloexec(in_fds[0]);
+    set_cloexec(in_fds[1]);
     if (pipe(out_fds) != 0) {
         close(in_fds[0]);
         close(in_fds[1]);
         return NULL;
     }
+    set_cloexec(out_fds[0]);
+    set_cloexec(out_fds[1]);
     pid_t pid = fork();
     if (pid < 0) {
         close(in_fds[0]); close(in_fds[1]); close(out_fds[0]); close(out_fds[1]);
@@ -8164,7 +8193,7 @@ static char *prefs_path(void) {
 
 static void prefs_save(struct app *app) {
     char *path = prefs_path();
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0) {
         log_line(app, "/set: cannot write %s: %s", path, strerror(errno));
         free(path);
@@ -8345,6 +8374,8 @@ static void exec_job(struct app *app, const struct job *job) {
         log_line(app, "/exec: cannot create a pipe: %s", strerror(errno));
         return;
     }
+    set_cloexec(fds[0]);
+    set_cloexec(fds[1]);
     pid_t pid = fork();
     if (pid < 0) {
         close(fds[0]);
@@ -11586,6 +11617,8 @@ static void record_start_for(struct app *app, bool video, enum record_purpose pu
         log_line(app, "/%s: cannot open a pipe", video ? "video" : "voice");
         return;
     }
+    set_cloexec(in_fds[0]);
+    set_cloexec(in_fds[1]);
     char cap[16];
     snprintf(cap, sizeof(cap), "%d", RECORD_MAX_SECONDS);
 
@@ -14807,7 +14840,7 @@ static bool ircd_listen(struct app *app) {
      * connects over ::1 must not find the door shut because v4 answered
      * first. */
     for (struct addrinfo *ai = res; ai && app->ircd.listen_count < IRCD_LISTEN_MAX; ai = ai->ai_next) {
-        int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        int fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
         if (fd < 0) continue;
         int on = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
@@ -14835,6 +14868,7 @@ static bool ircd_listen(struct app *app) {
 static void ircd_accept(struct app *app, int listen_fd) {
     for (;;) {
         int fd = accept(listen_fd, NULL, NULL);
+        if (fd >= 0) set_cloexec(fd);
         if (fd < 0) return;
         fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
         pthread_mutex_lock(&app->ircd.lock);
