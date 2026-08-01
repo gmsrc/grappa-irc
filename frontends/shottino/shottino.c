@@ -793,6 +793,11 @@ struct app {
     /* Headless: no terminal to draw on, so the operational log goes to
      * stderr where a service manager can collect it. */
     bool headless;
+    /* Is the ncurses screen up? Until it is, a log line has nowhere to
+     * be seen — the ring is drawn by a frame that has not happened yet —
+     * so failures during startup go to stderr as well. Set immediately
+     * after initscr and cleared at endwin. */
+    bool ui_active;
     /* /view downloads here, and the directory goes at exit: a session
      * that opens fifty pictures must not leave fifty files behind. */
     char view_dir[1024];
@@ -1052,7 +1057,13 @@ struct app {
 static void die(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void startup(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+/* Last resort. Restores the terminal FIRST, because a message printed
+ * into a raw ncurses screen is a message nobody can read — and the shell
+ * the user is dropped back into inherits the raw mode, no echo and no
+ * line discipline, which reads as a hung terminal rather than as an
+ * error. isendwin() answers safely whether or not curses ever started. */
 static void die(const char *fmt, ...) {
+    if (!isendwin()) endwin();
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
@@ -1238,7 +1249,10 @@ static void log_push_locked(struct app *app, char *line, bool mention, bool pend
     /* Headless there is no window to file it under and nobody to read
      * it: the same line goes to stderr, which is where a service manager
      * or a terminal running --ircd will look for it. */
-    if (app->headless) fprintf(stderr, "%s\n", line);
+    /* Headless there is no window and nobody to read it; before the
+     * screen exists there is a window but no frame has drawn yet. Both
+     * mean the same thing: say it on stderr or it is said nowhere. */
+    if (app->headless || !app->ui_active) fprintf(stderr, "%s\n", line);
 }
 
 /* Does row `i` belong in the window whose scope is `scope`? A row with
@@ -1618,6 +1632,8 @@ static int connect_tcp(const char *host, const char *port) {
  * both the grappa connection and a one-off fetch of a link somebody
  * pasted (/view). The hostname is bound for verification either way —
  * a third-party host gets the same check the bouncer does. */
+static void conn_close(struct tls_conn *conn);
+
 static bool conn_open_to(struct app *app, const char *host, const char *port, bool use_tls,
                          struct tls_conn *conn) {
     memset(conn, 0, sizeof(*conn));
@@ -1625,8 +1641,20 @@ static bool conn_open_to(struct app *app, const char *host, const char *port, bo
     if (conn->fd < 0) return false;
     conn->tls = use_tls;
     if (conn->tls) {
+        /* Every failure below closes what it opened.
+         *
+         * The socket is already connected by the time TLS can fail, so a
+         * bare `return false` left the caller holding a live fd and,
+         * past SSL_new, an SSL object too. One call site cleaned up
+         * afterwards and two did not, so a misconfigured /llm or /stt
+         * endpoint leaked a descriptor per attempt until the process ran
+         * out and unrelated I/O started failing. The function that
+         * opened it is the one that knows it needs closing. */
         conn->ssl = SSL_new(app->ssl_ctx);
-        if (!conn->ssl) return false;
+        if (!conn->ssl) {
+            conn_close(conn);
+            return false;
+        }
         SSL_set_fd(conn->ssl, conn->fd);
         SSL_set_tlsext_host_name(conn->ssl, host);
         /* SNI (above) only NAMES the host in the ClientHello — it does not
@@ -1637,8 +1665,14 @@ static bool conn_open_to(struct app *app, const char *host, const char *port, bo
          * for attacker.example and read the bearer token we send on this
          * connection. SSL_set1_host makes the handshake fail on a hostname
          * mismatch — the client twin of the server's #89 hostname check. */
-        if (SSL_set1_host(conn->ssl, host) != 1) return false;
-        if (SSL_connect(conn->ssl) != 1) return false;
+        if (SSL_set1_host(conn->ssl, host) != 1) {
+            conn_close(conn);
+            return false;
+        }
+        if (SSL_connect(conn->ssl) != 1) {
+            conn_close(conn);
+            return false;
+        }
     }
     return true;
 }
@@ -1708,15 +1742,30 @@ static char *read_all(struct tls_conn *conn, size_t *out_len) {
  * it REPORTS a malformed reply (status 0) instead of dying. grappa
  * answering garbage means the client is not talking to grappa; a model
  * endpoint answering garbage is Tuesday. */
+/* A failed request, with the reason IN the body.
+ *
+ * Never a NULL body: a dozen call sites log `%.200s` of it, and a null
+ * pointer through %s is undefined behaviour that glibc merely happens to
+ * render as "(null)". Since the body has to exist anyway, it may as well
+ * say what went wrong — "login failed HTTP 0: connection refused" is a
+ * sentence somebody can act on. */
+static struct http_response http_failed(const char *why) {
+    size_t n = strlen(why);
+    char *body = malloc(n + 1);
+    if (!body) die("out of memory");
+    memcpy(body, why, n + 1);
+    return (struct http_response){ .status = 0, .body = body, .body_len = n };
+}
+
 static struct http_response http_read_response(struct tls_conn *conn) {
     size_t raw_len = 0;
     char *raw = read_all(conn, &raw_len);
-    if (!raw) return (struct http_response){ .status = 0, .body = NULL, .body_len = 0 };
+    if (!raw) return http_failed("no reply");
 
     char *sep = strstr(raw, "\r\n\r\n");
     if (!sep) {
         free(raw);
-        return (struct http_response){ .status = 0, .body = NULL, .body_len = 0 };
+        return http_failed("reply had no headers");
     }
     *sep = 0;
     char *statusp = strchr(raw, ' ');
@@ -1744,7 +1793,24 @@ static struct http_response http_request_raw(struct app *app, const char *method
                                              const char *body, size_t body_len,
                                              const char *content_type) {
     struct tls_conn conn;
-    if (!conn_open(app, &conn)) die("failed to connect to %s:%s", app->url.host, app->url.port);
+    /* A transport failure REPORTS and returns rather than killing the
+     * client.
+     *
+     * These three were die() calls, and die() exits the process from
+     * whichever thread reached it — including the job worker, which runs
+     * read-cursor pushes and member refreshes nobody asked for. So a
+     * bouncer restart mid-session (which grappa's own deploy does) took
+     * the whole client with it, from a background thread, without
+     * endwin: the terminal was left raw and the websocket's careful
+     * reconnect-with-backoff never got the chance to do its job. The
+     * status-0 return is the shape callers already handle. */
+    if (!conn_open(app, &conn)) {
+        char why[512];
+        snprintf(why, sizeof(why), "cannot reach %.128s:%.16s — %.128s", app->url.host,
+                 app->url.port, strerror(errno));
+        log_line(app, "%s", why);
+        return http_failed(why);
+    }
     char auth[MAX_TOKEN + 64] = "";
     if (app->token[0]) snprintf(auth, sizeof(auth), "Authorization: Bearer %s\r\n", app->token);
     char *head = xasprintf(
@@ -1762,14 +1828,21 @@ static struct http_response http_request_raw(struct app *app, const char *method
     /* Body written separately — it is binary and must not go through a
      * format string. */
     if (ok && body_len) ok = conn_write_all(&conn, body, body_len);
-    if (!ok) die("HTTP write failed");
+    if (!ok) {
+        conn_close(&conn);
+        log_line(app, "lost the connection to %s while sending %s %.80s", app->url.host, method,
+                 path);
+        return http_failed("connection lost mid-request");
+    }
     struct http_response resp = http_read_response(&conn);
     conn_close(&conn);
-    /* This door has always treated a malformed reply from GRAPPA as
-     * fatal — it means the bouncer is not what we are talking to. The
-     * shared reader reports it instead of dying, so the /llm path (a
-     * third party's endpoint, allowed to be broken) can carry on. */
-    if (resp.status == 0) die("bad HTTP response");
+    /* A malformed reply from GRAPPA used to be fatal on the grounds that
+     * it means the bouncer is not what we are talking to. That is a fair
+     * reading at login and a wrong one afterwards: the likeliest cause
+     * mid-session is a proxy or a restart mangling one response, and the
+     * cure for one bad answer is not to take the client down. */
+    if (resp.status == 0)
+        log_line(app, "unreadable reply from %s to %s %.80s", app->url.host, method, path);
     return resp;
 }
 
@@ -15034,6 +15107,7 @@ static void ircd_loop(struct app *app) {
 static void event_loop(struct app *app) {
     setlocale(LC_ALL, "");
     initscr();
+    app->ui_active = true;
     init_theme();
     /* After init_theme: the mIRC pair pool sits above the theme's fixed
      * pairs and needs COLORS/COLOR_PAIRS, which start_color() populates. */
@@ -15164,6 +15238,7 @@ static void event_loop(struct app *app) {
         }
     }
     mouse_reporting(false);
+    app->ui_active = false;
     endwin();
 }
 
