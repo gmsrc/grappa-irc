@@ -531,7 +531,11 @@ enum overlay_action {
     /* Stop drawing a picture in place. The row keeps its link — hiding is
      * about the space the picture takes on screen, not about forgetting
      * the URL was ever posted. */
-    ACT_HIDE
+    ACT_HIDE,
+    /* A settings row: apply the value the menu names, or open it for
+     * typing when the value is not one of a known few. */
+    ACT_SET_VALUE,
+    ACT_SET_EDIT
 };
 
 /* How many entries a picker offers. Twenty is what fits the phrase "the
@@ -570,6 +574,9 @@ struct overlay {
      * serves both because the question is the same one — "what can I do
      * with the thing under the pointer" — and only the answers differ. */
     char media[MAX_LINE];
+    /* Menu: the preference under the pointer, in the settings panel. The
+     * third subject the same menu answers for. */
+    char setting[64];
     /* Media picker: what Enter does with the URL, decided by the command
      * that opened it (/preview or /view) rather than by the list. */
     enum overlay_action pick_action;
@@ -5978,6 +5985,8 @@ static int media_claim_locked(struct app *app, const char *url, bool is_video) {
  *
  * The URL keeps its link and its region: hiding is about the space on
  * screen, so the row is still clickable and /preview still finds it. */
+static void settings_prefill_edit(struct app *app, const char *name);
+
 static void hide_media_url(struct app *app, const char *url) {
     pthread_mutex_lock(&app->lock);
     bool any = false;
@@ -9334,6 +9343,48 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
     struct overlay *ov = &app->overlay;
     size_t n = 0;
     if (ov->kind == OVERLAY_MENU) {
+        /* A preference under the pointer. The values it can take are
+         * already in the table — SET_BOOL is on/off, SET_CHOICE lists
+         * its words in `values` — so the menu is BUILT from the same
+         * source /set validates against and cannot offer something the
+         * command would then reject.
+         *
+         * A free-text setting has no such list, so it gets the two
+         * things that are always true of one: type a new value, or empty
+         * it. */
+        if (ov->setting[0]) {
+            const struct setting_def *def = setting_find(ov->setting);
+            if (!def) return n;
+            char cur[256];
+            setting_value(app, def->name, cur, sizeof(cur));
+            if (def->kind == SET_BOOL) {
+                for (size_t k = 0; k < 2; k++) {
+                    const char *word = k ? "off" : "on";
+                    menu_add(out, &n, max, ACT_SET_VALUE, def->name, word, "%s%s",
+                             strcmp(cur, word) == 0 ? "• " : "  ", word);
+                }
+                return n;
+            }
+            if (def->kind == SET_CHOICE && def->values) {
+                /* Split the `on|off|all|first-party` spelling the usage
+                 * message already uses, so one string feeds the error
+                 * text and the menu both. */
+                const char *p = def->values;
+                while (*p && n < max) {
+                    const char *bar = strchr(p, '|');
+                    size_t len = bar ? (size_t)(bar - p) : strlen(p);
+                    char word[32];
+                    snprintf(word, sizeof(word), "%.*s", (int)len, p);
+                    menu_add(out, &n, max, ACT_SET_VALUE, def->name, word, "%s%s",
+                             strcmp(cur, word) == 0 ? "• " : "  ", word);
+                    p = bar ? bar + 1 : p + len;
+                }
+                return n;
+            }
+            if (!menu_add(out, &n, max, ACT_SET_EDIT, def->name, "", "Type a new value")) return n;
+            menu_add(out, &n, max, ACT_SET_VALUE, def->name, "", "Clear it");
+            return n;
+        }
         /* A picture under the pointer, rather than a person. The URL
          * rides in `body` so the actions are the SAME ones the media
          * picker already uses — a second implementation of "preview
@@ -9471,6 +9522,7 @@ static void overlay_close(struct app *app) {
     app->overlay.kind = OVERLAY_NONE;
     app->overlay.filter[0] = 0;
     app->overlay.media[0] = 0;
+    app->overlay.setting[0] = 0;
     app->overlay.sel = 0;
     app->overlay.top = 0;
     pthread_mutex_unlock(&app->lock);
@@ -9698,6 +9750,30 @@ static void overlay_activate(struct app *app) {
         break;
     case ACT_HIDE:
         if (body[0]) hide_media_url(app, body);
+        break;
+    case ACT_SET_VALUE:
+        /* Through the ordinary /set path: one validation, one save, one
+         * panel refresh. The menu picked the word; it does not get its
+         * own way of applying it. An empty body is "clear it", which is
+         * a value like any other. */
+        if (nick[0]) {
+            char cmd[MAX_LINE];
+            /* Explicit bounds: both parts are short by construction — a
+             * setting name and one of its own words — but the compiler
+             * sees two buffers that could fill the line between them,
+             * and a silent truncation here would send /set a value
+             * nobody chose. */
+            snprintf(cmd, sizeof(cmd), "/set %.63s %.63s", nick, body);
+            handle_command(app, cmd);
+        }
+        break;
+    case ACT_SET_EDIT:
+        /* The same prefill Enter does on a settings row, reached from
+         * the menu instead — including its refusal to prefill a secret
+         * or a value too long to carry. */
+        if (nick[0]) {
+            settings_prefill_edit(app, nick);
+        }
         break;
     case ACT_NONE:
         break;
@@ -10081,6 +10157,39 @@ static void complete_input(struct app *app) {
  * memory is wrong.
  *
  * Returns true when the key was consumed. */
+/* Put `/set <name> <current>` in the input line, ready to edit.
+ *
+ * The RAW value, not the displayed one: setting_value masks the tokens,
+ * shows the whisper binary it FOUND for stt.local and the path it
+ * DERIVES for bot.dir, and cuts llm.prompt to 120 characters — so
+ * prefilling what the panel shows and pressing Enter again would write a
+ * mask over a token, an autodetected path over an empty setting, or 120
+ * characters over a 16 KiB prompt.
+ *
+ * A secret is never prefilled, and neither is a value too long to carry
+ * WITH its command in front of it — measuring the value alone would only
+ * move the truncation. `/set <name>` with no value PRINTS the setting
+ * rather than writing it, so the safe fallback is a useful one too.
+ *
+ * One implementation, reached from the panel's Enter and from the
+ * right-click menu, because two of these would drift on the first of
+ * those rules that changed. */
+static void settings_prefill_edit(struct app *app, const char *name) {
+    char raw[MAX_LINE];
+    size_t need = setting_raw(app, name, raw, sizeof(raw));
+    bool secret = strstr(name, "token") != NULL;
+    size_t room = sizeof(app->input) - strlen(name) - sizeof("/set  ");
+    bool carriable = need > 0 && need < sizeof(raw) && need < room && !strchr(raw, '\n');
+    char line[MAX_LINE];
+    int w = snprintf(line, sizeof(line), "/set %s %.*s", name, (int)room,
+                     (secret || !carriable) ? "" : raw);
+    if (w < 0) return;
+    pthread_mutex_lock(&app->lock);
+    snprintf(app->input, sizeof(app->input), "%s", line);
+    app->input_len = strlen(app->input);
+    pthread_mutex_unlock(&app->lock);
+}
+
 static bool panel_key(struct app *app, int ch) {
     pthread_mutex_lock(&app->lock);
     bool in_panel = app->panel != PANEL_CHAT;
@@ -10163,29 +10272,7 @@ static bool panel_key(struct app *app, int ch) {
         size_t sel = app->settings_sel;
         pthread_mutex_unlock(&app->lock);
         if (sel >= settings_count()) return false;
-        /* The RAW value, not the displayed one. setting_value masks the
-         * tokens, shows the whisper binary it FOUND for stt.local and the
-         * path it DERIVES for bot.dir, and cut llm.prompt to 120 chars —
-         * so prefilling what the panel shows and pressing Enter again
-         * wrote a mask over a token, an autodetected path over an empty
-         * setting, or 120 characters over a 16 KiB prompt. Silently, and
-         * only for the people who used the panel the way it invites. */
-        char raw[MAX_LINE];
-        size_t need = setting_raw(app, SETTINGS[sel].name, raw, sizeof(raw));
-        /* A secret is never prefilled, and neither is a value too long to
-         * carry: `/set <name>` with no value PRINTS the setting instead
-         * of writing it, so the safe fallback is also a useful one. */
-        bool secret = strstr(SETTINGS[sel].name, "token") != NULL;
-        /* The room left once "/set <name> " is in front of it. A value
-         * that does not fit WITH its command is not carriable either —
-         * measuring the value alone would just move the truncation. */
-        size_t room = sizeof(app->input) - strlen(SETTINGS[sel].name) - sizeof("/set  ");
-        bool carriable = need > 0 && need < sizeof(raw) && need < room && !strchr(raw, '\n');
-        pthread_mutex_lock(&app->lock);
-        snprintf(app->input, sizeof(app->input), "/set %s %.*s", SETTINGS[sel].name, (int)room,
-                 (secret || !carriable) ? "" : raw);
-        app->input_len = strlen(app->input);
-        pthread_mutex_unlock(&app->lock);
+        settings_prefill_edit(app, SETTINGS[sel].name);
         return true;
     }
     default:
@@ -13578,7 +13665,7 @@ static void handle_mouse(struct app *app) {
             app->panel_offset = app->panel_offset > 3 ? app->panel_offset - 3 : 0;
         else if (wheel_down)
             app->panel_offset += 3; /* clamped when drawn */
-        else if (click && app->panel == PANEL_SETTINGS && app->settings_shown) {
+        else if ((click || right) && app->panel == PANEL_SETTINGS && app->settings_shown) {
             /* Which panel line is under the pointer, tested against the
              * BOX the last frame drew — both dimensions and the bottom
              * edge. Testing the row alone counted a click on the sidebar,
@@ -13590,9 +13677,27 @@ static void handle_mouse(struct app *app) {
                           ev.x >= app->panel_draw_x0 && ev.x <= app->panel_draw_x1;
             if (in_box) {
                 size_t line = app->panel_offset + (size_t)(ev.y - first_y);
-                if (line >= app->settings_row0 &&
-                    line - app->settings_row0 < settings_count())
+                if (line >= app->settings_row0 && line - app->settings_row0 < settings_count()) {
                     app->settings_sel = line - app->settings_row0;
+                    /* RIGHT-click asks what this preference can be, and
+                     * the answer comes from the same table /set
+                     * validates against — a switch offers on and off, a
+                     * choice offers its words, and free text offers the
+                     * two things always true of it. Selecting first, so
+                     * the menu is about the row under the pointer even
+                     * if the keyboard was somewhere else. */
+                    if (right) {
+                        app->overlay.kind = OVERLAY_MENU;
+                        app->overlay.sel = 0;
+                        app->overlay.x = ev.x;
+                        app->overlay.y = ev.y + 1;
+                        app->overlay.nick[0] = 0;
+                        app->overlay.body[0] = 0;
+                        app->overlay.media[0] = 0;
+                        snprintf(app->overlay.setting, sizeof(app->overlay.setting), "%s",
+                                 SETTINGS[app->settings_sel].name);
+                    }
+                }
             }
         }
     }
@@ -13613,6 +13718,7 @@ static void handle_mouse(struct app *app) {
             app->overlay.y = ev.y + 1;
             app->overlay.nick[0] = 0;
             app->overlay.body[0] = 0;
+            app->overlay.setting[0] = 0;
             snprintf(app->overlay.media, sizeof(app->overlay.media), "%s", mr->url);
             pthread_mutex_unlock(&app->lock);
             return;
@@ -13625,6 +13731,7 @@ static void handle_mouse(struct app *app) {
             app->overlay.x = ev.x;
             app->overlay.y = ev.y + 1;
             app->overlay.media[0] = 0;
+            app->overlay.setting[0] = 0;
             snprintf(app->overlay.nick, sizeof(app->overlay.nick), "%s", r->nick);
             snprintf(app->overlay.body, sizeof(app->overlay.body), "%s", r->body);
             break;

@@ -354,10 +354,18 @@ added last.
   ↑↓        pick a preference        (when the input line is empty)
   Enter     edit it
   Space     toggle a switch
+  right-click  choose from the values it accepts
   PgUp/PgDn scroll, and the mouse wheel
   click     select the row under the pointer
   Esc       back to chat
 ```
+
+**Right-click a preference** for a menu of the values it can take: a switch
+offers `on` and `off`, a choice setting offers its own words, and free text
+offers "type a new value" or "clear it". The list is built from the same table
+`/set` validates against, so it cannot offer a word the command would reject —
+and cannot quietly stop offering one that gets added. The value in force is
+marked with a `•`.
 
 **Enter puts `/set <name> <current>` in the input line** rather than running
 anything: you see exactly what will happen, you can edit it, and it lands in

@@ -1128,6 +1128,66 @@ TEST(an_accented_character_survives_typing_and_one_backspace) {
     free_app(app);
 }
 
+/* Right-clicking a preference offers the values it can actually take.
+ *
+ * Built from the same table /set validates against, so the menu cannot
+ * offer a word the command would then reject — and cannot silently stop
+ * offering one that was added to the table. */
+TEST(a_settings_menu_offers_what_the_setting_accepts) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    struct overlay_item items[64];
+
+    /* A switch: both words, with the current one marked. */
+    app->overlay.kind = OVERLAY_MENU;
+    app->mouse_enabled = true;
+    snprintf(app->overlay.setting, sizeof(app->overlay.setting), "mouse");
+    size_t n = overlay_items_locked(app, items, 64);
+    CHECK_LONG(n, 2);
+    CHECK(strstr(items[0].label, "on") != NULL);
+    CHECK(strstr(items[1].label, "off") != NULL);
+    CHECK(strstr(items[0].label, "•") != NULL);  /* mouse is on */
+    CHECK(strstr(items[1].label, "•") == NULL);
+    /* Choosing one goes through /set, so the value and the name travel
+     * as the command would spell them. */
+    CHECK_LONG(items[1].action, ACT_SET_VALUE);
+    CHECK_STR(items[1].nick, "mouse");
+    CHECK_STR(items[1].body, "off");
+
+    /* A choice setting offers every word from its own `values` string —
+     * the same one the usage message prints. */
+    snprintf(app->overlay.setting, sizeof(app->overlay.setting), "media");
+    n = overlay_items_locked(app, items, 64);
+    CHECK_LONG(n, 4);
+    const char *want[] = { "on", "off", "all", "first-party" };
+    for (size_t i = 0; i < 4; i++) {
+        CHECK(strstr(items[i].label, want[i]) != NULL);
+        CHECK_STR(items[i].body, want[i]);
+    }
+
+    /* Free text has no list, so it offers the two things always true of
+     * it: type something, or empty it. */
+    snprintf(app->overlay.setting, sizeof(app->overlay.setting), "stt.url");
+    n = overlay_items_locked(app, items, 64);
+    CHECK_LONG(n, 2);
+    CHECK_LONG(items[0].action, ACT_SET_EDIT);
+    CHECK_LONG(items[1].action, ACT_SET_VALUE);
+    CHECK_STR(items[1].body, "");
+
+    /* EVERY setting answers with something — a row whose right-click
+     * produced an empty menu would look broken. */
+    for (size_t i = 0; i < settings_count(); i++) {
+        snprintf(app->overlay.setting, sizeof(app->overlay.setting), "%s", SETTINGS[i].name);
+        CHECK(overlay_items_locked(app, items, 64) > 0);
+    }
+
+    /* A name that is not a setting offers nothing rather than guessing. */
+    snprintf(app->overlay.setting, sizeof(app->overlay.setting), "nonesuch");
+    CHECK_LONG(overlay_items_locked(app, items, 64), 0);
+
+    free_app(app);
+}
+
 /* Three threads send on one websocket; a ref must belong to one of them.
  *
  * ws_ref was incremented from main, the job worker and the model thread
@@ -1943,6 +2003,7 @@ int main(void) {
     RUN(a_memory_filename_is_built_not_taken);
     RUN(two_identities_get_two_bot_directories);
     RUN(an_accented_character_survives_typing_and_one_backspace);
+    RUN(a_settings_menu_offers_what_the_setting_accepts);
     RUN(a_websocket_ref_is_never_handed_out_twice);
     RUN(the_model_thread_announces_that_it_stopped);
     RUN(retiring_an_echo_moves_every_row_not_just_its_text);
