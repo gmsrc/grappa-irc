@@ -2504,6 +2504,34 @@ const ScrollbackPane: Component<Props> = (props) => {
     if (winner) dispatchScrollWrite(winner);
   };
 
+  // #608 (deep-review §6.4) — the prepend-preserve applier entrypoint. UNLIKE
+  // the commit-frame intents, loadMore preserve is POST-AWAIT: an older page is
+  // fetched, PREPENDED, and the reader's on-screen row must stay put across that
+  // mutation. It is a DISTINCT entrypoint (not `resolveIntent` at the commit
+  // frame) because the restore needs the geometry captured BEFORE the await and
+  // runs on the commit AFTER the prepend lands — the commit-frame length-effect
+  // already ran for that same rows() change and, per the followMode gate, left a
+  // scrolled-up reader in place. `prepend-preserve` is the LOWEST precedence in
+  // the array: it never fights a higher authority because it fires only on the
+  // operator's own scroll-to-top / #230 underfill-rescue, when nothing higher is
+  // arming. The single owner of the W6 write; logs via the shared dev-log.
+  // `oldScrollHeight` / `oldScrollTop` are the geometry captured pre-await.
+  const applyPrependPreserve = (oldScrollHeight: number, oldScrollTop: number): void => {
+    if (!listRef) return;
+    const intent: ScrollIntent = { kind: "prepend-preserve", key: key(), lifetime: "one-shot" };
+    const newScrollHeight = listRef.scrollHeight;
+    if (newScrollHeight === oldScrollHeight) {
+      // No growth (empty / already-exhausted page) — nothing prepended, nothing
+      // to preserve.
+      logScrollDecision("prepend-preserve", [intent], null, "no-growth");
+      return;
+    }
+    logScrollDecision("prepend-preserve", [intent], intent, "prepend-preserve");
+    // The prepended rows sit ABOVE the viewport, so shifting scrollTop by the
+    // growth keeps the row the reader was looking at in the same on-screen spot.
+    listRef.scrollTop = newScrollHeight - oldScrollHeight + oldScrollTop;
+  };
+
   // After Solid commits new DOM nodes, scroll to the tail iff the user
   // was at the bottom before the update (auto-follow). The effect tracks
   // `rows().length` so it re-runs on every append AND on cursor
@@ -2622,10 +2650,10 @@ const ScrollbackPane: Component<Props> = (props) => {
   // jump to the new top (scrollTop=0 stays pinned) — where they were already
   // looking — or stay numerically pinned to scrollTop=N relative to the OLD
   // scrollHeight, which is now a different position relative to the new
-  // content. We capture (scrollHeight, scrollTop) BEFORE the await, then after
-  // merge restore as `newScrollHeight - oldScrollHeight + oldScrollTop` so the
-  // rows the user was looking at remain in the same on-screen position. DOM
-  // mutation lives here in the component; lib/scrollback.ts stays DOM-free.
+  // content. We capture (scrollHeight, scrollTop) BEFORE the await, then the
+  // #608 applier's post-await `applyPrependPreserve` restores the reader's row
+  // via the height delta (see its doc). DOM mutation lives here in the
+  // component; lib/scrollback.ts stays DOM-free.
   const maybeLoadOlder = (): void => {
     if (!listRef) return;
     if (listRef.scrollTop > LOAD_MORE_THRESHOLD_PX) return;
@@ -2635,12 +2663,9 @@ const ScrollbackPane: Component<Props> = (props) => {
     // operator scrolled UP).
     const oldScrollHeight = listRef.scrollHeight;
     const oldScrollTop = listRef.scrollTop;
-    void loadMoreScrollback(props.networkSlug, props.channelName).then(() => {
-      if (!listRef) return;
-      const newScrollHeight = listRef.scrollHeight;
-      if (newScrollHeight === oldScrollHeight) return;
-      listRef.scrollTop = newScrollHeight - oldScrollHeight + oldScrollTop;
-    });
+    void loadMoreScrollback(props.networkSlug, props.channelName).then(() =>
+      applyPrependPreserve(oldScrollHeight, oldScrollTop),
+    );
   };
 
   const onWheel = (e: WheelEvent): void => {
