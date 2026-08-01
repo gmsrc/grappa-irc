@@ -59,9 +59,14 @@ defmodule Grappa.Net.SourceAliasManager do
 
   @arm_key {__MODULE__, :arm}
 
-  # arm/1 shells out to the wrapper's `probe` (up to the adapter's @timeout_s);
-  # the GenServer.call budget must exceed that so a slow probe returns a reason
-  # instead of crashing the caller on the default 5s call timeout.
+  # Every mailbox-serialized call here (acquire/release/reconcile/arm) shells
+  # out to the adapter (ifconfig add/del/probe, up to the adapter's @timeout_s
+  # ceiling); the GenServer.call budget must exceed that ceiling so a slow
+  # shell-out returns an {:error, _} the caller can handle instead of crashing
+  # it with the default 5s call-timeout EXIT (e.g. a set-time `arm` probe
+  # blocking a concurrent connect's `acquire`). A pathological QUEUE of several
+  # slow shell-outs can still exceed this — a pre-existing mailbox-serialization
+  # limit, not introduced by the runtime probe.
   @call_timeout 15_000
 
   @type state :: %{
@@ -86,7 +91,8 @@ defmodule Grappa.Net.SourceAliasManager do
   never created.
   """
   @spec acquire(String.t()) :: :ok | {:error, term()}
-  def acquire(addr) when is_binary(addr), do: GenServer.call(__MODULE__, {:acquire, addr})
+  def acquire(addr) when is_binary(addr),
+    do: GenServer.call(__MODULE__, {:acquire, addr}, @call_timeout)
 
   @doc """
   Drop a reference to `addr` (ref-count 1→0 unbinds via the adapter). A
@@ -95,14 +101,15 @@ defmodule Grappa.Net.SourceAliasManager do
   boot reconcile is the backstop that reclaims a stuck alias).
   """
   @spec release(String.t()) :: :ok
-  def release(addr) when is_binary(addr), do: GenServer.call(__MODULE__, {:release, addr})
+  def release(addr) when is_binary(addr),
+    do: GenServer.call(__MODULE__, {:release, addr}, @call_timeout)
 
   @doc """
   Release the alias orphans — bound at the OS layer but not in the held set.
   See the moduledoc + `held_addresses/1`.
   """
   @spec reconcile() :: :ok
-  def reconcile, do: GenServer.call(__MODULE__, :reconcile)
+  def reconcile, do: GenServer.call(__MODULE__, :reconcile, @call_timeout)
 
   @doc """
   Probe `prefix` and, on success, adopt it as the manager's working prefix and

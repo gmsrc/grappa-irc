@@ -826,6 +826,14 @@ than egressing from the shared kernel-default source.
   Bootstrap spawns sessions) the `SourceAliasManager` sweeps orphan
   aliases a crashed prior run left bound (`ifconfig lo0` on FreeBSD;
   no-op on Linux/AnyIP), so a hard crash does not leak `/128` aliases.
+- **Renumbering (changing the prefix) with LIVE mode-2 sessions leaks the
+  old aliases.** A successful `PUT /admin/settings` prefix change takes effect
+  at runtime (#609), but sessions already bound to the OLD prefix keep those
+  `/128` aliases (correct — an in-use source must not be removed), and neither
+  a later release nor the reconcile sweep (both scoped to the NEW prefix) can
+  reclaim them, so the old `lo0` aliases linger until a manual `ifconfig lo0
+  inet6 <old-addr>/128 -alias`. To renumber cleanly, disconnect mode-2 sessions
+  first (or accept the manual cleanup). A full live-renumber is not supported.
 
 **fail2ban gotcha.** fail2ban runs on the **host** (9 jails incl.
 `http-404`, `http-ratelimit`, `recidive`). A cic client looping on a

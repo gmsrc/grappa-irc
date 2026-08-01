@@ -25862,7 +25862,17 @@ so a pre-existing alias is never disturbed. The elegant part: because the canary
 is derived from the **DB** prefix while the wrapper's in-prefix guard scopes
 against its **config-file** prefix, a DB↔substrate drift surfaces for free as
 exit 65 → `:prefix_mismatch`. No duplicated "compare the two prefixes" state —
-the mismatch falls out of the existing guard. Reasons: 65→`:prefix_mismatch`,
+the mismatch falls out of the existing guard. **Blind spot (accepted, review
+2026-08-01):** the canary is the network base (host-0), so a config prefix that
+is strictly NARROWER than the DB prefix but shares its base (e.g. DB `/64`,
+config `/80`, both `…cb::`) contains the base → the probe passes and arms, yet
+real derived sources (random 48-bit host bits) fall outside the narrower config
+and are refused at acquire → sessions HELD. It is fail-safe (held, never wrong
+egress) and requires a hand-edit that deviates from the deploy-render (which
+writes the config FROM the DB prefix, so they match). A canary carrying a
+host bit set just below the DB boundary would close this — deferred as a
+possible follow-up, not folded into the review fix on a held branch. Reasons:
+65→`:prefix_mismatch`,
 66→`:prefix_config_unavailable`, 69→`:alias_not_permitted`, sudo's own exit 1 /
 missing binary → `:wrapper_unavailable`, timeout → `:probe_timeout`.
 
@@ -25891,3 +25901,17 @@ DB prefix and the manager's `ensure_source` guard refuses it (`:outside_prefix`)
 so the session is HELD, never egressing wrong — and it self-corrects on the next
 successful set or at boot. The alternative (persist-then-arm) would violate the
 "probe FIRST, do not persist" contract, so this ordering is deliberate.
+
+**Second accepted limitation (runtime renumber, review 2026-08-01):** because
+`arm/1` adopts the new prefix as the manager's working prefix, changing the
+mode-2 prefix while mode-2 sessions are LIVE leaks their old-prefix `/128`
+aliases. The live sessions still bind the old addresses (correct — you must not
+`-alias` an in-use source), but when such a holder later releases,
+`release_source(D_old, prefix=P_new)` fails `in_cidr6?` (`:outside_prefix`) and
+the boot reconcile only sweeps within the CURRENT prefix, so `D_old` on `lo0`
+lingers until a manual `ifconfig -alias`. A full runtime renumber (tracking each
+alias's own prefix, or reconciling both) is out of #609's scope; the operator
+guidance (OPERATIONS.md) is to disconnect mode-2 sessions before renumbering, or
+accept the manual cleanup. This is not new to #609 in kind — any prefix change
+orphans out-of-current-prefix aliases from the reconcile sweep — but #609 makes
+a runtime prefix change take effect without a reboot, so it is now reachable.

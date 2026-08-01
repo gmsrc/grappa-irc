@@ -6,10 +6,11 @@ defmodule Grappa.Net.SourceAlias.FreeBSD do
   seam (`Grappa.Net.SourceAlias.Config.cmd/0`).
 
   The wrapper — not a bare `sudo ifconfig` — is the privilege boundary: it
-  hard-codes `lo0` + `/128` and refuses any address outside the compiled/env
-  prefix (an unconstrained `sudo ifconfig` is a privilege hole, Global
-  Constraint). This adapter mirrors that guard in-process (`in_cidr6?/2`
-  BEFORE shelling) so an out-of-prefix address never even reaches `sudo`.
+  hard-codes `lo0` + `/128` and refuses any address outside its configured
+  prefix (read from a root-owned config file, #609; an unconstrained `sudo
+  ifconfig` is a privilege hole, Global Constraint). This adapter mirrors that
+  guard in-process (`in_cidr6?/2` BEFORE shelling) so an out-of-prefix address
+  never even reaches `sudo`.
 
   `ensure_source` / `release_source` add / delete the alias; `arm_check`
   proves the substrate can ACTUALLY alias — the wrapper's `probe` subcommand
@@ -26,7 +27,7 @@ defmodule Grappa.Net.SourceAlias.FreeBSD do
   alias Grappa.Net.SourceAlias.Config
 
   # sudoers-scoped wrapper; resolved on the operator's secure_path (see
-  # docs/OPERATIONS.md). subcommands: add | del | check.
+  # docs/OPERATIONS.md). subcommands: add | del | probe.
   @wrapper "grappa-source-alias"
   # Wall-clock ceiling for the ifconfig shell-out — an alias add/del is
   # sub-second; 10s is generous slack, not a tuning knob.
