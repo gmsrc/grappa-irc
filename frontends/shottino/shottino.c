@@ -1,8 +1,8 @@
-// Shottino, a standalone terminal client for grappa.
-//
-// Contract: authenticate against grappa's REST API, read scrollback via REST,
-// send PRIVMSG/JOIN/PART via REST, and subscribe to Phoenix Channels for live
-// typed JSON events. The client never parses IRC framing.
+/* Shottino, a standalone terminal client for grappa.
+ *
+ * Contract: authenticate against grappa's REST API, read scrollback via REST,
+ * send PRIVMSG/JOIN/PART via REST, and subscribe to Phoenix Channels for live
+ * typed JSON events. The client never parses IRC framing. */
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -1547,10 +1547,10 @@ static char *dup_range(const char *s, size_t len) {
     return out;
 }
 
-// Split a share link `https://host[:port]/share/<token>` (the URL cic mints,
-// `${origin}/share/${token}`) into its base origin and the percent-decoded
-// token. Tolerates a hash-router artifact (`.../#/share/<token>`) and trailing
-// query/fragment after the token. Returns false if no `/share/` segment.
+/* Split a share link `https://host[:port]/share/<token>` (the URL cic mints,
+ * `${origin}/share/${token}`) into its base origin and the percent-decoded
+ * token. Tolerates a hash-router artifact (`.../#/share/<token>`) and trailing
+ * query/fragment after the token. Returns false if no `/share/` segment. */
 static bool split_share_url(const char *url, char **base_out, char **token_out) {
     const char *marker = strstr(url, "/share/");
     if (!marker) return false;
@@ -4091,9 +4091,9 @@ static char *login_identifier_for_mode(const char *mode, const char *identifier)
     return xasprintf("%s", identifier);
 }
 
-// Visitor session-sharing — consume side. Unauthenticated by design: the
-// signed token IS the credential. POST /auth/share/consume {token} returns the
-// same wire shape as /auth/login ({token, subject}) for the SAME visitor row.
+/* Visitor session-sharing — consume side. Unauthenticated by design: the
+ * signed token IS the credential. POST /auth/share/consume {token} returns the
+ * same wire shape as /auth/login ({token, subject}) for the SAME visitor row. */
 static bool consume_share(struct app *app, const char *share_token) {
     char *t = json_escape(share_token);
     char *body = xasprintf("{\"token\":\"%s\"}", t);
@@ -4112,10 +4112,10 @@ static bool consume_share(struct app *app, const char *share_token) {
     return true;
 }
 
-// Mirror of attach_or_login for the share path: reattach a previously consumed
-// session if its bearer still validates, else consume the one-shot share token.
-// Keyed on a fixed "visitor-share" identifier so a relaunch with the (now
-// spent) link reattaches via the saved bearer instead of a doomed re-consume.
+/* Mirror of attach_or_login for the share path: reattach a previously consumed
+ * session if its bearer still validates, else consume the one-shot share token.
+ * Keyed on a fixed "visitor-share" identifier so a relaunch with the (now
+ * spent) link reattaches via the saved bearer instead of a doomed re-consume. */
 static bool attach_or_consume(struct app *app, const char *base, const char *share_token) {
     char *path = token_path_for(base, "visitor-share");
     snprintf(app->token_path, sizeof(app->token_path), "%s", path);
@@ -9280,106 +9280,90 @@ static bool own_op_in_focused_window_locked(struct app *app) {
  * time it is drawn or acted on, so a message arriving under an open
  * picker cannot make the highlighted row mean something else than what
  * gets sent. Caller holds app->lock. */
+/* One menu entry, with the bound checked where it cannot be forgotten.
+ *
+ * Every entry used to be four lines — label, nick, action, and then
+ * `if (++n >= max) return n;` — repeated ten times. The repetition is
+ * harmless; the GUARD is the part a copy drops, and the eleventh entry
+ * is where that gets discovered. Returns false when the list is full, so
+ * the caller stops asking. */
+static bool menu_add(struct overlay_item *out, size_t *n, size_t max, enum overlay_action action,
+                     const char *nick, const char *body, const char *fmt, ...)
+    __attribute__((format(printf, 7, 8)));
+
+static bool menu_add(struct overlay_item *out, size_t *n, size_t max, enum overlay_action action,
+                     const char *nick, const char *body, const char *fmt, ...) {
+    if (*n >= max) return false;
+    struct overlay_item *it = &out[(*n)++];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(it->label, sizeof(it->label), fmt, ap);
+    va_end(ap);
+    snprintf(it->nick, sizeof(it->nick), "%s", nick ? nick : "");
+    snprintf(it->body, sizeof(it->body), "%s", body ? body : "");
+    it->action = action;
+    return *n < max;
+}
+
 static size_t overlay_items(struct app *app, struct overlay_item *out, size_t max) {
     if (max == 0) return 0;
     struct overlay *ov = &app->overlay;
     size_t n = 0;
     if (ov->kind == OVERLAY_MENU) {
-        /* A picture under the pointer, rather than a person. The URL rides
-         * in `body` so the actions themselves are the SAME ones the media
-         * picker already uses — a second implementation of "preview this"
-         * is a second thing that can drift from /preview. */
+        /* A picture under the pointer, rather than a person. The URL
+         * rides in `body` so the actions are the SAME ones the media
+         * picker already uses — a second implementation of "preview
+         * this" is a second thing that can drift from /preview. */
         if (ov->media[0]) {
             enum media_kind mk = media_kind_of(ov->media);
             if (mk == MEDIA_AUDIO) {
-                snprintf(out[n].label, sizeof(out[n].label), "Play %.900s", ov->media);
-                snprintf(out[n].body, sizeof(out[n].body), "%s", ov->media);
-                out[n].action = ACT_PREVIEW;
-                if (++n >= max) return n;
-            } else {
-                snprintf(out[n].label, sizeof(out[n].label), "Preview here");
-                snprintf(out[n].body, sizeof(out[n].body), "%s", ov->media);
-                out[n].action = ACT_PREVIEW;
-                if (++n >= max) return n;
-                snprintf(out[n].label, sizeof(out[n].label), "Open in viewer");
-                snprintf(out[n].body, sizeof(out[n].body), "%s", ov->media);
-                out[n].action = ACT_VIEW;
-                if (++n >= max) return n;
-                /* Offered only when there is something drawn to hide: on a
-                 * link whose picture is not inline (media off, a
-                 * third-party host under `first-party`, a failed decode)
-                 * the entry would do nothing visible. */
-                if (media_shown_locked(app, ov->media)) {
-                    snprintf(out[n].label, sizeof(out[n].label), "Hide this picture");
-                    snprintf(out[n].body, sizeof(out[n].body), "%s", ov->media);
-                    out[n].action = ACT_HIDE;
-                    if (++n >= max) return n;
-                }
+                menu_add(out, &n, max, ACT_PREVIEW, "", ov->media, "Play %.900s", ov->media);
+                return n;
             }
+            if (!menu_add(out, &n, max, ACT_PREVIEW, "", ov->media, "Preview here")) return n;
+            if (!menu_add(out, &n, max, ACT_VIEW, "", ov->media, "Open in viewer")) return n;
+            /* Offered only when there is something drawn to hide: on a
+             * link whose picture is not inline (media off, a third-party
+             * host under `first-party`, a failed decode) the entry would
+             * do nothing visible. */
+            if (media_shown_locked(app, ov->media))
+                menu_add(out, &n, max, ACT_HIDE, "", ov->media, "Hide this picture");
             return n;
         }
         if (!ov->nick[0]) return n;
-        /* Replying needs something they SAID, which a roster row does not
-         * have: the menu offers what the thing under the pointer can
+        /* Replying needs something they SAID, which a roster row does
+         * not have: the menu offers what the thing under the pointer can
          * actually do, rather than an entry that fails when chosen. */
-        if (ov->body[0]) {
-            snprintf(out[n].label, sizeof(out[n].label), "Reply to %s", ov->nick);
-            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-            snprintf(out[n].body, sizeof(out[n].body), "%s", ov->body);
-            out[n].action = ACT_REPLY;
-            if (++n >= max) return n;
-        }
-        snprintf(out[n].label, sizeof(out[n].label), "Open query with %s", ov->nick);
-        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-        out[n].action = ACT_QUERY;
-        if (++n >= max) return n;
-        snprintf(out[n].label, sizeof(out[n].label), "Whois %s", ov->nick);
-        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-        out[n].action = ACT_WHOIS;
-        if (++n >= max) return n;
-        snprintf(out[n].label, sizeof(out[n].label), "Ping %s", ov->nick);
-        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-        out[n].action = ACT_PING;
-        if (++n >= max) return n;
+        if (ov->body[0] &&
+            !menu_add(out, &n, max, ACT_REPLY, ov->nick, ov->body, "Reply to %s", ov->nick))
+            return n;
+        if (!menu_add(out, &n, max, ACT_QUERY, ov->nick, "", "Open query with %s", ov->nick))
+            return n;
+        if (!menu_add(out, &n, max, ACT_WHOIS, ov->nick, "", "Whois %s", ov->nick)) return n;
+        if (!menu_add(out, &n, max, ACT_PING, ov->nick, "", "Ping %s", ov->nick)) return n;
         /* Block is a toggle: offering "Block" for somebody already
          * blocked is an entry that does nothing, and the list is the one
          * place the user can see the state at all without /block. */
         bool blocked = is_blocked_locked(app, ov->nick);
-        snprintf(out[n].label, sizeof(out[n].label), "%s %s", blocked ? "Unblock" : "Block",
-                 ov->nick);
-        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-        out[n].action = blocked ? ACT_UNBLOCK : ACT_BLOCK;
-        if (++n >= max) return n;
+        if (!menu_add(out, &n, max, blocked ? ACT_UNBLOCK : ACT_BLOCK, ov->nick, "", "%s %s",
+                      blocked ? "Unblock" : "Block", ov->nick))
+            return n;
         /* The op entries, offered only where they would WORK: a channel,
          * and one this user carries @ in. A menu that lists /kick for
          * somebody who cannot kick teaches the user that the client
          * lies — the server would answer 482 and nothing would happen. */
         if (own_op_in_focused_window_locked(app)) {
-            snprintf(out[n].label, sizeof(out[n].label), "Kick %s", ov->nick);
-            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-            out[n].action = ACT_KICK;
-            if (++n >= max) return n;
-            snprintf(out[n].label, sizeof(out[n].label), "Ban %s", ov->nick);
-            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-            out[n].action = ACT_BAN;
-            if (++n >= max) return n;
-            snprintf(out[n].label, sizeof(out[n].label), "Kick and ban %s", ov->nick);
-            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-            out[n].action = ACT_KICKBAN;
-            if (++n >= max) return n;
+            if (!menu_add(out, &n, max, ACT_KICK, ov->nick, "", "Kick %s", ov->nick)) return n;
+            if (!menu_add(out, &n, max, ACT_BAN, ov->nick, "", "Ban %s", ov->nick)) return n;
+            if (!menu_add(out, &n, max, ACT_KICKBAN, ov->nick, "", "Kick and ban %s", ov->nick))
+                return n;
         }
         /* The oper action is network-wide, not channel-scoped: it is
          * offered wherever the person is, query windows included. */
-        if (own_oper_on_network_locked(app)) {
-            snprintf(out[n].label, sizeof(out[n].label), "Kill %s", ov->nick);
-            snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-            out[n].action = ACT_KILL;
-            if (++n >= max) return n;
-        }
-        snprintf(out[n].label, sizeof(out[n].label), "Type %s", ov->nick);
-        snprintf(out[n].nick, sizeof(out[n].nick), "%s", ov->nick);
-        out[n].action = ACT_INSERT;
-        n++;
+        if (own_oper_on_network_locked(app) &&
+            !menu_add(out, &n, max, ACT_KILL, ov->nick, "", "Kill %s", ov->nick))
+            return n;
+        menu_add(out, &n, max, ACT_INSERT, ov->nick, "", "Type %s", ov->nick);
         return n;
     }
     /* The media picker: the last PICKER_MAX pictures and clips posted in
@@ -11166,10 +11150,10 @@ static void show_command_help(struct app *app, const char *raw) {
     else log_line(app, "no help for /%s; use /help for the command list", cmd);
 }
 
-// Visitor session-sharing — mint side. POST /me/share-token (visitor-only;
-// the server 403s a registered user) returns {token, expires_at}. We wrap the
-// token in `<base>/share/<token>` — the URL the other device feeds to
-// /share/<token> (consume) to land on this same session.
+/* Visitor session-sharing — mint side. POST /me/share-token (visitor-only;
+ * the server 403s a registered user) returns {token, expires_at}. We wrap the
+ * token in `<base>/share/<token>` — the URL the other device feeds to
+ * /share/<token> (consume) to land on this same session. */
 static void mint_share_link(struct app *app) {
     struct http_response r = http_request(app, "POST", "/me/share-token", NULL);
     if (r.status == 403) {
