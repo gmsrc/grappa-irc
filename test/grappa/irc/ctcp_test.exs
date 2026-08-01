@@ -38,4 +38,50 @@ defmodule Grappa.IRC.CTCPTest do
       refute CTCP.action?("\x01")
     end
   end
+
+  # #591 — general CTCP verb+args classifier in the SSOT. The single parser
+  # both the inbound NOTICE arm (a peer's CTCP PING reply → `meta.ctcp` with
+  # verb "PING" + the echoed token) and the outbound self-echo persist (the
+  # operator's own `/ctcp`/`/ping` → `meta.ctcp` so cic renders "→ CTCP VERB"
+  # instead of raw \x01) route through. cic reads the TYPED `meta.ctcp`, never
+  # \x01 (CLAUDE.md "one IRC parser, on the server; cic never parses IRC").
+  # ACTION keeps its own `:action` kind (action?/1) — this is the escape hatch
+  # for every OTHER verb.
+  describe "verb_args/1" do
+    test "verb with no argument (VERSION)" do
+      assert CTCP.verb_args("\x01VERSION\x01") == {"VERSION", ""}
+    end
+
+    test "verb with an argument token (PING)" do
+      assert CTCP.verb_args("\x01PING 1706743200000\x01") == {"PING", "1706743200000"}
+    end
+
+    test "args preserve interior spaces (opaque echo — don't re-tokenize)" do
+      assert CTCP.verb_args("\x01PING 1706 743\x01") == {"PING", "1706 743"}
+    end
+
+    test "classifies ACTION too (caller decides ACTION keeps its own kind)" do
+      assert CTCP.verb_args("\x01ACTION waves at the channel\x01") == {"ACTION", "waves at the channel"}
+    end
+
+    test "lenient when the trailing \\x01 is absent (mirrors action?/1)" do
+      assert CTCP.verb_args("\x01VERSION") == {"VERSION", ""}
+      assert CTCP.verb_args("\x01PING 1706743200000") == {"PING", "1706743200000"}
+    end
+
+    test "empty argument after the space yields an empty args string" do
+      assert CTCP.verb_args("\x01PING \x01") == {"PING", ""}
+    end
+
+    test ":none for a non-CTCP body, empty body, or a bare delimiter" do
+      assert CTCP.verb_args("hello world") == :none
+      assert CTCP.verb_args("") == :none
+      assert CTCP.verb_args("\x01") == :none
+    end
+
+    test ":none when no verb follows the opening delimiter" do
+      # `\x01 VERSION` — a space before any verb token means no verb.
+      assert CTCP.verb_args("\x01 VERSION") == :none
+    end
+  end
 end

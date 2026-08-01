@@ -52,4 +52,48 @@ defmodule Grappa.IRC.CTCP do
   @spec framed?(binary()) :: boolean()
   def framed?(<<0x01, _::binary>>), do: true
   def framed?(_), do: false
+
+  @doc """
+  Classifies any CTCP frame into its `{verb, args}` (#591).
+
+  A CTCP body is `\\x01<VERB>[ <args>]\\x01` (trailing `\\x01` optional, per
+  the same leniency as `action?/1`). Returns `{verb, args}` — `args` is `""`
+  when the verb carries none, and preserves interior spaces verbatim (the
+  argument is an opaque echo, e.g. a PING token, never re-tokenized). Returns
+  `:none` for a non-CTCP body, an empty body, a bare `\\x01`, or a frame whose
+  opening delimiter is not immediately followed by a verb.
+
+  This is the SINGLE CTCP verb parser shared by BOTH directions so they cannot
+  drift (the #14 lesson): the inbound EventRouter NOTICE arm tags a peer's CTCP
+  PING reply, and the outbound `Session.Server` self-echo persist tags the
+  operator's own `/ctcp`/`/ping` — both into a typed `meta.ctcp` cic consumes
+  WITHOUT ever touching `\\x01`. `ACTION` is classified here too, but callers
+  keep routing it through its dedicated `:action` kind (`action?/1`); every
+  OTHER verb rides `meta.ctcp`.
+  """
+  @spec verb_args(binary()) :: {String.t(), String.t()} | :none
+  def verb_args(<<0x01, rest::binary>>) do
+    case String.split(strip_trailing_delim(rest), " ", parts: 2) do
+      [verb | _] when verb == "" -> :none
+      [verb] -> {verb, ""}
+      [verb, args] -> {verb, args}
+    end
+  end
+
+  def verb_args(_), do: :none
+
+  # Drops a single trailing `\x01` (CTCP's optional closing delimiter) so the
+  # last argument doesn't carry the delimiter byte. Byte-level per "IRC is
+  # bytes"; safe on an empty binary.
+  @spec strip_trailing_delim(binary()) :: binary()
+  defp strip_trailing_delim(""), do: ""
+
+  defp strip_trailing_delim(bin) do
+    last_at = byte_size(bin) - 1
+
+    case binary_part(bin, last_at, 1) do
+      <<0x01>> -> binary_part(bin, 0, last_at)
+      _ -> bin
+    end
+  end
 end

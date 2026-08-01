@@ -25162,3 +25162,72 @@ control inside the panel is `none`, under the active is-ios kill, mirroring
 (without the fix the panel computes `none`). Real long-press selection is not
 emulatable on Playwright webkit, so computed style is the testable boundary;
 device dogfood is the final iOS check.
+## 2026-08-01 — #591 CTCP send side: `/ctcp`, `/ping`, and one CTCP parser on the server
+
+cicchetto had no `/ctcp` and no `/ping` — both standard irssi client verbs.
+This is the SEND side (the receive side of `/me` ACTION shipped in #14). Two
+decisions drove the shape.
+
+**One IRC parser, on the server (the invariant held).** The tempting cic-side
+approach — inspect the incoming NOTICE body for `\x01PING <token>\x01` to
+correlate an RTT — was rejected: it would be the first place cic parses CTCP
+framing out of a body, breaking "one IRC parser, on the server; cic never
+parses IRC." Instead the server SSOT `Grappa.IRC.CTCP` gained `verb_args/1`
+(classify any `\x01VERB [args]\x01` into `{verb, args} | :none`), the sibling
+to the existing `action?/1`. The EventRouter NOTICE arm tags a peer's CTCP
+reply with typed **flat** meta `ctcp_verb` / `ctcp_args`, and the Session.Server
+outbound self-echo persist tags the operator's own `/ctcp`/`/ping` the same
+way — both through the ONE SSOT, so the two halves cannot drift (the #14
+lesson). cic reads `meta.ctcp_verb` / `meta.ctcp_args` typed and never touches
+`\x01`. The `\x01` body is preserved verbatim (round-trip fidelity).
+
+**Flat meta keys, not nested.** `Grappa.Scrollback.Meta` atomizes only
+top-level keys and its moduledoc bans nested string-keyed maps (the B6.1 note),
+so the shape is `ctcp_verb` + `ctcp_args`, not `ctcp: %{...}`. Adding them was
+the standard cost of any new meta field: `@known_keys` + `@type` + `@spec` in
+`meta.ex`, and the synced Logger `:metadata` allowlist in `config/config.exs`
+(the A18 sync test enforces the pair). This makes #591 **cold-forcing** via the
+config change.
+
+**The RTT line is synthesized client-side, in the source window.** Per the
+maintainer ruling: the RTT is NOT a routed NOTICE — cic correlates the reply's
+token (from `meta.ctcp_args`) against a pending-`/ping` table keyed by
+`(network, nick, token)`, and on a match synthesizes the round-trip line into
+the window where `/ping` was typed (irssi behavior), consuming the reply. No
+match → the notice falls through to its normal routing untouched (the #546/#548
+domain), so the change is strictly additive. (shottino's own `/ping` uses the
+same correlation-table shape — see the 2026-08-01 shottino note.)
+
+**Outbound self-echo cleanup is part of the feature, not scope creep.** Before
+#591 a CTCP frame could not be typed at all, so the raw-`\x01` self-echo is a
+wart this feature *creates*; shipping `/ctcp`/`/ping` with a raw control-char
+line in the sender's own window would be visibly broken every time. The fix is
+the same SSOT + the same persist call-site that already classifies ACTION —
+inbound and outbound classified identically. ACTION itself is never tagged into
+meta (it rides its dedicated `:action` kind).
+
+**Inbound PING answer re-landed (86416a21/96bedfdd) — the duplication this note
+predicted is now REAL, in the same file.** The "answer incoming CTCP PING"
+feature (reverted once as 3d690e0a → 6b96b199 for a Credo-strict `do_route`
+complexity 10>9) re-landed the same day as `86416a21` + `96bedfdd`: the answer
+moved into `ctcp_ping_reply/4` (out of the over-complex `do_route` clause) and
+`Grappa.IRC.CTCP.framed?/1` was added so a CTCP-framed reply NOTICE routes to
+`$server` instead of minting a peer query window. Two consequences for #591,
+both handled at the rebase onto `96bedfdd`:
+
+1. **Routing.** A peer's CTCP PING *reply* now persists on `$server` (not
+   `channel = peer`). #591's `ctcp_meta/1` tags it there all the same, and cic
+   is ALWAYS subscribed to `$server`, so the RTT-correlation gate
+   (`subscribe.ts maybeConsumePingReply`, top of `routeMessage`) receives it
+   with no query-window subscribe race. The event_router test asserts the
+   `$server` channel AND the typed meta together.
+2. **Duplication (the one this note predicted).** The re-land added
+   `ctcp_payload/1` — a byte-for-byte duplicate of `verb_args/1`'s
+   arg-extraction — while the pre-existing `ctcp_verb/1` already duplicates the
+   verb half. `framed?/1` is NOT a duplicate (it asks "opens with `\x01` at
+   all", true even for a bare `\x01`; `verb_args/1` returns `:none` there — a
+   distinct, correctly-co-located SSOT primitive). Routing `ctcp_verb/1` +
+   `ctcp_payload/1` through the single `CTCP.verb_args/1` is the correct "one
+   CTCP parser on the server" cleanup, but it touches another author's
+   just-landed code plus a pre-existing helper, so it is proposed to vjt
+   rather than folded silently into #591's send-side scope.

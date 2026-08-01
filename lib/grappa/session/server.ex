@@ -3446,7 +3446,15 @@ defmodule Grappa.Session.Server do
           # for the inbound side; nil → %{} for DM targets / plain grade.
           # Members-map lookup uses the folded `key` (EventRouter keys the
           # members map by the folded channel too).
-          meta: own_sender_prefix_meta(state, key),
+          #
+          # #591 — merge the typed `meta.ctcp` for the operator's OWN outbound
+          # CTCP self-echo (`/ctcp`, `/ping`), so cic renders "→ CTCP VERB"
+          # instead of the raw \x01 body of the query it just sent. Same SSOT
+          # (`Grappa.IRC.CTCP.verb_args/1`) and same call-site that already
+          # classifies ACTION at line ~3302 — inbound (EventRouter NOTICE arm)
+          # + outbound classified identically, per the #14 lesson. ACTION keeps
+          # its `:action` kind; cic ignores meta.ctcp on :action rows.
+          meta: Map.merge(own_sender_prefix_meta(state, key), ctcp_self_echo_meta(fragment)),
           # CP14 B3 — outbound DM detection. `Scrollback.dm_peer/4` is
           # the single source for the rule (channel msg vs DM): for
           # outbound, target is the peer iff target is nick-shaped (no
@@ -3488,6 +3496,25 @@ defmodule Grappa.Session.Server do
     case Identifier.member_prefix(sigils) do
       nil -> %{}
       prefix -> %{sender_prefix: prefix}
+    end
+  end
+
+  # #591 — the typed CTCP meta for the operator's OWN outbound CTCP self-echo,
+  # or `%{}` for a plain body. FLAT keys (`ctcp_verb`/`ctcp_args`) — mirrors
+  # `EventRouter.ctcp_meta/1` (the inbound half): both wrap the shared
+  # `Grappa.IRC.CTCP.verb_args/1` SSOT, kept per-site because each persist path
+  # assembles its own meta map. cic reads `meta.ctcp_verb`/`meta.ctcp_args`
+  # (typed) — never \x01. ACTION rides its dedicated `:action` kind; cic ignores
+  # meta.ctcp_* on :action rows.
+  @spec ctcp_self_echo_meta(binary()) ::
+          %{optional(:ctcp_verb) => String.t(), optional(:ctcp_args) => String.t()}
+  defp ctcp_self_echo_meta(fragment) do
+    case CTCP.verb_args(fragment) do
+      # /me ACTION rides its own :action kind (set at line ~3302) — never
+      # double-tag it into meta.
+      {"ACTION", _} -> %{}
+      {verb, args} -> %{ctcp_verb: verb, ctcp_args: args}
+      :none -> %{}
     end
   end
 

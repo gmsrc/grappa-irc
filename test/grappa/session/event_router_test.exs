@@ -870,6 +870,45 @@ defmodule Grappa.Session.EventRouterTest do
                EventRouter.route(m, state)
     end
 
+    # #591 — a peer's CTCP PING reply (a NOTICE from a regular nick carrying a
+    # \x01PING <token>\x01 frame) is PROTOCOL, not conversation: main's
+    # `route_non_channel_notice/3` sends any CTCP-framed NOTICE to `$server`
+    # (86416a21/96bedfdd — no query window minted; the "CTCP-framed NOTICE
+    # lands on $server" test above pins that routing). This test asserts the
+    # ADDITIVE half #591 layers on top: the \x01 body is PRESERVED and typed
+    # flat meta (ctcp_verb/ctcp_args) is attached to THAT $server row, so cic
+    # correlates the token back to the /ping WITHOUT ever parsing \x01.
+    test "peer CTCP PING reply persists on $server with preserved body + typed ctcp meta" do
+      state = base_state()
+
+      m = msg(:notice, ["vjt", "\x01PING 1706743200000\x01"], {:nick, "bob", "u", "h"})
+
+      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+               EventRouter.route(m, state)
+
+      # CTCP-framed NOTICE → $server (protocol, not a DM — mints no window).
+      assert attrs.channel == "$server"
+      assert attrs.sender == "bob"
+      # \x01 preserved verbatim (round-trip fidelity — CLAUDE.md).
+      assert attrs.body == "\x01PING 1706743200000\x01"
+      # Typed classification cic reads instead of touching \x01.
+      assert attrs.meta == %{ctcp_verb: "PING", ctcp_args: "1706743200000"}
+    end
+
+    # #591 — a plain (non-CTCP) peer NOTICE stays exactly as before: empty
+    # meta, no ctcp tag. Proves the classification is strictly additive.
+    test "plain peer NOTICE gets no ctcp meta (additive)" do
+      state = base_state()
+
+      m = msg(:notice, ["vjt", "hey are you around?"], {:nick, "bob", "u", "h"})
+
+      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+               EventRouter.route(m, state)
+
+      assert attrs.channel == "bob"
+      assert attrs.meta == %{}
+    end
+
     # #371 — Azzurra (bahamut) pseudo-services SeenServ / StatServ /
     # DebugServ were absent from the allowlist, so their NOTICE replies
     # fell through to the peer-nick query-window arm (a stray empty

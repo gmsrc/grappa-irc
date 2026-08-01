@@ -3206,6 +3206,61 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "#591 outbound CTCP self-echo classification" do
+    test "own /ctcp + /ping self-echo as :privmsg with typed flat ctcp meta" do
+      # Introducing /ctcp + /ping means the operator's own CTCP query now
+      # self-echoes back. Without classification it renders as a raw \x01 body
+      # in the window they just typed in — a visibly broken feature every time.
+      # Same SSOT (Grappa.IRC.CTCP.verb_args/1) + same persist call-site that
+      # already classifies ACTION → :action, so inbound + outbound agree (#14
+      # lesson). Non-ACTION CTCP keeps :privmsg and carries typed flat meta
+      # (ctcp_verb/ctcp_args) so cic renders "→ CTCP VERB", never \x01.
+      rfc_handler = fn state, line ->
+        if String.starts_with?(line, "USER ") do
+          {:reply, ":server 001 grappa-test :Welcome\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(rfc_handler)
+      {user, network, _} = setup_user_and_network(port)
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      # /ctcp #sniffo VERSION → cic sends \x01VERSION\x01 as the PRIVMSG body.
+      assert {:ok, version_msg} =
+               Session.send_privmsg({:user, user.id}, network.id, "#sniffo", "\x01VERSION\x01")
+
+      # Non-ACTION CTCP keeps :privmsg (ACTION alone earns :action).
+      assert version_msg.kind == :privmsg
+
+      # /ping #sniffo → cic sends \x01PING <token>\x01.
+      assert {:ok, _} =
+               Session.send_privmsg(
+                 {:user, user.id},
+                 network.id,
+                 "#sniffo",
+                 "\x01PING 1706743200000\x01"
+               )
+
+      rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
+
+      version_row = Enum.find(rows, &(&1.body == "\x01VERSION\x01"))
+      assert version_row.kind == :privmsg
+      # Flat keys, and body preserves \x01 verbatim (round-trip fidelity).
+      assert version_row.meta == %{ctcp_verb: "VERSION", ctcp_args: ""}
+
+      ping_row = Enum.find(rows, &(&1.body == "\x01PING 1706743200000\x01"))
+      assert ping_row.kind == :privmsg
+      assert ping_row.meta == %{ctcp_verb: "PING", ctcp_args: "1706743200000"}
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "#25 outbound own sender-prefix snapshot" do
     test "own channel message snapshots the operator's op grade into meta.sender_prefix" do
       # Mirror of the inbound EventRouter capture for the outbound door:

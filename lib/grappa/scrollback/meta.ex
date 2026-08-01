@@ -106,6 +106,18 @@ defmodule Grappa.Scrollback.Meta do
       :nick_change                  →  %{new_nick: String.t()}
       :mode                         →  %{modes: String.t(), args: [String.t()]}
       :kick                         →  %{target: String.t()}     (body carries reason)
+      :notice  | :privmsg           →  %{ctcp_verb: String.t(), ctcp_args: String.t()}
+                                                                 (#591: a CTCP frame classified by
+                                                                  Grappa.IRC.CTCP.verb_args/1 — a peer's
+                                                                  CTCP reply arriving as :notice (e.g.
+                                                                  the PING reply answering our /ping), OR
+                                                                  the operator's OWN outbound /ctcp /ping
+                                                                  self-echo as :privmsg. FLAT keys — cic
+                                                                  reads them typed, never \x01. Both keys
+                                                                  present or neither. args is "" for a
+                                                                  verb with no argument. ACTION is NOT
+                                                                  tagged here — it rides its own :action
+                                                                  kind.)
 
   Phase 1 only writes `:privmsg` rows where `meta = %{}` so Phase 1
   exercises only the empty-map path. The allowlist + atomization is
@@ -141,10 +153,12 @@ defmodule Grappa.Scrollback.Meta do
             | :sender_user
             | :sender_host
             | :sender_prefix
+            | :ctcp_verb
+            | :ctcp_args
           ) => term()
         }
 
-  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix]a
+  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix ctcp_verb ctcp_args]a
 
   @doc """
   The atom-key allowlist. Exposed so the test suite can assert that
@@ -169,7 +183,9 @@ defmodule Grappa.Scrollback.Meta do
           | :raw_params
           | :sender_user
           | :sender_host
-          | :sender_prefix,
+          | :sender_prefix
+          | :ctcp_verb
+          | :ctcp_args,
           ...
         ]
   def known_keys, do: @known_keys

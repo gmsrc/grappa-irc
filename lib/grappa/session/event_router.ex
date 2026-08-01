@@ -2226,7 +2226,14 @@ defmodule Grappa.Session.EventRouter do
               binary_part(target, 0, 1) not in ["#", "&", "!", "+"] do
     sender = Message.sender_nick(msg)
     {channel, body_to_persist} = route_non_channel_notice(sender, body, state)
-    {state, eff} = build_persist(state, :notice, channel, sender, body_to_persist, %{})
+    # #591 — a peer's CTCP reply (a NOTICE carrying `\x01VERB [args]\x01`, e.g.
+    # the CTCP PING reply answering our /ping) is classified ONCE here, on the
+    # server, into a typed `meta.ctcp`. The \x01 body is preserved verbatim
+    # (round-trip fidelity) but cic reads the TYPED meta — never \x01 — to
+    # correlate a PING reply's token back to the /ping it sent (RTT synthesized
+    # client-side). A non-CTCP notice (NickServ, MOTD, plain peer notice) is
+    # `:none` → empty meta, so this is strictly additive.
+    {state, eff} = build_persist(state, :notice, channel, sender, body_to_persist, ctcp_meta(body))
     {:cont, state, [eff]}
   end
 
@@ -2662,6 +2669,28 @@ defmodule Grappa.Session.EventRouter do
   end
 
   defp ctcp_payload(_), do: ""
+
+  # #591 — the typed CTCP meta for a persisted row whose body is a CTCP frame,
+  # or `%{}` for a plain (non-CTCP) body. FLAT keys (`ctcp_verb`/`ctcp_args`)
+  # per the `Grappa.Scrollback.Meta` allowlist convention — that type atomizes
+  # only top-level keys and its moduledoc bans nested string-keyed maps (the
+  # B6.1 note). Classification is single-sourced in the SSOT
+  # `Grappa.IRC.CTCP.verb_args/1` (shared with the outbound self-echo persist in
+  # Session.Server). cic reads `meta.ctcp_verb` / `meta.ctcp_args` (typed) —
+  # never \x01. A future INBOUND CTCP-PING answer (reverted from main as
+  # 3d690e0a) MUST also route through `CTCP.verb_args/1` rather than re-adding an
+  # inline match, so it does not re-collide with this SSOT (DESIGN_NOTES
+  # 2026-08-01).
+  @spec ctcp_meta(binary()) :: %{optional(:ctcp_verb) => String.t(), optional(:ctcp_args) => String.t()}
+  defp ctcp_meta(body) do
+    case CTCP.verb_args(body) do
+      # ACTION rides its own :action kind (a NOTICE-ACTION is non-standard
+      # anyway) — never double-tag it into meta.
+      {"ACTION", _} -> %{}
+      {verb, args} -> %{ctcp_verb: verb, ctcp_args: args}
+      :none -> %{}
+    end
+  end
 
   # Shared default PRIVMSG handler — used by both the generic arm and
   # the CTCP-aware arm's fallthrough for unknown verbs. Pulls out the
