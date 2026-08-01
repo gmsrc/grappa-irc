@@ -38,7 +38,7 @@ import {
 } from "./lib/presenceFilter";
 import { canonicalQueryNick, openQueryWindowState } from "./lib/queryWindows";
 import { getReadCursor } from "./lib/readCursor";
-import { nextFollowMode } from "./lib/scrollAuthority";
+import { nextFollowMode, resolveIntent, type ScrollIntent } from "./lib/scrollAuthority";
 import {
   lastOwnSend,
   loadMore as loadMoreScrollback,
@@ -2379,6 +2379,131 @@ const ScrollbackPane: Component<Props> = (props) => {
     setMarkerCursorId(c);
   });
 
+  // #608 (deep-review §6.3) — THE SINGLE SCROLL APPLIER.
+  //
+  // Historically N effects each independently decided to write `scrollTop` /
+  // `scrollIntoView`, arbitrated only by whichever ran LAST in the frame — the
+  // un-coordinated race the reshape kills. The applier is the ONE place that
+  // resolves precedence (via the pure `resolveIntent` core) and performs the
+  // single winning DOM write, with a dev-only log per run so the next field
+  // report is a log line, not a guess.
+  //
+  // Intents are built from LIVE state at call time: the sticky ones are DERIVED
+  // (overlay-freeze from `isOverlayFrozen()`, marker-activation from the latch +
+  // a rendered divider, tail-follow from `followMode()`); the one-shot ones
+  // (operator-tail, mention-jump) are DECLARED by their trigger and consumed
+  // here. This increment funnels the length-effect (rows() content change)
+  // through it; later increments route the remaining writers (overlay edge,
+  // send, gesture, mention, key-change) in one at a time.
+
+  // Dev-only decision log — (trigger, intents, winner, reason, geometry) per
+  // applier run. Gated on the dev-server MODE: Vite statically replaces
+  // `import.meta.env.MODE`, so this is dead-code-eliminated in the prod bundle
+  // and silent under vitest (MODE "test"). listRef is read for geometry only.
+  const logScrollDecision = (
+    trigger: string,
+    intents: readonly ScrollIntent[],
+    winner: ScrollIntent | null,
+    reason: string,
+  ): void => {
+    if (import.meta.env.MODE !== "development" || !listRef) return;
+    console.debug("[scroll-authority]", {
+      trigger,
+      key: key(),
+      intents: intents.map((i) => i.kind),
+      winner: winner?.kind ?? null,
+      reason,
+      geometry: {
+        scrollTop: listRef.scrollTop,
+        scrollHeight: listRef.scrollHeight,
+        clientHeight: listRef.clientHeight,
+      },
+    });
+  };
+
+  // Perform the winning intent's DOM write. Each kind keeps the exact timing its
+  // pre-applier writer used (rAF×2 where geometry must settle after the <For>
+  // commit — STEP 6 replaces that with the measured-settle predicate). The
+  // caller guarantees `listRef` is non-null on entry, but the deferred rAF
+  // bodies re-check it (it can null on unmount between frames).
+  const dispatchScrollWrite = (winner: ScrollIntent): void => {
+    switch (winner.kind) {
+      case "overlay-freeze": {
+        // W4 — re-assert the held snapshot px. The ref-keyed <For> has just
+        // recreated the list DOM, resetting scrollTop to 0; re-assert SYNC (no
+        // transient-0 frame for a reader to catch) then AGAIN across rAF×2 as
+        // belt-and-braces for any late layout shift. Re-check `isOverlayFrozen()`
+        // in the rAF: the overlay may have closed, in which case the overlay
+        // effect's close restore owns it.
+        const snapNow = overlayScrollSnapshot;
+        if (listRef && snapNow !== null && listRef.scrollTop !== snapNow) {
+          listRef.scrollTop = snapNow;
+        }
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const snap = overlayScrollSnapshot;
+            if (listRef && isOverlayFrozen() && snap !== null) {
+              listRef.scrollTop = snap;
+            }
+          }),
+        );
+        return;
+      }
+      case "marker-activation":
+        // W2/W3 — jump to the rendered unread divider (or the tail if none).
+        // `scrollToActivation` owns the rAF×2 + the frozen bail (unreachable
+        // here: overlay-freeze outranks marker-activation, so we only dispatch
+        // marker-activation when not frozen).
+        scrollToActivation("marker-or-tail", false);
+        return;
+      case "tail-follow":
+        // W5 — stick to the tail. rAF×2 so layout has settled before the read;
+        // `lastElementChild.scrollIntoView` is layout-aware even when
+        // scrollHeight bookkeeping is mid-update (the fallback covers an empty
+        // list). Re-check `followMode()` in the rAF — the operator may have
+        // scrolled up between the decision and the frame.
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            if (!listRef) return;
+            if (!followMode()) return;
+            const tail = listRef.lastElementChild as HTMLElement | null;
+            if (tail?.scrollIntoView) {
+              tail.scrollIntoView({ block: "end" });
+            } else {
+              listRef.scrollTop = listRef.scrollHeight;
+            }
+          }),
+        );
+        return;
+      default:
+        // operator-tail / mention-jump / prepend-preserve are routed in later
+        // increments — the length-effect never declares them, so this is
+        // unreachable until then.
+        return;
+    }
+  };
+
+  // The applier entrypoint for a content change (the length-effect below).
+  // Builds the live-derived intents that compete when rows() changes, resolves
+  // precedence, logs, and performs the single winning write.
+  const applyScrollForContentChange = (): void => {
+    if (!listRef) return;
+    const k = key();
+    const intents: ScrollIntent[] = [];
+    if (isOverlayFrozen()) {
+      intents.push({ kind: "overlay-freeze", key: k, lifetime: "sticky" });
+    }
+    if (markerActivationPending() && listRef.querySelector('[data-testid="unread-marker"]')) {
+      intents.push({ kind: "marker-activation", key: k, lifetime: "sticky" });
+    }
+    if (followMode()) {
+      intents.push({ kind: "tail-follow", key: k, lifetime: "sticky" });
+    }
+    const { winner, reason } = resolveIntent(intents, k);
+    logScrollDecision("content-change", intents, winner, reason);
+    if (winner) dispatchScrollWrite(winner);
+  };
+
   // After Solid commits new DOM nodes, scroll to the tail iff the user
   // was at the bottom before the update (auto-follow). The effect tracks
   // `rows().length` so it re-runs on every append AND on cursor
@@ -2417,101 +2542,14 @@ const ScrollbackPane: Component<Props> = (props) => {
   createEffect(
     on(
       () => rows()?.length ?? 0,
-      () => {
-        if (!listRef) return;
-        // #219 / #219-general / #196(reopen) — a covering overlay freezes the
-        // pane's scroll (see the overlay-snapshot capture/restore + the
-        // scrollToActivation guard). A message arriving WHILE an overlay is up
-        // must not tail-follow the covered pane out from under the reader (#168
-        // message-follow is correct ONLY when no overlay covers the pane).
-        //
-        // #196 reopen: bailing outright is NOT enough. This rows() change is the
-        // very message arrival that triggered the effect; the ref-keyed <For>
-        // has just RECREATED the list DOM, resetting scrollTop to 0. Bailing
-        // leaves the covered pane stranded at the top for the overlay's whole
-        // lifetime, and the single close-edge restore then lands wrong when the
-        // scrollTop=0 artifact spuriously prepended older rows (onScroll gate
-        // below now blocks that) — "re-reading old messages as if new", the
-        // reopened desktop regression the quiet-channel e2e never saw. RE-ASSERT
-        // the held snapshot instead (rAF×2, matching the overlay-snapshot
-        // restore's frame budget so it lands after the <For> commit), so the
-        // reader's position survives EVERY rows recreation while frozen, not
-        // just the close edge. Re-check `isOverlayFrozen()` inside the rAF — the
-        // overlay may have closed in the interim, in which case the close-edge
-        // restore owns it.
-        if (isOverlayFrozen()) {
-          // This createEffect runs AFTER the ref-keyed <For> has reconciled, so
-          // scrollTop has ALREADY been reset to 0 by the DOM recreation. Re-assert
-          // the held snapshot SYNCHRONOUSLY (no transient-0 frame for a reader to
-          // catch) — the snapshot is an absolute offset, so no post-layout
-          // scrollHeight read is needed — then AGAIN across rAF×2 as belt-and-
-          // braces for any late layout shift (matching the overlay-snapshot
-          // restore's frame budget). Re-check `isOverlayFrozen()` in the rAF: the
-          // overlay may have closed, in which case the close restore owns it.
-          const snapNow = overlayScrollSnapshot;
-          if (snapNow !== null && listRef.scrollTop !== snapNow) {
-            listRef.scrollTop = snapNow;
-          }
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => {
-              const snap = overlayScrollSnapshot;
-              if (listRef && isOverlayFrozen() && snap !== null) {
-                listRef.scrollTop = snap;
-              }
-            }),
-          );
-          return;
-        }
-        // #168 completion / 307 race fix — while a channel activation is
-        // latched AND a rendered unread divider EXISTS, EVERY rows recreation
-        // (post-switch catch-up refresh, late read-cursor hydration inserting
-        // the divider) must RE-ASSERT the marker jump; the ref-keyed `<For>`
-        // reset scrollTop to 0 on this recreation and a one-shot jump would
-        // strand (the 307 bug — a far marker sets followMode=false, which without
-        // this branch suppresses ALL re-establish). Pre-paint (rAF×2,
-        // withHide=false) so the reset frame is never shown.
-        //
-        // Gated on the marker actually EXISTING (not just the latch): when
-        // there is no divider — a read channel's cold-mount, OR a scroll-up
-        // loadMore prepend on a read channel — we FALL THROUGH to the followMode
-        // tail-follow below. That preserves the two cases correctly with ONE
-        // rule: initial cold-mount (followMode=true) tails; a loadMore prepend
-        // after the operator scrolled up (followMode=false) does nothing → the
-        // prepend's own height-delta restore preserves position (cp14-b2). A
-        // no-marker re-assert would instead TAIL and yank the prepend — the
-        // oscillation this gate prevents. The latch still clears on operator
-        // input / own send.
-        if (markerActivationPending() && listRef.querySelector('[data-testid="unread-marker"]')) {
-          scrollToActivation("marker-or-tail", false);
-          return;
-        }
-        if (followMode()) {
-          // Same scrollHeight-vs-layout race as scrollToActivation /
-          // measureOverflow: reading scrollHeight synchronously inside
-          // the Solid effect callback fires BEFORE the browser's layout
-          // pass has measured the newly-committed <For> rows, so the
-          // write lands one-or-two rows short of true bottom.
-          // CI sentinel (scroll-on-window-switch:141) consistently saw a
-          // 66px gap pre-double-rAF; vjt prod-dogfooded the same as
-          // "short channel scrolled above its own height" 2026-05-23.
-          // Double rAF guarantees layout has settled before the read.
-          // UX-8(a3): use lastElementChild.scrollIntoView for native
-          // layout-aware bottom-anchor (avoids scrollHeight-mid-update
-          // race even after rAF×2).
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              if (!listRef) return;
-              if (!followMode()) return;
-              const tail = listRef.lastElementChild as HTMLElement | null;
-              if (tail?.scrollIntoView) {
-                tail.scrollIntoView({ block: "end" });
-              } else {
-                listRef.scrollTop = listRef.scrollHeight;
-              }
-            });
-          });
-        }
-      },
+      // #608 (deep-review §6.3) — routed through the single applier. This
+      // effect used to hand-code the precedence overlay-freeze ▸
+      // marker-activation ▸ tail-follow as an if/else ladder; it now DECLARES
+      // the live-derived intents and the applier resolves + writes exactly one.
+      // The per-branch rationale (frozen re-assert on the ref-keyed <For>
+      // recreation, the #307 marker re-assert, the followMode tail-follow rAF×2)
+      // lives in `dispatchScrollWrite` / `applyScrollForContentChange` above.
+      () => applyScrollForContentChange(),
     ),
   );
 
