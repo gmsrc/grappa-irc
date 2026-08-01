@@ -1756,25 +1756,21 @@ const ScrollbackPane: Component<Props> = (props) => {
         }
         const target = overlayScrollSnapshot;
         const snapKey = overlaySnapshotKey;
-        if (target === null) return;
+        if (target === null || snapKey === null) return;
+        // Re-assert across rAF×2 (matching scrollToActivation's frame budget so
+        // it lands after the overlay's layout commits) via the applier's W1
+        // restore entrypoint — the single owner of this write, key-guarded there.
+        //
+        // #608 (deep-review §6.2) — NO snapshot clear. The freeze is DERIVED from
+        // the live `overlayCount()` (see `isOverlayFrozen`), so the snapshot no
+        // longer doubles as the freeze flag; it is only the px to restore,
+        // harmlessly stale once the count hits 0 and re-captured on the next open
+        // edge. Dropping the clear removes the separately-cleared latch that could
+        // drift from the count — the review's PLAUSIBLE stale-clear race (a
+        // close→reopen nulling a just-re-armed snapshot) is now structurally
+        // impossible, as is the field-bug "frozen forever under a leaked count".
         requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            // Only restore onto the SAME window the snapshot was taken on —
-            // a mid-overlay channel switch (nick-click in /names or /who)
-            // owns its own activation; do not stamp the old offset onto it.
-            if (listRef && snapKey === key() && listRef.scrollTop !== target) {
-              listRef.scrollTop = target;
-            }
-            // #608 (deep-review §6.2) — NO snapshot clear. The freeze is now
-            // DERIVED from the live `overlayCount()` (see `isOverlayFrozen`), so
-            // the snapshot no longer doubles as the freeze flag; it is only the
-            // px to restore, harmlessly stale once the count hits 0 and re-
-            // captured on the next open edge. Dropping the clear removes the
-            // separately-cleared latch that could drift from the count — the
-            // review's PLAUSIBLE stale-clear race (a close→reopen nulling a
-            // just-re-armed snapshot) is now structurally impossible, as is the
-            // field-bug "frozen forever under a leaked count".
-          }),
+          requestAnimationFrame(() => applyOverlayRestore(target, snapKey)),
         );
       },
       { defer: true },
@@ -2530,6 +2526,22 @@ const ScrollbackPane: Component<Props> = (props) => {
     // The prepended rows sit ABOVE the viewport, so shifting scrollTop by the
     // growth keeps the row the reader was looking at in the same on-screen spot.
     listRef.scrollTop = newScrollHeight - oldScrollHeight + oldScrollTop;
+  };
+
+  // #608 (deep-review §6.2) — the W1 overlay-restore applier entrypoint: the
+  // overlay-freeze intent's RESTORE. Called from the overlay effect on BOTH
+  // refcount edges (the open-edge re-assert under the overlay + the close-edge
+  // final restore), so — UNLIKE the commit-frame overlay-freeze dispatch, which
+  // requires `isOverlayFrozen()` (count>0) — it must NOT gate on the live freeze:
+  // on the close edge the count is already 0. It gates only on the KEY (a
+  // mid-overlay channel switch owns its own activation; never stamp the leaving
+  // channel's px onto it) and skips a no-op write. `target` is the px captured on
+  // the open edge; `snapKey` the channel it was captured on.
+  const applyOverlayRestore = (target: number, snapKey: string): void => {
+    if (!listRef || snapKey !== key() || listRef.scrollTop === target) return;
+    const intent: ScrollIntent = { kind: "overlay-freeze", key: snapKey, lifetime: "sticky" };
+    logScrollDecision("overlay-restore", [intent], intent, "overlay-restore");
+    listRef.scrollTop = target;
   };
 
   // After Solid commits new DOM nodes, scroll to the tail iff the user
