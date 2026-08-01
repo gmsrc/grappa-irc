@@ -718,14 +718,21 @@ Key bindings:
 
 Media link previews:
 
-- **Inline media is on for every host by default**, and off entirely when
-  `ffmpeg` is not installed — it decodes every picture and clip, so a default
-  that promised pictures without it would deliver "[image could not be
-  decoded]" on every row. Being on for every host means an image linked in a
-  channel is fetched when its row scrolls into view, so **that host learns your
-  IP address and when you read**. `/media first-party` limits fetching to your
-  own deployment's uploads; `/media off` turns pictures off. shottino says which
-  of these is in force every time it starts.
+- **Inline media is on for your own deployment's uploads by default**, and off
+  entirely when `ffmpeg` is not installed — it decodes every picture and clip,
+  so a default that promised pictures without it would deliver "[image could not
+  be decoded]" on every row.
+- **The default stops at first-party on purpose.** An inline picture is
+  *fetched* when its row scrolls into view — no click, no confirmation. Turned
+  on for every host, any URL any stranger posts becomes a request from your
+  machine the moment you read past it: **that host learns your IP address and
+  roughly when you read the channel**, which is a working tracking pixel in a
+  text-only IRC client. It also hands bytes of their choosing to ffmpeg's
+  demuxers. Your own deployment's uploads learn nothing they do not already
+  know, which is why they are the ones left on.
+- `/media all` opts in to every host and prints the warning above when you do;
+  `/media first-party` goes back; `/media off` turns pictures off entirely.
+  shottino says which of these is in force every time it starts.
 - `/preview` opens a picker over the last 20 pictures and clips posted in this
   window, newest first, each URL once — type to filter, `Enter` to open, `Esc`
   to cancel. `/preview <url>` skips the list. Press any key to return to the
