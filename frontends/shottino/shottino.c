@@ -312,7 +312,9 @@ enum job_kind {
     JOB_MEDIA,
     JOB_VIEW,
     JOB_CHATHISTORY,
-    JOB_EXEC
+    JOB_EXEC,
+    JOB_STT,
+    JOB_UPLOAD
 };
 
 struct job {
@@ -321,6 +323,11 @@ struct job {
     char channel[MAX_CHANNEL];
     char arg1[MAX_LINE];
     char arg2[MAX_LINE];
+    /* The job owns the file named by arg1: it was recorded FOR this job
+     * and the worker deletes it, along with the scratch directory made
+     * to hold it, when it is done. False for a file the user named —
+     * /upload of a holiday photo must not eat the photo. */
+    bool owns_file;
 };
 
 struct seen_message {
@@ -470,7 +477,23 @@ struct msg_region {
  * a list you draw from one source and act on from another is a list that
  * eventually acts on the row above the one you clicked. Same rule as the
  * chat area's measure/draw agreement, for the same reason. */
-enum overlay_kind { OVERLAY_NONE = 0, OVERLAY_MENU, OVERLAY_REPLY, OVERLAY_MEDIA };
+enum overlay_kind { OVERLAY_NONE = 0, OVERLAY_MENU, OVERLAY_REPLY, OVERLAY_MEDIA, OVERLAY_RECORD };
+
+/* A recording stops itself here rather than running until the disk or
+ * the upload limit says so. Declared with the overlay because the box
+ * that draws the timer prints it. */
+#define RECORD_MAX_SECONDS 300
+struct app;
+struct job;
+static void record_finish(struct app *app, bool send);
+/* /stt reaches back from the settings listing (which local whisper is in
+ * force?) and forward from the job loop; the upload transport is reached
+ * from the job loop too, since /upload, /voicemsg and /video all post
+ * through the SAME function on the worker thread. */
+static const char *stt_local_binary(struct app *app);
+static void stt_job(struct app *app, const struct job *job);
+static void upload_file_to(struct app *app, const char *path, const char *marker,
+                           const char *up_net, const char *up_chan);
 
 enum overlay_action {
     ACT_NONE = 0,
@@ -798,6 +821,50 @@ struct app {
     /* Where AGENT.md and the memory notes live. Empty means the default
      * under the state directory. */
     char bot_dir[LLM_MAX_PATH];
+    /* Capture devices, in ffmpeg's `format:input` spelling. Settings
+     * rather than constants because there is no portable answer: pulse
+     * on most desktops, alsa on a bare one, and a webcam that is
+     * /dev/video0 here and /dev/video2 on the machine with an IR
+     * camera. */
+    char voice_source[128];
+    char video_source[128];
+    /* ── /stt: speech to text ──────────────────────────────────────
+     *
+     * OFF by default, and that is a decision rather than a shrug:
+     * turning it on means audio from this machine leaves it for a
+     * transcription service. Nobody should discover that after the
+     * fact. With `stt.url` set, that endpoint gets the audio; with it
+     * empty, a local whisper binary does the work and nothing leaves
+     * the machine at all — which is why local is the FALLBACK and not
+     * an afterthought. */
+    bool stt_enabled;
+    char stt_url[LLM_MAX_URL];
+    char stt_token[LLM_MAX_TOKEN];
+    char stt_model[LLM_MAX_MODEL];
+    char stt_local[128]; /* binary name; empty = look for the usual ones */
+    /* An in-flight /voice or /video. MODAL: the recorder owns the
+     * keyboard until Enter or Esc, because a recording that keeps
+     * running while you type somewhere else is a recording you forget
+     * you are making. */
+    struct {
+        bool active;
+        bool video;
+        pid_t pid;
+        int stdin_fd;
+        long started_ms;
+        char dir[64];
+        char path[160];
+        char err_path[160];
+        long stop_deadline_ms;
+        /* Enter was pressed and ffmpeg is writing the trailer. The
+         * overlay stays up saying so: the alternative is blocking the UI
+         * thread on a subprocess, and a client that freezes for a second
+         * after every recording is one people stop using. */
+        bool stopping;
+        int purpose; /* enum record_purpose */
+        char network[MAX_SLUG];
+        char channel[MAX_CHANNEL];
+    } rec;
     /* Pre-approved (person, tool) pairs. A grant is per PAIR on purpose:
      * approving alice to speak does not approve her to make the client
      * join channels. */
@@ -6203,7 +6270,32 @@ static void draw(struct app *app) {
 
     /* The overlay is drawn LAST and over everything: it is modal, and a
      * pane border crossing a menu would read as part of the menu. */
-    if (app->overlay.kind != OVERLAY_NONE) {
+    if (app->overlay.kind == OVERLAY_RECORD) {
+        /* No list, no selection: a recording is a state, not a choice.
+         * The timer is the whole point — it is the only thing telling
+         * you the microphone is live. */
+        long secs = (monotonic_ms() - app->rec.started_ms) / 1000;
+        int box_w = 46;
+        if (box_w > main_w - 2) box_w = main_w - 2;
+        if (box_w < 24) box_w = 24;
+        int box_h = 3;
+        int box_x = main_x + (main_w - box_w) / 2;
+        int box_y = (rows - box_h) / 2;
+        if (box_x < 0) box_x = 0;
+        if (box_y < 0) box_y = 0;
+        for (int r = 0; r < box_h; r++) draw_fill(box_y + r, box_x, box_w, CP_ALT);
+        /* The dot blinks, because a static one reads as an icon and a
+         * blinking one reads as RUNNING. */
+        bool on = ((monotonic_ms() - app->rec.started_ms) / 500) % 2 == 0;
+        draw_text(box_y, box_x + 1, box_w - 2, CP_MENTION, A_BOLD, "%s recording %s  %ld:%02ld",
+                  on ? "●" : " ", app->rec.video ? "video" : "voice", secs / 60, secs % 60);
+        draw_text(box_y + 1, box_x + 1, box_w - 2, CP_ACCENT, 0, "to %s", app->rec.channel);
+        if (app->rec.stopping)
+            draw_text(box_y + 2, box_x + 1, box_w - 2, CP_MUTED, A_DIM, "finishing…");
+        else
+            draw_text(box_y + 2, box_x + 1, box_w - 2, CP_MUTED, A_DIM,
+                      "Enter send · Esc discard · max %ds", RECORD_MAX_SECONDS);
+    } else if (app->overlay.kind != OVERLAY_NONE) {
         struct overlay_item items[64];
         size_t n = overlay_items(app, items, sizeof(items) / sizeof(items[0]));
         bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA;
@@ -6868,8 +6960,8 @@ static void bot_memories_append(struct app *app, char *out, size_t out_sz) {
     body[0] = 0;
     for (struct dirent *e; (e = readdir(d)) && files < BOT_MEMORY_MAX;) {
         if (!is_memory_file(e->d_name)) continue;
-        char path[LLM_MAX_PATH + 160];
-        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        char path[LLM_MAX_PATH + 288];
+        snprintf(path, sizeof(path), "%s/%.255s", dir, e->d_name);
         FILE *f = fopen(path, "r");
         if (!f) continue;
         size_t room = sizeof(body) - used;
@@ -7249,6 +7341,13 @@ static const struct setting_def SETTINGS[] = {
     { "llm.cli_tools", SET_TEXT, NULL,
       "claude-cli: its OWN built-in tools to enable (empty = none)" },
     { "bot.dir", SET_TEXT, NULL, "where AGENT.md and the bot's notes live" },
+    { "stt.enabled", SET_BOOL, NULL, "/stt speech to text (off: nothing is transcribed)" },
+    { "stt.url", SET_TEXT, NULL, "whisper endpoint base; empty = local whisper only" },
+    { "stt.token", SET_TEXT, NULL, "whisper endpoint bearer (never echoed, never shown)" },
+    { "stt.model", SET_TEXT, NULL, "whisper model name (endpoint)" },
+    { "stt.local", SET_TEXT, NULL, "local whisper binary; empty = whisper-cli or whisper" },
+    { "voice.source", SET_TEXT, NULL, "/voicemsg capture, as ffmpeg format:input" },
+    { "video.source", SET_TEXT, NULL, "/video camera, as ffmpeg format:input" },
     { "llm.prompt", SET_TEXT, NULL, "system prompt" },
 };
 
@@ -7290,6 +7389,23 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "llm.cli_tools") == 0)
         snprintf(out, out_sz, "%s", app->llm.cli_tools[0] ? app->llm.cli_tools : "(none)");
     else if (strcmp(name, "llm.prompt") == 0) snprintf(out, out_sz, "%.120s", app->llm.prompt);
+    else if (strcmp(name, "stt.enabled") == 0)
+        snprintf(out, out_sz, "%s", app->stt_enabled ? "on" : "off");
+    else if (strcmp(name, "stt.url") == 0)
+        snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->stt_url[0] ? app->stt_url : "(unset)");
+    /* Masked by the same rule as llm.token: a listing that prints a
+     * secret is a listing that puts it in the terminal's scrollback. */
+    else if (strcmp(name, "stt.token") == 0) llm_token_redacted(app->stt_token, out, out_sz);
+    else if (strcmp(name, "stt.model") == 0)
+        snprintf(out, out_sz, "%s", app->stt_model[0] ? app->stt_model : "whisper-1");
+    else if (strcmp(name, "stt.local") == 0) {
+        const char *bin = stt_local_binary(app);
+        snprintf(out, out_sz, "%s", app->stt_local[0] ? app->stt_local
+                                    : bin              ? bin
+                                                       : "(none found)");
+    }
+    else if (strcmp(name, "voice.source") == 0) snprintf(out, out_sz, "%s", app->voice_source);
+    else if (strcmp(name, "video.source") == 0) snprintf(out, out_sz, "%s", app->video_source);
     else if (strcmp(name, "bot.dir") == 0) {
         char dir[LLM_MAX_PATH];
         bot_dir_path(app, dir, sizeof(dir));
@@ -7768,6 +7884,23 @@ static void *worker_main(void *arg) {
         }
         case JOB_EXEC:
             exec_job(app, &job);
+            break;
+        case JOB_STT:
+            stt_job(app, &job);
+            break;
+        case JOB_UPLOAD:
+            upload_file_to(app, job.arg1, job.arg2, job.network, job.channel);
+            if (job.owns_file) {
+                unlink(job.arg1);
+                /* And the directory that existed only to hold it. rmdir
+                 * refuses a non-empty one, so this cannot take anything
+                 * with it. */
+                char *slash = strrchr(job.arg1, '/');
+                if (slash) {
+                    *slash = 0;
+                    rmdir(job.arg1);
+                }
+            }
             break;
         case JOB_JOIN:
             join_channel_on(app, job.network, job.channel);
@@ -8396,6 +8529,21 @@ static bool overlay_key(struct app *app, int ch) {
     pthread_mutex_unlock(&app->lock);
     if (kind == OVERLAY_NONE) return false;
 
+    /* A recording owns the keyboard COMPLETELY: two keys mean something
+     * and every other key means nothing. Typing into the message line
+     * mid-recording would be composing a message you cannot send, and
+     * the mouse must not be able to dismiss the overlay either — the
+     * only ways out are the two that decide the recording's fate. */
+    if (kind == OVERLAY_RECORD) {
+        /* Once it is finishing, the recording's fate is decided and the
+         * keys do nothing: Esc at that moment would discard a file the
+         * worker has already been handed. */
+        if (app->rec.stopping) return true;
+        if (ch == '\n' || ch == '\r') record_finish(app, true);
+        else if (ch == 27) record_finish(app, false);
+        return true;
+    }
+
     /* Not a key. Left to handle_mouse, which is what makes the pointer
      * able to pick an item at all — this used to consume KEY_MOUSE along
      * with everything else, so the menu's own click handling below was
@@ -8611,9 +8759,11 @@ static const char *commands[] = {
     "/media", "/members", "/mode", "/motd", "/mouse", "/ms", "/msg", "/names", "/nick",
     "/notify", "/ns", "/op", "/open", "/oper", "/os", "/part", "/ping", "/preview", "/q",
     "/query", "/quit", "/quote", "/rehash", "/restart", "/rs", "/sconnect", "/set", "/settings",
-    "/share", "/split", "/splith", "/splitv", "/splitw", "/squit", "/stats", "/topic", "/trace",
+    "/share", "/split", "/splith", "/splitv", "/splitw", "/squit", "/stats", "/stt", "/topic",
+    "/trace",
     "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unkline", "/unsplit", "/upload",
-    "/users", "/version", "/view", "/voice", "/w", "/wallops", "/watch", "/who", "/whois",
+    "/users", "/version", "/video", "/view", "/vmsg", "/voice", "/voicemsg", "/w",
+    "/wallops", "/watch", "/who", "/whois",
     "/whowas", "/win", "/window", "/wire"
 };
 
@@ -9610,6 +9760,8 @@ static void show_help(struct app *app) {
     log_line(app, "watch: /notify [nick...|del nick|list] watches PEOPLE; /hilight pattern, /dehilight pattern watch WORDS (/watch add|del|list is the older spelling)");
     log_line(app, "services: /cs /ns /ms /os /hs /rs [command] — bare form sends HELP; aliases: /alias name expansion ($1..$9, $*), /unalias name, bare /alias lists");
     log_line(app, "files: /upload <path> — post a local file and share its link (IRC stays text; the link is clickable)");
+    log_line(app, "       /voicemsg (/vmsg), /video — record one and post it; Enter sends, Esc discards");
+    log_line(app, "       /stt — speak instead of typing; the words land in the input line (off by default)");
     log_line(app, "terminal: mouse tracking is ON by default (click links, right-click a message, wheel over the userlist); hold Shift to select text as usual, or /mouse off to give selection back unconditionally");
     log_line(app, "media: images render INLINE when the terminal supports it (kitty/iTerm2/sixel) or as colour art otherwise; video and GIFs PLAY as colour art (/media still for one frame)");
     log_line(app, "audio: an audio link NEVER plays on arrival — click it (or /preview /view it) and it plays out of band via mpv/ffplay, falling back to your desktop handler");
@@ -9665,6 +9817,8 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "lusers") == 0) log_line(app, "/lusers — request IRC network user/server counts");
     else if (strcmp(cmd, "watch") == 0 || strcmp(cmd, "highlight") == 0) log_line(app, "/watch add|del|list pattern — manage highlight watchlist");
     else if (strcmp(cmd, "op") == 0 || strcmp(cmd, "deop") == 0 || strcmp(cmd, "voice") == 0 || strcmp(cmd, "devoice") == 0) log_line(app, "/%s nick [nick...] — change channel privileges", cmd);
+    else if (strcmp(cmd, "stt") == 0) log_line(app, "/stt — speak, and the words land in the input line for you to check before sending. /stt <file> transcribes an audio file instead. OFF until /set stt.enabled on: with stt.url set the audio is sent to that endpoint, without it a local whisper (whisper-cli or whisper) does it and nothing leaves the machine");
+    else if (strcmp(cmd, "voicemsg") == 0 || strcmp(cmd, "vmsg") == 0) log_line(app, "/voicemsg — record from the microphone: a timer opens, Enter ends and sends it, Esc throws it away. The recording is uploaded and its link posted like a picture. NOT /voice, which is the IRC +v verb. Capped at 300s; /set voice.source picks the device");
     else if (strcmp(cmd, "kick") == 0) log_line(app, "/kick nick [reason] — kick nick from the current channel");
     else if (strcmp(cmd, "ban") == 0 || strcmp(cmd, "unban") == 0) log_line(app, "/%s mask — set or remove a channel ban mask", cmd);
     else if (strcmp(cmd, "banlist") == 0) log_line(app, "/banlist — request current channel ban list");
@@ -9699,6 +9853,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "splitv") == 0 || strcmp(cmd, "splitw") == 0) log_line(app, "/splitv, /splitw — split the chat area side by side; both spellings do the same thing");
     else if (strcmp(cmd, "unsplit") == 0) log_line(app, "/unsplit — close the split and give the whole chat area back to one window");
     else if (strcmp(cmd, "upload") == 0) log_line(app, "/upload path — post a local file and share its link; IRC stays text, the link is clickable");
+    else if (strcmp(cmd, "video") == 0) log_line(app, "/video — the same as /voicemsg, with the camera (and the microphone: a silent video message is not a video message). /set video.source picks it, as ffmpeg format:input, e.g. v4l2:/dev/video0");
     else if (strcmp(cmd, "cs") == 0 || strcmp(cmd, "ns") == 0 || strcmp(cmd, "ms") == 0 || strcmp(cmd, "os") == 0 || strcmp(cmd, "hs") == 0 || strcmp(cmd, "rs") == 0) log_line(app, "/%s [command] — send a private message to this network's service; the bare form sends HELP", cmd);
     else log_line(app, "no help for /%s; use /help for the command list", cmd);
 }
@@ -9781,27 +9936,21 @@ static const char *mime_for_path(const char *path) {
     return NULL; /* unsupported — refused locally, see upload_command */
 }
 
-static void upload_command(struct app *app, const char *path) {
-    while (*path == ' ') path++;
-    if (!*path) {
-        log_line(app, "/upload requires a file path");
-        return;
-    }
-    /* Refuse an unsupported type HERE. The server would answer 415, and
-     * "HTTP 415" tells the user nothing about which types it takes. */
+/* Post `path` to grappa and send the link to a NAMED window.
+ *
+ * Split out of upload_command so /voice and /video share the transport
+ * instead of growing a second one: same MIME table, same size cap, same
+ * multipart body, same failure messages. `marker` is the emoji the row
+ * leads with — 📸 for a file the user picked, 🎤 and 🎥 for something
+ * this client recorded, so scrollback says which it was without opening
+ * the link. */
+static void upload_file_to(struct app *app, const char *path, const char *marker,
+                           const char *up_net, const char *up_chan) {
     const char *mime = mime_for_path(path);
     if (!mime) {
         log_line(app, "/upload: unsupported file type — images (png jpg gif webp apng), "
                       "video (mp4 mov webm), audio (mp3 m4a aac wav flac), "
                       "documents (pdf txt odt ods docx xlsx)");
-        return;
-    }
-    /* Same read-only rule as a typed message: the link would be posted to
-     * the current window, and $server rejects a PRIVMSG. */
-    char up_net[MAX_SLUG], up_chan[MAX_CHANNEL];
-    if (!current_window_key(app, up_net, sizeof(up_net), up_chan, sizeof(up_chan)) ||
-        is_server_window(up_chan)) {
-        log_line(app, "/upload: the server window is read-only — switch to a channel or query first");
         return;
     }
     FILE *f = fopen(path, "rb");
@@ -9885,14 +10034,532 @@ static void upload_command(struct app *app, const char *path) {
      * Sized for base + url + the marker so no spelling of either can be
      * truncated: a cut URL is not a shorter link, it is a dead one, and
      * the row would look perfectly ordinary in scrollback. */
-    char message[sizeof(app->url.base) + MAX_LINE + 8];
+    char message[sizeof(app->url.base) + MAX_LINE + 24];
+    /* The marker is bounded explicitly (an emoji is at most a few
+     * bytes): what must never be cut is the URL, and a cut URL is not a
+     * shorter link but a dead one. */
     if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0)
-        snprintf(message, sizeof(message), "📸 %s", url);
+        snprintf(message, sizeof(message), "%.16s %s", marker, url);
     else
-        snprintf(message, sizeof(message), "📸 %s%s", app->url.base, url);
+        snprintf(message, sizeof(message), "%.16s %s%s", marker, app->url.base, url);
 
     add_pending_echo(app, up_net, up_chan, own_nick_for_network(app, up_net), message);
     enqueue_send(app, up_net, up_chan, message);
+}
+
+static void upload_command(struct app *app, const char *path) {
+    while (*path == ' ') path++;
+    if (!*path) {
+        log_line(app, "/upload requires a file path");
+        return;
+    }
+    /* Same read-only rule as a typed message: the link would be posted to
+     * the current window, and $server rejects a PRIVMSG. */
+    char up_net[MAX_SLUG], up_chan[MAX_CHANNEL];
+    if (!current_window_key(app, up_net, sizeof(up_net), up_chan, sizeof(up_chan)) ||
+        is_server_window(up_chan)) {
+        log_line(app, "/upload: the server window is read-only — switch to a channel or query first");
+        return;
+    }
+    /* On the WORKER. An upload is an HTTP round trip with a file
+     * attached: on the UI thread that is a client frozen mid-keystroke
+     * for as long as the network takes. */
+    struct job job = { .kind = JOB_UPLOAD, .owns_file = false };
+    snprintf(job.network, sizeof(job.network), "%s", up_net);
+    snprintf(job.channel, sizeof(job.channel), "%s", up_chan);
+    snprintf(job.arg1, sizeof(job.arg1), "%s", path);
+    snprintf(job.arg2, sizeof(job.arg2), "📸");
+    enqueue_job(app, job);
+}
+
+/* ── /stt: speech to text ──────────────────────────────────────────────
+ *
+ * Two backends, in this order, and the order is the privacy story:
+ *
+ *   ENDPOINT  an OpenAI-compatible /audio/transcriptions (url + token +
+ *             model). Used when `stt.url` is set — the audio LEAVES the
+ *             machine, which is why nothing here is on by default.
+ *   LOCAL     a whisper binary on PATH. Nothing leaves the machine.
+ *             Both spellings are accepted: whisper.cpp's `whisper-cli`
+ *             (-f in, -otxt) and openai-whisper's `whisper` (positional,
+ *             --output_format txt). They take different flags, so the
+ *             one that is present decides — a single hardcoded command
+ *             line would work on exactly one of the two machines.
+ *
+ * Transcription runs on the WORKER thread. An HTTP round trip with an
+ * audio file attached, or a local model on a CPU, is seconds to minutes;
+ * on the UI thread that is a frozen client.
+ *
+ * The transcript lands in the INPUT LINE, not on the network. Speech
+ * recognition misreads names, and a client that sends what it thought it
+ * heard is a client that publishes your mistakes. Read it, fix it, press
+ * Enter. */
+#define STT_MAX_TEXT 4000
+
+/* The local binary to use, or NULL. `stt.local` overrides the search
+ * for anyone whose whisper lives under another name. */
+static const char *stt_local_binary(struct app *app) {
+    if (app->stt_local[0]) return media_tool_available(app->stt_local) ? app->stt_local : NULL;
+    if (media_tool_available("whisper-cli")) return "whisper-cli";
+    if (media_tool_available("whisper")) return "whisper";
+    return NULL;
+}
+
+/* POST the file to an OpenAI-compatible /audio/transcriptions. Caller
+ * frees. Mirrors llm_call_openai_raw's transport — same connection
+ * helpers, same failure reporting — with a multipart body instead. */
+static char *stt_transcribe_remote(struct app *app, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        log_line(app, "/stt: cannot open %s", path);
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    long size = ftell(f);
+    rewind(f);
+    if (size <= 0 || size > 32L * 1024 * 1024) {
+        fclose(f);
+        log_line(app, "/stt: %s is %ld bytes — too big to send", path, size);
+        return NULL;
+    }
+    char *audio = malloc((size_t)size);
+    if (!audio || fread(audio, 1, (size_t)size, f) != (size_t)size) {
+        free(audio);
+        fclose(f);
+        log_line(app, "/stt: short read on %s", path);
+        return NULL;
+    }
+    fclose(f);
+
+    struct url u;
+    if (!parse_url(app->stt_url, &u)) {
+        free(audio);
+        log_line(app, "/stt: cannot parse url `%.80s`", app->stt_url);
+        return NULL;
+    }
+    struct tls_conn conn;
+    if (!conn_open_to(app, u.host, u.port, u.tls, &conn)) {
+        free(audio);
+        log_line(app, "/stt: cannot reach %s:%s", u.host, u.port);
+        return NULL;
+    }
+    const char *boundary = "----shottinoSTT9wQ3v";
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    char *head = xasprintf("--%s\r\n"
+                           "Content-Disposition: form-data; name=\"model\"\r\n\r\n%s\r\n"
+                           "--%s\r\n"
+                           "Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+                           "Content-Type: application/octet-stream\r\n\r\n",
+                           boundary, app->stt_model[0] ? app->stt_model : "whisper-1", boundary,
+                           base);
+    char *tail = xasprintf("\r\n--%s--\r\n", boundary);
+    size_t total = strlen(head) + (size_t)size + strlen(tail);
+    char reqpath[LLM_MAX_URL + 32];
+    snprintf(reqpath, sizeof(reqpath), "%.*s/audio/transcriptions", (int)(LLM_MAX_URL - 1),
+             u.base[0] ? u.base : "");
+    char *hdr = xasprintf("POST %s HTTP/1.1\r\n"
+                          "Host: %s\r\n"
+                          "User-Agent: shottino/0.1\r\n"
+                          "Accept: application/json\r\n"
+                          "Content-Type: multipart/form-data; boundary=%s\r\n"
+                          "Authorization: Bearer %s\r\n"
+                          "Content-Length: %zu\r\n"
+                          "Connection: close\r\n\r\n",
+                          reqpath, u.host, boundary, app->stt_token, total);
+    bool ok = conn_write_all(&conn, hdr, strlen(hdr)) &&
+              conn_write_all(&conn, head, strlen(head)) &&
+              conn_write_all(&conn, audio, (size_t)size) &&
+              conn_write_all(&conn, tail, strlen(tail));
+    free(hdr);
+    free(head);
+    free(tail);
+    free(audio);
+    if (!ok) {
+        conn_close(&conn);
+        log_line(app, "/stt: write failed");
+        return NULL;
+    }
+    struct http_response r = http_read_response(&conn);
+    conn_close(&conn);
+    if (r.status < 200 || r.status >= 300) {
+        log_line(app, "/stt: HTTP %d%s%.160s", r.status, r.body ? " — " : "", r.body ? r.body : "");
+        free(r.body);
+        return NULL;
+    }
+    char text[STT_MAX_TEXT] = "";
+    bool got = r.body && json_top_string(r.body, r.body_len, "text", text, sizeof(text));
+    free(r.body);
+    if (!got || !text[0]) {
+        log_line(app, "/stt: the endpoint returned no text");
+        return NULL;
+    }
+    return xasprintf("%s", text);
+}
+
+/* Run a local whisper and read back what it wrote. Caller frees. */
+static char *stt_transcribe_local(struct app *app, const char *path) {
+    const char *bin = stt_local_binary(app);
+    if (!bin) return NULL;
+    char dir[64];
+    snprintf(dir, sizeof(dir), "/tmp/shottino-stt-XXXXXX");
+    if (!mkdtemp(dir)) {
+        log_line(app, "/stt: cannot make a scratch directory");
+        return NULL;
+    }
+    char stem[128], out[160];
+    snprintf(stem, sizeof(stem), "%s/out", dir);
+    snprintf(out, sizeof(out), "%s.txt", stem);
+
+    /* whisper.cpp and openai-whisper share a name and nothing else. */
+    bool cpp = strstr(bin, "whisper-cli") != NULL;
+    char *const cpp_argv[] = { (char *)bin, "-f",   (char *)path, "-otxt",
+                               "-of",       stem,   "-np",        NULL };
+    char *const py_argv[] = { (char *)bin,     (char *)path,  "--output_format", "txt",
+                              "--output_dir",  dir,           "--fp16",          "False",
+                              NULL };
+    log_line(app, "/stt: transcribing locally with %s — this can take a while", bin);
+    int rc = run_cmd(cpp ? cpp_argv : py_argv, false);
+    if (rc != 0) log_line(app, "/stt: %s exited %d", bin, rc);
+
+    /* openai-whisper names the output after the INPUT file, not after
+     * --output_dir's stem, so the directory is searched rather than
+     * guessed: guessing produced "no transcript" on a run that had
+     * worked perfectly. */
+    char *text = NULL;
+    DIR *d = opendir(dir);
+    if (d) {
+        for (struct dirent *e; (e = readdir(d));) {
+            size_t n = strlen(e->d_name);
+            if (n < 5 || strcmp(e->d_name + n - 4, ".txt") != 0) continue;
+            char found[sizeof(dir) + 288];
+            snprintf(found, sizeof(found), "%s/%.255s", dir, e->d_name);
+            FILE *f = fopen(found, "r");
+            if (!f) continue;
+            char buf[STT_MAX_TEXT];
+            size_t got = fread(buf, 1, sizeof(buf) - 1, f);
+            fclose(f);
+            buf[got] = 0;
+            while (got && (buf[got - 1] == '\n' || buf[got - 1] == '\r' || buf[got - 1] == ' '))
+                buf[--got] = 0;
+            unlink(found);
+            if (got) text = xasprintf("%s", buf);
+            break;
+        }
+        closedir(d);
+    }
+    unlink(out);
+    rmdir(dir);
+    if (!text) log_line(app, "/stt: %s produced no transcript", bin);
+    return text;
+}
+
+/* Worker side of /stt. `job->arg1` is a local path. */
+static void stt_job(struct app *app, const struct job *job) {
+    char *text = app->stt_url[0] ? stt_transcribe_remote(app, job->arg1)
+                                 : stt_transcribe_local(app, job->arg1);
+    if (!text && app->stt_url[0] && stt_local_binary(app)) {
+        log_line(app, "/stt: the endpoint did not answer — falling back to local whisper");
+        text = stt_transcribe_local(app, job->arg1);
+    }
+    if (job->owns_file) {
+        unlink(job->arg1);
+        char dir[MAX_LINE];
+        snprintf(dir, sizeof(dir), "%s", job->arg1);
+        char *slash = strrchr(dir, '/');
+        if (slash) {
+            *slash = 0;
+            rmdir(dir);
+        }
+    }
+    if (!text) return;
+    /* Newlines would be several messages; a transcript is one. */
+    for (char *p = text; *p; p++)
+        if (*p == '\n' || *p == '\r') *p = ' ';
+    pthread_mutex_lock(&app->lock);
+    /* Into the INPUT LINE, appended: whatever was already typed is not
+     * thrown away by a transcript arriving. */
+    size_t have = strlen(app->input);
+    if (have && have + 1 < sizeof(app->input)) app->input[have++] = ' ';
+    snprintf(app->input + have, sizeof(app->input) - have, "%s", text);
+    app->input_len = strlen(app->input);
+    pthread_mutex_unlock(&app->lock);
+    log_line(app, "/stt: %.200s", text);
+    log_line(app, "/stt: in the input line — read it, fix it, then press Enter to send");
+    free(text);
+}
+
+/* ── /voice and /video ─────────────────────────────────────────────────
+ *
+ * Record from the microphone (or camera), then post the file the same
+ * way /upload does and send its link. IRC stays text: what goes on the
+ * wire is a URL, exactly as with a picture, and the recipient's client
+ * decides what to do with it. Shottino itself plays audio only on a
+ * click, never on arrival.
+ *
+ * The shape is a modal overlay with a running timer: Enter ends the
+ * recording and sends it, Esc throws it away. There is no third
+ * outcome and no way to leave one running in the background, which is
+ * the point — an always-recordable client is one nobody trusts.
+ *
+ * ffmpeg does the capture. Enter sends it `q` on stdin rather than a
+ * signal, because that is the input that makes it FINALISE the
+ * container: an mp4 killed mid-write has no moov atom and is a file
+ * nothing will play. Esc, which throws the recording away, can kill
+ * outright — there is nothing to finalise. */
+static void record_cleanup(struct app *app) {
+    if (app->rec.stdin_fd >= 0) close(app->rec.stdin_fd);
+    if (app->rec.path[0]) unlink(app->rec.path);
+    if (app->rec.err_path[0]) unlink(app->rec.err_path);
+    if (app->rec.dir[0]) rmdir(app->rec.dir);
+    memset(&app->rec, 0, sizeof(app->rec));
+    app->rec.stdin_fd = -1;
+    if (app->overlay.kind == OVERLAY_RECORD) app->overlay.kind = OVERLAY_NONE;
+}
+
+/* ffmpeg's last words, for a failure the user can act on ("no such
+ * device" is a fixable problem; "recording failed" is not). */
+static void record_report_error(struct app *app) {
+    char last[240] = "";
+    FILE *f = app->rec.err_path[0] ? fopen(app->rec.err_path, "r") : NULL;
+    if (f) {
+        char line[240];
+        while (fgets(line, sizeof(line), f)) {
+            line[strcspn(line, "\r\n")] = 0;
+            if (line[0]) snprintf(last, sizeof(last), "%s", line);
+        }
+        fclose(f);
+    }
+    log_line(app, "/%s: recording failed%s%s", app->rec.video ? "video" : "voice",
+             last[0] ? " — " : "", last);
+}
+
+/* What a finished recording is FOR. Recording is the same act either
+ * way; only the destination differs, so the recorder carries the
+ * destination rather than growing a second copy of itself. */
+enum record_purpose { RECORD_SEND = 0, RECORD_TRANSCRIBE };
+
+static void record_start_for(struct app *app, bool video, enum record_purpose purpose);
+
+static void record_start(struct app *app, bool video) {
+    record_start_for(app, video, RECORD_SEND);
+}
+
+static void record_start_for(struct app *app, bool video, enum record_purpose purpose) {
+    if (app->rec.active) {
+        log_line(app, "already recording — Enter sends it, Esc throws it away");
+        return;
+    }
+    if (!media_tool_available("ffmpeg")) {
+        log_line(app, "/%s needs ffmpeg on PATH — it is what does the recording",
+                 video ? "video" : "voice");
+        return;
+    }
+    /* The link would be posted to the current window, and $server
+     * rejects a PRIVMSG — refuse BEFORE recording, not after. */
+    char net[MAX_SLUG], chan[MAX_CHANNEL];
+    if (!current_window_key(app, net, sizeof(net), chan, sizeof(chan)) || is_server_window(chan)) {
+        log_line(app, "/%s: the server window is read-only — switch to a channel or query first",
+                 video ? "video" : "voice");
+        return;
+    }
+
+    memset(&app->rec, 0, sizeof(app->rec));
+    snprintf(app->rec.dir, sizeof(app->rec.dir), "/tmp/shottino-rec-XXXXXX");
+    if (!mkdtemp(app->rec.dir)) {
+        log_line(app, "/%s: cannot make a scratch directory", video ? "video" : "voice");
+        app->rec.dir[0] = 0;
+        return;
+    }
+    /* The basename is what the server stores and what the recipient
+     * sees in the URL, so it says what the thing is. */
+    snprintf(app->rec.path, sizeof(app->rec.path), "%s/%s", app->rec.dir,
+             video ? "video-message.mp4" : "voice-message.m4a");
+    snprintf(app->rec.err_path, sizeof(app->rec.err_path), "%s/ffmpeg.log", app->rec.dir);
+
+    /* `format:input`, e.g. pulse:default or v4l2:/dev/video0 — split
+     * BEFORE the fork. Between fork and exec only async-signal-safe
+     * calls are legal, and a strdup there is a deadlock waiting for the
+     * one run where another thread held the allocator's lock. */
+    char source[128], asource[128];
+    snprintf(source, sizeof(source), "%s", video ? app->video_source : app->voice_source);
+    snprintf(asource, sizeof(asource), "%s", app->voice_source);
+    char *colon = strchr(source, ':');
+    const char *fmt = source;
+    const char *input = "default";
+    if (colon) {
+        *colon = 0;
+        input = colon + 1;
+    }
+    char *acolon = strchr(asource, ':');
+    const char *afmt = asource;
+    const char *ainput = "default";
+    if (acolon) {
+        *acolon = 0;
+        ainput = acolon + 1;
+    }
+
+    int in_fds[2];
+    if (pipe(in_fds) != 0) {
+        record_cleanup(app);
+        log_line(app, "/%s: cannot open a pipe", video ? "video" : "voice");
+        return;
+    }
+    char cap[16];
+    snprintf(cap, sizeof(cap), "%d", RECORD_MAX_SECONDS);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(in_fds[0]);
+        close(in_fds[1]);
+        record_cleanup(app);
+        log_line(app, "/%s: cannot fork ffmpeg", video ? "video" : "voice");
+        return;
+    }
+    if (pid == 0) {
+        dup2(in_fds[0], STDIN_FILENO);
+        close(in_fds[0]);
+        close(in_fds[1]);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) dup2(devnull, STDOUT_FILENO);
+        int errfd = open(app->rec.err_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (errfd >= 0) dup2(errfd, STDERR_FILENO);
+        const char *argv[40];
+        size_t a = 0;
+        argv[a++] = "ffmpeg";
+        argv[a++] = "-hide_banner";
+        argv[a++] = "-loglevel"; argv[a++] = "error";
+        argv[a++] = "-y";
+        if (video) {
+            argv[a++] = "-f"; argv[a++] = fmt;
+            argv[a++] = "-i"; argv[a++] = input;
+            /* The camera brings no sound, so the microphone is a second
+             * input — a silent video message is not a video message. */
+            argv[a++] = "-f"; argv[a++] = afmt;
+            argv[a++] = "-i"; argv[a++] = ainput;
+            argv[a++] = "-c:v"; argv[a++] = "libx264";
+            argv[a++] = "-preset"; argv[a++] = "veryfast";
+            argv[a++] = "-pix_fmt"; argv[a++] = "yuv420p";
+            /* faststart moves the index to the front: without it the
+             * recipient's player must download the whole file before it
+             * can begin. */
+            argv[a++] = "-movflags"; argv[a++] = "+faststart";
+        } else {
+            argv[a++] = "-f"; argv[a++] = fmt;
+            argv[a++] = "-i"; argv[a++] = input;
+            argv[a++] = "-ac"; argv[a++] = "1";
+        }
+        argv[a++] = "-c:a"; argv[a++] = "aac";
+        argv[a++] = "-b:a"; argv[a++] = "64k";
+        /* A hard cap, so a forgotten recording cannot fill the disk or
+         * outgrow the upload limit. */
+        argv[a++] = "-t"; argv[a++] = cap;
+        argv[a++] = app->rec.path;
+        argv[a] = NULL;
+        execvp("ffmpeg", (char *const *)argv);
+        _exit(127);
+    }
+    close(in_fds[0]);
+    app->rec.active = true;
+    app->rec.video = video;
+    app->rec.pid = pid;
+    app->rec.stdin_fd = in_fds[1];
+    app->rec.started_ms = monotonic_ms();
+    app->rec.purpose = purpose;
+    snprintf(app->rec.network, sizeof(app->rec.network), "%s", net);
+    snprintf(app->rec.channel, sizeof(app->rec.channel), "%s", chan);
+    app->overlay.kind = OVERLAY_RECORD;
+}
+
+/* Enter (send=true) or Esc (send=false). */
+static void record_finish(struct app *app, bool send) {
+    if (!app->rec.active) return;
+    if (send) {
+        /* `q` is ffmpeg's own "stop and write the trailer" — a signal
+         * would leave an mp4 with no moov atom, which is a file nothing
+         * plays. Then RETURN: record_poll reaps it and takes over. */
+        (void)!write(app->rec.stdin_fd, "q", 1);
+        close(app->rec.stdin_fd);
+        app->rec.stdin_fd = -1;
+        app->rec.stopping = true;
+        app->rec.stop_deadline_ms = monotonic_ms() + 5000;
+        return;
+    } else {
+        /* Nothing to finalise — the file is about to be deleted. */
+        if (app->rec.stdin_fd >= 0) close(app->rec.stdin_fd);
+        app->rec.stdin_fd = -1;
+        kill(app->rec.pid, SIGKILL);
+        while (waitpid(app->rec.pid, NULL, 0) < 0 && errno == EINTR) {}
+    }
+
+    log_line(app, "%s message discarded", app->rec.video ? "video" : "voice");
+    record_cleanup(app);
+}
+
+/* The recording stopped — by Enter, by ffmpeg's own duration cap, or
+ * because the device went away. Everything that happens to a finished
+ * recording happens HERE, once, so there is one place that decides what
+ * a recording becomes. */
+static void record_finished(struct app *app) {
+    bool video = app->rec.video;
+    struct stat st;
+    if (stat(app->rec.path, &st) != 0 || st.st_size == 0) {
+        record_report_error(app);
+        record_cleanup(app);
+        return;
+    }
+    long secs = (monotonic_ms() - app->rec.started_ms) / 1000;
+    struct job job = { .owns_file = true };
+    snprintf(job.arg1, sizeof(job.arg1), "%s", app->rec.path);
+    if (app->rec.purpose == RECORD_TRANSCRIBE) {
+        job.kind = JOB_STT;
+        log_line(app, "/stt: %lds recorded — transcribing", secs);
+    } else {
+        job.kind = JOB_UPLOAD;
+        snprintf(job.network, sizeof(job.network), "%s", app->rec.network);
+        snprintf(job.channel, sizeof(job.channel), "%s", app->rec.channel);
+        snprintf(job.arg2, sizeof(job.arg2), "%s", video ? "🎥" : "🎤");
+        log_line(app, "%s message: %lds, %ld KiB — uploading", video ? "video" : "voice", secs,
+                 (long)st.st_size / 1024);
+    }
+    enqueue_job(app, job);
+    /* The worker owns the file now, so cleanup must NOT delete it. */
+    app->rec.path[0] = 0;
+    app->rec.dir[0] = 0;
+    record_cleanup(app);
+}
+
+/* Called every tick. Two things end a recording without the keyboard:
+ * ffmpeg finishing the trailer after Enter, and ffmpeg stopping on its
+ * own — the duration cap, or a device that went away. Polling covers
+ * both, and covers them without the UI thread ever waiting. */
+static void record_poll(struct app *app) {
+    if (!app->rec.active) return;
+    if (waitpid(app->rec.pid, NULL, WNOHANG) != app->rec.pid) {
+        /* A recorder that will not stop must not hold the overlay
+         * forever: past the deadline it is asked less politely. */
+        if (app->rec.stopping && monotonic_ms() > app->rec.stop_deadline_ms) {
+            kill(app->rec.pid, SIGTERM);
+            app->rec.stop_deadline_ms = monotonic_ms() + 2000;
+        }
+        return;
+    }
+    app->rec.pid = 0;
+    if (app->rec.stdin_fd >= 0) close(app->rec.stdin_fd);
+    app->rec.stdin_fd = -1;
+    /* Not stopping means nobody asked it to — it hit the cap or the
+     * device failed. Say which, because "the recording ended" with no
+     * reason reads as a bug. */
+    if (!app->rec.stopping) {
+        struct stat st;
+        if (stat(app->rec.path, &st) == 0 && st.st_size > 0)
+            log_line(app, "/%s: stopped at the %d-second limit — sending what was recorded",
+                     app->rec.video ? "video" : "voice", RECORD_MAX_SECONDS);
+    }
+    record_finished(app);
 }
 
 /* ── /archive open|purge ───────────────────────────────────────────────
@@ -10918,8 +11585,8 @@ static void handle_command_dispatch(struct app *app, char *line) {
             if (d) {
                 for (struct dirent *e; (e = readdir(d));) {
                     if (!is_memory_file(e->d_name)) continue;
-                    char path[LLM_MAX_PATH + 160], first[200] = "";
-                    snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+                    char path[LLM_MAX_PATH + 288], first[200] = "";
+                    snprintf(path, sizeof(path), "%s/%.255s", dir, e->d_name);
                     FILE *f = fopen(path, "r");
                     if (f) {
                         if (fgets(first, sizeof(first), f)) first[strcspn(first, "\r\n")] = 0;
@@ -11077,6 +11744,30 @@ static void handle_command_dispatch(struct app *app, char *line) {
                 } else if (strcmp(def->name, "bot.dir") == 0)
                     snprintf(app->bot_dir, sizeof(app->bot_dir), "%.*s",
                              (int)sizeof(app->bot_dir) - 1, value);
+                else if (strcmp(def->name, "stt.enabled") == 0) {
+                    app->stt_enabled = on;
+                    if (on && app->stt_url[0])
+                        log_line(app, "/stt on — audio will be SENT to %s", app->stt_url);
+                    else if (on)
+                        log_line(app, "/stt on — local only; no audio leaves this machine");
+                } else if (strcmp(def->name, "stt.url") == 0)
+                    snprintf(app->stt_url, sizeof(app->stt_url), "%.*s",
+                             (int)sizeof(app->stt_url) - 1, value);
+                else if (strcmp(def->name, "stt.token") == 0)
+                    snprintf(app->stt_token, sizeof(app->stt_token), "%.*s",
+                             (int)sizeof(app->stt_token) - 1, value);
+                else if (strcmp(def->name, "stt.model") == 0)
+                    snprintf(app->stt_model, sizeof(app->stt_model), "%.*s",
+                             (int)sizeof(app->stt_model) - 1, value);
+                else if (strcmp(def->name, "stt.local") == 0)
+                    snprintf(app->stt_local, sizeof(app->stt_local), "%.*s",
+                             (int)sizeof(app->stt_local) - 1, value);
+                else if (strcmp(def->name, "voice.source") == 0)
+                    snprintf(app->voice_source, sizeof(app->voice_source), "%.*s",
+                             (int)sizeof(app->voice_source) - 1, value);
+                else if (strcmp(def->name, "video.source") == 0)
+                    snprintf(app->video_source, sizeof(app->video_source), "%.*s",
+                             (int)sizeof(app->video_source) - 1, value);
                 if (touched_llm) llm_save(app);
                 /* The VALUE is not echoed: `llm.token` goes through this
                  * same line, and a confirmation that repeats it defeats
@@ -11271,6 +11962,33 @@ static void handle_command_dispatch(struct app *app, char *line) {
         upload_command(app, line + 8);
     } else if (strcmp(line, "/upload") == 0) {
         log_line(app, "/upload <path> — send a local file and post its link");
+    } else if (strncmp(line, "/stt", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
+        const char *rest = line + 4;
+        while (*rest == ' ') rest++;
+        if (!app->stt_enabled) {
+            log_line(app, "/stt is off — /set stt.enabled on turns it on. With stt.url set the "
+                          "audio is SENT to that endpoint; without it a local whisper does the "
+                          "work and nothing leaves this machine");
+        } else if (!app->stt_url[0] && !stt_local_binary(app)) {
+            log_line(app, "/stt: no endpoint (/set stt.url) and no local whisper on PATH "
+                          "(whisper-cli or whisper)");
+        } else if (*rest) {
+            /* A file that already exists — a received voice message
+             * saved to disk, or anything else with speech in it. Not
+             * ours, so the worker must not delete it. */
+            struct job job = { .kind = JOB_STT, .owns_file = false };
+            snprintf(job.arg1, sizeof(job.arg1), "%s", rest);
+            if (access(rest, R_OK) != 0)
+                log_line(app, "/stt: cannot read %s", rest);
+            else
+                enqueue_job(app, job);
+        } else {
+            record_start_for(app, false, RECORD_TRANSCRIBE);
+        }
+    } else if (strcmp(line, "/voicemsg") == 0 || strcmp(line, "/vmsg") == 0) {
+        record_start(app, false);
+    } else if (strcmp(line, "/video") == 0) {
+        record_start(app, true);
     } else if (strcmp(line, "/list") == 0 || strncmp(line, "/list ", 6) == 0) {
         directory_command(app, line[5] ? line + 6 : "");
     } else if (strncmp(line, "/watch ", 7) == 0 || strncmp(line, "/highlight ", 11) == 0) {
@@ -13152,6 +13870,7 @@ static void event_loop(struct app *app) {
             (app->preview.state == IM_READY || app->preview.state == IM_FAILED);
         pthread_mutex_unlock(&app->lock);
         if (preview_ready) show_preview(app);
+        record_poll(app);
         draw(app);
         int ch = getch();
         if (ch == ERR) continue;
@@ -13486,6 +14205,12 @@ int main(int argc, char **argv) {
      * the setting would promise pictures and deliver "[image could not
      * be decoded]" on every row — the honest default is the one the
      * machine can keep. */
+    /* ffmpeg's usual desktop capture pair. Wrong on a machine with no
+     * pulse or a second webcam, which is exactly why they are settings
+     * and not constants. */
+    snprintf(app->voice_source, sizeof(app->voice_source), "pulse:default");
+    snprintf(app->video_source, sizeof(app->video_source), "v4l2:/dev/video0");
+    app->rec.stdin_fd = -1;
     bool have_ffmpeg = media_tool_available("ffmpeg");
     app->inline_media_enabled = have_ffmpeg;
     app->inline_media_peers = have_ffmpeg;
@@ -13624,6 +14349,14 @@ int main(int argc, char **argv) {
     } else {
         startup("entering terminal UI");
         event_loop(app);
+    }
+    /* A recording in flight when the client quits: ffmpeg would keep
+     * the microphone (or the camera light) until its own duration cap,
+     * long after the window it was recording for has gone. */
+    if (app->rec.active && app->rec.pid > 0) {
+        kill(app->rec.pid, SIGKILL);
+        while (waitpid(app->rec.pid, NULL, 0) < 0 && errno == EINTR) {}
+        record_cleanup(app);
     }
     pthread_mutex_lock(&app->jobs_lock);
     app->worker_stop = true;

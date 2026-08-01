@@ -386,6 +386,62 @@ The prompt is mitigation, not containment: a model can be argued into
 anything. What contains it is the tool allowlist, the per-pair grant and the
 rate limit. The full model is in `llm.h`, beside the code that obeys it.
 
+## Voice and video messages, and speaking instead of typing
+
+```sh
+/voicemsg          # or /vmsg — record from the microphone
+/video             # record from the camera
+/stt               # speak; the words land in the input line
+/stt <file>        # transcribe an audio file instead
+```
+
+`/voicemsg` and `/video` open a **modal timer**: Enter ends the recording and
+sends it, Esc throws it away. There is no third outcome and no way to leave one
+running in the background — an always-recordable client is one nobody trusts.
+The recording is uploaded exactly like `/upload` and its **link** is posted, so
+IRC stays text; the row leads with 🎤 or 🎥 instead of 📸 so scrollback says
+which it was without opening it. Recordings are capped at 300 seconds.
+
+Note `/voicemsg`, not `/voice` — `/voice` is the IRC +v verb and keeps that
+meaning.
+
+Nothing blocks the client: the recorder is stopped with ffmpeg's own `q` (a
+signal would leave an mp4 with no index — a file nothing plays), the overlay
+says *finishing…* while the trailer is written, and the upload happens on the
+worker thread. `/upload` moved onto the same path, so a slow network no longer
+freezes the client mid-keystroke either.
+
+ffmpeg does the capture. The devices are settings, because there is no portable
+answer:
+
+```sh
+/set voice.source pulse:default        # ffmpeg format:input
+/set video.source v4l2:/dev/video0
+```
+
+**`/stt` is off by default**, and that is a decision rather than a shrug:
+turning it on means audio from this machine may leave it.
+
+```sh
+/set stt.enabled on
+/set stt.url https://api.openai.com/v1    # audio is SENT here
+/set stt.token <bearer>                   # masked, never echoed
+/set stt.model whisper-1
+/set stt.local whisper-cli                # or leave empty to auto-detect
+```
+
+With `stt.url` set, that endpoint transcribes — and if it does not answer, a
+local whisper picks up the job, which can only ever be more private than what
+you asked for. With `stt.url` empty, a **local whisper** does it from the
+start — `whisper-cli` (whisper.cpp) or `whisper` (openai-whisper),
+whichever is on PATH, each with its own flags — and nothing leaves the machine.
+That is why local is the fallback rather than an afterthought. The setter says
+which of the two is in force when you switch it on.
+
+The transcript lands in the **input line**, not on the network: speech
+recognition misreads names, and a client that sends what it thought it heard
+publishes your mistakes. Read it, fix it, press Enter.
+
 ## /exec
 
 `/exec <command>` runs it in a shell and **sends its stdout to the current
