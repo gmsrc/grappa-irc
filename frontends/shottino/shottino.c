@@ -7793,26 +7793,36 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
  * as the token, or a probe result frozen into an explicit setting, or one
  * identity's bot directory pinned for every other. So the config file
  * takes what the user actually typed, and an empty field is written as
- * nothing at all rather than as the default it currently resolves to. */
-static void setting_raw(struct app *app, const char *name, char *out, size_t out_sz) {
-    if (strcmp(name, "mouse") == 0) snprintf(out, out_sz, "%s", app->mouse_enabled ? "on" : "off");
-    else if (strcmp(name, "animate") == 0)
-        snprintf(out, out_sz, "%s", app->animate_media ? "on" : "off");
+ * nothing at all rather than as the default it currently resolves to.
+ *
+ * Returns the length the value NEEDS, snprintf-style, so a caller can
+ * tell a complete value from a truncated one. The settings panel needs
+ * that: llm.prompt is up to 16 KiB and its Enter prefills an input line
+ * a fraction of that size, and prefilling a truncated value is how a
+ * second Enter would write the truncation back over the real prompt. */
+static size_t setting_raw(struct app *app, const char *name, char *out, size_t out_sz) {
+    const char *src = "";
+    if (strcmp(name, "mouse") == 0) src = app->mouse_enabled ? "on" : "off";
+    else if (strcmp(name, "animate") == 0) src = app->animate_media ? "on" : "off";
     else if (strcmp(name, "media") == 0)
-        snprintf(out, out_sz, "%s",
-                 app->inline_media_enabled ? (app->inline_media_peers ? "all" : "first-party") : "off");
-    else if (strcmp(name, "stt.enabled") == 0)
-        snprintf(out, out_sz, "%s", app->stt_enabled ? "on" : "off");
-    else if (strcmp(name, "stt.url") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->stt_url);
-    else if (strcmp(name, "stt.token") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->stt_token);
-    else if (strcmp(name, "stt.model") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->stt_model);
-    else if (strcmp(name, "stt.local") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->stt_local);
-    else if (strcmp(name, "voice.source") == 0)
-        snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->voice_source);
-    else if (strcmp(name, "video.source") == 0)
-        snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->video_source);
-    else if (strcmp(name, "bot.dir") == 0) snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->bot_dir);
-    else out[0] = 0;
+        src = app->inline_media_enabled ? (app->inline_media_peers ? "all" : "first-party") : "off";
+    else if (strcmp(name, "llm.backend") == 0)
+        src = app->llm.backend == LLM_BACKEND_CLAUDE_CLI ? "claude-cli" : "openai";
+    else if (strcmp(name, "llm.url") == 0) src = app->llm.url;
+    else if (strcmp(name, "llm.token") == 0) src = app->llm.token;
+    else if (strcmp(name, "llm.model") == 0) src = app->llm.model;
+    else if (strcmp(name, "llm.cli_tools") == 0) src = app->llm.cli_tools;
+    else if (strcmp(name, "llm.prompt") == 0) src = app->llm.prompt;
+    else if (strcmp(name, "stt.enabled") == 0) src = app->stt_enabled ? "on" : "off";
+    else if (strcmp(name, "stt.url") == 0) src = app->stt_url;
+    else if (strcmp(name, "stt.token") == 0) src = app->stt_token;
+    else if (strcmp(name, "stt.model") == 0) src = app->stt_model;
+    else if (strcmp(name, "stt.local") == 0) src = app->stt_local;
+    else if (strcmp(name, "voice.source") == 0) src = app->voice_source;
+    else if (strcmp(name, "video.source") == 0) src = app->video_source;
+    else if (strcmp(name, "bot.dir") == 0) src = app->bot_dir;
+    snprintf(out, out_sz, "%.*s", (int)out_sz - 1, src);
+    return strlen(src);
 }
 
 /* Which file owns a setting.
@@ -9738,19 +9748,27 @@ static bool panel_key(struct app *app, int ch) {
         size_t sel = app->settings_sel;
         pthread_mutex_unlock(&app->lock);
         if (sel >= settings_count()) return false;
-        char cur[256];
-        setting_value(app, SETTINGS[sel].name, cur, sizeof(cur));
-        /* The command is put in the input line rather than run: the user
-         * sees exactly what will happen, can edit it, and it lands in
-         * history like anything else they typed. A secret is never
-         * prefilled — setting_value masks llm.token and stt.token, and
-         * writing the mask back would SET the token to `********`. */
+        /* The RAW value, not the displayed one. setting_value masks the
+         * tokens, shows the whisper binary it FOUND for stt.local and the
+         * path it DERIVES for bot.dir, and cut llm.prompt to 120 chars —
+         * so prefilling what the panel shows and pressing Enter again
+         * wrote a mask over a token, an autodetected path over an empty
+         * setting, or 120 characters over a 16 KiB prompt. Silently, and
+         * only for the people who used the panel the way it invites. */
+        char raw[MAX_LINE];
+        size_t need = setting_raw(app, SETTINGS[sel].name, raw, sizeof(raw));
+        /* A secret is never prefilled, and neither is a value too long to
+         * carry: `/set <name>` with no value PRINTS the setting instead
+         * of writing it, so the safe fallback is also a useful one. */
         bool secret = strstr(SETTINGS[sel].name, "token") != NULL;
-        bool unset = strcmp(cur, "(unset)") == 0 || strcmp(cur, "(none)") == 0 ||
-                     strcmp(cur, "(none found)") == 0;
+        /* The room left once "/set <name> " is in front of it. A value
+         * that does not fit WITH its command is not carriable either —
+         * measuring the value alone would just move the truncation. */
+        size_t room = sizeof(app->input) - strlen(SETTINGS[sel].name) - sizeof("/set  ");
+        bool carriable = need > 0 && need < sizeof(raw) && need < room && !strchr(raw, '\n');
         pthread_mutex_lock(&app->lock);
-        snprintf(app->input, sizeof(app->input), "/set %s %s", SETTINGS[sel].name,
-                 (secret || unset) ? "" : cur);
+        snprintf(app->input, sizeof(app->input), "/set %s %.*s", SETTINGS[sel].name, (int)room,
+                 (secret || !carriable) ? "" : raw);
         app->input_len = strlen(app->input);
         pthread_mutex_unlock(&app->lock);
         return true;
@@ -11250,6 +11268,15 @@ static void record_start_for(struct app *app, bool video, enum record_purpose pu
     }
 
     memset(&app->rec, 0, sizeof(app->rec));
+    /* Zero means fd 0, and fd 0 is the KEYBOARD. Every failure path from
+     * here to the fork ends in record_cleanup, which closes stdin_fd if
+     * it is >= 0 — so a struct left zeroed by the memset would have a
+     * failed pipe() or fork() close the process's own stdin, after which
+     * getch() returns ERR forever and the client is deaf for the rest of
+     * the session. The idle value is -1, and it has to be restored the
+     * moment the struct is cleared rather than only by the cleanup that
+     * may never run. */
+    app->rec.stdin_fd = -1;
     snprintf(app->rec.dir, sizeof(app->rec.dir), "/tmp/shottino-rec-XXXXXX");
     if (!mkdtemp(app->rec.dir)) {
         log_line(app, "/%s: cannot make a scratch directory", video ? "video" : "voice");
