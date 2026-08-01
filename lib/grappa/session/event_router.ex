@@ -394,8 +394,8 @@ defmodule Grappa.Session.EventRouter do
   defp do_route(%Message{command: :privmsg, params: [target, body]} = msg, state)
        when is_binary(target) and is_binary(body) and
               binary_part(body, 0, 1) == <<0x01>> do
-    case ctcp_verb(body) do
-      "VERSION" ->
+    case CTCP.verb_args(body) do
+      {"VERSION", _} ->
         sender = Message.sender_nick(msg)
         version = Grappa.Version.current()
         reply = "NOTICE #{sender} :\x01VERSION grappa #{version}\x01"
@@ -424,7 +424,7 @@ defmodule Grappa.Session.EventRouter do
 
         {:cont, state2, [{:reply, reply}, persist_eff]}
 
-      "PING" ->
+      {"PING", _} ->
         # Answered in its own function, not inline: this clause was at
         # cyclomatic complexity 9 (Credo's strict maximum) before the arm
         # existed, and the arm's own case + if took it to 10. The limit
@@ -2603,20 +2603,6 @@ defmodule Grappa.Session.EventRouter do
   # and the wire-frame splitter (LineSplit). See issue #14: the two paths
   # had drifted (inbound :action, outbound :privmsg).
 
-  # Extracts the CTCP verb from a `\x01VERB ...\x01` (or `\x01VERB\x01`)
-  # body. Returns nil if the body doesn't start with \x01 or has no
-  # parseable verb. Used by the CTCP-aware PRIVMSG arm to dispatch on
-  # verb name (VERSION today; PING / TIME / SOURCE / FINGER candidates).
-  @spec ctcp_verb(binary()) :: String.t() | nil
-  defp ctcp_verb(<<0x01, rest::binary>>) do
-    case :binary.split(rest, [" ", <<0x01>>]) do
-      ["" | _] -> nil
-      [verb | _] -> verb
-    end
-  end
-
-  defp ctcp_verb(_), do: nil
-
   # CTCP PING: echo the payload back, unchanged and uninspected.
   #
   # The token is the ASKER's — conventionally their clock, but it is
@@ -2635,12 +2621,17 @@ defmodule Grappa.Session.EventRouter do
   defp ctcp_ping_reply(msg, target, body, state) do
     sender = Message.sender_nick(msg)
 
-    # A token-less `\x01PING\x01` echoes back token-less, rather than
-    # with a stray separator the asker never sent.
+    # The echoed token comes from the single SSOT parser
+    # (`CTCP.verb_args/1`), not a local duplicate. A token-less
+    # `\x01PING\x01` echoes back token-less, rather than with a stray
+    # separator the asker never sent. `:none` cannot occur here (this arm
+    # is reached only on a `{"PING", _}` match) but is handled as the
+    # empty-token case for totality.
     reply =
-      case ctcp_payload(body) do
-        "" -> "NOTICE #{sender} :\x01PING\x01"
-        payload -> "NOTICE #{sender} :\x01PING #{payload}\x01"
+      case CTCP.verb_args(body) do
+        {_, ""} -> "NOTICE #{sender} :\x01PING\x01"
+        {_, token} -> "NOTICE #{sender} :\x01PING #{token}\x01"
+        :none -> "NOTICE #{sender} :\x01PING\x01"
       end
 
     dm_channel =
@@ -2653,22 +2644,6 @@ defmodule Grappa.Session.EventRouter do
 
     {:cont, state2, [{:reply, reply}, persist_eff]}
   end
-
-  # The argument of a `\x01VERB arg\x01` body, verbatim and NOT parsed:
-  # a CTCP PING token is the asker's to choose, and the only contract is
-  # that it comes back unchanged. Empty when the body carries no
-  # argument (`\x01PING\x01`), which echoes an empty token rather than
-  # inventing one. The trailing \x01 is stripped; anything after it
-  # cannot be part of this CTCP.
-  @spec ctcp_payload(binary()) :: String.t()
-  defp ctcp_payload(<<0x01, rest::binary>>) do
-    case :binary.split(rest, " ") do
-      [_, arg] -> arg |> :binary.split(<<0x01>>) |> hd()
-      _ -> ""
-    end
-  end
-
-  defp ctcp_payload(_), do: ""
 
   # #591 — the typed CTCP meta for a persisted row whose body is a CTCP frame,
   # or `%{}` for a plain (non-CTCP) body. FLAT keys (`ctcp_verb`/`ctcp_args`)
