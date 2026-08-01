@@ -2678,6 +2678,40 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert_push("event", %{kind: :query_windows_list})
     end
 
+    # #594 — the WS `close_failed` terminal. A sustained transient SQLITE_BUSY
+    # on the window delete must degrade to a clean channel error and leave the
+    # socket OPEN — never a raise that tears the connection down. This is one
+    # of the two out-of-process terminals the process-dictionary seam can't
+    # reach (the handler runs in the channel's own pid), so it is armed via the
+    # cross-process ETS seam on `socket.channel_pid`. Pinning it matters
+    # because Dialyzer does NOT flag a non-exhaustive `case` — a refactor
+    # dropping the `{:error, :db_unavailable}` arm would crash the channel
+    # here, unseen, exactly like the `maybe_open_query_window` CaseClauseError.
+    test "close_query_window: a sustained DB busy replies close_failed and keeps the socket open", %{
+      socket: socket,
+      user: user,
+      network: network
+    } do
+      {:ok, _} = QueryWindows.open({:user, user.id}, network.id, "dave", user.name)
+      assert_push("event", %{kind: :query_windows_list})
+
+      # Arm the fault against the CHANNEL process — QueryWindows.close/4's
+      # BusyRetry.run runs there, so its budget exhausts to :db_unavailable.
+      Grappa.Repo.BusyRetry.arm_faults(socket.channel_pid, 10_000)
+      on_exit(fn -> Grappa.Repo.BusyRetry.disarm_faults(socket.channel_pid) end)
+
+      ref =
+        push(socket, "close_query_window", %{
+          "network_id" => network.id,
+          "target_nick" => "dave"
+        })
+
+      # Observable terminal: a typed error reply, NOT a crash — and the
+      # channel process is still alive to serve the next push.
+      assert_reply(ref, :error, %{error: "close_failed"})
+      assert Process.alive?(socket.channel_pid)
+    end
+
     # V2 — visitor parity: visitors persist DM windows alongside users.
     # Pre-V2 the channel handlers short-circuited `visitor_not_allowed`;
     # V2 lifts the gate so visitor sockets get the same broadcast +
