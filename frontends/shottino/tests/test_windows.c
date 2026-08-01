@@ -1185,6 +1185,52 @@ TEST(a_tab_completed_verb_still_dispatches) {
     free_app(app);
 }
 
+/* The panel and /set must show the SAME set of preferences. A panel that
+ * lists its own hand-written subset is a panel that quietly stops
+ * mentioning whatever was added last. */
+TEST(the_settings_panel_lists_every_setting) {
+    struct app *app = window_app();
+    app->panel = PANEL_SETTINGS;
+    /* A secret worth masking: llm_token_redacted renders an EMPTY token
+     * as visibly empty, so an unset one proves nothing about masking. */
+    snprintf(app->llm.token, sizeof(app->llm.token), "sk-not-a-real-key-8842");
+    settings_rows(app);
+
+    CHECK(app->panel_line_count == settings_count());
+    CHECK(settings_count() > 10); /* a table that emptied itself is not a pass */
+
+    for (size_t i = 0; i < settings_count(); i++) {
+        /* Every row names its setting and shows a value — not "?" , the
+         * shape the admin panel used to render before #the-values-fix. */
+        CHECK(strstr(app->panel_lines[i], SETTINGS[i].name) != NULL);
+        CHECK(strstr(app->panel_lines[i], SETTINGS[i].help) != NULL);
+    }
+
+    /* A secret is masked in the panel exactly as it is in the listing:
+     * the panel is drawn on a screen people share. */
+    for (size_t i = 0; i < settings_count(); i++) {
+        if (strcmp(SETTINGS[i].name, "llm.token") != 0) continue;
+        CHECK(strstr(app->panel_lines[i], "*") != NULL);
+        CHECK(strstr(app->panel_lines[i], "sk-not") == NULL);
+    }
+
+    /* An edit is reflected in place — the panel does not re-fetch to
+     * show that a switch moved. */
+    size_t mouse_row = settings_count();
+    for (size_t i = 0; i < settings_count(); i++)
+        if (strcmp(SETTINGS[i].name, "mouse") == 0) mouse_row = i;
+    CHECK(mouse_row < settings_count());
+    /* Row 0 is a VALID position for the block, and the refresh must work
+     * there: treating zero as "no block" is the bug this pins. */
+    CHECK(app->settings_row0 == 0);
+    CHECK(app->settings_shown);
+    app->mouse_enabled = !app->mouse_enabled;
+    settings_rows_refresh_locked(app);
+    CHECK(strstr(app->panel_lines[mouse_row], app->mouse_enabled ? "on" : "off") != NULL);
+
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -1226,6 +1272,7 @@ int main(void) {
     RUN(two_identities_get_two_bot_directories);
     RUN(a_standing_grant_survives_a_restart);
     RUN(a_tab_completed_verb_still_dispatches);
+    RUN(the_settings_panel_lists_every_setting);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
     return test_report();
 }

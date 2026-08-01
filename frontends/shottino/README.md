@@ -295,6 +295,32 @@ chooses it, the wheel walks the list, and a click anywhere outside the box
 closes it — the same as Esc. Right-click needs mouse reporting, which is on by
 default; `Ctrl-R` works either way.
 
+## The settings panel
+
+`/settings` opens it. Every preference `/set` knows is listed there, with its
+current value — the rows are **derived from the same table** the command reads,
+so the panel cannot show a subset that quietly stops mentioning whatever was
+added last.
+
+```
+  ↑↓        pick a preference        (when the input line is empty)
+  Enter     edit it
+  Space     toggle a switch
+  PgUp/PgDn scroll, and the mouse wheel
+  click     select the row under the pointer
+  Esc       back to chat
+```
+
+**Enter puts `/set <name> <current>` in the input line** rather than running
+anything: you see exactly what will happen, you can edit it, and it lands in
+command history like anything else you typed. There is one validation and one
+save path, not a second one behind the panel. Tokens are never prefilled —
+they are shown masked, and writing the mask back would set your token to
+`********`.
+
+Panels scroll now. They did not before, and the settings panel is taller than
+a terminal, so the bottom of it was simply not drawn.
+
 ## /llm
 
 Ask a language model, from the client.

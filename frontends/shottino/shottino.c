@@ -491,6 +491,13 @@ static void record_finish(struct app *app, bool send);
  * from the job loop too, since /upload, /voicemsg and /video all post
  * through the SAME function on the worker thread. */
 static const char *stt_local_binary(struct app *app);
+/* The settings panel's editable rows come from the /set table, which is
+ * declared further down beside the command that reads it. The count is a
+ * function rather than a macro for the same reason: the table is not in
+ * scope up here, and a second hardcoded length is a second thing to keep
+ * right. */
+static void settings_rows(struct app *app);
+static size_t settings_count(void);
 /* The bot's per-identity directory: the grants are written from the
  * approval path, which comes before the directory helper. */
 static void bot_dir_path(struct app *app, char *out, size_t out_sz);
@@ -701,6 +708,28 @@ struct app {
     enum panel_kind panel;
     char *panel_lines[PANEL_LINES];
     size_t panel_line_count;
+    /* Where the panel's first visible row was actually drawn. Recorded
+     * by the draw path and read by the click handler: the layout knows
+     * this, and a second copy of the arithmetic in the mouse code is a
+     * second thing to get wrong when the chrome changes. */
+    int panel_draw_y;
+    /* A panel is taller than the terminal — the settings one always is
+     * now that it lists every preference — so it scrolls. The draw path
+     * clamps this against the real height, which only it knows. */
+    size_t panel_offset;
+    /* The editable block inside the settings panel: where its first row
+     * sits in panel_lines, and which row is selected. The rows are
+     * DERIVED from the same SETTINGS[] table /set reads, so the panel
+     * cannot list a preference the command does not have (or miss one
+     * it does). */
+    size_t settings_row0;
+    size_t settings_sel;
+    /* Whether the block is on screen at all. A separate flag because
+     * row0 == 0 is a VALID position — the first line of the panel — and
+     * using zero as "absent" makes the refresh, the highlight and the
+     * click test all silently do nothing the day the block moves to the
+     * top. */
+    bool settings_shown;
     struct seen_message seen[SEEN_MESSAGES];
     size_t seen_count;
     size_t seen_next;
@@ -3440,6 +3469,11 @@ static void open_panel(struct app *app, enum panel_kind panel) {
     pthread_mutex_lock(&app->lock);
     clear_panel_lines_locked(app);
     app->panel = panel;
+    /* A panel opened again starts at the top, not wherever the last one
+     * was left. */
+    app->panel_offset = 0;
+    app->settings_row0 = 0;
+    app->settings_shown = false;
     struct window current = app->windows[focused_window_locked(app)];
     size_t window_count = app->window_count;
     size_t alias_count = app->aliases.count;
@@ -3468,6 +3502,11 @@ static void open_panel(struct app *app, enum panel_kind panel) {
     }
 
     case PANEL_SETTINGS:
+        /* Editable first: it is what people open this panel for. The
+         * read-only facts about the connection follow. */
+        panel_line(app, "preferences — Enter edits, Space toggles a switch");
+        settings_rows(app);
+        panel_line(app, "%s", "");
         panel_line(app, "connection");
         panel_line(app, "  server         %s", app->url.base);
         panel_line(app, "  subject        %s", app->subject);
@@ -6166,13 +6205,47 @@ static void draw(struct app *app) {
         /* A panel replaces the whole chat area, panes and all: it is a
          * different mode, not another window. */
         draw_text(area_y, main_x + 1, main_w - 2, CP_ACCENT, A_BOLD, "%s", panel_name(app->panel));
-        for (size_t i = 0; i < app->panel_line_count && (int)i + area_y + 2 < compose_y - 1; i++) {
-            int pair = i == 0 ? CP_ACCENT : CP_MAIN;
-            attr_t attr = i == 0 ? A_BOLD : 0;
-            draw_text(area_y + 2 + (int)i, main_x + 1, main_w - 2, pair, attr, "%s", app->panel_lines[i]);
+        /* How many rows the panel actually has to draw into. The offset
+         * is clamped HERE because this is the only place that knows the
+         * height — a key handler that clamped against a guess would let
+         * the last page scroll off on one terminal and not another. */
+        int panel_h = compose_y - 1 - (area_y + 2);
+        if (panel_h < 1) panel_h = 1;
+        size_t max_off = app->panel_line_count > (size_t)panel_h
+                             ? app->panel_line_count - (size_t)panel_h
+                             : 0;
+        if (app->panel_offset > max_off) app->panel_offset = max_off;
+        /* Keep the selected preference on screen: moving a selection you
+         * cannot see is how you change the wrong setting. */
+        if (app->panel == PANEL_SETTINGS && app->settings_shown) {
+            size_t sel = app->settings_row0 + app->settings_sel;
+            if (sel < app->panel_offset) app->panel_offset = sel;
+            else if (sel >= app->panel_offset + (size_t)panel_h)
+                app->panel_offset = sel - (size_t)panel_h + 1;
+        }
+        app->panel_draw_y = area_y + 2;
+        for (size_t i = app->panel_offset;
+             i < app->panel_line_count && (int)(i - app->panel_offset) < panel_h; i++) {
+            bool selected = app->panel == PANEL_SETTINGS && app->settings_shown &&
+                            i == app->settings_row0 + app->settings_sel;
+            int pair = selected ? CP_MENTION : (i == 0 ? CP_ACCENT : CP_MAIN);
+            attr_t attr = selected ? A_BOLD | A_REVERSE : (i == 0 ? A_BOLD : 0);
+            draw_text(area_y + 2 + (int)(i - app->panel_offset), main_x + 1, main_w - 2, pair, attr,
+                      "%s", app->panel_lines[i]);
         }
         draw_fill(compose_y, main_x, main_w, CP_STATUS);
-        draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0, "panel: %s | Esc or /chat returns to chat", panel_name(app->panel));
+        if (app->panel == PANEL_SETTINGS)
+            draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0,
+                      "settings %zu/%zu | ↑↓ pick · Enter edit · Space toggle · PgUp/PgDn scroll · "
+                      "Esc returns to chat",
+                      app->settings_sel + 1, settings_count());
+        else if (max_off)
+            draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0,
+                      "panel: %s %zu/%zu | PgUp/PgDn scroll | Esc or /chat returns to chat",
+                      panel_name(app->panel), app->panel_offset + 1, max_off + 1);
+        else
+            draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0,
+                      "panel: %s | Esc or /chat returns to chat", panel_name(app->panel));
         int cursor_y = input_y;
         int cursor_x = main_x + 2;
         draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input, &cursor_y, &cursor_x);
@@ -7458,6 +7531,8 @@ static bool setting_parse_bool(const char *v, bool *out) {
     return false;
 }
 
+static size_t settings_count(void) { return sizeof(SETTINGS) / sizeof(SETTINGS[0]); }
+
 static const struct setting_def *setting_find(const char *name) {
     for (size_t i = 0; i < sizeof(SETTINGS) / sizeof(SETTINGS[0]); i++)
         if (strcasecmp(SETTINGS[i].name, name) == 0) return &SETTINGS[i];
@@ -7508,6 +7583,46 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
         snprintf(out, out_sz, "%.*s", (int)out_sz - 1, dir);
     }
     else snprintf(out, out_sz, "?");
+}
+
+/* One panel row per setting, from the same table /set reads.
+ *
+ * Rewritten in place after an edit rather than by rebuilding the panel:
+ * open_panel blocks on HTTP for the notify list and the server
+ * capabilities, and paying for two round trips to show that `mouse` now
+ * says off would make the panel feel broken. The block is a fixed run of
+ * settings_count() lines, so its rows can be replaced where they sit. */
+static void settings_row_text(struct app *app, size_t i, char *out, size_t out_sz) {
+    char cur[256];
+    setting_value(app, SETTINGS[i].name, cur, sizeof(cur));
+    snprintf(out, out_sz, "  %-16s %-28s %s", SETTINGS[i].name, cur, SETTINGS[i].help);
+}
+
+static void settings_rows(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    app->settings_row0 = app->panel_line_count;
+    app->settings_shown = true;
+    pthread_mutex_unlock(&app->lock);
+    for (size_t i = 0; i < settings_count(); i++) {
+        char row[512];
+        settings_row_text(app, i, row, sizeof(row));
+        panel_line(app, "%s", row);
+    }
+}
+
+/* Caller holds app->lock. */
+static void settings_rows_refresh_locked(struct app *app) {
+    if (app->panel != PANEL_SETTINGS || !app->settings_shown) return;
+    for (size_t i = 0; i < settings_count(); i++) {
+        size_t at = app->settings_row0 + i;
+        if (at >= app->panel_line_count) break;
+        char row[512];
+        settings_row_text(app, i, row, sizeof(row));
+        char *dup = strdup(row);
+        if (!dup) continue;
+        free(app->panel_lines[at]);
+        app->panel_lines[at] = dup;
+    }
 }
 
 /* The owner typing. No `on_behalf_of`, so any write tool this turn is
@@ -8971,6 +9086,111 @@ static void complete_input(struct app *app) {
             used += (size_t)n;
         }
         log_line(app, "completions for '%s': %s", stem, list);
+    }
+}
+
+/* ── Keys, while a panel is open ───────────────────────────────────────
+ *
+ * A panel is a mode, not a window, but the input line is still there and
+ * still takes commands — so the navigation keys only claim a keystroke
+ * when the input line is EMPTY. Type anything and Up/Down are command
+ * history again, which is what they are everywhere else in the client.
+ * Stealing them outright would make the panel a place where your muscle
+ * memory is wrong.
+ *
+ * Returns true when the key was consumed. */
+static bool panel_key(struct app *app, int ch) {
+    pthread_mutex_lock(&app->lock);
+    bool in_panel = app->panel != PANEL_CHAT;
+    bool typing = app->input_len > 0;
+    bool settings = app->panel == PANEL_SETTINGS && app->settings_shown;
+    pthread_mutex_unlock(&app->lock);
+    if (!in_panel || typing) return false;
+
+    switch (ch) {
+    case KEY_PPAGE:
+    case KEY_NPAGE: {
+        pthread_mutex_lock(&app->lock);
+        /* A page is "most of a screen", not a screen: the overlap is
+         * what stops a reader losing their place. The draw path clamps
+         * the far end — it is the only thing that knows the height. */
+        size_t page = 10;
+        if (ch == KEY_PPAGE)
+            app->panel_offset = app->panel_offset > page ? app->panel_offset - page : 0;
+        else
+            app->panel_offset += page;
+        pthread_mutex_unlock(&app->lock);
+        return true;
+    }
+    case KEY_HOME:
+        pthread_mutex_lock(&app->lock);
+        app->panel_offset = 0;
+        pthread_mutex_unlock(&app->lock);
+        return true;
+    case KEY_END:
+        pthread_mutex_lock(&app->lock);
+        app->panel_offset = app->panel_line_count; /* clamped when drawn */
+        pthread_mutex_unlock(&app->lock);
+        return true;
+    default:
+        break;
+    }
+    if (!settings) return false;
+
+    switch (ch) {
+    case KEY_UP:
+        pthread_mutex_lock(&app->lock);
+        if (app->settings_sel) app->settings_sel--;
+        pthread_mutex_unlock(&app->lock);
+        return true;
+    case KEY_DOWN:
+        pthread_mutex_lock(&app->lock);
+        if (app->settings_sel + 1 < settings_count()) app->settings_sel++;
+        pthread_mutex_unlock(&app->lock);
+        return true;
+    case ' ': {
+        /* A switch is a switch: flipping it needs no sentence typed at
+         * it. Anything else falls through to Enter, because there is no
+         * obvious "next" value for a URL. */
+        pthread_mutex_lock(&app->lock);
+        size_t sel = app->settings_sel;
+        pthread_mutex_unlock(&app->lock);
+        if (sel >= settings_count() || SETTINGS[sel].kind != SET_BOOL) return false;
+        char cur[64];
+        setting_value(app, SETTINGS[sel].name, cur, sizeof(cur));
+        char cmd[160];
+        snprintf(cmd, sizeof(cmd), "/set %s %s", SETTINGS[sel].name,
+                 strcmp(cur, "on") == 0 ? "off" : "on");
+        /* Through the ordinary command path: one validation, one save,
+         * and the panel refresh that /set already does. */
+        handle_command(app, cmd);
+        return true;
+    }
+    case '\n':
+    case '\r': {
+        pthread_mutex_lock(&app->lock);
+        size_t sel = app->settings_sel;
+        pthread_mutex_unlock(&app->lock);
+        if (sel >= settings_count()) return false;
+        char cur[256];
+        setting_value(app, SETTINGS[sel].name, cur, sizeof(cur));
+        /* The command is put in the input line rather than run: the user
+         * sees exactly what will happen, can edit it, and it lands in
+         * history like anything else they typed. A secret is never
+         * prefilled — setting_value masks llm.token and stt.token, and
+         * writing the mask back would SET the token to `********`. */
+        bool secret = strstr(SETTINGS[sel].name, "token") != NULL;
+        bool unset = strcmp(cur, "(unset)") == 0 || strcmp(cur, "(none)") == 0 ||
+                     strcmp(cur, "(none found)") == 0;
+        pthread_mutex_lock(&app->lock);
+        snprintf(app->input, sizeof(app->input), "/set %s %s", SETTINGS[sel].name,
+                 (secret || unset) ? "" : cur);
+        app->input_len = strlen(app->input);
+        pthread_mutex_unlock(&app->lock);
+        return true;
+    }
+    default:
+        return false;
     }
 }
 
@@ -11885,6 +12105,13 @@ static void handle_command_dispatch(struct app *app, char *line) {
                     snprintf(app->video_source, sizeof(app->video_source), "%.*s",
                              (int)sizeof(app->video_source) - 1, value);
                 if (touched_llm) llm_save(app);
+                /* Whether the change came from the panel or from a typed
+                 * /set, the panel is showing the old value until this
+                 * runs. One refresh at the point of change covers both
+                 * doors. */
+                pthread_mutex_lock(&app->lock);
+                settings_rows_refresh_locked(app);
+                pthread_mutex_unlock(&app->lock);
                 /* The VALUE is not echoed: `llm.token` goes through this
                  * same line, and a confirmation that repeats it defeats
                  * the masking everywhere else. */
@@ -12267,6 +12494,33 @@ static void handle_mouse(struct app *app) {
         else overlay_close(app);
         return;
     }
+
+    /* A panel owns the pointer the way it owns the keyboard: the wheel
+     * scrolls it, and a click on a preference selects that preference.
+     * Falling through to the chat handlers here would hunt for message
+     * regions that belong to a screen the panel is covering. */
+    pthread_mutex_lock(&app->lock);
+    bool in_panel = app->panel != PANEL_CHAT;
+    if (in_panel) {
+        if (wheel_up)
+            app->panel_offset = app->panel_offset > 3 ? app->panel_offset - 3 : 0;
+        else if (wheel_down)
+            app->panel_offset += 3; /* clamped when drawn */
+        else if (click && app->panel == PANEL_SETTINGS && app->settings_shown) {
+            /* Which panel line is under the pointer: the first row is
+             * drawn two lines below the panel's own heading, and the
+             * view starts at panel_offset. */
+            int first_y = app->panel_draw_y;
+            if (ev.y >= first_y) {
+                size_t line = app->panel_offset + (size_t)(ev.y - first_y);
+                if (line >= app->settings_row0 &&
+                    line - app->settings_row0 < settings_count())
+                    app->settings_sel = line - app->settings_row0;
+            }
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+    if (in_panel) return;
 
     if (right) {
         /* Right-click names the message under the pointer. */
@@ -13996,6 +14250,7 @@ static void event_loop(struct app *app) {
         }
         if (ch == 27) ch = resolve_escape();
         if (overlay_key(app, ch)) continue;
+        if (panel_key(app, ch)) continue;
         if (roster_key(app, ch)) continue;
         if (ch == 18) { /* Ctrl-R */
             open_reply_picker(app);
