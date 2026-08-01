@@ -1082,6 +1082,57 @@ TEST(two_identities_get_two_bot_directories) {
 
 /* "Approve always" that forgets at the next restart is not a grant, it
  * is a longer session. */
+/* Retiring a row must carry its whole row with it.
+ *
+ * Six arrays are parallel-indexed: the text, mention, pending-echo,
+ * scrollback id, media slot, scope. clear_matching_pending_echo used to
+ * memmove three of them by hand and leave the other three where they
+ * were, so after every message you sent while its echo was on screen,
+ * every row above it took on a NEIGHBOUR's id, image slot and window. The
+ * ring's own comment says exactly two functions may know the full set;
+ * this asserts that the retirement path is not a third. */
+TEST(retiring_an_echo_moves_every_row_not_just_its_text) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+
+    /* Three rows, each with metadata that names it, and the pending echo
+     * FIRST so the two below it have to slide. */
+    pthread_mutex_lock(&app->lock);
+    log_push_locked(app, strdup("[azzurra/#sniffo] 10:00 <vjt> hello there"), false, true);
+    log_push_locked(app, strdup("[azzurra/#sniffo] 10:01 <alice> second"), true, false);
+    log_push_locked(app, strdup("[azzurra/#altro] 10:02 <bob> third"), false, false);
+    app->log_ids[0] = 100; app->log_media[0] = 0;
+    app->log_ids[1] = 101; app->log_media[1] = 1;
+    app->log_ids[2] = 102; app->log_media[2] = 2;
+    char scope1[MAX_SLUG + MAX_CHANNEL + 8], scope2[MAX_SLUG + MAX_CHANNEL + 8];
+    snprintf(scope1, sizeof(scope1), "%s", app->log_scope[1]);
+    snprintf(scope2, sizeof(scope2), "%s", app->log_scope[2]);
+    pthread_mutex_unlock(&app->lock);
+    CHECK_LONG(app->log_count, 3);
+
+    clear_matching_pending_echo(app, "azzurra", "#sniffo", "hello there");
+    CHECK_LONG(app->log_count, 2);
+
+    /* Each surviving row still carries ITS id, ITS image and ITS window —
+     * not the ones belonging to the row that used to sit below it. */
+    CHECK(strstr(app->log[0], "second") != NULL);
+    CHECK_LONG(app->log_ids[0], 101);
+    CHECK_LONG(app->log_media[0], 1);
+    CHECK(app->log_mentions[0]);
+    CHECK(strcmp(app->log_scope[0], scope1) == 0);
+
+    CHECK(strstr(app->log[1], "third") != NULL);
+    CHECK_LONG(app->log_ids[1], 102);
+    CHECK_LONG(app->log_media[1], 2);
+    CHECK(!app->log_mentions[1]);
+    CHECK(strcmp(app->log_scope[1], scope2) == 0);
+    /* The two rows came from different channels, so a scope that did not
+     * move would file one of them into the other's window. */
+    CHECK(strcmp(scope1, scope2) != 0);
+
+    free_app(app);
+}
+
 /* The bot's door, not its judgement.
  *
  * bot_consider spent its whole life inside the `default:` arm of
@@ -1383,6 +1434,7 @@ int main(void) {
     RUN(a_grant_is_per_person_and_per_tool);
     RUN(a_memory_filename_is_built_not_taken);
     RUN(two_identities_get_two_bot_directories);
+    RUN(retiring_an_echo_moves_every_row_not_just_its_text);
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);
     RUN(a_standing_grant_survives_a_restart);

@@ -1275,9 +1275,19 @@ static void clear_matching_pending_echo(struct app *app, const char *network, co
         if (!app->log_pending[i]) continue;
         if (strstr(app->log[i], body) && strstr(app->log[i], network) && strstr(app->log[i], channel)) {
             free(app->log[i]);
-            memmove(app->log + i, app->log + i + 1, sizeof(app->log[0]) * (app->log_count - i - 1));
-            memmove(app->log_mentions + i, app->log_mentions + i + 1, sizeof(app->log_mentions[0]) * (app->log_count - i - 1));
-            memmove(app->log_pending + i, app->log_pending + i + 1, sizeof(app->log_pending[0]) * (app->log_count - i - 1));
+            /* Through log_row_move_locked, which is one of the two
+             * functions allowed to know how many parallel arrays there
+             * are. This site used to memmove three of the six by hand and
+             * leave log_ids, log_media and log_scope where they were — so
+             * every row above a retired echo took on another row's
+             * scrollback id, inline-image slot and window scope. The
+             * unread divider landed on the wrong line, an image rendered
+             * under the wrong message, and rows filed into the wrong
+             * window, a little more with every message sent.
+             *
+             * Exactly the drift the ring's own comment warns about, in the
+             * one function that ignored it. */
+            for (size_t k = i; k + 1 < app->log_count; k++) log_row_move_locked(app, k, k + 1);
             app->log_count--;
             break;
         }
