@@ -248,11 +248,23 @@ defmodule Grappa.Push do
   Returns `{deleted_count, nil}` per `Repo.delete_all/2` semantics.
   Idempotent — repeated calls with an already-deleted endpoint
   return `{0, nil}`.
+
+  #590 — `Push.Sender` is the only caller, a BACKGROUND delivery task with no
+  client waiting on this stale-endpoint sweep. Ride out a transient SQLITE_BUSY
+  via the shared engine and degrade sustained saturation to
+  `{:error, :db_unavailable}` rather than letting the raise escape and crash the
+  send task; the Sender maps it to a best-effort DROP (the endpoint is swept on
+  the next failed delivery). Wrap the `delete_all` in an `{:ok, _}` so it honours
+  the `BusyRetry.run/1` contract.
   """
-  @spec delete_dead(String.t()) :: {non_neg_integer(), nil}
+  @spec delete_dead(String.t()) :: {non_neg_integer(), nil} | {:error, :db_unavailable}
   def delete_dead(endpoint) when is_binary(endpoint) do
     query = from(s in Subscription, where: s.endpoint == ^endpoint)
-    Repo.delete_all(query)
+
+    case Repo.BusyRetry.run(fn -> {:ok, Repo.delete_all(query)} end) do
+      {:ok, {_count, nil} = deleted} -> deleted
+      {:error, :db_unavailable} = err -> err
+    end
   end
 
   @doc """

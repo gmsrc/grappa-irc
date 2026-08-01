@@ -132,6 +132,12 @@ defmodule Grappa.Operator do
       {:error, :not_found} ->
         IO.puts(:stderr, "visitor #{id} not found")
         raise Ecto.NoResultsError, queryable: Visitor
+
+      # #590 — the pool stayed saturated past the retry budget. A `bin/grappa`
+      # operator must see it and exit non-zero (retryable, not a silent no-op).
+      {:error, :db_unavailable} ->
+        IO.puts(:stderr, "visitor #{id} delete failed — database busy, retry")
+        raise "visitor delete deferred: database busy"
     end
   end
 
@@ -154,10 +160,10 @@ defmodule Grappa.Operator do
   `:visitor_deleted` admin event so the operator console shows
   who triggered the delete.
   """
-  @spec delete_visitor(Ecto.UUID.t()) :: :ok | {:error, :not_found}
+  @spec delete_visitor(Ecto.UUID.t()) :: :ok | {:error, :not_found | :db_unavailable}
   def delete_visitor(id) when is_binary(id), do: delete_visitor(id, nil)
 
-  @spec delete_visitor(Ecto.UUID.t(), actor()) :: :ok | {:error, :not_found}
+  @spec delete_visitor(Ecto.UUID.t(), actor()) :: :ok | {:error, :not_found | :db_unavailable}
   def delete_visitor(id, actor) when is_binary(id) do
     case Visitors.get(id) do
       nil ->
@@ -165,9 +171,25 @@ defmodule Grappa.Operator do
 
       visitor ->
         :ok = stop_visitor_session(visitor)
-        :ok = log_delete_outcome(id, visitor, Visitors.delete(id))
-        :ok = emit_visitor_deleted(visitor, actor)
-        :ok
+
+        # #590 — `Visitors.delete/1` degrades a sustained SQLITE_BUSY to
+        # `{:error, :db_unavailable}`. This is a client-facing door (admin REST
+        # `DELETE /admin/visitors/:id` + `bin/grappa`), so PROPAGATE it: the
+        # HTTP path routes through FallbackController to a clean 503, the CLI
+        # path raises via `delete_visitor!/1`. Only on a real delete (or a
+        # concurrent-reaper `:not_found`) do we emit the `:visitor_deleted`
+        # event — a deferred-because-busy delete never fires a misleading
+        # "reaped" signal.
+        case Visitors.delete(id) do
+          {:error, :db_unavailable} = err ->
+            :ok = log_delete_outcome(id, visitor, err)
+            err
+
+          outcome ->
+            :ok = log_delete_outcome(id, visitor, outcome)
+            :ok = emit_visitor_deleted(visitor, actor)
+            :ok
+        end
     end
   end
 
@@ -279,6 +301,15 @@ defmodule Grappa.Operator do
   # else already had".
   defp log_delete_outcome(id, _, {:error, :not_found}) do
     IO.puts("visitor #{id} already deleted (concurrent reaper or operator)")
+    :ok
+  end
+
+  # #590 — a sustained SQLITE_BUSY degraded the delete. Operator-visible line
+  # (stderr, mirroring the not-found clause) so a `bin/grappa` invocation and
+  # the server log both show the deferral; the caller then propagates
+  # `:db_unavailable` (HTTP 503 / CLI raise).
+  defp log_delete_outcome(id, _, {:error, :db_unavailable}) do
+    IO.puts(:stderr, "visitor #{id} delete deferred — database busy (retry)")
     :ok
   end
 

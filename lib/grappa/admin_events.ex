@@ -310,14 +310,26 @@ defmodule Grappa.AdminEvents do
   defp persist_event(event) do
     attrs = %{kind: to_string(event.kind), payload: event}
 
-    case %Event{} |> Event.changeset(attrs) |> Repo.insert() do
+    # #590 — ride out a transient SQLITE_BUSY on the mirror insert; sustained
+    # saturation is a best-effort DROP (the ring is the live serving source, so
+    # only THIS event's restart-survival is lost) rather than a raise that
+    # crashes the singleton and wipes the whole in-memory ring.
+    case Repo.BusyRetry.run(fn -> %Event{} |> Event.changeset(attrs) |> Repo.insert() end) do
       {:ok, _} ->
         :ok
 
-      {:error, changeset} ->
+      {:error, %Ecto.Changeset{} = changeset} ->
         Logger.error("admin_events persist failed",
           kind: event.kind,
           reason: inspect(changeset)
+        )
+
+        :ok
+
+      {:error, :db_unavailable} ->
+        Logger.warning(
+          "admin_events persist dropped: db unavailable — ring serves in-memory, restart-survival lost for this event",
+          kind: event.kind
         )
 
         :ok
@@ -331,33 +343,62 @@ defmodule Grappa.AdminEvents do
   # opaque + serialized straight to cic, never atom-matched server-side.
   @spec load_recent(pos_integer()) :: [map()]
   def load_recent(retention) when is_integer(retention) and retention > 0 do
-    Event
-    |> order_by([e], desc: e.id)
-    |> limit(^retention)
-    |> select([e], e.payload)
-    |> Repo.all()
+    # #590 — this runs in `init/1` at boot. Ride out a transient SQLITE_BUSY on
+    # the reload read; sustained saturation degrades to an EMPTY ring (log +
+    # `[]`) rather than raising and crash-looping the supervised singleton at
+    # boot. The ring repopulates from live events immediately; only the
+    # restart-history reload is lost for this boot.
+    case Repo.BusyRetry.run(fn ->
+           {:ok,
+            Event
+            |> order_by([e], desc: e.id)
+            |> limit(^retention)
+            |> select([e], e.payload)
+            |> Repo.all()}
+         end) do
+      {:ok, rows} ->
+        rows
+
+      {:error, :db_unavailable} ->
+        Logger.warning("admin_events reload skipped: db unavailable at boot — ring starts empty")
+        []
+    end
   end
 
   # On-disk ring cap: delete every row older than the `retention`-th newest
   # (indexed id-range delete). Mirror of Grappa.SessionLog.prune/1.
+  #
+  # #590 — the cutoff read + range delete ride out a transient SQLITE_BUSY;
+  # sustained saturation is a best-effort DROP (log + skip) so a busy on the
+  # trim never crashes the singleton. Bounded overshoot (a few extra mirrored
+  # rows) until the next write's prune catches up — no correctness loss.
   @spec prune(pos_integer()) :: :ok
   defp prune(retention) do
-    cutoff =
-      Event
-      |> order_by([e], desc: e.id)
-      |> offset(^(retention - 1))
-      |> limit(1)
-      |> select([e], e.id)
-      |> Repo.one()
+    outcome =
+      Repo.BusyRetry.run(fn ->
+        cutoff =
+          Event
+          |> order_by([e], desc: e.id)
+          |> offset(^(retention - 1))
+          |> limit(1)
+          |> select([e], e.id)
+          |> Repo.one()
 
-    case cutoff do
-      nil ->
+        case cutoff do
+          nil -> :ok
+          id -> Event |> where([e], e.id < ^id) |> Repo.delete_all()
+        end
+
+        {:ok, :pruned}
+      end)
+
+    case outcome do
+      {:ok, _} ->
         :ok
 
-      id ->
-        Event |> where([e], e.id < ^id) |> Repo.delete_all()
+      {:error, :db_unavailable} ->
+        Logger.warning("admin_events prune skipped: db unavailable — ring trims on next write")
+        :ok
     end
-
-    :ok
   end
 end

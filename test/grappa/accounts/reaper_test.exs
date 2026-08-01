@@ -14,8 +14,11 @@ defmodule Grappa.Accounts.ReaperTest do
   """
   use Grappa.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Grappa.Accounts
   alias Grappa.Accounts.{Reaper, Session}
+  alias Grappa.Repo.BusyRetry
 
   @idle_seconds 7 * 24 * 3600
 
@@ -43,6 +46,30 @@ defmodule Grappa.Accounts.ReaperTest do
 
     test "returns {:ok, 0} when nothing is expired" do
       assert {:ok, 0} = Reaper.sweep()
+    end
+
+    # #590 — a sustained SQLITE_BUSY on the bulk delete must be a best-effort
+    # DROP: the sweep rides it out, then reports `{:ok, 0}` + a log instead of
+    # raising and crashing the reaper (there is no web caller to 503). `sweep/0`
+    # runs synchronously in the test process, so the process-dictionary fault
+    # seam reaches it directly — no cross-process arming needed. The DROP must
+    # be OBSERVABLE (not merely "did not crash"): the row SURVIVES (the delete
+    # never landed) AND the saturation is logged.
+    test "sustained DB busy → best-effort drop: sweep survives, logs, and leaves the row" do
+      stale = stale_user_session()
+
+      log =
+        capture_log(fn ->
+          BusyRetry.inject_transient_faults(10_000)
+          assert {:ok, 0} = Reaper.sweep()
+          BusyRetry.inject_transient_faults(0)
+        end)
+
+      # The row was NOT deleted — the write degraded rather than landing.
+      assert Repo.get(Session, stale.id)
+      # The saturation surfaced honestly (BusyRetry budget-exhaust warning +
+      # the reaper's own dropped-sweep line).
+      assert log =~ "db unavailable"
     end
   end
 

@@ -83,7 +83,12 @@ defmodule Grappa.AccountDeletion do
   no negated guards (a bare `%User{is_admin: false}` / `%Visitor{}` after
   the nil/true clauses is necessarily the offered case).
   """
-  @spec delete_account(subject()) :: :ok | {:error, :forbidden | :not_found}
+  # #590 — the visitor self-delete branch returns `Visitors.delete/1`, which
+  # degrades a sustained SQLITE_BUSY to `{:error, :db_unavailable}`; `MeController`
+  # routes it through FallbackController to a 503 (a real client is waiting on
+  # the self-delete, so this is NOT a background drop).
+  @spec delete_account(subject()) ::
+          :ok | {:error, :forbidden | :not_found | :db_unavailable}
   def delete_account({:user, %User{is_admin: true}}), do: {:error, :forbidden}
 
   def delete_account({:user, %User{is_admin: false} = user}) do

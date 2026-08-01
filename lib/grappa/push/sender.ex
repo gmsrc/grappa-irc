@@ -240,19 +240,31 @@ defmodule Grappa.Push.Sender do
         end
 
       {:error, :expired} ->
-        {deleted, _} = Push.delete_dead(sub.endpoint)
+        # #590 — `delete_dead/1` degrades a sustained SQLITE_BUSY to
+        # `{:error, :db_unavailable}`. This is a background delivery task with no
+        # client waiting, so the terminal is best-effort DROP: log + carry on —
+        # the stale endpoint is swept on the next failed delivery. Either way the
+        # subscription is treated as gone from this delivery's perspective.
+        case Push.delete_dead(sub.endpoint) do
+          {deleted, _} ->
+            :telemetry.execute(
+              [:grappa, :push, :delete_dead],
+              %{count: deleted},
+              %{endpoint: sub.endpoint}
+            )
 
-        :telemetry.execute(
-          [:grappa, :push, :delete_dead],
-          %{count: deleted},
-          %{endpoint: sub.endpoint}
-        )
+            Logger.info(
+              "push.send subscription gone — deleted",
+              endpoint: sub.endpoint,
+              count: deleted
+            )
 
-        Logger.info(
-          "push.send subscription gone — deleted",
-          endpoint: sub.endpoint,
-          count: deleted
-        )
+          {:error, :db_unavailable} ->
+            Logger.warning(
+              "push.send: dead-subscription sweep deferred — db unavailable",
+              endpoint: sub.endpoint
+            )
+        end
 
         {:error, :gone}
 

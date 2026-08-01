@@ -56,12 +56,18 @@ defmodule GrappaWeb.Admin.UploadsController do
   # row's slug against `^[a-z2-7]{26}$` — no traversal reachable.
   @sobelow_skip ["Traversal.FileModule"]
   @doc false
-  @spec delete(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :not_found}
+  @spec delete(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :not_found | :db_unavailable}
   def delete(conn, %{"id" => id}) when is_binary(id) do
-    with {:ok, row} <- Uploads.get_by_id(id) do
-      path = Uploads.storage_path(Uploads.storage_root(), row.slug)
-      _ = File.rm(path)
-      {:ok, _} = Uploads.soft_delete(row, DateTime.utc_now())
+    # #590 — `Uploads.soft_delete/2` now degrades a sustained SQLITE_BUSY to
+    # `{:error, :db_unavailable}`. Fold it into the `with` (was a hard
+    # `{:ok, _} =` match that would MatchError→500 on the degrade) so
+    # FallbackController renders a clean 503. The file is unlinked first and the
+    # flip is idempotent, so a 503-then-retry self-heals via the enoent path —
+    # same shape as the reaper's best-effort sweep.
+    with {:ok, row} <- Uploads.get_by_id(id),
+         path = Uploads.storage_path(Uploads.storage_root(), row.slug),
+         _ = File.rm(path),
+         {:ok, _} <- Uploads.soft_delete(row, DateTime.utc_now()) do
       send_resp(conn, :no_content, "")
     end
   end

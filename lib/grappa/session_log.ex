@@ -206,12 +206,22 @@ defmodule Grappa.SessionLog do
       {:ok, event} ->
         broadcast(event)
 
-      {:error, changeset} ->
+      {:error, %Ecto.Changeset{} = changeset} ->
         # Best-effort persist — the Logger line (emit/3) is the reliable
         # record. Log honestly (no silent drop) and keep the sink alive.
         Logger.error("session_log persist failed",
           event: metadata[:event],
           reason: inspect(changeset)
+        )
+
+      {:error, :db_unavailable} ->
+        # #590 — a sustained SQLITE_BUSY on the insert. This is a BACKGROUND
+        # sink (a telemetry cast, no client waiting), so the terminal is
+        # best-effort DROP: the emit/3 Logger line already carried the
+        # reliable record; log the dropped persisted-row honestly (warning,
+        # not error — it is transient backpressure) and keep the sink alive.
+        Logger.warning("session_log persist dropped: db unavailable — sink continues",
+          event: metadata[:event]
         )
     end
 
@@ -224,9 +234,12 @@ defmodule Grappa.SessionLog do
     :ok = :telemetry.detach(@telemetry_handler_id)
   end
 
-  @spec persist(map()) :: {:ok, Event.t()} | {:error, Ecto.Changeset.t()}
+  # #590 — ride out a transient SQLITE_BUSY on the insert; sustained saturation
+  # degrades to `{:error, :db_unavailable}` (best-effort DROP at the handle_cast
+  # terminal) rather than raising and crashing the sink GenServer.
+  @spec persist(map()) :: {:ok, Event.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   defp persist(metadata) do
-    %Event{} |> Event.changeset(metadata) |> Repo.insert()
+    Repo.BusyRetry.run(fn -> %Event{} |> Event.changeset(metadata) |> Repo.insert() end)
   end
 
   @spec broadcast(Event.t()) :: :ok
@@ -247,25 +260,40 @@ defmodule Grappa.SessionLog do
 
   # On-disk ring: delete every row older than the `retention`-th newest.
   # id (PK autoincrement) is the insertion order — an indexed range delete.
+  #
+  # #590 — the cutoff read + range delete ride out a transient SQLITE_BUSY via
+  # the shared engine; sustained saturation is a best-effort DROP (log + skip),
+  # so a busy on the trim never crashes the sink. The ring simply carries a few
+  # extra rows until the next write's prune catches up — bounded overshoot, no
+  # correctness loss.
   @spec prune(pos_integer()) :: :ok
   defp prune(retention) do
-    cutoff =
-      Event
-      |> order_by([e], desc: e.id)
-      |> offset(^(retention - 1))
-      |> limit(1)
-      |> select([e], e.id)
-      |> Repo.one()
+    outcome =
+      Repo.BusyRetry.run(fn ->
+        cutoff =
+          Event
+          |> order_by([e], desc: e.id)
+          |> offset(^(retention - 1))
+          |> limit(1)
+          |> select([e], e.id)
+          |> Repo.one()
 
-    case cutoff do
-      nil ->
+        case cutoff do
+          nil -> :ok
+          id -> Event |> where([e], e.id < ^id) |> Repo.delete_all()
+        end
+
+        {:ok, :pruned}
+      end)
+
+    case outcome do
+      {:ok, _} ->
         :ok
 
-      id ->
-        Event |> where([e], e.id < ^id) |> Repo.delete_all()
+      {:error, :db_unavailable} ->
+        Logger.warning("session_log prune skipped: db unavailable — ring trims on next write")
+        :ok
     end
-
-    :ok
   end
 
   # ----- Human-readable Logger lines -----------------------------------

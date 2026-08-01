@@ -581,7 +581,7 @@ defmodule Grappa.Accounts do
   rides the audit log so a no-op sweep stays distinguishable from a
   productive one.
   """
-  @spec delete_expired_sessions() :: {:ok, non_neg_integer()}
+  @spec delete_expired_sessions() :: {:ok, non_neg_integer()} | {:error, :db_unavailable}
   def delete_expired_sessions do
     cutoff = DateTime.add(DateTime.utc_now(), -@idle_timeout_seconds, :second)
 
@@ -590,17 +590,30 @@ defmodule Grappa.Accounts do
         where: not is_nil(s.user_id) and s.last_seen_at < ^cutoff
       )
 
-    {deleted, _} = Repo.delete_all(query)
+    # #590 — this is a BACKGROUND writer (the #223 idle-session reaper is the
+    # only caller). Ride out a transient SQLITE_BUSY on the bulk delete via
+    # the shared engine, and on sustained saturation degrade to
+    # `{:error, :db_unavailable}` rather than letting the raise escape and
+    # crash the reaper GenServer. Uniform with every other background-writer
+    # context fn: the atom is returned here, the reaper (`Accounts.Reaper`)
+    # owns the best-effort-DROP terminal — NO 503 (no web caller). Wrap the
+    # `delete_all` in an `{:ok, _}` so it honours the `BusyRetry.run/1`
+    # contract.
+    case Repo.BusyRetry.run(fn -> {:ok, Repo.delete_all(query)} end) do
+      {:ok, {deleted, _}} ->
+        # Suppressed on count=0: the reaper calls this every 60s, so an
+        # unconditional line would flood the log with 1440 idle "reaped 0"
+        # entries/day. A productive sweep logs once so the lifecycle stays
+        # greppable — same suppression the sibling reapers use for their
+        # AdminEvents summary. (CLAUDE.md log-honesty: the line states what
+        # was observed — N rows past the idle window — not merely "ran".)
+        if deleted > 0, do: Logger.info("expired sessions reaped", affected: deleted)
 
-    # Suppressed on count=0: the reaper calls this every 60s, so an
-    # unconditional line would flood the log with 1440 idle "reaped 0"
-    # entries/day. A productive sweep logs once so the lifecycle stays
-    # greppable — same suppression the sibling reapers use for their
-    # AdminEvents summary. (CLAUDE.md log-honesty: the line states what
-    # was observed — N rows past the idle window — not merely "ran".)
-    if deleted > 0, do: Logger.info("expired sessions reaped", affected: deleted)
+        {:ok, deleted}
 
-    {:ok, deleted}
+      {:error, :db_unavailable} = err ->
+        err
+    end
   end
 
   defp check_idle(session) do

@@ -5,8 +5,10 @@ defmodule Grappa.Uploads.ReaperTest do
   # the suite honest but serialization avoids cross-test bleed.
   use Grappa.DataCase, async: false
 
+  import ExUnit.CaptureLog
   import Grappa.AuthFixtures, only: [user_fixture: 1]
 
+  alias Grappa.Repo.BusyRetry
   alias Grappa.Uploads
   alias Grappa.Uploads.Reaper
 
@@ -181,6 +183,40 @@ defmodule Grappa.Uploads.ReaperTest do
         )
 
       assert {:ok, 2} = Reaper.sweep(root, now)
+    end
+
+    # #590 — a sustained SQLITE_BUSY on the row soft-delete must be a
+    # best-effort DROP: the per-row failure logs + continues (sweep returns
+    # `{:ok, 0}`), and the row is LEFT un-soft-deleted for the next tick. The
+    # sweep runs in the test process, so the process-dictionary seam reaches
+    # `Uploads.soft_delete/2`'s BusyRetry directly. Observable: the row's
+    # `deleted_at` stays nil (the flip degraded) + the saturation is logged.
+    test "sustained DB busy → best-effort drop: sweep survives, logs, leaves row un-soft-deleted", %{
+      root: root
+    } do
+      user = user_fixture([])
+      now = DateTime.utc_now()
+      past = DateTime.add(now, -60, :second)
+
+      {:ok, expired} =
+        Uploads.create(
+          "img",
+          %{subject: {:user, user.id}, mime: "text/plain", expires_at: past},
+          storage_root: root
+        )
+
+      log =
+        capture_log(fn ->
+          BusyRetry.inject_transient_faults(10_000)
+          assert {:ok, 0} = Reaper.sweep(root, now)
+          BusyRetry.inject_transient_faults(0)
+        end)
+
+      # The row flip degraded — the upload is still live (deleted_at nil),
+      # to be retried by the next tick.
+      reloaded = Grappa.Repo.get!(Uploads.Upload, expired.id)
+      assert is_nil(reloaded.deleted_at)
+      assert log =~ "unavailable"
     end
   end
 

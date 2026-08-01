@@ -156,7 +156,11 @@ defmodule Grappa.Visitors.Reaper do
     end
   end
 
-  @spec reap_visitor(Visitors.Visitor.t()) :: :ok | {:error, :not_found}
+  # #590 — `Visitors.delete/1` can now degrade a sustained SQLITE_BUSY to
+  # `{:error, :db_unavailable}`; the sweep's per-row `{:error, reason}` arm logs
+  # + continues (best-effort DROP — the row is left for the next tick), so the
+  # reaper rides transient contention rather than crashing.
+  @spec reap_visitor(Visitors.Visitor.t()) :: :ok | {:error, :not_found | :db_unavailable}
   defp reap_visitor(v) do
     with :ok <- stop_visitor_session(v),
          :ok <- Visitors.delete(v.id) do

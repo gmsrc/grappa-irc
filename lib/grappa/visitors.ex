@@ -760,10 +760,13 @@ defmodule Grappa.Visitors do
   logs in again, so its per-network failure counters would otherwise
   orphan for the node lifetime.
   """
-  @spec delete(Ecto.UUID.t()) :: :ok | {:error, :not_found}
+  @spec delete(Ecto.UUID.t()) :: :ok | {:error, :not_found | :db_unavailable}
   def delete(visitor_id) when is_binary(visitor_id) do
     case Repo.get(Visitor, visitor_id) do
       nil -> {:error, :not_found}
+      # #590 — `destroy_visitor/1` degrades a sustained SQLITE_BUSY to
+      # `{:error, :db_unavailable}`; propagate it so each caller maps its
+      # terminal (reaper DROP, operator/admin 503, account-deletion 503).
       visitor -> destroy_visitor(visitor)
     end
   end
@@ -785,12 +788,34 @@ defmodule Grappa.Visitors do
   # rows have `visitor_id = NULL`), so a crash between the two steps self-heals
   # on the next reap/retry (re-home finds nothing, delete proceeds). Backoff
   # eviction is ETS, after the DB writes.
-  @spec destroy_visitor(Visitor.t()) :: :ok
+  #
+  # #590 — the whole (re-home + delete) is a BACKGROUND write (reap / operator
+  # / account-deletion / anon-cleanup, no HTTP client waiting mid-write). Ride
+  # out a transient SQLITE_BUSY via the shared engine and degrade sustained
+  # saturation to `{:error, :db_unavailable}` rather than letting the raise
+  # escape and crash the reaper GenServer. `BusyRetry.run/1` is NOT a
+  # transaction — it re-runs the (idempotent) op on a raise — so the "sequential
+  # single-statement writes, self-heals" property above is preserved: a retry
+  # re-homes (no-op the second time) then re-deletes. The atom is returned; each
+  # public verb maps its own terminal (`delete/1` propagates → reaper DROP /
+  # operator + account 503; `purge_if_anon/1` absorbs → best-effort cleanup).
+  @spec destroy_visitor(Visitor.t()) :: :ok | {:error, :db_unavailable}
   defp destroy_visitor(%Visitor{} = visitor) do
-    Themes.rehome_visitor_published_to_system(visitor.id)
-    {:ok, _} = Repo.delete(visitor)
-    :ok = Session.Backoff.forget({:visitor, visitor.id})
-    :ok
+    outcome =
+      Repo.BusyRetry.run(fn ->
+        Themes.rehome_visitor_published_to_system(visitor.id)
+        {:ok, _} = Repo.delete(visitor)
+        {:ok, :deleted}
+      end)
+
+    case outcome do
+      {:ok, :deleted} ->
+        :ok = Session.Backoff.forget({:visitor, visitor.id})
+        :ok
+
+      {:error, :db_unavailable} = err ->
+        err
+    end
   end
 
   @doc """
@@ -1262,7 +1287,25 @@ defmodule Grappa.Visitors do
           # preempt). destroy_visitor re-homes published themes (#299), hard-
           # deletes the row (CASCADE), and evicts its Backoff entries so the
           # retired UUID leaves no orphan.
-          destroy_visitor(visitor)
+          #
+          # #590 — this is a co-terminus BEST-EFFORT cleanup (a failed/preempted
+          # login has no HTTP client waiting on the purge), and every caller
+          # matches `:ok =`. A sustained SQLITE_BUSY therefore ABSORBS to `:ok`
+          # + a log rather than propagating: the anon row is simply left for
+          # `Visitors.Reaper` to collect once its TTL elapses. Distinct from
+          # `delete/1`, whose operator/admin callers want the 503.
+          case destroy_visitor(visitor) do
+            :ok ->
+              :ok
+
+            {:error, :db_unavailable} ->
+              Logger.warning(
+                "purge_if_anon: db unavailable — anon purge deferred to reaper",
+                visitor_id: visitor_id
+              )
+
+              :ok
+          end
         end
     end
   end

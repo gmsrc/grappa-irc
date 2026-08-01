@@ -78,7 +78,23 @@ defmodule Grappa.Accounts.Reaper do
   Accounts context owns its schema; the reaper is just the cadence).
   """
   @spec sweep() :: {:ok, non_neg_integer()}
-  def sweep, do: Accounts.delete_expired_sessions()
+  def sweep do
+    # #590 — `delete_expired_sessions/0` degrades a sustained SQLITE_BUSY to
+    # `{:error, :db_unavailable}` (uniform with every background-writer context
+    # fn) rather than letting the raise escape. The reaper's terminal is
+    # best-effort DROP (there is no web caller to 503): log the skipped sweep
+    # and report `{:ok, 0}` so the tick's `{:ok, _} = sweep()` stays a total
+    # match — mirroring the sibling reapers, whose per-row drops likewise leave
+    # the count short and carry on. The next tick retries.
+    case Accounts.delete_expired_sessions() do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, :db_unavailable} ->
+        Logger.warning("accounts reaper: db unavailable — sweep dropped, retrying next tick")
+        {:ok, 0}
+    end
+  end
 
   @impl GenServer
   def init(opts) do
@@ -98,7 +114,9 @@ defmodule Grappa.Accounts.Reaper do
     # `delete_expired_sessions/0` logs productive sweeps (count > 0) and
     # deliberately suppresses count=0 to avoid 1440 idle lines/day under
     # the 60s cadence. The reaper stays quiet here so the context
-    # function is the single logging site (no double-line).
+    # function is the single logging site (no double-line). `sweep/0`
+    # absorbs a #590 best-effort DROP into `{:ok, 0}` (logged there), so
+    # this match stays total even when the pool saturates.
     {:ok, _} = sweep()
 
     {:noreply, state}

@@ -13,9 +13,11 @@ defmodule Grappa.Visitors.ReaperTest do
   """
   use Grappa.DataCase, async: false
 
+  import ExUnit.CaptureLog
   import Grappa.AuthFixtures, only: [network_fixture: 1, start_visitor_session_for: 2, visitor_with_network: 2]
 
   alias Grappa.{AdmissionStateHelpers, Push, QueryWindows, ReadCursor, Session, UserSettings, Visitors}
+  alias Grappa.Repo.BusyRetry
   alias Grappa.Visitors.{Reaper, Visitor}
 
   setup do
@@ -50,6 +52,31 @@ defmodule Grappa.Visitors.ReaperTest do
 
     test "returns {:ok, 0} when nothing to reap" do
       assert {:ok, 0} = Reaper.sweep()
+    end
+
+    # #590 — a sustained SQLITE_BUSY on a visitor delete must be a best-effort
+    # DROP: the per-row failure logs + continues, the sweep survives (returns
+    # `{:ok, 0}` — nothing was actually deleted), and crucially the row is LEFT
+    # for the next tick. `sweep/0` runs in the test process, so the
+    # process-dictionary fault seam reaches `destroy_visitor/1`'s BusyRetry
+    # directly. The DROP must be OBSERVABLE (row survives + logged), not just
+    # "did not crash".
+    test "sustained DB busy → best-effort drop: sweep survives, logs, leaves the visitor row" do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      _ = network_fixture(slug: slug)
+      {:ok, dead} = Visitors.find_or_provision_anon("dead", slug, nil)
+      expire(dead)
+
+      log =
+        capture_log(fn ->
+          BusyRetry.inject_transient_faults(10_000)
+          assert {:ok, 0} = Reaper.sweep()
+          BusyRetry.inject_transient_faults(0)
+        end)
+
+      # The visitor was NOT deleted — the write degraded rather than landing.
+      assert Repo.reload(dead)
+      assert log =~ "unavailable"
     end
 
     test "terminates live Session.Server before deleting expired visitor row" do

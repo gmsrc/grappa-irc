@@ -136,6 +136,12 @@ defmodule Grappa.Uploads.Reaper do
     case Uploads.soft_delete(up, now) do
       {:ok, _} -> :ok
       {:error, %Ecto.Changeset{} = cs} -> {:error, cs}
+      # #590 — a sustained SQLITE_BUSY degraded the row flip. Best-effort DROP:
+      # surface it as a per-row error so the sweep logs + continues (the file
+      # is already unlinked; the row stays expired and the next tick retries via
+      # the enoent path). WITHOUT this arm the `case` would CaseClauseError-crash
+      # the reaper — the exact non-exhaustive-case class #594 guards.
+      {:error, :db_unavailable} = err -> err
     end
   end
 

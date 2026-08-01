@@ -311,11 +311,18 @@ defmodule Grappa.Uploads do
   `Admin.UploadsController.delete/2`). Idempotent: re-soft-delete
   of an already-deleted row is a no-op return.
   """
-  @spec soft_delete(Upload.t(), DateTime.t()) :: {:ok, Upload.t()} | {:error, Ecto.Changeset.t()}
+  @spec soft_delete(Upload.t(), DateTime.t()) ::
+          {:ok, Upload.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def soft_delete(%Upload{deleted_at: %DateTime{}} = up, _), do: {:ok, up}
 
   def soft_delete(%Upload{} = up, %DateTime{} = now) do
-    up |> Upload.soft_delete_changeset(now) |> Repo.update()
+    # #590 — `soft_delete/2` is shared by a BACKGROUND caller (the GC reaper)
+    # and a WEB caller (admin DELETE). Ride out a transient SQLITE_BUSY on the
+    # flip and degrade sustained saturation to `{:error, :db_unavailable}`
+    # rather than letting the raise escape; each caller maps its terminal —
+    # the reaper DROPS + logs (row left for the next tick, self-heals via the
+    # enoent path), the admin controller routes to a 503 via FallbackController.
+    Repo.BusyRetry.run(fn -> up |> Upload.soft_delete_changeset(now) |> Repo.update() end)
   end
 
   @doc """
