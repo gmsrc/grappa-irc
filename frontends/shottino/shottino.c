@@ -8481,7 +8481,12 @@ static bool setting_reset(struct app *app, const char *name) {
         pthread_mutex_lock(&app->lock);
         settings_rows_refresh_locked(app);
         pthread_mutex_unlock(&app->lock);
-        log_line(app, "/unset %s — back to the default", SETTINGS[i].name);
+        /* Says what it IS now, not merely that it did something. A
+         * confirmation you have to go and check is a confirmation that
+         * does not confirm. */
+        char now[256];
+        setting_value(app, SETTINGS[i].name, now, sizeof(now));
+        log_line(app, "/unset %s — back to the default: %s", SETTINGS[i].name, now);
         return true;
     }
     return false;
@@ -13857,10 +13862,38 @@ static const struct link_region *region_at_locked(struct app *app, int x, int y)
 static void handle_mouse(struct app *app) {
     MEVENT ev;
     if (getmouse(&ev) != OK) return;
+    /* /keys shows mouse events too.
+     *
+     * It used to skip them — `ch != KEY_MOUSE` — which left the one
+     * input class that varies wildly between terminals as the one class
+     * nobody could see. When a click or a right-click "does nothing",
+     * the first question is whether the event arrived at all and what
+     * the terminal called it, and that was unanswerable from inside the
+     * client. */
+    if (app->key_echo)
+        log_line(app, "mouse: x=%d y=%d bstate=0x%lx%s%s%s%s%s", ev.x, ev.y,
+                 (unsigned long)ev.bstate,
+                 (ev.bstate & BUTTON1_PRESSED) ? " b1press" : "",
+                 (ev.bstate & BUTTON1_CLICKED) ? " b1click" : "",
+#ifdef BUTTON3_PRESSED
+                 (ev.bstate & BUTTON3_PRESSED) ? " b3press" : "",
+                 (ev.bstate & BUTTON3_CLICKED) ? " b3click" : "",
+                 (ev.bstate & BUTTON3_RELEASED) ? " b3release" : "");
+#else
+                 "", "", "");
+#endif
     bool click = ev.bstate & (BUTTON1_PRESSED | BUTTON1_CLICKED);
+    /* PRESS, CLICK or RELEASE all count as a right click.
+     *
+     * Which of the three a terminal sends is not something the client
+     * gets to choose: with mouseinterval(0) ncurses synthesizes no
+     * CLICKED at all, and several terminals report only the release for
+     * button 3. Taking the union means the menu opens on the first
+     * event of the gesture whichever one that is — and opening twice is
+     * harmless, since the second lands on an already-open overlay. */
     bool right = false;
 #ifdef BUTTON3_PRESSED
-    right = (ev.bstate & (BUTTON3_PRESSED | BUTTON3_CLICKED)) != 0;
+    right = (ev.bstate & (BUTTON3_PRESSED | BUTTON3_CLICKED | BUTTON3_RELEASED)) != 0;
 #endif
     /* Read before the overlay branch: the wheel steers an open menu, and
      * asking after it would mean asking twice. */
