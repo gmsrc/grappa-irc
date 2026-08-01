@@ -12165,11 +12165,17 @@ static void handle_command_dispatch(struct app *app, char *line) {
         enqueue_job(app, job);
     } else if (strncmp(line, "/msg ", 5) == 0) {
         char *sp = strchr(line + 5, ' ');
-        if (!sp) log_line(app, "/msg requires <target> <body>");
+        /* A body of nothing but spaces is not a message. `/msg nick `
+         * used to reach the wire as an empty PRIVMSG — the dispatcher's
+         * whitespace trim only fires when the WHOLE tail is blank, and
+         * here the nick is in the way. */
+        const char *check = sp;
+        while (check && *check == ' ') check++;
+        if (!sp || !check || !*check) log_line(app, "/msg requires <target> <body>");
         else {
             *sp = 0;
             const char *target = line + 5;
-            const char *body = sp + 1;
+            const char *body = check;
             char msg_net[MAX_SLUG];
             if (!current_window_key(app, msg_net, sizeof(msg_net), NULL, 0)) return;
             query_window(app, target);
@@ -12483,14 +12489,24 @@ static void handle_command_dispatch(struct app *app, char *line) {
         char nick[MAX_CHANNEL], tool[64];
         snprintf(nick, sizeof(nick), "%s", app->bot_ask.nick);
         snprintf(tool, sizeof(tool), "%s", app->bot_ask.tool);
-        if (pending) {
+        /* The word is judged BEFORE anything is approved. `/approve
+         * alwyas` used to approve once and say nothing about the word it
+         * had not understood, so the user walked away believing they had
+         * granted a standing permission they had not — and answering the
+         * prompt at all is the irreversible half. */
+        bool always = strcmp(rest, "always") == 0;
+        bool understood = always || !*rest;
+        if (pending && understood) {
             app->bot_ask.approved = true;
             app->bot_ask.answered = true;
         }
         pthread_mutex_unlock(&app->lock);
-        if (!pending) {
+        if (!understood) {
+            log_line(app, "/approve: `%.20s` is not a word here — /approve, or /approve always; "
+                          "nothing was approved", rest);
+        } else if (!pending) {
             log_line(app, "/approve: nothing is waiting");
-        } else if (strcmp(rest, "always") == 0) {
+        } else if (always) {
             bot_grant_add(app, nick, tool);
             log_line(app, "approved — and %s may use %s from now on without asking", nick, tool);
         } else {

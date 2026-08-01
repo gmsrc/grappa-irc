@@ -1459,6 +1459,52 @@ TEST(a_standing_grant_survives_a_restart) {
  *
  * Driven through handle_command, the door every keystroke and every
  * alias goes through, so this covers verbs nobody has written yet. */
+/* A command must refuse what it cannot do, rather than do something else.
+ *
+ * `/msg nick ` reached the wire as an empty PRIVMSG: the dispatcher's
+ * whitespace trim only fires when the whole tail is blank, and here the
+ * nick is in the way. `/approve alwyas` approved ONCE and said nothing
+ * about the word it had not understood, so the user believed they had
+ * granted a standing permission they had not — and answering the prompt
+ * is the half that cannot be taken back. */
+TEST(a_command_refuses_what_it_cannot_do) {
+    struct app *app = window_app();
+    app->url.base[0] = 0;
+    add_window_ex(app, "azzurra", "#sniffo", true);
+
+    handle_command(app, "/msg alice ");
+    CHECK(log_has(app, "/msg requires"));
+    /* And nothing was queued for the wire. */
+    CHECK_LONG(app->pending_count, 0);
+
+    /* A real body still goes. */
+    handle_command(app, "/msg alice ciao");
+    CHECK_LONG(app->pending_count, 1);
+
+    /* A word /approve does not know approves NOTHING — the check happens
+     * before the answer is recorded, not after. */
+    pthread_mutex_lock(&app->lock);
+    app->bot_ask.pending = true;
+    app->bot_ask.answered = false;
+    app->bot_ask.approved = false;
+    snprintf(app->bot_ask.nick, sizeof(app->bot_ask.nick), "alice");
+    snprintf(app->bot_ask.tool, sizeof(app->bot_ask.tool), "send_message");
+    pthread_mutex_unlock(&app->lock);
+
+    handle_command(app, "/approve alwyas");
+    CHECK(log_has(app, "is not a word here"));
+    CHECK(!app->bot_ask.answered);
+    CHECK(!app->bot_ask.approved);
+    CHECK_LONG(app->bot_grant_count, 0);
+
+    /* The word it does know still works. */
+    handle_command(app, "/approve");
+    CHECK(app->bot_ask.answered);
+    CHECK(app->bot_ask.approved);
+
+    free_app(app);
+}
+
 /* A long AGENT.md must not eat the bot's own notes.
  *
  * The prompt was read with `fread(out, 1, out_sz - 1, f)` — the whole
@@ -1744,6 +1790,7 @@ int main(void) {
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);
     RUN(a_standing_grant_survives_a_restart);
+    RUN(a_command_refuses_what_it_cannot_do);
     RUN(a_long_agent_md_leaves_room_for_the_notes);
     RUN(a_join_key_is_split_from_the_channel);
     RUN(a_verb_is_matched_as_a_whole_word_not_a_prefix);
