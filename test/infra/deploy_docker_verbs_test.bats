@@ -266,9 +266,13 @@ EOF
     ! grep -q ' down' "$ARGV_LOG"
 }
 
-@test "stop: outside a grappa checkout it refuses before touching docker" {
+@test "stop: source mode outside a grappa checkout refuses before touching docker" {
+    # With compose.yaml gone, auto-detect would flip to RELEASE mode (#503
+    # unit D) — the no-source path. Pin source mode explicitly to exercise
+    # the source-mode guard; auto-detect→release is covered by the
+    # release-image suite.
     rm "$BOX/compose.yaml"
-    run "$DEPLOY" stop
+    GRAPPA_DEPLOY_MODE=source run "$DEPLOY" stop
     [ "$status" -ne 0 ]
     [ ! -s "$ARGV_LOG" ]
 }

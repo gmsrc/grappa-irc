@@ -66,17 +66,56 @@
 
 set -euo pipefail
 
-# ---- locate repo root (this script lives in infra/docker/) ------------
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
-
-# Pin to the committed compose file only — no override auto-merge. Every
-# compose invocation reuses this array.
-COMPOSE=(docker compose -f compose.yaml)
-
 say()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m  %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
+
+# ---- detect deploy mode (F5, #503 unit D) -----------------------------
+# ONE script, two substrates. A real checkout runs the SOURCE-mode path
+# (bind-mount dev image, compose, hot-on-HOT). A checkout-less host (the
+# `curl|bash` one-liner / a `docker run` of the published ghcr image) runs
+# the RELEASE-IMAGE path: no source, no compose, no mix — plain `docker`
+# against ghcr.io/vjt/grappa, COLD-only updates (hot-on-image is #503 unit
+# E). The source tree next to this script is the discriminator: a real
+# checkout has compose.yaml two levels up (infra/docker/ → repo root); a
+# curl'd copy sitting in $GRAPPA_HOME does not. GRAPPA_DEPLOY_MODE forces
+# it (source|release) for tests + operators who want no guessing.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CANDIDATE_ROOT="$(cd "$SELF_DIR/../.." 2>/dev/null && pwd || true)"
+
+case "${GRAPPA_DEPLOY_MODE:-}" in
+	source)  DEPLOY_MODE=source ;;
+	release) DEPLOY_MODE=release ;;
+	'')
+		if [ -n "$CANDIDATE_ROOT" ] && [ -f "$CANDIDATE_ROOT/compose.yaml" ]; then
+			DEPLOY_MODE=source
+		else
+			DEPLOY_MODE=release
+		fi
+		;;
+	*) die "GRAPPA_DEPLOY_MODE must be 'source' or 'release' (got '${GRAPPA_DEPLOY_MODE}')." ;;
+esac
+
+if [ "$DEPLOY_MODE" = source ]; then
+	# ---- source mode: operate the checkout via compose ----------------
+	REPO_ROOT="$CANDIDATE_ROOT"
+	cd "$REPO_ROOT"
+	# Pin to the committed compose file only — no override auto-merge.
+	# Every compose invocation reuses this array.
+	COMPOSE=(docker compose -f compose.yaml)
+else
+	# ---- release-image mode: checkout-less, docker-only ---------------
+	# State (the prod env file, with every secret) lives per-user so the
+	# `update` verb finds the box `install` created. /data is a named
+	# docker volume — nothing is written into a checkout, because there is
+	# none. All knobs are env-overridable for testing + odd hosts.
+	GRAPPA_HOME="${GRAPPA_HOME:-$HOME/.grappa}"
+	ENV_FILE="$GRAPPA_HOME/grappa.env"
+	GRAPPA_IMAGE="${GRAPPA_IMAGE:-ghcr.io/vjt/grappa:latest}"
+	GRAPPA_CONTAINER="${GRAPPA_CONTAINER:-grappa}"
+	GRAPPA_DATA_VOLUME="${GRAPPA_DATA_VOLUME:-grappa-data}"
+	GRAPPA_PUBLISH="${GRAPPA_PUBLISH:-127.0.0.1:4000}"
+fi
 
 usage() {
 	cat >&2 <<EOF
@@ -697,14 +736,346 @@ cmd_bare() {
 }
 
 # ======================================================================
-# dispatch
+# RELEASE-IMAGE mode (#503 unit D) — checkout-less, docker-only
+# ======================================================================
+# The published ghcr image (Dockerfile.release) is self-contained: mix
+# release, no source, no mix, no CodeReloader. These verbs bring it up and
+# keep it current with plain `docker`. Updates are COLD-only (recreate) —
+# hot-on-image is #503 unit E. All config + prod secrets live in $ENV_FILE
+# (mode 0600); /data is a named docker volume.
+
+usage_release() {
+	cat >&2 <<EOF
+usage: infra/docker/deploy.sh {install|update|stop} [options]   (release image)
+       infra/docker/deploy.sh                 (bare) install if no env file, else update
+
+  install                pull the ghcr image, generate secrets, migrate, run.
+                         PHX_HOST is asked interactively, or pass PHX_HOST=… .
+  update [--force-cold]  pull a newer image + recreate (COLD — hot-on-image is
+                         #503 unit E). States which kind of update it performed.
+  stop [--volumes|-v]    stop + remove the container ([+ drop the data volume]).
+
+  env: GRAPPA_IMAGE (default ghcr.io/vjt/grappa:latest), GRAPPA_HOME
+       (default \$HOME/.grappa), GRAPPA_PUBLISH (default 127.0.0.1:4000),
+       PHX_HOST (skips the prompt).
+EOF
+	exit 64
+}
+
+require_docker_release() {
+	command -v docker >/dev/null 2>&1 || die "docker not found — install Docker Engine first."
+	docker info >/dev/null 2>&1 || die "cannot talk to the Docker daemon — is it running / do you have permission?"
+}
+
+release_container_exists() { docker inspect "$GRAPPA_CONTAINER" >/dev/null 2>&1; }
+
+# resolve_phx_host — echo the hostname PHX_HOST is configured to. Priority:
+# the PHX_HOST env var (the non-interactive path a piped one-liner uses),
+# else an interactive prompt on the CONTROLLING TERMINAL ($GRAPPA_TTY,
+# default /dev/tty). A `curl … | bash` one-liner binds stdin to the SCRIPT,
+# so a bare `read` would eat the script text (or hit EOF) — the prompt MUST
+# come from the tty, not stdin. With neither a value nor a usable tty (CI,
+# a non-interactive pipeline) we FAIL LOUD with the exact fix rather than
+# silently defaulting to localhost — a wrong PHX_HOST mints dead upload
+# links + rejects every WebSocket handshake on Origin (#468).
+resolve_phx_host() {
+	if [ -n "${PHX_HOST:-}" ]; then
+		printf '%s' "$PHX_HOST"
+		return 0
+	fi
+	# The prompt goes to stderr (which still reaches the terminal even when
+	# stdin is a pipe, e.g. curl|bash); the ANSWER is read from the tty, NOT
+	# stdin — stdin is the piped script itself.
+	local tty="${GRAPPA_TTY:-/dev/tty}"
+	if [ -r "$tty" ]; then
+		local ans=''
+		printf 'Public hostname grappa is reached at (PHX_HOST, e.g. grappa.example.org): ' >&2
+		IFS= read -r ans < "$tty" || true
+		if [ -n "$ans" ]; then
+			printf '%s' "$ans"
+			return 0
+		fi
+	fi
+	die "PHX_HOST is required and no terminal is available to prompt for it.
+    Re-run with it set, e.g.:  PHX_HOST=grappa.example.org GRAPPA_HOME=${GRAPPA_HOME} <this command>"
+}
+
+# write_env_file — generate the prod env ONCE, into $ENV_FILE at mode 0600.
+# Idempotent BY DESIGN: an existing file is NEVER regenerated — rotating
+# SECRET_KEY_BASE / GRAPPA_ENCRYPTION_KEY under a live box invalidates every
+# session and makes stored (Cloak-encrypted) credentials undecryptable. So
+# install on an existing box reuses it untouched.
+#
+# Secrets never touch argv (`ps`-visible to every user) or stdout: the four
+# random secrets are generated on the host with `openssl` into shell vars;
+# the VAPID keypair is generated by the release image's OWN :crypto (the
+# exact P-256 keygen + base64url mix grappa.gen_vapid runs — host openssl
+# cannot safely reproduce a raw P-256 point), reading the just-generated
+# secrets from a 0600 --env-file, never the CLI.
+write_env_file() {
+	if [ -f "$ENV_FILE" ]; then
+		say "reusing the existing env file at $ENV_FILE (secrets are NOT regenerated)"
+		return 0
+	fi
+
+	local phx_host
+	phx_host="$(resolve_phx_host)"
+
+	# umask BEFORE any create, so the file is never world-readable — not
+	# even for the instant between create and an explicit chmod.
+	umask 077
+	mkdir -p "$GRAPPA_HOME"
+
+	say "Generating production secrets into $ENV_FILE (mode 0600)"
+	local secret_key_base secret_signing_salt encryption_key release_cookie
+	secret_key_base="$(openssl rand -base64 64 | tr -d '\n')"
+	secret_signing_salt="$(openssl rand -base64 32 | tr -d '\n')"
+	encryption_key="$(openssl rand -base64 32 | tr -d '\n')"
+	release_cookie="$(openssl rand -hex 32 | tr -d '\n')"
+
+	# VAPID via the image's crypto. runtime.exs (prod) RAISES on any missing
+	# prod var, so the gen container gets a throwaway 0600 --env-file with
+	# the real four + placeholder VAPID (a presence-only check) + a throwaway
+	# DATABASE_PATH; the eval prints a FRESH keypair and never starts the Repo.
+	local gen_env
+	gen_env="$(mktemp "${TMPDIR:-/tmp}/grappa-gen.XXXXXX")"
+	chmod 600 "$gen_env"
+	{
+		printf 'PHX_HOST=%s\n' "$phx_host"
+		printf 'DATABASE_PATH=/tmp/grappa-gen.db\n'
+		printf 'SECRET_KEY_BASE=%s\n' "$secret_key_base"
+		printf 'SECRET_SIGNING_SALT=%s\n' "$secret_signing_salt"
+		printf 'GRAPPA_ENCRYPTION_KEY=%s\n' "$encryption_key"
+		printf 'RELEASE_COOKIE=%s\n' "$release_cookie"
+		printf 'VAPID_PUBLIC_KEY=pending\n'
+		printf 'VAPID_PRIVATE_KEY=pending\n'
+	} > "$gen_env"
+
+	# The eval mirrors mix grappa.gen_vapid EXACTLY (P-256 ECDH keypair,
+	# base64url without padding) — keep the two in sync; the release image
+	# has no mix to reuse the task itself.
+	local vapid=''
+	vapid="$(docker run --rm --env-file "$gen_env" "$GRAPPA_IMAGE" \
+		eval '{pub, priv} = :crypto.generate_key(:ecdh, :prime256v1); IO.puts("VAPID_PUBLIC_KEY=" <> Base.url_encode64(pub, padding: false)); IO.puts("VAPID_PRIVATE_KEY=" <> Base.url_encode64(priv, padding: false))' 2>/dev/null \
+		| grep -E '^VAPID_(PUBLIC|PRIVATE)_KEY=' || true)"
+	rm -f "$gen_env"
+
+	case "$vapid" in
+		*VAPID_PUBLIC_KEY=*VAPID_PRIVATE_KEY=*) ;;
+		*) die "VAPID generation returned no keypair from $GRAPPA_IMAGE — is the image pullable and current?" ;;
+	esac
+
+	{
+		printf '# grappa production env — release-image install (#503 unit D).\n'
+		printf '# Mode 0600: contains ALL production secrets. Regeneration is refused\n'
+		printf '# on an existing box (would invalidate sessions + Cloak-encrypted creds).\n'
+		printf '# Back up GRAPPA_ENCRYPTION_KEY separately — losing it loses stored creds.\n'
+		printf 'PHX_HOST=%s\n' "$phx_host"
+		printf 'GRAPPA_SUBSTRATE=docker\n'
+		printf 'DATABASE_PATH=/data/grappa.db\n'
+		printf 'UPLOADS_STORAGE_ROOT=/data/uploads\n'
+		printf 'SECRET_KEY_BASE=%s\n' "$secret_key_base"
+		printf 'SECRET_SIGNING_SALT=%s\n' "$secret_signing_salt"
+		printf 'GRAPPA_ENCRYPTION_KEY=%s\n' "$encryption_key"
+		printf 'RELEASE_COOKIE=%s\n' "$release_cookie"
+		printf '%s\n' "$vapid"
+	} > "$ENV_FILE"
+	chmod 600 "$ENV_FILE"
+}
+
+# release_start_container — `docker run -d` the published image. Assumes the
+# container name is free (caller removed any prior one). All env (secrets +
+# runtime knobs) rides in via --env-file, so nothing lands on argv.
+release_start_container() {
+	say "Starting $GRAPPA_CONTAINER from $GRAPPA_IMAGE"
+	docker run -d \
+		--name "$GRAPPA_CONTAINER" \
+		--restart unless-stopped \
+		--env-file "$ENV_FILE" \
+		-v "${GRAPPA_DATA_VOLUME}:/data" \
+		-p "${GRAPPA_PUBLISH}:4000" \
+		"$GRAPPA_IMAGE" >&2
+}
+
+release_migrate() {
+	say "Running database migrations (release image, full prod env)"
+	docker run --rm --env-file "$ENV_FILE" -v "${GRAPPA_DATA_VOLUME}:/data" \
+		"$GRAPPA_IMAGE" eval 'Grappa.Release.migrate()'
+}
+
+release_healthcheck_wait() {
+	say "Waiting for /healthz"
+	local deadline=$((SECONDS + 300))
+	until docker exec "$GRAPPA_CONTAINER" curl -fsS -o /dev/null http://localhost:4000/healthz 2>/dev/null; do
+		if [ "$SECONDS" -ge "$deadline" ]; then
+			warn "the container did not become healthy in time. Inspect with:"
+			warn "  docker logs $GRAPPA_CONTAINER"
+			die "health check timed out"
+		fi
+		printf '.'; sleep 2
+	done
+	printf '\n'
+}
+
+cmd_install_release() {
+	[ $# -eq 0 ] || usage_release
+	require_docker_release
+
+	# One box per host on this container name (parallels the source-mode
+	# ownership guard). An existing container means an existing install.
+	if release_container_exists; then
+		die "a container named '$GRAPPA_CONTAINER' already exists — this box looks installed. Run 'update', or 'stop' first."
+	fi
+
+	write_env_file
+
+	say "Ensuring the data volume ($GRAPPA_DATA_VOLUME) exists"
+	docker volume create "$GRAPPA_DATA_VOLUME" >&2 || true
+
+	release_migrate
+	release_start_container
+	release_healthcheck_wait
+
+	say "grappa is up from $GRAPPA_IMAGE 🎉"
+	cat <<EOF
+
+  Web UI:  http://${GRAPPA_PUBLISH}/   (front it with your own TLS front door)
+  Env:     ${ENV_FILE}   (0600 — every prod secret is here; back it up)
+  Data:    docker volume '${GRAPPA_DATA_VOLUME}' (sqlite + uploads)
+  Update:  infra/docker/deploy.sh update
+  Stop:    infra/docker/deploy.sh stop
+EOF
+}
+
+cmd_update_release() {
+	# Release-image update is COLD-only (hot-on-image is #503 unit E): the
+	# image ships no CodeReloader, so a recreate is the only safe verdict.
+	# --force-cold is accepted (redundant) for symmetry with the source path.
+	case "${1:-}" in
+		''|--force-cold) ;;
+		*) usage_release ;;
+	esac
+
+	require_docker_release
+	[ -f "$ENV_FILE" ] || die "no env file at $ENV_FILE — this box was never installed. Run 'install' first."
+
+	# ---- lib config + feature toggles (all git-centric features OFF) --
+	DEPLOY_SELF_REL="infra/docker/deploy.sh"
+	DEPLOY_USAGE="update [--force-cold]"
+	DEPLOY_FEATURE_FORCE_FLAGS=1
+	DEPLOY_FEATURE_DEFER=0
+	DEPLOY_FEATURE_NOTHING_TO_DO=0
+	DEPLOY_FEATURE_REEXEC=0
+	DEPLOY_FEATURE_MARKER=0
+	DEPLOY_FEATURE_PREV_SHA_CARRY=0
+	COLD_HEALTHCHECK_RETRIES="${COLD_HEALTHCHECK_RETRIES:-120}"
+	COLD_HEALTHCHECK_SLEEP="${COLD_HEALTHCHECK_SLEEP:-2}"
+
+	# ---- substrate hooks (release-image flavor) ----------------------
+	substrate_pull() {
+		say "Pulling $GRAPPA_IMAGE" >&2
+		docker pull "$GRAPPA_IMAGE" >&2 || die "docker pull $GRAPPA_IMAGE failed — check the tag + your ghcr access."
+		# marker/preflight are OFF (no git range to classify); PREV/NEW are
+		# set only because the lib reads them. The image ref keeps any log honest.
+		PREV_SHA="$GRAPPA_IMAGE"
+		NEW_SHA="$GRAPPA_IMAGE"
+	}
+	substrate_read_marker()   { :; }
+	substrate_write_marker()  { :; }
+	substrate_commit_exists() { return 0; }
+	substrate_changed_files() { :; }
+	substrate_preflight()     { return 3; }   # never reached (force-cold); COLD if it were
+	substrate_build()         { :; }          # image already pulled
+	substrate_reload()        { :; }          # never reached (COLD-only)
+	substrate_cic()           { :; }          # the cicchetto SPA is baked into the image
+	substrate_migrate()       { release_migrate; }
+	substrate_restart() {
+		if release_container_exists; then
+			say "Removing the running container ($GRAPPA_CONTAINER)"
+			docker rm -f "$GRAPPA_CONTAINER" >&2 || true
+		fi
+		release_start_container
+	}
+	substrate_healthcheck() {
+		docker exec "$GRAPPA_CONTAINER" curl -fsS -o /dev/null http://localhost:4000/healthz
+	}
+	substrate_done_banner() {
+		say "grappa updated — cold (image pulled + container recreated) 🎉"
+		cat <<EOF
+
+  Image:  $GRAPPA_IMAGE
+  Logs:   docker logs -f $GRAPPA_CONTAINER
+  Stop:   infra/docker/deploy.sh stop
+EOF
+	}
+
+	say "release image: updating cold (hot-on-image is #503 unit E)"
+	# shellcheck source=infra/lib/deploy_common.sh
+	. "$SELF_DIR/../lib/deploy_common.sh"
+	deploy_main --force-cold
+}
+
+cmd_stop_release() {
+	local drop_volume=0
+	case "${1:-}" in
+		--volumes|-v) drop_volume=1 ;;
+		'') ;;
+		*) die "usage: infra/docker/deploy.sh stop [--volumes]" ;;
+	esac
+
+	require_docker_release
+	if release_container_exists; then
+		say "Stopping + removing $GRAPPA_CONTAINER"
+		docker rm -f "$GRAPPA_CONTAINER" >&2 || true
+		say "box is down 🛑"
+	else
+		say "no '$GRAPPA_CONTAINER' container is up — nothing to stop 🫥"
+	fi
+
+	if [ "$drop_volume" -eq 1 ]; then
+		docker volume rm "$GRAPPA_DATA_VOLUME" >&2 || true
+		warn "data volume '$GRAPPA_DATA_VOLUME' dropped — the database and uploads are gone."
+	fi
+
+	cat <<EOF
+
+  Start again:  infra/docker/deploy.sh update
+  Env:          ${ENV_FILE} (kept — holds your secrets)
+EOF
+}
+
+cmd_bare_release() {
+	# A checkout-less host with no env file has never been installed; one
+	# with an env file is an existing box. The single command a curl|bash
+	# one-liner always runs.
+	if [ -f "$ENV_FILE" ]; then
+		say "existing env file — updating this box"
+		cmd_update_release "$@"
+	else
+		say "no env file — installing a fresh box"
+		cmd_install_release "$@"
+	fi
+}
+
+# ======================================================================
+# dispatch (mode-aware)
 # ======================================================================
 verb="${1:-}"
 if [ $# -gt 0 ]; then shift; fi
-case "$verb" in
-	install) cmd_install "$@" ;;
-	update)  cmd_update "$@" ;;
-	stop)    cmd_stop "$@" ;;
-	'')      cmd_bare "$@" ;;
-	*)       usage ;;
-esac
+if [ "$DEPLOY_MODE" = release ]; then
+	case "$verb" in
+		install) cmd_install_release "$@" ;;
+		update)  cmd_update_release "$@" ;;
+		stop)    cmd_stop_release "$@" ;;
+		'')      cmd_bare_release "$@" ;;
+		*)       usage_release ;;
+	esac
+else
+	case "$verb" in
+		install) cmd_install "$@" ;;
+		update)  cmd_update "$@" ;;
+		stop)    cmd_stop "$@" ;;
+		'')      cmd_bare "$@" ;;
+		*)       usage ;;
+	esac
+fi
