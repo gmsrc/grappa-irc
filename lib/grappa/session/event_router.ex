@@ -424,41 +424,9 @@ defmodule Grappa.Session.EventRouter do
 
         {:cont, state2, [{:reply, reply}, persist_eff]}
 
-      "PING" ->
-        # CTCP PING: echo the payload back, unchanged and uninspected.
-        # The token is the ASKER's — conventionally their clock, but it
-        # is opaque to us and its only job is to come back byte for byte
-        # so they can subtract. Answering here rather than in a client is
-        # the same reasoning VERSION uses: the bouncer is awake when no
-        # client is attached, and a session that ignores PING reads as a
-        # dead connection to everyone who asks. Before this, a ping at
-        # this session went unanswered and the raw `\x01PING 1234\x01`
-        # surfaced as a chat row.
-        sender = Message.sender_nick(msg)
-        # A token-less `\x01PING\x01` echoes back token-less, rather than
-        # with a stray separator the asker never sent.
-        reply =
-          case ctcp_payload(body) do
-            "" -> "NOTICE #{sender} :\x01PING\x01"
-            payload -> "NOTICE #{sender} :\x01PING #{payload}\x01"
-          end
-
-        # Same routing as VERSION — see that arm for why a DM-shaped
-        # query persists on the own-nick topic rather than at
-        # `channel = sender`.
-        dm_channel =
-          if nick_eq?(target, state.nick),
-            do: state.nick,
-            else: Identifier.canonical_target(target, casemapping(state))
-
-        {state2, persist_eff} =
-          build_persist(state, :notice, dm_channel, sender, "CTCP PING query → answered", %{})
-
-        {:cont, state2, [{:reply, reply}, persist_eff]}
-
       _ ->
-        # Non-VERSION, non-PING CTCP (ACTION handled below; TIME /
-        # SOURCE / FINGER not implemented yet) — delegate to the generic
+        # Non-VERSION CTCP (ACTION handled below; PING / TIME / SOURCE
+        # / FINGER not implemented yet) — delegate to the generic
         # PRIVMSG arm so ACTION still persists, others fall through
         # as plain :privmsg rows for now.
         privmsg_default(msg, state, body)
@@ -2606,22 +2574,6 @@ defmodule Grappa.Session.EventRouter do
   end
 
   defp ctcp_verb(_), do: nil
-
-  # The argument of a `\x01VERB arg\x01` body, verbatim and NOT parsed:
-  # a CTCP PING token is the asker's to choose, and the only contract is
-  # that it comes back unchanged. Empty when the body carries no
-  # argument (`\x01PING\x01`), which echoes an empty token rather than
-  # inventing one. The trailing \x01 is stripped; anything after it
-  # cannot be part of this CTCP.
-  @spec ctcp_payload(binary()) :: String.t()
-  defp ctcp_payload(<<0x01, rest::binary>>) do
-    case :binary.split(rest, " ") do
-      [_verb, arg] -> arg |> :binary.split(<<0x01>>) |> hd()
-      _ -> ""
-    end
-  end
-
-  defp ctcp_payload(_), do: ""
 
   # Shared default PRIVMSG handler — used by both the generic arm and
   # the CTCP-aware arm's fallthrough for unknown verbs. Pulls out the
