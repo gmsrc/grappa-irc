@@ -54,6 +54,84 @@ defmodule Grappa.Networks.CredentialTest do
     end
   end
 
+  describe "has_nickserv_secret?/1 (#581 — /recover button gate)" do
+    # Post-Cloak-load, the `*_encrypted` fields carry DECRYPTED plaintext
+    # (accessor contract), so a plain struct exercises the predicate without
+    # the DB — mirrors the `effective_ident/1` unit tests above.
+    test "true when the #509 $nickserv_pass is present (decoupled from auth_method)" do
+      cred = %Credential{auth_method: :server_pass, nickserv_pass_encrypted: "hunter2"}
+      assert Credential.has_nickserv_secret?(cred)
+    end
+
+    test "true for :nickserv_identify with an upstream password (the fallback source)" do
+      cred = %Credential{auth_method: :nickserv_identify, password_encrypted: "hunter2"}
+      assert Credential.has_nickserv_secret?(cred)
+    end
+
+    test "false with no secret at all" do
+      refute Credential.has_nickserv_secret?(%Credential{auth_method: :none})
+    end
+
+    test "false when an :nickserv_identify credential has no password" do
+      refute Credential.has_nickserv_secret?(%Credential{auth_method: :nickserv_identify})
+    end
+
+    test "an empty-string secret is treated as absent (mirrors the live gate's pw != \"\")" do
+      refute Credential.has_nickserv_secret?(%Credential{
+               auth_method: :server_pass,
+               nickserv_pass_encrypted: ""
+             })
+    end
+
+    test "false for :server_pass with only an upstream password (spent on PASS, not NickServ)" do
+      cred = %Credential{auth_method: :server_pass, password_encrypted: "shibboleth"}
+      refute Credential.has_nickserv_secret?(cred)
+    end
+  end
+
+  describe "recover_secret/1 (#581 — the /recover secret VALUE, SSOT for button + action)" do
+    # The value `Session.Server`'s /recover action IDENTIFYs with.
+    # `has_nickserv_secret?/1` is `not is_nil(recover_secret/1)`, so button and
+    # action read ONE source and can never diverge (review-#1). Post-Cloak-load
+    # the `*_encrypted` fields carry DECRYPTED plaintext (accessor contract),
+    # so a plain struct exercises it without the DB.
+    test "returns the #509 $nickserv_pass (the FIRST source, decoupled from auth_method)" do
+      cred = %Credential{auth_method: :server_pass, nickserv_pass_encrypted: "hunter2"}
+      assert Credential.recover_secret(cred) == "hunter2"
+    end
+
+    test "$nickserv_pass WINS over the :nickserv_identify password when both are set" do
+      cred = %Credential{
+        auth_method: :nickserv_identify,
+        nickserv_pass_encrypted: "primary",
+        password_encrypted: "fallback"
+      }
+
+      assert Credential.recover_secret(cred) == "primary"
+    end
+
+    test "falls back to the :nickserv_identify upstream password" do
+      cred = %Credential{auth_method: :nickserv_identify, password_encrypted: "hunter2"}
+      assert Credential.recover_secret(cred) == "hunter2"
+    end
+
+    test "nil with no secret at all" do
+      assert Credential.recover_secret(%Credential{auth_method: :none}) == nil
+    end
+
+    test "nil for :server_pass with only an upstream password (spent on PASS, not NickServ)" do
+      cred = %Credential{auth_method: :server_pass, password_encrypted: "shibboleth"}
+      assert Credential.recover_secret(cred) == nil
+    end
+
+    test "an empty-string $nickserv_pass is treated as absent (falls through to nil)" do
+      assert Credential.recover_secret(%Credential{
+               auth_method: :server_pass,
+               nickserv_pass_encrypted: ""
+             }) == nil
+    end
+  end
+
   describe "connection_state field (T32)" do
     test "round-trips :connected | :parked | :failed via changeset" do
       # `get_field` (not `get_change`) — `:connected` is the schema

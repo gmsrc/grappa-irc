@@ -435,7 +435,9 @@ defmodule Grappa.Networks.WireTest do
                  nick: "vjt-live",
                  connection_state: :parked,
                  connection_state_reason: nil,
-                 connection_state_changed_at: DateTime.to_iso8601(now)
+                 connection_state_changed_at: DateTime.to_iso8601(now),
+                 # #581 (D2) — :sasl credential, no NickServ secret.
+                 recoverable: false
                }
              }
     end
@@ -492,6 +494,22 @@ defmodule Grappa.Networks.WireTest do
       # wire boundary converts to ISO-8601.
       assert is_binary(row.connection_state_changed_at)
       assert {:ok, _, 0} = DateTime.from_iso8601(row.connection_state_changed_at)
+      # #581 (D2) — an :none credential carries no NickServ secret.
+      assert row.recoverable == false
+    end
+
+    test "recoverable is true when the credential carries a NickServ secret (#581 D2)",
+         %{user: user, network: network} do
+      {:ok, _} =
+        Credentials.bind_credential(user, network, %{
+          nick: "vjt",
+          auth_method: :nickserv_identify,
+          password: "hunter2"
+        })
+
+      cred = user |> Credentials.get_credential!(network) |> Repo.preload(:network)
+
+      assert Wire.home_network_row(cred, "vjt").recoverable == true
     end
 
     test "surfaces nil connection_state_changed_at as nil on the wire",

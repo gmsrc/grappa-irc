@@ -34,7 +34,7 @@ defmodule Grappa.Visitors.SessionPlan do
   """
 
   alias Grappa.{Networks, Repo, Session, Visitors}
-  alias Grappa.Networks.{Credential, NoServerError, Servers}
+  alias Grappa.Networks.{Credential, Credentials, NoServerError, Servers}
   alias Grappa.Networks.SessionPlan, as: NetworksSessionPlan
   alias Grappa.Visitors.Visitor
 
@@ -110,6 +110,33 @@ defmodule Grappa.Visitors.SessionPlan do
     case Visitors.resolve_credential(visitor, network.id) do
       {:ok, %Credential{} = cred} -> {:ok, cred}
       {:error, :not_found} -> {:error, :network_unconfigured}
+    end
+  end
+
+  # #581 — resolve the /recover secret SOURCE from the LIVE persistent
+  # `(visitor_id, network_id)` credential: `Credential.recover_secret/1` (the
+  # SSOT the `recoverable` button gate also reads) + the registered nick to
+  # reclaim, from ONE fetch. `:nothing_to_recover` when the credential is gone
+  # or carries no secret. Injected as the `recover_source` closure by
+  # `build_plan/4`; extracted here so that closure body stays a one-liner.
+  @spec recover_secret_source(Ecto.UUID.t(), pos_integer()) ::
+          {:ok, {String.t(), String.t()}} | {:error, :nothing_to_recover}
+  defp recover_secret_source(visitor_id, network_id) do
+    # `is_binary` guards on BOTH nick and secret narrow the success tuple to
+    # `{String.t(), String.t()}` — the schema types `nick` as `String.t() | nil`
+    # and `recover_secret/1` as `binary() | nil`, so without the guards Dialyzer
+    # infers `{:ok, {nil | binary(), ...}}`, which is NOT a subtype of the
+    # `recover_source()` @type on `Session.start_opts` → build_plan's return
+    # stops matching `start_opts()` → `resolve/2` loses its `{:ok, plan}` success
+    # typing → every `{:ok, _plan}` caller (Bootstrap/Operator/Visitors/Login)
+    # dead-patterns. A persisted credential always has a non-nil nick
+    # (validate_required), so the guard is belt-and-braces, not a real branch.
+    with {:ok, %Credential{nick: nick} = cred} when is_binary(nick) <-
+           Credentials.get_visitor_credential(visitor_id, network_id),
+         secret when is_binary(secret) <- Credential.recover_secret(cred) do
+      {:ok, {nick, secret}}
+    else
+      _ -> {:error, :nothing_to_recover}
     end
   end
 
@@ -198,6 +225,14 @@ defmodule Grappa.Visitors.SessionPlan do
       last_joined_persister: fn channels ->
         Visitors.update_last_joined_channels(visitor.id, network.id, channels)
       end,
+      # #581 — the "recover my identity" secret SOURCE. Session.Server cannot
+      # statically alias Networks/Visitors (Boundary cycle — Visitors deps
+      # Session via Login), so the reader is injected here as an opaque
+      # closure, mirroring `visitor_committer`. Body extracted to
+      # `recover_secret_source/2` (keeps build_plan under the cyclomatic
+      # budget). Captures `visitor.id` + `network.id` (immutable) like
+      # `last_joined_persister`.
+      recover_source: fn -> recover_secret_source(visitor.id, network.id) end,
       # Re-resolve the plan from the DB on every `Session.Server.init/1`
       # invocation — both first boot AND `:transient` restart.
       # `DynamicSupervisor` caches the spawn-time child spec; without

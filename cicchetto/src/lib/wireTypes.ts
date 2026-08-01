@@ -618,6 +618,7 @@ export type NetworksWireHomeNetworkRow = {
   connection_state: NetworksCredentialConnectionState;
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
+  recoverable: boolean;
 };
 
 export type NetworksWireAvailableNetworkRow = {
@@ -779,6 +780,8 @@ export const SESSION_WIRE_WIRE_EVENT_KIND = [
   "directory_complete",
   "directory_failed",
   "connection_progress",
+  "recover_progress",
+  "recover_result",
   "presence_changed",
   "presence_error",
   "presence_snapshot",
@@ -1117,6 +1120,43 @@ export type SessionWireConnectionProgressPayload = {
   state: "connecting" | "connected";
 };
 
+export const SESSION_WIRE_RECOVER_STEP = [
+  "identify",
+  "register",
+  "nick",
+  "recover",
+  "release",
+] as const;
+export type SessionWireRecoverStep = (typeof SESSION_WIRE_RECOVER_STEP)[number];
+
+export const SESSION_WIRE_RECOVER_STATUS = ["running", "ok", "failed"] as const;
+export type SessionWireRecoverStatus = (typeof SESSION_WIRE_RECOVER_STATUS)[number];
+
+export const SESSION_WIRE_RECOVER_REASON = [
+  "wrong_password",
+  "nick_unavailable",
+  "services_declined",
+] as const;
+export type SessionWireRecoverReason = (typeof SESSION_WIRE_RECOVER_REASON)[number];
+
+export type SessionWireRecoverProgressPayload = {
+  kind: "recover_progress";
+  network: string;
+  step: SessionWireRecoverStep;
+  status: SessionWireRecoverStatus;
+  reason: SessionWireRecoverReason | null;
+};
+
+export const SESSION_WIRE_RECOVER_OUTCOME = ["succeeded", "failed"] as const;
+export type SessionWireRecoverOutcome = (typeof SESSION_WIRE_RECOVER_OUTCOME)[number];
+
+export type SessionWireRecoverResultPayload = {
+  kind: "recover_result";
+  network: string;
+  outcome: SessionWireRecoverOutcome;
+  reason: SessionWireRecoverReason | null;
+};
+
 export type WireSessionEvent =
   | SessionWireChannelsChangedPayload
   | SessionWireOwnNickChangedPayload
@@ -1150,7 +1190,9 @@ export type WireSessionEvent =
   | SessionWireDirectoryProgressPayload
   | SessionWireDirectoryCompletePayload
   | SessionWireDirectoryFailedPayload
-  | SessionWireConnectionProgressPayload;
+  | SessionWireConnectionProgressPayload
+  | SessionWireRecoverProgressPayload
+  | SessionWireRecoverResultPayload;
 
 // === Grappa.SessionLog.Wire ===
 
@@ -1364,5 +1406,8 @@ export const ERROR_TOKENS_CHANNEL_ERROR_TOKEN = [
   "persist_failed",
   "invalid_channel",
   "links_in_flight",
+  "nothing_to_recover",
+  "already_identified",
+  "recovery_in_progress",
 ] as const;
 export type ErrorTokensChannelErrorToken = (typeof ERROR_TOKENS_CHANNEL_ERROR_TOKEN)[number];

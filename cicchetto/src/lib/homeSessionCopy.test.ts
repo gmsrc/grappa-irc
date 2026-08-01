@@ -45,6 +45,7 @@ function row(slug: string, nick: string): HomeNetworkRow {
     connection_state: "connected",
     connection_state_reason: null,
     connection_state_changed_at: null,
+    recoverable: false,
   };
 }
 

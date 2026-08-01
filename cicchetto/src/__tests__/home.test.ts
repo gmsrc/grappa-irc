@@ -71,6 +71,7 @@ describe("home.ts (UX-4 bucket B)", () => {
         connection_state: "connected",
         connection_state_reason: null,
         connection_state_changed_at: null,
+        recoverable: false,
       }),
     ).not.toThrow();
   });
@@ -87,6 +88,7 @@ describe("home.ts (UX-4 bucket B)", () => {
         connection_state: "failed",
         connection_state_reason: "permanent k-line",
         connection_state_changed_at: "2026-05-18T12:00:00Z",
+        recoverable: false,
       }),
     ).not.toThrow();
   });

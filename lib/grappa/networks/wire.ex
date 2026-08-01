@@ -189,7 +189,13 @@ defmodule Grappa.Networks.Wire do
           nick: String.t(),
           connection_state: Credential.connection_state(),
           connection_state_reason: String.t() | nil,
-          connection_state_changed_at: String.t() | nil
+          connection_state_changed_at: String.t() | nil,
+          # #581 (D2) — the credential carries a NickServ secret, so the
+          # visitor "recover my identity" action has something to identify
+          # with. The "recoverable credential on file" half of the /recover
+          # button gate; cic ANDs the "not already +r" + visitor-only halves.
+          # Derived (not stored) via `Credential.has_nickserv_secret?/1`.
+          recoverable: boolean()
         }
 
   @typedoc """
@@ -452,7 +458,8 @@ defmodule Grappa.Networks.Wire do
       nick: nick,
       connection_state: cred.connection_state,
       connection_state_reason: cred.connection_state_reason,
-      connection_state_changed_at: WireTime.iso8601_or_nil(cred.connection_state_changed_at)
+      connection_state_changed_at: WireTime.iso8601_or_nil(cred.connection_state_changed_at),
+      recoverable: Credential.has_nickserv_secret?(cred)
     }
   end
 

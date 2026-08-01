@@ -39,6 +39,7 @@ import { setPeerAway } from "./peerAway";
 import { type QueryWindow, setQueryWindowsByNetwork } from "./queryWindows";
 import { clearSeen } from "./reconnectBackfill";
 import { setReconnecting } from "./reconnectingStatus";
+import { applyRecoverProgress, applyRecoverResult } from "./recoverProgress";
 import { purgeScrollback } from "./scrollback";
 import { selectedChannel, setSelectedChannel } from "./selection";
 import { setServerReply } from "./serverReplyModal";
@@ -517,6 +518,11 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
           connection_state: n.connection_state,
           connection_state_reason: n.connection_state_reason as string | null,
           connection_state_changed_at: n.connection_state_changed_at as string | null,
+          // #581 (D2) — additive field. NOT in the reject-guard above: a
+          // missing additive field must never be fatal (client-protocol
+          // invariant), so tolerate absence with a `false` default rather
+          // than dropping the whole connection_state_changed update.
+          recoverable: typeof n.recoverable === "boolean" ? n.recoverable : false,
         },
       };
     }
@@ -863,6 +869,46 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
     case "directory_failed":
       if (typeof r.network !== "string" || typeof r.reason !== "string") return null;
       return { kind: "directory_failed", network: r.network, reason: r.reason };
+    case "recover_progress":
+      // #581 — one recovery-step transition. `step` + `status` are closed
+      // sets, narrowed strictly (an unknown value drops this ONE presentational
+      // ping, not the terminal result). `reason` is a nullable string (cic
+      // localizes it in RecoverModal).
+      if (
+        typeof r.network !== "string" ||
+        (r.step !== "identify" &&
+          r.step !== "register" &&
+          r.step !== "nick" &&
+          r.step !== "recover" &&
+          r.step !== "release") ||
+        (r.status !== "running" && r.status !== "ok" && r.status !== "failed") ||
+        (r.reason !== null && typeof r.reason !== "string")
+      )
+        return null;
+      return {
+        kind: "recover_progress",
+        network: r.network,
+        step: r.step,
+        status: r.status,
+        reason: r.reason as string | null,
+      };
+    case "recover_result":
+      // #581 — terminal recovery outcome. `outcome` is a closed binary. `reason`
+      // stays a nullable string (NOT hardened to the known token union) so an
+      // additive server reason token can never drop a terminal result event
+      // (unknown-is-never-fatal, #447); RecoverModal localizes the known tokens.
+      if (
+        typeof r.network !== "string" ||
+        (r.outcome !== "succeeded" && r.outcome !== "failed") ||
+        (r.reason !== null && typeof r.reason !== "string")
+      )
+        return null;
+      return {
+        kind: "recover_result",
+        network: r.network,
+        outcome: r.outcome,
+        reason: r.reason as string | null,
+      };
     default:
       return null;
   }
@@ -1380,6 +1426,21 @@ createRoot(() => {
           // NickServ IDENTIFY (auth_method :nickserv_identify) reads
           // identified="no" until the next natural refetch — not chased here.
           if (payload.state === "connected") refetchNetworks();
+          return;
+
+        case "recover_progress":
+          // #581 — mirror one recovery-step transition into the RecoverModal
+          // progress store. The FIRST progress event OPENS the modal (cic never
+          // originates state — the server drives); later ones accumulate/update
+          // the step list.
+          applyRecoverProgress(payload);
+          return;
+
+        case "recover_result":
+          // #581 — terminal recovery outcome. No-ops when the modal is closed
+          // (dismissed mid-flight / never opened this session — store patch
+          // guard); otherwise sets the success/failure conclusion.
+          applyRecoverResult(payload);
           return;
 
         // #247 — /notify watch list + presence. Full-list snapshot

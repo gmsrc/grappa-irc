@@ -845,7 +845,14 @@ defmodule Grappa.Session.EventRouter do
         []
       end
 
-    {:cont, new_state, persist_effects ++ self_server_effects ++ visitor_persist_effects ++ peer_rename_effects}
+    # #581 — mirror bahamut's SILENT +r-strip on our own genuine self-rename
+    # (see strip_r_on_self_rename/4) so the per-session umode set stays truthful.
+    {final_state, self_umode_effects} =
+      strip_r_on_self_rename(state, new_state, old_nick, new_nick)
+
+    {:cont, final_state,
+     persist_effects ++
+       self_server_effects ++ visitor_persist_effects ++ peer_rename_effects ++ self_umode_effects}
   end
 
   # Unsolicited TOPIC: a channel operator changed the topic mid-session.
@@ -2810,6 +2817,36 @@ defmodule Grappa.Session.EventRouter do
       "r" in next_umodes and "r" not in prev_umodes -> [{:session_identity_changed, :acquired}]
       "r" in prev_umodes and "r" not in next_umodes -> [{:session_identity_changed, :lost}]
       true -> []
+    end
+  end
+
+  # #581 — bahamut strips +r SILENTLY on a genuine nick change (m_nick.c:
+  # `mycmp(old,new) != 0 → umode &= ~UMODE_r`, no MODE echo — the same invariant
+  # Credentials.bind_identified_visitor_nick/3 documents). Mirror it so a
+  # self-rename leaves `state.umodes` truthful: on OUR OWN genuine rename drop
+  # "r" and emit `:umode_changed` + the identity transition (→ :lost, via
+  # session_identity_effects/2). A pure case-change is NOT a rename (mycmp is
+  # case-insensitive), so gate on `not nick_eq?(old, new)` — the #373
+  # rename-vs-fold distinction. Detection reads the ORIGINAL `state.nick` (the
+  # already-built `new_state.nick` holds the post-rename value); the strip
+  # applies to `new_state`. Without this a visitor who /nick's away from their
+  # registered nick keeps a PHANTOM +r and the #581 recover button
+  # (`canRecover() = recoverable && !"r"`) never appears. Drop ONLY "r" (the
+  # documented invariant), not other umodes; `Map.get`/`Map.put` (never
+  # `%{... | umodes:}`) for the #216 hot-reload contract.
+  @spec strip_r_on_self_rename(state(), state(), String.t(), String.t()) ::
+          {state(), [effect()]}
+  defp strip_r_on_self_rename(state, new_state, old_nick, new_nick) do
+    if nick_eq?(old_nick, state.nick) and not nick_eq?(old_nick, new_nick) do
+      prev_umodes = Map.get(new_state, :umodes, [])
+      next_umodes = prev_umodes -- ["r"]
+
+      changed_effects =
+        if next_umodes != prev_umodes, do: [{:umode_changed, next_umodes}], else: []
+
+      {Map.put(new_state, :umodes, next_umodes), changed_effects ++ session_identity_effects(prev_umodes, next_umodes)}
+    else
+      {new_state, []}
     end
   end
 

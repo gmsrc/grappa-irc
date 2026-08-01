@@ -879,6 +879,21 @@ export type LinksEntry = SessionWireLinksEntry;
 // `entries` list is the restricted/hidden-topology signal. NOT persisted.
 export type LinksReply = Omit<SessionWireLinksBundlePayload, "kind">;
 
+// #581 — "recover my identity" guided recovery. Two transient user-topic
+// events (recover_progress / recover_result) drive the RecoverModal progress
+// view. `step` / `status` / `outcome` are closed sets (atoms-in-allowlist,
+// narrowed strictly at ingress — an unknown value drops that one presentational
+// ping). The result `reason` stays a plain `string | null` on the wire arm
+// (NOT hardened to the known token union) so an additive server reason token
+// can never drop a TERMINAL result event (unknown-is-never-fatal, #447) — the
+// modal localizes the known tokens (`wrong_password` / `nick_unavailable` /
+// `services_declined`) and shows generic copy otherwise, the friendlyChannelError
+// posture.
+export type RecoverStep = "identify" | "register" | "nick" | "recover" | "release";
+export type RecoverStatus = "running" | "ok" | "failed";
+export type RecoverOutcome = "succeeded" | "failed";
+export type RecoverResultReason = "wrong_password" | "nick_unavailable" | "services_declined";
+
 // Mirror of the events fanned out on the user-level PubSub topic
 // (`Topic.user(user_name)`), pinned by:
 //   * `Grappa.Session.Wire.{channels_changed/0, own_nick_changed/2,
@@ -1134,6 +1149,26 @@ export type WireUserEvent =
   // transient reconnect; the badge is an ephemeral overlay. Rides the user
   // topic with the `network` slug discriminator (mirrors away_confirmed).
   | { kind: "connection_progress"; network: string; state: "connecting" | "connected" }
+  // #581 — "recover my identity" guided recovery. Two transient user-topic
+  // events, both carrying the network SLUG in `network`. `recover_progress`
+  // is one step transition (identify → register → nick → recover → release,
+  // each running → ok/failed); `recover_result` is the TERMINAL outcome. cic
+  // mirrors them into the RecoverModal progress view (recoverProgress.ts) —
+  // it NEVER originates recovery state; the first progress event opens the
+  // modal, the result event concludes it. `reason` is cic-localized copy.
+  | {
+      kind: "recover_progress";
+      network: string;
+      step: RecoverStep;
+      status: RecoverStatus;
+      reason: string | null;
+    }
+  | {
+      kind: "recover_result";
+      network: string;
+      outcome: RecoverOutcome;
+      reason: string | null;
+    }
   // #247 — /notify presence watch. `notify_list` is the full-list
   // snapshot broadcast on every Grappa.Notify mutation AND pushed on
   // user-topic after-join (same setState contract as

@@ -28,6 +28,10 @@ type HomeNetworkRowLocal = {
   connection_state: "connected" | "parked" | "failed";
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
+  // #581 (D2) — REQUIRED on the production wire (pinned by wireTypesAssert.ts);
+  // optional here so the many recover-agnostic mock rows omit it (absent →
+  // falsy → "not recoverable", a valid state). The #581 tests set it.
+  recoverable?: boolean;
 };
 type HomeDataLocal = {
   networks: HomeNetworkRowLocal[];
@@ -81,6 +85,9 @@ const openShareModalMock = vi.fn<() => void>();
 const pushLinksMock = vi.fn<(id: number, mask: string | null) => Promise<void>>(() =>
   Promise.resolve(),
 );
+// #581 — ConnectedRow's 🔑 Recover identity button pushes the recover verb.
+// Same socket-boundary mock rationale as pushLinks.
+const pushRecoverMock = vi.fn<(id: number) => Promise<void>>(() => Promise.resolve());
 
 vi.mock("../lib/home", () => ({
   homeData: () => homeDataMock(),
@@ -151,6 +158,7 @@ vi.mock("../lib/shareModal", () => ({
 
 vi.mock("../lib/socket", () => ({
   pushLinks: (id: number, mask: string | null) => pushLinksMock(id, mask),
+  pushRecover: (id: number) => pushRecoverMock(id),
 }));
 
 vi.mock("../lib/umodes", () => ({
@@ -199,6 +207,7 @@ describe("HomePane", () => {
     networkIdBySlugMock.mockReturnValue(undefined);
     openShareModalMock.mockClear();
     pushLinksMock.mockClear();
+    pushRecoverMock.mockClear();
   });
 
   afterEach(() => {
@@ -305,6 +314,70 @@ describe("HomePane", () => {
       render(() => <HomePane />);
 
       expect(screen.queryByTestId("home-register-nick-azzurra")).toBeNull();
+    });
+  });
+
+  describe("#581 recover-identity launcher", () => {
+    // A connected row carrying (or not) a recoverable credential (D2 wire flag).
+    const recoverableHome = (slug: string, recoverable: boolean): HomeDataLocal => ({
+      networks: [
+        {
+          slug,
+          nick: "guest",
+          connection_state: "connected",
+          connection_state_reason: null,
+          connection_state_changed_at: null,
+          recoverable,
+        },
+      ],
+      available_networks: [],
+    });
+
+    it("shows the button for a visitor with a recoverable credential and no +r, and pushes recover", async () => {
+      userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest" });
+      homeDataMock.mockReturnValue(recoverableHome("azzurra", true));
+      networkIdBySlugMock.mockReturnValue(7);
+      umodesForNetworkMock.mockReturnValue([]); // not identified yet
+      render(() => <HomePane />);
+
+      const btn = await screen.findByTestId("home-recover-identity-azzurra");
+      expect(btn).toBeInTheDocument();
+      // Paired with Browse in the CTA row, not the heading status area.
+      expect(btn.closest(".home-pane-network-cta")).not.toBeNull();
+      expect(btn.closest(".home-pane-network-status")).toBeNull();
+
+      fireEvent.click(btn);
+      expect(pushRecoverMock).toHaveBeenCalledWith(7);
+    });
+
+    it("hides the button once the +r umode is set (identified)", () => {
+      userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest" });
+      homeDataMock.mockReturnValue(recoverableHome("azzurra", true));
+      networkIdBySlugMock.mockReturnValue(7);
+      umodesForNetworkMock.mockReturnValue(["r"]); // identified → hidden
+      render(() => <HomePane />);
+
+      expect(screen.queryByTestId("home-recover-identity-azzurra")).toBeNull();
+    });
+
+    it("hides the button when the credential is not recoverable (no NickServ secret)", () => {
+      userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest" });
+      homeDataMock.mockReturnValue(recoverableHome("azzurra", false));
+      networkIdBySlugMock.mockReturnValue(7);
+      umodesForNetworkMock.mockReturnValue([]);
+      render(() => <HomePane />);
+
+      expect(screen.queryByTestId("home-recover-identity-azzurra")).toBeNull();
+    });
+
+    it("hides the button for a non-visitor (user) session — recover is visitor-only", () => {
+      userMock.mockReturnValue({ kind: "user", id: "u1", name: "vjt" });
+      homeDataMock.mockReturnValue(recoverableHome("azzurra", true));
+      networkIdBySlugMock.mockReturnValue(7);
+      umodesForNetworkMock.mockReturnValue([]);
+      render(() => <HomePane />);
+
+      expect(screen.queryByTestId("home-recover-identity-azzurra")).toBeNull();
     });
   });
 

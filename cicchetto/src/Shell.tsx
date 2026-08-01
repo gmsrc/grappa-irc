@@ -59,6 +59,7 @@ import PresenceToasts from "./PresenceToasts";
 import PrivacyModal from "./PrivacyModal";
 import RailActions from "./RailActions";
 import RailContext from "./RailContext";
+import RecoverModal from "./RecoverModal";
 import RegistrationWizardModal from "./RegistrationWizardModal";
 import ResizeHandle from "./ResizeHandle";
 import ScrollbackPane from "./ScrollbackPane";
@@ -552,6 +553,7 @@ const Shell: Component = () => {
           <ServerReplyModal />
           <ServiceModal />
           <RegistrationWizardModal />
+          <RecoverModal />
           <ShareSessionModal />
           <ConfirmModal />
           {/* #473 — ArchiveModal is the single archive surface on BOTH form
@@ -800,6 +802,7 @@ const Shell: Component = () => {
         <ServerReplyModal />
         <ServiceModal />
         <RegistrationWizardModal />
+        <RecoverModal />
         <ShareSessionModal />
         <ConfirmModal />
         <Show when={membersOpen()}>

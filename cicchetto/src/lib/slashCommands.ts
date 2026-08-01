@@ -155,6 +155,10 @@ export type SlashCommand =
   | { kind: "names"; target: string | null }
   | { kind: "list"; pattern: string | null }
   | { kind: "links"; pattern: string | null }
+  // #581 — /recover [network]: guided "recover my identity" (NickServ). The
+  // optional first token is the network slug (bare → the active window's
+  // network, resolved in compose.ts). Same optional-arg grammar as /links.
+  | { kind: "recover"; network: string | null }
   | { kind: "lusers" }
   | { kind: "info" }
   | { kind: "version" }
@@ -561,6 +565,14 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
   links: (_verb, rest) => {
     const [pattern] = tokens(rest);
     return { kind: "links", pattern: pattern ?? null };
+  },
+
+  // #581 — /recover [network]. First token = optional network slug (bare →
+  // current window's network, resolved in compose.ts). Same optional-arg shape
+  // as /links; trailing tokens are ignored.
+  recover: (_verb, rest) => {
+    const [network] = tokens(rest);
+    return { kind: "recover", network: network ?? null };
   },
 
   lusers: (_verb, _rest) => ({ kind: "lusers" }),

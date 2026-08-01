@@ -107,6 +107,7 @@ defmodule Grappa.HotReload.LongLivedModules do
   @state_helpers [
     Grappa.Session.AwayState,
     Grappa.Session.GhostRecovery,
+    Grappa.Session.RecoverIdentity,
     Grappa.Session.WindowState
   ]
 
@@ -133,6 +134,7 @@ defmodule Grappa.HotReload.LongLivedModules do
   @type state_helper ::
           Grappa.Session.AwayState
           | Grappa.Session.GhostRecovery
+          | Grappa.Session.RecoverIdentity
           | Grappa.Session.WindowState
 
   @doc """

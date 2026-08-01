@@ -55,6 +55,7 @@ import {
   pushNames,
   pushOper,
   pushRaw,
+  pushRecover,
   pushVersion,
   pushWho,
   pushWhois,
@@ -872,6 +873,31 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/links: network not found" };
           await pushLinks(networkId, cmd.pattern); // S6 (#364): await verb-ack
+          result = { ok: true };
+          break;
+        }
+        // #581 — /recover [network]: guided "recover my identity". Push on the
+        // user-level channel; the server runs the NickServ recovery sequence and
+        // streams recover_progress / recover_result events on the user topic
+        // (RecoverModal mirrors them). The modal opens off the SERVER's first
+        // recover_progress — NOT optimistically here (cic never originates
+        // state). Bare /recover uses the active window's network. A rejection
+        // (nothing_to_recover / already_identified / not_visitor) maps to
+        // friendly copy; anything else (no_session, WS-down) delegates to the
+        // shared friendlyError catch.
+        case "recover": {
+          const targetSlug = cmd.network ?? networkSlug;
+          const networkId = networkIdBySlug(targetSlug);
+          if (networkId === undefined) return { error: "/recover: network not found" };
+          try {
+            await pushRecover(networkId);
+          } catch (e) {
+            // #581 — the recover rejection tokens (nothing_to_recover /
+            // already_identified / recovery_in_progress / forbidden) are now
+            // in the generated channel-error union, so `friendlyError` →
+            // `friendlyChannelError` owns the copy. No local bridge needed.
+            return { error: friendlyError(e) };
+          }
           result = { ok: true };
           break;
         }

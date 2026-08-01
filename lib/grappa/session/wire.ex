@@ -96,6 +96,8 @@ defmodule Grappa.Session.Wire do
           | :directory_complete
           | :directory_failed
           | :connection_progress
+          | :recover_progress
+          | :recover_result
           | :presence_changed
           | :presence_error
           | :presence_snapshot
@@ -717,6 +719,48 @@ defmodule Grappa.Session.Wire do
           kind: :connection_progress,
           network: String.t(),
           state: :connecting | :connected
+        }
+
+  @typedoc """
+  #581 — a step in the visitor-triggered "recover my identity" sequence
+  (`IDENTIFY` → `+r` → `NICK` → `RECOVER`/`RELEASE` → `NICK`). TRANSIENT
+  and PRESENTATIONAL: it drives the recover progress modal only, is never
+  persisted, and never enters `window_states` (A1). Broadcast on
+  `Topic.user/1` with the `network` slug discriminator — the modal is a
+  home affordance with no per-network channel to receive on.
+
+  `step` and `status` are atoms in the closed sets below, projected to
+  strings on the wire (like `connection_progress/2`'s `state`). `reason`
+  is non-nil only on a `:failed` status.
+  """
+  @type recover_step :: :identify | :register | :nick | :recover | :release
+
+  @type recover_status :: :running | :ok | :failed
+
+  @type recover_reason :: :wrong_password | :nick_unavailable | :services_declined
+
+  @type recover_progress_payload :: %{
+          kind: :recover_progress,
+          network: String.t(),
+          step: recover_step(),
+          status: recover_status(),
+          reason: recover_reason() | nil
+        }
+
+  @typedoc """
+  #581 — the TERMINAL event of a recover sequence, closing the progress
+  modal's outcome. `outcome` ∈ `:succeeded | :failed`; `reason` carries
+  the failure cause (nil on success). Distinct kind from
+  `recover_progress` per A1 ("a single progress event kind plus a
+  terminal event").
+  """
+  @type recover_outcome :: :succeeded | :failed
+
+  @type recover_result_payload :: %{
+          kind: :recover_result,
+          network: String.t(),
+          outcome: recover_outcome(),
+          reason: recover_reason() | nil
         }
 
   @doc """
@@ -1477,5 +1521,35 @@ defmodule Grappa.Session.Wire do
   def connection_progress(network_slug, state)
       when is_binary(network_slug) and state in [:connecting, :connected] do
     %{kind: :connection_progress, network: network_slug, state: state}
+  end
+
+  @doc """
+  #581 — a recover-sequence progress step for the recover modal. `step`
+  ∈ `#{inspect([:identify, :register, :nick, :recover, :release])}`,
+  `status` ∈ `#{inspect([:running, :ok, :failed])}`; `reason` is a
+  `t:recover_reason/0` on `:failed`, else `nil`. Atom→string projection
+  happens at the JSON edge. Broadcast on `Topic.user/1`.
+  """
+  @spec recover_progress(String.t(), recover_step(), recover_status(), recover_reason() | nil) ::
+          recover_progress_payload()
+  def recover_progress(network_slug, step, status, reason)
+      when is_binary(network_slug) and
+             step in [:identify, :register, :nick, :recover, :release] and
+             status in [:running, :ok, :failed] and
+             (is_nil(reason) or reason in [:wrong_password, :nick_unavailable, :services_declined]) do
+    %{kind: :recover_progress, network: network_slug, step: step, status: status, reason: reason}
+  end
+
+  @doc """
+  #581 — the terminal recover outcome for the recover modal. `outcome` ∈
+  `#{inspect([:succeeded, :failed])}`; `reason` is a `t:recover_reason/0`
+  on `:failed`, else `nil`. Broadcast on `Topic.user/1`.
+  """
+  @spec recover_result(String.t(), recover_outcome(), recover_reason() | nil) ::
+          recover_result_payload()
+  def recover_result(network_slug, outcome, reason)
+      when is_binary(network_slug) and outcome in [:succeeded, :failed] and
+             (is_nil(reason) or reason in [:wrong_password, :nick_unavailable, :services_declined]) do
+    %{kind: :recover_result, network: network_slug, outcome: outcome, reason: reason}
   end
 end

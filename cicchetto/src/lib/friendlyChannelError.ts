@@ -146,6 +146,22 @@ function friendlyKnown(code: ErrorTokensChannelErrorToken): string {
     case "close_failed":
       return "Couldn't close that conversation. Try again.";
 
+    // ── #581 — /recover ("recover my identity") push rejections. The
+    //    visitor-only guard emits the shared `forbidden` token (handled
+    //    above), so only these three are recover-specific.
+    case "nothing_to_recover":
+      // The visitor has no recoverable credential (no stored NickServ
+      // secret) — `handle_call(:recover_identity)` never blind-IDENTIFYs
+      // (#561 pt3). Also the unconditional "nothing to do" outcome.
+      return "There's nothing to recover — no saved identity on this network.";
+    case "already_identified":
+      // The session already holds `+r`, so there's nothing to reclaim.
+      return "You're already identified on this network.";
+    case "recovery_in_progress":
+      // A recover sequence is already armed for this session (one FSM per
+      // session — `{:error, :in_progress}`).
+      return "Identity recovery is already in progress.";
+
     default:
       // Exhaustiveness: adding a token to the generated union without a
       // `case` arm narrows `code` to `never` only when every member is

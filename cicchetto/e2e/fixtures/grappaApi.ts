@@ -119,6 +119,62 @@ export async function mintVisitor(nick: string, incognito = false): Promise<Mint
   };
 }
 
+// #581 — visitor login WITH a password (vs `mintVisitor`, which is anon —
+// no password). `POST /auth/login {identifier, password, network}` is the
+// visitor branch (identifier is a bare nick, not `email@host`); a password
+// on a fresh (never-committed) nick threads through
+// `Visitors.SessionPlan.with_login_identify/2` → the plan identifies to
+// services at 001, and on the resulting `+r` `commit_identity` persists a
+// `:nickserv_identify` credential — the RECOVERABLE state the /recover feature
+// (and its home button) needs. `network` is explicit (the testnet has several
+// visitor_enabled networks → an implicit login is `:network_ambiguous`).
+//
+// Returns `subjectJson` too, so a spec can boot cic with the exact persisted
+// visitor subject via `loginAs(page, {...} as SeededUser)` (loginAs reads only
+// `.token` + `.subjectJson`).
+export type VisitorLoginResult = {
+  id: string;
+  nick: string;
+  network_slug: string;
+  token: string;
+  subject: { kind: "visitor"; id: string; registered?: boolean; incognito?: boolean };
+  subjectJson: string;
+};
+
+export async function loginVisitor(
+  nick: string,
+  password: string,
+  networkSlug: string,
+): Promise<VisitorLoginResult> {
+  const response = await fetch(`${GRAPPA_BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier: nick, password, network: networkSlug }),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `grappaApi.loginVisitor: ${nick} → ${response.status} ${await response.text()}`,
+    );
+  }
+  const body = (await response.json()) as {
+    token: string;
+    subject: { kind: "visitor"; id: string; registered?: boolean; incognito?: boolean };
+  };
+  if (body.subject.kind !== "visitor") {
+    throw new Error(
+      `grappaApi.loginVisitor: expected visitor subject, got ${body.subject.kind}`,
+    );
+  }
+  return {
+    id: body.subject.id,
+    nick,
+    network_slug: networkSlug,
+    token: body.token,
+    subject: body.subject,
+    subjectJson: JSON.stringify(body.subject),
+  };
+}
+
 // #299 amendment (author model A) — thin theme REST helpers for the
 // author-nick e2e. The runner talks to grappa directly on port 4000
 // (bypassing nginx), so these mirror the cic `themesApi` verbs without the

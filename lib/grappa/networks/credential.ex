@@ -784,6 +784,57 @@ defmodule Grappa.Networks.Credential do
   def upstream_nickserv_pass(%__MODULE__{nickserv_pass_encrypted: pw}), do: pw
 
   @doc """
+  GH #581 — the NickServ secret VALUE this credential recovers an identity
+  with, or `nil` when none is on file. The SINGLE SOURCE OF TRUTH for BOTH
+  the `/recover` action (`Session.Server` IDENTIFYs with this value) AND the
+  `recoverable` button gate (`has_nickserv_secret?/1` below is
+  `not is_nil(recover_secret/1)`).
+
+  Mirrors EXACTLY the resolution `Session.Server`'s `nickserv_secret/1`
+  applies, but over the PERSISTENT credential rather than the one-shot
+  session state: the #509 `$nickserv_pass` (the FIRST source, decoupled from
+  `auth_method`) WINS; falling back, a `:nickserv_identify` upstream
+  password. Both must be non-empty — an empty secret is "nothing to identify
+  with" (same `pw != ""` posture as the live gate and
+  `pending_password_from_opts`).
+
+  Reading the PERSISTENT credential is the #581 review-#1 fix: the button
+  read this source (`password_encrypted`, never cleared) while the action
+  read `state.pending_password` (one-shot cleared at 001), so post-connect
+  the action refused a session the button offered. Both now resolve HERE, so
+  they can never diverge.
+  """
+  @spec recover_secret(t()) :: binary() | nil
+  def recover_secret(%__MODULE__{} = cred) do
+    cond do
+      secret_present?(upstream_nickserv_pass(cred)) ->
+        upstream_nickserv_pass(cred)
+
+      cred.auth_method == :nickserv_identify and secret_present?(upstream_password(cred)) ->
+        upstream_password(cred)
+
+      true ->
+        nil
+    end
+  end
+
+  @doc """
+  GH #581 — true iff this credential carries a NickServ secret to recover an
+  identity with, i.e. `recover_secret/1` resolves a value.
+
+  Drives the visitor home row's `recoverable` wire flag (D2) — the
+  "recoverable credential on file" half of the /recover button gate; the
+  "not already `+r`" (and visitor-only) half is applied client-side. Sharing
+  `recover_secret/1` with the action keeps button and action in lockstep BY
+  CONSTRUCTION (one source), closing the review-#1 divergence — the button
+  can never show for a session `/recover` would refuse.
+  """
+  @spec has_nickserv_secret?(t()) :: boolean()
+  def has_nickserv_secret?(%__MODULE__{} = cred), do: not is_nil(recover_secret(cred))
+
+  defp secret_present?(pw), do: is_binary(pw) and pw != ""
+
+  @doc """
   GH #189 — returns the post-Cloak-load plaintext on-connect perform list,
   or `nil` when none is configured. Threaded into the connect plan by
   `Grappa.Networks.SessionPlan.base_plan/6` and expanded at 001 by

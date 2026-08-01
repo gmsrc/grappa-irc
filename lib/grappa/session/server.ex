@@ -110,6 +110,7 @@ defmodule Grappa.Session.Server do
     PerformList,
     Persistor,
     Presence,
+    RecoverIdentity,
     WindowState
   }
 
@@ -148,6 +149,20 @@ defmodule Grappa.Session.Server do
   # are typically sub-second; an 8s ceiling protects against an upstream
   # services outage holding the FSM open indefinitely.
   @ghost_recovery_timeout_ms 8_000
+
+  # #581 — overall deadline for the recover-identity sequence (IDENTIFY →
+  # +r → NICK → RECOVER/RELEASE → settle → NICK). Larger than the ghost
+  # budget: it spans an IDENTIFY round-trip, the +r MODE echo, a NICK, an
+  # optional services verb, the settle tick, and a final NICK. A blown
+  # deadline fails the modal (never hangs it).
+  @recover_timeout_ms 15_000
+
+  # #581 — the post-verb settle tick. After RECOVER/RELEASE, wait this
+  # long before the ONE final NICK (services need a beat to drop the
+  # hold / kill the ghost). This is STEP TIMING, not a retry: a refused
+  # final NICK is terminal (F2). Starting value — if it proves flaky it
+  # is a FINDING to raise, not a number to inflate until green.
+  @recover_settle_ms 800
 
   # #513b — /links in-flight window. A second `:send_links` within this many ms
   # of a still-pending one is REFUSED (rather than clobbering the un-keyed
@@ -327,6 +342,21 @@ defmodule Grappa.Session.Server do
   @type last_joined_persister :: ([String.t()] -> :ok | {:error, term()})
 
   @typedoc """
+  GH #581 — opaque reader the visitor `SessionPlan` injects so
+  `handle_call(:recover_identity, ...)` can resolve the PERSISTENT recover
+  target (the registered nick + NickServ secret) without a static
+  `Session → Networks/Visitors` alias (Boundary cycle — Visitors deps
+  Session via Login). Reads the LIVE credential each call
+  (`Credentials.get_visitor_credential` + `Credential.recover_secret/1`),
+  NOT `state.pending_password` (one-shot cleared at 001) — so it resolves the
+  SAME source as the `recoverable` button gate
+  (`Credential.has_nickserv_secret?/1`), the review-#1 fix. `nil` on state =
+  no reader injected (user sessions — recover is visitor-only).
+  """
+  @type recover_source ::
+          (-> {:ok, {String.t(), String.t()}} | {:error, :nothing_to_recover})
+
+  @typedoc """
   GH #417 — opaque closure that persists the EXPLICIT away snapshot to the
   producing context (Networks), forwarding `(reason, since)` to
   `Grappa.Networks.Credentials.update_away/4`. `(nil, nil)` clears it on
@@ -480,6 +510,9 @@ defmodule Grappa.Session.Server do
           optional(:credential_committer) => credential_committer(),
           optional(:registration_committer) => registration_committer(),
           optional(:last_joined_persister) => last_joined_persister(),
+          # #581 — visitor-only reader for the /recover secret source (user
+          # plans omit it; recover is visitor-only).
+          optional(:recover_source) => recover_source(),
           # GH #417 — persist/restore the EXPLICIT away across crash/reconnect.
           # User-only (visitor plans omit both).
           optional(:away_persister) => away_persister(),
@@ -595,12 +628,21 @@ defmodule Grappa.Session.Server do
           credential_committer: credential_committer() | nil,
           registration_committer: registration_committer() | nil,
           last_joined_persister: last_joined_persister() | nil,
+          # #581 — visitor-only /recover secret reader (nil for user sessions).
+          recover_source: recover_source() | nil,
           # GH #417 — persister for the EXPLICIT away snapshot; nil for
           # visitor sessions (away not persisted for the ephemeral subject).
           away_persister: away_persister() | nil,
           query_window_open?: EventRouter.query_window_open?(),
           ghost_recovery: GhostRecovery.t() | nil,
           ghost_timer: reference() | nil,
+          # #581 — the visitor "recover my identity" FSM + its two timers
+          # (overall deadline + the post-verb settle tick). All nil unless
+          # a recovery is in flight; the FSM is a sibling to
+          # `ghost_recovery`, driven by `advance_recover/2`.
+          recover_identity: RecoverIdentity.t() | nil,
+          recover_timer: reference() | nil,
+          recover_settle_timer: reference() | nil,
           away_state: AwayState.t(),
           auto_away_timer: reference() | nil,
           # S4.2: IRCv3 caps confirmed active by upstream CAP ACK. Keys are
@@ -1057,6 +1099,8 @@ defmodule Grappa.Session.Server do
       credential_committer: Map.get(opts, :credential_committer),
       registration_committer: Map.get(opts, :registration_committer),
       last_joined_persister: Map.get(opts, :last_joined_persister),
+      # #581 — visitor-only /recover secret reader (nil for user sessions).
+      recover_source: Map.get(opts, :recover_source),
       # GH #417 — persister for the EXPLICIT away snapshot (nil for visitors).
       away_persister: Map.get(opts, :away_persister),
       # #400 — open-query-window predicate EventRouter consults to re-key a
@@ -1069,6 +1113,11 @@ defmodule Grappa.Session.Server do
       query_window_open?: Map.get(opts, :query_window_open?, &QueryWindows.open?/3),
       ghost_recovery: nil,
       ghost_timer: nil,
+      # #581 — recover-identity FSM + timers idle until /recover (or the
+      # home button) fires `handle_call(:recover_identity, ...)`.
+      recover_identity: nil,
+      recover_timer: nil,
+      recover_settle_timer: nil,
       # GH #417 — restore a persisted EXPLICIT away (crash/respawn/reconnect)
       # from the plan; boots `:present` on first connect / when nothing was
       # persisted. The `AWAY :<reason>` is re-emitted upstream at 001 by
@@ -1829,6 +1878,52 @@ defmodule Grappa.Session.Server do
 
   def handle_call(:refresh_directory, _, state) do
     {:reply, {:error, :already_refreshing}, state}
+  end
+
+  # #581 — start the visitor "recover my identity" sequence (A3: ack
+  # immediately, steps ride async broadcasts). Clauses ordered: (1) a
+  # recovery already in flight is refused (one FSM per session); (2) a
+  # visitor subject is gated then started; (3) any other subject hits the
+  # visitor-only guard. The `recover_identity: %RecoverIdentity{}` guard
+  # also makes the numeric-feed `handle_info` clause below unambiguous.
+  def handle_call(:recover_identity, _, %{recover_identity: %RecoverIdentity{}} = state) do
+    {:reply, {:error, :in_progress}, state}
+  end
+
+  def handle_call(:recover_identity, _, %{subject: {:visitor, _}} = state) do
+    if "r" in Map.get(state, :umodes, []) do
+      # Already `+r` — identified, nothing to recover.
+      {:reply, {:error, :already_identified}, state}
+    else
+      # #581 review-#1 — resolve the secret + registered nick from the
+      # PERSISTENT credential (via the injected reader), NOT live state:
+      # `state.pending_password` is one-shot cleared at 001, so a session
+      # parked after connect would otherwise ALWAYS see `nothing_to_recover`
+      # while the button (reading `password_encrypted`) stays offered. Both
+      # now resolve `Credential.recover_secret/1`. A nil/absent secret =
+      # anon visitor / no stored NickServ secret → never blind-`IDENTIFY`
+      # (#561 pt3), the "nothing to recover" outcome `/recover` reports.
+      case recover_source(state) do
+        {:ok, {cred_nick, secret}} ->
+          fsm = RecoverIdentity.init(cred_nick, secret)
+          {_, next, lines} = RecoverIdentity.step(fsm, :start)
+
+          state =
+            state
+            |> flush_lines(lines)
+            |> broadcast_recover_events(:idle, next)
+
+          timer = Process.send_after(self(), :recover_timeout, @recover_timeout_ms)
+          {:reply, :ok, %{state | recover_identity: next, recover_timer: timer}}
+
+        {:error, :nothing_to_recover} ->
+          {:reply, {:error, :nothing_to_recover}, state}
+      end
+    end
+  end
+
+  def handle_call(:recover_identity, _, state) do
+    {:reply, {:error, :not_visitor}, state}
   end
 
   # #376 — /banlist <#chan>. Mirror of :send_whowas shape but keyed by
@@ -2752,6 +2847,22 @@ defmodule Grappa.Session.Server do
     {:noreply, %{state | pending_auth: nil, pending_auth_timer: nil}}
   end
 
+  # #581 — a 433/437 while a recover-identity is IN FLIGHT is the FSM's
+  # `{:nick_error, code}` signal (the credential nick is in use / held).
+  # MUST precede the ghost-recovery 433 clause below: a visitor with a
+  # cached password also has `pending_password` set, which would
+  # otherwise divert this 433 into GHOST recovery — an armed recover owns
+  # the numeric. The frame is CONSUMED here (not re-routed to a $server
+  # notice), keeping the managed sequence quiet, exactly like the ghost
+  # path consumes its 433.
+  def handle_info(
+        {:irc, %Message{command: {:numeric, code}}},
+        %{recover_identity: %RecoverIdentity{}} = state
+      )
+      when code in [433, 437] do
+    {:noreply, advance_recover(state, {:nick_error, code})}
+  end
+
   # Task 18 — visitor 433 with cached NickServ password starts ghost
   # recovery. AuthFSM's `:nickserv_identify`-specific 432/433 :cont
   # clause keeps the connection alive long enough for this handler to
@@ -2807,6 +2918,23 @@ defmodule Grappa.Session.Server do
   end
 
   def handle_info(:ghost_timeout, state), do: {:noreply, state}
+
+  # #581 — recover overall deadline: fail the sequence (never hang the
+  # modal). Armed-guard clause; a late/duplicate tick after the FSM
+  # already cleared its fields is the benign no-op catch-all below.
+  def handle_info(:recover_timeout, %{recover_identity: %RecoverIdentity{}} = state) do
+    {:noreply, advance_recover(state, :timeout)}
+  end
+
+  def handle_info(:recover_timeout, state), do: {:noreply, state}
+
+  # #581 — the post-verb settle tick fires the ONE final NICK. Same
+  # armed-guard + benign-late-tick pair as the overall deadline.
+  def handle_info(:recover_settle, %{recover_identity: %RecoverIdentity{}} = state) do
+    {:noreply, advance_recover(state, :settle)}
+  end
+
+  def handle_info(:recover_settle, state), do: {:noreply, state}
 
   # Channel directory (#84) refresh watchdog (merged C4). Armed by
   # `handle_call(:refresh_directory, ...)`; fires if 323 RPL_LISTEND never
@@ -3698,6 +3826,127 @@ defmodule Grappa.Session.Server do
     end)
   end
 
+  # #581 — resolve the PERSISTENT recover target (the registered nick + the
+  # NickServ secret) via the plan-injected `recover_source` closure. Session
+  # can't statically dep Networks/Visitors (Boundary cycle — Visitors deps
+  # Session via Login), so the plan injects the reader (mirroring
+  # `visitor_committer`). Reads the LIVE credential each call — NOT
+  # `state.nickserv_pass` / the one-shot-cleared `pending_password` — so the
+  # action resolves the SAME source as the `recoverable` button gate
+  # (`Credential.has_nickserv_secret?/1`); both go through
+  # `Credential.recover_secret/1`, so the action can never refuse a session the
+  # button offered (review #1). `Map.get` guards the hot-reload window (a proc
+  # predating the field): a state-shape change forces a COLD deploy, so in
+  # practice the reader is always present — the nil clause is pure defense.
+  @spec recover_source(t()) :: {:ok, {String.t(), String.t()}} | {:error, :nothing_to_recover}
+  defp recover_source(state) do
+    case Map.get(state, :recover_source) do
+      fun when is_function(fun, 0) -> fun.()
+      _ -> {:error, :nothing_to_recover}
+    end
+  end
+
+  # #581 — drive the RecoverIdentity FSM one input. Sibling to
+  # `advance_ghost/2`, but returns the STATE (not `{:noreply, _}`) so it
+  # composes from BOTH the numeric-feed `handle_info` clauses AND the
+  # `apply_effects` (+r) / `delegate` (nick_ok) hooks. Broadcasts the
+  # transition's progress step(s) on the user topic (A1); on entry to
+  # `:awaiting_verb_settle` arms the post-verb settle tick; on a terminal
+  # phase cancels both timers (nil-safe), broadcasts the terminal
+  # `recover_result`, and clears the recover fields.
+  @spec advance_recover(t(), RecoverIdentity.input()) :: t()
+  defp advance_recover(state, input) do
+    old_phase = state.recover_identity.phase
+    {_, next, lines} = RecoverIdentity.step(state.recover_identity, input)
+
+    state =
+      state
+      |> flush_lines(lines)
+      |> broadcast_recover_events(old_phase, next)
+
+    case next.phase do
+      terminal when terminal in [:succeeded, :failed] ->
+        :ok = cancel_and_drain(state.recover_timer, :recover_timeout)
+        :ok = cancel_and_drain(state.recover_settle_timer, :recover_settle)
+        %{state | recover_identity: nil, recover_timer: nil, recover_settle_timer: nil}
+
+      :awaiting_verb_settle ->
+        settle = Process.send_after(self(), :recover_settle, @recover_settle_ms)
+        %{state | recover_identity: next, recover_settle_timer: settle}
+
+      _ ->
+        %{state | recover_identity: next}
+    end
+  end
+
+  # #581 — broadcast the progress step(s) for a recover transition, plus
+  # the terminal `recover_result` when the FSM stops. Presentational +
+  # fire-and-forget (like `broadcast_connection_progress/2`): a dead WS
+  # consumer must never fail the recovery. Returns state unchanged.
+  @spec broadcast_recover_events(t(), RecoverIdentity.phase(), RecoverIdentity.t()) :: t()
+  defp broadcast_recover_events(state, old_phase, next) do
+    Enum.each(recover_progress_steps(old_phase, next), fn {step, status, reason} ->
+      _ =
+        Broadcaster.to_user(
+          state,
+          SessionWire.recover_progress(state.network_slug, step, status, reason)
+        )
+    end)
+
+    # Fire-and-forget: discard the broadcast result (a dead WS consumer
+    # must never fail the recovery — hence `_ =`, not a `:ok =` match).
+    _ =
+      case next.phase do
+        :succeeded ->
+          Broadcaster.to_user(state, SessionWire.recover_result(state.network_slug, :succeeded, nil))
+
+        :failed ->
+          Broadcaster.to_user(
+            state,
+            SessionWire.recover_result(state.network_slug, :failed, next.reason)
+          )
+
+        _ ->
+          :ok
+      end
+
+    state
+  end
+
+  # #581 — map an FSM transition (old phase → next state) to the progress
+  # step(s) the modal renders. Order mirrors the source-verified sequence:
+  # NICK + IDENTIFY go out together, `+r` is the success (`:register`),
+  # and a held nick detours through the reclaim verb. `verb` (`:recover |
+  # :release`) doubles as its own step atom.
+  @spec recover_progress_steps(RecoverIdentity.phase(), RecoverIdentity.t()) ::
+          [{SessionWire.recover_step(), SessionWire.recover_status(), SessionWire.recover_reason() | nil}]
+  defp recover_progress_steps(:idle, %{phase: :awaiting_r}),
+    do: [{:nick, :running, nil}, {:identify, :running, nil}]
+
+  defp recover_progress_steps(:awaiting_r, %{phase: :awaiting_verb_settle, verb: verb}),
+    do: [{:nick, :failed, nil}, {verb, :running, nil}]
+
+  defp recover_progress_steps(:awaiting_verb_settle, %{phase: :awaiting_final_r, verb: verb}),
+    do: [{verb, :ok, nil}, {:nick, :running, nil}, {:identify, :running, nil}]
+
+  defp recover_progress_steps(_, %{phase: :succeeded}),
+    do: [{:nick, :ok, nil}, {:identify, :ok, nil}, {:register, :ok, nil}]
+
+  defp recover_progress_steps(old, %{phase: :failed, reason: reason, verb: verb}),
+    do: [{recover_failed_step(old, verb), :failed, reason}]
+
+  defp recover_progress_steps(_, _), do: []
+
+  # The step that FAILED, keyed on the phase we failed OUT of: a clean
+  # NICK with no `+r` is an IDENTIFY (wrong password) failure; an
+  # unanswered verb is the verb; a reclaimed NICK that still can't land is
+  # the NICK.
+  @spec recover_failed_step(RecoverIdentity.phase(), RecoverIdentity.verb()) :: SessionWire.recover_step()
+  defp recover_failed_step(:awaiting_r, _), do: :identify
+  defp recover_failed_step(:awaiting_verb_settle, verb) when verb in [:recover, :release], do: verb
+  defp recover_failed_step(:awaiting_final_r, _), do: :nick
+  defp recover_failed_step(_, _), do: :nick
+
   # Build the IRC.Client opts map from the pre-resolved primitive
   # plan. Nick-fallback + Cloak password decryption already happened
   # in `Grappa.Networks.SessionPlan.resolve/1`'s `build_plan/4` — the
@@ -4226,12 +4475,32 @@ defmodule Grappa.Session.Server do
     event = if transition == :acquired, do: :identified, else: :deidentified
     SessionLog.emit(event, state, [])
 
-    # #347 — +r acquisition is the identify-confirmed signal the deferred
-    # `:nickserv_identify` autojoin waits for. Fire the JOINs now (cancelling
-    # the fallback timer) so they land AFTER identify — +R channels accept and
-    # ChanServ ops. No-op for any path that didn't defer (latch nil): SASL/:none
-    # fired on 001, and a `:lost` transition never triggers it.
-    state = if transition == :acquired, do: fire_deferred_autojoin(state), else: state
+    # On +r acquisition, TWO consumers fire (both gated on `:acquired`,
+    # nested under one rebind — Credo VariableRebinding):
+    #   #347 — +r is the identify-confirmed signal the deferred
+    #   `:nickserv_identify` autojoin waits for. Fire the JOINs now
+    #   (cancelling the fallback timer) so they land AFTER identify — +R
+    #   channels accept and ChanServ ops. No-op for any path that didn't
+    #   defer (latch nil): SASL/:none fired on 001.
+    #   #581 — +r IS the recover FSM's `:r_observed` signal. Reuse
+    #   EventRouter's `set_r_mode?` detection (it already produced this
+    #   effect) instead of re-parsing the MODE echo; only feed while a
+    #   recover is armed (`advance_recover/2` no-ops the FSM off-phase).
+    # A `:lost` transition triggers neither.
+    state =
+      if transition == :acquired do
+        after_autojoin = fire_deferred_autojoin(state)
+
+        # #229 hot-reload safety — `Map.get`, never `after_autojoin.recover_identity`
+        # dot-access: this runs on EVERY +r (not just recover), so a session
+        # predating the #581 field (force-hot-reloaded) would KeyError here on
+        # the common identify path. Absent key → nil → no armed recover.
+        if match?(%RecoverIdentity{}, Map.get(after_autojoin, :recover_identity)),
+          do: advance_recover(after_autojoin, :r_observed),
+          else: after_autojoin
+      else
+        state
+      end
 
     apply_effects(rest, state)
   end
@@ -4692,12 +4961,30 @@ defmodule Grappa.Session.Server do
   # somehow staged pending_auth (e.g. operator manually issued
   # NickServ IDENTIFY), the +r is logged and dropped.
   defp apply_effects([{:visitor_r_observed, password} | rest], state) do
+    # #561 — bind the password AND the nick this +r confirms. Normally
+    # that is `state.nick`: bahamut clears +r on a genuine nick change
+    # (`m_nick.c:594-602`) and services set it only on `sameNick`, so at
+    # ANY +r instant the live nick IS the identified account, never a
+    # forced Guest. #581 makes that explicit for the recover path — the
+    # sequence IDENTIFYs *for* `cred_nick` (and only lands +r once ON it),
+    # so bind that IDENTITY, not whatever nick is worn. The two are equal
+    # here by the sameNick rule; binding the target expresses intent and
+    # is robust if that invariant ever weakens (binding the worn nick
+    # instead of the identity is wrong regardless).
+    # #229 hot-reload safety — `Map.get`, never `state.recover_identity`
+    # dot-access: `visitor_r_observed` fires on EVERY visitor +r (whenever
+    # `pending_auth` was staged), so a session predating the #581 field
+    # (force-hot-reloaded) would KeyError here on the common identify path.
+    # Absent key → nil → the `state.nick` fallback (pre-#581 behaviour).
+    bind_nick =
+      case Map.get(state, :recover_identity) do
+        %RecoverIdentity{cred_nick: cred} when is_binary(cred) -> cred
+        _ -> state.nick
+      end
+
     case {state.subject, state.visitor_committer} do
       {{:visitor, visitor_id}, committer} when is_function(committer, 3) ->
-        # #561 — bind the password AND the nick held at this +r instant.
-        # bahamut strips +r on a genuine nick change, so `state.nick` here
-        # is guaranteed the identified account, never a forced Guest.
-        case committer.(visitor_id, password, state.nick) do
+        case committer.(visitor_id, password, bind_nick) do
           {:ok, _} ->
             # #561 — log ONLY the primary outcome (the password commit) here.
             # The secondary, best-effort nick bind logs its own honest line

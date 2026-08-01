@@ -171,6 +171,12 @@ defmodule Grappa.Session do
           optional(:credential_committer) => Server.credential_committer(),
           optional(:registration_committer) => Server.registration_committer(),
           optional(:last_joined_persister) => Server.last_joined_persister(),
+          # #581 — visitor-only /recover secret reader (the visitor plan injects
+          # it; user plans omit it). Twin of the `init_opts` entry in
+          # `Grappa.Session.Server` — MUST stay in sync (a build_plan map with a
+          # key absent here fails `resolve/2`'s `{:ok, start_opts()}` spec →
+          # dialyzer `missing_range` cascade across every resolve consumer).
+          optional(:recover_source) => Server.recover_source(),
           # GH #417 — persist/restore the EXPLICIT away across crash/reconnect
           # (user-only; the visitor plan omits both). Kept in sync with the
           # `Grappa.Session.Server.start_opts/0` twin.
@@ -276,6 +282,34 @@ defmodule Grappa.Session do
     case whereis(subject, network_id) do
       nil -> {:error, :not_connected}
       pid -> GenServer.call(pid, :refresh_directory)
+    end
+  end
+
+  @doc """
+  #581 — starts the visitor "recover my identity" sequence for
+  `(subject, network_id)`: `IDENTIFY` the credential nick → wait for the
+  `+r` umode → `NICK` to it (with a `RECOVER`/`RELEASE` detour if it's
+  held). The ONE action path both `/recover` and the home button ride
+  (A3). Acks immediately; the multi-step outcome arrives asynchronously
+  as `recover_progress`/`recover_result` events on the user topic (A1) —
+  this call never blocks for the sequence.
+
+  Gating (the Server enforces, being the authority on live state):
+  visitor subjects only (`:not_visitor` otherwise); a recoverable
+  credential must exist (`:nothing_to_recover` — never blind-`IDENTIFY`,
+  #561 pt3); an already-`+r` session has nothing to do
+  (`:already_identified`); a concurrent attempt is refused
+  (`:in_progress`). A missing live pid maps to `:not_connected` (same as
+  `refresh_directory/2`: no upstream, nothing to recover against).
+  """
+  @spec recover_identity(subject(), integer()) ::
+          :ok
+          | {:error, :not_connected | :not_visitor | :nothing_to_recover | :already_identified | :in_progress}
+  def recover_identity(subject, network_id)
+      when is_subject(subject) and is_integer(network_id) do
+    case whereis(subject, network_id) do
+      nil -> {:error, :not_connected}
+      pid -> GenServer.call(pid, :recover_identity)
     end
   end
 

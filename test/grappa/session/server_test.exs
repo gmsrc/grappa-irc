@@ -137,6 +137,72 @@ defmodule Grappa.Session.ServerTest do
     cred.password_encrypted
   end
 
+  # #581 — the credential nick a recover scaffold reclaims + the +r/collision
+  # MODE/numeric feeds target. State.nick adopts it from the 001 welcome.
+  @recover_nick "regnick"
+
+  # #581 — a REALISTIC recover scaffold (review-#1 fix). Stands up the
+  # PRODUCTION shape a returning REGISTERED visitor reconnects into: a
+  # PERSISTENT `(visitor_id, network_id)` credential carrying
+  # `:nickserv_identify` + a password (the state a prior `+r` commit leaves —
+  # `Visitors.commit_identity`), a session spawned via the real
+  # `VisitorSessionPlan.resolve/2` so the injected `recover_source` reader is
+  # present, and — crucially — driven PAST 001 so the one-shot
+  # `pending_password` is CLEARED. That cleared-live-state-but-live-persistent-
+  # secret condition is EXACTLY what the old `nickserv_secret(state)` read got
+  # wrong (returned nil → `:nothing_to_recover` while the button stayed
+  # offered); a hand-crafted `:none` + `nickserv_pass` plan (the pre-fix
+  # helper) masked it — "mock data must be realistic". `secret` nil → an anon
+  # visitor (`:none`, not recoverable). Returns the scaffold map; teardown via
+  # `start_visitor_session_for`'s on_exit.
+  defp start_recover_visitor(secret) do
+    handler = fn state, line ->
+      if String.starts_with?(line, "USER "),
+        do: {:reply, ":irc 001 #{@recover_nick} :Welcome\r\n", state},
+        else: {:reply, nil, state}
+    end
+
+    {server, port} = start_server(handler)
+
+    {network, _} =
+      network_with_server(port: port, slug: "test-#{System.unique_integer([:positive])}")
+
+    visitor = visitor_with_credential_fixture(nick: @recover_nick, network_slug: network.slug)
+
+    if is_binary(secret) do
+      {:ok, _} =
+        Credentials.upsert_visitor_credential(visitor.id, network.id, %{
+          nick: @recover_nick,
+          sasl_user: @recover_nick,
+          auth_method: :nickserv_identify,
+          password: secret
+        })
+    end
+
+    pid = start_visitor_session_for(visitor, network)
+    subject = {:visitor, visitor.id}
+    label = Grappa.Subject.label(subject)
+
+    # Barrier: drive PAST 001. A recoverable (:nickserv_identify) visitor fires
+    # the built-in one-arg `IDENTIFY <secret>` at 001, which ALSO nils
+    # `pending_password` — waiting for that line proves the persistent secret
+    # is the ONLY remaining live source (the review-#1 fix condition). An anon
+    # visitor sends no identify; the USER line is the past-001 barrier and
+    # `recover_source` reads the anon DB credential (→ nothing_to_recover).
+    if is_binary(secret) do
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          server,
+          &(&1 == "PRIVMSG NickServ :IDENTIFY #{secret}\r\n"),
+          1_000
+        )
+    else
+      :ok = await_handshake(server)
+    end
+
+    %{server: server, pid: pid, network: network, subject: subject, label: label}
+  end
+
   describe "DB-driven init (sub-task 2g)" do
     test "threads credential password + auth_method to IRC.Client (server_pass branch)" do
       {server, port} = start_server()
@@ -9912,6 +9978,201 @@ defmodule Grappa.Session.ServerTest do
 
       state = SessionStateHelpers.fetch(pid)
       assert WindowState.state_of(SessionStateHelpers.window_state(state), "#secret") == :pending
+    end
+  end
+
+  # #581 — "recover my identity" SERVER wiring (the pure FSM is exhausted in
+  # RecoverIdentityTest). Proves: handle_call gating, the outbound
+  # NICK/IDENTIFY/RECOVER/RELEASE flush, the +r → success hook (reusing the
+  # `:session_identity_changed, :acquired` effect, NOT a new MODE detector),
+  # the 433/437 numeric consumption, the progress + terminal broadcasts, and
+  # the settle / overall-deadline timers (driven deterministically via
+  # `send(pid, :recover_settle | :recover_timeout)` rather than sleeping the
+  # 800ms / 15s wall-clock). The `IDENTIFY vsh s3cret` two-arg line is unique
+  # to recover (auth_method :none sends no built-in identify without a 001).
+  describe "recover_identity (#581) — server integration" do
+    test "a user subject is refused with :not_visitor" do
+      {_, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      assert {:error, :not_visitor} =
+               Session.recover_identity({:user, user.id}, network.id)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "a visitor with no NickServ secret → :nothing_to_recover (never blind-IDENTIFY)" do
+      %{subject: subject, network: network} = start_recover_visitor(nil)
+
+      assert {:error, :nothing_to_recover} = Session.recover_identity(subject, network.id)
+    end
+
+    test "an already-+r visitor → :already_identified" do
+      %{server: server, subject: subject, network: network, label: label} =
+        start_recover_visitor("s3cret")
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(label))
+
+      # Flip +r first; the umode_changed broadcast is the "processed" barrier.
+      IRCServer.feed(server, ":irc.test.org MODE #{@recover_nick} :+r\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "event", payload: %{kind: :umode_changed}},
+                     1_000
+
+      assert {:error, :already_identified} = Session.recover_identity(subject, network.id)
+    end
+
+    test "a second concurrent recover → :in_progress" do
+      %{subject: subject, network: network} = start_recover_visitor("s3cret")
+
+      assert :ok = Session.recover_identity(subject, network.id)
+      assert {:error, :in_progress} = Session.recover_identity(subject, network.id)
+    end
+
+    test "happy path: reads the PERSISTENT secret past 001, NICK+IDENTIFY out, +r → succeeded" do
+      # RED-first vs the review-#1 bug: the session is PAST 001 so
+      # `pending_password` is already nil. Pre-fix, `nickserv_secret(state)`
+      # would read that nil and refuse with `:nothing_to_recover`; the fix
+      # reads the PERSISTENT `:nickserv_identify` credential (the same source
+      # the `recoverable` button gate reads), so the sequence proceeds.
+      %{server: server, subject: subject, network: network, label: label} =
+        start_recover_visitor("s3cret")
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(label))
+
+      assert :ok = Session.recover_identity(subject, network.id)
+
+      # NICK then IDENTIFY (sameNick, so the identify commits +r). The two-arg
+      # IDENTIFY carries the credential nick — unique to the recover sequence
+      # (the 001 built-in identify was one-arg, consumed by the scaffold).
+      assert {:ok, "PRIVMSG NickServ :IDENTIFY #{@recover_nick} s3cret\r\n"} =
+               IRCServer.wait_for_line(
+                 server,
+                 &(&1 == "PRIVMSG NickServ :IDENTIFY #{@recover_nick} s3cret\r\n"),
+                 1_000
+               )
+
+      # The first step broadcasts before the reply returns.
+      assert_receive %Phoenix.Socket.Broadcast{event: "event", payload: %{kind: :recover_progress}},
+                     1_000
+
+      # +r is the SUCCESS signal (reuses the :acquired identity effect).
+      IRCServer.feed(server, ":irc.test.org MODE #{@recover_nick} :+r\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :recover_result, outcome: :succeeded, reason: nil}
+                     },
+                     1_000
+    end
+
+    test "nick held (433) → RECOVER; then settle → +r → succeeded" do
+      %{server: server, pid: pid, subject: subject, network: network, label: label} =
+        start_recover_visitor("s3cret")
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(label))
+
+      assert :ok = Session.recover_identity(subject, network.id)
+
+      # The credential nick is in use → the FSM detours through RECOVER.
+      IRCServer.feed(server, ":irc.test.org 433 * #{@recover_nick} :Nickname is already in use\r\n")
+
+      assert {:ok, "PRIVMSG NickServ :RECOVER #{@recover_nick} s3cret\r\n"} =
+               IRCServer.wait_for_line(
+                 server,
+                 &(&1 == "PRIVMSG NickServ :RECOVER #{@recover_nick} s3cret\r\n"),
+                 1_000
+               )
+
+      # Drive the post-verb settle tick deterministically (no 800ms sleep) →
+      # the ONE final NICK+IDENTIFY; then +r closes it succeeded.
+      send(pid, :recover_settle)
+      IRCServer.feed(server, ":irc.test.org MODE #{@recover_nick} :+r\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :recover_result, outcome: :succeeded}
+                     },
+                     1_000
+    end
+
+    test "services hold (437) → RELEASE" do
+      %{server: server, subject: subject, network: network} = start_recover_visitor("s3cret")
+
+      assert :ok = Session.recover_identity(subject, network.id)
+
+      IRCServer.feed(
+        server,
+        ":irc.test.org 437 #{@recover_nick} :Nick/channel is temporarily unavailable\r\n"
+      )
+
+      assert {:ok, "PRIVMSG NickServ :RELEASE #{@recover_nick} s3cret\r\n"} =
+               IRCServer.wait_for_line(
+                 server,
+                 &(&1 == "PRIVMSG NickServ :RELEASE #{@recover_nick} s3cret\r\n"),
+                 1_000
+               )
+    end
+
+    test "wrong password: a clean NICK with no +r → overall timeout → :failed :wrong_password" do
+      %{pid: pid, subject: subject, network: network, label: label} =
+        start_recover_visitor("s3cret")
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(label))
+
+      assert :ok = Session.recover_identity(subject, network.id)
+
+      # No 433/437 (clean NICK) and no +r ever → the only signal is the overall
+      # deadline. Fire it deterministically rather than waiting @recover_timeout_ms.
+      send(pid, :recover_timeout)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :recover_result, outcome: :failed, reason: :wrong_password}
+                     },
+                     1_000
+    end
+
+    test "hot-reload safety: a live proc predating the :recover_source field survives" do
+      # #229/#581 hot-reload contract. A plain hot reload does NOT rewrite live
+      # process state, so a Session.Server spawned before the #581
+      # `:recover_source` field existed keeps its old keyless map. `handle_call`
+      # reads it via `Map.get` (never `state.recover_source`), so a /recover on
+      # a stale proc must degrade to `:nothing_to_recover`, never KeyError-crash.
+      %{pid: pid, subject: subject, network: network} = start_recover_visitor("s3cret")
+
+      # Simulate the stale-proc shape: strip :recover_source from live state.
+      _ = :sys.replace_state(pid, fn state -> Map.delete(state, :recover_source) end)
+
+      assert {:error, :nothing_to_recover} = Session.recover_identity(subject, network.id)
+
+      # Same pid — the stale proc never crashed/respawned.
+      assert Process.alive?(pid)
+    end
+
+    test "hot-reload safety: +r on a proc predating the :recover_identity field does not crash" do
+      # #581 review-#2 (the CRITICAL half). The `:acquired` identity effect
+      # runs on EVERY +r (not just recover), and it consults the recover FSM.
+      # A proc spawned before the #581 field keeps its old keyless map, so the
+      # read MUST be `Map.get(after_autojoin, :recover_identity)` — dot-access
+      # would KeyError on the common identify path, crash-waving every
+      # pre-#581 session that identifies after a hot deploy.
+      %{server: server, pid: pid, label: label} = start_recover_visitor("s3cret")
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(label))
+
+      # Simulate the stale-proc shape: strip :recover_identity from live state.
+      _ = :sys.replace_state(pid, fn state -> Map.delete(state, :recover_identity) end)
+
+      # +r fires the :acquired effect → the 4442 recover-FSM consult. Absent
+      # key → Map.get default nil → no armed recover, no KeyError.
+      IRCServer.feed(server, ":irc.test.org MODE #{@recover_nick} :+r\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "event", payload: %{kind: :umode_changed}},
+                     1_000
+
+      assert Process.alive?(pid)
     end
   end
 end

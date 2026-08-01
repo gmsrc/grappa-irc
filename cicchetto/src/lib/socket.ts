@@ -742,6 +742,18 @@ export function pushLinks(networkId: number, mask: string | null): Promise<void>
   );
 }
 
+// #581 — /recover. Push on the user-level channel; the server runs the guided
+// NickServ recovery sequence and streams `recover_progress` / `recover_result`
+// events back on the user topic (RecoverModal mirrors them). The Promise
+// resolves once the verb is ACCEPTED (validation + kickoff); the modal opens
+// off the first `recover_progress`, NOT this resolve — so the arm does NOT open
+// optimistically. A server rejection (`nothing_to_recover` / `already_identified`
+// / `not_visitor`, or a WS-down) rejects with a typed `ChannelPushError` the
+// compose arm maps to friendly copy. Mirror of pushLinks/pushLusers.
+export function pushRecover(networkId: number): Promise<void> {
+  return pushUserChannelVerb("recover", { network_id: networkId });
+}
+
 // #140 — /names <#channel>. Pushes on the user-level channel; server
 // primes names_pending + emits NAMES upstream. The 353/366 burst drains
 // into ONE ephemeral `names_reply` event on the user topic (NamesModal

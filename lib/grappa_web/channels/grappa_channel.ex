@@ -843,6 +843,24 @@ defmodule GrappaWeb.GrappaChannel do
     )
   end
 
+  # #581 — "recover my identity". The ONE action path both `/recover` and
+  # the home button ride (A3): acks immediately, and the multi-step
+  # outcome (`IDENTIFY` → `+r` → `NICK` → `RECOVER`/`RELEASE` → `NICK`)
+  # arrives asynchronously as `recover_progress`/`recover_result` events
+  # on the user topic. Visitor-only + credential gating live in the
+  # Server (the authority on live state), surfaced via the typed
+  # `not_visitor`/`nothing_to_recover`/`already_identified`/
+  # `recovery_in_progress` arms in `dispatch_subject_verb/3`. No args to
+  # validate beyond the guarded `network_id`.
+  def handle_in("recover", %{"network_id" => network_id}, socket)
+      when is_integer(network_id) do
+    dispatch_subject_verb(
+      socket,
+      fn -> {:ok, nil} end,
+      fn subject -> Session.recover_identity(subject, network_id) end
+    )
+  end
+
   # CP22 cluster B (channel-client-polish #14) — /who <#channel>. cic
   # pushes after the operator types `/who #chan`; the channel relays to
   # Session.send_who/3 which primes who_pending + emits WHO upstream.
@@ -1755,6 +1773,27 @@ defmodule GrappaWeb.GrappaChannel do
       # nothing ever emits.
       {:error, :links_in_flight} ->
         {:reply, {:error, %{error: "links_in_flight"}}, socket}
+
+      # #581 recover gating (Session.recover_identity/2). A missing live
+      # pid is the same "no upstream to act against" as `no_session`; a
+      # user subject reaching the visitor-only verb is `forbidden`. The
+      # rest are truthful recover-specific tokens cic's
+      # `friendlyChannelError` maps (and `/recover` reports
+      # `nothing_to_recover` as its "nothing to do" outcome).
+      {:error, :not_connected} ->
+        {:reply, {:error, %{error: "no_session"}}, socket}
+
+      {:error, :not_visitor} ->
+        {:reply, {:error, %{error: "forbidden"}}, socket}
+
+      {:error, :nothing_to_recover} ->
+        {:reply, {:error, %{error: "nothing_to_recover"}}, socket}
+
+      {:error, :already_identified} ->
+        {:reply, {:error, %{error: "already_identified"}}, socket}
+
+      {:error, :in_progress} ->
+        {:reply, {:error, %{error: "recovery_in_progress"}}, socket}
 
       # REV-F (H10, originally REV-E HIGH-1): `Session.send_*` post-U-
       # cluster CAN return `{:error, :no_socket | :closed |

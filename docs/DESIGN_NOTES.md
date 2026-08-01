@@ -24949,3 +24949,110 @@ pre-empt it. shottino needed no change to match: it keys on the framing and its
 own outstanding-ping table, never on which window the row was filed under, so
 the reply still cards in the window the question was asked from — with a test
 driven at `channel = "$server"` to prove the routing change cannot break it.
+**The lesson, plainly:** a gate that cannot be run is not a gate. Writing "NOT
+RUN LOCALLY — CI is the gate" in a commit message documented the risk without
+reducing it, and the change was pushed to main anyway where the whole team's
+main went red. The correct order is: get the toolchain, run the gate, then
+land.
+---
+
+## 2026-08-01 — #581: "recover my identity" — one action, the +r-only signal, and the state bug the e2e found
+
+**The feature.** A visitor whose registered nick was taken can reclaim it: a
+`/recover` alias and a 🔑 home button are two doors on ONE server action,
+`Session.recover_identity/2`. The sequence, source-verified against bahamut
+(`m_nick.c`, `struct.h`), is `NICK <cred_nick>` + `IDENTIFY <cred_nick> <secret>`
+together → await `+r` = SUCCESS; a `433`→`RECOVER` / `437`→`RELEASE` → settle →
+NICK+IDENTIFY again → `+r` = success / a refused NICK = `nick_unavailable` (no
+retry — RECOVER was chosen precisely because an empty retry never wins the nick);
+a `+r` that never arrives after a clean NICK = `wrong_password`. **The only
+trusted signal is the `+r` umode — never a NickServ notice** (notices are
+per-network folklore the issue bans). Visitor subjects only; the button is gated
+on a recoverable credential existing so it never blind-IDENTIFYs.
+
+**`+r` is per-nick, set only when you IDENTIFY while ON the registered nick.**
+bahamut sets `+r` on `do_identify` only when `sameNick`, and clears it on ANY
+genuine nick change. So during recover, at the moment `+r` lands `state.nick`
+already IS `cred_nick` — the #561 identity-binding assumption ("`state.nick` at
+`+r` is the identified account, never a forced Guest") holds, and no corruption
+is reachable. (A defensive `bind cred_nick when a recover FSM is armed` was kept
+anyway.)
+
+**The recover secret comes from the PERSISTENT credential, not live state.** The
+first cut read `nickserv_secret(state)` (= `nickserv_pass` OR `pending_password`).
+For a real visitor `nickserv_pass` is nil and `pending_password` is one-shot,
+cleared at 001 — so post-001 (the whole point of recover) the action always
+returned `:nothing_to_recover` while the button (reading the persistent
+`password_encrypted`) still showed. Button and action MUST read ONE source:
+`Credential.recover_secret/1` (nickserv_pass OR the `:nickserv_identify`
+password), and `has_nickserv_secret?/1` is now `not is_nil(recover_secret/1)`.
+The action reads the live persistent credential each call via an INJECTED closure
+(`recover_source`, built by `Visitors.SessionPlan`) rather than a state snapshot —
+so a mid-session `SET PASSWORD` rotation is honoured, and, more importantly,
+`Grappa.Session` never grows a static edge to `Grappa.Networks`/`Visitors`
+(that would close the Boundary cycle Visitors→Session already has). This is the
+same injected-closure DI seam as `visitor_committer` / `last_joined_persister` —
+the plan's "read Credentials directly" was a Boundary violation the seam fixes.
+
+**Twin @types must move together.** `Grappa.Session.start_opts()` (session.ex)
+and `Grappa.Session.Server.init_opts()` (server.ex) are twin map types kept in
+sync by contract. Adding `optional(:recover_source)` to `init_opts` but NOT to
+`start_opts` desynced `Visitors.SessionPlan.resolve/2`'s `{:ok, start_opts()}`
+spec: the returned plan map carried a key `start_opts()` didn't declare, so
+Dialyzer proved `resolve/2` could only ever error — a 24-warning cascade across
+every `{:ok, plan}` consumer (bootstrap, operator, both controllers), NONE of
+which #581 touched. The fix is to complete the seam (declare the field in BOTH
+twins), not silence anything. Lesson: any new plan field — especially an injected
+closure — goes in `start_opts` AND `init_opts`, or the resolve spec desyncs.
+
+**Automatic GhostRecovery owns PRE-001; the manual recover owns POST-001.** These
+are disjoint by connection phase, not competitors. `GhostRecovery` fires when a
+held nick earns a `433` BEFORE 001 while `pending_password` is set
+(`server.ex:2876`): grappa auto-does underscore-NICK→GHOST→IDENTIFY→`+r`, so any
+reconnect onto a held nick auto-recovers. The manual 🔑 serves the OTHER case:
+already connected, POST-001, on a non-`+r` nick, the target held — its `433`
+handler (`server.ex:2862`, gated on recover-armed) sits ABOVE the ghost handler.
+This is why a "park → hold the nick → reconnect" e2e staging can NOT surface the
+manual button (auto-ghost reclaims it PRE-001, measured as a 150s timeout); the
+deterministic way to reach POST-001 non-`+r` is a voluntary `/nick` to a Guest.
+
+**The state bug the e2e surfaced: `+r` went stale after a self-NICK.** bahamut
+strips `+r` SILENTLY on a genuine nick change (no `MODE` echo). grappa's
+EventRouter self-NICK handler updated `state.nick` but never recomputed
+`state.umodes`; the umode-refresh query (`MODE <own_nick>`→221) fires ONCE at 001,
+never on a rename; and cic's `own_nick_changed` handler only re-keys the nick, not
+the umode store. So a visitor who `/nick`s away from their registered nick kept a
+PHANTOM `+r` in both grappa's state and cic's store → `canRecover() = recoverable
+&& !"r"` stayed false → the manual button was UNREACHABLE in exactly the POST-001
+scenario it serves. This was a real state-fidelity bug, not an e2e artifact — the
+`/nick` staging just made it deterministic (the manual button DOES work today via
+the auto-ghost-FAILURE path, where grappa never tracked `"r"` that session, but
+that path is not deterministically stageable). Fix: on OUR OWN genuine rename
+(`nick_eq?(old, state.nick) and not nick_eq?(old, new)` — matching bahamut's
+case-insensitive `mycmp`, so a pure case-change is a no-op, per the #373
+rename-vs-fold distinction) drop `"r"` from `state.umodes`, emit `:umode_changed`
++ `session_identity_effects/2` (→ `:lost`). Universally correct — a regular user
+who `/nick`s also loses services identification — and drops ONLY `"r"` (the
+documented invariant), leaving other umodes untouched.
+
+The genuine-rename gate uses the bare `nick_eq?/2` (plain ASCII fold), matching
+bahamut's `mycmp` on `CASEMAPPING=ascii` (all prod) and staying CONSISTENT with
+the four sibling self-NICK detection sites in the same clause — all use bare
+`nick_eq?(old, state.nick)`. Known rfc1459-only niche (out of scope, the same
+class CLAUDE.md documents): on solanum/Libera a national-char *case-change*
+(`foo[1]→foo{1}`) reads as a genuine rename to grappa and would emit a spurious
+`:lost` (cosmetic, self-heals on the next real MODE). Deliberately NOT special-
+cased here — tightening it means moving ALL FIVE self-NICK sites to
+`canonical_target/2` with `casemapping(state)` together (total-consistency rule),
+a separate change on the shared path, not a one-site patch inside #581.
+
+**The e2e is the non-hollow proof.** A first-login anon visitor proves
+`recoverable` genuinely gates (button ABSENT, GET /me `recoverable=false`). The
+positive path registers the nick with real services (mailpit AUTH), logs the
+visitor in to reach `+r` once (persisting the recoverable credential), does a
+voluntary `/nick` to a Guest (clears `+r` — now that the fix mirrors the strip),
+lets an IrcPeer take + IDENTIFY the freed registered nick, then clicks 🔑 and
+asserts the VISIBLE terminal `recover-modal-success` after RECOVER frees the
+hold — no API-return assertion, no success-or-failure soft-assert (D4). A server
+integration test masking a critical behind an unrealistic mock is exactly why the
+happy-path e2e is mandatory: a feature without one is hollow green.

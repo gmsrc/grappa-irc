@@ -1715,6 +1715,40 @@ defmodule Grappa.Session.EventRouterTest do
       assert attrs.meta == %{new_nick: "vjt_"}
     end
 
+    # #581 — bahamut strips +r SILENTLY on a genuine nick change (m_nick.c:
+    # `mycmp(old,new) != 0 → umode &= ~UMODE_r`), with NO MODE echo, so the
+    # ONLY way grappa's per-session umode set stays truthful across a self-NICK
+    # is to mirror the strip here. Otherwise `state.umodes` keeps a phantom "r"
+    # and every +r-gated consumer (the #581 recover button, the identity badge)
+    # reads the visitor as still-identified after they /nick'd away from their
+    # registered nick. Drop ONLY "r" (the documented invariant), keep the rest.
+    test "NICK-self genuine rename drops +r + emits :umode_changed and :session_identity_changed :lost" do
+      state = base_state(%{nick: "vjt", umodes: ["i", "r"]})
+      m = msg(:nick, ["vjt_"], {:nick, "vjt", "u", "h"})
+
+      assert {:cont, new_state, effects} = EventRouter.route(m, state)
+
+      assert new_state.nick == "vjt_"
+      assert new_state.umodes == ["i"]
+      assert {:umode_changed, ["i"]} in effects
+      assert {:session_identity_changed, :lost} in effects
+    end
+
+    # A pure CASE change (foo→Foo) is NOT a genuine rename — bahamut's mycmp is
+    # case-insensitive, so +r survives it. Gate on `not nick_eq?(old, new)` (the
+    # #373 rename-vs-fold distinction) so a case-only self-NICK is a umode no-op.
+    test "NICK-self case-only change keeps +r (no drop, no identity effect)" do
+      state = base_state(%{nick: "vjt", umodes: ["r"]})
+      m = msg(:nick, ["VJT"], {:nick, "vjt", "u", "h"})
+
+      assert {:cont, new_state, effects} = EventRouter.route(m, state)
+
+      assert new_state.nick == "VJT"
+      assert new_state.umodes == ["r"]
+      refute Enum.any?(effects, &match?({:umode_changed, _}, &1))
+      refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
+    end
+
     test "NICK-other for stranger emits no effects + no mutation" do
       state = base_state(%{members: %{"#italia" => %{"vjt" => []}}})
       m = msg(:nick, ["stranger_"], {:nick, "stranger", "u", "h"})

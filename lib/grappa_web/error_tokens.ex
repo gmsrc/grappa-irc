@@ -163,4 +163,7 @@ defmodule GrappaWeb.ErrorTokens do
           | :persist_failed
           | :invalid_channel
           | :links_in_flight
+          | :nothing_to_recover
+          | :already_identified
+          | :recovery_in_progress
 end

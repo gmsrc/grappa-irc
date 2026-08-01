@@ -24,7 +24,7 @@ import { flavorForSlug, registerableFlavor } from "./lib/registrationTemplates";
 import { openRegistrationWizard } from "./lib/registrationWizard";
 import { setSelectedChannel } from "./lib/selection";
 import { openShareModal } from "./lib/shareModal";
-import { pushLinks } from "./lib/socket";
+import { pushLinks, pushRecover } from "./lib/socket";
 import { umodesForNetwork } from "./lib/umodes";
 import { confirmDisconnectNetwork } from "./lib/windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
@@ -263,6 +263,9 @@ type HomeRow = {
   connection_state: ConnectionState;
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
+  // #581 (D2) — the credential carries a NickServ secret, so /recover has
+  // something to identify with. Drives the "Recover identity" CTA.
+  recoverable: boolean;
 };
 
 const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
@@ -320,6 +323,28 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
     const umodes = id === undefined ? [] : umodesForNetwork(id);
     return !umodes.includes("r");
   };
+  // #581 — the "Recover identity" launcher, sibling of canRegister(): shown
+  // when (a) the credential carries a NickServ secret (`recoverable`, D2),
+  // (b) this is a VISITOR session (recover is visitor-only server-side — a
+  // user seeing it would only earn a `forbidden`), and (c) we're NOT already
+  // identified (no live +r umode). All reactive, so the button auto-hides the
+  // instant recovery lands the +r flip. Mirrors canRegister's undefined-id
+  // "no umodes seeded yet" tolerance (button shows).
+  const canRecover = () => {
+    if (!props.row.recoverable) return false;
+    if (!isVisitorSubject()) return false;
+    const id = networkIdBySlug(props.row.slug);
+    const umodes = id === undefined ? [] : umodesForNetwork(id);
+    return !umodes.includes("r");
+  };
+  // Fire-and-forget like onTopology: the RecoverModal opens off the SERVER's
+  // first recover_progress event (cic never originates state), and the
+  // canonical error-surfacing door is the /recover slash command — a rejected
+  // push just leaves the modal unopened rather than crashing the row.
+  const onRecover = () => {
+    const id = networkIdBySlug(props.row.slug);
+    if (id !== undefined) void pushRecover(id).catch(() => {});
+  };
   // #529 — the connected-row layout: a horizontal rule opens each network
   // block; the heading carries the network title (slug + nick, clickable →
   // jump-to-$server) on the left and a STATUS group (state label + the
@@ -372,6 +397,18 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
             onClick={() => openRegistrationWizard(props.row.slug)}
           >
             📝 Register nick
+          </button>
+        </Show>
+        <Show when={canRecover()}>
+          {/* #581 — same button set (equal weight) as Browse / Register;
+              identified in tests by its data-testid. */}
+          <button
+            type="button"
+            class="home-pane-network-browse"
+            data-testid={`home-recover-identity-${props.row.slug}`}
+            onClick={onRecover}
+          >
+            🔑 Recover identity
           </button>
         </Show>
       </div>

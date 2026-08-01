@@ -839,6 +839,24 @@ describe("parseSlash — info verbs (TODO — server-side missing)", () => {
   });
 });
 
+// #581 — /recover [network]: guided "recover my identity". Optional first
+// token is the network slug (bare → current window's network, resolved in
+// compose.ts). Same optional-arg grammar as /links.
+describe("parseSlash — /recover (#581)", () => {
+  it("/recover bare → recover with no network", () => {
+    expect(parseSlash("/recover")).toEqual({ kind: "recover", network: null });
+  });
+
+  it("/recover <network> → recover carrying the network slug", () => {
+    expect(parseSlash("/recover azzurra")).toEqual({ kind: "recover", network: "azzurra" });
+  });
+
+  // Trailing tokens past the first are ignored (recover takes one network arg).
+  it("/recover <network> <extra> → only the first token is the network", () => {
+    expect(parseSlash("/recover azzurra junk")).toEqual({ kind: "recover", network: "azzurra" });
+  });
+});
+
 // #356 — keyword highlight is classic-IRC irssi-shaped now: /hilight
 // canonical, /highlight alias, /dehilight remove. irssi-direct (the whole
 // rest is one pattern, no add/del/list subverb). A BARE form opens the
