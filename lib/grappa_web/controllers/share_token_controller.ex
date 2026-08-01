@@ -116,16 +116,26 @@ defmodule GrappaWeb.ShareTokenController do
   @doc """
   `POST /auth/share/consume` — unauthenticated, body `{token}`.
 
-  Flow:
+  Flow (claim-then-release, #593):
     1. Validate body shape (token present + binary) → 400 otherwise.
     2. `Phoenix.Token.verify` with `@salt` + `@max_age_seconds` →
        401 on bad signature, 410 on TTL elapsed.
-    3. `ShareTokens.mark_consumed/1` (atomic ETS insert-if-absent) →
-       410 on second redemption.
+    3. `ShareTokens.mark_consumed/1` (atomic ETS insert-if-absent) —
+       the one-shot CLAIM → 410 on second redemption. From here the
+       token is held by THIS request.
     4. `Visitors.get/1` → 404 if the row was reaped between mint and
        consume.
     5. `Accounts.create_session/4` for the SAME visitor row →
        returns the new bearer + the visitor's subject envelope.
+
+  #593 — the claim (step 3) is taken BEFORE the mint (steps 4-5), so a
+  failed mint would strand the token consumed with no session minted: a
+  dead link the retryable-503 (#518) invites the client to retry in vain.
+  `mint_session/3` closes that: ANY failure after the claim calls
+  `ShareTokens.release/1` to roll the claim back, so a failed mint leaves
+  the link usable and a successful mint leaves it dead. The release is
+  scoped to THIS request's own post-claim failures — a second
+  redemption's 410 (step 3) never releases the winner's claim.
 
   IP + user-agent are captured for audit just like login.
   """
@@ -137,16 +147,40 @@ defmodule GrappaWeb.ShareTokenController do
              | :share_token_expired
              | :share_token_consumed
              | :not_found
-             | :db_unavailable}
+             | :db_unavailable
+             | Ecto.Changeset.t()}
   def consume(conn, %{"token" => token}) when is_binary(token) and token != "" do
     with {:ok, visitor_id} <- verify_token(token),
-         :ok <- mark_consumed(token),
-         {:ok, visitor} <- fetch_visitor(visitor_id),
-         # #523/#518 — a transient SQLITE_BUSY on the token mint degrades to a
-         # clean 503 instead of a MatchError→500. NB: the one-shot share token
-         # is already consumed (step 2 above) by this point, so a saturated mint
-         # burns it — a pre-existing property of the consume-before-mint order;
-         # the retryable-later 503 is still strictly better than the old 500.
+         :ok <- mark_consumed(token) do
+      # The one-shot claim is now HELD by this request (mark_consumed
+      # returned :ok — we won any race). #593 — every failure past this
+      # point MUST roll the claim back (claim-then-release), so a
+      # retryable mint failure (a 503 under transient SQLite saturation,
+      # #518) leaves the link usable instead of silently dead.
+      mint_session(conn, token, visitor_id)
+    else
+      # Pre-consume rejects (bad signature / expired / lost the one-shot
+      # race → :share_token_consumed). NOTHING to release here: either no
+      # claim was taken, or the claim belongs to the WINNING request —
+      # releasing it would resurrect a token that already minted a
+      # session (dead-link → double-redemption, a worse bug).
+      {:error, reason} -> reject(reason)
+    end
+  end
+
+  def consume(_, _), do: {:error, :bad_request}
+
+  # Mint the session for an already-CLAIMED token. On ANY failure the
+  # claim is released (#593 claim-then-release) — safe because
+  # `mark_consumed/1` returned `:ok` for THIS request just above, so the
+  # token is ours to roll back, never a concurrent winner's. A failed
+  # mint therefore leaves the link usable; a successful mint leaves the
+  # claim in place (link dead), honouring the one-shot guarantee.
+  @spec mint_session(Plug.Conn.t(), String.t(), Ecto.UUID.t()) ::
+          Plug.Conn.t()
+          | {:error, :not_found | :db_unavailable | Ecto.Changeset.t()}
+  defp mint_session(conn, token, visitor_id) do
+    with {:ok, visitor} <- fetch_visitor(visitor_id),
          {:ok, session} <-
            Accounts.create_session(
              {:visitor, visitor.id},
@@ -170,18 +204,36 @@ defmodule GrappaWeb.ShareTokenController do
           |> Map.put(:kind, "visitor")
       })
     else
-      {:error, reason} = err ->
-        :telemetry.execute(
-          [:grappa, :visitor, :share_token, :rejected],
-          %{count: 1},
-          %{reason: reason}
-        )
-
-        err
+      {:error, reason} ->
+        ShareTokens.release(token)
+        reject(reason)
     end
   end
 
-  def consume(_, _), do: {:error, :bad_request}
+  # The closed set of rejection reasons — pre-consume (bad sig / expired /
+  # lost the one-shot race) and post-consume (visitor reaped / saturated
+  # mint / mint changeset). Typed over a bare `atom()` per CLAUDE.md's
+  # closed-set rule.
+  @typep reject_reason ::
+           :unauthorized
+           | :share_token_expired
+           | :share_token_consumed
+           | :not_found
+           | :db_unavailable
+           | Ecto.Changeset.t()
+
+  # Emit the rejection telemetry and return the wire error tuple, so
+  # both the pre-consume and post-consume reject paths stay single-sourced.
+  @spec reject(reject_reason()) :: {:error, reject_reason()}
+  defp reject(reason) do
+    :telemetry.execute(
+      [:grappa, :visitor, :share_token, :rejected],
+      %{count: 1},
+      %{reason: reason}
+    )
+
+    {:error, reason}
+  end
 
   @spec verify_token(String.t()) ::
           {:ok, Ecto.UUID.t()}

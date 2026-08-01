@@ -24865,11 +24865,17 @@ the request. Classification is by CALLER, not by "is it a write": a delete
 reachable from a background sweeper is #590 no matter which web door also calls
 it. Its #590 best-effort-DROP hardening is tracked separately.
 
-**Known pre-existing edge (not changed here).** The one-shot share token is
-`mark_consumed` BEFORE the session mint, so a saturated mint burns the token —
-a property of the consume-before-mint order that predates B1. The retryable-later
-503 is still strictly better than the old 500; reordering was judged too risky
-to fold into B1.
+**Known pre-existing edge (not changed here) — CLOSED by #593 (2026-08-01).**
+The one-shot share token is `mark_consumed` BEFORE the session mint, so a
+saturated mint burns the token — a property of the consume-before-mint order
+that predates B1. The retryable-later 503 is still strictly better than the old
+500; reordering was judged too risky to fold into B1 (touching the order touches
+the one-shot double-redemption window). B1's caution held: #593 did NOT reorder.
+It kept `mark_consumed` first as the atomic CLAIM and added a compensating
+`ShareTokens.release/1` that a failed mint calls to roll the claim back — a
+failed mint now leaves the link usable, a successful one leaves it dead, and the
+double-redemption window B1 feared never opens (the claim is held across the
+whole mint by `:ets.insert_new/2` atomicity). See the 2026-08-01 #593 entry.
 ---
 
 ## 2026-08-01 — CTCP PING answered, and a CTCP reply is not a DM
@@ -25420,3 +25426,54 @@ off so a later resize does not tail (RED before the fix, GREEN after); it is the
 deterministic inverse of the existing thaw case whose snapshot sits at the tail.
 The e2e `issue219-overlay-scroll-hold` is the wiring gate (the real resize
 authority; the assert and the 50px threshold were left untouched).
+---
+
+## 2026-08-01 — #593: a failed share-token mint leaves the link usable (claim-then-release)
+
+**The bug.** `POST /auth/share/consume` `mark_consumed`s the one-shot token
+BEFORE minting the session. A mint that fails AFTER the claim (a `:not_found`
+if the visitor row was reaped, or — the case that surfaced it — a
+`:db_unavailable` 503 when `create_session`'s SQLite write is saturated) left
+the token spent with no session minted: a dead link. #518 made that mint a
+**retryable 503**, but the retry it invites could never succeed — the token was
+already burned. Documented as a known edge in the #523/#518 (B1) entry above;
+this closes it.
+
+**Why not the "obvious" fix (one SQL transaction).** The tempting shape —
+wrap consume+mint in one `Repo.transaction` so a failed mint rolls the consume
+back — does NOT apply here, on two counts. (1) The one-shot ledger is **ETS**
+(`ShareTokens` / `:ets.insert_new/2`), not the Repo — "ETS over DB by intent"
+(zero migrations, HOT-deploy-friendly); `Repo.transaction` cannot roll back an
+ETS write. A true SQL transaction would first require migrating the ledger
+ETS→SQLite: the LARGEST change, silently reversing a documented architectural
+choice. (2) Worse, holding the consume inside a transaction across the whole
+`create_session` **lengthens the SQLite write-lock hold under exactly the
+saturation #518 mitigates** — it would aggravate the `SQLITE_BUSY` that made the
+bug visible. A fix that worsens the triggering condition is not a fix.
+
+**The fix — claim-then-release (the issue's own second option, "make the
+consume conditional on the mint succeeding").** Keep `mark_consumed` first: it
+is the atomic CLAIM (`:ets.insert_new/2`), held for the whole mint. Add
+`ShareTokens.release/1` (`:ets.delete/2`); `mint_session/3`'s inner `with` calls
+it on ANY post-claim failure, rolling the claim back. Failed mint → link usable;
+successful mint → claim retained, link dead. B1's caution is preserved: the
+order is NOT changed, so the double-redemption window it feared never opens —
+`insert_new/2`'s atomicity means at every instant exactly one caller holds the
+key.
+
+**The subtlety that is the whole point — release MUST be scoped to THIS
+request's own post-claim failures.** A flat `else` over one `with` would fire
+release on a LOSING concurrent redemption's `:share_token_consumed` too —
+deleting the WINNER's claim and resurrecting a token that already minted a
+session (dead-link → double-redemption, strictly worse than the bug being
+fixed). So `consume/2` splits: the outer `with` (verify + `mark_consumed`) whose
+`else` NEVER releases, and `mint_session/3`'s inner `with` (fetch + mint) whose
+`else` releases — reached only after `mark_consumed` returned `:ok` for this
+request, so the claim is provably ours. Pinned by the test *"a losing concurrent
+redemption's 410 does NOT release the winner's claim"*.
+
+**Known limit, accepted (benign threat model).** A concurrent loser gets a
+spurious 410 during a mint that later fails, and must retry after the winner's
+release. The threat model is "operator clicks their own link twice"; genuinely
+simultaneous double-redemption is rare, and a retry succeeds once the failed
+claim is released. Not worth a pending-state machine.

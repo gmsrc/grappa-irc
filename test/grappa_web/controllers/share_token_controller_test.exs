@@ -31,6 +31,7 @@ defmodule GrappaWeb.ShareTokenControllerTest do
 
   import Grappa.AuthFixtures
 
+  alias Grappa.Repo.BusyRetry
   alias Grappa.Visitors.ShareTokens
 
   @max_age_seconds 600
@@ -171,6 +172,53 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       assert json_response(fresh_conn, 410) == %{"error" => "share_token_consumed"}
     end
 
+    test "transient DB saturation on the mint leaves the token usable for a retry", %{
+      conn: conn,
+      visitor: visitor,
+      token: token
+    } do
+      # #593 — the hard half of the contract. The one-shot claim is taken
+      # (mark_consumed) BEFORE the session mint. Force the mint (a
+      # BusyRetry-wrapped INSERT) to exhaust its budget → {:error,
+      # :db_unavailable} → a retryable 503. The claim MUST roll back, else
+      # the retry the 503 invites can never succeed — a dead link.
+      BusyRetry.inject_transient_faults(10_000)
+      conn1 = post(conn, "/auth/share/consume", %{"token" => token})
+      assert json_response(conn1, 503)["error"] == "db_unavailable"
+
+      # White-box confirmation the compensating release fired: the token is
+      # absent from the consumed ledger.
+      refute token in ShareTokens.all_keys()
+
+      # Black-box proof: with the transient faults cleared, the SAME link
+      # mints for real. A dead link would 410 here.
+      BusyRetry.inject_transient_faults(0)
+      body = Phoenix.ConnTest.build_conn() |> post("/auth/share/consume", %{"token" => token}) |> json_response(200)
+      assert body["subject"]["id"] == visitor.id
+    end
+
+    test "a losing concurrent redemption's 410 does NOT release the winner's claim", %{
+      conn: conn,
+      token: token
+    } do
+      # #593 — the release must be scoped to THIS request's own post-consume
+      # failure. A flat `else` would fire release on the LOSER's
+      # `:share_token_consumed` too, deleting the WINNER's claim and
+      # resurrecting a token that already minted a session (a worse bug:
+      # dead-link → double-redemption). Winner mints, claim retained:
+      assert conn |> post("/auth/share/consume", %{"token" => token}) |> json_response(200)
+
+      # Loser hits the same token → 410. This 410 must leave the claim intact.
+      assert Phoenix.ConnTest.build_conn()
+             |> post("/auth/share/consume", %{"token" => token})
+             |> json_response(410) == %{"error" => "share_token_consumed"}
+
+      # Proof the winner's claim survived the loser's 410: still 410, never 200.
+      assert Phoenix.ConnTest.build_conn()
+             |> post("/auth/share/consume", %{"token" => token})
+             |> json_response(410) == %{"error" => "share_token_consumed"}
+    end
+
     test "visitor deleted between mint and consume returns 404", %{
       conn: conn,
       visitor: visitor,
@@ -257,6 +305,23 @@ defmodule GrappaWeb.ShareTokenControllerTest do
 
       assert_receive {:telemetry, [:grappa, :visitor, :share_token, :rejected], %{count: 1},
                       %{reason: :share_token_expired}}
+    end
+
+    test "a saturated mint (503) emits exactly one :rejected{db_unavailable}, no :consumed", %{conn: conn} do
+      # #593 — the post-claim failure path is DRY'd through `reject/1`; assert
+      # it fires the reject telemetry once (not zero, not doubled) and never
+      # the :consumed event when the mint rolls its claim back.
+      visitor = visitor_fixture()
+      token = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, visitor.id)
+
+      BusyRetry.inject_transient_faults(10_000)
+      conn |> post("/auth/share/consume", %{"token" => token}) |> json_response(503)
+      BusyRetry.inject_transient_faults(0)
+
+      assert_receive {:telemetry, [:grappa, :visitor, :share_token, :rejected], %{count: 1}, %{reason: :db_unavailable}}
+
+      refute_received {:telemetry, [:grappa, :visitor, :share_token, :rejected], _, _}
+      refute_received {:telemetry, [:grappa, :visitor, :share_token, :consumed], _, _}
     end
   end
 end
