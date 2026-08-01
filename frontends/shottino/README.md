@@ -153,7 +153,12 @@ address needs no brackets (`--ircd=::1`) but one **with** a port does
 a positional argument, and the positional it would eat is your password.
 
 It **detaches into the background** once it is up, printing the pid, the log
-path (`~/.local/share/shottino/ircd.log`) and how to stop it. Backgrounding is
+path (`~/.local/share/shottino/ircd.log`) and how to stop it. **That log holds
+the session's messages in plain text** — headless there is no screen for them,
+so every line goes there instead. Mode 0600, in a 0700 directory, and never
+rotated: it is the bridge's only diagnostic, and it grows for as long as the
+bridge runs. Know it is there before you point a backup at your home
+directory. Backgrounding is
 the last thing it does: the login, the scrollback, the websocket and the bind
 all happen in the foreground first, so a wrong password or a port already in use
 is still an error you see and a non-zero exit — not a line in a log file you did
