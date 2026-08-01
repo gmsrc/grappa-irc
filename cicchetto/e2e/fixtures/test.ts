@@ -71,7 +71,11 @@ interface CspViolation {
   lineNumber: number;
 }
 
-export const test = base.extend<{ _vjtReset: void; _cspGuard: void }>({
+export const test = base.extend<{
+  _vjtReset: void;
+  _cspGuard: void;
+  _unrouteGuard: void;
+}>({
   _cspGuard: [
     async ({ context }, use) => {
       const violations: CspViolation[] = [];
@@ -129,6 +133,33 @@ export const test = base.extend<{ _vjtReset: void; _cspGuard: void }>({
           })),
         },
       );
+    },
+    { auto: true },
+  ],
+  // `_unrouteGuard` (#619) — one seam for the whole suite's page.route
+  // lifetime. 13 of 14 specs that call `page.route(` never unroute, so a
+  // route callback can still be mid-flight when the test body returns;
+  // Playwright then fails the test in TEARDOWN with
+  // `route.fetch: Target page, context or browser has been closed`. It is
+  // load-sensitive (the signature of a teardown bug, not a product bug):
+  // it reddened `issue605-rail-width-cap` in CI with the intercepted
+  // request returning 200 and NO assertion failing — that spec keeps a
+  // `/networks` route armed on purpose so a late `connection_state_changed`
+  // refetch stays patched, which is exactly the callback that outran the
+  // test. `unrouteAll({ behavior: "ignoreErrors" })` after the body drains
+  // in-flight callbacks and drops every registration, so no spec has to
+  // remember (CLAUDE.md: implement once, reuse everywhere).
+  //
+  // Teardown ORDER is load-bearing: the unroute MUST run while the page is
+  // still open. Declared LAST, it tears down FIRST (fixtures unwind in
+  // reverse of setup), and its `{ page }` dependency forces `page` to
+  // outlive this teardown — Playwright tears a fixture down only after its
+  // dependents — so the page is guaranteed live here. Verified against the
+  // `issue605-rail-width-cap` pin, not by reasoning alone.
+  _unrouteGuard: [
+    async ({ page }, use) => {
+      await use();
+      await page.unrouteAll({ behavior: "ignoreErrors" });
     },
     { auto: true },
   ],
