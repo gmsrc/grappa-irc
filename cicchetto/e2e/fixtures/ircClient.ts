@@ -74,7 +74,28 @@ export class IrcPeer {
       });
     }
 
-    const registered = once(client, "registered", REGISTER_TIMEOUT_MS, `register ${opts.nick}`);
+    const registered = once<{ nick: string }>(
+      client,
+      "registered",
+      REGISTER_TIMEOUT_MS,
+      `register ${opts.nick}`,
+    );
+
+    // Ghost/collision hardening (#604). If the requested nick is already held —
+    // a residual ghost from a prior run, or a live collision under bahamut's
+    // per-IP limits — bahamut answers 433 ERR_NICKNAMEINUSE and waits for a
+    // fresh NICK. irc-framework (4.14.0) does NOT auto-retry during
+    // registration; it only emits `nick in use`, so `connect` would hang until
+    // REGISTER_TIMEOUT_MS and surface as a 15s locator timeout in whatever spec
+    // ran next (the #277 flake). Retry with a suffixed alternate until one is
+    // free; `peer.nick` is reconciled from the `registered` event below to
+    // whatever the server actually granted. Removed once registration lands.
+    let collisionAttempt = 0;
+    const onNickInUse = () => {
+      collisionAttempt += 1;
+      client.changeNick(`${opts.nick}_${collisionAttempt}`);
+    };
+    client.on("nick in use", onNickInUse);
 
     client.connect({
       // Default target is the azzurra leaf (`bahamut-test`); callers can
@@ -92,7 +113,14 @@ export class IrcPeer {
       auto_reconnect: false,
     });
 
-    await registered;
+    const welcome = await registered;
+    client.removeListener("nick in use", onNickInUse);
+    // Reconcile with the nick the server ACTUALLY registered (#604). The 001
+    // RPL_WELCOME nick is authoritative: it differs from the requested nick
+    // after a 433 retry above, or when bahamut truncated an over-NICKLEN nick.
+    // irc-framework already tracks it on client.user.nick; mirror it here so
+    // every downstream verb keyed on peer.nick addresses the peer that exists.
+    peer.nick = welcome.nick;
     return peer;
   }
 
@@ -483,13 +511,18 @@ export class IrcPeer {
   }
 }
 
-function once(client: Client, event: string, timeoutMs: number, label: string): Promise<unknown> {
+function once<T = unknown>(
+  client: Client,
+  event: string,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error(`IrcPeer: timeout waiting for ${label} (${timeoutMs}ms)`)),
       timeoutMs,
     );
-    client.once(event, (payload: unknown) => {
+    client.once(event, (payload: T) => {
       clearTimeout(timer);
       resolve(payload);
     });
