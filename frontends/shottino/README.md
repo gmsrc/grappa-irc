@@ -5,6 +5,43 @@ Standalone Linux terminal client for grappa's REST + Phoenix Channels surface.
 Shottino is intentionally a terminal facade over grappa's JSON API. It does not
 parse IRC and does not connect to upstream IRC servers.
 
+## The punk of the scene
+
+grappa and cicchetto are a restoration. The bouncer keeps the protocol honest,
+the PWA rebuilds irssi's feel on a modern harness — new plumbing, old soul —
+and the project writes the rule down in its own `CLAUDE.md`: **IRC stays text
+only.** No pictures in the scrollback. No unfurl cards. No autoplay. A media
+URL is a link, and clicking it is the browser's problem.
+
+Shottino runs the other way. It takes the oldest form there is — a curses
+client in a terminal — and crams into it everything that has no business being
+there:
+
+- pictures render **inline in the terminal**, in colour, with the graphics
+  protocol when there is one and character art when there is not;
+- clips and GIFs **play** in the scrollback;
+- `/voicemsg` records audio and posts it, `/video` does the same with a camera,
+  and `/stt` lets you dictate a line instead of typing it;
+- right-click a photo for a menu, scroll with the wheel, click a link;
+- `/bot` keeps a language model in your channels behind a permission gate;
+- `--ircd` turns the whole thing into an IRC server so irssi can connect *to
+  the terminal client*, which is either elegant or a war crime.
+
+Some of that is genuinely useful. Some of it is a terminal doing an impression
+of a browser because nobody said it couldn't. That is the point: cicchetto
+proves the old feel survives new infrastructure, and shottino proves the old
+*form* survives anything you throw at it — including every modern feature the
+house rules kept out on purpose.
+
+So the rules are broken deliberately, in one place, where the blast radius is a
+single client that one person runs. The invariants that actually matter — one
+IRC parser and it lives on the server, scrollback is bouncer-owned, the wire is
+versioned and additive-only — shottino keeps to the letter. It does not parse
+IRC. It does not talk to upstream. It renders what grappa tells it and sends
+back what you typed.
+
+Everything else is fair game.
+
 ## Install from a package
 
 Shottino ships in grappa's distro packages as `/usr/bin/shottino` — on a host
