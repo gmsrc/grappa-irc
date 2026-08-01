@@ -6845,22 +6845,23 @@ static void draw(struct app *app) {
     refresh();
 }
 
+static void send_message_target(struct app *app, const char *network, const char *channel,
+                                const char *body);
+
+/* Send to the window the user is looking at.
+ *
+ * The body of this was a byte-for-byte copy of send_message_target with
+ * the target inlined — the 201-echo handling had already been patched in
+ * both places once, which is how that ends. It also read
+ * app->windows[...] with NO lock while the worker was free to memmove
+ * that array in remove_window, so a /part landing at the wrong moment
+ * could send the line to a garbled target. current_window_key copies the
+ * identity out under the lock, which is what the rest of the client
+ * already does. */
 static void send_message(struct app *app, const char *body) {
-    struct window *w = &app->windows[focused_window_locked(app)];
-    char *net = url_encode(w->network);
-    char *chan = url_encode(w->channel);
-    char *escaped = json_escape(body);
-    char *path = xasprintf("/networks/%s/channels/%s/messages", net, chan);
-    char *json = xasprintf("{\"body\":\"%s\"}", escaped);
-    free(net);
-    free(chan);
-    free(escaped);
-    struct http_response r = http_request(app, "POST", path, json);
-    if (r.status < 200 || r.status >= 300) log_line(app, "send failed HTTP %d: %.200s", r.status, r.body);
-    else if (r.status == 201) render_created_message(app, r.body, r.body_len);
-    free(path);
-    free(json);
-    free(r.body);
+    char network[MAX_SLUG], channel[MAX_CHANNEL];
+    if (!current_window_key(app, network, sizeof(network), channel, sizeof(channel))) return;
+    send_message_target(app, network, channel, body);
 }
 
 static void send_message_target(struct app *app, const char *network, const char *channel,
@@ -16046,7 +16047,11 @@ int main(int argc, char **argv) {
         if (!foreground) ircd_daemonize(app);
     }
     startup("starting background worker");
-    pthread_create(&app->worker, NULL, worker_main, app);
+    /* Checked, like the model thread six lines below. Without a worker
+     * every enqueued job silently never runs, and the shutdown join
+     * would be handed a thread handle that was never initialised. */
+    if (pthread_create(&app->worker, NULL, worker_main, app) != 0)
+        die("cannot start the background worker: %s", strerror(errno));
     /* The model gets its OWN thread: a call takes seconds to minutes,
      * and sharing the job worker would park scrollback fetches, sends
      * and read cursors behind somebody's prompt. */

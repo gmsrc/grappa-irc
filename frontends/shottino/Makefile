@@ -2,8 +2,24 @@ ROOT := ../..
 -include $(ROOT)/config.mk
 
 CC ?= cc
-CFLAGS ?= -std=c11 -Wall -Wextra -Wpedantic -O2
+# Warnings and hardening are NOT part of the overridable CFLAGS.
+#
+# `CFLAGS ?=` meant that a CFLAGS in the environment — which build systems,
+# distro packaging and `make CFLAGS=-O0` all set — silently deleted -Wall
+# and -Wextra along with everything else. The parts that must survive any
+# override live in their own variables and are appended below.
+#
+# The hardening is cheap and this binary parses hostile bytes: websocket
+# frames, chunked HTTP and downstream IRC all arrive from somewhere else.
+# The sanitizers ride only the TEST binaries, so the shipped one deserves
+# the flags that cost nothing. -Wformat=2 is deliberate: every varargs
+# helper here already carries __attribute__((format)), so it has something
+# to check.
+CFLAGS ?= -O2
+WARNINGS := -std=c11 -Wall -Wextra -Wpedantic -Wformat=2
+HARDENING := -fstack-protector-strong -D_FORTIFY_SOURCE=2
 CPPFLAGS ?= -D_POSIX_C_SOURCE=200809L
+CFLAGS += $(WARNINGS) $(HARDENING)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 CFLAGS += $(CFLAGS_DEPS)
@@ -42,20 +58,14 @@ all: $(BIN)
 $(BIN): $(OBJS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
+# -MMD -MP makes the compiler write the header dependencies, because a
+# hand-maintained list rots: shottino.o's named nine headers while
+# shottino.c included eleven, so editing version.h or llm.h did not
+# rebuild it and the binary could ship a version string it no longer had.
 %.o: %.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c -o $@ $<
 
-shottino.o: shottino.c json.h wire.h alias.h mirc.h termcolor.h http.h media.h ircd.h ws.h
-ircd.o: ircd.c ircd.h
-ws.o: ws.c ws.h
-llm.o: llm.c llm.h json.h
-json.o: json.c json.h
-wire.o: wire.c wire.h json.h
-alias.o: alias.c alias.h
-mirc.o: mirc.c mirc.h
-termcolor.o: termcolor.c termcolor.h
-http.o: http.c http.h
-media.o: media.c media.h termcolor.h
+-include $(OBJS:.o=.d)
 
 # ws is a pure buffer: bytes in, messages out. It gets the fussiest
 # suite in the tree because the bug it replaces was invisible to every
@@ -133,4 +143,4 @@ install: $(BIN)
 	install -m 0755 "$(BIN)" "$(DESTDIR)$(BINDIR)/$(BIN)"
 
 clean:
-	rm -f $(BIN) $(OBJS) $(TESTS)
+	rm -f $(BIN) $(OBJS) $(OBJS:.o=.d) $(TESTS)
