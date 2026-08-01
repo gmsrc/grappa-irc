@@ -154,6 +154,116 @@ void llm_token_redacted(const char *token, char *out, size_t out_sz) {
     snprintf(out, out_sz, "%s", token && token[0] ? "********" : "(unset)");
 }
 
+/* ── tools ──────────────────────────────────────────────────────────── */
+
+/* Schemas the model is shown. Descriptions are written FOR a model: they
+ * say what the tool does and, where it matters, what it must not be used
+ * for — a description is the only place a tool can carry its own
+ * caveat. */
+static const struct llm_tool_def TOOLS[LLM_TOOL__COUNT] = {
+    [LLM_TOOL_READ_SCROLLBACK] =
+        { "read_scrollback", false,
+          "Read the most recent lines of a channel or query window you are already in. "
+          "Use this before answering a question about what was said.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"target\":{\"type\":\"string\",\"description\":\"channel (#name) or nick\"},"
+          "\"lines\":{\"type\":\"integer\",\"description\":\"how many recent lines, max 50\"}},"
+          "\"required\":[\"target\"]}" },
+    [LLM_TOOL_LIST_WINDOWS] =
+        { "list_windows", false,
+          "List the channels and queries this client currently has open, with their networks.",
+          "{\"type\":\"object\",\"properties\":{}}" },
+    [LLM_TOOL_NAMES] =
+        { "names", false, "List the people currently in a channel.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"channel\":{\"type\":\"string\"}},\"required\":[\"channel\"]}" },
+    [LLM_TOOL_SEND] =
+        { "send_message", true,
+          "Say something in a channel or query. Everyone in it will read it. "
+          "Keep it to one or two short lines.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"target\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},"
+          "\"required\":[\"target\",\"text\"]}" },
+    [LLM_TOOL_JOIN] =
+        { "join_channel", true, "Join a channel.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"channel\":{\"type\":\"string\"}},\"required\":[\"channel\"]}" },
+    [LLM_TOOL_PART] =
+        { "part_channel", true, "Leave a channel.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"channel\":{\"type\":\"string\"}},\"required\":[\"channel\"]}" },
+    [LLM_TOOL_CTCP] =
+        { "send_ctcp", true, "Send a CTCP query (for example PING or VERSION) to somebody.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"target\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"},"
+          "\"argument\":{\"type\":\"string\"}},\"required\":[\"target\",\"verb\"]}" },
+};
+
+const struct llm_tool_def *llm_tool(llm_tool_id id) {
+    if (id < 0 || id >= LLM_TOOL__COUNT) return NULL;
+    return &TOOLS[id];
+}
+
+const struct llm_tool_def *llm_tool_by_name(const char *name) {
+    if (!name) return NULL;
+    for (int i = 0; i < LLM_TOOL__COUNT; i++)
+        if (strcmp(TOOLS[i].name, name) == 0) return &TOOLS[i];
+    return NULL;
+}
+
+char *llm_tools_json(bool writes_allowed) {
+    size_t cap = 8192;
+    char *buf = malloc(cap);
+    if (!buf) return NULL;
+    size_t used = 0;
+    int w = snprintf(buf, cap, "[");
+    if (w < 0) { free(buf); return NULL; }
+    used = (size_t)w;
+    bool first = true;
+    for (int i = 0; i < LLM_TOOL__COUNT; i++) {
+        /* A write tool with no permission is OMITTED, not advertised and
+         * refused. What the model cannot see, it cannot be talked into
+         * attempting — and a refusal it can see is an invitation to
+         * argue about. */
+        if (TOOLS[i].writes && !writes_allowed) continue;
+        w = snprintf(buf + used, cap - used,
+                     "%s{\"type\":\"function\",\"function\":{\"name\":\"%s\","
+                     "\"description\":\"%s\",\"parameters\":%s}}",
+                     first ? "" : ",", TOOLS[i].name, TOOLS[i].description, TOOLS[i].params);
+        if (w < 0 || (size_t)w >= cap - used) { free(buf); return NULL; }
+        used += (size_t)w;
+        first = false;
+    }
+    w = snprintf(buf + used, cap - used, "]");
+    if (w < 0 || (size_t)w >= cap - used) { free(buf); return NULL; }
+    return buf;
+}
+
+size_t llm_parse_tool_calls(const json_value *root, struct llm_tool_call *out, size_t max) {
+    if (!out || !max) return 0;
+    const json_value *choices = json_get(root, "choices");
+    const json_value *msg = json_get(json_at(choices, 0), "message");
+    const json_value *calls = json_get(msg, "tool_calls");
+    size_t n = json_len(calls);
+    size_t written = 0;
+    for (size_t i = 0; i < n && written < max; i++) {
+        const json_value *c = json_at(calls, i);
+        const json_value *fn = json_get(c, "function");
+        const char *id = json_string(json_get(c, "id"));
+        const char *name = json_string(json_get(fn, "name"));
+        const char *args = json_string(json_get(fn, "arguments"));
+        if (!name) continue; /* a call without a name is not actionable */
+        snprintf(out[written].id, sizeof(out[written].id), "%s", id ? id : "");
+        snprintf(out[written].name, sizeof(out[written].name), "%s", name);
+        /* `arguments` is a STRING carrying JSON, per the OpenAI shape —
+         * not an object. Passed through verbatim for the handler to
+         * parse, so a schema change needs no change here. */
+        snprintf(out[written].arguments, sizeof(out[written].arguments), "%s", args ? args : "{}");
+        written++;
+    }
+    return written;
+}
+
 /* ── request bodies ─────────────────────────────────────────────────── */
 
 /* Minimal JSON string escaper — the module builds bodies, so it cannot

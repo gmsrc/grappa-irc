@@ -92,18 +92,81 @@ char *llm_claude_stdin_frame(const char *text);
 bool llm_claude_stream_line(const char *line, char *out, size_t out_sz, size_t *used,
                             bool *done);
 
+/* ── Tools ─────────────────────────────────────────────────────────────
+ *
+ * The definitions are DATA and live here, so the schema the model sees
+ * is testable without a socket; the handlers live in shottino.c, where
+ * the app state is. A tool whose schema and whose handler disagree fails
+ * at the far end — inside a model's reasoning — which is the least
+ * debuggable place in the system.
+ */
+typedef enum {
+    LLM_TOOL_READ_SCROLLBACK = 0,
+    LLM_TOOL_LIST_WINDOWS,
+    LLM_TOOL_NAMES,
+    /* Everything below WRITES to the network — see the trust model. */
+    LLM_TOOL_SEND,
+    LLM_TOOL_JOIN,
+    LLM_TOOL_PART,
+    LLM_TOOL_CTCP,
+    LLM_TOOL__COUNT
+} llm_tool_id;
+
+struct llm_tool_def {
+    const char *name;
+    bool writes; /* drives the approval gate; read tools never prompt */
+    const char *description;
+    const char *params; /* JSON Schema for the arguments object */
+};
+
+const struct llm_tool_def *llm_tool(llm_tool_id id);
+const struct llm_tool_def *llm_tool_by_name(const char *name);
+
+/* The `tools` array for a chat/completions body. Caller frees. When
+ * `writes_allowed` is false the WRITE tools are omitted ENTIRELY rather
+ * than advertised-and-refused: a tool the model cannot see is a tool it
+ * cannot be argued into trying. */
+char *llm_tools_json(bool writes_allowed);
+
+/* One parsed tool call from a response. */
+struct llm_tool_call {
+    char id[128];
+    char name[64];
+    char arguments[1024]; /* raw JSON object, as the model sent it */
+};
+
+/* Pull tool_calls out of an OpenAI response. Returns how many were
+ * written (bounded by `max`). Zero means the model answered with text
+ * instead, which is the normal case. */
+size_t llm_parse_tool_calls(const json_value *root, struct llm_tool_call *out, size_t max);
+
 /* ── The /bot trust model (agreed 2026-08-01) ──────────────────────────
  *
  * Recorded HERE rather than in a plan, because every function that
  * touches a tool has to obey it and a plan is not compiled.
  *
  * 1. NETWORK TEXT IS DATA, NEVER INSTRUCTION. Anything arriving from
- *    IRC — including from the owner's own nick — reaches the model as
- *    quoted, attributed content. The only instruction channel is the
- *    local input line, which nobody on the network can reach. IRC
- *    identity is too weak to carry authority: `nextime_` is one
- *    keystroke from `nextime`, and a bot cannot WHOIS every line to
- *    check NickServ status.
+ *    IRC reaches the model as quoted, attributed content. The only
+ *    unconditional instruction channel is the local input line, which
+ *    nobody on the network can reach.
+ *
+ * 1b. THE OWNER IS AN IDENTITY, NOT A NICK. `bot.owner` names who may
+ *    direct the bot from the network, and a sender matches it only when
+ *    BOTH hold:
+ *      * they are on the SAME grappa (this client's own session, or a
+ *        session of the same subject) — not merely someone using that
+ *        nick on the network; and
+ *      * they are AUTHENTICATED to the ircd (NickServ), verified from
+ *        the WHOIS `account` / registered flags rather than assumed.
+ *    A bare nick match is NOT sufficient and must never be treated as
+ *    one: `nextime_` is one keystroke from `nextime`, and a nick freed
+ *    by a netsplit is anybody's for the taking. When the check cannot be
+ *    completed — no WHOIS answer, services down — the sender is NOT the
+ *    owner, and the bot falls back to being driven ONLY by this
+ *    shottino's own input line. Failing closed to local-only is the
+ *    single safe direction: an unverifiable owner is indistinguishable
+ *    from an impostor, and the impostor is the one who benefits from a
+ *    guess.
  *
  * 2. READ tools (scrollback, names) are available whenever the bot runs.
  *    WRITE tools (send, join, part, ctcp) are not.

@@ -901,6 +901,53 @@ TEST(the_admin_visitors_tab_renders_per_network_rows) {
     free_app(app);
 }
 
+TEST(a_setting_name_and_a_boolean_are_parsed_the_way_people_type_them) {
+    bool v = false;
+    /* Every spelling somebody reaches for, because "expected on or off"
+     * after typing `yes` is a client arguing with its user. */
+    const char *yes[] = { "on", "ON", "true", "1", "yes", "y", NULL };
+    for (size_t i = 0; yes[i]; i++) {
+        v = false;
+        CHECK(setting_parse_bool(yes[i], &v));
+        CHECK(v);
+    }
+    const char *no[] = { "off", "OFF", "false", "0", "no", "n", NULL };
+    for (size_t i = 0; no[i]; i++) {
+        v = true;
+        CHECK(setting_parse_bool(no[i], &v));
+        CHECK(!v);
+    }
+    /* Anything else is refused rather than guessed at. */
+    CHECK(!setting_parse_bool("maybe", &v));
+    CHECK(!setting_parse_bool("", &v));
+
+    /* The registry is the answer to "what can I configure?" — a name
+     * that dispatches must be findable, case-insensitively. */
+    CHECK(setting_find("mouse") != NULL);
+    CHECK(setting_find("LLM.Token") != NULL);
+    CHECK(setting_find("nonesuch") == NULL);
+}
+
+TEST(the_settings_listing_never_prints_the_token) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    snprintf(app->llm.token, sizeof(app->llm.token), "sk-thisisasecret");
+    snprintf(app->llm.model, sizeof(app->llm.model), "gpt-4o-mini");
+
+    char out[256];
+    setting_value(app, "llm.token", out, sizeof(out));
+    CHECK_STR(out, "********");
+    CHECK(strstr(out, "sk-") == NULL);
+
+    /* Everything else reports itself normally — the masking is one
+     * field's rule, not a blanket that hides the config. */
+    setting_value(app, "llm.model", out, sizeof(out));
+    CHECK_STR(out, "gpt-4o-mini");
+    setting_value(app, "mouse", out, sizeof(out));
+    CHECK(strcmp(out, "on") == 0 || strcmp(out, "off") == 0);
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -934,6 +981,8 @@ int main(void) {
     RUN(the_admin_sessions_tab_reads_the_shape_the_server_sends);
     RUN(the_admin_uploads_tab_totals_the_bytes_field);
     RUN(the_admin_visitors_tab_renders_per_network_rows);
+    RUN(a_setting_name_and_a_boolean_are_parsed_the_way_people_type_them);
+    RUN(the_settings_listing_never_prints_the_token);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
     return test_report();
 }

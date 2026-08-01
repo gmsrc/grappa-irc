@@ -6482,6 +6482,80 @@ static void llm_enqueue(struct app *app, const char *network, const char *channe
     pthread_mutex_unlock(&app->llm_lock);
 }
 
+/* ── /set ──────────────────────────────────────────────────────────────
+ *
+ * One name → one setting, in ONE table. The togglable preferences were
+ * each their own verb (/mouse, /media) and the model config was its own
+ * sub-verb (/llm set), which is fine to type and impossible to
+ * enumerate: nothing could answer "what can I configure?". The table
+ * answers it, and bare /set prints every name with its current value.
+ *
+ * The old verbs stay — muscle memory is a feature, and /mouse is two
+ * characters shorter than /set mouse on. They now write through the
+ * same fields this reads. */
+enum setting_kind { SET_BOOL, SET_TEXT, SET_CHOICE };
+
+struct setting_def {
+    const char *name;
+    enum setting_kind kind;
+    const char *values; /* CHOICE: the accepted words, for the error message */
+    const char *help;
+};
+
+static const struct setting_def SETTINGS[] = {
+    { "mouse", SET_BOOL, NULL, "click links, right-click menu, wheel scrolling" },
+    { "media", SET_CHOICE, "on|off|all|first-party", "inline images, and from which hosts" },
+    { "animate", SET_BOOL, NULL, "play GIFs and clips as colour art" },
+    { "llm.backend", SET_CHOICE, "openai|claude-cli", "which model transport /llm uses" },
+    { "llm.url", SET_TEXT, NULL, "openai: the API base, e.g. https://api.openai.com/v1" },
+    { "llm.token", SET_TEXT, NULL, "openai: bearer token (never echoed, never shown)" },
+    { "llm.model", SET_TEXT, NULL, "model name" },
+    { "llm.prompt", SET_TEXT, NULL, "system prompt" },
+    { "llm.config_dir", SET_TEXT, NULL, "claude-cli: CLAUDE_CONFIG_DIR" },
+};
+
+/* on/off/true/false/1/0/yes/no — every spelling a user reaches for. */
+static bool setting_parse_bool(const char *v, bool *out) {
+    static const char *const yes[] = { "on", "true", "1", "yes", "y", NULL };
+    static const char *const no[] = { "off", "false", "0", "no", "n", NULL };
+    for (size_t i = 0; yes[i]; i++)
+        if (strcasecmp(v, yes[i]) == 0) { *out = true; return true; }
+    for (size_t i = 0; no[i]; i++)
+        if (strcasecmp(v, no[i]) == 0) { *out = false; return true; }
+    return false;
+}
+
+static const struct setting_def *setting_find(const char *name) {
+    for (size_t i = 0; i < sizeof(SETTINGS) / sizeof(SETTINGS[0]); i++)
+        if (strcasecmp(SETTINGS[i].name, name) == 0) return &SETTINGS[i];
+    return NULL;
+}
+
+/* Current value as text. `llm.token` is the one field that reports a
+ * mask rather than itself — a listing that prints a secret is a listing
+ * that puts it in the scrollback and the terminal's scrollback buffer. */
+static void setting_value(struct app *app, const char *name, char *out, size_t out_sz) {
+    if (strcmp(name, "mouse") == 0) snprintf(out, out_sz, "%s", app->mouse_enabled ? "on" : "off");
+    else if (strcmp(name, "animate") == 0)
+        snprintf(out, out_sz, "%s", app->animate_media ? "on" : "off");
+    else if (strcmp(name, "media") == 0)
+        snprintf(out, out_sz, "%s", app->inline_media_enabled ? (app->inline_media_peers ? "all" : "first-party") : "off");
+    else if (strcmp(name, "llm.backend") == 0)
+        snprintf(out, out_sz, "%s", app->llm.backend == LLM_BACKEND_CLAUDE_CLI ? "claude-cli" : "openai");
+    else if (strcmp(name, "llm.url") == 0)
+        /* Explicit precision: these fields are longer than the display
+         * buffer, and truncating a shown value is fine — silently
+         * truncating past the compiler's back is what earns a warning. */
+        snprintf(out, out_sz, "%.*s", (int)out_sz - 1, app->llm.url[0] ? app->llm.url : "(unset)");
+    else if (strcmp(name, "llm.token") == 0) llm_token_redacted(app->llm.token, out, out_sz);
+    else if (strcmp(name, "llm.model") == 0) snprintf(out, out_sz, "%s", app->llm.model[0] ? app->llm.model : "(unset)");
+    else if (strcmp(name, "llm.prompt") == 0) snprintf(out, out_sz, "%.120s", app->llm.prompt);
+    else if (strcmp(name, "llm.config_dir") == 0)
+        snprintf(out, out_sz, "%.*s", (int)out_sz - 1,
+                 app->llm.config_dir[0] ? app->llm.config_dir : "(unset)");
+    else snprintf(out, out_sz, "?");
+}
+
 /* ── /exec ─────────────────────────────────────────────────────────────
  *
  * Run a shell command and send its stdout to the window, as messages the
@@ -7748,7 +7822,7 @@ static const char *commands[] = {
     "/locops", "/lusers", "/me", "/media", "/members", "/mode", "/motd", "/mouse", "/ms", "/msg",
     "/names", "/nick", "/notify", "/ns", "/op", "/open", "/oper", "/os", "/part", "/ping",
     "/preview", "/q", "/query", "/quit", "/quote", "/rehash", "/restart", "/rs", "/sconnect",
-    "/settings", "/share", "/split", "/splith", "/splitv", "/splitw", "/squit", "/stats", "/topic",
+    "/set", "/settings", "/share", "/split", "/splith", "/splitv", "/splitw", "/squit", "/stats", "/topic",
     "/trace", "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unkline", "/unsplit",
     "/upload", "/users", "/version", "/view", "/voice", "/w", "/wallops", "/watch", "/who",
     "/whois", "/whowas", "/win", "/window", "/wire"
@@ -8786,6 +8860,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "disconnect") == 0) log_line(app, "/disconnect [network] [reason] — park a network while keeping Shottino running");
     else if (strcmp(cmd, "whois") == 0) log_line(app, "/whois nick — request WHOIS for nick");
     else if (oper_verb_help(app, cmd)) { /* the table carries its own help */ }
+    else if (strcmp(cmd, "set") == 0) log_line(app, "/set [name [value]] — bare lists every setting with its value; a text value may be @/path/to/file to read it from disk (how a multi-line prompt gets in). Names: mouse media animate llm.backend llm.url llm.token llm.model llm.prompt llm.config_dir");
     else if (strcmp(cmd, "llm") == 0) log_line(app, "/llm <prompt> — ask the model; the reply lands in the $llm window. /llm -p (or --public) sends it to the current window where everyone reads it. /llm set <backend|url|token|model|prompt|config_dir> <value> configures it; bare /llm shows the config (token masked)");
     else if (strcmp(cmd, "exec") == 0) log_line(app, "/exec <command> — run it in a shell and SEND its stdout to the current window (everyone sees it); capped at 20 lines / 16 KiB, killed after 15s, stderr discarded");
     else if (strcmp(cmd, "ctcp") == 0) log_line(app, "/ctcp <nick|#channel> <VERB> [args] — send any CTCP query (VERSION, TIME, FINGER…); the reply lands in the window you asked from. /ping is the timed special case");
@@ -9956,6 +10031,101 @@ static void handle_command_dispatch(struct app *app, char *line) {
             }
         }
     llm_done:;
+    } else if (strncmp(line, "/set", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
+        const char *rest = line + 4;
+        while (*rest == ' ') rest++;
+        char name[64];
+        const char *value = split_head(rest, name, sizeof(name));
+        if (!name[0]) {
+            log_line(app, "--- settings (/set <name> <value>)");
+            for (size_t i = 0; i < sizeof(SETTINGS) / sizeof(SETTINGS[0]); i++) {
+                char cur[256];
+                setting_value(app, SETTINGS[i].name, cur, sizeof(cur));
+                log_line(app, "  %-16s %-28s %s", SETTINGS[i].name, cur, SETTINGS[i].help);
+            }
+            log_line(app, "  a text value may be @/path/to/file — the file's contents are used, "
+                          "which is how a multi-line prompt gets in");
+        } else {
+            const struct setting_def *def = setting_find(name);
+            if (!def) {
+                log_line(app, "/set: no such setting `%.40s` — bare /set lists them", name);
+            } else if (!*value) {
+                char cur[256];
+                setting_value(app, def->name, cur, sizeof(cur));
+                log_line(app, "  %-16s %s", def->name, cur);
+            } else {
+                /* @file: the ONLY way a multi-line prompt gets in from a
+                 * one-line input box. Read here rather than in the
+                 * setter so every text setting gets it for free. */
+                static char filebuf[LLM_MAX_PROMPT];
+                if (value[0] == '@' && def->kind == SET_TEXT) {
+                    FILE *f = fopen(value + 1, "r");
+                    if (!f) {
+                        log_line(app, "/set: cannot read %s: %s", value + 1, strerror(errno));
+                        goto set_done;
+                    }
+                    size_t n = fread(filebuf, 1, sizeof(filebuf) - 1, f);
+                    int too_big = !feof(f);
+                    fclose(f);
+                    filebuf[n] = 0;
+                    /* Trailing newline is what an editor leaves behind,
+                     * not something the user meant to send. */
+                    while (n && (filebuf[n - 1] == '\n' || filebuf[n - 1] == '\r')) filebuf[--n] = 0;
+                    if (too_big) {
+                        log_line(app, "/set: %s is larger than %d bytes — refusing a truncated prompt",
+                                 value + 1, LLM_MAX_PROMPT);
+                        goto set_done;
+                    }
+                    value = filebuf;
+                }
+                bool on = false;
+                if (def->kind == SET_BOOL && !setting_parse_bool(value, &on)) {
+                    log_line(app, "/set %s: expected on or off", def->name);
+                    goto set_done;
+                }
+                bool touched_llm = strncmp(def->name, "llm.", 4) == 0;
+                if (strcmp(def->name, "mouse") == 0) {
+                    app->mouse_enabled = on;
+                    mouse_apply(app);
+                } else if (strcmp(def->name, "animate") == 0) {
+                    app->animate_media = on;
+                } else if (strcmp(def->name, "media") == 0) {
+                    if (strcasecmp(value, "off") == 0) app->inline_media_enabled = false;
+                    else if (strcasecmp(value, "all") == 0) {
+                        app->inline_media_enabled = true;
+                        app->inline_media_peers = true;
+                    } else if (strcasecmp(value, "first-party") == 0 || strcasecmp(value, "on") == 0) {
+                        app->inline_media_enabled = true;
+                        app->inline_media_peers = strcasecmp(value, "all") == 0;
+                    } else {
+                        log_line(app, "/set media: expected %s", def->values);
+                        goto set_done;
+                    }
+                } else if (strcmp(def->name, "llm.backend") == 0) {
+                    if (strcasecmp(value, "claude-cli") == 0) app->llm.backend = LLM_BACKEND_CLAUDE_CLI;
+                    else if (strcasecmp(value, "openai") == 0) app->llm.backend = LLM_BACKEND_OPENAI;
+                    else {
+                        log_line(app, "/set llm.backend: expected %s", def->values);
+                        goto set_done;
+                    }
+                } else if (strcmp(def->name, "llm.url") == 0)
+                    snprintf(app->llm.url, sizeof(app->llm.url), "%.*s", (int)sizeof(app->llm.url) - 1, value);
+                else if (strcmp(def->name, "llm.token") == 0)
+                    snprintf(app->llm.token, sizeof(app->llm.token), "%.*s", (int)sizeof(app->llm.token) - 1, value);
+                else if (strcmp(def->name, "llm.model") == 0)
+                    snprintf(app->llm.model, sizeof(app->llm.model), "%.*s", (int)sizeof(app->llm.model) - 1, value);
+                else if (strcmp(def->name, "llm.prompt") == 0)
+                    snprintf(app->llm.prompt, sizeof(app->llm.prompt), "%s", value);
+                else if (strcmp(def->name, "llm.config_dir") == 0)
+                    snprintf(app->llm.config_dir, sizeof(app->llm.config_dir), "%.*s", (int)sizeof(app->llm.config_dir) - 1, value);
+                if (touched_llm) llm_save(app);
+                /* The VALUE is not echoed: `llm.token` goes through this
+                 * same line, and a confirmation that repeats it defeats
+                 * the masking everywhere else. */
+                log_line(app, "/set %s updated", def->name);
+            }
+        }
+    set_done:;
     } else if (strncmp(line, "/exec ", 6) == 0) {
         const char *cmd = line + 6;
         while (*cmd == ' ') cmd++;
@@ -10199,6 +10369,17 @@ static void handle_enter(struct app *app) {
         if (!current_window_key(app, send_net, sizeof(send_net), send_chan, sizeof(send_chan))) return;
         const char *network = send_net;
         const char *channel = send_chan;
+        /* The $llm window is a CONVERSATION with the model, so typing in
+         * it talks to the model — not to IRC. There is no server side to
+         * send to anyway: this window is client-local, and a plain
+         * message here would be a POST to a channel named "$llm" that
+         * grappa would refuse. Getting to the model without repeating
+         * the verb is the whole point of the window. */
+        if (irc_name_eq(channel, LLM_WINDOW)) {
+            log_line(app, "[%s/%s] <you> %s", network, LLM_WINDOW, line);
+            llm_enqueue(app, network, channel, line, false);
+            return;
+        }
         /* $server is read-only by server contract, so say so HERE rather
          * than firing a request that can only come back 400. The client
          * knows the rule; making the user decode an HTTP status to learn

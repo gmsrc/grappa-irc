@@ -195,6 +195,101 @@ TEST(stream_json_accumulates_text_and_notices_the_end) {
     CHECK(done2);
 }
 
+TEST(a_write_tool_is_omitted_entirely_when_writes_are_not_allowed) {
+    char *read_only = llm_tools_json(false);
+    CHECK(read_only != NULL);
+    if (!read_only) return;
+    /* Read tools are offered... */
+    CHECK(strstr(read_only, "read_scrollback") != NULL);
+    CHECK(strstr(read_only, "list_windows") != NULL);
+    /* ...and the write tools are not even NAMED. Advertising a tool and
+     * refusing it invites a model to argue; one it cannot see, it cannot
+     * try. */
+    CHECK(strstr(read_only, "send_message") == NULL);
+    CHECK(strstr(read_only, "join_channel") == NULL);
+    CHECK(strstr(read_only, "part_channel") == NULL);
+    CHECK(strstr(read_only, "send_ctcp") == NULL);
+    free(read_only);
+
+    char *full = llm_tools_json(true);
+    CHECK(full != NULL);
+    if (!full) return;
+    CHECK(strstr(full, "send_message") != NULL);
+    CHECK(strstr(full, "join_channel") != NULL);
+    free(full);
+}
+
+TEST(the_tools_array_is_valid_json_the_endpoint_will_accept) {
+    /* A schema that does not parse is a 400 with no useful diagnostic,
+     * and the feature simply "does not work". */
+    for (int allowed = 0; allowed < 2; allowed++) {
+        char *tools = llm_tools_json(allowed != 0);
+        CHECK(tools != NULL);
+        if (!tools) continue;
+        json_doc *doc = json_parse(tools, strlen(tools), NULL, 0);
+        CHECK(doc != NULL);
+        if (doc) {
+            /* Every entry carries the function shape the API requires. */
+            const json_value *first = json_at(json_root(doc), 0);
+            CHECK_STR(json_string(json_get(first, "type")), "function");
+            const json_value *fn = json_get(first, "function");
+            CHECK(json_string(json_get(fn, "name")) != NULL);
+            CHECK(json_get(fn, "parameters") != NULL);
+            json_free(doc);
+        }
+        free(tools);
+    }
+}
+
+TEST(every_tool_is_findable_by_the_name_the_model_will_send_back) {
+    for (int i = 0; i < LLM_TOOL__COUNT; i++) {
+        const struct llm_tool_def *d = llm_tool((llm_tool_id)i);
+        CHECK(d != NULL);
+        if (!d) continue;
+        /* The round trip that matters: the schema advertises `name`, the
+         * model echoes `name`, and the handler is looked up BY name. A
+         * definition that cannot be found by its own name is a tool that
+         * silently never runs. */
+        CHECK(llm_tool_by_name(d->name) == d);
+    }
+    CHECK(llm_tool_by_name("no_such_tool") == NULL);
+    CHECK(llm_tool_by_name(NULL) == NULL);
+    /* /exec, /quote and the oper verbs are NOT tools, at any level. */
+    CHECK(llm_tool_by_name("exec") == NULL);
+    CHECK(llm_tool_by_name("quote") == NULL);
+    CHECK(llm_tool_by_name("kill") == NULL);
+}
+
+TEST(tool_calls_are_read_out_of_the_response) {
+    const char *json =
+        "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":null,"
+        "\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":"
+        "{\"name\":\"send_message\","
+        "\"arguments\":\"{\\\"target\\\":\\\"#sniffo\\\",\\\"text\\\":\\\"hi\\\"}\"}}]}}]}";
+    json_doc *doc = json_parse(json, strlen(json), NULL, 0);
+    CHECK(doc != NULL);
+    if (!doc) return;
+    struct llm_tool_call calls[4];
+    size_t n = llm_parse_tool_calls(json_root(doc), calls, 4);
+    CHECK_LONG(n, 1);
+    CHECK_STR(calls[0].id, "call_1");
+    CHECK_STR(calls[0].name, "send_message");
+    /* `arguments` is a STRING carrying JSON, not an object — passed
+     * through verbatim so a schema change needs no change here. */
+    CHECK_STR(calls[0].arguments, "{\"target\":\"#sniffo\",\"text\":\"hi\"}");
+    json_free(doc);
+
+    /* A plain text answer has no tool calls, and that is the normal
+     * case — not an error. */
+    const char *plain = "{\"choices\":[{\"message\":{\"content\":\"just talking\"}}]}";
+    doc = json_parse(plain, strlen(plain), NULL, 0);
+    CHECK(doc != NULL);
+    if (doc) {
+        CHECK_LONG(llm_parse_tool_calls(json_root(doc), calls, 4), 0);
+        json_free(doc);
+    }
+}
+
 int main(void) {
     RUN(config_round_trips_and_survives_a_bad_line);
     RUN(readiness_says_which_field_is_missing);
@@ -204,5 +299,9 @@ int main(void) {
     RUN(the_reply_is_read_out_of_the_response_shape);
     RUN(the_claude_stdin_frame_is_the_envelope_the_cli_reads);
     RUN(stream_json_accumulates_text_and_notices_the_end);
+    RUN(a_write_tool_is_omitted_entirely_when_writes_are_not_allowed);
+    RUN(the_tools_array_is_valid_json_the_endpoint_will_accept);
+    RUN(every_tool_is_findable_by_the_name_the_model_will_send_back);
+    RUN(tool_calls_are_read_out_of_the_response);
     return test_report();
 }
