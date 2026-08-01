@@ -1588,7 +1588,7 @@ static char *json_escape(const char *s) {
         case '\t': *w++ = '\\'; *w++ = 't'; break;
         default:
             if (*p < 0x20) {
-                sprintf(w, "\\u%04x", *p);
+                snprintf(w, 7, "\\u%04x", *p);
                 w += 6;
             } else {
                 *w++ = (char)*p;
@@ -1605,11 +1605,11 @@ static bool parse_url(const char *raw, struct url *out) {
     if (strncmp(p, "https://", 8) == 0) {
         out->tls = true;
         p += 8;
-        strcpy(out->port, "443");
+        snprintf(out->port, sizeof(out->port), "443");
     } else if (strncmp(p, "http://", 7) == 0) {
         out->tls = false;
         p += 7;
-        strcpy(out->port, "80");
+        snprintf(out->port, sizeof(out->port), "80");
     } else {
         return false;
     }
@@ -1934,7 +1934,14 @@ static void parse_subject(const char *json, size_t len, char *out, size_t out_sz
 static void parse_networks(struct app *app, const char *json, size_t len) {
     app->network_count = 0;
     json_doc *doc = json_parse(json, len, NULL, 0);
-    if (!doc) return;
+    /* Said out loud. A client with no networks looks exactly like an
+     * account with none, and the difference — one is a bad reply, the
+     * other is a fact — is the whole diagnosis. Both are survivable, so
+     * neither is fatal; only one of them was previously visible. */
+    if (!doc) {
+        log_line(app, "could not read the network list — the server sent something unparseable");
+        return;
+    }
     const json_value *list = json_root(doc);
     for (size_t i = 0; i < json_len(list) && app->network_count < MAX_NETWORKS; i++) {
         const json_value *row = json_at(list, i);
@@ -5552,15 +5559,25 @@ static void backfill_window(struct app *app, const char *network, const char *ch
         /* This endpoint answers ASCENDING, unlike the DESC tail fetch, so
          * rows are rendered in array order rather than reversed. */
         json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
-        const json_value *list = json_root(doc);
-        size_t n = json_len(list);
-        for (size_t i = 0; i < n; i++) {
-            struct wire_scrollback_message m;
-            if (wire_narrow_message(json_at(list, i), &m)) render_message(app, &m, false);
+        if (!doc) {
+            /* A page that cannot be read is a HOLE in the scrollback, and
+             * a hole nobody mentions is indistinguishable from a quiet
+             * channel. json_root(NULL) chains safely to a length of zero,
+             * so this used to drop the page and then report nothing at
+             * all — which reads as "you missed nothing". */
+            log_line(app, "[%s/%s] --- could not read the recovered messages; some may be missing",
+                     network, channel);
+        } else {
+            const json_value *list = json_root(doc);
+            size_t n = json_len(list);
+            for (size_t i = 0; i < n; i++) {
+                struct wire_scrollback_message m;
+                if (wire_narrow_message(json_at(list, i), &m)) render_message(app, &m, false);
+            }
+            if (n) log_line(app, "[%s/%s] --- %zu message%s recovered", network, channel, n,
+                            n == 1 ? "" : "s");
+            json_free(doc);
         }
-        if (n) log_line(app, "[%s/%s] --- %zu message%s recovered", network, channel, n,
-                        n == 1 ? "" : "s");
-        json_free(doc);
     }
     free(r.body);
 }

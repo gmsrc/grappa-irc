@@ -30,16 +30,20 @@ static bool message_kind_of(const json_value *v, wire_message_kind *out) {
 }
 
 static const char *const CONNECTION_STATE_NAMES[] = {"connected", "parked", "failed"};
+/* From the table, not from a 3 written twice: the array grows, the two
+ * loops that walk it did not. The sibling message_kind_of already used
+ * this idiom, which is what made the odd one out visible. */
+#define CONNECTION_STATE_COUNT (sizeof(CONNECTION_STATE_NAMES) / sizeof(CONNECTION_STATE_NAMES[0]))
 
 const char *wire_connection_state_name(wire_connection_state s) {
     size_t i = (size_t)s;
-    return i < 3 ? CONNECTION_STATE_NAMES[i] : "unknown";
+    return i < CONNECTION_STATE_COUNT ? CONNECTION_STATE_NAMES[i] : "unknown";
 }
 
 static bool connection_state_of(const json_value *v, wire_connection_state *out) {
     const char *s = json_string(v);
     if (!s) return false;
-    for (size_t i = 0; i < 3; i++) {
+    for (size_t i = 0; i < CONNECTION_STATE_COUNT; i++) {
         if (strcmp(s, CONNECTION_STATE_NAMES[i]) == 0) {
             *out = (wire_connection_state)i;
             return true;
