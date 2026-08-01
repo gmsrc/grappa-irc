@@ -395,10 +395,10 @@ TEST(an_oper_verb_missing_its_arguments_is_refused_not_sent) {
 TEST(an_oper_verb_is_matched_as_a_whole_word) {
     /* /kill must not be answered by /kickban, and a verb must not
      * swallow a longer word that starts the same way. */
-    CHECK(oper_verb_args("/kill alice", "/kill") != NULL);
-    CHECK(oper_verb_args("/kill", "/kill") != NULL);
-    CHECK(oper_verb_args("/killer alice", "/kill") == NULL);
-    CHECK(oper_verb_args("/kickban alice", "/kill") == NULL);
+    CHECK(verb_args("/kill alice", "/kill") != NULL);
+    CHECK(verb_args("/kill", "/kill") != NULL);
+    CHECK(verb_args("/killer alice", "/kill") == NULL);
+    CHECK(verb_args("/kickban alice", "/kill") == NULL);
 }
 
 TEST(every_oper_verb_explains_itself) {
@@ -1459,6 +1459,75 @@ TEST(a_standing_grant_survives_a_restart) {
  *
  * Driven through handle_command, the door every keystroke and every
  * alias goes through, so this covers verbs nobody has written yet. */
+/* A verb is a whole word, not a prefix.
+ *
+ * /who matched with a bare strncmp, so a bare /whois — which the
+ * with-argument arm above it does not accept — fell through to it AND
+ * brought an argument: the target was read from line + 5, so /whois
+ * asked the server to list a channel called "s" and /whowas one called
+ * "was". Silent, plausible, and wrong. */
+TEST(a_verb_is_matched_as_a_whole_word_not_a_prefix) {
+    struct app *app = window_app();
+    app->url.base[0] = 0;
+    add_window_ex(app, "azzurra", "#sniffo", true);
+
+    /* Bare, they explain themselves rather than becoming another verb. */
+    handle_command(app, "/whois");
+    CHECK(log_has(app, "/whois <nick>"));
+    handle_command(app, "/whowas");
+    CHECK(log_has(app, "/whowas <nick>"));
+
+    /* Neither may reach /who — which, not being connected, would have
+     * complained about the websocket instead. */
+    CHECK(!log_has(app, "not connected"));
+
+    /* A typo is an unknown verb, not a NAMES for a channel called "oo". */
+    handle_command(app, "/namesfoo");
+    CHECK(log_has(app, "unknown command"));
+
+    /* With an argument they still work — the point is the boundary, not
+     * refusing everything. Both reach the socket and report it missing. */
+    handle_command(app, "/whois alice");
+    CHECK(log_has(app, "not connected"));
+
+    free_app(app);
+}
+
+/* All three spellings of the window verb reach the same window.
+ *
+ * The argument used to be found by indexing fixed offsets off a guess:
+ * `line[2] == 'w'` is true for NO spelling (index 2 is 'n' in /window,
+ * 'i' in /win, and the space in /w), so `/w 3` fell through to
+ * `line + 8` — four bytes past the end of the string, reading whatever
+ * was left in the buffer. Usually atoi found garbage and /w looked
+ * simply dead; occasionally it found a number and moved somewhere
+ * nobody asked for. */
+TEST(every_spelling_of_the_window_verb_finds_its_number) {
+    struct app *app = window_app();
+    app->url.base[0] = 0;
+    add_window_ex(app, "azzurra", "$server", false);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    add_window_ex(app, "azzurra", "#terzo", true);
+    CHECK_LONG(app->window_count, 3);
+
+    handle_command(app, "/window 2");
+    CHECK_LONG(focused_window_locked(app), 1);
+    handle_command(app, "/win 3");
+    CHECK_LONG(focused_window_locked(app), 2);
+    handle_command(app, "/w 1");
+    CHECK_LONG(focused_window_locked(app), 0);
+
+    /* Extra spaces are still the same request. */
+    handle_command(app, "/w   2");
+    CHECK_LONG(focused_window_locked(app), 1);
+
+    /* A number nobody has stays where it is rather than guessing. */
+    handle_command(app, "/w 99");
+    CHECK_LONG(focused_window_locked(app), 1);
+
+    free_app(app);
+}
+
 TEST(a_tab_completed_verb_still_dispatches) {
     struct app *app = window_app();
     app->url.base[0] = 0; /* nothing here should reach the network */
@@ -1583,6 +1652,8 @@ int main(void) {
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);
     RUN(a_standing_grant_survives_a_restart);
+    RUN(a_verb_is_matched_as_a_whole_word_not_a_prefix);
+    RUN(every_spelling_of_the_window_verb_finds_its_number);
     RUN(a_tab_completed_verb_still_dispatches);
     RUN(the_settings_panel_lists_every_setting);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);

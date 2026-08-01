@@ -11800,7 +11800,13 @@ static bool oper_verb_line(const struct oper_verb *v, const char *args, char *ou
 
 /* Does `line` start with `verb` as a whole word? `/kill` must not be
  * answered by `/kickban`, and `/die` must not swallow `/dietro`. */
-static const char *oper_verb_args(const char *line, const char *verb) {
+/* The args of `verb`, or NULL when this line is not that verb.
+ *
+ * A WHOLE-WORD match: the character after the verb must be a space or
+ * the end, so /whois is not /who with a typo attached. Written for the
+ * oper verbs, and general — every arm that matched a bare prefix with
+ * strncmp had the same hole, and /who fell straight into it. */
+static const char *verb_args(const char *line, const char *verb) {
     size_t n = strlen(verb);
     if (strncmp(line, verb, n) != 0) return NULL;
     if (line[n] != ' ' && line[n] != '\0') return NULL;
@@ -11812,7 +11818,7 @@ static const char *oper_verb_args(const char *line, const char *verb) {
 static bool try_oper_verb(struct app *app, const char *line) {
     for (size_t i = 0; i < sizeof(oper_verbs) / sizeof(oper_verbs[0]); i++) {
         const struct oper_verb *v = &oper_verbs[i];
-        const char *args = oper_verb_args(line, v->verb);
+        const char *args = verb_args(line, v->verb);
         if (!args) continue;
         char frame[MAX_LINE];
         if (!oper_verb_line(v, args, frame, sizeof(frame))) {
@@ -12143,18 +12149,34 @@ static void handle_command_dispatch(struct app *app, char *line) {
         char *payload = xasprintf("{\"network_id\":%d}", current_network_id(app));
         ws_push_user(app, "lusers", payload);
         free(payload);
-    } else if (strncmp(line, "/who", 4) == 0) {
+    } else if (strcmp(line, "/whois") == 0) {
+        /* Named explicitly, because without this it falls to /who below.
+         * It used to fall there SILENTLY and with an argument: /who
+         * matched the bare prefix, then read its target from line + 5 —
+         * so typing /whois asked the server to list a channel called
+         * "s", and /whowas one called "was". */
+        log_line(app, "/whois <nick> — ask the server who someone is");
+    } else if (strcmp(line, "/whowas") == 0) {
+        log_line(app, "/whowas <nick> — ask the server who someone used to be");
+    } else if (verb_args(line, "/who")) {
         char chan_now[MAX_CHANNEL];
         current_window_key(app, NULL, 0, chan_now, sizeof(chan_now));
-        const char *target = line[4] && line[5] ? line + 5 : chan_now;
+        /* A WHOLE-WORD match now: the character after the verb has to be
+         * a space or the end, which is what keeps /whois out of here. */
+        const char *target = verb_args(line, "/who");
+        while (*target == ' ') target++;
         char *chan = json_escape(*target ? target : chan_now);
         char *payload = xasprintf("{\"network_id\":%d,\"channel\":\"%s\"}", current_network_id(app), chan);
         ws_push_user(app, "who", payload);
         free(chan); free(payload);
-    } else if (strncmp(line, "/names", 6) == 0) {
+    } else if (verb_args(line, "/names")) {
         char chan_now[MAX_CHANNEL];
         current_window_key(app, NULL, 0, chan_now, sizeof(chan_now));
-        const char *target = line[6] && line[7] ? line + 7 : chan_now;
+        /* Whole-word, for the same reason /who is: a bare prefix match
+         * turned `/namesfoo` into a NAMES for a channel called "oo"
+         * rather than an unknown verb. */
+        const char *target = verb_args(line, "/names");
+        while (*target == ' ') target++;
         char *chan = json_escape(*target ? target : chan_now);
         char *origin = json_escape(chan_now);
         char *payload = xasprintf("{\"network_id\":%d,\"channel\":\"%s\",\"origin_window\":\"%s\"}", current_network_id(app), chan, origin);
@@ -12812,7 +12834,18 @@ static void handle_command_dispatch(struct app *app, char *line) {
         ws_push_user(app, "watchlist", payload);
         free(pat); free(payload);
     } else if (strncmp(line, "/window ", 8) == 0 || strncmp(line, "/win ", 5) == 0 || strncmp(line, "/w ", 3) == 0) {
-        const char *arg = line[2] == 'w' && line[3] == ' ' ? line + 3 : (line[4] == ' ' ? line + 5 : line + 8);
+        /* Skip the verb, whichever of the three spellings it was, then
+         * the spaces. The old line indexed fixed offsets off a guess:
+         * `line[2] == 'w'` is true for no spelling at all (index 2 is
+         * 'n' in /window, 'i' in /win and the SPACE in /w), so `/w 3`
+         * fell through to `line + 8` — four bytes past the terminator,
+         * reading whatever alias_expand had left in the buffer. Usually
+         * atoi found garbage and did nothing, which is why /w looked
+         * dead; occasionally it found a number and jumped somewhere
+         * nobody asked for. */
+        const char *arg = line + 1;
+        while (*arg && *arg != ' ') arg++;
+        while (*arg == ' ') arg++;
         int n = atoi(arg);
         /* Focus moves under the lock, exactly as cycle_window does it:
          * app->current, the unread reset and the window it names are one

@@ -15,9 +15,10 @@
  * It asserts by SCANNING shottino.c for the dispatcher's own string
  * literals rather than by keeping a fourth list — a fourth list would be
  * one more thing to forget. The scan is deliberately dumb: it looks for the
- * exact shapes the dispatcher uses (`strcmp(line, "/verb"` and
- * `strncmp(line, "/verb "`), so a NEW dispatch shape reads as zero verbs and
- * the floor assertion fails loudly instead of passing vacuously.
+ * exact shapes the dispatcher uses (`strcmp(line, "/verb"`,
+ * `strncmp(line, "/verb "` and `verb_args(line, "/verb"`), so a NEW dispatch
+ * shape reads as zero verbs and the floor assertion fails loudly instead of
+ * passing vacuously.
  */
 #define main shottino_main_unused
 #include "../shottino.c"
@@ -217,6 +218,11 @@ int main(void) {
     }
     scan("strcmp(line, ");
     scan("strncmp(line, ");
+    /* The third shape: a WHOLE-WORD match. /who and /names moved to it
+     * because a bare strncmp let /whois fall into /who carrying an
+     * argument. Adding the shape here is what the floor assertion is
+     * for — it failed loudly the moment the dispatcher grew one. */
+    scan("verb_args(line, ");
     for (size_t i = 0; i < sizeof(oper_verbs) / sizeof(oper_verbs[0]); i++)
         verb_add(oper_verbs[i].verb);
 
