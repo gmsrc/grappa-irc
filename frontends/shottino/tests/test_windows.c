@@ -1459,6 +1459,49 @@ TEST(a_standing_grant_survives_a_restart) {
  *
  * Driven through handle_command, the door every keystroke and every
  * alias goes through, so this covers verbs nobody has written yet. */
+/* A bounded copy must not end in half a character.
+ *
+ * snprintf truncates by BYTES, so a transcript longer than the input
+ * line ended mid-sequence — invalid UTF-8, and it went on the wire that
+ * way when the user pressed Enter. */
+TEST(a_truncated_string_keeps_only_whole_characters) {
+    char s[16];
+
+    /* A 2-byte character whose second byte did not fit: the lead goes.
+     * Built byte by byte rather than truncated from a literal, so the
+     * test says which byte survived instead of leaving it to snprintf. */
+    memset(s, 'a', 14);
+    s[14] = (char)0xC3; /* lead byte of é... */
+    s[15] = 0;          /* ...and no room for its continuation byte */
+    utf8_trim_partial_tail(s);
+    CHECK_STR(s, "aaaaaaaaaaaaaa");
+
+    /* A character that FITS is kept whole. */
+    snprintf(s, sizeof(s), "%s", "ciao perch\xc3\xa9");
+    utf8_trim_partial_tail(s);
+    CHECK_STR(s, "ciao perch\xc3\xa9");
+
+    /* Pure ASCII is untouched, and so is an empty string. */
+    snprintf(s, sizeof(s), "%s", "hello");
+    utf8_trim_partial_tail(s);
+    CHECK_STR(s, "hello");
+    s[0] = 0;
+    utf8_trim_partial_tail(s);
+    CHECK_STR(s, "");
+
+    /* A 3-byte character cut after one byte, and after two. */
+    char t[8] = "ab\xe2\x82";
+    utf8_trim_partial_tail(t);
+    CHECK_STR(t, "ab");
+    char u[8] = "ab\xe2";
+    utf8_trim_partial_tail(u);
+    CHECK_STR(u, "ab");
+    /* Whole, it stays. */
+    char v[8] = "ab\xe2\x82\xac";
+    utf8_trim_partial_tail(v);
+    CHECK_STR(v, "ab\xe2\x82\xac");
+}
+
 /* A command must refuse what it cannot do, rather than do something else.
  *
  * `/msg nick ` reached the wire as an empty PRIVMSG: the dispatcher's
@@ -1790,6 +1833,7 @@ int main(void) {
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);
     RUN(a_standing_grant_survives_a_restart);
+    RUN(a_truncated_string_keeps_only_whole_characters);
     RUN(a_command_refuses_what_it_cannot_do);
     RUN(a_long_agent_md_leaves_room_for_the_notes);
     RUN(a_join_key_is_split_from_the_channel);

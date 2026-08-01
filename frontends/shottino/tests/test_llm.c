@@ -414,5 +414,12 @@ int main(void) {
     RUN(the_tools_array_is_valid_json_the_endpoint_will_accept);
     RUN(every_tool_is_findable_by_the_name_the_model_will_send_back);
     RUN(tool_calls_are_read_out_of_the_response);
+    /* These three were written and never registered, so the MCP shim —
+     * the door every tool reaches the claude CLI through — had no
+     * running test at all. The compiler had been saying so on every
+     * clean build ("defined but not used"); incremental builds hid it. */
+    RUN(a_result_frame_carries_the_text_when_no_delta_did);
+    RUN(a_tool_call_arrives_through_the_mcp_shim_by_either_route);
+    RUN(the_mcp_shim_advertises_the_tools_and_executes_none);
     return test_report();
 }

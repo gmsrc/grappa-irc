@@ -7898,9 +7898,17 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
         else if (strcasecmp(value, "all") == 0) {
             app->inline_media_enabled = true;
             app->inline_media_peers = true;
-        } else if (strcasecmp(value, "first-party") == 0 || strcasecmp(value, "on") == 0) {
+        } else if (strcasecmp(value, "first-party") == 0) {
             app->inline_media_enabled = true;
-            app->inline_media_peers = strcasecmp(value, "all") == 0;
+            app->inline_media_peers = false;
+        } else if (strcasecmp(value, "on") == 0) {
+            /* ON, and nothing else. The host scope is a SEPARATE decision
+             * — `all` versus `first-party` — and this arm used to reset
+             * it to first-party as a side effect, so `/set media on`
+             * silently narrowed what `/media all` had widened while
+             * `/media on` left it alone. Same knob, two doors, two
+             * answers. */
+            app->inline_media_enabled = true;
         } else {
             log_line(app, "/set media: expected %s", def->values);
             return false;
@@ -8727,6 +8735,33 @@ static void add_history(struct app *app, const char *line) {
  * So every read-modify-write of input/input_len holds app->lock, and the
  * bounds test lives inside the same critical section as the write it
  * guards. A mutex per keypress is not a cost anyone can perceive. */
+/* Drop a half-finished UTF-8 character from the end of `s`.
+ *
+ * snprintf truncates by BYTES and knows nothing about characters, so any
+ * bounded copy of text that came off the network or out of a
+ * transcriber can end mid-sequence. What is left is not merely ugly: it
+ * is invalid UTF-8, and it goes on the wire that way. Cutting back to
+ * the last complete character loses at most one glyph and always leaves
+ * something sendable. */
+static void utf8_trim_partial_tail(char *s) {
+    size_t n = strlen(s);
+    /* A character is at most 4 bytes, so the lead byte is within 3 steps
+     * of the end or the tail is malformed anyway. */
+    for (size_t back = 0; n > 0 && back < 4; back++) {
+        unsigned char c = (unsigned char)s[--n];
+        if ((c & 0xC0) == 0x80) continue; /* continuation byte, keep walking */
+        size_t need = c < 0x80             ? 1
+                      : (c & 0xE0) == 0xC0 ? 2
+                      : (c & 0xF0) == 0xE0 ? 3
+                      : (c & 0xF8) == 0xF0 ? 4
+                                           : 0;
+        /* A lead byte whose character does not fit in what remains, or a
+         * byte that is no lead byte at all, ends the string here. */
+        if (need == 0 || n + need > strlen(s)) s[n] = 0;
+        return;
+    }
+}
+
 /* Append one character to the input line, encoded as UTF-8.
  *
  * The old path took BYTES from getch() and filtered them with isprint(),
@@ -11230,6 +11265,10 @@ static void stt_job(struct app *app, const struct job *job) {
     size_t have = strlen(app->input);
     if (have && have + 1 < sizeof(app->input)) app->input[have++] = ' ';
     snprintf(app->input + have, sizeof(app->input) - have, "%s", text);
+    /* A transcript can be four times the input line, and snprintf cuts
+     * by bytes: a long dictation in any language with accents would
+     * otherwise end in half a character. */
+    utf8_trim_partial_tail(app->input);
     app->input_len = strlen(app->input);
     pthread_mutex_unlock(&app->lock);
     log_line(app, "/stt: %.200s", text);
@@ -11304,12 +11343,22 @@ static void record_start_for(struct app *app, bool video, enum record_purpose pu
         return;
     }
     /* The link would be posted to the current window, and $server
-     * rejects a PRIVMSG — refuse BEFORE recording, not after. */
+     * rejects a PRIVMSG — refuse BEFORE recording, not after.
+     *
+     * Only for a recording that is going to be SENT. A transcription
+     * ends up in the input line and touches the network not at all, so
+     * refusing it here told someone dictating in the server window that
+     * the window was read-only, which was true and beside the point. */
     char net[MAX_SLUG], chan[MAX_CHANNEL];
-    if (!current_window_key(app, net, sizeof(net), chan, sizeof(chan)) || is_server_window(chan)) {
+    bool have_window = current_window_key(app, net, sizeof(net), chan, sizeof(chan));
+    if (purpose == RECORD_SEND && (!have_window || is_server_window(chan))) {
         log_line(app, "/%s: the server window is read-only — switch to a channel or query first",
                  video ? "video" : "voice");
         return;
+    }
+    if (!have_window) {
+        net[0] = 0;
+        chan[0] = 0;
     }
 
     memset(&app->rec, 0, sizeof(app->rec));
