@@ -154,6 +154,38 @@ export class IrcPeer {
     this.client.raw(["NOTICE", target, body]);
   }
 
+  // #591 — answer an inbound CTCP PING by echoing its token straight back as a
+  // CTCP PING NOTICE, exactly as a real client (or shottino) does. Parsed off
+  // the RAW wire line rather than irc-framework's CTCP middleware, so it works
+  // regardless of the library's own CTCP handling; a `done` latch makes it
+  // one-shot, so a stray library auto-response can't double-fire from here.
+  // Call BEFORE the operator's `/ping` so the listener is armed when the query
+  // arrives. Grappa routes the reply to `$server` (CTCP-framed, 96bedfdd) and
+  // cic's correlation gate synthesises the RTT in the window `/ping` was typed.
+  answerCtcpPing(): void {
+    const delim = String.fromCharCode(1);
+    const marker = `:${delim}PING`;
+    let done = false;
+    this.client.on("raw", (event: { line: string; from_server: boolean }) => {
+      if (done || !event.from_server || event.line[0] !== ":") return;
+      const line = event.line;
+      // ":asker!user@host PRIVMSG <me> :\x01PING <token>\x01"
+      if (!line.includes(" PRIVMSG ")) return;
+      const at = line.indexOf(marker);
+      if (at < 0) return;
+      done = true;
+      const asker = line.slice(1, line.search(/[! ]/));
+      // Token = the bytes after ":\x01PING " up to the closing \x01 (optional),
+      // echoed verbatim — the whole protocol is that it returns byte for byte.
+      let rest = line.slice(at + marker.length);
+      if (rest.startsWith(" ")) rest = rest.slice(1);
+      const end = rest.indexOf(delim);
+      const token = end >= 0 ? rest.slice(0, end) : rest;
+      const body = token === "" ? `${delim}PING${delim}` : `${delim}PING ${token}${delim}`;
+      this.client.raw(["NOTICE", asker, body]);
+    });
+  }
+
   // Register a nick with NickServ. Used by P-0a e2es to put a peer
   // into +r (registered) state so a subsequent /whois returns 307
   // RPL_WHOISREGNICK. With EMAIL:1 (the config since GH #349 wired the
