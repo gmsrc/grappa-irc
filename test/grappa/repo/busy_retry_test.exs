@@ -157,4 +157,60 @@ defmodule Grappa.Repo.BusyRetryTest do
       assert Agent.get(counter, & &1) == 0
     end
   end
+
+  # #594 — cross-process fault arming. The process-dictionary seam
+  # (`inject_transient_faults/1`) can only reach work that runs in the
+  # CALLER's own process; a fault that must fire inside a Phoenix Channel,
+  # a Session.Server, or a sink GenServer needs to be armed against THAT
+  # pid. `arm_faults/2` stores the count in a shared ETS table keyed by the
+  # exact target pid — the same pid-scoped isolation the process dictionary
+  # gives (a sibling async test operates on its OWN spawned pid), just
+  # externally addressable. These tests pin BOTH halves: the target degrades,
+  # and the arming process itself is untouched.
+  describe "arm_faults/2 (cross-process seam, #594)" do
+    test "degrades a BusyRetry.run in the TARGET pid, leaving the caller's own run untouched" do
+      test_pid = self()
+
+      target =
+        spawn(fn ->
+          receive do
+            :go ->
+              send(test_pid, {:target_result, BusyRetry.run(fn -> {:ok, :wrote} end)})
+          end
+        end)
+
+      on_exit(fn -> BusyRetry.disarm_faults(target) end)
+
+      BusyRetry.arm_faults(target, 10_000)
+      send(target, :go)
+
+      # The armed target rides the budget out and degrades — proving the
+      # fault fired in a DIFFERENT process than the one that armed it.
+      assert_receive {:target_result, {:error, :db_unavailable}}, 2_000
+
+      # The CALLER (this test process) was never armed, so its own run
+      # succeeds — the fault did NOT bleed across the pid boundary.
+      assert BusyRetry.run(fn -> {:ok, :wrote} end) == {:ok, :wrote}
+    end
+
+    test "disarm_faults/1 clears a target's armed count" do
+      test_pid = self()
+
+      target =
+        spawn(fn ->
+          receive do
+            :go ->
+              send(test_pid, {:target_result, BusyRetry.run(fn -> {:ok, :wrote} end)})
+          end
+        end)
+
+      BusyRetry.arm_faults(target, 10_000)
+      :ok = BusyRetry.disarm_faults(target)
+
+      send(target, :go)
+
+      # With the count cleared, the target's run succeeds immediately.
+      assert_receive {:target_result, {:ok, :wrote}}, 2_000
+    end
+  end
 end

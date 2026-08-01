@@ -166,6 +166,19 @@ defmodule Grappa.Repo.BusyRetry do
   if Mix.env() == :test do
     @fault_pdict_key {__MODULE__, :inject_transient_faults}
 
+    # #594 — cross-process arming lives in a shared ETS table keyed by the
+    # TARGET pid. The process-dictionary seam above only reaches work in the
+    # caller's own process; a fault that must fire inside a Phoenix Channel,
+    # a Session.Server, or a sink GenServer needs to be armed against THAT
+    # pid from a test running in a DIFFERENT process. Keyed by the exact
+    # target pid, the isolation is identical to the process dictionary's (a
+    # concurrent async test operates on its OWN spawned pid and reads `[]`),
+    # only externally addressable — so async tests never bleed. The table is
+    # created ONCE by the ExUnit runner in `test_helper.exs` (owned by that
+    # long-lived process, never created lazily here — that would race
+    # `:ets.new` across async tests).
+    @fault_ets_table :grappa_busy_retry_cross_process_faults
+
     @doc false
     @spec inject_transient_faults(non_neg_integer()) :: :ok
     def inject_transient_faults(n) when is_integer(n) and n >= 0 do
@@ -173,20 +186,82 @@ defmodule Grappa.Repo.BusyRetry do
       :ok
     end
 
-    defp maybe_inject_fault do
-      case Process.get(@fault_pdict_key, 0) do
-        n when n > 0 ->
-          Process.put(@fault_pdict_key, n - 1)
-          # "Database busy" is the VERBATIM message a real write-lock
-          # SQLITE_BUSY raises through Ecto (proven by
-          # `Grappa.Repo.BusyRetryFidelityTest`, and the #523 prod evidence) —
-          # so the injected fault is byte-faithful to reality, not a shape we
-          # merely know our own classifier accepts.
-          raise %Exqlite.Error{message: "Database busy", statement: nil}
+    @doc false
+    # Arm `n` transient busy faults against `pid`. Callers MUST `on_exit` a
+    # `disarm_faults/1` — a fault left armed on a pid that outlives the test
+    # is a failure-at-a-distance (the worst kind to diagnose).
+    @spec arm_faults(pid(), non_neg_integer()) :: :ok
+    def arm_faults(pid, n) when is_pid(pid) and is_integer(n) and n >= 0 do
+      true = :ets.insert(@fault_ets_table, {pid, n})
+      :ok
+    end
+
+    @doc false
+    @spec disarm_faults(pid()) :: :ok
+    def disarm_faults(pid) when is_pid(pid) do
+      true = :ets.delete(@fault_ets_table, pid)
+      :ok
+    end
+
+    @doc false
+    # Create the cross-process fault table. Called ONCE by `test_helper.exs`
+    # from the ExUnit runner process so the `:public` table outlives every
+    # test. Idempotent (a re-run finds the table already there).
+    @spec ensure_fault_table() :: :ok
+    def ensure_fault_table do
+      case :ets.whereis(@fault_ets_table) do
+        :undefined ->
+          :ets.new(@fault_ets_table, [:named_table, :public, :set])
+          :ok
 
         _ ->
           :ok
       end
+    end
+
+    # pdict FIRST (the existing in-process seam — every already-green test
+    # keeps arming through it, untouched), ETS second (the #594 cross-process
+    # seam). Both are pid-scoped, so the order is a pure preference, not a
+    # correctness requirement.
+    defp maybe_inject_fault do
+      cond do
+        consume_pdict_fault?() -> raise_injected_busy()
+        consume_ets_fault?() -> raise_injected_busy()
+        true -> :ok
+      end
+    end
+
+    @spec consume_pdict_fault?() :: boolean()
+    defp consume_pdict_fault? do
+      case Process.get(@fault_pdict_key, 0) do
+        n when n > 0 ->
+          Process.put(@fault_pdict_key, n - 1)
+          true
+
+        _ ->
+          false
+      end
+    end
+
+    @spec consume_ets_fault?() :: boolean()
+    defp consume_ets_fault? do
+      case :ets.lookup(@fault_ets_table, self()) do
+        [{pid, n}] when n > 0 ->
+          :ets.insert(@fault_ets_table, {pid, n - 1})
+          true
+
+        _ ->
+          false
+      end
+    end
+
+    # "Database busy" is the VERBATIM message a real write-lock SQLITE_BUSY
+    # raises through Ecto (proven by `Grappa.Repo.BusyRetryFidelityTest`, and
+    # the #523 prod evidence) — so the injected fault is byte-faithful to
+    # reality, not a shape we merely know our own classifier accepts.
+    @spec raise_injected_busy() :: no_return()
+    defp raise_injected_busy do
+      raise %Exqlite.Error{message: "Database busy", statement: nil}
     end
   else
     defp maybe_inject_fault, do: :ok

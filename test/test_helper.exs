@@ -17,6 +17,13 @@
 # the sqlite-busy class with one knob.
 ExUnit.start(capture_log: true)
 Ecto.Adapters.SQL.Sandbox.mode(Grappa.Repo, :manual)
+
+# #594 — the cross-process BusyRetry fault table, created ONCE here so it is
+# owned by the long-lived ExUnit runner process and survives every test. A
+# `:public :named_table` keyed by target pid; `arm_faults/2` writes it,
+# `maybe_inject_fault/0` reads it by `self()`. Creating it lazily in the first
+# test that arms would race `:ets.new` across async tests — hence here.
+Grappa.Repo.BusyRetry.ensure_fault_table()
 Mox.defmock(Grappa.Admission.CaptchaMock, for: Grappa.Admission.Captcha)
 Mox.defmock(Grappa.Themes.ImageFetcherMock, for: Grappa.Themes.ImageFetcher)
 # #543 INC-5 — source-alias platform adapter + the hardened command seam.
