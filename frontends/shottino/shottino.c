@@ -33,6 +33,8 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <wchar.h>
+#include <wctype.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <limits.h>
@@ -8650,6 +8652,56 @@ static void add_history(struct app *app, const char *line) {
  * So every read-modify-write of input/input_len holds app->lock, and the
  * bounds test lives inside the same critical section as the write it
  * guards. A mutex per keypress is not a cost anyone can perceive. */
+/* Append one character to the input line, encoded as UTF-8.
+ *
+ * The old path took BYTES from getch() and filtered them with isprint(),
+ * which in a UTF-8 locale is false for every byte >= 0x80 — so no
+ * accented character could be typed at all. `perché` went out as
+ * `perch`, on a client whose main network is Italian. The bytes were not
+ * mangled; they were dropped one at a time, silently, which is why it
+ * read as a rendering problem rather than an input one.
+ *
+ * The buffer stays UTF-8 (the wire wants bytes, and everything
+ * downstream already treats it as bytes); only the way characters ENTER
+ * it changes. A character that will not fit whole is refused whole: half
+ * a multibyte sequence in the buffer is a line that cannot be sent. */
+static void input_append_wide(struct app *app, wchar_t wc) {
+    char enc[MB_LEN_MAX + 1];
+    mbstate_t st;
+    memset(&st, 0, sizeof(st));
+    size_t n = wcrtomb(enc, wc, &st);
+    if (n == 0 || n == (size_t)-1) return;
+    pthread_mutex_lock(&app->lock);
+    if (app->input_len + n < sizeof(app->input)) {
+        memcpy(app->input + app->input_len, enc, n);
+        app->input_len += n;
+        app->input[app->input_len] = 0;
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Delete one CHARACTER, which is not one byte.
+ *
+ * Backspace used to drop a single byte, so erasing an accented character
+ * left the leading byte of its sequence behind — an invalid prefix that
+ * the next keystroke appended to and that went out on the wire as
+ * garbage. It mattered even before typing them was possible, because
+ * UTF-8 reaches this line by other doors: an /stt transcript, the
+ * reply-prefill guillemets, a completed non-ASCII nick. */
+static void input_backspace(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    size_t n = app->input_len;
+    if (n) {
+        n--;
+        /* Continuation bytes are 10xxxxxx; walk back over them to the
+         * lead byte, which is the start of the character. */
+        while (n > 0 && ((unsigned char)app->input[n] & 0xC0) == 0x80) n--;
+        app->input_len = n;
+        app->input[n] = 0;
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
 static void history_prev(struct app *app) {
     pthread_mutex_lock(&app->lock);
     if (app->history_count && app->history_pos) {
@@ -14682,8 +14734,30 @@ static void event_loop(struct app *app) {
         if (preview_ready) show_preview(app);
         record_poll(app);
         draw(app);
-        int ch = getch();
-        if (ch == ERR) continue;
+        /* get_wch, not getch: the latter hands back one BYTE at a time,
+         * and a byte of a UTF-8 character is not a character. `rc` says
+         * which kind of thing arrived — KEY_CODE_YES for a function key,
+         * OK for a character — and that distinction matters below,
+         * because KEY_ codes start at 257 and so does Greek. */
+        wint_t wch = 0;
+        int rc = get_wch(&wch);
+        if (rc == ERR) continue;
+        int ch = (int)wch;
+        /* A character that did not fit in a byte cannot be any of the
+         * keys handled below — every one of those is ASCII or a KEY_
+         * code — so it is text, and matching it against KEY_ constants
+         * would be a numeric coincidence waiting to happen. Overlay and
+         * panel filters stay ASCII: they match nicks and URLs into a
+         * char buffer, so a wide character was never going to land in
+         * one, and typing one while a filter is open does nothing rather
+         * than something wrong. */
+        if (rc == OK && wch >= 256) {
+            pthread_mutex_lock(&app->lock);
+            bool captured = app->overlay.kind != OVERLAY_NONE || app->panel != PANEL_CHAT;
+            pthread_mutex_unlock(&app->lock);
+            if (!captured) input_append_wide(app, (wchar_t)wch);
+            continue;
+        }
         if (app->key_echo && ch != KEY_MOUSE) {
             const char *name = keyname(ch);
             log_line(app, "key: code=%d name=%s", ch, name ? name : "?");
@@ -14755,20 +14829,14 @@ static void event_loop(struct app *app) {
         } else if (ch == KEY_DOWN) {
             history_next(app);
         } else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
-            pthread_mutex_lock(&app->lock);
-            if (app->input_len > 0) app->input[--app->input_len] = 0;
-            pthread_mutex_unlock(&app->lock);
-        } else if (isprint(ch)) {
-            /* The bounds test is INSIDE the lock with the write it
-             * guards. Split apart, the worker could grow input_len
-             * between them and the trailing NUL would land one byte past
-             * the array. */
-            pthread_mutex_lock(&app->lock);
-            if (app->input_len + 1 < sizeof(app->input)) {
-                app->input[app->input_len++] = (char)ch;
-                app->input[app->input_len] = 0;
-            }
-            pthread_mutex_unlock(&app->lock);
+            input_backspace(app);
+        } else if (rc == OK && iswprint(wch)) {
+            /* iswprint, not isprint: the latter answers about a byte, and
+             * was the reason an accented character could not be typed.
+             * It was also called with KEY_ codes above 255, which is an
+             * out-of-range read of the ctype table — `rc == OK` is what
+             * keeps a function key out of here now. */
+            input_append_wide(app, (wchar_t)wch);
         }
     }
     mouse_reporting(false);

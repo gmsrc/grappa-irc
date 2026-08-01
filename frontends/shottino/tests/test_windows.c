@@ -1082,6 +1082,52 @@ TEST(two_identities_get_two_bot_directories) {
 
 /* "Approve always" that forgets at the next restart is not a grant, it
  * is a longer session. */
+/* You must be able to type your own language.
+ *
+ * The input path took BYTES from getch() and filtered them with
+ * isprint(), which in a UTF-8 locale is false for every byte >= 0x80, so
+ * every accented character was dropped one byte at a time in silence:
+ * `perché` went out as `perch`, on a client whose main network is
+ * Italian. And Backspace deleted one BYTE, so erasing an accented
+ * character left the lead byte of its sequence behind — an invalid
+ * prefix that the next keystroke appended to. */
+TEST(an_accented_character_survives_typing_and_one_backspace) {
+    /* The locale the terminal actually runs in; without it wcrtomb
+     * encodes to something that is not UTF-8 and the test would be
+     * asserting the wrong thing. */
+    CHECK(setlocale(LC_ALL, "C.UTF-8") != NULL || setlocale(LC_ALL, "en_US.UTF-8") != NULL);
+    struct app *app = window_app();
+    CHECK(app != NULL);
+
+    const wchar_t word[] = L"perché";
+    for (size_t i = 0; word[i]; i++) input_append_wide(app, word[i]);
+
+    /* Six characters, seven bytes: é is two of them. The old path stored
+     * five and dropped the rest. */
+    CHECK(strcmp(app->input, "perch\xc3\xa9") == 0);
+    CHECK_LONG(app->input_len, 7);
+
+    /* One Backspace removes the whole character, not half of it. */
+    input_backspace(app);
+    CHECK(strcmp(app->input, "perch") == 0);
+    CHECK_LONG(app->input_len, 5);
+
+    /* And an ASCII one still removes exactly one byte. */
+    input_backspace(app);
+    CHECK(strcmp(app->input, "perc") == 0);
+
+    /* A character that will not fit whole is refused whole: half a
+     * sequence in the buffer is a line that cannot be sent. */
+    app->input_len = sizeof(app->input) - 2;
+    memset(app->input, 'x', app->input_len);
+    app->input[app->input_len] = 0;
+    input_append_wide(app, L'é');
+    CHECK_LONG(app->input_len, sizeof(app->input) - 2);
+    CHECK(app->input[app->input_len] == 0);
+
+    free_app(app);
+}
+
 /* Three threads send on one websocket; a ref must belong to one of them.
  *
  * ws_ref was incremented from main, the job worker and the model thread
@@ -1530,6 +1576,7 @@ int main(void) {
     RUN(a_grant_is_per_person_and_per_tool);
     RUN(a_memory_filename_is_built_not_taken);
     RUN(two_identities_get_two_bot_directories);
+    RUN(an_accented_character_survives_typing_and_one_backspace);
     RUN(a_websocket_ref_is_never_handed_out_twice);
     RUN(the_model_thread_announces_that_it_stopped);
     RUN(retiring_an_echo_moves_every_row_not_just_its_text);
