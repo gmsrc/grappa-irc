@@ -6,10 +6,12 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
   operator's own TLS front door). nginx — where it survives (jail + e2e) —
   is a dumb reverse proxy that emits none of these.
 
-  The golden literal below is the CSP that shipped byte-for-byte in the
-  retired `infra/snippets/security-headers.conf`. It is intentionally
-  hardcoded here (not read from the plug) so this test PINS the plug
-  against drift — a characterization contract, not a mirror.
+  The golden literal below started as the CSP that shipped byte-for-byte
+  in the retired `infra/snippets/security-headers.conf`; #607 widened
+  `media-src` to `https:` (external audio in the docked mini-player) — a
+  deliberate, pinned deviation. It is intentionally hardcoded here (not
+  read from the plug) so this test PINS the plug against drift — a
+  characterization contract, not a mirror.
   """
   use ExUnit.Case, async: true
 
@@ -17,10 +19,11 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
 
   alias GrappaWeb.Plugs.SecurityHeaders
 
-  # Byte-identical to the deleted nginx snippet's Content-Security-Policy
-  # value. If the app must change the policy, change it in ONE place
-  # (the plug) and update this pin deliberately.
-  @golden_csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data:; font-src 'self'; manifest-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  # The plug's Content-Security-Policy SSOT (was byte-identical to the
+  # deleted nginx snippet; #607 widened media-src to https:). If the app
+  # must change the policy, change it in ONE place (the plug) and update
+  # this pin deliberately.
+  @golden_csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
   defp sent(status) do
     :get
@@ -29,7 +32,7 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
     |> send_resp(status, "body")
   end
 
-  test "csp/0 is byte-identical to the retired nginx snippet" do
+  test "csp/0 matches the golden pin (SSOT, incl. the #607 media-src https: widening)" do
     assert SecurityHeaders.csp() == @golden_csp
   end
 

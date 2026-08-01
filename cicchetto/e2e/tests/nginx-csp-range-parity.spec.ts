@@ -35,7 +35,10 @@ import { uploadViaPicker } from "../fixtures/uploadJourney";
 // design leans on (default-src/frame-ancestors/base-uri).
 const LOAD_BEARING_DIRECTIVES = [
   "default-src 'self'",
-  "media-src 'self' blob:",
+  // #607 — the `https:` token must reach the wire (external audio in the
+  // docked mini-player); the old "media-src 'self' blob:" pin is a PREFIX
+  // of this, so `toContain` would pass silently without the widened token.
+  "media-src 'self' blob: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'none'",
   "base-uri 'self'",

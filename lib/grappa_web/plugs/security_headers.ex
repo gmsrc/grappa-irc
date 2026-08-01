@@ -62,11 +62,17 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
     * `img-src 'self' data:` — favicons + manifest icons + SolidJS inline `data:` SVGs.
     * `font-src 'self'` — system fonts only.
     * `manifest-src 'self'` — PWA install manifest.
-    * `media-src 'self' blob:` — `blob:` for the video-upload duration probe
-      (off-DOM `<video>` via `URL.createObjectURL`, videoPolicy.ts); `'self'`
-      because declaring `media-src` REPLACES the `default-src` fallback and
-      direct navigation to `/uploads/<slug>` videos (the 🎬 link — browsers
-      render mp4 in a media document governed by this header) needs it.
+    * `media-src 'self' blob: https:` — `blob:` for the video-upload duration
+      probe (off-DOM `<video>` via `URL.createObjectURL`, videoPolicy.ts);
+      `'self'` because declaring `media-src` REPLACES the `default-src`
+      fallback and direct navigation to `/uploads/<slug>` videos (the 🎬 link
+      — browsers render mp4 in a media document governed by this header) needs
+      it; `https:` (#607) so the docked audio mini-player can play a
+      third-party `.mp3`/`.m4a` link's `<audio>` element (external audio only,
+      admitted client-side by `mediaLink.ts` `externalAudioLink` — the widening
+      is scheme-scoped to https, never http, so no mixed content). This is a
+      deliberate, documented loosening of the "restate only `'self'`" rule
+      above; the plug test + `nginx-csp-range-parity.spec.ts` pin it.
     * `worker-src 'self' blob:` — the SW shell-cache worker, plus mediabunny
       spawns codec workers from `blob:` URLs.
     * `frame-src https://challenges.cloudflare.com https://*.hcaptcha.com` —
@@ -88,7 +94,7 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
 
   import Plug.Conn
 
-  @csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data:; font-src 'self'; manifest-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  @csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
   # HTTP header names are lower-cased (HTTP/2 + Plug convention); the VALUES
   # are byte-identical to the retired nginx snippet.
