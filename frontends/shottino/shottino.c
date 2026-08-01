@@ -8390,12 +8390,43 @@ static void query_window(struct app *app, const char *target) {
  * network landed on whatever the user happened to be looking at. The
  * bridge (--ircd) has no focus at all, which is what made the latent bug
  * unavoidable. */
-static void join_channel_on(struct app *app, const char *network, const char *name) {
+/* Split `#chan key` into the two things the server wants separately.
+ *
+ * Everything up to the first space is the channel; everything after the
+ * spaces is the key, which may itself be empty. A comma-separated channel
+ * list keeps working — that is the name, and grappa validates it.
+ * Shared by /join and /j so the short spelling cannot lose the key. */
+static void join_split(const char *rest, char *chan, size_t chan_sz, char *key, size_t key_sz) {
+    while (*rest == ' ') rest++;
+    size_t n = 0;
+    while (rest[n] && rest[n] != ' ') n++;
+    snprintf(chan, chan_sz, "%.*s", (int)n, rest);
+    const char *k = rest + n;
+    while (*k == ' ') k++;
+    snprintf(key, key_sz, "%s", k);
+}
+
+/* `key` is the +k channel key, or "" for a channel that has none.
+ *
+ * It is a SEPARATE field, not part of the name: grappa validates the
+ * channel name and forwards the key to the upstream JOIN frame itself
+ * (see the create/2 docs in channels_controller.ex), so `/join #chan key`
+ * used to POST a channel literally called "#chan key" and come back 400.
+ * The verb has advertised the key form in /help all along. */
+static void join_channel_on(struct app *app, const char *network, const char *name,
+                            const char *key) {
     const char *net_slug = network && network[0] ? network : app->networks[0].slug;
     char *net = url_encode(net_slug);
     char *path = xasprintf("/networks/%s/channels", net);
     char *escaped = json_escape(name);
-    char *body = xasprintf("{\"name\":\"%s\"}", escaped);
+    char *body;
+    if (key && key[0]) {
+        char *key_json = json_escape(key);
+        body = xasprintf("{\"name\":\"%s\",\"key\":\"%s\"}", escaped, key_json);
+        free(key_json);
+    } else {
+        body = xasprintf("{\"name\":\"%s\"}", escaped);
+    }
     free(net);
     free(escaped);
     struct http_response r = http_request(app, "POST", path, body);
@@ -8529,7 +8560,7 @@ static void *worker_main(void *arg) {
             }
             break;
         case JOB_JOIN:
-            join_channel_on(app, job.network, job.channel);
+            join_channel_on(app, job.network, job.channel, job.arg1);
             break;
         case JOB_PART:
             part_target(app, job.network, job.channel);
@@ -12060,12 +12091,16 @@ static void handle_command_dispatch(struct app *app, char *line) {
     } else if (strncmp(line, "/join ", 6) == 0 && line[6]) {
         struct job job = { .kind = JOB_JOIN };
         current_window_key(app, job.network, sizeof(job.network), NULL, 0);
-        snprintf(job.channel, sizeof(job.channel), "%s", line + 6);
+        /* `#chan key`: the key is the server's own parameter, so it is
+         * split off here rather than posted as part of the name. */
+        join_split(line + 6, job.channel, sizeof(job.channel), job.arg1, sizeof(job.arg1));
         enqueue_job(app, job);
     } else if (strncmp(line, "/j ", 3) == 0 && line[3]) {
         struct job job = { .kind = JOB_JOIN };
         current_window_key(app, job.network, sizeof(job.network), NULL, 0);
-        snprintf(job.channel, sizeof(job.channel), "%s", line + 3);
+        /* `#chan key`: the key is the server's own parameter, so it is
+         * split off here rather than posted as part of the name. */
+        join_split(line + 3, job.channel, sizeof(job.channel), job.arg1, sizeof(job.arg1));
         enqueue_job(app, job);
     } else if (strcmp(line, "/part") == 0) {
         handle_command(app, "/close");

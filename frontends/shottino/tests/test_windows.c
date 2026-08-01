@@ -1459,6 +1459,41 @@ TEST(a_standing_grant_survives_a_restart) {
  *
  * Driven through handle_command, the door every keystroke and every
  * alias goes through, so this covers verbs nobody has written yet. */
+/* A channel key is the server's own parameter, not part of the name.
+ *
+ * `/join #chan key` used to put the whole rest in the name, so the POST
+ * asked for a channel literally called "#chan key" — which grappa
+ * validates and rejects, so a keyed join failed with HTTP 400 while
+ * /help advertised the form. */
+TEST(a_join_key_is_split_from_the_channel) {
+    char chan[MAX_CHANNEL], key[MAX_LINE];
+
+    join_split("#sniffo segreto", chan, sizeof(chan), key, sizeof(key));
+    CHECK_STR(chan, "#sniffo");
+    CHECK_STR(key, "segreto");
+
+    /* No key is an empty key, not a missing split. */
+    join_split("#sniffo", chan, sizeof(chan), key, sizeof(key));
+    CHECK_STR(chan, "#sniffo");
+    CHECK_STR(key, "");
+
+    /* Extra spaces belong to neither. */
+    join_split("  #sniffo   segreto", chan, sizeof(chan), key, sizeof(key));
+    CHECK_STR(chan, "#sniffo");
+    CHECK_STR(key, "segreto");
+
+    /* A comma-separated list is still ONE name — grappa validates it. */
+    join_split("#uno,#due", chan, sizeof(chan), key, sizeof(key));
+    CHECK_STR(chan, "#uno,#due");
+    CHECK_STR(key, "");
+
+    /* A key with a space in it is not a thing IRC has: everything after
+     * the first gap is the key, spaces and all, and the server decides. */
+    join_split("#chan a b", chan, sizeof(chan), key, sizeof(key));
+    CHECK_STR(chan, "#chan");
+    CHECK_STR(key, "a b");
+}
+
 /* A verb is a whole word, not a prefix.
  *
  * /who matched with a bare strncmp, so a bare /whois — which the
@@ -1652,6 +1687,7 @@ int main(void) {
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);
     RUN(a_standing_grant_survives_a_restart);
+    RUN(a_join_key_is_split_from_the_channel);
     RUN(a_verb_is_matched_as_a_whole_word_not_a_prefix);
     RUN(every_spelling_of_the_window_verb_finds_its_number);
     RUN(a_tab_completed_verb_still_dispatches);
