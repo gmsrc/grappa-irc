@@ -1082,6 +1082,66 @@ TEST(two_identities_get_two_bot_directories) {
 
 /* "Approve always" that forgets at the next restart is not a grant, it
  * is a longer session. */
+/* Three threads send on one websocket; a ref must belong to one of them.
+ *
+ * ws_ref was incremented from main, the job worker and the model thread
+ * with nothing serialising them, so two frames could carry the SAME ref —
+ * and Phoenix silently discards a push whose join_ref names no channel of
+ * its own, which is the failure mode that hides. The socket itself is not
+ * needed to test this: with ws_connected false nothing is written, and
+ * what is under test is the number, not the write.
+ *
+ * Deterministic in the passing direction — with the lock the refs are
+ * always distinct, so a slow box cannot make this red. Without it, this
+ * much contention loses increments. */
+#define REF_THREADS 4
+#define REF_EACH 5000
+static void *ref_grabber(void *arg) {
+    struct app *app = arg;
+    static _Thread_local unsigned long mine[REF_EACH];
+    for (size_t i = 0; i < REF_EACH; i++) mine[i] = ws_join(app, "grappa:user:vjt");
+    unsigned long *out = malloc(sizeof(mine));
+    memcpy(out, mine, sizeof(mine));
+    return out;
+}
+
+TEST(a_websocket_ref_is_never_handed_out_twice) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    pthread_mutex_init(&app->ws_lock, NULL);
+    /* Not connected: ws_send_text_locked returns immediately and no
+     * socket is touched, leaving the ref allocation as the whole test. */
+    app->ws_connected = false;
+
+    pthread_t t[REF_THREADS];
+    for (size_t i = 0; i < REF_THREADS; i++)
+        CHECK(pthread_create(&t[i], NULL, ref_grabber, app) == 0);
+
+    /* Every ref ever handed out, marked in a bitmap: any repeat is a lost
+     * increment, and the total must be exactly what was asked for. */
+    static bool seen[REF_THREADS * REF_EACH + 2];
+    size_t collected = 0, duplicates = 0, out_of_range = 0;
+    for (size_t i = 0; i < REF_THREADS; i++) {
+        unsigned long *refs = NULL;
+        pthread_join(t[i], (void **)&refs);
+        CHECK(refs != NULL);
+        for (size_t k = 0; k < REF_EACH; k++) {
+            collected++;
+            if (refs[k] == 0 || refs[k] >= sizeof(seen) / sizeof(seen[0])) { out_of_range++; continue; }
+            if (seen[refs[k]]) duplicates++;
+            seen[refs[k]] = true;
+        }
+        free(refs);
+    }
+    CHECK_LONG(collected, REF_THREADS * REF_EACH);
+    CHECK_LONG(duplicates, 0);
+    CHECK_LONG(out_of_range, 0);
+    CHECK_LONG(app->ws_ref, REF_THREADS * REF_EACH);
+
+    pthread_mutex_destroy(&app->ws_lock);
+    free_app(app);
+}
+
 /* Quitting has to be able to tell the model thread apart from a corpse.
  *
  * llm_stop was declared and read and assigned NOWHERE, so shutdown freed
@@ -1470,6 +1530,7 @@ int main(void) {
     RUN(a_grant_is_per_person_and_per_tool);
     RUN(a_memory_filename_is_built_not_taken);
     RUN(two_identities_get_two_bot_directories);
+    RUN(a_websocket_ref_is_never_handed_out_twice);
     RUN(the_model_thread_announces_that_it_stopped);
     RUN(retiring_an_echo_moves_every_row_not_just_its_text);
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);

@@ -984,6 +984,24 @@ struct app {
     size_t jobs_head;
     size_t jobs_tail;
     bool worker_stop;
+    /* Guards the websocket connection and every number that describes
+     * it: ws, ws_in, ws_connected, ws_ref, ws_user_join_ref. Three
+     * threads send on this socket (main, the job worker, the model
+     * thread) and main reconnects it underneath them — see the rules
+     * above ws_send_frame_locked.
+     *
+     * SEPARATE from app->lock: merging them would put a TLS write inside
+     * the lock every draw frame takes.
+     *
+     * ORDERING, when both are needed: ws_lock FIRST, app->lock second,
+     * never the reverse. Only one path does it — ws_try_reconnect holds
+     * this across ws_connect, which logs, and log_line takes app->lock.
+     * Every send site releases this before it logs precisely so the edge
+     * stays one-directional. A new site that takes app->lock and then
+     * sends would close the cycle, so send OUTSIDE the UI lock; every
+     * caller today already does (checked: the dispatcher, the worker's
+     * join/close paths, ctcp_respond, the model's tool calls). */
+    pthread_mutex_t ws_lock;
     struct tls_conn ws;
     /* Receive-side framing. Lives across reads BECAUSE a frame does: the
      * socket hands over whatever has arrived, which for anything bigger
@@ -4098,10 +4116,40 @@ static bool ws_connect(struct app *app) {
     return true;
 }
 
-/* One frame, any opcode. Text is what the client speaks; the opcode is a
- * parameter so a PONG can go back the same way rather than through a
- * second copy of the masking. */
-static bool ws_send_frame(struct app *app, int opcode, const char *body, size_t len) {
+/* ── The socket is shared; ws_lock is what makes that safe ──────────────
+ *
+ * Three threads write this connection. Main sends the heartbeat, the
+ * pongs, the joins and everything the command dispatcher pushes; the
+ * WORKER sends joins and query closes (join_channel_on,
+ * close_query_target) and CTCP replies; the LLM thread sends whatever a
+ * tool call decided (tool_execute -> ws_push_user). Only main reads it.
+ *
+ * None of that was synchronised. OpenSSL forbids concurrent use of one
+ * SSL object, so two threads inside SSL_write corrupt its state; without
+ * TLS, two conn_write_all loops interleave partial writes and corrupt
+ * the framing instead. Worse, reconnect calls conn_close — SSL_free plus
+ * memset — on main while a worker could be mid-write on that same
+ * object, which is a cross-thread use-after-free rather than a garbled
+ * message.
+ *
+ * ws_lock covers the connection AND the numbers that describe it:
+ * ws_connected, ws_ref (incremented from all three threads, so duplicate
+ * refs were already possible), ws_user_join_ref, and the reader buffer.
+ *
+ * Two rules keep it deadlock-free, because the read path can send:
+ *   1. `_locked` sends assume the caller holds it; the plain ones take
+ *      it. ws_read_frame answers a PING with the locked form, since
+ *      ws_pump is holding the lock while it reads.
+ *   2. Nothing that can send is called with the lock held. ws_pump drops
+ *      it before handle_ws_frame (which dispatches wire events that push
+ *      back), and ws_try_reconnect drops it before ws_join_topics.
+ *
+ * The reads are safe to hold it across: the socket is O_NONBLOCK from
+ * the moment the handshake finishes, so a read either takes data already
+ * buffered or returns immediately. The one place the lock is held over
+ * something slow is the reconnect handshake, and a background write
+ * during a dead socket had nothing to write to anyway. */
+static bool ws_send_frame_locked(struct app *app, int opcode, const char *body, size_t len) {
     if (!app->ws_connected) return false;
     unsigned char hdr[14];
     size_t hlen = 0;
@@ -4129,8 +4177,12 @@ static bool ws_send_frame(struct app *app, int opcode, const char *body, size_t 
     return ok;
 }
 
-static bool ws_send_text(struct app *app, const char *text) {
-    return ws_send_frame(app, 0x1, text, strlen(text));
+/* Only the _locked forms exist. Every send site here needs the ref and
+ * the frame carrying it to be one atomic step, so each takes ws_lock for
+ * its own reasons and there is nothing left for a self-locking wrapper
+ * to do — one would only invite a caller to send without the ref. */
+static bool ws_send_text_locked(struct app *app, const char *text) {
+    return ws_send_frame_locked(app, 0x1, text, strlen(text));
 }
 
 /* One line describing an outbound push, for /wire.
@@ -4179,30 +4231,48 @@ static char *ws_v2_frame(unsigned long join_ref, unsigned long ref, const char *
  * it. (A join is the one frame where join_ref and ref are the same
  * number: it is the message that establishes the pair.) */
 static unsigned long ws_join(struct app *app, const char *topic) {
+    /* The ref and the frame carrying it are one step: two threads
+     * incrementing ws_ref between the read and the send would give both
+     * frames the same number, and Phoenix discards a push whose join_ref
+     * names no channel of its own. */
+    pthread_mutex_lock(&app->ws_lock);
     unsigned long join_ref = ++app->ws_ref;
     char *frame = ws_v2_frame(join_ref, join_ref, topic, "phx_join", "{}");
-    ws_send_text(app, frame);
+    ws_send_text_locked(app, frame);
     free(frame);
+    pthread_mutex_unlock(&app->ws_lock);
+    /* Logged after the unlock: log_line takes app->lock, and holding two
+     * locks where one would do is how an ordering rule gets invented. */
     if (app->wire_echo) log_line(app, "wire -> join %s ref=%lu", topic, join_ref);
     return join_ref;
 }
 
 static void ws_push_user(struct app *app, const char *event, const char *payload) {
-    if (!app->ws_connected) {
+    char *topic = xasprintf("grappa:user:%s", app->subject);
+    unsigned long ref = 0, join_ref = 0;
+    bool connected;
+    pthread_mutex_lock(&app->ws_lock);
+    connected = app->ws_connected;
+    if (connected) {
+        ref = ++app->ws_ref;
+        /* The join's ref, not this push's — see ws_user_join_ref. Read
+         * under the same lock the reconnect rewrites it under, or a push
+         * can carry the ref of a join that no longer exists. */
+        join_ref = app->ws_user_join_ref;
+        char *frame = ws_v2_frame(join_ref, ref, topic, event, payload);
+        ws_send_text_locked(app, frame);
+        free(frame);
+    }
+    pthread_mutex_unlock(&app->ws_lock);
+    free(topic);
+    if (!connected) {
         log_line(app, "websocket is not connected; /%s not sent", event);
         return;
     }
-    unsigned long ref = ++app->ws_ref;
-    char *topic = xasprintf("grappa:user:%s", app->subject);
-    /* The join's ref, not this push's — see ws_user_join_ref. */
-    char *frame = ws_v2_frame(app->ws_user_join_ref, ref, topic, event, payload);
-    free(topic);
-    ws_send_text(app, frame);
-    free(frame);
     if (app->wire_echo) {
         char summary[MAX_LINE];
         wire_push_summary(event, payload, summary, sizeof(summary));
-        log_line(app, "%s ref=%lu join_ref=%lu", summary, ref, app->ws_user_join_ref);
+        log_line(app, "%s ref=%lu join_ref=%lu", summary, ref, join_ref);
     }
 }
 
@@ -4291,7 +4361,13 @@ static void ws_join_topics(struct app *app) {
     char *subject = json_escape(app->subject);
     char *topic = xasprintf("grappa:user:%s", subject);
     free(subject);
-    app->ws_user_join_ref = ws_join(app, topic);
+    /* Published under the lock every push reads it under: this is the
+     * number every later user-topic frame has to carry, and a reconnect
+     * rewrites it while background threads are pushing. */
+    unsigned long user_ref = ws_join(app, topic);
+    pthread_mutex_lock(&app->ws_lock);
+    app->ws_user_join_ref = user_ref;
+    pthread_mutex_unlock(&app->ws_lock);
     free(topic);
     for (size_t i = 0; i < app->window_count; i++) {
         char *chan = json_escape(app->windows[i].channel);
@@ -4330,8 +4406,9 @@ static int ws_read_frame(struct app *app, char **out) {
             return 1;
         case WS_PING: {
             /* Answered, not ignored: a peer that pings and hears nothing
-             * back is entitled to conclude we are gone. */
-            ws_send_frame(app, 0xA, payload, plen);
+             * back is entitled to conclude we are gone. The _locked form:
+             * ws_pump holds ws_lock across this whole read. */
+            ws_send_frame_locked(app, 0xA, payload, plen);
             free(payload);
             continue;
         }
@@ -5318,8 +5395,19 @@ static void ws_try_reconnect(struct app *app) {
     time_t now = time(NULL);
     if (now < app->ws_retry_at) return;
 
+    /* Close and reopen as ONE step. A worker holding a pointer into the
+     * old SSL object while this frees it is the use-after-free; taking
+     * the lock means any background send either finished before the
+     * close or finds ws_connected false and never touches it.
+     *
+     * Released before ws_join_topics, which sends: the joins take the
+     * lock themselves, one per topic. */
+    pthread_mutex_lock(&app->ws_lock);
     conn_close(&app->ws);
-    if (!ws_connect(app)) {
+    app->ws_connected = false;
+    bool up = ws_connect(app);
+    pthread_mutex_unlock(&app->ws_lock);
+    if (!up) {
         ws_schedule_retry(app);
         log_line(app, "reconnect failed; retrying in %ds", (int)(app->ws_retry_at - now));
         return;
@@ -5340,9 +5428,11 @@ static void ws_pump(struct app *app) {
     }
     time_t now = time(NULL);
     if (now >= app->next_heartbeat) {
+        pthread_mutex_lock(&app->ws_lock);
         char *hb = ws_v2_frame(0, ++app->ws_ref, "phoenix", "heartbeat", "{}");
-        ws_send_text(app, hb);
+        ws_send_text_locked(app, hb);
         free(hb);
+        pthread_mutex_unlock(&app->ws_lock);
         /* Same cadence: a ping that never came back is reported rather
          * than forgotten. */
         ping_sweep(app);
@@ -5350,11 +5440,18 @@ static void ws_pump(struct app *app) {
     }
     for (;;) {
         char *frame = NULL;
+        /* Held across the READ only. handle_ws_frame below dispatches
+         * wire events that push back onto this same socket, so holding
+         * it through the handling would deadlock against ws_push_user. */
+        pthread_mutex_lock(&app->ws_lock);
         int r = ws_read_frame(app, &frame);
-        if (r == 0) break;
         if (r < 0) {
             conn_close(&app->ws);
             app->ws_connected = false;
+        }
+        pthread_mutex_unlock(&app->ws_lock);
+        if (r == 0) break;
+        if (r < 0) {
             ws_schedule_retry(app);
             log_line(app, "websocket disconnected; reconnecting in %ds",
                      (int)(app->ws_retry_at - time(NULL)));
@@ -14918,6 +15015,7 @@ int main(int argc, char **argv) {
     if (!app) die("out of memory");
     pthread_mutex_init(&app->lock, NULL);
     pthread_mutex_init(&app->jobs_lock, NULL);
+    pthread_mutex_init(&app->ws_lock, NULL);
     pthread_cond_init(&app->jobs_cond, NULL);
     app->ws.fd = -1;
     /* Mouse tracking ON by default.
@@ -14982,6 +15080,7 @@ int main(int argc, char **argv) {
     if (!authed) {
         pthread_cond_destroy(&app->jobs_cond);
         pthread_mutex_destroy(&app->jobs_lock);
+        pthread_mutex_destroy(&app->ws_lock);
         pthread_mutex_destroy(&app->lock);
         SSL_CTX_free(app->ssl_ctx);
         free(app);
@@ -15157,6 +15256,7 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
     pthread_cond_destroy(&app->jobs_cond);
     pthread_mutex_destroy(&app->jobs_lock);
+    pthread_mutex_destroy(&app->ws_lock);
     pthread_mutex_destroy(&app->lock);
     SSL_CTX_free(app->ssl_ctx);
     free(app);
