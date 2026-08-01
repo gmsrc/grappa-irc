@@ -1256,9 +1256,28 @@ static bool window_matches(const struct window *w, const char *network, const ch
 /* The synthetic per-network window server replies land in. A name, not a
  * spelling: compared folded like every other IRC identifier. */
 #define SERVER_WINDOW "$server"
-
+/* The model conversation window. Client-local like $server: nothing on
+ * the wire ever names it. */
+#define LLM_WINDOW "$llm"
+/* The model conversation window. Client-local like $server: nothing on
+ * the wire ever names it. */
+/* The model conversation window. Client-local like $server: nothing on
+ * the wire ever names it. */
 static bool is_server_window(const char *channel) {
     return irc_name_eq(channel, SERVER_WINDOW);
+}
+
+/* A window that exists only in THIS client. grappa has never heard of
+ * it, so every REST call naming one can only fail: $server is where the
+ * client files what the network said to nobody in particular, and $llm
+ * is a conversation with a model that never touched the network at all.
+ *
+ * $llm was missing from the checks that already knew this about
+ * $server, which is why opening it fetched scrollback and members for a
+ * channel the bouncer does not have and answered with the 400 and the
+ * "not seeded yet" the user saw. */
+static bool is_local_window(const char *channel) {
+    return is_server_window(channel) || irc_name_eq(channel, LLM_WINDOW);
 }
 
 /* A channel name, by its sigil — the four RFC sigils, which is what the
@@ -4292,6 +4311,9 @@ static void seed_state(struct app *app) {
 }
 
 static void fetch_scrollback(struct app *app, struct window *w) {
+    /* Same rule as enqueue_fetch, at the other door: a window the
+     * bouncer has never heard of has no messages to ask it for. */
+    if (is_local_window(w->channel)) return;
     char *net = url_encode(w->network);
     char *chan = url_encode(w->channel);
     char *path = xasprintf("/networks/%s/channels/%s/messages?limit=80", net, chan);
@@ -5701,7 +5723,7 @@ static void ws_backfill_all(struct app *app) {
     }
     pthread_mutex_unlock(&app->lock);
     for (size_t i = 0; i < count; i++) {
-        if (is_server_window(snap[i].channel)) continue; /* no scrollback */
+        if (is_local_window(snap[i].channel)) continue; /* nothing on the server to fetch */
         /* last_id 0 means this window never saw a message; a full tail
          * fetch is the right recovery there, not an ?after=0 flood. */
         if (snap[i].last_id > 0) backfill_window(app, snap[i].network, snap[i].channel, snap[i].last_id);
@@ -7569,7 +7591,6 @@ static bool bot_grant_add(struct app *app, const char *nick, const char *tool) {
  * every other window mirrors server state, this one has no server side
  * at all. It is named like $server for the same reason — a `$` name
  * cannot collide with a channel or a nick. */
-#define LLM_WINDOW "$llm"
 
 /* ── Tool execution ────────────────────────────────────────────────────
  *
@@ -8069,9 +8090,21 @@ static void llm_run(struct app *app, const struct llm_req *req) {
      * what the next one means — the user asked it either way. */
     llm_history_append(app, req->network, req->channel, req->from_bot, "user", req->text);
 
-    for (int round = 0; round < 2; round++) {
+    /* Rounds 0 and 1 may use tools; the LAST one may not.
+     *
+     * A model that answers with tool calls right up to the last round
+     * produced no words at all, and the loop then returned in silence on
+     * the grounds that "the transport already said why" — which was
+     * true of a failed request and false of a successful one that simply
+     * had not finished talking. That is what "it calls the tools and
+     * then stops" was: the answer was never asked for.
+     *
+     * So there is one more round with the tools taken away. With nothing
+     * else available, the only thing left to produce is the answer. */
+    for (int round = 0; round < 3; round++) {
         struct llm_tool_call calls[LLM_MAX_TOOL_CALLS];
         size_t ncalls = 0;
+        int round_writes = round < 2 ? writes : -1;
         free(reply);
         reply = NULL;
 
@@ -8086,31 +8119,34 @@ static void llm_run(struct app *app, const struct llm_req *req) {
              * conversation rather than as one long question. */
             char flat[LLM_MAX_PROMPT];
             size_t used = 0;
-            for (size_t i = 0; i < nturns && used + 64 < sizeof(flat); i++) {
+            /* The conversation BEFORE this question. turns[0..nhist-1]
+             * is the history, turns[nhist] is what was just asked, and
+             * anything after it is what the tools answered — indices
+             * rather than "the last one", which is what made an earlier
+             * version paste the question in twice. */
+            for (size_t i = 0; i < nhist && used + 64 < sizeof(flat); i++) {
                 const char *who = strcmp(turns[i].role, "assistant") == 0 ? "You said" : "They said";
-                /* The LAST turn is the question being asked now, not a
-                 * quotation of one. */
-                if (i + 1 == nturns) break;
                 int w = snprintf(flat + used, sizeof(flat) - used, "%s: %.*s\n\n", who,
                                  (int)LLM_HISTORY_BYTES, turns[i].content ? turns[i].content : "");
                 if (w < 0 || (size_t)w >= sizeof(flat) - used) break;
                 used += (size_t)w;
             }
-            char *text = xasprintf("%s%s", flat, req->text);
-            if (nturns > 1 && strcmp(turns[nturns - 1].role, "user") == 0 &&
-                turns[nturns - 1].content != req->text) {
-                free(text);
-                text = xasprintf("%s%s\n\n%s", flat, req->text, turns[nturns - 1].content);
+            int w = snprintf(flat + used, sizeof(flat) - used, "%s", req->text);
+            if (w > 0 && (size_t)w < sizeof(flat) - used) used += (size_t)w;
+            for (size_t i = nhist + 1; i < nturns && used + 64 < sizeof(flat); i++) {
+                int n2 = snprintf(flat + used, sizeof(flat) - used, "\n\n%s",
+                                  turns[i].content ? turns[i].content : "");
+                if (n2 < 0 || (size_t)n2 >= sizeof(flat) - used) break;
+                used += (size_t)n2;
             }
-            reply = llm_call_claude_cli(app, &cfg, text, writes, calls, LLM_MAX_TOOL_CALLS,
+            reply = llm_call_claude_cli(app, &cfg, flat, round_writes, calls, LLM_MAX_TOOL_CALLS,
                                         &ncalls);
-            free(text);
             if (!reply && !ncalls) {
                 free(tool_notes);
                 return;
             }
         } else {
-            char *body = llm_openai_body_with_tools(&cfg, turns, nturns, writes);
+            char *body = llm_openai_body_with_tools(&cfg, turns, nturns, round_writes);
             if (!body) {
                 log_line(app, "/llm: cannot build the request body");
                 free(tool_notes);
@@ -8129,7 +8165,7 @@ static void llm_run(struct app *app, const struct llm_req *req) {
                 free(tool_notes);
                 return;
             }
-            ncalls = req->tools_wanted
+            ncalls = req->tools_wanted && round_writes >= 0
                          ? llm_parse_tool_calls(json_root(doc), calls, LLM_MAX_TOOL_CALLS)
                          : 0;
             const char *text = llm_openai_reply(json_root(doc));
@@ -8139,6 +8175,7 @@ static void llm_run(struct app *app, const struct llm_req *req) {
         }
 
         if (ncalls == 0) break;
+        if (round + 1 == 3) break; /* the tool-less round does not execute tools */
 
         /* Results are fed back as a USER turn describing what happened,
          * rather than as role:"tool" messages. The latter needs the
@@ -9423,6 +9460,10 @@ static void enqueue_read_cursor(struct app *app, const char *network, const char
 }
 
 static void enqueue_fetch(struct app *app, const char *network, const char *channel) {
+    /* The one door every scrollback fetch goes through, so the guard
+     * belongs here rather than at each caller — $llm reached the server
+     * through two of them and answered with an HTTP 400 both times. */
+    if (is_local_window(channel)) return;
     struct job job = { .kind = JOB_FETCH };
     snprintf(job.network, sizeof(job.network), "%s", network);
     snprintf(job.channel, sizeof(job.channel), "%s", channel);
@@ -9430,7 +9471,7 @@ static void enqueue_fetch(struct app *app, const char *network, const char *chan
 }
 
 static void enqueue_members(struct app *app, const char *network, const char *channel) {
-    if (!network[0] || !channel[0] || is_server_window(channel)) return;
+    if (!network[0] || !channel[0] || is_local_window(channel)) return;
     struct job job = { .kind = JOB_MEMBERS };
     snprintf(job.network, sizeof(job.network), "%s", network);
     snprintf(job.channel, sizeof(job.channel), "%s", channel);
@@ -14307,6 +14348,7 @@ static void handle_mouse(struct app *app) {
      * Falling through to the chat handlers here would hunt for message
      * regions that belong to a screen the panel is covering. */
     const char *open_setting = NULL;
+    bool miss = false;
     pthread_mutex_lock(&app->lock);
     bool in_panel = app->panel != PANEL_CHAT;
     if (in_panel) {
@@ -14322,6 +14364,12 @@ static void handle_mouse(struct app *app) {
              * click on whatever preference shared that screen row, and
              * the draw path would then scroll to follow the selection. */
             int row = settings_row_at_locked(app, ev.x, ev.y);
+            /* A right-click that lands in the panel but NOT on a
+             * preference row used to do nothing and say nothing, which
+             * is indistinguishable from the mouse not working at all.
+             * The rows start below the heading, and that is exactly the
+             * part of the panel a pointer lands on first. */
+            miss = right && row < 0;
             if (row >= 0) {
                 {
                     app->settings_sel = (size_t)row;
@@ -14341,6 +14389,9 @@ static void handle_mouse(struct app *app) {
     /* Opened after the lock is released: settings_open_modal takes it
      * itself, and reading the current value needs it too. */
     if (open_setting) settings_open_modal(app, open_setting);
+    else if (miss)
+        log_line(app, "right-click a preference ROW to change it — the rows start under the "
+                      "heading, and this click was above or past them");
     if (in_panel) return;
 
     if (right) {

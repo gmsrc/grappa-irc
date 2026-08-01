@@ -1104,6 +1104,27 @@ TEST(a_modal_over_the_settings_panel_is_drawn) {
     CHECK(screen_has("history rolls"));
     CHECK(screen_has("Esc cancel"));
 
+    /* THE GEOMETRY A REAL DRAW RECORDS. Every check so far fed the hit
+     * test numbers I chose; this feeds it the ones draw() wrote, which
+     * is the only pair that matters. A right-click on the first
+     * preference row must resolve to row 0. */
+    overlay_close(app);
+    erase();
+    draw(app);
+    pthread_mutex_lock(&app->lock);
+    int first_row_y = app->panel_draw_y + (int)(app->settings_row0 - app->panel_offset);
+    int mid_x = (app->panel_draw_x0 + app->panel_draw_x1) / 2;
+    int got = settings_row_at_locked(app, mid_x, first_row_y);
+    int below = settings_row_at_locked(app, mid_x, first_row_y + 1);
+    int above = settings_row_at_locked(app, mid_x, app->panel_draw_y - 1);
+    printf("  draw geometry: y=%d x0=%d x1=%d h=%d row0=%zu -> first row at y=%d\n",
+           app->panel_draw_y, app->panel_draw_x0, app->panel_draw_x1, app->panel_draw_h,
+           app->settings_row0, first_row_y);
+    pthread_mutex_unlock(&app->lock);
+    CHECK_LONG(got, 0);
+    CHECK_LONG(below, 1);
+    CHECK_LONG(above, -1);
+
     /* A choice setting shows its values rather than a field. */
     overlay_close(app);
     settings_open_modal(app, "media");

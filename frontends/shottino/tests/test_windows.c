@@ -1189,6 +1189,41 @@ TEST(a_settings_menu_offers_what_the_setting_accepts) {
     free_app(app);
 }
 
+/* A client-local window is never asked about over REST.
+ *
+ * $llm is a conversation with a model; nothing on the wire has ever
+ * named it. The checks that already knew this about $server did not
+ * know it about $llm, so opening the window fetched scrollback and
+ * members for a channel the bouncer does not have — an HTTP 400 and a
+ * "members are not seeded yet" in a window whose whole point is that
+ * the network is not involved. */
+TEST(a_client_local_window_is_never_fetched_from_the_server) {
+    CHECK(is_local_window("$llm"));
+    CHECK(is_local_window("$server"));
+    /* Matched as a NAME, like every other window comparison. */
+    CHECK(is_local_window("$LLM"));
+    CHECK(!is_local_window("#sniffo"));
+    CHECK(!is_local_window("alice"));
+    /* Not a prefix match: a real channel that merely starts the same
+     * way is still a real channel. */
+    CHECK(!is_local_window("$llmx"));
+
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    app->url.base[0] = 0; /* any REST call would be visible as a failure */
+
+    /* Neither door queues a job for it. */
+    enqueue_fetch(app, "azzurra", "$llm");
+    enqueue_members(app, "azzurra", "$llm");
+    CHECK_LONG(app->jobs_head, app->jobs_tail); /* queue untouched */
+
+    /* A real channel still goes. */
+    enqueue_fetch(app, "azzurra", "#sniffo");
+    CHECK(app->jobs_head != app->jobs_tail);
+
+    free_app(app);
+}
+
 /* A conversation, and a budget that keeps it inside the window.
  *
  * There was no history at all: every request built its turns from the
@@ -2235,6 +2270,7 @@ int main(void) {
     RUN(two_identities_get_two_bot_directories);
     RUN(an_accented_character_survives_typing_and_one_backspace);
     RUN(a_settings_menu_offers_what_the_setting_accepts);
+    RUN(a_client_local_window_is_never_fetched_from_the_server);
     RUN(a_conversation_is_remembered_and_rolls_to_fit);
     RUN(the_context_budget_leaves_room_for_the_fixed_parts);
     RUN(tab_completes_the_values_a_setting_accepts);
