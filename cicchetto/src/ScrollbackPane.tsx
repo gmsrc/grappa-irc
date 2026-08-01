@@ -941,9 +941,11 @@ const ScrollbackPane: Component<Props> = (props) => {
   // trigger from the media-viewer signal to the shared overlay refcount
   // (`overlayCount()`) — every covering modal/drawer already pushes into it,
   // so a single derived predicate ("a covering overlay is open") drives the
-  // freeze instead of one flag per modal. Plain let — pure mutation, no Solid
-  // reactivity; the reactive edge is the `overlayCount() > 0` memo in the
-  // effect below.
+  // freeze instead of one flag per modal. #608 (deep-review §6.2): this is now
+  // ONLY the px to restore — the freeze itself derives from the live
+  // `overlayCount()` in `isOverlayFrozen`, NOT from this being non-null — so it
+  // is captured on each open edge and left harmlessly stale after close (no
+  // clear). Plain let — pure mutation, no Solid reactivity.
   let overlayScrollSnapshot: number | null = null;
   // #219-general — the channel key the overlay snapshot was captured on. The
   // pane instance survives channel↔query switches (shared non-keyed Match), so
@@ -1092,17 +1094,28 @@ const ScrollbackPane: Component<Props> = (props) => {
 
   const key = () => channelKey(props.networkSlug, props.channelName);
   const messages = () => scrollbackByChannel()[key()];
-  // #219-general — "is THIS pane frozen under a covering overlay?" A snapshot
-  // is held (non-null) for the overlay's whole open→close-settle window, and
-  // it belongs to the channel it was captured on. Both scroll authorities
-  // (scrollToActivation + the length-effect) bail on this so no authority
-  // moves a covered pane; the overlay-snapshot effect owns the single restore.
+  // #219-general / #608 (deep-review §6.2) — "is THIS pane frozen under a
+  // covering overlay?" DERIVED from the LIVE overlay refcount, not a separately-
+  // cleared latch: a covering overlay is up NOW (`overlayCount() > 0`) and the
+  // snapshot belongs to the channel it was captured on (`overlaySnapshotKey ===
+  // key()`). Both scroll authorities (scrollToActivation + the length-effect)
+  // bail on this so no authority moves a covered pane; the overlay-snapshot
+  // effect owns the single restore.
+  //
+  // Pre-#608 this read `overlayScrollSnapshot !== null` — a latch cleared
+  // separately inside the overlay effect's rAF (gated on `overlayCount() === 0`).
+  // That parallel latch could DRIFT from the count: a leaked refcount (the
+  // Shell.tsx same-tick open→close, fixed in C1) meant the clear never fired and
+  // the pane stayed frozen for the session (the field bug). Deriving the freeze
+  // from the count makes that drift class structurally impossible ("derive,
+  // don't duplicate") and thaws the pane the instant the last overlay closes,
+  // without waiting on the deferred clear.
+  //
   // Key-scoped so a window switched-to WHILE an overlay is up (nick-click in
   // /names or /who opens a query + dismisses the modal) is not frozen — it
-  // activates normally. Plain-`let` reads, no reactivity (called imperatively
-  // from inside the authorities).
-  const isOverlayFrozen = (): boolean =>
-    overlayScrollSnapshot !== null && overlaySnapshotKey === key();
+  // activates normally. `overlayCount()` is reactive but read imperatively here
+  // (from inside the authorities), not in a tracking scope.
+  const isOverlayFrozen = (): boolean => overlayCount() > 0 && overlaySnapshotKey === key();
   // Per-network IRC nick for self-highlight + JOIN-banner + ownModes —
   // single-source via `ownNickForNetwork(net, me)` so account-name vs
   // IRC-nick drift cannot misfire highlights or own-action detection.
@@ -1752,18 +1765,15 @@ const ScrollbackPane: Component<Props> = (props) => {
             if (listRef && snapKey === key() && listRef.scrollTop !== target) {
               listRef.scrollTop = target;
             }
-            // Clear ONLY when no overlay is open NOW — not on the captured
-            // `open` boolean. A rapid close→reopen (refcount 1→0→1 in one
-            // frame batch — one modal closing as another opens) schedules
-            // this close-run's rAF BEFORE the reopen-run's; keying the clear
-            // on the stale `open=false` would null the snapshot the reopen
-            // just re-armed, thawing the pane while an overlay is still up
-            // (review PLAUSIBLE finding). `overlayCount() === 0` is the live
-            // truth: clear only when the last overlay is genuinely gone.
-            if (overlayCount() === 0) {
-              overlayScrollSnapshot = null;
-              overlaySnapshotKey = null;
-            }
+            // #608 (deep-review §6.2) — NO snapshot clear. The freeze is now
+            // DERIVED from the live `overlayCount()` (see `isOverlayFrozen`), so
+            // the snapshot no longer doubles as the freeze flag; it is only the
+            // px to restore, harmlessly stale once the count hits 0 and re-
+            // captured on the next open edge. Dropping the clear removes the
+            // separately-cleared latch that could drift from the count — the
+            // review's PLAUSIBLE stale-clear race (a close→reopen nulling a
+            // just-re-armed snapshot) is now structurally impossible, as is the
+            // field-bug "frozen forever under a leaked count".
           }),
         );
       },

@@ -3984,6 +3984,34 @@ describe("ScrollbackPane", () => {
       expect(scrollIntoViewSpy).toHaveBeenCalled();
     });
 
+    // #608 step 2 — the freeze is DERIVED from the live overlay refcount, not a
+    // separately-cleared latch. The thaw must follow the count→0 edge the same
+    // tick it happens, independent of whether the deferred snapshot-clear rAF
+    // has run. Pre-fix (`isOverlayFrozen` = `overlayScrollSnapshot !== null`)
+    // the pane stayed frozen until the clear rAF fired — and a leaked / never-
+    // firing clear stranded it FOREVER (the field bug root). Post-fix
+    // `isOverlayFrozen` = `overlayCount() > 0`, so a resize snaps to the tail
+    // the instant the last overlay closes, with no reliance on the clear.
+    it("thaws the instant count→0, without awaiting the deferred snapshot clear (live-derived freeze)", async () => {
+      seedRows();
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      await flushRaf();
+
+      pushOverlay(null);
+      await flushRaf();
+
+      // Close the last overlay, then IMMEDIATELY resize — NO flushRaf between,
+      // so the deferred snapshot-clear rAF has NOT run. The live-derived freeze
+      // must already read false because `overlayCount() === 0`.
+      popOverlay(null);
+      scrollIntoViewSpy.mockClear();
+
+      window.dispatchEvent(new Event("resize"));
+      await flushRaf();
+
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+    });
+
     // Regression (review PLAUSIBLE): a rapid close→reopen of a covering
     // overlay (refcount 1→0→1) — one modal closing as another opens in the
     // same tick, e.g. /names dismissed by a nick-click that opens a query
