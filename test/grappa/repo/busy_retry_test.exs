@@ -162,12 +162,13 @@ defmodule Grappa.Repo.BusyRetryTest do
   # (`inject_transient_faults/1`) can only reach work that runs in the
   # CALLER's own process; a fault that must fire inside a Phoenix Channel,
   # a Session.Server, or a sink GenServer needs to be armed against THAT
-  # pid. `arm_faults/2` stores the count in a shared ETS table keyed by the
+  # pid. `arm_faults/3` stores the count in a shared ETS table keyed by the
   # exact target pid — the same pid-scoped isolation the process dictionary
   # gives (a sibling async test operates on its OWN spawned pid), just
-  # externally addressable. These tests pin BOTH halves: the target degrades,
-  # and the arming process itself is untouched.
-  describe "arm_faults/2 (cross-process seam, #594)" do
+  # externally addressable. `fire_on: 1` is the immediate case (fire on the
+  # next check). These tests pin BOTH halves: the target degrades, and the
+  # arming process itself is untouched.
+  describe "arm_faults/3 (cross-process seam, #594)" do
     test "degrades a BusyRetry.run in the TARGET pid, leaving the caller's own run untouched" do
       test_pid = self()
 
@@ -181,7 +182,7 @@ defmodule Grappa.Repo.BusyRetryTest do
 
       on_exit(fn -> BusyRetry.disarm_faults(target) end)
 
-      BusyRetry.arm_faults(target, 10_000)
+      BusyRetry.arm_faults(target, 10_000, fire_on: 1)
       send(target, :go)
 
       # The armed target rides the budget out and degrades — proving the
@@ -204,7 +205,7 @@ defmodule Grappa.Repo.BusyRetryTest do
           end
         end)
 
-      BusyRetry.arm_faults(target, 10_000)
+      BusyRetry.arm_faults(target, 10_000, fire_on: 1)
       :ok = BusyRetry.disarm_faults(target)
 
       send(target, :go)

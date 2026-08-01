@@ -25619,19 +25619,31 @@ from any test: (a) the WS `close_query_window` `close_failed` reply runs in the
 Phoenix Channel's own pid; (b) the session query-window auto-open
 (`maybe_open_query_window/2`) runs in the `Session.Server`'s pid. The existing
 process-dictionary fault seam only reaches work in the TEST process, so #594
-added a cross-process ETS seam keyed by the TARGET pid (`arm_faults(pid, n)`).
-That pins (a) directly. But (b) can't be isolated by a plain per-pid counter:
-the auto-open runs ONLY after the persist returns `{:ok, _}`, and with a single
-counter "persist succeeds ⟺ fault count is 0 ⟹ the open never faults." So the
-seam gained a POSITIONAL selector: `arm_faults(pid, n, fire_on: k)` rides out
-the first `k-1` fault-CHECKS in the pid (a "check" = one `maybe_inject_fault/0`
-at the top of a `BusyRetry.run/1` attempt) and fires from the `k`-th. For the
-inbound-DM flow the pre-open checks are persist insert (1) + persist preload (2)
-— the `push: true` obligations (`Push.Triggers`, `WindowCounts`) each run in
-their OWN Task, so they add ZERO checks to the session pid — making the open's
-insert check **3**. `fire_on:` counts checks, NOT operations, and was named for
-exactly that; it is a separate explicit arity (NO default-arg drift), so every
-existing channel/reaper caller of `arm_faults/2` is untouched.
+added a cross-process ETS seam keyed by the TARGET pid. That pins (a) directly.
+But (b) can't be isolated by a plain per-pid counter: the auto-open runs ONLY
+after the persist returns `{:ok, _}`, and with a single counter "persist
+succeeds ⟺ fault count is 0 ⟹ the open never faults." So the seam gained a
+POSITIONAL selector: `arm_faults(pid, n, fire_on: k)` rides out the first `k-1`
+fault-CHECKS in the pid (a "check" = one `maybe_inject_fault/0` at the top of a
+`BusyRetry.run/1` attempt) and fires from the `k`-th. For the inbound-DM flow
+the pre-open checks are persist insert (1) + persist preload (2) — the `push:
+true` obligations (`Push.Triggers`, `WindowCounts`) each run in their OWN Task,
+so they add ZERO checks to the session pid — making the open's insert check
+**3**. `fire_on:` counts checks, NOT operations, and was named for exactly that.
+
+**One arity, `fire_on:` required — no immediate-mode default.** The seam has a
+SINGLE `arm_faults/3`; there is deliberately no `arm_faults/2` "fire
+immediately" convenience. Two arities where the shorter one means "fire on the
+next check" is a default argument wearing a disguise — the exact
+silent-degradation path CLAUDE.md bans — because `arm_faults(pid, n)` never says
+WHEN the fault fires. `fire_on: 1` is the immediate case, explicit at all three
+call sites (the WS close terminal + the two cross-process unit tests). (This
+also happens to keep the module above doctor's 40% dev-env doc floor, which the
+extra test-gated arity had pushed it under — but that is a SIDE EFFECT of the
+right API, not the reason; the general doctor artifact behind that floor —
+`Mix.env() == :test` functions scored as undocumented in the dev beam — is
+tracked as its own repo-wide issue, #621, and the test-env doctor already scores
+this module 100%.)
 
 **Why a test, not a type.** Dialyzer does NOT flag a non-exhaustive `case` — a
 refactor dropping `maybe_open_query_window/2`'s `{:error, :db_unavailable}` arm

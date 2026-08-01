@@ -187,30 +187,28 @@ defmodule Grappa.Repo.BusyRetry do
     end
 
     @doc false
-    # Arm `n` transient busy faults against `pid`, firing on the VERY NEXT
-    # fault-check in that pid. Callers MUST `on_exit` a `disarm_faults/1` — a
-    # fault left armed on a pid that outlives the test is a failure-at-a-
-    # distance (the worst kind to diagnose). Stored as a 3-tuple `{pid,
-    # remaining, skip}` where `skip` is the number of pre-fire checks to let
-    # pass (0 here — fire immediately, the existing channel/reaper behaviour).
-    @spec arm_faults(pid(), non_neg_integer()) :: :ok
-    def arm_faults(pid, n) when is_pid(pid) and is_integer(n) and n >= 0 do
-      true = :ets.insert(@fault_ets_table, {pid, n, 0})
-      :ok
-    end
-
-    @doc false
-    # As `arm_faults/2`, but the fault does NOT fire on the first `fire_on - 1`
-    # fault-CHECKS in `pid` — it starts firing on the `fire_on`-th check
-    # (1-indexed) and keeps firing until `n` is exhausted. A "check" is one
+    # Arm `n` transient busy faults against `pid`. `fire_on` is 1-indexed and
+    # REQUIRED — there is deliberately NO immediate-mode 2-arity: an
+    # `arm_faults(pid, n)` whose two args left "WHEN does the fault fire?"
+    # implicit is a default argument in disguise, the silent-degradation path
+    # CLAUDE.md bans. Making `fire_on:` explicit at every call site is the point
+    # (the 40%-doctor-floor artifact #621 is a side effect, not the reason).
+    #
+    # The fault rides out the first `fire_on - 1` fault-CHECKS in `pid`, then
+    # fires from the `fire_on`-th check until `n` is exhausted. A "check" is one
     # `maybe_inject_fault/0` at the top of a `BusyRetry.run/1` attempt — NOT a
-    # raw `Repo` call and NOT an operation. This positional selector is how
-    # #594 pins the query-window auto-open terminal: persist + its preload each
-    # make one wrapped call BEFORE the open, and a single per-pid counter can't
-    # otherwise distinguish "fault the open" from "fault the persist". The exact
-    # `fire_on` is DETERMINED EMPIRICALLY per flow (see the #594 session test) —
-    # a change in how many `BusyRetry.run` calls precede the open is MEANT to
-    # break that test, which asserts the open's terminal specifically.
+    # raw `Repo` call and NOT an operation. `fire_on: 1` fires on the VERY NEXT
+    # check (channel / reaper immediate case); a higher value is how #594 pins
+    # the query-window auto-open terminal — persist + its preload each make one
+    # wrapped call BEFORE the open, so a single per-pid counter cannot otherwise
+    # distinguish "fault the open" from "fault the persist". The exact `fire_on`
+    # is DETERMINED EMPIRICALLY per flow (see the #594 session test); a change in
+    # how many `BusyRetry.run` calls precede the open is MEANT to break it.
+    #
+    # Callers MUST `on_exit` a `disarm_faults/1` — a fault left armed on a pid
+    # that outlives the test is a failure-at-a-distance (the worst kind to
+    # diagnose). Stored as a 3-tuple `{pid, remaining, skip}` where `skip`
+    # counts down on each pre-fire check.
     @spec arm_faults(pid(), non_neg_integer(), [{:fire_on, pos_integer()}]) :: :ok
     def arm_faults(pid, n, fire_on: fire_on)
         when is_pid(pid) and is_integer(n) and n >= 0 and is_integer(fire_on) and fire_on >= 1 do

@@ -2697,7 +2697,9 @@ defmodule GrappaWeb.GrappaChannelTest do
 
       # Arm the fault against the CHANNEL process — QueryWindows.close/4's
       # BusyRetry.run runs there, so its budget exhausts to :db_unavailable.
-      Grappa.Repo.BusyRetry.arm_faults(socket.channel_pid, 10_000)
+      # fire_on: 1 = the very next check: the close is the first (only)
+      # BusyRetry.run in the channel pid for this push, so it faults immediately.
+      Grappa.Repo.BusyRetry.arm_faults(socket.channel_pid, 10_000, fire_on: 1)
       on_exit(fn -> Grappa.Repo.BusyRetry.disarm_faults(socket.channel_pid) end)
 
       ref =

@@ -20,7 +20,7 @@ Ecto.Adapters.SQL.Sandbox.mode(Grappa.Repo, :manual)
 
 # #594 — the cross-process BusyRetry fault table, created ONCE here so it is
 # owned by the long-lived ExUnit runner process and survives every test. A
-# `:public :named_table` keyed by target pid; `arm_faults/2` writes it,
+# `:public :named_table` keyed by target pid; `arm_faults/3` writes it,
 # `maybe_inject_fault/0` reads it by `self()`. Creating it lazily in the first
 # test that arms would race `:ets.new` across async tests — hence here.
 Grappa.Repo.BusyRetry.ensure_fault_table()
