@@ -81,7 +81,7 @@ die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 # curl'd copy sitting in $GRAPPA_HOME does not. GRAPPA_DEPLOY_MODE forces
 # it (source|release) for tests + operators who want no guessing.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CANDIDATE_ROOT="$(cd "$SELF_DIR/../.." 2>/dev/null && pwd || true)"
+CANDIDATE_ROOT="$(cd "$SELF_DIR/../.." 2>/dev/null && pwd)" || CANDIDATE_ROOT=""
 
 case "${GRAPPA_DEPLOY_MODE:-}" in
 	source)  DEPLOY_MODE=source ;;
