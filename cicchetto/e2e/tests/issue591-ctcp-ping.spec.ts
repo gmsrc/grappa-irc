@@ -32,7 +32,6 @@ import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
-const PEER_NICK = "m591peer";
 
 test("#591 — own /ctcp query self-echoes as '→ CTCP VERB args to target', not raw \\x01", async ({
   page,
@@ -71,7 +70,16 @@ test("#591 — /ping shows the round-trip time in the source window", async ({ p
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await expect(composeTextarea(page)).toBeVisible();
 
-  const peer = await IrcPeer.connect({ nick: PEER_NICK });
+  // Per-run unique peer nick. A fixed nick is a 433/ghost time bomb under CI
+  // rerun + bahamut per-IP clone/flood: a leftover ghost from a prior aborted
+  // run (or a QUIT not yet propagated) makes `connect` collide, irc-framework
+  // registers under an ALTERNATE nick, but `peer.nick` stays the requested one
+  // — so `/ping <peer.nick>` DMs a nick that isn't there and the RTT line
+  // never arrives (15s timeout, the #600 CI red). A fresh nick per run/retry
+  // sidesteps the ghost entirely; mirrors the sibling peer specs
+  // (k16peer/e2e263 → `crypto.randomUUID().slice(...)`).
+  const peerNick = `m591-${crypto.randomUUID().slice(0, 5)}`;
+  const peer = await IrcPeer.connect({ nick: peerNick });
   try {
     // Arm the peer to echo any CTCP PING token straight back (what a real
     // client does). No shared channel needed — /ping DMs the nick directly.
