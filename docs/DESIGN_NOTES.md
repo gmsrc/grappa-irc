@@ -25247,3 +25247,117 @@ empty rail column, the concern that only applied to a *fixed* track), and binds
 only while the card content is character-breakable (word-break on the dd). The
 issue's `vw` term is dead on desktop: at the 14px root, 14rem < any sane `Nvw`
 for width ≥769px.
+
+## 2026-08-01 — #608: one scroll authority for ScrollbackPane — the applier, the atBottom split, and derive-don't-latch
+
+`ScrollbackPane.tsx` had grown to 13 physical scroll writes (`scrollTop=` /
+`scrollIntoView` / `scrollTo`) spread across 19 `createEffect` blocks with **no
+arbitration** — two writers routinely disagreed within one reactive batch, and
+there was no single place to instrument. The deep review (GH #608 comment
+5150844112) traced the field symptoms — a message renders but the pane does not
+scroll, the float-to-bottom button hidden, persistent until force-close; and, at
+send, the pane scrolls **one message behind** — to one root model: the
+length-effect (the only writer that should land the *true* tail) was either
+**suppressed** by a stuck overlay freeze or **read un-settled geometry** (rAF×2
+is not a layout flush on iOS WebKit). #608 rebuilds the pane around a single
+scroll authority so that class of bug becomes structurally impossible, not just
+patched.
+
+**The single scroll applier.** ScrollbackPane's effects no longer write the DOM
+directly; they **declare a `ScrollIntent`** `{kind, key, lifetime}` and ONE
+applier owns *every* DOM scroll write. The arbitration lives in a pure core,
+`lib/scrollAuthority.ts` — `resolveIntent` (precedence resolver: given N live
+intents, return the winner + reason), `nextFollowMode` (the follow transition
+table), and `isSettled` (the measured-settle predicate) — all unit-tested in
+isolation, no DOM. The component owns only the DOM I/O. Precedence, high → low:
+**overlay-freeze ▸ operator-tail ▸ mention-jump ▸ marker-activation ▸
+tail-follow ▸ prepend-preserve** (a scroll-up is not a write — it turns
+`followMode` off). Each applier run emits a dev-only intent log
+`(intent, winner, reason, geometry)`, gated on
+`import.meta.env.MODE === "development"` so it is dead-code-eliminated in prod and
+silent under vitest — that log is what turns the next field report into a single
+line. The invariant this buys: **a new scroll trigger DECLARES an intent; it
+never writes `scrollTop` directly.** Acceptance was verified as no raw
+`scrollTop=` / `scrollIntoView` / `scrollTo` anywhere outside the applier surface
+(`scrollToActivation`, `dispatchScrollWrite`, `applyPrependPreserve`,
+`applyOverlayRestore`, `applyMentionJump`, `interruptSmoothScroll` —
+`scrollToActivation` reachable only via `applyActivation` + `dispatchScrollWrite`).
+
+**The `atBottom` split (the primary reshape).** The old `atBottom` signal was
+overloaded — it meant BOTH "stick to the tail" (a persistent *intent*) and
+"the viewport is geometrically at the bottom" (a *measurement*) — and that
+conflation was the source of the two writer-disagreement races. It is split into
+`followMode` (the persistent intent: drives tail-follow, the resize re-anchor
+gate, and the visibility-return gate; transitions ONLY via `nextFollowMode` edges
+— scroll-up → off, reach-tail/send → on, content-grow → no-op) versus
+`atBottomNow` (pure geometry: drives ONLY the float scroll-to-bottom button, via
+`!atBottomNow`). They are behaviour-identical everywhere EXCEPT at send, where
+they deliberately **diverge**: send arms `followMode` immediately, while
+`atBottomNow` flips true only once the echo row lays out.
+
+**Derive the freeze from the count — don't latch it.** `isOverlayFrozen()` is now
+`overlayCount() > 0 && overlaySnapshotKey === key()`, evaluated LIVE — NOT a
+separately-cleared latch. The snapshot holds the restore-px ONLY (captured on each
+overlay-open edge, harmlessly stale after close, with no rAF clear to drift). This
+kills the drift class at the root: a leaked overlay count can no longer strand the
+freeze forever, because the freeze is *derived* from the count rather than being a
+second copy of the same state that must be reset in lockstep ("derive, don't
+duplicate"). The field bug's actual *trigger* — the `Shell.tsx` same-tick
+`pushOverlay` refcount leak (members drawer + admin pane pushed via a deferred
+`queueMicrotask` without the `createOverlayLock` re-check) — was fixed separately
+in C1 (`2cb64ca2`, cherry-picked HOT to prod main as `e3bc9923`); deriving the
+freeze from the count is what makes "frozen forever under a leaked count"
+impossible even if a future leak reappears.
+
+**Prepend-preserve is a post-await entrypoint, not a commit-frame intent.**
+`loadMore` (prepending older history) captures the pre-prepend `scrollHeight`
+before its await and restores by the height delta on the commit after the prepend
+lands — `applyPrependPreserve(oldScrollHeight, oldScrollTop)`, lowest precedence,
+a distinct entry into the applier rather than an intent resolved on a content-grow
+frame. Prepend mutates the top axis; it must preserve the reader's position across
+that mutation, which is a different lifecycle from every other (tail-oriented)
+write.
+
+**Send arms `followMode`; it does not scroll a non-existent node.** The old send
+path called `scrollToBottom()` synchronously on `ownSendSubmitted` — but there is
+no optimistic append (the echo is WS-driven), so it read *pre-append* geometry and
+scrolled to the old tail. That was the off-by-one at its source. Now the
+`ownSendSubmitted` effect sets `followMode` via `nextFollowMode "send"` and
+releases the marker latch; the applier tail-follows when the echo row actually
+mounts and settles. The #580 split is preserved: the follow-arm fires at submit,
+independent of the POST, while `lastOwnSend` (post-resolve) still owns the divider
+re-latch.
+
+**Measured-settle via `isSettled`, not a fixed rAF×2.** The rAF×2 "settle" was the
+§5 off-by-one root on iOS WebKit — two guessed frames are not a layout flush.
+`tailFollowWhenSettled()` polls per frame (bounded `SETTLE_MAX_FRAMES = 30`, with a
+fail-safe single tail if no growth is ever observed), forces a reflow, and scrolls
+on the frame where `isSettled` holds: `currScrollHeight` grew versus the
+`lastTailScrollHeight` baseline (the last-tail extent, reset on key change — NOT a
+dispatch-time read, which a fast engine can pre-grow) AND the tail node has a
+laid-out box. The poll stops on `!listRef.isConnected` so it can never outlive the
+component and fire on a shared prototype spy (a cross-test-pollution trap found
+during the build). This is the condition-based-waiting skill applied: wait for the
+real state, not a frame count.
+
+**Operator-tail is an instant, synchronous dispatch.** The gesture path (the
+float button and #243 retap) routes through `dispatchScrollWrite`'s `operator-tail`
+case + `applyOperatorTail()` and writes the tail INSTANTLY and synchronously — no
+async animation. This preserves the 2026-06-02 contamination fix: an async
+animation on the shared `.scrollback` node does not survive a window switch, so a
+deliberate operator tail must land in the same tick.
+
+The e2e/unit contract set (`issue168-scroll-authority`, `scroll-on-window-switch`,
+`scroll-multi-roundtrip-contamination`, `issue219(-general)-overlay-scroll-hold`,
+`issue196-preview-scroll-*`, `issue230-wheel-underfill-loadmore`, `issue239`,
+`issue280-button-coexist`, `issue289`, `issue360`, `unread-divider-beyond-window`,
+`marker-target-window-regression`, `freshness-on-activation`,
+`login-advanced-scroll-reachability`, `issue535`, `issue310`, `issue243`,
+`issue580`, and the rest) is unchanged in intent — the reshape is
+behaviour-preserving except at the two deliberate divergence points (send-arm,
+measured-settle). The off-by-one regression gate `bug7-ios-own-msg-visible` (+
+`bug7-m6-ios-dm-own-msg-visible`) was **strengthened, never weakened**: it now
+asserts the own row `toBeInViewport` AND distance-to-tail ≤ threshold after the
+settle. The deliberate test-layer split holds throughout: core geometry is a
+vitest `isSettled` unit test, the wiring is a chromium e2e, and real iOS is a
+device verify — Playwright webkit is not iOS scroll.
