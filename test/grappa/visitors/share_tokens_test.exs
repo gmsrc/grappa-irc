@@ -50,6 +50,27 @@ defmodule Grappa.Visitors.ShareTokensTest do
     end
   end
 
+  describe "release/1" do
+    # #593 — the compensating action for claim-then-release. A consume
+    # claims the token (mark_consumed) BEFORE the session mint; a failed
+    # mint must roll that claim back so the retryable-503 the client is
+    # invited to retry can actually succeed.
+    test "deletes a consumed token so a later mark_consumed succeeds again" do
+      :ok = ShareTokens.mark_consumed("token-rel")
+      assert {:error, :already_consumed} = ShareTokens.mark_consumed("token-rel")
+
+      assert :ok = ShareTokens.release("token-rel")
+      # The claim is gone: the token is once again claimable.
+      assert :ok = ShareTokens.mark_consumed("token-rel")
+    end
+
+    test "releasing a token that was never consumed is a harmless no-op" do
+      assert :ok = ShareTokens.release("never-claimed")
+      # Still fully claimable afterwards — the no-op didn't corrupt the set.
+      assert :ok = ShareTokens.mark_consumed("never-claimed")
+    end
+  end
+
   describe "table_name/0" do
     test "returns the named ETS table atom" do
       assert ShareTokens.table_name() == :visitor_share_tokens_used

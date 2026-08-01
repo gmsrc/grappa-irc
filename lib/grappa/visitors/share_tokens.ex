@@ -31,6 +31,14 @@ defmodule Grappa.Visitors.ShareTokens do
     * `mark_consumed/1 :: :ok | {:error, :already_consumed}` —
       atomic insert-if-absent. Caller MUST treat
       `{:error, :already_consumed}` as a hard reject (HTTP 410 Gone).
+    * `release/1 :: :ok` — the compensating action for claim-then-release
+      (#593). Deletes a token this caller previously claimed, so a mint
+      that failed AFTER the claim leaves the link usable for a retry.
+      Idempotent (deleting an absent key is a no-op). The caller MUST
+      only release a token whose claim IS its own — never one that
+      returned `{:error, :already_consumed}` (that claim belongs to the
+      winning request; releasing it would resurrect a token that already
+      minted a session).
     * `all_keys/0` — test helper, returns the set of recorded tokens.
 
   ## Crash boundary
@@ -102,6 +110,25 @@ defmodule Grappa.Visitors.ShareTokens do
     else
       {:error, :already_consumed}
     end
+  end
+
+  @doc """
+  Release a token this caller previously claimed via `mark_consumed/1`,
+  making it claimable again. The compensating action of claim-then-release
+  (#593): a share-token consume claims the token BEFORE minting the
+  session, and a failed mint calls this to roll the claim back so the
+  retryable-503 the client is invited to retry can actually succeed.
+
+  Always returns `:ok` — deleting an absent key is a harmless no-op
+  (`:ets.delete/2` semantics). NEVER call this for a token whose claim
+  belongs to another request (a `mark_consumed/1` that returned
+  `{:error, :already_consumed}`): that would delete the winner's claim
+  and resurrect a token that already minted a session.
+  """
+  @spec release(binary()) :: :ok
+  def release(token) when is_binary(token) do
+    _ = :ets.delete(@table, token)
+    :ok
   end
 
   @doc false
