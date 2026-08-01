@@ -8534,19 +8534,44 @@ static void add_history(struct app *app, const char *line) {
     app->history_pos = app->history_count;
 }
 
+/* ── The input line is SHARED ───────────────────────────────────────────
+ *
+ * It looks like it belongs to the keyboard, and for most of its life it
+ * does. But /stt writes a transcript into it from the WORKER thread
+ * (stt_job), and reply_to, the /kill prefill, the menu's "Type <nick>"
+ * and the settings panel's Enter all write it too. Those five took
+ * app->lock; the keystroke path, the history walk, tab completion and
+ * Enter did not.
+ *
+ * That is not merely a torn line. The typing path read
+ * `input_len + 1 < sizeof(input)`, and the worker could move input_len
+ * between that test and the write — so the write landed at the old
+ * index, input_len became sizeof(input), and `input[input_len] = 0` put
+ * a NUL one byte PAST the array, into the input_len field sitting next
+ * to it in the struct.
+ *
+ * So every read-modify-write of input/input_len holds app->lock, and the
+ * bounds test lives inside the same critical section as the write it
+ * guards. A mutex per keypress is not a cost anyone can perceive. */
 static void history_prev(struct app *app) {
-    if (app->history_count == 0 || app->history_pos == 0) return;
-    app->history_pos--;
-    snprintf(app->input, sizeof(app->input), "%s", app->history[app->history_pos]);
-    app->input_len = strlen(app->input);
+    pthread_mutex_lock(&app->lock);
+    if (app->history_count && app->history_pos) {
+        app->history_pos--;
+        snprintf(app->input, sizeof(app->input), "%s", app->history[app->history_pos]);
+        app->input_len = strlen(app->input);
+    }
+    pthread_mutex_unlock(&app->lock);
 }
 
 static void history_next(struct app *app) {
-    if (app->history_pos >= app->history_count) return;
-    app->history_pos++;
-    if (app->history_pos == app->history_count) app->input[0] = 0;
-    else snprintf(app->input, sizeof(app->input), "%s", app->history[app->history_pos]);
-    app->input_len = strlen(app->input);
+    pthread_mutex_lock(&app->lock);
+    if (app->history_pos < app->history_count) {
+        app->history_pos++;
+        if (app->history_pos == app->history_count) app->input[0] = 0;
+        else snprintf(app->input, sizeof(app->input), "%s", app->history[app->history_pos]);
+        app->input_len = strlen(app->input);
+    }
+    pthread_mutex_unlock(&app->lock);
 }
 
 
@@ -9369,12 +9394,18 @@ static void collect_log_nick_candidate(struct app *app, char candidates[][MAX_CH
 
 static void complete_input(struct app *app) {
     char prefix[MAX_LINE];
+    /* Copied out under the lock and worked on from the copy: the search
+     * below takes app->lock again for the candidate walk, and holding it
+     * across the whole function would mean holding it across that. */
+    pthread_mutex_lock(&app->lock);
     snprintf(prefix, sizeof(prefix), "%s", app->input);
+    size_t typed = app->input_len;
+    pthread_mutex_unlock(&app->lock);
     char *last_space = strrchr(prefix, ' ');
     const char *stem = last_space ? last_space + 1 : prefix;
     size_t stem_len = strlen(stem);
 
-    if (app->input_len == 0 || stem_len == 0) return;
+    if (typed == 0 || stem_len == 0) return;
 
     char candidates[64][MAX_CHANNEL];
     size_t matches = 0;
@@ -9424,12 +9455,14 @@ static void complete_input(struct app *app) {
 
     if (matches == 1) {
         size_t head = last_space ? (size_t)(last_space + 1 - prefix) : 0;
+        pthread_mutex_lock(&app->lock);
         snprintf(app->input + head, sizeof(app->input) - head, "%s", candidates[0]);
         app->input_len = strlen(app->input);
         if (app->input_len + 1 < sizeof(app->input)) {
             app->input[app->input_len++] = ' ';
             app->input[app->input_len] = 0;
         }
+        pthread_mutex_unlock(&app->lock);
     } else if (matches > 1) {
         char list[1024] = "";
         size_t used = 0;
@@ -12662,13 +12695,21 @@ static void handle_command_dispatch(struct app *app, char *line) {
 }
 
 static void handle_enter(struct app *app) {
-    app->input[app->input_len] = 0;
-    if (app->input_len == 0) return;
     char line[MAX_LINE];
+    /* Taking the line and clearing it are ONE step: a transcript landing
+     * from /stt between the copy and the clear would be typed by nobody
+     * and then discarded unsent. */
+    pthread_mutex_lock(&app->lock);
+    app->input[app->input_len] = 0;
+    if (app->input_len == 0) {
+        pthread_mutex_unlock(&app->lock);
+        return;
+    }
     snprintf(line, sizeof(line), "%s", app->input);
-    add_history(app, line);
     app->input_len = 0;
     app->input[0] = 0;
+    pthread_mutex_unlock(&app->lock);
+    add_history(app, line);
     if (line[0] == '/') handle_command(app, line);
     else {
         char send_net[MAX_SLUG], send_chan[MAX_CHANNEL];
@@ -14617,10 +14658,20 @@ static void event_loop(struct app *app) {
         } else if (ch == KEY_DOWN) {
             history_next(app);
         } else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
+            pthread_mutex_lock(&app->lock);
             if (app->input_len > 0) app->input[--app->input_len] = 0;
-        } else if (isprint(ch) && app->input_len + 1 < sizeof(app->input)) {
-            app->input[app->input_len++] = (char)ch;
-            app->input[app->input_len] = 0;
+            pthread_mutex_unlock(&app->lock);
+        } else if (isprint(ch)) {
+            /* The bounds test is INSIDE the lock with the write it
+             * guards. Split apart, the worker could grow input_len
+             * between them and the trailing NUL would land one byte past
+             * the array. */
+            pthread_mutex_lock(&app->lock);
+            if (app->input_len + 1 < sizeof(app->input)) {
+                app->input[app->input_len++] = (char)ch;
+                app->input[app->input_len] = 0;
+            }
+            pthread_mutex_unlock(&app->lock);
         }
     }
     mouse_reporting(false);
