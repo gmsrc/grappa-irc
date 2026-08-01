@@ -25769,3 +25769,56 @@ exact prod stacktrace RED; (b) adapter-agnostic proof of the ROOT — a Mox adap
 with NO `list_aliases` stub, so any boot-path call raises → `:DOWN`, forcing the
 early-return rather than merely a defensive adapter clause; plus (c/d) the
 `FreeBSD.list_aliases(nil)`/`IpLiteral.in_cidr6?(_, nil)` unit clauses.
+## 2026-08-01 — #607: external (cross-host) audio in the docked mini-player + the media-src https: loosening
+
+A `.mp3`/`.m4a` link to a THIRD-PARTY host now opens in the #115 audio
+mini-player (cross-channel playback the iOS Safari view can't give) instead of
+navigating the tab. vjt decided in channel (2026-08-01: "ammettiamo anche
+esterni"). This is a **feature**, not a bug fix: cross-host links never had the
+iOS-standalone navigate-in-place bug (they open fine in the Safari view) — the
+gain is keeping the user in the app with the docked transport bar.
+
+**The one thing that blocked it was the host gate.** `mediaLink.ts`
+`classifyMediaLink` admitted a URL only when its host was the page origin or a
+#324 deployment alias, re-rooting the href onto the page origin; every foreign
+host returned null. The fix adds ONE narrow exception: when `sameHostUrl`
+rejects (foreign / non-http(s) / unparseable), fall through to
+`externalAudioLink` — `https:` only, audio extension only, returning the
+absolute href **UNCHANGED**. Four deliberate boundaries:
+
+- **Never re-root a foreign host.** The same-host branch returns
+  `${origin}${pathname}…`; doing that to a third-party host would 404 or load
+  an unrelated same-path file. External returns the href verbatim.
+- **https only.** The same-host match is deliberately scheme-agnostic (legacy
+  prod minted `http://host/uploads/<slug>` bodies that are permanent history);
+  that leniency does NOT extend outward — an `http:` media element on the
+  `https:` page is mixed content and is blocked. External requires `https:`.
+- **Audio only.** External image/video stay null — #341 declared inline
+  previews a non-goal, and the Safari view already opens them, so cross-origin
+  image/video gains nothing (and would need `img-src`/`media-src` loosenings
+  this design refused).
+- **No `crossorigin` on the `<audio>`.** It would demand
+  `Access-Control-Allow-Origin` from the foreign host and break playback that
+  otherwise works. Scrub/seek is best-effort: it depends on the remote host
+  honouring `Range` requests; a host that doesn't will play but not seek.
+
+**CSP loosening.** The `<audio>` element would be blocked by `media-src 'self'
+blob:`, so `SecurityHeaders` widens it to `media-src 'self' blob: https:`. This
+is a documented, deliberate exception to the hard-won "restate only what
+`default-src` provided" rule (2026-06-10): the widening is scheme-scoped to
+`https` (never `http`, so no mixed content) and the client gate is audio-only,
+so the attack surface is "a page can `<audio src>` any https origin" — accepted
+for a text-only IRC client whose media is user-clicked links. `'self'` and
+`blob:` are kept (declaring `media-src` REPLACES the `default-src` fallback;
+`blob:` is the video-upload duration probe). The directive is pinned in TWO
+places that must move together or the plug and the e2e nginx layer drift
+silently: `security_headers_test.exs`'s golden pin and
+`nginx-csp-range-parity.spec.ts`'s `LOAD_BEARING_DIRECTIVES`. Trap noted in the
+spec: the old `"media-src 'self' blob:"` substring is a PREFIX of the new value,
+so `toContain` would have passed silently — it's pinned to the full widened
+token. Playback itself is device-only (Playwright webkit ≠ iOS) and external
+hosts are unreachable from the hermetic testnet, so the issue scopes real
+playback to a Manual check; the automated coverage is the classifier table
+(`mediaLink.test.ts`) + the CSP-on-the-wire parity spec.
+
+Deploy class: `security_headers.ex` is in `lib/` → HOT.
