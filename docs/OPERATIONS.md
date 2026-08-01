@@ -367,11 +367,11 @@ downtime):
   read at service start); Docker classifies it HOT. The jail cold
   path runs `jail_install_rcd.sh` between stop and start, so the
   restart boots through the new wrapper. The sibling
-  `rc.d/grappa_ndp_keepalive` is HOT on both substrates — it's a
-  different rc(8) service, and restarting the BEAM wouldn't refresh
-  it; the installer refreshes its bytes on every cold deploy, or run
-  `jail_install_rcd.sh` + `service grappa_ndp_keepalive restart` by
-  hand for an immediate pickup. Deploy orchestrators
+  `rc.d/grappa_ndp_keepalive` was DEPRECATED 2026-08-02 (#628): the
+  routed-/64 jail has no proxy-NDP neighbour cache to keep warm, so
+  `jail_install_rcd.sh` no longer installs or enables it and it is out
+  of the boot path — no hot/cold classification applies while it ships
+  as no service (the script survives in-tree for a hand-resurrection). Deploy orchestrators
   (`scripts/deploy.sh`, `infra/freebsd/deploy.sh`),
   operator-on-demand verbs (`infra/freebsd/jail_*.sh`) and
   `grappa.env.example` are HOT on both substrates — nothing about

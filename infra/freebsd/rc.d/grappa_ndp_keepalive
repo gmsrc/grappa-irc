@@ -4,6 +4,19 @@
 # REQUIRE: NETWORKING
 # KEYWORD: shutdown
 #
+# =============================================================================
+# DEPRECATED (GH #628) — retired 2026-08-02, the VNET jail cutover.
+# NO LONGER INSTALLED. Kept in the tree ON PURPOSE.
+# =============================================================================
+# jail_install_rcd.sh no longer copies this into /usr/local/etc/rc.d nor writes
+# an _enable="YES" rc.conf.d entry, so it is out of the boot path. Left in place
+# deliberately ("fa fico avere un sorcio in perl") and still functional if an
+# operator installs it by hand. WHY it is dead weight: the bouncer now runs in a
+# VNET jail on a ROUTED /64 (per-session sources bound as /128s on lo0) — the
+# provider routes the block to us, there is no proxy-NDP neighbour cache to keep
+# warm. Full rationale + how to resurrect: ndp_keepalive.pl.
+# =============================================================================
+#
 # Background NDP keepalive — pings the default v6 gateway from every
 # source address in GRAPPA_OUTBOUND_V6_POOL every N seconds so the
 # upstream router's NDP table never expires a pool entry.
