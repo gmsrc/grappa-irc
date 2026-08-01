@@ -2542,6 +2542,69 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "inbound DM auto-open degrades cleanly under DB saturation (#594)" do
+    # #594 — the SECOND of the two out-of-process terminals (the first is the
+    # WS `close_query_window` `close_failed` reply, pinned in
+    # `GrappaWeb.GrappaChannelTest`). `maybe_open_query_window/2` runs inside
+    # the Session.Server's OWN pid, right after the persist, so the process-
+    # dictionary fault seam (which only reaches work in the TEST process)
+    # cannot arm it — it needs the #594 cross-process ETS seam armed against
+    # the SESSION pid, with `fire_on:` to skip the persist's checks and land on
+    # the open's. Pinning this matters because Dialyzer does NOT flag a
+    # non-exhaustive `case`: a refactor that dropped
+    # `maybe_open_query_window/2`'s `{:error, :db_unavailable}` arm would crash
+    # the session with a CaseClauseError on every DB-saturated inbound DM —
+    # exactly the class of bug that put the original arm in, and the only thing
+    # pinning it is this test.
+    test "a sustained DB busy on the auto-open logs + the session survives" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+      net_id = network.id
+
+      # The inbound DM to our own nick persists at `channel = own_nick`, so the
+      # message broadcast lands on the own-nick channel topic. Receiving it is
+      # the "persist succeeded" barrier — the auto-open runs in the SAME
+      # handle_info immediately after, so the following sync state call
+      # guarantees the (dropped) open has already logged its terminal.
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.channel(user.name, network.slug, "vjt"))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      # Arm the fault on the SESSION pid, firing on the auto-open's
+      # `BusyRetry.run` — NOT the persist's. The session-pid fault-CHECKS that
+      # precede the open are: persist insert (1) + persist preload (2). The
+      # `push: true` obligations (`Push.Triggers` + `WindowCounts`) each run in
+      # their OWN Task, so they add NO checks to this pid — the open's insert is
+      # the 3rd check, hence `fire_on: 3`. A wrong value fails LOUD, never
+      # silently passes: too low faults the persist (the message never lands →
+      # `assert_message_event` below times out); too high lets the open succeed
+      # (the terminal log is absent → the `log =~` assertion fails). So a change
+      # in how many `BusyRetry.run` calls precede the open BREAKS this test.
+      Repo.BusyRetry.arm_faults(pid, 10_000, fire_on: 3)
+      on_exit(fn -> Repo.BusyRetry.disarm_faults(pid) end)
+
+      log =
+        capture_log(fn ->
+          IRCServer.feed(server, ":alice!~a@host PRIVMSG vjt :hey there\r\n")
+          # persist rode out checks 1-2 + broadcast the message…
+          assert_message_event(sender: "alice", body: "hey there")
+          # …then drain the handle_info that also ran the dropped open.
+          _ = :sys.get_state(pid)
+        end)
+
+      # Observable terminal: the EXACT server.ex auto-open drop line AND a
+      # surviving session pid — a CaseClauseError would have taken it down.
+      assert log =~ "query-window auto-open db unavailable — session continues"
+      assert Process.alive?(pid)
+
+      # Not a no-op: the open genuinely dropped, so no window row was minted.
+      refute QueryWindows.open?({:user, user.id}, net_id, "alice")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "PRIVMSG persistence + broadcast" do
     test "persists row and broadcasts canonical wire-shape event on PRIVMSG" do
       {server, port} = start_server()
