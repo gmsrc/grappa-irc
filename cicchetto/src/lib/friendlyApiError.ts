@@ -268,6 +268,27 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
       // UX-6-B1 — 422 admin `PUT /admin/settings` with an out-of-shape
       // value. Carries the offending `field` (AdminSettingsTab highlights it).
       return "That setting value isn't valid. Check it and try again.";
+    case "addressing_unusable": {
+      // #609 — `PUT /admin/settings` tried to switch to addressing mode 2
+      // (static mapping) but the capability probe (SourceAliasManager.arm/1)
+      // refused to arm the prefix on THIS host, so the mode was NOT stored
+      // (422, no state change — fallback_controller.ex). The wire `reason`
+      // (captured into err.info by readError) names WHY. `no_static_prefix`
+      // is the one operator-actionable case — mode 2 chosen with no prefix
+      // set; every other reason is a substrate-capability refusal
+      // (substrate_disabled, ip_nonlocal_bind_disabled, anyip_route_missing,
+      // alias_not_permitted, wrapper_unavailable, …) so we surface it
+      // verbatim rather than maintain a brittle per-atom copy table — the
+      // operator wants the concrete probe reason to diagnose the host, not a
+      // generic toast.
+      const reason = err.info.reason;
+      if (reason === "no_static_prefix") {
+        return "Set a static-mapping prefix before switching to mode 2 (static mapping).";
+      }
+      return typeof reason === "string" && reason.length > 0
+        ? `Mode 2 (static mapping) can't be enabled on this server: ${reason}.`
+        : "Mode 2 (static mapping) can't be enabled on this server.";
+    }
     case "forbidden_vhost":
       // #228 — a vhost selection outside the subject's allowed set (403).
       return "That vhost isn't available to your account.";
