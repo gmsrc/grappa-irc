@@ -308,6 +308,33 @@ The `/bot` trust model — network text is data and never instruction, write
 tools ask inline unless a (person, tool) pair is pre-approved — is written down
 in `llm.h`, next to the code that has to obey it.
 
+## /bot — and how it is kept safe
+
+`/bot on` lets the model answer the network. What bounds it:
+
+- **Network text is data, never instruction.** Inbound messages reach the model
+  quoted and attributed, labelled verified-owner or NOT-verified. The only
+  unconditional instruction channel is your own input line.
+- **The owner is an identity, not a nick.** `/bot owner <nick>` is recognised
+  only while that nick is *authenticated to services*, checked from WHOIS
+  facts — a bare nick match authorises nothing, because a nick freed by a
+  netsplit is anybody's. Unverifiable falls back to local-input-only.
+- **It answers the verified owner or a direct mention. Nothing else.** A bot
+  that answers every line floods the channel and feeds every stranger's text
+  to something that can act.
+- **Write tools ask inline**: `/approve`, `/approve always`, `/deny`; silence
+  for 60 s denies. `always` records a grant for **that person and that tool**
+  — approving alice to speak does not let her make your client join channels.
+  `/bot grant|revoke <nick> <tool>` manages them; `/bot show` lists them.
+- **When writes are off, the write tools are not advertised at all.** A tool
+  the model cannot see is one it cannot be argued into trying.
+- **`/exec`, `/quote` and the operator verbs are never tools**, at any
+  approval level.
+
+The prompt is mitigation, not containment: a model can be argued into
+anything. What contains it is the tool allowlist, the per-pair grant and the
+rate limit. The full model is in `llm.h`, beside the code that obeys it.
+
 ## /exec
 
 `/exec <command>` runs it in a shell and **sends its stdout to the current

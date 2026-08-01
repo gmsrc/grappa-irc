@@ -948,6 +948,59 @@ TEST(the_settings_listing_never_prints_the_token) {
     free_app(app);
 }
 
+/* ── /bot: who may drive it ────────────────────────────────────────── */
+
+TEST(a_nick_match_alone_is_never_the_owner) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    snprintf(app->bot_owner, sizeof(app->bot_owner), "nextime");
+
+    /* Somebody using the owner's nick, with NOTHING known about their
+     * services login. This is the whole attack: a nick is borrowed,
+     * dropped and taken every day, and a bare match must not authorise
+     * anything. Unverifiable means not the owner. */
+    CHECK(!bot_sender_is_owner(app, "azzurra", "nextime"));
+
+    /* A different nick is not the owner however authenticated it is. */
+    whois_fact_record(app, "mallory", "mallory-account", true);
+    CHECK(!bot_sender_is_owner(app, "azzurra", "mallory"));
+
+    /* Verified by services → owner. */
+    whois_fact_record(app, "nextime", "nextime-account", true);
+    CHECK(bot_sender_is_owner(app, "azzurra", "nextime"));
+
+    /* Known to services but NOT identified is still not the owner. */
+    whois_fact_record(app, "nextime", "", false);
+    CHECK(!bot_sender_is_owner(app, "azzurra", "nextime"));
+
+    /* No owner configured: nobody on the network qualifies, ever. */
+    app->bot_owner[0] = 0;
+    whois_fact_record(app, "nextime", "nextime-account", true);
+    CHECK(!bot_sender_is_owner(app, "azzurra", "nextime"));
+    free_app(app);
+}
+
+TEST(a_grant_is_per_person_and_per_tool) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    bot_grant_add(app, "alice", "send_message");
+
+    CHECK(bot_has_grant(app, "alice", "send_message"));
+    /* Case-folded like every other nick compare. */
+    CHECK(bot_has_grant(app, "ALICE", "send_message"));
+    /* Approving her to SPEAK does not approve her to make the client
+     * join channels — that is the point of granting per pair. */
+    CHECK(!bot_has_grant(app, "alice", "join_channel"));
+    /* And it does not approve anybody else for anything. */
+    CHECK(!bot_has_grant(app, "bob", "send_message"));
+
+    /* Adding twice does not double the row. */
+    bot_grant_add(app, "alice", "send_message");
+    CHECK_LONG(app->bot_grant_count, 1);
+    free_app(app);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -983,6 +1036,8 @@ int main(void) {
     RUN(the_admin_visitors_tab_renders_per_network_rows);
     RUN(a_setting_name_and_a_boolean_are_parsed_the_way_people_type_them);
     RUN(the_settings_listing_never_prints_the_token);
+    RUN(a_nick_match_alone_is_never_the_owner);
+    RUN(a_grant_is_per_person_and_per_tool);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
     return test_report();
 }
