@@ -114,6 +114,10 @@ vi.mock("../lib/whoisCard", () => ({
   setWhoisBundle: vi.fn(),
 }));
 
+vi.mock("../lib/railWhois", () => ({
+  ingestRailWhois: vi.fn(),
+}));
+
 vi.mock("../lib/archive", () => ({
   loadArchive: vi.fn(),
 }));
@@ -283,6 +287,112 @@ describe("userTopic", () => {
       expect(networks.mutateNetworkNick).toHaveBeenCalledTimes(2);
       expect(networks.mutateNetworkNick).toHaveBeenNthCalledWith(1, 1, "grappa-1");
       expect(networks.mutateNetworkNick).toHaveBeenNthCalledWith(2, 1, "grappa-2");
+    });
+  });
+
+  // #606 — whois_bundle routing by server-marked `source`. The single-slot
+  // scrollback card (setWhoisBundle) takes ONLY user bundles; the per-nick
+  // rail cache (ingestRailWhois) takes rail bundles AND user bundles for the
+  // nick the rail is currently showing (a free refresh, not a race).
+  describe("whois_bundle source routing (#606)", () => {
+    const whoisBundleEvent = (overrides: Record<string, unknown> = {}) => ({
+      kind: "whois_bundle",
+      network: "azzurra",
+      target: "alice",
+      source: "user",
+      user: null,
+      host: null,
+      realname: null,
+      server: null,
+      server_info: null,
+      is_operator: false,
+      oper_text: null,
+      idle_seconds: null,
+      signon: null,
+      channels: null,
+      using_ssl: false,
+      is_registered: false,
+      is_admin: false,
+      is_services_admin: false,
+      is_helper: false,
+      is_chanop: false,
+      is_agent: false,
+      is_java: false,
+      umodes: null,
+      away_message: null,
+      actually_host: null,
+      actually_ip: null,
+      account: null,
+      secure: false,
+      secure_cipher: null,
+      certfp: null,
+      extra_lines: null,
+      ...overrides,
+    });
+
+    it("routes a source:user bundle to the scrollback card ONLY (rail not showing it)", async () => {
+      const whoisCard = await import("../lib/whoisCard");
+      const railWhois = await import("../lib/railWhois");
+      channelMock.fireEvent(whoisBundleEvent({ source: "user" }));
+      expect(whoisCard.setWhoisBundle).toHaveBeenCalledWith(
+        "azzurra",
+        expect.objectContaining({ target: "alice", source: "user" }),
+      );
+      expect(railWhois.ingestRailWhois).not.toHaveBeenCalled();
+    });
+
+    it("routes a source:rail bundle to the rail cache ONLY (never the scrollback card)", async () => {
+      const whoisCard = await import("../lib/whoisCard");
+      const railWhois = await import("../lib/railWhois");
+      channelMock.fireEvent(whoisBundleEvent({ source: "rail" }));
+      expect(railWhois.ingestRailWhois).toHaveBeenCalledWith(
+        "azzurra",
+        "alice",
+        expect.objectContaining({ target: "alice", source: "rail" }),
+      );
+      expect(whoisCard.setWhoisBundle).not.toHaveBeenCalled();
+    });
+
+    it("routes a source:user bundle to BOTH when the rail is showing that nick", async () => {
+      const selection = await import("../lib/selection");
+      const whoisCard = await import("../lib/whoisCard");
+      const railWhois = await import("../lib/railWhois");
+      vi.mocked(selection.selectedChannel).mockReturnValue({
+        networkSlug: "azzurra",
+        channelName: "Alice", // case-shift: nickEquals folds (#525)
+        kind: "query",
+      });
+      channelMock.fireEvent(whoisBundleEvent({ source: "user" }));
+      expect(whoisCard.setWhoisBundle).toHaveBeenCalledTimes(1);
+      expect(railWhois.ingestRailWhois).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT refresh the rail from a user bundle for a DIFFERENT shown nick", async () => {
+      const selection = await import("../lib/selection");
+      const whoisCard = await import("../lib/whoisCard");
+      const railWhois = await import("../lib/railWhois");
+      vi.mocked(selection.selectedChannel).mockReturnValue({
+        networkSlug: "azzurra",
+        channelName: "bob",
+        kind: "query",
+      });
+      channelMock.fireEvent(whoisBundleEvent({ source: "user", target: "alice" }));
+      expect(whoisCard.setWhoisBundle).toHaveBeenCalledTimes(1);
+      expect(railWhois.ingestRailWhois).not.toHaveBeenCalled();
+    });
+
+    it("treats an absent source as 'user' (old server / replayed payload)", async () => {
+      const whoisCard = await import("../lib/whoisCard");
+      const railWhois = await import("../lib/railWhois");
+      const ev = whoisBundleEvent();
+      // biome-ignore lint/performance/noDelete: exercising an absent wire key
+      delete (ev as Record<string, unknown>).source;
+      channelMock.fireEvent(ev);
+      expect(whoisCard.setWhoisBundle).toHaveBeenCalledWith(
+        "azzurra",
+        expect.objectContaining({ target: "alice", source: "user" }),
+      );
+      expect(railWhois.ingestRailWhois).not.toHaveBeenCalled();
     });
   });
 

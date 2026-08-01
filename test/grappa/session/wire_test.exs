@@ -599,6 +599,9 @@ defmodule Grappa.Session.WireTest do
                kind: :whois_bundle,
                network: "azzurra",
                target: "alice",
+               # #606 — request origin; defaults to :user for an accum with no
+               # :source (this test primes none).
+               source: :user,
                user: "alice_u",
                host: "alice.host",
                realname: "Alice Liddell",
@@ -642,6 +645,8 @@ defmodule Grappa.Session.WireTest do
                kind: :whois_bundle,
                network: "azzurra",
                target: "ghost",
+               # #606 — empty accum → origin defaults to :user.
+               source: :user,
                user: nil,
                host: nil,
                realname: nil,
@@ -695,6 +700,14 @@ defmodule Grappa.Session.WireTest do
       assert payload.actually_host == "real-host.example.net"
       assert payload.actually_ip == "203.0.113.7"
       assert payload.extra_lines == [%{numeric: 320, text: "is a volunteer staff member"}]
+    end
+
+    # #606 — the request origin rides in the accum as :source and projects
+    # verbatim. :rail is the query-rail auto-fetch; anything else defaults to
+    # :user (proven by the two exact-map tests above, which prime no :source).
+    test "projects the accum :source (rail auto-fetch) into the wire shape" do
+      payload = Wire.whois_bundle("azzurra", "alice", %{source: :rail})
+      assert payload.source == :rail
     end
   end
 

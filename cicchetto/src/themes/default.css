@@ -7512,6 +7512,28 @@ html.resize-dragging * {
   font-size: 0.8rem;
 }
 
+/* #606 — query-window rail context: heading + reused WhoisCard. The card
+   itself is styled by `.whois-card*` (shared with the scrollback overlay).
+   The #605 rail-track cap (`fit-content(14rem)` on `.shell-no-members`)
+   binds here too because `.whois-card-fields dd` AND this heading both wrap
+   (`word-break`) — the coupling gotcha #605 flagged: a non-wrapping token
+   would floor `fit-content` above the cap. */
+.rail-query-context {
+  flex: 0 0 auto;
+}
+
+/* Mirrors `.members-pane h3` (uppercased, muted) so the query rail's
+   heading slot reads identically to the channel members slot. */
+.rail-query-heading {
+  font-size: 0.85rem;
+  font-weight: normal;
+  color: var(--muted);
+  margin: 0;
+  padding: 0.25rem 1rem;
+  text-transform: uppercase;
+  word-break: break-word;
+}
+
 .lusers-card {
   margin: 0.25rem 0.5rem 0.5rem 0.5rem;
   padding: 0.5rem 0.75rem;

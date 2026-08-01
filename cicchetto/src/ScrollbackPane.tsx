@@ -55,6 +55,7 @@ import { scrollToBottomRequest } from "./lib/scrollToBottomCommand";
 import { setCursorIfAdvances, setSelectedChannel } from "./lib/selection";
 import { isMobile } from "./lib/theme";
 import { formatTimestamp } from "./lib/timeFormat";
+import { dismissWhoisCard, whoisCardBySlug } from "./lib/whoisCard";
 import { SERVER_WINDOW_NAME, type WindowKind } from "./lib/windowKinds";
 import { MircBody } from "./MircText";
 import NextActiveButton from "./NextActiveButton";
@@ -3323,7 +3324,10 @@ const ScrollbackPane: Component<Props> = (props) => {
       <div class="scrollback-overlay" data-testid="scrollback-overlay">
         {/* C2 — WHOIS card. Mounts on every window kind; the card itself
             short-circuits to null when no bundle is present. */}
-        <WhoisCard networkSlug={props.networkSlug} />
+        <WhoisCard
+          bundle={whoisCardBySlug()[props.networkSlug]}
+          onDismiss={() => dismissWhoisCard(props.networkSlug)}
+        />
         {/* P-0c — WHOWAS card. Mirrors WhoisCard mount shape (every window
             kind, not just $server). */}
         <WhowasCard networkSlug={props.networkSlug} />

@@ -9105,7 +9105,7 @@ defmodule Grappa.Session.ServerTest do
       assert {:error, :no_session} = Session.send_banlist({:user, uid}, 9_999, "#x")
       assert {:error, :no_session} = Session.send_umode({:user, uid}, 9_999, "+i")
       assert {:error, :no_session} = Session.send_mode({:user, uid}, 9_999, "#x", "+m", [])
-      assert {:error, :no_session} = Session.send_whois({:user, uid}, 9_999, "alice", nil)
+      assert {:error, :no_session} = Session.send_whois({:user, uid}, 9_999, "alice", nil, :user)
       assert {:error, :no_session} = Session.send_who({:user, uid}, 9_999, "#bofh")
       assert {:error, :no_session} = Session.send_names({:user, uid}, 9_999, "#bofh")
     end
@@ -9131,7 +9131,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "/whois <nick> sends WHOIS upstream", %{server: server, user: user, network: network, pid: pid} do
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :user)
 
       assert {:ok, "WHOIS alice\r\n"} =
                IRCServer.wait_for_line(server, &(&1 == "WHOIS alice\r\n"), 1_000)
@@ -9157,7 +9157,7 @@ defmodule Grappa.Session.ServerTest do
           %{state | whois_pending: %{"ghost" => %{target_display: "ghost", __primed_at_ms: stale_at}}}
         end)
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil, :user)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS fresh\r\n"), 1_000)
 
       state = SessionStateHelpers.fetch(pid)
@@ -9180,7 +9180,7 @@ defmodule Grappa.Session.ServerTest do
           %{state | whois_pending: %{"recent" => %{target_display: "recent", __primed_at_ms: recent_at}}}
         end)
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil, :user)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS fresh\r\n"), 1_000)
 
       state = SessionStateHelpers.fetch(pid)
@@ -9227,7 +9227,7 @@ defmodule Grappa.Session.ServerTest do
     } do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :user)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS alice\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 311 grappa-test alice alice_u alice.host * :Alice Liddell\r\n")
@@ -9249,6 +9249,33 @@ defmodule Grappa.Session.ServerTest do
       assert bundle.idle_seconds == 42
       assert bundle.signon == 1_700_000_000
       assert bundle.channels == ["@#italia", "+#grappa"]
+      # #606 — an operator-issued /whois marks the bundle :user so cic routes
+      # it to the single-slot scrollback card.
+      assert bundle.source == :user
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # #606 — a rail auto-fetch marks the bundle :source == :rail, the signal
+    # cic uses to route it to the per-nick rail cache WITHOUT forging a
+    # scrollback card. Same 311→318 fold path; only the origin differs.
+    test "a :rail-origin /whois marks the broadcast bundle source: :rail", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :rail)
+      _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS alice\r\n"), 1_000)
+
+      IRCServer.feed(server, ":irc.test.org 311 grappa-test alice alice_u alice.host * :Alice\r\n")
+      IRCServer.feed(server, ":irc.test.org 318 grappa-test alice :End of /WHOIS list\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "event", payload: %{kind: :whois_bundle} = bundle}, 1_500
+      assert bundle.target == "alice"
+      assert bundle.source == :rail
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -9261,7 +9288,7 @@ defmodule Grappa.Session.ServerTest do
     } do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 318 grappa-test ghost :End of /WHOIS list\r\n")
@@ -9438,7 +9465,7 @@ defmodule Grappa.Session.ServerTest do
     } do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :user)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS alice\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 311 grappa-test ALICE alice_u alice.host * :Alice\r\n")

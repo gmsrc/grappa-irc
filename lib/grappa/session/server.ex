@@ -2050,10 +2050,21 @@ defmodule Grappa.Session.Server do
   # on `target` (the nick) — routing only changes which server answers, not
   # the bundle's target — so priming is identical; only the emitted frame
   # differs (`WHOIS <server> <nick>` vs `WHOIS <nick>`).
-  def handle_call({:send_whois, target, server}, _, state)
-      when is_binary(target) and (is_binary(server) or is_nil(server)) do
+  # #606 — `origin` (`:user | :rail`) rides in the accumulator as `:source`
+  # so it re-emerges on the `whois_bundle` wire event. `whois_pending` keys
+  # per target nick, so two concurrent requests for one nick share this
+  # accumulator and the last write of `:source` wins — deliberately NOT
+  # fixed by splitting the key (the ircd numerics carry no request identity):
+  # the cic consumer rule (rail takes its own + the shown nick's user bundle)
+  # turns that collapse into a harmless cache hit, not a race.
+  def handle_call({:send_whois, target, server, origin}, _, state)
+      when is_binary(target) and (is_binary(server) or is_nil(server)) and
+             origin in [:user, :rail] do
     nick_key = fold_key(state, target)
-    next_pending = prime_pending(state.whois_pending, nick_key, %{target_display: target})
+
+    next_pending =
+      prime_pending(state.whois_pending, nick_key, %{target_display: target, source: origin})
+
     next_state = %{state | whois_pending: next_pending}
     {:reply, Client.send_whois(state.client, target, server), next_state}
   end

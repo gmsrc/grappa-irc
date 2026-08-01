@@ -28006,3 +28006,61 @@ Record<string, unknown>`, opaque to the generator.
 actually depends on it. Before granting one, check whether the boundary code
 already does the work the exception was supposed to avoid — here it did, and
 the exception bought nothing but a footnote.
+## 2026-08-01 — #606: the query rail context, and why the server marks the WHOIS origin
+
+#606 lands the deferred half of #474: a query window's right rail gets its own
+context — a heading (`private conversation with <NICK>`, mirroring the
+MembersPane `<h3>` slot; the nick reads live off `selectedChannel` so a #373
+rename re-labels it) and a WHOIS card for the partner, auto-fetched on select.
+The card **reuses** the existing `WhoisCard`, now refactored to be
+prop-driven (`bundle` + optional `onDismiss`): the scrollback overlay passes
+the single-slot `whoisCardBySlug` bundle plus a dismiss handler; the rail
+passes its per-nick `railWhois` bundle and omits `onDismiss`, so the rail card
+is persistent (no ×, like `ServerInfoCard`).
+
+**The real design problem was disambiguation.** `whois_bundle` arrives on
+`Topic.user/1` and, pre-#606, always landed in the single-slot store. If the
+rail auto-fetched through that same path, opening two queries would clobber the
+card and an auto-fetch would forge a scrollback card the user never asked for.
+Two options were put to the maintainer: (1) **client-only** — the rail keeps
+its own per-nick store and suppresses the single-slot only for its own fetch;
+zero server change, but a sub-second race survives (a `/whois` on the same nick
+while the rail is mid-fetch delivers that bundle to the rail, not the user's
+card). (2) **server-marked** — the bundle carries its request origin, each
+consumer takes only what is addressed to it, race gone by construction.
+
+**Decision: option 2** ("se 2) non è costosa va bene 2"), on the maintainer's
+own #608 rule — kill the class of bug, don't patch the symptom. Cost accepted:
+three lines of server + one wire field, but it makes an issue labelled
+`cicchetto` a **cross-stack** change, so the gate is the full integration suite,
+not the client suite alone.
+
+**Wire shape.** Add-only field `source: :user | :rail` on `whois_bundle` (atom
+union → `"user" | "rail"`, following the `server_reply` source precedent), so
+**no `protocol_version` bump** and old clients ignore it. `"user"` is the
+default for every existing path. The origin threads: `pushWhois(…, origin)`
+(default `"user"`; only the rail passes `"rail"`) → channel `handle_in("whois")`
+normalizes an **untrusted** client token (only exact `"rail"` opts in, all else
+→ `:user`) → `Session.send_whois/5` → primes it in the per-target
+`whois_pending` accumulator as `:source` → 318 drains it into the bundle →
+`Wire.whois_bundle/3` projects `Map.get(accum, :source, :user)`.
+
+**The consumer rule is where option 2 can still go wrong.** `whois_pending` is
+keyed per target nick, not per request, so two concurrent requests for one nick
+share one accumulator and the last write of `:source` wins — deliberately NOT
+fixed by splitting the key (the ircd numerics carry no request identity to split
+on). It is resolved at the cic consumer instead: the single-slot store consumes
+only `source: "user"`; the rail store consumes `source: "rail"` **and** a
+`source: "user"` bundle whose target is the nick the rail is currently showing
+(a free refresh). With that rule the collision collapses into a cache hit, not a
+race: `/whois` always gets its card, the rail gets a refresh. An absent `source`
+(pre-#606 server, replayed payload) is normalized to `"user"` at the cic
+narrower — the narrower **reconstructs** the bundle field-by-field, so `source`
+had to be added there too or it would have been silently dropped.
+
+**#605 coupling.** The query rail lives in the same `.shell-no-members`
+`fit-content(14rem)` track #605 capped. The cap binds here because both the
+reused `.whois-card-fields dd` and the new `.rail-query-heading` are
+`word-break`-able — the exact gotcha #605 flagged ("a future RailContext card
+without break-word would re-starve"). Explicitly out of scope (maintainer, same
+thread): no message counters / conversation stats.

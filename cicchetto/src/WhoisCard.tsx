@@ -1,7 +1,6 @@
 import { type Component, For, Show } from "solid-js";
 import type { WhoisBundle } from "./lib/api";
 import { formatDuration } from "./lib/duration";
-import { dismissWhoisCard, whoisCardBySlug } from "./lib/whoisCard";
 import { MircBody } from "./MircText";
 import NickText from "./NickText";
 
@@ -30,12 +29,23 @@ import NickText from "./NickText";
 // grappa-generated localized string, so the no-localized-strings policy
 // does not gate it. Same class as `server_info` / channel names.
 //
-// Close affordance: × button on the right calls `dismissWhoisCard` for
-// this network. Mounted by `ScrollbackPane.tsx` only when a bundle
-// exists for the selected window's network slug.
+// #606 — PROP-DRIVEN presentation. WhoisCard renders whatever `bundle` it
+// is handed and knows nothing about WHERE that bundle lives:
+//   * the scrollback overlay (`ScrollbackPane`) passes the single-slot
+//     `whoisCardBySlug` bundle for the active window's network AND an
+//     `onDismiss` — the × button that clears the user-issued /whois card;
+//   * the query rail context (`RailContext`, #606) passes its per-nick
+//     `railWhoisFor` bundle and OMITS `onDismiss` — the rail card is a
+//     persistent per-window-kind surface (like `ServerInfoCard`), so it has
+//     no × affordance.
+// Short-circuits to nothing when `bundle` is undefined, so both mount sites
+// can render it unconditionally.
 
 export type Props = {
-  networkSlug: string;
+  bundle: WhoisBundle | undefined;
+  /** When supplied, renders the × dismiss button wired to this handler
+      (the ephemeral scrollback card). Omit for the persistent rail card. */
+  onDismiss?: () => void;
 };
 
 const formatSignon = (epochSeconds: number | null): string | null => {
@@ -68,7 +78,7 @@ const collectTags = (b: WhoisBundle): TagChip[] => {
 };
 
 const WhoisCard: Component<Props> = (props) => {
-  const bundle = () => whoisCardBySlug()[props.networkSlug];
+  const bundle = () => props.bundle;
   const hasFields = (): boolean => {
     const b = bundle();
     if (!b) return false;
@@ -114,14 +124,16 @@ const WhoisCard: Component<Props> = (props) => {
                 <span class={`whois-card-tag whois-card-tag-${tag.cssMod}`}>{tag.label}</span>
               )}
             </For>
-            <button
-              type="button"
-              class="whois-card-close"
-              aria-label="Dismiss WHOIS"
-              onClick={() => dismissWhoisCard(props.networkSlug)}
-            >
-              ×
-            </button>
+            <Show when={props.onDismiss}>
+              <button
+                type="button"
+                class="whois-card-close"
+                aria-label="Dismiss WHOIS"
+                onClick={() => props.onDismiss?.()}
+              >
+                ×
+              </button>
+            </Show>
           </div>
           <Show
             when={hasFields()}

@@ -669,6 +669,13 @@ export function pushRaw(networkId: number, line: string): Promise<void> {
 // still arrives asynchronously on the user topic, unchanged.
 // ---------------------------------------------------------------------------
 
+// #606 — the WHOIS request origin. `"user"` = an operator-issued /whois
+// (renders the single-slot scrollback card); `"rail"` = the query-rail
+// auto-fetch (feeds the per-nick rail cache, never the scrollback card).
+// Add-only wire field, so the server treats an absent/unknown value as
+// "user" and no protocol_version bumps.
+export type WhoisOrigin = "user" | "rail";
+
 // /whois [<server>] <nick> → WHOIS — pushes on the user-level channel.
 // `server` is the optional RFC 2812 §3.6.2 target-server (#198): non-null
 // for the two-arg `/whois <server> <nick>` form (bouncer emits `WHOIS
@@ -676,8 +683,15 @@ export function pushRaw(networkId: number, line: string): Promise<void> {
 // `WHOIS <nick>`). Sent explicitly (never omitted) so the server clause
 // selection is unambiguous — a null server binary-fails the two-arg
 // handle_in guard and falls through to the single-arg clause.
-export function pushWhois(networkId: number, nick: string, server: string | null): Promise<void> {
-  return pushUserChannelVerb("whois", { network_id: networkId, nick, server });
+// `origin` (#606) defaults to "user" — the existing /whois call sites
+// (compose, UserContextMenu) are unchanged; only the rail passes "rail".
+export function pushWhois(
+  networkId: number,
+  nick: string,
+  server: string | null,
+  origin: WhoisOrigin = "user",
+): Promise<void> {
+  return pushUserChannelVerb("whois", { network_id: networkId, nick, server, source: origin });
 }
 
 // P-0c — /whowas <nick> → WHOWAS nick — pushes on the user-level

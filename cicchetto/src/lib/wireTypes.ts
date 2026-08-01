@@ -1015,6 +1015,7 @@ export type SessionWireWhoisBundlePayload = {
   kind: "whois_bundle";
   network: string;
   target: string;
+  source: "user" | "rail";
   user: string | null;
   host: string | null;
   realname: string | null;

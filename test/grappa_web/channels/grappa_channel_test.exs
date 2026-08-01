@@ -2230,6 +2230,43 @@ defmodule GrappaWeb.GrappaChannelTest do
 
       assert_reply(ref, :error, %{error: "invalid_nick"})
     end
+
+    # #606 — the query rail tags its auto-fetch `"source" => "rail"`. The
+    # channel boundary (`normalize_whois_origin/1`) maps that to `:rail`,
+    # which rides the accumulator and re-emerges on the broadcast bundle so
+    # cic routes it to the per-nick rail cache instead of the /whois card.
+    # An absent/unknown token normalizes to :user (covered by the tests
+    # above, which never send "source").
+    test "whois with source: rail marks the broadcast bundle source: :rail" do
+      {irc_server, port} = start_irc_server()
+      {visitor, network} = setup_visitor_and_network_with_session(port)
+      :ok = await_handshake(irc_server)
+      IRCServer.feed(irc_server, ":irc.test.org 001 #{visitor_nick(visitor)} :Welcome\r\n")
+      flush_server(irc_server)
+
+      visitor_name = "visitor:#{visitor.id}"
+      topic = Topic.user(visitor_name)
+
+      {:ok, _, visitor_socket} =
+        visitor_name
+        |> build_socket()
+        |> subscribe_and_join(topic, %{})
+
+      ref =
+        push(visitor_socket, "whois", %{
+          "network_id" => network.id,
+          "nick" => "alice",
+          "source" => "rail"
+        })
+
+      assert_reply(ref, :ok)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "WHOIS alice\r\n"), 1_000)
+
+      IRCServer.feed(irc_server, ":irc.test.org 311 #{visitor_nick(visitor)} alice u h * :Alice\r\n")
+      IRCServer.feed(irc_server, ":irc.test.org 318 #{visitor_nick(visitor)} alice :End\r\n")
+
+      assert_push("event", %{kind: :whois_bundle, target: "alice", source: :rail})
+    end
   end
 
   # Issue #62: `/away` returned a bare "Send failed" for visitors because

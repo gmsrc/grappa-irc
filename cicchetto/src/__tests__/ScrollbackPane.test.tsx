@@ -4855,6 +4855,7 @@ describe("ScrollbackPane", () => {
     const overlayBundle: WhoisBundle = {
       network: "overlaynet",
       target: "carol",
+      source: "user",
       user: "carol_u",
       host: "carol.host",
       realname: "Carol",

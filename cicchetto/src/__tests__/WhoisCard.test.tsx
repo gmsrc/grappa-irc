@@ -1,17 +1,23 @@
-import { render, screen } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { describe, expect, it, vi } from "vitest";
 import type { WhoisBundle } from "../lib/api";
-import { dismissWhoisCard, setWhoisBundle } from "../lib/whoisCard";
 import WhoisCard from "../WhoisCard";
 
 // P-0a — Cluster `numeric-delegation-p0` 2026-05-13. Verifies WhoisCard
 // renders all 11 newly-folded WHOIS-leg flags as inline tag chips +
 // structured rows. Server emits typed booleans / strings; cic builds
 // the human-readable strings ("services agent" / "SSL" / etc) here.
+//
+// #606 — WhoisCard is now PROP-DRIVEN (presentational): it takes the
+// `bundle` to render + an optional `onDismiss`. The scrollback overlay
+// passes the single-slot `whoisCardBySlug` bundle + a dismiss handler;
+// the query rail (#606) passes its per-nick bundle and OMITS onDismiss
+// (the rail card is persistent, like ServerInfoCard — no × button).
 
 const baseBundle: WhoisBundle = {
   network: "azzurra",
   target: "alice",
+  source: "user",
   user: "alice_u",
   host: "alice.host",
   realname: "Alice Liddell",
@@ -41,39 +47,33 @@ const baseBundle: WhoisBundle = {
   extra_lines: null,
 };
 
-describe("WhoisCard P-0a flags", () => {
-  afterEach(() => {
-    dismissWhoisCard("azzurra");
-  });
+const renderCard = (overrides: Partial<WhoisBundle> = {}, onDismiss?: () => void) =>
+  render(() => <WhoisCard bundle={{ ...baseBundle, ...overrides }} onDismiss={onDismiss} />);
 
+describe("WhoisCard P-0a flags", () => {
   it("renders SSL tag when using_ssl: true", () => {
-    setWhoisBundle("azzurra", { ...baseBundle, using_ssl: true });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ using_ssl: true });
     expect(screen.getByText("SSL")).toBeInTheDocument();
   });
 
   it("renders 'registered' tag when is_registered: true", () => {
-    setWhoisBundle("azzurra", { ...baseBundle, is_registered: true });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ is_registered: true });
     expect(screen.getByText("registered")).toBeInTheDocument();
   });
 
   it("renders 'services agent' tag when is_agent: true", () => {
-    setWhoisBundle("azzurra", { ...baseBundle, is_agent: true });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ is_agent: true });
     expect(screen.getByText("services agent")).toBeInTheDocument();
   });
 
   it("renders 'server admin' / 'services admin' / 'helper' / 'chanop' / 'java' tags from typed flags", () => {
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
+    renderCard({
       is_admin: true,
       is_services_admin: true,
       is_helper: true,
       is_chanop: true,
       is_java: true,
     });
-    render(() => <WhoisCard networkSlug="azzurra" />);
     expect(screen.getByText("server admin")).toBeInTheDocument();
     expect(screen.getByText("services admin")).toBeInTheDocument();
     expect(screen.getByText("helper")).toBeInTheDocument();
@@ -82,19 +82,13 @@ describe("WhoisCard P-0a flags", () => {
   });
 
   it("renders away row with the away message when away_message is non-null", () => {
-    setWhoisBundle("azzurra", { ...baseBundle, away_message: "Gone fishing" });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ away_message: "Gone fishing" });
     expect(screen.getByText("away")).toBeInTheDocument();
     expect(screen.getByText("Gone fishing")).toBeInTheDocument();
   });
 
   it("renders 'connecting from' row with host + ip when actually_host/ip set", () => {
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
-      actually_host: "real.host.example",
-      actually_ip: "192.0.2.42",
-    });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ actually_host: "real.host.example", actually_ip: "192.0.2.42" });
     expect(screen.getByText("connecting from")).toBeInTheDocument();
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).toContain("real.host.example");
@@ -102,15 +96,13 @@ describe("WhoisCard P-0a flags", () => {
   });
 
   it("renders modes row with the extracted umode string when umodes is set", () => {
-    setWhoisBundle("azzurra", { ...baseBundle, umodes: "+iZ" });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ umodes: "+iZ" });
     expect(screen.getByText("modes")).toBeInTheDocument();
     expect(screen.getByText("+iZ")).toBeInTheDocument();
   });
 
   it("does NOT render any P-0a tag chip when all flags are false (defaults)", () => {
-    setWhoisBundle("azzurra", baseBundle);
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard();
     // Empty-flag header should NOT contain any of the localized tag labels.
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).not.toContain("SSL");
@@ -127,8 +119,7 @@ describe("WhoisCard P-0a flags", () => {
   // modes lines still show control codes"). RED on the unfixed card: the
   // raw `\x03`/`\x02` bytes sit in textContent and no mIRC span exists.
   it("renders mIRC formatting in umodes / connecting-from / server_info, never raw control bytes", () => {
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
+    renderCard({
       // \x02 bold, \x03 04 red, \x0f reset — the codes a colored vhost /
       // swhois / formatted gecos carries on the wire.
       umodes: "\x02+iZ\x02",
@@ -137,7 +128,6 @@ describe("WhoisCard P-0a flags", () => {
       server_info: "\x0303Azzurra\x03 Hub",
       realname: "\x1fAlice\x1f",
     });
-    render(() => <WhoisCard networkSlug="azzurra" />);
     const card = screen.getByTestId("whois-card");
 
     // The parser splits the formatted runs into styled <span>s — proof the
@@ -159,8 +149,7 @@ describe("WhoisCard P-0a flags", () => {
   });
 
   it("renders ALL chip labels in the same card for a fully-flagged services-agent user", () => {
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
+    renderCard({
       is_operator: true,
       is_registered: true,
       is_agent: true,
@@ -170,7 +159,6 @@ describe("WhoisCard P-0a flags", () => {
       actually_ip: "10.0.0.1",
       away_message: "AFK",
     });
-    render(() => <WhoisCard networkSlug="azzurra" />);
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).toContain("oper");
     expect(card.textContent).toContain("registered");
@@ -182,6 +170,28 @@ describe("WhoisCard P-0a flags", () => {
   });
 });
 
+// #606 — the presentational contract: bundle is prop-injected, and the ×
+// dismiss button is present ONLY when an onDismiss handler is supplied.
+describe("WhoisCard #606 prop-driven render", () => {
+  it("renders nothing when no bundle is supplied", () => {
+    render(() => <WhoisCard bundle={undefined} />);
+    expect(screen.queryByTestId("whois-card")).toBeNull();
+  });
+
+  it("renders the × dismiss button and fires onDismiss when supplied (scrollback card)", () => {
+    const onDismiss = vi.fn();
+    renderCard({}, onDismiss);
+    const close = screen.getByLabelText("Dismiss WHOIS");
+    fireEvent.click(close);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the × dismiss button when no onDismiss is supplied (persistent rail card)", () => {
+    renderCard();
+    expect(screen.queryByLabelText("Dismiss WHOIS")).toBeNull();
+  });
+});
+
 // #367 — 313 RPL_WHOISOPERATOR role text. bahamut (Azzurra) distinguishes
 // operator levels via the trailing text ("is an IRC Operator" vs "is a
 // Server Administrator" vs "is a Services Administrator"). The bug: the card
@@ -190,17 +200,8 @@ describe("WhoisCard P-0a flags", () => {
 // fix surfaces `oper_text` as a structured row while KEEPING the "oper"
 // badge as the always-on flag + the fallback for a bare 313.
 describe("WhoisCard #367 oper role text", () => {
-  afterEach(() => {
-    dismissWhoisCard("azzurra");
-  });
-
   it("renders the role text row AND the oper badge when oper_text is present", () => {
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
-      is_operator: true,
-      oper_text: "is a Services Administrator",
-    });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ is_operator: true, oper_text: "is a Services Administrator" });
     const card = screen.getByTestId("whois-card");
     // The role text is surfaced verbatim (upstream ircd string).
     expect(card.textContent).toContain("is a Services Administrator");
@@ -212,12 +213,7 @@ describe("WhoisCard #367 oper role text", () => {
   it("routes oper_text through the mIRC renderer, never leaking raw control bytes", () => {
     // A services-set swhois can carry mIRC formatting — it must route
     // through MircBody like every other free-text whois field (#142 lesson).
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
-      is_operator: true,
-      oper_text: "\x0304is a Services Administrator\x0f",
-    });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ is_operator: true, oper_text: "\x0304is a Services Administrator\x0f" });
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).toContain("is a Services Administrator");
     for (const byte of ["\x03", "\x0f"]) {
@@ -226,8 +222,7 @@ describe("WhoisCard #367 oper role text", () => {
   });
 
   it("falls back to the bare oper badge with NO role row when oper_text is null (bare 313)", () => {
-    setWhoisBundle("azzurra", { ...baseBundle, is_operator: true, oper_text: null });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ is_operator: true, oper_text: null });
     const card = screen.getByTestId("whois-card");
     // Badge still present (is_operator latched)...
     expect(card.querySelector(".whois-card-tag-oper")).not.toBeNull();
@@ -245,47 +240,34 @@ describe("WhoisCard #367 oper role text", () => {
 // + certfp were never rendered at all. These lock the fix: a badge/field
 // keyed off the solanum fields, without regressing the bahamut path.
 describe("WhoisCard #221 solanum fields", () => {
-  afterEach(() => {
-    dismissWhoisCard("azzurra");
-  });
-
   it("renders 'registered' badge from account (330) even when is_registered is false", () => {
     // solanum: account present, is_registered false (no 307 emitted).
-    setWhoisBundle("azzurra", { ...baseBundle, account: "AliceAccount", is_registered: false });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ account: "AliceAccount", is_registered: false });
     expect(screen.getByText("registered")).toBeInTheDocument();
   });
 
   it("renders 'SSL' badge from secure (671) even when using_ssl is false", () => {
     // solanum: secure true, using_ssl false (no 275 emitted).
-    setWhoisBundle("azzurra", { ...baseBundle, secure: true, using_ssl: false });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ secure: true, using_ssl: false });
     expect(screen.getByText("SSL")).toBeInTheDocument();
   });
 
   it("renders the account name in a dedicated row when account is set", () => {
-    setWhoisBundle("azzurra", { ...baseBundle, account: "AliceAccount" });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ account: "AliceAccount" });
     expect(screen.getByText("account")).toBeInTheDocument();
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).toContain("AliceAccount");
   });
 
   it("renders the TLS protocol string from secure_cipher when present", () => {
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
-      secure: true,
-      secure_cipher: "TLSv1.3, TLS_AES_256_GCM_SHA384",
-    });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ secure: true, secure_cipher: "TLSv1.3, TLS_AES_256_GCM_SHA384" });
     expect(screen.getByText("secure")).toBeInTheDocument();
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).toContain("TLSv1.3, TLS_AES_256_GCM_SHA384");
   });
 
   it("renders the certfp fingerprint row when certfp is set", () => {
-    setWhoisBundle("azzurra", { ...baseBundle, certfp: "deadbeefcafef00d" });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ certfp: "deadbeefcafef00d" });
     expect(screen.getByText("cert")).toBeInTheDocument();
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).toContain("deadbeefcafef00d");
@@ -294,15 +276,13 @@ describe("WhoisCard #221 solanum fields", () => {
   it("renders registered badge + account name + SSL badge + TLS proto together for a solanum user", () => {
     // The full reopened-#221 bug scenario in one card: registered + TLS
     // Libera user must NOT look anonymous + insecure.
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
+    renderCard({
       account: "AliceAccount",
       secure: true,
       secure_cipher: "TLSv1.3, TLS_AES_256_GCM_SHA384",
       is_registered: false,
       using_ssl: false,
     });
-    render(() => <WhoisCard networkSlug="azzurra" />);
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).toContain("registered");
     expect(card.textContent).toContain("SSL");
@@ -311,8 +291,7 @@ describe("WhoisCard #221 solanum fields", () => {
   });
 
   it("does NOT render a 'registered' badge or account row when account is null and is_registered false", () => {
-    setWhoisBundle("azzurra", baseBundle);
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard();
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).not.toContain("registered");
     expect(card.textContent).not.toContain("account");

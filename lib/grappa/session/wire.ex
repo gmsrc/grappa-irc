@@ -445,6 +445,11 @@ defmodule Grappa.Session.Wire do
           kind: :whois_bundle,
           network: String.t(),
           target: String.t(),
+          # #606 — request origin. `"user"` = operator-issued /whois (the
+          # single-slot scrollback card); `"rail"` = query-rail auto-fetch.
+          # Add-only (no protocol_version bump); an old client ignores it and
+          # cic treats an absent value as "user".
+          source: :user | :rail,
           user: String.t() | nil,
           host: String.t() | nil,
           realname: String.t() | nil,
@@ -1262,6 +1267,10 @@ defmodule Grappa.Session.Wire do
       kind: :whois_bundle,
       network: network_slug,
       target: target,
+      # #606 — request origin, defaulting to :user for a bundle primed by
+      # pre-#606 code (hot-deploy in-flight accumulator) or any path that
+      # somehow skipped it. Jason encodes the atom to "user"/"rail".
+      source: Map.get(accum, :source, :user),
       user: Map.get(accum, :user),
       host: Map.get(accum, :host),
       realname: Map.get(accum, :realname),

@@ -730,27 +730,31 @@ defmodule GrappaWeb.GrappaChannel do
   # `:server` predicate (server name or routing nick — no whitespace/CRLF).
   defp do_handle_in(
          "whois",
-         %{"network_id" => network_id, "nick" => nick, "server" => server},
+         %{"network_id" => network_id, "nick" => nick, "server" => server} = params,
          socket
        )
        when is_integer(network_id) and is_binary(nick) and is_binary(server) do
+    origin = normalize_whois_origin(params)
+
     dispatch_subject_verb(
       socket,
       fn -> validate_args(nick: nick, server: server) end,
-      fn subject -> Session.send_whois(subject, network_id, nick, server) end
+      fn subject -> Session.send_whois(subject, network_id, nick, server, origin) end
     )
   end
 
   defp do_handle_in(
          "whois",
-         %{"network_id" => network_id, "nick" => nick},
+         %{"network_id" => network_id, "nick" => nick} = params,
          socket
        )
        when is_integer(network_id) and is_binary(nick) do
+    origin = normalize_whois_origin(params)
+
     dispatch_subject_verb(
       socket,
       fn -> validate_args(nick: nick) end,
-      fn subject -> Session.send_whois(subject, network_id, nick, nil) end
+      fn subject -> Session.send_whois(subject, network_id, nick, nil, origin) end
     )
   end
 
@@ -1563,6 +1567,13 @@ defmodule GrappaWeb.GrappaChannel do
     do: validate_args(server: mask, server: server)
 
   defp validate_lusers_args(_, _), do: {:error, :invalid_line}
+
+  # #606 — the WHOIS request origin the query rail tags its auto-fetch with.
+  # Untrusted client token, so ONLY the exact "rail" string opts into rail
+  # routing; absent / unknown / "user" all normalize to the :user default
+  # (an old client that never sends the key keeps working unchanged).
+  defp normalize_whois_origin(%{"source" => "rail"}), do: :rail
+  defp normalize_whois_origin(_), do: :user
 
   defp validate_args([]), do: {:ok, :ok}
 

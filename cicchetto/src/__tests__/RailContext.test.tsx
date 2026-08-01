@@ -1,25 +1,38 @@
 import { render, screen } from "@solidjs/testing-library";
-import { describe, expect, it, vi } from "vitest";
-import type { Network } from "../lib/api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Network, WhoisBundle } from "../lib/api";
 import type { SelectedChannel } from "../lib/selection";
 import type { WindowKind } from "../lib/windowKinds";
 
 // #474 — RailContext is the GENERIC per-window-kind context surface grafted
 // as a sibling of the RailActions drawer. It dispatches on the active
-// window's kind: server → ServerInfoCard today; query → whois is the
-// deferred follow-on. It renders NOTHING for kinds with no context content.
-// Built as a container (not a hardcoded server card) so future per-kind
-// content grafts here without touching Shell's two rail mounts.
+// window's kind: server → ServerInfoCard; query → whois context (#606, the
+// deferred half of #474). It renders NOTHING for kinds with no context.
+// Built as a container so future per-kind content grafts here without
+// touching Shell's two rail mounts.
 
-const selectedChannelMock = vi.hoisted(() => vi.fn<() => SelectedChannel | null>());
 const networkBySlugMock = vi.hoisted(() => vi.fn<(slug: string) => Network | undefined>());
+const requestRailWhoisMock = vi.hoisted(() => vi.fn<(slug: string, nick: string) => void>());
+const railWhoisForMock = vi.hoisted(() =>
+  vi.fn<(slug: string, nick: string) => WhoisBundle | undefined>(),
+);
 
-vi.mock("../lib/selection", () => ({
-  selectedChannel: () => selectedChannelMock(),
-}));
+// selection is signal-backed so a live NICK change (followQueryNick swapping
+// selectedChannel) re-renders the container mid-mount, exercising #606's
+// "heading must follow the nick" contract.
+vi.mock("../lib/selection", async () => {
+  const { createSignal } = await import("solid-js");
+  const [sel, setSel] = createSignal<SelectedChannel | null>(null);
+  return { selectedChannel: sel, __setSelected: setSel };
+});
 
 vi.mock("../lib/networks", () => ({
   networkBySlug: (slug: string) => networkBySlugMock(slug),
+}));
+
+vi.mock("../lib/railWhois", () => ({
+  requestRailWhois: (slug: string, nick: string) => requestRailWhoisMock(slug, nick),
+  railWhoisFor: (slug: string, nick: string) => railWhoisForMock(slug, nick),
 }));
 
 const net: Network = {
@@ -44,44 +57,116 @@ const sel = (kind: WindowKind, channelName: string): SelectedChannel => ({
   kind,
 });
 
+async function setSelected(value: SelectedChannel | null): Promise<void> {
+  const mod = (await import("../lib/selection")) as unknown as {
+    __setSelected: (v: SelectedChannel | null) => void;
+  };
+  mod.__setSelected(value);
+  await Promise.resolve();
+}
+
 async function renderContainer() {
   const { default: RailContext } = await import("../RailContext");
-  return render(() => <RailContext />);
+  const result = render(() => <RailContext />);
+  await Promise.resolve();
+  return result;
 }
+
+beforeEach(() => {
+  networkBySlugMock.mockReset();
+  requestRailWhoisMock.mockReset();
+  railWhoisForMock.mockReset();
+  railWhoisForMock.mockReturnValue(undefined);
+});
+
+afterEach(async () => {
+  await setSelected(null);
+});
 
 describe("RailContext per-kind dispatch", () => {
   it("renders the ServerInfoCard on a server window when the network is live", async () => {
-    selectedChannelMock.mockReturnValue(sel("server", "$server"));
+    await setSelected(sel("server", "$server"));
     networkBySlugMock.mockReturnValue(net);
     await renderContainer();
-    const card = screen.getByTestId("rail-server-info");
-    expect(card.textContent).toContain("libera");
+    expect(screen.getByTestId("rail-server-info").textContent).toContain("libera");
   });
 
   it("renders nothing on a server window whose network is not live", async () => {
-    selectedChannelMock.mockReturnValue(sel("server", "$server"));
+    await setSelected(sel("server", "$server"));
     networkBySlugMock.mockReturnValue(undefined);
     await renderContainer();
     expect(screen.queryByTestId("rail-server-info")).toBeNull();
   });
 
   it("renders nothing on a channel window", async () => {
-    selectedChannelMock.mockReturnValue(sel("channel", "#italia"));
+    await setSelected(sel("channel", "#italia"));
     networkBySlugMock.mockReturnValue(net);
     await renderContainer();
     expect(screen.queryByTestId("rail-server-info")).toBeNull();
-  });
-
-  it("renders nothing on a query window (whois context is a deferred follow-on)", async () => {
-    selectedChannelMock.mockReturnValue(sel("query", "alice"));
-    networkBySlugMock.mockReturnValue(net);
-    await renderContainer();
-    expect(screen.queryByTestId("rail-server-info")).toBeNull();
+    expect(screen.queryByTestId("rail-query-context")).toBeNull();
   });
 
   it("renders nothing when no window is selected", async () => {
-    selectedChannelMock.mockReturnValue(null);
+    await setSelected(null);
     await renderContainer();
     expect(screen.queryByTestId("rail-server-info")).toBeNull();
+    expect(screen.queryByTestId("rail-query-context")).toBeNull();
+  });
+});
+
+describe("RailContext query context (#606)", () => {
+  it("renders the heading 'private conversation with <nick>' on a query window", async () => {
+    await setSelected(sel("query", "alice"));
+    await renderContainer();
+    const ctx = screen.getByTestId("rail-query-context");
+    expect(ctx.textContent).toContain("private conversation with");
+    expect(ctx.textContent).toContain("alice");
+    // The server-info card is NOT what a query renders.
+    expect(screen.queryByTestId("rail-server-info")).toBeNull();
+  });
+
+  it("fires requestRailWhois(slug, nick) when a query is selected", async () => {
+    await setSelected(sel("query", "alice"));
+    await renderContainer();
+    expect(requestRailWhoisMock).toHaveBeenCalledWith("libera", "alice");
+  });
+
+  it("updates the heading when the query's nick changes while open (followQueryNick)", async () => {
+    await setSelected(sel("query", "alice"));
+    await renderContainer();
+    expect(screen.getByTestId("rail-query-context").textContent).toContain("alice");
+    // A peer NICK alice→alice2 swaps selectedChannel in place (#373).
+    await setSelected(sel("query", "alice2"));
+    const ctx = screen.getByTestId("rail-query-context");
+    expect(ctx.textContent).toContain("alice2");
+    expect(ctx.textContent).not.toContain("with alice "); // no stale nick
+  });
+
+  it("re-fires requestRailWhois for the new nick after a rename", async () => {
+    await setSelected(sel("query", "alice"));
+    await renderContainer();
+    await setSelected(sel("query", "alice2"));
+    expect(requestRailWhoisMock).toHaveBeenCalledWith("libera", "alice");
+    expect(requestRailWhoisMock).toHaveBeenCalledWith("libera", "alice2");
+  });
+
+  it("renders the WhoisCard when a rail bundle exists for the selected nick", async () => {
+    railWhoisForMock.mockImplementation((_slug, nick) =>
+      nick === "alice"
+        ? ({ target: "alice", account: "AliceAcct" } as unknown as WhoisBundle)
+        : undefined,
+    );
+    await setSelected(sel("query", "alice"));
+    await renderContainer();
+    expect(screen.getByTestId("whois-card")).toBeInTheDocument();
+    expect(screen.getByTestId("whois-card").textContent).toContain("AliceAcct");
+  });
+
+  it("renders the heading but no WhoisCard when no rail bundle exists yet", async () => {
+    railWhoisForMock.mockReturnValue(undefined);
+    await setSelected(sel("query", "alice"));
+    await renderContainer();
+    expect(screen.getByTestId("rail-query-context")).toBeInTheDocument();
+    expect(screen.queryByTestId("whois-card")).toBeNull();
   });
 });

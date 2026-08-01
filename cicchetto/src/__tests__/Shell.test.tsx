@@ -145,6 +145,15 @@ vi.mock("../lib/networks", () => ({
   networkBySlug: () => undefined,
 }));
 
+// #606 — RailContext's query context auto-fetches WHOIS on select via
+// railWhois. Shell's integration tests cover LAYOUT, not that fetch (railWhois
+// + RailContext own it), so stub it to a no-op — otherwise the real store
+// hits networkIdBySlug (not on this file's networks mock) and pushWhois.
+vi.mock("../lib/railWhois", () => ({
+  requestRailWhois: () => {},
+  railWhoisFor: () => undefined,
+}));
+
 vi.mock("../lib/selection", () => ({
   selectedChannel: () => selectionState.selSig(),
   setSelectedChannel: selectionState.setSelectedChannelMock,

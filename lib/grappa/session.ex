@@ -1619,16 +1619,24 @@ defmodule Grappa.Session do
   Per spec #2: ephemeral — NOT persisted in scrollback. Bundle replaces
   any prior bundle for the same target.
 
+  `origin` (#606) marks who asked: `:user` for an operator-issued `/whois`
+  (the single-slot scrollback card), `:rail` for the query-rail
+  auto-fetch. It rides in the per-target accumulator and re-emerges on the
+  `whois_bundle` wire event as `source`, so each cic store consumes only
+  what is addressed to it (a rail auto-fetch never forges the /whois card).
+  The channel boundary normalizes an unknown/absent client token to
+  `:user`, so the atom reaching here is always one of the two.
+
   Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}`
   if the nick or server syntax is rejected by
   `Grappa.IRC.Client.send_whois/3`.
   """
-  @spec send_whois(subject(), integer(), String.t(), String.t() | nil) ::
+  @spec send_whois(subject(), integer(), String.t(), String.t() | nil, :user | :rail) ::
           :ok | {:error, :no_session | :invalid_line | send_transport_error()}
-  def send_whois(subject, network_id, nick, server)
+  def send_whois(subject, network_id, nick, server, origin)
       when is_subject(subject) and is_integer(network_id) and is_binary(nick) and
-             (is_binary(server) or is_nil(server)) do
-    call_session(subject, network_id, {:send_whois, nick, server})
+             (is_binary(server) or is_nil(server)) and origin in [:user, :rail] do
+    call_session(subject, network_id, {:send_whois, nick, server, origin})
   end
 
   @doc """

@@ -31,6 +31,7 @@ import { setMentionsBundle } from "./mentionsWindow";
 import { moduleRoot } from "./moduleRoot";
 import { setNamesReply } from "./namesModal";
 import { mutateNetworkNick, refetchChannels, refetchNetworks } from "./networks";
+import { nickEquals } from "./nickEquals";
 import {
   applyPresenceChange,
   applyPresenceError,
@@ -39,6 +40,7 @@ import {
 } from "./notifyWatch";
 import { setPeerAway } from "./peerAway";
 import { type QueryWindow, setQueryWindowsByNetwork } from "./queryWindows";
+import { ingestRailWhois } from "./railWhois";
 import { clearSeen } from "./reconnectBackfill";
 import { setReconnecting } from "./reconnectingStatus";
 import { applyRecoverProgress, applyRecoverResult } from "./recoverProgress";
@@ -93,6 +95,18 @@ import { NETWORKS_CREDENTIAL_CONNECTION_STATE } from "./wireTypes";
 // Every token transition rebuilds the socket (socket.ts), so the effect
 // leaves the orphaned prior Channel and re-joins on the fresh socket —
 // including a rotation that keeps the identity (#364 cicchetto S1).
+
+// #606 — is the rail currently showing the query whose partner is `target`
+// on `network`? Used to decide whether a `source: user` whois_bundle (an
+// operator /whois) should ALSO refresh the rail card. `nickEquals` folds
+// (#525) so a case-shift still matches. Read outside any reactive scope
+// (a channel event callback), so this is a plain current-value read.
+function railIsShowingNick(network: string, target: string): boolean {
+  const sel = selectedChannel();
+  return (
+    sel?.kind === "query" && sel.networkSlug === network && nickEquals(sel.channelName, target)
+  );
+}
 
 function parseWindowsMap(raw: Record<string, QueryWindowEntry[]>): Record<number, QueryWindow[]> {
   const result: Record<number, QueryWindow[]> = {};
@@ -592,6 +606,11 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         kind: "whois_bundle",
         network: r.network,
         target: r.target,
+        // #606 — request origin (add-only). Absent/unknown (pre-#606 server,
+        // replayed payload) normalizes to "user" so the /whois card path is
+        // the safe default; only an explicit "rail" opts into rail-only
+        // routing. Tolerant, NOT a drop condition (old servers omit it).
+        source: r.source === "rail" ? "rail" : "user",
         user: r.user as string | null,
         host: r.host as string | null,
         realname: r.realname as string | null,
@@ -1191,14 +1210,25 @@ moduleRoot(() => {
 
         case "whois_bundle": {
           // C2 — WHOIS reply complete (server's 318 RPL_ENDOFWHOIS).
-          // Replace any prior bundle for this network and let the
-          // ScrollbackPane render the WhoisCard at the top of the
-          // active window. Focus-rule: per spec #2, the bundle renders
-          // INLINE in the window the user typed /whois from, NOT in
-          // the $server window. We don't switch focus — the user is
-          // already on the issuing window when the reply arrives.
+          // #606 — the server marks the request origin (`source`), so the two
+          // card stores stay disjoint by construction:
+          //   * single-slot scrollback card (whoisCard) — `user` bundles ONLY,
+          //     so a rail auto-fetch NEVER forges or clobbers the /whois card.
+          //     Renders INLINE in the window the user typed /whois from (spec
+          //     #2); we don't switch focus.
+          //   * per-nick rail cache (railWhois) — its own `rail` bundles AND a
+          //     `user` bundle for the nick the rail is CURRENTLY showing (a
+          //     free refresh — turns the shared-whois_pending collision into a
+          //     cache hit, not a race).
+          // An absent source (pre-#606 server, replayed payload) was already
+          // normalized to "user" by the narrower, so this is exhaustive.
           const { kind: _omit, ...bundle } = payload;
-          setWhoisBundle(payload.network, bundle);
+          if (bundle.source === "user") {
+            setWhoisBundle(payload.network, bundle);
+          }
+          if (bundle.source === "rail" || railIsShowingNick(payload.network, payload.target)) {
+            ingestRailWhois(payload.network, payload.target, bundle);
+          }
           return;
         }
 

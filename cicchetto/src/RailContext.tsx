@@ -1,19 +1,34 @@
-import { type Component, createSignal, Match, onCleanup, Show, Switch } from "solid-js";
+import {
+  type Component,
+  createEffect,
+  createSignal,
+  Match,
+  on,
+  onCleanup,
+  Show,
+  Switch,
+} from "solid-js";
 import { networkBySlug } from "./lib/networks";
+import { railWhoisFor, requestRailWhois } from "./lib/railWhois";
 import { selectedChannel } from "./lib/selection";
 import ServerInfoCard from "./ServerInfoCard";
+import WhoisCard from "./WhoisCard";
 
 // #474 — the rail's GENERIC per-window-kind context surface. Mounted as a
 // sibling of the RailActions drawer inside `.shell-members` in BOTH Shell
 // rail branches (desktop + mobile). It reads the active window's kind and
 // grafts the matching context content:
 //   * server → ServerInfoCard (connection facts already in the store)
-//   * query  → a /whois card is the deferred other half of this design
-//              (issue #474 "follow-on, not scope here") — add a <Match>
-//              here when it lands, NOT a second Shell edit.
+//   * query  → the query context (#606, the deferred half of #474): a
+//              heading + a WHOIS card for the conversation partner,
+//              auto-fetched on select. The card REUSES the same `WhoisCard`
+//              presentation as the scrollback overlay but is fed by the
+//              per-nick `railWhois` cache (NOT the single-slot `whoisCard`
+//              store the user-issued /whois owns) and carries no × affordance
+//              (persistent, like the server card).
 // It renders NOTHING for kinds with no context content (channel already has
 // the MembersPane above; home/admin/list/mentions have none). Built as a
-// container, not a hardcoded server card, so the rail becomes the per-kind
+// container, not a hardcoded server card, so the rail is the per-kind
 // context surface the RailActions moduledoc (#473) always earmarked.
 
 const TICK_MS = 60_000;
@@ -32,12 +47,44 @@ const RailContext: Component = () => {
 
   const sel = () => selectedChannel();
 
+  // #606 — fetch-on-select. When a query window is (re)focused, ask the rail
+  // WHOIS cache for its partner; the store de-dupes a fresh cache hit and an
+  // in-flight request, so re-selecting a query or fast A→B→A switching issues
+  // at most one WHOIS per nick. Keyed on the composed (slug, nick) string so
+  // the effect fires ONLY when the focused query's identity actually changes
+  // (a followQueryNick rename re-fetches for the new nick), not on every
+  // unrelated selection churn. A nick cannot contain a space, so the space
+  // separator is unambiguous.
+  createEffect(
+    on(
+      () => {
+        const s = sel();
+        return s?.kind === "query" ? `${s.networkSlug} ${s.channelName}` : null;
+      },
+      (key) => {
+        if (key === null) return;
+        const sep = key.indexOf(" ");
+        requestRailWhois(key.slice(0, sep), key.slice(sep + 1));
+      },
+    ),
+  );
+
   return (
     <Switch>
       <Match when={sel()?.kind === "server"}>
         <Show when={networkBySlug(sel()?.networkSlug ?? "")}>
           {(net) => <ServerInfoCard network={net()} now={now()} />}
         </Show>
+      </Match>
+      <Match when={sel()?.kind === "query"}>
+        <div class="rail-query-context" data-testid="rail-query-context">
+          {/* Mirrors the MembersPane `<h3>members (n)</h3>` slot (uppercased
+              by CSS). The nick reads live off selectedChannel, so a NICK while
+              the query is open re-labels the heading — #373 swaps
+              selectedChannel in place on a rename. */}
+          <h3 class="rail-query-heading">private conversation with {sel()?.channelName}</h3>
+          <WhoisCard bundle={railWhoisFor(sel()?.networkSlug ?? "", sel()?.channelName ?? "")} />
+        </div>
       </Match>
     </Switch>
   );
