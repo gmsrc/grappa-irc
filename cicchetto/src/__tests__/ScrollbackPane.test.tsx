@@ -1576,6 +1576,47 @@ describe("ScrollbackPane", () => {
     });
   });
 
+  // #608 STEP 5b (characterization for the gesture migration) — the explicit
+  // scroll-to-bottom GESTURE (floating button / #243 re-tap) performs an INSTANT
+  // tail scrollIntoView. It is about to be routed through an operator-tail applier
+  // intent (the write moved into `dispatchScrollWrite` so no raw scrollIntoView
+  // lives OUTSIDE the applier surface). This pins the CURRENT sync tail write
+  // observably BEFORE the extraction; behaviour-identical (mirrors the W8
+  // mention-jump migration — a single-intent one-shot, fired unconditionally).
+  // Driven via the #243 re-tap command — the SAME `scrollToBottomGesture` the
+  // floating button's onClick invokes (jsdom's zero-geometry keeps the button
+  // unmounted, so the command is the harness for the shared gesture).
+  describe("#608 — scroll-to-bottom gesture performs an operator-tail write (STEP 5b)", () => {
+    let origScrollIntoView: typeof Element.prototype.scrollIntoView;
+    let scrollIntoViewSpy: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      origScrollIntoView = Element.prototype.scrollIntoView;
+      scrollIntoViewSpy = vi.fn();
+      // biome-ignore lint/suspicious/noExplicitAny: jsdom Element type compat
+      (Element.prototype as any).scrollIntoView = scrollIntoViewSpy;
+    });
+    afterEach(() => {
+      Element.prototype.scrollIntoView = origScrollIntoView;
+    });
+
+    it("the #243 re-tap gesture instant-scrolls the tail into view", async () => {
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      await waitFor(() => expect(screen.getAllByTestId("scrollback-line")).toHaveLength(3));
+      // Drain the mount tail-follow so only the gesture's write is observed.
+      await new Promise((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => r(undefined))),
+      );
+      scrollIntoViewSpy.mockClear();
+
+      // THE GESTURE — the #243 re-tap command the floating button's onClick shares.
+      requestScrollToBottom();
+      await Promise.resolve();
+
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: "end" });
+    });
+  });
+
   // #310 — the scroll-to-bottom GESTURE (floating button + #243 re-tap)
   // must advance the server read cursor to the NEWEST rendered message.
   // Pre-#310 both funnelled through the pure `scrollToBottom()` helper,
