@@ -1362,6 +1362,74 @@ describe("ScrollbackPane", () => {
     });
   });
 
+  // #608 step 3 (characterization for the applier funnel) — the W8 mention-jump.
+  // Tapping the floating button when a mention sits below the fold smooth-scrolls
+  // the anchor into view (`scrollIntoView({behavior:"smooth", block:"center"})`)
+  // instead of jumping to the tail. Pinned here BEFORE the applier routes it
+  // through a `mention-jump` one-shot intent. jsdom has no layout, so the mention
+  // row's offsetTop is faked (readMentionGeom reads offsetTop) — the REAL
+  // mentionsBelowViewport / mentionJumpTargetId then classify it below the fold,
+  // no shared-mock swap needed.
+  describe("#608 — mention-jump smooth-scrolls the anchor (W8)", () => {
+    it("smooth-scrolls the mention anchor into view on a tap with a mention below", async () => {
+      setUserNick("vjt");
+      // A peer privmsg mentioning "vjt" gets .scrollback-mention; it is the LAST
+      // row, so mentionJumpTargetId returns its own id (anchor = the mention row).
+      setScrollback({
+        "freenode #grappa": [
+          {
+            id: 1,
+            network: "freenode",
+            channel: "#grappa",
+            server_time: 1,
+            kind: "privmsg",
+            sender: "alice",
+            body: "hi",
+            meta: {},
+          },
+          {
+            id: 2,
+            network: "freenode",
+            channel: "#grappa",
+            server_time: 2,
+            kind: "privmsg",
+            sender: "bob",
+            body: "hey vjt",
+            meta: {},
+          },
+        ],
+      });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+
+      // Overflowing; the mention row (id 2) sits far below the fold (offsetTop
+      // 1500 >> viewportBottom). scrollTop starts at 400 for the scroll-up below.
+      Object.defineProperty(list, "clientHeight", { value: 100, configurable: true });
+      Object.defineProperty(list, "scrollHeight", { value: 2000, configurable: true });
+      Object.defineProperty(list, "scrollTop", { value: 400, writable: true, configurable: true });
+      const mentionRow = list.querySelector<HTMLElement>('.scrollback-line[data-msg-id="2"]');
+      if (mentionRow === null) throw new Error("mention row not rendered");
+      Object.defineProperty(mentionRow, "offsetTop", { value: 1500, configurable: true });
+      const scrollIntoViewSpy = vi.fn();
+      mentionRow.scrollIntoView = scrollIntoViewSpy;
+
+      // Scroll DOWN (establishes lastScrollTop) then UP → atBottomNow false, so
+      // the floating button renders. followMode also flips false, so the mount
+      // tail-follow bails (never touches the spied row).
+      list.dispatchEvent(new Event("scroll"));
+      list.scrollTop = 200;
+      list.dispatchEvent(new Event("scroll"));
+      await waitFor(() => expect(screen.queryByTestId("scroll-to-bottom")).not.toBeNull());
+      scrollIntoViewSpy.mockClear();
+
+      // Tap the button → mention path: viewportBottom = 200+100 = 300, the
+      // mention (offsetTop 1500) is below it → smooth-scroll the anchor.
+      screen.getByTestId("scroll-to-bottom").click();
+
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    });
+  });
+
   // #310 — the scroll-to-bottom GESTURE (floating button + #243 re-tap)
   // must advance the server read cursor to the NEWEST rendered message.
   // Pre-#310 both funnelled through the pure `scrollToBottom()` helper,
