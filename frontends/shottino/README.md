@@ -350,6 +350,13 @@ in `llm.h`, next to the code that has to obey it.
   for 60 s denies. `always` records a grant for **that person and that tool**
   — approving alice to speak does not let her make your client join channels.
   `/bot grant|revoke <nick> <tool>` manages them; `/bot show` lists them.
+  Grants **persist**, in the same per-identity directory as the notes, mode
+  0600: an "always" that forgets at the next restart is not a grant but a
+  longer session, and one the owner must re-answer every morning is one they
+  learn to answer by reflex. `/bot on` and the owner deliberately do **not**
+  persist — a client that starts up already answering the network, to a nick
+  it decided was the owner before any WHOIS could confirm it, is not something
+  anyone asked for.
 - **When writes are off, the write tools are not advertised at all.** A tool
   the model cannot see is one it cannot be argued into trying.
 - **`/exec`, `/quote` and the operator verbs are never tools**, at any

@@ -1047,6 +1047,8 @@ TEST(a_memory_filename_is_built_not_taken) {
 TEST(two_identities_get_two_bot_directories) {
     /* Heap, not stack: `struct app` carries the whole scrollback and is
      * far larger than a thread stack. */
+    /* Plain calloc: bot_dir_path touches no lock and logs nothing, so
+     * these carry no allocation to release. */
     struct app *a = calloc(1, sizeof(*a));
     struct app *b = calloc(1, sizeof(*b));
     char da[LLM_MAX_PATH], db[LLM_MAX_PATH];
@@ -1076,6 +1078,72 @@ TEST(two_identities_get_two_bot_directories) {
     CHECK_STR(da, "/tmp/shared-brain");
     free(a);
     free(b);
+}
+
+/* "Approve always" that forgets at the next restart is not a grant, it
+ * is a longer session. */
+TEST(a_standing_grant_survives_a_restart) {
+    char dir[] = "/tmp/shottino-grants-test-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL);
+
+    struct app *a = window_app();
+    snprintf(a->bot_dir, sizeof(a->bot_dir), "%s", dir);
+    bot_grant_add(a, "alice", "send_message");
+    bot_grant_add(a, "bob", "join_channel");
+    CHECK(a->bot_grant_count == 2);
+
+    /* A second client, same identity: it reads what the first wrote. */
+    struct app *b = window_app();
+    snprintf(b->bot_dir, sizeof(b->bot_dir), "%s", dir);
+    bot_grants_load(b);
+    CHECK(b->bot_grant_count == 2);
+    CHECK(bot_has_grant(b, "alice", "send_message"));
+    CHECK(bot_has_grant(b, "bob", "join_channel"));
+    /* Still per PAIR after a round trip — the property that matters. */
+    CHECK(!bot_has_grant(b, "alice", "join_channel"));
+    CHECK(!bot_has_grant(b, "bob", "send_message"));
+    /* And still a nick MATCH, not a spelling. */
+    CHECK(bot_has_grant(b, "ALICE", "send_message"));
+
+    /* A revoke reaches the file too, or the grant comes back tomorrow. */
+    for (size_t i = 0; i < a->bot_grant_count; i++) {
+        if (strcmp(a->bot_grants[i].nick, "alice") != 0) continue;
+        memmove(a->bot_grants + i, a->bot_grants + i + 1,
+                sizeof(a->bot_grants[0]) * (a->bot_grant_count - i - 1));
+        a->bot_grant_count--;
+        break;
+    }
+    bot_grants_save(a);
+    struct app *c = window_app();
+    snprintf(c->bot_dir, sizeof(c->bot_dir), "%s", dir);
+    bot_grants_load(c);
+    CHECK(c->bot_grant_count == 1);
+    CHECK(!bot_has_grant(c, "alice", "send_message"));
+    CHECK(bot_has_grant(c, "bob", "join_channel"));
+
+    /* A line naming a tool this build does not have authorises nothing,
+     * so it must not be shown as an authorisation. */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/grants", dir);
+    FILE *f = fopen(path, "w");
+    CHECK(f != NULL);
+    fprintf(f, "# comment\n\nmallory rm_minus_rf\ncarol names\n");
+    fclose(f);
+    struct app *d = window_app();
+    snprintf(d->bot_dir, sizeof(d->bot_dir), "%s", dir);
+    bot_grants_load(d);
+    CHECK(d->bot_grant_count == 1);
+    CHECK(bot_has_grant(d, "carol", "names"));
+    CHECK(!bot_has_grant(d, "mallory", "rm_minus_rf"));
+
+    unlink(path);
+    rmdir(dir);
+    /* free_app, not free: loading dropped a grant and SAID so, and a
+     * logged line is an allocation. */
+    free_app(a);
+    free_app(b);
+    free_app(c);
+    free_app(d);
 }
 
 int main(void) {
@@ -1117,6 +1185,7 @@ int main(void) {
     RUN(a_grant_is_per_person_and_per_tool);
     RUN(a_memory_filename_is_built_not_taken);
     RUN(two_identities_get_two_bot_directories);
+    RUN(a_standing_grant_survives_a_restart);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
     return test_report();
 }

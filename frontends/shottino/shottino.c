@@ -491,6 +491,9 @@ static void record_finish(struct app *app, bool send);
  * from the job loop too, since /upload, /voicemsg and /video all post
  * through the SAME function on the worker thread. */
 static const char *stt_local_binary(struct app *app);
+/* The bot's per-identity directory: the grants are written from the
+ * approval path, which comes before the directory helper. */
+static void bot_dir_path(struct app *app, char *out, size_t out_sz);
 static void stt_job(struct app *app, const struct job *job);
 static void upload_file_to(struct app *app, const char *path, const char *marker,
                            const char *up_net, const char *up_chan);
@@ -6712,6 +6715,92 @@ static bool bot_has_grant(struct app *app, const char *nick, const char *tool) {
     return false;
 }
 
+/* ── Grants on disk ────────────────────────────────────────────────────
+ *
+ * "Approve always" that forgets at the next restart is not a grant, it
+ * is a longer session — and the owner who answered it once would have
+ * to answer it again every morning, which is how people learn to
+ * approve by reflex. So it persists.
+ *
+ * With the memories, in the same per-identity directory: a grant is an
+ * authorisation to act as SOMEBODY on SOME bouncer, and two accounts on
+ * one machine must not inherit each other's. Mode 0600, written whole
+ * (temp + rename) because the second shottino under the same identity
+ * may be writing it at the same moment.
+ *
+ * Deliberately NOT persisted alongside: `/bot on` and the owner. A
+ * client that starts up already answering the network, to a nick it
+ * decided was the owner before any WHOIS could confirm it, is not
+ * something anyone asked for. Turning the bot on stays a thing you do
+ * on purpose, each time. */
+static void bot_grants_path(struct app *app, char *out, size_t out_sz) {
+    char dir[LLM_MAX_PATH];
+    bot_dir_path(app, dir, sizeof(dir));
+    mkdir(dir, 0700);
+    snprintf(out, out_sz, "%.*s/grants", (int)(out_sz > 8 ? out_sz - 8 : 1), dir);
+}
+
+static void bot_grants_save(struct app *app) {
+    char path[LLM_MAX_PATH + 16], tmp[LLM_MAX_PATH + 48];
+    bot_grants_path(app, path, sizeof(path));
+    snprintf(tmp, sizeof(tmp), "%s.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) {
+        log_line(app, "/bot: cannot save the grants to %s", path);
+        return;
+    }
+    fprintf(f, "# shottino /bot grants: one `nick tool` per line.\n"
+               "# Each line lets that person use that tool without being asked.\n");
+    for (size_t i = 0; i < app->bot_grant_count; i++)
+        fprintf(f, "%s %s\n", app->bot_grants[i].nick, app->bot_grants[i].tool);
+    fclose(f);
+    chmod(tmp, 0600);
+    if (rename(tmp, path) != 0) {
+        unlink(tmp);
+        log_line(app, "/bot: cannot save the grants to %s", path);
+    }
+}
+
+static void bot_grants_load(struct app *app) {
+    char path[LLM_MAX_PATH + 16];
+    bot_grants_path(app, path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    app->bot_grant_count = 0;
+    char line[256];
+    size_t dropped = 0;
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p || *p == '#') continue;
+        char nick[MAX_CHANNEL];
+        const char *tool = split_head(p, nick, sizeof(nick));
+        while (*tool == ' ') tool++;
+        if (!nick[0] || !*tool) continue;
+        /* A tool this build no longer has cannot be granted: keeping the
+         * line would show the owner an authorisation that authorises
+         * nothing. */
+        if (!llm_tool_by_name(tool)) {
+            dropped++;
+            continue;
+        }
+        if (app->bot_grant_count >= sizeof(app->bot_grants) / sizeof(app->bot_grants[0])) break;
+        struct bot_grant *g = &app->bot_grants[app->bot_grant_count++];
+        snprintf(g->nick, sizeof(g->nick), "%s", nick);
+        /* Bounded explicitly: `tool` is a line off disk, and the grant
+         * slot is smaller than a line. It matched llm_tool_by_name
+         * above, so anything longer than the slot cannot be a real tool
+         * name — but the compiler cannot see that, and neither can the
+         * next person to edit this. */
+        snprintf(g->tool, sizeof(g->tool), "%.*s", (int)sizeof(g->tool) - 1, tool);
+    }
+    fclose(f);
+    if (dropped)
+        log_line(app, "/bot: dropped %zu grant(s) naming a tool this build does not have",
+                 dropped);
+}
+
 static void bot_grant_add(struct app *app, const char *nick, const char *tool) {
     if (bot_has_grant(app, nick, tool)) return;
     if (app->bot_grant_count >= sizeof(app->bot_grants) / sizeof(app->bot_grants[0])) {
@@ -6721,6 +6810,7 @@ static void bot_grant_add(struct app *app, const char *nick, const char *tool) {
     struct bot_grant *g = &app->bot_grants[app->bot_grant_count++];
     snprintf(g->nick, sizeof(g->nick), "%s", nick);
     snprintf(g->tool, sizeof(g->tool), "%s", tool);
+    bot_grants_save(app);
 }
 
 /* The window a private reply lands in. Client-LOCAL and deliberately so:
@@ -11635,6 +11725,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
                     app->bot_grant_count--;
                     break;
                 }
+                bot_grants_save(app);
                 log_line(app, "%s may no longer use %s without asking", who, tool);
             }
         } else {
@@ -14282,6 +14373,12 @@ int main(int argc, char **argv) {
      * flash past on the way in. */
     blocks_load(app);
     llm_load(app);
+    /* AFTER login: the grants live in the per-identity bot directory,
+     * and before the subject is known that path names nobody. */
+    bot_grants_load(app);
+    if (app->bot_grant_count)
+        startup("bot grants: %zu standing (nick, tool) pair(s) — /bot show lists them",
+                app->bot_grant_count);
     if (app->block_count)
         startup("blocked: %zu nick(s) hidden locally — /block lists them", app->block_count);
     if (!app->headless) {
