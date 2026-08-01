@@ -371,6 +371,49 @@ describe("ScrollbackPane", () => {
     expect(line.textContent ?? "").not.toContain("ACTION ");
   });
 
+  it("renders an own outbound CTCP query self-echo as a human line, not raw \\x01 — #591", () => {
+    // #591 — the operator's own /ctcp + /ping self-echo back as a :privmsg
+    // whose body is the raw \x01VERB args\x01 frame, tagged by the server with
+    // typed meta.ctcp_verb / meta.ctcp_args (SSOT Grappa.IRC.CTCP.verb_args/1).
+    // The render layer shows "→ CTCP VERB [args] to <target>" instead of the
+    // raw \x01 the operator would otherwise see in the window they typed in.
+    // cic reads the TYPED meta, never \x01 (the "one IRC parser" invariant).
+    // The e2e (M-591) pins the same against a real send.
+    const ctcpSelfEcho: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 1,
+        kind: "privmsg",
+        sender: "alice",
+        body: "\x01VERSION\x01",
+        meta: { ctcp_verb: "VERSION", ctcp_args: "" },
+      },
+      {
+        id: 2,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 2,
+        kind: "privmsg",
+        sender: "alice",
+        body: "\x01PING 1706743200000\x01",
+        meta: { ctcp_verb: "PING", ctcp_args: "1706743200000" },
+      },
+    ];
+    setScrollback({ "freenode #grappa": ctcpSelfEcho });
+    render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+    const lines = screen.getAllByTestId("scrollback-line");
+    expect(lines).toHaveLength(2);
+    // No-arg verb → "→ CTCP VERSION to #grappa"; the raw \x01 never renders.
+    expect(lines[0]?.dataset.kind).toBe("privmsg");
+    expect(lines[0]).toHaveTextContent("→ CTCP VERSION to #grappa");
+    expect(lines[0]?.textContent ?? "").not.toContain("\x01");
+    // Arg-carrying verb → the token rides after the verb.
+    expect(lines[1]).toHaveTextContent("→ CTCP PING 1706743200000 to #grappa");
+    expect(lines[1]?.textContent ?? "").not.toContain("\x01");
+  });
+
   it("renders the action row with one space between '*' and the nick (not two) — #457", () => {
     // Regression pin for #457: the :action arm rendered `*  nick` (two
     // spaces) while every sibling `*`-framed kind (join/part/quit/…) uses

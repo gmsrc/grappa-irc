@@ -649,7 +649,28 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
   );
 
   switch (msg.kind) {
-    case "privmsg":
+    case "privmsg": {
+      // #591 — the operator's OWN outbound CTCP query (/ctcp, /ping) self-echoes
+      // here as a :privmsg whose body is the raw \x01VERB args\x01 frame, tagged
+      // by the server with typed meta.ctcp_verb / meta.ctcp_args (SSOT
+      // Grappa.IRC.CTCP.verb_args/1). Render a human "→ CTCP VERB [args] to
+      // <target>" line instead of the raw \x01 body. cic reads the TYPED meta,
+      // NEVER \x01 (the "one IRC parser, on the server" invariant). ACTION never
+      // reaches here carrying ctcp meta — it rides the :action kind, which the
+      // server excludes from ctcp classification. This is a control surface, so
+      // it renders as plain text (no mIRC \x02/\x1D emphasis, like the numeric /
+      // raw-event surfaces). A matched inbound PING reply is consumed upstream
+      // (subscribe.ts) and never reaches any render path.
+      const ctcpVerb = msg.meta.ctcp_verb;
+      if (typeof ctcpVerb === "string") {
+        const ctcpArgs = typeof msg.meta.ctcp_args === "string" ? msg.meta.ctcp_args : "";
+        const query = ctcpArgs === "" ? `CTCP ${ctcpVerb}` : `CTCP ${ctcpVerb} ${ctcpArgs}`;
+        return (
+          <span class="scrollback-body">
+            → {query} to {msg.channel}
+          </span>
+        );
+      }
       return (
         <>
           {senderSpan("<", ">", msg.sender)}{" "}
@@ -658,6 +679,7 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
           </span>
         </>
       );
+    }
     case "notice": {
       // No-silent-drops bucket 1: structured raw-event rendering.
       // EventRouter's catch-all persists unhandled command verbs as
