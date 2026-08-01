@@ -1205,6 +1205,77 @@ describe("ScrollbackPane", () => {
     });
   });
 
+  // #608 — CHARACTERIZATION of the geometric at-bottom → button contract, ahead
+  // of the `atBottom` → `followMode` + `atBottomNow` split (deep-review §6.1).
+  // jsdom has no layout, but `onScroll`'s distance is pure arithmetic over
+  // scrollTop/scrollHeight/clientHeight, so `defineProperty`'d geometry + a
+  // dispatched `scroll` event exercises the EXACT branches the split touches:
+  // `onScroll`'s at-bottom flip and the floating button's `<Show>` read. The
+  // full scroll physics live in the chromium e2e (issue280/289,
+  // login-advanced-scroll-reachability — webkit ≠ iOS scroll,
+  // feedback_playwright_webkit_not_ios_scroll); this locks the unit-observable
+  // half so the split (which moves the button onto `atBottomNow` and the
+  // tail-follow onto `followMode`) cannot silently regress the button. These
+  // assert CURRENT behavior and MUST stay green verbatim across the split.
+  describe("#608 — floating button tracks the geometric at-bottom state", () => {
+    const overflowing = (list: HTMLDivElement, scrollTop: number): void => {
+      Object.defineProperty(list, "scrollHeight", { value: 5000, configurable: true });
+      Object.defineProperty(list, "clientHeight", { value: 500, configurable: true });
+      Object.defineProperty(list, "scrollTop", {
+        value: scrollTop,
+        writable: true,
+        configurable: true,
+      });
+    };
+
+    it("surfaces the button on an operator scroll-up and hides it again at the tail", async () => {
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+
+      // At the tail (initial state) → no button.
+      expect(screen.queryByTestId("scroll-to-bottom")).toBeNull();
+
+      // Scroll DOWN first (establishes lastScrollTop), then UP: the follow
+      // authority flips false ONLY when scrollTop DECREASES (the #168 guard).
+      overflowing(list, 400);
+      list.dispatchEvent(new Event("scroll"));
+      list.scrollTop = 100; // distance 5000-100-500 = 4400 > 50 AND 100 < 400 → scroll-up
+      list.dispatchEvent(new Event("scroll"));
+      await waitFor(() => {
+        expect(screen.queryByTestId("scroll-to-bottom")).not.toBeNull();
+      });
+
+      // Return to the tail → button hides again (distance within threshold).
+      list.scrollTop = 4500; // distance 5000-4500-500 = 0 <= 50 → reach-tail
+      list.dispatchEvent(new Event("scroll"));
+      await waitFor(() => {
+        expect(screen.queryByTestId("scroll-to-bottom")).toBeNull();
+      });
+    });
+
+    it("keeps the button hidden on a content-grow above the fold (scrollTop not decreased — #168)", async () => {
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+
+      // Following the tail (distance 0 → at bottom, button hidden).
+      overflowing(list, 4500);
+      list.dispatchEvent(new Event("scroll"));
+      expect(screen.queryByTestId("scroll-to-bottom")).toBeNull();
+
+      // Older rows PREPEND above the viewport: scrollHeight grows, scrollTop is
+      // unchanged. The scroll event this fires shows a huge distance-to-tail, but
+      // scrollTop did NOT decrease → the follow state must NOT flip (#168), so the
+      // button stays hidden. Were the guard removed, distance>threshold would
+      // surface the button here.
+      Object.defineProperty(list, "scrollHeight", { value: 8000, configurable: true });
+      list.dispatchEvent(new Event("scroll")); // distance 8000-4500-500 = 3000 > 50, but 4500 !< 4500
+      await new Promise((r) => queueMicrotask(() => r(undefined)));
+      expect(screen.queryByTestId("scroll-to-bottom")).toBeNull();
+    });
+  });
+
   // #310 — the scroll-to-bottom GESTURE (floating button + #243 re-tap)
   // must advance the server read cursor to the NEWEST rendered message.
   // Pre-#310 both funnelled through the pure `scrollToBottom()` helper,
