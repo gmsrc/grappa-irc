@@ -92,4 +92,39 @@ char *llm_claude_stdin_frame(const char *text);
 bool llm_claude_stream_line(const char *line, char *out, size_t out_sz, size_t *used,
                             bool *done);
 
+/* ── The /bot trust model (agreed 2026-08-01) ──────────────────────────
+ *
+ * Recorded HERE rather than in a plan, because every function that
+ * touches a tool has to obey it and a plan is not compiled.
+ *
+ * 1. NETWORK TEXT IS DATA, NEVER INSTRUCTION. Anything arriving from
+ *    IRC — including from the owner's own nick — reaches the model as
+ *    quoted, attributed content. The only instruction channel is the
+ *    local input line, which nobody on the network can reach. IRC
+ *    identity is too weak to carry authority: `nextime_` is one
+ *    keystroke from `nextime`, and a bot cannot WHOIS every line to
+ *    check NickServ status.
+ *
+ * 2. READ tools (scrollback, names) are available whenever the bot runs.
+ *    WRITE tools (send, join, part, ctcp) are not.
+ *
+ * 3. A WRITE requested on behalf of somebody else ASKS THE OWNER INLINE
+ *    — approve once / approve always for this person and this tool /
+ *    deny — UNLESS the owner has already pre-approved that (person,
+ *    tool) pair. The grant is per PAIR: approving alice for `send` does
+ *    not approve her for `join`, and approving her today does not
+ *    approve bob.
+ *
+ * 4. The owner's own typed instructions execute without a prompt. They
+ *    came from the keyboard, which is the trusted channel by definition.
+ *
+ * 5. /exec, /quote and the operator verbs are NEVER exposed as tools, at
+ *    any approval level. A tool the model cannot reach is the only kind
+ *    that cannot be talked into being reached.
+ *
+ * The system prompt is mitigation, not containment: a model can be
+ * argued into anything. What actually contains it is this list — the
+ * tool allowlist, the per-pair grant, and the rate limit.
+ */
+
 #endif /* SHOTTINO_LLM_H */

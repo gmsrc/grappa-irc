@@ -42,6 +42,7 @@
 #include "http.h"
 #include "ircd.h"
 #include "ws.h"
+#include "llm.h"
 #include "json.h"
 #include "media.h"
 #include "mirc.h"
@@ -764,6 +765,26 @@ struct app {
      * folded like every other nick. */
     char blocks[MAX_BLOCKS][MAX_CHANNEL];
     size_t block_count;
+    /* ── /llm ──────────────────────────────────────────────────────────
+     * Its own thread and its own queue, NOT the job worker's: a model
+     * call takes seconds to minutes, and parking it behind the worker
+     * would stall scrollback fetches, sends and read cursors behind it.
+     * Nothing here touches the UI thread. */
+    struct llm_config llm;
+    bool llm_loaded;
+    pthread_t llm_thread;
+    bool llm_thread_started;
+    pthread_mutex_t llm_lock;
+    pthread_cond_t llm_cond;
+    struct llm_req {
+        char network[MAX_SLUG];
+        char channel[MAX_CHANNEL]; /* where a PUBLIC reply is sent */
+        char text[MAX_LINE];
+        bool publish; /* -p: reply goes to the channel, not the $llm window */
+    } llm_queue[8];
+    size_t llm_head, llm_tail;
+    bool llm_busy;
+    bool llm_stop;
     /* CTCP pings we are waiting on.
      *
      * The stamp travels in the payload and comes back in the reply, so
@@ -1469,6 +1490,45 @@ static char *read_all(struct tls_conn *conn, size_t *out_len) {
 /* Generalised request: an explicit content type and an explicit body
  * length, so a body containing NUL bytes (a file upload) survives. The
  * JSON wrapper below is the common case and keeps its old signature. */
+/* Read a whole HTTP response off an open connection.
+ *
+ * Extracted so the /llm transport can talk to somebody else's endpoint
+ * without a second copy of this parse — and, unlike the copy it replaces,
+ * it REPORTS a malformed reply (status 0) instead of dying. grappa
+ * answering garbage means the client is not talking to grappa; a model
+ * endpoint answering garbage is Tuesday. */
+static struct http_response http_read_response(struct tls_conn *conn) {
+    size_t raw_len = 0;
+    char *raw = read_all(conn, &raw_len);
+    if (!raw) return (struct http_response){ .status = 0, .body = NULL, .body_len = 0 };
+
+    char *sep = strstr(raw, "\r\n\r\n");
+    if (!sep) {
+        free(raw);
+        return (struct http_response){ .status = 0, .body = NULL, .body_len = 0 };
+    }
+    *sep = 0;
+    char *statusp = strchr(raw, ' ');
+    int status = statusp ? atoi(statusp + 1) : 0;
+    char *body_start = sep + 4;
+    size_t hdr_len = (size_t)(body_start - raw);
+    size_t blen = raw_len >= hdr_len ? raw_len - hdr_len : 0;
+    char *payload = NULL;
+    size_t payload_len = 0;
+    if (strcasestr(raw, "Transfer-Encoding: chunked")) {
+        payload = http_decode_chunked(body_start, blen, &payload_len);
+        if (!payload) die("out of memory");
+    } else {
+        payload = malloc(blen + 1);
+        if (!payload) die("out of memory");
+        memcpy(payload, body_start, blen);
+        payload[blen] = 0;
+        payload_len = blen;
+    }
+    free(raw);
+    return (struct http_response){ .status = status, .body = payload, .body_len = payload_len };
+}
+
 static struct http_response http_request_raw(struct app *app, const char *method, const char *path,
                                              const char *body, size_t body_len,
                                              const char *content_type) {
@@ -1492,32 +1552,14 @@ static struct http_response http_request_raw(struct app *app, const char *method
      * format string. */
     if (ok && body_len) ok = conn_write_all(&conn, body, body_len);
     if (!ok) die("HTTP write failed");
-    size_t raw_len = 0;
-    char *raw = read_all(&conn, &raw_len);
+    struct http_response resp = http_read_response(&conn);
     conn_close(&conn);
-
-    char *sep = strstr(raw, "\r\n\r\n");
-    if (!sep) die("bad HTTP response");
-    *sep = 0;
-    char *statusp = strchr(raw, ' ');
-    int status = statusp ? atoi(statusp + 1) : 0;
-    char *body_start = sep + 4;
-    size_t hdr_len = (size_t)(body_start - raw);
-    size_t blen = raw_len >= hdr_len ? raw_len - hdr_len : 0;
-    char *payload = NULL;
-    size_t payload_len = 0;
-    if (strcasestr(raw, "Transfer-Encoding: chunked")) {
-        payload = http_decode_chunked(body_start, blen, &payload_len);
-        if (!payload) die("out of memory");
-    } else {
-        payload = malloc(blen + 1);
-        if (!payload) die("out of memory");
-        memcpy(payload, body_start, blen);
-        payload[blen] = 0;
-        payload_len = blen;
-    }
-    free(raw);
-    return (struct http_response){ .status = status, .body = payload, .body_len = payload_len };
+    /* This door has always treated a malformed reply from GRAPPA as
+     * fatal — it means the bouncer is not what we are talking to. The
+     * shared reader reports it instead of dying, so the /llm path (a
+     * third party's endpoint, allowed to be broken) can carry on. */
+    if (resp.status == 0) die("bad HTTP response");
+    return resp;
 }
 
 static struct http_response http_request(struct app *app, const char *method, const char *path, const char *body) {
@@ -3478,6 +3520,62 @@ static bool block_remove_locked(struct app *app, const char *nick) {
         return true;
     }
     return false;
+}
+
+/* ── /llm: config on disk ───────────────────────────────────────────────
+ *
+ * Beside the cached tokens, mode 0600, because for the openai backend it
+ * HOLDS a bearer token in clear. The claude-cli backend deliberately
+ * keeps nothing secret here at all — the binary owns its credentials in
+ * CLAUDE_CONFIG_DIR. */
+static char *llm_config_path(void) {
+    char *dir = shottino_state_dir();
+    char *path = xasprintf("%s/llm.conf", dir);
+    free(dir);
+    return path;
+}
+
+static void llm_load(struct app *app) {
+    char *path = llm_config_path();
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        /* No file is not an error: it is a fresh install, which still
+         * gets the default prompt. */
+        llm_config_parse("", &app->llm);
+        app->llm_loaded = true;
+        free(path);
+        return;
+    }
+    static char text[LLM_MAX_PROMPT * 4];
+    size_t n = fread(text, 1, sizeof(text) - 1, f);
+    text[n] = 0;
+    fclose(f);
+    free(path);
+    llm_config_parse(text, &app->llm);
+    app->llm_loaded = true;
+}
+
+static void llm_save(struct app *app) {
+    char *path = llm_config_path();
+    static char text[LLM_MAX_PROMPT * 4];
+    if (!llm_config_serialize(&app->llm, text, sizeof(text))) {
+        log_line(app, "/llm: configuration too large to save");
+        free(path);
+        return;
+    }
+    /* 0600 BEFORE the content lands: creating world-readable and
+     * chmod-ing after leaves a window where the token is readable. */
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        log_line(app, "/llm: cannot write %s: %s", path, strerror(errno));
+        free(path);
+        return;
+    }
+    fchmod(fd, 0600);
+    size_t len = strlen(text);
+    if (write(fd, text, len) != (ssize_t)len) log_line(app, "/llm: short write saving config");
+    close(fd);
+    free(path);
 }
 
 static char *blocks_path(void) {
@@ -6110,6 +6208,280 @@ static void send_message(struct app *app, const char *body) {
 static void send_message_target(struct app *app, const char *network, const char *channel,
                                 const char *body);
 
+/* ── /llm: the two transports ───────────────────────────────────────────
+ *
+ * Both return a malloc'd reply or NULL, and both run ONLY on the llm
+ * thread. Neither touches app state beyond reading the config, so
+ * neither can deadlock the UI.
+ */
+
+/* OpenAI-compatible: one POST, no streaming. The endpoint is somebody
+ * else's host, so this cannot reuse http_request — that one is bound to
+ * grappa's URL and, more importantly, attaches GRAPPA'S BEARER TOKEN.
+ * Sending that to a model provider would hand them a session on your
+ * bouncer. */
+static char *llm_call_openai(struct app *app, const char *body) {
+    struct url u;
+    if (!parse_url(app->llm.url, &u)) {
+        log_line(app, "/llm: cannot parse url `%.80s`", app->llm.url);
+        return NULL;
+    }
+    struct tls_conn conn;
+    if (!conn_open_to(app, u.host, u.port, u.tls, &conn)) {
+        log_line(app, "/llm: cannot reach %s:%s", u.host, u.port);
+        return NULL;
+    }
+    /* Sized for the base plus the longest suffix it can carry, so the
+     * compiler can see the concatenation always fits. */
+    char path[LLM_MAX_URL + 32];
+    snprintf(path, sizeof(path), "%.*s/chat/completions", (int)(LLM_MAX_URL - 1),
+             u.base[0] ? u.base : "");
+    char *head = xasprintf("POST %s HTTP/1.1\r\n"
+                           "Host: %s\r\n"
+                           "User-Agent: shottino/0.1\r\n"
+                           "Accept: application/json\r\n"
+                           "Content-Type: application/json\r\n"
+                           "Authorization: Bearer %s\r\n"
+                           "Content-Length: %zu\r\n"
+                           "Connection: close\r\n\r\n",
+                           path, u.host, app->llm.token, strlen(body));
+    bool ok = conn_write_all(&conn, head, strlen(head)) && conn_write_all(&conn, body, strlen(body));
+    free(head);
+    if (!ok) {
+        conn_close(&conn);
+        log_line(app, "/llm: write failed");
+        return NULL;
+    }
+    struct http_response r = http_read_response(&conn);
+    conn_close(&conn);
+    if (r.status < 200 || r.status >= 300) {
+        log_line(app, "/llm: HTTP %d%s%.160s", r.status, r.body ? " — " : "", r.body ? r.body : "");
+        free(r.body);
+        return NULL;
+    }
+    json_doc *doc = json_parse(r.body, r.body_len, NULL, 0);
+    char *reply = NULL;
+    if (doc) {
+        const char *text = llm_openai_reply(json_root(doc));
+        if (text) reply = xasprintf("%s", text);
+        json_free(doc);
+    }
+    if (!reply) log_line(app, "/llm: the endpoint returned no reply text");
+    free(r.body);
+    return reply;
+}
+
+/* The local `claude` CLI, headless.
+ *
+ * Every flag here earns its place, and dropping one breaks the mode
+ * silently rather than loudly:
+ *   -p                      headless/print — the "act as a provider" switch
+ *   --input/output-format stream-json
+ *                           the prompt arrives on STDIN as an Anthropic
+ *                           envelope; the positional prompt is ignored
+ *   --include-partial-messages
+ *                           without it there are no deltas and no
+ *                           stop_reason to end a turn on
+ *   --tools '' + --disallowedTools 'mcp__*'
+ *                           strip the CLI's own tools and the host's MCP
+ *                           servers: this is an inference endpoint, and
+ *                           OUR tools are the only ones it may have
+ *   --no-session-persistence
+ *                           one subprocess per request, no session files
+ *   stdbuf -oL              line-buffer stdout, or streaming sits in a
+ *                           pipe buffer until the process exits
+ * CLAUDE_CODE_USE_KEYCHAIN=false keeps credentials out of the system
+ * keychain; CLAUDE_CONFIG_DIR isolates them per account. */
+static char *llm_call_claude_cli(struct app *app, const char *prompt_text) {
+    int in_fds[2], out_fds[2];
+    if (pipe(in_fds) != 0) return NULL;
+    if (pipe(out_fds) != 0) {
+        close(in_fds[0]);
+        close(in_fds[1]);
+        return NULL;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(in_fds[0]); close(in_fds[1]); close(out_fds[0]); close(out_fds[1]);
+        log_line(app, "/llm: cannot fork the claude CLI");
+        return NULL;
+    }
+    if (pid == 0) {
+        dup2(in_fds[0], STDIN_FILENO);
+        dup2(out_fds[1], STDOUT_FILENO);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+        close(in_fds[0]); close(in_fds[1]); close(out_fds[0]); close(out_fds[1]);
+        if (app->llm.config_dir[0]) setenv("CLAUDE_CONFIG_DIR", app->llm.config_dir, 1);
+        setenv("CLAUDE_CODE_USE_KEYCHAIN", "false", 1);
+        const char *argv[32];
+        size_t a = 0;
+        argv[a++] = "stdbuf";
+        argv[a++] = "-oL";
+        argv[a++] = "claude";
+        argv[a++] = "-p";
+        argv[a++] = "--output-format"; argv[a++] = "stream-json";
+        argv[a++] = "--input-format";  argv[a++] = "stream-json";
+        argv[a++] = "--permission-prompt-tool"; argv[a++] = "stdio";
+        argv[a++] = "--verbose";
+        argv[a++] = "--dangerously-skip-permissions";
+        argv[a++] = "--tools"; argv[a++] = "";
+        argv[a++] = "--include-partial-messages";
+        argv[a++] = "--no-session-persistence";
+        argv[a++] = "--disallowedTools"; argv[a++] = "mcp__*";
+        if (app->llm.prompt[0]) { argv[a++] = "--system-prompt"; argv[a++] = app->llm.prompt; }
+        if (app->llm.model[0])  { argv[a++] = "--model"; argv[a++] = app->llm.model; }
+        argv[a] = NULL;
+        execvp("stdbuf", (char *const *)argv);
+        _exit(127);
+    }
+    close(in_fds[0]);
+    close(out_fds[1]);
+
+    char *frame = llm_claude_stdin_frame(prompt_text);
+    if (frame) {
+        (void)!write(in_fds[1], frame, strlen(frame));
+        free(frame);
+    }
+    close(in_fds[1]); /* EOF: the CLI answers one message per subprocess */
+
+    static char reply[16384];
+    size_t used = 0;
+    reply[0] = 0;
+    bool done = false;
+    char line[8192];
+    size_t len = 0;
+    for (;;) {
+        char c;
+        ssize_t n = read(out_fds[0], &c, 1);
+        if (n <= 0) break;
+        if (c == '\n') {
+            line[len] = 0;
+            llm_claude_stream_line(line, reply, sizeof(reply), &used, &done);
+            len = 0;
+            if (done) break;
+        } else if (len + 1 < sizeof(line)) {
+            line[len++] = c;
+        }
+    }
+    close(out_fds[0]);
+    if (!done) kill(pid, SIGTERM);
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+    if (!reply[0]) {
+        log_line(app, "/llm: the claude CLI produced no text (is `claude` on PATH and logged in?)");
+        return NULL;
+    }
+    return xasprintf("%s", reply);
+}
+
+/* The window a private reply lands in. Client-LOCAL and deliberately so:
+ * every other window mirrors server state, this one has no server side
+ * at all. It is named like $server for the same reason — a `$` name
+ * cannot collide with a channel or a nick. */
+#define LLM_WINDOW "$llm"
+
+/* One request, start to finish. Runs ONLY on the llm thread. */
+static void llm_run(struct app *app, const struct llm_req *req) {
+    const char *why = NULL;
+    if (!llm_config_ready(&app->llm, &why)) {
+        log_line(app, "/llm: not configured — %s", why ? why : "see /llm set");
+        return;
+    }
+    char *reply = NULL;
+    if (app->llm.backend == LLM_BACKEND_CLAUDE_CLI) {
+        reply = llm_call_claude_cli(app, req->text);
+    } else {
+        struct llm_turn turn = { "user", req->text };
+        char *body = llm_openai_body(&app->llm, &turn, 1);
+        if (!body) {
+            log_line(app, "/llm: cannot build the request body");
+            return;
+        }
+        reply = llm_call_openai(app, body);
+        free(body);
+    }
+    if (!reply) return; /* the transport already said why */
+
+    if (req->publish) {
+        /* PUBLIC: real messages, everyone reads them. Capped like /exec
+         * — a model that answers with six paragraphs is an excess-flood
+         * kill, and the channel seeing half an answer must not look like
+         * the whole one. */
+        size_t sent = 0;
+        bool cut = false;
+        char *save = NULL;
+        for (char *line = strtok_r(reply, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+            line[strcspn(line, "\r")] = 0;
+            if (!line[0]) continue;
+            if (sent >= EXEC_MAX_LINES) {
+                cut = true;
+                break;
+            }
+            send_message_target(app, req->network, req->channel, line);
+            sent++;
+        }
+        if (cut) log_line(app, "/llm: reply cut at %zu lines — the channel saw only that much", sent);
+    } else {
+        /* PRIVATE: the $llm window, which is ours and has no line limit
+         * to respect. */
+        add_window_ex(app, req->network, LLM_WINDOW, false);
+        char *save = NULL;
+        for (char *line = strtok_r(reply, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+            line[strcspn(line, "\r")] = 0;
+            log_line(app, "[%s/%s] <%s> %s", req->network, LLM_WINDOW,
+                     app->llm.model[0] ? app->llm.model : "llm", line);
+        }
+    }
+    free(reply);
+}
+
+/* The llm thread: one request at a time, in arrival order. Deliberately
+ * NOT parallel — two model calls racing to write the same window is a
+ * transcript nobody can read, and the queue is short enough that a
+ * backlog means the user should stop typing rather than fan out. */
+static void *llm_main(void *arg) {
+    struct app *app = arg;
+    for (;;) {
+        pthread_mutex_lock(&app->llm_lock);
+        while (app->llm_head == app->llm_tail && !app->llm_stop)
+            pthread_cond_wait(&app->llm_cond, &app->llm_lock);
+        if (app->llm_stop) {
+            pthread_mutex_unlock(&app->llm_lock);
+            return NULL;
+        }
+        struct llm_req req = app->llm_queue[app->llm_head];
+        app->llm_head = (app->llm_head + 1) % (sizeof(app->llm_queue) / sizeof(app->llm_queue[0]));
+        app->llm_busy = true;
+        pthread_mutex_unlock(&app->llm_lock);
+
+        llm_run(app, &req);
+
+        pthread_mutex_lock(&app->llm_lock);
+        app->llm_busy = false;
+        pthread_mutex_unlock(&app->llm_lock);
+    }
+}
+
+static void llm_enqueue(struct app *app, const char *network, const char *channel, const char *text,
+                        bool publish) {
+    pthread_mutex_lock(&app->llm_lock);
+    size_t cap = sizeof(app->llm_queue) / sizeof(app->llm_queue[0]);
+    size_t next = (app->llm_tail + 1) % cap;
+    if (next == app->llm_head) {
+        pthread_mutex_unlock(&app->llm_lock);
+        log_line(app, "/llm: still working through %zu queued prompts — try again shortly", cap - 1);
+        return;
+    }
+    struct llm_req *r = &app->llm_queue[app->llm_tail];
+    snprintf(r->network, sizeof(r->network), "%s", network);
+    snprintf(r->channel, sizeof(r->channel), "%s", channel);
+    snprintf(r->text, sizeof(r->text), "%s", text);
+    r->publish = publish;
+    app->llm_tail = next;
+    pthread_cond_signal(&app->llm_cond);
+    pthread_mutex_unlock(&app->llm_lock);
+}
+
 /* ── /exec ─────────────────────────────────────────────────────────────
  *
  * Run a shell command and send its stdout to the window, as messages the
@@ -7372,7 +7744,7 @@ static const char *commands[] = {
     "/admin", "/alias", "/archive", "/away", "/ban", "/banlist", "/block", "/chat", "/clear",
     "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deop", "/devoice", "/die", "/disconnect",
     "/exec", "/exit", "/globops", "/help", "/highlight", "/hilight", "/hs", "/ignore", "/info", "/invite",
-    "/j", "/join", "/kb", "/keys", "/kick", "/kickban", "/kill", "/kline", "/links", "/list",
+    "/j", "/join", "/kb", "/keys", "/kick", "/kickban", "/kill", "/kline", "/links", "/list", "/llm",
     "/locops", "/lusers", "/me", "/media", "/members", "/mode", "/motd", "/mouse", "/ms", "/msg",
     "/names", "/nick", "/notify", "/ns", "/op", "/open", "/oper", "/os", "/part", "/ping",
     "/preview", "/q", "/query", "/quit", "/quote", "/rehash", "/restart", "/rs", "/sconnect",
@@ -8414,6 +8786,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "disconnect") == 0) log_line(app, "/disconnect [network] [reason] — park a network while keeping Shottino running");
     else if (strcmp(cmd, "whois") == 0) log_line(app, "/whois nick — request WHOIS for nick");
     else if (oper_verb_help(app, cmd)) { /* the table carries its own help */ }
+    else if (strcmp(cmd, "llm") == 0) log_line(app, "/llm <prompt> — ask the model; the reply lands in the $llm window. /llm -p (or --public) sends it to the current window where everyone reads it. /llm set <backend|url|token|model|prompt|config_dir> <value> configures it; bare /llm shows the config (token masked)");
     else if (strcmp(cmd, "exec") == 0) log_line(app, "/exec <command> — run it in a shell and SEND its stdout to the current window (everyone sees it); capped at 20 lines / 16 KiB, killed after 15s, stderr discarded");
     else if (strcmp(cmd, "ctcp") == 0) log_line(app, "/ctcp <nick|#channel> <VERB> [args] — send any CTCP query (VERSION, TIME, FINGER…); the reply lands in the window you asked from. /ping is the timed special case");
     else if (strcmp(cmd, "ping") == 0) log_line(app, "/ping nick — CTCP PING somebody and time the round trip; the answer lands in the window you asked from");
@@ -9526,6 +9899,63 @@ static void handle_command_dispatch(struct app *app, char *line) {
         char *payload = xasprintf("{\"network_id\":%d,\"line\":\"%s\"}", current_network_id(app), raw);
         ws_push_user(app, "raw", payload);
         free(raw); free(payload);
+    } else if (strncmp(line, "/llm", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
+        const char *rest = line + 4;
+        while (*rest == ' ') rest++;
+        bool publish = false;
+        if (strncmp(rest, "-p ", 3) == 0) { publish = true; rest += 3; }
+        else if (strncmp(rest, "--public ", 9) == 0) { publish = true; rest += 9; }
+        while (*rest == ' ') rest++;
+
+        if (strncmp(rest, "set ", 4) == 0) {
+            const char *arg = rest + 4;
+            while (*arg == ' ') arg++;
+            char key[32];
+            const char *val = split_head(arg, key, sizeof(key));
+            if (!key[0] || !*val) {
+                log_line(app, "/llm set <backend|url|token|model|prompt|config_dir> <value>");
+            } else {
+                if (strcmp(key, "backend") == 0)
+                    app->llm.backend = strcmp(val, "claude-cli") == 0 ? LLM_BACKEND_CLAUDE_CLI
+                                                                     : LLM_BACKEND_OPENAI;
+                else if (strcmp(key, "url") == 0) snprintf(app->llm.url, sizeof(app->llm.url), "%s", val);
+                else if (strcmp(key, "token") == 0) snprintf(app->llm.token, sizeof(app->llm.token), "%s", val);
+                else if (strcmp(key, "model") == 0) snprintf(app->llm.model, sizeof(app->llm.model), "%s", val);
+                else if (strcmp(key, "prompt") == 0) snprintf(app->llm.prompt, sizeof(app->llm.prompt), "%s", val);
+                else if (strcmp(key, "config_dir") == 0)
+                    snprintf(app->llm.config_dir, sizeof(app->llm.config_dir), "%s", val);
+                else { log_line(app, "/llm: unknown setting `%s`", key); goto llm_done; }
+                llm_save(app);
+                /* The VALUE is never echoed: `token` is one of the keys
+                 * this loop accepts, and a confirmation that repeats it
+                 * puts the secret in the scrollback. */
+                log_line(app, "/llm: %s updated", key);
+            }
+        } else if (strcmp(rest, "show") == 0 || !*rest) {
+            char masked[64];
+            llm_token_redacted(app->llm.token, masked, sizeof(masked));
+            log_line(app, "/llm backend   %s",
+                     app->llm.backend == LLM_BACKEND_CLAUDE_CLI ? "claude-cli" : "openai");
+            log_line(app, "/llm url       %s", app->llm.url[0] ? app->llm.url : "(unset)");
+            log_line(app, "/llm token     %s", masked);
+            log_line(app, "/llm model     %s", app->llm.model[0] ? app->llm.model : "(unset)");
+            log_line(app, "/llm config_dir %s",
+                     app->llm.config_dir[0] ? app->llm.config_dir : "(unset)");
+            log_line(app, "/llm prompt    %.200s", app->llm.prompt);
+        } else {
+            char llm_net[MAX_SLUG] = "", llm_chan[MAX_CHANNEL] = "";
+            if (!current_window_key(app, llm_net, sizeof(llm_net), llm_chan, sizeof(llm_chan))) {
+                log_line(app, "/llm: no window");
+            } else if (publish && is_server_window(llm_chan)) {
+                log_line(app, "/llm -p: the server window is read-only — switch to a channel or query");
+            } else {
+                llm_enqueue(app, llm_net, llm_chan, rest, publish);
+                log_line(app, "/llm: asked (%s) — the reply lands %s", 
+                         app->llm.backend == LLM_BACKEND_CLAUDE_CLI ? "claude-cli" : "openai",
+                         publish ? "in this window, visible to everyone" : "in the $llm window");
+            }
+        }
+    llm_done:;
     } else if (strncmp(line, "/exec ", 6) == 0) {
         const char *cmd = line + 6;
         while (*cmd == ' ') cmd++;
@@ -11930,6 +12360,7 @@ int main(int argc, char **argv) {
     /* Before the first scrollback renders, or the people the user blocked
      * flash past on the way in. */
     blocks_load(app);
+    llm_load(app);
     if (app->block_count)
         startup("blocked: %zu nick(s) hidden locally — /block lists them", app->block_count);
     if (!app->headless) {
@@ -11986,6 +12417,12 @@ int main(int argc, char **argv) {
     }
     startup("starting background worker");
     pthread_create(&app->worker, NULL, worker_main, app);
+    /* The model gets its OWN thread: a call takes seconds to minutes,
+     * and sharing the job worker would park scrollback fetches, sends
+     * and read cursors behind somebody's prompt. */
+    pthread_mutex_init(&app->llm_lock, NULL);
+    pthread_cond_init(&app->llm_cond, NULL);
+    if (pthread_create(&app->llm_thread, NULL, llm_main, app) == 0) app->llm_thread_started = true;
     if (ircd_enabled) {
         ircd_loop(app);
     } else {

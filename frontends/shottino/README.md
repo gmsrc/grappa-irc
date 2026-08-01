@@ -278,6 +278,36 @@ chooses it, the wheel walks the list, and a click anywhere outside the box
 closes it — the same as Esc. Right-click needs mouse reporting, which is on by
 default; `Ctrl-R` works either way.
 
+## /llm
+
+Ask a language model, from the client.
+
+```sh
+/llm set backend claude-cli          # or: openai
+/llm set model  claude-sonnet-4      # openai also needs url + token
+/llm <prompt>                        # reply lands in the $llm window
+/llm -p <prompt>                     # reply goes to the CURRENT window — everyone reads it
+/llm                                 # show the config; the token is masked
+```
+
+Two backends. **openai** is any OpenAI-compatible endpoint (`url` + `token` +
+`model`). **claude-cli** drives a local `claude` binary headless over pipes —
+it needs no url and no token, because the CLI owns its own credentials in
+`CLAUDE_CONFIG_DIR`; nothing secret lands in shottino's config at all.
+
+It runs on its **own thread**, never the job worker: a model call takes seconds
+to minutes, and sharing the worker would park scrollback fetches and sends
+behind somebody's prompt. Requests queue (depth 8) and run one at a time.
+
+Config lives in `~/.local/share/shottino/llm.conf`, mode 0600. `/llm set token`
+never echoes the value, and the config display masks it to a fixed-width
+`********` — showing a prefix, a suffix or even the length leaks something
+about a secret. A `-p` reply is capped like `/exec`, and says so when cut.
+
+The `/bot` trust model — network text is data and never instruction, write
+tools ask inline unless a (person, tool) pair is pre-approved — is written down
+in `llm.h`, next to the code that has to obey it.
+
 ## /exec
 
 `/exec <command>` runs it in a shell and **sends its stdout to the current
