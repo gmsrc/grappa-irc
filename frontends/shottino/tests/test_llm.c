@@ -252,6 +252,34 @@ TEST(a_tool_call_arrives_through_the_mcp_shim_by_either_route) {
 
 /* The shim is the ONLY way a caller's tools reach `claude -p`: --tools
  * selects built-ins by name and cannot register a definition. */
+/* The shim reflects the caller's own strings; it must escape them.
+ *
+ * The request id round-trips in the type it arrived in, and a string id
+ * was copied straight into the reply. A quote or a backslash in it would
+ * end the JSON string early and leave the rest of the frame as garbage
+ * the client cannot parse — the one unescaped interpolation left in the
+ * codebase. */
+TEST(the_mcp_shim_escapes_what_it_reflects) {
+    char out[4096];
+
+    /* A quote in the id. */
+    CHECK(llm_mcp_response("{\"jsonrpc\":\"2.0\",\"id\":\"a\\\"b\",\"method\":\"ping\"}", "[]", out,
+                           sizeof(out)));
+    CHECK(strstr(out, "\"id\":\"a\\\"b\"") != NULL);
+    /* And it is still ONE parseable document. */
+    json_doc *doc = json_parse(out, strlen(out), NULL, 0);
+    CHECK(doc != NULL);
+    if (doc) json_free(doc);
+
+    /* A backslash in the protocol version, which is echoed back. */
+    CHECK(llm_mcp_response(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"x\\\\y\"}}",
+        "[]", out, sizeof(out)));
+    doc = json_parse(out, strlen(out), NULL, 0);
+    CHECK(doc != NULL);
+    if (doc) json_free(doc);
+}
+
 TEST(the_mcp_shim_advertises_the_tools_and_executes_none) {
     char out[8192];
 
@@ -421,5 +449,6 @@ int main(void) {
     RUN(a_result_frame_carries_the_text_when_no_delta_did);
     RUN(a_tool_call_arrives_through_the_mcp_shim_by_either_route);
     RUN(the_mcp_shim_advertises_the_tools_and_executes_none);
+    RUN(the_mcp_shim_escapes_what_it_reflects);
     return test_report();
 }

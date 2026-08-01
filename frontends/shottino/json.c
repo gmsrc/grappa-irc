@@ -1,6 +1,10 @@
 /* json.c — see json.h for the why. */
 #include "json.h"
 
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -397,8 +401,15 @@ static bool parse_number(struct parser *ps, json_value **out) {
     tmp[n] = '\0';
 
     char *endp = NULL;
+    errno = 0;
     double d = strtod(tmp, &endp);
     if (endp != tmp + n) return fail(ps, "malformed number");
+    /* `1e999` parses "successfully" as infinity, and an infinity has no
+     * JSON spelling — round-tripping one through the writer produced
+     * `inf`, which is not JSON and which the next parser rejects. A
+     * number nobody can represent is a malformed number. */
+    if (errno == ERANGE && (d > 1.0e308 || d < -1.0e308)) return fail(ps, "number out of range");
+    if (!isfinite(d)) return fail(ps, "number out of range");
 
     json_value *v = new_value(ps, JSON_NUMBER);
     if (!v) return false;
@@ -517,9 +528,20 @@ bool json_number(const json_value *v, double *out) {
     return true;
 }
 
+/* A number that fits in a `long`, or a refusal.
+ *
+ * The cast used to be unconditional, and converting an out-of-range
+ * double to an integer type is undefined behaviour. A hostile or merely
+ * broken frame — `{"id":1e300}` — reached this through the wire
+ * narrowers, which believed they were rejecting bad shapes. Rejecting it
+ * here is what makes that belief true: the caller already handles false
+ * as "this field is not what it should be". */
 bool json_long(const json_value *v, long *out) {
     if (!v || v->type != JSON_NUMBER) return false;
-    *out = (long)v->u.number;
+    double d = v->u.number;
+    if (!isfinite(d)) return false;
+    if (d < (double)LONG_MIN || d > (double)LONG_MAX) return false;
+    *out = (long)d;
     return true;
 }
 
@@ -656,9 +678,24 @@ static bool write_value(const json_value *v, char *out, size_t out_sz, size_t *n
     case JSON_NUMBER: {
         char buf[40];
         double d = v->u.number;
-        int w = (d == (double)(long long)d && d < 1e18 && d > -1e18)
-                    ? snprintf(buf, sizeof(buf), "%lld", (long long)d)
-                    : snprintf(buf, sizeof(buf), "%.17g", d);
+        /* RANGE FIRST, then the cast.
+         *
+         * `d == (double)(long long)d` performs the conversion before the
+         * comparison, and converting a double outside long long's range —
+         * or an infinity, or a NaN — is undefined behaviour, not a
+         * defined wrong answer. It is reachable: a tool-call argument of
+         * 1e300 comes back through here on its way to the handler.
+         *
+         * A non-finite value has no JSON spelling at all (the grammar has
+         * no `inf`), so it is written as 0 rather than as something no
+         * parser on the other end would accept. */
+        int w;
+        if (!isfinite(d))
+            w = snprintf(buf, sizeof(buf), "0");
+        else if (d >= -9.0e18 && d <= 9.0e18 && d == (double)(long long)d)
+            w = snprintf(buf, sizeof(buf), "%lld", (long long)d);
+        else
+            w = snprintf(buf, sizeof(buf), "%.17g", d);
         return w > 0 && put(out, out_sz, n, buf, (size_t)w);
     }
     case JSON_STRING:

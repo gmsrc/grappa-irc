@@ -3987,13 +3987,23 @@ static bool load_saved_token(struct app *app, const char *path) {
     return app->token[0] != 0;
 }
 
+/* 0600 from the moment the file EXISTS, not once it is written.
+ *
+ * fopen("w") creates with 0666 & ~umask — 0644 on most systems — and
+ * chmod afterwards leaves a window in which another local user can open
+ * the file and keep the descriptor. The fd survives the chmod, and the
+ * token is written after it. llm_save already did this correctly and
+ * said why; this is the same fix at the other two doors. */
 static void save_token(struct app *app, const char *path) {
-    FILE *f = fopen(path, "w");
-    if (!f) return;
-    chmod(path, 0600);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) return;
+    FILE *f = fdopen(fd, "w");
+    if (!f) {
+        close(fd);
+        return;
+    }
     fprintf(f, "%s\n", app->token);
     fclose(f);
-    chmod(path, 0600);
 }
 
 static bool validate_saved_token(struct app *app) {
@@ -7164,21 +7174,29 @@ static bool bot_sender_is_owner(struct app *app, const char *network, const char
  * outlive the conversation it was given in. */
 static bool bot_has_grant(struct app *app, const char *nick, const char *tool) {
     char account[MAX_CHANNEL];
+    /* Resolved before the lock is taken: bot_sender_account takes
+     * app->lock itself, and this function is called from the MODEL
+     * thread while the keyboard is free to add and revoke grants. The
+     * list is a security allowlist, and reading one while it is being
+     * rewritten can see a half-written (nick, tool) pair. */
     bot_sender_account(app, nick, account, sizeof(account));
-    for (size_t i = 0; i < app->bot_grant_count; i++) {
+    bool ok = false;
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->bot_grant_count && !ok; i++) {
         const struct bot_grant *g = &app->bot_grants[i];
         if (!irc_name_eq(g->nick, nick) || strcmp(g->tool, tool) != 0) continue;
         if (g->account[0]) {
-            if (account[0] && irc_name_eq(g->account, account)) return true;
+            if (account[0] && irc_name_eq(g->account, account)) ok = true;
             continue;
         }
         /* Given to an unidentified nick: it covers an unidentified nick
          * only. Somebody who has since identified is a different case
          * and should be asked once, so the grant can be recorded
          * properly. */
-        if (!account[0]) return true;
+        if (!account[0]) ok = true;
     }
-    return false;
+    pthread_mutex_unlock(&app->lock);
+    return ok;
 }
 
 /* ── Grants on disk ────────────────────────────────────────────────────
@@ -7210,8 +7228,17 @@ static void bot_grants_save(struct app *app) {
     char path[LLM_MAX_PATH + 16], tmp[LLM_MAX_PATH + 48];
     bot_grants_path(app, path, sizeof(path));
     snprintf(tmp, sizeof(tmp), "%s.%d", path, (int)getpid());
-    FILE *f = fopen(tmp, "w");
+    /* 0600 at creation: see save_token. A grant file is not a secret in
+     * the way a token is, but it names who may drive this client, and it
+     * costs nothing to create it unreadable. */
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        log_line(app, "/bot: cannot save the grants to %s", path);
+        return;
+    }
+    FILE *f = fdopen(fd, "w");
     if (!f) {
+        close(fd);
         log_line(app, "/bot: cannot save the grants to %s", path);
         return;
     }
@@ -7225,7 +7252,6 @@ static void bot_grants_save(struct app *app) {
                 app->bot_grants[i].tool);
     }
     fclose(f);
-    chmod(tmp, 0600);
     if (rename(tmp, path) != 0) {
         unlink(tmp);
         log_line(app, "/bot: cannot save the grants to %s", path);
@@ -11154,6 +11180,41 @@ static const char *mime_for_path(const char *path) {
  * leads with — 📸 for a file the user picked, 🎤 and 🎥 for something
  * this client recorded, so scrollback says which it was without opening
  * the link. */
+/* A multipart boundary no payload can contain, and a filename that
+ * cannot end the part it names.
+ *
+ * RFC 2046 wants a boundary the body provably does not contain, and both
+ * upload paths used a compile-time constant and never checked. A file
+ * whose BYTES contain that constant followed by a Content-Disposition
+ * header would therefore split its own request and smuggle extra form
+ * fields into grappa's upload endpoint — and an attacker who can get a
+ * file onto disk, or simply send you one, chooses those bytes. 16 random
+ * bytes make a collision something that does not happen.
+ *
+ * The filename gets the same treatment for the same reason: a quote or a
+ * CRLF in it would close the header early. Anything but the safe set
+ * becomes '_', because a name is a label here, not an identifier — the
+ * server decides what the upload is really called. */
+static void multipart_boundary(char *out, size_t out_sz) {
+    unsigned char raw[16];
+    RAND_bytes(raw, sizeof(raw));
+    size_t n = snprintf(out, out_sz, "----shottino");
+    for (size_t i = 0; i < sizeof(raw) && n + 2 < out_sz; i++)
+        n += (size_t)snprintf(out + n, out_sz - n, "%02x", raw[i]);
+}
+
+static void multipart_filename(const char *in, char *out, size_t out_sz) {
+    size_t n = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p && n + 1 < out_sz; p++) {
+        unsigned char c = *p;
+        bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                    c == '.' || c == '-' || c == '_';
+        out[n++] = safe ? (char)c : '_';
+    }
+    out[n] = 0;
+    if (!n) snprintf(out, out_sz, "upload");
+}
+
 static void upload_file_to(struct app *app, const char *path, const char *marker,
                            const char *up_net, const char *up_chan) {
     const char *mime = mime_for_path(path);
@@ -11198,11 +11259,14 @@ static void upload_file_to(struct app *app, const char *path, const char *marker
 
     const char *base = strrchr(path, '/');
     base = base ? base + 1 : path;
-    const char *boundary = "----shottino7RcH2mQx";
+    char boundary[64];
+    multipart_boundary(boundary, sizeof(boundary));
+    char safe_name[256];
+    multipart_filename(base, safe_name, sizeof(safe_name));
     char *head = xasprintf("--%s\r\n"
                            "Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
                            "Content-Type: %s\r\n\r\n",
-                           boundary, base, mime);
+                           boundary, safe_name, mime);
     char *tail = xasprintf("\r\n--%s--\r\n", boundary);
     size_t hlen = strlen(head), tlen = strlen(tail);
     size_t total = hlen + got + tlen;
@@ -11356,16 +11420,19 @@ static char *stt_transcribe_remote(struct app *app, const char *path) {
         log_line(app, "/stt: cannot reach %s:%s", u.host, u.port);
         return NULL;
     }
-    const char *boundary = "----shottinoSTT9wQ3v";
     const char *base = strrchr(path, '/');
     base = base ? base + 1 : path;
+    char boundary[64];
+    multipart_boundary(boundary, sizeof(boundary));
+    char safe_name[256];
+    multipart_filename(base, safe_name, sizeof(safe_name));
     char *head = xasprintf("--%s\r\n"
                            "Content-Disposition: form-data; name=\"model\"\r\n\r\n%s\r\n"
                            "--%s\r\n"
                            "Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
                            "Content-Type: application/octet-stream\r\n\r\n",
                            boundary, app->stt_model[0] ? app->stt_model : "whisper-1", boundary,
-                           base);
+                           safe_name);
     char *tail = xasprintf("\r\n--%s--\r\n", boundary);
     size_t total = strlen(head) + (size_t)size + strlen(tail);
     char reqpath[LLM_MAX_URL + 32];
@@ -14144,10 +14211,22 @@ static bool ircd_hist_after(const struct ircd_hist *h, const struct ircd_selecto
 
 #define IRCD_CHATHISTORY_MAX 200
 
-static void ircd_send_batch(struct app *app, struct ircd_client *c, const char *target,
-                            const struct ircd_hist **rows, size_t count) {
-    char own[MAX_CHANNEL];
-    ircd_own_nick(app, c->network, own, sizeof(own));
+/* Queue a whole CHATHISTORY batch. Caller holds ircd.lock.
+ *
+ * `own` is resolved by the CALLER because resolving it needs app->lock,
+ * and the ordering rule here is that app->lock is never taken while
+ * ircd.lock is held.
+ *
+ * The whole batch is queued inside one critical section on purpose. The
+ * archive answer arrives seconds after it was asked, on the worker, and
+ * the slot it names may by then have been dropped and handed to a new
+ * connection. The `id` check exists to catch exactly that — but it was
+ * done, the lock released, and only THEN the batch sent, so the slot
+ * could be reused in between and one user's history delivered into
+ * another user's client. Queuing is only buffer appends, so holding the
+ * lock across it costs nothing and closes the window. */
+static void ircd_send_batch_locked(struct ircd_client *c, const char *own, const char *target,
+                                   const struct ircd_hist **rows, size_t count) {
     char ref[32] = "";
     /* A batch is what tells the client these are OLD messages rather than
      * a burst of new ones. Without the capability they are sent anyway,
@@ -14155,15 +14234,15 @@ static void ircd_send_batch(struct app *app, struct ircd_client *c, const char *
      * worse off than one that gets it unlabelled. */
     if (c->cap_batch) {
         snprintf(ref, sizeof(ref), "sh%u", ++c->batch_seq);
-        ircd_send(app, c, ":%s BATCH +%s chathistory %s", IRCD_SERVER, ref, target);
+        ircd_send_locked(c, ":%s BATCH +%s chathistory %s", IRCD_SERVER, ref, target);
     }
     for (size_t i = 0; i < count; i++) {
         char line[IRCD_LINE_MAX + 256];
         ircd_message_line(rows[i], own, c->cap_server_time, c->cap_tags, ref[0] ? ref : NULL, line,
                           sizeof(line));
-        if (line[0]) ircd_send(app, c, "%s", line);
+        if (line[0]) ircd_send_locked(c, "%s", line);
     }
-    if (ref[0]) ircd_send(app, c, ":%s BATCH -%s", IRCD_SERVER, ref);
+    if (ref[0]) ircd_send_locked(c, ":%s BATCH -%s", IRCD_SERVER, ref);
 }
 
 static void ircd_cmd_chathistory(struct app *app, struct ircd_client *c,
@@ -14345,7 +14424,11 @@ static void ircd_cmd_chathistory(struct app *app, struct ircd_client *c,
         if (enqueue_job(app, job)) return;
         /* The queue is full: the ring's answer is better than none. */
     }
-    ircd_send_batch(app, c, target, picked, count);
+    char own_now[MAX_CHANNEL];
+    ircd_own_nick(app, c->network, own_now, sizeof(own_now));
+    pthread_mutex_lock(&app->ircd.lock);
+    ircd_send_batch_locked(c, own_now, target, picked, count);
+    pthread_mutex_unlock(&app->ircd.lock);
 }
 
 /* ── CHATHISTORY against grappa's archive ──────────────────────────────
@@ -14447,15 +14530,23 @@ static void ircd_archive_job(struct app *app, const struct job *job) {
     const struct ircd_hist *rows[IRCD_CHATHISTORY_MAX];
     for (size_t i = 0; i < reply->count; i++) rows[i] = &reply->hist[i];
 
+    /* Resolved BEFORE ircd.lock is taken: it needs app->lock, and the
+     * ordering rule forbids that pairing. */
+    char own[MAX_CHANNEL];
+    ircd_own_nick(app, network, own, sizeof(own));
+
+    /* Find the client and send it the batch WITHOUT letting go in
+     * between. Gone, or the slot belongs to somebody else now: the
+     * answer is dropped rather than delivered into a session that never
+     * asked for it. */
     pthread_mutex_lock(&app->ircd.lock);
-    struct ircd_client *c = NULL;
-    for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++)
-        if (app->ircd.clients[i].fd >= 0 && app->ircd.clients[i].id == client_id)
-            c = &app->ircd.clients[i];
+    for (size_t i = 0; i < IRCD_MAX_CLIENTS; i++) {
+        struct ircd_client *c = &app->ircd.clients[i];
+        if (c->fd < 0 || c->id != client_id) continue;
+        ircd_send_batch_locked(c, own, target, rows, reply->count);
+        break;
+    }
     pthread_mutex_unlock(&app->ircd.lock);
-    /* Gone, or the slot belongs to somebody else now: the answer is
-     * dropped rather than delivered into a session that never asked. */
-    if (c) ircd_send_batch(app, c, target, rows, reply->count);
     free(reply);
 }
 

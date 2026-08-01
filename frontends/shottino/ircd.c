@@ -261,16 +261,35 @@ void ircd_tags(long server_time_ms, bool want_time, long msgid, bool want_tags,
     bool have_msgid = want_tags && msgid > 0;
     bool have_batch = want_tags && batch_ref && *batch_ref;
     if (!stamp[0] && !have_msgid && !have_batch) return;
+    /* snprintf returns what it WOULD have written, so accumulating its
+     * return value unclamped lets `used` pass out_sz — and then
+     * `out + used` points past the buffer while `out_sz - used` wraps to
+     * an enormous size_t, which turns the next leg into an unbounded
+     * write. Not reachable with today's callers (128 bytes, and the only
+     * batch ref is the internally generated `sh%u`), which is exactly
+     * why it should be fixed before someone changes a buffer size and
+     * discovers it the hard way. */
     size_t used = 0;
-    used += (size_t)snprintf(out + used, out_sz - used, "@");
-    if (stamp[0]) used += (size_t)snprintf(out + used, out_sz - used, "%s", stamp);
-    if (have_msgid)
-        used += (size_t)snprintf(out + used, out_sz - used, "%smsgid=%ld", used > 1 ? ";" : "",
-                                 msgid);
-    if (have_batch)
-        used += (size_t)snprintf(out + used, out_sz - used, "%sbatch=%s", used > 1 ? ";" : "",
-                                 batch_ref);
-    snprintf(out + used, out_sz - used, " ");
+#define TAG_APPEND(...)                                                                            \
+    do {                                                                                           \
+        if (used >= out_sz) {                                                                      \
+            out[0] = '\0';                                                                         \
+            return;                                                                                \
+        }                                                                                          \
+        int w_ = snprintf(out + used, out_sz - used, __VA_ARGS__);                                 \
+        if (w_ < 0 || (size_t)w_ >= out_sz - used) {                                               \
+            out[0] = '\0';                                                                         \
+            return;                                                                                \
+        }                                                                                          \
+        used += (size_t)w_;                                                                        \
+    } while (0)
+
+    TAG_APPEND("@");
+    if (stamp[0]) TAG_APPEND("%s", stamp);
+    if (have_msgid) TAG_APPEND("%smsgid=%ld", used > 1 ? ";" : "", msgid);
+    if (have_batch) TAG_APPEND("%sbatch=%s", used > 1 ? ";" : "", batch_ref);
+    TAG_APPEND(" ");
+#undef TAG_APPEND
 }
 
 void ircd_sanitize(const char *in, char *out, size_t out_sz) {

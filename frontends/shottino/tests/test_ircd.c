@@ -251,6 +251,23 @@ TEST(tags_are_built_as_one_prefix_or_not_at_all) {
     /* message-tags without server-time still carries the id. */
     ircd_tags(1753776000123L, false, 42, true, NULL, out, sizeof(out));
     CHECK_STR(out, "@msgid=42 ");
+    /* A buffer too small for the tags produces NOTHING, not a truncated
+     * prefix and not a write past the end. snprintf returns what it
+     * WOULD have written, so accumulating that unclamped let the offset
+     * pass the buffer and the remaining size wrap to an enormous
+     * size_t — the next leg would then write without a bound. */
+    char tiny[8];
+    memset(tiny, 'x', sizeof(tiny));
+    ircd_tags(1753776000123L, true, 42, true, "sh7", tiny, sizeof(tiny));
+    CHECK_STR(tiny, "");
+    /* And a buffer that is exactly big enough still builds the whole
+     * thing — the clamp must not refuse work that fits. */
+    char room[128];
+    ircd_tags(1753776000123L, true, 42, true, "sh7", room, sizeof(room));
+    CHECK(strstr(room, "msgid=42") != NULL);
+    CHECK(strstr(room, "batch=sh7") != NULL);
+    CHECK(room[strlen(room) - 1] == ' ');
+
 }
 
 /* ── The conversation ──────────────────────────────────────────────── */

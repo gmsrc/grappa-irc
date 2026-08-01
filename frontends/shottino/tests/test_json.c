@@ -219,6 +219,52 @@ TEST(null_safety) {
     CHECK(json_root(NULL) == NULL);
 }
 
+/* A number nobody can represent is a malformed number.
+ *
+ * `1e999` used to parse "successfully" as infinity, because strtod's
+ * ERANGE was never checked — and an infinity has no JSON spelling, so
+ * round-tripping one through json_write emitted `inf`, which the next
+ * parser rejects. Out-of-range integers were worse than wrong: casting
+ * a double outside long's range is undefined behaviour, and the wire
+ * narrowers were performing that cast while believing they were
+ * rejecting bad shapes. */
+TEST(a_number_nobody_can_represent_is_refused) {
+    /* Overflow to infinity is a parse failure, not a value. */
+    CHECK(json_parse("{\"x\":1e999}", 11, NULL, 0) == NULL);
+    CHECK(json_parse("{\"x\":-1e999}", 12, NULL, 0) == NULL);
+
+    /* A finite number too big for a long is refused BY json_long rather
+     * than cast into undefined behaviour — the document is fine, the
+     * field is not an integer. */
+    json_doc *d = parse_ok("{\"huge\":1e300,\"ok\":42}");
+    CHECK(d != NULL);
+    if (d) {
+        const json_value *r = json_root(d);
+        long n = 12345;
+        CHECK(!json_long(json_get(r, "huge"), &n));
+        CHECK_LONG(n, 12345); /* untouched on refusal */
+        CHECK(json_long(json_get(r, "ok"), &n));
+        CHECK_LONG(n, 42);
+        /* And it still round-trips as a NUMBER, not as `inf`. */
+        char out[128];
+        CHECK(json_write(json_get(r, "huge"), out, sizeof(out)));
+        CHECK(strstr(out, "inf") == NULL);
+        CHECK(strstr(out, "nan") == NULL);
+        json_free(d);
+    }
+
+    /* The everyday sizes still work, including the biggest thing the
+     * wire actually carries. */
+    d = parse_ok("{\"id\":9007199254740991}");
+    CHECK(d != NULL);
+    if (d) {
+        long n = 0;
+        CHECK(json_long(json_get(json_root(d), "id"), &n));
+        CHECK(n == 9007199254740991L);
+        json_free(d);
+    }
+}
+
 TEST(numbers) {
     json_doc *d = parse_ok("{\"neg\":-17,\"big\":1753500000,\"real\":1.5,\"exp\":1e3,\"zero\":0}");
     CHECK(d != NULL);
@@ -263,6 +309,7 @@ int main(void) {
     RUN(rejects_deep_nesting);
     RUN(null_safety);
     RUN(numbers);
+    RUN(a_number_nobody_can_represent_is_refused);
     RUN(empty_containers);
     return test_report();
 }

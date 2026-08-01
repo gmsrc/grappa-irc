@@ -264,6 +264,10 @@ static char *tools_json_shape(bool writes_allowed, bool mcp) {
 char *llm_tools_json(bool writes_allowed) { return tools_json_shape(writes_allowed, false); }
 char *llm_tools_mcp_json(bool writes_allowed) { return tools_json_shape(writes_allowed, true); }
 
+/* Defined with the request bodies below; the shim needs it too, and a
+ * reply that reflects the caller's own strings must escape them. */
+static bool json_escape_into(const char *src, char *out, size_t out_sz, size_t *used);
+
 /* ── The MCP shim's protocol half ──────────────────────────────────────
  *
  * Four methods matter. `tools/call` is answered too, even though the
@@ -290,9 +294,19 @@ bool llm_mcp_response(const char *line, const char *tools_json, char *out, size_
     }
     /* An id round-trips in the TYPE it arrived in — a string id echoed
      * as a number is a reply the client cannot match. */
-    char id[64];
+    char id[256];
     if (json_type_of(idv) == JSON_STRING) {
-        snprintf(id, sizeof(id), "\"%.60s\"", json_string(idv));
+        /* ESCAPED, not copied. This is the caller's own string coming
+         * straight back out inside a JSON document, and a quote or a
+         * backslash in it would end the string early and leave the rest
+         * of the reply as garbage the client cannot parse. The one
+         * unescaped interpolation left in the codebase. */
+        char esc[192];
+        if (!json_escape_into(json_string(idv), esc, sizeof(esc), NULL)) {
+            json_free(doc);
+            return false;
+        }
+        snprintf(id, sizeof(id), "\"%s\"", esc);
     } else {
         long n = 0;
         json_long(idv, &n);
@@ -302,11 +316,15 @@ bool llm_mcp_response(const char *line, const char *tools_json, char *out, size_
     int w;
     if (strcmp(method, "initialize") == 0) {
         const char *proto = json_string(json_get(json_get(root, "params"), "protocolVersion"));
+        char proto_esc[64];
+        if (!proto || !proto[0] || !json_escape_into(proto, proto_esc, sizeof(proto_esc), NULL))
+            snprintf(proto_esc, sizeof(proto_esc), "2024-11-05");
+        proto = proto_esc;
         w = snprintf(out, out_sz,
                      "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"protocolVersion\":\"%s\","
                      "\"capabilities\":{\"tools\":{\"listChanged\":false}},"
                      "\"serverInfo\":{\"name\":\"" LLM_MCP_SERVER "\",\"version\":\"1\"}}}",
-                     id, proto && proto[0] ? proto : "2024-11-05");
+                     id, proto);
     } else if (strcmp(method, "tools/list") == 0) {
         w = snprintf(out, out_sz, "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"tools\":%s}}",
                      id, tools_json && tools_json[0] ? tools_json : "[]");
