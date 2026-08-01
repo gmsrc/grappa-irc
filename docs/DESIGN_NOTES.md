@@ -25708,3 +25708,64 @@ container scroll write lands past a settle grace (300ms) — i.e. exactly one
 tail-follow per send. RED on main (a second `scrollIntoView` at t≈540–610ms),
 GREEN with the fix. Chromium (webkit ≠ real-iOS scroll, but the DEFECT — the
 redundant delayed write — is engine-independent and deterministically pinned).
+
+---
+
+## 2026-08-02 — #627: an unconfigured mode 2 must never crash boot — the arm gate guarded the bind, not the reconcile
+
+Field report (vjt, the 2026-08-02 jail cutover): the release refused to boot on
+the FreeBSD substrate. The DB was still in **mode 1** — no `addressing.mode`, no
+`addressing.static_mapping_prefix` row in `server_settings` — which is the
+DEFAULT of a fresh install and of any DB restored from before #543. The log even
+said so, then crashed anyway:
+
+```
+[info]  source-alias mode 2 disarmed (:no_static_prefix) — static-mapping sessions will be held
+[error] GenServer Grappa.Net.SourceAliasManager terminating
+** (FunctionClauseError) no function clause matching in Grappa.Net.IpLiteral.in_cidr6?/2
+    lib/grappa/net/ip_literal.ex:144: Grappa.Net.IpLiteral.in_cidr6?("::1", nil)
+    lib/grappa/net/source_alias/free_bsd.ex:58: …FreeBSD.list_aliases/1
+    lib/grappa/net/source_alias_manager.ex:214: …do_reconcile/1
+    lib/grappa/net/source_alias_manager.ex:132: …handle_continue/2
+```
+
+`SourceAliasManager` is a supervised child of the app supervisor, so the crash in
+its boot `{:continue, :reconcile}` escalated and took the **whole node** down —
+the BEAM never reached the HTTP listener. The bouncer was fully down, not
+degraded.
+
+**Root cause — the arm gate and the reconcile path disagreed.** `init/1`
+correctly runs `compute_arm(adapter, nil) → {false, :no_static_prefix}` and
+publishes the disarmed state (a nil prefix short-circuits before `arm_check`).
+But `do_reconcile/1` then called `state.adapter.list_aliases(state.prefix)`
+**unconditionally**. On FreeBSD that parses `ifconfig lo0` and filters every
+address through `IpLiteral.in_cidr6?(addr, prefix)`, whose sole clause is
+`is_binary/1`-guarded on BOTH arguments. `lo0` always carries `::1`, so the first
+element blew the clause with `prefix = nil`. **The arm gate guarded the BIND
+decisions; it did not guard the reconcile.** (Linux + Disabled never showed it —
+their `list_aliases(_)` already returns `{:ok, []}`; only FreeBSD shells out.)
+
+**Fix — at the root, plus belt-and-braces (neither alone is the fix).**
+1. **Root:** `do_reconcile(%{prefix: nil} = state), do: state` — with no prefix
+   there is no block to reconcile against and nothing can be a managed alias, so
+   the manager does NO reconcile work. This is the fix: the manager must not do
+   work it has no business doing when mode 2 is unconfigured.
+2. `FreeBSD.list_aliases(nil) → {:ok, []}` (without shelling) — keeps the adapter
+   contract total for the nil prefix, matching Linux/Disabled.
+3. `IpLiteral.in_cidr6?(_, nil) → false` — "no prefix ⇒ no membership". Narrowed
+   to nil ONLY: a non-binary addr with a real prefix still crashes (a genuine
+   caller bug worth surfacing, per the CLAUDE.md let-it-crash rule). #2 and #3 on
+   their own would only HIDE the manager doing work it shouldn't — they harden
+   the contract, they do not replace the root guard.
+
+**The invariant the test encodes: a nil/absent `static_mapping_prefix` must NEVER
+take the application down.** The gap that let this ship was a test masking:
+`source_alias_manager_test.exs` already booted the manager with `prefix: nil`,
+but stubbed the Mox adapter's `list_aliases` with `fn _ -> {:ok, []} end`, which
+tolerates nil where the real FreeBSD adapter raises. The regression tests
+(`#627`): (a) the manager on the **real** FreeBSD adapter (cmd Mox'd) with
+`prefix: nil` boots without a `:DOWN` and reconciles to a no-op — reproducing the
+exact prod stacktrace RED; (b) adapter-agnostic proof of the ROOT — a Mox adapter
+with NO `list_aliases` stub, so any boot-path call raises → `:DOWN`, forcing the
+early-return rather than merely a defensive adapter clause; plus (c/d) the
+`FreeBSD.list_aliases(nil)`/`IpLiteral.in_cidr6?(_, nil)` unit clauses.

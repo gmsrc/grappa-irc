@@ -53,7 +53,14 @@ defmodule Grappa.Net.SourceAlias.FreeBSD do
   def release_source(addr, prefix), do: alias_op("del", addr, prefix)
 
   @impl Grappa.Net.SourceAlias
-  def list_aliases(prefix) do
+  # #627 — no prefix means mode 2 is unconfigured: no block to list aliases
+  # inside, so the answer is empty WITHOUT shelling `ifconfig`. Belt-and-braces
+  # with the manager's reconcile early-return — keeps the adapter contract
+  # total (never raises) for the nil prefix of a mode-1 / fresh install, rather
+  # than parsing `lo0` and filtering `::1` through `in_cidr6?(_, nil)`.
+  def list_aliases(nil), do: {:ok, []}
+
+  def list_aliases(prefix) when is_binary(prefix) do
     case Config.cmd().run("ifconfig", ["lo0"], @timeout_s) do
       {:ok, output} -> {:ok, parse_lo0_inet6(output, prefix)}
       {:error, _} = err -> err

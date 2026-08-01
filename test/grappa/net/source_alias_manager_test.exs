@@ -11,6 +11,7 @@ defmodule Grappa.Net.SourceAliasManagerTest do
 
   import Mox
 
+  alias Grappa.Net.SourceAlias.FreeBSD
   alias Grappa.Net.SourceAliasManager, as: Manager
 
   @prefix "2a03:4000:20:2d3:cb::/80"
@@ -163,6 +164,64 @@ defmodule Grappa.Net.SourceAliasManagerTest do
       drain_boot_reconcile(pid)
 
       assert Manager.armed?() == false
+      assert Manager.disarm_reason() == :no_static_prefix
+    end
+  end
+
+  # #627 — a nil/absent `static_mapping_prefix` (mode 2 unconfigured, the
+  # default of a fresh install or a pre-#543 DB) must NEVER take the node down.
+  # In prod (FreeBSD jail, on the release deployed at `b41b8d09`) `do_reconcile`
+  # shelled `ifconfig lo0` and filtered `::1` through `in_cidr6?(_, nil)`,
+  # raising in the boot `handle_continue` and escalating to the whole
+  # application. The bug rode in with #543's source-alias reconcile; the arm
+  # gate already disarms mode 2 for a nil prefix — the reconcile path must too.
+  describe "nil prefix (#627) — mode 2 unconfigured must not crash the node" do
+    # The ROOT of the fix, proven adapter-agnostically: the Mox adapter has NO
+    # `list_aliases` (or `arm_check`) stub, so ANY boot-path adapter call would
+    # raise inside the GenServer and surface as a DOWN. Green requires the
+    # manager to early-return from reconcile — not merely a defensive adapter
+    # clause — because it must do NO reconcile work with no prefix to diff.
+    test "the manager never calls the adapter when there is no prefix" do
+      pid =
+        start_supervised!(%{
+          id: Manager,
+          start: {Manager, :start_link, [[adapter: Grappa.Net.SourceAliasMock, prefix: nil]]},
+          restart: :temporary
+        })
+
+      ref = Process.monitor(pid)
+      # handle_continue(:reconcile) runs async right after init; a nil-prefix
+      # crash arrives as a DOWN within milliseconds.
+      refute_receive {:DOWN, ^ref, :process, ^pid, _reason}, 500
+      assert Process.alive?(pid)
+
+      # An explicit reconcile is a no-op too — still no adapter call.
+      assert :ok = Manager.reconcile()
+      assert Process.alive?(pid)
+    end
+
+    # The faithful prod reproduction: the REAL FreeBSD adapter (cmd Mox'd) with
+    # prefix nil. Pre-fix, the manager shells `ifconfig` and crashes on `::1`;
+    # the `stub` feeds exactly that line. Post-fix the reconcile early-returns,
+    # so `run/3` is never reached (stub tolerates zero calls).
+    test "boots on the real FreeBSD adapter with prefix nil without crashing" do
+      stub(Grappa.Sys.HardenedCmdMock, :run, fn "ifconfig", ["lo0"], _ ->
+        {:ok, "lo0: flags=8049\n\tinet6 ::1 prefixlen 128\n"}
+      end)
+
+      pid =
+        start_supervised!(%{
+          id: Manager,
+          start: {Manager, :start_link, [[adapter: FreeBSD, prefix: nil]]},
+          restart: :temporary
+        })
+
+      ref = Process.monitor(pid)
+      refute_receive {:DOWN, ^ref, :process, ^pid, _reason}, 500
+      assert Process.alive?(pid)
+
+      assert :ok = Manager.reconcile()
+      assert Process.alive?(pid)
       assert Manager.disarm_reason() == :no_static_prefix
     end
   end

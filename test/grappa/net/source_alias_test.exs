@@ -122,6 +122,15 @@ defmodule Grappa.Net.SourceAliasTest do
 
       assert {:ok, ["2a03:4000:20:2d3:cb::5"]} = FreeBSD.list_aliases(@prefix)
     end
+
+    # #627 — a nil prefix means mode 2 is unconfigured: there is no block to
+    # list aliases inside, so the answer is empty WITHOUT touching `ifconfig`.
+    # Before the fix this shelled out and filtered `::1` through
+    # `in_cidr6?(_, nil)`, raising and crashing the boot reconcile. No cmd
+    # `expect` here — a shell-out would fail `verify_on_exit!`.
+    test "returns an empty list for a nil prefix WITHOUT shelling (#627)" do
+      assert {:ok, []} = FreeBSD.list_aliases(nil)
+    end
   end
 
   describe "Linux (AnyIP no-op adapter)" do
@@ -136,6 +145,12 @@ defmodule Grappa.Net.SourceAliasTest do
 
     test "list_aliases is empty — AnyIP has no per-address alias to reconcile" do
       assert {:ok, []} = Linux.list_aliases(@prefix)
+    end
+
+    # #627 — the reconcile-safety contract holds for a nil prefix too (mode 2
+    # unconfigured): AnyIP already makes this a no-op for any argument.
+    test "list_aliases is empty for a nil prefix too (#627)" do
+      assert {:ok, []} = Linux.list_aliases(nil)
     end
 
     test "arm_check passes when nonlocal_bind=1 and the AnyIP route is present" do

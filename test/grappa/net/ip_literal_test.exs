@@ -145,5 +145,15 @@ defmodule Grappa.Net.IpLiteralTest do
       refute IpLiteral.in_cidr6?("2a03::2", "2a03::1/128")
       assert IpLiteral.in_cidr6?("2a03:4000:20:2d3:cb::1", "::/0")
     end
+
+    # #627 — with mode 2 unconfigured there is NO prefix, so nothing can be a
+    # managed alias: a nil prefix is `false`, never a FunctionClauseError. The
+    # sole clause was `is_binary/1`-guarded on both args, so `in_cidr6?("::1",
+    # nil)` raised inside the FreeBSD list_aliases filter and took the node
+    # down at boot. Semantically "no prefix ⇒ no membership", so `false`.
+    test "false for a nil prefix (no mode-2 prefix configured)" do
+      refute IpLiteral.in_cidr6?("2a03:4000:20:2d3:cb::1", nil)
+      refute IpLiteral.in_cidr6?("::1", nil)
+    end
   end
 end

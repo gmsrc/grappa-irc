@@ -140,7 +140,7 @@ defmodule Grappa.Net.IpLiteral do
   block — a privilege-scope invariant), so the membership math lives here
   once (CLAUDE.md "implement once, reuse everywhere").
   """
-  @spec in_cidr6?(String.t(), String.t()) :: boolean()
+  @spec in_cidr6?(String.t(), String.t() | nil) :: boolean()
   def in_cidr6?(addr, prefix_cidr) when is_binary(addr) and is_binary(prefix_cidr) do
     with {:ok, {_, _, _, _, _, _, _, _} = addr_tuple} <- to_tuple(addr),
          {:ok, {net_tuple, len}} <- parse_cidr6(prefix_cidr) do
@@ -150,6 +150,14 @@ defmodule Grappa.Net.IpLiteral do
       _ -> false
     end
   end
+
+  # #627 — no prefix configured (mode 2 unconfigured) ⇒ no membership. A nil
+  # prefix is `false`, never a FunctionClauseError: the sole clause above was
+  # `is_binary/1`-guarded on BOTH args, so `in_cidr6?("::1", nil)` raised
+  # inside the FreeBSD `list_aliases` filter and took the node down at boot.
+  # This narrows ONLY the "no prefix" case — a non-binary addr with a real
+  # prefix still crashes (a genuine caller bug worth surfacing, CLAUDE.md).
+  def in_cidr6?(_, nil), do: false
 
   # ---- v6 bit helpers (128-bit int ↔ 8×16 tuple) -------------------
 

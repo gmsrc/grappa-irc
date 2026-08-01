@@ -210,6 +210,16 @@ defmodule Grappa.Net.SourceAliasManager do
   @spec held_addresses(state()) :: [String.t()]
   defp held_addresses(state), do: Map.keys(state.refcounts) ++ state.held_source_fn.()
 
+  # #627 — with no prefix, mode 2 is unconfigured (the arm gate already
+  # disarmed it, see `compute_arm/2`): there is no `::cb::/80` block to
+  # reconcile against and nothing can be a managed alias, so the sweep is not
+  # merely unnecessary — it has no business running. Doing it anyway shelled
+  # `ifconfig lo0` and filtered `::1` through `in_cidr6?(_, nil)`, raising in
+  # the boot `handle_continue` and escalating to the whole application, so a
+  # mode-1 / fresh install (no `addressing.static_mapping_prefix` row) could
+  # not start. The arm gate guarded the bind decisions but not this path.
+  defp do_reconcile(%{prefix: nil} = state), do: state
+
   defp do_reconcile(state) do
     case state.adapter.list_aliases(state.prefix) do
       {:ok, os_bound} ->
