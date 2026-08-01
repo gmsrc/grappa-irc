@@ -292,8 +292,32 @@ Ask a language model, from the client.
 
 Two backends. **openai** is any OpenAI-compatible endpoint (`url` + `token` +
 `model`). **claude-cli** drives a local `claude` binary headless over pipes —
-it needs no url and no token, because the CLI owns its own credentials in
-`CLAUDE_CONFIG_DIR`; nothing secret lands in shottino's config at all.
+it needs no url and no token, and shottino does not touch its environment:
+it runs under **your own claude login**, the same one your shell uses. Nothing
+secret lands in shottino's config at all.
+
+Both backends get the same tools. On openai they go in the `tools` array; on
+the CLI they cannot, because `--tools` selects *built-in* tools by name and no
+flag registers a function definition. **MCP is the only door**, so shottino
+serves one: it re-executes itself as `shottino --mcp-shim`, a stdio MCP server
+that advertises the same tool table. Same tools, same handlers, same approval
+gate — the shim only *advertises*, and every call is executed here, where the
+app state and the gate are.
+
+The CLI's own built-in tools stay off. (Not via `--tools ''`, which on CLI
+2.1.220 empties the registry *including* MCP tools and leaves the model told
+the server is "still connecting" — verified against the real binary. Shottino
+names `ToolSearch` instead: the one built-in that grants no capability of its
+own.) To enable some:
+
+```sh
+/set llm.cli_tools Read,WebSearch    # empty (the default) means none
+```
+
+Be deliberate about that one: those run **inside** the CLI, under
+`--dangerously-skip-permissions`, and shottino's approval gate never sees them.
+With `/bot` on, a message from the network can provoke a turn that uses them.
+The setter says so out loud each time.
 
 It runs on its **own thread**, never the job worker: a model call takes seconds
 to minutes, and sharing the worker would park scrollback fetches and sends
@@ -330,6 +354,33 @@ in `llm.h`, next to the code that has to obey it.
   the model cannot see is one it cannot be argued into trying.
 - **`/exec`, `/quote` and the operator verbs are never tools**, at any
   approval level.
+
+### AGENT.md and the notes
+
+```sh
+/set bot.dir ~/somewhere        # default: per-identity, under the state dir
+/bot memory                     # list the notes
+/bot forget <name>              # remove one
+```
+
+Put an **`AGENT.md`** in that directory and it becomes the bot's prompt,
+re-read on every turn — so editing it takes effect on the next message, not the
+next restart. It wins over `/bot prompt`, and `/bot show` tells you which one is
+in force rather than leaving you to wonder why an edit did nothing.
+
+The `remember` tool writes short notes as `.md` files under `<dir>/memories/`,
+and they are prepended to every later turn. It is gated like a write tool for a
+sharper reason than the others: a note is the only thing here that **outlives
+the conversation that planted it**, so a stranger who talks the bot into keeping
+one has bought influence over tomorrow. They come back labelled as the bot's own
+notes, never as instructions from you.
+
+Where all this lives is **per identity**, keyed by (bouncer, account) exactly
+like the cached session tokens — several shottinos under one unix user is
+normal, and two accounts on one laptop get two bots that cannot read each
+other's notes. The same identity opened twice deliberately shares one directory,
+so every note is written whole (temp file + rename) and never half-seen by the
+other session.
 
 The prompt is mitigation, not containment: a model can be argued into
 anything. What contains it is the tool allowlist, the per-pair grant and the

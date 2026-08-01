@@ -1001,6 +1001,83 @@ TEST(a_grant_is_per_person_and_per_tool) {
     free_app(app);
 }
 
+/* A memory's filename is BUILT from the title, never taken from it: the
+ * model picks the words, and it must not be able to pick the path. */
+TEST(a_memory_filename_is_built_not_taken) {
+    char slug[128];
+
+    CHECK(bot_memory_slug("Nextime prefers short answers", slug, sizeof(slug)));
+    CHECK_STR(slug, "nextime-prefers-short-answers.md");
+
+    /* Traversal is not rejected — it is UNREPRESENTABLE. Dots and
+     * slashes are simply not in the alphabet the builder draws from. */
+    CHECK(bot_memory_slug("../../.ssh/authorized_keys", slug, sizeof(slug)));
+    CHECK(strstr(slug, "..") == NULL);
+    CHECK(strchr(slug, '/') == NULL);
+    CHECK_STR(slug, "ssh-authorized-keys.md");
+
+    CHECK(bot_memory_slug("a\nb\tc", slug, sizeof(slug)));
+    CHECK_STR(slug, "a-b-c.md");
+
+    /* Nothing to build a name from is a refusal, not a file called
+     * ".md" — an empty-named note nobody can list or forget. */
+    CHECK(!bot_memory_slug("...", slug, sizeof(slug)));
+    CHECK(!bot_memory_slug("", slug, sizeof(slug)));
+
+    /* An over-long title truncates instead of overflowing, and stays a
+     * .md file. */
+    char loud[512];
+    memset(loud, 'x', sizeof(loud) - 1);
+    loud[sizeof(loud) - 1] = 0;
+    char small[24];
+    CHECK(bot_memory_slug(loud, small, sizeof(small)));
+    CHECK(strlen(small) < sizeof(small));
+    CHECK(strstr(small, ".md") != NULL);
+
+    /* Listing skips the in-flight temp file: a concurrent writer's
+     * half-written note must never be read as a memory. */
+    CHECK(is_memory_file("note.md"));
+    CHECK(!is_memory_file(".4242.tmp"));
+    CHECK(!is_memory_file("notes.txt"));
+    CHECK(!is_memory_file(".md"));
+}
+
+/* Several shottinos run side by side under one unix user. Two accounts
+ * must not share one bot's memories. */
+TEST(two_identities_get_two_bot_directories) {
+    /* Heap, not stack: `struct app` carries the whole scrollback and is
+     * far larger than a thread stack. */
+    struct app *a = calloc(1, sizeof(*a));
+    struct app *b = calloc(1, sizeof(*b));
+    char da[LLM_MAX_PATH], db[LLM_MAX_PATH];
+
+    snprintf(a->url.base, sizeof(a->url.base), "https://grappa.example");
+    snprintf(a->subject, sizeof(a->subject), "user:alice");
+    snprintf(b->url.base, sizeof(b->url.base), "https://grappa.example");
+    snprintf(b->subject, sizeof(b->subject), "user:bob");
+    bot_dir_path(a, da, sizeof(da));
+    bot_dir_path(b, db, sizeof(db));
+    CHECK(strcmp(da, db) != 0);
+
+    /* Same identity, second window: deliberately the SAME bot. */
+    snprintf(b->subject, sizeof(b->subject), "user:alice");
+    bot_dir_path(b, db, sizeof(db));
+    CHECK_STR(db, da);
+
+    /* Same account on a DIFFERENT bouncer is a different bot too. */
+    snprintf(b->url.base, sizeof(b->url.base), "https://other.example");
+    bot_dir_path(b, db, sizeof(db));
+    CHECK(strcmp(db, da) != 0);
+
+    /* An explicit bot.dir is honoured verbatim — sharing a brain across
+     * sessions is allowed, as long as it is asked for. */
+    snprintf(a->bot_dir, sizeof(a->bot_dir), "/tmp/shared-brain");
+    bot_dir_path(a, da, sizeof(da));
+    CHECK_STR(da, "/tmp/shared-brain");
+    free(a);
+    free(b);
+}
+
 int main(void) {
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
@@ -1038,6 +1115,8 @@ int main(void) {
     RUN(the_settings_listing_never_prints_the_token);
     RUN(a_nick_match_alone_is_never_the_owner);
     RUN(a_grant_is_per_person_and_per_tool);
+    RUN(a_memory_filename_is_built_not_taken);
+    RUN(two_identities_get_two_bot_directories);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
     return test_report();
 }

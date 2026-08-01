@@ -609,3 +609,86 @@ bool json_str_is(const json_value *v, const char *expect) {
     const char *s = json_string(v);
     return s && expect && strcmp(s, expect) == 0;
 }
+
+/* ── Writing ─────────────────────────────────────────────────────────── */
+
+/* Append `src` to out, returning false if it would not fit. */
+static bool put(char *out, size_t out_sz, size_t *n, const char *src, size_t len) {
+    if (*n + len + 1 > out_sz) return false;
+    memcpy(out + *n, src, len);
+    *n += len;
+    out[*n] = 0;
+    return true;
+}
+
+static bool put_string(char *out, size_t out_sz, size_t *n, const char *s, size_t len) {
+    if (!put(out, out_sz, n, "\"", 1)) return false;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        char esc[8];
+        size_t elen;
+        switch (c) {
+        case '"':  memcpy(esc, "\\\"", 2); elen = 2; break;
+        case '\\': memcpy(esc, "\\\\", 2); elen = 2; break;
+        case '\n': memcpy(esc, "\\n", 2); elen = 2; break;
+        case '\r': memcpy(esc, "\\r", 2); elen = 2; break;
+        case '\t': memcpy(esc, "\\t", 2); elen = 2; break;
+        default:
+            if (c < 0x20) {
+                elen = (size_t)snprintf(esc, sizeof(esc), "\\u%04x", c);
+            } else {
+                esc[0] = (char)c;
+                elen = 1;
+            }
+        }
+        if (!put(out, out_sz, n, esc, elen)) return false;
+    }
+    return put(out, out_sz, n, "\"", 1);
+}
+
+static bool write_value(const json_value *v, char *out, size_t out_sz, size_t *n) {
+    if (!v) return put(out, out_sz, n, "null", 4);
+    switch (v->type) {
+    case JSON_NULL:
+        return put(out, out_sz, n, "null", 4);
+    case JSON_BOOL:
+        return v->u.boolean ? put(out, out_sz, n, "true", 4) : put(out, out_sz, n, "false", 5);
+    case JSON_NUMBER: {
+        char buf[40];
+        double d = v->u.number;
+        int w = (d == (double)(long long)d && d < 1e18 && d > -1e18)
+                    ? snprintf(buf, sizeof(buf), "%lld", (long long)d)
+                    : snprintf(buf, sizeof(buf), "%.17g", d);
+        return w > 0 && put(out, out_sz, n, buf, (size_t)w);
+    }
+    case JSON_STRING:
+        return put_string(out, out_sz, n, v->u.string.ptr, v->u.string.len);
+    case JSON_ARRAY:
+        if (!put(out, out_sz, n, "[", 1)) return false;
+        for (size_t i = 0; i < v->u.array.count; i++) {
+            if (i && !put(out, out_sz, n, ",", 1)) return false;
+            if (!write_value(v->u.array.items[i], out, out_sz, n)) return false;
+        }
+        return put(out, out_sz, n, "]", 1);
+    case JSON_OBJECT:
+        if (!put(out, out_sz, n, "{", 1)) return false;
+        for (size_t i = 0; i < v->u.object.count; i++) {
+            if (i && !put(out, out_sz, n, ",", 1)) return false;
+            const char *k = v->u.object.keys[i];
+            if (!put_string(out, out_sz, n, k, strlen(k))) return false;
+            if (!put(out, out_sz, n, ":", 1)) return false;
+            if (!write_value(v->u.object.values[i], out, out_sz, n)) return false;
+        }
+        return put(out, out_sz, n, "}", 1);
+    }
+    return false;
+}
+
+bool json_write(const json_value *v, char *out, size_t out_sz) {
+    if (!out || !out_sz) return false;
+    size_t n = 0;
+    out[0] = 0;
+    if (write_value(v, out, out_sz, &n)) return true;
+    out[0] = 0; /* a truncated document is not a document */
+    return false;
+}

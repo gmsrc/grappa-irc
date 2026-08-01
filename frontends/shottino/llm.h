@@ -4,8 +4,11 @@
  *
  *   OPENAI      an OpenAI-compatible HTTP endpoint (url + token + model).
  *   CLAUDE_CLI  a LOCAL `claude` binary driven headless over pipes. No
- *               network of ours, no API key in our config — the CLI owns
- *               its own credentials in CLAUDE_CONFIG_DIR.
+ *               network of ours, no API key in our config, and NO config
+ *               of ours either: it runs under the user's own claude
+ *               configuration, exactly as if they had typed the command.
+ *               Every shottino on the machine therefore shares one
+ *               login, which is what the user already expects of it.
  *
  * This module is the PURE half: config text in, config struct out;
  * request bodies built; replies and stream frames parsed. No sockets, no
@@ -25,8 +28,12 @@
 #define LLM_MAX_URL 512
 #define LLM_MAX_TOKEN 512
 #define LLM_MAX_MODEL 128
-#define LLM_MAX_PROMPT 4096
+/* Big enough for an AGENT.md plus a handful of memory notes: the
+ * EFFECTIVE prompt is assembled per request and can dwarf a hand-typed
+ * one. It is never serialised back — what is saved is what the user set. */
+#define LLM_MAX_PROMPT 16384
 #define LLM_MAX_PATH 512
+#define LLM_MAX_TOOLS 256
 
 typedef enum {
     LLM_BACKEND_OPENAI = 0,
@@ -38,8 +45,14 @@ struct llm_config {
     char url[LLM_MAX_URL];     /* openai: base, e.g. https://api.openai.com/v1 */
     char token[LLM_MAX_TOKEN]; /* openai: bearer. NEVER rendered unredacted. */
     char model[LLM_MAX_MODEL];
-    char prompt[LLM_MAX_PROMPT];   /* system prompt */
-    char config_dir[LLM_MAX_PATH]; /* claude-cli: CLAUDE_CONFIG_DIR */
+    char prompt[LLM_MAX_PROMPT]; /* system prompt */
+    /* claude-cli: which of the CLI's OWN built-in tools to enable, as
+     * the CLI names them (e.g. "Read,WebSearch"). Empty — the default —
+     * means `--tools ''`: none at all, ours over MCP being the only ones
+     * it has. These run INSIDE the CLI and never reach shottino's
+     * approval gate, which is why "none" is the default and why the
+     * setter says so out loud. */
+    char cli_tools[LLM_MAX_TOOLS];
 };
 
 /* One turn of a conversation, in the order it happened. */
@@ -66,7 +79,7 @@ bool llm_config_parse(const char *text, struct llm_config *out);
 bool llm_config_serialize(const struct llm_config *cfg, char *out, size_t out_sz);
 
 /* Is this config usable? Openai needs url+model; claude-cli needs model
- * only (the binary and its credentials live outside our config).
+ * only (the binary and its credentials are the user's own).
  * `why` receives a one-line reason when false. */
 bool llm_config_ready(const struct llm_config *cfg, const char **why);
 
@@ -85,13 +98,6 @@ const char *llm_openai_reply(const json_value *root);
  * Caller frees. */
 char *llm_claude_stdin_frame(const char *text);
 
-/* One line of `--output-format stream-json`. Appends any text delta to
- * `out` (bounded), and sets `*done` when the turn's stop_reason arrives.
- * Returns false when the line is not JSON we recognise — which is normal
- * and not an error: the stream carries frames we do not consume. */
-bool llm_claude_stream_line(const char *line, char *out, size_t out_sz, size_t *used,
-                            bool *done);
-
 /* ── Tools ─────────────────────────────────────────────────────────────
  *
  * The definitions are DATA and live here, so the schema the model sees
@@ -109,6 +115,13 @@ typedef enum {
     LLM_TOOL_JOIN,
     LLM_TOOL_PART,
     LLM_TOOL_CTCP,
+    /* Writes to DISK, not to the network — and it is gated like a write
+     * for a sharper reason than the others: a memory is re-read as
+     * context on every later turn, so a note somebody talks the bot into
+     * keeping is influence that OUTLIVES the conversation that planted
+     * it. Of everything here it is the only tool whose effect is
+     * permanent. */
+    LLM_TOOL_REMEMBER,
     LLM_TOOL__COUNT
 } llm_tool_id;
 
@@ -139,6 +152,68 @@ struct llm_tool_call {
  * written (bounded by `max`). Zero means the model answered with text
  * instead, which is the normal case. */
 size_t llm_parse_tool_calls(const json_value *root, struct llm_tool_call *out, size_t max);
+
+/* ── Tools on the claude CLI: the MCP shim ─────────────────────────────
+ *
+ * `claude -p --tools ''` is not a limitation we can flag our way out of:
+ * --tools selects BUILT-IN tools by NAME, and no flag registers a
+ * function definition. MCP is the only injection point the CLI has, so
+ * the tools reach it as an MCP server — which shottino serves itself,
+ * re-executing its own binary as `shottino --mcp-shim`. One tool table,
+ * two transports; a second definition of the same tools in a second
+ * shape is a schema that drifts.
+ *
+ * The shim ADVERTISES and never executes. Executing would put the tool
+ * on the far side of a pipe from the app state and the approval gate,
+ * where nothing can ask the owner anything. Instead the caller stops the
+ * CLI the moment a tool_use block completes, runs the tool HERE under
+ * the gate, and re-prompts with the result — which is also how the
+ * openai path works, so there is one tool story and not two.
+ *
+ * (Learned from aisbf's claude provider, which solved this first.)
+ */
+#define LLM_MCP_SERVER "shottino"
+#define LLM_MCP_PREFIX "mcp__" LLM_MCP_SERVER "__"
+
+/* The CLI namespaces MCP tools; our handlers know the bare name. */
+const char *llm_mcp_strip_prefix(const char *name);
+
+/* The `tools` array in MCP tools/list shape (name/description/
+ * inputSchema), same allowlist rule as llm_tools_json. Caller frees. */
+char *llm_tools_mcp_json(bool writes_allowed);
+
+/* One line of JSON-RPC in, one line out. Returns false when no response
+ * is owed (a notification, or unparseable input) — the shim must stay
+ * silent then, not answer with an error to a request nobody made.
+ * `tools_json` is the tools/list array, spliced in verbatim. */
+bool llm_mcp_response(const char *line, const char *tools_json, char *out, size_t out_sz);
+
+/* ── Reading the CLI's stream ──────────────────────────────────────────
+ *
+ * Accumulates one turn: text deltas, and any tool_use blocks the model
+ * emits through the shim. `--include-partial-messages` is what makes
+ * both arrive — the arguments come as input_json_delta fragments keyed
+ * by content-block index, and `stop_reason` on message_delta is the only
+ * reliable marker that EVERY tool_use in the turn has landed. Stopping
+ * at the first one loses a parallel call. */
+#define LLM_MAX_TOOL_CALLS 4
+
+struct llm_claude_stream {
+    char *text; /* borrowed, NUL-terminated as it fills */
+    size_t text_sz;
+    size_t used;
+    bool done;
+    bool saw_delta_text; /* deltas win; the assistant echo is the same words */
+    struct llm_tool_call calls[LLM_MAX_TOOL_CALLS];
+    long block_of[LLM_MAX_TOOL_CALLS]; /* content-block index per call */
+    size_t ncalls;
+};
+
+void llm_claude_stream_init(struct llm_claude_stream *st, char *buf, size_t buf_sz);
+
+/* Returns false when the line is not JSON we recognise — normal, not an
+ * error: the stream carries frames we do not consume. */
+bool llm_claude_stream_feed(struct llm_claude_stream *st, const char *line);
 
 /* ── The /bot trust model (agreed 2026-08-01) ──────────────────────────
  *

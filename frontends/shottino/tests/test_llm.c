@@ -161,38 +161,149 @@ TEST(the_claude_stdin_frame_is_the_envelope_the_cli_reads) {
     free(f);
 }
 
+/* The CLI nests its partial-message events inside a `stream_event`
+ * envelope. Reading them at the top level finds NOTHING and yields a
+ * turn with no text and no tools — a silent wrong answer, so it is
+ * pinned here in the shape the CLI actually emits. */
 TEST(stream_json_accumulates_text_and_notices_the_end) {
-    char out[256] = "";
-    size_t used = 0;
-    bool done = false;
+    char buf[256];
+    struct llm_claude_stream st;
+    llm_claude_stream_init(&st, buf, sizeof(buf));
 
-    CHECK(llm_claude_stream_line(
-        "{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}",
-        out, sizeof(out), &used, &done));
-    CHECK(llm_claude_stream_line(
-        "{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}",
-        out, sizeof(out), &used, &done));
-    CHECK_STR(out, "Hello");
-    CHECK(!done);
+    CHECK(llm_claude_stream_feed(&st,
+        "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}}"));
+    CHECK(llm_claude_stream_feed(&st,
+        "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}}"));
+    CHECK_STR(buf, "Hello");
+    CHECK(!st.done);
 
     /* Frames we do not consume are NORMAL, not errors. */
-    CHECK(!llm_claude_stream_line("not json at all", out, sizeof(out), &used, &done));
-    CHECK_STR(out, "Hello");
+    CHECK(!llm_claude_stream_feed(&st, "not json at all"));
+    CHECK_STR(buf, "Hello");
+
+    /* The finished assistant message repeats what the deltas said. Once
+     * is the answer; twice is a model that looks like it stammers. */
+    CHECK(llm_claude_stream_feed(&st,
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}]}}"));
+    CHECK_STR(buf, "Hello");
 
     /* stop_reason on a message_delta ends the turn — the signal
      * --include-partial-messages exists to deliver. */
-    CHECK(llm_claude_stream_line(
-        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}", out, sizeof(out),
-        &used, &done));
-    CHECK(done);
+    CHECK(llm_claude_stream_feed(&st,
+        "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_delta\","
+        "\"delta\":{\"stop_reason\":\"end_turn\"}}}"));
+    CHECK(st.done);
+}
 
-    /* A result frame ends it too, for the turn that carries no delta. */
-    bool done2 = false;
-    size_t used2 = 0;
-    char out2[64] = "";
-    CHECK(llm_claude_stream_line("{\"type\":\"result\",\"subtype\":\"success\"}", out2,
-                                 sizeof(out2), &used2, &done2));
-    CHECK(done2);
+TEST(a_result_frame_carries_the_text_when_no_delta_did) {
+    char buf[64];
+    struct llm_claude_stream st;
+    llm_claude_stream_init(&st, buf, sizeof(buf));
+    CHECK(llm_claude_stream_feed(
+        &st, "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"the answer\"}"));
+    CHECK(st.done);
+    CHECK_STR(buf, "the answer");
+}
+
+TEST(a_tool_call_arrives_through_the_mcp_shim_by_either_route) {
+    /* Route one: built up from fragments, with the name namespaced by
+     * the CLI and the arguments split across input_json_delta frames. */
+    char buf[64];
+    struct llm_claude_stream st;
+    llm_claude_stream_init(&st, buf, sizeof(buf));
+    CHECK(llm_claude_stream_feed(&st,
+        "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":1,"
+        "\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\","
+        "\"name\":\"mcp__shottino__send_message\"}}}"));
+    CHECK(llm_claude_stream_feed(&st,
+        "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":1,"
+        "\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"target\\\":\"}}}"));
+    CHECK(llm_claude_stream_feed(&st,
+        "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":1,"
+        "\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"#room\\\"}\"}}}"));
+    CHECK(st.ncalls == 1);
+    CHECK_STR(st.calls[0].name, "send_message"); /* the prefix is the CLI's, not ours */
+    CHECK_STR(st.calls[0].arguments, "{\"target\":\"#room\"}");
+
+    /* Route two: the same call announced whole, `input` as an OBJECT and
+     * never a single delta. A model that emits small arguments in one
+     * piece takes this path — and the id says it is the SAME call, so it
+     * must not run twice. */
+    CHECK(llm_claude_stream_feed(&st,
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"tu_1\","
+        "\"name\":\"mcp__shottino__send_message\",\"input\":{\"target\":\"#other\"}}]}}"));
+    CHECK(st.ncalls == 1);
+    CHECK_STR(st.calls[0].arguments, "{\"target\":\"#room\"}"); /* the fragments won */
+
+    /* A different id IS a different call, and its object is serialised
+     * back to the text a handler reads. */
+    struct llm_claude_stream fresh;
+    char buf2[64];
+    llm_claude_stream_init(&fresh, buf2, sizeof(buf2));
+    CHECK(llm_claude_stream_feed(&fresh,
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"tu_9\","
+        "\"name\":\"mcp__shottino__names\",\"input\":{\"channel\":\"#c\",\"n\":2}}]}}"));
+    CHECK(fresh.ncalls == 1);
+    CHECK_STR(fresh.calls[0].name, "names");
+    CHECK_STR(fresh.calls[0].arguments, "{\"channel\":\"#c\",\"n\":2}");
+}
+
+/* The shim is the ONLY way a caller's tools reach `claude -p`: --tools
+ * selects built-ins by name and cannot register a definition. */
+TEST(the_mcp_shim_advertises_the_tools_and_executes_none) {
+    char out[8192];
+
+    CHECK(llm_mcp_response("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                           "\"params\":{\"protocolVersion\":\"2024-11-05\"}}",
+                           "[]", out, sizeof(out)));
+    CHECK(strstr(out, "\"id\":1") != NULL);
+    CHECK(strstr(out, "\"protocolVersion\":\"2024-11-05\"") != NULL);
+    CHECK(strstr(out, "shottino") != NULL);
+
+    char *tools = llm_tools_mcp_json(true);
+    CHECK(tools != NULL);
+    /* MCP spells the schema `inputSchema`; the openai array spells it
+     * `parameters`. Same table, two shapes. */
+    CHECK(strstr(tools, "\"inputSchema\"") != NULL);
+    CHECK(strstr(tools, "\"name\":\"send_message\"") != NULL);
+    CHECK(strstr(tools, "\"type\":\"function\"") == NULL);
+    CHECK(llm_mcp_response("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}", tools, out,
+                           sizeof(out)));
+    CHECK(strstr(out, "\"name\":\"send_message\"") != NULL);
+    free(tools);
+
+    /* Read-only advertises fewer, by the same rule as the openai array. */
+    char *ro = llm_tools_mcp_json(false);
+    CHECK(ro != NULL);
+    CHECK(strstr(ro, "\"name\":\"send_message\"") == NULL);
+    CHECK(strstr(ro, "\"name\":\"read_scrollback\"") != NULL);
+    free(ro);
+
+    /* A call is a LOST RACE, not a feature: shottino runs its own tools
+     * behind the approval gate. Answering isError puts the reason in the
+     * transcript instead of hanging the CLI on a request nobody answers. */
+    CHECK(llm_mcp_response("{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"method\":\"tools/call\","
+                           "\"params\":{\"name\":\"send_message\"}}",
+                           "[]", out, sizeof(out)));
+    CHECK(strstr(out, "\"id\":\"abc\"") != NULL); /* a string id stays a string */
+    CHECK(strstr(out, "\"isError\":true") != NULL);
+    CHECK(strstr(out, "did NOT happen") != NULL);
+
+    CHECK(llm_mcp_response("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}", "[]", out,
+                           sizeof(out)));
+    CHECK(strstr(out, "\"result\":{}") != NULL);
+
+    CHECK(llm_mcp_response("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"resources/list\"}", "[]",
+                           out, sizeof(out)));
+    CHECK(strstr(out, "-32601") != NULL);
+
+    /* A notification has no id and is owed no answer — replying to one
+     * is a protocol error, and the CLI sends several. */
+    CHECK(!llm_mcp_response("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", "[]",
+                            out, sizeof(out)));
+    CHECK(!llm_mcp_response("garbage", "[]", out, sizeof(out)));
 }
 
 TEST(a_write_tool_is_omitted_entirely_when_writes_are_not_allowed) {

@@ -104,4 +104,17 @@ bool json_bool_dflt(const json_value *obj, const char *key, bool dflt, bool *out
 /* Equality against a string literal — the `r.state !== "joined"` guard. */
 bool json_str_is(const json_value *v, const char *expect);
 
+/* ── Writing ───────────────────────────────────────────────────────────
+ * Compact serialisation of a parsed value back to JSON text. This reader
+ * grew a writer for one reason: a tool call's `input` arrives as an
+ * OBJECT, and a tool handler wants the arguments as TEXT. Re-serialising
+ * is the only way across, and doing it by hand at the call site is how a
+ * quoting bug gets written twice.
+ *
+ * Returns false (leaving `out` unusable) when the value does not fit —
+ * truncated JSON is not JSON, so a partial write is never reported as
+ * success. Numbers round-trip through %.17g and integers print without a
+ * decimal point. */
+bool json_write(const json_value *v, char *out, size_t out_sz);
+
 #endif /* SHOTTINO_JSON_H */
