@@ -1102,6 +1102,9 @@ struct app {
      * click-to-preview — which `/preview` provides from the keyboard
      * anyway. `/mouse on` opts back in. */
     bool mouse_enabled;
+    /* The event mask the terminal actually gave us; 0 means it gave
+     * nothing and no click will ever arrive. */
+    unsigned long mouse_granted;
     bool running;
     pthread_mutex_t lock;
     pthread_mutex_t jobs_lock;
@@ -6576,6 +6579,132 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
 
 }
 
+/* Draw whatever overlay is up, on top of everything else.
+ *
+ * A function rather than inline code because there are TWO draw paths
+ * that need it — the chat area and the panel — and the panel path
+ * returns early. Caller holds app->lock. */
+static void draw_overlay_locked(struct app *app, int rows, int cols, int main_x, int main_w) {
+if (app->overlay.kind == OVERLAY_RECORD) {
+    /* No list, no selection: a recording is a state, not a choice.
+     * The timer is the whole point — it is the only thing telling
+     * you the microphone is live. */
+    long secs = (monotonic_ms() - app->rec.started_ms) / 1000;
+    int box_w = 46;
+    if (box_w > main_w - 2) box_w = main_w - 2;
+    if (box_w < 24) box_w = 24;
+    int box_h = 3;
+    int box_x = main_x + (main_w - box_w) / 2;
+    int box_y = (rows - box_h) / 2;
+    if (box_x < 0) box_x = 0;
+    if (box_y < 0) box_y = 0;
+    for (int r = 0; r < box_h; r++) draw_fill(box_y + r, box_x, box_w, CP_ALT);
+    /* The dot blinks, because a static one reads as an icon and a
+     * blinking one reads as RUNNING. */
+    bool on = ((monotonic_ms() - app->rec.started_ms) / 500) % 2 == 0;
+    draw_text(box_y, box_x + 1, box_w - 2, CP_MENTION, A_BOLD, "%s recording %s  %ld:%02ld",
+              on ? "●" : " ", app->rec.video ? "video" : "voice", secs / 60, secs % 60);
+    draw_text(box_y + 1, box_x + 1, box_w - 2, CP_ACCENT, 0, "to %s", app->rec.channel);
+    if (app->rec.stopping)
+        draw_text(box_y + 2, box_x + 1, box_w - 2, CP_MUTED, A_DIM, "finishing…");
+    else
+        draw_text(box_y + 2, box_x + 1, box_w - 2, CP_MUTED, A_DIM,
+                  "Enter send · Esc discard · max %ds", RECORD_MAX_SECONDS);
+} else if (app->overlay.kind != OVERLAY_NONE) {
+    struct overlay_item items[64];
+    size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
+    /* A MODAL: centred, with a heading above and a key hint below.
+     * The pickers already had that shape, and one preference asked
+     * about is the same question with different answers. */
+    bool modal = app->overlay.kind == OVERLAY_SETTING;
+    bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA || modal;
+    /* Free text has no list, so the single row IS the field. */
+    bool typing = modal && n == 0;
+    int box_w = picker ? (main_w > 76 ? 76 : main_w - 2) : 34;
+    if (box_w > main_w - 2) box_w = main_w - 2;
+    if (box_w < 20) box_w = 20;
+    int list_h = (int)(n > 12 ? 12 : n);
+    if (list_h < 1) list_h = 1;
+    /* The field row, plus a line for the help text the table already
+     * carries — a modal that names a setting without saying what it
+     * does makes the user go and read /help. */
+    if (modal) list_h = typing ? 2 : list_h + 1;
+    int box_h = list_h + (picker ? 2 : 0);
+    int box_x = picker ? main_x + (main_w - box_w) / 2 : app->overlay.x;
+    int box_y = picker ? (rows - box_h) / 2 : app->overlay.y;
+    /* Clamped below, then written back: the click handler maps a row
+     * to an item from these, so they have to be where it ACTUALLY
+     * landed, not where it was asked to go. */
+    if (box_x + box_w > cols) box_x = cols - box_w;
+    if (box_x < 0) box_x = 0;
+    if (box_y + box_h > rows - 1) box_y = rows - 1 - box_h;
+    if (box_y < 0) box_y = 0;
+    if (app->overlay.sel >= n && n) app->overlay.sel = n - 1;
+    /* The window into the list follows the selection: a picker offers
+     * more entries than the box has rows, and a selection nobody can
+     * see is a selection nobody can trust. */
+    if (app->overlay.sel < app->overlay.top) app->overlay.top = app->overlay.sel;
+    if (app->overlay.sel >= app->overlay.top + (size_t)list_h)
+        app->overlay.top = app->overlay.sel - (size_t)list_h + 1;
+    if (app->overlay.top + (size_t)list_h > n)
+        app->overlay.top = n > (size_t)list_h ? n - (size_t)list_h : 0;
+    app->overlay.x = box_x;
+    app->overlay.y = box_y;
+    app->overlay.w = box_w;
+    app->overlay.h = box_h;
+
+    const struct setting_def *mdef = modal ? setting_find(app->overlay.setting) : NULL;
+    const char *verb = app->overlay.kind == OVERLAY_MEDIA
+                           ? (app->overlay.pick_action == ACT_VIEW ? "open" : "preview")
+                           : "reply to";
+    const char *empty = app->overlay.kind == OVERLAY_MEDIA ? "(no pictures or clips here)"
+                                                           : "(nothing to reply to)";
+    for (int row = 0; row < box_h; row++) draw_fill(box_y + row, box_x, box_w, CP_SELECTED);
+    int line_y = box_y;
+    if (modal) {
+        draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s",
+                  app->overlay.setting);
+        line_y++;
+        draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM, "%s",
+                  mdef ? mdef->help : "");
+        line_y++;
+    } else if (picker) {
+        draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s: %s%s", verb,
+                  app->overlay.filter, "_");
+        line_y++;
+    }
+    if (typing) {
+        /* The value being typed, with a cursor. It scrolls with the
+         * text rather than being clipped from the left, so the end
+         * you are editing is the end you can see. */
+        const char *val = app->overlay.edit;
+        int room = box_w - 4;
+        size_t vlen = strlen(val);
+        const char *shown = (int)vlen > room ? val + (vlen - (size_t)room) : val;
+        draw_fill(line_y, box_x, box_w, CP_MENTION);
+        draw_text(line_y, box_x + 1, box_w - 2, CP_MENTION, A_BOLD, "%s_", shown);
+        line_y++;
+    } else {
+        for (size_t i = 0; i < (size_t)(modal ? list_h - 1 : list_h); i++) {
+            size_t idx = app->overlay.top + i;
+            bool on = idx == app->overlay.sel;
+            draw_fill(line_y, box_x, box_w, on ? CP_MENTION : CP_SELECTED);
+            draw_text(line_y, box_x + 1, box_w - 2, on ? CP_MENTION : CP_SELECTED,
+                      on ? A_BOLD : 0, "%s", idx < n ? items[idx].label : empty);
+            line_y++;
+        }
+    }
+    if (modal)
+        draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
+                  typing ? "type the value | Enter save | Esc cancel"
+                         : "Up/Down | Enter choose | Esc cancel");
+    else if (picker)
+        draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
+                  "%zu/%zu | type to filter | Up/Down | Enter | Esc", n ? app->overlay.sel + 1 : 0,
+                  n);
+}
+}
+
 static void draw(struct app *app) {
     pthread_mutex_lock(&app->lock);
     erase();
@@ -6764,6 +6893,19 @@ static void draw(struct app *app) {
         int cursor_y = input_y;
         int cursor_x = main_x + 2;
         draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input, &cursor_y, &cursor_x);
+        /* An overlay belongs ON TOP of a panel, not instead of it.
+         *
+         * This path returns early — a panel replaces the chat area, so
+         * everything below is about panes it is covering — and the
+         * overlay drawing lives below. So a modal opened from the
+         * settings panel was opened correctly, kept its state correctly,
+         * took keys correctly, and was never drawn: right-click looked
+         * like it did nothing while the client was in fact waiting for
+         * an answer to a question the user could not see.
+         *
+         * The overlay is the one thing down there that is NOT about
+         * panes, so it comes along. */
+        draw_overlay_locked(app, rows, cols, main_x, main_w);
         move(cursor_y, cursor_x);
         pthread_mutex_unlock(&app->lock);
         refresh();
@@ -6867,124 +7009,7 @@ static void draw(struct app *app) {
 
     /* The overlay is drawn LAST and over everything: it is modal, and a
      * pane border crossing a menu would read as part of the menu. */
-    if (app->overlay.kind == OVERLAY_RECORD) {
-        /* No list, no selection: a recording is a state, not a choice.
-         * The timer is the whole point — it is the only thing telling
-         * you the microphone is live. */
-        long secs = (monotonic_ms() - app->rec.started_ms) / 1000;
-        int box_w = 46;
-        if (box_w > main_w - 2) box_w = main_w - 2;
-        if (box_w < 24) box_w = 24;
-        int box_h = 3;
-        int box_x = main_x + (main_w - box_w) / 2;
-        int box_y = (rows - box_h) / 2;
-        if (box_x < 0) box_x = 0;
-        if (box_y < 0) box_y = 0;
-        for (int r = 0; r < box_h; r++) draw_fill(box_y + r, box_x, box_w, CP_ALT);
-        /* The dot blinks, because a static one reads as an icon and a
-         * blinking one reads as RUNNING. */
-        bool on = ((monotonic_ms() - app->rec.started_ms) / 500) % 2 == 0;
-        draw_text(box_y, box_x + 1, box_w - 2, CP_MENTION, A_BOLD, "%s recording %s  %ld:%02ld",
-                  on ? "●" : " ", app->rec.video ? "video" : "voice", secs / 60, secs % 60);
-        draw_text(box_y + 1, box_x + 1, box_w - 2, CP_ACCENT, 0, "to %s", app->rec.channel);
-        if (app->rec.stopping)
-            draw_text(box_y + 2, box_x + 1, box_w - 2, CP_MUTED, A_DIM, "finishing…");
-        else
-            draw_text(box_y + 2, box_x + 1, box_w - 2, CP_MUTED, A_DIM,
-                      "Enter send · Esc discard · max %ds", RECORD_MAX_SECONDS);
-    } else if (app->overlay.kind != OVERLAY_NONE) {
-        struct overlay_item items[64];
-        size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
-        /* A MODAL: centred, with a heading above and a key hint below.
-         * The pickers already had that shape, and one preference asked
-         * about is the same question with different answers. */
-        bool modal = app->overlay.kind == OVERLAY_SETTING;
-        bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA || modal;
-        /* Free text has no list, so the single row IS the field. */
-        bool typing = modal && n == 0;
-        int box_w = picker ? (main_w > 76 ? 76 : main_w - 2) : 34;
-        if (box_w > main_w - 2) box_w = main_w - 2;
-        if (box_w < 20) box_w = 20;
-        int list_h = (int)(n > 12 ? 12 : n);
-        if (list_h < 1) list_h = 1;
-        /* The field row, plus a line for the help text the table already
-         * carries — a modal that names a setting without saying what it
-         * does makes the user go and read /help. */
-        if (modal) list_h = typing ? 2 : list_h + 1;
-        int box_h = list_h + (picker ? 2 : 0);
-        int box_x = picker ? main_x + (main_w - box_w) / 2 : app->overlay.x;
-        int box_y = picker ? (rows - box_h) / 2 : app->overlay.y;
-        /* Clamped below, then written back: the click handler maps a row
-         * to an item from these, so they have to be where it ACTUALLY
-         * landed, not where it was asked to go. */
-        if (box_x + box_w > cols) box_x = cols - box_w;
-        if (box_x < 0) box_x = 0;
-        if (box_y + box_h > rows - 1) box_y = rows - 1 - box_h;
-        if (box_y < 0) box_y = 0;
-        if (app->overlay.sel >= n && n) app->overlay.sel = n - 1;
-        /* The window into the list follows the selection: a picker offers
-         * more entries than the box has rows, and a selection nobody can
-         * see is a selection nobody can trust. */
-        if (app->overlay.sel < app->overlay.top) app->overlay.top = app->overlay.sel;
-        if (app->overlay.sel >= app->overlay.top + (size_t)list_h)
-            app->overlay.top = app->overlay.sel - (size_t)list_h + 1;
-        if (app->overlay.top + (size_t)list_h > n)
-            app->overlay.top = n > (size_t)list_h ? n - (size_t)list_h : 0;
-        app->overlay.x = box_x;
-        app->overlay.y = box_y;
-        app->overlay.w = box_w;
-        app->overlay.h = box_h;
-
-        const struct setting_def *mdef = modal ? setting_find(app->overlay.setting) : NULL;
-        const char *verb = app->overlay.kind == OVERLAY_MEDIA
-                               ? (app->overlay.pick_action == ACT_VIEW ? "open" : "preview")
-                               : "reply to";
-        const char *empty = app->overlay.kind == OVERLAY_MEDIA ? "(no pictures or clips here)"
-                                                               : "(nothing to reply to)";
-        for (int row = 0; row < box_h; row++) draw_fill(box_y + row, box_x, box_w, CP_SELECTED);
-        int line_y = box_y;
-        if (modal) {
-            draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s",
-                      app->overlay.setting);
-            line_y++;
-            draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM, "%s",
-                      mdef ? mdef->help : "");
-            line_y++;
-        } else if (picker) {
-            draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s: %s%s", verb,
-                      app->overlay.filter, "_");
-            line_y++;
-        }
-        if (typing) {
-            /* The value being typed, with a cursor. It scrolls with the
-             * text rather than being clipped from the left, so the end
-             * you are editing is the end you can see. */
-            const char *val = app->overlay.edit;
-            int room = box_w - 4;
-            size_t vlen = strlen(val);
-            const char *shown = (int)vlen > room ? val + (vlen - (size_t)room) : val;
-            draw_fill(line_y, box_x, box_w, CP_MENTION);
-            draw_text(line_y, box_x + 1, box_w - 2, CP_MENTION, A_BOLD, "%s_", shown);
-            line_y++;
-        } else {
-            for (size_t i = 0; i < (size_t)(modal ? list_h - 1 : list_h); i++) {
-                size_t idx = app->overlay.top + i;
-                bool on = idx == app->overlay.sel;
-                draw_fill(line_y, box_x, box_w, on ? CP_MENTION : CP_SELECTED);
-                draw_text(line_y, box_x + 1, box_w - 2, on ? CP_MENTION : CP_SELECTED,
-                          on ? A_BOLD : 0, "%s", idx < n ? items[idx].label : empty);
-                line_y++;
-            }
-        }
-        if (modal)
-            draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
-                      typing ? "type the value | Enter save | Esc cancel"
-                             : "Up/Down | Enter choose | Esc cancel");
-        else if (picker)
-            draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
-                      "%zu/%zu | type to filter | Up/Down | Enter | Esc", n ? app->overlay.sel + 1 : 0,
-                      n);
-    }
+    draw_overlay_locked(app, rows, cols, main_x, main_w);
     /* Reconcile the terminal's graphics placements with what this frame
      * actually drew.
      *
@@ -11265,7 +11290,14 @@ static void mouse_reporting(bool on) {
  * not consistently manage. */
 static void mouse_apply(struct app *app) {
     if (app->mouse_enabled) {
-        mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
+        /* What was actually GRANTED, not what was asked for. mousemask
+         * returns the mask it could set, and it returns 0 when the
+         * terminfo entry has no mouse capability at all — in which case
+         * every click silently does nothing and the client used to claim
+         * tracking was on regardless. */
+        mmask_t got = 0;
+        mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, &got);
+        app->mouse_granted = (unsigned long)got;
         mouseinterval(0);
         mouse_reporting(true);
     } else {
@@ -14149,6 +14181,27 @@ static const struct link_region *region_at_locked(struct app *app, int x, int y)
     return NULL;
 }
 
+/* Which preference row is at screen cell (x, y), or -1 for none.
+ *
+ * Tested against the BOX the last frame drew — both dimensions and the
+ * bottom edge — because testing the row alone counted a click on the
+ * sidebar or the status line as a click on whatever preference shared
+ * that screen row. Pulled out of the mouse handler so it can be checked
+ * without a terminal: "the click does nothing" has three possible
+ * causes, and this is the one that can be proved. Caller holds
+ * app->lock. */
+static int settings_row_at_locked(struct app *app, int x, int y) {
+    if (app->panel != PANEL_SETTINGS || !app->settings_shown) return -1;
+    if (app->panel_draw_h <= 0) return -1;
+    if (y < app->panel_draw_y || y >= app->panel_draw_y + app->panel_draw_h) return -1;
+    if (x < app->panel_draw_x0 || x > app->panel_draw_x1) return -1;
+    size_t line = app->panel_offset + (size_t)(y - app->panel_draw_y);
+    if (line < app->settings_row0) return -1;
+    size_t idx = line - app->settings_row0;
+    if (idx >= settings_count()) return -1;
+    return (int)idx;
+}
+
 /* Map a mouse event to a link region: motion updates the hover hint, a
  * left button press over a region acts on the link — a picture previews
  * in place, anything else opens in the browser. */
@@ -14268,13 +14321,10 @@ static void handle_mouse(struct app *app) {
              * on the roster, or on the status line below the panel as a
              * click on whatever preference shared that screen row, and
              * the draw path would then scroll to follow the selection. */
-            int first_y = app->panel_draw_y;
-            bool in_box = ev.y >= first_y && ev.y < first_y + app->panel_draw_h &&
-                          ev.x >= app->panel_draw_x0 && ev.x <= app->panel_draw_x1;
-            if (in_box) {
-                size_t line = app->panel_offset + (size_t)(ev.y - first_y);
-                if (line >= app->settings_row0 && line - app->settings_row0 < settings_count()) {
-                    app->settings_sel = line - app->settings_row0;
+            int row = settings_row_at_locked(app, ev.x, ev.y);
+            if (row >= 0) {
+                {
+                    app->settings_sel = (size_t)row;
                     /* RIGHT-click asks what this preference can be, and
                      * the answer comes from the same table /set
                      * validates against — a switch offers on and off, a

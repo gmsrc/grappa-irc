@@ -36,6 +36,20 @@ static void snap(char dst[MAX_H][MAX_W + 1], int rows, int cols) {
     }
 }
 
+/* Is `needle` anywhere on the rendered screen?
+ *
+ * Reads the virtual screen back through the same snap() the tail checks
+ * use. This is what tells "drawn" from "would be drawn" — the whole
+ * point of rendering to a real ncurses screen rather than asserting
+ * about the state that feeds it. */
+static bool screen_has(const char *needle) {
+    int rows = getmaxy(stdscr), cols = getmaxx(stdscr);
+    snap(full_rows, rows, cols);
+    for (int y = 0; y < rows && y < MAX_H; y++)
+        if (strstr(full_rows[y], needle)) return true;
+    return false;
+}
+
 /* The tail of a wrapped body, drawn from line `skip`, is the full draw's
  * lines `skip`.. — same break points, same cells. */
 static void check_text_tail(const char *s, int width, int height, int skip) {
@@ -1049,6 +1063,60 @@ TEST(the_decoder_says_what_animates_not_the_url) {
     rmdir(dir);
 }
 
+/* A modal opened over the settings panel must actually be DRAWN.
+ *
+ * The panel draw path ends in `refresh(); return;` — a panel replaces
+ * the chat area, so everything below it is about panes it is covering —
+ * and the overlay drawing lived below that return. So a modal opened
+ * from the settings panel was opened correctly, kept its state
+ * correctly and took keys correctly, and was never painted: right-click
+ * looked like it did nothing while the client sat waiting for an answer
+ * to a question nobody could see.
+ *
+ * Rendered to a real (offscreen) ncurses screen and read back, because
+ * that is the only way to tell "drawn" from "would be drawn". */
+TEST(a_modal_over_the_settings_panel_is_drawn) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+
+    app->panel = PANEL_SETTINGS;
+    panel_line(app, "settings");
+    panel_line(app, "%s", "");
+    panel_line(app, "preferences");
+    settings_rows(app);
+
+    /* No overlay yet. The panel LISTS llm.context as one of its rows, so
+     * the name proves nothing — the modal's key hint is what only the
+     * modal draws. */
+    erase();
+    draw(app);
+    CHECK(screen_has("mouse"));        /* the panel itself is there */
+    CHECK(!screen_has("Esc cancel"));  /* and no modal is */
+
+    /* Now open one, exactly as the right-click does. */
+    settings_open_modal(app, "llm.context");
+    erase();
+    draw(app);
+    /* The setting's name and its help both belong to the modal, and
+     * neither appears anywhere else on a settings panel row. */
+    CHECK(screen_has("llm.context"));
+    CHECK(screen_has("history rolls"));
+    CHECK(screen_has("Esc cancel"));
+
+    /* A choice setting shows its values rather than a field. */
+    overlay_close(app);
+    settings_open_modal(app, "media");
+    erase();
+    draw(app);
+    CHECK(screen_has("first-party"));
+    CHECK(screen_has("Enter choose"));
+
+    for (size_t i = 0; i < app->panel_line_count; i++) free(app->panel_lines[i]);
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    free(app);
+}
+
 int main(void) {
     FILE *sink = fopen("/dev/null", "w");
     if (!sink) {
@@ -1063,6 +1131,7 @@ int main(void) {
         fclose(sink);
         return 0;
     }
+    RUN(a_modal_over_the_settings_panel_is_drawn);
     RUN(wrapped_text_tail_matches_full_draw);
     RUN(message_line_tail_matches_full_draw);
     RUN(zero_skip_is_the_ordinary_draw);
