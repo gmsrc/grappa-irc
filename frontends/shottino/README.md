@@ -744,6 +744,20 @@ ever offers audio, since a candidate it cannot transcribe is a keypress wasted.
 A URL you typed yourself is never replaced: Tab starts a fresh cycle rather
 than discarding it.
 
+**Local transcription needs a model file.** `whisper.cpp` will not go looking
+for one: with no `-m` it tries `models/ggml-base.en.bin` relative to the working
+directory, fails to initialise and exits non-zero having printed nothing useful.
+shottino looks in the usual places and otherwise says so plainly:
+
+```sh
+/set stt.local_model ~/.local/share/whisper/ggml-base.bin
+```
+
+Get one from `huggingface.co/ggerganov/whisper.cpp` — `ggml-base.bin` is a
+reasonable start. Audio is converted to 16 kHz mono WAV with ffmpeg first,
+since that is the only thing whisper.cpp reads and anything posted in a channel
+is an m4a, an ogg or an mp3.
+
 **`/stt` is off by default**, and that is a decision rather than a shrug:
 turning it on means audio from this machine may leave it.
 

@@ -545,6 +545,11 @@ static void record_finish(struct app *app, bool send);
  * from the job loop too, since /upload, /voicemsg and /video all post
  * through the SAME function on the worker thread. */
 static const char *stt_local_binary(struct app *app);
+/* The whisper.cpp MODEL file: the setting if there is one, otherwise
+ * the places distributions and the project's own download script put
+ * them. Empty means none was found, which is a thing to SAY rather than
+ * a reason to run the binary and let it fail obscurely. */
+static void stt_local_model(struct app *app, char *out, size_t out_sz);
 /* The settings panel's editable rows come from the /set table, which is
  * declared further down beside the command that reads it. The count is a
  * function rather than a macro for the same reason: the table is not in
@@ -1008,6 +1013,10 @@ struct app {
     char stt_url[LLM_MAX_URL];
     char stt_token[LLM_MAX_TOKEN];
     char stt_model[LLM_MAX_MODEL];
+    /* The whisper.cpp model FILE for local transcription. Separate from
+     * stt.model, which names a model at the ENDPOINT — one is a path on
+     * this disk and the other is a string somebody else's API knows. */
+    char stt_local_model[LLM_MAX_PATH];
     char stt_local[128]; /* binary name; empty = look for the usual ones */
     /* An in-flight /voice or /video. MODAL: the recorder owns the
      * keyboard until Enter or Esc, because a recording that keeps
@@ -6600,6 +6609,13 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
         /* LOG_MEDIA_NONE only: a row the user HID stays hidden, and this
          * is the line that decides it — the claim is what would otherwise
          * bring the picture straight back on the next frame. */
+        /* AUDIO is not a picture. It was being claimed here like any
+         * other media, handed to the image decoder, and drawn as
+         * "[image could not be decoded]" under every voice message —
+         * a failure notice for something that was never going to have
+         * a frame. Clicking it still plays it; there is simply nothing
+         * to render. */
+        if (mk == MEDIA_AUDIO) mk = MEDIA_NONE;
         if (mi == LOG_MEDIA_NONE && mk != MEDIA_NONE && app->inline_media_enabled &&
             (app->inline_media_peers || url_is_first_party(app, url_tok))) {
             app->log_media[i] = media_claim_locked(app, url_tok, mk == MEDIA_VIDEO);
@@ -8919,6 +8935,7 @@ static const struct setting_def SETTINGS[] = {
     { "stt.token", SET_TEXT, NULL, "whisper endpoint bearer (never echoed, never shown)" },
     { "stt.model", SET_TEXT, NULL, "whisper model name (endpoint)" },
     { "stt.local", SET_TEXT, NULL, "local whisper binary; empty = whisper-cli or whisper" },
+    { "stt.local_model", SET_TEXT, NULL, "whisper.cpp model file (ggml-*.bin); needed for local" },
     { "voice.source", SET_TEXT, NULL, "/voicemsg capture, as ffmpeg format:input" },
     { "video.source", SET_TEXT, NULL, "/video camera, as ffmpeg format:input" },
     { "llm.prompt", SET_TEXT, NULL, "system prompt" },
@@ -8990,6 +9007,11 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "stt.token") == 0) llm_token_redacted(app->stt_token, out, out_sz);
     else if (strcmp(name, "stt.model") == 0)
         snprintf(out, out_sz, "%s", app->stt_model[0] ? app->stt_model : "whisper-1");
+    else if (strcmp(name, "stt.local_model") == 0) {
+        char m[LLM_MAX_PATH];
+        stt_local_model(app, m, sizeof(m));
+        snprintf(out, out_sz, "%.*s", (int)out_sz - 1, m[0] ? m : "(none found — local STT cannot run)");
+    }
     else if (strcmp(name, "stt.local") == 0) {
         const char *bin = stt_local_binary(app);
         snprintf(out, out_sz, "%s", app->stt_local[0] ? app->stt_local
@@ -9047,6 +9069,7 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "stt.token") == 0) src = app->stt_token;
     else if (strcmp(name, "stt.model") == 0) src = app->stt_model;
     else if (strcmp(name, "stt.local") == 0) src = app->stt_local;
+    else if (strcmp(name, "stt.local_model") == 0) src = app->stt_local_model;
     else if (strcmp(name, "voice.source") == 0) src = app->voice_source;
     else if (strcmp(name, "video.source") == 0) src = app->video_source;
     else if (strcmp(name, "bot.dir") == 0) src = app->bot_dir;
@@ -9212,6 +9235,9 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
         snprintf(app->stt_model, sizeof(app->stt_model), "%.*s", (int)sizeof(app->stt_model) - 1, value);
     else if (strcmp(def->name, "stt.local") == 0)
         snprintf(app->stt_local, sizeof(app->stt_local), "%.*s", (int)sizeof(app->stt_local) - 1, value);
+    else if (strcmp(def->name, "stt.local_model") == 0)
+        snprintf(app->stt_local_model, sizeof(app->stt_local_model), "%.*s",
+                 (int)sizeof(app->stt_local_model) - 1, value);
     else if (strcmp(def->name, "voice.source") == 0)
         snprintf(app->voice_source, sizeof(app->voice_source), "%.*s",
                  (int)sizeof(app->voice_source) - 1, value);
@@ -12937,6 +12963,29 @@ static char *stt_transcribe_remote(struct app *app, const char *path) {
 }
 
 /* Run a local whisper and read back what it wrote. Caller frees. */
+static void stt_local_model(struct app *app, char *out, size_t out_sz) {
+    out[0] = 0;
+    if (app->stt_local_model[0] && access(app->stt_local_model, R_OK) == 0) {
+        snprintf(out, out_sz, "%s", app->stt_local_model);
+        return;
+    }
+    const char *home = getenv("HOME");
+    char tries[6][LLM_MAX_PATH];
+    size_t n = 0;
+    if (home) {
+        snprintf(tries[n++], LLM_MAX_PATH, "%s/.local/share/whisper/ggml-base.bin", home);
+        snprintf(tries[n++], LLM_MAX_PATH, "%s/.cache/whisper/ggml-base.bin", home);
+    }
+    snprintf(tries[n++], LLM_MAX_PATH, "/usr/share/whisper.cpp/ggml-base.bin");
+    snprintf(tries[n++], LLM_MAX_PATH, "/usr/share/whisper/ggml-base.bin");
+    snprintf(tries[n++], LLM_MAX_PATH, "/usr/local/share/whisper.cpp/ggml-base.bin");
+    for (size_t i = 0; i < n; i++)
+        if (access(tries[i], R_OK) == 0) {
+            snprintf(out, out_sz, "%.*s", (int)out_sz - 1, tries[i]);
+            return;
+        }
+}
+
 static char *stt_transcribe_local(struct app *app, const char *path) {
     const char *bin = stt_local_binary(app);
     if (!bin) return NULL;
@@ -12952,8 +13001,35 @@ static char *stt_transcribe_local(struct app *app, const char *path) {
 
     /* whisper.cpp and openai-whisper share a name and nothing else. */
     bool cpp = strstr(bin, "whisper-cli") != NULL;
-    char *const cpp_argv[] = { (char *)bin, "-f",   (char *)path, "-otxt",
-                               "-of",       stem,   "-np",        NULL };
+    /* whisper.cpp needs a MODEL FILE and it will not go looking: with no
+     * -m it tries `models/ggml-base.en.bin` relative to the working
+     * directory, fails to initialise, and exits non-zero having printed
+     * nothing a user can act on. That is what "exited 3 / produced no
+     * transcript" was — not a bad recording, not an unsupported
+     * container, just no model. */
+    char model[LLM_MAX_PATH] = "";
+    stt_local_model(app, model, sizeof(model));
+    if (!model[0]) {
+        log_line(app, "/stt: %s has no model. Download one — for example "
+                      "ggml-base.bin from huggingface.co/ggerganov/whisper.cpp — and point "
+                      "/set stt.local_model at the file",
+                 bin);
+        return NULL;
+    }
+    /* And it reads 16 kHz mono WAV, nothing else. Anything posted in a
+     * channel is an m4a, an ogg or an mp3, so it is converted first —
+     * ffmpeg is already required for inline media. */
+    char wav[LLM_MAX_PATH * 2];
+    snprintf(wav, sizeof(wav), "%.*s/in16k.wav", (int)sizeof(wav) - 16, dir);
+    char *const conv[] = { "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i",
+                           (char *)path, "-ar",  "16000", "-ac", "1", "-c:a", "pcm_s16le",
+                           wav,          NULL };
+    if (run_cmd(conv, false) != 0 || access(wav, R_OK) != 0) {
+        log_line(app, "/stt: could not convert the audio to 16 kHz WAV (is ffmpeg installed?)");
+        return NULL;
+    }
+    char *const cpp_argv[] = { (char *)bin, "-m",    model, "-f",  wav,
+                               "-otxt",     "-of",   stem,  "-np", NULL };
     char *const py_argv[] = { (char *)bin,     (char *)path,  "--output_format", "txt",
                               "--output_dir",  dir,           "--fp16",          "False",
                               NULL };

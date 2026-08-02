@@ -1063,6 +1063,47 @@ TEST(the_decoder_says_what_animates_not_the_url) {
     rmdir(dir);
 }
 
+/* An audio link is clickable but never drawn as a picture.
+ *
+ * It was being claimed as inline media like any other URL, handed to
+ * the image decoder, and rendered as "[image could not be decoded]"
+ * under every voice message — a failure notice for something that was
+ * never going to have a frame. The link must survive: clicking plays
+ * it, and right-clicking offers to transcribe it. */
+TEST(audio_is_clickable_but_not_drawn) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    add_test_window(app, "azzurra", "#sniffo");
+    app->inline_media_enabled = true;
+    app->inline_media_peers = true;
+    seed_log(app, "[azzurra/#sniffo] 09:00 <a> https://ex.net/voice.m4a");
+
+    erase();
+    draw(app);
+
+    /* No slot was claimed for it, so nothing tries to decode it. */
+    bool claimed = false;
+    for (size_t i = 0; i < app->log_count; i++)
+        if (app->log_media[i] >= 0) claimed = true;
+    CHECK(!claimed);
+    CHECK(!screen_has("could not be decoded"));
+
+    /* But the link region is there, carrying its kind, so the pointer
+     * can still reach it. */
+    bool linked = false;
+    for (size_t i = 0; i < app->link_region_count; i++)
+        if (strstr(app->link_regions[i].url, "voice.m4a")) {
+            linked = true;
+            CHECK_LONG(app->link_regions[i].kind, MEDIA_AUDIO);
+        }
+    CHECK(linked);
+
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    free(app);
+}
+
 /* Every window in the sidebar gets a clickable row.
  *
  * Recorded by the DRAW pass, because the layout is the only thing that
@@ -1195,6 +1236,7 @@ int main(void) {
         fclose(sink);
         return 0;
     }
+    RUN(audio_is_clickable_but_not_drawn);
     RUN(the_sidebar_records_a_row_for_every_window);
     RUN(a_modal_over_the_settings_panel_is_drawn);
     RUN(wrapped_text_tail_matches_full_draw);
