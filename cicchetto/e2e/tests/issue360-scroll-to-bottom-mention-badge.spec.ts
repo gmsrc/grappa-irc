@@ -116,6 +116,33 @@ async function lineVisibleInPane(page: Page, needle: string): Promise<boolean> {
   }, needle);
 }
 
+// #653/#639 — tap the floating scroll-to-bottom button, tolerating the
+// snap-to-bottom unmount race. The button lives under `<Show when=
+// {!atBottomNow()}>` (ScrollbackPane), so it UNMOUNTS the instant the pane
+// reaches bottom. On the empty-badge tap a settling scroll from the prior
+// jump can flip `atBottomNow` true BETWEEN the visibility check and this
+// click — Playwright resolves the button, the node detaches mid-click, and
+// its built-in detach-retry then waits out the full 10s for a node that will
+// never remount. Re-resolve per attempt and treat an already-unmounted button
+// as the snap having landed (button gone == at bottom == the tap's own goal);
+// the post-tap assertions at the call site stay the source of truth for the
+// end state, so an early return can never mask a wrong one — a button that
+// vanished WITHOUT reaching bottom fails the distFromBottom poll that follows.
+async function tapScrollToBottom(page: Page, selector: string): Promise<void> {
+  const btn = page.locator(selector);
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    if ((await btn.count()) === 0) return;
+    try {
+      await btn.click({ timeout: 1_500 });
+      return;
+    } catch (err) {
+      if ((await btn.count()) === 0) return;
+      if (Date.now() >= deadline) throw err;
+    }
+  }
+}
+
 test.describe("#360 — mention-aware scroll-to-bottom badge", () => {
   test("badge counts mentions below the fold; tap jumps to the next mention, decrementing; empty-badge tap snaps to bottom", async ({
     page,
@@ -218,7 +245,9 @@ test.describe("#360 — mention-aware scroll-to-bottom badge", () => {
       await expect(page.locator(SCROLL_TO_BOTTOM)).toBeVisible();
 
       // Tap 3 (empty badge) → classic snap-to-bottom: newest line, button hides.
-      await page.locator(SCROLL_TO_BOTTOM).click({ timeout: 10_000 });
+      // Re-resolve-tolerant tap: the button unmounts the instant the snap
+      // reaches bottom, which a settling scroll can trigger mid-click (#653/#639).
+      await tapScrollToBottom(page, SCROLL_TO_BOTTOM);
       await expect
         .poll(async () => (await distFromBottom(page)) ?? 999, { timeout: 5_000 })
         .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
