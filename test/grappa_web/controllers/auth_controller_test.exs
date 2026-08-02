@@ -23,8 +23,10 @@ defmodule GrappaWeb.AuthControllerTest do
   import Mox
 
   alias Grappa.{Accounts, Accounts.Session, IRCServer, Repo, Visitors}
+  alias Grappa.Accounts.TOTP
   alias Grappa.AdmissionStateHelpers
   alias Grappa.Networks.Credential
+  alias Grappa.RateLimit.FailureWindow
   alias Grappa.Session.Server, as: SessionServer
   alias Grappa.Visitors.Visitor
 
@@ -65,6 +67,14 @@ defmodule GrappaWeb.AuthControllerTest do
 
   defp stop_visitor_session(visitor_id, network_id),
     do: :ok = Grappa.Session.stop_session({:visitor, visitor_id}, network_id)
+
+  defp arm_totp(user) do
+    enrollment = TOTP.new_enrollment(user, "Grappa test")
+    previous_step = System.system_time(:second) - 30
+    {:ok, code} = TOTP.code_at(enrollment.secret, previous_step)
+    {:ok, _} = TOTP.confirm_enrollment(user, enrollment.secret, code, previous_step)
+    enrollment.secret
+  end
 
   describe "POST /auth/login (mode-1 admin via email)" do
     test "valid credentials → 200 + token + subject{kind: user}", %{conn: conn} do
@@ -160,6 +170,139 @@ defmodule GrappaWeb.AuthControllerTest do
       body = json_response(conn, 200)
       session = Repo.get(Session, body["token"])
       assert session.client_id == client_id
+    end
+  end
+
+  describe "POST /auth/login + /auth/totp/verify" do
+    test "enrolled account gets challenge and no bearer before valid TOTP", %{conn: conn} do
+      {user, password} = user_fixture_with_password()
+      secret = arm_totp(user)
+
+      pending =
+        conn
+        |> post("/auth/login", %{
+          "identifier" => "#{user.name}@example.com",
+          "password" => password
+        })
+        |> json_response(202)
+
+      assert pending["two_factor_required"] == true
+      assert is_binary(pending["challenge_token"])
+      refute Map.has_key?(pending, "token")
+      assert session_count() == 0
+
+      {:ok, code} = TOTP.code_at(secret, System.system_time(:second))
+
+      body =
+        conn
+        |> post("/auth/totp/verify", %{
+          "challenge_token" => pending["challenge_token"],
+          "code" => code
+        })
+        |> json_response(200)
+
+      assert is_binary(body["token"])
+      assert body["subject"]["id"] == user.id
+      assert session_count() == 1
+    end
+
+    test "invalid TOTP never mints a bearer", %{conn: conn} do
+      {user, password} = user_fixture_with_password()
+      _ = arm_totp(user)
+
+      pending =
+        conn
+        |> post("/auth/login", %{"identifier" => user.name, "password" => password})
+        |> json_response(202)
+
+      rejected =
+        post(conn, "/auth/totp/verify", %{
+          "challenge_token" => pending["challenge_token"],
+          "code" => "000000"
+        })
+
+      assert json_response(rejected, 401) == %{"error" => "invalid_two_factor"}
+      assert session_count() == 0
+    end
+
+    test "challenge is bound to source client", %{conn: conn} do
+      {user, password} = user_fixture_with_password()
+      secret = arm_totp(user)
+
+      pending =
+        conn
+        |> put_req_header("x-grappa-client-id", "11111111-1111-4111-8111-111111111111")
+        |> post("/auth/login", %{"identifier" => user.name, "password" => password})
+        |> json_response(202)
+
+      {:ok, code} = TOTP.code_at(secret, System.system_time(:second))
+
+      rejected =
+        conn
+        |> put_req_header("x-grappa-client-id", "22222222-2222-4222-8222-222222222222")
+        |> post("/auth/totp/verify", %{
+          "challenge_token" => pending["challenge_token"],
+          "code" => code
+        })
+
+      assert json_response(rejected, 401) == %{"error" => "invalid_two_factor"}
+      assert session_count() == 0
+    end
+
+    test "valid TOTP clears its failure window", %{conn: conn} do
+      {user, password} = user_fixture_with_password()
+      secret = arm_totp(user)
+      key = {"127.0.0.1", user.id}
+
+      for _ <- 1..9, do: FailureWindow.record_failure(:totp_login, key, :timer.minutes(15))
+
+      pending =
+        conn
+        |> post("/auth/login", %{"identifier" => user.name, "password" => password})
+        |> json_response(202)
+
+      {:ok, code} = TOTP.code_at(secret, System.system_time(:second))
+
+      conn
+      |> post("/auth/totp/verify", %{
+        "challenge_token" => pending["challenge_token"],
+        "code" => code
+      })
+      |> json_response(200)
+
+      assert :ok = FailureWindow.check(:totp_login, key, 1)
+    end
+
+    test "replayed TOTP is rejected", %{conn: conn} do
+      {user, password} = user_fixture_with_password()
+      secret = arm_totp(user)
+      {:ok, code} = TOTP.code_at(secret, System.system_time(:second))
+
+      pending1 =
+        conn
+        |> post("/auth/login", %{"identifier" => user.name, "password" => password})
+        |> json_response(202)
+
+      assert conn
+             |> post("/auth/totp/verify", %{
+               "challenge_token" => pending1["challenge_token"],
+               "code" => code
+             })
+             |> json_response(200)
+
+      pending2 =
+        conn
+        |> post("/auth/login", %{"identifier" => user.name, "password" => password})
+        |> json_response(202)
+
+      replay =
+        post(conn, "/auth/totp/verify", %{
+          "challenge_token" => pending2["challenge_token"],
+          "code" => code
+        })
+
+      assert json_response(replay, 401) == %{"error" => "invalid_two_factor"}
+      assert session_count() == 1
     end
   end
 

@@ -46,12 +46,12 @@ defmodule Grappa.Accounts do
   """
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Ecto.Like, Grappa.Repo, Grappa.Visitors.Visitor],
-    exports: [User, Session, Wire, AdminWire]
+    deps: [Grappa.Ecto.Like, Grappa.EncryptedBinary, Grappa.Repo, Grappa.Visitors.Visitor],
+    exports: [User, Session, Wire, AdminWire, TOTP, TOTPRecoveryCode]
 
   import Ecto.Query
 
-  alias Grappa.Accounts.{Session, User}
+  alias Grappa.Accounts.{Session, TOTP, TOTPRecoveryCode, User}
   alias Grappa.Ecto.Like
   alias Grappa.Repo
   alias Grappa.Visitors.Visitor
@@ -579,6 +579,79 @@ defmodule Grappa.Accounts do
     )
 
     :ok
+  end
+
+  @doc "Revokes every live bearer for `user` except the current session."
+  @spec revoke_other_sessions_for_user(User.t(), Ecto.UUID.t()) :: :ok
+  def revoke_other_sessions_for_user(%User{id: user_id}, current_session_id)
+      when is_binary(current_session_id) do
+    query =
+      from(s in Session,
+        where: s.user_id == ^user_id and s.id != ^current_session_id and is_nil(s.revoked_at)
+      )
+
+    Repo.update_all(query, set: [revoked_at: DateTime.utc_now()])
+    :ok
+  end
+
+  @doc "Atomically enables TOTP and revokes every other bearer session."
+  @spec confirm_totp_enrollment(User.t(), Ecto.UUID.t(), String.t(), String.t(), integer()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def confirm_totp_enrollment(user, current_session_id, secret, code, unix_seconds) do
+    Repo.BusyRetry.run(fn ->
+      Repo.transaction(fn ->
+        confirm_totp_transaction(user, current_session_id, secret, code, unix_seconds)
+      end)
+    end)
+  end
+
+  @doc "Atomically disables TOTP and revokes every other bearer session."
+  @spec disable_totp(User.t(), Ecto.UUID.t(), String.t()) ::
+          {:ok, User.t()} | {:error, term()}
+  def disable_totp(user, current_session_id, password) do
+    if Argon2.verify_pass(password, user.password_hash) do
+      run_disable_totp_transaction(user, current_session_id)
+    else
+      {:error, :invalid_credentials}
+    end
+  end
+
+  defp confirm_totp_transaction(user, current_session_id, secret, code, unix_seconds) do
+    case TOTP.confirm_enrollment(user, secret, code, unix_seconds) do
+      {:ok, recovery_codes} ->
+        :ok = revoke_other_sessions_for_user(user, current_session_id)
+        recovery_codes
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
+  end
+
+  defp run_disable_totp_transaction(user, current_session_id) do
+    Repo.BusyRetry.run(fn ->
+      Repo.transaction(fn -> disable_totp_transaction(user, current_session_id) end)
+    end)
+  end
+
+  defp disable_totp_transaction(user, current_session_id) do
+    now = DateTime.utc_now()
+    user_query = from(u in User, where: u.id == ^user.id)
+
+    {1, _} =
+      Repo.update_all(
+        user_query,
+        set: [
+          totp_secret_encrypted: nil,
+          totp_enabled_at: nil,
+          totp_last_used_step: nil,
+          updated_at: now
+        ]
+      )
+
+    recovery_query = from(r in TOTPRecoveryCode, where: r.user_id == ^user.id)
+    Repo.delete_all(recovery_query)
+    :ok = revoke_other_sessions_for_user(user, current_session_id)
+    Repo.get!(User, user.id)
   end
 
   @doc """

@@ -45,6 +45,12 @@ defmodule Grappa.RateLimit.FailureWindow do
   @spec table_name() :: :rate_limit_failure_window
   def table_name, do: @table
 
+  @doc "Clears the live failure window for `(bucket, key)`."
+  @spec clear(atom(), term()) :: :ok
+  def clear(bucket, key) when is_atom(bucket) do
+    GenServer.call(__MODULE__, {:clear, {bucket, key}})
+  end
+
   @doc false
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_) do
@@ -121,6 +127,11 @@ defmodule Grappa.RateLimit.FailureWindow do
       end
 
     {:reply, count, state}
+  end
+
+  def handle_call({:clear, key}, _, state) do
+    true = :ets.delete(@table, key)
+    {:reply, :ok, state}
   end
 
   @spec live_count(key(), integer()) :: non_neg_integer()
