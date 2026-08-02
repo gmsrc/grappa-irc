@@ -2,7 +2,9 @@ defmodule GrappaWeb.Admin.SettingsControllerTest do
   use GrappaWeb.ConnCase, async: false
 
   import Grappa.AuthFixtures
+  import Mox
 
+  alias Grappa.Net.{SourceAliasManager, SourceAliasMock}
   alias Grappa.PubSub.Topic
   alias Grappa.{ServerSettings, WSPresence}
 
@@ -247,13 +249,27 @@ defmodule GrappaWeb.Admin.SettingsControllerTest do
     end
   end
 
-  describe "PUT /admin/settings — addressing (#543)" do
+  describe "PUT /admin/settings — addressing (#543/#609)" do
+    setup :set_mox_global
+    setup :verify_on_exit!
+
     setup do
       {_, session} = user_and_session(is_admin: true)
+
+      # The #609 set-time capability probe calls SourceAliasManager.arm/1, so a
+      # manager must be running. It is wired to the Mox adapter (no real
+      # ifconfig); a nil boot prefix skips the boot arm_check, and list_aliases
+      # is stubbed for the boot reconcile. Per-test arm_check expectations model
+      # the substrate's probe verdict.
+      stub(SourceAliasMock, :list_aliases, fn _ -> {:ok, []} end)
+      start_supervised!({SourceAliasManager, adapter: SourceAliasMock, prefix: nil})
+
       %{session: session}
     end
 
-    test "sets mode + prefix", %{conn: conn, session: session} do
+    test "sets mode + prefix after the probe arms", %{conn: conn, session: session} do
+      expect(SourceAliasMock, :arm_check, fn "2a03:4000:20:2d3:cb::/80" -> :ok end)
+
       conn =
         conn
         |> put_bearer(session.id)
@@ -269,6 +285,68 @@ defmodule GrappaWeb.Admin.SettingsControllerTest do
       assert addressing["static_mapping_prefix"] == "2a03:4000:20:2d3:cb::/80"
       assert ServerSettings.addressing_mode() == :static_mapping_with_reservations
       assert ServerSettings.static_mapping_prefix() == "2a03:4000:20:2d3:cb::/80"
+      # a successful set adopts the new prefix + arms without a reboot (B1).
+      assert SourceAliasManager.armed?() == true
+    end
+
+    test "422 addressing_unusable when the probe refuses — nothing is persisted",
+         %{conn: conn, session: session} do
+      expect(SourceAliasMock, :arm_check, fn _ -> {:error, :alias_not_permitted} end)
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "addressing" => %{
+            "mode" => "static_mapping_with_reservations",
+            "static_mapping_prefix" => "2a03:4000:20:2d3:cb::/80"
+          }
+        })
+
+      assert json_response(conn, 422) == %{
+               "error" => "addressing_unusable",
+               "reason" => "alias_not_permitted"
+             }
+
+      # a mode that cannot arm never reaches the DB.
+      assert ServerSettings.addressing_mode() == :pool_with_reservations
+      assert ServerSettings.static_mapping_prefix() == nil
+    end
+
+    test "422 addressing_unusable :no_static_prefix when enabling mode 2 with no prefix",
+         %{conn: conn, session: session} do
+      # arm_check is never reached — a nil prefix cannot arm (no Mox expect set).
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "addressing" => %{"mode" => "static_mapping_with_reservations"}
+        })
+
+      assert json_response(conn, 422) == %{
+               "error" => "addressing_unusable",
+               "reason" => "no_static_prefix"
+             }
+
+      assert ServerSettings.addressing_mode() == :pool_with_reservations
+    end
+
+    test "changing the prefix while mode 2 is active re-probes the NEW prefix",
+         %{conn: conn, session: session} do
+      :ok = ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
+      :ok = ServerSettings.put_static_mapping_prefix("2a03:4000:20:2d3:cb::/80")
+
+      expect(SourceAliasMock, :arm_check, fn "2a03:4000:20:2d3:ca::/80" -> :ok end)
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "addressing" => %{"static_mapping_prefix" => "2a03:4000:20:2d3:ca::/80"}
+        })
+
+      assert json_response(conn, 200)
+      assert ServerSettings.static_mapping_prefix() == "2a03:4000:20:2d3:ca::/80"
     end
 
     test "422 invalid_setting for an unknown mode", %{conn: conn, session: session} do
@@ -298,12 +376,17 @@ defmodule GrappaWeb.Admin.SettingsControllerTest do
     end
 
     test "applies upload AND addressing subtrees in one request", %{conn: conn, session: session} do
+      expect(SourceAliasMock, :arm_check, fn "2a03:4000:20:2d3:cb::/80" -> :ok end)
+
       conn =
         conn
         |> put_bearer(session.id)
         |> put("/admin/settings", %{
           "upload" => %{"active_host" => "litterbox"},
-          "addressing" => %{"mode" => "static_mapping_with_reservations"}
+          "addressing" => %{
+            "mode" => "static_mapping_with_reservations",
+            "static_mapping_prefix" => "2a03:4000:20:2d3:cb::/80"
+          }
         })
 
       assert %{

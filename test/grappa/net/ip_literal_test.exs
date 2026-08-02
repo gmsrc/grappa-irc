@@ -123,6 +123,27 @@ defmodule Grappa.Net.IpLiteralTest do
     end
   end
 
+  describe "network_address/1" do
+    test "returns the network base literal (host bits zeroed, no /len)" do
+      assert {:ok, "2a03:4000:20:2d3:cb::"} =
+               IpLiteral.network_address("2a03:4000:20:2d3:cb::/80")
+    end
+
+    test "masks host bits below the prefix length and canonicalizes the spelling" do
+      assert {:ok, "2a03:4000:20:2d3:cb::"} =
+               IpLiteral.network_address("2A03:4000:20:2D3:00CB:0:0:5/80")
+    end
+
+    test "handles a /128 (the base is the address itself)" do
+      assert {:ok, "2001:db8::1"} = IpLiteral.network_address("2001:db8::1/128")
+    end
+
+    test "rejects an IPv4 CIDR and a non-literal" do
+      assert :error = IpLiteral.network_address("192.0.2.0/24")
+      assert :error = IpLiteral.network_address("nope/64")
+    end
+  end
+
   describe "in_cidr6?/2" do
     test "true when the v6 address sits inside the prefix" do
       assert IpLiteral.in_cidr6?("2a03:4000:20:2d3:cb::1", "2a03:4000:20:2d3:cb::/80")

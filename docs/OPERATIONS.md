@@ -772,20 +772,49 @@ than egressing from the shared kernel-default source.
 
   The wrapper — not a bare `sudo ifconfig` — is the privilege boundary:
   it hard-codes `lo0` + `/128` and refuses any address outside the
-  configured prefix (its compiled `PREFIX=` default,
-  `2a03:4000:20:2d3:cb::/80` — MUST match
-  `ServerSettings.static_mapping_prefix`). **For a non-default block, edit
-  the `PREFIX=` line in the root-owned wrapper — do NOT `env_keep`
-  `GRAPPA_SOURCE_ALIAS_PREFIX` through sudoers.** The prefix is the
-  wrapper's privilege SCOPE; env-keeping it hands that scope to the
+  configured prefix. **The prefix is NOT compiled in (#609).** The wrapper
+  reads it from a ROOT-OWNED config file it FAILS CLOSED without:
+
+  ```
+  # /usr/local/etc/grappa/source-alias.conf   root:wheel, 0444
+  PREFIX=2a03:4000:20:2d3:cb::/80
+  ```
+
+  Render this file from `ServerSettings.static_mapping_prefix` as part of the
+  SAME deploy step that installs the wrapper + sudoers line, so the DB prefix
+  and the wrapper's scope cannot drift by hand — that drift is the #609 prod
+  incident (the wrapper still pinned `cb::/80` while the intended block was
+  `cafe::/80`, which was not even routed, so every acquire failed exit 65 and
+  sessions stayed held). A missing / unreadable / malformed file makes the
+  wrapper exit 66 (fail closed), never a wildcard fallback.
+
+  **Do NOT `env_keep GRAPPA_SOURCE_ALIAS_PREFIX` through sudoers.** The prefix
+  is the wrapper's privilege SCOPE; env-keeping it hands that scope to the
   (untrusted) grappa caller, so a compromised BEAM could set
   `GRAPPA_SOURCE_ALIAS_PREFIX=::/0` and `sudo` an alias for ANY address —
-  including the trusted `::ca` block — defeating the exact accountable-vs-
-  untrusted egress separation this feature enforces. sudo scrubs the env by
-  default, so the hard-coded root-owned `PREFIX=` is the only scope that
-  applies; keep it that way. `arm_check` probes the grant with `sudo -n
-  grappa-source-alias check`; a missing wrapper/grant leaves mode 2 disarmed
-  with reason `:wrapper_unavailable`.
+  including the trusted `::ca` block — defeating the accountable-vs-untrusted
+  egress separation this feature enforces. `sudo` scrubs the env by default, so
+  from the grappa caller only the config file applies; the env override exists
+  ONLY for a root-invoked / test call. Keep it that way.
+
+  **A VNET jail is REQUIRED.** `arm_check` no longer trusts a no-op grant probe
+  — it drives `sudo -n grappa-source-alias probe <canary>`, which adds then
+  deletes a canary address (the prefix's network base) to prove the substrate
+  can actually alias. A NON-VNET jail (shared host network stack, `ip6.addr`
+  pinned by the host) refuses `ifconfig ... alias` with EPERM, so mode 2
+  disarms with `:alias_not_permitted` instead of arming and then failing every
+  acquire. Give the jail its own VNET (`vnet` + an `epair`/interface in the
+  bastille/jail config) before enabling mode 2. Other disarm reasons:
+  `:wrapper_unavailable` (missing wrapper/grant), `:prefix_mismatch` (the
+  config-file prefix differs from the DB prefix — the canary is derived from
+  the DB prefix, so the wrapper refuses it), `:prefix_config_unavailable`
+  (missing/malformed config file).
+
+  These same probes run at settings-SET time: `PUT /admin/settings` selecting
+  mode 2 — or changing the prefix while mode 2 is active — runs the probe FIRST
+  and, on failure, returns **422 `addressing_unusable`** with the specific
+  reason and persists NOTHING, so an operator learns in the curl/UI response
+  rather than later from held sessions.
 - **Native Linux (`GRAPPA_SUBSTRATE=linux`).** No per-address alias —
   an AnyIP local route makes the whole block bindable at once. Provision
   BOTH (persist in your netplan/rc): `sysctl -w
@@ -797,6 +826,14 @@ than egressing from the shared kernel-default source.
   Bootstrap spawns sessions) the `SourceAliasManager` sweeps orphan
   aliases a crashed prior run left bound (`ifconfig lo0` on FreeBSD;
   no-op on Linux/AnyIP), so a hard crash does not leak `/128` aliases.
+- **Renumbering (changing the prefix) with LIVE mode-2 sessions leaks the
+  old aliases.** A successful `PUT /admin/settings` prefix change takes effect
+  at runtime (#609), but sessions already bound to the OLD prefix keep those
+  `/128` aliases (correct — an in-use source must not be removed), and neither
+  a later release nor the reconcile sweep (both scoped to the NEW prefix) can
+  reclaim them, so the old `lo0` aliases linger until a manual `ifconfig lo0
+  inet6 <old-addr>/128 -alias`. To renumber cleanly, disconnect mode-2 sessions
+  first (or accept the manual cleanup). A full live-renumber is not supported.
 
 **fail2ban gotcha.** fail2ban runs on the **host** (9 jails incl.
 `http-404`, `http-ratelimit`, `recidive`). A cic client looping on a

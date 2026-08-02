@@ -252,6 +252,28 @@ defmodule Grappa.ServerSettings do
   def static_mapping_prefix, do: get_raw(@key_static_mapping_prefix)
 
   @doc """
+  Validate + canonicalize a static-mapping prefix WITHOUT persisting.
+
+  The admin controller resolves the TARGET prefix this way to run the #609
+  capability probe BEFORE it decides whether to persist a mode-2 change (so an
+  unusable mode never reaches the DB). Same rule as `put_static_mapping_prefix/1`:
+  a strict IPv6 CIDR whose length is a 16-bit-group boundary, returned masked +
+  canonical. Any other input → `{:error, :invalid_prefix}`.
+  """
+  @spec validate_static_mapping_prefix(String.t()) :: {:ok, String.t()} | {:error, :invalid_prefix}
+  def validate_static_mapping_prefix(value) when is_binary(value) do
+    with {:ok, {_, len}} <- IpLiteral.parse_cidr6(value),
+         true <- len in @allowed_prefix_lengths,
+         {:ok, canonical} <- IpLiteral.canonicalize_cidr6(value) do
+      {:ok, canonical}
+    else
+      _ -> {:error, :invalid_prefix}
+    end
+  end
+
+  def validate_static_mapping_prefix(_), do: {:error, :invalid_prefix}
+
+  @doc """
   Pins the static-mapping derived-source prefix. Accepts a strict IPv6
   CIDR whose length is a 16-bit-group boundary (OperServ scan-width
   constraint: `64 | 80 | 96 | 112 | 128`); stores it masked + canonical.
@@ -259,18 +281,18 @@ defmodule Grappa.ServerSettings do
   """
   @spec put_static_mapping_prefix(String.t()) :: :ok | {:error, :invalid_prefix | :db_unavailable}
   def put_static_mapping_prefix(value) when is_binary(value) do
-    with {:ok, {_, len}} <- IpLiteral.parse_cidr6(value),
-         true <- len in @allowed_prefix_lengths,
-         {:ok, canonical} <- IpLiteral.canonicalize_cidr6(value) do
-      case put_raw(@key_static_mapping_prefix, canonical) do
-        :ok -> :ok
-        # A transient DB fault is backpressure, NOT a malformed prefix — keep
-        # it distinct so the controller surfaces a 503, never a 422 (#518).
-        {:error, :db_unavailable} = err -> err
-        {:error, _} -> {:error, :invalid_prefix}
-      end
-    else
-      _ -> {:error, :invalid_prefix}
+    case validate_static_mapping_prefix(value) do
+      {:ok, canonical} ->
+        case put_raw(@key_static_mapping_prefix, canonical) do
+          :ok -> :ok
+          # A transient DB fault is backpressure, NOT a malformed prefix — keep
+          # it distinct so the controller surfaces a 503, never a 422 (#518).
+          {:error, :db_unavailable} = err -> err
+          {:error, _} -> {:error, :invalid_prefix}
+        end
+
+      {:error, :invalid_prefix} = err ->
+        err
     end
   end
 
