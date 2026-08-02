@@ -298,7 +298,7 @@ TEST(the_mcp_shim_advertises_the_tools_and_executes_none) {
     CHECK(strstr(out, "\"protocolVersion\":\"2024-11-05\"") != NULL);
     CHECK(strstr(out, "shottino") != NULL);
 
-    char *tools = llm_tools_mcp_json(true);
+    char *tools = llm_tools_mcp_json(true, NULL);
     CHECK(tools != NULL);
     /* MCP spells the schema `inputSchema`; the openai array spells it
      * `parameters`. Same table, two shapes. */
@@ -311,7 +311,7 @@ TEST(the_mcp_shim_advertises_the_tools_and_executes_none) {
     free(tools);
 
     /* Read-only advertises fewer, by the same rule as the openai array. */
-    char *ro = llm_tools_mcp_json(false);
+    char *ro = llm_tools_mcp_json(false, NULL);
     CHECK(ro != NULL);
     CHECK(strstr(ro, "\"name\":\"send_message\"") == NULL);
     CHECK(strstr(ro, "\"name\":\"read_scrollback\"") != NULL);
@@ -343,7 +343,7 @@ TEST(the_mcp_shim_advertises_the_tools_and_executes_none) {
 }
 
 TEST(a_write_tool_is_omitted_entirely_when_writes_are_not_allowed) {
-    char *read_only = llm_tools_json(false);
+    char *read_only = llm_tools_json(false, NULL);
     CHECK(read_only != NULL);
     if (!read_only) return;
     /* Read tools are offered... */
@@ -358,7 +358,7 @@ TEST(a_write_tool_is_omitted_entirely_when_writes_are_not_allowed) {
     CHECK(strstr(read_only, "send_ctcp") == NULL);
     free(read_only);
 
-    char *full = llm_tools_json(true);
+    char *full = llm_tools_json(true, NULL);
     CHECK(full != NULL);
     if (!full) return;
     CHECK(strstr(full, "send_message") != NULL);
@@ -370,7 +370,7 @@ TEST(the_tools_array_is_valid_json_the_endpoint_will_accept) {
     /* A schema that does not parse is a 400 with no useful diagnostic,
      * and the feature simply "does not work". */
     for (int allowed = 0; allowed < 2; allowed++) {
-        char *tools = llm_tools_json(allowed != 0);
+        char *tools = llm_tools_json(allowed != 0, NULL);
         CHECK(tools != NULL);
         if (!tools) continue;
         json_doc *doc = json_parse(tools, strlen(tools), NULL, 0);
@@ -446,9 +446,9 @@ TEST(tool_calls_are_read_out_of_the_response) {
  * what it was, what it was talking to, or what it could do. */
 TEST(the_default_prompt_names_the_tools_it_actually_has) {
     static char full[8192], reads[8192], none[8192];
-    llm_default_prompt(full, sizeof(full), 1, false);
-    llm_default_prompt(reads, sizeof(reads), 0, true);
-    llm_default_prompt(none, sizeof(none), -1, false);
+    llm_default_prompt(full, sizeof(full), 1, false, NULL);
+    llm_default_prompt(reads, sizeof(reads), 0, true, NULL);
+    llm_default_prompt(none, sizeof(none), -1, false, NULL);
 
     /* The medium, in every version. */
     CHECK(strstr(full, "IRC") != NULL);
@@ -463,10 +463,48 @@ TEST(the_default_prompt_names_the_tools_it_actually_has) {
          * sentence says "remembering", which contains "remember". */
         char entry[128];
         snprintf(entry, sizeof(entry), "- %s:", t->name);
-        CHECK(strstr(full, entry) != NULL);                    /* writes allowed: all */
+        /* With no list configured, a tool appears exactly when its own
+         * default says so — read_file, glob, grep, write_file, shell and
+         * browser_control are off until asked for, and a prompt that
+         * named them would be offering what the model cannot call. */
+        if (!t->default_on) {
+            CHECK(strstr(full, entry) == NULL);
+            CHECK(strstr(reads, entry) == NULL);
+            continue;
+        }
+        CHECK(strstr(full, entry) != NULL);                    /* writes allowed: all of them */
         if (t->writes) CHECK(strstr(reads, entry) == NULL);    /* reads only: none of these */
         else CHECK(strstr(reads, entry) != NULL);
         CHECK(strstr(none, entry) == NULL);                    /* no tools: none at all */
+    }
+
+    /* An explicit list turns on exactly what it names, defaults and all
+     * — that is the whole point of the setting. */
+    static char picked[8192];
+    llm_default_prompt(picked, sizeof(picked), 1, false, "read_file,shell");
+    CHECK(strstr(picked, "- read_file:") != NULL);
+    CHECK(strstr(picked, "- shell:") != NULL);
+    CHECK(strstr(picked, "- read_scrollback:") == NULL); /* not named, so not offered */
+
+    /* And the same list governs the SCHEMA the model is sent, or the
+     * prompt would describe a set the request does not carry. */
+    char *json = llm_tools_json(true, "read_file,shell");
+    CHECK(json != NULL);
+    if (json) {
+        CHECK(strstr(json, "read_file") != NULL);
+        CHECK(strstr(json, "shell") != NULL);
+        CHECK(strstr(json, "read_scrollback") == NULL);
+        free(json);
+    }
+    /* The default set carries the IRC tools and the two web ones. */
+    json = llm_tools_json(true, NULL);
+    CHECK(json != NULL);
+    if (json) {
+        CHECK(strstr(json, "read_scrollback") != NULL);
+        CHECK(strstr(json, "web_fetch") != NULL);
+        CHECK(strstr(json, "web_search") != NULL);
+        CHECK(strstr(json, "shell") == NULL);
+        free(json);
     }
 
     /* The instruction that the tool loop exists to satisfy. */
@@ -490,7 +528,7 @@ TEST(an_empty_prompt_line_does_not_erase_the_default) {
 
     /* ...and empty is what the caller turns into the built-in. */
     static char built[8192];
-    llm_default_prompt(built, sizeof(built), 1, false);
+    llm_default_prompt(built, sizeof(built), 1, false, NULL);
     CHECK(built[0] != 0);
     CHECK(strstr(built, "shottino") != NULL);
 
@@ -499,7 +537,7 @@ TEST(an_empty_prompt_line_does_not_erase_the_default) {
      * not silently switch off the other. */
     static char mixed[8192];
     snprintf(mixed, sizeof(mixed), "%s", "Answer only in Italian.");
-    llm_tools_prompt(mixed + strlen(mixed), sizeof(mixed) - strlen(mixed), 1, false);
+    llm_tools_prompt(mixed + strlen(mixed), sizeof(mixed) - strlen(mixed), 1, false, NULL);
     CHECK(strstr(mixed, "Answer only in Italian.") != NULL);
     CHECK(strstr(mixed, "- read_scrollback:") != NULL);
     CHECK(strstr(mixed, "ANSWER IN WORDS") != NULL);

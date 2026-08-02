@@ -60,6 +60,15 @@ struct llm_config {
      * approval gate, which is why "none" is the default and why the
      * setter says so out loud. */
     char cli_tools[LLM_MAX_TOOLS];
+    /* Which of SHOTTINO'S OWN tools are offered, as a comma-separated
+     * list of names; empty means each tool's own default. One list for
+     * every backend, because the tools are implemented here and not
+     * borrowed from whatever the transport happens to provide. */
+    char tools[LLM_MAX_TOOLS];
+    /* Endpoints the outward-facing tools need, and have no sane default
+     * for: a search front-end, and a Chrome debug port. */
+    char search_url[LLM_MAX_URL];
+    char cdp_url[LLM_MAX_URL];
     /* The model's context window, in tokens. The client keeps the
      * conversation under a fraction of this (see LLM_CONTEXT_TARGET_PCT)
      * so the fixed parts — the system prompt and the tool declarations —
@@ -85,12 +94,14 @@ struct llm_turn {
  * `writes` matches the tool budget for the turn: -1 no tools, 0 read
  * only, 1 everything. `from_bot` adds the paragraph that only matters
  * when strangers can reach it. */
-void llm_default_prompt(char *out, size_t out_sz, int writes, bool from_bot);
+void llm_default_prompt(char *out, size_t out_sz, int writes, bool from_bot,
+                        const char *enabled);
 
 /* Just the tools half, for appending to a prompt the user wrote. A
  * custom prompt is about tone and task; which tools exist on this turn
  * is a fact about the turn, and both are needed. */
-void llm_tools_prompt(char *out, size_t out_sz, int writes, bool from_bot);
+void llm_tools_prompt(char *out, size_t out_sz, int writes, bool from_bot,
+                      const char *enabled);
 
 /* `key = value` per line, `#` comments, unknown keys IGNORED (a config
  * written by a newer build must not break an older one). Returns false
@@ -148,15 +159,46 @@ typedef enum {
      * it. Of everything here it is the only tool whose effect is
      * permanent. */
     LLM_TOOL_REMEMBER,
+    /* ── Tools that reach outside IRC ───────────────────────────────
+     *
+     * Implemented HERE rather than borrowed from the claude CLI's own
+     * set, so every backend gets them: an openai-compatible endpoint
+     * has no CLI to borrow from, and a feature that exists on one
+     * transport and not the other is a feature nobody can rely on.
+     *
+     * They are also why `enabled` exists. Reading a URL is not the same
+     * risk as reading a file, and neither is the same as running a
+     * command — so each carries its own default and the user turns on
+     * what they want. */
+    LLM_TOOL_WEB_FETCH,
+    LLM_TOOL_WEB_SEARCH,
+    LLM_TOOL_READ_FILE,
+    LLM_TOOL_GLOB,
+    LLM_TOOL_GREP,
+    LLM_TOOL_WRITE_FILE,
+    LLM_TOOL_SHELL,
+    LLM_TOOL_BROWSER,
     LLM_TOOL__COUNT
 } llm_tool_id;
 
 struct llm_tool_def {
     const char *name;
     bool writes; /* drives the approval gate; read tools never prompt */
+    /* On unless the user says otherwise. The IRC tools are what this
+     * client is FOR, so they are on; the ones that touch the filesystem
+     * or run a command are off until asked for, because "the model can
+     * read my files" is a decision and not a default. */
+    bool default_on;
     const char *description;
     const char *params; /* JSON Schema for the arguments object */
 };
+
+/* Is `name` in the user's enabled list?
+ *
+ * `enabled` is the llm.tools setting: a comma-separated list of tool
+ * names, or empty for "the defaults". One list governs every tool this
+ * client implements, whichever backend is carrying them. */
+bool llm_tool_enabled(const char *enabled, const struct llm_tool_def *t);
 
 const struct llm_tool_def *llm_tool(llm_tool_id id);
 const struct llm_tool_def *llm_tool_by_name(const char *name);
@@ -165,7 +207,7 @@ const struct llm_tool_def *llm_tool_by_name(const char *name);
  * `writes_allowed` is false the WRITE tools are omitted ENTIRELY rather
  * than advertised-and-refused: a tool the model cannot see is a tool it
  * cannot be argued into trying. */
-char *llm_tools_json(bool writes_allowed);
+char *llm_tools_json(bool writes_allowed, const char *enabled);
 
 /* One parsed tool call from a response. */
 struct llm_tool_call {
@@ -206,7 +248,7 @@ const char *llm_mcp_strip_prefix(const char *name);
 
 /* The `tools` array in MCP tools/list shape (name/description/
  * inputSchema), same allowlist rule as llm_tools_json. Caller frees. */
-char *llm_tools_mcp_json(bool writes_allowed);
+char *llm_tools_mcp_json(bool writes_allowed, const char *enabled);
 
 
 /* One line of JSON-RPC in, one line out. Returns false when no response

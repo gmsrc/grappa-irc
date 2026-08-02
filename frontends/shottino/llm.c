@@ -28,7 +28,8 @@
  * terse in Italian still needs to know it can read a channel. Leaving
  * it out meant a custom prompt silently disabled the tools in the only
  * place it matters — the model's own idea of what it can do. */
-void llm_tools_prompt(char *out, size_t out_sz, int writes, bool from_bot) {
+void llm_tools_prompt(char *out, size_t out_sz, int writes, bool from_bot,
+                      const char *enabled) {
     size_t n = 0;
     out[0] = 0;
     if (from_bot)
@@ -49,6 +50,7 @@ void llm_tools_prompt(char *out, size_t out_sz, int writes, bool from_bot) {
     for (llm_tool_id id = 0; id < LLM_TOOL__COUNT && n + 128 < out_sz; id++) {
         const struct llm_tool_def *t = llm_tool(id);
         if (!t || (t->writes && writes < 1)) continue;
+        if (!llm_tool_enabled(enabled, t)) continue;
         n += (size_t)snprintf(out + n, out_sz - n, "- %s: %s\n", t->name, t->description);
     }
     if (writes < 1 && n + 200 < out_sz)
@@ -64,7 +66,8 @@ void llm_tools_prompt(char *out, size_t out_sz, int writes, bool from_bot) {
 /* The whole built-in prompt: how to answer, then what it can do. Used
  * when nothing is configured; the second half is used on its own when
  * something is. */
-void llm_default_prompt(char *out, size_t out_sz, int writes, bool from_bot) {
+void llm_default_prompt(char *out, size_t out_sz, int writes, bool from_bot,
+                        const char *enabled) {
     size_t n = (size_t)snprintf(out, out_sz,
         "You are the assistant built into shottino, a terminal IRC client. You are talking to "
         "its user through a chat window.\n\n"
@@ -74,7 +77,7 @@ void llm_default_prompt(char *out, size_t out_sz, int writes, bool from_bot) {
         "- Be brief. A few short lines. Long answers are truncated before they are shown, and in "
         "a channel they are flood-kill material.\n"
         "- Never invent what somebody said. If you did not read it, say you did not.\n");
-    if (n < out_sz) llm_tools_prompt(out + n, out_sz - n, writes, from_bot);
+    if (n < out_sz) llm_tools_prompt(out + n, out_sz - n, writes, from_bot, enabled);
 }
 
 
@@ -161,6 +164,12 @@ bool llm_config_parse(const char *text, struct llm_config *out) {
         else if (strcmp(key, "model") == 0) set_field(out->model, sizeof(out->model), val);
         else if (strcmp(key, "cli_tools") == 0)
             set_field(out->cli_tools, sizeof(out->cli_tools), val);
+        else if (strcmp(key, "tools") == 0)
+            set_field(out->tools, sizeof(out->tools), val);
+        else if (strcmp(key, "search_url") == 0)
+            set_field(out->search_url, sizeof(out->search_url), val);
+        else if (strcmp(key, "cdp_url") == 0)
+            set_field(out->cdp_url, sizeof(out->cdp_url), val);
         else if (strcmp(key, "context") == 0)
             out->context_tokens = (int)strtol(val, NULL, 10);
         else if (strcmp(key, "prompt") == 0)
@@ -182,10 +191,14 @@ bool llm_config_serialize(const struct llm_config *cfg, char *out, size_t out_sz
                      "token = %s\n"
                      "model = %s\n"
                      "cli_tools = %s\n"
+                     "tools = %s\n"
+                     "search_url = %s\n"
+                     "cdp_url = %s\n"
                      "context = %d\n"
                      "prompt = %s\n",
                      cfg->backend == LLM_BACKEND_CLAUDE_CLI ? "claude-cli" : "openai", cfg->url,
-                     cfg->token, cfg->model, cfg->cli_tools,
+                     cfg->token, cfg->model, cfg->cli_tools, cfg->tools, cfg->search_url,
+                     cfg->cdp_url,
                      cfg->context_tokens > 0 ? cfg->context_tokens : LLM_CONTEXT_DEFAULT, prompt);
     return n > 0 && (size_t)n < out_sz;
 }
@@ -231,7 +244,7 @@ void llm_token_redacted(const char *token, char *out, size_t out_sz) {
  * caveat. */
 static const struct llm_tool_def TOOLS[LLM_TOOL__COUNT] = {
     [LLM_TOOL_READ_SCROLLBACK] =
-        { "read_scrollback", false,
+        { "read_scrollback", false, true,
           "Read the most recent lines of a channel or query window you are already in, "
           "oldest first, ending with the newest. Use this before answering a question "
           "about what was said, and read again rather than trusting an earlier read.",
@@ -241,41 +254,112 @@ static const struct llm_tool_def TOOLS[LLM_TOOL__COUNT] = {
           "(default 60, max 400)\"}},"
           "\"required\":[\"target\"]}" },
     [LLM_TOOL_LIST_WINDOWS] =
-        { "list_windows", false,
+        { "list_windows", false, true,
           "List the channels and queries this client currently has open, with their networks.",
           "{\"type\":\"object\",\"properties\":{}}" },
     [LLM_TOOL_NAMES] =
-        { "names", false, "List the people currently in a channel.",
+        { "names", false, true, "List the people currently in a channel.",
           "{\"type\":\"object\",\"properties\":{"
           "\"channel\":{\"type\":\"string\"}},\"required\":[\"channel\"]}" },
     [LLM_TOOL_SEND] =
-        { "send_message", true,
+        { "send_message", true, true,
           "Say something in a channel or query. Everyone in it will read it. "
           "Keep it to one or two short lines.",
           "{\"type\":\"object\",\"properties\":{"
           "\"target\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},"
           "\"required\":[\"target\",\"text\"]}" },
     [LLM_TOOL_JOIN] =
-        { "join_channel", true, "Join a channel.",
+        { "join_channel", true, true, "Join a channel.",
           "{\"type\":\"object\",\"properties\":{"
           "\"channel\":{\"type\":\"string\"}},\"required\":[\"channel\"]}" },
     [LLM_TOOL_PART] =
-        { "part_channel", true, "Leave a channel.",
+        { "part_channel", true, true, "Leave a channel.",
           "{\"type\":\"object\",\"properties\":{"
           "\"channel\":{\"type\":\"string\"}},\"required\":[\"channel\"]}" },
     [LLM_TOOL_CTCP] =
-        { "send_ctcp", true, "Send a CTCP query (for example PING or VERSION) to somebody.",
+        { "send_ctcp", true, true, "Send a CTCP query (for example PING or VERSION) to somebody.",
           "{\"type\":\"object\",\"properties\":{"
           "\"target\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"},"
           "\"argument\":{\"type\":\"string\"}},\"required\":[\"target\",\"verb\"]}" },
     [LLM_TOOL_REMEMBER] =
-        { "remember", true,
+        { "remember", true, true,
           "Keep a short note for later. Notes are re-read at the start of every "
           "future conversation, so write facts worth keeping, not chatter.",
           "{\"type\":\"object\",\"properties\":{"
           "\"title\":{\"type\":\"string\"},\"note\":{\"type\":\"string\"}},"
           "\"required\":[\"title\",\"note\"]}" },
+    [LLM_TOOL_WEB_FETCH] =
+        { "web_fetch", false, true,
+          "Fetch a web page or API over http/https and return its text, tags stripped. "
+          "Use it to look something up rather than guessing.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"url\":{\"type\":\"string\",\"description\":\"http:// or https:// URL\"}},"
+          "\"required\":[\"url\"]}" },
+    [LLM_TOOL_WEB_SEARCH] =
+        { "web_search", false, true,
+          "Search the web and return the top results. Needs a search endpoint configured "
+          "(llm.search_url); say so plainly if it is not.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}" },
+    [LLM_TOOL_READ_FILE] =
+        { "read_file", false, false,
+          "Read a text file from this machine. Off by default; the user has to enable it.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}" },
+    [LLM_TOOL_GLOB] =
+        { "glob", false, false,
+          "List files matching a shell glob, for example /home/me/*.txt. Off by default.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"pattern\":{\"type\":\"string\"}},\"required\":[\"pattern\"]}" },
+    [LLM_TOOL_GREP] =
+        { "grep", false, false,
+          "Search for a fixed string in a file and return the matching lines with their "
+          "numbers. Off by default.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"path\":{\"type\":\"string\"},\"pattern\":{\"type\":\"string\"}},"
+          "\"required\":[\"path\",\"pattern\"]}" },
+    [LLM_TOOL_WRITE_FILE] =
+        { "write_file", true, false,
+          "Write a text file on this machine, replacing what is there. Off by default, and "
+          "asks the owner every time.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"path\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},"
+          "\"required\":[\"path\",\"text\"]}" },
+    [LLM_TOOL_BROWSER] =
+        { "browser_control", true, false,
+          "Drive a running Chrome/Chromium that was started with --remote-debugging-port. "
+          "Actions: `list` the open tabs, `open` a URL in a new tab, `close` a tab by id. "
+          "Off by default; needs llm.cdp_url set to the browser's debug endpoint.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"action\":{\"type\":\"string\",\"description\":\"list | open | close\"},"
+          "\"url\":{\"type\":\"string\",\"description\":\"for open\"},"
+          "\"target\":{\"type\":\"string\",\"description\":\"tab id, for close\"}},"
+          "\"required\":[\"action\"]}" },
+    [LLM_TOOL_SHELL] =
+        { "shell", true, false,
+          "Run a shell command on this machine and return its output. Off by default, and "
+          "asks the owner every time. Anything you can do here you do as the user.",
+          "{\"type\":\"object\",\"properties\":{"
+          "\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}" },
 };
+
+bool llm_tool_enabled(const char *enabled, const struct llm_tool_def *t) {
+    if (!t || !t->name) return false;
+    /* Empty list means "the defaults", which is what a fresh install
+     * and an unset preference both look like. */
+    if (!enabled || !enabled[0]) return t->default_on;
+    size_t n = strlen(t->name);
+    for (const char *p = enabled; *p;) {
+        while (*p == ' ' || *p == ',') p++;
+        const char *end = p;
+        while (*end && *end != ',') end++;
+        size_t len = (size_t)(end - p);
+        while (len && p[len - 1] == ' ') len--;
+        if (len == n && strncmp(p, t->name, n) == 0) return true;
+        p = *end ? end + 1 : end;
+    }
+    return false;
+}
 
 const struct llm_tool_def *llm_tool(llm_tool_id id) {
     if (id < 0 || id >= LLM_TOOL__COUNT) return NULL;
@@ -300,7 +384,7 @@ const char *llm_mcp_strip_prefix(const char *name) {
  * names; writing them out twice is how the schema the model sees on one
  * backend drifts from the other, and a drifted schema fails inside the
  * model's reasoning where nothing can see it. */
-static char *tools_json_shape(bool writes_allowed, bool mcp) {
+static char *tools_json_shape(bool writes_allowed, bool mcp, const char *enabled) {
     size_t cap = 8192;
     char *buf = malloc(cap);
     if (!buf) return NULL;
@@ -315,6 +399,10 @@ static char *tools_json_shape(bool writes_allowed, bool mcp) {
          * attempting — and a refusal it can see is an invitation to
          * argue about. */
         if (TOOLS[i].writes && !writes_allowed) continue;
+        /* And only what the user has turned on. A tool the model cannot
+         * see is a tool it cannot be argued into trying — the same
+         * reasoning that hides the write tools when writes are off. */
+        if (!llm_tool_enabled(enabled, &TOOLS[i])) continue;
         w = mcp ? snprintf(buf + used, cap - used,
                            "%s{\"name\":\"%s\",\"description\":\"%s\","
                            "\"inputSchema\":%s}",
@@ -332,8 +420,12 @@ static char *tools_json_shape(bool writes_allowed, bool mcp) {
     return buf;
 }
 
-char *llm_tools_json(bool writes_allowed) { return tools_json_shape(writes_allowed, false); }
-char *llm_tools_mcp_json(bool writes_allowed) { return tools_json_shape(writes_allowed, true); }
+char *llm_tools_json(bool writes_allowed, const char *enabled) {
+    return tools_json_shape(writes_allowed, false, enabled);
+}
+char *llm_tools_mcp_json(bool writes_allowed, const char *enabled) {
+    return tools_json_shape(writes_allowed, true, enabled);
+}
 
 
 /* Defined with the request bodies below; the shim needs it too, and a

@@ -454,8 +454,39 @@ that advertises the same tool table. Same tools, same handlers, same approval
 gate — the shim only *advertises*, and every call is executed here, where the
 app state and the gate are.
 
-The CLI's own built-in tools default to **`WebFetch,WebSearch`** — the two that
-read the world and change nothing in it. To change the set:
+**The CLI's own tools are not used at all** — `--tools ''`. Everything the model
+is offered is implemented in shottino and registered over MCP, so an
+openai-compatible endpoint gets exactly the same set. A capability that exists
+on one transport and not the other is one nobody can build on, and the CLI's
+built-ins never passed shottino's approval gate.
+
+The tools, and whether they are on without asking:
+
+| tool | default | what it does |
+| --- | --- | --- |
+| `read_scrollback`, `list_windows`, `names` | **on** | read the client's own windows |
+| `send_message`, `join_channel`, `part_channel`, `send_ctcp` | **on** (asks) | act on IRC |
+| `remember` | **on** (asks) | keep a note for later |
+| `web_fetch` | **on** | fetch a URL and return its text, tags stripped |
+| `web_search` | **on** | needs `llm.search_url` |
+| `read_file`, `glob`, `grep` | off | read this machine |
+| `write_file`, `shell` | off (asks) | change this machine |
+| `browser_control` | off (asks) | drive a Chrome started with `--remote-debugging-port`; needs `llm.cdp_url` |
+
+`/set llm.tools <names>` names exactly which are offered; empty means each
+tool's own default. The write tools still ask the owner every time, and a tool
+that is off is not advertised at all — a tool the model cannot see is one it
+cannot be argued into trying.
+
+```sh
+/set llm.tools                                   # the defaults
+/set llm.tools read_scrollback,web_fetch,shell   # exactly these
+/set llm.search_url https://searx.example/search?q=%s
+/set llm.cdp_url    http://127.0.0.1:9222
+```
+
+The legacy `llm.cli_tools` setting still exists and still names the CLI's own
+built-ins, but nothing is passed to `--tools` any more; leave it empty.
 
 ```sh
 /set llm.cli_tools WebFetch,WebSearch          # the default

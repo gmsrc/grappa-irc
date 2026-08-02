@@ -41,6 +41,7 @@
 #include <sys/stat.h>
 #include <limits.h>
 #include <dirent.h>
+#include <glob.h>
 
 #include "alias.h"
 #include "http.h"
@@ -7184,7 +7185,7 @@ static char *llm_openai_body_with_tools(const struct llm_config *cfg, const stru
                                         size_t n, int writes) {
     char *base = llm_openai_body(cfg, turns, n);
     if (!base || writes < 0) return base;
-    char *tools = llm_tools_json(writes > 0);
+    char *tools = llm_tools_json(writes > 0, cfg->tools);
     if (!tools) return base;
     size_t len = strlen(base);
     /* base ends with "}" — replace it with ,"tools":[…]} */
@@ -7242,7 +7243,7 @@ static char *llm_call_claude_cli(struct app *app, const struct llm_config *cfg,
         if (mkdtemp(workdir)) {
             snprintf(tools_file, sizeof(tools_file), "%s/tools.json", workdir);
             snprintf(mcp_config, sizeof(mcp_config), "%s/mcp.json", workdir);
-            char *tools = llm_tools_mcp_json(writes > 0);
+            char *tools = llm_tools_mcp_json(writes > 0, cfg->tools);
             FILE *tf = tools ? fopen(tools_file, "w") : NULL;
             if (tf) {
                 fputs(tools, tf);
@@ -7315,24 +7316,20 @@ static char *llm_call_claude_cli(struct app *app, const struct llm_config *cfg,
         argv[a++] = "--permission-prompt-tool"; argv[a++] = "stdio";
         argv[a++] = "--verbose";
         argv[a++] = "--dangerously-skip-permissions";
-        /* The CLI's OWN built-in tools, and EMPTY means none.
+        /* NONE of the CLI's own tools, ever.
          *
-         * An earlier version passed "ToolSearch" here whenever the list
-         * was empty, on the belief that `--tools ''` emptied the whole
-         * registry including the MCP tools. That was a misdiagnosis: the
-         * symptom it was working around — the model told our server was
-         * "still connecting" — had a different cause entirely, a
-         * trailing newline in the tools file that split the JSON-RPC
-         * reply across two lines. With that fixed, `--tools ''` behaves
-         * as documented and as the reference implementation relies on:
-         * built-ins off, MCP tools unaffected.
+         * Everything the model is offered is implemented in shottino and
+         * registered over MCP, so an openai-compatible endpoint gets
+         * exactly the same set — a capability that exists on one
+         * transport and not the other is one nobody can build on. It
+         * also puts every tool behind the same approval gate, which the
+         * CLI's built-ins never passed.
          *
-         * WebFetch and WebSearch are on by default because they read the
-         * world and change nothing in it. Everything else the CLI offers
-         * runs INSIDE the CLI, where shottino's approval gate cannot see
-         * it, which is why the rest are opt-in. */
+         * web_fetch, web_search, read_file, glob, grep, write_file,
+         * shell and browser_control are ours now; llm.tools says which
+         * are offered. */
         argv[a++] = "--tools";
-        argv[a++] = cfg->cli_tools;
+        argv[a++] = "";
         argv[a++] = "--include-partial-messages";
         argv[a++] = "--no-session-persistence";
         if (mcp_config[0]) {
@@ -7967,6 +7964,62 @@ static void bot_effective_prompt(struct app *app, char *out, size_t out_sz) {
     bot_memories_append(app, out, out_sz);
 }
 
+struct fetch_result {
+    int status;
+    char *body;
+    size_t len;
+    char location[MAX_LINE];
+    char content_type[128];
+};
+static bool http_fetch(struct app *app, const char *url, struct fetch_result *out);
+static void fetch_result_free(struct fetch_result *r);
+
+/* Markup out, words in.
+ *
+ * A model asked to read a page wants the page, and the markup is most
+ * of the bytes — a tool result capped at 16 KiB that spends 15 of them
+ * on <div> is a tool that fetched nothing useful. Script and style
+ * bodies go entirely; everything else keeps its text, with runs of
+ * whitespace collapsed so the result reads as prose rather than as an
+ * indentation diagram. Deliberately not an HTML parser: this feeds a
+ * language model, which is the one consumer that copes with a rough
+ * job. Caller frees. */
+static void utf8_trim_partial_tail(char *s);
+
+static char *html_to_text(const char *html) {
+    size_t n = strlen(html);
+    char *out = malloc(n + 1);
+    if (!out) return NULL;
+    size_t w = 0;
+    bool space = true; /* leading whitespace is dropped */
+    for (size_t i = 0; i < n;) {
+        if (html[i] == '<') {
+            /* A whole <script>/<style> element, contents and all. */
+            const char *skip = NULL;
+            if (strncasecmp(html + i, "<script", 7) == 0) skip = "</script";
+            else if (strncasecmp(html + i, "<style", 6) == 0) skip = "</style";
+            if (skip) {
+                const char *end = strcasestr(html + i, skip);
+                i = end ? (size_t)(end - html) : n;
+            }
+            while (i < n && html[i] != '>') i++;
+            if (i < n) i++;
+            if (!space && w) { out[w++] = ' '; space = true; }
+            continue;
+        }
+        unsigned char c = (unsigned char)html[i++];
+        if (c == '\r' || c == '\n' || c == '\t' || c == ' ') {
+            if (!space && w) { out[w++] = ' '; space = true; }
+            continue;
+        }
+        out[w++] = (char)c;
+        space = false;
+    }
+    while (w && out[w - 1] == ' ') w--;
+    out[w] = 0;
+    return out;
+}
+
 static char *tool_execute(struct app *app, const struct llm_req *req,
                           const struct llm_tool_call *call, const char *on_behalf_of) {
     const struct llm_tool_def *def = llm_tool_by_name(call->name);
@@ -8045,6 +8098,175 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
         pthread_mutex_unlock(&app->lock);
         return xasprintf("%s", out[0] ? out : "(nothing in that window)");
     }
+    /* ── Tools that reach outside IRC ───────────────────────────────
+     *
+     * Implemented HERE, not borrowed from the claude CLI's built-in
+     * set, so that an openai-compatible endpoint gets exactly the same
+     * ones. A capability that exists on one transport and not the other
+     * is a capability nobody can build on. */
+    if (strcmp(call->name, "web_fetch") == 0) {
+        char url[MAX_LINE];
+        if (!tool_arg(call->arguments, "url", url, sizeof(url)))
+            return xasprintf("error: url is required");
+        if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0)
+            return xasprintf("error: only http:// and https:// URLs");
+        struct fetch_result r;
+        if (!http_fetch(app, url, &r) || !r.body)
+            return xasprintf("error: could not fetch %.120s", url);
+        /* Tags out, text in. A model asked to read a page should get the
+         * page, not its markup — and the markup is most of the bytes. */
+        char *text = html_to_text(r.body);
+        fetch_result_free(&r);
+        char *out = xasprintf("%.*s", (int)LLM_TOOL_RESULT_BYTES - 512, text ? text : "");
+        free(text);
+        return out;
+    }
+    if (strcmp(call->name, "web_search") == 0) {
+        char q[MAX_LINE];
+        if (!tool_arg(call->arguments, "query", q, sizeof(q)))
+            return xasprintf("error: query is required");
+        if (!app->llm.search_url[0])
+            return xasprintf("error: no search endpoint. The owner sets one with "
+                             "/set llm.search_url <url with %%s where the query goes>, for "
+                             "example a SearxNG instance");
+        char *enc = url_encode(q);
+        char url[LLM_MAX_URL + MAX_LINE];
+        /* The template names where the query goes, so any search
+         * front-end the user can reach works without shottino knowing
+         * anything about it. */
+        const char *pct = strstr(app->llm.search_url, "%s");
+        if (pct)
+            snprintf(url, sizeof(url), "%.*s%s%s", (int)(pct - app->llm.search_url),
+                     app->llm.search_url, enc, pct + 2);
+        else
+            snprintf(url, sizeof(url), "%s%s", app->llm.search_url, enc);
+        free(enc);
+        struct fetch_result r;
+        if (!http_fetch(app, url, &r) || !r.body)
+            return xasprintf("error: search endpoint did not answer");
+        char *text = html_to_text(r.body);
+        fetch_result_free(&r);
+        char *out = xasprintf("%.*s", (int)LLM_TOOL_RESULT_BYTES - 512, text ? text : "");
+        free(text);
+        return out;
+    }
+    if (strcmp(call->name, "read_file") == 0) {
+        char path[LLM_MAX_PATH];
+        if (!tool_arg(call->arguments, "path", path, sizeof(path)))
+            return xasprintf("error: path is required");
+        FILE *f = fopen(path, "r");
+        if (!f) return xasprintf("error: cannot read %.200s: %s", path, strerror(errno));
+        static char buf[LLM_TOOL_RESULT_BYTES - 512];
+        size_t got = fread(buf, 1, sizeof(buf) - 1, f);
+        bool more = !feof(f);
+        fclose(f);
+        buf[got] = 0;
+        utf8_trim_partial_tail(buf);
+        return xasprintf("%s%s", buf, more ? "\n[…truncated]" : "");
+    }
+    if (strcmp(call->name, "glob") == 0) {
+        char pat[LLM_MAX_PATH];
+        if (!tool_arg(call->arguments, "pattern", pat, sizeof(pat)))
+            return xasprintf("error: pattern is required");
+        glob_t g;
+        memset(&g, 0, sizeof(g));
+        if (glob(pat, GLOB_MARK, NULL, &g) != 0) {
+            globfree(&g);
+            return xasprintf("(no matches)");
+        }
+        static char out[LLM_TOOL_RESULT_BYTES - 512];
+        size_t n = 0;
+        out[0] = 0;
+        for (size_t i = 0; i < g.gl_pathc && n + 256 < sizeof(out); i++)
+            n += (size_t)snprintf(out + n, sizeof(out) - n, "%s\n", g.gl_pathv[i]);
+        size_t total = g.gl_pathc;
+        globfree(&g);
+        return xasprintf("%zu match(es)\n%s", total, out);
+    }
+    if (strcmp(call->name, "grep") == 0) {
+        char path[LLM_MAX_PATH], pat[MAX_LINE];
+        if (!tool_arg(call->arguments, "path", path, sizeof(path)) ||
+            !tool_arg(call->arguments, "pattern", pat, sizeof(pat)))
+            return xasprintf("error: path and pattern are required");
+        FILE *f = fopen(path, "r");
+        if (!f) return xasprintf("error: cannot read %.200s: %s", path, strerror(errno));
+        static char out[LLM_TOOL_RESULT_BYTES - 512];
+        size_t n = 0, hits = 0, lineno = 0;
+        out[0] = 0;
+        char line[MAX_LINE];
+        while (fgets(line, sizeof(line), f) && n + 512 < sizeof(out)) {
+            lineno++;
+            if (!strstr(line, pat)) continue;
+            line[strcspn(line, "\r\n")] = 0;
+            n += (size_t)snprintf(out + n, sizeof(out) - n, "%zu: %.400s\n", lineno, line);
+            hits++;
+        }
+        fclose(f);
+        return xasprintf("%zu matching line(s)\n%s", hits, out);
+    }
+    if (strcmp(call->name, "write_file") == 0) {
+        char path[LLM_MAX_PATH];
+        if (!tool_arg(call->arguments, "path", path, sizeof(path)) ||
+            !tool_arg(call->arguments, "text", text, sizeof(text)))
+            return xasprintf("error: path and text are required");
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        if (fd < 0) return xasprintf("error: cannot write %.200s: %s", path, strerror(errno));
+        size_t len = strlen(text);
+        ssize_t w = write(fd, text, len);
+        close(fd);
+        if (w < 0 || (size_t)w != len) return xasprintf("error: short write to %.200s", path);
+        return xasprintf("wrote %zu bytes to %s", len, path);
+    }
+    if (strcmp(call->name, "shell") == 0) {
+        char cmd[MAX_LINE];
+        if (!tool_arg(call->arguments, "command", cmd, sizeof(cmd)))
+            return xasprintf("error: command is required");
+        /* Through the same door /exec uses, so there is one place where
+         * "run a command" is implemented and one place to look when it
+         * misbehaves. It runs as the user, which is why the tool is off
+         * by default and asks every time. */
+        struct job job = { .kind = JOB_EXEC };
+        snprintf(job.arg1, sizeof(job.arg1), "%s", cmd);
+        snprintf(job.network, sizeof(job.network), "%s", req->network);
+        snprintf(job.channel, sizeof(job.channel), "%s", req->channel);
+        enqueue_job(app, job);
+        return xasprintf("running `%.200s` — its output lands in the window, not here", cmd);
+    }
+    if (strcmp(call->name, "browser_control") == 0) {
+        char action[32];
+        if (!tool_arg(call->arguments, "action", action, sizeof(action)))
+            return xasprintf("error: action is required");
+        if (!app->llm.cdp_url[0])
+            return xasprintf("error: no browser. The owner sets one with /set llm.cdp_url "
+                             "http://127.0.0.1:9222 after starting Chrome with "
+                             "--remote-debugging-port=9222");
+        char url[LLM_MAX_URL + MAX_LINE];
+        if (strcmp(action, "list") == 0)
+            snprintf(url, sizeof(url), "%s/json/list", app->llm.cdp_url);
+        else if (strcmp(action, "open") == 0) {
+            char page[MAX_LINE];
+            if (!tool_arg(call->arguments, "url", page, sizeof(page)))
+                return xasprintf("error: open needs a url");
+            char *enc = url_encode(page);
+            snprintf(url, sizeof(url), "%s/json/new?%s", app->llm.cdp_url, enc);
+            free(enc);
+        } else if (strcmp(action, "close") == 0) {
+            char id[128];
+            if (!tool_arg(call->arguments, "target", id, sizeof(id)))
+                return xasprintf("error: close needs a target id");
+            char *enc = url_encode(id);
+            snprintf(url, sizeof(url), "%s/json/close/%s", app->llm.cdp_url, enc);
+            free(enc);
+        } else {
+            return xasprintf("error: action must be list, open or close");
+        }
+        struct fetch_result r;
+        if (!http_fetch(app, url, &r) || !r.body)
+            return xasprintf("error: no answer from %.120s", app->llm.cdp_url);
+        char *out = xasprintf("%.*s", (int)LLM_TOOL_RESULT_BYTES - 512, r.body);
+        fetch_result_free(&r);
+        return out;
+    }
     if (strcmp(call->name, "send_message") == 0) {
         if (!tool_arg(call->arguments, "target", target, sizeof(target)) ||
             !tool_arg(call->arguments, "text", text, sizeof(text)))
@@ -8114,7 +8336,8 @@ static void llm_run(struct app *app, const struct llm_req *req) {
                            app->bot_writes_ok)     ? 1
                                                    : 0;
     if (!cfg.prompt[0]) {
-        llm_default_prompt(cfg.prompt, sizeof(cfg.prompt), prompt_writes, req->from_bot);
+        llm_default_prompt(cfg.prompt, sizeof(cfg.prompt), prompt_writes, req->from_bot,
+                           cfg.tools);
     } else {
         /* A custom prompt replaces the STYLE, never the facts. Which
          * tools exist on this turn is a fact, and a prompt about tone
@@ -8123,7 +8346,7 @@ static void llm_run(struct app *app, const struct llm_req *req) {
         size_t have = strlen(cfg.prompt);
         if (have + 512 < sizeof(cfg.prompt))
             llm_tools_prompt(cfg.prompt + have, sizeof(cfg.prompt) - have, prompt_writes,
-                             req->from_bot);
+                             req->from_bot, cfg.tools);
     }
     if (req->from_bot) {
         bot_effective_prompt(app, cfg.prompt, sizeof(cfg.prompt));
@@ -8442,7 +8665,7 @@ static size_t llm_tokens_of(const char *s) { return s ? (strlen(s) + 3) / 4 : 0;
  * the system prompt, the tool declarations, and room for an answer. */
 static size_t llm_fixed_cost(struct app *app, const struct llm_config *cfg, int writes) {
     size_t fixed = llm_tokens_of(cfg->prompt);
-    char *tools = writes >= 0 ? llm_tools_json(writes > 0) : NULL;
+    char *tools = writes >= 0 ? llm_tools_json(writes > 0, app->llm.tools) : NULL;
     fixed += llm_tokens_of(tools);
     free(tools);
     (void)app;
@@ -8605,6 +8828,9 @@ static const struct setting_def SETTINGS[] = {
     { "llm.cli_tools", SET_TEXT, NULL,
       "claude-cli: its OWN built-in tools to enable (empty = none)" },
     { "llm.context", SET_TEXT, NULL, "context window in tokens; history rolls to fit 80% of it" },
+    { "llm.tools", SET_TEXT, NULL, "which of shottino's tools the model gets (empty = defaults)" },
+    { "llm.search_url", SET_TEXT, NULL, "web_search endpoint; %s is where the query goes" },
+    { "llm.cdp_url", SET_TEXT, NULL, "browser_control: Chrome debug endpoint, e.g. http://127.0.0.1:9222" },
     { "bot.dir", SET_TEXT, NULL, "where AGENT.md and the bot's notes live" },
     { "stt.enabled", SET_BOOL, NULL, "/stt speech to text (off: nothing is transcribed)" },
     { "stt.url", SET_TEXT, NULL, "whisper endpoint base; empty = local whisper only" },
@@ -8658,6 +8884,14 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "llm.context") == 0)
         snprintf(out, out_sz, "%d tokens (history rolls at %d)", llm_context_tokens(&app->llm),
                  llm_context_budget(&app->llm));
+    else if (strcmp(name, "llm.tools") == 0)
+        snprintf(out, out_sz, "%s", app->llm.tools[0] ? app->llm.tools : "(defaults)");
+    else if (strcmp(name, "llm.search_url") == 0)
+        snprintf(out, out_sz, "%.*s", (int)out_sz - 1,
+                 app->llm.search_url[0] ? app->llm.search_url : "(unset — web_search is off)");
+    else if (strcmp(name, "llm.cdp_url") == 0)
+        snprintf(out, out_sz, "%.*s", (int)out_sz - 1,
+                 app->llm.cdp_url[0] ? app->llm.cdp_url : "(unset — browser_control is off)");
     else if (strcmp(name, "llm.prompt") == 0)
         /* Empty MEANS the built-in, so say that rather than showing a
          * blank — a blank row reads as "nothing is set", which is the
@@ -8718,6 +8952,9 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "llm.token") == 0) src = app->llm.token;
     else if (strcmp(name, "llm.model") == 0) src = app->llm.model;
     else if (strcmp(name, "llm.cli_tools") == 0) src = app->llm.cli_tools;
+    else if (strcmp(name, "llm.tools") == 0) src = app->llm.tools;
+    else if (strcmp(name, "llm.search_url") == 0) src = app->llm.search_url;
+    else if (strcmp(name, "llm.cdp_url") == 0) src = app->llm.cdp_url;
     else if (strcmp(name, "llm.context") == 0) {
         snprintf(out, out_sz, "%d", llm_context_tokens(&app->llm));
         return strlen(out);
@@ -8854,7 +9091,30 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
             return false;
         }
         app->llm.context_tokens = (int)v;
-    } else if (strcmp(def->name, "bot.dir") == 0)
+    } else if (strcmp(def->name, "llm.tools") == 0) {
+        /* Checked against the tools that exist, for the same reason
+         * llm.cli_tools is: a list that silently accepts a name nothing
+         * answers to is a list that turns a tool off without saying so. */
+        char copy[LLM_MAX_TOOLS];
+        snprintf(copy, sizeof(copy), "%.*s", (int)sizeof(copy) - 1, value);
+        for (char *tok = strtok(copy, ","); tok; tok = strtok(NULL, ",")) {
+            while (*tok == ' ') tok++;
+            size_t l = strlen(tok);
+            while (l && tok[l - 1] == ' ') tok[--l] = 0;
+            if (!*tok || llm_tool_by_name(tok)) continue;
+            log_line(app, "/set llm.tools: `%.30s` is not one of shottino's tools — /llm tools "
+                          "lists them", tok);
+            return false;
+        }
+        snprintf(app->llm.tools, sizeof(app->llm.tools), "%.*s", (int)sizeof(app->llm.tools) - 1,
+                 value);
+    } else if (strcmp(def->name, "llm.search_url") == 0)
+        snprintf(app->llm.search_url, sizeof(app->llm.search_url), "%.*s",
+                 (int)sizeof(app->llm.search_url) - 1, value);
+    else if (strcmp(def->name, "llm.cdp_url") == 0)
+        snprintf(app->llm.cdp_url, sizeof(app->llm.cdp_url), "%.*s",
+                 (int)sizeof(app->llm.cdp_url) - 1, value);
+    else if (strcmp(def->name, "bot.dir") == 0)
         snprintf(app->bot_dir, sizeof(app->bot_dir), "%.*s", (int)sizeof(app->bot_dir) - 1, value);
     else if (strcmp(def->name, "stt.enabled") == 0) {
         app->stt_enabled = on;
@@ -11237,13 +11497,6 @@ static void open_external_url(struct app *app, const char *url) {
 /* One GET. Returns false when the response never arrived; a response
  * that arrived with a bad status is a `true` with that status in it, so
  * the caller can tell "no route" from "404". */
-struct fetch_result {
-    int status;
-    char *body;
-    size_t len;
-    char location[MAX_LINE];
-    char content_type[128];
-};
 
 static void fetch_result_free(struct fetch_result *r) {
     free(r->body);
@@ -17002,13 +17255,6 @@ int main(int argc, char **argv) {
     snprintf(app->voice_source, sizeof(app->voice_source), "pulse:default");
     snprintf(app->video_source, sizeof(app->video_source), "v4l2:/dev/video0");
     app->rec.stdin_fd = -1;
-    /* The claude CLI's own tools that are safe to have on by default:
-     * they READ the world and change nothing in it. Everything else it
-     * offers — Read, Write, Edit, Glob, Grep, Bash, Monitor and the Cron
-     * verbs — is available through llm.cli_tools and off until asked
-     * for, because those run INSIDE the CLI and never pass shottino's
-     * approval gate. */
-    snprintf(app->llm.cli_tools, sizeof(app->llm.cli_tools), "WebFetch,WebSearch");
     bool have_ffmpeg = media_tool_available("ffmpeg");
     app->inline_media_enabled = have_ffmpeg;
     /* ALL HOSTS by default — the owner's call, made with the cost known.
