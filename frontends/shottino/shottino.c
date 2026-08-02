@@ -934,9 +934,18 @@ struct app {
         pid_t pid;
         int in_fd;
         int err_fd;
+        int out_fd; /* the helper's rgb24 frame stream */
         pthread_t reader;
+        pthread_t vreader;
         bool reading;
+        bool vreading;
         bool video;
+        /* The live frame, as an inline_media so the SAME half-block
+         * renderer that draws clips draws this. A call is not a second
+         * kind of picture. Cell dims are fixed when the call starts:
+         * the helper was TOLD a size and cannot be retold mid-call. */
+        struct inline_media frame;
+        int cols, rows;
         char network[MAX_SLUG];
         char channel[MAX_CHANNEL];
     } call_live;
@@ -7584,6 +7593,31 @@ static void draw(struct app *app) {
             draw_text(2, members_x + 1, members - 2, CP_MUTED, 0, "(not seeded)");
     }
 
+    /* A live call's picture, over the chat and under the overlay.
+     *
+     * Picture-in-picture rather than a pane of its own: a call is
+     * temporary, and reserving layout for it would move everybody's
+     * scrollback the moment the phone rang. Drawn from the SAME
+     * half-block renderer that draws clips — a call is not a second
+     * kind of picture — and clamped by it, so a terminal that shrank
+     * mid-call letterboxes instead of writing past the region. */
+    if (app->call_live.pid > 0 && app->call_live.frame.state == IM_READY &&
+        app->call_live.cols > 0) {
+        int vw = app->call_live.cols, vh = app->call_live.rows;
+        if (vw > main_w - 2) vw = main_w - 2;
+        if (vh > rows - 4) vh = rows - 4;
+        if (vw > 0 && vh > 0) {
+            int vx = main_x + main_w - vw - 1;
+            int vy = 1;
+            draw_inline_media_locked(&app->call_live.frame, vy, vx, 0, vh, vw);
+            /* A one-line label under it: a picture with no caption in
+             * the corner of a chat client reads as a glitch. */
+            if (vy + vh < rows - 2)
+                draw_text(vy + vh, vx, vw, CP_MENTION, A_BOLD, " %.*s ", vw - 2,
+                          app->call_live.channel);
+        }
+    }
+
     /* The overlay is drawn LAST and over everything: it is modal, and a
      * pane border crossing a menu would read as part of the menu. */
     draw_overlay_locked(app, rows, cols, main_x, main_w);
@@ -12342,6 +12376,68 @@ static bool call_helper_path(struct app *app, char *out, size_t out_sz) {
     return false;
 }
 
+/* The picture-in-picture box, in CELLS.
+ *
+ * A share of the width rather than a constant: on an 80-column terminal
+ * a 40-cell picture is the client, and on a 200-column one a 24-cell
+ * picture is a stamp. Half blocks mean two PIXEL rows per cell row, so
+ * the pixel height is rows*2 — which is also why the aspect arithmetic
+ * looks off by two and is not.
+ *
+ * Fixed for the whole call: the helper is TOLD a size at exec and there
+ * is no way to retell it, so a resize letterboxes (the draw clamps)
+ * rather than tearing. */
+static void call_video_box(int cols_total, int *cols, int *rows) {
+    int w = cols_total / 4;
+    if (w > 40) w = 40;
+    if (w < 16) w = 16;
+    /* 4:3, in pixels: px_h = px_w * 3/4, and px_h is rows*2. */
+    int r = (w * 3) / 8;
+    if (r < 6) r = 6;
+    *cols = w;
+    *rows = r;
+}
+
+/* Read the helper's rgb24 frames and publish the newest.
+ *
+ * One frame is cols x (rows*2) x 3 bytes with no header — the stream is
+ * raw by contract, which is what lets the decoder write it straight to
+ * the pipe. Read to a WHOLE frame before publishing: a partial one
+ * drawn is a band of garbage, and the pipe delivers whatever size it
+ * feels like. */
+static void *call_frame_main(void *arg) {
+    struct app *app = arg;
+    int cols = app->call_live.cols, rows = app->call_live.rows;
+    size_t need = (size_t)cols * (size_t)(rows * 2) * 3;
+    unsigned char *buf = malloc(need);
+    if (!buf) return NULL;
+    size_t have = 0;
+    for (;;) {
+        ssize_t n = read(app->call_live.out_fd, buf + have, need - have);
+        if (n <= 0) break; /* helper gone, or the call ended */
+        have += (size_t)n;
+        if (have < need) continue;
+        have = 0;
+        unsigned char *copy = malloc(need);
+        if (!copy) continue;
+        memcpy(copy, buf, need);
+        pthread_mutex_lock(&app->lock);
+        /* Swap, never append: this is a LIVE feed, so the newest frame
+         * is the only one worth keeping and the old one is freed here
+         * rather than accumulating a call's worth of video in memory. */
+        free(app->call_live.frame.rgb);
+        app->call_live.frame.rgb = copy;
+        app->call_live.frame.cols = cols;
+        app->call_live.frame.rows = rows;
+        app->call_live.frame.frame_count = 1;
+        app->call_live.frame.frame = 0;
+        app->call_live.frame.state = IM_READY;
+        pthread_mutex_unlock(&app->lock);
+    }
+    free(buf);
+    return NULL;
+}
+
 /* Drain the helper's event stream into the window it belongs to.
  *
  * The helper reports state and failures as JSON lines on stderr; without
@@ -12406,6 +12502,23 @@ static void call_helper_stop(struct app *app) {
         while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
     }
     if (reading) pthread_join(reader, NULL);
+    /* The frame reader is blocked in read(); closing the pipe is what
+     * ends it. Closed AFTER the helper is gone so a frame in flight
+     * cannot arrive to a freed buffer. */
+    pthread_mutex_lock(&app->lock);
+    int out_fd = app->call_live.out_fd;
+    bool vreading = app->call_live.vreading;
+    pthread_t vreader = app->call_live.vreader;
+    app->call_live.out_fd = -1;
+    app->call_live.vreading = false;
+    pthread_mutex_unlock(&app->lock);
+    if (out_fd >= 0) close(out_fd);
+    if (vreading) pthread_join(vreader, NULL);
+    pthread_mutex_lock(&app->lock);
+    free(app->call_live.frame.rgb);
+    app->call_live.frame.rgb = NULL;
+    app->call_live.frame.state = IM_IDLE;
+    pthread_mutex_unlock(&app->lock);
 }
 
 /* Start a call in the terminal. Returns false when the helper is not
@@ -12434,13 +12547,24 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     snprintf(whip, sizeof(whip), "%s%swhip", room_url, slash ? "" : "/");
     snprintf(whep, sizeof(whep), "%s%swhep", room_url, slash ? "" : "/");
 
-    int in_pipe[2], err_pipe[2];
+    int in_pipe[2], err_pipe[2], out_pipe[2] = { -1, -1 };
     if (pipe(in_pipe) != 0) return false;
     if (pipe(err_pipe) != 0) {
         close(in_pipe[0]);
         close(in_pipe[1]);
         return false;
     }
+    int vcols = 0, vrows = 0;
+    if (video) {
+        call_video_box(COLS > 0 ? COLS : 80, &vcols, &vrows);
+        if (pipe(out_pipe) != 0) {
+            close(in_pipe[0]); close(in_pipe[1]);
+            close(err_pipe[0]); close(err_pipe[1]);
+            return false;
+        }
+    }
+    char frame_arg[32];
+    snprintf(frame_arg, sizeof(frame_arg), "%dx%d", vcols, vrows * 2);
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -12451,13 +12575,18 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     if (pid == 0) {
         dup2(in_pipe[0], STDIN_FILENO);
         dup2(err_pipe[1], STDERR_FILENO);
-        /* stdout is the FRAME stream and nothing reads it yet, so it
-         * goes to /dev/null rather than into this terminal — rgb24 bytes
+        /* stdout is the FRAME stream. For an audio call nothing reads
+         * it, and it must NOT inherit this terminal — rgb24 bytes
          * painted over ncurses is a screen nobody can recover. */
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) dup2(devnull, STDOUT_FILENO);
+        if (video) {
+            dup2(out_pipe[1], STDOUT_FILENO);
+        } else {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) dup2(devnull, STDOUT_FILENO);
+        }
         close(in_pipe[0]); close(in_pipe[1]);
         close(err_pipe[0]); close(err_pipe[1]);
+        if (out_pipe[0] >= 0) { close(out_pipe[0]); close(out_pipe[1]); }
         /* Built as a list rather than a conditional initialiser: the
          * device settings are the SAME ones /voicemsg and /video use, so
          * one configured capture serves every feature here. */
@@ -12474,6 +12603,10 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
             argv[a++] = (char *)"--video";
             argv[a++] = (char *)"--video-source";
             argv[a++] = app->video_source;
+            /* The helper has no terminal and must never guess: the box
+             * is measured HERE, in cells, and handed over in pixels. */
+            argv[a++] = (char *)"--frame";
+            argv[a++] = frame_arg;
         }
         argv[a] = NULL;
         execv(helper, argv);
@@ -12481,8 +12614,13 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     }
     close(in_pipe[0]);
     close(err_pipe[1]);
+    if (out_pipe[1] >= 0) close(out_pipe[1]);
 
     pthread_mutex_lock(&app->lock);
+    app->call_live.out_fd = out_pipe[0];
+    app->call_live.cols = vcols;
+    app->call_live.rows = vrows;
+    app->call_live.frame.state = IM_IDLE;
     app->call_live.pid = pid;
     app->call_live.in_fd = in_pipe[1];
     app->call_live.err_fd = err_pipe[0];
@@ -12491,14 +12629,15 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     snprintf(app->call_live.channel, sizeof(app->call_live.channel), "%s", channel ? channel : "");
     app->call_live.reading =
         pthread_create(&app->call_live.reader, NULL, call_reader_main, app) == 0;
+    app->call_live.vreading =
+        video && pthread_create(&app->call_live.vreader, NULL, call_frame_main, app) == 0;
     pthread_mutex_unlock(&app->lock);
 
     log_line(app, "call: connecting in the terminal (%s) — /hangup ends it, /mute and /unmute "
                   "while it runs",
              video ? "audio and video" : "audio");
     if (video)
-        log_line(app, "call: your camera is sent; THEIR video is not drawn yet — that is the next "
-                      "stage, and audio works both ways now");
+        log_line(app, "call: their picture appears top-right while the call runs");
     return true;
 }
 
@@ -18506,7 +18645,7 @@ int main(int argc, char **argv) {
     /* Queries ring, channels do not. A channel doorbell any member can
      * press is a doorbell that gets pressed. */
     app->call_ring = CALL_RING_QUERIES;
-    app->call_live.in_fd = app->call_live.err_fd = -1;
+    app->call_live.in_fd = app->call_live.err_fd = app->call_live.out_fd = -1;
     /* web_search needs somewhere to point, and the choice is decided by
      * what answers a plain socket rather than by brand.
      *

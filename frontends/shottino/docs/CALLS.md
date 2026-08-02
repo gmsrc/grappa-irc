@@ -407,11 +407,25 @@ Events from the helper are drained by a reader thread and shown in the
 window. That thread exists whether or not anyone reads the messages: an
 undrained stderr pipe fills and then BLOCKS the helper mid-call.
 
-**Audio works both ways. Incoming video is not drawn yet** — the camera
-is sent, and painting the far side's frames into the terminal is the
-remaining stage. The helper's stdout (the frame stream) is pointed at
-/dev/null until then, because rgb24 bytes painted over ncurses is a
-screen nobody can recover.
+Their picture is drawn **picture-in-picture**, top-right over the chat
+and under any overlay. Not a pane of its own: a call is temporary, and
+reserving layout for it would move everybody's scrollback the moment the
+phone rang.
+
+The frames go through the **same half-block renderer that draws clips** —
+a call is not a second kind of picture — which is also what clamps it, so
+a terminal that shrank mid-call letterboxes rather than writing past the
+region. The box is a share of the width (16–40 cells, 4:3 in pixels,
+where the pixel height is `rows*2` because half blocks pack two pixel
+rows per cell row), measured in shottino and handed to the helper as
+`--frame WxH`; the helper has no terminal and must never guess one.
+
+It is fixed for the call: the helper is told a size at exec and there is
+no way to retell it. A resize letterboxes rather than tearing.
+
+For an audio call the frame stream goes to /dev/null and must never
+inherit the terminal — rgb24 bytes painted over ncurses is a screen
+nobody can recover.
 
 ## Roadmap
 
