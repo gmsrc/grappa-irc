@@ -375,6 +375,44 @@ and is the reason a query call needs no host at all.
 
 ---
 
+## Running a call in the terminal
+
+```sh
+/set call.base_url http://sfu.example:8889   # a WHIP/WHEP SFU, not jitsi
+/set call.mode terminal
+/call                                        # or /videocall
+```
+
+`call.mode` defaults to **browser**, and that is not a lesser path — it
+works with any room-per-URL service and needs nothing installed. The
+terminal mode is opt-in because **nothing can tell from a URL whether a
+service speaks WHIP**; it has to be declared.
+
+shottino spawns `shottino-call`, looking for it in this order: the
+`call.helper` setting, then **beside the shottino binary** (they are
+built and installed together, so this is the usual answer), then
+`~/.local/share/shottino/bin/`, then PATH. If none is found, `/call`
+says so and opens the browser instead — the fallback is automatic, not
+an error.
+
+The invite still carries the ROOM URL; `whip` and `whep` are appended to
+it, so one link serves the browser and the terminal both.
+
+| verb | while a call runs |
+|---|---|
+| `/hangup` | ends it. Asks the helper first so it can DELETE the session — killing it outright leaves the SFU holding the slot |
+| `/mute`, `/unmute` | the microphone. Local and instant |
+
+Events from the helper are drained by a reader thread and shown in the
+window. That thread exists whether or not anyone reads the messages: an
+undrained stderr pipe fills and then BLOCKS the helper mid-call.
+
+**Audio works both ways. Incoming video is not drawn yet** — the camera
+is sent, and painting the far side's frames into the terminal is the
+remaining stage. The helper's stdout (the frame stream) is pointed at
+/dev/null until then, because rgb24 bytes painted over ncurses is a
+screen nobody can recover.
+
 ## Roadmap
 
 - **Stage 1 — shipping.** Invite convention, ring, answer/decline, hand
