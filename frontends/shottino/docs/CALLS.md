@@ -465,11 +465,36 @@ against a `fps=10` filter. shottino only ever draws the newest frame, so
 it wastes CPU rather than corrupting anything, but the rate bound on the
 decode side is not doing its job and wants an explicit output rate.
 
-**One publisher per path.** MediaMTX allows a single publisher per path,
-so two participants cannot both publish to `<room>/whip`. Real two-way
-between two people needs a path each (`<room>/<nick>`) with each
-subscribing to the other's — which is where the roster note above stops
-being theory. The current scheme is proven for publish-and-watch.
+**A path per person, and the roster decides who to read.** Everyone
+publishes to `<room>/<nick>/whip`; a query reads the one person the
+window names, a channel reads every member. Members not in the call have
+no publisher, the SFU says so, and the helper steps over them — that
+same tolerance is what lets a late joiner work at all.
+
+Capped at 8 peers: a mesh of subscribes is cheap when the render target
+is ASCII, but it is not free, and a cap makes "the channel had forty
+people in it" a clear message rather than a machine that stops
+responding.
+
+Proven three-way against the live SFU, and the result names the
+remaining gap exactly:
+
+| peer | joined | subscribes connected |
+|---|---|---|
+| ann | 1st | 0 — nobody was publishing yet |
+| bob | 2nd | 1 |
+| cid | 3rd | **2**, plus 109 decoded frames |
+
+Everyone subscribes to whoever was ALREADY publishing when they joined,
+so the last to arrive sees everyone and the first sees nobody. **The
+missing piece is a resubscribe loop** — periodically retry the peers
+that had no publisher. It fixes late joiners and channel members who
+join the call afterwards with one mechanism, which is why it is worth
+building deliberately rather than bolting on.
+
+**Video is one tile.** Audio is per peer — N decoders into one sink, and
+the audio system does the mixing, which it does far better than anything
+here would. N video tiles needs a layout policy in the draw path.
 
 ## Roadmap
 

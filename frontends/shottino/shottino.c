@@ -2985,6 +2985,10 @@ static void render_ctcp_reply(struct app *app, const char *network, const char *
  * privacy statement true: a call is exactly as private as the window
  * its link was posted in. Which is why the ring says where it came
  * from, and why /call refuses to guess a window. */
+/* Kept in step with the helper's own cap: shottino builds the argument
+ * list, so it is the side that must not overrun it. */
+#define CALL_MAX_PEERS 8
+
 #define CALL_MARKER_AUDIO "📞"
 #define CALL_MARKER_VIDEO "📹"
 
@@ -12592,11 +12596,39 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     call_path_nick(own ? own : "me", me, sizeof(me));
     call_path_nick(query ? channel : "", them, sizeof(them));
 
-    char whip[MAX_LINE], whep[MAX_LINE];
     size_t len = strlen(room_url);
     const char *sep = (len > 0 && room_url[len - 1] == '/') ? "" : "/";
+    char whip[MAX_LINE];
     snprintf(whip, sizeof(whip), "%s%s%s/whip", room_url, sep, me);
-    snprintf(whep, sizeof(whep), "%s%s%s/whep", room_url, sep, them);
+
+    /* WHO ELSE TO READ. In a query it is the one person the window
+     * names. In a CHANNEL it is the roster — which is the thing WHIP
+     * deliberately does not carry and an IRC client has had all along.
+     *
+     * Members who are not in the call have no publisher on their path
+     * and the SFU says so; the helper steps over them. That is also
+     * what makes a late joiner work: they are simply a member whose
+     * path started answering. */
+    char whep[CALL_MAX_PEERS][MAX_LINE];
+    size_t peers = 0;
+    if (query) {
+        snprintf(whep[peers++], MAX_LINE, "%s%s%s/whep", room_url, sep, them);
+    } else if (channel && channel[0]) {
+        pthread_mutex_lock(&app->lock);
+        for (size_t i = 0; i < app->window_count && peers < CALL_MAX_PEERS; i++) {
+            struct window *w = &app->windows[i];
+            if (strcmp(w->network, network) != 0 || !irc_name_eq(w->channel, channel)) continue;
+            for (size_t k = 0; k < w->member_count && peers < CALL_MAX_PEERS; k++) {
+                /* Not ourselves: reading our own publish is an echo. */
+                if (own && irc_name_eq(w->members[k].nick, own)) continue;
+                char pn[128];
+                call_path_nick(w->members[k].nick, pn, sizeof(pn));
+                snprintf(whep[peers++], MAX_LINE, "%s%s%s/whep", room_url, sep, pn);
+            }
+            break;
+        }
+        pthread_mutex_unlock(&app->lock);
+    }
 
     int in_pipe[2], err_pipe[2], out_pipe[2] = { -1, -1 };
     if (pipe(in_pipe) != 0) return false;
@@ -12641,14 +12673,14 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         /* Built as a list rather than a conditional initialiser: the
          * device settings are the SAME ones /voicemsg and /video use, so
          * one configured capture serves every feature here. */
-        char *argv[16];
+        char *argv[16 + 2 * CALL_MAX_PEERS];
         size_t a = 0;
         argv[a++] = helper;
         argv[a++] = (char *)"--whip";
         argv[a++] = whip;
-        if (query) {
+        for (size_t i = 0; i < peers; i++) {
             argv[a++] = (char *)"--whep";
-            argv[a++] = whep;
+            argv[a++] = whep[i];
         }
         argv[a++] = (char *)"--audio-source";
         argv[a++] = app->voice_source;
@@ -12690,8 +12722,9 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
                   "while it runs",
              video ? "audio and video" : "audio");
     if (!query)
-        log_line(app, "call: in a channel this SENDS only — reading every member is one subscribe "
-                      "each, and that is not wired yet. A query is two-way");
+        log_line(app, "call: group call with %zu other%s in %s — members not in the call are "
+                      "stepped over, and their video is not drawn (one tile for now)",
+                 peers, peers == 1 ? "" : "s", channel ? channel : "?");
     if (video)
         log_line(app, "call: their picture appears top-right while the call runs");
     return true;

@@ -54,6 +54,13 @@
  * behind by an older install fails LOUDLY instead of misbehaving. */
 #define CALL_PROTOCOL 1
 
+/* How many other people one call can carry. A mesh of subscribes is
+ * cheap here because the render target is ASCII — a peer costs ~24 kbps
+ * of Opus and ~150 kbps of tiny VP8 — but it is not free, and a cap is
+ * how "the channel had forty people in it" fails as a clear message
+ * rather than as a machine that stops responding. */
+#define CALL_MAX_PEERS 8
+
 static volatile sig_atomic_t stop_requested;
 
 static bool verbose;
@@ -125,17 +132,32 @@ struct session {
     char resource[WHIP_MAX_URL];
     bool have_resource;
     bool active;
-    /* Does THIS session's inbound media feed the decoders? Exactly one
-     * session receives, whichever shape we are in — wiring both would
-     * hand our own echo to the speakers. */
+    /* Does THIS session's inbound media feed the decoders? Publishing
+     * feeds them only in the single-endpoint shape; wiring both ends of
+     * a pair would hand our own echo to the speakers. */
     bool receives;
+    /* Which peer this is, and therefore which decoder its RTP belongs
+     * to. Every subscriber has its OWN legs: N people are N streams,
+     * and one decoder fed from several would be a blender. */
+    int slot;
 };
 
 struct call {
     pthread_mutex_t lock;
     pthread_cond_t cv;
-    struct session pub, sub;
-    struct media_leg send_audio, send_video, recv_audio, recv_video;
+    struct session pub;
+    struct session sub[CALL_MAX_PEERS];
+    int sub_count;
+    struct media_leg send_audio, send_video;
+    /* One audio decoder per peer, all playing to the SAME sink — the
+     * mixing is the audio system's job and it already does it, which is
+     * why N voices need no mixer here.
+     *
+     * Video is ONE tile, from the first peer. N tiles means a layout
+     * policy in the draw path, and that is a deliberate next step
+     * rather than something to guess at. */
+    struct media_leg recv_audio[CALL_MAX_PEERS];
+    struct media_leg recv_video;
     /* Mute is LOCAL and instant: the capture leg keeps running and its
      * packets are dropped on the way to the track. Tearing down ffmpeg
      * instead would make unmuting take as long as a device open, and a
@@ -175,13 +197,17 @@ static void RTC_API on_gathering(int pc, rtcGatheringState state, void *ptr) {
 static void RTC_API on_audio_rtp(int id, const char *msg, int size, void *ptr) {
     (void)id;
     struct session *s = ptr;
-    if (size > 0) media_feed(&s->owner->recv_audio, msg, (size_t)size);
+    if (size > 0 && s->slot >= 0 && s->slot < CALL_MAX_PEERS)
+        media_feed(&s->owner->recv_audio[s->slot], msg, (size_t)size);
 }
 
 static void RTC_API on_video_rtp(int id, const char *msg, int size, void *ptr) {
     (void)id;
     struct session *s = ptr;
-    if (size > 0) media_feed(&s->owner->recv_video, msg, (size_t)size);
+    /* Only the first peer's picture is drawn, so only its packets are
+     * decoded — decoding the rest would burn CPU on frames with nowhere
+     * to go. */
+    if (size > 0 && s->slot == 0) media_feed(&s->owner->recv_video, msg, (size_t)size);
 }
 
 /* The other direction: whatever the capture ffmpeg packetised, onto the
@@ -263,12 +289,20 @@ static bool session_settled(const struct session *s) {
 }
 
 static bool all_gathered(const struct call *c) {
-    return (!c->pub.active || c->pub.gathering == RTC_GATHERING_COMPLETE) &&
-           (!c->sub.active || c->sub.gathering == RTC_GATHERING_COMPLETE);
+    if (c->pub.active && c->pub.gathering != RTC_GATHERING_COMPLETE) return false;
+    for (int i = 0; i < c->sub_count; i++)
+        if (c->sub[i].active && c->sub[i].gathering != RTC_GATHERING_COMPLETE) return false;
+    return true;
 }
 
+/* The PUBLISH is what a call depends on; a peer that never came up is a
+ * person who is not here, not a broken call. So the wait ends when
+ * publishing has settled and every subscribe has stopped moving. */
 static bool all_settled(const struct call *c) {
-    return session_settled(&c->pub) && session_settled(&c->sub);
+    if (!session_settled(&c->pub)) return false;
+    for (int i = 0; i < c->sub_count; i++)
+        if (!session_settled(&c->sub[i])) return false;
+    return true;
 }
 
 static bool session_up(const struct session *s) { return !s->active || s->state == RTC_CONNECTED; }
@@ -473,7 +507,8 @@ static void usage(FILE *out) {
 
 int main(int argc, char **argv) {
     const char *whip_url = NULL;
-    const char *whep_url = NULL;
+    const char *whep_urls[CALL_MAX_PEERS];
+    int whep_count = 0;
     const char *stun = NULL;
     bool video = false;
     int timeout_ms = 15000;
@@ -513,7 +548,11 @@ int main(int argc, char **argv) {
     while ((c = getopt_long(argc, argv, "w:s:Vt:vph", opts, NULL)) != -1) {
         switch (c) {
         case 'w': whip_url = optarg; break;
-        case OPT_WHEP: whep_url = optarg; break;
+        case OPT_WHEP:
+            /* Repeatable: one per person in the call. */
+            if (whep_count < CALL_MAX_PEERS) whep_urls[whep_count++] = optarg;
+            else emit_event("error", "message", "too many peers — extra --whep ignored");
+            break;
         case 's': stun = optarg; break;
         case 'V': video = true; break;
         case 't': timeout_ms = atoi(optarg); break;
@@ -536,7 +575,7 @@ int main(int argc, char **argv) {
         default: usage(stderr); return 2;
         }
     }
-    if (!whip_url && !whep_url) {
+    if (!whip_url && whep_count == 0) {
         usage(stderr);
         return 2;
     }
@@ -556,21 +595,30 @@ int main(int argc, char **argv) {
     memset(&call, 0, sizeof(call));
     pthread_mutex_init(&call.lock, NULL);
     pthread_cond_init(&call.cv, NULL);
-    call.pub.owner = call.sub.owner = &call;
+    call.pub.owner = &call;
     call.pub.label = "publish";
-    call.sub.label = "subscribe";
-    call.pub.pc = call.sub.pc = -1;
+    call.pub.pc = -1;
     call.pub.audio_track = call.pub.video_track = -1;
-    call.sub.audio_track = call.sub.video_track = -1;
-    call.send_audio.fd = call.send_video.fd = call.recv_audio.fd = call.recv_video.fd = -1;
-    call.send_audio.pid = call.send_video.pid = call.recv_audio.pid = call.recv_video.pid = -1;
+    call.pub.slot = -1;
+    call.sub_count = whep_count;
+    for (int i = 0; i < CALL_MAX_PEERS; i++) {
+        call.sub[i].owner = &call;
+        call.sub[i].label = "subscribe";
+        call.sub[i].pc = -1;
+        call.sub[i].audio_track = call.sub[i].video_track = -1;
+        call.sub[i].slot = i;
+        call.recv_audio[i].fd = -1;
+        call.recv_audio[i].pid = -1;
+    }
+    call.send_audio.fd = call.send_video.fd = call.recv_video.fd = -1;
+    call.send_audio.pid = call.send_video.pid = call.recv_video.pid = -1;
 
     /* Which session receives, and therefore which direction each one
      * negotiates. Decided ONCE, here, so nothing downstream has to work
      * it out again and reach a different answer. */
-    bool paired = whip_url && whep_url;
-    call.sub.receives = whep_url != NULL;
-    call.pub.receives = whip_url && !whep_url;
+    bool paired = whip_url && whep_count > 0;
+    for (int i = 0; i < whep_count; i++) call.sub[i].receives = true;
+    call.pub.receives = whip_url && whep_count == 0;
 
     pthread_t pump = 0;
     bool pumping = false;
@@ -610,7 +658,7 @@ int main(int argc, char **argv) {
      * active the instant its own POST returns — ICE still has to
      * complete. Measured against a real server, which is the only place
      * this shows: a stub answers the same either way. */
-    if (ok && whep_url && whip_url) {
+    if (ok && whep_count > 0 && whip_url) {
         note("subscribe: waiting for the publish to come up");
         if (!wait_until(&call, publish_up, timeout_ms)) {
             emit_event("error", "message",
@@ -618,16 +666,31 @@ int main(int argc, char **argv) {
             ok = false;
         }
     }
-    if (ok && whep_url)
-        ok = session_negotiate(&call.sub, whep_url, RTC_DIRECTION_RECVONLY, video, &mcfg, stun,
-                               timeout_ms);
+    /* Every peer gets its own session, and a peer that FAILS does not
+     * fail the call: in a channel most members are not in it, so their
+     * path has no publisher and the SFU rightly says 404. That is a
+     * person who is not here, reported and stepped over. */
+    int joined = 0;
+    for (int i = 0; ok && i < whep_count; i++) {
+        if (session_negotiate(&call.sub[i], whep_urls[i], RTC_DIRECTION_RECVONLY,
+                              video && i == 0, &mcfg, stun, timeout_ms))
+            joined++;
+        else
+            note("subscribe %d: not in the call", i);
+    }
+    if (whep_count > 0 && joined == 0 && !whip_url) {
+        emit_event("error", "message", "nobody is in this call yet");
+        ok = false;
+    }
 
     bool connected = false;
     if (ok) {
         emit_event("negotiated", "resource",
-                   call.pub.have_resource ? call.pub.resource : call.sub.resource);
-        connected = wait_until(&call, all_settled, timeout_ms) && session_up(&call.pub) &&
-                    session_up(&call.sub);
+                   call.pub.have_resource ? call.pub.resource : call.sub[0].resource);
+        /* Connected means OUR end is up. A peer who never answered is
+         * absent, not a failure — otherwise one silent member of a
+         * channel would end everybody else's call. */
+        connected = wait_until(&call, all_settled, timeout_ms) && session_up(&call.pub);
         if (!connected && !stop_requested)
             emit_event("error", "message",
                        "the media path never came up — check the SFU's advertised public IP");
@@ -639,13 +702,17 @@ int main(int argc, char **argv) {
          * negotiation error into a recording light nobody asked for. A
          * watch-only session opens neither. */
         bool sending = whip_url != NULL;
-        bool receiving = call.pub.receives || call.sub.receives;
-        if (receiving) {
-            if (!media_start_recv(&call.recv_audio, &mcfg, false, -1))
+        int voices = call.pub.receives ? 1 : 0;
+        for (int i = 0; i < call.sub_count; i++)
+            if (call.sub[i].active && call.sub[i].state == RTC_CONNECTED) voices = i + 1;
+        /* One decoder per peer, every one playing to the same sink: N
+         * voices mix in the audio system, which already does that job
+         * far better than anything here would. */
+        for (int i = 0; i < voices; i++)
+            if (!media_start_recv(&call.recv_audio[i], &mcfg, false, -1))
                 emit_event("error", "message", "cannot start audio playback (is ffmpeg installed?)");
-            if (video && !media_start_recv(&call.recv_video, &mcfg, true, STDOUT_FILENO))
-                emit_event("error", "message", "cannot start video decoding");
-        }
+        if (voices > 0 && video && !media_start_recv(&call.recv_video, &mcfg, true, STDOUT_FILENO))
+            emit_event("error", "message", "cannot start video decoding");
         emit_event("media", "value",
                    sending ? (video ? "audio+video" : "audio")
                            : (video ? "watching audio+video" : "watching audio"));
@@ -672,7 +739,7 @@ int main(int argc, char **argv) {
             emit_event("control", "value", line);
         }
         pthread_mutex_lock(&call.lock);
-        bool still = session_up(&call.pub) && session_up(&call.sub);
+        bool still = session_up(&call.pub);
         pthread_mutex_unlock(&call.lock);
         if (!still) break;
     }
@@ -681,10 +748,10 @@ int main(int argc, char **argv) {
     if (pumping) pthread_join(pump, NULL);
     media_stop(&call.send_audio);
     media_stop(&call.send_video);
-    media_stop(&call.recv_audio);
+    for (int i = 0; i < CALL_MAX_PEERS; i++) media_stop(&call.recv_audio[i]);
     media_stop(&call.recv_video);
     session_release(&call.pub);
-    session_release(&call.sub);
+    for (int i = 0; i < CALL_MAX_PEERS; i++) session_release(&call.sub[i]);
     rtcCleanup();
     emit_event("closed", NULL, NULL);
     return connected ? 0 : 1;
