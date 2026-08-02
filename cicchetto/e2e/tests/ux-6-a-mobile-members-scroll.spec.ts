@@ -119,15 +119,29 @@ test("@webkit ux-6-a — html.overlay-open suspends root touch-action so gesture
   // when keyboard-up made the layout document-tall. v3 locks the
   // whole chain; the overlay's own pan-y carve-out still wins via
   // higher selector specificity inside its subtree.
-  await page.evaluate(() => document.documentElement.classList.add("overlay-open"));
-  const chain = await page.evaluate(() => ({
-    html: getComputedStyle(document.documentElement).touchAction,
-    body: getComputedStyle(document.body).touchAction,
-    root: getComputedStyle(document.getElementById("root") ?? document.body).touchAction,
-    rootChild: getComputedStyle(
-      document.querySelector("#root > div") ?? document.body,
-    ).touchAction,
-  }));
+  // #653/#531 — add the sentinel class AND read the computed chain in ONE
+  // synchronous evaluate. `overlay-open` is app-managed by a refcount
+  // (`lib/overlayScrollLock.ts` applyClass): any overlay push/pop settling
+  // during boot fires applyClass(), which — with the refcount at 0 — STRIPS
+  // the class the test just added. Split across two evaluates (the pre-fix
+  // shape), that reconciliation could run between the add and the read under
+  // full-gate load, reverting touch-action to `auto` before the snapshot;
+  // green in isolation because boot settles before the test acts. A single
+  // evaluate is atomic — getComputedStyle forces a synchronous style recalc
+  // while the class is guaranteed present, so no microtask (hence no Solid
+  // effect / applyClass) can interleave between add and read. Assertions stay
+  // exactly as strict.
+  const chain = await page.evaluate(() => {
+    document.documentElement.classList.add("overlay-open");
+    return {
+      html: getComputedStyle(document.documentElement).touchAction,
+      body: getComputedStyle(document.body).touchAction,
+      root: getComputedStyle(document.getElementById("root") ?? document.body).touchAction,
+      rootChild: getComputedStyle(
+        document.querySelector("#root > div") ?? document.body,
+      ).touchAction,
+    };
+  });
   expect(chain.html).toBe("none");
   expect(chain.body).toBe("none");
   expect(chain.root).toBe("none");
