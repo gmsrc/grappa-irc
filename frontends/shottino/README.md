@@ -820,10 +820,17 @@ public to whoever knows its name — **the link is the credential**. Which makes
 the honest statement true: a call is exactly as private as the window its link
 was posted in, and the ring says which window that was.
 
-`/set call.base_url` points at any room-per-URL service; nothing in the code
-knows what jitsi is. Note that **meet.jit.si now requires the moderator to log
-in** before a room starts — an invite you *receive* always works, one you
-*place* may ask the browser for a login the first time.
+`/set call.base_url` defaults to our own SFU, which is the only default that
+works **both** ways: the room page for a browser, and WHIP/WHEP under the same
+prefix for the terminal. A public jitsi cannot do the second at all — it speaks
+XMPP, not WHIP. Any deployment of `web/room.html` + `web/nginx-call.conf` serves
+the same shape.
+
+**A second `/call` where one is already running joins it** rather than minting a
+second room — otherwise two people end in two rooms, each having told the
+channel to come somewhere else. And a call arriving in a query while you are
+already in one is answered **busy** in plain text, so the caller is told rather
+than left listening to nothing.
 
 Putting the call itself **in the terminal** — audio through the system devices,
 video decoded by ffmpeg and drawn as colour art by the renderer that already

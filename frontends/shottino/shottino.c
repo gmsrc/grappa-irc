@@ -2725,6 +2725,10 @@ static void bot_consider(struct app *app, const char *network, const char *chann
  * anything more than a line of text. */
 static void call_consider(struct app *app, const char *network, const char *channel,
                           const char *sender, const char *body);
+/* Busy answers a call from inside one, so the send path is needed at
+ * the ingest — where it otherwise would not be. */
+static void enqueue_send(struct app *app, const char *network, const char *channel,
+                         const char *body);
 static struct network *network_by_slug_locked(struct app *app, const char *slug);
 static void ws_push_user(struct app *app, const char *event, const char *payload);
 /* Defined with the oper verbs, which parse arguments the same way. */
@@ -3174,8 +3178,33 @@ static void call_consider(struct app *app, const char *network, const char *chan
     const char *own = own_nick_for_network(app, network);
     if (own && sender && irc_name_eq(sender, own)) return;
 
-    bool ring = call_should_ring(app->call_ring, !is_channel_name(channel));
+    bool query = !is_channel_name(channel);
+    bool ring = call_should_ring(app->call_ring, query);
     bool busy = false;
+
+    /* ALREADY IN A CALL. Somebody ringing a phone that is off the hook
+     * deserves to be told, not to be left listening to nothing.
+     *
+     * Answered only in a QUERY: in a channel this would be one busy
+     * line per member already in the call, which is noise about a fact
+     * the caller can see. And only for a DIFFERENT room — an invite for
+     * the call we are already in is the normal echo of joining it.
+     *
+     * Plain text, deliberately no marker: a marker would ring THEM. */
+    pthread_mutex_lock(&app->lock);
+    bool in_call = app->call_live.pid > 0;
+    bool elsewhere = in_call && strcmp(app->call_last.url, url) != 0;
+    pthread_mutex_unlock(&app->lock);
+    if (in_call && elsewhere) {
+        if (query) {
+            const char *own = own_nick_for_network(app, network);
+            add_pending_echo(app, network, channel, own, "busy — already in a call");
+            enqueue_send(app, network, channel, "busy — already in a call");
+        }
+        log_line(app, "call: %s called while you are in another one — told them you are busy",
+                 sender ? sender : "someone");
+        return;
+    }
 
     pthread_mutex_lock(&app->lock);
     /* A ring already up owns the screen. A second invite neither
@@ -18888,17 +18917,17 @@ int main(int argc, char **argv) {
     snprintf(app->voice_source, sizeof(app->voice_source), "pulse:default");
     snprintf(app->video_source, sizeof(app->video_source), "v4l2:/dev/video0");
     app->rec.stdin_fd = -1;
-    /* A service that needs no account to JOIN and makes a room out of
-     * any path — which is what the convention assumes and all it
-     * assumes. Nothing in the call code knows what jitsi is; point this
-     * at a self-hosted room service and everything works the same.
+    /* Our own SFU, which is the only default that works BOTH ways: the
+     * room page for a browser, and WHIP/WHEP under the same prefix for
+     * the terminal. A public jitsi cannot do the second at all — it
+     * speaks XMPP, not WHIP — so pointing here by default is what makes
+     * `/set call.mode terminal` a one-line change rather than a
+     * research project.
      *
-     * NOTE for whoever reads the ring and wonders why the caller had to
-     * log in: meet.jit.si requires the MODERATOR to authenticate before
-     * a room starts. Joining one that is already running is anonymous,
-     * so an invite you RECEIVE always works; one you PLACE may ask the
-     * browser for a login the first time. */
-    snprintf(app->call_base_url, sizeof(app->call_base_url), "https://meet.jit.si");
+     * Nothing in the call code knows what this host is: it is a base,
+     * and any deployment of web/room.html + web/nginx-call.conf serves
+     * the same shape. */
+    snprintf(app->call_base_url, sizeof(app->call_base_url), "https://grappa.nexlab.net/call");
     /* Queries ring, channels do not. A channel doorbell any member can
      * press is a doorbell that gets pressed. */
     app->call_ring = CALL_RING_QUERIES;
