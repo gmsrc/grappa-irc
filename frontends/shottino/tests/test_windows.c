@@ -1867,6 +1867,197 @@ TEST(a_conversation_reaches_the_bot_and_a_join_does_not) {
     free_app(app);
 }
 
+/* ── Calls ─────────────────────────────────────────────────────────────
+ *
+ * The whole anti-annoyance posture of the feature lives in the parser:
+ * anyone in a channel can paste a meeting link, quote one, or link a
+ * recording of one, and none of those may make every shottino in the
+ * room scream. Only what a caller deliberately sends does. */
+TEST(only_a_marked_invite_is_a_call) {
+    enum call_kind kind = CALL_VIDEO;
+    char url[MAX_LINE];
+
+    CHECK(call_invite_parse("📞 https://meet.example/abc", &kind, url, sizeof(url)));
+    CHECK_LONG(kind, CALL_AUDIO);
+    CHECK_STR(url, "https://meet.example/abc");
+
+    CHECK(call_invite_parse("📹 https://meet.example/abc", &kind, url, sizeof(url)));
+    CHECK_LONG(kind, CALL_VIDEO);
+
+    /* Trailing prose is allowed, so WHICH link gets opened never depends
+     * on reading a sentence. */
+    CHECK(call_invite_parse("📞 https://meet.example/abc join us!", &kind, url, sizeof(url)));
+    CHECK_STR(url, "https://meet.example/abc");
+
+    /* A bare link is somebody talking. */
+    CHECK(!call_invite_parse("https://meet.example/abc", &kind, url, sizeof(url)));
+    /* A marker further in is somebody talking ABOUT a call. */
+    CHECK(!call_invite_parse("look at 📞 https://meet.example/abc", &kind, url, sizeof(url)));
+    /* The marker is a word of its own. */
+    CHECK(!call_invite_parse("📞https://meet.example/abc", &kind, url, sizeof(url)));
+    /* Answering hands the URL to the desktop opener, so the scheme is an
+     * allowlist rather than a suggestion: a stranger must not be able to
+     * put a registered handler one keystroke away. */
+    CHECK(!call_invite_parse("📞 file:///etc/passwd", &kind, url, sizeof(url)));
+    CHECK(!call_invite_parse("📞 javascript:alert(1)", &kind, url, sizeof(url)));
+    CHECK(!call_invite_parse("📞 ftp://host/x", &kind, url, sizeof(url)));
+    /* Somebody else's marker. */
+    CHECK(!call_invite_parse("📸 https://meet.example/abc", &kind, url, sizeof(url)));
+    CHECK(!call_invite_parse("", &kind, url, sizeof(url)));
+
+    /* A URL that does not fit is REFUSED, never truncated: half a room
+     * name is not a shorter link, it is a different room. */
+    char tiny[10];
+    CHECK(!call_invite_parse("📞 https://meet.example/abc", &kind, tiny, sizeof(tiny)));
+}
+
+/* What /call posts is what a receiving shottino reads back. */
+TEST(an_invite_round_trips_through_its_own_parser) {
+    char room[96];
+    call_room_name(room, sizeof(room));
+    CHECK(strncmp(room, "shottino-", 9) == 0);
+    CHECK_LONG((long)strlen(room), 9 + 32); /* 128 bits, as hex */
+
+    /* Two rooms are two rooms — the name is the only thing standing
+     * between a stranger and the call. */
+    char second[96];
+    call_room_name(second, sizeof(second));
+    CHECK(strcmp(room, second) != 0);
+
+    for (int v = 0; v < 2; v++) {
+        enum call_kind sent = v ? CALL_VIDEO : CALL_AUDIO;
+        char line[512];
+        call_invite_build(sent, "https://meet.example", room, line, sizeof(line));
+        enum call_kind got;
+        char url[MAX_LINE];
+        CHECK(call_invite_parse(line, &got, url, sizeof(url)));
+        CHECK_LONG(got, sent);
+        CHECK(strstr(url, room) != NULL);
+    }
+
+    /* One slash however the base was spelled: a doubled one is a 404 on
+     * some services and a different room on others. */
+    char line[512];
+    call_invite_build(CALL_AUDIO, "https://meet.example/", "r", line, sizeof(line));
+    CHECK(strstr(line, "https://meet.example/r") != NULL);
+    CHECK(strstr(line, "//r") == NULL);
+}
+
+TEST(a_query_rings_and_a_channel_only_announces) {
+    CHECK(call_should_ring(CALL_RING_QUERIES, true));
+    CHECK(!call_should_ring(CALL_RING_QUERIES, false));
+    CHECK(call_should_ring(CALL_RING_ALL, true));
+    CHECK(call_should_ring(CALL_RING_ALL, false));
+    CHECK(!call_should_ring(CALL_RING_OFF, true));
+    CHECK(!call_should_ring(CALL_RING_OFF, false));
+
+    /* The word /set accepts, the word it shows and the word the config
+     * file holds are ONE pair of functions, so they cannot drift. */
+    static const enum call_ring_policy all[] = { CALL_RING_OFF, CALL_RING_QUERIES, CALL_RING_ALL };
+    for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
+        enum call_ring_policy back;
+        CHECK(call_ring_parse(call_ring_word(all[i]), &back));
+        CHECK_LONG(back, all[i]);
+    }
+    enum call_ring_policy ignored;
+    CHECK(!call_ring_parse("sometimes", &ignored));
+    CHECK(!call_ring_parse("", &ignored));
+}
+
+/* The ring, through the real ingest path — the guards that matter are at
+ * the CALL SITE (live, not blocked, conversational), so a test that
+ * called call_consider directly would prove none of them. */
+TEST(an_arriving_call_rings_only_where_it_should) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    add_window_ex(app, "azzurra", "alice", true);
+    /* Stated rather than inherited: the harness does not run the boot
+     * defaults, and a test of a POLICY that silently depended on one
+     * would pass for the wrong reason the day the default changed. */
+    app->call_ring = CALL_RING_QUERIES;
+
+    struct wire_scrollback_message m = { 0 };
+    m.id = 1;
+    m.network = "azzurra";
+    m.channel = "#sniffo";
+    m.sender = "alice";
+    m.kind = MSG_PRIVMSG;
+    m.body = "📞 https://meet.example/room1";
+    render_message(app, &m, true);
+    /* Default policy: a channel does not interrupt... */
+    CHECK_LONG(app->overlay.kind, OVERLAY_NONE);
+    /* ...but the invite is still reachable, which is what /answer needs
+     * and what makes the quiet policy usable rather than merely quiet. */
+    CHECK(app->call_last.present);
+    CHECK_STR(app->call_last.url, "https://meet.example/room1");
+
+    /* A query is somebody calling YOU. */
+    m.id = 2;
+    m.channel = "alice";
+    m.body = "📹 https://meet.example/room2";
+    render_message(app, &m, true);
+    CHECK_LONG(app->overlay.kind, OVERLAY_CALL);
+    CHECK_LONG(app->call_last.kind, CALL_VIDEO);
+    CHECK(app->call_ring_bell);
+
+    /* Decline is what sel=0 lands on: a ring that arrives mid-keystroke
+     * must not open a stranger's link on the Enter already being typed. */
+    struct overlay_item items[8];
+    size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
+    CHECK_LONG((long)n, 2);
+    CHECK_LONG(app->overlay.sel, 0);
+    CHECK_LONG(items[0].action, ACT_CALL_DECLINE);
+    CHECK_LONG(items[1].action, ACT_CALL_ANSWER);
+
+    /* A second caller does not steal the ring that is up, nor silently
+     * retarget what Answer would reach. */
+    m.id = 3;
+    m.sender = "bob";
+    m.body = "📞 https://meet.example/room3";
+    render_message(app, &m, true);
+    CHECK_STR(app->call_last.url, "https://meet.example/room2");
+
+    /* Dismissing is local AND non-destructive. */
+    call_hangup(app);
+    CHECK_LONG(app->overlay.kind, OVERLAY_NONE);
+    CHECK(app->call_last.present);
+    CHECK_STR(app->call_last.url, "https://meet.example/room2");
+
+    /* Our own invite, arriving back from the server, must not ring us —
+     * otherwise every call rings its own caller. */
+    m.id = 4;
+    m.sender = "vjt";
+    m.body = "📞 https://meet.example/mine";
+    render_message(app, &m, true);
+    CHECK_LONG(app->overlay.kind, OVERLAY_NONE);
+    CHECK_STR(app->call_last.url, "https://meet.example/room2");
+
+    /* A blocked person cannot ring you at all: the guard is the same one
+     * that decides they are not drawn. */
+    pthread_mutex_lock(&app->lock);
+    block_add_locked(app, "carol");
+    pthread_mutex_unlock(&app->lock);
+    m.id = 5;
+    m.sender = "carol";
+    m.channel = "alice";
+    m.body = "📞 https://meet.example/blocked";
+    render_message(app, &m, true);
+    CHECK_LONG(app->overlay.kind, OVERLAY_NONE);
+    CHECK_STR(app->call_last.url, "https://meet.example/room2");
+
+    /* History is not an event: a scrollback fetch replaying yesterday's
+     * calls must not ring. */
+    m.id = 6;
+    m.sender = "alice";
+    m.body = "📞 https://meet.example/yesterday";
+    render_message(app, &m, false);
+    CHECK_LONG(app->overlay.kind, OVERLAY_NONE);
+    CHECK_STR(app->call_last.url, "https://meet.example/room2");
+
+    free_app(app);
+}
+
 /* Every preference the panel shows must come back after a restart.
  *
  * Only the llm.* half had a writer: an STT endpoint, its token, the capture
@@ -2413,6 +2604,11 @@ TEST(the_settings_panel_lists_every_setting) {
 
     CHECK(app->panel_line_count == settings_count());
     CHECK(settings_count() > 10); /* a table that emptied itself is not a pass */
+    /* settings_capture_defaults stops at 32 slots, so a table that grows
+     * past it loses /unset for the tail — SILENTLY, which is the part
+     * that matters: the row still lists, still sets, and only "put it
+     * back how it was" quietly stops working. */
+    CHECK(settings_count() <= 32);
 
     for (size_t i = 0; i < settings_count(); i++) {
         /* Every row names its setting and shows a value — not "?" , the
@@ -2513,5 +2709,9 @@ int main(void) {
     RUN(a_tab_completed_verb_still_dispatches);
     RUN(the_settings_panel_lists_every_setting);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
+    RUN(only_a_marked_invite_is_a_call);
+    RUN(an_invite_round_trips_through_its_own_parser);
+    RUN(a_query_rings_and_a_channel_only_announces);
+    RUN(an_arriving_call_rings_only_where_it_should);
     return test_report();
 }

@@ -781,6 +781,55 @@ The transcript lands in the **input line**, not on the network: speech
 recognition misreads names, and a client that sends what it thought it heard
 publishes your mistakes. Read it, fix it, press Enter.
 
+## Calls
+
+```sh
+/call              # audio: mint a room, post the link here, open it
+/videocall         # the same with a camera
+/answer            # join the last call that came in — ringing or not
+/hangup            # stop a ring. LOCAL: the caller is not told
+```
+
+A call is **a URL somebody posts and somebody else opens**, and that is
+deliberately the whole protocol. IRC stays text, everyone else in the channel
+sees a line they can read, and shottino is the only client that also treats it
+as an event. The marker mirrors what `/upload` already ships:
+
+```
+📞 https://meet.jit.si/shottino-4f2c8e01…      audio
+📹 https://meet.jit.si/shottino-4f2c8e01…      video
+```
+
+**Only a marked line rings.** Ringing at any recognised meeting link would mean
+anyone who pastes one — or quotes one, or links a recording of one — makes every
+shottino in the room scream. The marker has to *open* the line, and the scheme
+has to be http or https, because answering hands the URL to your desktop opener
+and a stranger must not be able to put a registered handler one keystroke away.
+
+**Queries ring; channels only announce.** A channel doorbell that any member can
+press is a doorbell that gets pressed. The invite still lands in scrollback and
+`/answer` still reaches it — `/set call.ring off|queries|all` decides.
+
+**Declining says nothing to anyone.** Declining down the wire would post "no"
+into whatever window the invite arrived in, a channel included. The caller
+learns you did not join by your not being in the room, the way a call has always
+worked.
+
+The room name is 128 bits from the CSPRNG, because a room of this shape is
+public to whoever knows its name — **the link is the credential**. Which makes
+the honest statement true: a call is exactly as private as the window its link
+was posted in, and the ring says which window that was.
+
+`/set call.base_url` points at any room-per-URL service; nothing in the code
+knows what jitsi is. Note that **meet.jit.si now requires the moderator to log
+in** before a room starts — an invite you *receive* always works, one you
+*place* may ask the browser for a login the first time.
+
+Putting the call itself **in the terminal** — audio through the system devices,
+video decoded by ffmpeg and drawn as colour art by the renderer that already
+draws animated clips — is the next stage, over WHIP/WHEP. What a host has to
+provide for it is written down in [docs/CALLS.md](docs/CALLS.md).
+
 ## /exec
 
 `/exec <command>` runs it in a shell and **sends its stdout to the current

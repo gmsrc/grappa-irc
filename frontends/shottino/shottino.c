@@ -516,8 +516,28 @@ enum overlay_kind {
     OVERLAY_RECORD,
     /* One preference, opened for changing: a list of the values it
      * accepts, or a field to type one into when it accepts anything. */
-    OVERLAY_SETTING
+    OVERLAY_SETTING,
+    /* Somebody is calling. The only overlay that is not opened by the
+     * keyboard or the pointer — it ARRIVES, which is why it is also the
+     * only one whose subject (app->call_last) outlives it: dismissing a
+     * ring must not throw away the invite it was ringing about. */
+    OVERLAY_CALL
 };
+
+/* Audio or video, and never a string.
+ *
+ * It decides the marker on the wire, the word in the ring, and — from
+ * the stage that puts media in the terminal — whether a camera is opened
+ * at all. A closed set of two with three consequences is exactly what
+ * this codebase spells as an enum. */
+enum call_kind { CALL_AUDIO, CALL_VIDEO };
+
+/* When an arriving invite rings, and when it only lands in scrollback.
+ *
+ * A query is somebody calling YOU. A channel is somebody calling the
+ * room — a doorbell any member can press — so the two cannot share a
+ * default without one of them being wrong. */
+enum call_ring_policy { CALL_RING_OFF, CALL_RING_QUERIES, CALL_RING_ALL };
 
 /* A recording stops itself here rather than running until the disk or
  * the upload limit says so. Declared with the overlay because the box
@@ -592,7 +612,13 @@ enum overlay_action {
     /* A settings row: apply the value the menu names, or open it for
      * typing when the value is not one of a known few. */
     ACT_SET_VALUE,
-    ACT_SET_EDIT
+    ACT_SET_EDIT,
+    /* The two answers to a ringing call. Answering hands the room URL to
+     * the desktop opener; declining is LOCAL — it stops the ring and
+     * says nothing to anyone, because posting "declined" into a channel
+     * tells everyone in it something they did not ask about. */
+    ACT_CALL_ANSWER,
+    ACT_CALL_DECLINE
 };
 
 /* How many entries a picker offers. Twenty is what fits the phrase "the
@@ -869,6 +895,31 @@ struct app {
     size_t cycle_at;
     bool cycling;
     char last_url[MAX_LINE];
+    /* The most recent call invite, and where it came from.
+     *
+     * ONE record, read by both doors: the ring overlay draws it, and
+     * /answer joins it. A ring that carried its own copy would be a
+     * second truth to keep in step, and dismissing the ring would throw
+     * away an invite that is still perfectly answerable — the row is
+     * still sitting in scrollback, after all.
+     *
+     * It is also what makes a non-ringing invite (a channel, under the
+     * default policy) reachable: nothing is drawn, but /answer knows. */
+    struct {
+        bool present;
+        enum call_kind kind;
+        char from[MAX_CHANNEL];
+        char network[MAX_SLUG];
+        char channel[MAX_CHANNEL];
+        char url[MAX_LINE];
+    } call_last;
+    /* Raised when a ring goes up, lowered by the DRAW thread after it
+     * beeps. ncurses is not thread-safe and invites arrive on the socket
+     * thread, so the bell cannot be rung where the decision is made. */
+    bool call_ring_bell;
+    /* Where a room lives, and when an arriving one rings. */
+    char call_base_url[256];
+    enum call_ring_policy call_ring;
     /* Most recent IMAGE/VIDEO link, for keyboard-driven /preview. */
     char last_media_url[MAX_LINE];
     bool last_media_is_video;
@@ -2583,6 +2634,11 @@ static void card(struct app *app, const char *network, const char *fmt, ...)
 static bool is_blocked(struct app *app, const char *nick);
 static void bot_consider(struct app *app, const char *network, const char *channel,
                          const char *sender, const char *body);
+/* Sits beside bot_consider for the same reason it is called beside it:
+ * both look at every inbound conversational row and decide whether it is
+ * anything more than a line of text. */
+static void call_consider(struct app *app, const char *network, const char *channel,
+                          const char *sender, const char *body);
 static struct network *network_by_slug_locked(struct app *app, const char *slug);
 static void ws_push_user(struct app *app, const char *event, const char *payload);
 /* Defined with the oper verbs, which parse arguments the same way. */
@@ -2815,6 +2871,193 @@ static void render_ctcp_reply(struct app *app, const char *network, const char *
     else card(app, network, "--- CTCP %s reply from %s", verb, sender);
 }
 
+/* ── Calls: the invite convention ──────────────────────────────────────
+ *
+ * A call is a URL somebody posts and somebody else opens. That is the
+ * whole protocol, and it is deliberately the whole protocol: IRC stays
+ * text, every other client in the channel sees a line it can read, and
+ * shottino is the only one that also treats it as an event.
+ *
+ * The wire shape mirrors what /upload already ships — a marker emoji, a
+ * space, then the URL — so the two produce the same kind of row and a
+ * human reading it in irssi needs no explanation:
+ *
+ *     📞 https://meet.jit.si/shottino-4f2c…     audio
+ *     📹 https://meet.jit.si/shottino-4f2c…     video
+ *
+ * WHY A MARKER RATHER THAN A URL PATTERN. Ringing at any recognised
+ * meeting link would mean anyone who pastes one — or quotes one, or
+ * links a recording of one — makes every shottino in the channel ring.
+ * The marker is the deliberate act: it is what a caller sends and what
+ * nothing else sends by accident.
+ *
+ * WHY NO SERVICE IS NAMED ANYWHERE. `call.base_url` is a base and a
+ * path, so any room-per-URL service works and nothing here knows what
+ * jitsi is. That is what keeps this stage from deciding the next one:
+ * a peer-to-peer or WHIP-signalled call can post a different payload
+ * behind the same marker without the convention changing.
+ *
+ * WHY THE ROOM NAME IS RANDOM. A room of this shape is public to
+ * whoever knows its name — the link IS the credential. 128 bits from
+ * the CSPRNG makes guessing one a non-event, and it makes the honest
+ * privacy statement true: a call is exactly as private as the window
+ * its link was posted in. Which is why the ring says where it came
+ * from, and why /call refuses to guess a window. */
+#define CALL_MARKER_AUDIO "📞"
+#define CALL_MARKER_VIDEO "📹"
+
+static const char *call_marker(enum call_kind kind) {
+    return kind == CALL_VIDEO ? CALL_MARKER_VIDEO : CALL_MARKER_AUDIO;
+}
+
+static const char *call_kind_word(enum call_kind kind) {
+    return kind == CALL_VIDEO ? "video call" : "call";
+}
+
+/* A room nobody can guess: 16 bytes of CSPRNG as hex.
+ *
+ * Truncation is a real failure here rather than a cosmetic one — half a
+ * room name is a different room — so the loop stops on the buffer and
+ * the caller sizes it for the whole thing. */
+static void call_room_name(char *out, size_t out_sz) {
+    if (!out || out_sz == 0) return;
+    unsigned char raw[16];
+    RAND_bytes(raw, sizeof(raw));
+    int w = snprintf(out, out_sz, "shottino-");
+    if (w < 0) { out[0] = 0; return; }
+    size_t n = (size_t)w;
+    for (size_t i = 0; i < sizeof(raw) && n + 2 < out_sz; i++)
+        n += (size_t)snprintf(out + n, out_sz - n, "%02x", raw[i]);
+}
+
+/* The line an invite IS. One `/` between base and room however the base
+ * was spelled — a doubled slash is a different path on some services and
+ * a 404 on others. */
+static void call_invite_build(enum call_kind kind, const char *base_url, const char *room,
+                              char *out, size_t out_sz) {
+    size_t len = strlen(base_url);
+    bool slash = len > 0 && base_url[len - 1] == '/';
+    snprintf(out, out_sz, "%s %s%s%s", call_marker(kind), base_url, slash ? "" : "/", room);
+}
+
+/* Is `body` an invite, and if so to what?
+ *
+ * Strict in three ways, each of which is the difference between a
+ * feature and a way to make somebody's terminal scream:
+ *
+ *   - the marker must OPEN the line. A marker further in is somebody
+ *     talking ABOUT a call, not placing one.
+ *   - the scheme must be http or https. Answering hands the URL to the
+ *     desktop opener, and a `file://` — or anything else with a
+ *     registered handler — arriving from a stranger and opened by one
+ *     keystroke is a hole, not a call.
+ *   - the URL is the first token after the marker. Trailing words are
+ *     allowed ("📞 <url> join us"), so nothing about WHICH link gets
+ *     opened depends on parsing prose. */
+static bool call_invite_parse(const char *body, enum call_kind *kind, char *url, size_t url_sz) {
+    if (!body || !url || url_sz == 0) return false;
+    enum call_kind k;
+    const char *p;
+    if (strncmp(body, CALL_MARKER_AUDIO, strlen(CALL_MARKER_AUDIO)) == 0) {
+        k = CALL_AUDIO;
+        p = body + strlen(CALL_MARKER_AUDIO);
+    } else if (strncmp(body, CALL_MARKER_VIDEO, strlen(CALL_MARKER_VIDEO)) == 0) {
+        k = CALL_VIDEO;
+        p = body + strlen(CALL_MARKER_VIDEO);
+    } else {
+        return false;
+    }
+    /* The marker is a word of its own: "📞x" is not an invite, and
+     * neither is a longer emoji that merely starts with these bytes. */
+    if (*p != ' ' && *p != '\t') return false;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "https://", 8) != 0 && strncmp(p, "http://", 7) != 0) return false;
+    size_t n = 0;
+    while (p[n] && p[n] != ' ' && p[n] != '\t') n++;
+    if (n + 1 > url_sz) return false; /* a cut URL is not a shorter link, it is a dead one */
+    memcpy(url, p, n);
+    url[n] = 0;
+    if (kind) *kind = k;
+    return true;
+}
+
+/* Does an invite arriving HERE ring?
+ *
+ * Queries ring and channels do not, by default. Both land in scrollback
+ * either way — the row is an ordinary message — so the quiet case loses
+ * nothing except the interruption, and /answer still reaches it. */
+/* The policy's spelling, and its spelling read back. One pair, so the
+ * word /set accepts, the word /set shows and the word the config file
+ * holds cannot drift into three. */
+static const char *call_ring_word(enum call_ring_policy policy) {
+    switch (policy) {
+    case CALL_RING_OFF:     return "off";
+    case CALL_RING_QUERIES: return "queries";
+    case CALL_RING_ALL:     return "all";
+    }
+    return "queries";
+}
+
+static bool call_ring_parse(const char *word, enum call_ring_policy *out) {
+    if (!word || !out) return false;
+    if (strcasecmp(word, "off") == 0)          { *out = CALL_RING_OFF;     return true; }
+    if (strcasecmp(word, "queries") == 0)      { *out = CALL_RING_QUERIES; return true; }
+    if (strcasecmp(word, "all") == 0)          { *out = CALL_RING_ALL;     return true; }
+    return false;
+}
+
+static bool call_should_ring(enum call_ring_policy policy, bool query) {
+    switch (policy) {
+    case CALL_RING_OFF:     return false;
+    case CALL_RING_QUERIES: return query;
+    case CALL_RING_ALL:     return true;
+    }
+    return false;
+}
+
+static void call_consider(struct app *app, const char *network, const char *channel,
+                          const char *sender, const char *body) {
+    enum call_kind kind;
+    char url[MAX_LINE];
+    if (!call_invite_parse(body, &kind, url, sizeof(url))) return;
+    /* Our own invite, arriving back from the server. Ringing at it would
+     * mean every call rings its own caller. */
+    const char *own = own_nick_for_network(app, network);
+    if (own && sender && irc_name_eq(sender, own)) return;
+
+    bool ring = call_should_ring(app->call_ring, !is_channel_name(channel));
+    bool busy = false;
+
+    pthread_mutex_lock(&app->lock);
+    /* A ring already up owns the screen. A second invite neither
+     * replaces it nor silently retargets the record it is drawing —
+     * whoever is ringing now is who Answer must reach. */
+    if (ring && app->overlay.kind == OVERLAY_CALL) {
+        busy = true;
+    } else {
+        app->call_last.present = true;
+        app->call_last.kind = kind;
+        snprintf(app->call_last.from, sizeof(app->call_last.from), "%s", sender ? sender : "");
+        snprintf(app->call_last.network, sizeof(app->call_last.network), "%s", network ? network : "");
+        snprintf(app->call_last.channel, sizeof(app->call_last.channel), "%s", channel ? channel : "");
+        snprintf(app->call_last.url, sizeof(app->call_last.url), "%s", url);
+        if (ring) {
+            app->overlay.kind = OVERLAY_CALL;
+            app->overlay.sel = 0;
+            app->overlay.top = 0;
+            app->call_ring_bell = true;
+        }
+    }
+    pthread_mutex_unlock(&app->lock);
+
+    if (busy)
+        log_line(app, "call: %s is calling too — answer or dismiss the current ring first",
+                 sender ? sender : "someone");
+    else if (!ring)
+        log_line(app, "call: %s started a %s in %s — /answer to join", sender ? sender : "someone",
+                 call_kind_word(kind), channel ? channel : "?");
+}
+
 static void render_message(struct app *app, const struct wire_scrollback_message *m, bool live) {
     long id = m->id;
     long server_time = m->server_time;
@@ -2995,6 +3238,11 @@ static void render_message(struct app *app, const struct wire_scrollback_message
      * on top of it (the approval gate, the grants, the memories) was
      * therefore live code behind a dead door. */
     if (conversational && live && !hidden) bot_consider(app, network, display_channel, sender, body);
+    /* Same three guards, and each one earns its place: `live` so a
+     * scrollback fetch cannot ring you with yesterday's calls, `hidden`
+     * so a blocked person cannot ring you at all, and `conversational`
+     * because a join is not an invitation. */
+    if (conversational && live && !hidden) call_consider(app, network, display_channel, sender, body);
 
     pthread_mutex_lock(&app->lock);
     /* Stamp the row just appended with its scrollback id, so the unread
@@ -6745,7 +6993,12 @@ if (app->overlay.kind == OVERLAY_RECORD) {
      * The pickers already had that shape, and one preference asked
      * about is the same question with different answers. */
     bool modal = app->overlay.kind == OVERLAY_SETTING;
-    bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA || modal;
+    /* A ring is a modal in every way that matters to the box: centred,
+     * titled, and answered with Enter. It differs only in WHERE its two
+     * lines of heading come from — an arriving call, not a table. */
+    bool ring = app->overlay.kind == OVERLAY_CALL;
+    bool picker =
+        app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA || modal || ring;
     /* Free text has no list, so the single row IS the field. */
     bool typing = modal && n == 0;
     int box_w = picker ? (main_w > 76 ? 76 : main_w - 2) : 34;
@@ -6757,6 +7010,9 @@ if (app->overlay.kind == OVERLAY_RECORD) {
      * carries — a modal that names a setting without saying what it
      * does makes the user go and read /help. */
     if (modal) list_h = typing ? 2 : list_h + 1;
+    /* Two answers plus the second heading line that says where the call
+     * came from — the one thing that decides whether you want it. */
+    if (ring) list_h = (int)n + 1;
     int box_h = list_h + (picker ? 2 : 0);
     int box_x = picker ? main_x + (main_w - box_w) / 2 : app->overlay.x;
     int box_y = picker ? (rows - box_h) / 2 : app->overlay.y;
@@ -6798,6 +7054,16 @@ if (app->overlay.kind == OVERLAY_RECORD) {
         draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM, "%s",
                   mdef ? mdef->help : "");
         line_y++;
+    } else if (ring) {
+        /* Who, and from WHERE. The second line is not decoration: a call
+         * is exactly as private as the window its link was posted in, so
+         * "in #channel" is the fact you answer or decline on. */
+        draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s %s is calling",
+                  call_marker(app->call_last.kind), app->call_last.from);
+        line_y++;
+        draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM, "%s in %s",
+                  call_kind_word(app->call_last.kind), app->call_last.channel);
+        line_y++;
     } else if (picker) {
         draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s: %s%s", verb,
                   app->overlay.filter, "_");
@@ -6815,7 +7081,7 @@ if (app->overlay.kind == OVERLAY_RECORD) {
         draw_text(line_y, box_x + 1, box_w - 2, CP_MENTION, A_BOLD, "%s_", shown);
         line_y++;
     } else {
-        for (size_t i = 0; i < (size_t)(modal ? list_h - 1 : list_h); i++) {
+        for (size_t i = 0; i < (size_t)((modal || ring) ? list_h - 1 : list_h); i++) {
             size_t idx = app->overlay.top + i;
             bool on = idx == app->overlay.sel;
             draw_fill(line_y, box_x, box_w, on ? CP_MENTION : CP_SELECTED);
@@ -6828,6 +7094,13 @@ if (app->overlay.kind == OVERLAY_RECORD) {
         draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
                   typing ? "type the value | Enter save | Esc cancel"
                          : "Up/Down | Enter choose | Esc cancel");
+    else if (ring)
+        /* No filter row and no count: two answers do not need finding.
+         * Esc is spelled "dismiss" and not "cancel" because it stops the
+         * ring WITHOUT telling the caller anything — /answer still
+         * reaches the call afterwards. */
+        draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
+                  "Up/Down | Enter choose | Esc dismiss");
     else if (picker)
         draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
                   "%zu/%zu | type to filter | Up/Down | Enter | Esc", n ? app->overlay.sel + 1 : 0,
@@ -6837,6 +7110,13 @@ if (app->overlay.kind == OVERLAY_RECORD) {
 
 static void draw(struct app *app) {
     pthread_mutex_lock(&app->lock);
+    /* The ring, rung here because ncurses is not thread-safe and an
+     * invite arrives on the socket thread. Once per raised ring: a bell
+     * on every frame is not a doorbell, it is an alarm. */
+    if (app->call_ring_bell) {
+        app->call_ring_bell = false;
+        beep();
+    }
     erase();
     app->frame_seq++;
     app->link_region_count = 0;
@@ -8929,6 +9209,8 @@ static const struct setting_def SETTINGS[] = {
     { "llm.tools", SET_TEXT, NULL, "which of shottino's tools the model gets (empty = defaults)" },
     { "llm.search_url", SET_TEXT, NULL, "web_search endpoint; %s is where the query goes" },
     { "llm.cdp_url", SET_TEXT, NULL, "browser_control: Chrome debug endpoint, e.g. http://127.0.0.1:9222" },
+    { "call.base_url", SET_TEXT, NULL, "where /call makes a room; any room-per-URL service" },
+    { "call.ring", SET_CHOICE, "off|queries|all", "when an arriving call interrupts you" },
     { "bot.dir", SET_TEXT, NULL, "where AGENT.md and the bot's notes live" },
     { "stt.enabled", SET_BOOL, NULL, "/stt speech to text (off: nothing is transcribed)" },
     { "stt.url", SET_TEXT, NULL, "whisper endpoint base; empty = local whisper only" },
@@ -9072,6 +9354,8 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "stt.local_model") == 0) src = app->stt_local_model;
     else if (strcmp(name, "voice.source") == 0) src = app->voice_source;
     else if (strcmp(name, "video.source") == 0) src = app->video_source;
+    else if (strcmp(name, "call.base_url") == 0) src = app->call_base_url;
+    else if (strcmp(name, "call.ring") == 0) src = call_ring_word(app->call_ring);
     else if (strcmp(name, "bot.dir") == 0) src = app->bot_dir;
     snprintf(out, out_sz, "%.*s", (int)out_sz - 1, src);
     return strlen(src);
@@ -9244,6 +9528,19 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
     else if (strcmp(def->name, "video.source") == 0)
         snprintf(app->video_source, sizeof(app->video_source), "%.*s",
                  (int)sizeof(app->video_source) - 1, value);
+    else if (strcmp(def->name, "call.base_url") == 0)
+        snprintf(app->call_base_url, sizeof(app->call_base_url), "%.*s",
+                 (int)sizeof(app->call_base_url) - 1, value);
+    else if (strcmp(def->name, "call.ring") == 0) {
+        /* The table's `values` string is what the error message quotes,
+         * so a word this rejects is a word the user was already shown. */
+        enum call_ring_policy policy;
+        if (!call_ring_parse(value, &policy)) {
+            log_line(app, "/set call.ring: `%.20s` is not one of %s", value, def->values);
+            return false;
+        }
+        app->call_ring = policy;
+    }
     return true;
 }
 
@@ -10434,6 +10731,16 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
     if (max == 0) return 0;
     struct overlay *ov = &app->overlay;
     size_t n = 0;
+    /* A ringing call: two answers, in the order that makes the safe one
+     * the one already selected. Answering opens a stranger's link and
+     * tells them you are here, so it is never what Enter does by
+     * accident — sel starts at 0, and 0 is Decline. */
+    if (ov->kind == OVERLAY_CALL) {
+        menu_add(out, &n, max, ACT_CALL_DECLINE, app->call_last.from, "", "Decline");
+        menu_add(out, &n, max, ACT_CALL_ANSWER, app->call_last.from, "",
+                 "Answer — open %s", app->call_last.url);
+        return n;
+    }
     /* One preference, opened for changing. The values it can take are
      * already in the table — SET_BOOL is on/off, SET_CHOICE lists its
      * words in `values` — so the list is BUILT from the same source /set
@@ -10848,6 +11155,13 @@ static void overlay_activate(struct app *app) {
     case ACT_HIDE:
         if (body[0]) hide_media_url(app, body);
         break;
+    case ACT_CALL_ANSWER:
+    case ACT_CALL_DECLINE:
+        /* Through the verbs, like every other menu entry: the ring must
+         * not become a second implementation of answering that drifts
+         * from the one a user could have typed. */
+        handle_command(app, action == ACT_CALL_ANSWER ? "/answer" : "/hangup");
+        break;
     case ACT_TRANSCRIBE:
         /* Through the ordinary verb, so the enablement checks, the
          * endpoint choice and the local fallback are decided in one
@@ -11182,9 +11496,11 @@ static void cycle_window(struct app *app, int delta) {
  * the dispatcher's own literals and fails when one is not listed here.
  * Adding a verb means adding it in three places; that test names them. */
 static const char *commands[] = {
-    "/admin", "/alias", "/approve", "/archive", "/away", "/ban", "/banlist", "/block", "/bot",
+    "/admin", "/alias", "/answer", "/approve", "/archive", "/away", "/ban", "/banlist", "/block",
+    "/bot", "/call",
     "/chat", "/clear", "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deny", "/deop",
-    "/devoice", "/dictate", "/die", "/disconnect", "/exec", "/exit", "/globops", "/help", "/highlight",
+    "/devoice", "/dictate", "/die", "/disconnect", "/exec", "/exit", "/globops", "/hangup", "/help",
+    "/highlight",
     "/hilight", "/hs", "/ignore", "/info", "/invite", "/j", "/join", "/kb", "/keys", "/kick",
     "/kickban", "/kill", "/kline", "/links", "/list", "/llm", "/llm-clear", "/llm-compact",
     "/locops", "/lusers", "/me",
@@ -11196,7 +11512,7 @@ static const char *commands[] = {
     "/trace",
     "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unkline", "/unset", "/unsplit",
     "/upload",
-    "/users", "/version", "/video", "/view", "/vmsg", "/voice", "/voicemsg", "/w",
+    "/users", "/version", "/video", "/videocall", "/view", "/vmsg", "/voice", "/voicemsg", "/w",
     "/wallops", "/watch", "/who", "/whois",
     "/whowas", "/win", "/window", "/wire"
 };
@@ -11669,6 +11985,91 @@ static void open_external_url(struct app *app, const char *url) {
     }
     while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
     log_line(app, "opened %s", url);
+}
+
+/* ── /call, /videocall, /answer, /hangup ───────────────────────────────
+ *
+ * Placing a call is: mint a room nobody can guess, post the invite as
+ * text, and join it yourself. Joining is handing the URL to the desktop
+ * opener — the same thing /open does with any other link, which is the
+ * whole of stage 1. What changes later is what "join" runs, not what
+ * gets posted or how it is recognised. */
+static void call_command(struct app *app, enum call_kind kind) {
+    char net[MAX_SLUG], chan[MAX_CHANNEL];
+    if (!current_window_key(app, net, sizeof(net), chan, sizeof(chan)) || is_local_window(chan)) {
+        log_line(app, "/call: this window has nobody to call — switch to a channel or a query");
+        return;
+    }
+    if (!app->call_base_url[0]) {
+        log_line(app, "/call: no service set — /set call.base_url https://meet.jit.si (or your own)");
+        return;
+    }
+    char room[96];
+    call_room_name(room, sizeof(room));
+    char message[sizeof(app->call_base_url) + sizeof(room) + 16];
+    call_invite_build(kind, app->call_base_url, room, message, sizeof(message));
+
+    /* The caller is a participant too: a call you start and do not join
+     * is an invitation, and this verb is not called /invite. Recorded as
+     * the last invite for the same reason — /answer must be able to get
+     * you back into your OWN call after you close the tab. */
+    pthread_mutex_lock(&app->lock);
+    app->call_last.present = true;
+    app->call_last.kind = kind;
+    snprintf(app->call_last.from, sizeof(app->call_last.from), "%s",
+             own_nick_for_network(app, net) ? own_nick_for_network(app, net) : "");
+    snprintf(app->call_last.network, sizeof(app->call_last.network), "%s", net);
+    snprintf(app->call_last.channel, sizeof(app->call_last.channel), "%s", chan);
+    snprintf(app->call_last.url, sizeof(app->call_last.url), "%s", message + strlen(call_marker(kind)) + 1);
+    pthread_mutex_unlock(&app->lock);
+
+    add_pending_echo(app, net, chan, own_nick_for_network(app, net), message);
+    enqueue_send(app, net, chan, message);
+    log_line(app, "call: %s posted to %s — anyone there can join by opening the link",
+             call_kind_word(kind), chan);
+    open_external_url(app, app->call_last.url);
+}
+
+/* Join the call that came in — whether it rang or not.
+ *
+ * Reads app->call_last rather than the overlay, which is what lets a
+ * channel invite under the default (quiet) policy still be answerable,
+ * and what makes dismissing a ring non-destructive. */
+static void call_answer(struct app *app) {
+    char url[MAX_LINE];
+    char from[MAX_CHANNEL];
+    bool have;
+    pthread_mutex_lock(&app->lock);
+    have = app->call_last.present;
+    snprintf(url, sizeof(url), "%s", app->call_last.url);
+    snprintf(from, sizeof(from), "%s", app->call_last.from);
+    if (app->overlay.kind == OVERLAY_CALL) app->overlay.kind = OVERLAY_NONE;
+    pthread_mutex_unlock(&app->lock);
+    if (!have) {
+        log_line(app, "/answer: nobody has called");
+        return;
+    }
+    log_line(app, "call: joining %s's room", from[0] ? from : "the");
+    open_external_url(app, url);
+}
+
+/* Stop the ring. LOCAL: nothing is sent to the caller.
+ *
+ * Declining down the wire would mean posting "no" into whatever window
+ * the invite arrived in — a channel included — which tells everyone
+ * there something they did not ask about. The caller learns you did not
+ * join by your not being in the room, which is how a call has always
+ * worked. */
+static void call_hangup(struct app *app) {
+    bool ringing;
+    pthread_mutex_lock(&app->lock);
+    ringing = app->overlay.kind == OVERLAY_CALL;
+    if (ringing) app->overlay.kind = OVERLAY_NONE;
+    pthread_mutex_unlock(&app->lock);
+    /* Says what it OBSERVED: "dismissed" when a ring was up, and the
+     * honest nothing-to-do when there wasn't. */
+    if (ringing) log_line(app, "call: dismissed — the caller was not told");
+    else log_line(app, "/hangup: nothing is ringing");
 }
 
 
@@ -12546,6 +12947,10 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "quote") == 0) log_line(app, "/quote raw-line — send a raw IRC line through grappa");
     else if (strcmp(cmd, "oper") == 0) log_line(app, "/oper name password — send IRC OPER credentials; password is not logged");
     else if (strcmp(cmd, "open") == 0) log_line(app, "/open — open the most recent URL using xdg-open (the browser: the handler comes from the scheme)");
+    else if (strcmp(cmd, "call") == 0) log_line(app, "/call — start an audio call in this window: a room nobody can guess is minted, its link is posted as 📞 <url>, and your browser opens it. The link IS the credential, so the call is exactly as private as the window you posted it in. /set call.base_url picks the service");
+    else if (strcmp(cmd, "videocall") == 0) log_line(app, "/videocall — /call with a camera: the same room, posted as 📹 <url> so the other side knows to expect video before joining");
+    else if (strcmp(cmd, "answer") == 0) log_line(app, "/answer — join the last call that came in, ringing or not. A channel invite does not ring under the default /set call.ring, and this is how you take it");
+    else if (strcmp(cmd, "hangup") == 0) log_line(app, "/hangup — stop a ringing call. LOCAL: the caller is not told, the same way not picking up a phone tells nobody. /answer still reaches the call afterwards");
     else if (strcmp(cmd, "view") == 0) log_line(app, "/view [url] — download it and open the desktop viewer for that file TYPE; an audio URL PLAYS instead (mpv/ffplay); bare /view offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview-ascii") == 0) log_line(app, "/preview-ascii [url] — the same preview, forced to colour character art: skips the terminal's graphics protocol, which is what to try when a picture renders as garbage or not at all");
@@ -14100,6 +14505,14 @@ static void handle_command_dispatch(struct app *app, char *line) {
             log_line(app, "/view: nothing to open — no picture, clip or audio has been posted in this window");
     } else if (strcmp(line, "/open") == 0) {
         open_external_url(app, app->last_url);
+    } else if (strcmp(line, "/call") == 0) {
+        call_command(app, CALL_AUDIO);
+    } else if (strcmp(line, "/videocall") == 0) {
+        call_command(app, CALL_VIDEO);
+    } else if (strcmp(line, "/answer") == 0) {
+        call_answer(app);
+    } else if (strcmp(line, "/hangup") == 0) {
+        call_hangup(app);
     } else if (strcmp(line, "/clear") == 0) {
         clear_active_window_log(app);
     } else if (strcmp(line, "/close") == 0) {
@@ -17608,6 +18021,20 @@ int main(int argc, char **argv) {
     snprintf(app->voice_source, sizeof(app->voice_source), "pulse:default");
     snprintf(app->video_source, sizeof(app->video_source), "v4l2:/dev/video0");
     app->rec.stdin_fd = -1;
+    /* A service that needs no account to JOIN and makes a room out of
+     * any path — which is what the convention assumes and all it
+     * assumes. Nothing in the call code knows what jitsi is; point this
+     * at a self-hosted room service and everything works the same.
+     *
+     * NOTE for whoever reads the ring and wonders why the caller had to
+     * log in: meet.jit.si requires the MODERATOR to authenticate before
+     * a room starts. Joining one that is already running is anonymous,
+     * so an invite you RECEIVE always works; one you PLACE may ask the
+     * browser for a login the first time. */
+    snprintf(app->call_base_url, sizeof(app->call_base_url), "https://meet.jit.si");
+    /* Queries ring, channels do not. A channel doorbell any member can
+     * press is a doorbell that gets pressed. */
+    app->call_ring = CALL_RING_QUERIES;
     /* web_search needs somewhere to point, and the choice is decided by
      * what answers a plain socket rather than by brand.
      *
