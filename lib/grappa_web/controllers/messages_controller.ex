@@ -12,7 +12,12 @@ defmodule GrappaWeb.MessagesController do
   `create/2` routes through `Grappa.Session.send_privmsg/4`, which
   persists the row, broadcasts on the per-channel PubSub topic, AND
   sends the PRIVMSG upstream — single source for both the scrollback
-  row and the wire event. The lookup is keyed by the
+  row and the wire event. #640: a POST carrying `"ctcp_target"` is a
+  CTCP QUERY (`/ctcp`, `/ping`) instead — it routes through
+  `Grappa.Session.send_ctcp/5`, where the URL `channel_id` is the SOURCE
+  window the echo renders in and `ctcp_target` is the wire recipient; no
+  query window is ever opened for the recipient (a control-surface probe
+  is not a conversation). The lookup is keyed by the
   `t:Grappa.Session.subject/0` ID-tuple resolved from
   `conn.assigns.current_subject` via `GrappaWeb.Subject.to_session/1`
   + `network.id` end-to-end (sub-task 2g) so two subjects on the same
@@ -162,6 +167,28 @@ defmodule GrappaWeb.MessagesController do
           Plug.Conn.t()
           | {:error, :bad_request | :no_session | :invalid_line | :rate_limited}
           | {:error, Ecto.Changeset.t()}
+  def create(conn, %{"channel_id" => channel, "body" => body, "ctcp_target" => ctcp_target})
+      when is_binary(body) and body != "" and is_binary(ctcp_target) and ctcp_target != "" do
+    subject = Subject.to_session(conn.assigns.current_subject)
+    network = conn.assigns.network
+
+    # #640 — a CTCP QUERY (/ctcp, /ping). `channel` (the URL) is the SOURCE
+    # window the echo renders in — `validate_target_name` (NOT the post variant)
+    # so `$server` is allowed (a /ping typed in the server window is legit).
+    # `ctcp_target` is the wire recipient — `validate_post_target_name` (a real
+    # channel/nick, never the read-only `$server`). The session persists the
+    # echo to `source`, relays the frame to `ctcp_target`, and NEVER opens a
+    # query window for it (the phantom-window bug). One send-token as for a
+    # plain PRIVMSG. `send_ctcp` always persists a row (no `:no_persist` arm).
+    with :ok <- BodyLimit.check(body),
+         :ok <- validate_target_name(channel),
+         :ok <- validate_post_target_name(ctcp_target),
+         :ok <- take_send_token(subject, network.id),
+         {:ok, result} <- Session.send_ctcp(subject, network.id, channel, ctcp_target, body) do
+      render_send_result(conn, result)
+    end
+  end
+
   def create(conn, %{"channel_id" => channel, "body" => body})
       when is_binary(body) and body != "" do
     subject = Subject.to_session(conn.assigns.current_subject)

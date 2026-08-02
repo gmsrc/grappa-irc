@@ -118,6 +118,17 @@ defmodule Grappa.Scrollback.Meta do
                                                                   verb with no argument. ACTION is NOT
                                                                   tagged here — it rides its own :action
                                                                   kind.)
+      :privmsg (CTCP query echo)    →  + %{ctcp_target: String.t()}
+                                                                 (#640: the operator's OWN outbound CTCP
+                                                                  QUERY self-echo (/ctcp, /ping) is keyed
+                                                                  to the SOURCE window it was typed in, NOT
+                                                                  the wire recipient — a control-surface
+                                                                  probe never opens a query window. The
+                                                                  wire recipient rides here so the render
+                                                                  shows "→ CTCP VERB args to <ctcp_target>"
+                                                                  off the message, not off the routing key
+                                                                  (`channel`). Present alongside
+                                                                  ctcp_verb/ctcp_args on such echoes.)
 
   Phase 1 only writes `:privmsg` rows where `meta = %{}` so Phase 1
   exercises only the empty-map path. The allowlist + atomization is
@@ -155,10 +166,11 @@ defmodule Grappa.Scrollback.Meta do
             | :sender_prefix
             | :ctcp_verb
             | :ctcp_args
+            | :ctcp_target
           ) => term()
         }
 
-  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix ctcp_verb ctcp_args]a
+  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix ctcp_verb ctcp_args ctcp_target]a
 
   @doc """
   The atom-key allowlist. Exposed so the test suite can assert that
@@ -185,7 +197,8 @@ defmodule Grappa.Scrollback.Meta do
           | :sender_host
           | :sender_prefix
           | :ctcp_verb
-          | :ctcp_args,
+          | :ctcp_args
+          | :ctcp_target,
           ...
         ]
   def known_keys, do: @known_keys

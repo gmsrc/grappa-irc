@@ -496,7 +496,18 @@ const exports = identityScopedStore((onIdentityChange) => {
     }
   };
 
-  const sendMessage = async (slug: string, name: string, body: string): Promise<void> => {
+  // #640 — `ctcpTarget` (optional) makes this a CTCP QUERY send: `name` is the
+  // SOURCE window the echo renders in (where the operator typed /ctcp or /ping),
+  // and `ctcpTarget` is the wire recipient. All the own-send bookkeeping
+  // (submit-snap, cursor advance, divider re-latch) is keyed on `name` = the
+  // source window — exactly where the echo + RTT land — so it is byte-identical
+  // to a plain send once `name` is the source. Absent, it is a normal PRIVMSG.
+  const sendMessage = async (
+    slug: string,
+    name: string,
+    body: string,
+    ctcpTarget?: string,
+  ): Promise<void> => {
     const t = token();
     if (!t) return;
     const key = channelKey(slug, name);
@@ -536,7 +547,7 @@ const exports = identityScopedStore((onIdentityChange) => {
     // (networks ↔ selection). Three-line inline body + the doc here
     // is cheaper than hoisting `setCursorIfAdvances` to a leaf module
     // for a single second caller.
-    const row = await apiSendMessage(t, slug, name, body);
+    const row = await apiSendMessage(t, slug, name, body, ctcpTarget);
     // Anti-poison gate (issue #50 / m6, 2026-06-09): only advance the
     // cursor when the local pane already holds a rendered row. Advancing
     // PAST an unrendered row poisons `refreshScrollback`'s resume cursor —

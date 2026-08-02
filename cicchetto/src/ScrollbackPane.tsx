@@ -675,9 +675,16 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
       if (typeof ctcpVerb === "string") {
         const ctcpArgs = typeof msg.meta.ctcp_args === "string" ? msg.meta.ctcp_args : "";
         const query = ctcpArgs === "" ? `CTCP ${ctcpVerb}` : `CTCP ${ctcpVerb} ${ctcpArgs}`;
+        // #640 — the echo is now keyed to the SOURCE window (msg.channel), so
+        // the wire recipient travels in meta.ctcp_target: read the target OFF
+        // the message, not the routing key. Fall back to msg.channel for
+        // pre-#640 rows (keyed to the target, no ctcp_target) so historical
+        // echoes still name the right peer.
+        const ctcpTarget =
+          typeof msg.meta.ctcp_target === "string" ? msg.meta.ctcp_target : msg.channel;
         return (
           <span class="scrollback-body">
-            → {query} to {msg.channel}
+            → {query} to {ctcpTarget}
           </span>
         );
       }

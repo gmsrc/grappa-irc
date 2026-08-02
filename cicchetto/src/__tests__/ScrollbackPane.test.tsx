@@ -380,47 +380,79 @@ describe("ScrollbackPane", () => {
     expect(line.textContent ?? "").not.toContain("ACTION ");
   });
 
-  it("renders an own outbound CTCP query self-echo as a human line, not raw \\x01 — #591", () => {
+  it("renders an own CTCP query self-echo in the SOURCE window, target read from meta — #591/#640", () => {
     // #591 — the operator's own /ctcp + /ping self-echo back as a :privmsg
     // whose body is the raw \x01VERB args\x01 frame, tagged by the server with
     // typed meta.ctcp_verb / meta.ctcp_args (SSOT Grappa.IRC.CTCP.verb_args/1).
-    // The render layer shows "→ CTCP VERB [args] to <target>" instead of the
-    // raw \x01 the operator would otherwise see in the window they typed in.
+    // The render shows "→ CTCP VERB [args] to <target>" instead of the raw \x01.
     // cic reads the TYPED meta, never \x01 (the "one IRC parser" invariant).
-    // The e2e (M-591) pins the same against a real send.
+    //
+    // #640 — the echo is keyed to the SOURCE window the command was typed in
+    // (msg.channel = "#grappa"), and the wire recipient rides meta.ctcp_target
+    // ("bob"). The render MUST read the target OFF the message, not the routing
+    // key. This fixture pins channel (the source) DISTINCT from the target —
+    // exactly the conflation (channel == target) the pre-#640 fixture baked in,
+    // which is what hid the split-window bug. Never assert the buggy shape.
     const ctcpSelfEcho: ScrollbackMessage[] = [
       {
         id: 1,
         network: "freenode",
-        channel: "#grappa",
+        channel: "#grappa", // SOURCE window (where /ctcp was typed)
         server_time: 1,
         kind: "privmsg",
         sender: "alice",
         body: "\x01VERSION\x01",
-        meta: { ctcp_verb: "VERSION", ctcp_args: "" },
+        meta: { ctcp_verb: "VERSION", ctcp_args: "", ctcp_target: "bob" }, // wire recipient
       },
       {
         id: 2,
         network: "freenode",
-        channel: "#grappa",
+        channel: "#grappa", // SOURCE window
         server_time: 2,
         kind: "privmsg",
         sender: "alice",
         body: "\x01PING 1706743200000\x01",
-        meta: { ctcp_verb: "PING", ctcp_args: "1706743200000" },
+        meta: { ctcp_verb: "PING", ctcp_args: "1706743200000", ctcp_target: "bob" },
       },
     ];
     setScrollback({ "freenode #grappa": ctcpSelfEcho });
     render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
     const lines = screen.getAllByTestId("scrollback-line");
     expect(lines).toHaveLength(2);
-    // No-arg verb → "→ CTCP VERSION to #grappa"; the raw \x01 never renders.
+    // Target is the wire recipient (bob), read from meta.ctcp_target — NOT the
+    // routing key (#grappa, the source window). The raw \x01 never renders.
     expect(lines[0]?.dataset.kind).toBe("privmsg");
-    expect(lines[0]).toHaveTextContent("→ CTCP VERSION to #grappa");
+    expect(lines[0]).toHaveTextContent("→ CTCP VERSION to bob");
+    // The source window name must NEVER appear as the target (the #640 bug).
+    expect(lines[0]?.textContent ?? "").not.toContain("#grappa");
     expect(lines[0]?.textContent ?? "").not.toContain("\x01");
-    // Arg-carrying verb → the token rides after the verb.
-    expect(lines[1]).toHaveTextContent("→ CTCP PING 1706743200000 to #grappa");
+    // Arg-carrying verb → the token rides after the verb, still to bob.
+    expect(lines[1]).toHaveTextContent("→ CTCP PING 1706743200000 to bob");
+    expect(lines[1]?.textContent ?? "").not.toContain("#grappa");
     expect(lines[1]?.textContent ?? "").not.toContain("\x01");
+  });
+
+  it("falls back to the routing key for a pre-#640 echo with no ctcp_target", () => {
+    // Backward-compat: rows persisted before #640 were keyed to the TARGET
+    // (msg.channel) and carry no meta.ctcp_target. The render falls back to
+    // msg.channel so a historical "/ctcp #chan VERSION" echo still names the
+    // right peer instead of a blank/undefined target.
+    const legacy: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "freenode",
+        channel: "#chan",
+        server_time: 1,
+        kind: "privmsg",
+        sender: "alice",
+        body: "\x01VERSION\x01",
+        meta: { ctcp_verb: "VERSION", ctcp_args: "" }, // no ctcp_target (pre-#640 row)
+      },
+    ];
+    setScrollback({ "freenode #chan": legacy });
+    render(() => <ScrollbackPane networkSlug="freenode" channelName="#chan" kind="channel" />);
+    const lines = screen.getAllByTestId("scrollback-line");
+    expect(lines[0]).toHaveTextContent("→ CTCP VERSION to #chan");
   });
 
   it("renders the action row with one space between '*' and the nick (not two) — #457", () => {

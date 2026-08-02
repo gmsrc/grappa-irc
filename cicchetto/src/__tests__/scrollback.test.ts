@@ -243,7 +243,42 @@ describe("scrollback verbs", () => {
     });
     const scrollback = await import("../lib/scrollback");
     await scrollback.sendMessage("freenode", "#grappa", "hello world");
-    expect(api.sendMessage).toHaveBeenCalledWith("tok", "freenode", "#grappa", "hello world");
+    // #640 — a plain send carries NO ctcp_target: the pass-through forwards it
+    // as `undefined`, so api.sendMessage's payload stays `{ body }` (byte-
+    // identical to the pre-#640 request). A CTCP query would pass a 5th arg.
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      "tok",
+      "freenode",
+      "#grappa",
+      "hello world",
+      undefined,
+    );
+  });
+
+  it("sendMessage forwards ctcpTarget to api.sendMessage for a CTCP query — #640", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.sendMessage).mockResolvedValue({
+      id: 2,
+      network: "freenode",
+      channel: "#grappa",
+      server_time: 0,
+      kind: "privmsg",
+      sender: "alice",
+      body: "\x01PING 123\x01",
+      meta: {},
+    });
+    const scrollback = await import("../lib/scrollback");
+    // #640 — /ping typed in #grappa (source) targeting bob (wire recipient):
+    // the source window rides the `channel` arg, the recipient the 5th.
+    await scrollback.sendMessage("freenode", "#grappa", "\x01PING 123\x01", "bob");
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      "tok",
+      "freenode",
+      "#grappa",
+      "\x01PING 123\x01",
+      "bob",
+    );
   });
 
   // Bucket D — post-success cursor advance. The id from the 201 body

@@ -304,10 +304,29 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // `ctcpFrame` seam. Non-ACTION CTCP is single-line by convention
         // (Grappa.IRC.LineSplit) so there is no multiline fan-out. AWAIT the
         // send: a CTCP verb MUST NOT silently no-op when the WS is down.
-        case "ctcp":
-          await sendPrivmsg(networkSlug, cmd.target, ctcpFrame(cmd.verb, cmd.args));
+        case "ctcp": {
+          // #640 — a CTCP QUERY (VERSION/PING/TIME/…) is a control-surface
+          // probe, not a conversation: its self-echo renders in the SOURCE
+          // window (`channelName`, where the operator typed it), NEVER a query
+          // window for the recipient. Send to the source window with the wire
+          // recipient in `ctcpTarget`; the server keys the echo to the source,
+          // carries the recipient in `meta.ctcp_target`, and never auto-opens a
+          // window for it.
+          //
+          // ACTION is the exception — it IS conversation (`/me` to an explicit
+          // target), so it belongs in the TARGET window and rides the normal
+          // send path unchanged (the server also rejects an ACTION via the CTCP
+          // route — `Session.send_ctcp`'s non-ACTION gate). The parser
+          // upper-cases the verb; guard case-insensitively regardless.
+          const frame = ctcpFrame(cmd.verb, cmd.args);
+          if (cmd.verb.toUpperCase() === "ACTION") {
+            await sendPrivmsg(networkSlug, cmd.target, frame);
+          } else {
+            await sendPrivmsg(networkSlug, channelName, frame, cmd.target);
+          }
           result = { ok: true };
           break;
+        }
         // #591 — /ping <target>: CTCP PING sugar. The token is a client
         // timestamp; it travels in the frame, comes back verbatim in the
         // reply's server-typed meta.ctcp_args, and the RTT is `now - sentAt`.
@@ -331,8 +350,14 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           if (networkId === undefined) return { error: "/ping: network not found" };
           const sentAtMs = Date.now();
           const token = String(sentAtMs);
+          // registerPing keys the RTT correlation on the SOURCE window
+          // (`key`/`channelName`) so the reply's RTT line lands where /ping was
+          // typed — the SAME window the #640 echo now renders in (the two halves
+          // finally converge).
           registerPing(networkId, cmd.target, token, key, channelName, sentAtMs);
-          await sendPrivmsg(networkSlug, cmd.target, ctcpFrame("PING", token));
+          // #640 — echo to the SOURCE window (`channelName`) with the wire
+          // recipient in `ctcpTarget`; never opens a query window for the peer.
+          await sendPrivmsg(networkSlug, channelName, ctcpFrame("PING", token), cmd.target);
           result = { ok: true };
           break;
         }

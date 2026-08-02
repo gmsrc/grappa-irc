@@ -370,10 +370,12 @@ describe("compose submit — slash command dispatch", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  // #591 — /ctcp <target> <verb> reuses the /me framing seam to build a single
-  // \x01VERB\x01 frame, sent to the EXPLICIT target (not the current window).
-  // No args → no trailing space inside the frame.
-  it("/ctcp <target> <verb> sends \\x01VERB\\x01 to the target (#591)", async () => {
+  // #591/#640 — /ctcp <target> <verb> builds a single \x01VERB\x01 frame. #640:
+  // a CTCP QUERY is a control-surface probe, so the echo is keyed to the SOURCE
+  // window (the submit's channelName, "#a") and the wire recipient ("bob")
+  // rides the 4th `ctcpTarget` arg — NOT sent to the target as a DM (which
+  // spawned the phantom window). No args → no trailing space inside the frame.
+  it("/ctcp <target> <verb> echoes in the SOURCE window with ctcpTarget (#591/#640)", async () => {
     localStorage.setItem("grappa-token", "tok");
     const sb = await import("../lib/scrollback");
     vi.mocked(sb.sendMessage).mockResolvedValue();
@@ -383,13 +385,16 @@ describe("compose submit — slash command dispatch", () => {
     compose.setDraft(k, "/ctcp bob version");
     const result = await compose.submit(k, "freenode", "#a");
 
-    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "bob", "\x01VERSION\x01");
+    // source window "#a", frame, ctcpTarget "bob" — the recipient is NOT the
+    // send channel anymore (that is the whole #640 fix).
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01VERSION\x01", "bob");
     expect(result).toEqual({ ok: true });
   });
 
-  // #591 — /ctcp <target> <verb> <args> frames \x01VERB args\x01 (single space
-  // after the verb), preserving arg case + interior spaces.
-  it("/ctcp <target> <verb> <args> frames \\x01VERB args\\x01 (#591)", async () => {
+  // #640 — ACTION is the exception: it IS conversation (/me to an explicit
+  // target), so it rides the normal send path INTO the target window (3 args,
+  // no ctcpTarget), exactly as before #640. The parser upper-cases the verb.
+  it("/ctcp <target> ACTION <args> sends to the TARGET window as conversation (#591/#640)", async () => {
     localStorage.setItem("grappa-token", "tok");
     const sb = await import("../lib/scrollback");
     vi.mocked(sb.sendMessage).mockResolvedValue();
@@ -399,6 +404,7 @@ describe("compose submit — slash command dispatch", () => {
     compose.setDraft(k, "/ctcp #chan action waves at Everyone");
     const result = await compose.submit(k, "freenode", "#a");
 
+    // Target #chan, no 4th arg — an action belongs in the target's window.
     expect(sb.sendMessage).toHaveBeenCalledWith(
       "freenode",
       "#chan",
@@ -423,8 +429,15 @@ describe("compose submit — slash command dispatch", () => {
     compose.setDraft(k, "/ping bob");
     const result = await compose.submit(k, "freenode", "#a");
 
-    // CTCP PING frame with the timestamp token, to the EXPLICIT target.
-    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "bob", "\x01PING 1706743200000\x01");
+    // #640 — CTCP PING frame with the timestamp token, echoed in the SOURCE
+    // window ("#a") with the wire recipient ("bob") in the 4th ctcpTarget arg —
+    // never a DM to the target (no phantom window).
+    expect(sb.sendMessage).toHaveBeenCalledWith(
+      "freenode",
+      "#a",
+      "\x01PING 1706743200000\x01",
+      "bob",
+    );
     // Pending registered: (networkId, nick, token, sourceKey, sourceChannel, sentAtMs).
     expect(pc.registerPing).toHaveBeenCalledWith(1, "bob", "1706743200000", k, "#a", 1706743200000);
     expect(result).toEqual({ ok: true });
@@ -466,7 +479,13 @@ describe("compose submit — slash command dispatch", () => {
 
     // THE RACE: with the send still unresolved, a reply arriving now MUST find a
     // registered pending entry. Pre-fix (register AFTER the await) this is 0 calls.
-    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "bob", "\x01PING 1706743200000\x01");
+    // #640 — the send targets the SOURCE window ("#a") with ctcpTarget "bob".
+    expect(sb.sendMessage).toHaveBeenCalledWith(
+      "freenode",
+      "#a",
+      "\x01PING 1706743200000\x01",
+      "bob",
+    );
     expect(pc.registerPing).toHaveBeenCalledWith(1, "bob", "1706743200000", k, "#a", 1706743200000);
 
     releaseSend();

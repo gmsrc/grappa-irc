@@ -354,6 +354,11 @@ config :logger, :console,
     # no Logger call carries them today.
     :ctcp_verb,
     :ctcp_args,
+    # #640 — the wire recipient of the operator's own outbound CTCP QUERY
+    # self-echo, carried in meta so the echo can be keyed to the SOURCE window
+    # (never a query window for the target). In the allowlist to satisfy the
+    # known_keys↔metadata sync test even though no Logger call carries it today.
+    :ctcp_target,
     # Auth context (Phase 2): bearer-token session lifecycle. `session_ref`
     # is a non-reversible SHA-256 handle of the session-id (S9: the raw id
     # IS the bearer token, so it must NEVER hit the log stream) — it rides

@@ -3324,6 +3324,146 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "#640 outbound CTCP QUERY routing (send_ctcp)" do
+    # #640 — a CTCP QUERY (/ctcp, /ping) to a nick is a control-surface probe,
+    # not a conversation. Its self-echo must land in the SOURCE window it was
+    # typed in — NOT a query window for the wire recipient — and it must NEVER
+    # auto-open that recipient's query window (the phantom-window bug). This is
+    # the server half: `send_ctcp/5` keys the echo to `source`, carries the wire
+    # recipient in `meta.ctcp_target`, sets `dm_with: nil`, and skips
+    # `maybe_open_query_window/2`. Sibling of the #591 classification block
+    # above; distinct verb (`send_ctcp` vs `send_privmsg`) so a plain DM still
+    # auto-opens.
+    setup do
+      rfc_handler = fn state, line ->
+        if String.starts_with?(line, "USER ") do
+          {:reply, ":server 001 grappa-test :Welcome\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(rfc_handler)
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      %{server: server, user: user, network: network, pid: pid}
+    end
+
+    test "keys the echo to the SOURCE window, tags meta.ctcp_target, dm_with nil, relays to recipient",
+         %{server: server, user: user, network: network, pid: pid} do
+      # /ping carol typed in #sniffo → source window is #sniffo, wire recipient
+      # is carol. The echo must persist keyed to #sniffo (the source), never
+      # carol.
+      assert {:ok, msg} =
+               Session.send_ctcp(
+                 {:user, user.id},
+                 network.id,
+                 "#sniffo",
+                 "carol",
+                 "\x01PING 1706743200000\x01"
+               )
+
+      # Persist KEY is the SOURCE window, NOT the wire recipient.
+      assert msg.channel == "#sniffo"
+      assert msg.kind == :privmsg
+      # The wire recipient travels in meta so the render reads it OFF the
+      # message, not the routing key (`channel`), alongside the typed verb/args.
+      assert msg.meta == %{ctcp_verb: "PING", ctcp_args: "1706743200000", ctcp_target: "carol"}
+      # A control probe is not a DM — no thread, no query window.
+      assert msg.dm_with == nil
+
+      # The frame still reaches the recipient on the wire.
+      assert {:ok, _} =
+               IRCServer.wait_for_line(
+                 server,
+                 &String.starts_with?(&1, "PRIVMSG carol :\x01PING 1706743200000\x01"),
+                 1_000
+               )
+
+      # The row lives in the SOURCE window's scrollback, not carol's.
+      source_rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
+      assert Enum.any?(source_rows, &(&1.body == "\x01PING 1706743200000\x01"))
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "NEVER opens a query window for the recipient (#640 phantom-window fix)",
+         %{user: user, network: network, pid: pid} do
+      net_id = network.id
+
+      # send_privmsg to a peer WOULD auto-open (asserted above). send_ctcp must
+      # NOT — a probe never spawns a conversation window. The call is
+      # synchronous, so maybe_open_query_window would have run inside it if it
+      # were going to; the refute is deterministic, no timing.
+      assert {:ok, _} =
+               Session.send_ctcp(
+                 {:user, user.id},
+                 net_id,
+                 "#sniffo",
+                 "carol",
+                 "\x01PING 1706743200000\x01"
+               )
+
+      refute QueryWindows.open?({:user, user.id}, net_id, "carol")
+
+      # Same for a recipient nobody has a window with (the issue's
+      # "/ping <nonexistent>" phantom): the server can't know it's nonexistent,
+      # so the fix is uniform — it just never opens one.
+      assert {:ok, _} =
+               Session.send_ctcp(
+                 {:user, user.id},
+                 net_id,
+                 "#sniffo",
+                 "ghostpeer",
+                 "\x01VERSION\x01"
+               )
+
+      refute QueryWindows.open?({:user, user.id}, net_id, "ghostpeer")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "keying to a query-window SOURCE still opens no window for the recipient",
+         %{user: user, network: network, pid: pid} do
+      # Prove the recipient-window suppression is independent of the source
+      # SHAPE: a /ping typed in a query window (dm-eligible source) must still
+      # not spawn a window for the DIFFERENT recipient.
+      net_id = network.id
+
+      assert {:ok, msg} =
+               Session.send_ctcp(
+                 {:user, user.id},
+                 net_id,
+                 "dave",
+                 "carol",
+                 "\x01PING 1706743200000\x01"
+               )
+
+      assert msg.channel == "dave"
+      assert msg.meta.ctcp_target == "carol"
+      refute QueryWindows.open?({:user, user.id}, net_id, "carol")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "rejects a non-CTCP body (and a bare ACTION) as :invalid_line",
+         %{user: user, network: network, pid: pid} do
+      net_id = network.id
+
+      # A plain PRIVMSG must go through send_privmsg/4 — ctcp_target is
+      # meaningless without a CTCP frame.
+      assert {:error, :invalid_line} =
+               Session.send_ctcp({:user, user.id}, net_id, "#sniffo", "carol", "just text")
+
+      # A /me ACTION rides its own kind, never a ctcp_target send.
+      assert {:error, :invalid_line} =
+               Session.send_ctcp({:user, user.id}, net_id, "#sniffo", "carol", "\x01ACTION waves\x01")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "#25 outbound own sender-prefix snapshot" do
     test "own channel message snapshots the operator's op grade into meta.sender_prefix" do
       # Mirror of the inbound EventRouter capture for the outbound door:

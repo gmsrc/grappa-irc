@@ -1631,6 +1631,28 @@ defmodule Grappa.Session.Server do
     end
   end
 
+  # #640 — /ctcp + /ping outbound CTCP QUERY. Unlike a plain PRIVMSG, a CTCP
+  # query to a nick is a control-surface probe, NOT a conversation: its
+  # self-echo belongs in the SOURCE window the operator typed it in (irssi
+  # behavior), and it must NEVER open a query window for the wire recipient.
+  # `source` is the display/persist window (the URL `channel_id` cic POSTed to);
+  # `ctcp_target` is the wire recipient. The wire line goes to `ctcp_target`;
+  # the echo persists+broadcasts keyed to `source`, with `dm_with: nil` and the
+  # recipient in `meta.ctcp_target` so the render reads the target OFF the
+  # message, not the routing key. Crucially: NO `maybe_open_query_window` — that
+  # server-side auto-open (`handle_persisting_send`) is exactly what spawned the
+  # phantom target window #640 reports. Uniform for humans AND services (a
+  # services CTCP query never opened a window either — it just gains the source
+  # echo now, strictly better; the inbound reply routing is unchanged).
+  # (No @impl here — a continuation clause of handle_call/3, whose @impl rides
+  # the {:send_privmsg, …} clause above, mirroring the sibling {:send_topic, …}.)
+  def handle_call({:send_ctcp, source, ctcp_target, body}, _, state)
+      when is_binary(source) and is_binary(ctcp_target) and is_binary(body) do
+    line = "PRIVMSG #{ctcp_target} :#{body}"
+    state = capture_outbound_ns_secret(state, line)
+    handle_ctcp_send(source, ctcp_target, body, state)
+  end
+
   # Sends `TOPIC <channel> :<body>` upstream. NO optimistic persist +
   # broadcast here — issue #22: the upstream IRC server echoes the TOPIC
   # back, EventRouter's unsolicited-TOPIC handler builds the canonical
@@ -3404,6 +3426,50 @@ defmodule Grappa.Session.Server do
 
       {:error, _} = err ->
         {:reply, err, state}
+    end
+  end
+
+  # #640 — persist the CTCP-query self-echo to the SOURCE window + relay the
+  # wire frame to the recipient, WITHOUT opening a query window. A CTCP query is
+  # single-frame (never line-split — splitting a `\x01`-framed body mid-frame
+  # would corrupt it), so this is a deliberately non-fragmenting sibling of
+  # `persist_and_send_fragments`: the wire target (`ctcp_target`) and the
+  # persist key (`fold_key(source)`) are distinct, `dm_with` is nil (control
+  # surface, not a DM), and the meta carries the typed CTCP verb/args PLUS
+  # `ctcp_target` so the render shows "→ CTCP VERB args to <recipient>" off the
+  # message. Reuses the shared `ctcp_self_echo_meta/1` (SSOT
+  # `Grappa.IRC.CTCP.verb_args/1`), `Persistor` (push: false — own outbound
+  # never self-notifies), and `send_privmsg_or_log/3`.
+  @spec handle_ctcp_send(String.t(), String.t(), String.t(), t()) ::
+          {:reply, {:ok, Scrollback.Message.t()} | {:error, term()}, t()}
+  defp handle_ctcp_send(source, ctcp_target, body, state) do
+    key = fold_key(state, source)
+
+    attrs =
+      Session.put_subject_id(
+        %{
+          network_id: state.network_id,
+          # #640 — persist/broadcast KEY is the SOURCE window, network-folded
+          # (NOT the wire recipient); the wire recipient rides `meta.ctcp_target`.
+          channel: key,
+          server_time: System.system_time(:millisecond),
+          kind: :privmsg,
+          sender: state.nick,
+          body: body,
+          meta: Map.merge(ctcp_self_echo_meta(body), %{ctcp_target: ctcp_target}),
+          # #640 — a CTCP query is a control-surface probe, NOT a DM: no dm_with
+          # (so no DM thread), and no `maybe_open_query_window` below (so no
+          # phantom query window for the recipient).
+          dm_with: nil
+        },
+        state.subject
+      )
+
+    with {:ok, message} <- Persistor.persist_and_broadcast(attrs, state, push: false),
+         :ok <- send_privmsg_or_log(state.client, ctcp_target, body) do
+      {:reply, {:ok, message}, state}
+    else
+      {:error, _} = err -> {:reply, err, state}
     end
   end
 

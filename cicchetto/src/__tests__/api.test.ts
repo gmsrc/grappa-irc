@@ -402,6 +402,49 @@ describe("postTopic / postNick", () => {
   });
 });
 
+describe("sendMessage ctcp_target wire field (#640)", () => {
+  const okRow = JSON.stringify({
+    id: 1,
+    network: "azzurra",
+    channel: "#italia",
+    server_time: 0,
+    kind: "privmsg",
+    sender: "vjt",
+    body: "x",
+    meta: {},
+  });
+
+  it("a plain send POSTs { body } only — no ctcp_target (byte-identical to pre-#640)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(okRow, { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.sendMessage("tok", "azzurra", "#italia", "ciao");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/networks/azzurra/channels/%23italia/messages",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ body: "ciao" }) }),
+    );
+  });
+
+  it("a CTCP query POSTs { body, ctcp_target } to the SOURCE window URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(okRow, { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // /ping bob typed in #italia: the URL channel is the SOURCE window, and the
+    // wire recipient rides the snake_case `ctcp_target` field (the additive wire
+    // token #640 introduces).
+    await api.sendMessage("tok", "azzurra", "#italia", "\x01PING 1\x01", "bob");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/networks/azzurra/channels/%23italia/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ body: "\x01PING 1\x01", ctcp_target: "bob" }),
+      }),
+    );
+  });
+});
+
 describe("ownNickForNetwork (cic H3 fix + bucket F H4 type split)", () => {
   // Per-network IRC nick resolver — single source of truth for the
   // "what's my IRC nick on THIS network" question. Replaces the

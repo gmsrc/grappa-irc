@@ -175,6 +175,67 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "#640: ctcp_target routes the echo to the SOURCE window, wire to the recipient, no query window",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      # /ping carol typed in #sniffo: cic POSTs to the SOURCE window (the URL
+      # channel_id, #sniffo) with ctcp_target=carol (the wire recipient). The
+      # echo persists in #sniffo; carol never gets a phantom query window.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+          "body" => "\x01PING 1706743200000\x01",
+          "ctcp_target" => "carol"
+        })
+
+      body = json_response(conn, 201)
+      assert body["channel"] == "#sniffo"
+      assert body["kind"] == "privmsg"
+      assert body["meta"]["ctcp_verb"] == "PING"
+      assert body["meta"]["ctcp_args"] == "1706743200000"
+      assert body["meta"]["ctcp_target"] == "carol"
+
+      # The frame reaches carol on the wire, NOT #sniffo.
+      assert {:ok, "PRIVMSG carol :\x01PING 1706743200000\x01\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PRIVMSG carol"), 1_000)
+
+      # The echo lives in the SOURCE window's scrollback.
+      rows = Scrollback.fetch({:user, vjt.id}, network.id, "#sniffo", nil, 10, nil, false)
+      assert Enum.any?(rows, &(&1.body == "\x01PING 1706743200000\x01"))
+
+      # No phantom query window for the recipient — the whole point of #640.
+      refute Grappa.QueryWindows.open?({:user, vjt.id}, network.id, "carol")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#640: ctcp_target = $server is rejected (read-only) as bad_request",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      # The wire recipient is validated with validate_post_target_name, which
+      # rejects the read-only $server synthetic (a CTCP frame can't target it).
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+          "body" => "\x01VERSION\x01",
+          "ctcp_target" => "$server"
+        })
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "#357: the send-path span [:grappa, :session, :send_privmsg] closes with outcome: :ok",
          %{conn: conn, vjt: vjt} do
       {server, port} = start_server()

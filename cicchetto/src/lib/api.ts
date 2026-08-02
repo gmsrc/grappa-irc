@@ -1991,18 +1991,27 @@ export async function listMessagesAfter(
 // id from this body and let the WS echo own the insert. Reading the
 // body for any other purpose risks double-rendering on the race where
 // WS lands first.
+//
+// #640 — `ctcpTarget` turns this into a CTCP QUERY send (/ctcp, /ping): the
+// URL `channelName` is the SOURCE window the echo renders in, and `ctcpTarget`
+// is the wire recipient. The server persists the echo to the source window
+// (NOT a query window for the recipient) and relays the frame to `ctcpTarget`.
+// Absent (a plain PRIVMSG) the POST body is unchanged, so every non-CTCP
+// caller is byte-identical to the pre-#640 request.
 export async function sendMessage(
   token: string,
   networkSlug: string,
   channelName: string,
   body: string,
+  ctcpTarget?: string,
 ): Promise<ScrollbackMessage> {
+  const payload = ctcpTarget === undefined ? { body } : { body, ctcp_target: ctcpTarget };
   const res = await fetch(
     `/networks/${encodeURIComponent(networkSlug)}/channels/${encodeURIComponent(channelName)}/messages`,
     {
       method: "POST",
       headers: buildHeaders(token),
-      body: JSON.stringify({ body }),
+      body: JSON.stringify(payload),
     },
   );
   if (!res.ok) throw await readError(res);

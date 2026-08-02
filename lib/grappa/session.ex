@@ -74,7 +74,7 @@ defmodule Grappa.Session do
     ],
     exports: [Backoff, Server, Wire]
 
-  alias Grappa.IRC.{AuthFSM, Identifier}
+  alias Grappa.IRC.{AuthFSM, CTCP, Identifier}
   alias Grappa.Session.Server
 
   require Logger
@@ -554,6 +554,58 @@ defmodule Grappa.Session do
       )
     else
       {:error, :invalid_line}
+    end
+  end
+
+  @doc """
+  #640 — sends the operator's own outbound CTCP QUERY (`/ctcp`, `/ping`) and
+  self-echoes it into the SOURCE window, NEVER a query window for the wire
+  recipient.
+
+  `source` is the display/persist window the command was typed in (cic's URL
+  `channel_id`); `ctcp_target` is the wire recipient. The Session.Server relays
+  `PRIVMSG <ctcp_target> :<body>` upstream, persists the echo keyed to `source`
+  with `dm_with: nil` + `meta.ctcp_target`, and does NOT auto-open a query
+  window — that server-side auto-open (`handle_persisting_send`) is exactly the
+  phantom target window #640 reports.
+
+  `{:error, :invalid_line}` when `source`/`ctcp_target`/`body` carry CRLF/NUL,
+  or when `body` is not a non-ACTION CTCP frame (a plain PRIVMSG must go through
+  `send_privmsg/4`; a `/me` ACTION rides its own kind). `{:error, :no_session}`
+  when no live session. On success `{:ok, %Scrollback.Message{}}` — always
+  persisted (no `:no_persist` arm: the source echo is the whole point, even for
+  a services recipient, which never opened a window either).
+  """
+  @spec send_ctcp(subject(), integer(), String.t(), String.t(), String.t()) ::
+          {:ok, Grappa.Scrollback.Message.t()}
+          | {:error, :no_session | :invalid_line | send_transport_error()}
+          | {:error, Ecto.Changeset.t()}
+  def send_ctcp(subject, network_id, source, ctcp_target, body)
+      when is_subject(subject) and is_integer(network_id) and is_binary(source) and
+             is_binary(ctcp_target) and is_binary(body) do
+    # Injection + shape gates fire BEFORE the registry lookup (mirror
+    # send_privmsg/4): a malformed line against a non-existent session still
+    # surfaces as :invalid_line, and the row is never persisted on rejection.
+    # `body` MUST be a non-ACTION CTCP frame — ctcp_target is meaningless for a
+    # plain PRIVMSG (use send_privmsg/4) or a /me ACTION (rides its own kind).
+    if Identifier.safe_line_token?(source) and Identifier.safe_line_token?(ctcp_target) and
+         Identifier.safe_line_token?(body) and ctcp_query?(body) do
+      call_session(subject, network_id, {:send_ctcp, source, ctcp_target, body})
+    else
+      {:error, :invalid_line}
+    end
+  end
+
+  # #640 — a CTCP QUERY frame: `\x01VERB[ args]\x01` where VERB is not ACTION
+  # (/me's ACTION rides its own :action kind, never a ctcp_target send). The
+  # discriminant is the shared SSOT `Grappa.IRC.CTCP.verb_args/1`, so this
+  # facade gate and the Session.Server meta tag agree on what "is a CTCP query."
+  @spec ctcp_query?(binary()) :: boolean()
+  defp ctcp_query?(body) do
+    case CTCP.verb_args(body) do
+      {"ACTION", _} -> false
+      {_, _} -> true
+      :none -> false
     end
   end
 
