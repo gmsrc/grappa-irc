@@ -26046,3 +26046,55 @@ guidance (OPERATIONS.md) is to disconnect mode-2 sessions before renumbering, or
 accept the manual cleanup. This is not new to #609 in kind — any prefix change
 orphans out-of-current-prefix aliases from the reconcile sweep — but #609 makes
 a runtime prefix change take effect without a reboot, so it is now reachable.
+
+## 2026-08-02 — #647: mode-2 held every first-time visitor (the P0), the fallback fix, and why its coverage lives at the plan layer
+
+**The incident.** Emergency COLD deploy at 10:49: since the mode-2
+(`static_mapping_with_reservations`) cutover, **no new user could connect** to a
+mode-2 deployment. Mode 2 derives a session's outbound source from the subject's
+last-known client `/64` (`Vhosts.last_client_prefix64/1`); with none recorded,
+`effective_source/3` returns `{:hold, :no_client_source}` and
+`Session.Server.init_or_hold/1` refuses the session rather than egress from a
+shared pool — correct by design. The defect was ORDERING: the only capture point
+was `UserSocket.connect/3` (#543 Part C), which runs AFTER `Visitors.Login` has
+already spawned the anchor session. A first-time visitor therefore reached the
+plan with nothing recorded, was held, and had its row expired.
+
+**Two fixes, and why the second masks the first.** `138e4b9e` records the client
+prefix at LOGIN, before the spawn, on both the fresh-provision and existing-row
+paths, best-effort (a login never fails because the sample could not be taken).
+`7b880769` then made `last_client_prefix64/1` FALL BACK, when no usable sample
+is recorded, to the address already on file — the visitor row's `ip` (written at
+login) or the newest `sessions.ip` for an account — deriving from it and
+persisting it (walked once per subject, not every reconnect). Still per-subject,
+still the subject's own client network, never a shared source; a subject with no
+address anywhere is still held. **Consequence for the visitor OUTCOME the two
+are redundant:** both derive from the same login `ip`, and the visitor row's `ip`
+is set at login before the spawn, so once `7b880769` is in place, reverting
+`138e4b9e` alone no longer produces a hold — the fallback admits via `visitor.ip`.
+The load-bearing fix for the visible outcome is `7b880769`; `138e4b9e` remains as
+defence-in-depth (records earlier, into the same store the fallback would).
+(Both commits mis-cite `fix(#645)`; #645 is the unrelated CTCP self-echo PR —
+#647 is the real home.)
+
+**Why the coverage sits at the plan layer, not a live spawn.** A mode-2 session
+cannot be spawned end-to-end in the test suite: `IRC.Client.source_bind/2` binds
+the derived source as `ifaddr`, and a derived public-IPv6 `2a03:…::cb` either
+family-mismatches the IPv4 fake IRCServer (`:inet.getaddr("127.0.0.1", :inet6)`
+fails → `:source_family_mismatch`) or, against an IPv6 fake, fails the bind
+itself (`:eaddrnotavail` — the host holds no such address). So a real mode-2
+login never returns `{:ok}`, admit or hold alike — the bind failure masks the
+admission decision. The whole codebase reflects this: every prior mode-2 test
+either hand-crafts `source_address: {:hold, _}`/`nil + managed_source_alias`
+opts, or asserts at `SessionPlan.base_plan`. #647's regression coverage
+therefore asserts the RESOLVED `source_address` at the `base_plan` seam
+(`addressing_config → effective_source → last_client_prefix64`), which the
+Session.Server hold tests never traverse — a whole addressing mode that was
+invisible to the composition. The synthetic mode-2 arming seam is the existing
+triad: `ServerSettings.put_addressing_mode/1` + `put_static_mapping_prefix/1`
+(DB, sandboxed) + `SourceAliasManager.put_test_armed/2` (persistent_term, global
+→ reset `on_exit`). The login-door guard (`login_test.exs`) composes a real
+`Visitors.Login` (default addressing, so it spawns and connects to the fake with
+no bind) with a mode-2 `base_plan` resolution afterward; it deliberately does
+NOT isolate either commit (either fix alone still admits), so its falsification
+is the DOUBLE revert of both commits ⇒ `{:hold, :no_client_source}` ⇒ RED.

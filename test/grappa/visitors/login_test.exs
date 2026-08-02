@@ -18,8 +18,14 @@ defmodule Grappa.Visitors.LoginTest do
   alias Grappa.Accounts.Session, as: AccountsSession
   alias Grappa.Admission.NetworkCircuit
   alias Grappa.AdmissionStateHelpers
-  alias Grappa.Networks.{Credential, Credentials, Network}
+  alias Grappa.Net.SourceAliasManager
+  alias Grappa.Networks.{Credential, Credentials, Network, Server, SessionPlan}
+  alias Grappa.{ServerSettings, Vhosts}
+  alias Grappa.Vhosts.SourceMapping
   alias Grappa.Visitors.{Login, Visitor}
+
+  # #647 — the production static-mapping /80 (mirrors session_plan_vhost_test).
+  @cb_prefix "2a03:4000:20:2d3:cb::/80"
 
   # NetworkCircuit is ETS-backed and survives Ecto sandbox resets. Each
   # test that creates a network may get the same auto-increment id (sqlite
@@ -659,6 +665,111 @@ defmodule Grappa.Visitors.LoginTest do
                )
 
       assert is_integer(retry_after) and retry_after >= 0
+    end
+  end
+
+  # #647 — the login records the client source sample before the spawn
+  # (138e4b9e), best-effort: a login must NEVER fail because the sample could
+  # not be taken. `record_login_client_source/2` skips an absent (nil) or
+  # unparseable `input.ip` and returns :ok, so the login proceeds and simply
+  # takes no sample. Assert the visible outcome — login SUCCEEDS, no sample on
+  # record — not that the recorder was called (which would pass on the broken
+  # code too). Falsification: make the recorder raise on a bad ip → the login
+  # crashes → RED.
+  describe "#647 — client-source capture at login is best-effort" do
+    test "a login with an absent (nil) ip still succeeds — no sample taken" do
+      {server, port} = start_server()
+      {network, _} = setup_visitor_network(port)
+
+      task = Task.async(fn -> Login.login(login_input(%{ip: nil}), []) end)
+      :ok = await_handshake(server)
+      feed_001(server, "vjt")
+
+      assert {:ok, %{visitor: %Visitor{} = v}} = Task.await(task, 10_000)
+      # nil ip ⇒ nothing to record and nothing on the row to fall back to.
+      assert Grappa.Vhosts.last_client_prefix64({:visitor, v.id}) == nil
+
+      stop_visitor_session(v.id, network.id)
+    end
+
+    test "a login with an unparseable ip still succeeds — no sample taken" do
+      {server, port} = start_server()
+      {network, _} = setup_visitor_network(port)
+
+      task = Task.async(fn -> Login.login(login_input(%{ip: "not-an-ip"}), []) end)
+      :ok = await_handshake(server)
+      feed_001(server, "vjt")
+
+      assert {:ok, %{visitor: %Visitor{} = v}} = Task.await(task, 10_000)
+      # The parse fails, the recorder returns :ok, and the row's unparseable ip
+      # yields no fallback key either — a sample is simply never taken.
+      assert Vhosts.last_client_prefix64({:visitor, v.id}) == nil
+
+      stop_visitor_session(v.id, network.id)
+    end
+  end
+
+  # #647 — END-TO-END GUARD spanning the door where the P0 manifested (a
+  # first-time visitor login) through the mode-2 addressing gate that refused
+  # it. Emergency cold deploy: no new user could connect on a mode-2
+  # deployment, because the client /64 was captured only at the WS connect —
+  # AFTER the login had already spawned the anchor — so a first-time visitor
+  # reached the plan with nothing recorded, was held with :no_client_source,
+  # and had its row expired.
+  #
+  # This test deliberately does NOT isolate either commit — that is not its
+  # job (A, the effective_source unit seam, isolates 7b880769 per subject; R4
+  # isolates 138e4b9e's best-effort). Here BOTH fixes overlap on the outcome:
+  # the login records the sample (138e4b9e) AND, absent that, the plan falls
+  # back to the visitor row's own ip (7b880769). Either one ALONE still admits,
+  # so a single-commit revert stays GREEN. Its own falsification is the DOUBLE
+  # revert (138e4b9e AND 7b880769 both reverted): only then does the plan
+  # resolve {:hold, :no_client_source} and this goes RED. If it stays green
+  # under the double revert it proves nothing — delete it. Its value is nailing
+  # the visible outcome (first-time visitor → admitted, not held) at the login
+  # door, which the unit seams do not traverse.
+  describe "#647 — first-time visitor login → mode-2 admission (end-to-end guard)" do
+    setup do
+      # put_test_armed writes global persistent_term — reset so the armed state
+      # never leaks to a sibling test.
+      on_exit(fn -> SourceAliasManager.put_test_armed(false, :not_armed) end)
+      :ok
+    end
+
+    test "a fresh visitor login lets the mode-2 plan resolve a derived source, not a hold" do
+      {server, port} = start_server()
+      {network, _} = setup_visitor_network(port)
+      client_ip = "2001:db8:1:2:3:4:5:6"
+      {:ok, ip_tuple} = :inet.parse_address(String.to_charlist(client_ip))
+
+      # 1. First-time visitor logs in under the DEFAULT addressing (mode 1: the
+      #    plan's source_address is nil, so the anchor binds nothing and
+      #    connects to the fake cleanly). The login carries the trusted client
+      #    IP through to record_login_client_source.
+      task = Task.async(fn -> Login.login(login_input(%{ip: client_ip}), []) end)
+      :ok = await_handshake(server)
+      feed_001(server, "vjt")
+      assert {:ok, %{visitor: %Visitor{} = v}} = Task.await(task, 10_000)
+
+      # 2. Arm mode 2 and resolve the plan for THAT visitor — the source the
+      #    next connect would bind. It must DERIVE from the login-time client
+      #    /64, never {:hold, :no_client_source}: that hold, for every
+      #    first-time visitor, WAS the P0. (Resolved at the plan layer, not a
+      #    live spawn — a derived public-IPv6 source cannot be bound on the
+      #    test host, so no mode-2 session ever connects in the suite.)
+      :ok = ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
+      :ok = ServerSettings.put_static_mapping_prefix(@cb_prefix)
+      :ok = SourceAliasManager.put_test_armed(true, nil)
+
+      cred = %Credential{nick: "n", auth_method: :none, autojoin_channels: [], last_joined_channels: []}
+      plan_server = %Server{host: "irc.example.test", port: 6697, tls: true, source_address: nil}
+      plan = SessionPlan.base_plan({:visitor, v.id}, "label", cred, network, plan_server, "n")
+
+      {:ok, expected} = SourceMapping.derive(SourceMapping.client_key(ip_tuple), @cb_prefix)
+      assert plan.source_address == expected
+      refute match?({:hold, _}, plan.source_address)
+
+      stop_visitor_session(v.id, network.id)
     end
   end
 end

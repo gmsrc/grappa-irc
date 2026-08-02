@@ -12,9 +12,9 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
 
   import Grappa.AuthFixtures
 
+  alias Grappa.{Accounts, ServerSettings, UserSettings, Vhosts}
   alias Grappa.Net.SourceAliasManager
   alias Grappa.Networks.{Credential, Server, SessionPlan}
-  alias Grappa.{ServerSettings, Vhosts}
   alias Grappa.Vhosts.SourceMapping
 
   test "with no pin / no selection, source_address falls back to server.source_address" do
@@ -132,6 +132,95 @@ defmodule Grappa.Networks.SessionPlanVhostTest do
       # #543 INC-6 — an admin pin lives OUTSIDE ::cb, so it is never a managed
       # alias (it binds verbatim, no ref-counted lifecycle).
       assert plan.managed_source_alias == nil
+    end
+
+    # #647 — the P0 and its real fix (7b880769). A subject with NO recorded
+    # UserSettings sample used to HOLD under mode 2, even though its client
+    # address was sitting in the visitor row (or the newest sessions row): the
+    # sample was captured only at the WS connect, AFTER the anchor spawned, so
+    # every FIRST-TIME visitor reached the plan with nothing recorded, was held
+    # with :no_client_source, and had its row expired — "no new user can
+    # connect". `last_client_prefix64/1` now falls back to that last-known
+    # address and derives from it. These pin the resolved source at the exact
+    # seam the hold used to strand — the composition (addressing_config →
+    # effective_source → last_client_prefix64), which had ZERO end-to-end
+    # coverage (the Session.Server hold tests hand-craft `source_address:
+    # {:hold, _}` and never reach this path). Falsification target: revert
+    # 7b880769 → `last_client_prefix64` returns nil again → {:hold,
+    # :no_client_source} → RED.
+    test "no sample but a visitor.ip on record → derived from it, NOT held (#647)" do
+      client_ip = "2001:db8:11:22:33:44:55:66"
+      {:ok, ip_tuple} = :inet.parse_address(String.to_charlist(client_ip))
+      # A first-time visitor: the row carries its login `ip`, but NO client
+      # sample was ever recorded (the pre-#543 / lost-capture case).
+      visitor = visitor_fixture(ip: client_ip)
+      refute UserSettings.get_last_client_prefix64({:visitor, visitor.id})
+
+      cred = %Credential{nick: "n", auth_method: :none, autojoin_channels: [], last_joined_channels: []}
+      server = %Server{host: "irc.example.test", port: 6697, tls: true, source_address: nil}
+
+      plan = SessionPlan.base_plan({:visitor, visitor.id}, "label", cred, network_fixture(), server, "n")
+
+      {:ok, expected} = SourceMapping.derive(SourceMapping.client_key(ip_tuple), @cb_prefix)
+      assert plan.source_address == expected
+      assert SourceMapping.in_prefix?(plan.source_address, @cb_prefix)
+      # #543 INC-6 — a derived ::cb source is a managed alias.
+      assert plan.managed_source_alias == expected
+    end
+
+    test "no sample but a newest sessions.ip on record → derived from it, NOT held (#647, user path)" do
+      user = user_fixture()
+      client_ip = "2001:db8:aa:bb:cc:dd:ee:ff"
+      {:ok, ip_tuple} = :inet.parse_address(String.to_charlist(client_ip))
+      # An account whose sample was lost but whose newest session still carries
+      # the client address the operator can see in admin.
+      {:ok, _} = Accounts.create_session({:user, user.id}, client_ip, nil, [])
+      refute UserSettings.get_last_client_prefix64({:user, user.id})
+
+      cred = %Credential{nick: "n", auth_method: :none, autojoin_channels: [], last_joined_channels: []}
+      server = %Server{host: "irc.example.test", port: 6697, tls: true, source_address: nil}
+
+      plan = SessionPlan.base_plan({:user, user.id}, "label", cred, network_fixture(), server, "n")
+
+      {:ok, expected} = SourceMapping.derive(SourceMapping.client_key(ip_tuple), @cb_prefix)
+      assert plan.source_address == expected
+      assert plan.managed_source_alias == expected
+    end
+
+    test "no sample AND no address anywhere → still {:hold, :no_client_source} (Global Constraint)" do
+      # The fallback is per-subject and NEVER a shared source: a subject with no
+      # sample and no address on record (no visitor.ip, no sessions.ip) is STILL
+      # held. 7b880769 widened WHERE the /64 comes from; it did not open a pool
+      # fallthrough. Visitor-subject sibling of the user case above. This PASSES
+      # both pre- and post-7b880769 — it guards the fix against over-reach.
+      visitor = visitor_fixture(ip: nil)
+      refute UserSettings.get_last_client_prefix64({:visitor, visitor.id})
+
+      cred = %Credential{nick: "n", auth_method: :none, autojoin_channels: [], last_joined_channels: []}
+      server = %Server{host: "irc.example.test", port: 6697, tls: true, source_address: nil}
+
+      plan = SessionPlan.base_plan({:visitor, visitor.id}, "label", cred, network_fixture(), server, "n")
+      assert plan.source_address == {:hold, :no_client_source}
+      assert plan.managed_source_alias == nil
+    end
+
+    test "resolving via the fallback PERSISTS the sample (walked once per subject, #647)" do
+      # 7b880769 records the derived sample on the way through, so the next
+      # resolve reads a recorded value instead of re-deriving from the row —
+      # the fallback path is walked once per subject, not on every reconnect.
+      # Assert the persisted OUTCOME (the sample is now on record), not the call.
+      client_ip = "2001:db8:11:22:33:44:55:66"
+      {:ok, ip_tuple} = :inet.parse_address(String.to_charlist(client_ip))
+      visitor = visitor_fixture(ip: client_ip)
+      refute UserSettings.get_last_client_prefix64({:visitor, visitor.id})
+
+      cred = %Credential{nick: "n", auth_method: :none, autojoin_channels: [], last_joined_channels: []}
+      server = %Server{host: "irc.example.test", port: 6697, tls: true, source_address: nil}
+
+      _ = SessionPlan.base_plan({:visitor, visitor.id}, "label", cred, network_fixture(), server, "n")
+
+      assert UserSettings.get_last_client_prefix64({:visitor, visitor.id}) ==
+               Base.encode16(SourceMapping.client_key(ip_tuple))
     end
   end
 end
