@@ -42,12 +42,37 @@ defmodule GrappaWeb.GrappaChannelTest do
   import Grappa.AuthFixtures
 
   alias Grappa.IRCServer
-  alias Grappa.{Networks, Protocol, QueryWindows, Repo, ScrollbackHelpers, Session, WSPresence}
+
+  alias Grappa.{
+    AdmissionStateHelpers,
+    Networks,
+    Protocol,
+    QueryWindows,
+    Repo,
+    ScrollbackHelpers,
+    Session,
+    WSPresence
+  }
+
   alias Grappa.Networks.{Credentials, Servers}
   alias Grappa.PubSub.Topic
   alias Grappa.Scrollback.Wire
   alias Grappa.Visitors.SessionPlan, as: VisitorSessionPlan
   alias GrappaWeb.UserSocket
+
+  # #653/#499 — this file spawns real `Session.Server`s (see
+  # `setup_user_and_network_with_session/2`), but the app-wide singletons
+  # those sessions touch — `NetworkCircuit` + `Backoff` ETS,
+  # `SessionSupervisor`/`SessionRegistry` — survive the `Sandbox` across
+  # tests, so a leftover row keyed by a sqlite-recycled `network_id` can
+  # bleed from an earlier test into a later one (the #499 class). Clear all
+  # three at the START of every test — the documented `AdmissionStateHelpers`
+  # pattern the ~20 other singleton-touching test files already follow; this
+  # file had only referenced it in a comment (the `on_exit` teardown below).
+  setup do
+    AdmissionStateHelpers.reset_all()
+    :ok
+  end
 
   # Mirrors `UserSocket.connect/3`'s assigns surface — assigns
   # `:user_name` AND `:current_subject` (V4: channel arms read the
