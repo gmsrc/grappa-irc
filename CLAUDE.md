@@ -615,9 +615,12 @@ is due. Don't just look at todo.md.
 3. **Merge BEFORE deploy, push BEFORE prod.** Prod is the **m42
    bastille jail** — `scripts/deploy-m42.sh` (server, auto hot/cold)
    / `--cic` (bundle only). The jail pulls origin/main, so: rebase
-   worktree onto main → merge to main → push origin main →
-   remove the now-merged worktree + delete its branch (step 0) →
-   deploy-m42 → verify health. Invoke deploy scripts by ABSOLUTE
+   worktree onto main → merge to main → remove the now-merged worktree +
+   delete its branch (step 0) → **bump `mix.exs @version` as the LAST
+   commit** → tag → push origin main → deploy-m42 → verify health. The
+   bump rides IN, never after — `Version.base/0` reads the compiled
+   `:vsn` so a hot reload never refreshes it (#391) and a `mix.exs`
+   change forces COLD regardless. Invoke deploy scripts by ABSOLUTE
    path (`/srv/grappa/scripts/…`) — cwd drift runs another
    checkout's copy. `scripts/deploy.sh` (Docker) drives the LOCAL
    dev stack only; nothing production runs on the pi.

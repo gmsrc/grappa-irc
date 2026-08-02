@@ -498,7 +498,21 @@ problem, defect #9) is solved differently here: the systemd unit runs
 exits — no custom wrapper needed. See
 `infra/linux/systemd/grappa.service`'s comments for the full rationale.
 
-### Release-cutting (post-deploy) — GitHub release + tag + News/Releases
+### Release-cutting — version-first, then GitHub release + tag + News/Releases
+
+**Cut the version FIRST, deploy SECOND — never bump after (vjt 2026-08-02).**
+The `mix.exs:5 @version` bump MUST ride into the deploy as the **last commit of
+the range being shipped**, be tagged on that commit, and only THEN deployed —
+the version bump is the *pre-deploy* half of release-cutting; the GH release +
+tag + News sequence below is the post-deploy half. WHY it cannot be bumped
+after: `Version.base/0` reads the **compiled `:vsn`**, so a HOT reload never
+refreshes the version string (that is the #391 bug); and `Preflight.mix_deps?`
+classifies any `mix.exs` change as **COLD**, so the bump forces an
+otherwise-hot range cold regardless — there is no "hot-patch the version"
+shortcut. Corollary: an **unplanned** prod move (a migration, a jail cutover)
+is something you version BEFORE, not after — a cutover that ships N commits
+while `mix.exs` still reads the old version is NOT corrected by a second cold
+restart to fix a string; the correct fix is to have bumped first.
 
 Standing order (vjt 2026-07-24): a batch deploy is not "done" until a GitHub
 release is cut AND the site's News/Releases entry is committed. After a **batch
