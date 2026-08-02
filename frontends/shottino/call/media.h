@@ -59,12 +59,24 @@ struct media_config {
     int video_payload_type;
     uint32_t audio_ssrc;
     uint32_t video_ssrc;
-    /* The terminal's frame geometry in PIXELS, decided by shottino from
-     * the cells it has and passed down, because the helper has no
-     * terminal and must not guess one. */
+    /* What we DECODE to: the terminal's frame geometry in PIXELS,
+     * decided by shottino from the cells it has, because the helper has
+     * no terminal and must not guess one. */
     int frame_w;
     int frame_h;
     int fps;
+    /* What we SEND. Deliberately NOT the same numbers.
+     *
+     * These were one setting, so the video leaving the machine was
+     * sized from the local picture-in-picture box — 320x240 because
+     * THIS terminal draws ASCII. The far end may be a browser on a
+     * large screen or a terminal with real bitmaps, and none of that is
+     * any business of how we happen to render theirs. Resizing your own
+     * window would also have changed what everybody else received. */
+    int capture_w;
+    int capture_h;
+    int capture_fps;
+    int video_kbps;
     /* Audio-only calls neither open the camera nor decode video. */
     bool want_video;
 };

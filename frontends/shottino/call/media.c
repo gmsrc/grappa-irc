@@ -99,17 +99,19 @@ bool media_start_send(struct media_leg *leg, const struct media_config *cfg, boo
     snprintf(dest, sizeof(dest), "rtp://127.0.0.1:%d", port);
     snprintf(pt, sizeof(pt), "%d", video ? cfg->video_payload_type : cfg->audio_payload_type);
     snprintf(ssrc, sizeof(ssrc), "%u", (unsigned)(video ? cfg->video_ssrc : cfg->audio_ssrc));
-    snprintf(rate, sizeof(rate), "%d", cfg->fps > 0 ? cfg->fps : 10);
+    /* CAPTURE geometry, never the render box: see media.h. */
+    int cw = cfg->capture_w > 0 ? cfg->capture_w : 640;
+    int ch = cfg->capture_h > 0 ? cfg->capture_h : 480;
+    int cfps = cfg->capture_fps > 0 ? cfg->capture_fps : 20;
+    snprintf(rate, sizeof(rate), "%d", cfps);
     snprintf(vfilter, sizeof(vfilter), "fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease,"
                                        "pad=%d:%d:(ow-iw)/2:(oh-ih)/2",
-             cfg->fps > 0 ? cfg->fps : 10, cfg->frame_w > 0 ? cfg->frame_w : 320,
-             cfg->frame_h > 0 ? cfg->frame_h : 240, cfg->frame_w > 0 ? cfg->frame_w : 320,
-             cfg->frame_h > 0 ? cfg->frame_h : 240);
-    /* Bitrates sized for what the far end will DO with this. The
-     * terminal renders coloured half-blocks, so detail beyond a few
-     * hundred kbps is decoded and then thrown away — and a mesh or a
-     * small SFU pays for every stream it forwards. */
-    snprintf(bitrate, sizeof(bitrate), "%s", video ? "300k" : "24k");
+             cfps, cw, ch, cw, ch);
+    /* Audio is Opus at conversational quality; video is whatever the
+     * sender was told to spend, because the RECEIVER decides what it
+     * can use and a browser can use a great deal more than a terminal. */
+    if (video) snprintf(bitrate, sizeof(bitrate), "%dk", cfg->video_kbps > 0 ? cfg->video_kbps : 800);
+    else snprintf(bitrate, sizeof(bitrate), "24k");
 
     char *argv[MEDIA_MAX_ARGS];
     size_t n = 0;

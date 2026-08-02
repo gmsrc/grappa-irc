@@ -496,7 +496,10 @@ static void usage(FILE *out) {
             "  --audio-source <f:i>  ffmpeg capture, e.g. pulse:default\n"
             "  --video-source <f:i>  ffmpeg camera, e.g. v4l2:/dev/video0\n"
             "  --audio-sink <f:d>    where decoded audio plays, e.g. pulse:default\n"
-            "  --frame <WxH>    decoded video size in PIXELS (default 320x240)\n"
+            "  --frame <WxH>    what we DECODE to, in pixels (default 320x240)\n"
+            "  --capture <WxH[@fps]>  what we SEND (default 640x480@20) — the far end\n"
+            "                   may be a browser, so this is not the render size\n"
+            "  --bitrate <kbps> video bitrate we send (default 800)\n"
             "  --fps <n>        video frame rate (default 10)\n"
             "  --verbose        interleave '#' notes on stderr\n"
             "  --protocol       print the helper protocol version and exit\n"
@@ -525,9 +528,14 @@ int main(int argc, char **argv) {
                                  .frame_w = 320,
                                  .frame_h = 240,
                                  .fps = 10,
+                                 .capture_w = 640,
+                                 .capture_h = 480,
+                                 .capture_fps = 20,
+                                 .video_kbps = 800,
                                  .want_video = false };
 
-    enum { OPT_AUDIO_SRC = 1000, OPT_VIDEO_SRC, OPT_AUDIO_SINK, OPT_FRAME, OPT_FPS, OPT_WHEP };
+    enum { OPT_AUDIO_SRC = 1000, OPT_VIDEO_SRC, OPT_AUDIO_SINK, OPT_FRAME, OPT_FPS, OPT_WHEP,
+           OPT_CAPTURE, OPT_KBPS };
     static const struct option opts[] = {
         { "whip", required_argument, NULL, 'w' },
         { "whep", required_argument, NULL, OPT_WHEP },
@@ -538,6 +546,8 @@ int main(int argc, char **argv) {
         { "video-source", required_argument, NULL, OPT_VIDEO_SRC },
         { "audio-sink", required_argument, NULL, OPT_AUDIO_SINK },
         { "frame", required_argument, NULL, OPT_FRAME },
+        { "capture", required_argument, NULL, OPT_CAPTURE },
+        { "bitrate", required_argument, NULL, OPT_KBPS },
         { "fps", required_argument, NULL, OPT_FPS },
         { "verbose", no_argument, NULL, 'v' },
         { "protocol", no_argument, NULL, 'p' },
@@ -568,6 +578,14 @@ int main(int argc, char **argv) {
                 return 2;
             }
             break;
+        case OPT_CAPTURE:
+            if (sscanf(optarg, "%dx%d@%d", &mcfg.capture_w, &mcfg.capture_h, &mcfg.capture_fps) < 2 ||
+                mcfg.capture_w <= 0 || mcfg.capture_h <= 0) {
+                emit_event("error", "message", "--capture wants WxH or WxH@fps, e.g. 640x480@20");
+                return 2;
+            }
+            break;
+        case OPT_KBPS: mcfg.video_kbps = atoi(optarg); break;
         case OPT_FPS: mcfg.fps = atoi(optarg); break;
         case 'v': verbose = true; break;
         case 'p': printf("%d\n", CALL_PROTOCOL); return 0;
@@ -582,6 +600,7 @@ int main(int argc, char **argv) {
     if (timeout_ms < 1000) timeout_ms = 1000;
     mcfg.want_video = video;
     if (mcfg.fps < 1 || mcfg.fps > 30) mcfg.fps = 10;
+    if (mcfg.capture_fps < 1 || mcfg.capture_fps > 60) mcfg.capture_fps = 20;
 
     /* SIGPIPE would kill the process the moment shottino closes the
      * frame pipe; the read/write paths report the error instead. */
