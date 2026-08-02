@@ -490,7 +490,9 @@ services:
       retries: 30
 
   cicchetto-build-test:
-    image: oven/bun:1
+    # oven/bun digest-pinned (#103). Refresh on a bump:
+    # docker buildx imagetools inspect oven/bun:1 --format '{{.Manifest.Digest}}'
+    image: oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4
     # Use the operator's UID/GID so writes to the bind-mounted host
     # cache dir + the dist named volume match host ownership. Mirrors
     # scripts/bun.sh's --user pattern. CONTAINER_UID/GID are exported
@@ -540,7 +542,9 @@ services:
     command: ["/bin/sh", "/certs/gen-cert.sh"]
 
   nginx-test:
-    image: nginx:alpine
+    # nginx:alpine digest-pinned (#103 — `alpine` floats). Refresh on a bump:
+    # docker buildx imagetools inspect nginx:alpine --format '{{.Manifest.Digest}}'
+    image: nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
     container_name: grappa-e2e-nginx
     hostname: nginx-test
     depends_on:

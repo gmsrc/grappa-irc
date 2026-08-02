@@ -36,6 +36,13 @@
 
 . "$(dirname "$0")/_lib.sh"
 
+# oven/bun image, digest-pinned (#103 supply-chain: `oven/bun:1` is a
+# major-moving tag). The tag stays for human readability; the @sha256 index
+# digest enforces reproducibility and still resolves multi-arch (amd64 CI +
+# arm64 dev host). Refresh on an intentional bump:
+#   docker buildx imagetools inspect oven/bun:1 --format '{{.Manifest.Digest}}'
+readonly BUN_IMAGE="oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4"
+
 CICCHETTO_DIR="$SRC_ROOT/cicchetto"
 BUN_CACHE_DIR="$REPO_ROOT/runtime/bun-cache"
 mkdir -p "$CICCHETTO_DIR" "$BUN_CACHE_DIR"
@@ -85,7 +92,7 @@ case "${1:-}" in
     *)
         if [ ! -d "$CICCHETTO_DIR/node_modules" ]; then
             printf 'scripts/bun.sh: cicchetto/node_modules missing — running bun install...\n' >&2
-            run_bun oven/bun:1 bun install >&2
+            run_bun "$BUN_IMAGE" bun install >&2
         fi
         ;;
 esac
@@ -99,4 +106,4 @@ if [ "${1:-}" = "run" ] && { [ "${2:-}" = "dev" ] || [ "${2:-}" = "preview" ]; }
     PORT_ARGS=(-p 5173:5173)
 fi
 
-run_bun "${PORT_ARGS[@]}" oven/bun:1 bun "$@"
+run_bun "${PORT_ARGS[@]}" "$BUN_IMAGE" bun "$@"

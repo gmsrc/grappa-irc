@@ -174,7 +174,9 @@ services:
   # and makes dist/ inspectable from the host.
   cicchetto-build:
     profiles: [prod]
-    image: oven/bun:1
+    # oven/bun digest-pinned (#103 supply-chain). Refresh on an intentional
+    # bump: docker buildx imagetools inspect oven/bun:1 --format '{{.Manifest.Digest}}'
+    image: oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4
     user: "${CONTAINER_UID:-1000}:${CONTAINER_GID:-1000}"
     working_dir: /app
     volumes:

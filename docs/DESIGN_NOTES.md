@@ -26416,3 +26416,56 @@ native, decided (vjt, 2026-08-02).** No CI→IRC channel was built.
 checks out that tag, `fetch-depth: 0`) is vjt-wanted, blocked on (a) landing,
 and the dispatch is an operator step (it publishes to real releases) — not part
 of this merge.
+## 2026-08-02 — #103: pin the moving base-image tags (oven/bun, nginx:alpine) to content digests
+
+**Problem.** `oven/bun:1` (dev scripts + the cicchetto-build compose oneshots)
+and `nginx:alpine` (the e2e stack) are MOVING tags — `oven/bun:1` advances
+across bun majors, `nginx:alpine` floats `alpine`. Two builds a week apart can
+pull different bytes, so a "reproducible" build isn't. (The prod nginx CONTAINER
+the issue originally named is gone since #485 — the BEAM serves the SPA and the
+jail's nginx is a FreeBSD package, not an image — so the only remaining
+`nginx:alpine` is the e2e one.)
+
+**Fix.** Pin every reference to `image:tag@sha256:<digest>`, keeping the tag for
+human readability and the digest for reproducibility. The digest pinned is the
+multi-arch INDEX digest (the tag's registry digest, from
+`docker buildx imagetools inspect <tag> --format '{{.Manifest.Digest}}'`), NOT
+a per-platform manifest — so Docker still resolves linux/amd64 (CI) and
+linux/arm64 (dev host) from within the index; the pin removes drift without
+locking to one architecture.
+
+**Two distinct oven/bun tags, two digests.** The dev/test paths use `oven/bun:1`
+(debian); `Dockerfile.release`'s cic stage uses `oven/bun:1-alpine` (bun is
+musl-built, matched to the alpine runtime) — a SEPARATE tag with its own digest.
+Both are pinned; they are not interchangeable.
+
+**Occurrences pinned:** `scripts/bun.sh` (one `BUN_IMAGE` constant, reused at the
+implicit-install + real-invocation call sites), `compose.yaml` cicchetto-build,
+`Dockerfile.release` cic stage (`:1-alpine`), `cicchetto/e2e/compose.yaml`
+(oven/bun + nginx:alpine).
+
+**Scope (deliberate).** Only the two tags the issue names. `elixir:1.19-otp-28-alpine`
+(dev Dockerfile + release build stage), `alpine:3.24`/`alpine:3.20`,
+`debian:trixie` (e2e ircd images), and `tonistiigi/binfmt:latest` (release CI)
+are LEFT as-is. Their drift risk varies — `elixir`/`alpine` float a patch,
+`debian:trixie` floats the whole Debian stable release, `binfmt:latest` floats
+everything — but none is the major-moving `oven/bun:1` the issue named, and
+pinning every base image in the tree (a `Dockerfile.release` half-pinned against
+its own `elixir`/`alpine` siblings is the sharpest instance) is a larger,
+separate task. The drift guard enforces consistency WITHIN the pinned families;
+a follow-up should file + pin the rest so the half-pin is a tracked TODO, not a
+silent divergence. Out of scope too: `oven-sh/setup-bun@v2` in release CI is a
+GitHub Action, not a container base image.
+
+**Drift guard.** `test/infra/base_image_digest_pin_test.bats` fails the moment a
+real `oven/bun`/`nginx:alpine` reference loses its `@sha256:` (root-cause fix,
+not just today's instances) — it `git grep`s tracked build files, excludes
+comment lines + the docs/test prose trees (which name the tags in prose and the
+`# Refresh:` hints), and refuses a vacuous pass (asserts ≥4 refs found). A
+second test pins the digest FORMAT (`sha256:<64 lowercase hex>`) so a truncated
+paste fails fast at unit time, not slowly at build time. Refresh procedure lives
+in each pin's inline comment + the test header.
+
+Deploy class: HOT (no `.ex`, no `mix.exs`/`mix.lock`; scripts + compose +
+Dockerfile.release + a bats test). The Dockerfile.release + e2e-compose pins are
+only exercised by the release/integration CI, not a running node.
