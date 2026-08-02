@@ -907,6 +907,10 @@ struct app {
      * default policy) reachable: nothing is drawn, but /answer knows. */
     struct {
         bool present;
+        /* When it was seen. A call is a thing happening NOW: an invite
+         * from this morning must not quietly swallow this evening's
+         * /call into a room nobody is in. */
+        time_t at;
         enum call_kind kind;
         char from[MAX_CHANNEL];
         char network[MAX_SLUG];
@@ -3130,6 +3134,27 @@ static bool call_ring_parse(const char *word, enum call_ring_policy *out) {
     return false;
 }
 
+/* How long an invite still names a call worth JOINING.
+ *
+ * There is no way to ask the SFU "is anyone in room X" without an
+ * endpoint that also answers "what rooms exist", which is the one thing
+ * this design refuses to publish — a room name is the credential. So
+ * currency is judged by the clock, and the number is a compromise: long
+ * enough that joining a call that started ten minutes ago works, short
+ * enough that this morning's invite does not swallow tonight's /call
+ * into an empty room. */
+#define CALL_INVITE_CURRENT_SECS (30 * 60)
+
+static bool call_invite_is_current(bool present, time_t at, const char *inv_net,
+                                   const char *inv_chan, const char *network, const char *channel,
+                                   time_t now) {
+    if (!present || !inv_net || !inv_chan || !network || !channel) return false;
+    if (strcmp(inv_net, network) != 0 || !irc_name_eq(inv_chan, channel)) return false;
+    /* A clock that went backwards must not make an invite eternal. */
+    if (now < at) return false;
+    return now - at <= CALL_INVITE_CURRENT_SECS;
+}
+
 static bool call_should_ring(enum call_ring_policy policy, bool query) {
     switch (policy) {
     case CALL_RING_OFF:     return false;
@@ -3160,6 +3185,7 @@ static void call_consider(struct app *app, const char *network, const char *chan
         busy = true;
     } else {
         app->call_last.present = true;
+        app->call_last.at = time(NULL);
         app->call_last.kind = kind;
         snprintf(app->call_last.from, sizeof(app->call_last.from), "%s", sender ? sender : "");
         snprintf(app->call_last.network, sizeof(app->call_last.network), "%s", network ? network : "");
@@ -12260,6 +12286,7 @@ static void open_external_url(struct app *app, const char *url) {
 
 /* Defined with the media helper below, which needs the URL helpers this
  * section declares. */
+static void call_answer(struct app *app);
 static void call_invite_peers(struct app *app, const char *network, const char *channel,
                               char *out, size_t out_sz);
 static void call_url_for_me(struct app *app, const char *network, const char *url, char *out,
@@ -12286,6 +12313,24 @@ static void call_command(struct app *app, enum call_kind kind) {
         log_line(app, "/call: no service set — /set call.base_url https://meet.jit.si (or your own)");
         return;
     }
+    /* A CALL ALREADY RUNNING HERE IS THE CALL. Minting a second room
+     * would put two people in two rooms, each waiting for the other —
+     * and each having told the channel to come to a different place.
+     * That is the same failure a simultaneous /call produces, so the
+     * two share a fix: whoever is second joins. */
+    pthread_mutex_lock(&app->lock);
+    bool join_existing = call_invite_is_current(app->call_last.present, app->call_last.at,
+                                                app->call_last.network, app->call_last.channel,
+                                                net, chan, time(NULL));
+    pthread_mutex_unlock(&app->lock);
+    if (join_existing) {
+        log_line(app, "call: one is already running in %s — joining it rather than starting a "
+                      "second. /hangup first if you meant a new one",
+                 chan);
+        call_answer(app);
+        return;
+    }
+
     char room[96];
     call_room_name(room, sizeof(room));
     char message[sizeof(app->call_base_url) + sizeof(room) + 640];
@@ -12307,6 +12352,7 @@ static void call_command(struct app *app, enum call_kind kind) {
      * you back into your OWN call after you close the tab. */
     pthread_mutex_lock(&app->lock);
     app->call_last.present = true;
+    app->call_last.at = time(NULL);
     app->call_last.kind = kind;
     snprintf(app->call_last.from, sizeof(app->call_last.from), "%s",
              own_nick_for_network(app, net) ? own_nick_for_network(app, net) : "");

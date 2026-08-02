@@ -2012,6 +2012,42 @@ TEST(the_call_picture_is_a_share_of_the_width) {
     }
 }
 
+/* A second /call where one is already running JOINS it.
+ *
+ * Minting a second room would put two people in two rooms, each waiting
+ * for the other and each having told the channel to come somewhere
+ * else. Currency is judged by the clock because there is no way to ask
+ * the SFU "is anyone in room X" without also publishing what rooms
+ * exist — and a room name is the credential. */
+TEST(a_call_already_running_here_is_the_call) {
+    const time_t now = 1000000;
+
+    /* Same window, recent: join it. */
+    CHECK(call_invite_is_current(true, now - 60, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
+    /* Channels are matched as NAMES, like every other window compare. */
+    CHECK(call_invite_is_current(true, now - 60, "azzurra", "#SNIFFO", "azzurra", "#sniffo", now));
+
+    /* A different window is a different call. */
+    CHECK(!call_invite_is_current(true, now - 60, "azzurra", "#other", "azzurra", "#sniffo", now));
+    CHECK(!call_invite_is_current(true, now - 60, "libera", "#sniffo", "azzurra", "#sniffo", now));
+
+    /* Stale: this morning's invite must not swallow tonight's /call into
+     * a room nobody is in. */
+    CHECK(!call_invite_is_current(true, now - CALL_INVITE_CURRENT_SECS - 1, "azzurra", "#sniffo",
+                                  "azzurra", "#sniffo", now));
+    /* Exactly at the edge still counts — the boundary belongs to the
+     * side that joins, because joining an empty room is recoverable and
+     * splitting a live call is not. */
+    CHECK(call_invite_is_current(true, now - CALL_INVITE_CURRENT_SECS, "azzurra", "#sniffo",
+                                 "azzurra", "#sniffo", now));
+
+    /* Nothing seen at all. */
+    CHECK(!call_invite_is_current(false, now, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
+    /* A clock that went backwards must not make an invite eternal. */
+    CHECK(!call_invite_is_current(true, now + 500, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
+    CHECK(!call_invite_is_current(true, now, NULL, "#sniffo", "azzurra", "#sniffo", now));
+}
+
 /* ── Calls ─────────────────────────────────────────────────────────────
  *
  * The whole anti-annoyance posture of the feature lives in the parser:
@@ -2917,6 +2953,7 @@ int main(void) {
     RUN(a_question_is_written_where_its_answer_will_land);
     RUN(only_a_marked_invite_is_a_call);
     RUN(an_invite_round_trips_through_its_own_parser);
+    RUN(a_call_already_running_here_is_the_call);
     RUN(an_invite_carries_its_room_in_the_fragment);
     RUN(a_query_rings_and_a_channel_only_announces);
     RUN(an_arriving_call_rings_only_where_it_should);
