@@ -28,12 +28,12 @@ RUN bun install --frozen-lockfile
 COPY cicchetto/ ./
 # The vite build REFUSES to run without GRAPPA_VERSION (#538 — it bakes
 # <meta cicchetto-version> and won't ship it empty). Derive it via the SAME
-# version.sh SSOT the .deb/.rpm/AUR builds use — placed with mix.exs at the
-# layout version.sh expects (SCRIPT_DIR/../.. == repo root) so nothing
-# re-implements the regex. Same invocation as build.sh: `bun run build` =
-# `tsc --noEmit && vite build`; --emptyOutDir because the outDir is outside
-# the vite project root.
-COPY mix.exs ./mix.exs
+# version.sh SSOT the .deb/.rpm/AUR builds use — placed with the VERSION file
+# at the layout version.sh expects (SCRIPT_DIR/../.. == repo root, so it reads
+# ./VERSION, #652) so nothing re-implements the read. Same invocation as
+# build.sh: `bun run build` = `tsc --noEmit && vite build`; --emptyOutDir
+# because the outDir is outside the vite project root.
+COPY VERSION ./VERSION
 COPY infra/packaging/version.sh ./infra/packaging/version.sh
 RUN GRAPPA_VERSION="$(sh infra/packaging/version.sh)" \
     && export GRAPPA_VERSION \
@@ -53,8 +53,10 @@ ENV LANG=C.UTF-8 \
     MIX_ENV=prod
 WORKDIR /src
 RUN mix local.hex --force && mix local.rebar --force
-# Prod deps first (cache layer).
-COPY mix.exs mix.lock ./
+# Prod deps first (cache layer). VERSION rides with mix.exs: mix.exs reads it
+# via File.read! at project-eval time, so EVERY mix task (deps.get included)
+# needs it present, not just the later compile (#652).
+COPY mix.exs mix.lock VERSION ./
 RUN mix deps.get --only prod
 # App source + config, then compile + assemble in ONE `mix compile` — the same
 # sequence infra/packaging/build.sh proves in the deb/rpm CI (deps.get →
@@ -65,7 +67,7 @@ RUN mix deps.get --only prod
 # `.git` is EXCLUDED by .dockerignore, so at compile time Grappa.Version has no
 # git facts and takes the no-git path — the artifact reports the BARE X.Y.Z, the
 # same path the AUR source tarball uses (#391). The CI `docker` job checks out
-# the release tag and asserts `tag == mix.exs @version`, so the bare version
+# the release tag and asserts `tag == VERSION` (#652), so the bare version
 # equals the tag. `mix release` runs the #542 version-sha guard, which logs the
 # no-git skip and proceeds (no HEAD to verify against).
 COPY config config

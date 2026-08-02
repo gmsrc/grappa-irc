@@ -2,7 +2,14 @@ defmodule Grappa.MixProject do
   use Mix.Project
 
   @app :grappa
-  @version "0.9.0"
+  # #652 — the version is DECLARED ONCE in the repo-root `VERSION` file and read
+  # here at BUILD time (compile-time `File.read!`, never a runtime read — the
+  # #391 defect was a runtime read of this build file). Bumping `VERSION` no
+  # longer touches `mix.exs`, so `Grappa.Deploy.Preflight` classifies a bump as
+  # HOT instead of COLD (its `mix_deps?` clause) — a version bump keeps every
+  # IRC session alive. `Grappa.Version` bakes the SAME file into a module
+  # attribute so the reloaded beam carries the new number across a hot deploy.
+  @version File.read!(Path.join(__DIR__, "VERSION")) |> String.trim()
 
   def project do
     [

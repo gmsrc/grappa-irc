@@ -1,10 +1,12 @@
 #!/bin/sh
 # version.sh — echo grappa's single canonical version to stdout.
 #
-# THE single source of truth for the version across every carrier is
-# `@version` in mix.exs (#538). Everything else DERIVES from it — there is no
-# second hand-edited copy to keep in sync:
+# THE single source of truth for the version across every carrier is the
+# repo-root `VERSION` file (#652, was mix.exs `@version` under #538).
+# Everything else DERIVES from it — there is no second hand-edited copy:
 #
+#   * mix.exs + lib/grappa/version.ex read the SAME file at COMPILE time
+#     (baked into the beam so a bump hot-reloads instead of forcing COLD);
 #   * build.sh sources this to export GRAPPA_VERSION, which nfpm.yaml
 #     interpolates into the .deb (and, once #438 lands, the .rpm);
 #   * release.yml's Arch job + aur/regen.sh run this to fill PKGBUILD's
@@ -12,13 +14,13 @@
 #   * every cic build entrypoint (scripts/bun.sh, the compose cicchetto-build
 #     launchers, the Arch/FreeBSD/Linux prod builds) exports GRAPPA_VERSION
 #     from this so vite bakes it into <meta cicchetto-version> — the container
-#     builds mount only ./cicchetto and cannot read mix.exs themselves.
+#     builds mount only ./cicchetto and cannot read the repo root themselves.
 #
 # POSIX sh, NOT bash: the FreeBSD jail build (infra/freebsd/jail_cic_build.sh)
 # runs /bin/sh with no bash/bun port and calls this to derive the version.
 # Always EXECUTED (never sourced), so `$0` locates the script.
 #
-# Bump the version by editing mix.exs `@version` — nothing else.
+# Bump the version by editing the repo-root `VERSION` file — nothing else.
 set -eu
 
 # No `dirname --` / `cd --`: BSD dirname (the FreeBSD jail) doesn't accept the
@@ -26,9 +28,11 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd "${SCRIPT_DIR}/../.." && pwd)"
 
-version="$(grep -oE '@version "[^"]+"' "${REPO_ROOT}/mix.exs" | head -1 | sed -E 's/@version "([^"]+)"/\1/')"
+# `head -1` + `tr -d` strips any trailing newline / CR the file carries so the
+# echoed value is a bare `X.Y.Z` (git-checked-out with LF, but be defensive).
+version="$(head -1 "${REPO_ROOT}/VERSION" 2>/dev/null | tr -d '\r\n')"
 if [ -z "${version}" ]; then
-	printf 'version.sh: could not read @version from %s/mix.exs\n' "${REPO_ROOT}" >&2
+	printf 'version.sh: could not read version from %s/VERSION\n' "${REPO_ROOT}" >&2
 	exit 1
 fi
 printf '%s\n' "${version}"

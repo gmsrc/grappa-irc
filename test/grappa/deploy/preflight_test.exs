@@ -250,6 +250,26 @@ defmodule Grappa.Deploy.PreflightTest do
       end
     end
 
+    test "VERSION (a bump-only diff) → hot on every substrate (#652)" do
+      # The #652 acceptance criterion: the version SSOT moved out of mix.exs
+      # into the repo-root VERSION file precisely so a bump is HOT — it is NOT
+      # a Class 1 mix_deps path, so it falls through to HOT and every IRC
+      # session survives the deploy.
+      for substrate <- @substrates do
+        assert {:hot, []} = Preflight.classify_paths(["VERSION"], substrate)
+      end
+    end
+
+    test "VERSION rides with a hot module change → still hot (#652)" do
+      # The real bump commit shape: VERSION plus the recompiled Grappa.Version
+      # beam's source (version.ex is a regular module, not long-lived) — the
+      # whole diff must stay HOT.
+      for substrate <- @substrates do
+        assert {:hot, []} =
+                 Preflight.classify_paths(["VERSION", "lib/grappa/version.ex"], substrate)
+      end
+    end
+
     test "lib/grappa/scrollback.ex (regular module) → hot on both substrates when state-shape check is skipped" do
       for substrate <- @substrates do
         assert {:hot, []} = Preflight.classify_paths(["lib/grappa/scrollback.ex"], substrate)

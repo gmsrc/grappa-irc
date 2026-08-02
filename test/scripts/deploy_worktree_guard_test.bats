@@ -52,13 +52,14 @@ setup() {
     # #503: deploy.sh now sources the shared deploy algorithm lib — it must
     # exist in the checkout for the script to reach the pull step.
     cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_common.sh" "$MAIN/infra/lib/deploy_common.sh"
-    # #538 — deploy-cic.sh (and deploy.sh's cold path) derive the cic version
-    # from mix.exs @version via infra/packaging/version.sh. The fixture needs
-    # both the script and a mix.exs to derive from, or the real derivation dies
-    # under `set -e` before the build.
+    # #538/#652 — deploy-cic.sh (and deploy.sh's cold path) derive the cic
+    # version from the repo-root VERSION file via infra/packaging/version.sh.
+    # The fixture needs both the script and a VERSION file to derive from, or
+    # the real derivation dies under `set -e` before the build.
     mkdir -p "$MAIN/infra/packaging"
     cp "$VERSION_SH" "$MAIN/infra/packaging/version.sh"
     chmod +x "$MAIN/infra/packaging/version.sh"
+    printf '9.9.9\n' > "$MAIN/VERSION"
     printf 'defmodule Grappa.MixProject do\n  @version "9.9.9"\nend\n' > "$MAIN/mix.exs"
     : > "$MAIN/compose.yaml"
     touch "$MAIN/runtime/.gitkeep"

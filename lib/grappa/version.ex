@@ -2,34 +2,39 @@ defmodule Grappa.Version do
   @moduledoc """
   Single source of truth for the running grappa version.
 
-  ## Base version — from the release `.app` metadata
+  ## Base version — the compiled `VERSION`-file constant (#652)
 
-  `base/0` returns `Application.spec(:grappa, :vsn)` — the version OTP
-  compiled into the application resource from `@version` in `mix.exs` at
-  build time. It is the canonical "what version is running" and needs no
+  `base/0` returns `@base_version`, a module attribute baked at **compile**
+  time from the repo-root `VERSION` file (`File.read!/1` inside the build
+  tree, registered as an `@external_resource` so an edit forces a
+  recompile). It is the canonical "what version is running" and needs no
   filesystem access at runtime.
 
-  It does **not** read `mix.exs` live (an earlier #391 design did, via
-  `File.read!/1`). Two reasons that read was wrong:
+  It deliberately does **not** return `Application.spec(:grappa, :vsn)`.
+  That reads the `.app` resource, which the running node loads ONCE at boot
+  and never re-reads. The jail hot path is `git pull → mix compile →
+  mix release --overwrite → POST /admin/reload`; `/admin/reload`
+  (`Grappa.HotReload.reload_modified/0`) reloads only the `.beam` files
+  whose on-disk md5 changed — it never re-reads `.app`. So after a
+  **hot-deployed** version bump, `Application.spec/2` would keep reporting
+  the boot-time value while the operator expects the new one. Sourcing
+  `base/0` from a compiled constant instead means the number travels with
+  the recompiled `Grappa.Version` beam and updates on the same reload
+  (#652). This is also NOT the #391 defect: that was a **runtime** read of
+  a **build** file (`mix.exs`), which a package lacks — it *raised* and
+  crashed the `CTCP VERSION` reply. Here the read is at compile time,
+  inside the build tree where `VERSION` always exists (source checkout OR
+  release tarball), and the artifact carries a plain string — no runtime
+  filesystem access, so no fallback to design and no packaging failure.
 
-    * **A release has no `mix.exs`.** A distro package (`.deb`/Arch —
-      self-hosting Part 2, #419) ships a self-contained `mix release` with
-      no project source beside the compiled BEAM. The old `File.read!/1`
-      of the absent `mix.exs` did not degrade to `-dev` — it *raised*,
-      crashing the `CTCP VERSION` reply. Reading a **build-time** file at
-      **runtime** was the defect, not the symptom.
-    * **The staleness it guarded against cannot occur.** The live read
-      existed because `POST /admin/reload` (CP23) soft-purges + reloads
-      `lib/*.ex` modules but never the `.app` resource, so
-      `Application.spec/2` could report a stale version after a
-      hot-deployed `@version` bump. But `@version` lives only in
-      `mix.exs`, and `Grappa.Deploy.Preflight` classifies any `mix.exs`
-      change as **COLD** (its `mix_deps?` clause) — a version bump therefore always
-      restarts the node, which reloads `.app` fresh. No hot path changes
-      `@version`, so the `.app` vsn is always current.
+  ## The declared price (#652)
 
-  So `base/0` is the `.app` vsn everywhere — dev, test, and prod — and
-  there is no runtime build-file read left to break in a package.
+  After a **hot** bump the running node's `.app` vsn stays at its boot
+  value while `base/0` reports the new number; they reconverge at the next
+  cold restart. `Grappa.Version` is the ONLY `Application.spec(:grappa, …)`
+  consumer in the tree, so nothing else observes the divergence — and a
+  bump that changes only `VERSION` (never `mix.exs` / `mix.lock`) is
+  classified HOT by `Grappa.Deploy.Preflight`, which is the whole point.
 
   ## Suffix — git tag ≡ CTCP VERSION (#391)
 
@@ -60,9 +65,10 @@ defmodule Grappa.Version do
   When there was **no `.git` at build** — a package built from a release
   tarball (Arch) — `@git_facts` is `nil` and the reported version is the
   bare `base` (the package version = the cut tag): no git suffix is applied.
-  This is *derive, don't inject* — the `.app` vsn IS the package metadata,
-  already baked into the artifact, so nothing hand-set can drift out of sync
-  with the build (the drift #391 exists to prevent).
+  This is *derive, don't inject* — `base` is the compiled `VERSION`-file
+  constant (#652), the same string `mix.exs` reads to stamp the package
+  metadata, so nothing hand-set can drift out of sync with the build (the
+  drift #391 exists to prevent).
 
   ## Boundary
 
@@ -76,9 +82,19 @@ defmodule Grappa.Version do
 
   alias Grappa.Version.GitProbe
 
-  @app :grappa
-
   @repo_root Path.expand("../..", __DIR__)
+
+  # #652 — the base version is the repo-root `VERSION` file, read at COMPILE
+  # time and baked into a module attribute. Registered as an
+  # `@external_resource` so a bump dirties this module → `mix compile` on the
+  # hot path recompiles it → `reload_modified/0` picks up the new beam by md5,
+  # and the reported version updates WITHOUT a cold restart (the `.app` vsn
+  # would not — the node never re-reads the app resource). The read is
+  # compile-time, inside the build tree where `VERSION` always exists, so —
+  # unlike the #391 runtime `mix.exs` read — a package build cannot raise.
+  @version_path Path.join(@repo_root, "VERSION")
+  @external_resource @version_path
+  @base_version @version_path |> File.read!() |> String.trim()
 
   # Re-run compilation whenever the build's git ref moves so an incremental
   # build re-snapshots the sha. The watch set is the corrected #533/#542 one
@@ -103,12 +119,14 @@ defmodule Grappa.Version do
   def current, do: derive(base(), @git_facts)
 
   @doc """
-  The canonical base version — `Application.spec(:grappa, :vsn)`, compiled
-  from `@version` in `mix.exs` into the `.app` resource at build time. No
-  runtime filesystem access.
+  The canonical base version — the repo-root `VERSION` file, read at compile
+  time and baked into `@base_version` (#652). NOT `Application.spec(:grappa,
+  :vsn)`: the `.app` resource is read once at boot and never re-read, so it
+  goes stale across a hot-deployed bump; a compiled constant travels with the
+  reloaded beam. No runtime filesystem access.
   """
   @spec base() :: String.t()
-  def base, do: @app |> Application.spec(:vsn) |> to_string()
+  def base, do: @base_version
 
   @doc """
   Folds the base version and a build-time git snapshot into the honest

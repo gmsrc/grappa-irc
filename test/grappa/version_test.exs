@@ -6,10 +6,12 @@ defmodule Grappa.VersionTest do
   suffix so an operator reading CTCP VERSION tells released-vs-unreleased at
   a glance.
 
-  #419 R3 — the base version comes from the release `.app` metadata
-  (`Application.spec(:grappa, :vsn)`), NOT a runtime `mix.exs` read (a
-  package ships no mix.exs — the source never enters the CI-built artifact —
-  and the old `File.read!/1` raised there). A packaged build has no `.git`
+  #652 — the base version is the repo-root `VERSION` file, read at COMPILE
+  time and baked into `@base_version` (NOT `Application.spec(:grappa, :vsn)`:
+  the `.app` resource is read once at boot and goes stale across a hot bump).
+  It is still NOT a runtime `File.read!/1` (the #391 defect — a package ships
+  no source tree, that read raised); the compile-time read lives inside the
+  build tree where `VERSION` always exists. A packaged build has no `.git`
   at build, so its git snapshot is `nil` and it reports the bare package
   version.
 
@@ -80,21 +82,18 @@ defmodule Grappa.VersionTest do
     end
   end
 
-  describe "base/0 + current/0 — version from the .app metadata (#419 R3)" do
-    test "base/0 returns the .app vsn, which tracks the canonical @version in mix.exs" do
-      # base/0 returns the vsn OTP compiled into the .app from mix.exs
-      # @version at build — no runtime mix.exs read (that raised in a package).
-      # Cross-check the built metadata against the source declaration: reading
-      # mix.exs HERE is a build↔source verification in the test, not the
-      # runtime read the seam removed. Proves the .app vsn IS the declared
-      # @version (and that Application.spec/2 is populated for a started app).
-      source_version =
-        "mix.exs"
-        |> File.read!()
-        |> then(&Regex.run(~r/@version\s+"([^"]+)"/, &1))
-        |> List.last()
+  describe "base/0 + current/0 — version from the compiled VERSION file (#652)" do
+    test "base/0 returns the trimmed repo-root VERSION file, not the .app vsn" do
+      # #652 — base/0 is a compile-time constant baked from VERSION, so it
+      # survives a hot deploy (the .app vsn does not — the node never re-reads
+      # the app resource). Cross-check the compiled constant against the source
+      # carrier: reading VERSION HERE is a build↔source verification, not a
+      # runtime read (which #391 removed). Assert equality to VERSION rather
+      # than to Application.spec/2 — that is the acceptance criterion that
+      # base/0 no longer routes through the .app metadata.
+      version_file = "VERSION" |> File.read!() |> String.trim()
 
-      assert Version.base() == source_version
+      assert Version.base() == version_file
       assert Version.base() =~ ~r/^\d+\.\d+\.\d+/
     end
 

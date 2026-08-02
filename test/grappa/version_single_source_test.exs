@@ -1,20 +1,24 @@
 defmodule Grappa.VersionSingleSourceTest do
   @moduledoc """
-  #538 — the version is DECLARED ONCE and everything else DERIVES from it.
+  #538/#652 — the version is DECLARED ONCE and everything else DERIVES from it.
 
-  `@version` in `mix.exs` is the single canonical declaration. Every other
-  carrier is a DERIVATION, not a hand-edited copy:
+  The repo-root `VERSION` file is the single canonical declaration (#652 moved
+  it out of `mix.exs` `@version` so a bump hot-reloads instead of forcing a
+  COLD restart). Every other carrier is a DERIVATION, not a hand-edited copy:
 
+    * `mix.exs` `@version` + `lib/grappa/version.ex` `@base_version` — both
+      read the SAME `VERSION` file at COMPILE time (no hardcoded literal to
+      drift; the beam-baked constant is what a hot deploy reloads);
     * the `.deb`/nfpm version — `infra/packaging/build.sh` exports
-      `GRAPPA_VERSION` from `infra/packaging/version.sh` (which greps
-      `@version`), and `nfpm.yaml` interpolates `${GRAPPA_VERSION}`;
+      `GRAPPA_VERSION` from `infra/packaging/version.sh` (which reads
+      `VERSION`), and `nfpm.yaml` interpolates `${GRAPPA_VERSION}`;
     * the Arch `pkgver` — `infra/packaging/aur/regen.sh` derives it from the
       same `version.sh` at release time, filling the committed
       `@GRAPPA_VERSION@` sentinel (a value `makepkg` REFUSES, so an
       underived build fails loudly instead of shipping `grappa-@…@`);
     * the cicchetto `<meta cicchetto-version>` — `vite.config.ts` reads
       the `GRAPPA_VERSION` env (cic builds mount only `./cicchetto`, so
-      they cannot read `mix.exs`; the build wrappers export it from
+      they cannot read the repo root; the build wrappers export it from
       `version.sh`), throwing if it is unset.
 
   This is the drift-catcher the issue asks for, **runnable on a bump commit,
@@ -22,9 +26,9 @@ defmodule Grappa.VersionSingleSourceTest do
   i.e. someone re-hardcodes a competing version literal. It does NOT assert
   the carriers all EQUAL the version (that would be the rejected "bump N
   files, CI yells" shape); it asserts they stay in their SENTINEL/DERIVED
-  form, so there is exactly one number to bump: `mix.exs`.
+  form, so there is exactly one number to bump: `VERSION`.
 
-  The tag ↔ `mix.exs` guard (the human declaration must match the tag being
+  The tag ↔ `VERSION` guard (the human declaration must match the tag being
   cut) lives in `.github/workflows/release.yml`; it needs a tag, so it is a
   release-time check. This test is its bump-commit-runnable complement.
   """
@@ -32,21 +36,29 @@ defmodule Grappa.VersionSingleSourceTest do
 
   # The single canonical declaration, read the same way `version.sh` and the
   # release workflow read it — a build↔source cross-check, not a runtime read.
-  @canonical_version "mix.exs"
-                     |> File.read!()
-                     |> then(&Regex.run(~r/@version\s+"([^"]+)"/, &1))
-                     |> List.last()
+  @canonical_version "VERSION" |> File.read!() |> String.trim()
 
-  describe "the single canonical declaration (mix.exs @version)" do
+  describe "the single canonical declaration (repo-root VERSION file)" do
     test "is a well-formed semver" do
       assert @canonical_version =~ ~r/^\d+\.\d+\.\d+/
     end
 
     test "is what OTP compiled into the .app resource (origin wired to runtime)" do
-      # Application.spec/2 returns the vsn OTP baked into the .app from
-      # @version at build. If they disagree the running node would report a
-      # version the source never declared — the #533-adjacent honesty half.
+      # Application.spec/2 returns the vsn OTP baked into the .app from mix.exs
+      # @version at build — which #652 has mix.exs read from VERSION. If they
+      # disagree the running node's .app would report a version the source
+      # never declared. (Note base/0 no longer routes through .app — #652 — but
+      # the .app vsn must still be stamped from the same VERSION at build.)
       assert to_string(Application.spec(:grappa, :vsn)) == @canonical_version
+    end
+
+    test "mix.exs @version DERIVES from VERSION — never a re-hardcoded literal (#652)" do
+      # The core #652 guarantee: mix.exs stopped being the hand-edited carrier.
+      # If someone re-inlines `@version \"X.Y.Z\"` the bump silently forces COLD
+      # again (Preflight mix_deps?) — catch that regression at the bump commit.
+      mix = File.read!("mix.exs")
+      refute mix =~ ~r/@version\s+"\d/
+      assert mix =~ "File.read!(Path.join(__DIR__, \"VERSION\"))"
     end
 
     test "version.sh (the shared derivation primitive) echoes it" do

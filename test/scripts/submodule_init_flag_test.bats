@@ -47,11 +47,12 @@ setup() {
     cp "$TESTNET_SH" "$MAIN/scripts/testnet.sh"
     cp "$BATS_SH" "$MAIN/scripts/bats.sh"
     cp "$LIB_SH" "$MAIN/scripts/_lib.sh"
-    # testnet.sh derives GRAPPA_VERSION from mix.exs @version via version.sh
-    # BEFORE the submodule branch — under set -e it must succeed or the
-    # script dies before we reach the code under test.
+    # testnet.sh derives GRAPPA_VERSION from the repo-root VERSION file via
+    # version.sh (#652) BEFORE the submodule branch — under set -e it must
+    # succeed or the script dies before we reach the code under test.
     cp "$VERSION_SH" "$MAIN/infra/packaging/version.sh"
     chmod +x "$MAIN/infra/packaging/version.sh"
+    printf '9.9.9\n' > "$MAIN/VERSION"
     printf 'defmodule Grappa.MixProject do\n  @version "9.9.9"\nend\n' > "$MAIN/mix.exs"
     # testnet.sh's compose.yaml existence check must pass; the infra
     # submodule dir must be ABSENT so the auto-init branch fires. lib/ is the

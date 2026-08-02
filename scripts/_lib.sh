@@ -110,6 +110,12 @@ if [ "$SRC_ROOT" != "$REPO_ROOT" ]; then
         -v "$SRC_ROOT/infra:/app/infra:ro"
         -v "$SRC_ROOT/cicchetto/src:/app/cicchetto/src:$cic_mode"
         -v "$SRC_ROOT/mix.exs:/app/mix.exs:ro"
+        # #652 — VERSION is the repo-root version SSOT, read at COMPILE time by
+        # mix.exs + lib/grappa/version.ex. Like mix.exs it's a root-level file
+        # not under the dir mounts above, so a worktree oneshot must override it
+        # or the container compiles against MAIN's tree (no VERSION → File.Error
+        # / a stale number). RO — read at build, never written.
+        -v "$SRC_ROOT/VERSION:/app/VERSION:ro"
         -v "$SRC_ROOT/mix.lock:/app/mix.lock:$lock_mode"
         -v "$SRC_ROOT/.formatter.exs:/app/.formatter.exs:ro"
         -v "$SRC_ROOT/.credo.exs:/app/.credo.exs:ro"
