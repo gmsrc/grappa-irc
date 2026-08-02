@@ -1,5 +1,30 @@
 #!/usr/local/bin/perl
 #
+# =============================================================================
+# DEPRECATED (GH #628) — retired 2026-08-02, the VNET jail cutover.
+# NO LONGER SHIPPED AS A SERVICE. Kept in the tree ON PURPOSE.
+# =============================================================================
+#
+# jail_install_rcd.sh no longer installs or enables this (it copied the rc.d
+# wrapper into /usr/local/etc/rc.d and wrote an _enable="YES" rc.conf.d entry;
+# that block is gone). The file stays out of every boot path but is left in
+# place deliberately ("fa fico avere un sorcio in perl") and still works if a
+# future operator copies it in by hand.
+#
+# WHY it became dead weight: since the 2026-08-02 cutover the bouncer runs in a
+# VNET jail on a ROUTED /64, with the per-session source addresses bound as
+# /128s on lo0. The provider ROUTES the block to us — nothing upstream resolves
+# each address on the link, so there is no neighbour cache to keep warm. This
+# keepalive existed only for the OLD proxy-NDP arrangement, where pinging the
+# gateway kept the upstream answering for the secondary addresses. It ran only
+# inside the OLD jail, which is now stopped and boot-disabled, so nothing runs
+# it today and there was nothing to migrate.
+#
+# To resurrect (e.g. a return to a shared L2 segment where proxy-NDP is back):
+# re-add the install/enable block to jail_install_rcd.sh — see its git history
+# at the #628 commit for the exact rc.d + rc.conf.d wiring.
+# =============================================================================
+#
 # NDP keepalive supervisor (event-driven, process-accounting-friendly).
 #
 # Replaces the old spawn-per-tick shell loop, which fork+exec'd one
