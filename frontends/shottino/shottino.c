@@ -7985,6 +7985,8 @@ static void fetch_result_free(struct fetch_result *r);
  * language model, which is the one consumer that copes with a rough
  * job. Caller frees. */
 static void utf8_trim_partial_tail(char *s);
+static int shell_capture(const char *cmd, bool merge_stderr, char *out, size_t out_sz,
+                         bool *timed_out, bool *truncated);
 
 static char *html_to_text(const char *html) {
     size_t n = strlen(html);
@@ -8146,6 +8148,18 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
             return xasprintf("error: search endpoint did not answer");
         char *text = html_to_text(r.body);
         fetch_result_free(&r);
+        /* A consent wall or a bot challenge is a 200 with no results in
+         * it, which would otherwise reach the model as an answer. Google
+         * serves exactly this to a client with no JavaScript. */
+        if (text && (strstr(text, "if you are not redirected") ||
+                     strstr(text, "complete the following challenge"))) {
+            free(text);
+            return xasprintf("error: %.80s answered with a redirect or bot challenge rather than "
+                             "results — it needs a browser. Point llm.search_url at an endpoint "
+                             "that serves plain HTML, e.g. "
+                             "https://html.duckduckgo.com/html/?q=%%s",
+                             app->llm.search_url);
+        }
         char *out = xasprintf("%.*s", (int)LLM_TOOL_RESULT_BYTES - 512, text ? text : "");
         free(text);
         return out;
@@ -8221,16 +8235,24 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
         char cmd[MAX_LINE];
         if (!tool_arg(call->arguments, "command", cmd, sizeof(cmd)))
             return xasprintf("error: command is required");
-        /* Through the same door /exec uses, so there is one place where
-         * "run a command" is implemented and one place to look when it
-         * misbehaves. It runs as the user, which is why the tool is off
-         * by default and asks every time. */
-        struct job job = { .kind = JOB_EXEC };
-        snprintf(job.arg1, sizeof(job.arg1), "%s", cmd);
-        snprintf(job.network, sizeof(job.network), "%s", req->network);
-        snprintf(job.channel, sizeof(job.channel), "%s", req->channel);
-        enqueue_job(app, job);
-        return xasprintf("running `%.200s` — its output lands in the window, not here", cmd);
+        /* The OUTPUT comes back, which is the whole reason a model would
+         * run a command. It shares /exec's capture — same bound, same
+         * timeout, same one place to look when it misbehaves — and
+         * differs in taking stderr too: a model given only stdout would
+         * be told a failing command produced nothing.
+         *
+         * Runs as the user. That is why the tool is off by default and
+         * asks every time. */
+        static char cap[EXEC_MAX_BYTES + 1];
+        bool timed_out = false, truncated = false;
+        int rc = shell_capture(cmd, true, cap, sizeof(cap), &timed_out, &truncated);
+        if (rc == -1) return xasprintf("error: could not run it: %s", strerror(errno));
+        /* The exit status is part of the answer: a silent command that
+         * failed and a silent command that worked are different, and
+         * only the number tells them apart. */
+        log_line(app, "--- shell (model): %.120s", cmd);
+        return xasprintf("exit %d%s%s\n%s", rc, timed_out ? " (timed out)" : "",
+                         truncated ? " (output truncated)" : "", cap[0] ? cap : "(no output)");
     }
     if (strcmp(call->name, "browser_control") == 0) {
         char action[32];
@@ -9403,65 +9425,88 @@ static void bot_consider(struct app *app, const char *network, const char *chann
  * which is the same power they already have at the shell they launched
  * it from.
  */
-static void exec_job(struct app *app, const struct job *job) {
+/* Run a command through the shell and CAPTURE what it says.
+ *
+ * One implementation, shared by /exec and by the `shell` tool. They want
+ * the same thing — a bounded, time-limited read of a child's output —
+ * and differ only in where it goes afterwards and whether stderr counts:
+ * a person watching /exec has the window for errors, while a model
+ * given only stdout would be told a command produced nothing when it
+ * actually failed.
+ *
+ * Returns the exit status, or -1 if the child could not be started.
+ * `timed_out` and `truncated` say why the output stops where it does,
+ * because "no more output" and "we stopped listening" are different
+ * facts and the caller reports them differently. */
+static int shell_capture(const char *cmd, bool merge_stderr, char *out, size_t out_sz,
+                         bool *timed_out, bool *truncated) {
+    *timed_out = false;
+    *truncated = false;
+    out[0] = 0;
     int fds[2];
-    if (pipe(fds) != 0) {
-        log_line(app, "/exec: cannot create a pipe: %s", strerror(errno));
-        return;
-    }
+    if (pipe(fds) != 0) return -1;
     set_cloexec(fds[0]);
     set_cloexec(fds[1]);
     pid_t pid = fork();
     if (pid < 0) {
         close(fds[0]);
         close(fds[1]);
-        log_line(app, "/exec: cannot fork: %s", strerror(errno));
-        return;
+        return -1;
     }
     if (pid == 0) {
         close(fds[0]);
         int devnull = open("/dev/null", O_RDWR);
-        if (devnull >= 0) {
-            dup2(devnull, STDIN_FILENO);
-            dup2(devnull, STDERR_FILENO);
-        }
+        if (devnull >= 0) dup2(devnull, STDIN_FILENO);
         dup2(fds[1], STDOUT_FILENO);
+        if (merge_stderr) dup2(fds[1], STDERR_FILENO);
+        else if (devnull >= 0) dup2(devnull, STDERR_FILENO);
         if (fds[1] > STDERR_FILENO) close(fds[1]);
         if (devnull > STDERR_FILENO) close(devnull);
-        execl("/bin/sh", "sh", "-c", job->arg1, (char *)NULL);
+        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
     }
     close(fds[1]);
 
     long deadline = monotonic_ms() + EXEC_TIMEOUT_MS;
-    char buf[EXEC_MAX_BYTES + 1];
     size_t len = 0;
-    bool truncated = false, timed_out = false;
+    size_t cap = out_sz - 1;
     for (;;) {
         long left = deadline - monotonic_ms();
         if (left <= 0) {
-            timed_out = true;
+            *timed_out = true;
             break;
         }
         struct pollfd pfd = { .fd = fds[0], .events = POLLIN };
         int r = poll(&pfd, 1, (int)left);
         if (r <= 0) {
             if (r < 0 && errno == EINTR) continue;
-            timed_out = r == 0;
+            *timed_out = r == 0;
             break;
         }
-        ssize_t n = read(fds[0], buf + len, EXEC_MAX_BYTES - len);
+        ssize_t n = read(fds[0], out + len, cap - len);
         if (n <= 0) break; /* EOF, or a read error the child cannot recover from */
         len += (size_t)n;
-        if (len >= EXEC_MAX_BYTES) {
-            truncated = true;
+        if (len >= cap) {
+            *truncated = true;
             break;
         }
     }
-    buf[len] = 0;
+    out[len] = 0;
     close(fds[0]);
-    if (timed_out || truncated) kill(pid, SIGTERM);
-    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+    if (*timed_out || *truncated) kill(pid, SIGTERM);
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -2;
+}
+
+static void exec_job(struct app *app, const struct job *job) {
+    static char buf[EXEC_MAX_BYTES + 1];
+    bool truncated = false, timed_out = false;
+    if (shell_capture(job->arg1, false, buf, sizeof(buf), &timed_out, &truncated) == -1) {
+        log_line(app, "/exec: cannot run it: %s", strerror(errno));
+        return;
+    }
+
 
     size_t sent = 0;
     char *save = NULL;
@@ -17255,6 +17300,18 @@ int main(int argc, char **argv) {
     snprintf(app->voice_source, sizeof(app->voice_source), "pulse:default");
     snprintf(app->video_source, sizeof(app->video_source), "v4l2:/dev/video0");
     app->rec.stdin_fd = -1;
+    /* web_search needs somewhere to point, and the choice is decided by
+     * what answers a plain socket rather than by brand.
+     *
+     * Google was asked for and MEASURED: it returns 200 with 90 KiB of
+     * JavaScript saying "please click here if you are not redirected",
+     * and no results — there is nothing a client without a browser can
+     * do with that. DuckDuckGo's html endpoint exists precisely for
+     * readers with no JavaScript and returns the results themselves.
+     * `%s` is where the query goes, so pointing this at Google, a
+     * SearxNG instance or anything else is one /set away. */
+    snprintf(app->llm.search_url, sizeof(app->llm.search_url),
+             "https://html.duckduckgo.com/html/?q=%%s");
     bool have_ffmpeg = media_tool_available("ffmpeg");
     app->inline_media_enabled = have_ffmpeg;
     /* ALL HOSTS by default — the owner's call, made with the cost known.

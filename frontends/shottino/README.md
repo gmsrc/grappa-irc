@@ -470,7 +470,7 @@ The tools, and whether they are on without asking:
 | `web_fetch` | **on** | fetch a URL and return its text, tags stripped |
 | `web_search` | **on** | needs `llm.search_url` |
 | `read_file`, `glob`, `grep` | off | read this machine |
-| `write_file`, `shell` | off (asks) | change this machine |
+| `write_file`, `shell` | off (asks) | change this machine; `shell` returns its output |
 | `browser_control` | off (asks) | drive a Chrome started with `--remote-debugging-port`; needs `llm.cdp_url` |
 
 `/set llm.tools <names>` names exactly which are offered; empty means each
@@ -481,9 +481,40 @@ cannot be argued into trying.
 ```sh
 /set llm.tools                                   # the defaults
 /set llm.tools read_scrollback,web_fetch,shell   # exactly these
-/set llm.search_url https://searx.example/search?q=%s
-/set llm.cdp_url    http://127.0.0.1:9222
+/set llm.cdp_url    http://127.0.0.1:9222        # for browser_control
 ```
+
+### web_search, and why not Google
+
+`llm.search_url` is a template with `%s` where the query goes, and it defaults
+to **`https://html.duckduckgo.com/html/?q=%s`** — chosen because it is what
+answers a plain socket, not out of preference.
+
+Google was tried and measured. `https://www.google.com/search?q=…` returns
+**200 with 90 KiB of JavaScript** saying *"please click here if you are not
+redirected"* and no results at all; DuckDuckGo's `html` endpoint exists for
+readers without JavaScript and returns the results themselves.
+`lite.duckduckgo.com` answers 202 with a bot challenge. A client that speaks
+HTTP and not DOM cannot do anything with the first two.
+
+Point it wherever you like — a SearxNG instance is the other good answer:
+
+```sh
+/set llm.search_url https://searx.example/search?q=%s
+/set llm.search_url https://www.google.com/search?q=%s   # will not return results
+```
+
+If an endpoint answers with a consent wall or a bot challenge, `web_search`
+**says so** rather than handing the model a page about clicking a button — that
+failure looks exactly like a search that found nothing, which is the worst
+thing a tool can look like.
+
+### shell
+
+`shell` returns what the command printed, **stdout and stderr both**, with the
+exit status in front of it. A model given only stdout would be told a failing
+command produced nothing. It shares `/exec`'s capture — the same byte bound and
+the same timeout — and says when it hit either.
 
 The legacy `llm.cli_tools` setting still exists and still names the CLI's own
 built-ins, but nothing is passed to `--tools` any more; leave it empty.
