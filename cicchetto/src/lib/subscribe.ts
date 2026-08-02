@@ -201,6 +201,12 @@ createRoot(() => {
       ...message,
       channel: hit.sourceChannel,
       body: `CTCP PING reply from ${message.sender}: ${hit.rttMs} ms`,
+      // #641 — this is a cic-OWNED display row, not the raw CTCP frame. Drop the
+      // reply's typed ctcp meta: the body IS the final human line, and carrying
+      // meta.ctcp_verb would make ScrollbackPane's notice CTCP arm render it as
+      // "← CTCP PING reply from <peer>" and swallow the "N ms" body. The raw
+      // reply itself is already swallowed (this branch returns true).
+      meta: {},
     });
     return true;
   };

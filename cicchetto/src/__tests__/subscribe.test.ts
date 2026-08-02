@@ -1788,6 +1788,12 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
     expect(store.scrollbackByChannel()[sourceKey]?.map((m) => m.body)).toEqual([
       "CTCP PING reply from NickServ: 42 ms",
     ]);
+    // #641 regression guard: the synthesized RTT row is a cic-owned DISPLAY line,
+    // NOT a raw CTCP frame — it must NOT inherit the reply's ctcp_verb meta, or
+    // ScrollbackPane's notice CTCP arm intercepts it and renders
+    // "← CTCP PING reply from NickServ" instead of the "N ms" body (the PR #663
+    // red). Assert the meta was stripped at synthesis.
+    expect(store.scrollbackByChannel()[sourceKey]?.[0]?.meta?.ctcp_verb).toBeUndefined();
     // $server got NOTHING — the token-less reply was swallowed, never rendered raw.
     expect(store.scrollbackByChannel()[channelKey("freenode", "$server")]).toBeUndefined();
     // No audible alert for a consumed correlation reply (the $server handler
@@ -1840,6 +1846,10 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
     expect(store.scrollbackByChannel()[sourceKey]?.map((m) => m.body)).toEqual([
       "CTCP PING reply from vjt: 42 ms",
     ]);
+    // #641 regression guard: the synthesized RTT row must NOT inherit the reply's
+    // ctcp_verb meta (else the ScrollbackPane notice CTCP arm eats it and drops
+    // the "N ms" body — the PR #663 red). Meta is stripped at synthesis.
+    expect(store.scrollbackByChannel()[sourceKey]?.[0]?.meta?.ctcp_verb).toBeUndefined();
     // The peer window got NOTHING — the reply was swallowed, not re-keyed raw.
     expect(store.scrollbackByChannel()[channelKey("freenode", "vjt")]).toBeUndefined();
     // No audible alert for a consumed correlation reply.
