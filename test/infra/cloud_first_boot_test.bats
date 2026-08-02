@@ -231,3 +231,36 @@ mode_of() {  # GNU-first, BSD fallback (macOS runner) — matches the packaging 
     [ "$(grep -c "^PHX_HOST=" "$GRAPPA_ENV_FILE")" -eq 1 ]
     [ "$(grep -c "^VAPID_SUBJECT=" "$GRAPPA_ENV_FILE")" -eq 1 ]
 }
+
+@test "re-run does NOT strip certbot's TLS vhost from the nginx site" {
+    run "$FBSH"
+    [ "$status" -eq 0 ]
+    # Simulate certbot --nginx having taken the site over (it appends a 443
+    # server + marks its edits '# managed by Certbot').
+    cat >> "$GRAPPA_NGINX_SITES_AVAILABLE/grappa" <<'EOF'
+server {
+    listen 443 ssl; # managed by Certbot
+    server_name irc.example.org;
+    ssl_certificate /etc/letsencrypt/live/irc.example.org/fullchain.pem; # managed by Certbot
+}
+EOF
+    run "$FBSH"
+    [ "$status" -eq 0 ]
+    # The TLS vhost must survive the re-run.
+    grep -q "listen 443 ssl; # managed by Certbot" "$GRAPPA_NGINX_SITES_AVAILABLE/grappa"
+    [[ "$output" == *"certbot-managed"* ]]
+}
+
+# ───────────────────────────── input validation ──────────────────────────────
+
+@test "rejects a malformed domain (SSOT-side validation)" {
+    GRAPPA_DOMAIN="not a domain'; rm -rf /" run "$FBSH"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not a valid fully-qualified domain name"* ]]
+}
+
+@test "rejects a malformed admin email" {
+    GRAPPA_ADMIN_EMAIL="nope" run "$FBSH"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not a valid email address"* ]]
+}

@@ -36,8 +36,10 @@
 # story as infra/docker/get.sh. amd64 only (the .deb is amd64-only).
 #
 # Idempotent: re-running re-applies the same config (apt install of the same
-# deb is a no-op, the env force-set writes the same values, the nginx site is
-# overwritten identically). bash, `set -euo pipefail`, shellcheck -x clean.
+# deb is a no-op, the env force-set writes the same values). The nginx site is
+# rewritten only until certbot has taken it over — once it is certbot-managed a
+# re-run leaves the TLS vhost intact (see write_nginx_site). bash,
+# `set -euo pipefail`, shellcheck -x clean.
 # Ubuntu always ships bash, so this is bash (not the strict-POSIX sh of the
 # shared deploy lib) for readable string handling.
 #
@@ -73,6 +75,14 @@ die() { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 require_env() {
 	[ -n "$GRAPPA_DOMAIN" ] || die "GRAPPA_DOMAIN is required (the public hostname → PHX_HOST). Refusing to boot a grappa with no host — it would mint dead links and reject every WebSocket."
 	[ -n "$GRAPPA_ADMIN_EMAIL" ] || die "GRAPPA_ADMIN_EMAIL is required (ACME registration + VAPID_SUBJECT)."
+	# Validate format in the SHARED script, not only in a provider's param
+	# constraints — both doors consume this verbatim, and the values are
+	# interpolated into an nginx server_name and the baked grappa-tls heredoc,
+	# so a value carrying a quote/space/'$'/backtick must be rejected HERE.
+	[[ "$GRAPPA_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]] \
+		|| die "GRAPPA_DOMAIN ('$GRAPPA_DOMAIN') is not a valid fully-qualified domain name."
+	[[ "$GRAPPA_ADMIN_EMAIL" =~ ^[^@[:space:]\'\"\$\`]+@[^@[:space:]\'\"\$\`]+\.[^@[:space:]\'\"\$\`]+$ ]] \
+		|| die "GRAPPA_ADMIN_EMAIL ('$GRAPPA_ADMIN_EMAIL') is not a valid email address."
 }
 
 require_root() {
@@ -90,12 +100,17 @@ fetch() {
 
 # ── Package install (.deb = LATEST release asset) ───────────────────────────
 # The latest release's amd64 .deb download URL, grep+sed (no jq on stock
-# Ubuntu). Empty stdout ⇒ no matching asset (caller dies).
+# Ubuntu). Empty stdout ⇒ no matching asset (caller dies). curl is consumed
+# fully into a var FIRST (not piped) so no early-terminating stage can SIGPIPE
+# the download under `set -o pipefail`; `sed -n '1p'` reads all input, so it
+# picks the first match without closing the pipe early either.
 latest_deb_url() {
-	curl -fsSL "$GITHUB_API" \
+	local json
+	json="$(curl -fsSL "$GITHUB_API")" || return 1
+	printf '%s\n' "$json" \
 		| grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*_amd64\.deb"' \
-		| head -1 \
-		| sed 's/.*"\(https[^"]*_amd64\.deb\)".*/\1/'
+		| sed 's/.*"\(https[^"]*_amd64\.deb\)".*/\1/' \
+		| sed -n '1p'
 }
 
 install_grappa_deb() {
@@ -153,13 +168,26 @@ configure_env() {
 # ── nginx: single-box HTTP front (certbot upgrades it to HTTPS) ──────────────
 # The proxy surface is the #485 SSOT snippet, FETCHED at the same git ref this
 # script came from (the .deb does not ship it). certbot --nginx later injects
-# the 443 server + the 80→443 redirect into this same site file.
+# the 443 server + the 80→443 redirect INTO this same site file (marking its
+# edits `# managed by Certbot`). So a re-run must NOT blindly overwrite the site
+# once certbot owns it — that would strip TLS until maybe_issue_cert re-runs.
+# The included snippet is always safe to refresh (certbot never touches it).
 write_nginx_site() {
-	say "Writing nginx site for $GRAPPA_DOMAIN"
+	local site="$NGINX_SITES_AVAILABLE/grappa"
 	mkdir -p "$NGINX_SNIPPETS" "$NGINX_SITES_AVAILABLE" "$NGINX_SITES_ENABLED"
 	fetch "$GRAPPA_RAW_BASE/infra/snippets/locations-api.conf" "$NGINX_SNIPPETS/grappa-locations-api.conf"
 
-	cat >"$NGINX_SITES_AVAILABLE/grappa" <<EOF
+	# Idempotency vs certbot: once the site is certbot-managed, leave its TLS
+	# vhost intact rather than reverting to HTTP-only.
+	if grep -q "managed by Certbot" "$site" 2>/dev/null; then
+		say "nginx site is certbot-managed — leaving the TLS vhost intact (refreshed snippet only)"
+		nginx -t
+		systemctl reload nginx 2>/dev/null || systemctl restart nginx
+		return 0
+	fi
+
+	say "Writing nginx site for $GRAPPA_DOMAIN"
+	cat >"$site" <<EOF
 # grappa — single-box TLS-terminating front (#665). Written by first-boot.sh.
 # certbot --nginx adds the listen 443 ssl server + the 80→443 redirect here.
 upstream grappa_upstream {
@@ -177,7 +205,7 @@ server {
 }
 EOF
 
-	ln -sf "$NGINX_SITES_AVAILABLE/grappa" "$NGINX_SITES_ENABLED/grappa"
+	ln -sf "$site" "$NGINX_SITES_ENABLED/grappa"
 	# Drop the stock default so our server_name wins the ACME challenge.
 	rm -f "$NGINX_SITES_ENABLED/default"
 
