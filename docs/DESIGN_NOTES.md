@@ -25822,6 +25822,34 @@ playback to a Manual check; the automated coverage is the classifier table
 (`mediaLink.test.ts`) + the CSP-on-the-wire parity spec.
 
 Deploy class: `security_headers.ex` is in `lib/` → HOT.
+## 2026-08-02 — #628: NDP keepalive deprecated (kept in tree, dropped from the boot path)
+
+The 2026-08-02 jail cutover moved the bouncer into a VNET jail on a **routed**
+`/64`, with the per-session source addresses bound as `/128`s on `lo0`. The
+provider now ROUTES the block to us; nothing upstream resolves each address on
+the link, so there is no neighbour cache to keep warm. That retires the entire
+reason `infra/freebsd/ndp_keepalive.pl` (+ its `.sh` shim + `rc.d/`
+`grappa_ndp_keepalive`) existed: it pinged the gateway (and external anchors) so
+the OLD **proxy-NDP** arrangement kept answering for the secondary addresses. It
+ran only inside the OLD jail, which is now stopped and boot-disabled — nothing
+runs it today, so there was nothing to migrate.
+
+**Deprecated, not deleted (vjt).** The perl supervisor stays in the tree on
+purpose ("fa fico avere un sorcio in perl") and still works if an operator
+copies it in by hand. Each of the three files carries a DEPRECATED header naming
+the *why* (routed /64, no proxy-NDP) and the *when* (2026-08-02, GH #628), so a
+reader in six months does not have to reconstruct the cutover.
+
+**Boot path.** `jail_install_rcd.sh` no longer copies the rc.d wrapper into
+`/usr/local/etc/rc.d` nor writes an `_enable="YES"` `rc.conf.d` entry, so new
+jails never wire the service. The BEAM (`grappa`) install is unchanged, as is the
+guard that writes `/etc/rc.conf.d/grappa` **only when absent** (a jail that must
+stay down relies on that file existing). To resurrect the keepalive (e.g. a
+return to a shared L2 segment where proxy-NDP is back), re-add the install/enable
+block — the exact rc.d + rc.conf.d wiring is in this commit's history.
+
+**Out of scope.** The host-side `ndproxy` service is a separate thing serving
+other jails; it was not touched.
 ---
 
 ## 2026-08-01 — #609: the source-alias wrapper's prefix has one source of truth, and arm_check proves aliasing
