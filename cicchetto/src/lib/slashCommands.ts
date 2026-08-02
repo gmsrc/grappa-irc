@@ -418,8 +418,16 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     // Reject every IRC channel sigil (# & ! +) up front, otherwise compose.ts
     // opens a phantom query window keyed by the channel name whose WS-driven
     // own-send never renders (cic only subscribes to JOINED channel topics).
+    // #343 — the refusal STAYS by design, but say so out loud: name the
+    // target, explain that /msg addresses nicks, and point at what to type
+    // instead (open the channel's window / /join it, then type there). The
+    // guard is unconditional — no joined-state check — so the guidance is
+    // "open its window", never "/msg after joining".
     if (["#", "&", "!", "+"].includes(target[0] ?? "")) {
-      return err(verb, "/msg to a channel is not supported");
+      return err(
+        verb,
+        `/msg is for private messages to a nick, not channels. To message ${target}, open its window (or /join ${target}) and type your message there.`,
+      );
     }
     return { kind: "msg", target, body };
   },

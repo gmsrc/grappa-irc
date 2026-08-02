@@ -327,16 +327,25 @@ describe("parseSlash — /msg", () => {
     expect(parseSlash("/msg alice")).toMatchObject({ kind: "error", verb: "msg" });
   });
 
-  // #12 — /msg is for nicks (queries). grappa does not relay a PRIVMSG to a
-  // channel addressed by name, so a channel-shaped target opened a phantom
+  // #12/#343 — /msg is for nicks (queries). grappa does not relay a PRIVMSG to
+  // a channel addressed by name, so a channel-shaped target opened a phantom
   // query window keyed by a channel name whose own-send never rendered.
-  // Reject every IRC channel sigil (# & ! +) up front, not just '#'.
+  // Reject every IRC channel sigil (# & ! +) up front, not just '#'. #343: the
+  // refusal STAYS but the message must be EXPLICIT — say THAT it is refused,
+  // WHY (/msg addresses nicks), and WHAT to type instead (open/join the
+  // channel window). Pin that actionable guidance so it can never regress to
+  // the bare "not supported" string.
   it.each(["#foo", "&local", "!12345chan", "+modeless"])(
-    "/msg to a channel (%s) is rejected (#12)",
+    "/msg to a channel (%s) is rejected with explicit guidance (#12/#343)",
     (chan) => {
       const r = parseSlash(`/msg ${chan} hello`);
       expect(r).toMatchObject({ kind: "error", verb: "msg" });
-      expect((r as { message: string }).message).toMatch(/channel/i);
+      const { message } = r as { message: string };
+      expect(message).toMatch(/channel/i);
+      // Actionable guidance — the whole point of #343.
+      expect(message).toMatch(/open|join|window|type/i);
+      // Names the offending target so the user knows what was refused.
+      expect(message).toContain(chan);
     },
   );
 });

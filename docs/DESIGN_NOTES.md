@@ -26469,3 +26469,33 @@ in each pin's inline comment + the test header.
 Deploy class: HOT (no `.ex`, no `mix.exs`/`mix.lock`; scripts + compose +
 Dockerfile.release + a bats test). The Dockerfile.release + e2e-compose pins are
 only exercised by the release/integration CI, not a running node.
+
+---
+
+## 2026-08-02 — #343: `/msg #chan` refusal is KEPT by design — the bare error becomes an explicit one (cic, copy-only)
+
+`/msg #chan text` in cic has always been refused at the parser
+(`slashCommands.ts`, rationale #12): grappa does not relay a name-addressed
+PRIVMSG to a channel, and cic only subscribes to the topics of channels it has
+**joined**, so letting `/msg #chan` through would make `compose.ts` open a
+phantom query window keyed by the channel name whose WS-driven own-send never
+renders — a dead window. The refusal is correct; the defect was that it read
+like a bug (`"/msg to a channel is not supported"` — flat, no *why*, no *what to
+do instead*).
+
+**Decision (vjt, 2026-08-02): the refusal stays — but it must say so out loud.**
+Making `/msg #chan` actually send would mean touching the SUBSCRIBE path (open a
+window for a non-joined channel), which is explicitly out of scope for this
+issue. So the ONLY change is the user-facing string: name the target, explain
+that `/msg` addresses nicks not channels, and point at what to type instead —
+open the channel's window (or `/join` it) and type there. The guard is
+unconditional (no joined-state check — that would be the subscribe path we are
+NOT touching), so the guidance is "open its window", never "/msg after joining".
+
+Scope: cic-only, copy-only. One production line changed
+(`slashCommands.ts`, the `msg:` handler's channel-sigil branch); the
+`kind:"error"` shape, the `compose.ts` render mechanism, the parser structure,
+and `subscribe.ts` are all UNCHANGED. No wire token, no server change. The
+unit test (`slashCommands.test.ts`, `describe("parseSlash — /msg")`) was
+strengthened to pin the actionable guidance (`/open|join|window|type/i` + the
+target name), so the message can never silently regress to the bare string.
