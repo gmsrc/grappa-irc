@@ -165,9 +165,10 @@ describe("channelModes reconciled with the HelpServ CMODE helpfile (#667)", () =
   const ADVERTISED_TYPE_D = "BcdijmMnOprRsStuU".split("");
 
   // Verbatim copy from `run/data/helpfiles/us/helpserv/cmode`, minus the
-  // leading "  x  - " marker. THIS is the acceptance source of truth.
-  // (No `B`: advertised but absent from the helpfile — the one open
-  // decision, asserted on the fallback below.)
+  // leading "  x  - " marker. THIS is the acceptance source of truth for the
+  // verbatim entries. (No `B` here: it is absent from the helpfile, so it
+  // carries authored copy instead — pinned separately in HIDEBANS_COPY and
+  // asserted below, NOT verbatim.)
   const HELPFILE_US: Record<string, string> = {
     c: "Blocks all messages containing colors sent to the channel.",
     C: "Blocks all CTCPs sent to the channel.",
@@ -190,15 +191,22 @@ describe("channelModes reconciled with the HelpServ CMODE helpfile (#667)", () =
     U: "Allow users without a registered nick on .US and .EU robins to join the channel.",
   };
 
+  // #667 — the ONE authored (non-verbatim) entry: MODE_HIDEBANS (+B) is
+  // advertised but absent from the helpfile, so its copy has no verbatim
+  // source. vjt approved this exact wording in-channel (2026-08-02); it is
+  // faithful to the ircd (ban list hidden from non-priv src/channel.c:1559;
+  // MODE +b/-b chanop-routed src/channel.c:3609, 3634). Pinned here so a
+  // drift from the approved string reds the suite.
+  const HIDEBANS_COPY =
+    "Hides the channel ban list and ban changes from users who are not channel operators.";
+
   // A letter resolves to the GENERIC fallback iff its label is the
   // synthesized `mode +<letter>` (the production fallback contract).
   const isFallback = (letter: string): boolean =>
     modeDescription(letter).label === `mode +${letter}`;
 
-  it("every advertised type B/C/D letter (except +B) resolves to non-fallback copy", () => {
-    const advertised = [...ADVERTISED_TYPE_B, ...ADVERTISED_TYPE_C, ...ADVERTISED_TYPE_D].filter(
-      (l) => l !== "B",
-    ); // +B is the one open decision — see below.
+  it("every advertised type B/C/D letter resolves to non-fallback copy", () => {
+    const advertised = [...ADVERTISED_TYPE_B, ...ADVERTISED_TYPE_C, ...ADVERTISED_TYPE_D];
 
     const stillFallback = advertised.filter(isFallback);
     expect(stillFallback).toEqual([]);
@@ -240,10 +248,15 @@ describe("channelModes reconciled with the HelpServ CMODE helpfile (#667)", () =
     expect(isFallback("D")).toBe(true);
   });
 
-  it("+B stays on the generic fallback — the one open decision (no helpfile copy)", () => {
-    // MODE_HIDEBANS is advertised (type D) but absent from the HelpServ
-    // helpfile. Its wording is a separate decision; until made, +B must NOT
-    // carry invented copy.
-    expect(isFallback("B")).toBe(true);
+  it("+B (MODE_HIDEBANS) carries the approved authored copy — the sole non-verbatim entry", () => {
+    // Advertised (type D) but ABSENT from the HelpServ helpfile, so it has no
+    // verbatim source. vjt approved this exact wording in-channel; it is the
+    // ONLY entry not drawn from the helpfile (every letter in HELPFILE_US is).
+    const B = modeDescription("B");
+    expect(isFallback("B")).toBe(false);
+    expect(B.desc).toBe(HIDEBANS_COPY);
+    // And it is NOT sourced from the verbatim helpfile dict — the marker that
+    // keeps the "sole authored entry" invariant honest.
+    expect(HELPFILE_US).not.toHaveProperty("B");
   });
 });

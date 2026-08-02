@@ -28,17 +28,18 @@ export type ModeInfo = { label: string; desc: string };
 // ⇒ type B `k`, type C `l`, type D `B c d i j m M n O p r R s S t u U`
 //   (type A `b z` list modes + PREFIX `o h v` are excluded — see above).
 //
-// The `desc` is VERBATIM from the network's HelpServ CMODE helpfile
+// Every `desc` is VERBATIM from the network's HelpServ CMODE helpfile
 // (`azzurra/services` → run/data/helpfiles/us/helpserv/cmode), NOT
-// paraphrased from the ircd C source. That text is what users are already
-// told, so cic must MATCH it — and paraphrasing the C source is exactly how
-// `+d` was once mislabelled "delayed" (it is MODE_NONICKCHG: no nick change)
-// and `+u` a "spam filter" (it blocks PART/QUIT). The `label` is cic's own
-// short UI tag: concise but truthful to the verbatim `desc`.
+// paraphrased from the ircd C source — with EXACTLY ONE exception, `+B`
+// (MODE_HIDEBANS): it is advertised but ABSENT from the helpfile, so it
+// carries authored copy (approved in-channel; see its inline note at the top
+// of the table). That verbatim text is what users are already told, so cic
+// must MATCH it — and paraphrasing the C source is exactly how `+d` was once
+// mislabelled "delayed" (it is MODE_NONICKCHG: no nick change) and `+u` a
+// "spam filter" (it blocks PART/QUIT). The `label` is cic's own short UI tag:
+// concise but truthful to the `desc`.
 //
 // Not here, on purpose:
-//   `+B` (MODE_HIDEBANS) — advertised but ABSENT from the helpfile; carries
-//        no entry and falls to the generic fallback pending a copy decision.
 //   `+D` — DELETED: the ircd has no such mode (no `case 'D'`, not in
 //        CHANMODES); a phantom entry is what made a reader assume `+d` was
 //        its lowercase sibling. Delete, don't rewrite.
@@ -48,6 +49,17 @@ export type ModeInfo = { label: string; desc: string };
 //
 // Ordered as the helpfile lists them (case-insensitive) for easy audit.
 const MODE_DESCRIPTIONS: Record<string, ModeInfo> = {
+  // #667 — the SOLE non-verbatim entry. MODE_HIDEBANS (`+B`) is advertised
+  // (type D) but ABSENT from the HelpServ CMODE helpfile, so it has no
+  // verbatim text to match; this copy is authored, approved by vjt in-channel
+  // (2026-08-02). It is faithful to the ircd behaviour: the ban list is
+  // withheld from non-privileged users (bahamut src/channel.c:1559) and
+  // MODE +b/-b are routed to channel operators only (src/channel.c:3609,
+  // 3634). Every OTHER entry below is verbatim from the helpfile.
+  B: {
+    label: "hide bans",
+    desc: "Hides the channel ban list and ban changes from users who are not channel operators.",
+  },
   c: {
     label: "no colors",
     desc: "Blocks all messages containing colors sent to the channel.",
