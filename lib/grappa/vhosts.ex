@@ -83,8 +83,8 @@ defmodule Grappa.Vhosts do
 
   import Ecto.Query
 
-  alias Grappa.{Repo, Subject, UserSettings}
   alias Grappa.Accounts.Session
+  alias Grappa.{Repo, Subject, UserSettings}
   alias Grappa.Vhosts.{Grant, SourceMapping, Vhost}
   alias Grappa.Visitors.Visitor
 
@@ -632,7 +632,7 @@ defmodule Grappa.Vhosts do
   # The sample is persisted on the way through (best-effort — the writer never
   # fails a caller), so the next connect reads a recorded value and this path
   # is walked once per subject, not on every reconnect.
-  @spec last_known_client_key(Subject.t()) :: binary() | nil
+  @spec last_known_client_key(Subject.t()) :: <<_::32, _::_*32>> | nil
   defp last_known_client_key(subject) do
     with ip when is_binary(ip) <- last_known_ip(subject),
          {:ok, tuple} <- :inet.parse_address(String.to_charlist(ip)) do
@@ -652,14 +652,15 @@ defmodule Grappa.Vhosts do
   end
 
   defp last_known_ip({:user, id}) do
-    Repo.one(
+    query =
       from(s in Session,
         where: s.user_id == ^id and not is_nil(s.ip),
         order_by: [desc: s.last_seen_at],
         limit: 1,
         select: s.ip
       )
-    )
+
+    Repo.one(query)
   end
 
   # ---------------------------------------------------------------------------
