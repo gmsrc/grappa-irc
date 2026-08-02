@@ -6,11 +6,16 @@ vi.mock("../lib/api", () => {
   class ApiError extends Error {
     readonly status: number;
     readonly code: string;
-    constructor(status: number, code: string) {
+    // #666 — the resumable fan-out reads `info.retry_after` off a 429 to pace
+    // the residue, so the stub MUST mirror the real class's `info` field (see
+    // api.ts ApiError) or `e.info` is undefined and the pacing throws.
+    readonly info: Record<string, unknown>;
+    constructor(status: number, code: string, info: Record<string, unknown> = {}) {
       super(`${status} ${code}`);
       this.name = "ApiError";
       this.status = status;
       this.code = code;
+      this.info = info;
     }
   }
   // compose.ts's catch does `e instanceof ChannelPushError` (#62) — the
@@ -353,6 +358,156 @@ describe("compose submit — slash command dispatch", () => {
 
     expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "hello");
     expect(result).toEqual({ ok: true });
+  });
+
+  // #666 — a multi-line paste fans out to one PRIVMSG per line, clears the
+  // draft on full success, and records the WHOLE original body as ONE history
+  // entry (not per-line).
+  it("#666 — a multi-line body sends one PRIVMSG per line and clears the draft", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+
+    compose.setDraft(k, "one\ntwo\nthree");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(vi.mocked(sb.sendMessage).mock.calls.map((c) => c[2])).toEqual(["one", "two", "three"]);
+    expect(compose.getDraft(k)).toBe("");
+    expect(result).toEqual({ ok: true });
+
+    // History records the WHOLE original paste (one recall entry), not per-line.
+    compose.recallPrev(k);
+    expect(compose.getDraft(k)).toBe("one\ntwo\nthree");
+  });
+
+  // #666 — the CORE bug. A fatal mid-paste error must leave ONLY the unsent
+  // remainder in the draft (never the whole body), so a resend sends ONLY that
+  // remainder — never re-delivering the lines that already went out.
+  it("#666 — fatal mid-paste keeps only the residue; resume sends only the remainder (no dup)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const api = await import("../lib/api");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+
+    // l1..l3 delivered; the 4th send fails FATALLY (400 invalid_line, not a 429).
+    let n = 0;
+    vi.mocked(sb.sendMessage).mockImplementation(async () => {
+      n += 1;
+      if (n === 4) throw new api.ApiError(400, "invalid_line");
+      return undefined as never;
+    });
+
+    compose.setDraft(k, "l1\nl2\nl3\nl4\nl5");
+    const first = await compose.submit(k, "freenode", "#a");
+
+    // l1..l4 attempted once each (l4 failed); l5 NEVER attempted (no drop-and-forget).
+    expect(vi.mocked(sb.sendMessage).mock.calls.map((c) => c[2])).toEqual(["l1", "l2", "l3", "l4"]);
+    // Draft holds ONLY the unsent remainder — the delivered l1..l3 are gone.
+    expect(compose.getDraft(k)).toBe("l4\nl5");
+    expect(first).toHaveProperty("error");
+
+    // Resume: the door is open now. Resending sends ONLY l4, l5 — never l1..l3 again.
+    vi.mocked(sb.sendMessage).mockReset();
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const second = await compose.submit(k, "freenode", "#a");
+
+    expect(vi.mocked(sb.sendMessage).mock.calls.map((c) => c[2])).toEqual(["l4", "l5"]);
+    expect(compose.getDraft(k)).toBe(""); // fully drained
+    expect(second).toEqual({ ok: true });
+  });
+
+  // #666 — a send-door 429 is a PAUSE, not a failure: the fan-out waits the
+  // server's retry-after, then retries the SAME (refused, never-delivered) line
+  // and drains the rest. No line dropped; the refused line is not skipped; the
+  // draft holds the unsent remainder while it paces.
+  it("#666 — a send-door 429 auto-paces on retry-after and drains the full paste", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+
+      // a, b deliver; c (call 3) is refused ONCE with a 429 carrying
+      // retry_after: 2 (seconds); every later attempt succeeds.
+      let n = 0;
+      let refused = false;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n === 3 && !refused) {
+          refused = true;
+          throw new api.ApiError(429, "rate_limited", { retry_after: 2 });
+        }
+        return undefined as never;
+      });
+
+      compose.setDraft(k, "a\nb\nc\nd");
+      const done = compose.submit(k, "freenode", "#a");
+
+      // Flush microtasks up to the 429 pause: a, b delivered; c refused once.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.mocked(sb.sendMessage).mock.calls.map((c) => c[2])).toEqual(["a", "b", "c"]);
+      // Residue after the refusal is the UNSENT remainder incl. the refused c.
+      expect(compose.getDraft(k)).toBe("c\nd");
+
+      // Honour the interval: advance the full 2s → c retried, then d.
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      // Every line delivered in order; c appears twice on the CALL log (refused
+      // then delivered) but only ever went out once (the first was a 429).
+      expect(vi.mocked(sb.sendMessage).mock.calls.map((c) => c[2])).toEqual([
+        "a",
+        "b",
+        "c",
+        "c",
+        "d",
+      ]);
+      expect(compose.getDraft(k)).toBe(""); // fully drained, no residue
+      expect(await done).toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #666 — safety valve: a door that keeps 429ing PAST its own retry-after must
+  // NOT hang the composer forever. After the per-line retry cap the fan-out
+  // gives up and surfaces the throttle, leaving the unsent residue in the draft.
+  // `vi.runAllTimersAsync` would itself throw if the loop were unbounded (it
+  // aborts after 10k timers) — so this is also the regression guard against
+  // ever removing the cap.
+  it("#666 — a persistently throttled paste stops after the retry cap (no infinite loop), residue kept", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+
+      // a delivers; b (and every retry of it) is refused with a 429 forever.
+      let n = 0;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n >= 2) throw new api.ApiError(429, "rate_limited", { retry_after: 1 });
+        return undefined as never;
+      });
+
+      compose.setDraft(k, "a\nb\nc");
+      const done = compose.submit(k, "freenode", "#a");
+      // Drain every scheduled pace-sleep; bounded by the cap → settles.
+      await vi.runAllTimersAsync();
+      const result = await done;
+
+      expect(result).toHaveProperty("error");
+      // a went out and is gone from the draft; the unsent b, c remain.
+      expect(compose.getDraft(k)).toBe("b\nc");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("/me action sends as ACTION via scrollback.sendMessage with CTCP framing", async () => {

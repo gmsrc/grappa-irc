@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { addAlias, aliases, delAlias } from "./aliasList";
 import {
+  ApiError,
   ownNickForNetwork,
   patchNetwork,
   postJoin,
@@ -116,21 +117,103 @@ const empty = (): ComposeState => ({
 export const ctcpFrame = (verb: string, args: string): string =>
   args === "" ? `\x01${verb}\x01` : `\x01${verb} ${args}\x01`;
 
-// Multiline fan-out: split a free-text body into one PRIVMSG per line
-// (see messageLines.ts for the wire-framing why) and send each.
-// `action` wraps every line in CTCP ACTION framing for /me (via the shared
-// `ctcpFrame` builder). Sequential await preserves wire order; a single-line
-// body loops exactly once, so the common path is unchanged from the pre-split
-// behavior. Shared by the privmsg, me, and msg send sites — the only free-text
-// paths whose body can contain an operator-typed newline.
+// #666 — resumable, self-pacing multiline fan-out.
+//
+// A paste sends one PRIVMSG per line, but the server's send door (the
+// per-(subject, network) token bucket, #340) refuses a burst past its
+// capacity with a 429. Pre-#666 the first 429 rejected the for-await loop and
+// EVERY remaining line was silently dropped, while the draft (cleared only on
+// success) still held the WHOLE body — so resending duplicated the delivered
+// lines AND immediately re-tripped the throttle. The fix makes a 429 a pause,
+// not a failure: wait the server's retry-after, then retry THIS line (a
+// refused line was never delivered, so retrying is neither a drop nor a dup).
+// Only a fatal error stops the drain.
+
+// Fallback wait when a 429 arrives with no parseable retry-after (the server
+// always sends one now — messages_controller/#666 — but a proxy could strip
+// the header). Matches the send throttle's default 0.5/s refill (1 token / 2s).
+const DEFAULT_RETRY_AFTER_MS = 2_000;
+
+// Safety valve: how many times ONE line is re-paced against a persistent 429
+// before the fan-out gives up and surfaces the throttle. An honest send door
+// admits on the FIRST retry once a token has refilled (we waited its own
+// retry-after), so the cap is only reached by a door that refuses PAST its own
+// hint (a misbehaving/severed server, or a proxy 429) — the guard that keeps
+// the composer from hanging on an unbounded retry loop. Generous enough to
+// absorb timer jitter around the refill boundary.
+const MAX_PACED_RETRIES_PER_LINE = 5;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A send-door 429 — the ONLY error class the fan-out paces-and-retries rather
+// than surfacing. Everything else (WS down, invalid_line, a severed-session
+// 401) is fatal and stops the drain.
+const isSendThrottled = (e: unknown): e is ApiError => e instanceof ApiError && e.status === 429;
+
+// ms to wait before retrying a throttled line. `api.ts readError` parses the
+// server's `retry-after` header (seconds) into `info.retry_after`; convert to
+// ms, falling back to the send-throttle default if it's missing/garbage.
+const retryAfterMs = (e: ApiError): number => {
+  const seconds = e.info.retry_after;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+    ? seconds * 1_000
+    : DEFAULT_RETRY_AFTER_MS;
+};
+
+// Split a free-text body into one PRIVMSG per line (see messageLines.ts for
+// the wire-framing why) and send each, in order. `action` wraps every line in
+// CTCP ACTION framing for /me (via the shared `ctcpFrame` builder). Sequential
+// await preserves wire order; a single-line body loops exactly once (the
+// common path). Shared by the privmsg, me, and msg send sites — the only
+// free-text paths whose body can contain an operator-typed newline.
+//
+// #666 — a send-door 429 retries the SAME line after the server's retry-after
+// (never advancing `sent` past a refusal → never a drop, never a dup); any
+// other error stops and propagates. `onProgress` (optional) fires after every
+// acked line AND before every pace/stop, with the count sent so far and the
+// unsent remainder joined back into a body — compose `submit` mirrors that
+// remainder into the draft so it holds ONLY what has not gone out. External
+// callers (ServiceModal, RegistrationWizardModal) pass no callback and simply
+// inherit the never-drop + pacing behaviour.
 export const sendBodyLines = async (
   slug: string,
   target: string,
   body: string,
   action: boolean,
+  onProgress?: (sent: number, total: number, residue: string) => void,
 ): Promise<void> => {
-  for (const line of splitMessageLines(body)) {
-    await sendPrivmsg(slug, target, action ? ctcpFrame("ACTION", line) : line);
+  const lines = splitMessageLines(body);
+  const total = lines.length;
+  let sent = 0;
+  // Consecutive paced retries of the CURRENT line; reset when `sent` advances.
+  let retries = 0;
+  while (sent < total) {
+    // `?? ""` satisfies noUncheckedIndexedAccess; `sent < total` guarantees a value.
+    const line = lines[sent] ?? "";
+    try {
+      await sendPrivmsg(slug, target, action ? ctcpFrame("ACTION", line) : line);
+      sent += 1;
+      retries = 0;
+      onProgress?.(sent, total, lines.slice(sent).join("\n"));
+    } catch (e) {
+      // The residue always starts at `sent` — the first line NOT yet acked.
+      // On a 429 that is the refused line (retry it after pacing); on a fatal
+      // error it is the line that failed (kept, not dropped). Either way the
+      // caller's draft must hold exactly lines[sent..].
+      onProgress?.(sent, total, lines.slice(sent).join("\n"));
+      // Auto-pace ONLY a multi-line paste (the #666 domain): a SINGLE throttled
+      // send surfaces immediately, preserving #342's throttle-copy affordance.
+      // `retries` caps the wait against a door that refuses past its own
+      // retry-after (misbehaving/severed server) so the composer never hangs —
+      // an honest throttle admits on the first retry once a token has refilled.
+      if (isSendThrottled(e) && total > 1 && retries < MAX_PACED_RETRIES_PER_LINE) {
+        retries += 1;
+        await sleep(retryAfterMs(e));
+        // loop retries the same `sent` index — never advanced past a refusal.
+      } else {
+        throw e;
+      }
+    }
   }
 };
 
@@ -213,6 +296,50 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     }));
   };
 
+  // #666 — send a free-text body as one PRIVMSG per line via the resumable,
+  // self-pacing `sendBodyLines`, mirroring the UNSENT remainder into the draft
+  // after every line so the composer holds ONLY what has not gone out — never
+  // the whole body (the pre-#666 resend-duplicates bug). A send-door 429 auto-
+  // paces and drains the rest over time (the composer stays busy while it
+  // does); a fatal error stops with the residue in the draft and surfaces how
+  // many lines made it out. Used by the privmsg / me / msg arms — the free-text
+  // paths whose body can be a multi-line paste. `key` is the SOURCE window (the
+  // one the operator submitted from), so a partial send leaves the remainder
+  // where it was typed. On error returns `{error}` — the caller MUST early-
+  // return it so the shared end-of-submit draft-clear + history-push never
+  // runs (which would wipe the residue and record a half-sent paste).
+  const sendPacedBody = async (
+    key: ChannelKey,
+    slug: string,
+    target: string,
+    body: string,
+    action: boolean,
+  ): Promise<SubmitResult> => {
+    let sentCount = 0;
+    let totalCount = 0;
+    try {
+      await sendBodyLines(slug, target, body, action, (sent, total, residue) => {
+        sentCount = sent;
+        totalCount = total;
+        // Residue-only draft, reset to the live bottom (historyCursor null):
+        // we're typing the remainder, not walking history.
+        writeState(key, (s) => ({ ...s, draft: residue, historyCursor: null }));
+      });
+      return { ok: true };
+    } catch (e) {
+      // Fatal mid-fan-out (WS down, invalid_line, severed 401). The residue
+      // draft is already set to the unsent remainder; surface the reason and,
+      // for a genuine multi-line paste, how many lines went out so the operator
+      // knows the send partially landed and the rest is queued in the box.
+      const reason = friendlyError(e);
+      return totalCount > 1
+        ? {
+            error: `${reason} — sent ${sentCount} of ${totalCount} lines; the rest are in the box`,
+          }
+        : { error: reason };
+    }
+  };
+
   const submit = async (
     key: ChannelKey,
     networkSlug: string,
@@ -288,17 +415,25 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     let result: SubmitResult;
     try {
       switch (cmd.kind) {
-        case "privmsg":
-          // One PRIVMSG per line — an embedded newline can't ride a
-          // single IRC frame (server rejects as :invalid_line).
-          await sendBodyLines(networkSlug, channelName, cmd.body, false);
-          result = { ok: true };
+        case "privmsg": {
+          // One PRIVMSG per line — an embedded newline can't ride a single IRC
+          // frame (server rejects as :invalid_line). #666 — resumable + paced:
+          // a send-door 429 drains the rest over time; a fatal error leaves ONLY
+          // the unsent remainder in the draft (early-return so the end-of-submit
+          // clear never wipes it).
+          const r = await sendPacedBody(key, networkSlug, channelName, cmd.body, false);
+          if ("error" in r) return r;
+          result = r;
           break;
-        case "me":
-          // CTCP ACTION framing per line: \x01ACTION <text>\x01.
-          await sendBodyLines(networkSlug, channelName, cmd.body, true);
-          result = { ok: true };
+        }
+        case "me": {
+          // CTCP ACTION framing per line: \x01ACTION <text>\x01. Same #666
+          // resumable + paced fan-out as privmsg.
+          const r = await sendPacedBody(key, networkSlug, channelName, cmd.body, true);
+          if ("error" in r) return r;
+          result = r;
           break;
+        }
         // #591 — /ctcp <target> <VERB> [args]: a single CTCP frame to an
         // EXPLICIT target (not the current window), built via the shared
         // `ctcpFrame` seam. Non-ACTION CTCP is single-line by convention
@@ -478,8 +613,10 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/msg: network not found" };
           if (isServicesSender(cmd.target)) {
-            await sendBodyLines(networkSlug, cmd.target, cmd.body, false);
-            result = { ok: true };
+            // #666 — resumable + paced; residue keyed on the source window `key`.
+            const svc = await sendPacedBody(key, networkSlug, cmd.target, cmd.body, false);
+            if ("error" in svc) return svc;
+            result = svc;
             break;
           }
           const canonical = canonicalQueryNick(networkId, cmd.target);
@@ -494,8 +631,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // echo stays the sole render path (no optimistic local render — cf.
           // the #251 source_address abolition).
           await ensureQueryTopicJoined(networkSlug, canonical);
-          await sendBodyLines(networkSlug, canonical, cmd.body, false);
-          result = { ok: true };
+          // #666 — resumable + paced. Residue keyed on the source window `key`
+          // (where /msg was typed), not the query window we just focused.
+          const r = await sendPacedBody(key, networkSlug, canonical, cmd.body, false);
+          if ("error" in r) return r;
+          result = r;
           break;
         }
         case "service-modal": {
