@@ -16,6 +16,73 @@ to run grappa yourself.
 > now serves the SPA and emits the CSP itself. Jump to
 > [Upgrading from the two-container topology](#upgrading-from-the-two-container-topology).
 
+## One-click on AWS (CloudFormation)
+
+Want grappa on its own cloud box over HTTPS, installing **nothing** locally?
+If you already have an AWS account, the CloudFormation template
+[`infra/aws/grappa-cloudformation.yaml`](infra/aws/grappa-cloudformation.yaml)
+stands up a single stock-Ubuntu EC2 instance that installs the latest release
+`.deb`, self-terminates TLS, and keeps a stable Elastic IP.
+
+**What you provide** (the five shared knobs + an SSH key pair):
+
+| Knob | Meaning |
+|------|---------|
+| **Domain** | public hostname (e.g. `irc.example.org`) |
+| **AdminEmail** | Let's Encrypt registration + web-push contact |
+| **InstanceType** | EC2 size — **amd64 only** (the `.deb` is amd64-only; no Graviton) |
+| **SshCidr** | CIDR allowed to SSH — required, lock it to your address (`x.x.x.x/32`) |
+| **DiskSizeGb** | root/data volume size |
+| **KeyName** | an existing EC2 key pair (AWS-specific, on top of the five) |
+
+**Version pin = latest.** There is no apt repo — first boot fetches the
+*latest* GitHub release asset (`grappa_<ver>_amd64.deb`). "Pinned version"
+therefore means *latest at launch time*.
+
+### Order matters — point DNS, then issue TLS
+
+1. **Launch the stack** (see the launch URL below). It resolves the Ubuntu
+   24.04 AMI via Canonical's SSM public parameter (so it works in every region
+   with no hardcoded AMI), creates a security group (443 + 80-for-ACME open, SSH
+   restricted to your CIDR), the instance, and an **Elastic IP**.
+2. **Read the Outputs.** `PublicIp` is the Elastic IP; `DnsRecord` is the exact
+   A record to create. **Point your domain's A record at that IP.**
+3. **Issue the cert.** TLS is *deferred* at first boot on purpose: the Elastic
+   IP is unknown until the stack finishes, so DNS cannot resolve yet, and
+   issuing blind would burn Let's Encrypt's failed-validation quota. Once DNS
+   resolves, SSH in and run:
+
+   ```sh
+   sudo grappa-tls
+   ```
+
+   (A boot oneshot also retries this best-effort, so a **reboot after you point
+   DNS** self-issues the cert without the manual step.)
+4. Open `https://<your-domain>/` and create your first user.
+
+### The launch URL
+
+The console "quick-create" URL wants a **`templateURL=` on S3** — it does *not*
+accept a raw `raw.githubusercontent.com` URL. Host the YAML in a public S3
+bucket and build:
+
+```
+https://<region>.console.aws.amazon.com/cloudformation/home?region=<region>#/stacks/create/review?templateURL=https://<bucket>.s3.<region>.amazonaws.com/grappa-cloudformation.yaml&stackName=grappa
+```
+
+Or, with no bucket, upload the file directly in the CloudFormation console
+(**Create stack → Upload a template file**).
+
+### Deleting
+
+Deleting the stack removes everything it created (instance, security group,
+Elastic IP). Nothing is retained.
+
+> The on-box bootstrap lives in [`infra/cloud/first-boot.sh`](infra/cloud/first-boot.sh),
+> shared verbatim with the future Terraform module (the CFN `UserData` curls it
+> at a git ref and execs it — it is never inlined). Operator runbook for the AWS
+> box: [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
 ## Prerequisites
 
 - **Docker Engine** with the **Compose v2** plugin (`docker compose

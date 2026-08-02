@@ -26628,3 +26628,85 @@ acked item, keep the draft = the unsent residue, and pace on the refusing
 bucket's OWN advertised interval. When a 429 hint already flows on the wire
 (`retry-after` header, or a `retry_after_ms` JSON field), read it — don't
 back-to-back-refire and re-trip the throttle.
+## 2026-08-02 — #665: one-click AWS via a CloudFormation door over a SHARED, provider-agnostic `first-boot.sh`
+
+Ship a launch URL that stands up grappa on AWS over HTTPS for someone who has an
+AWS account and installs nothing locally. The perimeter was CLOSED at scoping
+(vjt, #it-opers 2026-08-02) and is NOT re-litigated here: **no** custom
+AMI/Packer (regional + per-arch rebuilds, marketplace paperwork buys nothing),
+**no** marketplace listing, **no** CDK/cdktf (a Node toolchain to save ~30 lines
+of resource graph), and **no** Terraform *first* (it needs a CLI + creds before
+anything happens — wrong first step for "easy to launch"). Terraform is a
+LATER door; the layout is built FOR it now so the second consumer is a wrapper,
+not a rewrite.
+
+**Shared ground, not shared graph.** The one thing both doors share is the
+after-boot logic: install the `.deb`, force the domain into the env file, stand
+up nginx, start the unit, terminate TLS. That lives in ONE script,
+`infra/cloud/first-boot.sh`, consumed VERBATIM — the CFN `UserData` curls it at
+a git ref and execs it, NEVER inlines it; a future Terraform `user_data` does
+the same. `infra/cloud/` holds the shared material (the script + a
+machine-readable `params.contract`); `infra/aws/` holds the CFN YAML that
+CONSUMES it. The resource graph is deliberately NOT shared — CFN YAML and
+Terraform HCL stay two hand-written files, because generating both from one
+source is exactly the CDK cost the perimeter rejected.
+
+**Five shared knobs, one name each (the contract):** `domain` (→ `PHX_HOST`),
+`admin_email` (→ ACME email + `VAPID_SUBJECT=mailto:`), `instance_type` (amd64 —
+the `.deb` is amd64-only, no arm64), `ssh_cidr` (SG ingress, REQUIRED, no
+default — an open SSH port is never a default), `disk_size_gb` (EBS). Keypair is
+an AWS-specific parameter ON TOP (no cross-cloud analogue). Only `domain` +
+`admin_email` reach `first-boot.sh` (env `GRAPPA_DOMAIN` / `GRAPPA_ADMIN_EMAIL`);
+the other three shape the resource graph.
+
+**Drift-guard, not a generator (`infra/cloud/check-drift.sh`, wired into CI).**
+Since the two doors are hand-written, a CHECK keeps them honest: every provider
+door must reference `first-boot.sh` and annotate the parameter implementing each
+knob with a `grappa-knob: <name>` marker. The guard greps for those markers, so
+it is agnostic to each tool's own naming (CFN `Domain`, Terraform `domain` both
+carry `grappa-knob: domain`). It runs against whatever doors exist and tolerates
+`infra/terraform/` being absent (an absent provider is not drift). It is proven
+to go RED on drift by `test/infra/cloud_drift_guard_test.bats`.
+
+**Pin = LATEST, stated out loud.** The `.deb`/`.rpm` exist ONLY as GitHub
+release assets — there is no apt/yum repo — so `first-boot.sh` fetches the
+LATEST release's `grappa_<ver>_amd64.deb` (grep of `.../releases/latest`, no
+`jq` on stock Ubuntu). "Pinned version" therefore means *latest at launch*; the
+template + script say so. Same posture as #503's `get.sh`. Ubuntu 24.04 AMI is
+resolved region-agnostically via Canonical's SSM public parameter
+(`AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>`), no per-region AMI copies.
+
+**Single-box TLS, DEFERRED until DNS resolves (the non-obvious part).** Unlike
+`infra/linux/` (a dumb HTTP proxy BEHIND an upstream TLS box), a cloud box is
+the whole world and terminates TLS itself. `first-boot.sh` installs nginx +
+certbot, writes an HTTP site that `include`s the FETCHED #485 proxy snippet
+(`infra/snippets/locations-api.conf` — the SSOT proxy surface, not re-typed),
+force-sets `PHX_HOST` + `VAPID_SUBJECT` (re-locking the env file 0640
+root:grappa, same discipline as `gen-secrets.sh`), starts grappa and waits on
+`/healthz`. It does NOT issue the cert at first boot: the Elastic IP — and thus
+DNS — is unknown until the stack Outputs show it, and issuing blind burns Let's
+Encrypt's 5-failed-validations-per-hour quota. Instead it installs
+`/usr/local/sbin/grappa-tls` (domain + email baked) and enables a
+`grappa-tls.service` boot oneshot (best-effort) so a **reboot after DNS
+self-issues**; the documented manual path is one `sudo grappa-tls` once the
+operator points the A record at the Elastic IP.
+
+**No Elixir change.** `config/runtime.exs` ALREADY hard-requires `PHX_HOST` in
+prod (raises when missing), so mapping domain→`PHX_HOST` is a pure shell set —
+this shipped shell-only, no `config/` or `lib/` touch, no COMPILE lane.
+
+**Launch-URL caveat.** The console quick-create `templateURL=` wants an S3
+https URL, not `raw.githubusercontent.com`; the YAML must be hosted in a public
+S3 bucket (or uploaded directly in the console). Documented in INSTALL.md, not
+faked with a working raw URL.
+
+**Testing.** bats mirrors #503's unit-D shape — `test/infra/cloud_first_boot_test.bats`
+(domain/email hard-required, latest-`.deb` install, enable+restart+health wait,
+`PHX_HOST`/`VAPID_SUBJECT` force-set + 0640 relock with the GNU-first
+`stat -c '%a' || stat -f '%Lp'` probe, nginx site + fetched snippet, grappa-tls
+helper + boot oneshot, TLS-deferred-vs-issued on DNS) and
+`test/infra/cloud_drift_guard_test.bats`. `shellcheck -x` on both scripts, wired
+into ci.yml next to the #503 deploy-script gate. cfn-lint is BEST-EFFORT (no AWS
+creds in CI). Acceptance — clean account → HTTPS, ≥2 regions, stack fully
+deletes — is a MANUAL vjt check, reported PENDING; the template + script were
+built and tested against their SHAPE, not a live AWS account.

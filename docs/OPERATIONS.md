@@ -677,6 +677,58 @@ curl -fsSL https://raw.githubusercontent.com/vjt/grappa-irc/main/infra/docker/ge
 > `docker run` of the published image once a tag has cut before trusting these
 > one-liners in anger.
 
+### AWS one-click box (CloudFormation) — #665
+
+A checkout-less, install-nothing-locally path for someone with an AWS account:
+[`infra/aws/grappa-cloudformation.yaml`](../infra/aws/grappa-cloudformation.yaml)
+launches a single stock-Ubuntu EC2 box that installs the latest release `.deb`
+and terminates its OWN TLS. Operator-facing INSTALL flow (launch URL, the five
+knobs, delete) is in [`INSTALL.md`](../INSTALL.md#one-click-on-aws-cloudformation);
+this is the runbook.
+
+- **The shared bootstrap is `infra/cloud/first-boot.sh`.** The CFN `UserData`
+  curls it at a git ref (`main`) and execs it — it is NEVER inlined into the
+  template. The same script is the future Terraform `user_data`. The two doors
+  share ONLY this script + the knob names in `infra/cloud/params.contract`; the
+  resource graph (CFN YAML vs Terraform HCL) stays two hand-written files. CI
+  runs `infra/cloud/check-drift.sh` to prove both doors reference `first-boot.sh`
+  and expose the same knobs.
+- **AMI.** Resolved at stack-create time from Canonical's SSM public parameter
+  (`/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`)
+  — region-agnostic, no hardcoded/per-region AMI ids. **amd64 only** (the `.deb`
+  is amd64-only; do not pick a Graviton instance type).
+- **Version pin = latest.** No apt repo exists — `first-boot.sh` fetches the
+  *latest* release's `grappa_<ver>_amd64.deb` (grep of
+  `api.github.com/repos/vjt/grappa-irc/releases/latest`, no `jq`). Same story as
+  the #503 `get.sh` path.
+- **TLS is single-box + DEFERRED.** Unlike `infra/linux/` (a dumb HTTP proxy
+  behind an upstream TLS box), this box terminates TLS itself: `first-boot.sh`
+  installs nginx + certbot, writes an HTTP site that `include`s the FETCHED #485
+  proxy snippet, then defers cert issuance because the Elastic IP — and thus DNS
+  — is unknown at first boot. Issuing blind would burn Let's Encrypt's
+  5-failed-validations-per-hour quota. It installs `/usr/local/sbin/grappa-tls`
+  (domain + email baked in) and enables a `grappa-tls.service` boot oneshot that
+  best-effort retries; issuance happens the moment DNS resolves — either the
+  operator runs `sudo grappa-tls`, or a reboot-after-DNS self-issues.
+- **DNS order.** Point the domain's A record at the stack's Elastic IP
+  (`PublicIp` / `DnsRecord` Outputs) BEFORE issuing TLS.
+- **Env + secrets.** The `.deb` postinstall creates `/etc/grappa/grappa.env`
+  (0640 root:grappa) and mints secrets via `gen-secrets.sh` (openssl-only);
+  `first-boot.sh` force-sets `PHX_HOST` (= Domain) + `VAPID_SUBJECT` (=
+  `mailto:AdminEmail`) and re-locks 0640. Back up `GRAPPA_ENCRYPTION_KEY`.
+- **Ongoing ops.** It is a native systemd host — `journalctl -u grappa -f`,
+  `systemctl restart grappa`, `sudo grappa migrate`, `sudo grappa gen-secrets`
+  all work exactly as the packaged native-Linux path. certbot installs its own
+  renewal timer.
+- **Delete.** The stack is fully deletable (instance + SG + Elastic IP, all
+  `DeleteOnTermination`/no-retain).
+
+> **Acceptance is a MANUAL check (vjt).** cfn-lint ran best-effort only (no AWS
+> creds in CI); a real launch from a clean account → HTTPS reachable, ≥2 regions,
+> stack fully deletes has NOT been run yet. The template + `first-boot.sh` were
+> built and bats-tested against their SHAPE (stubbed apt/systemctl/nginx/certbot),
+> not against a live AWS account.
+
 ### Running operator actions against the live jail (prod)
 
 Prod is a **bastille jail** (name `grappa`, `/usr/local/bastille/jails/grappa/root`,
