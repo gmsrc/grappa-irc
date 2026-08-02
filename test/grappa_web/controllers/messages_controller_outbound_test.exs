@@ -539,6 +539,33 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # #666 — the send-door 429 MUST carry a `retry-after` header so cic can
+    # pace the remaining lines of a multi-line paste against THIS bucket's
+    # refill instead of firing them back-to-back (and re-429ing). The value is
+    # the send throttle's OWN refill interval — NOT the coarse #630 budget's
+    # (RequestBudget.retry_after_ms/0), which refills far faster and would
+    # mis-pace cic. Derived from config here so the assertion tracks the wire
+    # contract, not a magic constant.
+    test "a throttled POST (429) carries a retry-after header = the send-throttle refill interval",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      # Drain the burst (capacity 3 in test config), then trip the empty bucket.
+      for n <- 1..3, do: assert(json_response(post_body(conn, network, "line #{n}"), 201))
+      throttled = post_body(conn, network, "flood")
+      assert %{"error" => "rate_limited"} = json_response(throttled, 429)
+
+      # seconds until one token refills = ceil(1 / refill_per_sec), floored at 1.
+      refill = Application.get_env(:grappa, :send_throttle)[:refill_per_sec]
+      expected = Integer.to_string(max(1, ceil(1.0 / refill)))
+      assert [^expected] = get_resp_header(throttled, "retry-after")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "the bucket is per-(subject, network): a second network is unaffected by the first's flood",
          %{conn: conn, vjt: vjt} do
       {server1, port1} = start_server()

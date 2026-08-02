@@ -76,6 +76,7 @@ defmodule GrappaWeb.FallbackController do
            | :share_token_expired
            | :share_token_consumed
            | :rate_limited
+           | {:rate_limited, pos_integer()}
            | :too_many_attempts
            | :theme_cap_reached
            | :list_full
@@ -220,6 +221,26 @@ defmodule GrappaWeb.FallbackController do
   # boundary, not a rolling window, so a seconds hint would mislead.
   def call(conn, {:error, :rate_limited}) do
     conn
+    |> put_status(:too_many_requests)
+    |> json(%{error: "rate_limited"})
+  end
+
+  # #666 — the #340 send-door token bucket (POST /messages) refused: the
+  # per-(subject, network) send throttle is empty. Distinct from the bare
+  # :rate_limited above (themes DailyQuota, a calendar-day reset that gets NO
+  # hint) — this bucket refills at a fixed rate, so the 429 carries a
+  # `retry-after` header (seconds) cic paces the remaining paste lines against
+  # instead of firing them back-to-back and re-tripping. The value is the send
+  # throttle's OWN refill interval, threaded through the tuple by
+  # `MessagesController.take_send_token/2` (NOT `RequestBudget.retry_after_ms/0`,
+  # the coarse #630 budget). cic reads the header in `api.ts readError` →
+  # `body.retry_after`. Same "tuple carries the retry value" shape as
+  # `{:network_circuit_open, retry_after}` / `{:anon_collision, _}`. Wire body
+  # is byte-identical to the bare clause (`error: "rate_limited"`) — additive,
+  # no new token, no protocol bump.
+  def call(conn, {:error, {:rate_limited, retry_after}}) when is_integer(retry_after) do
+    conn
+    |> put_resp_header("retry-after", Integer.to_string(retry_after))
     |> put_status(:too_many_requests)
     |> json(%{error: "rate_limited"})
   end

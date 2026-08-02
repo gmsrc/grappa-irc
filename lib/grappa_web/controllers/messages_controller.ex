@@ -78,6 +78,15 @@ defmodule GrappaWeb.MessagesController do
                                   0.5
                                 )
 
+  # #666 — seconds until one token refills; the client-facing retry hint on a
+  # send-door 429. Derived from THIS bucket's refill — NOT
+  # `RequestBudget.retry_after_ms/0`, which reads the coarse #630 budget's much
+  # faster refill and would pace cic against the wrong bucket (re-429ing every
+  # line of a paste). `ceil` so cic never under-waits and re-trips instantly;
+  # `max(1, _)` guards a sub-second config from flooring to 0. HTTP Retry-After
+  # is integer seconds (RFC 7231 §7.1.3) — coarse but honest for this bucket.
+  @send_throttle_retry_after_seconds max(1, ceil(1.0 / @send_throttle_refill_per_sec))
+
   @doc """
   `GET /networks/:network_id/channels/:channel_id/messages` —
   paginated scrollback fetch for the authenticated subject.
@@ -165,7 +174,7 @@ defmodule GrappaWeb.MessagesController do
   """
   @spec create(Plug.Conn.t(), map()) ::
           Plug.Conn.t()
-          | {:error, :bad_request | :no_session | :invalid_line | :rate_limited}
+          | {:error, :bad_request | :no_session | :invalid_line | {:rate_limited, pos_integer()}}
           | {:error, Ecto.Changeset.t()}
   def create(conn, %{"channel_id" => channel, "body" => body, "ctcp_target" => ctcp_target})
       when is_binary(body) and body != "" and is_binary(ctcp_target) and ctcp_target != "" do
@@ -217,16 +226,27 @@ defmodule GrappaWeb.MessagesController do
   def create(_, %{"channel_id" => _}), do: {:error, :bad_request}
 
   # #340 — consume one send-token for `(subject, network)`. `:ok` rides
-  # through the `with`; `{:error, :rate_limited}` short-circuits it to the
-  # FallbackController 429 clause.
-  @spec take_send_token(Session.subject(), integer()) :: :ok | {:error, :rate_limited}
+  # through the `with`; a refusal short-circuits it to the FallbackController
+  # 429 clause.
+  #
+  # #666 — a refused take is tagged `{:rate_limited, retry_after_seconds}`
+  # (the tuple shape `FallbackController` renders with a `retry-after` header),
+  # carrying THIS bucket's own refill interval so cic paces the remaining
+  # lines of a multi-line paste against the bucket that actually refused —
+  # NOT the coarse #630 budget. The bare `:rate_limited` atom stays reserved
+  # for the #75 themes daily quota (no meaningful seconds hint).
+  @spec take_send_token(Session.subject(), integer()) ::
+          :ok | {:error, {:rate_limited, pos_integer()}}
   defp take_send_token(subject, network_id) do
-    TokenBucket.take(
-      @send_throttle_bucket,
-      {subject, network_id},
-      @send_throttle_capacity,
-      @send_throttle_refill_per_sec
-    )
+    case TokenBucket.take(
+           @send_throttle_bucket,
+           {subject, network_id},
+           @send_throttle_capacity,
+           @send_throttle_refill_per_sec
+         ) do
+      :ok -> :ok
+      {:error, :rate_limited} -> {:error, {:rate_limited, @send_throttle_retry_after_seconds}}
+    end
   end
 
   # `Session.send_privmsg/4`'s contract returns either:
