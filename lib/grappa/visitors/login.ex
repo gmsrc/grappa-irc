@@ -257,6 +257,38 @@ defmodule Grappa.Visitors.Login do
 
   defp maybe_autoconnect({:error, _} = err, _, _), do: err
 
+  # #645 — capture the subject's client network prefix HERE, before any
+  # session is spawned, not only on the WebSocket connect.
+  #
+  # Mode 2 (`static_mapping_with_reservations`) derives a session's outbound
+  # source from the subject's last-known client `/64`
+  # (`Vhosts.last_client_prefix64/1`); with none recorded,
+  # `Vhosts.effective_source/3` returns `{:hold, :no_client_source}` and
+  # `Session.Server.init_or_hold/1` refuses the session rather than egress
+  # from a shared pool. The only capture point used to be
+  # `GrappaWeb.UserSocket.connect/3` (#543 Part C) — which runs AFTER this
+  # login has already spawned the anchor session. A visitor logging in for
+  # the first time therefore reached `Session.Server` with nothing recorded,
+  # got held, and had its row expired: "no new user can connect" for every
+  # deployment running mode 2. The login request carries the very same
+  # trusted client IP (`RemoteIpFromProxy` → `RemoteIP.format/1` →
+  # `input.ip`), so record it at the point the subject first exists.
+  #
+  # Best-effort by construction, exactly like the socket path: a login must
+  # never fail because the sample could not be taken.
+  # `Vhosts.record_client_source/2` already returns `:ok` on a persist
+  # failure (logged), and an `input.ip` that is absent or not a parseable
+  # literal simply skips — the caller cannot tell the difference.
+  @spec record_login_client_source(Visitor.t(), String.t() | nil) :: :ok
+  defp record_login_client_source(%Visitor{id: id}, ip) when is_binary(ip) do
+    case :inet.parse_address(String.to_charlist(ip)) do
+      {:ok, tuple} -> Grappa.Vhosts.record_client_source({:visitor, id}, tuple)
+      {:error, _} -> :ok
+    end
+  end
+
+  defp record_login_client_source(_, _), do: :ok
+
   defp validate_nick(nick) do
     case IdentifierClassifier.classify(nick) do
       {:nick, _} -> :ok
@@ -346,6 +378,8 @@ defmodule Grappa.Visitors.Login do
              input.ip,
              Map.get(input, :incognito, false)
            ) do
+      :ok = record_login_client_source(visitor, input.ip)
+
       case continue_case_1(visitor, network, input, timeouts) do
         {:ok, _} = ok ->
           :ok = NetworkCircuit.record_success(network.id)
@@ -387,6 +421,8 @@ defmodule Grappa.Visitors.Login do
   # Credential is the single source of truth — there is no scalar left to
   # keep in sync (the phase-3 dual-write is retired with the column).
   defp dispatch(%Visitor{} = visitor, input, network, timeouts) do
+    :ok = record_login_client_source(visitor, input.ip)
+
     case Visitors.resolve_credential(visitor, network.id) do
       {:ok, %Credential{password_encrypted: pwd}} when is_binary(pwd) ->
         dispatch_registered(visitor, pwd, input, network, timeouts)

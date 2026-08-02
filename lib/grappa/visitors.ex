@@ -71,6 +71,9 @@ defmodule Grappa.Visitors do
       Grappa.Subject,
       Grappa.Themes,
       Grappa.UserSettings,
+      # #645 — Login records the client source prefix before it spawns, so a
+      # first-time visitor is not held by mode-2 addressing.
+      Grappa.Vhosts,
       Grappa.Visitors.Visitor
     ],
     exports: [AdminWire, Login, SessionPlan, Wire]
