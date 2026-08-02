@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  grappa — one-click IRC bouncer on a single stock-Ubuntu EC2 box (#665).
+  Resolves the Ubuntu 24.04 AMI via the Canonical SSM public parameter (so the
+  template is region-agnostic with no per-region AMI copies), then UserData
+  curls the shared infra/cloud/first-boot.sh at a git ref and execs it — the
+  ONE bootstrap also used by the future Terraform module. The box installs the
+  LATEST grappa_<ver>_amd64.deb release asset (there is no apt repo — "pinned
+  version" here means *latest at launch*), self-terminates TLS via nginx +
+  certbot, and keeps its address across stop/start via an Elastic IP.
+
+# Console "quick-create" parameter grouping (the pre-filled one-click UX).
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "grappa (shared knobs — same names as the Terraform door)" }
+        Parameters: [Domain, AdminEmail, InstanceType, SshCidr, DiskSizeGb]
+      - Label: { default: "AWS specifics" }
+        Parameters: [KeyName, UbuntuAmi]
+    ParameterLabels:
+      Domain: { default: "Public hostname (you must point DNS at the Elastic IP)" }
+      AdminEmail: { default: "Admin email (Let's Encrypt + web-push contact)" }
+      InstanceType: { default: "EC2 instance type (amd64)" }
+      SshCidr: { default: "CIDR allowed to SSH (e.g. 203.0.113.4/32)" }
+      DiskSizeGb: { default: "Root volume size (GiB)" }
+      KeyName: { default: "EC2 key pair for SSH" }
+
+Parameters:
+  # grappa-knob: domain
+  # → first-boot.sh GRAPPA_DOMAIN → PHX_HOST, nginx server_name, TLS SAN.
+  Domain:
+    Type: String
+    Description: >-
+      Public hostname the bouncer is reached at (e.g. irc.example.org). You
+      MUST create an A record pointing this at the stack's Elastic IP — see the
+      Outputs. TLS issuance is deferred until that DNS resolves.
+    AllowedPattern: "^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$"
+    ConstraintDescription: must be a fully-qualified domain name.
+
+  # grappa-knob: admin_email
+  # → first-boot.sh GRAPPA_ADMIN_EMAIL → ACME registration + VAPID_SUBJECT.
+  AdminEmail:
+    Type: String
+    Description: >-
+      Admin contact. Used as the Let's Encrypt registration email and as the
+      web-push VAPID subject (mailto:).
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    ConstraintDescription: must be a valid email address.
+
+  # grappa-knob: instance_type
+  InstanceType:
+    Type: String
+    Default: t3.small
+    Description: >-
+      EC2 instance type. amd64 only — the grappa .deb is amd64-only, so do NOT
+      pick a Graviton (arm64) type. t3.small is a sane small default.
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+      - m5.large
+      - c5.large
+
+  # grappa-knob: ssh_cidr
+  # REQUIRED, no default — an SSH port open to the world is never a default.
+  SshCidr:
+    Type: String
+    Description: >-
+      Source IPv4 CIDR permitted to reach SSH (port 22). Lock this to your own
+      address, e.g. 203.0.113.4/32. There is deliberately NO default.
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$"
+    ConstraintDescription: must be a valid IPv4 CIDR (e.g. 203.0.113.4/32).
+
+  # grappa-knob: disk_size_gb
+  DiskSizeGb:
+    Type: Number
+    Default: 20
+    MinValue: 8
+    MaxValue: 16384
+    Description: Root/data EBS volume size in GiB (sqlite scrollback + uploads live here).
+
+  # AWS-specific parameter ON TOP of the five shared knobs (no cross-cloud
+  # analogue, so it is not part of params.contract).
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair for SSH access to the box.
+
+  # Region-agnostic Ubuntu 24.04 AMI via the Canonical SSM public parameter —
+  # resolved at stack-create time, so no hardcoded per-region AMI ids.
+  UbuntuAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+    Description: Leave as-is — Canonical's SSM public parameter for the latest Ubuntu 24.04 LTS amd64 AMI.
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: grappa — HTTPS + HTTP(ACME) open; SSH restricted to the given CIDR.
+      SecurityGroupIngress:
+        - Description: HTTPS
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: HTTP (Let's Encrypt ACME challenge + the 80->443 redirect)
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: SSH (restricted to SshCidr)
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr
+      Tags:
+        - { Key: Name, Value: grappa }
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref UbuntuAmi
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref DiskSizeGb
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - { Key: Name, Value: grappa }
+      # UserData curls the SHARED bootstrap at a git ref and execs it — it is
+      # NOT inlined here, so the CFN door and the future Terraform door run the
+      # exact same first-boot.sh. Pin = LATEST: first-boot.sh fetches the
+      # latest release's grappa_<ver>_amd64.deb (there is no apt repo).
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          export GRAPPA_DOMAIN='${Domain}'
+          export GRAPPA_ADMIN_EMAIL='${AdminEmail}'
+          curl -fsSL https://raw.githubusercontent.com/vjt/grappa-irc/main/infra/cloud/first-boot.sh -o /root/grappa-first-boot.sh
+          bash /root/grappa-first-boot.sh
+
+  # Elastic IP so the public address survives a stop/start. Kept separate +
+  # associated so the address the operator points DNS at is stable.
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - { Key: Name, Value: grappa }
+
+  ElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Instance
+
+Outputs:
+  PublicIp:
+    Description: The Elastic IP — point your domain's A record here.
+    Value: !Ref ElasticIp
+  DnsRecord:
+    Description: The DNS record to create BEFORE TLS can be issued.
+    Value: !Sub "${Domain}  A  ${ElasticIp}"
+  Url:
+    Description: Open this once DNS resolves and 'sudo grappa-tls' has run.
+    Value: !Sub "https://${Domain}"
+  NextSteps:
+    Description: Post-launch checklist.
+    Value: !Sub >-
+      1) Create A record ${Domain} -> ${ElasticIp}.
+      2) Wait for DNS to resolve, then SSH in and run: sudo grappa-tls
+      (first boot defers TLS so it never burns the Let's Encrypt failed-validation quota).
+      3) Open https://${Domain} and create your first user.
