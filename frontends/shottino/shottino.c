@@ -9182,6 +9182,33 @@ static void llm_enqueue_full(struct app *app, const char *network, const char *c
     app->llm_tail = next;
     pthread_cond_signal(&app->llm_cond);
     pthread_mutex_unlock(&app->llm_lock);
+
+    /* The question goes in the window that will hold the answer.
+     *
+     * Asking from a channel opened $llm and put the REPLY there and
+     * nothing else, so the window read as a model talking to itself: no
+     * record of what was asked, and after two questions no way to tell
+     * which answer belonged to which. Typing directly INTO $llm did echo
+     * — at its own call site — so the two doors to the same conversation
+     * disagreed, which is the drift that rule exists to stop. The echo
+     * lives HERE now, once, and both doors get it.
+     *
+     * It also lands BEFORE the model is reached rather than beside the
+     * reply, so a slow answer has the question sitting there meanwhile.
+     *
+     * Not for `publish`: that reply goes to the channel, and the bot's
+     * prompt is a quoted stranger, not something you asked. Not for
+     * `compact` either — its text is an instruction to the model, and
+     * showing it as something YOU said is a lie about who typed it.
+     *
+     * After the unlock: log_line takes app->lock, and taking it under
+     * llm_lock would invert the order every other path uses. */
+    if (!publish && !compact) {
+        /* Opened here, not at reply time, or the question would have
+         * nowhere to appear until the answer arrived. */
+        add_window_ex(app, network, LLM_WINDOW, false);
+        log_line(app, "[%s/%s] <you> %s", network, LLM_WINDOW, text);
+    }
 }
 
 /* ── /set ──────────────────────────────────────────────────────────────
@@ -15464,7 +15491,9 @@ static void handle_enter(struct app *app) {
          * grappa would refuse. Getting to the model without repeating
          * the verb is the whole point of the window. */
         if (irc_name_eq(channel, LLM_WINDOW)) {
-            log_line(app, "[%s/%s] <you> %s", network, LLM_WINDOW, line);
+            /* The echo used to be here. It moved into llm_enqueue_full
+             * so that asking from a channel gets it too — echoing again
+             * here would show the question twice. */
             llm_enqueue(app, network, channel, line, false);
             return;
         }

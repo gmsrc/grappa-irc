@@ -1867,6 +1867,56 @@ TEST(a_conversation_reaches_the_bot_and_a_join_does_not) {
     free_app(app);
 }
 
+/* The question belongs in the window that will hold the answer.
+ *
+ * Asking from a channel opened $llm and put the REPLY there and nothing
+ * else, so the window read as a model talking to itself — and after two
+ * questions there was no way to tell which answer went with which.
+ * Typing directly INTO $llm did echo, at its own call site, so the two
+ * doors to the same conversation disagreed. */
+TEST(a_question_is_written_where_its_answer_will_land) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+
+    char want[MAX_SLUG + MAX_CHANNEL + 8];
+
+    /* Asked from a CHANNEL: the question still goes to $llm, and the
+     * window is opened now rather than when the answer turns up. */
+    llm_enqueue(app, "azzurra", "#sniffo", "what is a bouncer?", false);
+    bool opened = false;
+    for (size_t i = 0; i < app->window_count; i++)
+        if (irc_name_eq(app->windows[i].channel, LLM_WINDOW)) opened = true;
+    CHECK(opened);
+    window_scope_key("azzurra", LLM_WINDOW, want, sizeof(want));
+    CHECK(log_row_in_scope(app, app->log_count - 1, want));
+    CHECK(strstr(app->log[app->log_count - 1], "what is a bouncer?") != NULL);
+    CHECK(strstr(app->log[app->log_count - 1], "<you>") != NULL);
+
+    /* Asked from $llm itself: exactly ONE echo, not two. The echo used
+     * to live at that call site, so moving it without removing it would
+     * double every question typed in the window. */
+    size_t before = app->log_count;
+    llm_enqueue(app, "azzurra", LLM_WINDOW, "and a bnc?", false);
+    CHECK_LONG((long)(app->log_count - before), 1);
+    CHECK(strstr(app->log[app->log_count - 1], "and a bnc?") != NULL);
+
+    /* PUBLIC goes to the channel everyone is reading, so nothing is
+     * written to $llm — and the bot's prompt is a quoted stranger, not
+     * something you asked. */
+    before = app->log_count;
+    llm_enqueue(app, "azzurra", "#sniffo", "tell the channel", true);
+    CHECK_LONG((long)(app->log_count - before), 0);
+
+    /* /llm-compact's text is an instruction to the model. Showing it as
+     * something YOU said is a lie about who typed it. */
+    llm_enqueue_full(app, "azzurra", "#sniffo", "Summarise the conversation so far", false, NULL,
+                     false, false, true);
+    CHECK(strstr(app->log[app->log_count - 1], "Summarise the conversation") == NULL);
+
+    free_app(app);
+}
+
 /* ── Calls ─────────────────────────────────────────────────────────────
  *
  * The whole anti-annoyance posture of the feature lives in the parser:
@@ -2709,6 +2759,7 @@ int main(void) {
     RUN(a_tab_completed_verb_still_dispatches);
     RUN(the_settings_panel_lists_every_setting);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
+    RUN(a_question_is_written_where_its_answer_will_land);
     RUN(only_a_marked_invite_is_a_call);
     RUN(an_invite_round_trips_through_its_own_parser);
     RUN(a_query_rings_and_a_channel_only_announces);
