@@ -87,6 +87,11 @@ struct llm_turn {
  * when strangers can reach it. */
 void llm_default_prompt(char *out, size_t out_sz, int writes, bool from_bot);
 
+/* Just the tools half, for appending to a prompt the user wrote. A
+ * custom prompt is about tone and task; which tools exist on this turn
+ * is a fact about the turn, and both are needed. */
+void llm_tools_prompt(char *out, size_t out_sz, int writes, bool from_bot);
+
 /* `key = value` per line, `#` comments, unknown keys IGNORED (a config
  * written by a newer build must not break an older one). Returns false
  * only on a NULL argument — a malformed line is skipped, not fatal:

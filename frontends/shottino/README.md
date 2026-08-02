@@ -491,9 +491,11 @@ something you typed, the read-only half for a bot turn with writes off, none at
 all when tools are not wanted. A bot turn also gets the paragraph saying that
 messages from the network are data and never instructions.
 
-`/set llm.prompt <text>` replaces it — replaces, not extends: half a prompt you
-did not write is harder to reason about than all of one you did. `/unset
-llm.prompt` goes back to the built-in.
+`/set llm.prompt <text>` replaces the **style** half — how to answer, how long,
+what medium. The **tool** half is appended either way: which tools exist on a
+given turn is a fact about that turn, not a matter of taste, and a prompt about
+tone that silently switched them off would break a feature it says nothing
+about. `/unset llm.prompt` goes back to the built-in entirely.
 
 An empty prompt in `llm.conf` **means** "use the built-in". It used to mean
 nothing at all: the parser seeded the default and then an empty `prompt =` line

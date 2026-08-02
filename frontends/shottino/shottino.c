@@ -525,6 +525,12 @@ enum overlay_kind {
  * are kept, how many turns each remembers, and how much of one turn is
  * worth carrying. Small on purpose — the point is that a follow-up makes
  * sense, not that the model can recite the channel. */
+/* How much of a tool's answer the MODEL gets. Generous on purpose: the
+ * budget that matters is the context window, which is checked
+ * separately, and a scrollback read cut to a couple of lines is a tool
+ * that answers wrongly rather than one that answers briefly. */
+#define LLM_TOOL_RESULT_BYTES 16384
+
 #define LLM_HISTORY_CONVS 4
 #define LLM_HISTORY_TURNS 8
 #define LLM_HISTORY_BYTES 1500
@@ -832,6 +838,14 @@ struct app {
     size_t seen_next;
     char input[MAX_LINE];
     size_t input_len;
+    /* Where the cursor sits IN the line, as a byte offset.
+     *
+     * There was no cursor: the line could only be appended to and
+     * backspaced from the end, so a typo four words back meant deleting
+     * four words. Kept as a byte offset because the buffer is UTF-8 and
+     * everything else here indexes bytes; it only ever lands on a
+     * character boundary, which is what the movement helpers are for. */
+    size_t input_pos;
     char last_url[MAX_LINE];
     /* Most recent IMAGE/VIDEO link, for keyboard-driven /preview. */
     char last_media_url[MAX_LINE];
@@ -3494,7 +3508,8 @@ static int input_display_lines(const char *prompt, const char *input, int width)
     return lines < 1 ? 1 : lines;
 }
 
-static void draw_input_box(int y, int x, int width, int height, const char *prompt, const char *input, int *cursor_y, int *cursor_x) {
+static void draw_input_box(int y, int x, int width, int height, const char *prompt,
+                           const char *input, int cursor_at, int *cursor_y, int *cursor_x) {
     if (width <= 0 || height <= 0) return;
     for (int row = 0; row < height; row++) draw_fill(y + row, x, width, CP_INPUT);
     int inner_x = x + 1;
@@ -3526,7 +3541,10 @@ static void draw_input_box(int y, int x, int width, int height, const char *prom
     }
     if (joined_len == 0) draw_text(y, inner_x, inner_w, CP_INPUT, 0, "%s", "");
 
-    int cursor_pos = joined_len;
+    /* Where the cursor actually IS, not the end of the line. It used to
+     * be pinned to the end because there was nowhere else it could be. */
+    int cursor_pos = prompt_len + (cursor_at < 0 ? (int)strlen(input) : cursor_at);
+    if (cursor_pos > joined_len) cursor_pos = joined_len;
     int cursor_line = cursor_pos / inner_w;
     int cursor_col = cursor_pos % inner_w;
     if (cursor_line < first_line) {
@@ -6938,7 +6956,8 @@ static void draw(struct app *app) {
                       "panel: %s | Esc or /chat returns to chat", panel_name(app->panel));
         int cursor_y = input_y;
         int cursor_x = main_x + 2;
-        draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input, &cursor_y, &cursor_x);
+        draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input,
+                       (int)app->input_pos, &cursor_y, &cursor_x);
         /* An overlay belongs ON TOP of a panel, not instead of it.
          *
          * This path returns early — a panel replaces the chat area, so
@@ -7025,7 +7044,8 @@ static void draw(struct app *app) {
     }
     int cursor_y = input_y;
     int cursor_x = main_x + 2;
-    draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input, &cursor_y, &cursor_x);
+    draw_input_box(input_y, main_x + 1, main_w - 2, input_h, prompt, app->input,
+                       (int)app->input_pos, &cursor_y, &cursor_x);
 
     /* The member pane used to render three lines of prose describing what
      * a member pane would show. It shows the members now: ops first, then
@@ -8000,10 +8020,20 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
             return xasprintf("error: target is required");
         char scope[MAX_SLUG + MAX_CHANNEL + 8];
         window_scope_key(req->network, target, scope, sizeof(scope));
-        char out[4096] = "";
+        /* Room for the whole window's worth. The old 4 KiB with a
+         * thirty-line cap was already tight for a busy channel, and the
+         * caller no longer truncates what comes back. */
+        static char out[LLM_TOOL_RESULT_BYTES - 512];
+        out[0] = 0;
+        long want = 60;
+        char nstr[16];
+        if (tool_arg(call->arguments, "lines", nstr, sizeof(nstr))) {
+            long v = strtol(nstr, NULL, 10);
+            if (v > 0 && v < 400) want = v;
+        }
         pthread_mutex_lock(&app->lock);
         size_t shown = 0;
-        for (size_t i = app->log_count; i > 0 && shown < 30; i--) {
+        for (size_t i = app->log_count; i > 0 && shown < (size_t)want; i--) {
             if (!log_row_in_scope(app, i - 1, scope)) continue;
             size_t len = strlen(app->log[i - 1]);
             if (strlen(out) + len + 2 >= sizeof(out)) break;
@@ -8079,12 +8109,22 @@ static void llm_run(struct app *app, const struct llm_req *req) {
     /* An empty llm.prompt means "use the built-in", not "say nothing".
      * It is filled in HERE rather than at load, so the description of
      * the tools always matches what THIS turn is actually offered. */
-    if (!cfg.prompt[0])
-        llm_default_prompt(cfg.prompt, sizeof(cfg.prompt),
-                           !req->tools_wanted ? -1
-                           : (!req->from_bot || app->bot_writes_ok) ? 1
-                                                                    : 0,
-                           req->from_bot);
+    int prompt_writes = !req->tools_wanted        ? -1
+                        : (!req->from_bot ||
+                           app->bot_writes_ok)     ? 1
+                                                   : 0;
+    if (!cfg.prompt[0]) {
+        llm_default_prompt(cfg.prompt, sizeof(cfg.prompt), prompt_writes, req->from_bot);
+    } else {
+        /* A custom prompt replaces the STYLE, never the facts. Which
+         * tools exist on this turn is a fact, and a prompt about tone
+         * that silently disabled them would be a prompt that broke the
+         * feature it says nothing about. */
+        size_t have = strlen(cfg.prompt);
+        if (have + 512 < sizeof(cfg.prompt))
+            llm_tools_prompt(cfg.prompt + have, sizeof(cfg.prompt) - have, prompt_writes,
+                             req->from_bot);
+    }
     if (req->from_bot) {
         bot_effective_prompt(app, cfg.prompt, sizeof(cfg.prompt));
         /* And NO built-in CLI tools, whatever llm.cli_tools says.
@@ -8252,15 +8292,33 @@ static void llm_run(struct app *app, const struct llm_req *req) {
          * mismatch would live. This shape is plainer and the model reads
          * it fine — and it is the only shape the CLI path could use
          * anyway, which makes it the shape both use. */
-        char merged[2048] = "";
+        /* The RESULT, whole.
+         *
+         * This used to hand the model `%.200s` of it — the first two
+         * hundred characters. read_scrollback returns thirty lines
+         * oldest-first, so what the model actually received was the
+         * OLDEST two or three, and it answered accordingly: asked for
+         * the last message in a channel it reported one from an hour
+         * earlier, and said so again when told it was wrong, because
+         * from where it sat it was right. A tool whose answer is cut to
+         * a fifth of one line is worse than no tool: it is a tool that
+         * lies with confidence.
+         *
+         * The line shown to the USER stays short — the scrollback is not
+         * where anyone wants thirty lines repeated — but the display
+         * budget and the model's budget are different questions and are
+         * no longer the same number. */
+        static char merged[LLM_TOOL_RESULT_BYTES];
+        merged[0] = 0;
         for (size_t i = 0; i < ncalls; i++) {
             char *out = tool_execute(app, req, &calls[i],
                                      req->on_behalf_of[0] ? req->on_behalf_of : NULL);
-            char one[512];
-            snprintf(one, sizeof(one), "%s(%.120s) -> %.200s\n", calls[i].name,
-                     calls[i].arguments, out ? out : "(no result)");
-            strncat(merged, one, sizeof(merged) - strlen(merged) - 1);
-            log_line(app, "--- tool %s: %.120s", calls[i].name, out ? out : "");
+            size_t have = strlen(merged);
+            snprintf(merged + have, sizeof(merged) - have, "%s(%.200s) ->\n%s\n",
+                     calls[i].name, calls[i].arguments, out ? out : "(no result)");
+            /* One line in the window, whatever the model got. */
+            log_line(app, "--- tool %s: %.120s%s", calls[i].name, out ? out : "",
+                     out && strlen(out) > 120 ? " […]" : "");
             free(out);
         }
         free(tool_notes);
@@ -9731,9 +9789,69 @@ static void utf8_backspace(char *buf, size_t *len) {
     buf[n] = 0;
 }
 
+/* Insert one character AT THE CURSOR, and step over it. Appending is
+ * the special case where the cursor is already at the end. */
 static void input_append_wide(struct app *app, wchar_t wc) {
+    char enc[MB_LEN_MAX + 1];
+    mbstate_t st;
+    memset(&st, 0, sizeof(st));
+    size_t n = wcrtomb(enc, wc, &st);
+    if (n == 0 || n == (size_t)-1) return;
     pthread_mutex_lock(&app->lock);
-    utf8_append(app->input, sizeof(app->input), &app->input_len, wc);
+    if (app->input_pos > app->input_len) app->input_pos = app->input_len;
+    if (app->input_len + n < sizeof(app->input)) {
+        memmove(app->input + app->input_pos + n, app->input + app->input_pos,
+                app->input_len - app->input_pos);
+        memcpy(app->input + app->input_pos, enc, n);
+        app->input_len += n;
+        app->input_pos += n;
+        app->input[app->input_len] = 0;
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* One character left or right, never landing inside one: UTF-8
+ * continuation bytes are stepped over as part of the character they
+ * belong to. Caller holds app->lock. */
+static void input_step_locked(struct app *app, int dir) {
+    if (dir < 0) {
+        size_t n = app->input_pos;
+        if (!n) return;
+        n--;
+        while (n > 0 && ((unsigned char)app->input[n] & 0xC0) == 0x80) n--;
+        app->input_pos = n;
+    } else {
+        size_t n = app->input_pos;
+        if (n >= app->input_len) return;
+        n++;
+        while (n < app->input_len && ((unsigned char)app->input[n] & 0xC0) == 0x80) n++;
+        app->input_pos = n;
+    }
+}
+
+/* Delete the character AT the cursor — what Delete does, as opposed to
+ * Backspace, which deletes the one before it. */
+static void input_delete(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    if (app->input_pos < app->input_len) {
+        size_t end = app->input_pos + 1;
+        while (end < app->input_len && ((unsigned char)app->input[end] & 0xC0) == 0x80) end++;
+        memmove(app->input + app->input_pos, app->input + end, app->input_len - end);
+        app->input_len -= end - app->input_pos;
+        app->input[app->input_len] = 0;
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
+static void input_move(struct app *app, int dir) {
+    pthread_mutex_lock(&app->lock);
+    input_step_locked(app, dir);
+    pthread_mutex_unlock(&app->lock);
+}
+
+static void input_jump(struct app *app, bool to_end) {
+    pthread_mutex_lock(&app->lock);
+    app->input_pos = to_end ? app->input_len : 0;
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -9745,9 +9863,19 @@ static void input_append_wide(struct app *app, wchar_t wc) {
  * garbage. It mattered even before typing them was possible, because
  * UTF-8 reaches this line by other doors: an /stt transcript, the
  * reply-prefill guillemets, a completed non-ASCII nick. */
+/* Delete the character BEFORE the cursor and step back onto its place.
+ * At the end of the line this is exactly the old behaviour. */
 static void input_backspace(struct app *app) {
     pthread_mutex_lock(&app->lock);
-    utf8_backspace(app->input, &app->input_len);
+    if (app->input_pos > app->input_len) app->input_pos = app->input_len;
+    size_t was = app->input_pos;
+    input_step_locked(app, -1);
+    size_t from = app->input_pos;
+    if (from < was) {
+        memmove(app->input + from, app->input + was, app->input_len - was);
+        app->input_len -= was - from;
+        app->input[app->input_len] = 0;
+    }
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -9757,6 +9885,7 @@ static void history_prev(struct app *app) {
         app->history_pos--;
         snprintf(app->input, sizeof(app->input), "%s", app->history[app->history_pos]);
         app->input_len = strlen(app->input);
+        app->input_pos = app->input_len;
     }
     pthread_mutex_unlock(&app->lock);
 }
@@ -9768,6 +9897,7 @@ static void history_next(struct app *app) {
         if (app->history_pos == app->history_count) app->input[0] = 0;
         else snprintf(app->input, sizeof(app->input), "%s", app->history[app->history_pos]);
         app->input_len = strlen(app->input);
+        app->input_pos = app->input_len;
     }
     pthread_mutex_unlock(&app->lock);
 }
@@ -10220,6 +10350,7 @@ static void reply_to(struct app *app, const char *nick, const char *body) {
     compose_reply(nick, body, app->input, composed, sizeof(composed));
     snprintf(app->input, sizeof(app->input), "%s", composed);
     app->input_len = strlen(app->input);
+        app->input_pos = app->input_len;
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -10263,6 +10394,7 @@ static void overlay_activate(struct app *app) {
             pthread_mutex_lock(&app->lock);
             snprintf(app->input, sizeof(app->input), "/kill %s ", nick);
             app->input_len = strlen(app->input);
+        app->input_pos = app->input_len;
             pthread_mutex_unlock(&app->lock);
         }
         break;
@@ -10310,6 +10442,7 @@ static void overlay_activate(struct app *app) {
             snprintf(app->input + len, sizeof(app->input) - len, "%s%s%s", sep, nick,
                      len == 0 ? ": " : " ");
             app->input_len = strlen(app->input);
+        app->input_pos = app->input_len;
             pthread_mutex_unlock(&app->lock);
         }
         break;
@@ -10817,6 +10950,7 @@ static void complete_input(struct app *app) {
         pthread_mutex_lock(&app->lock);
         snprintf(app->input + head, sizeof(app->input) - head, "%s", candidates[0]);
         app->input_len = strlen(app->input);
+        app->input_pos = app->input_len;
         if (app->input_len + 1 < sizeof(app->input)) {
             app->input[app->input_len++] = ' ';
             app->input[app->input_len] = 0;
@@ -10902,6 +11036,7 @@ static void settings_prefill_edit(struct app *app, const char *name) {
     pthread_mutex_lock(&app->lock);
     snprintf(app->input, sizeof(app->input), "%s", line);
     app->input_len = strlen(app->input);
+        app->input_pos = app->input_len;
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -12459,6 +12594,7 @@ static void stt_job(struct app *app, const struct job *job) {
      * otherwise end in half a character. */
     utf8_trim_partial_tail(app->input);
     app->input_len = strlen(app->input);
+        app->input_pos = app->input_len;
     pthread_mutex_unlock(&app->lock);
     log_line(app, "/stt: %.200s", text);
     log_line(app, "/stt: in the input line — read it, fix it, then press Enter to send");
@@ -14292,6 +14428,7 @@ static void handle_enter(struct app *app) {
     }
     snprintf(line, sizeof(line), "%s", app->input);
     app->input_len = 0;
+    app->input_pos = 0;
     app->input[0] = 0;
     pthread_mutex_unlock(&app->lock);
     add_history(app, line);
@@ -16451,10 +16588,25 @@ static void event_loop(struct app *app) {
             scroll_chat(app, 1);
         } else if (ch == KEY_CHAT_DOWN) {
             scroll_chat(app, -1);
-        } else if (ch == KEY_HOME) {
-            scroll_chat(app, 1000000);
-        } else if (ch == KEY_END) {
-            scroll_bottom(app);
+        } else if (ch == KEY_LEFT || ch == KEY_RIGHT) {
+            /* Move within the line being typed. There was no cursor at
+             * all: the line could only be appended to and backspaced
+             * from the end, so fixing a typo four words back meant
+             * deleting four words. */
+            input_move(app, ch == KEY_RIGHT ? 1 : -1);
+        } else if (ch == KEY_DC) {
+            input_delete(app);
+        } else if (ch == KEY_HOME || ch == KEY_END) {
+            /* With something typed these are the line's ends, which is
+             * what every other input box does; with the line empty they
+             * keep their old meaning of scrolling the chat, which is
+             * what they were bound to before there was a cursor. */
+            pthread_mutex_lock(&app->lock);
+            bool typing = app->input_len > 0;
+            pthread_mutex_unlock(&app->lock);
+            if (typing) input_jump(app, ch == KEY_END);
+            else if (ch == KEY_HOME) scroll_chat(app, 1000000);
+            else scroll_bottom(app);
         } else if (ch == '\t' || ch == KEY_BTAB) {
             complete_input(app);
         } else if (ch == KEY_UP) {

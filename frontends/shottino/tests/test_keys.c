@@ -168,7 +168,88 @@ TEST(roster_focus_takes_the_arrows_and_gives_them_back) {
     free(app);
 }
 
+/* The line can be EDITED, not just appended to.
+ *
+ * There was no cursor at all: characters went on the end and Backspace
+ * came off the end, so fixing a typo four words back meant deleting
+ * four words. Arrows now move within the line, and everything that
+ * writes at the cursor has to respect where it is. */
+TEST(the_input_line_has_a_cursor_you_can_move) {
+    struct app *app = calloc(1, sizeof(*app));
+    if (!app) return;
+    pthread_mutex_init(&app->lock, NULL);
+
+    for (const char *p = "ciao"; *p; p++) input_append_wide(app, (wchar_t)*p);
+    CHECK_STR(app->input, "ciao");
+    CHECK_LONG(app->input_pos, 4);
+
+    /* Left three, then insert: the text lands where the cursor is. */
+    input_move(app, -1);
+    input_move(app, -1);
+    input_move(app, -1);
+    CHECK_LONG(app->input_pos, 1);
+    input_append_wide(app, L'X');
+    CHECK_STR(app->input, "cXiao");
+    CHECK_LONG(app->input_pos, 2);
+
+    /* Backspace takes the character BEFORE the cursor, not the last one. */
+    input_backspace(app);
+    CHECK_STR(app->input, "ciao");
+    CHECK_LONG(app->input_pos, 1);
+
+    /* Delete takes the one AT the cursor. */
+    input_delete(app);
+    CHECK_STR(app->input, "cao");
+    CHECK_LONG(app->input_pos, 1);
+
+    /* Home and End are the ends of the line. */
+    input_jump(app, true);
+    CHECK_LONG(app->input_pos, 3);
+    input_jump(app, false);
+    CHECK_LONG(app->input_pos, 0);
+
+    /* Moving past either end stays put rather than running off. */
+    input_move(app, -1);
+    CHECK_LONG(app->input_pos, 0);
+    input_backspace(app);
+    CHECK_STR(app->input, "cao");
+    input_jump(app, true);
+    input_move(app, 1);
+    CHECK_LONG(app->input_pos, 3);
+    input_delete(app);
+    CHECK_STR(app->input, "cao");
+
+    /* The locale the terminal runs in; without it wcrtomb cannot encode
+     * a non-ASCII character at all and the test would be asserting
+     * about an empty buffer. */
+    CHECK(setlocale(LC_ALL, "C.UTF-8") != NULL || setlocale(LC_ALL, "en_US.UTF-8") != NULL);
+
+    /* The locale the terminal runs in; without it wcrtomb cannot encode
+     * a non-ASCII character and the test would assert about an empty
+     * buffer rather than about the cursor. */
+    CHECK(setlocale(LC_ALL, "C.UTF-8") != NULL || setlocale(LC_ALL, "en_US.UTF-8") != NULL);
+
+    /* A multibyte character is ONE step, and one delete, in both
+     * directions — the cursor never lands inside one. */
+    app->input[0] = 0;
+    app->input_len = app->input_pos = 0;
+    input_append_wide(app, L'a');
+    input_append_wide(app, L'é');
+    input_append_wide(app, L'b');
+    CHECK_LONG(app->input_len, 4);
+    input_move(app, -1);          /* before b */
+    CHECK_LONG(app->input_pos, 3);
+    input_move(app, -1);          /* before é, not inside it */
+    CHECK_LONG(app->input_pos, 1);
+    input_delete(app);            /* removes é whole */
+    CHECK_STR(app->input, "ab");
+
+    pthread_mutex_destroy(&app->lock);
+    free(app);
+}
+
 int main(void) {
+    RUN(the_input_line_has_a_cursor_you_can_move);
     RUN(modified_keys_decode_where_terminfo_describes_them);
     RUN(modified_keys_decode_where_terminfo_describes_nothing);
     RUN(roster_focus_takes_the_arrows_and_gives_them_back);

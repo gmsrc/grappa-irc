@@ -494,6 +494,18 @@ TEST(an_empty_prompt_line_does_not_erase_the_default) {
     CHECK(built[0] != 0);
     CHECK(strstr(built, "shottino") != NULL);
 
+    /* A CUSTOM prompt still gets the tools appended: the prompt is about
+     * tone, the tool list is about what this turn can do, and one must
+     * not silently switch off the other. */
+    static char mixed[8192];
+    snprintf(mixed, sizeof(mixed), "%s", "Answer only in Italian.");
+    llm_tools_prompt(mixed + strlen(mixed), sizeof(mixed) - strlen(mixed), 1, false);
+    CHECK(strstr(mixed, "Answer only in Italian.") != NULL);
+    CHECK(strstr(mixed, "- read_scrollback:") != NULL);
+    CHECK(strstr(mixed, "ANSWER IN WORDS") != NULL);
+    /* And the style half is NOT repeated. */
+    CHECK(strstr(mixed, "HOW TO ANSWER") == NULL);
+
     /* A configured prompt still wins and round-trips whole. */
     struct llm_config mine = { 0 };
     CHECK(llm_config_parse("prompt = answer only in Italian\n", &mine));
