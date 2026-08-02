@@ -3464,6 +3464,83 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "#640 inbound 401 ERR_NOSUCHNICK from a CTCP probe" do
+    # #640 — pinging (or /ctcp'ing) a NONEXISTENT nick makes bahamut answer
+    # 401 ERR_NOSUCHNICK for the relayed frame. NumericRouter (a pure
+    # syntactic classifier — CP13) scans that 401 to {:query, target}; the
+    # server then gates the decision on window-existence
+    # (`resolve_numeric_query_window/2` via `state.query_window_open?`): a
+    # /ctcp or /ping opens NO query window (send_ctcp), so there is nothing to
+    # land in and the row is redirected to $server — no phantom. (The /msg
+    # case, where a window IS open, keeps landing in it — see the positive
+    # test beside 9902 + cp13-s5-msg-ghost-401.) The send_ctcp block above
+    # proves the OUTBOUND echo opens no window; this proves the INBOUND probe
+    # FAILURE opens none either. This is the behavioral falsification target:
+    # revert the server gate and this goes RED.
+    setup do
+      rfc_handler = fn state, line ->
+        if String.starts_with?(line, "USER ") do
+          {:reply, ":server 001 grappa-test :Welcome\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(rfc_handler)
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      %{server: server, user: user, network: network, pid: pid}
+    end
+
+    test "routes the 401 to $server and opens NO phantom window for the target",
+         %{server: server, user: user, network: network, pid: pid} do
+      net_id = network.id
+
+      :ok =
+        Phoenix.PubSub.subscribe(
+          Grappa.PubSub,
+          Topic.channel(user.name, network.slug, "$server")
+        )
+
+      # /ctcp ghostpeer VERSION typed in #sniffo → the frame is relayed to the
+      # (nonexistent) recipient upstream.
+      assert {:ok, _} =
+               Session.send_ctcp(
+                 {:user, user.id},
+                 net_id,
+                 "#sniffo",
+                 "ghostpeer",
+                 "\x01VERSION\x01"
+               )
+
+      # Barrier: the probe frame reached the wire, so bahamut would now answer.
+      assert {:ok, _} =
+               IRCServer.wait_for_line(
+                 server,
+                 &String.starts_with?(&1, "PRIVMSG ghostpeer :\x01VERSION\x01"),
+                 1_000
+               )
+
+      # bahamut's reply for a nonexistent target (3-elem RFC 2812 shape).
+      IRCServer.feed(server, ":irc.azzurra.chat 401 vjt ghostpeer :No such nick/channel\r\n")
+
+      # The 401 lands as a $server :notice — the barrier proving it was fully
+      # processed. Pre-fix it routed to {:query, "ghostpeer"} instead, so this
+      # assert_receive (subscribed to the $server topic) times out (the RED).
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{message: %{channel: "$server", body: "No such nick/channel"}}
+                     },
+                     2_000
+
+      # The outcome: no phantom query window for the nonexistent probe target.
+      refute QueryWindows.open?({:user, user.id}, net_id, "ghostpeer")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "#25 outbound own sender-prefix snapshot" do
     test "own channel message snapshots the operator's op grade into meta.sender_prefix" do
       # Mirror of the inbound EventRouter capture for the outbound door:
@@ -9825,17 +9902,68 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "401 ERR_NOSUCHNICK persists on the queried nick (query window)" do
+    test "401 ERR_NOSUCHNICK with NO open window is redirected to $server (#640)" do
+      # #640 — a raw 401 for a nick the operator has NO query window with (a
+      # /ctcp or /ping to a nonexistent nick opened none) scans syntactically
+      # to {:query, "ghost"}, then the server's window-existence gate
+      # (resolve_numeric_query_window/2 via state.query_window_open?) finds no
+      # window and redirects the row to $server — no phantom is minted. This
+      # test previously asserted the phantom (channel: "ghost"); correcting it
+      # is part of the #640 fix, not a weakening (CLAUDE.md "Never assert buggy
+      # behavior"). The OPEN-window counterpart is the very next test — the two
+      # together pin both arms of the gate.
       {server, port} = start_server()
       {user, network, _} = setup_user_and_network(port)
 
-      topic = Topic.channel(user.name, network.slug, "ghost")
+      topic = Topic.channel(user.name, network.slug, "$server")
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, topic)
 
       pid = start_session_for(user, network)
       :ok = await_handshake(server)
       IRCServer.feed(server, ":irc.test.org 401 vjt ghost :No such nick/channel\r\n")
 
+      assert_message_event(
+        kind: :notice,
+        channel: "$server",
+        network: network.slug,
+        meta: %{numeric: 401, severity: :error, raw_params: ["vjt", "ghost", "No such nick/channel"]}
+      )
+
+      # The #640 outcome: no phantom query window for the nonexistent target.
+      refute QueryWindows.open?({:user, user.id}, network.id, "ghost")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "401 ERR_NOSUCHNICK with an OPEN query window lands in that window (#640 / cp13-s5)" do
+      # #640 Design-2 counterpart: when the operator HAS an open query window
+      # with the target (they /msg'd it — the outbound-DM auto-open minted the
+      # window), the 401 "No such nick/channel" is live feedback that belongs
+      # IN that window, NOT redirected to $server. resolve_numeric_query_window/2
+      # sees the open window (state.query_window_open?) and KEEPS {:query,
+      # "ghost"}. Server twin of the cp13-s5-msg-ghost-401 e2e; the
+      # falsification companion to the no-window test above — the gate must
+      # route to the window when it exists, never blanket-redirect.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      # /msg ghost hi — the outbound DM opens the server-side query window for
+      # ghost (#422 maybe_open_query_window), exactly as compose.ts's /msg does.
+      assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
+      assert QueryWindows.open?({:user, user.id}, network.id, "ghost")
+
+      # Subscribe AFTER the outbound send so only the 401 notice lands in the
+      # mailbox (assert_message_event grabs the first message-event, and the
+      # outbound "hi" privmsg already broadcast during send_privmsg).
+      topic = Topic.channel(user.name, network.slug, "ghost")
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, topic)
+
+      IRCServer.feed(server, ":irc.test.org 401 vjt ghost :No such nick/channel\r\n")
+
+      # The 401 lands in the OPEN query window, NOT $server.
       assert_message_event(
         kind: :notice,
         channel: "ghost",

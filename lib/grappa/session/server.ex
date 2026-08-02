@@ -3229,6 +3229,11 @@ defmodule Grappa.Session.Server do
         trailing = List.last(msg.params)
         sender = Message.sender_nick(msg)
 
+        # #640 — resolve a {:query, target} decision against actual window
+        # existence: a numeric lands in an EXISTING conversation or on $server,
+        # it never MINTS a query window (see resolve_numeric_query_window/2).
+        routing = resolve_numeric_query_window(routing, state)
+
         # Persist the numeric as a `:notice` row in the routed window —
         # iff the trailing param is a string (defensive: malformed numerics
         # with no trailing text are dropped silently rather than crashing
@@ -4187,6 +4192,36 @@ defmodule Grappa.Session.Server do
   # routes to the synthetic `"$server"` window; `{:channel, c}` and
   # `{:query, n}` route directly to the named target. Mirrors
   # `Grappa.Scrollback.Message.@valid_target?` accept set.
+  # #640 — a numeric routing to {:query, target} must land in an EXISTING
+  # query window, never MINT one. `NumericRouter` stays a pure SYNTACTIC
+  # classifier (CP13): it resolves a nick-shaped param to {:query, target}
+  # without knowing whether a window exists. The window-existence POLICY is
+  # the server's — it owns window state — so the gate lives here, using the
+  # SAME `state.query_window_open?` predicate EventRouter's
+  # `service_route_channel/2` uses for the identical "route to the window iff
+  # already open, else $server; never auto-open" decision.
+  #
+  # The concrete bug: a 401 ERR_NOSUCHNICK from a /ctcp or /ping to a
+  # nonexistent nick scans to {:query, target}; with no window open it used
+  # to mint a phantom query window for a nick that does not exist (#640's
+  # e2e). The SAME 401 for a nick the operator has an OPEN window with (they
+  # /msg'd it — the window was opened by the outbound-DM auto-open) belongs
+  # in that window (cp13-s5-msg-ghost-401). The open-window fact splits the
+  # two. {:channel, _} and {:server, nil} pass through untouched.
+  @spec resolve_numeric_query_window(
+          {:channel, String.t()} | {:query, String.t()} | {:server, nil},
+          t()
+        ) :: {:channel, String.t()} | {:query, String.t()} | {:server, nil}
+  defp resolve_numeric_query_window({:query, target}, state) when is_binary(target) do
+    open? = Map.get(state, :query_window_open?, &QueryWindows.open?/3)
+
+    if open?.(state.subject, state.network_id, target),
+      do: {:query, target},
+      else: {:server, nil}
+  end
+
+  defp resolve_numeric_query_window(routing, _), do: routing
+
   @spec routing_to_channel({:channel, String.t()} | {:query, String.t()} | {:server, nil}) ::
           String.t()
   defp routing_to_channel({:channel, c}) when is_binary(c), do: c

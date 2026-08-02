@@ -26214,3 +26214,69 @@ and the hamburger stays a sibling. The visual proof is device dogfood (Playwrigh
 webkit ≠ iOS) — owed on desktop AND iOS.
 
 Deploy class: cic-only (pure CSS + DOM restructure) → HOT / cic bundle.
+
+## 2026-08-02 — #640: a CTCP probe's 401 must not MINT a query window — the window-existence policy is the server's, the router stays syntactic (CP13 reconciled)
+
+**Bug.** `/ping <nonexistent>` and `/ctcp <peer> VERSION <nonexistent>`
+relay a `PRIVMSG <target> :\x01…\x01` upstream; bahamut answers `401
+ERR_NOSUCHNICK [own_nick, target, "No such nick/channel"]`. `NumericRouter`
+scans the nick-shaped `target` to `{:query, target}`, the server persists a
+`:notice` under `channel = target`, and `maybe_open_query_window/2`
+**auto-opens** a phantom query window for a nick that DOES NOT EXIST — a
+ghost tab. `Session.send_ctcp/5` (the #640 self-echo) was already correct
+(echo to the SOURCE window, `dm_with: nil`, opens no window); the gap was
+this INBOUND 401, invisible to the passing server unit test and caught only
+by the full e2e (`issue640-ping-self-echo`, the `/ping <nonexistent>` +
+`/ctcp … VERSION` cases). The live-peer case passes because a peer's reply
+is a CTCP NOTICE routed to `$server` (the #641 arm), not a 401.
+
+**The CP13 tension — and why the fix does NOT reverse it.** CP13 made
+`NumericRouter` a PURELY SYNTACTIC classifier: `build_router_state/1` stopped
+threading `open_query_nicks`, and `scan_params/2` resolves a nick-shaped
+param to `{:query, target}` on syntax alone, no window knowledge. That
+simplification is load-bearing (the router is a pure, sandbox-free "No Repo"
+function of its `router_state`) — and it is EXACTLY what mints the phantom: a
+syntactic scan cannot know that `/ctcp`'s target has no window while `/msg`'s
+does. The wrong fix is to teach the router about windows (reverses CP13) or
+to deny-list 401 to `$server` unconditionally (see below). The RIGHT fix
+splits the two concerns: **classification stays in the router (syntactic,
+CP13 preserved); the window-existence POLICY lives server-side**, where
+window state already is.
+
+**The gate.** `Session.Server.resolve_numeric_query_window/2` sits between
+`NumericRouter.route/2` and the persist: a `{:query, target}` decision is
+kept only if a query window is already OPEN for `target`
+(`state.query_window_open?` — the same injected predicate, defaulting to
+`QueryWindows.open?/3`, that `EventRouter.service_route_channel/2` uses for
+the identical "route to the window iff already open, else `$server`; never
+auto-open" decision on services traffic); otherwise it falls to `{:server,
+nil}`. `{:channel, _}` and `{:server, nil}` pass through untouched. A numeric
+now lands in an EXISTING conversation or on `$server` — it never MINTS a
+window.
+
+**Two arms, both preserved:**
+* `/ctcp`/`/ping <nonexistent>` — `send_ctcp` opened no window → gate finds
+  none → the 401 lands on `$server` (visible, no phantom, no Archive ghost).
+* `/msg <ghost>` — the outbound-DM auto-open (#422) already opened the query
+  window → gate keeps `{:query, ghost}` → the 401 "No such nick/channel"
+  lands IN that window as live feedback. This is the 2026-05-10
+  operator-action-echo behavior ("the operator must SEE the failure inline in
+  the query window") and the `cp13-s5-msg-ghost-401` e2e — both intact.
+
+**Why not deny-list 401 to `$server` (the rejected first attempt).** It fixes
+the phantom but REGRESSES the `/msg` arm: the error leaves the DM window the
+operator is staring at. #640 never asked to move `/msg`'s feedback, and doing
+it would require rewriting a legitimate test (`cp13-s5-msg-ghost-401`) — which
+is precisely what we do not do. The gate is superior: it is the root-cause
+class fix (no numeric ever mints a window) and it reuses the established
+`query_window_open?` seam rather than a per-numeric deny-list whack-a-mole.
+
+**Tests.** `NumericRouter` stays syntactic, so `numeric_router_test`'s
+`401 → {:query, target}` scan tests are UNCHANGED (they pin the router's
+correct contract; the policy is tested elsewhere). The behavioral
+reproduction lives at the right layer in `server_test.exs`: a raw 401 with NO
+open window → `$server` (no phantom); the same 401 WITH an open window (opened
+via a real `send_privmsg`) → lands in that window. Falsification: revert
+`resolve_numeric_query_window/2` (or make it identity) ⇒ the no-window
+server_test and the `issue640-ping-self-echo` e2e go RED. The e2e assert is
+the acceptance gate and stays untouched.
