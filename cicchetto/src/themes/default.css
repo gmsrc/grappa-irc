@@ -7284,6 +7284,14 @@ html.resize-dragging * {
   color: var(--fg);
 }
 
+/* #673 — untyped WHOIS-leg lines (340 shun / 320 swhois / future). Each is
+   a full free-form sentence from the ircd, so they stack one per row rather
+   than running inline like channel names. */
+.whois-card-extra-line {
+  display: block;
+  color: var(--fg);
+}
+
 /* P-0b — peer-away banner. Renders IN-FLOW at the top of `.scrollback`
    in DM windows when the operator /msg's an away peer (#270 — moved out of
    the floating `.scrollback-overlay` so it reserves its own space and never

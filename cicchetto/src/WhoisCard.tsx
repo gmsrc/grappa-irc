@@ -95,7 +95,11 @@ const WhoisCard: Component<Props> = (props) => {
       // #221 — solanum-specific fields also count as "has data".
       b.account !== null ||
       b.secure ||
-      b.certfp !== null
+      b.certfp !== null ||
+      // #673 — an oper-only or privacy-stripped reply can carry nothing
+      // but an extra line; without this the card claims "no WHOIS
+      // information returned" while holding the line /whois was run for.
+      (b.extra_lines?.length ?? 0) > 0
     );
   };
 
@@ -227,6 +231,35 @@ const WhoisCard: Component<Props> = (props) => {
                 <dd>
                   <For each={b().channels ?? []}>
                     {(chan) => <span class="whois-card-channel">{chan}</span>}
+                  </For>
+                </dd>
+              </Show>
+              {/* #673 — every WHOIS-leg numeric with no typed field, which
+                  #221's generic catch collects and nothing rendered until
+                  now: 340 RPL_SHUNNED (bahamut, oper-only), 320
+                  RPL_WHOISSPECIAL (solanum), and whatever either ircd adds
+                  next. Rendered LAST so the typed rows keep their shape.
+
+                  Order is the wire's: the server accumulator prepends LIFO
+                  for O(1) fold and `Grappa.Session.Wire.reverse_extra_lines/1`
+                  reverses on emit, so this list arrives in arrival order —
+                  render as-is, never reverse here.
+
+                  The text is the ircd's trailing param, i.e. upstream
+                  English, NOT a grappa-authored string — the i18n pass must
+                  NOT translate it (same class as `oper_text` / `server_info`
+                  above). It routes through MircBody because a services-set
+                  line can carry mIRC colour (#142). The numeric is oper
+                  diagnostics, so it rides in `title` rather than the body. */}
+              <Show when={(b().extra_lines?.length ?? 0) > 0}>
+                <dt>info</dt>
+                <dd>
+                  <For each={b().extra_lines ?? []}>
+                    {(line) => (
+                      <div class="whois-card-extra-line" title={`numeric ${line.numeric}`}>
+                        <MircBody body={line.text} />
+                      </div>
+                    )}
                   </For>
                 </dd>
               </Show>
