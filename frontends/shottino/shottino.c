@@ -3520,6 +3520,7 @@ static void draw_fill(int y, int x, int n, int pair) {
 
 static void draw_text(int y, int x, int max, int pair, attr_t attrs, const char *fmt, ...) __attribute__((format(printf, 6, 7)));
 static int split_message_line(const char *line, char *prefix, size_t prefix_sz, char *nick, size_t nick_sz, const char **body);
+static int split_action_line(const char *line, char *prefix, size_t prefix_sz, char *nick, size_t nick_sz, const char **body);
 
 static void draw_text(int y, int x, int max, int pair, attr_t attrs, const char *fmt, ...) {
     if (max <= 0) return;
@@ -3824,6 +3825,36 @@ static void draw_message_line(int y, int x, int width, int skip_rows, int max_li
         }
         draw_wrapped_text(y, body_x, body_w, skip_rows, max_lines, body_pair, body_attr, body);
         if (pending_row && width > 11) draw_text(y + max_lines - 1, x + width - 11, 11, CP_MUTED, A_DIM, "[sending]");
+    } else if (split_action_line(line, prefix, sizeof(prefix), nick, sizeof(nick), &body)) {
+        /* An action has no <nick>, so it used to miss the branch above
+         * and land in the plain-text arm — drawn in CP_MUTED, i.e.
+         * DIMMER than an ordinary message and the same grey as system
+         * noise. That is backwards: an action is somebody DOING
+         * something, and it should read as the most present line on the
+         * screen, not the least.
+         *
+         * Three spans, like a message: the timestamp stays muted, the
+         * star and nick take that nick's own colour so you can see who
+         * at a glance, and the words are accent + bold. */
+        int base_pair = mention_row ? CP_MENTION : CP_MUTED;
+        int who_pair = mention_row ? CP_MENTION : nick_pair(nick);
+        int body_pair = mention_row ? CP_MENTION : (pending_row ? CP_MUTED : CP_ACCENT);
+        attr_t base_attr = pending_row ? A_DIM : 0;
+        attr_t body_attr = pending_row ? A_DIM : A_BOLD;
+        int px = x + (int)strlen(prefix);
+        if (skip_rows == 0) {
+            draw_text(y, x, width, base_pair, base_attr, "%s", prefix);
+            draw_text(y, px, (int)strlen(nick), who_pair, A_BOLD | base_attr, "%s", nick);
+        }
+        int body_x = px + (int)strlen(nick) + 1;
+        int body_w = width - (body_x - x);
+        if (body_w < 12) {
+            body_x = x + 2;
+            body_w = width - 2;
+        }
+        draw_wrapped_text(y, body_x, body_w, skip_rows, max_lines, body_pair, body_attr, body);
+        if (pending_row && width > 11)
+            draw_text(y + max_lines - 1, x + width - 11, 11, CP_MUTED, A_DIM, "[sending]");
     } else if (find_url(line)) {
         draw_wrapped_text(y, x, width, skip_rows, max_lines, media_kind_of(find_url(line)) != MEDIA_NONE ? CP_ACCENT : CP_MUTED, A_UNDERLINE, line);
     } else if (strstr(line, "failed") || strstr(line, "error")) {
@@ -4269,6 +4300,51 @@ static int split_message_line(const char *line, char *prefix, size_t prefix_sz, 
     memcpy(nick, lt + 1, nlen);
     nick[nlen] = 0;
     *body = gt + 1;
+    while (**body == ' ') (*body)++;
+    return 1;
+}
+
+/* `[net/chan] HH:MM * nick words` — the shape an ACTION is written in.
+ *
+ * A sibling of split_message_line rather than a second meaning bolted
+ * onto it: the row IS a message, just spelled with a star instead of
+ * angle brackets, and a splitter that had to mean both would be wrong
+ * about one of them.
+ *
+ * The star has to sit in the TIMESTAMP column for this to match. Looking
+ * for "* " anywhere would make any system row that mentions one — `2 * 3`
+ * — render as somebody emoting. */
+static int split_action_line(const char *line, char *prefix, size_t prefix_sz, char *nick,
+                             size_t nick_sz, const char **body) {
+    prefix[0] = 0;
+    nick[0] = 0;
+    *body = line;
+    const char *visible = line;
+    if (*visible == '[') {
+        const char *end = strchr(visible, ']');
+        if (end && end[1] == ' ') visible = end + 2;
+    }
+    const char *star = strstr(visible, "* ");
+    if (!star) return 0;
+    for (const char *p = visible; p < star; p++)
+        if (!isdigit((unsigned char)*p) && *p != ':' && *p != ' ') return 0;
+
+    const char *n = star + 2;
+    if (!*n || *n == ' ') return 0;
+    const char *sp = strchr(n, ' ');
+    size_t nlen = sp ? (size_t)(sp - n) : strlen(n);
+
+    /* The prefix carries the star, so the drawing is three spans:
+     * timestamp, nick, words. */
+    size_t plen = (size_t)(n - line);
+    if (plen >= prefix_sz) return 0;
+    memcpy(prefix, line, plen);
+    prefix[plen] = 0;
+    if (nlen >= nick_sz) return 0;
+    memcpy(nick, n, nlen);
+    nick[nlen] = 0;
+    /* An action with no words is still an action. */
+    *body = sp ? sp + 1 : n + nlen;
     while (**body == ' ') (*body)++;
     return 1;
 }

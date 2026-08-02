@@ -50,6 +50,23 @@ static bool screen_has(const char *needle) {
     return false;
 }
 
+/* The colour pair a run of text was drawn in.
+ *
+ * screen_has answers "was it drawn"; this answers "drawn HOW", which is
+ * the only way to assert a colour decision — the alternative is to
+ * re-state the constant the code already names and prove nothing.
+ * Returns -1 when the needle is not on screen. */
+static int screen_pair_of(const char *needle) {
+    int rows = getmaxy(stdscr), cols = getmaxx(stdscr);
+    snap(full_rows, rows, cols);
+    for (int y = 0; y < rows && y < MAX_H; y++) {
+        const char *at = strstr(full_rows[y], needle);
+        if (!at) continue;
+        return (int)PAIR_NUMBER(mvinch(y, (int)(at - full_rows[y])) & A_COLOR);
+    }
+    return -1;
+}
+
 /* The tail of a wrapped body, drawn from line `skip`, is the full draw's
  * lines `skip`.. — same break points, same cells. */
 static void check_text_tail(const char *s, int width, int height, int skip) {
@@ -1222,6 +1239,55 @@ TEST(a_modal_over_the_settings_panel_is_drawn) {
     free(app);
 }
 
+/* An action is somebody DOING something, and it should read as the most
+ * present line on the screen.
+ *
+ * It had no `<nick>`, so it missed the message arm and landed in the
+ * plain-text fallback: CP_MUTED — dimmer than an ordinary message and
+ * the same grey as system noise. Exactly backwards. */
+TEST(an_action_is_drawn_louder_than_system_noise) {
+    static const char action[] = "[azzurra/#sniffo] 21:29 * nextime accende il camino";
+
+    erase();
+    draw_message_line(0, 0, 60, 0, 3, action, false, false);
+    CHECK_LONG(screen_pair_of("accende il camino"), CP_ACCENT);
+    /* The nick keeps its own colour, so you can see WHO at a glance —
+     * and it is not the muted timestamp column it used to share. */
+    CHECK_LONG(screen_pair_of("nextime"), nick_pair("nextime"));
+    CHECK(screen_pair_of("nextime") != CP_MUTED);
+
+    /* The grey it used to be drawn in is still what an unattributed
+     * system row gets, which is the contrast that was missing. */
+    erase();
+    draw_message_line(0, 0, 60, 0, 3, "reconnecting to azzurra", false, false);
+    CHECK_LONG(screen_pair_of("reconnecting"), CP_MUTED);
+
+    /* An ordinary message is untouched by the new arm. */
+    erase();
+    draw_message_line(0, 0, 60, 0, 3, "[azzurra/#sniffo] 21:30 <nextime> ciao", false, false);
+    CHECK_LONG(screen_pair_of("ciao"), CP_MAIN);
+
+    /* A mention still wins: it paints the whole row, action or not. */
+    erase();
+    draw_message_line(0, 0, 60, 0, 3, action, true, false);
+    CHECK_LONG(screen_pair_of("accende il camino"), CP_MENTION);
+
+    /* The star must sit in the TIMESTAMP column. A system row that
+     * merely CONTAINS one is not somebody emoting — without this the
+     * arm would swallow arbitrary text. */
+    char prefix[256], nick[256];
+    const char *body;
+    CHECK(!split_action_line("the product is 2 * 3 today", prefix, sizeof(prefix), nick,
+                             sizeof(nick), &body));
+    CHECK(!split_action_line("[azzurra/#sniffo] 21:29 <nextime> 2 * 3", prefix, sizeof(prefix),
+                             nick, sizeof(nick), &body));
+    /* An action with no words is still an action. */
+    CHECK(split_action_line("[azzurra/#sniffo] 21:29 * nextime", prefix, sizeof(prefix), nick,
+                            sizeof(nick), &body));
+    CHECK_STR(nick, "nextime");
+    CHECK_STR(body, "");
+}
+
 int main(void) {
     FILE *sink = fopen("/dev/null", "w");
     if (!sink) {
@@ -1269,6 +1335,7 @@ int main(void) {
     RUN(a_short_channel_name_leaves_the_topic_the_width);
     RUN(the_topic_breaks_on_a_word);
     RUN(the_decoder_says_what_animates_not_the_url);
+    RUN(an_action_is_drawn_louder_than_system_noise);
     endwin();
     fclose(sink);
     return test_report();
