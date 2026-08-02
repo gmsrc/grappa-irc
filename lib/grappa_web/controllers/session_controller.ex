@@ -119,9 +119,55 @@ defmodule GrappaWeb.SessionController do
   defp add_user_network(conn, %User{} = user, slug) do
     with {:ok, network} <- Networks.fetch_accretable_network(slug),
          :ok <- ensure_user_not_attached(user, network),
-         {:ok, credential} <- bind_user_credential(user, network),
-         {:ok, plan} <- resolve_user_plan(user, credential) do
-      NetworkSpawn.orchestrate(conn, {:user, user}, credential, plan)
+         {:ok, credential} <- bind_user_credential(user, network) do
+      spawn_or_rollback(conn, user, network, credential)
+    end
+  end
+
+  # Accretion is ATOMIC (#642 defect 2): the accreted credential is bound
+  # `:parked` (never `:connected`) and only transitions to `:connected` AFTER
+  # the upstream session is live via `Networks.connect/1`. This is the exact
+  # invariant the PATCH /connect U-0 fix (`NetworksController.apply_transition/5`)
+  # upholds: no observer ever sees `:connected` without a live `Session.Server`.
+  #
+  # Binding `:parked` is load-bearing, not cosmetic. The tempting shape — bind
+  # `:connected` (schema default) then DELETE on failure — is a trap: that
+  # delete (`Credentials.unbind_credential/2` → a NAKED `Repo.delete_all`, no
+  # `Repo.BusyRetry`) can itself RAISE under WAL + `pool_size > 1`, and the
+  # rollback fires PRECISELY on admission refusal — i.e. under exactly the load
+  # where SQLite write contention is likeliest. A raised rollback would leave
+  # the row `:connected` with no session: the very wedge this closes (UI shows
+  # CONNECTED with a climbing uptime, `POST /messages` 404s, reconnect 409s
+  # `already_attached`, escapable only by Disconnect+Reconnect). Binding
+  # `:parked` makes that impossible BY CONSTRUCTION — a failed cleanup degrades
+  # to `:parked` (a normal, user-recoverable state via PATCH /connect), never
+  # to the `:connected`-with-no-session wedge.
+  #
+  # On ANY failure after the bind — plan resolution (`:resolve_failed`) OR
+  # every rejection out of `NetworkSpawn.orchestrate` (`:ip_cap_exceeded` /
+  # `:user_cap_exceeded`, the `{:network_circuit_open, _}` / `{:start_failed,
+  # _}` tuples, the subject-row-gone `:not_found`) — the just-bound credential
+  # is rolled back best-effort via `Credentials.unbind_credential_resilient/2`
+  # so nothing stays attached and a later attempt starts clean without
+  # Disconnect+Reconnect. That rollback rides out a transient DB fault and, on
+  # sustained saturation, degrades to leaving the credential `:parked` rather
+  # than masking the original refusal behind a 500 — the DB-fault resilience
+  # lives in the context (where Repo access belongs), not in this web layer.
+  @spec spawn_or_rollback(Plug.Conn.t(), User.t(), Network.t(), Credential.t()) ::
+          {:ok, pid()} | {:error, term()}
+  defp spawn_or_rollback(conn, %User{} = user, %Network{} = network, %Credential{} = credential) do
+    with {:ok, plan} <- resolve_user_plan(user, credential),
+         {:ok, pid} <- NetworkSpawn.orchestrate(conn, {:user, user}, credential, plan),
+         {:ok, _} <- Networks.connect(credential) do
+      {:ok, pid}
+    else
+      {:error, _} = err ->
+        # Best-effort: surface the ORIGINAL refusal on a transient rollback
+        # fault (it degrades to :db_unavailable, discarded here, leaving the
+        # credential safely :parked); a non-transient corruption fault still
+        # raises loudly out of unbind_credential_resilient/2 (BusyRetry contract).
+        _ = Credentials.unbind_credential_resilient(user, network)
+        err
     end
   end
 
@@ -135,11 +181,15 @@ defmodule GrappaWeb.SessionController do
     end
   end
 
-  # Bind the accreted USER credential ANON (`auth_method: :none`) — a
-  # self-serve network the user has not yet identified on; per-network
-  # identity is editable afterwards (#476). Seed the identity from a
-  # representative existing user credential for continuity, falling back to
-  # the account name when the user holds none yet.
+  # Bind the accreted USER credential ANON (`auth_method: :none`) + `:parked` —
+  # a self-serve network the user has not yet identified on; per-network
+  # identity is editable afterwards (#476). Binding `:parked` (NOT the schema
+  # default `:connected`) is the #642 defect-2 invariant: the row transitions
+  # to `:connected` only after `spawn_or_rollback/4` confirms a live session,
+  # so a refused spawn can never strand a `:connected`-with-no-session
+  # credential (see `spawn_or_rollback/4`). Seed the identity from a
+  # representative existing user credential for continuity, falling back to the
+  # account name when the user holds none yet.
   @spec bind_user_credential(User.t(), Network.t()) ::
           {:ok, Credential.t()} | {:error, Ecto.Changeset.t()}
   defp bind_user_credential(%User{} = user, %Network{} = network) do
@@ -151,7 +201,8 @@ defmodule GrappaWeb.SessionController do
       realname: realname,
       sasl_user: nick,
       auth_method: :none,
-      autojoin_channels: []
+      autojoin_channels: [],
+      connection_state: :parked
     })
   end
 

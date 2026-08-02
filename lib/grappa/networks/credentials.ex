@@ -990,13 +990,53 @@ defmodule Grappa.Networks.Credentials do
     # wrapper needed now that unbind only ever touches the credential row
     # (GH #105 removed the last-binding check + cascade-on-empty network
     # delete that used to share the transaction).
-    cred_query =
-      from(c in Credential,
-        where: c.user_id == ^user_id and c.network_id == ^network_id
+    {_, _} = Repo.delete_all(credential_scope_query(user_id, network_id))
+    :ok
+  end
+
+  @doc """
+  As `unbind_credential/2`, but rides out a transient SQLITE_BUSY on the
+  credential delete via `Repo.BusyRetry` and degrades to `{:error,
+  :db_unavailable}` on sustained saturation, instead of the raise a naked
+  `Repo.delete_all` throws under WAL + `pool_size > 1`.
+
+  The #642 defect-2 accretion rollback
+  (`GrappaWeb.SessionController.spawn_or_rollback/4`) calls this: it fires
+  PRECISELY on admission refusal — i.e. under exactly the write contention
+  where the naked delete is likeliest to raise. Because the accreted
+  credential is bound `:parked` until its session is live, a degraded rollback
+  safely leaves it `:parked` (a normal, user-recoverable state via PATCH
+  /connect), never the `:connected`-with-no-session wedge. A NON-transient
+  fault (syntax / corruption) still re-raises — `Repo.BusyRetry`'s contract,
+  CLAUDE.md "no silent-swallow". Sibling of
+  `Accounts.revoke_session_resilient/1` (#630), which had the same "must
+  degrade, not crash under peak write load" need. The delete is idempotent, so
+  a retried statement is safe.
+  """
+  @spec unbind_credential_resilient(User.t(), Network.t()) :: :ok | {:error, :db_unavailable}
+  def unbind_credential_resilient(%User{id: user_id}, %Network{id: network_id}) do
+    :ok =
+      Session.stop_session(
+        {:user, user_id},
+        network_id,
+        "credentials unbound (accretion rollback)"
       )
 
-    {_, _} = Repo.delete_all(cred_query)
-    :ok
+    case Repo.BusyRetry.run(fn ->
+           {:ok, Repo.delete_all(credential_scope_query(user_id, network_id))}
+         end) do
+      {:ok, {_, _}} -> :ok
+      {:error, :db_unavailable} = err -> err
+    end
+  end
+
+  # Scoped credential-row query shared by `unbind_credential/2` and
+  # `unbind_credential_resilient/2` — the single (user, network) binding.
+  @spec credential_scope_query(Ecto.UUID.t(), pos_integer()) :: Ecto.Query.t()
+  defp credential_scope_query(user_id, network_id) do
+    from(c in Credential,
+      where: c.user_id == ^user_id and c.network_id == ^network_id
+    )
   end
 
   @doc """

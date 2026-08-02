@@ -26098,3 +26098,66 @@ triad: `ServerSettings.put_addressing_mode/1` + `put_static_mapping_prefix/1`
 no bind) with a mode-2 `base_plan` resolution afterward; it deliberately does
 NOT isolate either commit (either fix alone still admits), so its falsification
 is the DOUBLE revert of both commits ⇒ `{:hold, :no_client_source}` ⇒ RED.
+---
+
+## 2026-08-02 — #642 defect 2: a refused accretion spawn must not strand a `:connected` credential (the wedged user)
+
+`POST /session/networks` user accretion (`SessionController.add_user_network/3`)
+bound the credential — `connection_state: :connected`, the `Credential` schema
+default — BEFORE `NetworkSpawn.orchestrate`, with no rollback on refusal. When
+admission rejected the spawn (`:user_cap_exceeded` on staging, but the class is
+EVERY rejection out of orchestrate) the row stayed `:connected` while no
+`Session.Server` existed: the UI showed the network CONNECTED with a climbing
+uptime, `POST /messages` 404'd (no registry entry), and a reconnect 409'd
+`already_attached`. The only escape was Disconnect (→ `:parked`) + Reconnect — a
+user who didn't know the trick saw an account that claimed to be online and
+silently swallowed every message.
+
+Fix: accretion is now ATOMIC by mirroring the PATCH /connect U-0 stop-swallow
+fix (`NetworksController.apply_transition/5`, 2026-05-16) VERBATIM — the accreted
+credential is bound `:parked` (not the `:connected` schema default) and
+transitions to `:connected` via `Networks.connect/1` ONLY after the upstream
+session is live. Both doors now uphold ONE invariant: no observer ever sees
+`:connected` without a live `Session.Server`. On any failure after the bind —
+plan resolution `:resolve_failed` OR every rejection out of orchestrate
+(`:ip_cap_exceeded` / `:user_cap_exceeded`, the `{:network_circuit_open, _}` /
+`{:start_failed, _}` tuples, the subject-row-gone `:not_found`) — the just-bound
+credential is rolled back best-effort via
+`Credentials.unbind_credential_resilient/2`, so nothing stays attached and a
+later attempt starts clean (no Disconnect+Reconnect).
+
+**Why bind-`:parked` and not "bind-`:connected` then delete-on-failure"** (the
+shape first reached for, and rejected on review): the compensating delete is
+itself a fallible write — `unbind_credential/2` runs a NAKED `Repo.delete_all`
+with no `Repo.BusyRetry`, and under prod's WAL + `pool_size: 10` a transient
+write-lock contention RAISES (BusyRetry moduledoc). Crucially the rollback fires
+PRECISELY on admission refusal — i.e. under exactly the load where SQLite
+contention is likeliest — so a raised rollback would leave the row `:connected`
+with no session: the very wedge, re-created by the fix meant to close it. A
+delete-on-failure only NARROWS the window; it does not close the class, because
+`:connected` was already persisted before the fallible cleanup. Bind-`:parked`
+closes the class STRUCTURALLY: `:connected` is never written until the session
+is live, so a failed cleanup degrades to `:parked` (a normal, user-recoverable
+state via PATCH /connect), never to the wedge. The rollback delete runs through
+`Repo.BusyRetry.run/1` INSIDE the context (`unbind_credential_resilient/2`, a
+sibling of `Accounts.revoke_session_resilient/1` — the DB-fault resilience lives
+where Repo access belongs, NOT the web controller, whose `GrappaWeb → Grappa.Repo`
+Boundary edge is forbidden): a transient fault is ridden out and, on sustained
+saturation, degrades to leaving the credential `:parked` while the ORIGINAL
+refusal reason surfaces cleanly; a non-transient corruption fault still re-raises
+loudly (BusyRetry's contract, CLAUDE.md "no silent-swallow").
+
+**The extra success-path broadcast is ACCEPTABLE.** `Networks.connect/1` on the
+`:parked`→`:connected` transition fires a `connection_state_changed` on the user
+topic that the pre-fix accretion path (which bound `:connected` directly) never
+emitted. This is fine, and an improvement: it is exactly the event the PATCH
+/connect verb already fires, cic handles it idempotently (`userTopic.ts` reacts
+with a `GET /networks` refetch), and the wire contract is additive — a client
+must tolerate events it does not act on. Accretion success now speaks the same
+connection-state language as every other connect, rather than relying on cic to
+notice the new network some other way.
+
+Defect 1 of #642 (the per-IP cap counting the reverse-proxy address) is
+DELIBERATELY out of scope here — it turns on whether prod records the proxy
+address and whether the cap should be per-connection or per-subject (the same
+axis as #632), an open product question owned by vjt.

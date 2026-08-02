@@ -252,6 +252,84 @@ defmodule GrappaWeb.SessionControllerTest do
       |> json_response(409)
     end
 
+    # #642 defect 2 — accretion must be ATOMIC: a rejected spawn may not
+    # strand a `:connected` credential with no Session.Server (the "wedged
+    # user" bug). Pre-fix, `add_user_network` bound the credential
+    # (`connection_state: :connected`, the `credential.ex` schema default)
+    # BEFORE `NetworkSpawn.orchestrate`; on admission refusal there was no
+    # rollback, so the row stayed `:connected` while no session existed — the
+    # UI showed the network CONNECTED with climbing uptime, `POST /messages`
+    # 404'd (no registry entry), and a reconnect 409'd `already_attached`.
+    # The only escape was Disconnect+Reconnect.
+    #
+    # Post-fix: the credential is bound `:parked` and only reaches
+    # `:connected` after the session is live, so a refused spawn NEVER leaves a
+    # `:connected`-with-no-session row (mirrors the PATCH /connect U-0
+    # invariant). This drives `:user_cap_exceeded`; the SAME `with/else` rolls
+    # back every other rejection out of orchestrate identically
+    # (`:ip_cap_exceeded`, the `{:network_circuit_open, _}` / `{:start_failed,
+    # _}` tuples, the subject-row-gone `:not_found`). On refusal the best-effort
+    # rollback removes the parked credential (nothing stays attached), the
+    # reason surfaces (503), and a later attempt succeeds WITHOUT
+    # Disconnect+Reconnect.
+    #
+    # Scope limit: this proves "the row is gone after a refused spawn" and
+    # "a retry is not wedged". It does NOT independently pin bind-`:parked`
+    # over bind-`:connected`-then-delete — the two shapes diverge only when
+    # the rollback delete itself RAISES under write contention, which the
+    # `pool_size: 1` SQL sandbox cannot reproduce. That structural guarantee
+    # rests on `unbind_credential_resilient/2` (BusyRetry) + the DESIGN_NOTES
+    # reasoning, not an assertion here.
+    test "user accretion rolls the credential back when the spawn is refused, and a retry works (#642)",
+         %{conn: conn} do
+      {user, session} = user_and_session()
+
+      {server_b, port_b} = start_server()
+      {network_b, _} = network_with_server(port: port_b, slug: "beta", visitor_enabled: true)
+      on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network_b.id) end)
+
+      # Saturate the network so every user spawn rejects at admission.
+      # cap==0 short-circuits in `Admission.check_network_total/1` — no live
+      # session needed to occupy the slot (same lever as the U-0 PATCH test).
+      {:ok, _} =
+        Grappa.Networks.update_network_settings(network_b, %{max_concurrent_user_sessions: 0})
+
+      refused =
+        conn
+        |> put_bearer(session.id)
+        |> post("/session/networks", %{"network" => "beta"})
+
+      # The refusal surfaces honestly (503 network_busy), NOT a 204 the
+      # client would read as a successful connect.
+      assert json_response(refused, 503)["error"] == "network_busy"
+
+      # The heart of #642 defect 2: NOTHING stays attached. Pre-fix this row
+      # was `:connected` with no session; post-fix the bind is rolled back.
+      assert {:error, :not_found} =
+               Credentials.get_credential_by_ids(user.id, network_b.id)
+
+      refute is_pid(Grappa.Session.whereis({:user, user.id}, network_b.id))
+
+      # Lift the cap and retry from a fresh request — the user is NOT wedged;
+      # no Disconnect+Reconnect dance is required.
+      {:ok, _} =
+        Grappa.Networks.update_network_settings(network_b, %{max_concurrent_user_sessions: nil})
+
+      retry =
+        build_conn()
+        |> put_bearer(session.id)
+        |> post("/session/networks", %{"network" => "beta"})
+
+      assert response(retry, 204)
+      {:ok, _} = IRCServer.wait_for_line(server_b, &String.starts_with?(&1, "NICK"), 5_000)
+      assert is_pid(Grappa.Session.whereis({:user, user.id}, network_b.id))
+
+      # Exactly ONE credential now, legitimately `:connected` with a live
+      # session behind it.
+      assert {:ok, cred_b} = Credentials.get_credential_by_ids(user.id, network_b.id)
+      assert cred_b.connection_state == :connected
+    end
+
     # #211 phase 6 — accretion is anon-allowed now (ruling C follow-up 2:
     # "always reduce the friction for visitors to get on irc"). An ANON
     # visitor one-taps an available network from the home page. Still
