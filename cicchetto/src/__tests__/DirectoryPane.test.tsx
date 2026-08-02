@@ -45,10 +45,22 @@ const { tokenMock } = vi.hoisted(() => ({
   tokenMock: vi.fn<() => string | null>(() => "test-token"),
 }));
 const windowStateByChannelMock = vi.fn<() => Record<string, string>>(() => ({}));
+// #677 — new store verbs the pane consumes. directorySort seeds the sort
+// toggle's rehydration; isLoadingMore drives the sentinel spinner; loadMore
+// is the append verb the IntersectionObserver calls (observer is inert in
+// jsdom — see setupTests); resetDirectory is the on-close filter clear.
+const directorySortMock = vi.fn<(slug: string) => "users" | "name">(() => "users");
+const isLoadingMoreMock = vi.fn<(slug: string) => boolean>(() => false);
+const loadMoreMock = vi.fn<(slug: string) => Promise<void>>(() => Promise.resolve());
+const resetDirectoryMock = vi.fn<(slug: string) => void>(() => {});
 
 vi.mock("../lib/channelDirectory", () => ({
   directoryPage: (slug: string) => directoryPageMock(slug),
+  directorySort: (slug: string) => directorySortMock(slug),
+  isLoadingMore: (slug: string) => isLoadingMoreMock(slug),
   loadDirectory: (slug: string) => loadDirectoryMock(slug),
+  loadMore: (slug: string) => loadMoreMock(slug),
+  resetDirectory: (slug: string) => resetDirectoryMock(slug),
   setSort: (slug: string, sort: "users" | "name") => setSortMock(slug, sort),
   setQuery: (slug: string, q: string) => setQueryMock(slug, q),
   triggerRefresh: (slug: string) => triggerRefreshMock(slug),
@@ -140,6 +152,10 @@ describe("DirectoryPane", () => {
     windowStateByChannelMock.mockReturnValue({});
     setSelectedChannelMock.mockClear();
     closeToPreviousWindowMock.mockClear();
+    directorySortMock.mockReturnValue("users");
+    isLoadingMoreMock.mockReturnValue(false);
+    loadMoreMock.mockClear();
+    resetDirectoryMock.mockClear();
   });
 
   afterEach(() => {
@@ -522,6 +538,58 @@ describe("DirectoryPane", () => {
 
       expect(container.querySelector("textarea")).toBeNull();
       expect(container.querySelector(".compose-box")).toBeNull();
+    });
+  });
+
+  // #677 — the search key is cleared on window close. The pane's local
+  // searchText dies with the unmount; resetDirectory clears the store's
+  // sticky `q` (and drops the cached page) so a reopened directory is
+  // unfiltered with an empty box. Asserted here at the unmount boundary; the
+  // reopen-shows-unfiltered outcome is covered end-to-end in the e2e.
+  describe("clear-filter-on-close (#677)", () => {
+    it("resets the directory store for its slug on unmount", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { unmount } = render(() => <DirectoryPane networkSlug={SLUG} />);
+      expect(resetDirectoryMock).not.toHaveBeenCalled();
+      unmount();
+      expect(resetDirectoryMock).toHaveBeenCalledWith(SLUG);
+    });
+  });
+
+  // #677 — sort is a sticky PREFERENCE (unlike the filter). A reopened pane
+  // rehydrates its toggle from the store's persisted sort so the label
+  // matches the order the store re-fetches. Without this, the drop-page
+  // reset would re-fetch by the stored sort while the toggle showed the
+  // local default — a sibling of the filter desync #677 fixes.
+  describe("sort rehydration (#677)", () => {
+    it("initializes the sort toggle from the store's persisted sort", () => {
+      directorySortMock.mockReturnValue("name");
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      render(() => <DirectoryPane networkSlug={SLUG} />);
+      expect(screen.getByRole("button", { name: /sort:.*name/i })).toBeInTheDocument();
+    });
+  });
+
+  // #677 — the sentinel renders only while the server reports another page
+  // (next_cursor). Exhausted list → no sentinel (nothing left to observe).
+  describe("load-more sentinel (#677)", () => {
+    it("renders the sentinel when next_cursor is present", () => {
+      directoryPageMock.mockReturnValue({ ...FRESH_PAGE, next_cursor: "CURSOR2" });
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+      expect(container.querySelector(".directory-sentinel")).not.toBeNull();
+    });
+
+    it("omits the sentinel when next_cursor is null (last page)", () => {
+      directoryPageMock.mockReturnValue({ ...FRESH_PAGE, next_cursor: null });
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+      expect(container.querySelector(".directory-sentinel")).toBeNull();
+    });
+
+    it("shows the loading-more indicator while a next page is in flight", () => {
+      isLoadingMoreMock.mockReturnValue(true);
+      directoryPageMock.mockReturnValue({ ...FRESH_PAGE, next_cursor: "CURSOR2" });
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+      expect(container.querySelector(".directory-loading-more")).not.toBeNull();
     });
   });
 });

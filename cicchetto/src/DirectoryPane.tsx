@@ -1,9 +1,13 @@
-import { type Component, createEffect, createSignal, For, on, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { ApiError, type DirectoryEntry, postJoin } from "./lib/api";
 import { token } from "./lib/auth";
 import {
   directoryPage,
+  directorySort,
+  isLoadingMore,
   loadDirectory,
+  loadMore,
+  resetDirectory,
   setQuery,
   setSort,
   triggerRefresh,
@@ -29,15 +33,23 @@ import { MircBody } from "./MircText";
 // .directory-row-join grid in default.css): no horizontal scroll. The
 // close button returns to the previously active window.
 //
-// Data layer: channelDirectory.ts (directoryPage / loadDirectory / setSort /
-// setQuery / triggerRefresh). DirectoryPane owns LOCAL signals for the search
-// text and active sort (to render the controls) but every control change
-// routes through the store verbs so subsequent ping-driven re-GETs use the
-// correct view.
+// Data layer: channelDirectory.ts (directoryPage / loadDirectory / loadMore /
+// resetDirectory / directorySort / isLoadingMore / setSort / setQuery /
+// triggerRefresh). DirectoryPane owns LOCAL signals for the search text and
+// active sort (to render the controls) but every control change routes
+// through the store verbs so subsequent ping-driven re-GETs use the correct
+// view.
+//
+// Pagination (#677): the server keyset-paginates (100/page); the pane drives
+// load-more via a bottom sentinel + IntersectionObserver → loadMore, which
+// APPENDS the next page. Search text is cleared on window close
+// (resetDirectory in onCleanup) so a reopened directory is unfiltered with an
+// empty box; sort is a sticky preference and rehydrates from directorySort.
 //
 // Scroll preservation: the row container tracks scrollTop on scroll. A
-// createEffect on the page signal restores it via queueMicrotask so the
-// viewport stays steady while rows update from a progress ping.
+// createEffect on the page's entry COUNT restores it via queueMicrotask so
+// the viewport stays steady while rows update from a progress ping or an
+// append; a REPLACE that shrinks the list snaps back to the top.
 
 // Pure relative-time formatter. No external deps, exported for unit tests.
 // Thresholds: <60s → "just now", <60m → "Nm ago", <24h → "Nh ago", else "Nd ago".
@@ -157,11 +169,28 @@ const DirectoryRow: Component<DirectoryRowProps> = (props) => {
 
 const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
   const [searchText, setSearchText] = createSignal("");
-  const [activeSort, setActiveSort] = createSignal<"users" | "name">("users");
+  // #677 — the search key is cleared on window close (see the onCleanup /
+  // slug-switch resets below), so searchText always mounts "" and the store
+  // agrees. Sort, by contrast, is a sticky PREFERENCE: rehydrate the toggle
+  // from the store so a reopened pane's label matches the sorted list the
+  // store re-fetches (the drop-page reset would otherwise re-fetch the
+  // stored sort while the toggle showed the local default — a sibling of the
+  // very desync #677 fixes for the filter).
+  const [activeSort, setActiveSort] = createSignal<"users" | "name">(
+    directorySort(props.networkSlug),
+  );
   // Callback-ref so TypeScript accepts potential undefined (element is inside
   // <Show when={page()}> and only rendered once a page is in the store).
   let containerRef: HTMLDivElement | undefined;
   let savedScrollTop = 0;
+  // The slug currently shown — kept in sync by the effect so onCleanup can
+  // reset the right slug without reading props during disposal.
+  let mountedSlug = props.networkSlug;
+  // Tracks the rendered row count across page-signal updates so the scroll
+  // restore can tell an APPEND (grows → keep position) from a top-of-view
+  // REPLACE (shrinks → jump to top; a deep saved scrollTop is meaningless
+  // against the shorter list a ping reset produces). #677 constraint 4.
+  let prevEntryCount = 0;
 
   // Load on mount / slug change. `on` makes networkSlug the sole reactive
   // trigger — reading directoryPage(s) inside does NOT create a directoryPage
@@ -170,20 +199,40 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
   createEffect(
     on(
       () => props.networkSlug,
-      (s) => {
+      (s, prevS) => {
+        // #677 — an A-$list → B-$list direct switch reuses this component
+        // instance (the Shell <Match> stays true), so onCleanup does NOT
+        // fire for A. Reset A's browse state here so reopening A later starts
+        // fresh + unfiltered, exactly like closing via ✕ / switch-away.
+        if (prevS !== undefined && prevS !== s) resetDirectory(prevS);
+        mountedSlug = s;
+        setActiveSort(directorySort(s));
+        prevEntryCount = directoryPage(s)?.entries.length ?? 0;
         if (directoryPage(s) === undefined) void loadDirectory(s);
       },
     ),
   );
 
-  // Scroll preservation across live re-GETs (progress pings). After the
-  // page signal updates, restore the saved scroll position so the viewport
-  // stays steady while the row list repaints. queueMicrotask defers the
-  // write to after Solid commits DOM updates.
+  // #677 — clear the search key + drop the accumulated pages when the
+  // directory window closes. DirectoryPane lives under Shell's
+  // <Match when={selKind() === "list"}>, so ANY dismissal (the ✕, a
+  // switch-away, bucket-D park redirect, bucket-E close picker) unmounts it
+  // and fires this. A reopened directory is then unfiltered with an empty
+  // box — the box tells the truth.
+  onCleanup(() => resetDirectory(mountedSlug));
+
+  // Scroll preservation across live re-GETs (progress pings) and appends.
+  // After the page signal updates, restore the saved scroll position so the
+  // viewport stays steady while the row list repaints. A REPLACE that
+  // shrinks the list (a ping reset to page 1) invalidates a deep saved
+  // position, so snap back to the top in that case. queueMicrotask defers
+  // the write to after Solid commits DOM updates.
   createEffect(
     on(
-      () => directoryPage(props.networkSlug),
-      () => {
+      () => directoryPage(props.networkSlug)?.entries.length ?? 0,
+      (len) => {
+        if (len < prevEntryCount) savedScrollTop = 0;
+        prevEntryCount = len;
         const el = containerRef;
         if (!el) return;
         queueMicrotask(() => {
@@ -192,6 +241,27 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
       },
     ),
   );
+
+  // #677 — infinite scroll. A zero-height sentinel sits at the bottom of the
+  // scroll list; when it enters the container's viewport (with a 200px
+  // pre-fetch margin) we ask the store for the next keyset page, which
+  // APPENDS. loadMore self-guards (no next_cursor / already loading), so a
+  // burst of observer fires is harmless. The observer is (re)created on each
+  // sentinel mount — the sentinel is inside <Show when next_cursor>, so it
+  // unmounts once the list is exhausted — and disconnected on pane unmount.
+  let sentinelObserver: IntersectionObserver | undefined;
+  const attachSentinel = (el: HTMLDivElement): void => {
+    sentinelObserver?.disconnect();
+    const root = el.closest(".directory-list");
+    sentinelObserver = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void loadMore(props.networkSlug);
+      },
+      { root, rootMargin: "200px" },
+    );
+    sentinelObserver.observe(el);
+  };
+  onCleanup(() => sentinelObserver?.disconnect());
 
   const page = () => directoryPage(props.networkSlug);
   const status = () => page()?.status;
@@ -287,6 +357,17 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
                   {(entry) => <DirectoryRow entry={entry} networkSlug={props.networkSlug} />}
                 </For>
               </ul>
+              {/* #677 — load-more sentinel: present only while the server
+                  reports another page (next_cursor). IntersectionObserver on
+                  it drives loadMore; it unmounts when the list is exhausted. */}
+              <Show when={p().next_cursor !== null}>
+                <div class="directory-sentinel" aria-hidden="true" ref={attachSentinel} />
+              </Show>
+              <Show when={isLoadingMore(props.networkSlug)}>
+                <div class="directory-loading-more muted" role="status">
+                  Loading more…
+                </div>
+              </Show>
             </div>
           </>
         )}

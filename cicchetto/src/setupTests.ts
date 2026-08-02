@@ -82,6 +82,27 @@ class InertWebSocket {
   }
 }
 
+// jsdom ships no IntersectionObserver, but DirectoryPane (#677 infinite
+// scroll) constructs one at mount — an undefined global would throw and
+// break every pane render test. An inert stand-in satisfies construction
+// and observe/disconnect without ever firing a callback (jsdom has no
+// layout/scroll to intersect against anyway); the load-more → append
+// behaviour is asserted in the real-browser e2e
+// (issue677-directory-pagination.spec.ts). Production always runs in a
+// browser where IntersectionObserver is a baseline API.
+class InertIntersectionObserver {
+  readonly root: Element | null = null;
+  readonly rootMargin: string = "";
+  readonly thresholds: ReadonlyArray<number> = [];
+  constructor(_cb: unknown, _opts?: unknown) {}
+  observe(_target: Element): void {}
+  unobserve(_target: Element): void {}
+  disconnect(): void {}
+  takeRecords(): unknown[] {
+    return [];
+  }
+}
+
 beforeEach(() => {
   // Fresh in-memory localStorage for every test — no state bleeds between cases.
   vi.stubGlobal("localStorage", makeLocalStorage());
@@ -89,6 +110,8 @@ beforeEach(() => {
   // vi.unstubAllGlobals() in some file's afterEach can't resurrect the
   // real jsdom implementation for the rest of the worker's lifetime.
   vi.stubGlobal("WebSocket", InertWebSocket);
+  // Inert IntersectionObserver — see class comment. jsdom has none.
+  vi.stubGlobal("IntersectionObserver", InertIntersectionObserver);
 });
 
 // Solid testing-library doesn't auto-cleanup like RTL; missing this leaks

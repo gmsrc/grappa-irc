@@ -8537,6 +8537,23 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   padding: 0;
 }
 
+/* #677 — load-more sentinel: a zero-height marker at the bottom of the
+ * scroll list. IntersectionObserver watches it to fetch + append the next
+ * keyset page. Invisible; occupies no vertical space of its own. */
+.directory-sentinel {
+  height: 1px;
+  margin: 0;
+  padding: 0;
+}
+
+/* #677 — brief "Loading more…" line shown while a next-page GET is in
+ * flight (below the last row, inside the scroll list). */
+.directory-loading-more {
+  padding: 0.5rem 1rem;
+  font-size: 0.85em;
+  text-align: center;
+}
+
 .directory-row {
   margin: 0;
   padding: 0;
