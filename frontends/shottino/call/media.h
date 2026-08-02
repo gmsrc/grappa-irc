@@ -32,6 +32,33 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+/* Which video codec a call speaks.
+ *
+ * A closed set rather than a string, because it decides THREE things
+ * that have to agree exactly: the codec named in the SDP offer, the
+ * ffmpeg encoder on the capture leg, and the rtpmap the decoder is
+ * handed. Any two of the three agreeing and the third not is a call
+ * that connects and shows nothing, with no error anywhere.
+ *
+ * VP8 is the default and the safe choice: every browser has it, it is
+ * free of the licensing baggage that keeps H.264 out of some
+ * distributions, and the terminal throws away the extra detail anyway.
+ * H.264 is here because the far end does not always get a vote — an SFU
+ * does not transcode, so a browser or a phone that publishes H.264 is
+ * one this helper can either speak to or not see at all. */
+enum media_video_codec {
+    MEDIA_VIDEO_VP8 = 0,
+    MEDIA_VIDEO_H264
+};
+
+/* The wire name, for an rtpmap or an offer. */
+const char *media_video_codec_name(enum media_video_codec codec);
+
+/* Parse the spelling a user types. Returns false on anything else
+ * rather than falling back to a default: silently getting VP8 when you
+ * asked for H.264 is the failure this whole enum exists to prevent. */
+bool media_video_codec_parse(const char *word, enum media_video_codec *out);
+
 /* One direction of one medium. */
 struct media_leg {
     pid_t pid;   /* the ffmpeg doing the codec work, or -1 */
@@ -77,6 +104,8 @@ struct media_config {
     int capture_h;
     int capture_fps;
     int video_kbps;
+    /* What both ends of the video path speak. See the enum. */
+    enum media_video_codec video_codec;
     /* Audio-only calls neither open the camera nor decode video. */
     bool want_video;
 };

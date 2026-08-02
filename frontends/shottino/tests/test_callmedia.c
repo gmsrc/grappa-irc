@@ -60,6 +60,54 @@ TEST(the_receive_sdp_describes_what_was_negotiated) {
     CHECK(!media_recv_sdp(NULL, true, 45123, sdp, sizeof(sdp)));
 }
 
+/* An SFU does not transcode, so the codec is not ours to pick alone: a
+ * far end publishing H.264 to a helper that offered VP8 is a call that
+ * connects, reports nothing wrong, and shows no picture. The decoder
+ * has to be told the same thing the offer said. */
+TEST(the_receive_sdp_follows_the_negotiated_video_codec) {
+    struct media_config cfg = { .video_payload_type = 96, .video_codec = MEDIA_VIDEO_VP8 };
+    char sdp[512];
+
+    CHECK(media_recv_sdp(&cfg, true, 5000, sdp, sizeof(sdp)));
+    CHECK(strstr(sdp, "a=rtpmap:96 VP8/90000") != NULL);
+    /* VP8 gets NO fmtp rather than an empty one. */
+    CHECK(strstr(sdp, "a=fmtp:") == NULL);
+
+    cfg.video_codec = MEDIA_VIDEO_H264;
+    CHECK(media_recv_sdp(&cfg, true, 5000, sdp, sizeof(sdp)));
+    CHECK(strstr(sdp, "a=rtpmap:96 H264/90000") != NULL);
+    /* Without this the depacketiser assumes single-NAL and drops every
+     * fragmented keyframe — i.e. all of them. */
+    CHECK(strstr(sdp, "a=fmtp:96 packetization-mode=1") != NULL);
+
+    /* Audio is unaffected by the video codec. */
+    cfg.audio_payload_type = 111;
+    CHECK(media_recv_sdp(&cfg, false, 5001, sdp, sizeof(sdp)));
+    CHECK(strstr(sdp, "a=rtpmap:111 opus/48000/2") != NULL);
+    CHECK(strstr(sdp, "H264") == NULL);
+}
+
+/* The spelling a user types, and the one wrong answer that must not be
+ * given: falling back to a default when asked for something specific. */
+TEST(the_video_codec_is_parsed_or_refused) {
+    enum media_video_codec got = MEDIA_VIDEO_H264;
+    CHECK(media_video_codec_parse("vp8", &got) && got == MEDIA_VIDEO_VP8);
+    CHECK(media_video_codec_parse("VP8", &got) && got == MEDIA_VIDEO_VP8);
+    CHECK(media_video_codec_parse("h264", &got) && got == MEDIA_VIDEO_H264);
+    CHECK(media_video_codec_parse("H.264", &got) && got == MEDIA_VIDEO_H264);
+
+    CHECK(!media_video_codec_parse("vp9", &got));
+    CHECK(!media_video_codec_parse("", &got));
+    CHECK(!media_video_codec_parse(NULL, &got));
+    /* Refused means UNCHANGED: a rejected word that had already
+     * overwritten the setting would be the silent-default bug wearing a
+     * return value. */
+    CHECK(got == MEDIA_VIDEO_H264);
+
+    CHECK(strcmp(media_video_codec_name(MEDIA_VIDEO_VP8), "VP8") == 0);
+    CHECK(strcmp(media_video_codec_name(MEDIA_VIDEO_H264), "H264") == 0);
+}
+
 /* Two legs must never be handed the same port, and the port has to be
  * one the caller can actually tell ffmpeg about. */
 TEST(loopback_ports_are_distinct_and_reported) {
@@ -77,6 +125,8 @@ TEST(loopback_ports_are_distinct_and_reported) {
 
 int main(void) {
     RUN(the_receive_sdp_describes_what_was_negotiated);
+    RUN(the_receive_sdp_follows_the_negotiated_video_codec);
+    RUN(the_video_codec_is_parsed_or_refused);
     RUN(loopback_ports_are_distinct_and_reported);
     return test_report();
 }

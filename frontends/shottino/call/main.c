@@ -371,14 +371,25 @@ static bool session_negotiate(struct session *s, const char *url, rtcDirection d
     if (s->receives) rtcSetMessageCallback(s->audio_track, on_audio_rtp);
 
     if (video) {
-        /* VP8 is the safest common denominator: universally supported
-         * and free of the licensing baggage that keeps H.264 out of
-         * some distributions. The terminal renders ASCII art, so the
-         * detail H.264 would buy is thrown away on arrival anyway. */
+        /* VP8 by default and H.264 on request — see media.h for why the
+         * choice exists at all. In short: an SFU does not transcode, so
+         * the codec is not ours to pick unilaterally. A far end that
+         * publishes H.264 while we offer only VP8 produces a call that
+         * connects, reports nothing wrong, and shows no picture. */
         rtcTrackInit vid;
         memset(&vid, 0, sizeof(vid));
         vid.direction = dir;
-        vid.codec = RTC_CODEC_VP8;
+        if (mcfg->video_codec == MEDIA_VIDEO_H264) {
+            vid.codec = RTC_CODEC_H264;
+            /* Spelled out rather than left NULL: the C API turns a NULL
+             * profile into NO fmtp line at all, and an H.264 m-line
+             * without packetization-mode is one a browser may decline or
+             * read as single-NAL. Constrained Baseline 3.1 is what the
+             * capture leg is told to produce. */
+            vid.profile = "profile-level-id=42e01f;packetization-mode=1;level-asymmetry-allowed=1";
+        } else {
+            vid.codec = RTC_CODEC_VP8;
+        }
         vid.payloadType = mcfg->video_payload_type;
         vid.ssrc = mcfg->video_ssrc;
         vid.mid = "video";
@@ -500,6 +511,8 @@ static void usage(FILE *out) {
             "  --capture <WxH[@fps]>  what we SEND (default 640x480@20) — the far end\n"
             "                   may be a browser, so this is not the render size\n"
             "  --bitrate <kbps> video bitrate we send (default 800)\n"
+            "  --video-codec <c>  vp8 (default) or h264. An SFU does not transcode,\n"
+            "                   so this has to match what the far end publishes\n"
             "  --fps <n>        video frame rate (default 10)\n"
             "  --verbose        interleave '#' notes on stderr\n"
             "  --protocol       print the helper protocol version and exit\n"
@@ -532,10 +545,11 @@ int main(int argc, char **argv) {
                                  .capture_h = 480,
                                  .capture_fps = 20,
                                  .video_kbps = 800,
+                                 .video_codec = MEDIA_VIDEO_VP8,
                                  .want_video = false };
 
     enum { OPT_AUDIO_SRC = 1000, OPT_VIDEO_SRC, OPT_AUDIO_SINK, OPT_FRAME, OPT_FPS, OPT_WHEP,
-           OPT_CAPTURE, OPT_KBPS };
+           OPT_CAPTURE, OPT_KBPS, OPT_VCODEC };
     static const struct option opts[] = {
         { "whip", required_argument, NULL, 'w' },
         { "whep", required_argument, NULL, OPT_WHEP },
@@ -548,6 +562,7 @@ int main(int argc, char **argv) {
         { "frame", required_argument, NULL, OPT_FRAME },
         { "capture", required_argument, NULL, OPT_CAPTURE },
         { "bitrate", required_argument, NULL, OPT_KBPS },
+        { "video-codec", required_argument, NULL, OPT_VCODEC },
         { "fps", required_argument, NULL, OPT_FPS },
         { "verbose", no_argument, NULL, 'v' },
         { "protocol", no_argument, NULL, 'p' },
@@ -586,6 +601,14 @@ int main(int argc, char **argv) {
             }
             break;
         case OPT_KBPS: mcfg.video_kbps = atoi(optarg); break;
+        case OPT_VCODEC:
+            /* Refused rather than defaulted: asking for h264 and
+             * silently getting VP8 is the exact failure this is for. */
+            if (!media_video_codec_parse(optarg, &mcfg.video_codec)) {
+                emit_event("error", "message", "--video-codec wants vp8 or h264");
+                return 2;
+            }
+            break;
         case OPT_FPS: mcfg.fps = atoi(optarg); break;
         case 'v': verbose = true; break;
         case 'p': printf("%d\n", CALL_PROTOCOL); return 0;

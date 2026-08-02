@@ -539,6 +539,22 @@ enum call_kind { CALL_AUDIO, CALL_VIDEO };
  * default without one of them being wrong. */
 enum call_ring_policy { CALL_RING_OFF, CALL_RING_QUERIES, CALL_RING_ALL };
 
+/* What a terminal call speaks on the video track.
+ *
+ * An SFU does not transcode, so this is NOT a private preference: it is
+ * an agreement with whoever else is in the room. VP8 is the default
+ * because every browser has it and it carries no licensing baggage;
+ * H.264 exists because a far end that publishes it — a phone, a browser
+ * built without VP8 — is one we can either speak to or not see at all,
+ * and "connected, no picture, no error" is the worst of the three.
+ *
+ * Mirrors the helper's own enum (call/media.h) rather than sharing it:
+ * the two are separate binaries, and the WORD on the command line is
+ * the contract between them. Both sides parse it strictly for the same
+ * reason — silently getting VP8 when you asked for H.264 is the exact
+ * failure the setting exists to prevent. */
+enum call_vcodec { CALL_VCODEC_VP8, CALL_VCODEC_H264 };
+
 /* A recording stops itself here rather than running until the disk or
  * the upload limit says so. Declared with the overlay because the box
  * that draws the timer prints it. */
@@ -930,6 +946,7 @@ struct app {
      * speaks WHIP/WHEP, which nothing can detect from a URL — so it is
      * declared, not guessed. */
     bool call_in_terminal;
+    enum call_vcodec call_vcodec;
     char call_helper[LLM_MAX_PATH];
     /* The running call, if any. `in_fd` takes the control verbs; the
      * reader thread drains the helper's event stream so a call that
@@ -3135,6 +3152,25 @@ static bool call_ring_parse(const char *word, enum call_ring_policy *out) {
     if (strcasecmp(word, "off") == 0)          { *out = CALL_RING_OFF;     return true; }
     if (strcasecmp(word, "queries") == 0)      { *out = CALL_RING_QUERIES; return true; }
     if (strcasecmp(word, "all") == 0)          { *out = CALL_RING_ALL;     return true; }
+    return false;
+}
+
+/* The same pair for the video codec. `h.264` is accepted as well as
+ * `h264` because that is how the codec is spelled everywhere except in
+ * command-line flags. */
+static const char *call_vcodec_word(enum call_vcodec codec) {
+    switch (codec) {
+    case CALL_VCODEC_VP8:  return "vp8";
+    case CALL_VCODEC_H264: return "h264";
+    }
+    return "vp8";
+}
+
+static bool call_vcodec_parse(const char *word, enum call_vcodec *out) {
+    if (!word || !out) return false;
+    if (strcasecmp(word, "vp8") == 0)   { *out = CALL_VCODEC_VP8;  return true; }
+    if (strcasecmp(word, "h264") == 0 ||
+        strcasecmp(word, "h.264") == 0) { *out = CALL_VCODEC_H264; return true; }
     return false;
 }
 
@@ -9524,6 +9560,8 @@ static const struct setting_def SETTINGS[] = {
     { "call.base_url", SET_TEXT, NULL, "where /call makes a room; any room-per-URL service" },
     { "call.ring", SET_CHOICE, "off|queries|all", "when an arriving call interrupts you" },
     { "call.mode", SET_CHOICE, "browser|terminal", "where a call runs; terminal needs a WHIP SFU" },
+    { "call.video_codec", SET_CHOICE, "vp8|h264",
+      "what a terminal call speaks; an SFU does not transcode, so it must match the room" },
     { "call.helper", SET_TEXT, NULL, "path to shottino-call (empty = found beside shottino)" },
     { "bot.dir", SET_TEXT, NULL, "where AGENT.md and the bot's notes live" },
     { "stt.enabled", SET_BOOL, NULL, "/stt speech to text (off: nothing is transcribed)" },
@@ -9671,6 +9709,7 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "call.base_url") == 0) src = app->call_base_url;
     else if (strcmp(name, "call.ring") == 0) src = call_ring_word(app->call_ring);
     else if (strcmp(name, "call.mode") == 0) src = app->call_in_terminal ? "terminal" : "browser";
+    else if (strcmp(name, "call.video_codec") == 0) src = call_vcodec_word(app->call_vcodec);
     else if (strcmp(name, "call.helper") == 0) src = app->call_helper;
     else if (strcmp(name, "bot.dir") == 0) src = app->bot_dir;
     snprintf(out, out_sz, "%.*s", (int)out_sz - 1, src);
@@ -9851,6 +9890,13 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
             log_line(app, "/set call.mode: `%.20s` is not one of %s", value, def->values);
             return false;
         }
+    } else if (strcmp(def->name, "call.video_codec") == 0) {
+        enum call_vcodec codec;
+        if (!call_vcodec_parse(value, &codec)) {
+            log_line(app, "/set call.video_codec: `%.20s` is not one of %s", value, def->values);
+            return false;
+        }
+        app->call_vcodec = codec;
     } else if (strcmp(def->name, "call.helper") == 0)
         snprintf(app->call_helper, sizeof(app->call_helper), "%.*s",
                  (int)sizeof(app->call_helper) - 1, value);
@@ -12915,6 +12961,12 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
              * is measured HERE, in cells, and handed over in pixels. */
             argv[a++] = (char *)"--frame";
             argv[a++] = frame_arg;
+            /* Passed ALWAYS, not only when it differs from the helper's
+             * own default: the two binaries are versioned separately, so
+             * "whatever the helper defaults to" is not a thing this side
+             * can know. Saying it out loud costs two argv slots. */
+            argv[a++] = (char *)"--video-codec";
+            argv[a++] = (char *)call_vcodec_word(app->call_vcodec);
         }
         argv[a] = NULL;
         execv(helper, argv);

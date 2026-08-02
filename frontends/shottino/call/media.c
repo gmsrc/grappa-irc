@@ -13,7 +13,24 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define MEDIA_MAX_ARGS 48
+#define MEDIA_MAX_ARGS 64
+
+const char *media_video_codec_name(enum media_video_codec codec) {
+    return codec == MEDIA_VIDEO_H264 ? "H264" : "VP8";
+}
+
+bool media_video_codec_parse(const char *word, enum media_video_codec *out) {
+    if (!word || !out) return false;
+    if (strcmp(word, "vp8") == 0 || strcmp(word, "VP8") == 0) {
+        *out = MEDIA_VIDEO_VP8;
+        return true;
+    }
+    if (strcmp(word, "h264") == 0 || strcmp(word, "H264") == 0 || strcmp(word, "H.264") == 0) {
+        *out = MEDIA_VIDEO_H264;
+        return true;
+    }
+    return false;
+}
 
 int media_bind_loopback(int *port_out) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -95,7 +112,7 @@ bool media_start_send(struct media_leg *leg, const struct media_config *cfg, boo
     split_source(video ? cfg->video_source : cfg->audio_source, &fmt, &input, scratch,
                  sizeof(scratch));
 
-    char dest[64], pt[16], ssrc[16], rate[16], bitrate[16], vfilter[160];
+    char dest[64], pt[16], ssrc[16], rate[16], bitrate[16], vfilter[160], gop[16];
     snprintf(dest, sizeof(dest), "rtp://127.0.0.1:%d", port);
     snprintf(pt, sizeof(pt), "%d", video ? cfg->video_payload_type : cfg->audio_payload_type);
     snprintf(ssrc, sizeof(ssrc), "%u", (unsigned)(video ? cfg->video_ssrc : cfg->audio_ssrc));
@@ -112,6 +129,16 @@ bool media_start_send(struct media_leg *leg, const struct media_config *cfg, boo
      * can use and a browser can use a great deal more than a terminal. */
     if (video) snprintf(bitrate, sizeof(bitrate), "%dk", cfg->video_kbps > 0 ? cfg->video_kbps : 800);
     else snprintf(bitrate, sizeof(bitrate), "24k");
+    /* A keyframe every two seconds, for BOTH codecs.
+     *
+     * This is what a late joiner costs: a decoder that attaches to a
+     * stream mid-flight shows nothing until the next keyframe, and the
+     * defaults are hopeless for a call — x264's keyint is 250 frames,
+     * twelve seconds at this rate, and there is no PLI path here to ask
+     * for one. In a group call somebody is ALWAYS joining late, and the
+     * video mix restarts on a re-tile besides. Two seconds of black is
+     * a hiccup; twelve is a bug report. */
+    snprintf(gop, sizeof(gop), "%d", cfps * 2);
 
     char *argv[MEDIA_MAX_ARGS];
     size_t n = 0;
@@ -138,15 +165,41 @@ bool media_start_send(struct media_leg *leg, const struct media_config *cfg, boo
         argv[n++] = vfilter;
         argv[n++] = (char *)"-an";
         argv[n++] = (char *)"-c:v";
-        argv[n++] = (char *)"libvpx";
-        argv[n++] = (char *)"-b:v";
-        argv[n++] = bitrate;
-        /* Real time beats quality: a frame that arrives late is worse
-         * than a frame that arrived rough, and this one becomes ASCII. */
-        argv[n++] = (char *)"-deadline";
-        argv[n++] = (char *)"realtime";
-        argv[n++] = (char *)"-cpu-used";
-        argv[n++] = (char *)"8";
+        if (cfg->video_codec == MEDIA_VIDEO_H264) {
+            argv[n++] = (char *)"libx264";
+            argv[n++] = (char *)"-b:v";
+            argv[n++] = bitrate;
+            /* Real time beats quality: a frame that arrives late is
+             * worse than a frame that arrived rough. */
+            argv[n++] = (char *)"-preset";
+            argv[n++] = (char *)"ultrafast";
+            argv[n++] = (char *)"-tune";
+            argv[n++] = (char *)"zerolatency";
+            /* Constrained Baseline, which is what libdatachannel offers
+             * (profile-level-id=42e01f) and what every browser and phone
+             * decodes. A stream whose profile is above what the offer
+             * promised is one the far end is entitled to drop. */
+            argv[n++] = (char *)"-profile:v";
+            argv[n++] = (char *)"baseline";
+            argv[n++] = (char *)"-pix_fmt";
+            argv[n++] = (char *)"yuv420p";
+            /* SPS/PPS in front of every keyframe, not once at the start.
+             * There is no out-of-band sprop-parameter-sets on this path,
+             * so a decoder that attached late has no other way to learn
+             * the parameter sets and stays blank forever. */
+            argv[n++] = (char *)"-bsf:v";
+            argv[n++] = (char *)"dump_extra";
+        } else {
+            argv[n++] = (char *)"libvpx";
+            argv[n++] = (char *)"-b:v";
+            argv[n++] = bitrate;
+            argv[n++] = (char *)"-deadline";
+            argv[n++] = (char *)"realtime";
+            argv[n++] = (char *)"-cpu-used";
+            argv[n++] = (char *)"8";
+        }
+        argv[n++] = (char *)"-g";
+        argv[n++] = gop;
     } else {
         argv[n++] = (char *)"-vn";
         argv[n++] = (char *)"-c:a";
@@ -183,24 +236,38 @@ bool media_recv_sdp(const struct media_config *cfg, bool video, int port, char *
     /* c= is the loopback the helper writes to; the rtpmap must match
      * what the offer negotiated or the decoder sits silent with no
      * error, which is the least debuggable failure this design has. */
-    int w = video ? snprintf(out, out_sz,
-                             "v=0\r\n"
-                             "o=- 0 0 IN IP4 127.0.0.1\r\n"
-                             "s=shottino\r\n"
-                             "c=IN IP4 127.0.0.1\r\n"
-                             "t=0 0\r\n"
-                             "m=video %d RTP/AVP %d\r\n"
-                             "a=rtpmap:%d VP8/90000\r\n",
-                             port, pt, pt)
-                  : snprintf(out, out_sz,
-                             "v=0\r\n"
-                             "o=- 0 0 IN IP4 127.0.0.1\r\n"
-                             "s=shottino\r\n"
-                             "c=IN IP4 127.0.0.1\r\n"
-                             "t=0 0\r\n"
-                             "m=audio %d RTP/AVP %d\r\n"
-                             "a=rtpmap:%d opus/48000/2\r\n",
-                             port, pt, pt);
+    int w;
+    if (!video) {
+        w = snprintf(out, out_sz,
+                     "v=0\r\n"
+                     "o=- 0 0 IN IP4 127.0.0.1\r\n"
+                     "s=shottino\r\n"
+                     "c=IN IP4 127.0.0.1\r\n"
+                     "t=0 0\r\n"
+                     "m=audio %d RTP/AVP %d\r\n"
+                     "a=rtpmap:%d opus/48000/2\r\n",
+                     port, pt, pt);
+        return w > 0 && (size_t)w < out_sz;
+    }
+    /* H.264 additionally needs its packetization mode spelled out: a
+     * depacketiser told nothing assumes single-NAL, and a real sender
+     * fragments (FU-A) the moment a frame exceeds the MTU — which is
+     * every keyframe. The result is a decoder that reports nothing and
+     * shows nothing. VP8 carries no such ambiguity, so it gets no fmtp
+     * rather than an empty one. */
+    char fmtp[64] = { 0 };
+    if (cfg->video_codec == MEDIA_VIDEO_H264)
+        snprintf(fmtp, sizeof(fmtp), "a=fmtp:%d packetization-mode=1\r\n", pt);
+    w = snprintf(out, out_sz,
+                 "v=0\r\n"
+                 "o=- 0 0 IN IP4 127.0.0.1\r\n"
+                 "s=shottino\r\n"
+                 "c=IN IP4 127.0.0.1\r\n"
+                 "t=0 0\r\n"
+                 "m=video %d RTP/AVP %d\r\n"
+                 "a=rtpmap:%d %s/90000\r\n"
+                 "%s",
+                 port, pt, pt, media_video_codec_name(cfg->video_codec), fmtp);
     return w > 0 && (size_t)w < out_sz;
 }
 
