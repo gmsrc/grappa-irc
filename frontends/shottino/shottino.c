@@ -636,6 +636,10 @@ struct overlay {
     /* Media picker: what Enter does with the URL, decided by the command
      * that opened it (/preview or /view) rather than by the list. */
     enum overlay_action pick_action;
+    /* Narrow the picker to one kind of media, or MEDIA_NONE for all.
+     * /stt wants the audio and nothing else: a list where most entries
+     * cannot be transcribed is a list you have to read twice. */
+    enum media_kind pick_kind;
 };
 
 /* ── The downstream IRC server (--ircd) ────────────────────────────────
@@ -849,6 +853,16 @@ struct app {
      * everything else here indexes bytes; it only ever lands on a
      * character boundary, which is what the movement helpers are for. */
     size_t input_pos;
+    /* Tab cycling through the media in this window.
+     *
+     * `cycle_from` is what the line looked like before the first Tab —
+     * the verb and whatever was typed after it — and `cycle_at` is how
+     * many candidates have been shown. Kept so a second Tab means "the
+     * next one" rather than "the same one again"; any edit that is not
+     * a cycle clears it, because then the base has changed. */
+    char cycle_from[MAX_LINE];
+    size_t cycle_at;
+    bool cycling;
     char last_url[MAX_LINE];
     /* Most recent IMAGE/VIDEO link, for keyboard-driven /preview. */
     char last_media_url[MAX_LINE];
@@ -6753,7 +6767,9 @@ if (app->overlay.kind == OVERLAY_RECORD) {
 
     const struct setting_def *mdef = modal ? setting_find(app->overlay.setting) : NULL;
     const char *verb = app->overlay.kind == OVERLAY_MEDIA
-                           ? (app->overlay.pick_action == ACT_VIEW ? "open" : "preview")
+                           ? (app->overlay.pick_action == ACT_VIEW      ? "open"
+                              : app->overlay.pick_action == ACT_TRANSCRIBE ? "transcribe"
+                                                                          : "preview")
                            : "reply to";
     const char *empty = app->overlay.kind == OVERLAY_MEDIA ? "(no pictures or clips here)"
                                                            : "(nothing to reply to)";
@@ -10510,6 +10526,7 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
             copy_url_token(url, tok, sizeof(tok));
             enum media_kind kind = media_kind_of(tok);
             if (kind == MEDIA_NONE) continue;
+            if (ov->pick_kind != MEDIA_NONE && kind != ov->pick_kind) continue;
             if (ov->filter[0] && !contains_ci(tok, ov->filter)) continue;
             bool already = false;
             for (size_t j = 0; j < n && !already; j++) already = strcmp(out[j].body, tok) == 0;
@@ -10982,11 +10999,13 @@ static void open_reply_picker(struct app *app) {
  * /view hands it to the system viewer. Returns false when the window
  * has no media to offer, so the caller can say so rather than opening
  * an empty box. */
-static bool open_media_picker(struct app *app, enum overlay_action action) {
+static bool open_media_picker_kind(struct app *app, enum overlay_action action,
+                                   enum media_kind only) {
     struct overlay_item items[PICKER_MAX];
     pthread_mutex_lock(&app->lock);
     app->overlay.kind = OVERLAY_MEDIA;
     app->overlay.pick_action = action;
+    app->overlay.pick_kind = only;
     app->overlay.filter[0] = 0;
     app->overlay.sel = 0;
     app->overlay.top = 0;
@@ -10994,6 +11013,10 @@ static bool open_media_picker(struct app *app, enum overlay_action action) {
     if (n == 0) app->overlay.kind = OVERLAY_NONE;
     pthread_mutex_unlock(&app->lock);
     return n > 0;
+}
+
+static bool open_media_picker(struct app *app, enum overlay_action action) {
+    return open_media_picker_kind(app, action, MEDIA_NONE);
 }
 
 /* Scroll ONE pane. Positive = further back. The focused-pane form below
@@ -11200,6 +11223,66 @@ static void complete_input(struct app *app) {
     char *last_space = strrchr(prefix, ' ');
     const char *stem = last_space ? last_space + 1 : prefix;
     size_t stem_len = strlen(stem);
+
+    /* MEDIA CYCLING: for the verbs that take a URL from this window,
+     * Tab walks the media in scrollback instead of completing a word.
+     *
+     * The alternative is reading a URL out of the scrollback and typing
+     * it, which is exactly the work a client should be doing. /stt sees
+     * only audio — a candidate it cannot transcribe is a keypress
+     * wasted. */
+    enum media_kind cycle_only = MEDIA_NONE;
+    bool cycle_verb = false;
+    if (strncmp(prefix, "/preview ", 9) == 0 || strncmp(prefix, "/view ", 6) == 0) cycle_verb = true;
+    else if (strncmp(prefix, "/stt ", 5) == 0) {
+        cycle_verb = true;
+        cycle_only = MEDIA_AUDIO;
+    }
+    if (cycle_verb) {
+        char base[MAX_LINE];
+        const char *sp = strchr(prefix, ' ');
+        snprintf(base, sizeof(base), "%.*s", (int)(sp - prefix + 1), prefix);
+        pthread_mutex_lock(&app->lock);
+        /* Continue the cycle only if the line is still EXACTLY the one
+         * the last Tab wrote. Anything else — a URL typed by hand, an
+         * edit, a different verb — is a fresh start, so Tab can never
+         * throw away something the user put there themselves. */
+        if (!app->cycling || strcmp(app->cycle_from, app->input) != 0) {
+            app->cycle_at = 0;
+            app->cycling = true;
+        }
+        struct overlay_item items[PICKER_MAX];
+        enum overlay_kind was_kind = app->overlay.kind;
+        enum media_kind was_only = app->overlay.pick_kind;
+        char was_filter[64];
+        snprintf(was_filter, sizeof(was_filter), "%s", app->overlay.filter);
+        /* The picker already knows how to list this window's media,
+         * newest first and each URL once. Borrowing it beats a second
+         * walk of the log that would drift from the first. */
+        app->overlay.kind = OVERLAY_MEDIA;
+        app->overlay.pick_kind = cycle_only;
+        app->overlay.filter[0] = 0;
+        size_t n = overlay_items_locked(app, items, PICKER_MAX);
+        app->overlay.kind = was_kind;
+        app->overlay.pick_kind = was_only;
+        snprintf(app->overlay.filter, sizeof(app->overlay.filter), "%s", was_filter);
+        if (n) {
+            size_t pick = app->cycle_at % n;
+            app->cycle_at = pick + 1;
+            snprintf(app->input, sizeof(app->input), "%s%s", base, items[pick].body);
+            app->input_len = strlen(app->input);
+            app->input_pos = app->input_len;
+            /* Remember what we wrote, so the next Tab can tell "again"
+             * from "the user has been typing". */
+            snprintf(app->cycle_from, sizeof(app->cycle_from), "%s", app->input);
+        }
+        pthread_mutex_unlock(&app->lock);
+        if (!n)
+            log_line(app, "%s", cycle_only == MEDIA_AUDIO
+                                    ? "no audio in this window to cycle through"
+                                    : "no pictures or clips in this window to cycle through");
+        return;
+    }
 
     /* Decided BEFORE the empty-stem bail below, because `/set media `
      * followed by Tab has an empty stem and is exactly the moment the
@@ -14784,9 +14867,14 @@ static void handle_command_dispatch(struct app *app, char *line) {
                 current_window_key(app, job.network, sizeof(job.network), NULL, 0);
                 enqueue_job(app, job);
             }
-        } else {
-            log_line(app, "/stt <url|file> — transcribe audio into this window. "
-                          "To speak and have the words typed for you, use /dictate");
+        } else if (!open_media_picker_kind(app, ACT_TRANSCRIBE, MEDIA_AUDIO)) {
+            /* Bare /stt offers the audio posted HERE, newest first —
+             * the same move /preview makes for pictures, and for the
+             * same reason: the thing you want is almost always one
+             * somebody just posted, and retyping its URL from the
+             * scrollback is work the client can do. */
+            log_line(app, "/stt: no audio in this window. /stt <url|file> takes one directly, "
+                          "and /dictate speaks instead of transcribing");
         }
     } else if (strcmp(line, "/dictate") == 0) {
         /* The microphone half, which /stt used to be. Separated because

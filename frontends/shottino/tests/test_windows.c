@@ -1189,6 +1189,52 @@ TEST(a_settings_menu_offers_what_the_setting_accepts) {
     free_app(app);
 }
 
+/* Tab walks the media in this window instead of completing a word.
+ *
+ * The verbs that take a URL — /preview, /view, /stt — were asking the
+ * user to read one out of the scrollback and type it, which is exactly
+ * the work a client should be doing. /stt sees only audio: a candidate
+ * it cannot transcribe is a keypress wasted. */
+TEST(tab_cycles_through_the_media_in_this_window) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    app->url.base[0] = 0;
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    /* Oldest first, so the picker's newest-first order is visible. */
+    log_line(app, "[azzurra/#sniffo] 09:00 <a> https://ex.net/one.png");
+    log_line(app, "[azzurra/#sniffo] 09:01 <b> https://ex.net/talk.ogg");
+    log_line(app, "[azzurra/#sniffo] 09:02 <c> https://ex.net/two.png");
+
+    /* /preview cycles pictures AND clips, newest first, and wraps. */
+    snprintf(app->input, sizeof(app->input), "/preview ");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/preview https://ex.net/two.png");
+    complete_input(app);
+    CHECK_STR(app->input, "/preview https://ex.net/talk.ogg");
+    complete_input(app);
+    CHECK_STR(app->input, "/preview https://ex.net/one.png");
+    complete_input(app);
+    CHECK_STR(app->input, "/preview https://ex.net/two.png"); /* wrapped */
+
+    /* /stt sees the audio and nothing else. */
+    snprintf(app->input, sizeof(app->input), "/stt ");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/stt https://ex.net/talk.ogg");
+    complete_input(app);
+    CHECK_STR(app->input, "/stt https://ex.net/talk.ogg"); /* the only one */
+
+    /* A URL typed by hand is never replaced: Tab starts a fresh cycle
+     * rather than throwing away what the user put there. */
+    snprintf(app->input, sizeof(app->input), "/preview https://typed.example/mine.png");
+    app->input_len = strlen(app->input);
+    complete_input(app);
+    CHECK_STR(app->input, "/preview https://ex.net/two.png"); /* restarts at the newest */
+
+    free_app(app);
+}
+
 /* /stt and /dictate are different features.
  *
  * /stt was doing both: bare, it took the microphone and typed for you.
@@ -2441,6 +2487,7 @@ int main(void) {
     RUN(two_identities_get_two_bot_directories);
     RUN(an_accented_character_survives_typing_and_one_backspace);
     RUN(a_settings_menu_offers_what_the_setting_accepts);
+    RUN(tab_cycles_through_the_media_in_this_window);
     RUN(stt_transcribes_and_dictate_types);
     RUN(a_client_local_window_is_never_fetched_from_the_server);
     RUN(a_conversation_is_remembered_and_rolls_to_fit);

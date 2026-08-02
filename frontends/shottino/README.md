@@ -52,7 +52,7 @@ build it from source instead, read on.
 ## Version
 
 ```sh
-shottino --version        # shottino 0.2.0
+shottino --version        # shottino 0.2.1
 ```
 
 It is also in the corner, beside the name, on any terminal wide enough to
@@ -699,6 +699,7 @@ rate limit. The full model is in `llm.h`, beside the code that obeys it.
 ```sh
 /voicemsg          # or /vmsg — record from the microphone
 /video             # record from the camera
+/stt               # pick from the audio posted in this window, newest first
 /stt <url>         # transcribe a voice message posted in the channel
 /stt <file>        # or an audio file on disk — the words land in the WINDOW
 /dictate           # speak; the words land in the INPUT LINE, for you to send
@@ -736,6 +737,12 @@ Putting a transcript of someone else's message into your input line — which is
 what the old `/stt` did — is one Enter away from saying their words as your own.
 
 **Right-clicking an audio link** offers `Transcribe it` beside `Play it`.
+
+**Tab cycles through the media in this window** for the verbs that take a URL —
+`/preview`, `/view` and `/stt` — newest first, wrapping at the end. `/stt` only
+ever offers audio, since a candidate it cannot transcribe is a keypress wasted.
+A URL you typed yourself is never replaced: Tab starts a fresh cycle rather
+than discarding it.
 
 **`/stt` is off by default**, and that is a decision rather than a shrug:
 turning it on means audio from this machine may leave it.
