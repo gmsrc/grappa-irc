@@ -475,6 +475,18 @@ type NickHandlers = {
 // atom-keyed fields keeps both the closed-set discipline and the
 // Logger metadata sync intact.
 type RawEvent = { raw_verb?: string; raw_sender?: string; raw_params?: string[] };
+
+// #641 — scrub the CTCP delimiter (U+0001) from a typed CTCP verb/args BEFORE
+// it renders. The server's SSOT classifier (Grappa.IRC.CTCP.verb_args/1) strips
+// only the ONE optional TRAILING \x01, so a malformed or concatenated frame
+// (`\x01VERSION a\x01b\x01`, `\x01V x\x01\x01PING y\x01`) can leave an INTERIOR
+// \x01 in the typed verb or args. A CTCP line is a control surface, and "cic
+// NEVER shows \x01" is absolute — scrub the display string. This is NOT parsing
+// \x01 (we still render off typed meta, never off delimiters); the stored body
+// stays verbatim (round-trip fidelity is a STORAGE property, not a display one).
+// Shared by BOTH CTCP arms — the outbound privmsg self-echo and the inbound
+// notice reply — so neither can leak (fix the class, not the instance).
+const stripCtcpDelim = (s: string): string => s.replaceAll("\u0001", "");
 const renderRawEvent = (
   raw: RawEvent,
   msg: ScrollbackMessage,
@@ -673,8 +685,13 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
       // (subscribe.ts) and never reaches any render path.
       const ctcpVerb = msg.meta.ctcp_verb;
       if (typeof ctcpVerb === "string") {
-        const ctcpArgs = typeof msg.meta.ctcp_args === "string" ? msg.meta.ctcp_args : "";
-        const query = ctcpArgs === "" ? `CTCP ${ctcpVerb}` : `CTCP ${ctcpVerb} ${ctcpArgs}`;
+        // #641 — scrub any interior \x01 the server's one-trailing-strip left
+        // behind (shared with the notice arm); "cic NEVER shows \x01" is absolute.
+        const verb = stripCtcpDelim(ctcpVerb);
+        const ctcpArgs = stripCtcpDelim(
+          typeof msg.meta.ctcp_args === "string" ? msg.meta.ctcp_args : "",
+        );
+        const query = ctcpArgs === "" ? `CTCP ${verb}` : `CTCP ${verb} ${ctcpArgs}`;
         // #640 — the echo is now keyed to the SOURCE window (msg.channel), so
         // the wire recipient travels in meta.ctcp_target: read the target OFF
         // the message, not the routing key. Fall back to msg.channel for
@@ -715,11 +732,14 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
       // control-surface text (no mIRC emphasis), like the numeric/raw surfaces.
       const noticeCtcpVerb = msg.meta.ctcp_verb;
       if (typeof noticeCtcpVerb === "string") {
-        const noticeCtcpArgs = typeof msg.meta.ctcp_args === "string" ? msg.meta.ctcp_args : "";
+        const verb = stripCtcpDelim(noticeCtcpVerb);
+        const args = stripCtcpDelim(
+          typeof msg.meta.ctcp_args === "string" ? msg.meta.ctcp_args : "",
+        );
         return (
           <span class="scrollback-body">
-            ← CTCP {noticeCtcpVerb} reply from {msg.sender}
-            {noticeCtcpArgs === "" ? "" : `: ${noticeCtcpArgs}`}
+            ← CTCP {verb} reply from {msg.sender}
+            {args === "" ? "" : `: ${args}`}
           </span>
         );
       }

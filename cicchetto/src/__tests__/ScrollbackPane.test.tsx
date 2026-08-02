@@ -512,6 +512,51 @@ describe("ScrollbackPane", () => {
     expect(lines[1]?.textContent ?? "").not.toContain("\x01");
   });
 
+  it("scrubs an INTERIOR \\x01 the server's one-trailing-strip left in typed CTCP meta — #641", () => {
+    // The server's SSOT classifier (Grappa.IRC.CTCP.verb_args/1) strips only the
+    // ONE optional TRAILING \x01, so a malformed or concatenated frame
+    // (`\x01VERSION a\x01b\x01`, `\x01V x\x01\x01PING y\x01`) leaves an INTERIOR
+    // \x01 in the TYPED verb/args. The plain not.toContain check on a clean
+    // payload passes trivially; this fixture carries the delimiter INSIDE the
+    // typed strings, so it goes red if the render stops scrubbing them. "cic
+    // NEVER shows \x01" is absolute — the fix must hold for adversarial input,
+    // not just a well-formed reply.
+    const adversarial: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 1,
+        kind: "notice",
+        sender: "mallory",
+        // verb + args each carry an interior delimiter (verb_args left them in).
+        body: "\x01VE\x01RSION 1.0\x01evil\x01",
+        meta: { ctcp_verb: "VE\x01RSION", ctcp_args: "1.0\x01evil" },
+      },
+      // The privmsg CTCP arm shares the same scrub (fix the class): an operator's
+      // own echo with a stray delimiter must not leak it either.
+      {
+        id: 2,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 2,
+        kind: "privmsg",
+        sender: "alice",
+        body: "\x01PING to\x01ken\x01",
+        meta: { ctcp_verb: "PING", ctcp_args: "to\x01ken", ctcp_target: "bob" },
+      },
+    ];
+    setScrollback({ "freenode #grappa": adversarial });
+    render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+    const lines = screen.getAllByTestId("scrollback-line");
+    expect(lines).toHaveLength(2);
+    // Delimiters scrubbed from BOTH verb and args; NO U+0001 in the DOM.
+    expect(lines[0]).toHaveTextContent("← CTCP VERSION reply from mallory: 1.0evil");
+    expect(lines[0]?.textContent ?? "").not.toContain("\x01");
+    expect(lines[1]).toHaveTextContent("→ CTCP PING token to bob");
+    expect(lines[1]?.textContent ?? "").not.toContain("\x01");
+  });
+
   it("renders the action row with one space between '*' and the nick (not two) — #457", () => {
     // Regression pin for #457: the :action arm rendered `*  nick` (two
     // spaces) while every sibling `*`-framed kind (join/part/quit/…) uses
