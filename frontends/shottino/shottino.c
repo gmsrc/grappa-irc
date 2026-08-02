@@ -4122,6 +4122,59 @@ static void llm_load(struct app *app) {
     app->llm_loaded = true;
 }
 
+/* Write a config file, keeping the previous version beside it.
+ *
+ * Both config files are written WHOLESALE from memory, so anything
+ * wrong in memory becomes wrong on disk in one step and there is
+ * nothing to go back to. That has cost this client's own config three
+ * times: a /unset that discarded rather than restored, an empty prompt
+ * line that overwrote its default, and a schema change that zeroed
+ * fields an older file did not mention. Each was a different bug; what
+ * they shared was that the damage was instant and total.
+ *
+ * So the current file is copied to `<name>~` before the new one lands,
+ * and the new one arrives by rename — atomic, so a crash mid-write
+ * leaves the old file intact rather than a truncated one. Two things
+ * that cost nothing and would have turned each of those incidents into
+ * an inconvenience.
+ *
+ * 0600 from creation on both, because one of them holds tokens. */
+static bool config_write(struct app *app, const char *path, const char *text, const char *what) {
+    char backup[LLM_MAX_PATH + 8];
+    snprintf(backup, sizeof(backup), "%s~", path);
+    /* Copied rather than renamed: a rename would leave no current file
+     * at all if the write below then failed. */
+    FILE *in = fopen(path, "r");
+    if (in) {
+        int bfd = open(backup, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        if (bfd >= 0) {
+            char buf[4096];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
+                if (write(bfd, buf, n) != (ssize_t)n) break;
+            close(bfd);
+        }
+        fclose(in);
+    }
+
+    char tmp[LLM_MAX_PATH + 32];
+    snprintf(tmp, sizeof(tmp), "%s.%d", path, (int)getpid());
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        log_line(app, "%s: cannot write %s: %s", what, path, strerror(errno));
+        return false;
+    }
+    size_t len = strlen(text);
+    bool ok = write(fd, text, len) == (ssize_t)len;
+    close(fd);
+    if (!ok || rename(tmp, path) != 0) {
+        unlink(tmp);
+        log_line(app, "%s: could not save %s — the previous file is untouched", what, path);
+        return false;
+    }
+    return true;
+}
+
 static void llm_save(struct app *app) {
     char *path = llm_config_path();
     static char text[LLM_MAX_PROMPT * 4];
@@ -4130,18 +4183,7 @@ static void llm_save(struct app *app) {
         free(path);
         return;
     }
-    /* 0600 BEFORE the content lands: creating world-readable and
-     * chmod-ing after leaves a window where the token is readable. */
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-    if (fd < 0) {
-        log_line(app, "/llm: cannot write %s: %s", path, strerror(errno));
-        free(path);
-        return;
-    }
-    fchmod(fd, 0600);
-    size_t len = strlen(text);
-    if (write(fd, text, len) != (ssize_t)len) log_line(app, "/llm: short write saving config");
-    close(fd);
+    config_write(app, path, text, "/llm");
     free(path);
 }
 
@@ -9181,21 +9223,11 @@ static char *prefs_path(void) {
 }
 
 static void prefs_save(struct app *app) {
-    char *path = prefs_path();
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-    if (fd < 0) {
-        log_line(app, "/set: cannot write %s: %s", path, strerror(errno));
-        free(path);
-        return;
-    }
-    fchmod(fd, 0600);
-    FILE *f = fdopen(fd, "w");
-    if (!f) {
-        close(fd);
-        free(path);
-        return;
-    }
-    fputs("# shottino preferences. Mode 0600: stt.token is in CLEAR here.\n", f);
+    /* Built whole, then handed to config_write — same backup, same
+     * atomic rename, same one place to look as llm.conf. */
+    static char text[LLM_MAX_PATH * 8];
+    size_t n = (size_t)snprintf(text, sizeof(text),
+                                "# shottino preferences. Mode 0600: stt.token is in CLEAR here.\n");
     for (size_t i = 0; i < settings_count(); i++) {
         if (setting_in_llm_conf(SETTINGS[i].name)) continue;
         char raw[LLM_MAX_PATH];
@@ -9204,12 +9236,15 @@ static void prefs_save(struct app *app) {
          * see "the user never set this" and fall back to the same
          * discovery it would have done on a fresh install. */
         if (!raw[0]) continue;
-        /* A value with a newline in it would parse back as two lines, one
-         * of them garbage. Nothing here can legally contain one. */
+        /* A value with a newline in it would parse back as two lines,
+         * one of them garbage. Nothing here can legally contain one. */
         if (strchr(raw, '\n')) continue;
-        fprintf(f, "%s = %s\n", SETTINGS[i].name, raw);
+        int w = snprintf(text + n, sizeof(text) - n, "%s = %s\n", SETTINGS[i].name, raw);
+        if (w < 0 || (size_t)w >= sizeof(text) - n) break;
+        n += (size_t)w;
     }
-    fclose(f);
+    char *path = prefs_path();
+    config_write(app, path, text, "/set");
     free(path);
 }
 

@@ -1315,6 +1315,72 @@ TEST(the_context_budget_leaves_room_for_the_fixed_parts) {
     free_app(app);
 }
 
+/* Every config write keeps the previous version.
+ *
+ * Both files are written wholesale from memory, so anything wrong in
+ * memory becomes wrong on disk in one step. That has cost this client's
+ * own config three times — a /unset that discarded rather than
+ * restored, an empty prompt line that overwrote its default, and a
+ * schema change that zeroed fields an older file did not mention. Each
+ * was a different bug; what they shared was that the damage was instant
+ * and total. */
+TEST(a_config_write_leaves_the_previous_version_behind) {
+    char home[] = "/tmp/shottino-backup-XXXXXX";
+    CHECK(mkdtemp(home) != NULL);
+    char *old_home = getenv("HOME");
+    char *saved = old_home ? strdup(old_home) : NULL;
+    setenv("HOME", home, 1);
+
+    struct app *app = window_app();
+    CHECK(app != NULL);
+
+    /* First write: nothing to back up yet. */
+    snprintf(app->voice_source, sizeof(app->voice_source), "first");
+    prefs_save(app);
+    char path[512], backup[520];
+    char *p = prefs_path();
+    snprintf(path, sizeof(path), "%s", p);
+    snprintf(backup, sizeof(backup), "%s~", p);
+    free(p);
+    struct stat st;
+    CHECK(stat(path, &st) == 0);
+    CHECK(stat(backup, &st) != 0); /* no previous version existed */
+
+    /* Second write: the first one is kept. */
+    snprintf(app->voice_source, sizeof(app->voice_source), "second");
+    prefs_save(app);
+    CHECK(stat(backup, &st) == 0);
+    CHECK_LONG(st.st_mode & 0777, 0600); /* the backup is no more readable than the file */
+
+    FILE *f = fopen(backup, "r");
+    CHECK(f != NULL);
+    char buf[2048] = "";
+    if (f) {
+        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+        buf[n] = 0;
+        fclose(f);
+    }
+    CHECK(strstr(buf, "voice.source = first") != NULL);   /* the OLD value */
+    CHECK(strstr(buf, "second") == NULL);
+
+    /* And the live file has the new one. */
+    f = fopen(path, "r");
+    CHECK(f != NULL);
+    if (f) {
+        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+        buf[n] = 0;
+        fclose(f);
+    }
+    CHECK(strstr(buf, "voice.source = second") != NULL);
+
+    unlink(path);
+    unlink(backup);
+    free_app(app);
+    if (saved) setenv("HOME", saved, 1);
+    else unsetenv("HOME");
+    free(saved);
+}
+
 /* An empty system prompt is a STATE, not an absence.
  *
  * Empty means "use the built-in" now, so a settings row that renders it
@@ -2320,6 +2386,7 @@ int main(void) {
     RUN(a_client_local_window_is_never_fetched_from_the_server);
     RUN(a_conversation_is_remembered_and_rolls_to_fit);
     RUN(the_context_budget_leaves_room_for_the_fixed_parts);
+    RUN(a_config_write_leaves_the_previous_version_behind);
     RUN(an_unset_prompt_says_the_built_in_is_in_use);
     RUN(tab_completes_the_values_a_setting_accepts);
     RUN(the_setting_modal_seeds_its_field_but_never_a_secret);
