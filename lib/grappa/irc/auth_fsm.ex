@@ -73,6 +73,21 @@ defmodule Grappa.IRC.AuthFSM do
                                         advertise / NAK'd it
       {:nick_rejected, 432 | 433, n} -- upstream rejected NICK during register
 
+  ## Nick-collision fallback (#676)
+
+  A 433 during registration is NOT immediately fatal. The FSM walks a
+  bounded ladder of alternate nicks — `<nick>_`, then random-suffixed
+  variants — re-sending NICK for each and only stopping with
+  `{:nick_rejected, 433, _}` once the ladder is spent. `state.nick`
+  tracks the candidate in flight; 001's `welcomed_nick` is the final
+  authority (`Grappa.Session.EventRouter` reconciles it, and tells the
+  user when it differs from what they asked for).
+
+  Two carve-outs: `:nickserv_identify` keeps its silent `:cont` (the host
+  drives GHOST / recover-identity off that numeric), and 432 still stops
+  outright — an erroneous nick is a SHAPE rejection, so a suffixed retry
+  would re-send the same bad shape.
+
   Caller is responsible for Logger emission on stop reasons; the FSM
   itself emits no side effect beyond the returned `[iodata]` frames.
   """
@@ -108,6 +123,9 @@ defmodule Grappa.IRC.AuthFSM do
 
   @type t :: %__MODULE__{
           nick: String.t(),
+          orig_nick: String.t(),
+          nick_suffixes: [String.t()],
+          nick_cap: pos_integer(),
           ident: String.t(),
           realname: String.t(),
           sasl_user: String.t(),
@@ -117,7 +135,16 @@ defmodule Grappa.IRC.AuthFSM do
           caps_buffer: [String.t()]
         }
 
-  @enforce_keys [:nick, :ident, :realname, :sasl_user, :auth_method, :phase]
+  @enforce_keys [
+    :nick,
+    :orig_nick,
+    :nick_cap,
+    :ident,
+    :realname,
+    :sasl_user,
+    :auth_method,
+    :phase
+  ]
   # `:password` is the only secret on the struct — `@derive Inspect`
   # excludes it so SASL-report dumps + IEx `:sys.get_state/1` (transitively
   # via the host Client struct) introspection never leak plaintext.
@@ -125,12 +152,15 @@ defmodule Grappa.IRC.AuthFSM do
   @derive {Inspect, except: [:password]}
   defstruct [
     :nick,
+    :orig_nick,
     :ident,
     :realname,
     :sasl_user,
     :password,
     :auth_method,
     :phase,
+    :nick_cap,
+    nick_suffixes: [],
     caps_buffer: []
   ]
 
@@ -161,6 +191,9 @@ defmodule Grappa.IRC.AuthFSM do
       {:ok,
        %__MODULE__{
          nick: opts.nick,
+         orig_nick: opts.nick,
+         nick_suffixes: nick_fallback_ladder(),
+         nick_cap: Identifier.max_nick_length(),
          ident: opts.ident,
          realname: opts.realname,
          sasl_user: opts.sasl_user,
@@ -170,6 +203,24 @@ defmodule Grappa.IRC.AuthFSM do
          caps_buffer: []
        }}
     end
+  end
+
+  # #676 — the bounded 433 fallback ladder, drawn ONCE per connection so
+  # `step/2` stays pure and deterministic: the suffixes are DATA on the
+  # struct, not a per-step `:rand` call. Underscore first (the classic IRC
+  # client move, and the spelling a returning user recognises as "that's
+  # me"), then random tails — vjt's ruling, because a second underscore
+  # just walks into the next occupied slot on a busy network.
+  #
+  # The bound IS the list length. Unbounded retries against a hostile or
+  # duplicated nick space is a respawn flood, the same trap the e2e
+  # fixtures hit with shared-leaf 433 autokill.
+  @nick_fallback_attempts 3
+
+  defp nick_fallback_ladder do
+    draws = Stream.repeatedly(&Identifier.random_nick_suffix/0)
+
+    ["_" | draws |> Stream.uniq() |> Enum.take(@nick_fallback_attempts - 1)]
   end
 
   defp validate_password_present(%{auth_method: :none}), do: :ok
@@ -357,6 +408,30 @@ defmodule Grappa.IRC.AuthFSM do
     {:cont, state, []}
   end
 
+  # #676 — 433 ERR_NICKNAMEINUSE with ladder left: retry under the next
+  # candidate instead of dead-ending the login. A visitor whose nick is
+  # taken upstream used to get no session at all (FSM stop → `:nick_in_use`
+  # → HTTP 409) and had to go hunt for the nick field in settings; now they
+  # land as `<nick>_` and can rename at leisure. `state.nick` moves to the
+  # candidate so the stop reason (once the ladder runs out) names the nick
+  # we last actually tried, and so 001's `welcomed_nick` reconciliation has
+  # something truthful to compare against.
+  #
+  # Placed AFTER the `:nickserv_identify` clause on purpose: that mode's
+  # 433 belongs to the host's GhostRecovery / RecoverIdentity flows, and a
+  # ladder NICK here would race the GHOST sequence off its own nick.
+  # 432 is deliberately NOT laddered — an erroneous nick is a SHAPE
+  # rejection, and retrying `<badnick>_` re-sends the same bad shape.
+  def step(
+        %__MODULE__{nick_suffixes: [suffix | rest]} = state,
+        %Message{command: {:numeric, 433}, params: params}
+      ) do
+    cap = learned_nick_cap(state, params)
+    candidate = Identifier.collision_fallback(state.orig_nick, suffix, cap)
+
+    {:cont, %{state | nick: candidate, nick_suffixes: rest, nick_cap: cap}, ["NICK #{candidate}\r\n"]}
+  end
+
   # 432 ERR_ERRONEUSNICKNAME / 433 ERR_NICKNAMEINUSE during registration.
   # Without an explicit handler the FSM would sit in `:pre_register` /
   # `:awaiting_cap_*` forever; surface as a structured stop reason so
@@ -385,6 +460,28 @@ defmodule Grappa.IRC.AuthFSM do
   end
 
   def step(state, _), do: {:cont, state, []}
+
+  # #676 — the upstream NICKLEN, learned from the 433 echo.
+  #
+  # 005 RPL_ISUPPORT (where NICKLEN lives) only arrives AFTER 001, so at
+  # 433 time the advertised cap is genuinely unknowable — the issue's
+  # "truncate using the network's advertised NICKLEN" cannot be honoured
+  # as written. The 433 line itself carries the evidence instead: an ircd
+  # that silently truncated our NICK rejects the SHORTENED spelling, so an
+  # echo shorter than what we sent IS the cap. Without this, a 30-char
+  # nick on a NICKLEN=16 network would retry with a candidate the server
+  # truncates straight back into the same collision, burning the whole
+  # ladder on one unreachable nick.
+  #
+  # A proven cap STICKS (`state.nick_cap`): the clamped candidate fits, so
+  # the next echo comes back verbatim and offers no second proof. Only a
+  # fresh truncation lowers it — an equal-length echo says nothing.
+  defp learned_nick_cap(%__MODULE__{nick: sent, nick_cap: cap}, [_, echoed | _])
+       when is_binary(echoed) do
+    if String.length(echoed) < String.length(sent), do: String.length(echoed), else: cap
+  end
+
+  defp learned_nick_cap(%__MODULE__{nick_cap: cap}, _), do: cap
 
   # CAP LS continuation: 4th param == "*" marks "more lines coming."
   # IRCv3.2 splits long cap lists; accumulate in `caps_buffer` until a

@@ -138,6 +138,68 @@ defmodule Grappa.IRC.Identifier do
   @spec truncate_nick(String.t()) :: String.t()
   def truncate_nick(nick) when is_binary(nick), do: String.slice(nick, 0, @max_nick_length)
 
+  @doc """
+  The nick length ceiling this module enforces (`#{@max_nick_length}`).
+
+  Exposed for #676's 433 collision-fallback ladder, which needs an explicit
+  cap argument for `collision_fallback/3`: the upstream `NICKLEN` is NOT
+  knowable at 433 time (005 RPL_ISUPPORT only arrives after 001), so the
+  caller passes this ceiling until an ircd truncation proves a smaller one.
+  """
+  # The spec is the LITERAL, not `pos_integer()`: Dialyzer's success typing
+  # for a constant getter is the constant, and a supertype spec is a
+  # `contract_supertype` error under this project's settings. Change the
+  # constant and this spec fails loudly — as does `max_nick_length/0`'s
+  # test, which pins it against what `valid_nick?/1` actually accepts.
+  @spec max_nick_length() :: 30
+  def max_nick_length, do: @max_nick_length
+
+  @doc """
+  Builds a collision-fallback nick: `base` with `suffix` appended, clamped
+  to `cap` by trimming the BASE.
+
+  The suffix is load-bearing, so it is the part that always survives. An
+  ircd silently truncates an over-long NICK to its `NICKLEN`; a builder
+  that let the clamp eat the suffix would hand back the exact nick the
+  server just rejected, and #676's retry ladder would spin to exhaustion
+  against a collision it can never escape.
+
+  `cap` must leave room for at least one base character — callers derive
+  it from `max_nick_length/0` or from an observed truncation, both of
+  which are far above any suffix we generate.
+  """
+  @spec collision_fallback(String.t(), String.t(), pos_integer()) :: String.t()
+  def collision_fallback(base, suffix, cap)
+      when is_binary(base) and is_binary(suffix) and is_integer(cap) and
+             cap > byte_size(suffix) do
+    String.slice(base, 0, cap - String.length(suffix)) <> suffix
+  end
+
+  # Nick-tail charset for `random_nick_suffix/0`: lowercase alphanumerics
+  # only. A strict subset of `@nick_regex`'s tail class, so appending one
+  # to a valid base always yields a valid nick — and it dodges the
+  # national/bracket chars whose case-folding is CASEMAPPING-dependent
+  # (#537), keeping a generated nick identical under every fold table.
+  @nick_suffix_alphabet ~c"abcdefghijklmnopqrstuvwxyz0123456789"
+  @nick_suffix_length 3
+
+  @doc """
+  A random #{@nick_suffix_length}-char nick suffix for #676's collision
+  ladder (36³ = 46 656 draws).
+
+  Random, not another underscore: vjt's ruling is that once `<nick>_` is
+  ALSO taken, stacking underscores walks straight into the next occupied
+  slot on a busy network, while a random tail almost certainly does not.
+
+  The lone impure function in this module — it draws from `:rand`.
+  Callers that need determinism (the FSM `step/2` path) take the suffix as
+  DATA rather than calling this per step.
+  """
+  @spec random_nick_suffix() :: String.t()
+  def random_nick_suffix do
+    for _ <- 1..@nick_suffix_length, into: "", do: <<Enum.random(@nick_suffix_alphabet)>>
+  end
+
   @doc "True iff the input is a syntactically valid IRC channel name."
   @spec valid_channel?(term()) :: boolean()
   def valid_channel?(s) when is_binary(s), do: Regex.match?(@channel_regex, s)

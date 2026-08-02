@@ -26835,3 +26835,79 @@ variable is a missing TRIGGER, not a missing writer. Add the trigger to the
 existing writer and reuse its existing correction schedule. And when an umbrella
 issue bundles N symptoms, verify each one is actually the same code surface
 before writing N fixes — here only one of the three was.
+
+---
+
+## 2026-08-03 — #676: a nick collision at connect is a fallback, not a dead end
+
+**The report.** A user on #grappa logged in with the nick they were already
+using from their own client on Libera, collided, and got no session at all —
+just a 409. The UI told them the nick was in use; the friction was entirely
+*"now what do I type, and where"*. They had to go find the nick field in
+settings → general to get in.
+
+**The shape of the gap.** Everything downstream of the 433 was already correct
+and honest: `AuthFSM` stopped the Client with `{:nick_rejected, 433, _}`,
+`Visitors.Login.classify_down/1` mapped it to `:nick_in_use`, the controller
+rendered a 409, cic showed friendly copy. Nothing was broken — we simply
+stopped where every IRC client since the 1990s would have retried.
+
+**Where the retry went, and why not somewhere else.** The underscore mechanism
+already existed in `Session.GhostRecovery` — including a `password: nil` clause
+whose whole job is to emit `NICK <nick>_`. That clause was **unreachable in
+production**: its only call site (`Session.Server`'s 433 handler) guards on
+`is_binary(pending_password)`, and an anon visitor has none. It was unit-tested,
+so it looked alive. Reaching it would ALSO have required an `AuthFSM` change
+(the FSM stops the Client before the host can drive anything), and it stops
+after ONE underscore — no bound, no random suffix, none of the decided shape.
+
+So the ladder went into `AuthFSM` instead, where it belongs: a 433 *during
+registration* is a registration-handshake concern, and the FSM is the module
+that owns the handshake. `GhostRecovery` keeps its 433 untouched — the new
+clause sits AFTER the `:nickserv_identify` arm on purpose, so a ladder NICK can
+never race the GHOST / recover-identity sequence off its own nick (#676 point
+5). **432 is deliberately NOT laddered**: an erroneous nick is a SHAPE
+rejection, so `<badnick>_` re-sends the same bad shape.
+
+**The ladder.** `<nick>_` first — the classic client move, and the spelling a
+returning user recognises as themselves. Then random 3-char suffixes, per vjt's
+ruling: a second underscore just walks into the next occupied slot on a busy
+network. The bound IS the list length (3), drawn ONCE in `new/1` so `step/2`
+stays pure and deterministic — the suffixes are DATA on the struct, not a
+per-step `:rand` call. Unbounded retries against a hostile or duplicated nick
+space is a respawn flood, the same trap the e2e fixtures hit with shared-leaf
+433 autokill.
+
+**NICKLEN: the spec point we could not honour as written.** The issue asked to
+"truncate on our side using the network's advertised NICKLEN". We cannot:
+NICKLEN lives in 005 RPL_ISUPPORT, which only arrives **after** 001, and the 433
+happens before it. The 433 line carries the evidence instead — an ircd that
+silently truncated our NICK rejects the **shortened** spelling, so an echo
+shorter than what we sent IS the cap. A proven cap then STICKS on the FSM
+state: the clamped candidate fits, so the next echo comes back verbatim and
+offers no second proof. Without both halves, a 30-char nick on a NICKLEN=16
+network retries with a candidate the server truncates straight back into the
+same collision, burning the whole ladder on one unreachable nick.
+`Identifier.collision_fallback/3` trims the BASE, never the suffix, for the same
+reason.
+
+**Telling the user (point 3).** A silent rename becomes permanent by accident.
+At 001, when the welcomed nick differs from the requested one, `EventRouter`
+persists a `:server_event` row on `$server` naming both. The comparison folds
+(`canonical_target/1`): `VJT` → `vjt` is the ircd normalising our own nick, not
+a different person, and announcing it would be noise on every connect to a
+case-normalising network. The row carries the facts structured in
+`meta.nick_fallback` **and** a plain body, so it is legible with no cic change —
+additive-only, no new wire token, no `protocol_version` bump. This fires for
+every divergence class, not just the ladder: a services rename or a truncation
+is equally worth saying out loud.
+
+**Scope held.** The in-session `/nick` path still fails loudly (#676 point 4):
+an explicit rename that silently lands somewhere else is worse than an error.
+
+**Apply:** before building a recovery mechanism, grep for whether one already
+exists — and then check whether its production call site can actually REACH it.
+A unit-tested branch behind a guard no caller satisfies reads as working code.
+And when a spec cites a protocol value, verify the value has arrived by the time
+you need it: "use the advertised NICKLEN" is unimplementable at 433 time, and
+the echo was the honest substitute sitting in the same line.

@@ -2748,8 +2748,36 @@ defmodule Grappa.Session.EventRouterTest do
       state = base_state(%{nick: "vjt"})
       m = msg({:numeric, 1}, ["vjt_truncated", "Welcome to IRC"], {:server, "irc"})
 
-      assert {:cont, new_state, []} = EventRouter.route(m, state)
+      assert {:cont, new_state, [_]} = EventRouter.route(m, state)
       assert new_state.nick == "vjt_truncated"
+    end
+
+    # #676 point 3 — the fallback must ANNOUNCE itself. A silent underscore
+    # becomes permanent by accident: the user never learns they are `vjt_`,
+    # so they never rename. The row carries the facts in `meta` (structured,
+    # for cic to render properly) plus a body so it is legible today.
+    test "a different welcomed nick persists a $server row naming both nicks" do
+      state = base_state(%{nick: "vjt"})
+      m = msg({:numeric, 1}, ["vjt_", "Welcome to IRC"], {:server, "irc.test.org"})
+
+      assert {:cont, _, [{:persist, :server_event, attrs}]} =
+               EventRouter.route(m, state)
+
+      assert attrs.channel == "$server"
+      assert attrs.meta.nick_fallback == %{requested: "vjt", registered: "vjt_"}
+      assert attrs.body =~ "vjt"
+      assert attrs.body =~ "vjt_"
+    end
+
+    # A pure case difference is the ircd normalising, not a collision — the
+    # user is still who they asked to be, so there is nothing to announce.
+    # The fold is the identity authority here, not `==` (#121/#537).
+    test "a case-only difference reconciles silently (no row)" do
+      state = base_state(%{nick: "VJT"})
+      m = msg({:numeric, 1}, ["vjt", "Welcome to IRC"], {:server, "irc"})
+
+      assert {:cont, new_state, []} = EventRouter.route(m, state)
+      assert new_state.nick == "vjt"
     end
   end
 

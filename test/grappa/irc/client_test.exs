@@ -32,6 +32,33 @@ defmodule Grappa.IRC.ClientTest do
     {server, IRCServer.port(server)}
   end
 
+  # #676 — a realistic 433: the numeric echoes the nick the SERVER rejected,
+  # i.e. the one we just sent (an ircd that truncates to its NICKLEN echoes
+  # the SHORTENED spelling, which is how the FSM learns the cap). A fake
+  # that echoed a hardcoded nick would feed the FSM a phantom truncation.
+  defp nick_in_use(nick_line) do
+    nick = nick_line |> String.trim() |> String.trim_leading("NICK ")
+    ":server 433 * #{nick} :Nickname is already in use\r\n"
+  end
+
+  # #676 — the passwordless (`:none`) shape the nick-collision ladder
+  # covers. Shared by both 433 tests so they differ only in what the fake
+  # upstream does, not in how the client is built.
+  defp start_collision_client(port) do
+    Client.start_link(%{
+      host: "127.0.0.1",
+      port: port,
+      tls: false,
+      dispatch_to: self(),
+      logger_metadata: [],
+      nick: "grappa-test",
+      ident: "grappa-test",
+      realname: "grappa-test",
+      sasl_user: "grappa-test",
+      auth_method: :none
+    })
+  end
+
   # Bind ephemeral port, capture number, release immediately. The kernel
   # may eventually reuse it; the C2 non-blocking-init test only needs the
   # port to be unbound for the ~10ms it takes the connect to refuse.
@@ -1285,33 +1312,55 @@ defmodule Grappa.IRC.ClientTest do
       assert %{fsm: %{phase: :registered, caps_buffer: []}} = :sys.get_state(client)
     end
 
-    test "433 ERR_NICKNAMEINUSE during registration crashes {:nick_rejected, 433, nick}" do
-      nick_clash_handler = fn state, line ->
-        if String.starts_with?(line, "USER ") do
-          {:reply, ":server 433 * grappa-test :Nickname is already in use\r\n", state}
+    # #676 — a 433 at registration is no longer fatal on the first hit: the
+    # FSM re-sends NICK under `<nick>_` and the handshake completes. This is
+    # the whole point of the issue — a visitor whose nick is taken upstream
+    # gets a working session instead of a dead login.
+    test "433 ERR_NICKNAMEINUSE during registration retries under <nick>_ and registers" do
+      retry_handler = fn state, line ->
+        cond do
+          String.starts_with?(line, "NICK grappa-test_") ->
+            {:reply, ":server 001 grappa-test_ :Welcome\r\n", state}
+
+          String.starts_with?(line, "NICK ") ->
+            {:reply, nick_in_use(line), state}
+
+          true ->
+            {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(retry_handler)
+
+      {:ok, client} = start_collision_client(port)
+
+      {:ok, _} =
+        IRCServer.wait_for_line(server, &String.starts_with?(&1, "NICK grappa-test_"), 1_000)
+
+      Process.sleep(50)
+
+      assert %{fsm: %{phase: :registered, nick: "grappa-test_"}} = :sys.get_state(client)
+    end
+
+    # The ladder is BOUNDED: an upstream that rejects every candidate must
+    # still terminate, and with the honest stop reason. An unbounded retry
+    # here would be a respawn flood under the supervisor.
+    test "433 on every candidate exhausts the ladder and stops {:nick_rejected, 433, _}" do
+      always_clash = fn state, line ->
+        if String.starts_with?(line, "NICK ") do
+          {:reply, nick_in_use(line), state}
         else
           {:reply, nil, state}
         end
       end
 
-      {_, port} = start_server(nick_clash_handler)
+      {_, port} = start_server(always_clash)
       Process.flag(:trap_exit, true)
 
-      {:ok, client} =
-        Client.start_link(%{
-          host: "127.0.0.1",
-          port: port,
-          tls: false,
-          dispatch_to: self(),
-          logger_metadata: [],
-          nick: "grappa-test",
-          ident: "grappa-test",
-          realname: "grappa-test",
-          sasl_user: "grappa-test",
-          auth_method: :none
-        })
+      {:ok, client} = start_collision_client(port)
 
-      assert_receive {:EXIT, ^client, {:nick_rejected, 433, "grappa-test"}}, 1_000
+      assert_receive {:EXIT, ^client, {:nick_rejected, 433, last_tried}}, 2_000
+      assert String.starts_with?(last_tried, "grappa-test")
     end
   end
 

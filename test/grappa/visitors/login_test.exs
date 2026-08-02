@@ -94,6 +94,13 @@ defmodule Grappa.Visitors.LoginTest do
     :ok = Session.stop_session({:visitor, visitor_id}, network_id)
   end
 
+  # #676 — 433 echoing the nick the server actually rejected. A hardcoded
+  # echo would look like an ircd truncation to the FSM's NICKLEN heuristic.
+  defp nick_in_use(nick_line) do
+    nick = nick_line |> String.trim() |> String.trim_leading("NICK ")
+    ":irc.test.org 433 * #{nick} :Nickname is already in use\r\n"
+  end
+
   describe "validation gates (independent of network state)" do
     test "malformed nick → {:error, :malformed_nick}" do
       assert {:error, :malformed_nick} = Login.login(login_input(%{nick: "9bad"}), [])
@@ -285,22 +292,52 @@ defmodule Grappa.Visitors.LoginTest do
       assert Visitors.resolve_identity_by_nick("vjt", network.id) == nil
     end
 
-    test "433 nick-in-use during registration → {:error, :nick_in_use}, anon row purged" do
-      {server, port} = start_server()
+    # #676 — THE issue's scenario: a user already connected to the network
+    # from their own client logs in here with the same nick. Before, they
+    # got a 409 and had to go dig the nick field out of settings → general;
+    # now the ladder lands them on `vjt_` with a working session, and the
+    # rename is something they can do later, at leisure.
+    test "433 nick-in-use during registration → login SUCCEEDS under the fallback nick" do
+      collide_once = fn state, line ->
+        cond do
+          String.starts_with?(line, "NICK vjt_") ->
+            {:reply, ":irc.test.org 001 vjt_ :Welcome\r\n", state}
+
+          String.starts_with?(line, "NICK ") ->
+            {:reply, nick_in_use(line), state}
+
+          true ->
+            {:reply, nil, state}
+        end
+      end
+
+      {_, port} = start_server(collide_once)
       {network, _} = setup_visitor_network(port)
 
-      task = Task.async(fn -> Login.login(login_input(), []) end)
+      assert {:ok, %{visitor: visitor}} = Login.login(login_input(), [])
+      on_exit(fn -> stop_visitor_session(visitor.id, network.id) end)
 
-      # Connect + NICK/USER handshake completes against the fake; instead
-      # of 001 the upstream rejects the nick with 433 ERR_NICKNAMEINUSE.
-      # AuthFSM stops the Client with `{:nick_rejected, 433, _}`, which
-      # propagates as the Session.Server DOWN reason. Login must classify
-      # that as :nick_in_use (issue #40) rather than the generic
-      # :upstream_unreachable / :welcome_timeout it used to surface.
-      :ok = await_handshake(server)
-      IRCServer.feed(server, ":irc.test.org 433 * vjt :Nickname is already in use\r\n")
+      pid = Grappa.Session.whereis({:visitor, visitor.id}, network.id)
+      assert is_pid(pid)
+      assert %{nick: "vjt_"} = :sys.get_state(pid)
+    end
 
-      assert {:error, :nick_in_use} = Task.await(task, 10_000)
+    # The dead end still exists — it just moved to the END of the ladder.
+    # An upstream that rejects every candidate must still surface the
+    # actionable :nick_in_use copy (issue #40), not a generic timeout.
+    test "433 on every candidate → {:error, :nick_in_use}, anon row purged" do
+      always_clash = fn state, line ->
+        if String.starts_with?(line, "NICK ") do
+          {:reply, nick_in_use(line), state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {_, port} = start_server(always_clash)
+      {network, _} = setup_visitor_network(port)
+
+      assert {:error, :nick_in_use} = Login.login(login_input(), [])
       assert Visitors.resolve_identity_by_nick("vjt", network.id) == nil
     end
 

@@ -7976,27 +7976,34 @@ defmodule Grappa.Session.ServerTest do
       {server, port} = start_server(ghost_handler(nick))
       {visitor, network} = visitor_with_network(port, nick: nick)
 
-      # Anon visitor has auth_method :none; AuthFSM stops on 433 with
-      # :nick_rejected, killing Client. Session restarts under the
-      # transient supervisor and the cycle repeats — capturing the log
-      # noise keeps it out of the test output. The wire-side assertion
-      # is the negative one: the underscore-variant NICK never appears,
-      # because Server doesn't run GhostRecovery for nil-password.
+      # Anon visitor has auth_method :none and no cached password, so
+      # GhostRecovery — which needs one to issue GHOST — must stay unarmed.
       #
-      # The wait may resolve as `:timeout` (deadline elapsed with no
-      # match) OR `:tcp_closed` (S7: post-cluster #10 the IRCServer
-      # drains pending waiters when the upstream socket closes mid-
-      # wait, and AuthFSM's :nick_rejected stop closes the socket
-      # promptly). Both encode "the NICK was never sent" — that is the
-      # load-bearing assertion.
+      # #676 flipped what the wire proves. The underscore NICK now DOES go
+      # out: it comes from AuthFSM's collision-fallback ladder, which is
+      # exactly the gap the issue closed (pre-#676 an anon visitor's 433
+      # killed the Client and the login dead-ended at 409). So the
+      # load-bearing assertion moved off "no NICK_ on the wire" and onto
+      # the two facts that still hold — no GHOST is issued, and no
+      # `ghost_recovery` FSM is armed on the Session.
       capture_log(fn ->
-        _ = start_visitor_session_for(visitor, network)
+        pid = start_visitor_session_for(visitor, network)
         :ok = await_handshake(server)
 
+        {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "NICK #{nick}_\r\n"), 1_000)
+
         assert {:error, reason} =
-                 IRCServer.wait_for_line(server, &(&1 == "NICK #{nick}_\r\n"), 200)
+                 IRCServer.wait_for_line(
+                   server,
+                   &String.starts_with?(&1, "PRIVMSG NickServ :GHOST"),
+                   200
+                 )
 
         assert reason in [:timeout, :tcp_closed]
+
+        state = SessionStateHelpers.fetch(pid)
+        assert SessionStateHelpers.ghost_recovery(state) == nil
+        assert SessionStateHelpers.ghost_timer(state) == nil
       end)
     end
 

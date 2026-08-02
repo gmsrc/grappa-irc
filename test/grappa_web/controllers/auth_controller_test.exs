@@ -601,15 +601,20 @@ defmodule GrappaWeb.AuthControllerTest do
       assert is_nil(Visitors.resolve_identity_by_nick("vjt", network.id))
     end
 
-    test "nick already in use → 409 nick_in_use (#40)", %{conn: conn} do
+    test "every nick candidate in use → 409 nick_in_use (#40)", %{conn: conn} do
       # Upstream completes the TCP/registration handshake then rejects the
-      # chosen nick with 433 ERR_NICKNAMEINUSE instead of 001. The handler
-      # replies the moment it sees the USER line, so the path resolves
-      # immediately — no probe-budget timeout. Pre-#40 this surfaced as the
-      # generic 502 upstream_unreachable ("handshake didn't complete" in cic).
+      # chosen nick with 433 ERR_NICKNAMEINUSE instead of 001. Pre-#40 this
+      # surfaced as the generic 502 upstream_unreachable ("handshake didn't
+      # complete" in cic).
+      #
+      # #676 — a SINGLE 433 no longer reaches here: the FSM retries under
+      # `vjt_` and the login succeeds. The 409 is now the END of the
+      # fallback ladder, so this fake must reject every candidate. The echo
+      # carries the nick the server rejected, as a real ircd's would.
       nick_in_use_handler = fn state, line ->
-        if String.starts_with?(line, "USER") do
-          {:reply, ":irc.test.org 433 * vjt :Nickname is already in use\r\n", state}
+        if String.starts_with?(line, "NICK ") do
+          nick = line |> String.trim() |> String.trim_leading("NICK ")
+          {:reply, ":irc.test.org 433 * #{nick} :Nickname is already in use\r\n", state}
         else
           {:reply, nil, state}
         end

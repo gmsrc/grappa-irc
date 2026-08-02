@@ -64,6 +64,68 @@ defmodule Grappa.IRC.IdentifierTest do
     end
   end
 
+  # #676 — the 433 collision-fallback candidate builder. The suffix is the
+  # part that MUST survive: a builder that let the cap eat it would hand the
+  # ircd back the very nick it just rejected, and the retry ladder would spin
+  # to exhaustion against a nick it can never win.
+  describe "collision_fallback/3" do
+    test "appends the suffix when the cap leaves room" do
+      assert Identifier.collision_fallback("vjt", "_", 30) == "vjt_"
+    end
+
+    test "trims the BASE (never the suffix) to fit the cap" do
+      base = String.duplicate("a", 30)
+
+      assert Identifier.collision_fallback(base, "_", 30) ==
+               String.duplicate("a", 29) <> "_"
+    end
+
+    test "honours a cap below our own nick ceiling (a short upstream NICKLEN)" do
+      assert Identifier.collision_fallback("abcdefghij", "x9", 9) == "abcdefgx9"
+    end
+
+    test "the result is always a valid nick and never exceeds the cap" do
+      check all(
+              base <- string(?a..?z, min_length: 1, max_length: 30),
+              suffix <- string(?a..?z, min_length: 1, max_length: 3),
+              cap <- integer(4..30)
+            ) do
+        out = Identifier.collision_fallback(base, suffix, cap)
+
+        assert Identifier.valid_nick?(out)
+        assert String.length(out) <= cap
+        assert String.ends_with?(out, suffix)
+      end
+    end
+  end
+
+  describe "random_nick_suffix/0" do
+    test "produces a tail-charset suffix that keeps a valid base valid" do
+      for _ <- 1..50 do
+        suffix = Identifier.random_nick_suffix()
+
+        assert String.match?(suffix, ~r/^[a-z0-9]+$/),
+               "expected a nick-tail-safe suffix, got #{inspect(suffix)}"
+
+        assert Identifier.valid_nick?("vjt" <> suffix)
+      end
+    end
+
+    test "is actually random (50 draws are not one repeated value)" do
+      draws = for _ <- 1..50, into: MapSet.new(), do: Identifier.random_nick_suffix()
+      assert MapSet.size(draws) > 1
+    end
+  end
+
+  describe "max_nick_length/0" do
+    test "matches the length valid_nick?/1 enforces" do
+      cap = Identifier.max_nick_length()
+
+      assert Identifier.valid_nick?(String.duplicate("a", cap))
+      refute Identifier.valid_nick?(String.duplicate("a", cap + 1))
+    end
+  end
+
   describe "valid_channel?/1" do
     test "accepts # / & / + / ! prefixed channels" do
       assert Identifier.valid_channel?("#sniffo")

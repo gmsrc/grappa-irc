@@ -11,7 +11,14 @@ defmodule Grappa.IRC.AuthFSMTest do
   """
   use ExUnit.Case, async: true
 
-  alias Grappa.IRC.{AuthFSM, Message}
+  alias Grappa.IRC.{AuthFSM, Identifier, Message}
+
+  defp four_three_three(rejected) do
+    %Message{
+      command: {:numeric, 433},
+      params: ["*", rejected, "Nickname is already in use."]
+    }
+  end
 
   defp base_opts(overrides) do
     Map.merge(
@@ -508,7 +515,8 @@ defmodule Grappa.IRC.AuthFSMTest do
       %{state: new!(%{})}
     end
 
-    test "433 NICKNAMEINUSE -> :stop {:nick_rejected, 433, nick}", %{state: state} do
+    test "433 NICKNAMEINUSE with the ladder spent -> :stop {:nick_rejected, 433, nick}" do
+      state = %{new!(%{}) | nick_suffixes: []}
       msg = %Message{command: {:numeric, 433}}
 
       assert {:stop, {:nick_rejected, 433, "vjt"}, _, []} =
@@ -541,8 +549,7 @@ defmodule Grappa.IRC.AuthFSMTest do
       assert {:cont, ^state, []} = AuthFSM.step(state, msg)
     end
 
-    test "non-:nickserv_identify modes still :stop on 432/433" do
-      msg_433 = %Message{command: {:numeric, 433}, params: ["*", "vjt"]}
+    test "non-:nickserv_identify modes still :stop on 432 (no retry ladder)" do
       msg_432 = %Message{command: {:numeric, 432}, params: ["*", "vjt"]}
 
       for {method, opts} <- [
@@ -553,12 +560,131 @@ defmodule Grappa.IRC.AuthFSMTest do
           ] do
         state = new!(opts)
 
-        assert {:stop, {:nick_rejected, 433, "vjt"}, _, []} = AuthFSM.step(state, msg_433),
-               "expected mode #{inspect(method)} to stop on 433"
-
         assert {:stop, {:nick_rejected, 432, "vjt"}, _, []} = AuthFSM.step(state, msg_432),
                "expected mode #{inspect(method)} to stop on 432"
       end
+    end
+  end
+
+  # #676 — a 433 at registration used to be a dead end for every mode but
+  # `:nickserv_identify`: the FSM stopped the Client, `Visitors.Login`
+  # classified the exit as `:nick_in_use`, and the user got a 409 with no
+  # session. Now the FSM walks a bounded fallback ladder — `<nick>_` first,
+  # then random suffixes — and only stops once the ladder is spent.
+  describe "step/2 — 433 nick-collision fallback ladder (#676)" do
+    test "first 433 retries with <nick>_ and stays alive" do
+      state = new!(%{})
+
+      assert {:cont, next, sends} = AuthFSM.step(state, four_three_three("vjt"))
+      assert next.nick == "vjt_"
+      assert send_lines(sends) == ["NICK vjt_"]
+    end
+
+    test "a second 433 moves to a random suffix instead of stacking underscores" do
+      state = new!(%{})
+
+      {:cont, after_first, _} = AuthFSM.step(state, four_three_three("vjt"))
+      {:cont, after_second, sends} = AuthFSM.step(after_first, four_three_three("vjt_"))
+
+      refute after_second.nick == "vjt__",
+             "stacking underscores walks into the next occupied slot (vjt ruling)"
+
+      assert String.starts_with?(after_second.nick, "vjt")
+      assert Identifier.valid_nick?(after_second.nick)
+      assert send_lines(sends) == ["NICK #{after_second.nick}"]
+    end
+
+    test "the ladder is bounded — repeated 433s eventually stop, never loop forever" do
+      state = new!(%{})
+
+      final =
+        Enum.reduce_while(1..25, state, fn _, acc ->
+          case AuthFSM.step(acc, four_three_three(acc.nick)) do
+            {:cont, next, _} -> {:cont, next}
+            {:stop, reason, _, _} -> {:halt, reason}
+          end
+        end)
+
+      assert {:nick_rejected, 433, last} = final,
+             "an unbounded ladder is a respawn-flood against a hostile nick space"
+
+      assert Identifier.valid_nick?(last)
+    end
+
+    test "every candidate on the ladder is a distinct, valid nick" do
+      state = new!(%{})
+
+      {nicks, _} =
+        Enum.flat_map_reduce(1..25, state, fn _, acc ->
+          case AuthFSM.step(acc, four_three_three(acc.nick)) do
+            {:cont, next, _} -> {[next.nick], next}
+            {:stop, _, _, _} -> {:halt, acc}
+          end
+        end)
+
+      assert length(nicks) > 1
+      assert Enum.all?(nicks, &Identifier.valid_nick?/1)
+      assert Enum.uniq(nicks) == nicks, "a repeated candidate wastes an attempt: #{inspect(nicks)}"
+    end
+
+    # 005 RPL_ISUPPORT (and therefore NICKLEN) only lands AFTER 001, so at
+    # 433 time we cannot know the upstream cap. The 433 echo does: an ircd
+    # that truncated our NICK rejects the SHORTENED spelling. Read the cap
+    # off that echo, or a 30-char nick on a NICKLEN=16 network retries with
+    # a candidate the server truncates straight back into the collision.
+    test "learns the upstream cap from a truncated 433 echo" do
+      long = String.duplicate("a", 30)
+      state = new!(%{nick: long})
+
+      # Upstream took `long`, truncated it to 16, and rejected THAT.
+      echo = String.duplicate("a", 16)
+
+      assert {:cont, next, sends} = AuthFSM.step(state, four_three_three(echo))
+      assert String.length(next.nick) == 16
+      assert String.ends_with?(next.nick, "_")
+      assert send_lines(sends) == ["NICK #{next.nick}"]
+    end
+
+    # Truncation is proven ONCE. The clamped candidate that follows fits, so
+    # upstream echoes it back verbatim — no second proof. A cap re-derived
+    # per step would forget what it learned and send another over-long nick.
+    test "the learned cap sticks for the rest of the ladder" do
+      state = new!(%{nick: String.duplicate("a", 30)})
+
+      {:cont, first, _} = AuthFSM.step(state, four_three_three(String.duplicate("a", 16)))
+      {:cont, second, _} = AuthFSM.step(first, four_three_three(first.nick))
+
+      assert String.length(second.nick) <= 16,
+             "cap learned at the first 433 must survive into later attempts"
+    end
+
+    test "an untruncated echo does NOT clamp the candidate" do
+      state = new!(%{nick: "vjt"})
+
+      assert {:cont, next, _} = AuthFSM.step(state, four_three_three("vjt"))
+      assert next.nick == "vjt_"
+    end
+
+    test "a 433 with no echo param still retries (cap falls back to our ceiling)" do
+      state = new!(%{})
+
+      assert {:cont, next, sends} = AuthFSM.step(state, %Message{command: {:numeric, 433}})
+      assert next.nick == "vjt_"
+      assert send_lines(sends) == ["NICK vjt_"]
+    end
+
+    test ":nickserv_identify keeps its silent :cont — the host owns that wire" do
+      state = new!(%{auth_method: :nickserv_identify, password: "s3cret"})
+
+      assert {:cont, ^state, []} = AuthFSM.step(state, four_three_three("vjt")),
+             "the ladder must not pre-empt GhostRecovery / RecoverIdentity (#676 point 5)"
+    end
+
+    test "a 433 after registration is still absorbed, ladder untouched" do
+      {state, _} = AuthFSM.initial_handshake(new!(%{}))
+      {:cont, registered, _} = AuthFSM.step(state, %Message{command: {:numeric, 1}})
+
+      assert {:cont, ^registered, []} = AuthFSM.step(registered, four_three_three("vjt"))
     end
   end
 

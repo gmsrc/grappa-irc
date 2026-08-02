@@ -1645,9 +1645,25 @@ defmodule Grappa.Session.EventRouter do
   # actually registered us as — may differ from requested due to
   # case-fold normalization, services rename, length truncation).
   # Reconcile state.nick to upstream's authority.
-  defp do_route(%Message{command: {:numeric, 1}, params: [welcomed_nick | _]}, state)
+  defp do_route(%Message{command: {:numeric, 1}, params: [welcomed_nick | _]} = msg, state)
        when is_binary(welcomed_nick) do
-    {:cont, %{state | nick: welcomed_nick}, []}
+    reconciled = %{state | nick: welcomed_nick}
+
+    # #676 point 3 — when upstream registered us under a DIFFERENT identity
+    # than we asked for (the 433 fallback ladder, a services rename, a
+    # NICKLEN truncation), say so on `$server`. A silent rename becomes
+    # permanent by accident: the user never learns they are `vjt_`, so the
+    # underscore outlives the collision that caused it.
+    #
+    # The fold is the identity authority (#121/#537): `VJT` → `vjt` is the
+    # ircd normalising our own nick, not a different person, and announcing
+    # it would be noise on every connect to a case-normalising network.
+    if Identifier.canonical_target(welcomed_nick) == Identifier.canonical_target(state.nick) do
+      {:cont, reconciled, []}
+    else
+      {reconciled, eff} = nick_fallback_row(reconciled, msg, state.nick, welcomed_nick)
+      {:cont, reconciled, [eff]}
+    end
   end
 
   # CP15 B2 — JOIN failure numerics. Six codes carry the same shape:
@@ -2938,6 +2954,24 @@ defmodule Grappa.Session.EventRouter do
 
   # #127 — flush the accumulator to wire-order lines.
   defp server_reply_drain(%{lines: lines}), do: Enum.reverse(lines)
+
+  # #676 — the "you are not the nick you asked for" row.
+  #
+  # `:server_event` (event-tier, not content): it is session chrome, not
+  # something anyone said. The facts live STRUCTURED in `meta.nick_fallback`
+  # so cic can render and localise them properly; `body` carries a plain
+  # spelling too, so the row is legible with no client change (the wire is
+  # additive-only — an old client ignores the meta and shows the body).
+  defp nick_fallback_row(state, msg, requested, registered) do
+    build_persist(
+      state,
+      :server_event,
+      "$server",
+      Message.sender_nick(msg),
+      "nick #{requested} was taken — you are registered as #{registered}",
+      %{nick_fallback: %{requested: requested, registered: registered}}
+    )
+  end
 
   # #127 — legacy `$server` :notice persist for an unprimed / connect-time
   # server-info numeric (connect MOTD, unsolicited INFO/VERSION). Extracted
