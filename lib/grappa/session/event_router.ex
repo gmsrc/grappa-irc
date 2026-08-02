@@ -3259,6 +3259,9 @@ defmodule Grappa.Session.EventRouter do
   # which for these codes is inherently free-form and network-defined).
   # Prepends for O(1) fold (mirror of who_fold/replies); the wire projection
   # `SessionWire.whois_bundle/3` reverses so cic sees arrival order.
+  # The reverse itself lives in `Grappa.Session.Wire.reverse_extra_lines/1`
+  # (`lib/grappa/session/wire.ex`) — named here because #673 was filed as an
+  # order bug on the strength of grepping only this file and `userTopic.ts`.
   @spec whois_extra_line_fold(state(), String.t(), 1..999, String.t()) :: state()
   defp whois_extra_line_fold(state, target, code, text)
        when is_binary(target) and is_integer(code) and is_binary(text) do

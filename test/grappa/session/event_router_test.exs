@@ -3768,6 +3768,31 @@ defmodule Grappa.Session.EventRouterTest do
              ]
     end
 
+    # #673 — the REAL numeric behind the bug report, not a hypothetical.
+    # 340 RPL_SHUNNED is bahamut's oper-only shun line, emitted inside the
+    # WHOIS block right after 311 (`azzurra/bahamut include/numeric.h:255`,
+    # `src/s_user.c:2217`). It has no typed field, so it MUST keep reaching
+    # the generic catch: the day someone deny-lists it — or types it into
+    # @delegated_numerics/@active_numerics without adding a fold — the shun
+    # silently disappears from the card again. The 617 case above proves the
+    # generic path works for an unknown code; this pins 340 in particular.
+    test "340 RPL_SHUNNED (bahamut, oper-only) folds into extra_lines" do
+      state = whois_pending_state("alice")
+
+      m =
+        msg(
+          {:numeric, 340},
+          ["vjt", "alice", "is currently shunned"],
+          {:server, "irc.azzurra.org"}
+        )
+
+      {:cont, new_state, []} = EventRouter.route(m, state)
+
+      assert new_state.whois_pending["alice"][:extra_lines] == [
+               %{numeric: 340, text: "is currently shunned"}
+             ]
+    end
+
     test "multiple unknown numerics surface in extra_lines in arrival order (via the bundle)" do
       state = whois_pending_state("alice")
 
