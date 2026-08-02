@@ -17,17 +17,29 @@ Earlier versions of this skill used `/compact <prompt-body>`. Switched to `/clea
 
 Tradeoff: no auto-summary safety net. The prompt body MUST be fully self-contained (file paths, commit SHAs, exact next-step). Tell the sibling that explicitly when asking for the prompt.
 
-## Architecture (v2 — daemon + log + cursor-tail)
+## Architecture (v3 — daemon + log + **persistent Monitor**)
 
 v1 used a single-shot wait-for-event chain: orchestrator armed one bg-bash, harness fired a notification when it exited, orchestrator re-armed. **This was brittle**: forgetting to re-arm = silent stall (happened twice in the visitor-parity cluster). 60s tick missed fast clear-ask replies. Permission prompts and design pickers all looked like "IDLE" so orchestrator tried to clear sibling mid-prompt.
 
-v2 separates concerns:
+v2 kept the one-shot waiter but made the daemon durable, so a missed re-arm only *delayed* events instead of losing them. **That was not enough, and v3 exists because it failed in production.**
+
+### 🔴 Why v3: you cannot notice silence
+
+On 2026-08-02 the orchestrator armed a `wait-for-event.sh` waiter **and a CI poller in the same assistant message**. The harness reaps both, so `pgrep` showed **no waiter at all**. The daemon kept writing events that nobody read. Meanwhile **both workers were halted asking the orchestrator questions — w2 for ~60 minutes, w1 for ~30 — and the orchestrator kept merging PRs and reporting them as "building".** vjt had to point it out.
+
+The lesson is structural, not a scolding: **an absent listener and a calm worker produce exactly the same observable — nothing.** Any design that needs a human-in-the-loop re-arm on every event will eventually skip one, and the skip is invisible by construction.
+
+**v3 removes the loop.** One `Monitor` armed once per session streams every event forever. There is no re-arm, so there is nothing to forget.
+
+v3 separates concerns:
+
+- **`lib/monitor-stream.sh <PANE> [<PANE>...]`** — the event feed. `tail -n0 -F` on each pane's daemon log, filtered to the actionable events, each line prefixed with the pane's tmux title. Never exits. **Arm it ONCE via the `Monitor` tool with `persistent: true`**; every subsequent event arrives as its own notification with no action from you. Handles N panes in ONE monitor — one stream, not one per worker. It only tails what the daemon writes, so a dead daemon is still silent: check `daemon.sh status` on resume.
 
 - **`lib/daemon.sh start|stop|status|log <PANE>`** — long-running detached ticker (forked via `nohup … &` + `disown`; macOS has no `setsid`). Calls `wakeup-tick.sh` every **5s** (was 20s, was 60s) and appends events to `/tmp/orchestrate-events-<pane>.log`. Single-instance per pane via pid file at `/tmp/orchestrate-daemon-<pane>.pid`. Survives orchestrator `/clear`, `/exit`, harness restarts. **The orchestrator can't break the chain by forgetting to re-arm anything.**
 
 - **`lib/wakeup-tick.sh <PANE>`** — the one-shot pane sample. Reads pane via `tmux capture-pane`, classifies state, emits zero-or-more event lines. State persisted at `/tmp/orchestrate-state-<pane>.json` for transition diffs across ticks.
 
-- **`lib/wait-for-event.sh <PANE>`** — cursor-tracking log tailer. Reads byte offset from `/tmp/orchestrate-cursor-<pane>`, waits until log size > cursor, dumps all new events to stdout, advances cursor, exits. Invoked via `Bash run_in_background: true` for the per-event wakeup notification. **Multiple events queued during a no-waiter window are emitted together** — no event is ever lost.
+- **`lib/wait-for-event.sh <PANE>`** — ⚠️ **LEGACY (v2), superseded by the Monitor above. Do not use it as the primary listener.** Cursor-tracking one-shot log tailer: reads the byte offset from `/tmp/orchestrate-cursor-<pane>`, waits until the log grows past it, dumps the new events, advances the cursor, exits. Still useful for a **deliberate one-off drain** ("show me what I missed") — but as a steady-state listener it is exactly the re-arm treadmill that blinded the orchestrator on 2026-08-02. 🔴 **Never arm it in the same assistant message as another background command: the harness reaps both and you are left with no listener and no error.**
 
 - **`lib/state.sh <PANE>`** — query current state without consuming events. Use when orchestrator wakes via user message and needs ground truth.
 
@@ -303,19 +315,23 @@ If `STALE` or `FRESH`, fall through to Step 2.
    ```
    Wait ~3s, then verify: `.claude/skills/orchestrate/lib/daemon.sh status <SIBLING_PANE_ID>` should report `last_event: BOOT state=...`.
 
-5. Arm the next-event consumer:
+5. **Arm the event stream — ONCE, for the whole session, covering EVERY pane:**
    ```
-   Bash(
-     command: "/Users/mbarnaba/code/grappa/.claude/skills/orchestrate/lib/wait-for-event.sh <SIBLING_PANE_ID>",
-     run_in_background: true,
-     timeout: 3600000,
-     description: "wait for next event from pane <SIBLING_PANE_ID>"
+   Monitor(
+     command: "/srv/grappa/.claude/skills/orchestrate/lib/monitor-stream.sh %16 %28",
+     description: "grappa worker pane events (w1 %16, w2 %28)",
+     persistent: true,
+     timeout_ms: 3600000
    )
    ```
 
-   When the script exits (on the next event delivered by the daemon), the harness fires a task-completion notification. Read the task output via `TaskOutput` (block: false), apply the decision tree, then re-arm another `wait-for-event.sh` in the background. **One arm = one batch of events**: if the daemon queued multiple events while no waiter was armed (orchestrator was clearing, busy with user, crashed and restarted), they're all dumped in one shot — handle each one.
+   Every event the daemons write now arrives as its own notification. **There is no re-arm. Do not arm a `wait-for-event.sh` alongside it** — one listener, and it is this one.
 
-   **Forgetting to re-arm is no longer fatal**: the daemon keeps ticking + appending. Next `wait-for-event.sh` call resumes from the cursor with all queued events.
+   Pass **all** worker panes in the single call. One monitor for N panes beats N monitors: fewer things to lose track of, and the pane label is already in every line (`[grappa-worker %16] IDLE ctx=24%`).
+
+   The stream is filtered to what you act on — `IDLE`, `PROMPT-*`, `PICKER*`, `USER-TYPED`, `CTX-*`, `BOOT`, `PANE-MISSING`, `HEARTBEAT`, `STALL state=idle`. **`BUSY` and `STALL state=busy` are deliberately excluded**: a working worker is the common case, and Monitor auto-stops a stream that gets too chatty — losing the whole feed to keep the least useful events would be a bad trade. When you need busy-state ground truth, capture the pane or use `lib/state.sh`.
+
+   🔴 **Verify it took**: the tool returns a task id. If the monitor is ever auto-stopped for volume, or the session's monitors are cleared, **you get no error — you just stop hearing anything.** So on resume, and any time both panes have seemed quiet for a while, confirm the feed is alive rather than assuming calm (see "Resume", and the 2026-08-02 entry under Pitfalls).
 
 ### Detector internals (in `lib/wakeup-tick.sh`)
 
@@ -454,10 +470,10 @@ The daemon at `/tmp/orchestrate-daemon-<pane>.pid` runs independently of the orc
    - `FRESH` → first invocation: Setup Step 2.
 2. Re-read the active plan + active CP so you have the "as planned" frame again.
 3. Query current state: `lib/state.sh <PANE>` — gives you ground truth (state, ctx, last_state_change age, etc.) without consuming events.
-4. Capture pane once for orientation: `tmux capture-pane -t <PANE_ID> -p | tail -40`.
-5. Arm `wait-for-event.sh`. **Any events queued during the no-orchestrator window will all be dumped on first call** (cursor-tracked). Process each in order.
+4. Capture **every** worker pane once for orientation: `tmux capture-pane -t <PANE_ID> -p | tail -40`. Do this for ALL of them, not just the one you were last thinking about — a worker halted on a question looks identical to a worker you simply forgot.
+5. **Re-arm the persistent `Monitor` on `lib/monitor-stream.sh` with ALL panes** (Setup step 5). A monitor does NOT survive the orchestrator's `/clear` — the daemons do, the monitor does not. `tail -n0` means it starts from *now*, so anything the daemons wrote while you were away is not replayed: **step 4's captures are what recover that window**, which is why they are not optional. For a precise diff of what you missed, `lib/wait-for-event.sh <PANE>` as a deliberate one-off drain still works (cursor-tracked), or read the tail of `/tmp/orchestrate-events-<id>.log`.
 
-The daemon-survives-clear design eliminates the v1 silent-stall failure mode: if the orchestrator forgets to re-arm `wait-for-event.sh`, events still accumulate; next call picks them up.
+The daemon-survives-clear design means the *record* is never lost. The **listener** is what you must re-establish, and its absence is silent — so re-arming the Monitor is step 5 of every resume, not an optional flourish.
 
 ## Pitfalls (learned in S29 of CP07 + CP08/CP09 Phase 2/3 + CP10 S6 + visitor-parity cluster v2 rewrite)
 
@@ -641,12 +657,35 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
 - **A flake is fixed by making the SETUP deterministic, never by weakening an assert or bumping a timeout.**
 - **ALWAYS push with an explicit refspec** (`git push origin refs/heads/X:refs/heads/X`) — the bare-refspec trap
   landed a branch on **main** twice in one day.
+- 🔴 **VOYAGER'S LOCAL `main` IS PERMANENTLY STALE — "branch from local main" SILENTLY BRANCHES FROM ANCIENT
+  HISTORY THERE (caught 2026-08-02, PR #651 based on `654f158f`, FOUR commits behind).** Workers live in
+  worktrees and nobody ever fast-forwards voyager's `main`, so CLAUDE.md's "branch from LOCAL main, never
+  origin/main" — a rule written to protect UNPUSHED local commits — inverts into a bug on that host. The result
+  is a **CONFIRMED CONFLICTING PR, which runs NO CI AT ALL** (zero runs, and `gh pr checks` reads "no checks
+  reported", i.e. exactly like "not started yet" — a poller strands forever).
+  **The correct instruction, and it must be in EVERY dispatch brief:** `git fetch origin` FIRST, verify
+  `git log origin/main..main` is EMPTY (proving local main holds nothing unpushed — I check this myself, from
+  the orchestrator, via ssh), THEN branch/rebase onto **`origin/main`**. 🥇 *A rule's rationale, not its
+  wording, decides whether it applies on a given host — check which of the two mains is actually ahead.*
 - **`| tail && echo OK` MASKS the exit code** — redirect to a file and capture `$?`.
 
 ## 🧷 ORCHESTRATOR TRAPS (mechanics of driving the panes)
+- 🔴🔴 **THE BLINDING, 2026-08-02 — the worst failure this skill has had, and the reason v3 exists.**
+  The orchestrator armed a `wait-for-event.sh` waiter **and a CI poller in the same assistant message**. The
+  harness reaps both, so there was **no listener at all** — `pgrep -fl 'wait-for-ev''ent.sh'` returned nothing.
+  The daemons kept writing events nobody read. **Both workers were halted on questions addressed to the
+  orchestrator — w2 for ~60 minutes, w1 for ~30 — while the orchestrator merged PRs and reported them as
+  "building". vjt had to notice and say so.**
+  🥇 **The insight worth keeping: you cannot notice silence.** A dead listener and a calm worker are the same
+  observable — nothing. So never rely on "I'd have heard something by now".
+  🥇 **The cure is structural, not vigilance:** ONE `Monitor` with `persistent: true` on
+  `lib/monitor-stream.sh`, armed once per session, covering every pane. No re-arm ⇒ nothing to forget.
+  ⚠️ It is still not self-verifying: a monitor does not survive the orchestrator's `/clear`, and can be
+  auto-stopped for volume — **both silently**. So re-arm it on every resume, and if both panes have seemed
+  quiet for a stretch, **prove the feed is alive instead of enjoying the calm.**
 - 🔴 **Never background a waiter with `&` inside a foreground Bash** — it detaches, advances the cursor and eats
   events. Arm ONLY via `run_in_background: true`, **one per assistant message** (two in one message = both
-  `killed`, observed 3×).
+  `killed`, observed 3×). This is the legacy v2 path; prefer the Monitor above.
 - 🔴 **On resume, orphan waiters from the PRE-CLEAR session keep running and EAT EVENTS** while notifying a dead
   session (their cmdline carries the old `/tmp/claude-<id>-cwd`). Kill them and re-arm fresh — cursor-tracking
   loses nothing. Verify with `pgrep -fl 'wait-for-ev''ent.sh'` (the unsplit pattern kills its own shell).

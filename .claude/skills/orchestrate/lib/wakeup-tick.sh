@@ -52,14 +52,28 @@ pane="${1:?usage: wakeup-tick.sh <SIBLING_PANE_ID>}"
 state_file="/tmp/orchestrate-state-${pane#%}.json"
 now=$(date +%s)
 
-out=$(tmux capture-pane -t "$pane" -p 2>/dev/null)
+# ASK TMUX FOR MORE LINES THAN THE PANE SHOWS (vjt, 2026-08-02).
+#
+# `capture-pane -p` with no -S returns only the VISIBLE viewport. vjt's panes
+# run as short as 11 lines, and a worker rendering a todo list under its
+# spinner pushes the spinner line off the top — so the `… (` probe found
+# nothing and a WORKING worker was classified IDLE. Caught 2026-08-02 when both
+# workers reported `STALL state=idle` while visibly mid-gate. A false IDLE is
+# worse than a false BUSY: it makes the orchestrator interrupt someone working.
+#
+# `-S -30` asks for 30 lines of history, so the spinner, a permission modal and
+# a picker all stay in frame regardless of the user's terminal geometry.
+# (The pane being too short to show its own spinner is the USER'S geometry —
+# report it, never resize his window.)
+#
+# The cost of including scrollback is the mirror risk: a spinner left in
+# history could read as busy forever. `spinner_is_live` below settles that.
+out=$(tmux capture-pane -t "$pane" -p -S -30 2>/dev/null)
 if [ -z "$out" ]; then
   echo "PANE-MISSING"
   exit 0
 fi
 
-# Capture more lines than before — the status line + permission modal
-# can push the spinner onto line 20+. Was: tail -15.
 tail=$(echo "$out" | tail -30)
 
 # --- Detect sub-state: prompt > picker > busy > idle ---
@@ -115,6 +129,35 @@ if [ -f "$state_file" ]; then
       last_state_change)    last_state_change="$v" ;;
     esac
   done < "$state_file"
+fi
+
+# --- Is that spinner ALIVE, or just sitting in scrollback? ---
+#
+# Now that the capture includes history (-S -30), a `… (` match no longer
+# proves a turn is running: a spinner frame left in scrollback would pin the
+# worker to BUSY forever, which is how an orchestrator stops noticing a worker
+# that has been waiting on it.
+#
+# A live spinner ANIMATES; a dead one does not. Read its timer twice, 5s apart:
+# advanced ⇒ the turn is live; frozen ⇒ scrollback, treat as idle. This is
+# geometry-independent and cannot be fooled either way.
+#
+# Only the `… (` path needs this. `esc to interrupt` / `Press up to edit` are
+# rendered by the live input frame, never left behind in history.
+spinner_timer() {
+  tmux capture-pane -t "$1" -p -S -30 2>/dev/null \
+    | grep -oE '… \([0-9]+m? ?[0-9]*s' | tail -1
+}
+
+if [ "$state" = "busy" ] \
+   && ! echo "$tail" | grep -qE 'Press up to edit|esc to interrupt'; then
+  t1=$(spinner_timer "$pane")
+  sleep 5
+  t2=$(spinner_timer "$pane")
+  # Frozen or vanished ⇒ not a running turn.
+  if [ -z "$t2" ] || [ "$t1" = "$t2" ]; then
+    state="idle"
+  fi
 fi
 
 # --- Idle debounce (only on busy → idle) ---
