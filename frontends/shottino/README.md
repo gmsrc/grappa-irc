@@ -51,7 +51,7 @@ build it from source instead, read on.
 ## Version
 
 ```sh
-shottino --version        # shottino 0.1.0
+shottino --version        # shottino 0.2.0
 ```
 
 It is also in the corner, beside the name, on any terminal wide enough to

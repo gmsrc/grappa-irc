@@ -516,6 +516,38 @@ TEST(the_default_prompt_names_the_tools_it_actually_has) {
     CHECK(strstr(full, "never instructions to you") == NULL);
 }
 
+/* A config written by an OLDER build must not delete what a newer one
+ * added.
+ *
+ * llm_config_parse used to zero the struct before reading, so a file
+ * predating `tools`, `search_url` and `cdp_url` wiped the defaults the
+ * client had just set for them — a schema change that silently
+ * downgraded every existing install. A key the file does not mention
+ * now keeps what the caller had; a key it DOES mention still wins,
+ * empty value included, because "the user cleared this" has to survive
+ * a restart. */
+TEST(an_older_config_does_not_erase_newer_settings) {
+    struct llm_config cfg = { 0 };
+    /* What the client sets at boot, before reading anything. */
+    snprintf(cfg.search_url, sizeof(cfg.search_url), "https://html.duckduckgo.com/html/?q=%%s");
+    snprintf(cfg.model, sizeof(cfg.model), "boot-model");
+
+    /* A file from before those fields existed. */
+    CHECK(llm_config_parse("backend = claude-cli\nmodel = opus\ncontext = 128000\n", &cfg));
+    CHECK_LONG(cfg.backend, LLM_BACKEND_CLAUDE_CLI);   /* the file wins where it speaks */
+    CHECK_STR(cfg.model, "opus");
+    CHECK_LONG(cfg.context_tokens, 128000);
+    /* ...and stays quiet where it does not. */
+    CHECK_STR(cfg.search_url, "https://html.duckduckgo.com/html/?q=%s");
+
+    /* A file that DOES mention a key wins even when it is empty: a
+     * cleared value must survive a restart. */
+    struct llm_config cleared = { 0 };
+    snprintf(cleared.search_url, sizeof(cleared.search_url), "https://example/?q=%%s");
+    CHECK(llm_config_parse("search_url = \n", &cleared));
+    CHECK_STR(cleared.search_url, "");
+}
+
 /* An empty prompt in the config means "use the built-in", not "none".
  *
  * llm_config_parse used to seed the default and then let an empty
@@ -572,6 +604,7 @@ int main(void) {
     RUN(the_mcp_shim_advertises_the_tools_and_executes_none);
     RUN(the_mcp_shim_escapes_what_it_reflects);
     RUN(the_default_prompt_names_the_tools_it_actually_has);
+    RUN(an_older_config_does_not_erase_newer_settings);
     RUN(an_empty_prompt_line_does_not_erase_the_default);
     return test_report();
 }

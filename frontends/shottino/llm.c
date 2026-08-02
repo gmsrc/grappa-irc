@@ -123,7 +123,18 @@ static void escape_into(char *dst, size_t dst_sz, const char *src) {
 
 bool llm_config_parse(const char *text, struct llm_config *out) {
     if (!text || !out) return false;
-    memset(out, 0, sizeof(*out));
+    /* NOT memset.
+     *
+     * A key the file does not mention keeps whatever the caller already
+     * had, which is how a config written by an older build stops
+     * silently deleting settings the newer build introduced. It used to
+     * zero the struct first: adding `tools`, `search_url` and `cdp_url`
+     * therefore meant that loading any file written before them wiped
+     * the defaults the client had just set for them — a schema change
+     * that quietly downgraded every existing install.
+     *
+     * A file that DOES mention a key still wins, empty value included:
+     * "the user cleared this" has to survive a restart. */
     /* The prompt is NOT seeded with the default here.
      *
      * It used to be, and a file whose `prompt = ` line was empty then
