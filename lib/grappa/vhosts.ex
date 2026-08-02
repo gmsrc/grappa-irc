@@ -84,7 +84,9 @@ defmodule Grappa.Vhosts do
   import Ecto.Query
 
   alias Grappa.{Repo, Subject, UserSettings}
+  alias Grappa.Accounts.Session
   alias Grappa.Vhosts.{Grant, SourceMapping, Vhost}
+  alias Grappa.Visitors.Visitor
 
   require Logger
 
@@ -604,14 +606,60 @@ defmodule Grappa.Vhosts do
   def last_client_prefix64({_, _} = subject) do
     case UserSettings.get_last_client_prefix64(subject) do
       nil ->
-        nil
+        last_known_client_key(subject)
 
       hex ->
         case Base.decode16(hex) do
           {:ok, key} -> key
-          :error -> nil
+          :error -> last_known_client_key(subject)
         end
     end
+  end
+
+  # #647 — a subject with no usable RECORDED sample can still have an address
+  # on record: the visitor row's `ip` (written at login) or the newest
+  # `sessions.ip` of an account. Mode 2 holds any session it cannot derive a
+  # source for, so stopping at the missing sample stranded every subject whose
+  # capture predates #543 Part C (or was never taken) — while the operator
+  # could SEE that subject's source IP in admin. Whatever address we have is
+  # the address we reconnect from.
+  #
+  # This is NOT a shared-source fallback: the key still comes from THAT
+  # subject's own client network and derives that subject's own address, which
+  # is the Global Constraint mode 2 exists to enforce. A subject with no
+  # address anywhere still returns nil and is still held.
+  #
+  # The sample is persisted on the way through (best-effort — the writer never
+  # fails a caller), so the next connect reads a recorded value and this path
+  # is walked once per subject, not on every reconnect.
+  @spec last_known_client_key(Subject.t()) :: binary() | nil
+  defp last_known_client_key(subject) do
+    with ip when is_binary(ip) <- last_known_ip(subject),
+         {:ok, tuple} <- :inet.parse_address(String.to_charlist(ip)) do
+      :ok = record_client_source(subject, tuple)
+      SourceMapping.client_key(tuple)
+    else
+      _ -> nil
+    end
+  end
+
+  @spec last_known_ip(Subject.t()) :: String.t() | nil
+  defp last_known_ip({:visitor, id}) do
+    case Repo.get(Visitor, id) do
+      %Visitor{ip: ip} -> ip
+      nil -> nil
+    end
+  end
+
+  defp last_known_ip({:user, id}) do
+    Repo.one(
+      from(s in Session,
+        where: s.user_id == ^id and not is_nil(s.ip),
+        order_by: [desc: s.last_seen_at],
+        limit: 1,
+        select: s.ip
+      )
+    )
   end
 
   # ---------------------------------------------------------------------------
