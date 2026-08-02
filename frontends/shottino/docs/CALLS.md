@@ -192,11 +192,58 @@ there**; events are one JSON object per line on **stderr**, and
 character. `--protocol` exists so shottino can refuse a helper left
 behind by an older install rather than misbehaving with it.
 
-What it does today is the full signalling round trip: gather ICE, build
-the offer, POST it, resolve the session resource, apply the answer,
-report the connection state, and DELETE the resource on the way out.
-Piping ffmpeg into and out of the tracks is the next stage; the tracks
-are already declared `sendrecv` with the codecs those legs will use.
+It does the full signalling round trip — gather ICE, build the offer,
+POST it, resolve the session resource, apply the answer, report the
+connection state, DELETE on the way out — and it now carries **media**.
+
+**The split: ffmpeg does codecs and packetisation, the helper does
+transport.** Nothing in the helper encodes, decodes, packetises or times
+a frame. Each direction is an ffmpeg process joined to a libdatachannel
+track by a loopback UDP socket:
+
+```
+send:  ffmpeg -f pulse -i default … -f rtp rtp://127.0.0.1:P
+           → helper drains P → rtcSendMessage(track)
+
+recv:  track callback → helper sends to 127.0.0.1:Q
+           → ffmpeg -i <sdp describing Q> … → speakers, or rgb24
+```
+
+The video receive leg writes rgb24 **straight to the helper's own
+stdout** — no copy, no framing layer to desynchronise — using the same
+scale-and-pad convention as shottino's inline decoder, so a call frame is
+byte-identical in shape to a clip frame. That is why stdout is reserved.
+
+Mute is local and instant: the capture keeps running and its packets are
+dropped on the way to the track. Tearing ffmpeg down instead would make
+unmuting take as long as a device open.
+
+**Verified end to end without an SFU**, using ffmpeg's synthetic sources
+(`lavfi`) through a loopback that exercises everything except the
+transport libdatachannel owns: **118 RTP packets captured and forwarded →
+117 frames of rgb24 decoded**, and the audio leg producing Opus RTP.
+
+Five bugs that cost real time and are worth not repeating:
+
+- **`-framerate` / `-video_size` are demuxer-specific.** v4l2 takes them;
+  lavfi refuses them outright and the capture dies with its stderr
+  discarded — a silent leg producing nothing. Rate and size belong in the
+  **filter graph**, which works for every input and also pins the
+  geometry whatever the device felt like giving.
+- **ffmpeg needs `-nostdin`.** Handed `/dev/null`, it reads EOF and quits
+  before a single packet arrives, reporting "Output file does not contain
+  any stream" — which reads like a codec problem and is not.
+- **Drain the socket, never one datagram per wakeup.** A video frame is a
+  BURST of RTP packets; one-per-poll delivers a fraction of each, no
+  keyframe ever assembles, and the far end fails every packet.
+- **No `-fflags nobuffer` / `-flags low_delay` on the receive leg.** They
+  look like the obvious choice for a call and they cost the whole
+  picture: they make the demuxer discard rather than reorder, so any
+  jitter loses the keyframe. Measured both ways — **0 frames with them,
+  117 without**, same packets. The tens of milliseconds are not worth a
+  blank window.
+- **The receive SDP cannot be unlinked right after the spawn.** The child
+  may not have exec'd, and the decoder then reads nothing, silently.
 
 The offer it generates, captured against a stub endpoint:
 
