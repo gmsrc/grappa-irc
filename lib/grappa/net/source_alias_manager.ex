@@ -21,6 +21,13 @@ defmodule Grappa.Net.SourceAliasManager do
   `disarm_reason/0` are lock-free reads — no GenServer round-trip on the
   connect path.
 
+  `arm/1` re-runs the gate at RUNTIME: the admin settings write (#609) calls it
+  BEFORE persisting a mode-2 addressing change, so an unusable mode is rejected
+  with the concrete reason (422) and never reaches the DB, and a successful set
+  adopts the new prefix + publishes `armed?` without a reboot (B1). It changes
+  NO state on refusal — a failed set-time probe must not disarm a manager that
+  is currently working.
+
   ## Boot reconcile
 
   `reconcile/0` diffs the OS ground truth (`adapter.list_aliases/1`) against
@@ -52,6 +59,16 @@ defmodule Grappa.Net.SourceAliasManager do
 
   @arm_key {__MODULE__, :arm}
 
+  # Every mailbox-serialized call here (acquire/release/reconcile/arm) shells
+  # out to the adapter (ifconfig add/del/probe, up to the adapter's @timeout_s
+  # ceiling); the GenServer.call budget must exceed that ceiling so a slow
+  # shell-out returns an {:error, _} the caller can handle instead of crashing
+  # it with the default 5s call-timeout EXIT (e.g. a set-time `arm` probe
+  # blocking a concurrent connect's `acquire`). A pathological QUEUE of several
+  # slow shell-outs can still exceed this — a pre-existing mailbox-serialization
+  # limit, not introduced by the runtime probe.
+  @call_timeout 15_000
+
   @type state :: %{
           refcounts: %{optional(String.t()) => pos_integer()},
           prefix: String.t() | nil,
@@ -74,7 +91,8 @@ defmodule Grappa.Net.SourceAliasManager do
   never created.
   """
   @spec acquire(String.t()) :: :ok | {:error, term()}
-  def acquire(addr) when is_binary(addr), do: GenServer.call(__MODULE__, {:acquire, addr})
+  def acquire(addr) when is_binary(addr),
+    do: GenServer.call(__MODULE__, {:acquire, addr}, @call_timeout)
 
   @doc """
   Drop a reference to `addr` (ref-count 1→0 unbinds via the adapter). A
@@ -83,14 +101,29 @@ defmodule Grappa.Net.SourceAliasManager do
   boot reconcile is the backstop that reclaims a stuck alias).
   """
   @spec release(String.t()) :: :ok
-  def release(addr) when is_binary(addr), do: GenServer.call(__MODULE__, {:release, addr})
+  def release(addr) when is_binary(addr),
+    do: GenServer.call(__MODULE__, {:release, addr}, @call_timeout)
 
   @doc """
   Release the alias orphans — bound at the OS layer but not in the held set.
   See the moduledoc + `held_addresses/1`.
   """
   @spec reconcile() :: :ok
-  def reconcile, do: GenServer.call(__MODULE__, :reconcile)
+  def reconcile, do: GenServer.call(__MODULE__, :reconcile, @call_timeout)
+
+  @doc """
+  Probe `prefix` and, on success, adopt it as the manager's working prefix and
+  publish `armed?`. Returns `{:error, reason}` WITHOUT changing state when the
+  probe refuses.
+
+  The admin settings write (#609) calls this BEFORE it persists a mode-2
+  change: on `{:error, reason}` the controller returns 422 with the reason and
+  does NOT persist (an unusable mode never reaches the DB); on `:ok` it persists
+  while the manager's `armed?`/prefix already reflect the new value, so mode 2
+  goes live without a reboot (B1).
+  """
+  @spec arm(String.t()) :: :ok | {:error, atom()}
+  def arm(prefix) when is_binary(prefix), do: GenServer.call(__MODULE__, {:arm, prefix}, @call_timeout)
 
   @doc """
   True when the platform adapter armed mode 2 at boot. Lock-free read
@@ -168,6 +201,22 @@ defmodule Grappa.Net.SourceAliasManager do
   @impl GenServer
   def handle_call(:reconcile, _, state) do
     {:reply, :ok, do_reconcile(state)}
+  end
+
+  @impl GenServer
+  def handle_call({:arm, prefix}, _, state) do
+    case compute_arm(state.adapter, prefix) do
+      {true, nil} = arm ->
+        publish_arm(arm)
+        {:reply, :ok, %{state | prefix: prefix}}
+
+      {false, reason} ->
+        # Refuse WITHOUT touching state: the current arm/prefix stand and the
+        # caller returns 422 without persisting. We deliberately do NOT publish
+        # the disarm — a failed set-time probe must not flip a currently-armed
+        # manager to disarmed (only boot + a SUCCESSFUL set change arm state).
+        {:reply, {:error, reason}, state}
+    end
   end
 
   # -- internals --------------------------------------------------------------

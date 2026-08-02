@@ -17,6 +17,8 @@ defmodule Grappa.Net.SourceAliasTest do
   @prefix "2a03:4000:20:2d3:cb::/80"
   @in_prefix "2a03:4000:20:2d3:cb::1"
   @outside "2a03:4000:20:2d3:ffff::1"
+  # arm_check derives its probe canary from the prefix — the network base.
+  @canary "2a03:4000:20:2d3:cb::"
 
   describe "Config" do
     test "substrate selects the adapter; put_test_config round-trips" do
@@ -73,17 +75,59 @@ defmodule Grappa.Net.SourceAliasTest do
   end
 
   describe "FreeBSD.arm_check/1" do
-    test "probes the sudoers grant via the wrapper's check subcommand" do
-      expect(Grappa.Sys.HardenedCmdMock, :run, fn "sudo", ["-n", "grappa-source-alias", "check"], _ ->
+    test "probes real aliasing capability via `probe <canary>` derived from the prefix" do
+      expect(Grappa.Sys.HardenedCmdMock, :run, fn "sudo", ["-n", "grappa-source-alias", "probe", canary], t ->
+        assert canary == @canary
+        assert is_integer(t) and t > 0
         {:ok, ""}
       end)
 
       assert :ok = FreeBSD.arm_check(@prefix)
     end
 
-    test "refuses to arm when the wrapper/sudoers grant is missing" do
-      expect(Grappa.Sys.HardenedCmdMock, :run, fn "sudo", ["-n", "grappa-source-alias", "check"], _ ->
+    test "maps exit 69 (substrate refused the alias) to :alias_not_permitted" do
+      expect(Grappa.Sys.HardenedCmdMock, :run, fn "sudo", ["-n", "grappa-source-alias", "probe", _], _ ->
+        {:error, {:exit, 69, "substrate refused alias — non-VNET jail?"}}
+      end)
+
+      assert {:error, :alias_not_permitted} = FreeBSD.arm_check(@prefix)
+    end
+
+    test "maps exit 65 (canary outside the wrapper prefix) to :prefix_mismatch" do
+      expect(Grappa.Sys.HardenedCmdMock, :run, fn "sudo", ["-n", "grappa-source-alias", "probe", _], _ ->
+        {:error, {:exit, 65, "not inside"}}
+      end)
+
+      assert {:error, :prefix_mismatch} = FreeBSD.arm_check(@prefix)
+    end
+
+    test "maps exit 66 (prefix config unavailable) to :prefix_config_unavailable" do
+      expect(Grappa.Sys.HardenedCmdMock, :run, fn "sudo", ["-n", "grappa-source-alias", "probe", _], _ ->
+        {:error, {:exit, 66, "prefix config unavailable"}}
+      end)
+
+      assert {:error, :prefix_config_unavailable} = FreeBSD.arm_check(@prefix)
+    end
+
+    test "refuses to arm when the wrapper/sudoers grant is missing (sudo exit 1)" do
+      expect(Grappa.Sys.HardenedCmdMock, :run, fn "sudo", ["-n", "grappa-source-alias", "probe", _], _ ->
         {:error, {:exit, 1, "sudo: a password is required"}}
+      end)
+
+      assert {:error, :wrapper_unavailable} = FreeBSD.arm_check(@prefix)
+    end
+
+    test "maps a probe timeout to :probe_timeout" do
+      expect(Grappa.Sys.HardenedCmdMock, :run, fn "sudo", ["-n", "grappa-source-alias", "probe", _], _ ->
+        {:error, :timeout}
+      end)
+
+      assert {:error, :probe_timeout} = FreeBSD.arm_check(@prefix)
+    end
+
+    test "maps a missing runner binary to :wrapper_unavailable" do
+      expect(Grappa.Sys.HardenedCmdMock, :run, fn "sudo", ["-n", "grappa-source-alias", "probe", _], _ ->
+        {:error, {:exe_not_found, "sudo"}}
       end)
 
       assert {:error, :wrapper_unavailable} = FreeBSD.arm_check(@prefix)

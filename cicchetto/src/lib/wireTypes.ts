@@ -1354,6 +1354,7 @@ export const ERROR_TOKENS_REST_ERROR_TOKEN = [
   "insufficient_storage",
   "unsupported_media_type",
   "invalid_setting",
+  "addressing_unusable",
   "rate_limited",
   "too_many_attempts",
   "theme_cap_reached",

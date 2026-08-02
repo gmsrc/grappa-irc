@@ -68,6 +68,7 @@ defmodule GrappaWeb.Admin.SettingsController do
 
   use GrappaWeb, :controller
 
+  alias Grappa.Net.SourceAliasManager
   alias Grappa.{PubSub, ServerSettings, WSPresence}
   alias Grappa.PubSub.Topic
   alias Grappa.ServerSettings.Wire, as: SettingsWire
@@ -83,7 +84,11 @@ defmodule GrappaWeb.Admin.SettingsController do
   @doc false
   @spec update(Plug.Conn.t(), map()) ::
           Plug.Conn.t()
-          | {:error, atom() | {:invalid_setting, String.t()} | Ecto.Changeset.t()}
+          | {:error,
+             atom()
+             | {:invalid_setting, String.t()}
+             | {:addressing_unusable, atom()}
+             | Ecto.Changeset.t()}
   def update(conn, params) do
     with :ok <- apply_updates(params) do
       view = ServerSettings.public_view()
@@ -123,7 +128,7 @@ defmodule GrappaWeb.Admin.SettingsController do
 
   defp apply_updates(params) when is_map(params) do
     with :ok <- apply_subtree(params, "upload", &apply_upload_key/2) do
-      apply_subtree(params, "addressing", &apply_addressing_key/2)
+      apply_addressing(Map.get(params, "addressing"))
     end
   end
 
@@ -193,33 +198,104 @@ defmodule GrappaWeb.Admin.SettingsController do
     :ok
   end
 
-  # ---- addressing.* dispatch (#543) --------------------------------
+  # ---- addressing.* — probe-gated unit apply (#543 / #609) ----------
+  #
+  # Unlike `upload`, the addressing subtree is applied as a UNIT, not key by
+  # key: the #609 capability probe must run against the RESULTING (mode, prefix)
+  # — each taken from the body or, when the body omits it, the current row — and
+  # it must run BEFORE anything persists so an unusable mode-2 change never
+  # reaches the DB (vjt's order: preflight when the mode is SET, then hard-fail
+  # per-address at acquire).
+  defp apply_addressing(nil), do: :ok
 
-  defp apply_addressing_key("mode", "pool_with_reservations"),
-    do: ServerSettings.put_addressing_mode(:pool_with_reservations)
+  defp apply_addressing(subtree) when is_map(subtree) do
+    warn_unknown_addressing_keys(subtree)
 
-  defp apply_addressing_key("mode", "static_mapping_with_reservations"),
-    do: ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
+    with {:ok, mode} <- resolve_addressing_mode(subtree),
+         {:ok, prefix} <- resolve_addressing_prefix(subtree),
+         :ok <- arm_if_static(mode, prefix),
+         :ok <- persist_addressing_prefix(subtree),
+         :ok <- persist_addressing_mode(subtree) do
+      :ok
+    end
+  end
 
-  defp apply_addressing_key("mode", _),
+  defp apply_addressing(_), do: {:error, :bad_request}
+
+  # Target mode = the body's mode (validated against the closed set) or, when
+  # the body omits it, the currently stored mode.
+  defp resolve_addressing_mode(%{"mode" => "pool_with_reservations"}),
+    do: {:ok, :pool_with_reservations}
+
+  defp resolve_addressing_mode(%{"mode" => "static_mapping_with_reservations"}),
+    do: {:ok, :static_mapping_with_reservations}
+
+  defp resolve_addressing_mode(%{"mode" => _}),
     do: {:error, {:invalid_setting, "addressing.mode"}}
 
-  defp apply_addressing_key("static_mapping_prefix", value) when is_binary(value) do
+  defp resolve_addressing_mode(_), do: {:ok, ServerSettings.addressing_mode()}
+
+  # Target prefix = the body's prefix (validated + canonicalized, no persist)
+  # or, when the body omits it, the currently stored prefix (may be nil).
+  defp resolve_addressing_prefix(%{"static_mapping_prefix" => value}) when is_binary(value) do
+    case ServerSettings.validate_static_mapping_prefix(value) do
+      {:ok, canonical} -> {:ok, canonical}
+      {:error, :invalid_prefix} -> {:error, {:invalid_setting, "addressing.static_mapping_prefix"}}
+    end
+  end
+
+  defp resolve_addressing_prefix(%{"static_mapping_prefix" => _}),
+    do: {:error, {:invalid_setting, "addressing.static_mapping_prefix"}}
+
+  defp resolve_addressing_prefix(_), do: {:ok, ServerSettings.static_mapping_prefix()}
+
+  # Capability gate: a mode-2 target must be armable on THIS substrate before it
+  # is stored. `SourceAliasManager.arm/1` probes and, on success, adopts the
+  # prefix + publishes armed? (so the set goes live without a reboot, B1); on
+  # refusal it changes no state and we surface the concrete reason as 422. Mode
+  # 1 (pool) has no substrate prerequisite. A nil prefix under mode 2 cannot arm.
+  defp arm_if_static(:static_mapping_with_reservations, nil),
+    do: {:error, {:addressing_unusable, :no_static_prefix}}
+
+  defp arm_if_static(:static_mapping_with_reservations, prefix) do
+    case SourceAliasManager.arm(prefix) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:addressing_unusable, reason}}
+    end
+  end
+
+  defp arm_if_static(:pool_with_reservations, _), do: :ok
+
+  # Persist only the keys the body carried (both already validated above).
+  # Prefix first, then mode, so mode 2 is never stored ahead of the prefix it
+  # needs.
+  defp persist_addressing_prefix(%{"static_mapping_prefix" => value}) when is_binary(value) do
     case ServerSettings.put_static_mapping_prefix(value) do
       :ok -> :ok
-      # #523/#518 — transient DB saturation halts the fold with :db_unavailable
-      # so `update/2`'s `with` routes it to a clean 503 (FallbackController),
+      # #523/#518 — transient DB saturation → :db_unavailable → clean 503,
       # NOT the 422 an invalid-setting tuple would render.
       {:error, :db_unavailable} = err -> err
       {:error, :invalid_prefix} -> {:error, {:invalid_setting, "addressing.static_mapping_prefix"}}
     end
   end
 
-  defp apply_addressing_key("static_mapping_prefix", _),
-    do: {:error, {:invalid_setting, "addressing.static_mapping_prefix"}}
+  defp persist_addressing_prefix(_), do: :ok
 
-  defp apply_addressing_key(k, _) do
-    Logger.warning("admin PUT /settings: unknown addressing key", setting_key: k)
+  defp persist_addressing_mode(%{"mode" => "pool_with_reservations"}),
+    do: ServerSettings.put_addressing_mode(:pool_with_reservations)
+
+  defp persist_addressing_mode(%{"mode" => "static_mapping_with_reservations"}),
+    do: ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
+
+  defp persist_addressing_mode(_), do: :ok
+
+  # Unknown addressing key — ignore but log (tolerant of forward-compat shapes,
+  # discoverable on a typo). Same posture as `apply_upload_key/2`'s catch-all.
+  defp warn_unknown_addressing_keys(subtree) do
+    for {k, _} <- subtree, k not in ["mode", "static_mapping_prefix"] do
+      Logger.warning("admin PUT /settings: unknown addressing key", setting_key: k)
+    end
+
     :ok
   end
 

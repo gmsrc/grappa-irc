@@ -1740,6 +1740,61 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
   // reply neither beeps nor renders in the peer window. cic NEVER parses \x01 —
   // the server SSOT Grappa.IRC.CTCP.verb_args/1 classified the verb into the
   // typed meta; the correlation table (pingCorrelation) does the matching.
+  // #637 — a service's CTCP PING reply is CTCP-framed, so the server routes it to
+  // the synthetic `$server` window (event_router route_non_channel_notice,
+  // 86416a21); cic subscribes to `$server` via installChannelHandler, whose
+  // `routeMessage` runs the `maybeConsumePingReply` gate. THE BUG: Azzurra
+  // services (NickServ) echo a CTCP PING as a BARE `\x01PING\x01` — token
+  // STRIPPED — so grappa hands cic an EMPTY `ctcp_args`. Before #637 that missed
+  // the token-keyed pending entry and rendered raw in $server (while /ping a
+  // human, which echoes the token verbatim, worked the same session). This pins
+  // the real end-to-end path with the REAL token-less service reply.
+  it("#637 — a TOKEN-LESS service CTCP PING reply on $server is consumed into the source window (RTT), no raw $server render", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedDmListenerStubs();
+    const beep = await import("../lib/beep");
+    const { registerPing } = await import("../lib/pingCorrelation");
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalledTimes(3);
+    });
+    // Operator typed `/ping NickServ` in the #grappa window (real timestamp token).
+    const sourceKey = channelKey("freenode", "#grappa");
+    registerPing(1, "NickServ", "9958", sourceKey, "#grappa", 9958);
+    const eventCalls = mockChannel.on.mock.calls.filter((c) => c[0] === "event");
+    // Handler index 2 is the $server handler (channels, dm-listener, $server).
+    const serverHandler = eventCalls[2]?.[1] as (p: unknown) => void;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    serverHandler({
+      kind: "message",
+      message: {
+        id: 700,
+        network: "freenode",
+        channel: "$server",
+        server_time: 0,
+        kind: "notice",
+        sender: "NickServ",
+        // The REAL service reply: bare \x01PING\x01, token dropped → empty ctcp_args.
+        body: "\x01PING\x01",
+        meta: { ctcp_verb: "PING", ctcp_args: "" },
+      },
+    });
+    nowSpy.mockRestore();
+    // The synthesized RTT line lands in the SOURCE window (#grappa), not $server.
+    expect(store.scrollbackByChannel()[sourceKey]?.map((m) => m.body)).toEqual([
+      "CTCP PING reply from NickServ: 42 ms",
+    ]);
+    // $server got NOTHING — the token-less reply was swallowed, never rendered raw.
+    expect(store.scrollbackByChannel()[channelKey("freenode", "$server")]).toBeUndefined();
+    // No audible alert for a consumed correlation reply (the $server handler
+    // installs with ownNick=null; consumption precedes any beep path).
+    expect(beep.playBeep).not.toHaveBeenCalled();
+  });
+
   it("CTCP PING reply matching a pending /ping is consumed into the source window (RTT), no beep, no raw render", async () => {
     localStorage.setItem("grappa-token", "tok");
     localStorage.setItem(

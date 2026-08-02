@@ -1,40 +1,104 @@
 #!/bin/sh
 # grappa-source-alias — sudoers-scoped ifconfig wrapper for the #543
-# static-mapping outbound-addressing mode (INC-5).
+# static-mapping outbound-addressing mode.
 #
 # This wrapper — NOT a bare `sudo ifconfig` — is the privilege boundary. An
 # unconstrained `sudo ifconfig` would let the grappa user alias ANY address on
 # ANY interface (a privilege hole). This wrapper hard-codes the interface
 # (lo0), the netmask (/128), and refuses any address that is not strictly
-# inside the configured `::cb::/80` block, so the sudoers grant can only ever
-# add/remove a single derived source alias in the intended range.
+# inside the configured prefix, so the sudoers grant can only ever add/remove a
+# single derived source alias in the intended range.
 #
-# Subcommands (argv-validated; anything else exits non-zero):
-#   check           probe — exit 0. Used by the adapter's arm_check to prove
-#                   the sudoers NOPASSWD grant + this wrapper are present.
-#   add  <v6-addr>  ifconfig lo0 inet6 <addr>/128 alias   (addr must be in prefix)
-#   del  <v6-addr>  ifconfig lo0 inet6 <addr>/128 -alias  (addr must be in prefix)
+# ## Prefix source — root-owned config file, fail-closed (#609)
 #
-# The prefix is this wrapper's privilege SCOPE. For a non-default block, edit
-# the root-owned PREFIX= default below — it MUST match
-# ServerSettings.static_mapping_prefix so a derived address is never refused as
-# out-of-range. GRAPPA_SOURCE_ALIAS_PREFIX is read only as a root-invoked /
-# test override; NEVER `env_keep` it through sudoers — that hands the scope to
-# the (untrusted) grappa caller, who could then widen it to ::/0 and alias any
-# address (incl. the trusted ::ca block). sudo scrubs the env by default, so
-# without env_keep only the hard-coded default applies. See docs/OPERATIONS.md.
+# The prefix (this wrapper's privilege SCOPE) is read from a ROOT-OWNED config
+# file, NOT a compiled-in literal:
 #
-# Exit codes: 0 ok · 64 usage · 65 address outside the prefix / unparseable ·
-# ifconfig's own code on an add/del failure.
+#   /usr/local/etc/grappa/source-alias.conf   (root:wheel, 0444)
+#       PREFIX=<v6-cidr>
+#
+# It MUST match ServerSettings.static_mapping_prefix; the operator renders this
+# file from the DB prefix at deploy time so the two cannot drift by hand
+# (docs/OPERATIONS.md). A missing / unreadable / malformed file makes the
+# wrapper FAIL CLOSED (exit 66) — never a wildcard fallback that could alias an
+# unintended block.
+#
+# GRAPPA_SOURCE_ALIAS_PREFIX overrides the file, but ONLY for a root-invoked /
+# test call. NEVER `env_keep` it through sudoers — that hands the scope to the
+# (untrusted) grappa caller, who could widen it to ::/0 and alias any address
+# (incl. the trusted ::ca block). sudo scrubs the env by default, so from the
+# grappa caller only the config file applies. GRAPPA_SOURCE_ALIAS_CONF likewise
+# overrides the file PATH for tests only. See docs/OPERATIONS.md.
+#
+# ## Subcommands (argv-validated; anything else exits non-zero)
+#
+#   probe <v6-addr> real capability probe used by the adapter's arm_check: add
+#                   then delete the canary, exit 0 ONLY if the alias could be
+#                   added (proves the substrate can alias — a non-VNET jail
+#                   cannot). Deletes ONLY what it added.
+#   add   <v6-addr> ifconfig lo0 inet6 <addr>/128 alias   (addr must be in prefix)
+#   del   <v6-addr> ifconfig lo0 inet6 <addr>/128 -alias  (addr must be in prefix)
+#
+# ## Exit codes
+#
+#   0   ok
+#   64  usage (bad subcommand / argc)
+#   65  address outside the prefix / unparseable. This ALSO surfaces a
+#       DB↔substrate prefix drift: arm_check derives its probe canary from the
+#       DB prefix, so if this wrapper's config-file prefix differs the canary
+#       lands outside it and is refused here — the mismatch is caught at check
+#       time, never as a per-address failure after arming.
+#   66  prefix config unavailable (file missing / unreadable / malformed)
+#   69  substrate refused the alias during a probe (e.g. non-VNET jail)
+#   *   ifconfig's own exit code on an add/del failure (add/del use exec)
 
 set -u
 
-PREFIX="${GRAPPA_SOURCE_ALIAS_PREFIX:-2a03:4000:20:2d3:cb::/80}"
 IFACE="lo0"
+CONF="${GRAPPA_SOURCE_ALIAS_CONF:-/usr/local/etc/grappa/source-alias.conf}"
 
 usage() {
-	echo "usage: grappa-source-alias check | add <v6-addr> | del <v6-addr>" >&2
+	echo "usage: grappa-source-alias probe <v6-addr> | add <v6-addr> | del <v6-addr>" >&2
 	exit 64
+}
+
+# resolve_prefix → echoes the configured prefix on stdout (exit 0), or writes a
+# reason to stderr and returns non-zero (caller maps to exit 66). Precedence:
+# the root/test env override, else the root-owned config file's PREFIX= line.
+# The value is stripped of a trailing CR (CRLF files) and any trailing
+# whitespace — never of its colons — so a hand-edited file cannot corrupt it.
+resolve_prefix() {
+	if [ -n "${GRAPPA_SOURCE_ALIAS_PREFIX:-}" ]; then
+		printf '%s' "$GRAPPA_SOURCE_ALIAS_PREFIX"
+		return 0
+	fi
+
+	if [ ! -r "$CONF" ]; then
+		echo "grappa-source-alias: prefix config unavailable — cannot read ${CONF}" >&2
+		return 1
+	fi
+
+	_val=$(sed -n 's/^[[:space:]]*PREFIX=[[:space:]]*//p' "$CONF" | tail -n 1 | tr -d '\r')
+	_val="${_val%%[[:space:]]*}"
+	if [ -z "$_val" ]; then
+		echo "grappa-source-alias: no PREFIX= line in ${CONF}" >&2
+		return 1
+	fi
+
+	printf '%s' "$_val"
+}
+
+# valid_cidr6 CIDR → exit 0 if CIDR is a well-formed IPv6 network/len, else
+# non-zero. Guards the config-file value before it is trusted as the scope.
+valid_cidr6() {
+	perl -MSocket -e '
+		my ($cidr) = @ARGV;
+		my ($net, $len) = split m{/}, ($cidr // ""), 2;
+		exit 1 unless defined $len && $len =~ /^\d+$/ && $len >= 0 && $len <= 128;
+		my $n = eval { Socket::inet_pton(Socket::AF_INET6(), $net) };
+		exit 1 unless defined $n && length($n) == 16;
+		exit 0;
+	' "$1"
 }
 
 # in_prefix ADDR CIDR → exit 0 if ADDR is strictly inside CIDR, else non-zero.
@@ -66,24 +130,43 @@ in_prefix() {
 sub="$1"
 
 case "$sub" in
-check)
-	[ $# -eq 1 ] || usage
-	exit 0
-	;;
-add | del)
+probe | add | del)
 	[ $# -eq 2 ] || usage
 	addr="$2"
+
+	PREFIX=$(resolve_prefix) || exit 66
+	if ! valid_cidr6 "$PREFIX"; then
+		echo "grappa-source-alias: malformed prefix '${PREFIX}' (${CONF})" >&2
+		exit 66
+	fi
 
 	if ! in_prefix "$addr" "$PREFIX"; then
 		echo "grappa-source-alias: refusing '${addr}' — not inside ${PREFIX}" >&2
 		exit 65
 	fi
 
-	if [ "$sub" = "add" ]; then
+	case "$sub" in
+	add)
 		exec ifconfig "$IFACE" inet6 "${addr}/128" alias
-	else
+		;;
+	del)
 		exec ifconfig "$IFACE" inet6 "${addr}/128" -alias
-	fi
+		;;
+	probe)
+		# Prove the substrate can actually alias: add the canary, then remove
+		# ONLY what we added. A failed add means the substrate refuses aliasing
+		# (a non-VNET jail: ifconfig SIOCAIFADDR → EPERM) — report exit 69 so
+		# arm_check disarms with :alias_not_permitted rather than arming and
+		# failing every real acquire. We do NOT delete on a failed add, so a
+		# pre-existing alias (e.g. a live derived source) is never disturbed.
+		if ifconfig "$IFACE" inet6 "${addr}/128" alias 2>/dev/null; then
+			ifconfig "$IFACE" inet6 "${addr}/128" -alias 2>/dev/null || true
+			exit 0
+		fi
+		echo "grappa-source-alias: substrate refused alias of '${addr}' — non-VNET jail?" >&2
+		exit 69
+		;;
+	esac
 	;;
 *)
 	usage
