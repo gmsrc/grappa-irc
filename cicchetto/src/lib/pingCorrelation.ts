@@ -76,7 +76,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   ): { sourceKey: ChannelKey; sourceChannel: string; rttMs: number } | null => {
     const resolve = (key: string, entry: PendingPing) => {
       pending.delete(key);
-      return { sourceKey: entry.sourceKey, sourceChannel: entry.sourceChannel, rttMs: nowMs - entry.sentAtMs };
+      return {
+        sourceKey: entry.sourceKey,
+        sourceChannel: entry.sourceChannel,
+        rttMs: nowMs - entry.sentAtMs,
+      };
     };
 
     // Exact token match first — a well-behaved peer (or shottino) echoes the

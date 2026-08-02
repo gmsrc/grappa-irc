@@ -106,7 +106,14 @@ describe("pingCorrelation", () => {
     registerPing(1, "eve", "tok-e1", channelKey("freenode", "eve"), "eve", 5000);
 
     // A later /ping registered exactly at the TTL horizon evicts the stale one.
-    registerPing(1, "frank", "tok-f1", channelKey("freenode", "frank"), "frank", 5000 + PENDING_TTL_MS);
+    registerPing(
+      1,
+      "frank",
+      "tok-f1",
+      channelKey("freenode", "frank"),
+      "frank",
+      5000 + PENDING_TTL_MS,
+    );
 
     // The stale entry's reply can no longer be correlated (it was swept).
     expect(resolvePing(1, "eve", "tok-e1", 5000 + PENDING_TTL_MS + 10)).toBeNull();
@@ -118,7 +125,14 @@ describe("pingCorrelation", () => {
     registerPing(1, "grace", "tok-g1", channelKey("freenode", "grace"), "grace", 6000);
 
     // A second register ONE ms inside the horizon must NOT evict the first.
-    registerPing(1, "heidi", "tok-h1", channelKey("freenode", "heidi"), "heidi", 6000 + PENDING_TTL_MS - 1);
+    registerPing(
+      1,
+      "heidi",
+      "tok-h1",
+      channelKey("freenode", "heidi"),
+      "heidi",
+      6000 + PENDING_TTL_MS - 1,
+    );
 
     expect(resolvePing(1, "grace", "tok-g1", 6000 + PENDING_TTL_MS)).not.toBeNull();
   });
