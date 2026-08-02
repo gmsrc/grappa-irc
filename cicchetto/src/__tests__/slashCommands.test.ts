@@ -97,7 +97,7 @@ describe("parseSlash — /join", () => {
   it("/join <channel> (no key)", () => {
     expect(parseSlash("/join #grappa")).toEqual({
       kind: "join",
-      channel: "#grappa",
+      channels: ["#grappa"],
       key: null,
     });
   });
@@ -110,7 +110,7 @@ describe("parseSlash — /join", () => {
   it("/join <channel> <key> threads key", () => {
     expect(parseSlash("/join #priv secret")).toEqual({
       kind: "join",
-      channel: "#priv",
+      channels: ["#priv"],
       key: "secret",
     });
   });
@@ -126,7 +126,7 @@ describe("parseSlash — /join", () => {
   it("/join sniffo → auto-prepends # (UX shortcut)", () => {
     expect(parseSlash("/join sniffo")).toEqual({
       kind: "join",
-      channel: "#sniffo",
+      channels: ["#sniffo"],
       key: null,
     });
   });
@@ -134,7 +134,7 @@ describe("parseSlash — /join", () => {
   it("/j sniffo → alias of /join + auto-prepend", () => {
     expect(parseSlash("/j sniffo")).toEqual({
       kind: "join",
-      channel: "#sniffo",
+      channels: ["#sniffo"],
       key: null,
     });
   });
@@ -142,7 +142,7 @@ describe("parseSlash — /join", () => {
   it("/j #sniffo → alias, no double prepend", () => {
     expect(parseSlash("/j #sniffo")).toEqual({
       kind: "join",
-      channel: "#sniffo",
+      channels: ["#sniffo"],
       key: null,
     });
   });
@@ -150,7 +150,7 @@ describe("parseSlash — /join", () => {
   it("/j sniffo secret → alias + key", () => {
     expect(parseSlash("/j sniffo secret")).toEqual({
       kind: "join",
-      channel: "#sniffo",
+      channels: ["#sniffo"],
       key: "secret",
     });
   });
@@ -158,7 +158,7 @@ describe("parseSlash — /join", () => {
   it("/join &local → does not double-prepend on & prefix", () => {
     expect(parseSlash("/join &local")).toEqual({
       kind: "join",
-      channel: "&local",
+      channels: ["&local"],
       key: null,
     });
   });
@@ -174,10 +174,10 @@ describe("parseSlash — /join", () => {
     });
   });
 
-  it("/j #foo,#bar → passes through (already explicitly multi-prefixed)", () => {
+  it("/j #foo,#bar → parser splits the comma-list into channels[]", () => {
     expect(parseSlash("/j #foo,#bar")).toEqual({
       kind: "join",
-      channel: "#foo,#bar",
+      channels: ["#foo", "#bar"],
       key: null,
     });
   });

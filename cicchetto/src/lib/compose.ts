@@ -362,7 +362,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "join":
-          await postJoin(t, networkSlug, cmd.channel, cmd.key);
+          // #516 — the parser now returns `channels: string[]`. Rejoin with
+          // `,` to reproduce the RFC1459 comma-list on the wire byte-for-byte
+          // (the server splits it and opens a `:pending` window per channel,
+          // #382) — behaviour is unchanged from the former single `channel`.
+          await postJoin(t, networkSlug, cmd.channels.join(","), cmd.key);
           // CP17: server-driven `:pending` window-state origination.
           // Server's `record_in_flight_join/2` writes
           // `window_states[ch] = :pending` and broadcasts
@@ -386,24 +390,21 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // driven JOIN paths still go through the subscribe.ts handler
           // (no race for those — channel was already joined when JOIN
           // event arrives via WS).
-          // #510 — cmd.channel may be an RFC1459 comma-list (`/join
-          // #a,#b`). postJoin forwards it UNSPLIT above — the server
-          // splits it and opens a `:pending` window per channel (#382).
-          // Focus, though, must land on the FIRST channel, folded the
-          // SAME way the server folds window keys (`canonicalChannel` =
-          // the `Identifier.canonical_channel/1` twin, CASEMAPPING=ascii
-          // — A-Z only, brackets untouched; #525). Passing
-          // the raw list — or a mixed-case / bracketed first element —
-          // targets a key no `window_states` entry matches, opening the
-          // empty phantom window the issue reports. Single-channel
-          // `/join #foo` funnels through the same split (one element) so
-          // both paths canonicalise the focus key identically.
+          // #510/#516 — the parser owns the comma split now (`cmd.channels`
+          // is already the per-element list). Focus must land on the FIRST
+          // channel, folded the SAME way the server folds window keys
+          // (`canonicalChannel` = the `Identifier.canonical_channel/1` twin,
+          // CASEMAPPING=ascii — A-Z only, brackets untouched; #525). Passing
+          // a mixed-case / bracketed first element targets a key no
+          // `window_states` entry matches, opening the empty phantom window
+          // #510 reported. Single-channel `/join #foo` is a one-element list,
+          // so both paths canonicalise the focus key identically.
           setSelectedChannel({
             networkSlug,
-            // `split(",")` always yields >=1 element, so `[0]` is never
-            // undefined at runtime; the `?? cmd.channel` is unreachable and
-            // exists only to satisfy TS noUncheckedIndexedAccess.
-            channelName: canonicalChannel(cmd.channel.split(",")[0] ?? cmd.channel),
+            // `channels` is non-empty (the parser errors on a missing name),
+            // so `[0]` is never undefined at runtime; the `?? join(",")`
+            // fallback exists only to satisfy TS noUncheckedIndexedAccess.
+            channelName: canonicalChannel(cmd.channels[0] ?? cmd.channels.join(",")),
             kind: "channel",
           });
           result = { ok: true };

@@ -89,7 +89,7 @@ export type SlashCommand =
   | { kind: "empty" }
   | { kind: "privmsg"; body: string }
   | { kind: "me"; body: string }
-  | { kind: "join"; channel: string; key: string | null }
+  | { kind: "join"; channels: string[]; key: string | null }
   | { kind: "part"; channel: string | null; reason: string | null }
   | { kind: "topic-show"; channel: string | null }
   | { kind: "topic-set"; channel: string | null; text: string }
@@ -344,9 +344,17 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
         verb,
         `/${verb}: bare names with commas are ambiguous — spell each channel out (e.g. /${verb} #${raw.split(",").join(",#")})`,
       );
-    const channel = /^[#&+!]/.test(raw) ? raw : `#${raw}`;
+    // #516 — the parser owns the comma semantics: an RFC1459 JOIN target
+    // may be a comma-list (`#a,#b`), so return `channels: string[]` rather
+    // than lie about a single `channel: string`. The bare-name comma path
+    // already errored above; here `target` is sigil-normalised, so splitting
+    // on `,` yields one explicitly-prefixed channel per element (`["#a"]`
+    // for the single-join case). compose.ts rejoins with `,` for the wire
+    // (server splits it per #382) and focuses `channels[0]`.
+    const target = /^[#&+!]/.test(raw) ? raw : `#${raw}`;
+    const channels = target.split(",");
     const key = toks[1] ?? null;
-    return { kind: "join", channel, key };
+    return { kind: "join", channels, key };
   },
 
   part: (_verb, rest) => {

@@ -26499,3 +26499,32 @@ and `subscribe.ts` are all UNCHANGED. No wire token, no server change. The
 unit test (`slashCommands.test.ts`, `describe("parseSlash — /msg")`) was
 strengthened to pin the actionable guidance (`/open|join|window|type/i` + the
 target name), so the message can never silently regress to the bare string.
+
+---
+
+## 2026-08-02 — #516: cic `/join` parser returns `channels: string[]` (type-lie fix, behaviour-preserving)
+
+The cic `/join` parser used to return `channel: string` — but an RFC1459 JOIN
+target may be a comma-list (`/join #a,#b`), so a two-channel form travelled as
+a single `channel: "#a,#b"` string. The type lied about the value: it named one
+channel and held several. This is the follow-up #510 filed after fixing the
+*symptom* in `compose.ts` (which was splitting the comma-list itself, at the
+consumer, to canonicalise the focus key).
+
+**Decision (from the issue body, vjt-triaged 2026-08-02): the PARSER owns the
+comma semantics.** `join:` now returns `channels: string[]` (the sigil-normalised
+target split on `,` — `["#a","#b"]` for a multi-join, `["#foo"]` for the single
+case). The sole consumer, `compose.ts`, does `postJoin(channels.join(","))` — the
+server contract is UNCHANGED (still a comma-list; the server splits it and opens
+a `:pending` window per channel, #382) — and focuses `channels[0]` (folded via
+`canonicalChannel`, the #525 fold, exactly as #510 established).
+
+Behaviour + wire are **byte-identical** — same frames upstream, same focus
+window; this is pure type hygiene. The deliberate rejection of bare-name comma
+forms (`/join a,b` → error, because auto-prepending `#` to `foo,bar` yields the
+ambiguous `#foo,bar`) is UNCHANGED — that guard fires above the split, a parser
+design choice from #510. cic-only: two production files (`slashCommands.ts` type
++ handler, `compose.ts` two reads) and the `/join` unit block migrated from
+`channel:` to `channels:`. No wire token, no server/Elixir change. The
+IRC message-kind `"join"` (a JOIN *event* with `sender`/`body`) is a DIFFERENT
+type and was left untouched.
