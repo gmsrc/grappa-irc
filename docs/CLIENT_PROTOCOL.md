@@ -186,8 +186,10 @@ ignorable per §2.
 ## 6. Rate limiting & flood protection (#630)
 
 grappa applies a **coarse per-subject inbound budget** across BOTH doors —
-every WS `handle_in` verb AND every REST write (`POST`/`PUT`/`PATCH`/
-`DELETE`). It is a shared budget: you cannot dodge it by switching surface.
+every WS `handle_in` verb AND every authenticated non-admin REST write
+(`POST`/`PUT`/`PATCH`/`DELETE`). It is a shared budget: you cannot dodge it
+by switching surface. (The `is_admin`-gated `/admin/*` console + `AdminChannel`
+are exempt — operator surfaces, not the untrusted flood vector.)
 (A finer per-`(subject, network)` bucket also guards message sends, #340.)
 A well-behaved client never notices it; a flood does.
 

@@ -19,7 +19,7 @@
 // session is deliberately NOT touched — out of scope for a WEB sever.
 //
 // Isolation: flooding vjt drains only vjt's per-subject bucket, which
-// self-heals via refill (dev config 100/s) long before the next spec's
+// self-heals via refill (dev config 20/s) long before the next spec's
 // vjt login; the bystander is a DISTINCT subject (admin), untouched.
 
 import { loginAs } from "../fixtures/cicchettoPage";
@@ -36,7 +36,7 @@ const METERED_WRITE = "/me/settings/notification-prefs";
 
 // Big enough to blow past capacity + the sever threshold even after
 // in-burst refill, in one fast wave-batched shot (dev config: capacity
-// 200, refill 100/s, sever at 100 over-budget events in 5s).
+// 200, refill 20/s, sever at 30 over-budget events in 10s).
 const FLOOD_COUNT = 1200;
 const WAVE = 120;
 
