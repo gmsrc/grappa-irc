@@ -12376,6 +12376,43 @@ static bool call_helper_path(struct app *app, char *out, size_t out_sz) {
     return false;
 }
 
+/* A nick as a URL path segment.
+ *
+ * Both ends of a call must derive the SAME path for the same two
+ * people, or they publish past each other and each hears silence. Two
+ * things make that true:
+ *
+ *   FOLD. IRC nicks are matched case-insensitively, so `Alice` and
+ *   `alice` are one person and must be one path. Folded here for the
+ *   same reason every other identifier compare in this tree folds.
+ *
+ *   ESCAPE, do not squash. A nick may legally contain [ ] \ ` ^ { | },
+ *   none of which belong in a path unescaped. Mapping them all to `_`
+ *   would be simpler and would make foo[1] and foo{1} the SAME room —
+ *   two different people in one call, silently. Percent-encoding keeps
+ *   them distinct. */
+static void call_path_nick(const char *nick, char *out, size_t out_sz) {
+    static const char hex[] = "0123456789abcdef";
+    size_t n = 0;
+    if (!out || out_sz == 0) return;
+    for (const unsigned char *p = (const unsigned char *)(nick ? nick : ""); *p; p++) {
+        unsigned char c = *p;
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+        bool safe = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+                    c == '.' || c == '~';
+        if (safe) {
+            if (n + 2 > out_sz) break;
+            out[n++] = (char)c;
+        } else {
+            if (n + 4 > out_sz) break;
+            out[n++] = '%';
+            out[n++] = hex[c >> 4];
+            out[n++] = hex[c & 15];
+        }
+    }
+    out[n] = 0;
+}
+
 /* The picture-in-picture box, in CELLS.
  *
  * A share of the width rather than a constant: on an 80-column terminal
@@ -12537,15 +12574,29 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         return false;
     }
 
-    /* The invite carries the ROOM, and WHIP/WHEP are paths under it.
-     * Both are posted so the helper negotiates the publish/subscribe
-     * pair, which is what an SFU that separates them needs and what a
-     * single-endpoint one tolerates. */
+    /* ONE PATH PER PERSON, under the room.
+     *
+     * An SFU allows a single publisher per path, so two people both
+     * posting to <room>/whip means the second is refused — the reason
+     * two-way did not work. Each publishes to their OWN path and reads
+     * the other's, which is symmetric: what I call <room>/me/whip is
+     * what you read as <room>/you/whep from your side.
+     *
+     * The peer comes from the WINDOW: in a query the window IS the
+     * other person. A channel has many, and many readers is many
+     * subscribe sessions — not wired yet, so a channel call publishes
+     * and says so rather than pretending. */
+    const char *own = own_nick_for_network(app, network);
+    bool query = channel && channel[0] && !is_channel_name(channel);
+    char me[128], them[128];
+    call_path_nick(own ? own : "me", me, sizeof(me));
+    call_path_nick(query ? channel : "", them, sizeof(them));
+
     char whip[MAX_LINE], whep[MAX_LINE];
     size_t len = strlen(room_url);
-    bool slash = len > 0 && room_url[len - 1] == '/';
-    snprintf(whip, sizeof(whip), "%s%swhip", room_url, slash ? "" : "/");
-    snprintf(whep, sizeof(whep), "%s%swhep", room_url, slash ? "" : "/");
+    const char *sep = (len > 0 && room_url[len - 1] == '/') ? "" : "/";
+    snprintf(whip, sizeof(whip), "%s%s%s/whip", room_url, sep, me);
+    snprintf(whep, sizeof(whep), "%s%s%s/whep", room_url, sep, them);
 
     int in_pipe[2], err_pipe[2], out_pipe[2] = { -1, -1 };
     if (pipe(in_pipe) != 0) return false;
@@ -12595,8 +12646,10 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         argv[a++] = helper;
         argv[a++] = (char *)"--whip";
         argv[a++] = whip;
-        argv[a++] = (char *)"--whep";
-        argv[a++] = whep;
+        if (query) {
+            argv[a++] = (char *)"--whep";
+            argv[a++] = whep;
+        }
         argv[a++] = (char *)"--audio-source";
         argv[a++] = app->voice_source;
         if (video) {
@@ -12636,6 +12689,9 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     log_line(app, "call: connecting in the terminal (%s) — /hangup ends it, /mute and /unmute "
                   "while it runs",
              video ? "audio and video" : "audio");
+    if (!query)
+        log_line(app, "call: in a channel this SENDS only — reading every member is one subscribe "
+                      "each, and that is not wired yet. A query is two-way");
     if (video)
         log_line(app, "call: their picture appears top-right while the call runs");
     return true;
