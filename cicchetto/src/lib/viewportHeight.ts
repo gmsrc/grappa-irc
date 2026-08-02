@@ -42,14 +42,49 @@
 //                       rule but kept for now to avoid touching
 //                       every mobile-overlay surface.
 //
+// #649/#654 (2026-08-02) — resume triggers. The same no-resize-event
+// failure as #285 reopen, sign flipped: the last value written while
+// foregrounded with the keyboard up is a SHRUNK height; on returning
+// from an app-switch iOS restores the full visible viewport but the
+// `resize` that would correct the vars either never fires or fires
+// before the height settles. The vars stay at the keyboard-open value
+// and `body { height: calc(var(--vh)*100) }` keeps the shell at half
+// screen with no keyboard in sight.
+//
+// The fix is MORE TRIGGERS INTO THE ONE WRITER, never a second writer:
+// `visibilitychange` (→ visible), `pageshow` (iOS bfcache/PWA resume)
+// and window `focus` each re-run the EXISTING settle schedule below.
+// No new settle mechanism, no wrapper, no per-symptom patch that also
+// touches the vars — a second writer is exactly the conflicting-consumer
+// failure this surface has already produced three bug reports from.
+// `lib/documentVisibility.ts` owns a sibling visibility+focus signal for
+// Solid consumers; it deliberately does NOT write CSS vars, and this
+// module deliberately does not consume it — two consumers of one signal
+// is fine, two writers of one var is the conflict.
+//
 // Mock surface for vitest: `installViewportHeightTracker` accepts an
 // optional viewport argument so unit tests can pass a fake
 // `VisualViewport`-shaped object with a controllable height +
-// addEventListener.
+// addEventListener, plus optional window/document seams so the resume
+// triggers can be fired without touching the real globals (the module
+// has no uninstall path — a real listener outlives its test).
 
+// Deliberately `height`-only: reading `vv.offsetTop` to infer keyboard
+// geometry is WebKit bug #297779 (sticks at 24px after keyboard dismiss),
+// and leaving it off the type makes that mistake a compile error rather
+// than a regression waiting for a device to catch it.
 export interface VisualViewportLike {
   height: number;
   addEventListener(event: "resize", handler: () => void): void;
+}
+
+export interface ResumeWindowLike {
+  addEventListener(event: "pageshow" | "focus", handler: () => void): void;
+}
+
+export interface ResumeDocumentLike {
+  readonly visibilityState: DocumentVisibilityState;
+  addEventListener(event: "visibilitychange", handler: () => void): void;
 }
 
 const HEIGHT_VAR = "--viewport-height";
@@ -68,18 +103,37 @@ const VH_VAR = "--vh";
 // Brackets a fast, medium, and slow settle.
 const SETTLE_REREAD_DELAYS_MS = [100, 400, 900];
 
+// THE single writer of both CSS vars. Every trigger — boot, resize, and
+// each #649 resume trigger — reaches the vars through here and nowhere
+// else. Adding a second `setProperty` site for either var anywhere in the
+// codebase re-opens #79/#209/#649's shared root cause.
 function writeViewport(vp: VisualViewportLike): void {
   const style = document.documentElement.style;
   style.setProperty(HEIGHT_VAR, `${vp.height}px`);
   style.setProperty(VH_VAR, `${(vp.height * 0.01).toFixed(2)}px`);
 }
 
+// Write now, then re-read on the settle schedule — for the cases where the
+// corrective height arrives with NO resize event to announce it: cold boot
+// (#285 reopen) and app-switch resume (#649). Each re-read reads the LIVE
+// `vp.height`, so a genuine resize landing mid-schedule is never clobbered
+// by a stale replay; overlapping schedules from repeated resumes are for the
+// same reason harmless (they all converge on the current height).
+function writeAndSettle(vp: VisualViewportLike): void {
+  writeViewport(vp);
+  if (typeof setTimeout !== "function") return;
+  for (const ms of SETTLE_REREAD_DELAYS_MS) {
+    setTimeout(() => writeViewport(vp), ms);
+  }
+}
+
 /**
  * Boot-time entry. Writes `--vh` (Telegram pattern) AND
  * `--viewport-height` (legacy pattern) from `window.visualViewport`,
- * then re-writes on every resize event AND on a short post-boot settle
+ * then re-writes on every resize event, on a short post-boot settle
  * re-read schedule (#285 reopen — the cold-boot settle that fires no
- * resize event).
+ * resize event), and on each resume trigger (#649 — the app-switch
+ * return that likewise fires no resize event).
  *
  * Idempotent — main.tsx invokes once.
  *
@@ -91,15 +145,24 @@ export function installViewportHeightTracker(
   vp: VisualViewportLike | undefined = typeof window !== "undefined"
     ? (window.visualViewport ?? undefined)
     : undefined,
+  win: ResumeWindowLike | undefined = typeof window !== "undefined" ? window : undefined,
+  doc: ResumeDocumentLike | undefined = typeof document !== "undefined" ? document : undefined,
 ): void {
   if (!vp) return;
-  writeViewport(vp);
+  writeAndSettle(vp);
   vp.addEventListener("resize", () => writeViewport(vp));
-  if (typeof setTimeout === "function") {
-    for (const ms of SETTLE_REREAD_DELAYS_MS) {
-      setTimeout(() => writeViewport(vp), ms);
-    }
-  }
+  // #649 resume triggers. Three of them because no single one covers every
+  // return path: an installed iOS PWA coming back from an app-switch reports
+  // `visibilitychange`, a bfcache restore reports `pageshow`, and a
+  // same-visibility focus return (another app dismissed over the top) reports
+  // only `focus`. All three land on the same writer, so overlap costs one
+  // redundant re-read of the live height.
+  doc?.addEventListener("visibilitychange", () => {
+    if (doc.visibilityState !== "visible") return;
+    writeAndSettle(vp);
+  });
+  win?.addEventListener("pageshow", () => writeAndSettle(vp));
+  win?.addEventListener("focus", () => writeAndSettle(vp));
 }
 
 /**

@@ -26767,3 +26767,71 @@ re-implement the rule (that is the parallel state machine CLAUDE.md forbids) and
 it does not read only the common one. A conditional server-side re-key is a
 contract the client half has to be written for; grep the issue number on the
 client side before assuming it was.
+
+## 2026-08-02 — #654 (#649/#209/#79): the iOS viewport variable gets more triggers, never a second writer
+
+Three separately-filed iOS bugs (#79 selection won't start with the keyboard up,
+#209 layout breaks with the keyboard up on iPadOS PWA, #649 app-switch return
+leaves the shell at half height) were consolidated into epic #654 on the premise
+that they are three symptoms of ONE surface: the viewport-height custom property
+and its single writer.
+
+**vjt's constraint, verbatim:** *«non facciamo strati su quel che c'è già,
+cerchiamo di estendere e migliorare non stratificare che poi abbiamo consumer che
+vanno in conflitto»*. `installViewportHeightTracker` is the single writer of
+`--vh` + `--viewport-height` and must stay so — more triggers into that one
+writer, yes; a second writer, a wrapper, or a per-symptom patch that also touches
+the vars, no. Verified before designing, not assumed: a repo-wide `setProperty`
+grep finds exactly ONE writer of either var (`lib/viewportHeight.ts`); every
+other reference is a CSS consumer or a `getPropertyValue` read in
+`DiagFloat`/`AdminDebugTab`.
+
+**#649 is the only leg with code here.** The mechanism is #285-reopen with the
+sign flipped: the last value written while foregrounded with the keyboard up is a
+SHRUNK height; on returning from an app-switch iOS restores the full viewport but
+fires no `resize`, so the vars stay shrunk and `body { height: calc(var(--vh) *
+100) }` keeps the shell at half screen with no keyboard present. The fix adds
+three trigger points — `visibilitychange` (→ `visible`), `pageshow` (bfcache/PWA
+resume), window `focus` — each re-running the EXISTING `SETTLE_REREAD_DELAYS_MS`
+schedule via a new `writeAndSettle` that boot now shares. Three, because no one
+of them covers every return path (app-switch → visibilitychange, bfcache restore
+→ pageshow, an overlay app dismissed without a visibility change → focus only);
+overlap is free because every re-read reads the LIVE height, so a genuine resize
+landing mid-settle is never clobbered by a stale replay — the same argument #285
+reopen already made for its schedule. `lib/documentVisibility.ts` owns a sibling
+visibility+focus Solid signal and deliberately stays out of this: two consumers of
+one signal is fine, two writers of one var is the conflict.
+
+**#209 and #79 deliberately get NO code.** Writing speculative code for a symptom
+you cannot observe IS the per-symptom patching the epic exists to forbid.
+* #79 already carries a shipped, device-tuned fix in `keepKeyboard.ts` across
+  three iterations (v1 2026-07-03, the long-press duration gate 2026-07-04, the
+  #366 `touchend` select-all 2026-07-21) plus its CSS `user-select` re-enable.
+  There is nothing to add on the writer; a fresh repro is device-debugging.
+* #209's residual is most likely CSS geometry (`position: fixed` anchored to the
+  layout viewport, which iOS does not shrink for the keyboard) — a different
+  surface from the writer, diagnosable only on-device. Scope it after a real
+  DiagFloat trace says stale-vars (writer) vs mis-compute (CSS), not before.
+
+**Traps re-affirmed structurally, not by comment.** `VisualViewportLike` stays
+`height`-only, so reading `vv.offsetTop` (WebKit #297779 — sticks at 24px after
+dismiss) is a compile error rather than a regression waiting on a device.
+`installSmartScrollPin` is untouched, so its touch-gating (WebKit #226689, the
+1-3s scroll lock) still gates.
+
+**Verification honesty.** Only the wiring is desktop-provable, and it is unit-
+tested as wiring: each trigger reaches the one writer with no resize event in
+play, a `hidden` visibilitychange does nothing, a genuine resize mid-settle wins,
+and exactly three resume listeners are registered. Every test drains the boot
+settle FIRST — leaving those timers pending would let #285's schedule do the work
+and make the assertions hollow. The user-visible behaviour of all three symptoms
+is device-only: Playwright's `webkit-iphone-15` does not reproduce real iOS
+keyboard/scroll physics and desktop Safari does not speak CDP, so no e2e is
+written here — a green spec that cannot observe the behaviour is worse than no
+spec.
+
+**Apply:** when a variable has exactly one writer, a new failure mode on that
+variable is a missing TRIGGER, not a missing writer. Add the trigger to the
+existing writer and reuse its existing correction schedule. And when an umbrella
+issue bundles N symptoms, verify each one is actually the same code surface
+before writing N fixes — here only one of the three was.

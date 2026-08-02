@@ -114,6 +114,11 @@ mountBadgeReconcile(async () => {
 // with the iOS on-screen keyboard. Without this, iOS scrolls the
 // body to keep focused inputs visible and pushes the top bar out
 // of view. Boot-time so the first frame already has the var.
+// #649 — ALSO re-reads on resume (visibilitychange / pageshow /
+// focus), for the app-switch return that restores the viewport
+// without firing a resize. One writer, more triggers: the window and
+// document listeners are installed by the tracker itself, so nothing
+// out here (and nothing anywhere else) touches the vars.
 installViewportHeightTracker();
 
 // UX-6 D10 (2026-05-21) — smart-pin window scroll. iOS PWA 18.7
