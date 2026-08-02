@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # regen.sh — turn the committed sentinel recipe into a concrete, buildable
 # and publishable one, deriving the version from the single source of truth
-# (mix.exs @version, #538).
+# (the repo-root VERSION file, #538/#652).
 #
 # The committed PKGBUILD/.SRCINFO carry `pkgver=@GRAPPA_VERSION@` — a sentinel
 # makepkg REFUSES (its pkgver lint rejects '@'), so an UNDERIVED build fails
@@ -16,7 +16,7 @@
 # but "derive the version" must NOT be a manual step a publisher can forget —
 # that is the same forget-a-step class as the drift #538 fixes.
 #
-# Steps: derive pkgver from mix.exs, refresh the checksums against the tag
+# Steps: derive pkgver from the VERSION file, refresh the checksums against the tag
 # tarball (updpkgsums), regenerate .SRCINFO. Run from a checkout on the
 # release tag — updpkgsums fetches the `vX.Y.Z` tarball, so the tag must
 # already exist.
@@ -30,7 +30,7 @@ set -euo pipefail
 AUR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 version="$("${AUR_DIR}/../version.sh")"
-echo "==> deriving pkgver=${version} from mix.exs @version (#538 single source)"
+echo "==> deriving pkgver=${version} from the VERSION file (#538/#652 single source)"
 sed -i -E "s/^pkgver=.*/pkgver=${version}/" "${AUR_DIR}/PKGBUILD"
 
 cd "${AUR_DIR}"

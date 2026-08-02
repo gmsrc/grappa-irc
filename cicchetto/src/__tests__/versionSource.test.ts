@@ -2,11 +2,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// #538 — package.json's `version` is neutralised to 0.0.0. The reported cic
-// version now comes from mix.exs @version via the GRAPPA_VERSION env, which
-// vite bakes into <meta name="cicchetto-version"> (see vite.config.ts) — NOT
-// from here. This guards the inert placeholder so nobody re-hardcodes a
-// competing semver, which is exactly the 0.0.1-vs-0.6.x drift #538 fixes.
+// #538/#652 — package.json's `version` is neutralised to 0.0.0. The reported
+// cic version now comes from the repo-root VERSION file (#652, was mix.exs
+// @version under #538) via the GRAPPA_VERSION env, which vite bakes into
+// <meta name="cicchetto-version"> (see vite.config.ts) — NOT from here. This
+// guards the inert placeholder so nobody re-hardcodes a competing semver,
+// which is exactly the 0.0.1-vs-0.6.x drift #538 fixes.
 //
 // Client twin of the server-side carrier guard,
 // test/grappa/version_single_source_test.exs (which cannot read package.json —

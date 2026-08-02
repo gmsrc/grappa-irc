@@ -42,8 +42,8 @@ name: release
 #     #391 clean-tag path yields the bare version;
 #   * the Arch package builds from the GitHub source TARBALL (no .git by
 #     construction) → Grappa.Version's nil-git-facts path yields the bare
-#     `.app` version. This is the whole reason the runtime mix.exs read was
-#     removed — see lib/grappa/version.ex + DESIGN_NOTES.
+#     version — the compiled VERSION-file constant (#652), which the tarball
+#     always carries. See lib/grappa/version.ex + DESIGN_NOTES.
 #
 # BUILD ≠ PUBLISH TO AUR. This workflow publishes GitHub Release assets and
 # regenerates the AUR recipe metadata; pushing to aur.archlinux.org stays a
@@ -136,14 +136,14 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
-      - name: Verify the tag matches mix.exs @version
+      - name: Verify the tag matches the VERSION file
         id: ver
         run: |
           tag="${RELEASE_TAG#v}"
-          mixv="$(infra/packaging/version.sh)"
-          echo "tag=$tag mix.exs=$mixv"
-          if [ "$tag" != "$mixv" ]; then
-            echo "::error::tag v$tag does not match mix.exs @version $mixv — bump @version before cutting the tag"
+          srcv="$(infra/packaging/version.sh)"
+          echo "tag=$tag VERSION=$srcv"
+          if [ "$tag" != "$srcv" ]; then
+            echo "::error::tag v$tag does not match the VERSION file ($srcv) — bump VERSION before cutting the tag"
             exit 1
           fi
           echo "version=$tag" >> "$GITHUB_OUTPUT"
@@ -246,20 +246,20 @@ jobs:
           # PKGBUILD/recipe, not main's.
           ref: ${{ env.RELEASE_TAG }}
 
-      # Guard, never fixer (#538): the ONE hand-declared version is mix.exs
-      # @version, and it must match the tag being cut. pkgver is DERIVED from
-      # mix.exs by regen.sh below, so it is not an independent carrier to
-      # verify — asserting tag==pkgver here would be tautological once CI fills
-      # it. (Deriving pkgver from mix.exs is "derive from the origin"; the
-      # rejected alternative was deriving it from the TAG, which makes THIS
-      # gate compare a value against itself.)
-      - name: Verify the tag matches mix.exs @version
+      # Guard, never fixer (#538/#652): the ONE hand-declared version is the
+      # repo-root VERSION file, and it must match the tag being cut. pkgver is
+      # DERIVED from VERSION by regen.sh below, so it is not an independent
+      # carrier to verify — asserting tag==pkgver here would be tautological
+      # once CI fills it. (Deriving pkgver from VERSION is "derive from the
+      # origin"; the rejected alternative was deriving it from the TAG, which
+      # makes THIS gate compare a value against itself.)
+      - name: Verify the tag matches the VERSION file
         run: |
           tag="${RELEASE_TAG#v}"
-          mixv="$(infra/packaging/version.sh)"
-          echo "tag=$tag mix.exs=$mixv"
-          if [ "$tag" != "$mixv" ]; then
-            echo "::error::tag v$tag does not match mix.exs @version $mixv — bump @version before cutting the tag"
+          srcv="$(infra/packaging/version.sh)"
+          echo "tag=$tag VERSION=$srcv"
+          if [ "$tag" != "$srcv" ]; then
+            echo "::error::tag v$tag does not match the VERSION file ($srcv) — bump VERSION before cutting the tag"
             exit 1
           fi
 
@@ -269,11 +269,11 @@ jobs:
           printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
           chown -R builder:builder .
 
-      - name: regen.sh (derive pkgver from mix.exs) + makepkg — build the package
+      - name: regen.sh (derive pkgver from VERSION) + makepkg — build the package
         run: |
           cd infra/packaging/aur
-          # regen.sh (#538) fills the committed `pkgver=@GRAPPA_VERSION@`
-          # sentinel from mix.exs @version (the single source of truth), then
+          # regen.sh (#538/#652) fills the committed `pkgver=@GRAPPA_VERSION@`
+          # sentinel from the repo-root VERSION file (the single source of truth), then
           # runs updpkgsums (fetches the now-existing tag tarball, rewrites
           # sha256sums=('SKIP')) and regenerates .SRCINFO. It is the SAME
           # derivation path a human uses to publish to the AUR — scripted, so
@@ -415,13 +415,13 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
-      - name: Verify the tag matches mix.exs @version
+      - name: Verify the tag matches the VERSION file
         run: |
           tag="${RELEASE_TAG#v}"
-          mixv="$(infra/packaging/version.sh)"
-          echo "tag=$tag mix.exs=$mixv"
-          if [ "$tag" != "$mixv" ]; then
-            echo "::error::tag v$tag does not match mix.exs @version $mixv — bump @version before cutting the tag"
+          srcv="$(infra/packaging/version.sh)"
+          echo "tag=$tag VERSION=$srcv"
+          if [ "$tag" != "$srcv" ]; then
+            echo "::error::tag v$tag does not match the VERSION file ($srcv) — bump VERSION before cutting the tag"
             exit 1
           fi
 
@@ -506,22 +506,22 @@ jobs:
           # (.git is .dockerignore'd).
           fetch-depth: 0
 
-      - name: Resolve version (mix.exs @version = SSOT)
+      - name: Resolve version (repo-root VERSION file = SSOT)
         id: ver
         run: |
           version="$(infra/packaging/version.sh)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "push" ]; then
-            # Real release: the pushed tag MUST match mix.exs @version, same gate
+            # Real release: the pushed tag MUST match the VERSION file, same gate
             # as deb/arch/rpm. GITHUB_REF_NAME is the tag on a tag push.
             tag_ver="${GITHUB_REF_NAME#v}"
-            echo "pushed tag=${tag_ver} mix.exs=${version}"
+            echo "pushed tag=${tag_ver} VERSION=${version}"
             if [ "${tag_ver}" != "${version}" ]; then
-              echo "::error::pushed tag v${tag_ver} does not match mix.exs @version ${version} — bump @version before cutting the tag"
+              echo "::error::pushed tag v${tag_ver} does not match the VERSION file ${version} — bump VERSION before cutting the tag"
               exit 1
             fi
           else
-            echo "docker_validation dry-run: building ${GITHUB_REF_NAME} @ mix.exs ${version} — push:false, NOTHING will be published"
+            echo "docker_validation dry-run: building ${GITHUB_REF_NAME} @ VERSION ${version} — push:false, NOTHING will be published"
           fi
 
       - name: Resolve the built commit (OCI revision label)

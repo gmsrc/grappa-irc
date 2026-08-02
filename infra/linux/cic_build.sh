@@ -19,8 +19,8 @@ CIC_DIR="${REPO_ROOT}/cicchetto"
 OUT_DIR="${REPO_ROOT}/runtime/cicchetto-dist"
 GRAPPA_USER="${GRAPPA_USER:-grappa}"
 
-# #538 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>. Derive it
-# from mix.exs @version (the single source of truth) via version.sh; `sudo -u`
+# #538/#652 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>. Derive it
+# from the repo-root VERSION file (the single source of truth) via version.sh; `sudo -u`
 # scrubs the env, so it is injected into the run_as_grappa command string below.
 GRAPPA_VERSION="$("${REPO_ROOT}/infra/packaging/version.sh")"
 

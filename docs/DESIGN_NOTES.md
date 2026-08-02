@@ -26280,3 +26280,81 @@ via a real `send_privmsg`) → lands in that window. Falsification: revert
 `resolve_numeric_query_window/2` (or make it identity) ⇒ the no-window
 server_test and the `issue640-ping-self-echo` e2e go RED. The e2e assert is
 the acceptance gate and stays untouched.
+## 2026-08-02 — #652: the version SSOT moved from `mix.exs @version` to a repo-root `VERSION` file so a bump hot-reloads (supersedes #419 R3's `.app`-vsn base)
+
+**The bug this closes.** Bumping the version forced a COLD deploy. `@version`
+lived in `mix.exs`, and `Grappa.Deploy.Preflight.mix_deps?/1` classifies any
+`mix.exs` / `mix.lock` change as COLD (Class 1). So a one-character bump
+restarted the node and dropped every IRC session. That COLD was also
+load-bearing: `Version.base/0` returned `Application.spec(:grappa, :vsn)`, and
+the running node never re-reads the `.app` resource after boot (the jail hot
+path is `git pull → mix compile → mix release --overwrite → POST /admin/reload`;
+`reload_modified/0` reloads only `.beam` files whose md5 changed, never `.app`).
+The COLD is what kept `.app` fresh — remove it naïvely and a green hot deploy
+would report the OLD version (the exact #391 staleness).
+
+**The corrected mental model.** The lever is not *where the version file lives*
+— it is *what the hot deploy reloads*. So the number must stop coming from the
+`.app` resource and start coming from a normal module baked at COMPILE time,
+which travels with the `.beam` md5 reload.
+
+**The shape.**
+- `VERSION` at repo root is the single hand-edited carrier (`X.Y.Z\n`).
+- `lib/grappa/version.ex` registers `VERSION` as `@external_resource` (a bump
+  dirties the module → `mix compile` recompiles it on the hot path) and bakes
+  `@base_version` = the file's trimmed contents; `base/0` returns that constant,
+  NOT `Application.spec/2`.
+- `mix.exs` reads the SAME file at build time
+  (`File.read!(Path.join(__DIR__, "VERSION")) |> String.trim()`) so the `.app`
+  vsn stays stamped for packaging, but is no longer the runtime source.
+
+**Why this is NOT the #391 defect.** #391 was a *runtime* read of a *build*
+file (`mix.exs`), which a package lacks — `File.read!` raised and the CTCP
+VERSION reply died. Here the read is at COMPILE time, inside the build tree
+where `VERSION` always exists (source checkout OR release tarball), and the
+artifact carries a plain string. No runtime FS access → no fallback to design,
+no packaging failure. The package path (no `.git` at build) still reports the
+bare base via `derive(base, nil) -> base`.
+
+**Declared price.** After a HOT bump the running node's `.app` vsn stays at its
+boot value while `base/0` reports the new number; they reconverge at the next
+cold restart. `Grappa.Version` is the ONLY `Application.spec(:grappa, …)`
+consumer in the tree, so nothing else observes the divergence — this
+supersedes the #419 R3 / #391 moduledoc claim that base "comes from the `.app`
+metadata" and that staleness "cannot happen."
+
+**Carriers repointed (must move together).** `infra/packaging/version.sh` (the
+single extractor feeding deb/nfpm, PKGBUILD `pkgver`, and every cic
+`<meta cicchetto-version>` build) reads `VERSION` instead of grepping
+`mix.exs @version`. `.github/workflows/release.yml` already routed all four
+tag-vs-version gates THROUGH `version.sh`, so they keep failing on a mismatch
+now reading `VERSION` (wording updated only). `Dockerfile.release` copies
+`VERSION` into both the cic-build and `mix release` stages (mix.exs evaluates
+`File.read!` on every mix task, so `deps.get` needs it too). `scripts/_lib.sh`
+adds a worktree `-v VERSION:/app/VERSION:ro` override (like `mix.exs`) so a
+worktree oneshot compiles against its own `VERSION`, not MAIN's.
+
+**Guards.** `preflight_test.exs` pins `["VERSION"] → {:hot, []}` on every
+substrate while `mix.exs` / `mix.lock` stay COLD; `version_test.exs` pins
+`base/0 == String.trim(File.read!("VERSION"))` (the acceptance that it no
+longer routes through `Application.spec/2`); `version_single_source_test.exs`
+reads `VERSION` as the canonical declaration and now also asserts `mix.exs`
+DERIVES from it (no re-hardcoded `@version "X.Y.Z"` literal — that regression
+would silently reinstate the COLD).
+
+**The one claim source can't prove.** After a hot deploy of a bump, CTCP
+VERSION and `/admin` config must report the NEW version WITHOUT a restart —
+proven on the jail, not argued from source (the acceptance test, not a
+measurement).
+
+CI trigger (deliberate): `integration.yml`'s `paths:` filter lists `mix.exs`
+but NOT `VERSION`, so a bump-only diff no longer auto-runs the e2e integration
+lane. This is intentional — a pure version-string bump changes no runtime
+behavior, `ci.yml` (the core gate suite, incl. the new version guards) runs
+unconditionally, and the ship gate is a manual full `scripts/integration.sh`
+run regardless. Any real change riding alongside a bump still matches its own
+path and triggers integration. Not adding `VERSION` avoids the full browser
+matrix firing on a one-character bump (lightweight over heavyweight).
+
+Deploy class: the migration commit touches `mix.exs` → COLD (once). AFTER it,
+a bump touches only `VERSION` → HOT.

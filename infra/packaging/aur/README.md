@@ -49,7 +49,7 @@ three first.
 
 ```sh
 cd infra/packaging/aur
-# Derive the version from mix.exs @version (#538) + refresh checksums/.SRCINFO
+# Derive the version from the VERSION file (#538/#652) + refresh checksums/.SRCINFO
 # against the tag tarball. The committed pkgver is the @GRAPPA_VERSION@
 # sentinel (makepkg REFUSES it), so regen.sh is REQUIRED first — and makepkg
 # downloads the vX.Y.Z source tarball anyway, so the tag must already exist:
@@ -83,16 +83,16 @@ same FHS paths, wrapper, and operator model.
 live here, and nothing here pushes to `aur.archlinux.org`. To publish a
 release, a maintainer:
 
-1. Cuts the `vX.Y.Z` git tag this `PKGBUILD` pulls (matching `@version` in
-   `mix.exs` — the CI release gate asserts tag ↔ `mix.exs`; `pkgver` DERIVES
-   from `mix.exs`, so there is no second number to keep in sync).
+1. Cuts the `vX.Y.Z` git tag this `PKGBUILD` pulls (matching the repo-root
+   `VERSION` file — the CI release gate asserts tag ↔ `VERSION`; `pkgver`
+   DERIVES from `VERSION`, so there is no second number to keep in sync).
 2. Regenerates the recipe against the now-existing tag tarball — one script
    derives the version and refreshes checksums + metadata (#538), so the
    version is never a manual step a publisher can forget:
 
    ```sh
    cd infra/packaging/aur
-   ./regen.sh    # derive pkgver from mix.exs, updpkgsums, regenerate .SRCINFO
+   ./regen.sh    # derive pkgver from VERSION, updpkgsums, regenerate .SRCINFO
    ```
 
 3. Copies **`PKGBUILD`, `.SRCINFO`, `grappa.install`** into the AUR git repo
@@ -105,8 +105,8 @@ concrete publishable recipe by `regen.sh`:
 
 - `pkgver=@GRAPPA_VERSION@` is a sentinel `makepkg` REFUSES (#538) — an
   underived build fails loudly instead of silently shipping
-  `grappa-@GRAPPA_VERSION@`. `regen.sh` fills it from `mix.exs` `@version`,
-  the single source of truth.
+  `grappa-@GRAPPA_VERSION@`. `regen.sh` fills it from the repo-root `VERSION`
+  file, the single source of truth.
 - `sha256sums=('SKIP')` is a placeholder: the `vX.Y.Z` tarball does not exist
   until the tag is cut, so its real hash cannot be known yet. `regen.sh` runs
   `updpkgsums` to fill it at release.
@@ -126,18 +126,19 @@ being the `@GRAPPA_VERSION@` sentinel.
 ## Version reporting (bare `X.Y.Z`, #419 R3)
 
 `Grappa.Version` reports the **bare `X.Y.Z`** for an AUR build. The base
-version is the `.app` metadata (`Application.spec(:grappa, :vsn)`, compiled
-from `@version`), and the #391 git suffix is applied **only when `.git` is
-present at build**. A GitHub tag **tarball has no `.git`**, so `makepkg`'s
-build sees `nil` git facts and reports the package version with no suffix —
-the released code self-reports as released.
+version is the compiled `VERSION`-file constant (#652 — read at compile time,
+baked into a module attribute; NOT `Application.spec(:grappa, :vsn)`, which
+goes stale across a hot deploy), and the #391 git suffix is applied **only
+when `.git` is present at build**. A GitHub tag **tarball has no `.git`**, so
+`makepkg`'s build sees `nil` git facts and reports the package version with no
+suffix — the released code self-reports as released.
 
 This replaces R2's `-dev` caveat: earlier `Grappa.Version` read `@version`
 from `mix.exs` at runtime and folded git state, so a tarball build degraded
-to `X.Y.Z-dev`. #419 R3 removed the runtime `mix.exs` read entirely (a
-package ships no `mix.exs` — the source never enters the CI-built artifact,
-and the read raised there): the version is baked into the artifact, not
-derived from a file the package doesn't carry. The release CI asserts the
+to `X.Y.Z-dev`. #419 R3 removed the runtime `mix.exs` read; #652 kept the read
+at **compile** time and moved the number into the repo-root `VERSION` file —
+the tarball always carries `VERSION`, and the version is baked into the
+artifact, not read from a file at runtime. The release CI asserts the
 built Arch package reports the bare version — see
 [`.github/workflows/release.yml`](../../../.github/workflows/release.yml).
 

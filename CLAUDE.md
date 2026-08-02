@@ -616,11 +616,16 @@ is due. Don't just look at todo.md.
    bastille jail** — `scripts/deploy-m42.sh` (server, auto hot/cold)
    / `--cic` (bundle only). The jail pulls origin/main, so: rebase
    worktree onto main → merge to main → remove the now-merged worktree +
-   delete its branch (step 0) → **bump `mix.exs @version` as the LAST
-   commit** → tag → push origin main → deploy-m42 → verify health. The
-   bump rides IN, never after — `Version.base/0` reads the compiled
-   `:vsn` so a hot reload never refreshes it (#391) and a `mix.exs`
-   change forces COLD regardless. Invoke deploy scripts by ABSOLUTE
+   delete its branch (step 0) → **bump the repo-root `VERSION` file as the
+   LAST commit** → tag → push origin main → deploy-m42 → verify health. The
+   bump rides IN, never after — `Version.base/0` returns a compile-time
+   constant baked from `VERSION` (an `@external_resource`, #652), so the new
+   number travels with the reloaded `Grappa.Version` beam on a HOT deploy;
+   a `VERSION`-only bump is HOT (it no longer touches `mix.exs`, so
+   `Preflight.mix_deps?` no longer forces COLD — the #652 whole point).
+   Do NOT re-hardcode `@version` in `mix.exs`: it reads `VERSION` at build
+   time, and re-inlining a literal silently reinstates the COLD (guarded by
+   `version_single_source_test.exs`). Invoke deploy scripts by ABSOLUTE
    path (`/srv/grappa/scripts/…`) — cwd drift runs another
    checkout's copy. `scripts/deploy.sh` (Docker) drives the LOCAL
    dev stack only; nothing production runs on the pi.

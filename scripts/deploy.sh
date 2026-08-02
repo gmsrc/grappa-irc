@@ -136,8 +136,8 @@ substrate_cic() {
 	# dir that already exists with the right ownership.
 	mkdir -p runtime/cicchetto-dist
 	# #538 — derive the single-source version for the cic build. The
-	# cicchetto-build container mounts only ./cicchetto, so it can't read
-	# mix.exs; pass GRAPPA_VERSION (from mix.exs @version) through the env.
+	# cicchetto-build container mounts only ./cicchetto, so it can't read the
+	# repo root; pass GRAPPA_VERSION (from the VERSION file, #652) through the env.
 	GRAPPA_VERSION="$("$REPO_ROOT/infra/packaging/version.sh")"
 	export GRAPPA_VERSION
 	echo "Building cicchetto dist..."

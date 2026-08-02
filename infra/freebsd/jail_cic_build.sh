@@ -22,9 +22,9 @@ exec su -l grappa -c '
 set -eu
 cd /home/grappa/grappa/cicchetto
 mkdir -p ../runtime/cicchetto-dist
-# #538 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>. Derive it
-# from mix.exs @version via the POSIX version.sh (this jail runs /bin/sh + npm,
-# no bash/bun port). Single source of truth; same env channel every cic build
+# #538/#652 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>. Derive it
+# from the repo-root VERSION file via the POSIX version.sh (this jail runs
+# /bin/sh + npm, no bash/bun port). Single source of truth; same env channel every cic build
 # uses. su -l scrubs the env, so set it INSIDE this login shell.
 GRAPPA_VERSION="$(../infra/packaging/version.sh)"
 export GRAPPA_VERSION

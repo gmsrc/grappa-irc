@@ -21,9 +21,9 @@
 # automated from here, no AUR credentials live in this tree. See README.md.
 
 pkgname=grappa
-# pkgver is DERIVED, not hand-edited (#538). The single source of truth is
-# `@version` in mix.exs; `regen.sh` (run by release.yml's Arch job and by the
-# human AUR publish) fills this from `version.sh` before makepkg. The
+# pkgver is DERIVED, not hand-edited (#538/#652). The single source of truth
+# is the repo-root `VERSION` file; `regen.sh` (run by release.yml's Arch job
+# and by the human AUR publish) fills this from `version.sh` before makepkg. The
 # `@GRAPPA_VERSION@` sentinel is deliberate: makepkg's pkgver lint REFUSES '@',
 # so an underived build fails loudly instead of shipping `grappa-@GRAPPA_VERSION@`.
 pkgver=@GRAPPA_VERSION@
@@ -90,10 +90,10 @@ build() {
 	# rebuild must not hard-fail on that. mix.exs allows `~> 1.19`.
 	mix release --overwrite
 
-	# #538 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>. Derive
-	# it from mix.exs @version (the single source of truth) via version.sh —
-	# the SAME env channel nfpm + every other cic build uses. cwd is the
-	# extracted repo root here, so version.sh reads its mix.exs.
+	# #538/#652 — vite bakes GRAPPA_VERSION into <meta cicchetto-version>.
+	# Derive it from the repo-root VERSION file (the single source of truth)
+	# via version.sh — the SAME env channel nfpm + every other cic build uses.
+	# cwd is the extracted repo root here, so version.sh reads its VERSION.
 	GRAPPA_VERSION="$(infra/packaging/version.sh)"
 	export GRAPPA_VERSION
 

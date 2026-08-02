@@ -191,10 +191,11 @@ services:
     environment:
       HOME: /tmp
       BUN_INSTALL_CACHE_DIR: /cache
-      # #538 — vite bakes this into <meta cicchetto-version>. This container
-      # mounts only ./cicchetto, so it cannot read mix.exs; scripts/deploy.sh
-      # and scripts/deploy-cic.sh derive it from mix.exs @version
-      # (infra/packaging/version.sh) and export it before the compose run.
+      # #538/#652 — vite bakes this into <meta cicchetto-version>. This
+      # container mounts only ./cicchetto, so it cannot read the repo root;
+      # scripts/deploy.sh and scripts/deploy-cic.sh derive it from the
+      # repo-root VERSION file (infra/packaging/version.sh) and export it
+      # before the compose run.
       # `:-` (not `:?`) so unrelated compose commands don't abort on parse;
       # an empty value makes vite fail loud rather than bake a blank version.
       GRAPPA_VERSION: ${GRAPPA_VERSION:-}

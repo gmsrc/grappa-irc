@@ -13,21 +13,23 @@ import { PWA_ICONS } from "./src/lib/pwaIcons";
 // to advertise the AVAILABLE version over the `bundle_hash` wire event.
 //
 // #538 moved the NUMBER'S ORIGIN from package.json (which drifted to 0.0.1
-// while the server shipped 0.6.x) to mix.exs `@version` — the ONE place the
-// version is declared. It reaches this build through the GRAPPA_VERSION env,
-// the SAME channel nfpm.yaml consumes (both fed by infra/packaging/version.sh).
-// Env, not a file read, because cicchetto is built in containers that mount
-// ONLY ./cicchetto (compose cicchetto-build, scripts/bun.sh, the e2e stack) —
-// mix.exs is out of reach there; every cic-build entrypoint derives the number
-// from version.sh and exports it. Fail LOUD if unset: an empty
-// <meta cicchetto-version> is worse than a broken build. The #292 plumbing
-// below is UNCHANGED; only the source feeding CIC_VERSION moved. Trivial
-// rebuilds that reuse the version are still disambiguated by the short
+// while the server shipped 0.6.x) to the ONE place the version is declared;
+// #652 moved that declaration out of mix.exs `@version` into the repo-root
+// `VERSION` file (so a bump hot-reloads instead of forcing a COLD restart).
+// It reaches this build through the GRAPPA_VERSION env, the SAME channel
+// nfpm.yaml consumes (both fed by infra/packaging/version.sh, which reads
+// VERSION). Env, not a file read, because cicchetto is built in containers
+// that mount ONLY ./cicchetto (compose cicchetto-build, scripts/bun.sh, the
+// e2e stack) — the repo root is out of reach there; every cic-build entrypoint
+// derives the number from version.sh and exports it. Fail LOUD if unset: an
+// empty <meta cicchetto-version> is worse than a broken build. The #292
+// plumbing below is UNCHANGED; only the source feeding CIC_VERSION moved.
+// Trivial rebuilds that reuse the version are still disambiguated by the short
 // bundle-hash suffix the refresh bar appends.
 const CIC_VERSION = process.env.GRAPPA_VERSION;
 if (!CIC_VERSION) {
   throw new Error(
-    "vite.config.ts: GRAPPA_VERSION is unset — the cic build must be launched by a wrapper that derives it from mix.exs @version (infra/packaging/version.sh, #538). Refusing to bake an empty <meta cicchetto-version>.",
+    "vite.config.ts: GRAPPA_VERSION is unset — the cic build must be launched by a wrapper that derives it from the repo-root VERSION file (infra/packaging/version.sh, #538/#652). Refusing to bake an empty <meta cicchetto-version>.",
   );
 }
 

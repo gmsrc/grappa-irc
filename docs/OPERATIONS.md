@@ -501,18 +501,25 @@ exits — no custom wrapper needed. See
 ### Release-cutting — version-first, then GitHub release + tag + News/Releases
 
 **Cut the version FIRST, deploy SECOND — never bump after (vjt 2026-08-02).**
-The `mix.exs:5 @version` bump MUST ride into the deploy as the **last commit of
-the range being shipped**, be tagged on that commit, and only THEN deployed —
-the version bump is the *pre-deploy* half of release-cutting; the GH release +
-tag + News sequence below is the post-deploy half. WHY it cannot be bumped
-after: `Version.base/0` reads the **compiled `:vsn`**, so a HOT reload never
-refreshes the version string (that is the #391 bug); and `Preflight.mix_deps?`
-classifies any `mix.exs` change as **COLD**, so the bump forces an
-otherwise-hot range cold regardless — there is no "hot-patch the version"
-shortcut. Corollary: an **unplanned** prod move (a migration, a jail cutover)
-is something you version BEFORE, not after — a cutover that ships N commits
-while `mix.exs` still reads the old version is NOT corrected by a second cold
-restart to fix a string; the correct fix is to have bumped first.
+The **repo-root `VERSION` file** bump (#652 moved it out of `mix.exs @version`)
+MUST ride into the deploy as the **last commit of the range being shipped**, be
+tagged on that commit, and only THEN deployed — the version bump is the
+*pre-deploy* half of release-cutting; the GH release + tag + News sequence below
+is the post-deploy half. WHY version-first still holds after #652: the shipped
+range must self-report the version it IS, and the tag must equal `CTCP VERSION`
+exactly. `Version.base/0` now returns a compile-time constant baked from
+`VERSION` (an `@external_resource`), so a HOT deploy of a `VERSION`-only bump
+DOES refresh the reported string as the recompiled `Grappa.Version` beam
+reloads — a `VERSION`-only bump is HOT (it no longer touches `mix.exs`, so
+`Preflight.mix_deps?` no longer forces COLD; that reversed the pre-#652 rule).
+The one lag: the running node's `.app` vsn stays at its boot value until the
+next cold restart, but `Grappa.Version` is the only thing that ever read it, so
+nothing observes the divergence. Corollary: an **unplanned** prod move (a
+migration, a jail cutover) is still something you version BEFORE, not after —
+bump `VERSION` in the range so the artifact self-reports honestly rather than
+patching a string afterward. Do NOT re-hardcode `@version` in `mix.exs`: it
+reads `VERSION` at build time, and re-inlining a literal silently reinstates
+the COLD (guarded by `version_single_source_test.exs`).
 
 Standing order (vjt 2026-07-24): a batch deploy is not "done" until a GitHub
 release is cut AND the site's News/Releases entry is committed. After a **batch
@@ -525,11 +532,11 @@ sequence:
    **SEMVER bump SIZED TO THE BATCH**: a big batch = a **MINOR** bump, NOT
    patchlevel; a **patch** bump only for a small / fix-only batch. The tag ≡ the
    version grappa reports in `CTCP VERSION`, EXACTLY (issue #391 wires it:
-   `Grappa.Version` folds `mix.exs` `@version` with a compile-time git snapshot —
-   a clean release tag matching the mix version → bare `X.Y.Z`; anything else →
-   `X.Y.Z-<shortsha>`, `-dev` if git is absent). A released build reports the bare
-   version; an unreleased build carries the suffix. Keep the mix version and the
-   tag in lockstep at cut time.
+   `Grappa.Version` folds the compiled `VERSION`-file constant (#652) with a
+   compile-time git snapshot — a clean release tag matching that version → bare
+   `X.Y.Z`; anything else → `X.Y.Z-<shortsha>`, `-dev` if git is absent). A
+   released build reports the bare version; an unreleased build carries the
+   suffix. Keep the `VERSION` file and the tag in lockstep at cut time.
 3. **Ping vjt** (via the ircbot) with **the tag + the release URL + 2 lines of
    highlight**. vjt then writes the site's News entry (next step) from that.
 4. **News/Releases `news.json` entry — vjt's lane.** vjt writes a `news.json`
