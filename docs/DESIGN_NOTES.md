@@ -26161,3 +26161,56 @@ Defect 1 of #642 (the per-IP cap counting the reverse-proxy address) is
 DELIBERATELY out of scope here — it turns on whether prod records the proxy
 address and whether the cap should be per-connection or per-subject (the same
 axis as #632), an open product question owned by vjt.
+---
+
+### 2026-08-02 — #644 — TopicBar auto-centres its text block via a header wrapper (regression of #344, cic)
+
+vjt dogfood screenshot: cic's topic bar rendered the `#channel`/`+modes` namebox
+and the topic lines HIGH in the bar, with visibly more empty space below the
+text than above it, while the ☰ members hamburger on the right sat centred — the
+two halves disagreed and read as misaligned. His ask, verbatim: *"serve un po'
+più di padding o margin top, o meglio ancora usare qualsiasi cosa che lo centri
+in AUTOMATICO"* → **auto-centre, NOT a hand-tuned constant.**
+
+**Root cause.** `.topic-bar` is a flex row. #344 (2026-07-23, commit c02716ce)
+deliberately set `align-items: flex-start` so the two TEXT columns (namebox +
+topic strip) top-align to EACH OTHER — topic line-1 beside the channel name,
+line-2 beside the `+modes` line — instead of each column centring as a whole and
+mis-registering (the columns have different heights). But the members hamburger
+adopts `.shell-chrome-btn` whose `min-height: var(--chrome-tap-min)` (48px, the
+Apple-HIG tap floor) is TALLER than the ~2-line text columns, so on the mobile
+tier (where the hamburger shows, `@media max-width:768px`) it drives the bar's
+cross-axis height. With `align-items: flex-start` the shorter text columns then
+pin to the TOP of that taller bar → they float high, empty space below. The
+hamburger only *looked* centred because it IS the full bar height.
+
+**Why the obvious fixes are wrong.** Reverting `.topic-bar` to `align-items:
+center` alone re-breaks #344: the two columns then centre INDEPENDENTLY and,
+because they differ in height, their lines no longer register. `align-self:
+center` per column has the identical failure. A `padding-top`/`margin-top`
+constant is exactly what vjt rejected — it breaks on the next
+font-size/line-height change.
+
+**Fix.** Group the two text columns under ONE wrapper, sibling to the hamburger:
+`.topic-bar-header` holds `.topic-bar-namebox` + `.topic-bar-topic`. Then
+`.topic-bar { align-items: center }` centres the header block AND the hamburger
+as UNITS (auto-centre, no magic constant), while `.topic-bar-header {
+align-items: flex-start }` PRESERVES #344's intra-block line-registration —
+#344's top-alignment did not die, it moved one level in. The former `.topic-bar`
+0.5rem gap splits: `.topic-bar` gap now separates header|hamburger, the
+`.topic-bar-header` gap separates namebox|topic. The header carries `flex: 1` +
+`min-width: 0` so the topic strip's own `flex: 1` and the namebox 18% width cap
+resolve against the header width (the bar minus the hamburger) — visually
+identical on desktop (no hamburger → header ≈ bar) and marginally more correct
+on mobile (18% of the text area). The desktop tier (hamburger `display: none`,
+only two children) already filled the bar, so it is unchanged.
+
+**Apply:** when a flex row mixes a tall fixed-height control (a tap-floored
+button) with shorter content that must ALSO keep an internal top-alignment,
+don't fight `align-items` on the row — wrap the content and centre the wrapper as
+a unit, keeping `flex-start` inside it. Guard the STRUCTURE in vitest (jsdom has
+no layout engine, so it can't assert centring): the wrapper groups the columns
+and the hamburger stays a sibling. The visual proof is device dogfood (Playwright
+webkit ≠ iOS) — owed on desktop AND iOS.
+
+Deploy class: cic-only (pure CSS + DOM restructure) → HOT / cic bundle.

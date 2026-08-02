@@ -1696,17 +1696,41 @@ html.resize-dragging * {
 
 .topic-bar {
   display: flex;
-  /* #344 — top-align the two columns (namebox left / topic strip right) so
-     topic line-1 sits beside the channel name and topic line-2 beside the
-     +modes line, instead of both blocks centered as wholes. Was
-     `align-items: center`. Fine baseline rhythm between the columns (bold base
-     name vs 0.85rem mode vs 2× mono topic @ line-height 1.5) is a tune-by-eye
-     stretch — dogfood/device-verify owed (webkit != iOS). */
-  align-items: flex-start;
+  /* #644 — centre the header block (the two text columns, grouped in
+     `.topic-bar-header`) and the members hamburger as UNITS on the cross axis.
+     The taller 48px hamburger (mobile) / a stretched bar drives the height, and
+     `align-items: center` now AUTO-centres the shorter text block in it — no
+     magic padding/margin constant (vjt's acceptance bar for #644). #344's
+     top-alignment did NOT die: it moved INSIDE `.topic-bar-header` (flex-start
+     there keeps topic line-1 beside the channel name, line-2 beside +modes).
+     Centring `.topic-bar` directly instead would centre the two columns
+     INDEPENDENTLY and mis-register their lines — hence the wrapper. */
+  align-items: center;
+  /* gap now separates the header block from the hamburger; the intra-column
+     namebox↔topic gap lives on `.topic-bar-header`. */
   gap: 0.5rem;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+}
+
+/* #644 — groups the two text columns (namebox + topic strip) so `.topic-bar`
+   can centre them as ONE unit against the hamburger (see `.topic-bar` note).
+   `align-items: flex-start` PRESERVES #344's intra-block line-registration
+   (topic line-1 beside the channel NAME, line-2 beside the +modes line) —
+   moved here from `.topic-bar` verbatim. `flex: 1` + `min-width: 0` carry the
+   flex-grow + ellipsis chain the topic strip needs (the strip's own `flex: 1`
+   now resolves against THIS wrapper's width, the bar minus the hamburger); the
+   0.5rem gap is the former `.topic-bar` gap between namebox and topic. Fine
+   baseline rhythm between the columns (bold base name vs 0.85rem mode vs 2×
+   mono topic @ line-height 1.5) is a tune-by-eye stretch — #644 IS the owed
+   dogfood/device-verify pass (webkit != iOS). */
+.topic-bar-header {
+  display: flex;
+  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+  gap: 0.5rem;
 }
 
 /* #305 — the hamburger ADOPTS `.shell-chrome-btn` (base + size tokens) via

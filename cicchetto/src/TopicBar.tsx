@@ -281,7 +281,17 @@ const TopicBar: Component<Props> = (props) => {
           `.topic-bar-hamburger` below (channel-only, CSS-hidden on
           desktop via @media) is now the SINGLE hamburger across the
           whole shell. */}
-      {/* #275 — channel name + modes STACKED in ONE width-capped clickable
+      {/* #644 — the two text columns (namebox + topic strip) are grouped under
+          ONE wrapper so `.topic-bar { align-items: center }` centres this block
+          and the hamburger as UNITS (auto-centre, no magic constant), while
+          `.topic-bar-header { align-items: flex-start }` PRESERVES #344's
+          intra-block line-registration (topic line-1 beside the channel name,
+          line-2 beside +modes). Before this wrapper the columns top-aligned to
+          the taller 48px hamburger / stretched bar and floated high with empty
+          space below (#644). The members hamburger stays a SIBLING of this
+          wrapper (below), outside the centred block. */}
+      <div class="topic-bar-header">
+        {/* #275 — channel name + modes STACKED in ONE width-capped clickable
           box. The whole box opens the /mode viewer/editor modal (reuse
           `openModeModal` — the SAME verb `/mode #chan`, bare `/mode`, and the
           old inline indicator used; "reuse the verbs, not the nouns"). The
@@ -294,35 +304,37 @@ const TopicBar: Component<Props> = (props) => {
           button-in-button); a tap anywhere on the box — name OR modes —
           bubbles to this onClick, so the `.topic-bar-modes` click paths that
           issue216 / issue240 exercise still open the modal. */}
-      <button
-        type="button"
-        class="topic-bar-namebox"
-        data-testid="channel-mode-box"
-        aria-label={`channel ${props.channelName} — view modes`}
-        title={modeStr().length > 0 ? (modesEntry()?.modes.join(", ") ?? "") : "view channel modes"}
-        onClick={() => openModeModal(props.networkSlug, props.channelName)}
-      >
-        <span class="topic-bar-channel">{props.channelName}</span>
-        {/* Compact mode string (e.g. "+nt") — rendered only when modes are
+        <button
+          type="button"
+          class="topic-bar-namebox"
+          data-testid="channel-mode-box"
+          aria-label={`channel ${props.channelName} — view modes`}
+          title={
+            modeStr().length > 0 ? (modesEntry()?.modes.join(", ") ?? "") : "view channel modes"
+          }
+          onClick={() => openModeModal(props.networkSlug, props.channelName)}
+        >
+          <span class="topic-bar-channel">{props.channelName}</span>
+          {/* Compact mode string (e.g. "+nt") — rendered only when modes are
             cached and non-empty (C3.1). Second line of the box. */}
-        <Show when={modeStr().length > 0}>
-          <span class="topic-bar-modes" title={modesEntry()?.modes.join(", ") ?? ""}>
-            {modeStr()}
-          </span>
-        </Show>
-      </button>
-      {/* Topic strip — always present; shows placeholder when no topic cached.
+          <Show when={modeStr().length > 0}>
+            <span class="topic-bar-modes" title={modesEntry()?.modes.join(", ") ?? ""}>
+              {modeStr()}
+            </span>
+          </Show>
+        </button>
+        {/* Topic strip — always present; shows placeholder when no topic cached.
           #263: view-only, its only action is to open the (read-only) modal for
           everyone; editing lives inside the modal. */}
-      <button
-        type="button"
-        class="topic-bar-topic"
-        onClick={openModal}
-        aria-label="expand topic"
-        title={topicTitle()}
-        data-testid="topic-strip"
-      >
-        {/* #307 — the clamped runs MUST be the direct children of a NON-button
+        <button
+          type="button"
+          class="topic-bar-topic"
+          onClick={openModal}
+          aria-label="expand topic"
+          title={topicTitle()}
+          data-testid="topic-strip"
+        >
+          {/* #307 — the clamped runs MUST be the direct children of a NON-button
             `-webkit-box` for `-webkit-line-clamp` to engage (a <button> wraps
             its children in an internal box and defeats the clamp — the #262
             bug: geometric clip with no ellipsis). This inner span carries the
@@ -330,15 +342,16 @@ const TopicBar: Component<Props> = (props) => {
             stay on the real <button> above, so no role/tabindex/keydown
             reimplementation is needed. MircBody emits its runs with no block
             wrapper, so they land as the span's direct line-box content. */}
-        <span class="topic-bar-topic-text">
-          <Show when={topicText() !== null} fallback={"(no topic set)"}>
-            {/* #220 — the bar NEVER navigates a link directly; a tap on a
+          <span class="topic-bar-topic-text">
+            <Show when={topicText() !== null} fallback={"(no topic set)"}>
+              {/* #220 — the bar NEVER navigates a link directly; a tap on a
                 link "surface-wins" (suppresses navigation) and bubbles to
                 the strip's onClick, which opens the modal. */}
-            <MircBody body={topicText() ?? ""} linkPolicy="surface-wins" emphasis />
-          </Show>
-        </span>
-      </button>
+              <MircBody body={topicText() ?? ""} linkPolicy="surface-wins" emphasis />
+            </Show>
+          </span>
+        </button>
+      </div>
       {/* #71 INC-2 — the presence-filter toggle (👁/🙈) moved to the right-rail
           RailActions drawer (channel-gated). It is no longer rendered here. */}
       {/* Members hamburger only when actively joined. Parked / failed

@@ -632,4 +632,41 @@ describe("TopicBar", () => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
   });
+
+  // #644 — the topic block sat HIGH in the bar (empty space below it) because
+  // `.topic-bar` used `align-items: flex-start` while the taller 48px hamburger
+  // (mobile) / stretched bar drove the cross-axis height, pinning the two
+  // shorter text columns to the top. The fix groups the two text columns under
+  // ONE `.topic-bar-header` wrapper so `.topic-bar { align-items: center }`
+  // centres the header block + hamburger as UNITS (auto-centre, no magic
+  // constant — vjt's acceptance bar), while `.topic-bar-header { align-items:
+  // flex-start }` PRESERVES #344's intra-block line-registration (topic line-1
+  // beside the channel name, line-2 beside +modes). jsdom has no layout engine,
+  // so this pins the STRUCTURE the centring depends on — the visual proof is the
+  // device dogfood (webkit != iOS).
+  describe("#644 — topic block auto-centres via a header wrapper", () => {
+    it("groups the namebox + topic strip under a single .topic-bar-header wrapper", () => {
+      mockTopicByChannel.mockReturnValue({
+        "freenode #italia": { text: "A topic", set_by: "vjt", set_at: null },
+      });
+      const { container } = render(() => <TopicBar {...baseProps()} />);
+      const header = container.querySelector(".topic-bar > .topic-bar-header");
+      expect(header).not.toBeNull();
+      // Both text columns live INSIDE the header so they centre as one unit;
+      // the header's own flex-start keeps their lines registered (#344).
+      expect(header?.querySelector(":scope > .topic-bar-namebox")).not.toBeNull();
+      expect(header?.querySelector(":scope > .topic-bar-topic")).not.toBeNull();
+    });
+
+    it("keeps the members hamburger a SIBLING of the header, not inside it", () => {
+      // Joined → the hamburger renders (default mock). It must stay OUTSIDE the
+      // centred text block: inside the header it would centre WITH the text and
+      // drive the header's flex-start, reintroducing the #644 misalignment.
+      const { container } = render(() => <TopicBar {...baseProps()} />);
+      const ham = container.querySelector(".topic-bar-hamburger");
+      expect(ham).not.toBeNull();
+      expect(ham?.parentElement).toHaveClass("topic-bar");
+      expect(container.querySelector(".topic-bar-header .topic-bar-hamburger")).toBeNull();
+    });
+  });
 });
