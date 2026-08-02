@@ -12316,6 +12316,7 @@ static void open_external_url(struct app *app, const char *url) {
 /* Defined with the media helper below, which needs the URL helpers this
  * section declares. */
 static void call_answer(struct app *app);
+static void call_open_url(struct app *app, const char *url);
 static void call_invite_peers(struct app *app, const char *network, const char *channel,
                               char *out, size_t out_sz);
 static void call_url_for_me(struct app *app, const char *network, const char *url, char *out,
@@ -12582,6 +12583,31 @@ static void call_invite_peers(struct app *app, const char *network, const char *
         break;
     }
     pthread_mutex_unlock(&app->lock);
+}
+
+/* Open a URL that MIGHT be an invite, with our nick attached if it is.
+ *
+ * The verbs did this and the pointer did not, so joining by clicking the
+ * link in scrollback — which is how anyone without shottino joins, and
+ * how most people with it will — landed on a page with an empty nick
+ * field. Typing a different name there publishes to a path nobody is
+ * reading: connected to everyone, heard by no one.
+ *
+ * Non-invites pass through untouched: call_url_for_me only appends to a
+ * URL that carries a fragment. */
+static void call_open_url(struct app *app, const char *url) {
+    char net[MAX_SLUG];
+    char mine[MAX_LINE + 160];
+    if (!url || !url[0]) {
+        open_external_url(app, url);
+        return;
+    }
+    if (!current_window_key(app, net, sizeof(net), NULL, 0)) {
+        open_external_url(app, url);
+        return;
+    }
+    call_url_for_me(app, net, url, mine, sizeof(mine));
+    open_external_url(app, mine);
 }
 
 /* The same invite, with THIS client's own nick attached.
@@ -15392,7 +15418,7 @@ static void handle_command_dispatch(struct app *app, char *line) {
         else if (!open_media_picker(app, ACT_VIEW))
             log_line(app, "/view: nothing to open — no picture, clip or audio has been posted in this window");
     } else if (strcmp(line, "/open") == 0) {
-        open_external_url(app, app->last_url);
+        call_open_url(app, app->last_url);
     } else if (strcmp(line, "/call") == 0) {
         call_command(app, CALL_AUDIO);
     } else if (strcmp(line, "/videocall") == 0) {
@@ -16691,7 +16717,7 @@ static void handle_mouse(struct app *app) {
             /* Not a picture: hand it to the browser, the same door /open
              * uses. A link that cannot be opened from where it is read is
              * a link the user has to retype. */
-            open_external_url(app, url);
+            call_open_url(app, url);
         } else {
             /* Clicking a media link previews it, using the terminal's
              * graphics protocol when there is one and character art when
