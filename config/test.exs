@@ -66,6 +66,23 @@ config :logger, level: :warning
 # Cost: ~22s async → ~45s sequential test-suite latency.
 config :ex_unit, max_cases: 1
 
+# #653/#539 — raise the assert_receive/assert_push/assert_reply patience
+# window from ExUnit's 100ms default. Phoenix.ChannelTest's `assert_push/2`
+# + `assert_reply/2` both default their timeout to
+# `Application.fetch_env!(:ex_unit, :assert_receive_timeout)`, so this one
+# knob covers every channel reply/push assertion suite-wide, not just the
+# three GrappaChannelTest cases #539 filed. Those flaked under full-gate
+# load because a DB-write-gated reply/push arrives LATE, not never: with
+# `pool_size: 1` (single SQLite writer) + `max_cases: 1` (serial) + a
+# generous `queue_target: 5_000`, a reply gated on a write queued behind the
+# single writer can land well past 100ms. The message IS the settled signal
+# — waiting longer for it (condition-based-waiting) is the cure, NOT a blind
+# bump: 2s comfortably clears realistic queue latency while a genuinely
+# broken path still fails within 2s. `refute_receive` is UNAFFECTED (it
+# reads the separate `:refute_receive_timeout`), so negative "nothing
+# arrives" assertions stay fast and strict.
+config :ex_unit, assert_receive_timeout: 2_000
+
 # Test runs invoke Grappa.Bootstrap explicitly via Bootstrap.run/0; we
 # don't want the application start to autoload bound credentials and
 # try to connect to real upstream IRC servers during `mix test`.
