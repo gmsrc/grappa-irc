@@ -273,6 +273,8 @@ static bool all_settled(const struct call *c) {
 
 static bool session_up(const struct session *s) { return !s->active || s->state == RTC_CONNECTED; }
 
+static bool publish_up(const struct call *c) { return session_up(&c->pub); }
+
 /* Bring one session all the way up: tracks, offer, POST, answer.
  *
  * `dir` is what decides the shape — SENDRECV for a single-endpoint SFU,
@@ -295,9 +297,16 @@ static bool session_negotiate(struct session *s, const char *url, rtcDirection d
         config.iceServers = (const char **)ice;
         config.iceServersCount = 1;
     }
-    /* One UDP port for everything, which is what the far side expects
-     * and what makes a firewall rule writable. */
-    config.enableIceUdpMux = true;
+    /* NO UDP mux.
+     *
+     * It looked like the tidy choice — one local port, one firewall
+     * rule — and with TWO peer connections in one process it is a
+     * collision: both ask libjuice for the same muxed socket and the
+     * second never completes ICE, which the SFU reports as "deadline
+     * exceeded while waiting connection" and the user sees as a call
+     * with sound one way. The mux that matters is the SERVER's
+     * (webrtcLocalUDPAddress), and that is unaffected: our side dialling
+     * out from ephemeral ports is what every browser already does. */
 
     s->pc = rtcCreatePeerConnection(&config);
     if (s->pc < 0) {
@@ -563,11 +572,52 @@ int main(int argc, char **argv) {
     call.sub.receives = whep_url != NULL;
     call.pub.receives = whip_url && !whep_url;
 
+    pthread_t pump = 0;
+    bool pumping = false;
     bool ok = true;
     if (whip_url)
         ok = session_negotiate(&call.pub, whip_url,
                                paired ? RTC_DIRECTION_SENDONLY : RTC_DIRECTION_SENDRECV, video,
                                &mcfg, stun, timeout_ms);
+    /* Capture starts as soon as the SFU has ACCEPTED the publish, not
+     * after the connection completes.
+     *
+     * MediaMTX allows about two seconds from peer-connection to first
+     * RTP and then drops the publisher with "deadline exceeded while
+     * waiting tracks" — after which every WHEP read is a 404 and the
+     * failure looks like a subscribe bug. ffmpeg cannot fork, exec, open
+     * a device and encode a first frame inside that window if it only
+     * starts once ICE is done, so it gets its head start while ICE runs
+     * and the pump delivers the moment the track is up.
+     *
+     * The device still does not open until the SFU said yes, which is
+     * the gate that matters: a call nobody accepted never lights the
+     * microphone. */
+    if (ok && whip_url) {
+        if (!media_start_send(&call.send_audio, &mcfg, false))
+            emit_event("error", "message", "cannot open the microphone");
+        if (video && !media_start_send(&call.send_video, &mcfg, true))
+            emit_event("error", "message", "cannot open the camera");
+        pumping = pthread_create(&pump, NULL, pump_main, &call) == 0;
+    }
+
+    /* The subscribe waits for the publish to be CONNECTED, not merely
+     * accepted.
+     *
+     * An SFU that separates the two has nothing to read until a
+     * publisher is actually live: MediaMTX answers the WHEP POST with a
+     * 404 if the path has no active publisher, and the publish is not
+     * active the instant its own POST returns — ICE still has to
+     * complete. Measured against a real server, which is the only place
+     * this shows: a stub answers the same either way. */
+    if (ok && whep_url && whip_url) {
+        note("subscribe: waiting for the publish to come up");
+        if (!wait_until(&call, publish_up, timeout_ms)) {
+            emit_event("error", "message",
+                       "the publish never connected — check the SFU's advertised public IP");
+            ok = false;
+        }
+    }
     if (ok && whep_url)
         ok = session_negotiate(&call.sub, whep_url, RTC_DIRECTION_RECVONLY, video, &mcfg, stun,
                                timeout_ms);
@@ -583,8 +633,6 @@ int main(int argc, char **argv) {
                        "the media path never came up — check the SFU's advertised public IP");
     }
 
-    pthread_t pump = 0;
-    bool pumping = false;
     if (connected) {
         /* Devices open AFTER the connection is up, never before: opening
          * a microphone for a call that then fails to connect turns a
@@ -597,13 +645,6 @@ int main(int argc, char **argv) {
                 emit_event("error", "message", "cannot start audio playback (is ffmpeg installed?)");
             if (video && !media_start_recv(&call.recv_video, &mcfg, true, STDOUT_FILENO))
                 emit_event("error", "message", "cannot start video decoding");
-        }
-        if (sending) {
-            if (!media_start_send(&call.send_audio, &mcfg, false))
-                emit_event("error", "message", "cannot open the microphone");
-            if (video && !media_start_send(&call.send_video, &mcfg, true))
-                emit_event("error", "message", "cannot open the camera");
-            pumping = pthread_create(&pump, NULL, pump_main, &call) == 0;
         }
         emit_event("media", "value",
                    sending ? (video ? "audio+video" : "audio")

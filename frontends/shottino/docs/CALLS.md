@@ -427,6 +427,50 @@ For an audio call the frame stream goes to /dev/null and must never
 inherit the terminal — rgb24 bytes painted over ncurses is a screen
 nobody can recover.
 
+## Proven against a real SFU
+
+MediaMTX 1.19.3 on a public host, both sessions up, video decoded:
+
+```
+{"event":"state","value":"publish connected"}
+{"event":"state","value":"subscribe connected"}
+{"event":"media","value":"audio+video"}
+```
+
+Three bugs that ONLY a real server showed. A stub answers the same
+either way, which is exactly why they survived until now:
+
+- **The subscribe must wait for the publish to CONNECT.** MediaMTX
+  answers WHEP with `404` when a path has no active publisher, and the
+  publisher is not active the moment its own POST returns — ICE still
+  has to finish.
+- **Capture must start when the publish is ACCEPTED, not when it
+  connects.** MediaMTX allows about two seconds from peer-connection to
+  first RTP, then drops the publisher with *"deadline exceeded while
+  waiting tracks"* — after which every read is a 404 and it looks like a
+  subscribe bug. ffmpeg cannot fork, exec, open a device and encode a
+  frame inside that window from a standing start.
+- **No ICE UDP mux on our side.** One local port looked tidy and is a
+  collision with TWO peer connections in one process: both ask libjuice
+  for the same muxed socket and the second never completes ICE, which
+  the server reports as *"deadline exceeded while waiting connection"*
+  and the user experiences as sound one way. The mux that matters is the
+  SERVER's `webrtcLocalUDPAddress`; dialling out from ephemeral ports is
+  what every browser already does.
+
+### Known, not yet fixed
+
+The receive leg emits far more frames than asked for — measured ~486/s
+against a `fps=10` filter. shottino only ever draws the newest frame, so
+it wastes CPU rather than corrupting anything, but the rate bound on the
+decode side is not doing its job and wants an explicit output rate.
+
+**One publisher per path.** MediaMTX allows a single publisher per path,
+so two participants cannot both publish to `<room>/whip`. Real two-way
+between two people needs a path each (`<room>/<nick>`) with each
+subscribing to the other's — which is where the roster note above stops
+being theory. The current scheme is proven for publish-and-watch.
+
 ## Roadmap
 
 - **Stage 1 — shipping.** Invite convention, ring, answer/decline, hand
