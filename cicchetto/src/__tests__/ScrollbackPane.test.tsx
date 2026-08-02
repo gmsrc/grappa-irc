@@ -455,6 +455,63 @@ describe("ScrollbackPane", () => {
     expect(lines[0]).toHaveTextContent("→ CTCP VERSION to #chan");
   });
 
+  it("renders an uncorrelated inbound CTCP notice from typed meta, never raw \\x01 — #641", () => {
+    // #641 — an inbound CTCP reply (a NOTICE carrying \x01VERB [args]\x01) that
+    // matches no pending /ping is NOT consumed by subscribe.ts's
+    // maybeConsumePingReply (that swallows only CORRELATED PING replies). It
+    // reaches this render, where — before the fix — the notice arm fell through
+    // to the generic body render and leaked the raw \x01 delimiters into the DOM
+    // (`-NickServ- ^APING^A`), breaking the "cic NEVER shows \x01" invariant that
+    // only the privmsg arm (#591) had upheld.
+    //
+    // The server already classified it: meta.ctcp_verb is present (SSOT
+    // Grappa.IRC.CTCP.verb_args/1 tags EVERY inbound CTCP notice at
+    // event_router.ex:2236). cic reads the TYPED meta and renders a human INBOUND
+    // line (← ... from <sender>) — it NEVER parses \x01.
+    //
+    // TRAP (#638): /ping NickServ now CORRELATES (token-less service PING replies
+    // resolve), so a PING fixture would be consumed upstream and never reach this
+    // render — green for the WRONG reason. VERSION/TIME have NO correlation
+    // machinery: they are the genuinely uncorrelated class this fix must cover.
+    const ctcpNotice: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 1,
+        kind: "notice",
+        sender: "bob",
+        body: "\x01VERSION irssi 1.4.5\x01",
+        meta: { ctcp_verb: "VERSION", ctcp_args: "irssi 1.4.5" },
+      },
+      {
+        id: 2,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 2,
+        kind: "notice",
+        sender: "someclient",
+        body: "\x01TIME Sat Aug 02 2026\x01",
+        meta: { ctcp_verb: "TIME", ctcp_args: "Sat Aug 02 2026" },
+      },
+    ];
+    setScrollback({ "freenode #grappa": ctcpNotice });
+    render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+    const lines = screen.getAllByTestId("scrollback-line");
+    expect(lines).toHaveLength(2);
+    // Human INBOUND line from typed meta: direction ← and "reply from <sender>",
+    // reply payload (ctcp_args) rendered irssi-style after the sender.
+    expect(lines[0]?.dataset.kind).toBe("notice");
+    expect(lines[0]).toHaveTextContent("← CTCP VERSION reply from bob");
+    expect(lines[0]).toHaveTextContent("irssi 1.4.5");
+    // THE DEFECT: raw \x01 (U+0001) must NEVER reach the DOM.
+    expect(lines[0]?.textContent ?? "").not.toContain("\x01");
+    // General class, not the /ping instance: a stray TIME reply too.
+    expect(lines[1]).toHaveTextContent("← CTCP TIME reply from someclient");
+    expect(lines[1]).toHaveTextContent("Sat Aug 02 2026");
+    expect(lines[1]?.textContent ?? "").not.toContain("\x01");
+  });
+
   it("renders the action row with one space between '*' and the nick (not two) — #457", () => {
     // Regression pin for #457: the :action arm rendered `*  nick` (two
     // spaces) while every sibling `*`-framed kind (join/part/quit/…) uses

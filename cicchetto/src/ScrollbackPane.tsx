@@ -698,6 +698,31 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
       );
     }
     case "notice": {
+      // #641 — an inbound CTCP reply arrives as a server-typed :notice whose
+      // body is the raw \x01VERB [args]\x01 frame, classified ONCE on the server
+      // (SSOT Grappa.IRC.CTCP.verb_args/1) into typed meta.ctcp_verb /
+      // meta.ctcp_args. A CORRELATED /ping reply is consumed upstream
+      // (subscribe.ts maybeConsumePingReply) and never reaches here; an
+      // UNCORRELATED CTCP reply (a stray VERSION/TIME, or a token-less PING that
+      // matched no pending /ping) does. Before this arm it fell through to the
+      // generic body render below and leaked the raw \x01 into the DOM. Render a
+      // human INBOUND line from the TYPED meta instead — cic NEVER parses \x01
+      // (the "one IRC parser, on the server" invariant). This is the notice twin
+      // of the privmsg CTCP arm (#591), but INBOUND: direction ← / "reply from
+      // <sender>", and ctcp_args is the reply PAYLOAD rendered irssi-style after
+      // the sender (a query's outbound args mean something different — see the
+      // privmsg arm — so the two are deliberately NOT a shared helper). Plain
+      // control-surface text (no mIRC emphasis), like the numeric/raw surfaces.
+      const noticeCtcpVerb = msg.meta.ctcp_verb;
+      if (typeof noticeCtcpVerb === "string") {
+        const noticeCtcpArgs = typeof msg.meta.ctcp_args === "string" ? msg.meta.ctcp_args : "";
+        return (
+          <span class="scrollback-body">
+            ← CTCP {noticeCtcpVerb} reply from {msg.sender}
+            {noticeCtcpArgs === "" ? "" : `: ${noticeCtcpArgs}`}
+          </span>
+        );
+      }
       // No-silent-drops bucket 1: structured raw-event rendering.
       // EventRouter's catch-all persists unhandled command verbs as
       // :notice rows on $server with FLAT atom-keyed meta:
