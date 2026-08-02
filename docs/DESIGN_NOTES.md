@@ -26750,6 +26750,17 @@ taking only `$server`'s max would leave an open query's *pre-open* history above
 the threshold and dump it into the modal on open — breaking the "capture only
 while open" rule that shrinks the display-only phishing surface.
 
+**Second site, same blindness (found in review).** The #349 registration wizard
+mirrors NickServ the same way and carried the same `$server`-only read — in
+`setStepSince` (the step high-water) *and* in `RegistrationWizardModal`'s
+`lines()`, whose moduledoc already said it mirrored `openServiceModal`. There it
+is worse than cosmetic: step 4 (REGISTER) is USER-advanced off *reading* the
+reply — REGISTER has no structural success terminator — so an operator with a
+NickServ query open got an empty, unadvanceable-by-reading wizard. Both now
+consume `serviceMirrorRows`, and `setStepSince/1` takes the services nick from
+the caller that already resolved the template (no default argument). Fixing only
+the reported console would have left the same defect one modal away.
+
 **Apply:** when the server routes the same domain event to one of N destinations
 by a rule, a client view over that event reads **all N** — it does not
 re-implement the rule (that is the parallel state machine CLAUDE.md forbids) and

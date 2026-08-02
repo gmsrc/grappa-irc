@@ -46,7 +46,13 @@ export type ServiceModalTarget = {
 //
 // Ids are globally monotonic (`messages.id`), so a plain id sort interleaves
 // the two windows chronologically.
-export const serviceMirrorRows = (networkSlug: string, service: string): ScrollbackMessage[] => {
+// Returns a READONLY view: the `$server`-only fast path hands back the live
+// store array itself (no copy on the hot reactive read), so the type is the
+// guard against a caller mutating the scrollback in place.
+export const serviceMirrorRows = (
+  networkSlug: string,
+  service: string,
+): readonly ScrollbackMessage[] => {
   const byChannel = scrollbackByChannel();
   const server = byChannel[channelKey(networkSlug, SERVER_WINDOW_NAME)] ?? [];
   const query = byChannel[channelKey(networkSlug, service)] ?? [];
@@ -63,9 +69,9 @@ const exports_ = createRoot(() => {
     // arrives after open gets a higher id (ids are monotonic per the messages
     // schema), so `id > sinceId` selects exactly the while-open arrivals — and
     // spanning both windows keeps an open query's own history from leaking in.
-    // Assumes the $server subscription has already seeded local history (the
-    // common case — cic subscribes at connect). If it is empty here
-    // (sinceId=0) and a later reconnect refresh backfills pre-open notices,
+    // Assumes both windows' subscriptions have already seeded local history
+    // (the common case — cic subscribes at connect). If either has not landed
+    // yet and a later refresh backfills its pre-open notices above the mark,
     // they could surface once; display-only, so a benign, low-probability edge.
     const rows = serviceMirrorRows(networkSlug, service);
     const sinceId = rows.reduce((max, m) => (m.id > max ? m.id : max), 0);

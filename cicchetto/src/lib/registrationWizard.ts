@@ -1,7 +1,5 @@
 import { createRoot, createSignal } from "solid-js";
-import { channelKey } from "./channelKey";
-import { scrollbackByChannel } from "./scrollback";
-import { SERVER_WINDOW_NAME } from "./windowKinds";
+import { serviceMirrorRows } from "./serviceModal";
 
 // #349 — NickServ registration wizard open/close + step store.
 //
@@ -47,7 +45,7 @@ export type RegistrationWizardState = {
   email: string;
   password: string;
   code: string;
-  // High-water `$server` message id captured when a send-step (4 / 6)
+  // High-water mirror message id captured when a send-step (4 / 6)
   // fires (via `setStepSince`). The modal mirrors NickServ NOTICEs with
   // `id > stepSinceId` — a structural bound on "replies to THIS step",
   // NOT a parse of their text (#91 no-scraping rule).
@@ -102,12 +100,18 @@ const exports_ = createRoot(() => {
     patch((st) => ({ ...st, step: clampStep(st.step - 1), error: null }));
   };
 
-  // Capture the `$server` high-water mark for the wizard's network so the
-  // modal's NOTICE mirror shows only replies that arrive AFTER this
-  // send-step fired. Mirrors `openServiceModal`'s sinceId capture.
-  const setStepSince = (): void => {
+  // Capture the mirror high-water mark for the wizard's network so the modal's
+  // NOTICE mirror shows only replies that arrive AFTER this send-step fired.
+  // Shares `serviceMirrorRows` with `openServiceModal` — same capture, and the
+  // same #400/#661 reason for spanning both windows: with the operator's
+  // NickServ query window open the server re-keys every REGISTER/VERIFY reply
+  // THERE, so a `$server`-only high-water both misses the replies and leaves
+  // the query's pre-open history above the bound. `service` is the network's
+  // services nick (the wizard's `template.servicesNick`), passed in by the
+  // caller that already resolved the template.
+  const setStepSince = (service: string): void => {
     patch((st) => {
-      const rows = scrollbackByChannel()[channelKey(st.networkSlug, SERVER_WINDOW_NAME)] ?? [];
+      const rows = serviceMirrorRows(st.networkSlug, service);
       const stepSinceId = rows.reduce((max, m) => (m.id > max ? m.id : max), 0);
       return { ...st, stepSinceId };
     });

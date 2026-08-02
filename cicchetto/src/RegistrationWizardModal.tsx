@@ -10,7 +10,6 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { channelKey } from "./lib/channelKey";
 import { sendBodyLines } from "./lib/compose";
 import { friendlyError } from "./lib/friendlyError";
 import { networkBySlug, networkIdBySlug } from "./lib/networks";
@@ -30,9 +29,8 @@ import {
   wizardBack,
   wizardNext,
 } from "./lib/registrationWizard";
-import { scrollbackByChannel } from "./lib/scrollback";
+import { serviceMirrorRows } from "./lib/serviceModal";
 import { umodesForNetwork } from "./lib/umodes";
-import { SERVER_WINDOW_NAME } from "./lib/windowKinds";
 import { MircBody } from "./MircText";
 
 // #349 — guided NickServ registration wizard. Launched from the Home
@@ -109,14 +107,18 @@ const RegistrationWizardModal: Component = () => {
         };
         onCleanup(clearTimer);
 
-        // NickServ NOTICE mirror for the current send-step: $server rows
-        // for this network with id > stepSinceId, raw via MircBody. Zero
-        // content parsing — a structural (id) bound only.
+        // NickServ NOTICE mirror for the current send-step: this network's
+        // rows from wherever the server routes the service's replies —
+        // `$server`, or the service's own query window when the operator has
+        // one open (#400/#661, `serviceMirrorRows`) — with id > stepSinceId,
+        // raw via MircBody. Zero content parsing — a structural (id) bound
+        // only. Reading `$server` alone left the wizard's mirror permanently
+        // empty for an operator with a NickServ query open, and step 4 is
+        // USER-advanced off reading that reply: not cosmetic, unadvanceable.
         const lines = () => {
           const s = st();
-          const rows = scrollbackByChannel()[channelKey(s.networkSlug, SERVER_WINDOW_NAME)] ?? [];
           const nick = template()?.servicesNick ?? "NickServ";
-          return rows.filter(
+          return serviceMirrorRows(s.networkSlug, nick).filter(
             (m) => m.id > s.stepSinceId && m.kind === "notice" && nickEquals(m.sender, nick),
           );
         };
@@ -139,7 +141,7 @@ const RegistrationWizardModal: Component = () => {
           setTimedOut(false);
           clearTimer();
           setWizardError(null);
-          setStepSince();
+          setStepSince(tmpl.servicesNick);
           setWizardPending(true);
           sendBodyLines(s.networkSlug, tmpl.servicesNick, body, false)
             .then(() => {
