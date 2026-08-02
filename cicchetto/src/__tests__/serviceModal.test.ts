@@ -13,16 +13,25 @@ import { SERVER_WINDOW_NAME } from "../lib/windowKinds";
 
 const SLUG = "azzurra";
 
-const notice = (id: number, sender: string, body: string): ScrollbackMessage => ({
+const queryNotice = (
+  slug: string,
+  id: number,
+  sender: string,
+  channel: string,
+  body: string,
+): ScrollbackMessage => ({
   id,
-  network: SLUG,
-  channel: SERVER_WINDOW_NAME,
+  network: slug,
+  channel,
   server_time: id,
   kind: "notice",
   sender,
   body,
   meta: {},
 });
+
+const notice = (id: number, sender: string, body: string): ScrollbackMessage =>
+  queryNotice(SLUG, id, sender, SERVER_WINDOW_NAME, body);
 
 describe("serviceModal store (#290)", () => {
   afterEach(() => closeServiceModal());
@@ -40,6 +49,27 @@ describe("serviceModal store (#290)", () => {
     openServiceModal(SLUG, "NickServ");
 
     expect(serviceModalState()?.sinceId).toBe(42);
+  });
+
+  // #661 — the server (#400) re-keys a services arrival to the service's OWN
+  // query window when the operator has one open, so the high-water mark must
+  // span BOTH windows. Taking only $server would leave the query window's
+  // pre-open history above `sinceId` and leak it into the modal on open —
+  // exactly the "capture only while open" rule this field guards.
+  it("captures the high-water mark across $server AND the service's query window (#400 re-key)", () => {
+    const slug = "svc-hw-open-query";
+    appendToScrollback(
+      channelKey(slug, SERVER_WINDOW_NAME),
+      queryNotice(slug, 41, "NickServ", SERVER_WINDOW_NAME, "stale $server line"),
+    );
+    appendToScrollback(
+      channelKey(slug, "NickServ"),
+      queryNotice(slug, 55, "NickServ", "NickServ", "stale line in the open query"),
+    );
+
+    openServiceModal(slug, "NickServ");
+
+    expect(serviceModalState()?.sinceId).toBe(55);
   });
 
   it("sinceId is 0 when the $server window is empty (fresh network)", () => {

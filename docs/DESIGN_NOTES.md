@@ -26710,3 +26710,49 @@ into ci.yml next to the #503 deploy-script gate. cfn-lint is BEST-EFFORT (no AWS
 creds in CI). Acceptance — clean account → HTTPS, ≥2 regions, stack fully
 deletes — is a MANUAL vjt check, reported PENDING; the template + script were
 built and tested against their SHAPE, not a live AWS account.
+
+## 2026-08-03 — #661: the services console mirrors BOTH windows a service's notices can land in (#400 re-key)
+
+**Field report.** With a NickServ **query window open**, a bare `/ns` looked
+like it did nothing; closing the query made the console work. Deterministic
+toggle, reported with a screenshot, never reproduced by the issue author.
+
+**Neither of the two hypothesised loci was the cause.** The dispatch is
+window-agnostic (`parseServiceShortcut` returns `{kind:"service-modal"}` on
+`rest === ""` without consulting the active window, and `ComposeBox`'s submit
+path has no query-window branch), and the mount is unconditional (`ServiceModal`
+sits at the root of BOTH Shell branches; `Show when={state()}` renders as soon
+as the store is non-null). The modal **did** open — it opened **empty**, stuck
+on `(waiting for NickServ to reply…)` while the help wall piled up in the query
+window behind it. An empty console reads as "it didn't open".
+
+**Root cause: two SSOTs disagreed about WHERE a service's replies land.** The
+server's #400 rule (`EventRouter.service_route_channel/2`, shared by the NOTICE
+and the DM-shaped-PRIVMSG arms, twinned by `resolve_numeric_query_window/2` on
+the numeric door) re-keys a services-sender arrival to `$server` **UNLESS the
+operator has that service's own query window open** — then it lands THERE. cic's
+mirror read `$server` and only `$server`, so the exact configuration #400 exists
+to serve was the one configuration the console could not see. cic had **zero**
+references to #400: the client half of that rule was never written.
+
+**Fix — one derivation, both destinations** (`serviceMirrorRows/2` in
+`lib/serviceModal.ts`, consumed by `ServiceModal.tsx`'s `lines()` **and** by
+`openServiceModal`'s high-water capture). The union needs no open/closed flag of
+its own: a closed query contributes an empty list, so there is no second copy of
+the routing rule on the client to drift from the server's — the mirror simply
+reads *both* places a notice can be. It also survives the operator closing the
+query mid-open (arrivals switch back to `$server`, rendering continues) and the
+reverse. `messages.id` is globally monotonic, so a plain id sort interleaves the
+two windows chronologically instead of concatenating two blocks.
+
+**`sinceId` had to widen with it.** The high-water mark now spans both windows;
+taking only `$server`'s max would leave an open query's *pre-open* history above
+the threshold and dump it into the modal on open — breaking the "capture only
+while open" rule that shrinks the display-only phishing surface.
+
+**Apply:** when the server routes the same domain event to one of N destinations
+by a rule, a client view over that event reads **all N** — it does not
+re-implement the rule (that is the parallel state machine CLAUDE.md forbids) and
+it does not read only the common one. A conditional server-side re-key is a
+contract the client half has to be written for; grep the issue number on the
+client side before assuming it was.

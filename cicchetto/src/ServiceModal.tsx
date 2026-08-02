@@ -1,20 +1,18 @@
 import { type Component, createEffect, createSignal, For, Show } from "solid-js";
-import { channelKey } from "./lib/channelKey";
 import { sendBodyLines } from "./lib/compose";
 import { friendlyError } from "./lib/friendlyError";
 import { nickEquals } from "./lib/nickEquals";
 import { createOverlayLock } from "./lib/overlayScrollLock";
-import { scrollbackByChannel } from "./lib/scrollback";
-import { closeServiceModal, serviceModalState } from "./lib/serviceModal";
-import { SERVER_WINDOW_NAME } from "./lib/windowKinds";
+import { closeServiceModal, serviceMirrorRows, serviceModalState } from "./lib/serviceModal";
 import { MircBody } from "./MircText";
 
 // #290 — dedicated services console modal. Opened ONLY by a bare services
 // command (`/ns`, `/cs`, `/ms`, …) via compose.ts's `service-modal` arm
 // (which also fires `help`). Titled by the service; the body is a
-// notice-mirror derived from the $server scrollback (where the server routes
-// services-sender NOTICEs), filtered CLIENT-SIDE to THIS service and to
-// while-open arrivals (`id > sinceId`). Nick is stripped per line — the
+// notice-mirror derived from the scrollback windows the server routes
+// services-sender NOTICEs to (`$server`, or the service's own query window
+// when one is open — #400/#661, `serviceMirrorRows`), filtered CLIENT-SIDE to
+// THIS service and to while-open arrivals (`id > sinceId`). Nick is stripped per line — the
 // service name lives in the title, not repeated on every row. A bottom `>`
 // prompt sends raw commands to the service (same wire path as `/ns <cmd>`),
 // whose reply NOTICEs mirror back into the body. The notices ALSO stay in the
@@ -51,15 +49,16 @@ const ServiceModal: Component = () => {
         // "no silent-swallow at boundaries"; same posture as ComposeBox).
         const [sendError, setSendError] = createSignal<string | null>(null);
 
-        // Notice-mirror: the $server rows for this network, filtered to this
-        // service's notices that arrived AFTER open. Reactive on the
-        // scrollback signal — live NOTICEs append and appear here.
-        const lines = () => {
-          const rows = scrollbackByChannel()[channelKey(st.networkSlug, SERVER_WINDOW_NAME)] ?? [];
-          return rows.filter(
+        // Notice-mirror: this network's rows from wherever the server routes
+        // this service's arrivals — `$server`, or the service's own query
+        // window when the operator has one open (#400; see
+        // `serviceMirrorRows`) — filtered to this service's notices that
+        // arrived AFTER open. Reactive on the scrollback signal, so live
+        // NOTICEs append and appear here whichever window they land in.
+        const lines = () =>
+          serviceMirrorRows(st.networkSlug, st.service).filter(
             (m) => m.id > st.sinceId && m.kind === "notice" && nickEquals(m.sender, st.service),
           );
-        };
 
         const send = (): void => {
           const line = draft().trim();

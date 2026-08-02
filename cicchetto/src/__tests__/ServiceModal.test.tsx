@@ -19,10 +19,16 @@ vi.mock("../lib/compose", () => ({
   sendBodyLines: vi.fn().mockResolvedValue(undefined),
 }));
 
-const notice = (slug: string, id: number, sender: string, body: string): ScrollbackMessage => ({
+const noticeIn = (
+  slug: string,
+  id: number,
+  sender: string,
+  channel: string,
+  body: string,
+): ScrollbackMessage => ({
   id,
   network: slug,
-  channel: SERVER_WINDOW_NAME,
+  channel,
   server_time: id,
   kind: "notice",
   sender,
@@ -30,10 +36,18 @@ const notice = (slug: string, id: number, sender: string, body: string): Scrollb
   meta: {},
 });
 
+const notice = (slug: string, id: number, sender: string, body: string): ScrollbackMessage =>
+  noticeIn(slug, id, sender, SERVER_WINDOW_NAME, body);
+
 // Each test uses a distinct slug so the $server scrollback singleton stays
 // isolated across cases (no cross-test id/high-water-mark bleed).
 const seed = (slug: string, m: ScrollbackMessage): void =>
   appendToScrollback(channelKey(slug, SERVER_WINDOW_NAME), m);
+
+// #661 — seed the service's OWN query window, where the server (#400) re-keys
+// its arrivals whenever the operator has that window open.
+const seedQuery = (slug: string, service: string, m: ScrollbackMessage): void =>
+  appendToScrollback(channelKey(slug, service), m);
 
 describe("ServiceModal (#290)", () => {
   afterEach(() => {
@@ -68,6 +82,37 @@ describe("ServiceModal (#290)", () => {
     }
     // ...and the pre-open notice is NOT mirrored (capture only while open).
     expect(texts.some((t) => t.includes("stale line from a past session"))).toBe(false);
+  });
+
+  // #661 — the reported field bug: with a NickServ QUERY WINDOW open, the
+  // console looked dead (empty "waiting for NickServ to reply…" forever) while
+  // the help wall piled up in the query behind it. Cause: the server's #400
+  // rule re-keys a services arrival to that service's query window when one is
+  // open, so the reply NOTICEs never reach `$server` — the only window this
+  // mirror used to read. The modal is a view over wherever the service's
+  // notices land, so it reads both windows; a mid-open close of the query
+  // (arrivals switch back to `$server`) keeps rendering for the same reason.
+  it("mirrors notices re-keyed to the service's OPEN query window (#400), still capturing only while open", () => {
+    const slug = "svc-open-query";
+    seedQuery(slug, "NickServ", noticeIn(slug, 20, "NickServ", "NickServ", "stale query line"));
+    openServiceModal(slug, "NickServ"); // sinceId = 20 (high-water across both windows)
+    seedQuery(
+      slug,
+      "NickServ",
+      noticeIn(slug, 21, "NickServ", "NickServ", "help wall landed in the query"),
+    );
+    seed(slug, notice(slug, 22, "NickServ", "and this one landed on $server"));
+    render(() => <ServiceModal />);
+
+    const texts = screen.getAllByTestId("service-modal-line").map((l) => l.textContent ?? "");
+    expect(texts.some((t) => t.includes("help wall landed in the query"))).toBe(true);
+    expect(texts.some((t) => t.includes("and this one landed on $server"))).toBe(true);
+    expect(texts.some((t) => t.includes("stale query line"))).toBe(false);
+    // Merged in id order — the two windows interleave chronologically, they
+    // don't render as two concatenated blocks.
+    expect(texts.findIndex((t) => t.includes("in the query"))).toBeLessThan(
+      texts.findIndex((t) => t.includes("on $server")),
+    );
   });
 
   it("filters to THIS service — a different service's notice is not shown", () => {
