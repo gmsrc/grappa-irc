@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import * as api from "./api";
+import { setSeveredForFlood } from "./floodSever";
 
 // Auth state is a single module-level signal. The token is *the* identity
 // — REST calls attach it as `Authorization: Bearer ${token}`, the WS
@@ -39,6 +40,14 @@ export function setToken(value: string | null): void {
     localStorage.removeItem(STORAGE_KEY);
   } else {
     localStorage.setItem(STORAGE_KEY, value);
+    // #630 — acquiring a valid bearer IS a successful (re-)login, so clear
+    // the inbound-flood sever latch (floodSever.ts) here on the token-ACQUIRE
+    // edge. DELIBERATELY guarded on non-null: the flood sever revokes the
+    // bearer, which fires the 401 handler → setToken(null) DURING the sever;
+    // clearing on that token-CLEAR edge would erase the latch before the
+    // re-login banner ever rendered. So the clear lives ONLY here, never in
+    // the null branch / clearLocalAuth / logout.
+    setSeveredForFlood(false);
   }
   setTokenSignal(value);
 }

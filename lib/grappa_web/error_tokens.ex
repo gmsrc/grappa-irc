@@ -167,4 +167,5 @@ defmodule GrappaWeb.ErrorTokens do
           | :nothing_to_recover
           | :already_identified
           | :recovery_in_progress
+          | :rate_limited
 end

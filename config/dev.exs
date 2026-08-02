@@ -60,6 +60,21 @@ config :grappa, :admission, default_max_per_ip_per_network: 10
 # :admission relaxation above.
 config :grappa, :send_throttle, capacity: 1_000, refill_per_sec: 1_000
 
+# GH #630 — coarse per-subject request budget (see config.exs). Dev/e2e
+# headroom is set HIGH enough that a normal user (and every non-flood e2e
+# spec's login/seed/compose fan-out) stays comfortably under it, but a
+# DELIBERATE flood — the #630 e2e fires hundreds of frames as fast as JS
+# can — blows through `capacity` and then past `sever_after` over-budget
+# events, exercising the full throttle→429→sever ladder end-to-end. Unlike
+# `:send_throttle` (off in dev because the flood ladder isn't its surface),
+# #630's e2e IS the acceptance gate, so the budget stays ARMED here — just
+# with a burst ceiling no honest interaction reaches.
+config :grappa, :request_budget,
+  capacity: 200,
+  refill_per_sec: 20.0,
+  sever_after: 30,
+  sever_window_ms: 10_000
+
 # Cloak vault key — non-secret, dev-only. Anyone with the repo has it;
 # the dev sqlite file is gitignored. Prod reads from GRAPPA_ENCRYPTION_KEY
 # env var (see config/runtime.exs).

@@ -46,6 +46,7 @@ import type {
   NetworksWireVisitorNetworkWithNickJson,
   NotifyWireEntry,
   QueryWindowsWireWindowsEntry,
+  RateLimitWireWebSessionSeveredEvent,
   ScrollbackMessageKind,
   ScrollbackWireArchiveWireEntry,
   ScrollbackWireT,
@@ -1194,7 +1195,17 @@ export type WireUserEvent =
       kind: "presence_snapshot";
       network_id: number;
       nicks: Record<string, "online" | "offline" | "unknown">;
-    };
+    }
+  // #630 — inbound-flood web-session sever. When a client floods grappa
+  // inbound, the server broadcasts this on the user topic, THEN revokes the
+  // bearer + closes the socket. cic latches `severedForFlood` (floodSever.ts)
+  // so the re-login screen shows a dedicated "disconnected for sending too
+  // fast" banner. The arm reuses the generated `RateLimitWireWebSessionSevered
+  // Event` shape DIRECTLY — equality holds by construction, so no `_Assert_`
+  // pin is needed (same SSOT posture as the #410 leaf-enum aliases). `code`
+  // is a closed single-value set ("rate_limit_flood") narrowed strictly at
+  // ingress in userTopic.ts.
+  | RateLimitWireWebSessionSeveredEvent;
 
 // M-11 — Admin events stream. Discriminated union mirrors
 // `Grappa.AdminEvents.Wire`'s closed `event_kind` enum. Server emits

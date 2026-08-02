@@ -478,11 +478,40 @@ defmodule Grappa.Accounts do
   """
   @spec revoke_session(Ecto.UUID.t()) :: :ok
   def revoke_session(id) when is_binary(id) do
-    query = from(s in Session, where: s.id == ^id)
-    {affected, _} = Repo.update_all(query, set: [revoked_at: DateTime.utc_now()])
+    {affected, _} = Repo.update_all(session_by_id_query(id), set: [revoked_at: DateTime.utc_now()])
     Logger.info("session revoked", session_ref: session_handle(id), affected: affected)
     :ok
   end
+
+  @doc """
+  As `revoke_session/1`, but rides out a transient SQLITE_BUSY via
+  `Repo.BusyRetry` and degrades to `{:error, :db_unavailable}` on sustained
+  saturation instead of the MatchError-crash a bare `:ok = <update_all>`
+  would raise. The #630 web-session SEVER path
+  (`GrappaWeb.RequestBudget.sever/3`) calls this: it fires at PEAK DB write
+  contention (a flood IS the load) and, because the flood ladder severs
+  exactly ONCE at the crossing, a crash here would both skip the socket
+  close AND permanently defeat enforcement for the window. Sibling of
+  `revoke_sessions_for_visitor/1` (#523/#518), whose login door had the same
+  "must degrade, not crash" need. A single idempotent UPDATE, so a retried
+  statement is safe.
+  """
+  @spec revoke_session_resilient(Ecto.UUID.t()) :: :ok | {:error, :db_unavailable}
+  def revoke_session_resilient(id) when is_binary(id) do
+    case Repo.BusyRetry.run(fn ->
+           {:ok, Repo.update_all(session_by_id_query(id), set: [revoked_at: DateTime.utc_now()])}
+         end) do
+      {:ok, {affected, _}} ->
+        Logger.info("session revoked", session_ref: session_handle(id), affected: affected)
+        :ok
+
+      {:error, :db_unavailable} = err ->
+        err
+    end
+  end
+
+  @spec session_by_id_query(Ecto.UUID.t()) :: Ecto.Query.t()
+  defp session_by_id_query(id), do: from(s in Session, where: s.id == ^id)
 
   @doc """
   Bulk-revoke every non-revoked `Session` row tied to the given

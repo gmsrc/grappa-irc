@@ -21,10 +21,15 @@ defmodule Grappa.RateLimit do
       (ETS-backed GenServer), consumed by the inbound message-send
       throttle that 429s a flooding client before upstream k-lines it
       (#340).
+    * `RequestBudget` — GH #630 coarse per-subject inbound request
+      budget spanning EVERY WS verb + every REST write. The shared
+      throttle→429→sever decision function (built on `TokenBucket` +
+      `FailureWindow`) both inbound doors call; config via the
+      `:persistent_term` boot seam.
   """
 
   use Boundary,
     top_level?: true,
     deps: [],
-    exports: [JitteredCooldown, DailyQuota, FailureWindow, TokenBucket]
+    exports: [JitteredCooldown, DailyQuota, FailureWindow, TokenBucket, RequestBudget, Wire]
 end

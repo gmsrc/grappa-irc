@@ -379,6 +379,39 @@ defmodule GrappaWeb.GrappaChannel do
     {:noreply, socket}
   end
 
+  # GH #630 — the SINGLE inbound choke point for this channel. Phoenix
+  # offers no pre-dispatch hook, so EVERY inbound WS frame enters through
+  # this one public `handle_in/3`, runs the coarse per-subject request
+  # budget, and only on `:ok` delegates to the per-verb `do_handle_in/3`
+  # clauses below. Routing every frame here — not just the verbs that pass
+  # through `dispatch_subject_verb/3` — is what makes the budget cover the
+  # CHEAP doors a flooder actually reaches for: `visibility`,
+  # `client_closing`, the watchlist verbs, and the unknown-event catch-all.
+  # It is the SAME `GrappaWeb.RequestBudget.guard/3` the REST write plug
+  # calls: one decision + one sever code path, both doors.
+  #
+  # Over budget → a `rate_limited` error reply carrying the `retry_after_ms`
+  # hint (the WS twin of the REST 429). On the sever crossing `guard/3` has
+  # ALREADY broadcast the `web_session_severed` user-topic event, revoked
+  # the bearer, and closed the socket out of band; the reply here is still
+  # `rate_limited` (this frame WAS over budget) and the teardown follows.
+  # 🔴 The IRC `Session.Server` is never touched.
+  @impl Phoenix.Channel
+  def handle_in(event, payload, socket) do
+    subject = socket.assigns.current_subject
+    session_id = socket.assigns.current_session_id
+    user_name = socket.assigns.user_name
+
+    case GrappaWeb.RequestBudget.guard(subject, session_id, user_name) do
+      :ok ->
+        do_handle_in(event, payload, socket)
+
+      {:error, _} ->
+        {:reply, {:error, %{error: "rate_limited", retry_after_ms: Grappa.RateLimit.RequestBudget.retry_after_ms()}},
+         socket}
+    end
+  end
+
   # S3.3 — pagehide immediate-away hint.
   #
   # Cicchetto fires `client_closing` on `pagehide` / `beforeunload` via the
@@ -387,8 +420,7 @@ defmodule GrappaWeb.GrappaChannel do
   # than waiting for the 30s debounce. The transport_pid is the WS process
   # that UserSocket.connect/3 registered with WSPresence at connect time
   # (WSPresence tracks the transport process, not the channel process).
-  @impl Phoenix.Channel
-  def handle_in("client_closing", _, socket) do
+  defp do_handle_in("client_closing", _, socket) do
     user_name = socket.assigns.user_name
     # CP24 bucket E web/S5: forward client_closing for visitors too —
     # the WSPresence registry now tracks both subjects (visitor session
@@ -412,14 +444,14 @@ defmodule GrappaWeb.GrappaChannel do
   # `transport_pid` UserSocket.connect registered, so DOWN cleanup is
   # automatic. Both users and visitors report (the gate applies to both);
   # only user sessions drive auto-away.
-  def handle_in("visibility", %{"visible" => visible}, socket) when is_boolean(visible) do
+  defp do_handle_in("visibility", %{"visible" => visible}, socket) when is_boolean(visible) do
     :ok = WSPresence.set_visibility(socket.assigns.user_name, socket.transport_pid, visible)
     {:reply, {:ok, %{}}, socket}
   end
 
   # Boundary: reject a malformed payload loudly rather than silently
   # coercing — a non-boolean `visible` is a client bug.
-  def handle_in("visibility", _, socket) do
+  defp do_handle_in("visibility", _, socket) do
     {:reply, {:error, %{error: "invalid_payload"}}, socket}
   end
 
@@ -441,12 +473,12 @@ defmodule GrappaWeb.GrappaChannel do
   # S4.3: reads `origin_window` from the payload (if present) and passes it to
   # Session.set_explicit_away/4 so 305/306 reply numerics route back to the
   # originating cicchetto window.
-  def handle_in(
-        "away",
-        %{"action" => "set", "network" => slug, "reason" => reason} = payload,
-        socket
-      )
-      when is_binary(slug) and is_binary(reason) do
+  defp do_handle_in(
+         "away",
+         %{"action" => "set", "network" => slug, "reason" => reason} = payload,
+         socket
+       )
+       when is_binary(slug) and is_binary(reason) do
     case validate_origin_window(payload) do
       {:ok, origin_window} ->
         with_body_check(socket, reason, fn ->
@@ -466,8 +498,8 @@ defmodule GrappaWeb.GrappaChannel do
   # `{:error, :not_explicit}` return).
   #
   # S4.3: reads `origin_window` from payload and passes to Session facade.
-  def handle_in("away", %{"action" => "unset", "network" => slug} = payload, socket)
-      when is_binary(slug) do
+  defp do_handle_in("away", %{"action" => "unset", "network" => slug} = payload, socket)
+       when is_binary(slug) do
     with {:ok, origin_window} <- validate_origin_window(payload),
          {:ok, subject} <- resolve_subject(socket.assigns.user_name),
          {:ok, %Network{} = network} <- Networks.get_network_by_slug(slug),
@@ -499,12 +531,12 @@ defmodule GrappaWeb.GrappaChannel do
   # ---------------------------------------------------------------------------
 
   # /op alice bob carol  →  MODE #chan +ooo alice bob carol
-  def handle_in(
-        "op",
-        %{"network_id" => network_id, "channel" => channel, "nicks" => nicks},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) and is_list(nicks) do
+  defp do_handle_in(
+         "op",
+         %{"network_id" => network_id, "channel" => channel, "nicks" => nicks},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) and is_list(nicks) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel, nicks: nicks) end,
@@ -513,12 +545,12 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   # /deop alice bob carol  →  MODE #chan -ooo alice bob carol
-  def handle_in(
-        "deop",
-        %{"network_id" => network_id, "channel" => channel, "nicks" => nicks},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) and is_list(nicks) do
+  defp do_handle_in(
+         "deop",
+         %{"network_id" => network_id, "channel" => channel, "nicks" => nicks},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) and is_list(nicks) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel, nicks: nicks) end,
@@ -527,12 +559,12 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   # /voice alice  →  MODE #chan +v alice
-  def handle_in(
-        "voice",
-        %{"network_id" => network_id, "channel" => channel, "nicks" => nicks},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) and is_list(nicks) do
+  defp do_handle_in(
+         "voice",
+         %{"network_id" => network_id, "channel" => channel, "nicks" => nicks},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) and is_list(nicks) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel, nicks: nicks) end,
@@ -541,12 +573,12 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   # /devoice alice  →  MODE #chan -v alice
-  def handle_in(
-        "devoice",
-        %{"network_id" => network_id, "channel" => channel, "nicks" => nicks},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) and is_list(nicks) do
+  defp do_handle_in(
+         "devoice",
+         %{"network_id" => network_id, "channel" => channel, "nicks" => nicks},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) and is_list(nicks) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel, nicks: nicks) end,
@@ -555,13 +587,13 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   # /kick alice :bye  →  KICK #chan alice :bye
-  def handle_in(
-        "kick",
-        %{"network_id" => network_id, "channel" => channel, "nick" => nick, "reason" => reason},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) and is_binary(nick) and
-             is_binary(reason) do
+  defp do_handle_in(
+         "kick",
+         %{"network_id" => network_id, "channel" => channel, "nick" => nick, "reason" => reason},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) and is_binary(nick) and
+              is_binary(reason) do
     with_body_check(socket, reason, fn ->
       dispatch_subject_verb(
         socket,
@@ -572,12 +604,12 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   # /ban *!*@evil.com or /ban alice (bare nick → mask derivation in Server)
-  def handle_in(
-        "ban",
-        %{"network_id" => network_id, "channel" => channel, "mask" => mask},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) and is_binary(mask) do
+  defp do_handle_in(
+         "ban",
+         %{"network_id" => network_id, "channel" => channel, "mask" => mask},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) and is_binary(mask) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel, mask: mask) end,
@@ -586,12 +618,12 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   # /unban *!*@evil.com  →  MODE #chan -b *!*@evil.com
-  def handle_in(
-        "unban",
-        %{"network_id" => network_id, "channel" => channel, "mask" => mask},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) and is_binary(mask) do
+  defp do_handle_in(
+         "unban",
+         %{"network_id" => network_id, "channel" => channel, "mask" => mask},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) and is_binary(mask) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel, mask: mask) end,
@@ -610,12 +642,12 @@ defmodule GrappaWeb.GrappaChannel do
   # whether the invite is permitted (issuer must be on the channel; op for
   # +i). A visitor without a live session gets `no_session`, never an
   # identity rejection.
-  def handle_in(
-        "invite",
-        %{"network_id" => network_id, "channel" => channel, "nick" => nick},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) and is_binary(nick) do
+  defp do_handle_in(
+         "invite",
+         %{"network_id" => network_id, "channel" => channel, "nick" => nick},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) and is_binary(nick) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel, nick: nick) end,
@@ -634,12 +666,12 @@ defmodule GrappaWeb.GrappaChannel do
   # /banlist surface that superseded the original inline card). Pre-#376
   # this comment described the design but no such clause existed — 367/368
   # leaked the bare set-timestamp as a `$server` :notice row.
-  def handle_in(
-        "banlist",
-        %{"network_id" => network_id, "channel" => channel},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) do
+  defp do_handle_in(
+         "banlist",
+         %{"network_id" => network_id, "channel" => channel},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel) end,
@@ -656,12 +688,12 @@ defmodule GrappaWeb.GrappaChannel do
   # entitled (own session only, like /whois + /banlist). Returns the cached
   # entry, or {:error, not_cached} — the fail-closed signal cic surfaces so the
   # operator runs /whois rather than banning something wider than intended.
-  def handle_in(
-        "resolve_userhost",
-        %{"network_id" => network_id, "nick" => nick},
-        socket
-      )
-      when is_integer(network_id) and is_binary(nick) do
+  defp do_handle_in(
+         "resolve_userhost",
+         %{"network_id" => network_id, "nick" => nick},
+         socket
+       )
+       when is_integer(network_id) and is_binary(nick) do
     with {:ok, _} <- validate_args(nick: nick),
          {:ok, subject} <- resolve_subject(socket.assigns.user_name),
          {:ok, entry} <- Session.lookup_userhost(subject, network_id, nick) do
@@ -696,12 +728,12 @@ defmodule GrappaWeb.GrappaChannel do
   # the single-arg clause below (the extra "server" => nil map key is inert
   # in its pattern). The server token is validated with the single-token
   # `:server` predicate (server name or routing nick — no whitespace/CRLF).
-  def handle_in(
-        "whois",
-        %{"network_id" => network_id, "nick" => nick, "server" => server},
-        socket
-      )
-      when is_integer(network_id) and is_binary(nick) and is_binary(server) do
+  defp do_handle_in(
+         "whois",
+         %{"network_id" => network_id, "nick" => nick, "server" => server},
+         socket
+       )
+       when is_integer(network_id) and is_binary(nick) and is_binary(server) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(nick: nick, server: server) end,
@@ -709,12 +741,12 @@ defmodule GrappaWeb.GrappaChannel do
     )
   end
 
-  def handle_in(
-        "whois",
-        %{"network_id" => network_id, "nick" => nick},
-        socket
-      )
-      when is_integer(network_id) and is_binary(nick) do
+  defp do_handle_in(
+         "whois",
+         %{"network_id" => network_id, "nick" => nick},
+         socket
+       )
+       when is_integer(network_id) and is_binary(nick) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(nick: nick) end,
@@ -727,12 +759,12 @@ defmodule GrappaWeb.GrappaChannel do
   # WHOWAS upstream; EventRouter folds 314/312/369/406 and 369 (or 406)
   # broadcasts the bundle on `Topic.user/1` so the visitor's own cic
   # surface is the only consumer.
-  def handle_in(
-        "whowas",
-        %{"network_id" => network_id, "nick" => nick},
-        socket
-      )
-      when is_integer(network_id) and is_binary(nick) do
+  defp do_handle_in(
+         "whowas",
+         %{"network_id" => network_id, "nick" => nick},
+         socket
+       )
+       when is_integer(network_id) and is_binary(nick) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(nick: nick) end,
@@ -749,12 +781,12 @@ defmodule GrappaWeb.GrappaChannel do
   # and `LUSERS <mask> <server>` could not route remotely. Each is validated as
   # a single wire token (`safe_oper_token?/1`) before it reaches the wire; a
   # server with no mask is rejected (positional framing).
-  def handle_in(
-        "lusers",
-        %{"network_id" => network_id} = params,
-        socket
-      )
-      when is_integer(network_id) do
+  defp do_handle_in(
+         "lusers",
+         %{"network_id" => network_id} = params,
+         socket
+       )
+       when is_integer(network_id) do
     mask = Map.get(params, "mask")
     server = Map.get(params, "server")
 
@@ -771,12 +803,12 @@ defmodule GrappaWeb.GrappaChannel do
   # reply burst drains ONE ephemeral `server_reply` event on the subject's
   # `subject_label` topic — cic renders a dismissable retro modal, nothing is
   # persisted. Connect-time MOTD is untouched (no pending flag → $server).
-  def handle_in(
-        "info",
-        %{"network_id" => network_id},
-        socket
-      )
-      when is_integer(network_id) do
+  defp do_handle_in(
+         "info",
+         %{"network_id" => network_id},
+         socket
+       )
+       when is_integer(network_id) do
     dispatch_subject_verb(
       socket,
       fn -> {:ok, :ok} end,
@@ -784,12 +816,12 @@ defmodule GrappaWeb.GrappaChannel do
     )
   end
 
-  def handle_in(
-        "version",
-        %{"network_id" => network_id},
-        socket
-      )
-      when is_integer(network_id) do
+  defp do_handle_in(
+         "version",
+         %{"network_id" => network_id},
+         socket
+       )
+       when is_integer(network_id) do
     dispatch_subject_verb(
       socket,
       fn -> {:ok, :ok} end,
@@ -804,12 +836,12 @@ defmodule GrappaWeb.GrappaChannel do
   # injection-shaped target is rejected at the boundary before it reaches
   # the wire. An unknown target yields 402 ERR_NOSUCHSERVER upstream, which
   # surfaces via the same server_reply modal (never a wrong-server MOTD).
-  def handle_in(
-        "motd",
-        %{"network_id" => network_id} = params,
-        socket
-      )
-      when is_integer(network_id) do
+  defp do_handle_in(
+         "motd",
+         %{"network_id" => network_id} = params,
+         socket
+       )
+       when is_integer(network_id) do
     target = Map.get(params, "target")
 
     dispatch_subject_verb(
@@ -828,12 +860,12 @@ defmodule GrappaWeb.GrappaChannel do
   # the subject's `subject_label` topic — cic renders the topology map,
   # nothing is persisted. A restricted/oper-only network yields an empty
   # bundle ("hides topology") or a red $server 481 row.
-  def handle_in(
-        "links",
-        %{"network_id" => network_id} = params,
-        socket
-      )
-      when is_integer(network_id) do
+  defp do_handle_in(
+         "links",
+         %{"network_id" => network_id} = params,
+         socket
+       )
+       when is_integer(network_id) do
     mask = Map.get(params, "mask")
 
     dispatch_subject_verb(
@@ -852,8 +884,8 @@ defmodule GrappaWeb.GrappaChannel do
   # `not_visitor`/`nothing_to_recover`/`already_identified`/
   # `recovery_in_progress` arms in `dispatch_subject_verb/3`. No args to
   # validate beyond the guarded `network_id`.
-  def handle_in("recover", %{"network_id" => network_id}, socket)
-      when is_integer(network_id) do
+  defp do_handle_in("recover", %{"network_id" => network_id}, socket)
+       when is_integer(network_id) do
     dispatch_subject_verb(
       socket,
       fn -> {:ok, nil} end,
@@ -873,12 +905,12 @@ defmodule GrappaWeb.GrappaChannel do
   # of WHOIS post-C3); the WHO bundle's broadcast topic uses the
   # subject's `subject_label` so the visitor's own cic surface is the
   # only consumer.
-  def handle_in(
-        "who",
-        %{"network_id" => network_id, "channel" => channel},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) do
+  defp do_handle_in(
+         "who",
+         %{"network_id" => network_id, "channel" => channel},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) do
     dispatch_subject_verb(
       socket,
       # #221/#540 — WHO accepts a channel, a host/nick mask (RFC 2812
@@ -901,12 +933,12 @@ defmodule GrappaWeb.GrappaChannel do
   #
   # CP24 bucket B reviewer add-on: read-only verb — visitors are
   # entitled to issue it. Routes via `dispatch_subject_verb/2`.
-  def handle_in(
-        "names",
-        %{"network_id" => network_id, "channel" => channel},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) do
+  defp do_handle_in(
+         "names",
+         %{"network_id" => network_id, "channel" => channel},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel) end,
@@ -915,12 +947,12 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   # /umode +i  →  MODE own_nick +i
-  def handle_in(
-        "umode",
-        %{"network_id" => network_id, "modes" => modes},
-        socket
-      )
-      when is_integer(network_id) and is_binary(modes) do
+  defp do_handle_in(
+         "umode",
+         %{"network_id" => network_id, "modes" => modes},
+         socket
+       )
+       when is_integer(network_id) and is_binary(modes) do
     with_body_check(socket, modes, fn ->
       dispatch_subject_verb(
         socket,
@@ -931,12 +963,12 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   # /mode #chan +o-v alice bob  →  MODE #chan +o-v alice bob (verbatim, no chunking)
-  def handle_in(
-        "mode",
-        %{"network_id" => network_id, "target" => target, "modes" => modes, "params" => params},
-        socket
-      )
-      when is_integer(network_id) and is_binary(target) and is_binary(modes) and is_list(params) do
+  defp do_handle_in(
+         "mode",
+         %{"network_id" => network_id, "target" => target, "modes" => modes, "params" => params},
+         socket
+       )
+       when is_integer(network_id) and is_binary(target) and is_binary(modes) and is_list(params) do
     with_body_check(socket, modes, fn ->
       dispatch_subject_verb(
         socket,
@@ -962,23 +994,23 @@ defmodule GrappaWeb.GrappaChannel do
   # any new boolean check above either site silently flipped the error
   # message because both branches reduce to the same `false`/`true`.
   # Tagged tuples make each `else` arm map to a single source.
-  def handle_in(
-        "topic_set",
-        %{"network_id" => network_id, "channel" => channel, "text" => text},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) and is_binary(text) do
+  defp do_handle_in(
+         "topic_set",
+         %{"network_id" => network_id, "channel" => channel, "text" => text},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) and is_binary(text) do
     user_name = socket.assigns.user_name
     with_body_check(socket, text, fn -> topic_set_dispatch(socket, user_name, network_id, channel, text) end)
   end
 
   # /topic -delete  →  TOPIC #chan : (empty trailing — irssi convention, S5.4)
-  def handle_in(
-        "topic_clear",
-        %{"network_id" => network_id, "channel" => channel},
-        socket
-      )
-      when is_integer(network_id) and is_binary(channel) do
+  defp do_handle_in(
+         "topic_clear",
+         %{"network_id" => network_id, "channel" => channel},
+         socket
+       )
+       when is_integer(network_id) and is_binary(channel) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel) end,
@@ -1004,12 +1036,12 @@ defmodule GrappaWeb.GrappaChannel do
   # so a hand-crafted push with name/password containing spaces or empty
   # strings fails at this boundary — `OPER  \\r\\n` (empty) and
   # `OPER name extra pw\\r\\n` (space-leak) are both rejected here.
-  def handle_in(
-        "oper",
-        %{"network_id" => network_id, "name" => name, "password" => password},
-        socket
-      )
-      when is_integer(network_id) and is_binary(name) and is_binary(password) do
+  defp do_handle_in(
+         "oper",
+         %{"network_id" => network_id, "name" => name, "password" => password},
+         socket
+       )
+       when is_integer(network_id) and is_binary(name) and is_binary(password) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(oper_token: name, oper_token: password) end,
@@ -1024,12 +1056,12 @@ defmodule GrappaWeb.GrappaChannel do
   # adminserv/as/stats/rehash. That is INTENDED: the ircd O:line +
   # services are the real authority, the bouncer only enforces the same
   # CRLF/NUL line-safety it applies to every other outbound verb.
-  def handle_in(
-        "raw",
-        %{"network_id" => network_id, "line" => line},
-        socket
-      )
-      when is_integer(network_id) and is_binary(line) do
+  defp do_handle_in(
+         "raw",
+         %{"network_id" => network_id, "line" => line},
+         socket
+       )
+       when is_integer(network_id) and is_binary(line) do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(line: line) end,
@@ -1047,12 +1079,12 @@ defmodule GrappaWeb.GrappaChannel do
   # list. Visitor parity (V2 cluster, 2026-05-15) — visitor sockets get
   # the same path; row lands under `query_windows.visitor_id` per V1's
   # XOR FK shape.
-  def handle_in(
-        "open_query_window",
-        %{"network_id" => network_id, "target_nick" => target_nick},
-        socket
-      )
-      when is_integer(network_id) and is_binary(target_nick) do
+  defp do_handle_in(
+         "open_query_window",
+         %{"network_id" => network_id, "target_nick" => target_nick},
+         socket
+       )
+       when is_integer(network_id) and is_binary(target_nick) do
     user_name = socket.assigns.user_name
 
     with {:ok, _} <- validate_args(nick: target_nick),
@@ -1073,12 +1105,12 @@ defmodule GrappaWeb.GrappaChannel do
   # whether or not the row existed). After the DB delete, broadcasts
   # the updated `query_windows_list` on Topic.user/1. Visitor parity
   # per V2 — visitor sockets close visitor-FK rows.
-  def handle_in(
-        "close_query_window",
-        %{"network_id" => network_id, "target_nick" => target_nick},
-        socket
-      )
-      when is_integer(network_id) and is_binary(target_nick) do
+  defp do_handle_in(
+         "close_query_window",
+         %{"network_id" => network_id, "target_nick" => target_nick},
+         socket
+       )
+       when is_integer(network_id) and is_binary(target_nick) do
     user_name = socket.assigns.user_name
 
     with {:ok, _} <- validate_args(nick: target_nick),
@@ -1131,22 +1163,22 @@ defmodule GrappaWeb.GrappaChannel do
   # ---------------------------------------------------------------------------
 
   # /watch list  →  return current watchlist patterns for the subject.
-  def handle_in("watchlist", %{"action" => "list"}, socket) do
+  defp do_handle_in("watchlist", %{"action" => "list"}, socket) do
     subject = socket.assigns.current_subject
     patterns = UserSettings.get_highlight_patterns(subject)
     {:reply, {:ok, %{patterns: patterns}}, socket}
   end
 
   # /watch add <pattern>  →  add pattern to watchlist (idempotent — dup is no-op success).
-  def handle_in("watchlist", %{"action" => "add", "pattern" => pattern}, socket)
-      when is_binary(pattern) do
+  defp do_handle_in("watchlist", %{"action" => "add", "pattern" => pattern}, socket)
+       when is_binary(pattern) do
     watchlist_add(socket.assigns.current_subject, pattern, socket)
   end
 
   # /watch del <pattern>  →  remove pattern from watchlist.
   # Returns {:error, :not_found} when the pattern is not in the list.
-  def handle_in("watchlist", %{"action" => "del", "pattern" => pattern}, socket)
-      when is_binary(pattern) do
+  defp do_handle_in("watchlist", %{"action" => "del", "pattern" => pattern}, socket)
+       when is_binary(pattern) do
     watchlist_del(socket.assigns.current_subject, pattern, socket)
   end
 
@@ -1158,7 +1190,7 @@ defmodule GrappaWeb.GrappaChannel do
   # pid, so a hostile or buggy cic can repeatedly take down its own socket
   # and flood operator crash reports. Reply a typed error rather than crash,
   # mirroring AdminChannel's documented catch-all posture.
-  def handle_in(_, _, socket) do
+  defp do_handle_in(_, _, socket) do
     {:reply, {:error, %{error: "unknown_event"}}, socket}
   end
 

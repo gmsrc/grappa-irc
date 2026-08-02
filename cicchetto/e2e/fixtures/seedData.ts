@@ -149,6 +149,26 @@ export const I498_CHANNEL = "#i498";
 // NOT bahamut-test (not visitor_enabled → not self-serve-accretable).
 export const I498_NETWORK_SLUG = "azzurra";
 
+// #630 — dedicated sacrificial user for the inbound-flood-protection e2e.
+// The flood ladder's terminal rung is a SEVER: it REVOKES the flooded
+// subject's web bearer and closes its socket. The e2e stack boots
+// MIX_ENV=dev, whose `:request_budget` is ENFORCING (cap 200, sever at 30
+// over-budget events in 10s) so #630 proves the real 429 + sever + banner
+// full-stack — which means the flood MUST target a throwaway subject, never
+// the shared vjt. Flooding vjt revoked the SINGLE globalSetup-minted vjt
+// bearer every downstream vjt spec reuses, cascading auth-death across the
+// whole tail of the 1-worker suite (issue630 sorts at ~208, immediately
+// before issue66 + issue71-inc1 — exactly where that cascade began). Same
+// class as the GREEN-CI batch-1 fix (destructive admin specs → m9b-victim)
+// and the #498 witness (renames a LIVE nick → its OWN user): a DESTRUCTIVE
+// spec gets a dedicated victim. Created NO network bind (only needs a valid
+// web session to flood /me writes + be severed), so it consumes no
+// bahamut-test user-cap slot and never appears in the /admin/sessions leak
+// canary (registry-driven: one row = one live Session.Server pid).
+export const FLOOD_VICTIM_USER = "flood-victim";
+export const FLOOD_VICTIM_PASSWORD = "test-password-not-secret";
+export const FLOOD_VICTIM_IDENTIFIER = "flood-victim@grappa.test";
+
 const TOKEN_ENV_VAR = "E2E_VJT_TOKEN";
 const SUBJECT_ENV_VAR = "E2E_VJT_SUBJECT";
 const ADMIN_TOKEN_ENV_VAR = "E2E_ADMIN_TOKEN";
@@ -162,6 +182,8 @@ const ACCRETE_TOKEN_ENV_VAR = "E2E_ACCRETE_TOKEN";
 const ACCRETE_SUBJECT_ENV_VAR = "E2E_ACCRETE_SUBJECT";
 const I498_TOKEN_ENV_VAR = "E2E_I498_TOKEN";
 const I498_SUBJECT_ENV_VAR = "E2E_I498_SUBJECT";
+const FLOOD_VICTIM_TOKEN_ENV_VAR = "E2E_FLOOD_VICTIM_TOKEN";
+const FLOOD_VICTIM_SUBJECT_ENV_VAR = "E2E_FLOOD_VICTIM_SUBJECT";
 
 export default async function globalSetup(): Promise<void> {
   const result = await loginWithRetry(VJT_IDENTIFIER, VJT_PASSWORD);
@@ -217,6 +239,32 @@ export default async function globalSetup(): Promise<void> {
   const i498 = await loginWithRetry(I498_IDENTIFIER, I498_PASSWORD);
   process.env[I498_TOKEN_ENV_VAR] = i498.token;
   process.env[I498_SUBJECT_ENV_VAR] = JSON.stringify(i498.subject);
+
+  // #630 — sacrificial flood victim (see the constant's comment). Its bearer
+  // is the one the flood spec revokes; stashed so the spec can loginAs it.
+  const floodVictim = await loginWithRetry(FLOOD_VICTIM_IDENTIFIER, FLOOD_VICTIM_PASSWORD);
+  process.env[FLOOD_VICTIM_TOKEN_ENV_VAR] = floodVictim.token;
+  process.env[FLOOD_VICTIM_SUBJECT_ENV_VAR] = JSON.stringify(floodVictim.subject);
+}
+
+// #630 — the sacrificial flood victim (see FLOOD_VICTIM_USER). Same shape as
+// getSeededVjt; distinct env keys. The flood spec loginAs-es THIS user so the
+// sever revokes ITS bearer, never the shared vjt one downstream specs reuse.
+export function getSeededFloodVictim(): SeededUser {
+  const token = process.env[FLOOD_VICTIM_TOKEN_ENV_VAR];
+  const subjectJson = process.env[FLOOD_VICTIM_SUBJECT_ENV_VAR];
+  if (!token || !subjectJson) {
+    throw new Error(
+      `getSeededFloodVictim: ${FLOOD_VICTIM_TOKEN_ENV_VAR}/${FLOOD_VICTIM_SUBJECT_ENV_VAR} not set. Did playwright globalSetup run?`,
+    );
+  }
+  return {
+    name: FLOOD_VICTIM_USER,
+    password: FLOOD_VICTIM_PASSWORD,
+    identifier: FLOOD_VICTIM_IDENTIFIER,
+    token,
+    subjectJson,
+  };
 }
 
 export function getSeededVjt(): SeededUser {

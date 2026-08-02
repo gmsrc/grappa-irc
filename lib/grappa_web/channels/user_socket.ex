@@ -333,8 +333,25 @@ defmodule GrappaWeb.UserSocket do
   teardown response.
   """
   @spec disconnect_subject(GrappaWeb.Subject.t()) :: :ok
-  def disconnect_subject(subject) do
-    socket_id = id_for_subject(subject)
+  def disconnect_subject(subject), do: disconnect_user_name(Subject.topic_label(subject))
+
+  @doc """
+  Close the live WebSocket(s) for a subject addressed by its `user_name`
+  (the id-topic label `assign_subject/2` installs — `user.name` for a
+  user, `"visitor:" <> id` for a visitor). The WS-layer twin of
+  `disconnect_subject/1` for callers that hold the `user_name` (the
+  channel socket assign) but not the struct subject — GH #630's flood
+  sever runs inside `GrappaChannel.handle_in`, where only `user_name` is
+  in scope. Both go through the SAME id-topic broadcast so there is ONE
+  socket-teardown code path.
+
+  Fire-and-forget: a PubSub-server-unreachable `{:error, _}` is logged and
+  swallowed (the caller has already revoked the session, so the socket is
+  rejected on its next connect anyway).
+  """
+  @spec disconnect_user_name(String.t()) :: :ok
+  def disconnect_user_name(user_name) when is_binary(user_name) do
+    socket_id = id_for_user_name(user_name)
 
     case GrappaWeb.Endpoint.broadcast(socket_id, "disconnect", %{}) do
       :ok ->

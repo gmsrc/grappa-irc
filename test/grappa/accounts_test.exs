@@ -409,6 +409,47 @@ defmodule Grappa.AccountsTest do
     end
   end
 
+  # #630 — the busy-resilient single-session revoke the flood-sever door
+  # (`GrappaWeb.RequestBudget.sever/3`) calls. A flood IS peak DB write
+  # contention and the flood ladder severs exactly once, so the revoke must
+  # ride out a transient SQLITE_BUSY and degrade to a clean
+  # {:error, :db_unavailable} rather than the MatchError-crash a bare
+  # `:ok = <bare update_all>` raises. Sibling of
+  # `revoke_sessions_for_visitor/1` (#523/#518).
+  describe "revoke_session_resilient/1" do
+    setup do
+      {:ok, user} = Accounts.create_user(%{name: "sever-revoke", password: @password})
+      {:ok, session} = Accounts.create_session({:user, user.id}, "127.0.0.1", "ua", [])
+      %{session: session}
+    end
+
+    test "revokes the session with no contention", %{session: session} do
+      assert :ok = Accounts.revoke_session_resilient(session.id)
+      assert {:error, :revoked} = Accounts.authenticate(session.id)
+    end
+
+    test "rides out a transient busy within the retry budget, then revokes", %{session: session} do
+      # 3 injected faults clear well inside the 1500ms budget → the revoke
+      # still lands (proves the BusyRetry wiring, not just the degrade arm).
+      Grappa.Repo.BusyRetry.inject_transient_faults(3)
+
+      assert :ok = Accounts.revoke_session_resilient(session.id)
+      assert {:error, :revoked} = Accounts.authenticate(session.id)
+    end
+
+    test "degrades to :db_unavailable under sustained busy, never raising, bearer left intact", %{
+      session: session
+    } do
+      Grappa.Repo.BusyRetry.inject_transient_faults(10_000)
+
+      assert {:error, :db_unavailable} = Accounts.revoke_session_resilient(session.id)
+
+      # The revoke never landed, so the bearer is untouched — the caller's
+      # retry starts from the same state, no half-applied session churn.
+      assert {:ok, _} = Accounts.authenticate(session.id)
+    end
+  end
+
   # #257 — user leg of the admin subject-search autocomplete. A
   # case-insensitive substring match on the account `name`, LIKE-escaped
   # (an underscore in a name is legal and must match literally), bounded
