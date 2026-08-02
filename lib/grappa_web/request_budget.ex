@@ -60,12 +60,32 @@ defmodule GrappaWeb.RequestBudget do
   defp sever({kind, id}, session_id, user_name) do
     cfg = RequestBudget.config()
 
-    # 1. Tell the subject (best-effort) BEFORE the socket dies so cic can
-    #    latch the flood-banner state that survives the teardown.
-    :ok = Grappa.PubSub.broadcast_event(Topic.user(user_name), Wire.web_session_severed())
+    # 1. Tell the subject (best-effort courtesy) BEFORE the socket dies so
+    #    cic can latch the flood-banner state that survives the teardown. A
+    #    PubSub hiccup must NOT abort the load-bearing teardown below — the
+    #    failure already surfaces via `[:grappa, :pubsub, :broadcast_failed]`
+    #    telemetry, so the result is deliberately discarded, not matched.
+    _ = Grappa.PubSub.broadcast_event(Topic.user(user_name), Wire.web_session_severed())
 
     # 2. Kill the offending bearer — reconnect with old creds now refused.
-    :ok = Accounts.revoke_session(session_id)
+    #    A flood IS peak DB write contention and the ladder severs exactly
+    #    ONCE, so a MatchError-crash here would skip the socket close AND
+    #    permanently defeat enforcement for the window. The busy-resilient
+    #    revoke rides out a transient SQLITE_BUSY; on sustained saturation it
+    #    degrades to :db_unavailable — logged, then the teardown CONTINUES so
+    #    the live socket still closes (the stale bearer is throttled on its
+    #    next request). Never crash the guard.
+    case Accounts.revoke_session_resilient(session_id) do
+      :ok ->
+        :ok
+
+      {:error, :db_unavailable} ->
+        Logger.warning(
+          "web session sever: bearer revoke degraded (db unavailable) — " <>
+            "socket still closed, stale bearer throttled on next request",
+          subject_kind: kind
+        )
+    end
 
     # 3. Close the live socket(s) for this subject.
     :ok = UserSocket.disconnect_user_name(user_name)

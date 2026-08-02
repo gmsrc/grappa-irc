@@ -25851,7 +25851,10 @@ expires; no reset verb needed.
 
 **One code path, both doors.** `GrappaWeb.RequestBudget.guard/3` is the shared
 web adapter: `check/1` + the transport sever side-effects. `GrappaWeb.Plugs.
-RequestBudget` (REST writes, self-gated to write methods) and the SINGLE
+RequestBudget` (REST writes, self-gated to write methods; mounted via the
+`:request_budget` pipeline on the two authenticated cic-facing scopes — the
+`is_admin`-gated `/admin/*` console + `AdminChannel` are exempt, operator
+surfaces rather than the untrusted flood vector) and the SINGLE
 `GrappaChannel.handle_in/3` guard (which now fronts every verb — Phoenix has no
 pre-dispatch hook, so the 38 per-verb clauses became `do_handle_in/3` behind one
 public `handle_in/3`) both call it. Over budget → 429 (REST) / `rate_limited`
@@ -25860,6 +25863,22 @@ error frame (WS), each carrying `retry_after_ms`. The sever broadcasts a
 revokes the offending bearer, closes the socket via the shared id-topic
 disconnect, and records an `AdminEvents` event + `[:grappa, :rate_limit, :severed]`
 telemetry (a silent kill is a support ticket nobody can answer).
+
+**Sever is a resilient teardown, not a fail-hard chain (code-review).** The
+sever fires exactly ONCE at the crossing and runs at PEAK DB write contention
+(a flood IS the load), so no single side-effect may abort the ones after it.
+The courtesy broadcast is best-effort — its result is discarded (a PubSub
+hiccup already self-surfaces via `[:grappa, :pubsub, :broadcast_failed]`
+telemetry), never matched. The bearer revoke routes through
+`Accounts.revoke_session_resilient/1` (`Repo.BusyRetry`, the #523/#518
+pattern) so a transient SQLITE_BUSY is ridden out and sustained saturation
+degrades to a LOGGED `:db_unavailable` — the teardown then CONTINUES so the
+socket still closes (the stale bearer is throttled on its next request). A
+fail-hard `:ok =` here would MatchError-crash the guard, skip the socket
+close, and — because the ladder severs only once — permanently defeat
+enforcement for the window: the exact flood path the feature exists to stop.
+(Distinct from `Accounts.revoke_session/1`, kept fire-hard for its auth-path
+callers that run outside peak contention.)
 
 **Thresholds + WHY.** Prod: capacity 60, refill 20/s, sever at 20 over-budget
 events in 10s. 60 burst absorbs a login/window-open fan-out; 20/s is generous
