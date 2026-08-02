@@ -414,6 +414,20 @@ Two files under `~/.local/share/shottino`, both mode 0600:
 | --- | --- |
 | `llm.conf` | `llm.*` — the model transport's own configuration |
 | `shottino.conf` | everything else `/set` knows |
+| `*.conf~` | the version before the last write |
+
+**Every write keeps the previous version**, and the new file arrives by rename
+rather than by truncating in place — so a crash mid-write leaves the old file
+intact instead of half a file. Both are written wholesale from memory, which
+means anything wrong in memory becomes wrong on disk in one step; that has gone
+wrong three times in this client's own history, each time for a different
+reason, and each time what was missing was somewhere to look afterwards.
+
+A config **older than the binary** is safe too: a key it does not mention keeps
+whatever default the client just set, rather than being zeroed. Adding a setting
+used to delete that setting from every existing install, silently, the first
+time it read its own config.
+
 
 Until recently only the first existed, so an STT endpoint, its token, the
 capture devices and the three display toggles were set-and-lose while the
