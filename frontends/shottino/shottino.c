@@ -578,6 +578,8 @@ enum overlay_action {
     /* The IRCop action. Offered only while this user's own umodes say
      * they are one — see own_oper_on_network_locked. */
     ACT_KILL,
+    /* Turn a linked audio clip into words in the window. */
+    ACT_TRANSCRIBE,
     /* Stop drawing a picture in place. The row keeps its link — hiding is
      * about the space the picture takes on screen, not about forgetting
      * the URL was ever posted. */
@@ -10436,7 +10438,10 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
         if (ov->media[0]) {
             enum media_kind mk = media_kind_of(ov->media);
             if (mk == MEDIA_AUDIO) {
-                menu_add(out, &n, max, ACT_PREVIEW, "", ov->media, "Play %.900s", ov->media);
+                if (!menu_add(out, &n, max, ACT_PREVIEW, "", ov->media, "Play it")) return n;
+                /* Words are the other thing you can want from speech,
+                 * and the one a terminal is better at than a speaker. */
+                menu_add(out, &n, max, ACT_TRANSCRIBE, "", ov->media, "Transcribe it");
                 return n;
             }
             if (!menu_add(out, &n, max, ACT_PREVIEW, "", ov->media, "Preview here")) return n;
@@ -10800,6 +10805,16 @@ static void overlay_activate(struct app *app) {
     case ACT_HIDE:
         if (body[0]) hide_media_url(app, body);
         break;
+    case ACT_TRANSCRIBE:
+        /* Through the ordinary verb, so the enablement checks, the
+         * endpoint choice and the local fallback are decided in one
+         * place rather than two. */
+        if (body[0]) {
+            char cmd[MAX_LINE];
+            snprintf(cmd, sizeof(cmd), "/stt %.900s", body);
+            handle_command(app, cmd);
+        }
+        break;
     case ACT_SET_VALUE:
         /* Through the ordinary /set path: one validation, one save, one
          * panel refresh. The menu picked the word; it does not get its
@@ -11120,7 +11135,7 @@ static void cycle_window(struct app *app, int delta) {
 static const char *commands[] = {
     "/admin", "/alias", "/approve", "/archive", "/away", "/ban", "/banlist", "/block", "/bot",
     "/chat", "/clear", "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deny", "/deop",
-    "/devoice", "/die", "/disconnect", "/exec", "/exit", "/globops", "/help", "/highlight",
+    "/devoice", "/dictate", "/die", "/disconnect", "/exec", "/exit", "/globops", "/help", "/highlight",
     "/hilight", "/hs", "/ignore", "/info", "/invite", "/j", "/join", "/kb", "/keys", "/kick",
     "/kickban", "/kill", "/kline", "/links", "/list", "/llm", "/llm-clear", "/llm-compact",
     "/locops", "/lusers", "/me",
@@ -12412,7 +12427,8 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "lusers") == 0) log_line(app, "/lusers — request IRC network user/server counts");
     else if (strcmp(cmd, "watch") == 0 || strcmp(cmd, "highlight") == 0) log_line(app, "/watch add|del|list pattern — manage highlight watchlist");
     else if (strcmp(cmd, "op") == 0 || strcmp(cmd, "deop") == 0 || strcmp(cmd, "voice") == 0 || strcmp(cmd, "devoice") == 0) log_line(app, "/%s nick [nick...] — change channel privileges", cmd);
-    else if (strcmp(cmd, "stt") == 0) log_line(app, "/stt — speak, and the words land in the input line for you to check before sending. /stt <file> transcribes an audio file instead. OFF until /set stt.enabled on: with stt.url set the audio is sent to that endpoint, without it a local whisper (whisper-cli or whisper) does it and nothing leaves the machine");
+    else if (strcmp(cmd, "stt") == 0) log_line(app, "/stt <url|file> — transcribe audio into THIS window: a voice message somebody posted, or a file on disk. Right-clicking an audio link offers the same thing. OFF until /set stt.enabled on: with stt.url set the audio is sent to that endpoint, without it a local whisper (whisper-cli or whisper) does it and nothing leaves the machine");
+    else if (strcmp(cmd, "dictate") == 0) log_line(app, "/dictate — speak, and the words land in the INPUT LINE for you to check before sending. Enter ends the recording, Esc throws it away. Same engine and same setting as /stt; the difference is whose voice it is and where the words go");
     else if (strcmp(cmd, "voicemsg") == 0 || strcmp(cmd, "vmsg") == 0) log_line(app, "/voicemsg — record from the microphone: a timer opens, Enter ends and sends it, Esc throws it away. The recording is uploaded and its link posted like a picture. NOT /voice, which is the IRC +v verb. Capped at 300s; /set voice.source picks the device");
     else if (strcmp(cmd, "kick") == 0) log_line(app, "/kick nick [reason] — kick nick from the current channel");
     else if (strcmp(cmd, "ban") == 0 || strcmp(cmd, "unban") == 0) log_line(app, "/%s mask — set or remove a channel ban mask", cmd);
@@ -12895,12 +12911,75 @@ static char *stt_transcribe_local(struct app *app, const char *path) {
 }
 
 /* Worker side of /stt. `job->arg1` is a local path. */
+/* Download an audio URL to a scratch file so whisper has something on
+ * disk to read. Returns the path (caller unlinks and removes the
+ * directory) or NULL. Runs on the worker, so the fetch does not stall
+ * the UI. */
+static char *stt_fetch_audio(struct app *app, const char *url) {
+    struct fetch_result r;
+    if (!http_fetch(app, url, &r) || !r.body || !r.len) {
+        fetch_result_free(&r);
+        log_line(app, "/stt: could not download %.120s", url);
+        return NULL;
+    }
+    char dir[] = "/tmp/shottino-stt-XXXXXX";
+    if (!mkdtemp(dir)) {
+        fetch_result_free(&r);
+        log_line(app, "/stt: cannot make a scratch directory");
+        return NULL;
+    }
+    /* Keep the extension: both whisper flavours sniff the container by
+     * name as well as by content. */
+    const char *dot = strrchr(url, '.');
+    char ext[16] = ".ogg";
+    if (dot && strlen(dot) < sizeof(ext)) {
+        size_t n = 0;
+        for (const char *p = dot; *p && n + 1 < sizeof(ext); p++) {
+            if (*p == '?' || *p == '#') break;
+            ext[n++] = *p;
+        }
+        ext[n] = 0;
+    }
+    char *path = xasprintf("%s/audio%s", dir, ext);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    bool ok = fd >= 0 && write(fd, r.body, r.len) == (ssize_t)r.len;
+    if (fd >= 0) close(fd);
+    fetch_result_free(&r);
+    if (!ok) {
+        unlink(path);
+        rmdir(dir);
+        free(path);
+        log_line(app, "/stt: could not save the download");
+        return NULL;
+    }
+    return path;
+}
+
 static void stt_job(struct app *app, const struct job *job) {
-    char *text = app->stt_url[0] ? stt_transcribe_remote(app, job->arg1)
-                                 : stt_transcribe_local(app, job->arg1);
+    /* A URL is fetched first; a path is used as it stands. Either way
+     * what whisper sees is a file. */
+    char *fetched = NULL;
+    const char *src = job->arg1;
+    if (strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0) {
+        log_line(app, "/stt: downloading %.100s", src);
+        fetched = stt_fetch_audio(app, src);
+        if (!fetched) return;
+        src = fetched;
+    }
+    char *text = app->stt_url[0] ? stt_transcribe_remote(app, src)
+                                 : stt_transcribe_local(app, src);
     if (!text && app->stt_url[0] && stt_local_binary(app)) {
         log_line(app, "/stt: the endpoint did not answer — falling back to local whisper");
-        text = stt_transcribe_local(app, job->arg1);
+        text = stt_transcribe_local(app, src);
+    }
+    if (fetched) {
+        unlink(fetched);
+        char *slash = strrchr(fetched, '/');
+        if (slash) {
+            *slash = 0;
+            rmdir(fetched);
+        }
+        free(fetched);
     }
     if (job->owns_file) {
         unlink(job->arg1);
@@ -12917,20 +12996,32 @@ static void stt_job(struct app *app, const struct job *job) {
     for (char *p = text; *p; p++)
         if (*p == '\n' || *p == '\r') *p = ' ';
     pthread_mutex_lock(&app->lock);
-    /* Into the INPUT LINE, appended: whatever was already typed is not
-     * thrown away by a transcript arriving. */
-    size_t have = strlen(app->input);
-    if (have && have + 1 < sizeof(app->input)) app->input[have++] = ' ';
-    snprintf(app->input + have, sizeof(app->input) - have, "%s", text);
-    /* A transcript can be four times the input line, and snprintf cuts
-     * by bytes: a long dictation in any language with accents would
-     * otherwise end in half a character. */
-    utf8_trim_partial_tail(app->input);
-    app->input_len = strlen(app->input);
+    /* WHERE it lands is the difference between the two features.
+     *
+     * Dictation is you composing: the words go in the INPUT LINE for
+     * you to check and send, appended so anything already typed is not
+     * thrown away. Transcription is reading somebody ELSE'S audio: the
+     * words are a fact about the conversation and belong in the window,
+     * like any other line. Sending them would be putting words in your
+     * mouth that were never yours. */
+    if (job->arg2[0] == 'd') { /* dictate */
+        size_t have = strlen(app->input);
+        if (have && have + 1 < sizeof(app->input)) app->input[have++] = ' ';
+        snprintf(app->input + have, sizeof(app->input) - have, "%s", text);
+        /* A transcript can be four times the input line, and snprintf
+         * cuts by bytes: a long dictation in any language with accents
+         * would otherwise end in half a character. */
+        utf8_trim_partial_tail(app->input);
+        app->input_len = strlen(app->input);
         app->input_pos = app->input_len;
-    pthread_mutex_unlock(&app->lock);
-    log_line(app, "/stt: %.200s", text);
-    log_line(app, "/stt: in the input line — read it, fix it, then press Enter to send");
+        pthread_mutex_unlock(&app->lock);
+        log_line(app, "/dictate: %.200s", text);
+        log_line(app, "/dictate: in the input line — read it, fix it, then press Enter to send");
+    } else {
+        pthread_mutex_unlock(&app->lock);
+        card(app, job->network, "--- transcript of %.80s", job->arg1);
+        log_line(app, "%s", text);
+    }
     free(text);
 }
 
@@ -13179,6 +13270,7 @@ static void record_finished(struct app *app) {
     snprintf(job.arg1, sizeof(job.arg1), "%s", app->rec.path);
     if (app->rec.purpose == RECORD_TRANSCRIBE) {
         job.kind = JOB_STT;
+        snprintf(job.arg2, sizeof(job.arg2), "dictate");
         log_line(app, "/stt: %lds recorded — transcribing", secs);
     } else {
         job.kind = JOB_UPLOAD;
@@ -14678,18 +14770,35 @@ static void handle_command_dispatch(struct app *app, char *line) {
             log_line(app, "/stt: no endpoint (/set stt.url) and no local whisper on PATH "
                           "(whisper-cli or whisper)");
         } else if (*rest) {
-            /* A file that already exists — a received voice message
-             * saved to disk, or anything else with speech in it. Not
-             * ours, so the worker must not delete it. */
-            struct job job = { .kind = JOB_STT, .owns_file = false };
-            snprintf(job.arg1, sizeof(job.arg1), "%s", rest);
-            if (access(rest, R_OK) != 0)
+            /* A URL or a path: somebody else's audio, turned into words
+             * in the window. Not ours, so the worker must not delete it
+             * — a downloaded copy is its own business and cleaned up
+             * there. */
+            bool remote = strncmp(rest, "http://", 7) == 0 || strncmp(rest, "https://", 8) == 0;
+            if (!remote && access(rest, R_OK) != 0) {
                 log_line(app, "/stt: cannot read %s", rest);
-            else
+            } else {
+                struct job job = { .kind = JOB_STT, .owns_file = false };
+                snprintf(job.arg1, sizeof(job.arg1), "%s", rest);
+                snprintf(job.arg2, sizeof(job.arg2), "transcribe");
+                current_window_key(app, job.network, sizeof(job.network), NULL, 0);
                 enqueue_job(app, job);
+            }
         } else {
-            record_start_for(app, false, RECORD_TRANSCRIBE);
+            log_line(app, "/stt <url|file> — transcribe audio into this window. "
+                          "To speak and have the words typed for you, use /dictate");
         }
+    } else if (strcmp(line, "/dictate") == 0) {
+        /* The microphone half, which /stt used to be. Separated because
+         * they are different things: one turns somebody else's audio
+         * into text you READ, the other turns your voice into text you
+         * are about to SEND. */
+        if (!app->stt_enabled)
+            log_line(app, "/dictate is off — /set stt.enabled on turns it on");
+        else if (!app->stt_url[0] && !stt_local_binary(app))
+            log_line(app, "/dictate: no endpoint (/set stt.url) and no local whisper on PATH");
+        else
+            record_start_for(app, false, RECORD_TRANSCRIBE);
     } else if (strcmp(line, "/voicemsg") == 0 || strcmp(line, "/vmsg") == 0) {
         record_start(app, false);
     } else if (strcmp(line, "/video") == 0) {

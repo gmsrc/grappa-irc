@@ -21,7 +21,8 @@ there:
   protocol when there is one and character art when there is not;
 - clips and GIFs **play** in the scrollback;
 - `/voicemsg` records audio and posts it, `/video` does the same with a camera,
-  and `/stt` lets you dictate a line instead of typing it;
+  `/dictate` lets you speak a line instead of typing it, and `/stt` turns a voice
+  message somebody posted into words;
 - right-click a photo for a menu, scroll with the wheel, click a link;
 - `/bot` keeps a language model in your channels behind a permission gate;
 - `--ircd` turns the whole thing into an IRC server so irssi can connect *to
@@ -698,8 +699,9 @@ rate limit. The full model is in `llm.h`, beside the code that obeys it.
 ```sh
 /voicemsg          # or /vmsg — record from the microphone
 /video             # record from the camera
-/stt               # speak; the words land in the input line
-/stt <file>        # transcribe an audio file instead
+/stt <url>         # transcribe a voice message posted in the channel
+/stt <file>        # or an audio file on disk — the words land in the WINDOW
+/dictate           # speak; the words land in the INPUT LINE, for you to send
 ```
 
 `/voicemsg` and `/video` open a **modal timer**: Enter ends the recording and
@@ -725,6 +727,15 @@ answer:
 /set voice.source pulse:default        # ffmpeg format:input
 /set video.source v4l2:/dev/video0
 ```
+
+The two are one engine and one setting, and differ in whose voice it is and
+where the words go. Transcribing is reading: somebody else's audio becomes a
+line in the window, like any other fact about the conversation. Dictating is
+composing: your voice becomes text in the input line, which you check and send.
+Putting a transcript of someone else's message into your input line — which is
+what the old `/stt` did — is one Enter away from saying their words as your own.
+
+**Right-clicking an audio link** offers `Transcribe it` beside `Play it`.
 
 **`/stt` is off by default**, and that is a decision rather than a shrug:
 turning it on means audio from this machine may leave it.

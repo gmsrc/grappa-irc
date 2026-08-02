@@ -1189,6 +1189,64 @@ TEST(a_settings_menu_offers_what_the_setting_accepts) {
     free_app(app);
 }
 
+/* /stt and /dictate are different features.
+ *
+ * /stt was doing both: bare, it took the microphone and typed for you.
+ * That is dictation. Transcription is turning somebody ELSE'S audio
+ * into words you read — a voice message in a channel — and the two
+ * differ in whose voice it is and, crucially, where the words land:
+ * dictation into the input line to be sent, transcription into the
+ * window as a fact about the conversation. */
+TEST(stt_transcribes_and_dictate_types) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    app->url.base[0] = 0;
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    app->stt_enabled = true;
+    snprintf(app->stt_url, sizeof(app->stt_url), "https://whisper.example/v1");
+
+    /* Bare /stt no longer grabs the microphone; it says what it wants. */
+    handle_command(app, "/stt");
+    CHECK(log_has(app, "/stt <url|file>"));
+    CHECK(log_has(app, "/dictate"));
+
+    /* A URL is accepted and queued rather than rejected as a missing
+     * file — the whole point of the change. */
+    size_t before = app->jobs_tail;
+    handle_command(app, "/stt https://example.net/voice.ogg");
+    CHECK(app->jobs_tail != before);
+    CHECK(!log_has(app, "cannot read"));
+
+    /* A path that does not exist still says so. */
+    handle_command(app, "/stt /nowhere/really-not-here.ogg");
+    CHECK(log_has(app, "cannot read"));
+
+    /* The queued job carries the source and its PURPOSE, which is what
+     * decides where the words go. */
+    size_t at = app->jobs_head;
+    bool found = false;
+    for (size_t i = 0; i < JOB_QUEUE && at != app->jobs_tail; i++, at = (at + 1) % JOB_QUEUE) {
+        if (app->jobs[at].kind != JOB_STT) continue;
+        found = true;
+        CHECK_STR(app->jobs[at].arg1, "https://example.net/voice.ogg");
+        CHECK_STR(app->jobs[at].arg2, "transcribe");
+        break;
+    }
+    CHECK(found);
+
+    /* And the right-click menu on audio offers it, next to playing it. */
+    app->overlay.kind = OVERLAY_MENU;
+    snprintf(app->overlay.media, sizeof(app->overlay.media), "https://example.net/voice.ogg");
+    struct overlay_item items[64];
+    size_t n = overlay_items_locked(app, items, 64);
+    CHECK_LONG(n, 2);
+    CHECK_LONG(items[0].action, ACT_PREVIEW);
+    CHECK_LONG(items[1].action, ACT_TRANSCRIBE);
+    CHECK_STR(items[1].body, "https://example.net/voice.ogg");
+
+    free_app(app);
+}
+
 /* A client-local window is never asked about over REST.
  *
  * $llm is a conversation with a model; nothing on the wire has ever
@@ -2383,6 +2441,7 @@ int main(void) {
     RUN(two_identities_get_two_bot_directories);
     RUN(an_accented_character_survives_typing_and_one_backspace);
     RUN(a_settings_menu_offers_what_the_setting_accepts);
+    RUN(stt_transcribes_and_dictate_types);
     RUN(a_client_local_window_is_never_fetched_from_the_server);
     RUN(a_conversation_is_remembered_and_rolls_to_fit);
     RUN(the_context_budget_leaves_room_for_the_fixed_parts);
