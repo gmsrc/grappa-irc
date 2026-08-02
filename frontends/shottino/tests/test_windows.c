@@ -2084,8 +2084,55 @@ TEST(an_invite_round_trips_through_its_own_parser) {
      * some services and a different room on others. */
     char line[512];
     call_invite_build(CALL_AUDIO, "https://meet.example/", "r", line, sizeof(line));
-    CHECK(strstr(line, "https://meet.example/r") != NULL);
-    CHECK(strstr(line, "//r") == NULL);
+    CHECK(strstr(line, "https://meet.example/#r=r") != NULL);
+    CHECK(strstr(line, "//#") == NULL);
+    call_invite_build(CALL_AUDIO, "https://meet.example", "r", line, sizeof(line));
+    CHECK(strstr(line, "https://meet.example/#r=r") != NULL);
+}
+
+/* The room rides in the FRAGMENT, and a fragment is never sent to a
+ * server — which is the whole reason the room page can learn who is in
+ * a call without any endpoint being able to list room NAMES. A room
+ * name is the credential, so a listable endpoint hands every call in
+ * progress to whoever asks. */
+TEST(an_invite_carries_its_room_in_the_fragment) {
+    char base[MAX_LINE], room[160];
+
+    CHECK(call_invite_split("https://h/call/#r=shottino-4f2c&peers=ann,bob", base, sizeof(base),
+                            room, sizeof(room)));
+    CHECK_STR(base, "https://h/call");
+    CHECK_STR(room, "shottino-4f2c");
+
+    /* Order in the fragment is not ours to assume. */
+    CHECK(call_invite_split("https://h/call/#peers=ann&r=xyz", base, sizeof(base), room,
+                            sizeof(room)));
+    CHECK_STR(room, "xyz");
+
+    /* The base owns no trailing slash, so joining it cannot double one. */
+    CHECK(call_invite_split("https://h/call///#r=z", base, sizeof(base), room, sizeof(room)));
+    CHECK_STR(base, "https://h/call");
+
+    /* No fragment: the shape shottino posted BEFORE the room page, where
+     * the URL was the room base. Refused here so the caller falls back
+     * to it rather than deriving nonsense — an older client's invite
+     * stays answerable instead of silently unjoinable. */
+    CHECK(!call_invite_split("https://meet.jit.si/shottino-4f2c", base, sizeof(base), room,
+                             sizeof(room)));
+    /* A fragment with no room in it is not an invite we can act on. */
+    CHECK(!call_invite_split("https://h/call/#peers=ann", base, sizeof(base), room, sizeof(room)));
+    CHECK(!call_invite_split("#r=x", base, sizeof(base), room, sizeof(room)));
+    CHECK(!call_invite_split(NULL, base, sizeof(base), room, sizeof(room)));
+
+    /* What /call posts is what the splitter reads back. */
+    char line[512];
+    call_invite_build(CALL_VIDEO, "https://h/call", "shottino-99", line, sizeof(line));
+    enum call_kind kind;
+    char url[MAX_LINE];
+    CHECK(call_invite_parse(line, &kind, url, sizeof(url)));
+    CHECK_LONG(kind, CALL_VIDEO);
+    CHECK(call_invite_split(url, base, sizeof(base), room, sizeof(room)));
+    CHECK_STR(base, "https://h/call");
+    CHECK_STR(room, "shottino-99");
 }
 
 TEST(a_query_rings_and_a_channel_only_announces) {
@@ -2859,6 +2906,7 @@ int main(void) {
     RUN(a_question_is_written_where_its_answer_will_land);
     RUN(only_a_marked_invite_is_a_call);
     RUN(an_invite_round_trips_through_its_own_parser);
+    RUN(an_invite_carries_its_room_in_the_fragment);
     RUN(a_query_rings_and_a_channel_only_announces);
     RUN(an_arriving_call_rings_only_where_it_should);
     return test_report();

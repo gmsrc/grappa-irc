@@ -3023,7 +3023,45 @@ static void call_invite_build(enum call_kind kind, const char *base_url, const c
                               char *out, size_t out_sz) {
     size_t len = strlen(base_url);
     bool slash = len > 0 && base_url[len - 1] == '/';
-    snprintf(out, out_sz, "%s %s%s%s", call_marker(kind), base_url, slash ? "" : "/", room);
+    /* The room rides in the FRAGMENT, not the path.
+     *
+     * A fragment is never sent to a server, which is what lets the room
+     * page learn who is in the call without any endpoint anywhere being
+     * able to list room NAMES — and a room name is the credential here.
+     * The alternative, asking the SFU for its path list, hands every
+     * call in progress to whoever asks. */
+    snprintf(out, out_sz, "%s %s%s#r=%s", call_marker(kind), base_url, slash ? "" : "/", room);
+}
+
+/* Split an invite back into the page base and the room it names.
+ *
+ * False for an invite with no fragment — the shape shottino posted
+ * before the room page existed, where the URL WAS the room base.
+ * Accepting both keeps an older client's invite answerable instead of
+ * silently unjoinable. */
+static bool call_invite_split(const char *url, char *base, size_t base_sz, char *room,
+                              size_t room_sz) {
+    if (!url || !base || !room || base_sz == 0 || room_sz == 0) return false;
+    const char *hash = strchr(url, '#');
+    if (!hash) return false;
+    size_t blen = (size_t)(hash - url);
+    while (blen > 0 && url[blen - 1] == '/') blen--; /* the base owns no trailing slash */
+    if (blen == 0 || blen + 1 > base_sz) return false;
+    memcpy(base, url, blen);
+    base[blen] = 0;
+
+    room[0] = 0;
+    for (const char *p = hash + 1; *p;) {
+        if (p[0] == 'r' && p[1] == '=') {
+            size_t n = 0;
+            for (p += 2; *p && *p != '&' && n + 1 < room_sz; p++) room[n++] = *p;
+            room[n] = 0;
+            break;
+        }
+        while (*p && *p != '&') p++;
+        if (*p == '&') p++;
+    }
+    return room[0] != 0;
 }
 
 /* Is `body` an invite, and if so to what?
@@ -12578,6 +12616,16 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         return false;
     }
 
+    /* The media endpoints live under the page's own prefix, so ONE
+     * setting covers both: the page is <base>/ and a participant is
+     * <base>/rtc/<room>/<nick>/{whip,whep}. */
+    char page_base[MAX_LINE], room_id[160];
+    char rtc[MAX_LINE + sizeof(room_id) + 8];
+    if (call_invite_split(room_url, page_base, sizeof(page_base), room_id, sizeof(room_id)))
+        snprintf(rtc, sizeof(rtc), "%s/rtc/%s", page_base, room_id);
+    else
+        snprintf(rtc, sizeof(rtc), "%s", room_url); /* an invite from before the room page */
+
     /* ONE PATH PER PERSON, under the room.
      *
      * An SFU allows a single publisher per path, so two people both
@@ -12596,10 +12644,10 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     call_path_nick(own ? own : "me", me, sizeof(me));
     call_path_nick(query ? channel : "", them, sizeof(them));
 
-    size_t len = strlen(room_url);
-    const char *sep = (len > 0 && room_url[len - 1] == '/') ? "" : "/";
-    char whip[MAX_LINE];
-    snprintf(whip, sizeof(whip), "%s%s%s/whip", room_url, sep, me);
+    size_t len = strlen(rtc);
+    const char *sep = (len > 0 && rtc[len - 1] == '/') ? "" : "/";
+    char whip[sizeof(rtc) + 160];
+    snprintf(whip, sizeof(whip), "%s%s%s/whip", rtc, sep, me);
 
     /* WHO ELSE TO READ. In a query it is the one person the window
      * names. In a CHANNEL it is the roster — which is the thing WHIP
@@ -12609,10 +12657,10 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
      * and the SFU says so; the helper steps over them. That is also
      * what makes a late joiner work: they are simply a member whose
      * path started answering. */
-    char whep[CALL_MAX_PEERS][MAX_LINE];
+    char whep[CALL_MAX_PEERS][sizeof(rtc) + 160];
     size_t peers = 0;
     if (query) {
-        snprintf(whep[peers++], MAX_LINE, "%s%s%s/whep", room_url, sep, them);
+        snprintf(whep[peers], sizeof(whep[0]), "%s%s%s/whep", rtc, sep, them); peers++;
     } else if (channel && channel[0]) {
         pthread_mutex_lock(&app->lock);
         for (size_t i = 0; i < app->window_count && peers < CALL_MAX_PEERS; i++) {
@@ -12623,7 +12671,7 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
                 if (own && irc_name_eq(w->members[k].nick, own)) continue;
                 char pn[128];
                 call_path_nick(w->members[k].nick, pn, sizeof(pn));
-                snprintf(whep[peers++], MAX_LINE, "%s%s%s/whep", room_url, sep, pn);
+                snprintf(whep[peers], sizeof(whep[0]), "%s%s%s/whep", rtc, sep, pn); peers++;
             }
             break;
         }
