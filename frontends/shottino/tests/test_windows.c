@@ -1867,6 +1867,72 @@ TEST(a_conversation_reaches_the_bot_and_a_join_does_not) {
     free_app(app);
 }
 
+/* An action says it is an action ONCE.
+ *
+ * /me goes on the wire as \001ACTION ciao\001, grappa types the row
+ * :action and preserves the \x01 verbatim (round-trip fidelity for CTCP
+ * is an invariant on that side), so the row arrives typed AND wrapped.
+ * Rendering the body raw produced
+ *     * nextime ^AACTION devo accendere il camino^A
+ * — the star saying it, and the control characters saying it again. */
+TEST(an_action_is_shown_as_words_not_control_characters) {
+    char out[MAX_LINE];
+
+    CHECK_STR(ctcp_action_text("\001ACTION devo accendere il camino\001", out, sizeof(out)),
+              "devo accendere il camino");
+    /* Both shapes genuinely arrive — the --ircd bridge already had to
+     * make the same allowance in the other direction. */
+    CHECK_STR(ctcp_action_text("\001ACTION no trailing wrapper", out, sizeof(out)),
+              "no trailing wrapper");
+    /* An action with nothing in it is still an action, not a PRIVMSG. */
+    CHECK_STR(ctcp_action_text("\001ACTION\001", out, sizeof(out)), "");
+    /* Some clients do not shout the verb. */
+    CHECK_STR(ctcp_action_text("\001action ciao\001", out, sizeof(out)), "ciao");
+
+    /* NOT an action: the caller falls back to its ordinary rendering
+     * rather than showing a mangled body. */
+    CHECK(ctcp_action_text("plain words", out, sizeof(out)) == NULL);
+    CHECK(ctcp_action_text("\001PING 12345\001", out, sizeof(out)) == NULL);
+    CHECK(ctcp_action_text("\001ACTIONS are fun\001", out, sizeof(out)) == NULL);
+    CHECK(ctcp_action_text("", out, sizeof(out)) == NULL);
+    CHECK(ctcp_action_text(NULL, out, sizeof(out)) == NULL);
+
+    /* Through the real ingest path: what lands in scrollback carries no
+     * \x01 at all. */
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#sniffo", true);
+    struct wire_scrollback_message m = { 0 };
+    m.id = 1;
+    m.network = "azzurra";
+    m.channel = "#sniffo";
+    m.sender = "nextime";
+    m.kind = MSG_ACTION;
+    m.body = "\001ACTION devo accendere il camino\001";
+    render_message(app, &m, true);
+    const char *row = app->log[app->log_count - 1];
+    CHECK(strstr(row, "* nextime devo accendere il camino") != NULL);
+    CHECK(strchr(row, '\001') == NULL);
+
+    /* And your OWN action, echoed locally before the server's copy comes
+     * back — the same bug, one screen earlier. */
+    add_pending_echo(app, "azzurra", "#sniffo", "nextime", "\001ACTION saluta\001");
+    row = app->log[app->log_count - 1];
+    CHECK(strstr(row, "* nextime saluta") != NULL);
+    CHECK(strchr(row, '\001') == NULL);
+
+    /* The pending RECORD keeps the raw body: it is matched against what
+     * the server sends back, and a prettied copy would never retire. */
+    CHECK(app->pending_count > 0);
+    CHECK_STR(app->pending[app->pending_count - 1].body, "\001ACTION saluta\001");
+
+    /* An ordinary message is untouched. */
+    add_pending_echo(app, "azzurra", "#sniffo", "nextime", "ciao a tutti");
+    CHECK(strstr(app->log[app->log_count - 1], "<nextime> ciao a tutti") != NULL);
+
+    free_app(app);
+}
+
 /* The question belongs in the window that will hold the answer.
  *
  * Asking from a channel opened $llm and put the REPLY there and nothing
@@ -2759,6 +2825,7 @@ int main(void) {
     RUN(a_tab_completed_verb_still_dispatches);
     RUN(the_settings_panel_lists_every_setting);
     RUN(a_ping_reply_we_did_not_time_is_still_shown_when_live);
+    RUN(an_action_is_shown_as_words_not_control_characters);
     RUN(a_question_is_written_where_its_answer_will_land);
     RUN(only_a_marked_invite_is_a_call);
     RUN(an_invite_round_trips_through_its_own_parser);

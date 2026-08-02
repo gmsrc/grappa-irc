@@ -1553,13 +1553,66 @@ static void log_failure(struct app *app, const char *fmt, ...) {
     if (!app->ui_active && !app->headless) startup("%s", msg);
 }
 
+/* The words of an ACTION, without the CTCP wrapper it may still carry.
+ *
+ * `/me ciao` goes on the wire as `\001ACTION ciao\001`, which is right —
+ * that IS what an action is. grappa then classifies the KIND as :action
+ * and preserves the \x01 in the body verbatim, because round-trip
+ * fidelity for CTCP is a documented invariant on that side. So the row
+ * comes back typed as an action AND still wrapped, and rendering the
+ * body raw put this on screen:
+ *
+ *     * nextime ^AACTION devo accendere il camino^A
+ *
+ * The star already says it is an action; the body said it again, in
+ * control characters. Stripping is a DISPLAY concern and belongs here,
+ * not on the wire — the stored body keeps its bytes.
+ *
+ * Both shapes are accepted because both genuinely arrive; the --ircd
+ * bridge already had to make exactly this allowance in the other
+ * direction, which is the tell that a shared helper was missing rather
+ * than that one path was wrong. Returns NULL when `body` is not an
+ * ACTION, so a caller can fall back to its ordinary rendering. */
+static const char *ctcp_action_text(const char *body, char *out, size_t out_sz) {
+    static const char verb[] = "ACTION";
+    if (!body || !out || out_sz == 0 || body[0] != '\001') return NULL;
+    const char *p = body + 1;
+    if (strncasecmp(p, verb, sizeof(verb) - 1) != 0) return NULL;
+    p += sizeof(verb) - 1;
+    /* A space separates the verb from its words. `\001ACTION\001` — an
+     * action with nothing in it — is still an action, not a PRIVMSG. */
+    if (*p == ' ') p++;
+    else if (*p != '\001' && *p != 0) return NULL;
+    size_t n = strlen(p);
+    /* The closing \x01, when it survived the round trip. */
+    if (n && p[n - 1] == '\001') n--;
+    /* Callers size `out` from the body it came from, so this cannot
+     * trigger; it is here so the function is safe on its own terms. */
+    if (n + 1 > out_sz) n = out_sz - 1;
+    memcpy(out, p, n);
+    out[n] = 0;
+    return out;
+}
+
 static void add_pending_echo(struct app *app, const char *network, const char *channel, const char *sender, const char *body) {
     char clock[16];
     time_t now = time(NULL);
     struct tm tm;
     localtime_r(&now, &tm);
     strftime(clock, sizeof(clock), "%H:%M", &tm);
-    char *line = xasprintf("[%s/%s] %s <%s> %s", network, channel, clock, sender && sender[0] ? sender : "me", body);
+    /* /me echoes in ACTION form. The echo used to render every body as
+     * `<nick> body`, so your own action showed as `<nextime> ^AACTION
+     * …^A` until the server's copy replaced it — the same bug as the
+     * arriving row, one screen earlier.
+     *
+     * The pending record below keeps the RAW body: it is matched against
+     * what comes back from the server, and matching on a prettied copy
+     * would never retire the echo. */
+    char act[MAX_LINE];
+    const char *action = ctcp_action_text(body, act, sizeof(act));
+    const char *who = sender && sender[0] ? sender : "me";
+    char *line = action ? xasprintf("[%s/%s] %s * %s %s", network, channel, clock, who, action)
+                        : xasprintf("[%s/%s] %s <%s> %s", network, channel, clock, who, body);
     pthread_mutex_lock(&app->lock);
     log_push_locked(app, line, false, true);
     if (app->pending_count < sizeof(app->pending) / sizeof(app->pending[0])) {
@@ -3195,7 +3248,12 @@ static void render_message(struct app *app, const struct wire_scrollback_message
     switch (m->kind) {
     case MSG_ACTION:
         if (!hidden) {
-            log_line_mention(app, mention, "[%s/%s] %s * %s %s", network, display_channel, clock, sender, body);
+            /* The star already says it is an action — the body must not
+             * say it again in control characters. See ctcp_action_text. */
+            char act[MAX_LINE];
+            const char *shown = ctcp_action_text(body, act, sizeof(act));
+            log_line_mention(app, mention, "[%s/%s] %s * %s %s", network, display_channel, clock,
+                             sender, shown ? shown : body);
             wrote = true;
         }
         break;
