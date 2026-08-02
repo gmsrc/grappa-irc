@@ -1315,6 +1315,37 @@ TEST(the_context_budget_leaves_room_for_the_fixed_parts) {
     free_app(app);
 }
 
+/* An empty system prompt is a STATE, not an absence.
+ *
+ * Empty means "use the built-in" now, so a settings row that renders it
+ * blank says the opposite of what it does — and the built-in is the
+ * whole reason the model knows it is on IRC and has tools. */
+TEST(an_unset_prompt_says_the_built_in_is_in_use) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    char shown[256];
+
+    app->llm.prompt[0] = 0;
+    setting_value(app, "llm.prompt", shown, sizeof(shown));
+    CHECK(shown[0] != 0);
+    CHECK(strstr(shown, "built-in") != NULL);
+
+    /* But the RAW value stays empty, or saving the row would write that
+     * sentence into the config as if it were a prompt. */
+    char raw[MAX_LINE];
+    CHECK_LONG(setting_raw(app, "llm.prompt", raw, sizeof(raw)), 0);
+    CHECK_STR(raw, "");
+
+    /* A configured prompt shows itself. */
+    snprintf(app->llm.prompt, sizeof(app->llm.prompt), "answer only in Italian");
+    setting_value(app, "llm.prompt", shown, sizeof(shown));
+    CHECK_STR(shown, "answer only in Italian");
+    CHECK(setting_raw(app, "llm.prompt", raw, sizeof(raw)) > 0);
+    CHECK_STR(raw, "answer only in Italian");
+
+    free_app(app);
+}
+
 /* Tab on a value completes what that setting accepts.
  *
  * `/set media <TAB>` used to complete nothing: the completer bails when
@@ -2273,6 +2304,7 @@ int main(void) {
     RUN(a_client_local_window_is_never_fetched_from_the_server);
     RUN(a_conversation_is_remembered_and_rolls_to_fit);
     RUN(the_context_budget_leaves_room_for_the_fixed_parts);
+    RUN(an_unset_prompt_says_the_built_in_is_in_use);
     RUN(tab_completes_the_values_a_setting_accepts);
     RUN(the_setting_modal_seeds_its_field_but_never_a_secret);
     RUN(unset_puts_a_preference_back_to_how_it_started);

@@ -8565,7 +8565,13 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "llm.context") == 0)
         snprintf(out, out_sz, "%d tokens (history rolls at %d)", llm_context_tokens(&app->llm),
                  llm_context_budget(&app->llm));
-    else if (strcmp(name, "llm.prompt") == 0) snprintf(out, out_sz, "%.120s", app->llm.prompt);
+    else if (strcmp(name, "llm.prompt") == 0)
+        /* Empty MEANS the built-in, so say that rather than showing a
+         * blank — a blank row reads as "nothing is set", which is the
+         * opposite of what an empty prompt now does. */
+        snprintf(out, out_sz, "%.120s",
+                 app->llm.prompt[0] ? app->llm.prompt
+                                    : "(built-in — states the medium and lists this turn's tools)");
     else if (strcmp(name, "stt.enabled") == 0)
         snprintf(out, out_sz, "%s", app->stt_enabled ? "on" : "off");
     else if (strcmp(name, "stt.url") == 0)
@@ -16520,10 +16526,11 @@ static void print_usage(FILE *out, const char *prog) {
     fprintf(out, "  ~/.local/share/shottino/   cached session tokens, one per (server, identity)\n");
     fprintf(out, "\n");
     fprintf(out, "requires ffmpeg for inline pictures and clips; without it they stay off and\n");
-    fprintf(out, "links remain clickable. Inline media is limited to your own deployment's\n");
-    fprintf(out, "uploads by default: a picture is fetched when you scroll to it, so rendering\n");
-    fprintf(out, "one hosted elsewhere tells that host your IP and roughly when you read the\n");
-    fprintf(out, "channel. /media all opts in to every host, and says so when you do.\n");
+    fprintf(out, "links remain clickable. Inline media is ON FOR EVERY HOST by default: a\n");
+    fprintf(out, "picture is fetched when you scroll to it, so a link posted by a stranger\n");
+    fprintf(out, "tells that host your IP address and roughly when you read the channel.\n");
+    fprintf(out, "/media first-party limits fetching to your own deployment's uploads;\n");
+    fprintf(out, "/media off stops it entirely.\n");
     fprintf(out, "\nOnce connected, /help lists every command.\n");
 }
 
@@ -16768,21 +16775,22 @@ int main(int argc, char **argv) {
     app->rec.stdin_fd = -1;
     bool have_ffmpeg = media_tool_available("ffmpeg");
     app->inline_media_enabled = have_ffmpeg;
-    /* FIRST-PARTY by default, not every host.
+    /* ALL HOSTS by default — the owner's call, made with the cost known.
      *
-     * An inline picture is FETCHED when its row scrolls into view — no
-     * click, no confirmation. With peers on, any URL any stranger posts
-     * in any channel becomes a request from this machine the moment you
-     * read past it: a working tracking pixel in a text-only IRC client,
-     * telling the poster your IP, your rough read time and that you were
-     * there at all. It also feeds bytes of their choosing to ffmpeg's
+     * An inline picture is FETCHED when its row scrolls into view, with
+     * no click and no confirmation, so any URL any stranger posts
+     * becomes a request from this machine the moment you read past it:
+     * the poster learns your IP, roughly when you read, and that you
+     * were there. It also feeds bytes of their choosing to ffmpeg's
      * demuxers.
      *
-     * `/media all` still exists and still prints the warning that says
-     * all of the above; what changed is which way the default leans. The
-     * uploads of the deployment you are already logged in to learn
-     * nothing they do not know. */
-    app->inline_media_peers = false;
+     * That is a real cost and it is stated here, in --help and in the
+     * README rather than buried — but a client whose pictures mostly do
+     * not appear is a client whose picture feature does not work, and
+     * this is a single-user terminal client, not a deployment default
+     * for strangers. `/media first-party` narrows it to the deployment
+     * you are logged in to; `/media off` stops fetching entirely. */
+    app->inline_media_peers = have_ffmpeg;
     app->animate_media = have_ffmpeg;
     char *share_base = NULL, *share_token = NULL;
     const char *server_url;

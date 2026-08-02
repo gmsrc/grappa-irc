@@ -813,21 +813,22 @@ Key bindings:
 
 Media link previews:
 
-- **Inline media is on for your own deployment's uploads by default**, and off
-  entirely when `ffmpeg` is not installed — it decodes every picture and clip,
-  so a default that promised pictures without it would deliver "[image could not
-  be decoded]" on every row.
-- **The default stops at first-party on purpose.** An inline picture is
-  *fetched* when its row scrolls into view — no click, no confirmation. Turned
-  on for every host, any URL any stranger posts becomes a request from your
-  machine the moment you read past it: **that host learns your IP address and
-  roughly when you read the channel**, which is a working tracking pixel in a
-  text-only IRC client. It also hands bytes of their choosing to ffmpeg's
-  demuxers. Your own deployment's uploads learn nothing they do not already
-  know, which is why they are the ones left on.
-- `/media all` opts in to every host and prints the warning above when you do;
-  `/media first-party` goes back; `/media off` turns pictures off entirely.
-  shottino says which of these is in force every time it starts.
+- **Inline media is on for every host by default**, and off entirely when
+  `ffmpeg` is not installed — it decodes every picture and clip, so a default
+  that promised pictures without it would deliver "[image could not be decoded]"
+  on every row.
+- **Know what that costs.** An inline picture is *fetched* when its row scrolls
+  into view — no click, no confirmation. So any URL any stranger posts becomes a
+  request from your machine the moment you read past it: **that host learns your
+  IP address and roughly when you read the channel**, which is a working
+  tracking pixel in a text-only IRC client. It also hands bytes of their
+  choosing to ffmpeg's demuxers.
+- That is a deliberate trade, not an oversight: a client whose pictures mostly
+  do not appear is a client whose picture feature does not work, and this is a
+  single-user terminal client rather than a default imposed on strangers. If you
+  would rather not pay it, `/media first-party` limits fetching to your own
+  deployment's uploads and `/media off` stops it entirely. shottino says which
+  of the three is in force every time it starts.
 - **Click a window in the sidebar** to switch to it. The whole row is the
   target, number included — aiming at a channel name in a 14-column sidebar is
   finicky, and there is nothing else on the line to hit by accident. It goes
