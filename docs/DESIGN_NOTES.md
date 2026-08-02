@@ -26358,3 +26358,61 @@ matrix firing on a one-character bump (lightweight over heavyweight).
 
 Deploy class: the migration commit touches `mix.exs` → COLD (once). AFTER it,
 a bump touches only `VERSION` → HOT.
+
+---
+
+## 2026-08-02 — #573: the .rpm leg's env-stripped version probe + the partial-release marker
+
+Two releases (v0.8.0, v0.9.0) shipped **without their `.rpm`**, and a partial
+release was indistinguishable from a complete one. Both runs were red and
+nobody looked — *red-and-ignored* was the actual defect. Two independent fixes,
+both in `.github/workflows/release.yml`; no `lib/` change.
+
+**Root cause of the missing .rpm — SYSTEM-config `safe.directory`.** The `rpm`
+job is the ONLY leg that compiles from the `.git` checkout INSIDE a container
+(`container: fedora:43`). The host runner creates `$GITHUB_WORKSPACE` as its
+own uid while the container's steps run as root, so git trips *"detected
+dubious ownership"*. `actions/checkout` forgives that by writing a
+`safe.directory` into `~/.gitconfig` — but `Grappa.Version.GitProbe` shells out
+**env-stripped** (`System.cmd(_, _, env: [])`, deliberate: keeps
+`SECRET_KEY_BASE`/`CLOAK_KEY` out of the subprocess), and `env: []` drops
+`HOME`, so git never reads `~/.gitconfig`. Every `describe`/`rev-parse` fails →
+git facts fold to `nil` → `Grappa.Version` reports `-dev` → the #542 build-sha
+guard **correctly** refuses to assemble → the `.rpm` never builds. The `deb`
+job (no container, no uid mismatch) and the `arch` job (builds from the
+`.git`-less tarball) are both immune. Fix: one step in the rpm job,
+`git config --system --add safe.directory "$GITHUB_WORKSPACE"` — `/etc/gitconfig`
+(SYSTEM config) IS read with no `HOME` (nothing sets `GIT_CONFIG_NOSYSTEM`), and
+`$GITHUB_WORKSPACE` equals GitProbe's `@repo_root` exactly. **Rejected:**
+relaxing the #542 guard (it caught a real `0.9.0-dev` artifact), giving GitProbe
+a full env (re-exposes the secrets the env-strip exists to hide), or chowning the
+tree (heavier; re-breaks on a runner uid change).
+
+**Stating the hole — the partial-release marker.** Publish stays
+`needs: [deb, arch, rpm]` + `if: !cancelled()` (#504 defect 2 is NOT reverted: a
+green artifact still ships when a sibling leg dies) and the run stays red (the
+dead leg fails on its own). What was missing is *visibility*. The set logic —
+which asset kinds SHOULD exist vs which arrived — used to be an inline `find`
+glob in YAML with no notion of "expected", so it failed silently. It is now a
+tested script, **`infra/packaging/release_assets.sh`**, the SSOT of the expected
+asset set: `found` (the attach glob), `missing` (labels of absent kinds),
+`notice` / `apply-body` (a sentinel-delimited `> [!WARNING]` block in the release
+body). The publish job checks out the repo (NO ref override — the triggering
+ref's tree carries the FIXED script, exactly like the docker job; an OLD tag
+predates it), attaches what `found` returns, writes a `## ⚠️ Partial release`
+section to `$GITHUB_STEP_SUMMARY` on a gap, and reconciles the body
+idempotently via `apply-body` (prepend when incomplete; STRIP a stale block
+when a (b) repair dispatch has since completed the set — the converse).
+Idempotent + converse are pinned by `test/infra/release_assets_test.bats`.
+
+**The body marker is load-bearing, not decoration.** GitHub's native
+run-failure notification already fired for BOTH lost releases and nobody acted,
+so the notification is not what makes the hole visible — the body marker (what a
+human landing on the release page reads) is. **Notification transport = GitHub
+native, decided (vjt, 2026-08-02).** No CI→IRC channel was built.
+
+**(b) retroactive reattach** of the `.rpm` to v0.8.0 + v0.9.0 via
+`workflow_dispatch` per tag (the rpm job takes `RELEASE_TAG` from `inputs.tag`,
+checks out that tag, `fetch-depth: 0`) is vjt-wanted, blocked on (a) landing,
+and the dispatch is an operator step (it publishes to real releases) — not part
+of this merge.

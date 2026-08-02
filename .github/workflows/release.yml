@@ -415,6 +415,27 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
+      - name: Trust the checkout for the env-stripped version probe (#573)
+        # The .rpm is the ONLY leg that compiles from the .git checkout INSIDE a
+        # container: the host runner creates $GITHUB_WORKSPACE as its own uid
+        # while these steps run as root, so git trips "detected dubious
+        # ownership" and refuses to operate on it. actions/checkout forgives
+        # that by writing a safe.directory into ~/.gitconfig — but
+        # Grappa.Version.GitProbe shells out env-STRIPPED (System.cmd(_, _,
+        # env: []) so SECRET_KEY_BASE/CLOAK_KEY never reach the subprocess),
+        # which drops HOME, and with no HOME git never reads ~/.gitconfig. Every
+        # describe/rev-parse then fails, the git facts fold to nil,
+        # Grappa.Version reports -dev, and the #542 build-sha guard correctly
+        # refuses to assemble it → the .rpm never builds (v0.8.0 + v0.9.0 both
+        # shipped without one). /etc/gitconfig (SYSTEM config) IS read with no
+        # HOME (nothing sets GIT_CONFIG_NOSYSTEM), so writing the trust there —
+        # for $GITHUB_WORKSPACE, which equals GitProbe's @repo_root exactly —
+        # lets the env-stripped probe see the tag. Leaves the deliberate
+        # env-strip AND the #542 guard untouched; the deb job (no container, no
+        # uid mismatch) and the arch job (builds from the .git-less tarball) are
+        # both immune, so only this leg needs it.
+        run: git config --system --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Verify the tag matches the VERSION file
         run: |
           tag="${RELEASE_TAG#v}"
@@ -632,40 +653,53 @@ jobs:
       # uploads to the EXISTING release without any tag surgery.
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
+      - name: Checkout (for the release-asset audit script)
+        uses: actions/checkout@v7
+        with:
+          # publish needs infra/packaging/release_assets.sh (the expected-vs-
+          # arrived audit + the partial-release body marker). NO ref override —
+          # take the TRIGGERING ref, exactly like the docker job: the pushed tag
+          # on a release (it carries the script, committed before the tag) or
+          # the dispatched branch on a #573 (b) repair (it carries the FIXED
+          # script, whereas an OLD tag like v0.8.0 predates this work entirely).
+          # submodules:false — the audit is pure shell; fetch-depth 1 — no git
+          # history is read here. MUST run before download-artifact: checkout's
+          # default clean (git clean -ffdx) would otherwise wipe assets/.
+          submodules: false
+
       - name: Download built artifacts
         uses: actions/download-artifact@v7
         with:
           path: assets
 
-      - name: Create the release and attach whatever built
+      - name: Attach whatever built, audit the set, mark a partial release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           find assets -type f -print
-          # #504 defect 2 — collect ONLY the assets that actually downloaded.
-          # A failed leg never uploaded its artifact, so its files simply are
-          # not here; attaching what IS present publishes the green artifacts
-          # regardless.
+          # #504 defect 2 — attach ONLY the assets that actually downloaded. A
+          # failed leg never uploaded its artifact, so its files simply are not
+          # here; attaching what IS present publishes the green artifacts
+          # regardless, and the dead leg stays red on its own.
           #
-          # Match by NAME at ANY DEPTH, never by path. In run 30399152630
-          # download-artifact unpacked the one green artifact FLAT into
-          # assets/ — despite announcing a per-artifact subdirectory — so the
-          # path-coupled `assets/grappa-deb/*.deb` glob matched nothing and
-          # this step claimed "every package job failed" with the .deb sitting
-          # right there. The layout is the action's business; ours is the file
-          # names. -name also sidesteps the dotglob trap on .SRCINFO.
-          mapfile -t assets < <(find assets -type f \
-            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \
-               -o -name 'PKGBUILD' -o -name '.SRCINFO' \) | sort)
+          # `found` matches by NAME at ANY DEPTH from the SSOT expected-kinds
+          # table (infra/packaging/release_assets.sh), not a path-coupled glob:
+          # in run 30399152630 download-artifact unpacked the one green artifact
+          # FLAT into assets/ and a path glob matched nothing while the .deb sat
+          # right there. Extracting the glob into that script is what lets the
+          # audit below share ONE definition of "expected" — the whole #573 fix
+          # is that the attach list and the completeness check can never drift.
+          mapfile -t assets < <(infra/packaging/release_assets.sh found assets)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "::error::no build artifacts present — every package job failed; nothing to publish"
             exit 1
           fi
           printf 'attaching: %s\n' "${assets[@]}"
-          # Create the release on first run; on a re-run the release already
-          # exists, so fall back to uploading with --clobber. BUILD ≠ PUBLISH
-          # TO AUR: the regenerated PKGBUILD/.SRCINFO ride along as assets for
-          # a human to push to aur.archlinux.org — nothing here pushes there.
+
+          # Create the release on first run; on a re-run (or a #573 (b) repair
+          # dispatch to an existing release) fall back to uploading with
+          # --clobber. BUILD ≠ PUBLISH TO AUR: the PKGBUILD/.SRCINFO ride along
+          # as assets a human pushes to aur.archlinux.org — nothing here does.
           if ! gh release create "${RELEASE_TAG}" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --title "grappa ${RELEASE_TAG}" \
@@ -674,4 +708,36 @@ jobs:
             gh release upload "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" --clobber \
               "${assets[@]}"
+          fi
+
+          # State the hole out loud (#573). A partial release used to be
+          # indistinguishable from a complete one AT THE ARTIFACT LIST — two
+          # releases shipped without their .rpm and the red-and-ignored run was
+          # the only trace. Now: name every missing kind in the job summary AND
+          # in the release BODY. GitHub's own run-failure notification already
+          # fired for both losses and nobody acted, so the body marker — what a
+          # human landing on the release page actually reads — is the
+          # load-bearing signal, not the notification.
+          missing="$(infra/packaging/release_assets.sh missing assets)"
+          if [ -n "$missing" ]; then
+            {
+              echo "## ⚠️ Partial release"
+              echo
+              echo "\`${RELEASE_TAG}\` is missing expected package(s):"
+              echo
+              while IFS= read -r label; do echo "- ${label}"; done <<< "$missing"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Reconcile the body idempotently: apply-body PREPENDS a sentinel
+          # marker when the set is incomplete and STRIPS a stale one when a (b)
+          # repair dispatch has since completed the set (the converse). Edit
+          # only when the body actually changed, so a complete set on a clean
+          # body is a no-op and a re-run never accretes duplicate blocks.
+          old_body="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body -q .body)"
+          new_body="$(printf '%s' "$old_body" | infra/packaging/release_assets.sh apply-body assets)"
+          if [ "$new_body" != "$old_body" ]; then
+            gh release edit "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --notes "$new_body"
           fi
