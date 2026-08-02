@@ -25822,3 +25822,66 @@ playback to a Manual check; the automated coverage is the classifier table
 (`mediaLink.test.ts`) + the CSP-on-the-wire parity spec.
 
 Deploy class: `security_headers.ex` is in `lib/` → HOT.
+## 2026-08-02 — #630 inbound flood protection: one coarse per-subject budget across both doors, sever the web session (not the IRC session)
+
+**The hole.** The only inbound limiter was #340's per-`(subject, network)`
+send bucket on `POST /messages`. Every `GrappaChannel.handle_in` verb
+(`visibility`, `watchlist`, `away`, the unknown-event catch-all) and every
+non-message REST write were UNMETERED — the cheaper, faster doors an abusive
+client actually uses.
+
+**The ladder (vjt's two calls).** (1) ONE shared per-subject budget spanning
+EVERY WS verb AND every REST write, so a flooder can't dodge it by switching
+surface; #340's send bucket stays ON TOP as the finer send limit. (2) Sustained
+abuse ⇒ close the socket with a specific (snake_case) code AND invalidate the
+auth session (re-auth required). 🔴 The IRC `Session.Server` is deliberately
+NOT touched — a client-side bug must not cost the user their IRC presence or
+look like a netsplit to everyone in their channels. Web session dies, bouncer
+lives. 429 comes FIRST on both doors.
+
+**Reuse the verbs, not the nouns.** The decision function
+`Grappa.RateLimit.RequestBudget.check/1` is built entirely on the two existing
+primitives — no parallel state machine, no derived state duplicated:
+`TokenBucket` is the coarse per-subject throttle; `FailureWindow` IS the
+escalation counter (a rolling window). Over budget records one failure; the
+EXACT crossing (`count == sever_after`) returns `{:error, :severed}` ONCE (later
+over-budget events fall back to `:rate_limited`, no double-sever). A reformed
+client heals on its own — the bucket refills, no new failures record, the window
+expires; no reset verb needed.
+
+**One code path, both doors.** `GrappaWeb.RequestBudget.guard/3` is the shared
+web adapter: `check/1` + the transport sever side-effects. `GrappaWeb.Plugs.
+RequestBudget` (REST writes, self-gated to write methods) and the SINGLE
+`GrappaChannel.handle_in/3` guard (which now fronts every verb — Phoenix has no
+pre-dispatch hook, so the 38 per-verb clauses became `do_handle_in/3` behind one
+public `handle_in/3`) both call it. Over budget → 429 (REST) / `rate_limited`
+error frame (WS), each carrying `retry_after_ms`. The sever broadcasts a
+`web_session_severed` user-topic event (drives cic's dedicated re-login banner),
+revokes the offending bearer, closes the socket via the shared id-topic
+disconnect, and records an `AdminEvents` event + `[:grappa, :rate_limit, :severed]`
+telemetry (a silent kill is a support ticket nobody can answer).
+
+**Thresholds + WHY.** Prod: capacity 60, refill 20/s, sever at 20 over-budget
+events in 10s. 60 burst absorbs a login/window-open fan-out; 20/s is generous
+for interactive use, murderous for a scripted flood; 20-in-10s marks a client
+IGNORING the throttle (a legit paste burst trips 1–2, not 20). Config via the
+`:persistent_term` boot seam (`Admission.Config` precedent), never
+`Application.get_env/2` at runtime. Test config leaves the budget effectively
+OFF (metering now touches every write, so a low global cap would 429 unrelated
+tests); the ladder tests inject tiny thresholds per-test via `put_test_config/1`
+(restored in `on_exit`). Dev/e2e is armed with high headroom (capacity 200) so
+no honest spec trips but the #630 e2e's deliberate flood exercises the whole
+ladder full-stack.
+
+**Wire (additive, snake_case, no protocol bump).** New channel error token
+`rate_limited` (with `retry_after_ms`), new user-topic event
+`web_session_severed` (`Grappa.RateLimit.Wire`), new `AdminEvents` kind
+`web_session_severed`. All additive per #447 — an unrecognising client degrades
+safely (429 status / socket close stay unambiguous). Client-author contract:
+`docs/CLIENT_PROTOCOL.md` §6.
+
+**Not #345.** Different axis: #345 is per-subject pool fairness on the persist
+path against an INBOUND-FROM-IRC flood, which no client-side limiter can bound.
+Complementary; #345 stays open. Connection-level caps (max sockets/joins per
+subject) are also out of scope here — a real follow-up if a flooder opens many
+sockets each just under budget, but a bigger mechanism.

@@ -13,13 +13,14 @@ import {
   type WireUserEvent,
 } from "./api";
 import { loadArchive } from "./archive";
-import { socketUserName, token } from "./auth";
+import { clearLocalAuth, socketUserName, token } from "./auth";
 import { setAwayState } from "./awayStatus";
 import { setBanlistBundle } from "./banlistCard";
 import { setServerBundleHash, setServerBundleVersion } from "./bundleHash";
 import { onDirectoryComplete, onDirectoryFailed, onDirectoryProgress } from "./channelDirectory";
 import { channelKey } from "./channelKey";
 import { diagPush } from "./diagLog";
+import { setSeveredForFlood } from "./floodSever";
 import { refreshHighlights } from "./highlightList";
 import { patchHomeNetwork } from "./home";
 import { appendInviteAck } from "./inviteAck";
@@ -909,6 +910,12 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         outcome: r.outcome,
         reason: r.reason as string | null,
       };
+    case "web_session_severed":
+      // #630 — inbound-flood web-session sever. `code` is a closed
+      // single-value set; anything but "rate_limit_flood" drops the payload
+      // (mirrors the away_confirmed / connection_progress closed-set guards).
+      if (r.code !== "rate_limit_flood") return null;
+      return { kind: "web_session_severed", code: "rate_limit_flood" };
     default:
       return null;
   }
@@ -1468,6 +1475,28 @@ createRoot(() => {
           diagPush(
             `notify: watch list full on network ${payload.network_id} — rejected: ${payload.detail}`,
           );
+          return;
+
+        case "web_session_severed":
+          // #630 — the server severed this web session for inbound flooding
+          // (the bearer revoke + socket close land right behind this event).
+          // Two steps, ORDER-CRITICAL:
+          //   (1) Latch the persistent flood flag FIRST, so it is already set
+          //       when the re-login screen reads it. floodSever.ts is a plain
+          //       module signal (NOT identity-scoped), so it survives the
+          //       token-clear in step (2); it's cleared only on the next
+          //       successful login (auth.ts).
+          //   (2) Proactively drop local auth (clearLocalAuth → setToken(null)
+          //       → the token signal goes null → RequireAuth bounces to
+          //       /login, socket.ts disconnects the WS). This is the
+          //       DETERMINISTIC drop-to-login signal — cic must NOT sit on a
+          //       broken shell waiting for the WS reconnect-failure path to
+          //       eventually notice the revoked bearer. clearLocalAuth's
+          //       setToken(null) does NOT reset the flood flag (the clear is
+          //       guarded on a non-null bearer), so the banner survives to be
+          //       rendered on the login screen.
+          setSeveredForFlood(true);
+          clearLocalAuth();
           return;
 
         default:

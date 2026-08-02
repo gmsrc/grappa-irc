@@ -100,6 +100,10 @@ function renderEvent(ev: WireAdminEvent): string {
     case "login_throttled":
       // S6 — admin-login brute-force gate tripped for this source IP.
       return `login throttled: ${ev.source_ip ?? "(unknown ip)"} hit ${ev.failures} failures in ${Math.round(ev.window_ms / 60000)}m`;
+    case "web_session_severed":
+      // #630 — a subject's web session was severed for sustained inbound
+      // flooding (socket closed + bearer revoked; IRC session untouched).
+      return `web session severed for flood: ${ev.subject_kind} ${ev.subject_id} hit ${ev.failures} over-budget requests in ${Math.round(ev.window_ms / 1000)}s`;
     default:
       return assertNever(ev);
   }

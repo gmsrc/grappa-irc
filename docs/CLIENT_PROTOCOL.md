@@ -183,5 +183,46 @@ ignorable per §2.
 
 ---
 
+## 6. Rate limiting & flood protection (#630)
+
+grappa applies a **coarse per-subject inbound budget** across BOTH doors —
+every WS `handle_in` verb AND every REST write (`POST`/`PUT`/`PATCH`/
+`DELETE`). It is a shared budget: you cannot dodge it by switching surface.
+(A finer per-`(subject, network)` bucket also guards message sends, #340.)
+A well-behaved client never notices it; a flood does.
+
+**Over budget → refuse + retry hint (additive, snake_case):**
+
+| door | response |
+|------|----------|
+| REST write | HTTP `429` with body `{"error":"rate_limited","retry_after_ms":<int>}` and a `Retry-After` header (seconds) |
+| WS verb | the push reply errors with `{"error":"rate_limited","retry_after_ms":<int>}` (the socket stays open) |
+
+Back off for at least `retry_after_ms` before retrying; nothing was queued.
+
+**Sustained abuse → the web session is severed.** If a client keeps
+flooding past the 429s, grappa:
+
+1. pushes a `web_session_severed` **event** on your user topic —
+   `{"kind":"web_session_severed","code":"rate_limit_flood"}` (the
+   snake_case sever/close code); then
+2. **revokes your auth session** (bearer) — a reconnect with the OLD
+   credentials is refused (`401`/socket-connect refusal) until you
+   **re-authenticate**; then
+3. **closes the socket.**
+
+Re-authenticate (fresh login → fresh bearer) to recover. 🔴 Your **IRC
+session is NOT touched** — the bouncer stays connected on your behalf and
+your presence in channels is unaffected; only the *web* session dies. A
+client should treat `web_session_severed` as "drop to the sign-in screen
+and tell the user they were disconnected for sending too fast," not as a
+netsplit or an IRC event.
+
+Per §2 all of the above is additive: a client that does not recognise the
+`rate_limited` token or the `web_session_severed` frame still degrades
+safely (the 429 status / the socket close remain unambiguous).
+
+---
+
 *This document tracks a live contract. When it disagrees with the code,
 the code is right — start from the `file:line` anchors above.*

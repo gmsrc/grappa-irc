@@ -68,7 +68,13 @@ defmodule GrappaWeb.GrappaChannelTest do
 
     socket(UserSocket, "user_socket:#{user_name}", %{
       user_name: user_name,
-      current_subject: subject
+      current_subject: subject,
+      # #630 — UserSocket.connect/3 always assigns `current_session_id`, and
+      # the inbound `handle_in/3` request-budget guard reads it, so the
+      # fixture must carry it too (a generated bearer is fine — the budget
+      # only revokes on the sever crossing, which the generous test config
+      # never reaches). Overridable for the budget/sever tests.
+      current_session_id: Keyword.get(opts, :session_id, Ecto.UUID.generate())
     })
   end
 

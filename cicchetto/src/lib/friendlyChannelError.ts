@@ -41,6 +41,15 @@ function isKnownCode(code: string): code is ErrorTokensChannelErrorToken {
   return KNOWN_CODES.has(code as ErrorTokensChannelErrorToken);
 }
 
+// #630 — the coarse per-subject request budget (spanning every WS verb +
+// every REST write) refuses an over-budget frame with the `rate_limited`
+// token — the WS twin of the send door's HTTP 429. To the user it is the
+// SAME "slow down" signal, just across all verbs rather than just sends,
+// so it reuses the send-throttle copy. Exported so `friendlyError.ts`'s
+// REST `ApiError` `rate_limited` arm shares ONE string (implement once).
+export const SEND_THROTTLED_COPY =
+  "You're sending too fast — the server is throttling you. Slow down and try again in a moment.";
+
 export function friendlyChannelError(err: ChannelPushError): string {
   if (!isKnownCode(err.code)) return err.message;
   return friendlyKnown(err.code);
@@ -161,6 +170,11 @@ function friendlyKnown(code: ErrorTokensChannelErrorToken): string {
       // A recover sequence is already armed for this session (one FSM per
       // session — `{:error, :in_progress}`).
       return "Identity recovery is already in progress.";
+
+    case "rate_limited":
+      // #630 — over the coarse per-subject request budget. Same "slow
+      // down" meaning as the send door's 429; reuse its copy (SSOT above).
+      return SEND_THROTTLED_COPY;
 
     default:
       // Exhaustiveness: adding a token to the generated union without a

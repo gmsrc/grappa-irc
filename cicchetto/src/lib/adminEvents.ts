@@ -102,6 +102,7 @@ function ingest(ev: WireAdminEvent): void {
     case "credential_updated":
     case "credential_unbound":
     case "login_throttled":
+    case "web_session_severed":
       setEvents((prev) => cap([ev, ...prev]));
       return;
     case "cap_counts_changed":

@@ -34,6 +34,7 @@ vi.mock("../lib/networks", () => ({
 vi.mock("../lib/auth", () => ({
   token: vi.fn(() => "t1"),
   socketUserName: vi.fn(() => "vjt"),
+  clearLocalAuth: vi.fn(),
 }));
 
 vi.mock("../lib/queryWindows", () => ({
@@ -57,6 +58,10 @@ vi.mock("../lib/awayStatus", () => ({
 
 vi.mock("../lib/reconnectingStatus", () => ({
   setReconnecting: vi.fn(),
+}));
+
+vi.mock("../lib/floodSever", () => ({
+  setSeveredForFlood: vi.fn(),
 }));
 
 vi.mock("../lib/home", () => ({
@@ -1573,6 +1578,63 @@ describe("userTopic", () => {
       expect(cd.onDirectoryFailed).not.toHaveBeenCalled();
     });
   });
+
+  // #630 — inbound-flood web-session sever. The server broadcasts
+  // `web_session_severed` (code: "rate_limit_flood") on the user topic, THEN
+  // revokes the bearer + closes the socket. The dispatcher (1) latches the
+  // persistent flood flag so the re-login screen renders the dedicated banner
+  // and (2) proactively drops local auth (clearLocalAuth → token null →
+  // RequireAuth bounces to /login) so cic lands on the unauthenticated screen
+  // deterministically, not via the WS reconnect-failure path. `code` is a
+  // closed single-value set; a bad/absent code drops the payload.
+  describe("web_session_severed arm (#630)", () => {
+    it("latches setSeveredForFlood(true) on a valid rate_limit_flood event", async () => {
+      const fs = await import("../lib/floodSever");
+      channelMock.fireEvent({ kind: "web_session_severed", code: "rate_limit_flood" });
+      expect(fs.setSeveredForFlood).toHaveBeenCalledWith(true);
+    });
+
+    it("drops local auth so cic lands on the unauthenticated screen", async () => {
+      const authMod = await import("../lib/auth");
+      channelMock.fireEvent({ kind: "web_session_severed", code: "rate_limit_flood" });
+      expect(authMod.clearLocalAuth).toHaveBeenCalled();
+    });
+
+    // Order is load-bearing: the flag MUST be latched BEFORE auth is cleared,
+    // so it is already set when the login screen reads it (and clearLocalAuth's
+    // setToken(null) must never reset it — verified in floodSever.test.ts).
+    it("latches the flood flag BEFORE clearing auth", async () => {
+      const fs = await import("../lib/floodSever");
+      const authMod = await import("../lib/auth");
+      channelMock.fireEvent({ kind: "web_session_severed", code: "rate_limit_flood" });
+      const flagOrder = vi.mocked(fs.setSeveredForFlood).mock.invocationCallOrder[0];
+      const clearOrder = vi.mocked(authMod.clearLocalAuth).mock.invocationCallOrder[0];
+      if (flagOrder === undefined || clearOrder === undefined) {
+        throw new Error("both setSeveredForFlood and clearLocalAuth must have been called");
+      }
+      expect(flagOrder).toBeLessThan(clearOrder);
+    });
+
+    it("drops the event when code is not rate_limit_flood (narrower rejects)", async () => {
+      const fs = await import("../lib/floodSever");
+      const authMod = await import("../lib/auth");
+      channelMock.fireEvent({ kind: "web_session_severed", code: "something_else" });
+      expect(fs.setSeveredForFlood).not.toHaveBeenCalled();
+      expect(authMod.clearLocalAuth).not.toHaveBeenCalled();
+    });
+
+    it("drops the event when code is missing (narrower rejects)", async () => {
+      const fs = await import("../lib/floodSever");
+      channelMock.fireEvent({ kind: "web_session_severed" });
+      expect(fs.setSeveredForFlood).not.toHaveBeenCalled();
+    });
+
+    it("does NOT latch the flag for unrelated events", async () => {
+      const fs = await import("../lib/floodSever");
+      channelMock.fireEvent({ kind: "channels_changed" });
+      expect(fs.setSeveredForFlood).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // Pure narrowUserEvent tests — no mock setup needed; narrowUserEvent is a
@@ -1781,5 +1843,28 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
     expect(
       narrowUserEvent({ kind: "links_bundle", network: "azzurra", entries: "nope" }),
     ).toBeNull();
+  });
+});
+
+// #630 — web_session_severed: the inbound-flood sever event. `code` is a
+// closed single-value set ("rate_limit_flood"), narrowed strictly at ingress
+// (mirrors the away_confirmed / connection_progress closed-set guards).
+describe("narrowUserEvent — web_session_severed (#630)", () => {
+  it("narrows a valid rate_limit_flood event", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(narrowUserEvent({ kind: "web_session_severed", code: "rate_limit_flood" })).toEqual({
+      kind: "web_session_severed",
+      code: "rate_limit_flood",
+    });
+  });
+
+  it("rejects an unknown code", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(narrowUserEvent({ kind: "web_session_severed", code: "nope" })).toBeNull();
+  });
+
+  it("rejects a missing code", async () => {
+    const { narrowUserEvent } = await import("../lib/userTopic");
+    expect(narrowUserEvent({ kind: "web_session_severed" })).toBeNull();
   });
 });

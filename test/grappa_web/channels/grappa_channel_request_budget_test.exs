@@ -16,7 +16,26 @@ defmodule GrappaWeb.GrappaChannelRequestBudgetTest do
 
   alias Grappa.Accounts
   alias Grappa.PubSub.Topic
+  alias Grappa.RateLimit.RequestBudget
   alias GrappaWeb.{GrappaChannel, UserSocket}
+
+  # Inject tiny deterministic thresholds for THIS test only (global test
+  # config leaves the budget effectively off) and restore on exit so the
+  # metering doesn't leak into unrelated channel tests. capacity 5,
+  # sever_after 3, refill 0.5/s.
+  setup do
+    original = RequestBudget.config()
+
+    RequestBudget.put_test_config(%RequestBudget{
+      capacity: 5,
+      refill_per_sec: 0.5,
+      sever_after: 3,
+      sever_window_ms: 60_000
+    })
+
+    on_exit(fn -> RequestBudget.put_test_config(original) end)
+    :ok
+  end
 
   # A joined user-topic socket with the full production assigns surface
   # (user_name + bare-id subject + real session id) so the guard can read

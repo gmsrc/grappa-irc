@@ -890,6 +890,25 @@ html.overlay-open #root > div {
   font-size: 0.9rem;
 }
 
+/* #630 — inbound-flood web-session sever banner on the (re-)login screen.
+   DEDICATED, not the authed shell's generic ErrorBanners stack (that surface
+   covers connectivity / WS / bundle sources). Card-width + accent border so
+   it reads as a distinct, real explanation for why the user landed back at
+   login. Sits above the card in .login-scroll's flex column. */
+.login-flood-banner {
+  width: 100%;
+  max-width: 22rem;
+  margin: 0 auto 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  position: relative;
+  z-index: 1;
+}
+
 /* #204 — connecting view (replaces the form in place). Spinner + rotating
    cosmetic reassurance copy. */
 .login-connecting {

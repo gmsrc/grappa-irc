@@ -14,12 +14,23 @@ defmodule Grappa.RateLimit.RequestBudgetTest do
     {:user, "req-budget-#{System.unique_integer([:positive])}"}
   end
 
-  # config/test.exs pins capacity 5, sever_after 3, refill 0.5/s (no token
-  # refills between the sequential calls of one test), window 60_000ms.
+  # Inject tiny deterministic thresholds for THIS test only (the global
+  # test config leaves the budget effectively off so unrelated tests aren't
+  # metered) and restore the original in on_exit so nothing leaks. capacity
+  # 5, sever_after 3, refill 0.5/s (no token refills between the sequential
+  # calls of one test), window 60_000ms.
   setup do
-    cfg = RequestBudget.config()
-    assert cfg.capacity == 5
-    assert cfg.sever_after == 3
+    original = RequestBudget.config()
+
+    cfg = %RequestBudget{
+      capacity: 5,
+      refill_per_sec: 0.5,
+      sever_after: 3,
+      sever_window_ms: 60_000
+    }
+
+    RequestBudget.put_test_config(cfg)
+    on_exit(fn -> RequestBudget.put_test_config(original) end)
     {:ok, cfg: cfg}
   end
 

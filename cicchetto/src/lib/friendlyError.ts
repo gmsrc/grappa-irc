@@ -1,6 +1,6 @@
 import { ApiError, ChannelPushError } from "./api";
 import { friendlyApiError } from "./friendlyApiError";
-import { friendlyChannelError } from "./friendlyChannelError";
+import { friendlyChannelError, SEND_THROTTLED_COPY } from "./friendlyChannelError";
 
 // #74 — the single dispatcher that turns a thrown error from EITHER send
 // door into operator-visible human copy:
@@ -27,8 +27,10 @@ import { friendlyChannelError } from "./friendlyChannelError";
 // server token à la `too_many_attempts`/`theme_cap_reached`; #340 shipped
 // reusing `rate_limited` and #342 is scoped client-only, so the send door
 // discriminates by surface here.)
-const SEND_THROTTLED_COPY =
-  "You're sending too fast — the server is throttling you. Slow down and try again in a moment.";
+//
+// #630 — `SEND_THROTTLED_COPY` now lives in `friendlyChannelError.ts` (its
+// `rate_limited` channel arm shares the exact same copy) and is imported
+// above, so the REST and WS throttle surfaces speak with one voice.
 
 /**
  * Map a thrown value from a send door to human copy. Typed errors route to

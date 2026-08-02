@@ -4,6 +4,7 @@ import { ApiError } from "./lib/api";
 import * as auth from "./lib/auth";
 import { type CaptchaProvider, mountCaptchaWidget } from "./lib/captcha";
 import { CONNECTING_MESSAGES } from "./lib/connectingMessages";
+import { severedForFlood } from "./lib/floodSever";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { classifyLoginIdentifier } from "./lib/loginIdentifier";
 
@@ -301,6 +302,18 @@ const Login: Component = () => {
       {/* Scroll container: keeps the whole card (esp. Connect + the Advanced
           fields) reachable when it overflows a short viewport. */}
       <div class="login-scroll">
+        {/* #630 — inbound-flood web-session sever banner. Latched by
+            floodSever.ts when the server severs this web session for flooding
+            (the sever revokes the bearer + closes the socket, which bounces
+            the user back here). A DEDICATED banner above the login card —
+            distinct from the authed shell's generic ErrorBanners stack — so
+            the user knows WHY they were disconnected. Cleared on the next
+            successful login (auth.ts setToken). */}
+        <Show when={severedForFlood()}>
+          <div class="login-flood-banner" role="alert" data-testid="login-flood-banner">
+            You were disconnected for sending too fast. Please sign in again.
+          </div>
+        </Show>
         <Show
           when={connecting()}
           fallback={

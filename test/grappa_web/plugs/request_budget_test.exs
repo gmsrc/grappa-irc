@@ -13,7 +13,26 @@ defmodule GrappaWeb.Plugs.RequestBudgetTest do
   import Grappa.AuthFixtures
 
   alias Grappa.Accounts
+  alias Grappa.RateLimit.RequestBudget, as: Budget
   alias GrappaWeb.Plugs.RequestBudget
+
+  # Inject tiny deterministic thresholds for THIS test only (global test
+  # config leaves the budget effectively off) and restore on exit so the
+  # metering doesn't leak into unrelated controller/plug tests. capacity 5,
+  # sever_after 3.
+  setup do
+    original = Budget.config()
+
+    Budget.put_test_config(%Budget{
+      capacity: 5,
+      refill_per_sec: 0.5,
+      sever_after: 3,
+      sever_window_ms: 60_000
+    })
+
+    on_exit(fn -> Budget.put_test_config(original) end)
+    :ok
+  end
 
   defp write_conn(subject_struct, session_id) do
     :post

@@ -191,17 +191,20 @@ config :grappa, :send_throttle,
   capacity: 3,
   refill_per_sec: 0.5
 
-# GH #630 — tiny deterministic request budget so the plug + channel tests
-# trip the throttle after a handful of requests and the sever after a few
-# more, with refill slow enough that no token refills between the
-# sequential calls of one test (wall-clock-free; refill-over-time is
-# proven deterministically at the `TokenBucket` unit level via its now_ms
-# seam). capacity 5 → the 6th metered request in a burst 429s; sever_after
-# 3 → the 3rd over-budget event (8th request) severs.
+# GH #630 — the request budget is effectively OFF by default in test:
+# it now meters EVERY WS handle_in verb AND every REST write, so a low
+# global capacity would 429/sever unrelated controller + channel tests
+# that legitimately do several writes on one subject in a single test.
+# Mirror the `:send_throttle`/`:admission` dev-relaxation posture. The
+# #630 ladder tests (RequestBudget / plug / channel) inject their OWN
+# tiny deterministic thresholds per-test via
+# `Grappa.RateLimit.RequestBudget.put_test_config/1` (restored in
+# on_exit), so the budget is exercised WITHOUT poisoning the rest of the
+# suite. The e2e (dev config) is the full-stack ladder gate.
 config :grappa, :request_budget,
-  capacity: 5,
-  refill_per_sec: 0.5,
-  sever_after: 3,
+  capacity: 1_000_000,
+  refill_per_sec: 1_000_000.0,
+  sever_after: 1_000_000,
   sever_window_ms: 60_000
 
 # Push notifications cluster B2 (2026-05-14) — fixed VAPID keypair for
