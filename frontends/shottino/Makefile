@@ -209,9 +209,20 @@ $(CALL_BIN): $(CALL_SRC) call/whip.h call/media.h http.h $(LDC_LIBS)
 	$(CXX) -o $@ call/main.o call/whip.o call/media.o http.o $(LDC_LIBS) \
 	  -static-libstdc++ -static-libgcc -lssl -lcrypto -lpthread -lm
 
+# The helper rides along WHEN IT HAS BEEN BUILT, and is not a
+# prerequisite: `make install` must keep working on a machine without
+# cmake or a C++ compiler, which is the whole reason `call` is opt-in.
+# It goes in the SAME directory because that is the first place
+# call_helper_path looks — they are built and installed together.
 install: $(BIN)
 	install -d "$(DESTDIR)$(BINDIR)"
 	install -m 0755 "$(BIN)" "$(DESTDIR)$(BINDIR)/$(BIN)"
+	@if [ -x "$(CALL_BIN)" ]; then \
+		install -m 0755 "$(CALL_BIN)" "$(DESTDIR)$(BINDIR)/$(CALL_BIN)"; \
+		echo "installed $(CALL_BIN) beside $(BIN)"; \
+	else \
+		echo "no $(CALL_BIN) built — calls will open a browser (build it with 'make call')"; \
+	fi
 
 # The helper's objects and binary go too, but NOT vendor/build: rebuilding
 # libdatachannel from scratch is minutes, it is not what `clean` is for,
