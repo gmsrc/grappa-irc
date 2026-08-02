@@ -117,6 +117,15 @@ jobs:
           dash -n infra/docker/assert-abi-lockstep.sh
           dash -n infra/docker/release-entrypoint.sh
           dash -n infra/docker/get.sh
+          # #665 cloud bootstrap + drift-guard (bash, not the POSIX-sh lib).
+          shellcheck -x infra/cloud/first-boot.sh infra/cloud/check-drift.sh
+
+      - name: Cloud provider-door drift-guard (#665)
+        # Prove every provider door (infra/aws today, infra/terraform later)
+        # references the shared infra/cloud/first-boot.sh AND exposes the same
+        # knob names from infra/cloud/params.contract. A hand-written second
+        # door that drifts from the contract fails here instead of silently.
+        run: infra/cloud/check-drift.sh
 
       - name: Upload coverage
         uses: codecov/codecov-action@v7
