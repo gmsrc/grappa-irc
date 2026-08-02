@@ -1474,6 +1474,22 @@ TEST(unset_puts_a_preference_back_to_how_it_started) {
     handle_command(app, "/unset animate");
     CHECK(app->animate_media);
 
+    /* A setting whose fresh-install value is EMPTY is not "restored" by
+     * /unset — it is discarded, permanently, and written to disk. The
+     * report has to say which of the two happened, because "back to the
+     * default" reads as reversible and this is not. */
+    snprintf(app->stt_url, sizeof(app->stt_url), "https://whisper.example/v1");
+    handle_command(app, "/unset stt.url");
+    CHECK_STR(app->stt_url, "");
+    CHECK(log_has(app, "CLEARED"));
+    CHECK(log_has(app, "no default to go back to"));
+
+    /* And a setting that DOES have one still says "back to the default". */
+    handle_command(app, "/set voice.source alsa:hw:2");
+    handle_command(app, "/unset voice.source");
+    CHECK_STR(app->voice_source, "pulse:default");
+    CHECK(log_has(app, "back to the default"));
+
     /* A name nobody has says so rather than doing nothing quietly. */
     handle_command(app, "/unset nonesuch");
     CHECK(log_has(app, "no such setting"));

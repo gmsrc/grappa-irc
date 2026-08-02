@@ -8906,6 +8906,10 @@ static bool setting_reset(struct app *app, const char *name) {
     for (size_t i = 0; i < settings_count() && i < 32; i++) {
         if (strcasecmp(SETTINGS[i].name, name) != 0) continue;
         const char *def = app->setting_default[i] ? app->setting_default[i] : "";
+        /* What is about to be lost, so the report can tell "restored" from
+         * "discarded" — they read the same and are not the same. */
+        char before[MAX_LINE];
+        setting_raw(app, SETTINGS[i].name, before, sizeof(before));
         /* Through setting_apply like every other write, so a default
          * that is no longer valid is refused rather than forced in. */
         if (!setting_apply(app, &SETTINGS[i], def)) return true;
@@ -8914,12 +8918,24 @@ static bool setting_reset(struct app *app, const char *name) {
         pthread_mutex_lock(&app->lock);
         settings_rows_refresh_locked(app);
         pthread_mutex_unlock(&app->lock);
-        /* Says what it IS now, not merely that it did something. A
-         * confirmation you have to go and check is a confirmation that
-         * does not confirm. */
+        /* Says what it IS now, not merely that it did something — and
+         * says plainly when the "default" is nothing at all.
+         *
+         * For llm.url, llm.token, llm.model and llm.prompt the value a
+         * fresh install has IS empty, so /unset does not restore
+         * anything: it DISCARDS what was configured, permanently, and
+         * writes that to disk. The word "default" makes that sound
+         * reversible and it is not. */
         char now[256];
         setting_value(app, SETTINGS[i].name, now, sizeof(now));
-        log_line(app, "/unset %s — back to the default: %s", SETTINGS[i].name, now);
+        bool had = before[0] != 0;
+        bool blank = !def[0];
+        if (blank && had)
+            log_line(app, "/unset %s — CLEARED. It has no default to go back to, so the old "
+                          "value is gone and the file is written.",
+                     SETTINGS[i].name);
+        else
+            log_line(app, "/unset %s — back to the default: %s", SETTINGS[i].name, now);
         return true;
     }
     return false;
