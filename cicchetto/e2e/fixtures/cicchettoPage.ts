@@ -731,13 +731,36 @@ export async function composeSend(
 // synthetic) over `.tap()` for the same WebKit synthesis-race reason as
 // closeMembersDrawer below.
 export async function openMembersDrawer(page: Page): Promise<void> {
-  const topicHamburger = page.getByLabel(/open members sidebar/i);
-  if ((await topicHamburger.count()) > 0) {
-    await topicHamburger.first().click();
-  } else {
-    await page.getByTestId("shell-chrome-rail-opener").click();
+  const drawer = page.locator(".shell-members.open");
+  // #653/#519 — re-resolve per attempt instead of a single probe-then-click.
+  // The opener that renders depends on the focused window kind (channel →
+  // TopicBar hamburger `<Show when={windowIsJoined}>`; non-channel → rail
+  // opener), and under full-gate load a settling selection redirect (e.g. the
+  // post-PART close-watcher moving focus) can swap the focused window — and
+  // re-render the topic bar — BETWEEN the count probe and the click. The
+  // hamburger then detaches mid-click; Playwright's built-in detach-retry
+  // waits out its whole timeout for a node that has unmounted (the window is
+  // now a non-channel one with no hamburger). Looping re-picks the correct
+  // opener each attempt and absorbs the transient churn; the post-condition
+  // (`.shell-members.open` visible) stays exactly as strict, and a genuine
+  // failure still surfaces loudly when the deadline elapses. Green happy path
+  // is unchanged (one probe + click + visibility assert on the first pass).
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    if (await drawer.isVisible().catch(() => false)) return;
+    try {
+      const topicHamburger = page.getByLabel(/open members sidebar/i);
+      if ((await topicHamburger.count()) > 0) {
+        await topicHamburger.first().click({ timeout: 3_000 });
+      } else {
+        await page.getByTestId("shell-chrome-rail-opener").click({ timeout: 3_000 });
+      }
+      await expect(drawer).toBeVisible({ timeout: 3_000 });
+      return;
+    } catch (err) {
+      if (Date.now() >= deadline) throw err;
+    }
   }
-  await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
 }
 
 // #500 — reveal the RailActions launcher menu, the SINGLE door to every rail
