@@ -2123,6 +2123,17 @@ TEST(an_invite_carries_its_room_in_the_fragment) {
     CHECK(!call_invite_split("#r=x", base, sizeof(base), room, sizeof(room)));
     CHECK(!call_invite_split(NULL, base, sizeof(base), room, sizeof(room)));
 
+    /* The participant list survives the split — it lives in the same
+     * fragment and must not confuse the room lookup. */
+    CHECK(call_invite_split("https://h/call/#r=abc&peers=ann,bob", base, sizeof(base), room,
+                            sizeof(room)));
+    CHECK_STR(room, "abc");
+    /* `me` is appended when a link is OPENED, never when it is posted,
+     * so the splitter has to survive seeing it. */
+    CHECK(call_invite_split("https://h/call/#r=abc&peers=ann&me=bob", base, sizeof(base), room,
+                            sizeof(room)));
+    CHECK_STR(room, "abc");
+
     /* What /call posts is what the splitter reads back. */
     char line[512];
     call_invite_build(CALL_VIDEO, "https://h/call", "shottino-99", line, sizeof(line));

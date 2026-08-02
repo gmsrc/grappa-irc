@@ -1,0 +1,220 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>shottino call</title>
+<!--
+  The room page for a shottino call.
+
+  WHO IS IN THE ROOM COMES FROM THE FRAGMENT, never from the server.
+  MediaMTX has no room concept, only paths, so the obvious design is to
+  ask its API for the path list — which returns EVERY active room name
+  on the server. Room names are the credential here (128 bits of CSPRNG
+  precisely so they cannot be guessed), so publishing that list makes
+  the entropy worthless and hands every call in progress to anyone who
+  asks. A fragment is never sent to the server at all.
+
+      /call/#r=<room>&peers=ann,bob,cid
+
+  Late joiners are not in that snapshot, which is what the retry loop
+  below is for: unknown names can be added by hand, and known ones are
+  re-tried until they answer.
+-->
+<style>
+  :root { color-scheme: dark light }
+  body { margin:0; font:14px/1.4 system-ui,sans-serif; background:#111; color:#ddd }
+  header { padding:.6rem .8rem; background:#1b1b1b; display:flex; gap:.6rem; align-items:center; flex-wrap:wrap }
+  header b { font-weight:600 }
+  #grid { display:grid; gap:6px; padding:6px;
+          grid-template-columns:repeat(auto-fit,minmax(180px,1fr)) }
+  /* The speaker gets the room. Two columns and two rows of the grid, so
+     the others reflow around it instead of being pushed off. */
+  .tile { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:4/3 }
+  .tile.speaking { grid-column:span 2; grid-row:span 2; outline:2px solid #6ab04c }
+  .tile video { width:100%; height:100%; object-fit:contain; display:block }
+  .tile .who { position:absolute; left:0; bottom:0; padding:2px 6px; background:#000a; font-size:12px }
+  .tile.pending { opacity:.35 }
+  button,input { font:inherit; background:#2a2a2a; color:#ddd; border:1px solid #444;
+                 border-radius:4px; padding:.25rem .5rem }
+  #note { opacity:.7; font-size:12px }
+</style>
+
+<header>
+  <b>shottino call</b>
+  <span id="room"></span>
+  <input id="nick" placeholder="your nick" size="10">
+  <button id="join">join with camera</button>
+  <button id="mic">join, audio only</button>
+  <input id="add" placeholder="add a nick" size="10">
+  <span id="note"></span>
+</header>
+<div id="grid"></div>
+
+<script>
+// ── the room, from the fragment ──────────────────────────────────────
+const frag = new URLSearchParams(location.hash.slice(1));
+const room = (frag.get('r') || '').replace(/[^a-z0-9._~%-]/gi, '');
+const peers = (frag.get('peers') || '').split(',').map(s => s.trim()).filter(Boolean);
+// WHO WE ARE, put here by the shottino that opened this link. It is the
+// binding between the browser participant and the nick the other side
+// subscribes to: publish under a name nobody is reading and the call
+// looks connected to everyone and is heard by no one. Never present in
+// the POSTED invite — that link is read by several people and cannot
+// carry any one of their identities.
+const me = (frag.get('me') || '').trim();
+document.getElementById('room').textContent = room ? room : '(no room in the link)';
+if (me) document.getElementById('nick').value = me;
+
+// Same folding shottino uses to build a path: nicks match
+// case-insensitively, so Alice and alice must be ONE path or the two
+// ends publish past each other.
+const pathNick = n => [...n.toLowerCase()].map(c =>
+  /[a-z0-9._~-]/.test(c) ? c
+    : '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('');
+
+const base = location.pathname.replace(/\/$/, '') + '/rtc/' + room;
+const grid = document.getElementById('grid');
+const tiles = new Map();   // nick -> {el, video, pc, audio}
+const note = m => document.getElementById('note').textContent = m;
+
+function tile(nick) {
+  if (tiles.has(nick)) return tiles.get(nick);
+  const el = document.createElement('div');
+  el.className = 'tile pending';
+  const v = document.createElement('video');
+  v.autoplay = true; v.playsInline = true;
+  const who = document.createElement('span');
+  who.className = 'who'; who.textContent = nick;
+  el.append(v, who);
+  grid.append(el);
+  const t = { el, video: v, pc: null, audio: null, nick };
+  tiles.set(nick, t);
+  return t;
+}
+
+async function gathered(pc) {
+  // Vanilla ICE: WHIP/WHEP is one POST with one body, so the offer has
+  // to be complete before it is sent.
+  if (pc.iceGatheringState === 'complete') return;
+  await new Promise(r => {
+    const check = () => pc.iceGatheringState === 'complete'
+      && (pc.removeEventListener('icegatheringstatechange', check), r());
+    pc.addEventListener('icegatheringstatechange', check);
+    setTimeout(r, 3000); // a candidate that never arrives must not hang the room
+  });
+}
+
+// ── watch one peer ───────────────────────────────────────────────────
+async function subscribe(nick) {
+  const t = tile(nick);
+  if (t.pc) return true;
+  const pc = new RTCPeerConnection();
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+  const stream = new MediaStream();
+  pc.ontrack = e => {
+    stream.addTrack(e.track);
+    t.video.srcObject = stream;
+    t.el.classList.remove('pending');
+    if (e.track.kind === 'audio') meter(t, stream);
+  };
+  await pc.setLocalDescription(await pc.createOffer());
+  await gathered(pc);
+  let res;
+  try {
+    res = await fetch(base + '/' + pathNick(nick) + '/whep', {
+      method: 'POST', headers: { 'Content-Type': 'application/sdp' },
+      body: pc.localDescription.sdp });
+  } catch (e) { pc.close(); return false; }
+  // 404 is "that person is not in the call", not an error: in a channel
+  // most members are not. Stepped over, and retried below.
+  if (!res.ok) { pc.close(); return false; }
+  await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+  t.pc = pc;
+  return true;
+}
+
+// ── publish ourselves ────────────────────────────────────────────────
+async function publish(withVideo) {
+  const nick = document.getElementById('nick').value.trim();
+  if (!nick) return note('a nick is needed to join — it decides your path');
+  wanted.delete(nick);                       // never read ourselves back
+  const selfTile = tiles.get(nick);
+  if (selfTile && selfTile.pc) { selfTile.pc.close(); selfTile.pc = null; }
+  let media;
+  try {
+    media = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+  } catch (e) { return note('no camera or microphone: ' + e.message); }
+  const pc = new RTCPeerConnection();
+  media.getTracks().forEach(tr => pc.addTrack(tr, media));
+  await pc.setLocalDescription(await pc.createOffer());
+  await gathered(pc);
+  const res = await fetch(base + '/' + pathNick(nick) + '/whip', {
+    method: 'POST', headers: { 'Content-Type': 'application/sdp' },
+    body: pc.localDescription.sdp });
+  if (!res.ok) return note('the server refused the publish (' + res.status +
+    ') — someone may already be using that nick');
+  await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+  const t = tile(nick + ' (you)');
+  t.video.srcObject = media; t.video.muted = true;   // never hear yourself
+  t.el.classList.remove('pending');
+  note('publishing as ' + nick);
+}
+
+// ── who is talking ───────────────────────────────────────────────────
+// Bigger for the speaker, as asked. Done in the browser with WebAudio,
+// which already has the PCM — the terminal client cannot do it this way
+// because it never decodes audio itself.
+function meter(t, stream) {
+  try {
+    const ctx = meter.ctx || (meter.ctx = new AudioContext());
+    const an = ctx.createAnalyser();
+    an.fftSize = 512;
+    ctx.createMediaStreamSource(stream).connect(an);
+    t.audio = an;
+  } catch (e) { /* no audio context: tiles just stay equal */ }
+}
+
+function loudest() {
+  let best = null, bestLevel = 0.02;   // a floor, so silence promotes nobody
+  for (const t of tiles.values()) {
+    if (!t.audio) continue;
+    const buf = new Uint8Array(t.audio.frequencyBinCount);
+    t.audio.getByteTimeDomainData(buf);
+    let peak = 0;
+    for (const v of buf) peak = Math.max(peak, Math.abs(v - 128) / 128);
+    if (peak > bestLevel) { bestLevel = peak; best = t; }
+  }
+  for (const t of tiles.values()) t.el.classList.toggle('speaking', t === best);
+}
+setInterval(loudest, 400);
+
+// ── the retry loop ───────────────────────────────────────────────────
+// The same mechanism serves three problems: someone who joins late,
+// a channel member who was never in the call, and a peer whose page
+// loaded before theirs did.
+// Everyone in the link EXCEPT us: subscribing to our own path is an
+// echo — our voice back through the speakers, and a duplicate tile.
+const wanted = new Set(peers.filter(n => !me || pathNick(n) !== pathNick(me)));
+async function sweep() {
+  for (const nick of wanted) {
+    const t = tiles.get(nick);
+    if (t && t.pc && t.pc.connectionState !== 'failed' &&
+        t.pc.connectionState !== 'closed') continue;
+    if (t && t.pc) { t.pc.close(); t.pc = null; t.el.classList.add('pending'); }
+    await subscribe(nick);
+  }
+}
+peers.forEach(tile);            // show everyone expected, greyed until they answer
+sweep();
+setInterval(sweep, 5000);
+
+document.getElementById('join').onclick = () => publish(true);
+document.getElementById('mic').onclick = () => publish(false);
+document.getElementById('add').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const n = e.target.value.trim();
+  if (!n) return;
+  wanted.add(n); tile(n); sweep(); e.target.value = '';
+});
+if (!room) note('this link carries no room — open the one posted in the channel');
+</script>

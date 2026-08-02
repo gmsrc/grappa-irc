@@ -1,0 +1,36 @@
+# MediaMTX for shottino terminal calls.
+#
+# WebRTC ONLY. Every other server is off on purpose: this host already
+# runs nginx on 80/443, a java service on 8888 -- which is MediaMTX's
+# DEFAULT HLS port and would have collided -- plus prosody, transmission
+# and the grappa container. A media server that quietly grabs five more
+# ports on a box like this is a landmine for whoever debugs it next.
+logLevel: info
+
+api: false
+metrics: false
+playback: false
+rtsp: false
+rtmp: false
+hls: false
+srt: false
+
+webrtc: true
+webrtcAddress: :8889
+
+# ONE UDP port for all media, so the firewall rule stays one line.
+webrtcLocalUDPAddress: :8189
+
+# THE setting that decides whether a call works at all.
+#
+# Without it MediaMTX advertises only the addresses it finds on its own
+# interfaces -- here that is the LAN 192.168.11.76, which no outside
+# client can reach. It fails SILENTLY: signalling succeeds, the SDP
+# answer applies, and then no media ever flows.
+webrtcAdditionalHosts: [94.23.108.58]
+
+# No auth: a room is reachable by whoever knows its path, which is the
+# same bargain shottino's 128-bit room name already makes -- the link IS
+# the credential. Add authInternalUsers here if that stops being true.
+paths:
+  all_others:

@@ -12260,6 +12260,10 @@ static void open_external_url(struct app *app, const char *url) {
 
 /* Defined with the media helper below, which needs the URL helpers this
  * section declares. */
+static void call_invite_peers(struct app *app, const char *network, const char *channel,
+                              char *out, size_t out_sz);
+static void call_url_for_me(struct app *app, const char *network, const char *url, char *out,
+                            size_t out_sz);
 static bool call_helper_start(struct app *app, const char *room_url, bool video,
                               const char *network, const char *channel);
 static void call_helper_stop(struct app *app);
@@ -12284,8 +12288,18 @@ static void call_command(struct app *app, enum call_kind kind) {
     }
     char room[96];
     call_room_name(room, sizeof(room));
-    char message[sizeof(app->call_base_url) + sizeof(room) + 16];
+    char message[sizeof(app->call_base_url) + sizeof(room) + 640];
     call_invite_build(kind, app->call_base_url, room, message, sizeof(message));
+    /* WHO IS IN THE CALL, for whoever opens this in a BROWSER.
+     *
+     * The page has no other way to learn it: the roster is IRC's, and
+     * asking the SFU would mean an endpoint that lists rooms. shottino
+     * ignores this and uses the LIVE roster, which beats a snapshot.
+     *
+     * The CALLER is in the list. From a recipient's side the caller is
+     * just another person to read — leaving them out is how the one
+     * participant guaranteed to be there becomes the one nobody sees. */
+    call_invite_peers(app, net, chan, message, sizeof(message));
 
     /* The caller is a participant too: a call you start and do not join
      * is an invitation, and this verb is not called /invite. Recorded as
@@ -12310,8 +12324,11 @@ static void call_command(struct app *app, enum call_kind kind) {
      * is taken only when the operator has said their service speaks
      * WHIP — nothing can tell that from a URL. */
     if (!app->call_in_terminal ||
-        !call_helper_start(app, app->call_last.url, kind == CALL_VIDEO, net, chan))
-        open_external_url(app, app->call_last.url);
+        !call_helper_start(app, app->call_last.url, kind == CALL_VIDEO, net, chan)) {
+        char mine[MAX_LINE + 160];
+        call_url_for_me(app, net, app->call_last.url, mine, sizeof(mine));
+        open_external_url(app, mine);
+    }
 }
 
 /* Join the call that came in — whether it rang or not.
@@ -12341,8 +12358,11 @@ static void call_answer(struct app *app) {
     snprintf(net, sizeof(net), "%s", app->call_last.network);
     snprintf(chan, sizeof(chan), "%s", app->call_last.channel);
     pthread_mutex_unlock(&app->lock);
-    if (!app->call_in_terminal || !call_helper_start(app, url, want_video, net, chan))
-        open_external_url(app, url);
+    if (!app->call_in_terminal || !call_helper_start(app, url, want_video, net, chan)) {
+        char mine[MAX_LINE + 160];
+        call_url_for_me(app, net, url, mine, sizeof(mine));
+        open_external_url(app, mine);
+    }
 }
 
 /* Stop the ring. LOCAL: nothing is sent to the caller.
@@ -12453,6 +12473,60 @@ static void call_path_nick(const char *nick, char *out, size_t out_sz) {
         }
     }
     out[n] = 0;
+}
+
+/* Append `&peers=…` — every folded nick that could be in this call,
+ * caller first. Bounded by CALL_MAX_PEERS, like the helper's own cap. */
+static void call_invite_peers(struct app *app, const char *network, const char *channel, char *out,
+                              size_t out_sz) {
+    const char *own = own_nick_for_network(app, network);
+    size_t at = strlen(out);
+    size_t n = 0;
+    char pn[128];
+    if (own && own[0]) {
+        call_path_nick(own, pn, sizeof(pn));
+        at += (size_t)snprintf(out + at, out_sz - at, "&peers=%s", pn);
+        n++;
+    }
+    if (channel && channel[0] && !is_channel_name(channel)) {
+        call_path_nick(channel, pn, sizeof(pn));
+        snprintf(out + at, out_sz - at, "%s%s", n ? "," : "&peers=", pn);
+        return;
+    }
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) {
+        struct window *w = &app->windows[i];
+        if (strcmp(w->network, network) != 0 || !irc_name_eq(w->channel, channel)) continue;
+        for (size_t k = 0; k < w->member_count && n < CALL_MAX_PEERS; k++) {
+            if (own && irc_name_eq(w->members[k].nick, own)) continue;
+            call_path_nick(w->members[k].nick, pn, sizeof(pn));
+            if (at + strlen(pn) + 10 >= out_sz) break;
+            at += (size_t)snprintf(out + at, out_sz - at, "%s%s", n ? "," : "&peers=", pn);
+            n++;
+        }
+        break;
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* The same invite, with THIS client's own nick attached.
+ *
+ * Only ever added when opening a link LOCALLY, never when posting one:
+ * an invite is read by several people and cannot carry any one of their
+ * identities. The page prefills from it, which is what ties the browser
+ * participant to the nick the other side subscribes to — typing a
+ * different one publishes to a path nobody is reading, and the call
+ * looks connected to everybody and is heard by nobody. */
+static void call_url_for_me(struct app *app, const char *network, const char *url, char *out,
+                            size_t out_sz) {
+    const char *own = own_nick_for_network(app, network);
+    if (!own || !own[0] || !strchr(url, '#')) {
+        snprintf(out, out_sz, "%s", url);
+        return;
+    }
+    char pn[128];
+    call_path_nick(own, pn, sizeof(pn));
+    snprintf(out, out_sz, "%s&me=%s", url, pn);
 }
 
 /* The picture-in-picture box, in CELLS.
