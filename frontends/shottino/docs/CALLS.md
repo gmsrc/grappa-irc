@@ -111,12 +111,59 @@ POST <base>/<room>/whip          Content-Type: application/sdp
 DELETE <resource-url>            hang up
 ```
 
-That is an HTTP request `shottino/http.c` can already make over the
-OpenSSL it already links. The SDP is generated and consumed by
-libdatachannel — the one new dependency, and the same one whether the
-signalling is WHIP, Jitsi's XMPP/Jingle, or CTCP over IRC. **The
-signalling choice costs code, not dependencies**, and WHIP is the
-cheapest code.
+That is one HTTP request shape over the OpenSSL shottino already links.
+The SDP is generated and consumed by libdatachannel — the one new
+dependency, and the same one whether the signalling is WHIP, Jitsi's
+XMPP/Jingle, or CTCP over IRC. **The signalling choice costs code, not
+dependencies**, and WHIP is the cheapest code.
+
+### The dependency, measured
+
+libdatachannel is vendored as a pinned git submodule
+(`vendor/libdatachannel`, **v0.24.5**) and linked **statically** into the
+helper. Configured for media without the parts we do not use:
+
+```sh
+cmake -S vendor/libdatachannel -B vendor/build \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+  -DUSE_GNUTLS=OFF -DUSE_NICE=OFF \
+  -DNO_WEBSOCKET=ON -DNO_EXAMPLES=ON -DNO_TESTS=ON
+```
+
+`USE_GNUTLS=OFF` takes the OpenSSL that is already linked; `USE_NICE=OFF`
+takes the bundled libjuice rather than adding a system libnice. That
+produces four static archives totalling ~6.7 MB of which only the reached
+code is linked in:
+
+| archive | size |
+|---|---|
+| `libdatachannel.a` | 5.4 MB |
+| `libusrsctp.a` | 824 KB |
+| `libjuice.a` | 364 KB |
+| `libsrtp2.a` | 138 KB |
+
+**The result, verified by linking and running a C11 smoke program** that
+creates a real peer connection: a **4.5 MB** self-contained binary whose
+runtime dependencies are
+
+```
+libssl.so.3  libcrypto.so.3  libm.so.6  libc.so.6  libz.so.1  libzstd.so.1
+```
+
+— which is **exactly the set shottino already links**. No libstdc++, no
+GStreamer, no new runtime dependency of any kind.
+
+Two details make that work and are easy to get wrong:
+
+- libdatachannel is C++ inside, so the helper is **compiled as C11 but
+  linked with the C++ driver** (`c++`), with `-static-libstdc++
+  -static-libgcc`. Linking with `cc` fails on `__cxxabiv1` vtables, and
+  linking without the static flags adds a `libstdc++.so.6` runtime
+  dependency that the whole point was to avoid.
+- The helper is **not built by `make all`**. The packaging path runs
+  `make -C frontends/shottino` and must keep producing one binary with no
+  new dependencies; building the helper additionally needs cmake and a
+  C++ compiler, which the .deb and AUR builders are not asked for.
 
 ### What the host has to run
 

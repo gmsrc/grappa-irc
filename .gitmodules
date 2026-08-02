@@ -5,3 +5,6 @@
 	path = vendor/bats-core
 	url = https://github.com/bats-core/bats-core.git
 	branch = master
+[submodule "frontends/shottino/vendor/libdatachannel"]
+	path = frontends/shottino/vendor/libdatachannel
+	url = https://github.com/paullouisageneau/libdatachannel.git

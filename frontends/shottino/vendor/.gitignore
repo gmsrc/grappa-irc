@@ -1,0 +1,4 @@
+# CMake output for the vendored libdatachannel. The SOURCE is a pinned
+# submodule and is tracked; the build tree is not — it is machine- and
+# toolchain-specific, and it is ~50 MB of object files.
+build/
