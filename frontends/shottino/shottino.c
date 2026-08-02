@@ -7295,22 +7295,24 @@ static char *llm_call_claude_cli(struct app *app, const struct llm_config *cfg,
         argv[a++] = "--permission-prompt-tool"; argv[a++] = "stdio";
         argv[a++] = "--verbose";
         argv[a++] = "--dangerously-skip-permissions";
-        /* The CLI's OWN built-in tools.
+        /* The CLI's OWN built-in tools, and EMPTY means none.
          *
-         * `--tools ''` does NOT mean "built-ins off, keep the rest": on
-         * CLI 2.1.220 it empties the registry ENTIRELY, MCP tools
-         * included, and the model is then told our server is "still
-         * connecting" forever. Verified against the real binary — the
-         * flag documentation says "from the built-in set", but the empty
-         * value is a floor, not a filter.
+         * An earlier version passed "ToolSearch" here whenever the list
+         * was empty, on the belief that `--tools ''` emptied the whole
+         * registry including the MCP tools. That was a misdiagnosis: the
+         * symptom it was working around — the model told our server was
+         * "still connecting" — had a different cause entirely, a
+         * trailing newline in the tools file that split the JSON-RPC
+         * reply across two lines. With that fixed, `--tools ''` behaves
+         * as documented and as the reference implementation relies on:
+         * built-ins off, MCP tools unaffected.
          *
-         * Naming ANY built-in keeps the registry alive and ours load
-         * beside it, so the no-built-ins case names ToolSearch: it is
-         * the one built-in that confers no capability of its own, and
-         * with --strict-mcp-config the only tools it could ever surface
-         * are the ones we already registered. */
+         * WebFetch and WebSearch are on by default because they read the
+         * world and change nothing in it. Everything else the CLI offers
+         * runs INSIDE the CLI, where shottino's approval gate cannot see
+         * it, which is why the rest are opt-in. */
         argv[a++] = "--tools";
-        argv[a++] = cfg->cli_tools[0] ? cfg->cli_tools : (mcp_config[0] ? "ToolSearch" : "");
+        argv[a++] = cfg->cli_tools;
         argv[a++] = "--include-partial-messages";
         argv[a++] = "--no-session-persistence";
         if (mcp_config[0]) {
@@ -7338,12 +7340,34 @@ static char *llm_call_claude_cli(struct app *app, const struct llm_config *cfg,
     static char reply[16384];
     struct llm_claude_stream st;
     llm_claude_stream_init(&st, reply, sizeof(reply));
+    /* Read in CHUNKS, not a byte at a time.
+     *
+     * This was one read() syscall per character — thousands per event —
+     * and it lost a race that matters. The contract with the shim is
+     * that the CLI is torn down the instant a turn ends in tool calls,
+     * because the shim cannot execute anything: it advertises, and
+     * shottino runs the tools itself. Between the CLI emitting
+     * stop_reason and this loop noticing, a byte-at-a-time reader is
+     * slow enough that the CLI dispatches the call, receives the shim's
+     * "not executed here" sentinel, and tells the MODEL its tool
+     * failed — which the model then narrates to the user as
+     * "[Tool use was rejected]" and prose describing calls it would
+     * have made. Buffered, the kill lands first.
+     *
+     * (The sentinel stays, and stays an error, exactly as the reference
+     * implementation has it: if the race is ever lost again it must
+     * fail loudly in the transcript rather than hang the subprocess.) */
     char line[8192];
-    size_t len = 0;
+    char buf[16384];
+    size_t len = 0, have = 0, at = 0;
     for (;;) {
-        char c;
-        ssize_t n = read(out_fds[0], &c, 1);
-        if (n <= 0) break;
+        if (at == have) {
+            ssize_t n = read(out_fds[0], buf, sizeof(buf));
+            if (n <= 0) break;
+            have = (size_t)n;
+            at = 0;
+        }
+        char c = buf[at++];
         if (c == '\n') {
             line[len] = 0;
             llm_claude_stream_feed(&st, line);
@@ -8166,6 +8190,17 @@ static void llm_run(struct app *app, const struct llm_req *req) {
             }
             int w = snprintf(flat + used, sizeof(flat) - used, "%s", req->text);
             if (w > 0 && (size_t)w < sizeof(flat) - used) used += (size_t)w;
+            /* The last round has no tools, and a model that has just
+             * been using them will otherwise announce another call and
+             * stop. Saying so IN the message as well as in the system
+             * prompt is belt and braces for the one turn where getting
+             * words out is the entire job. */
+            if (round_writes < 0 && used + 200 < sizeof(flat)) {
+                int n3 = snprintf(flat + used, sizeof(flat) - used,
+                                  "\n\n[No tools are available now. Answer from what you already "
+                                  "have, in words. Do not say you are about to call anything.]");
+                if (n3 > 0 && (size_t)n3 < sizeof(flat) - used) used += (size_t)n3;
+            }
             for (size_t i = nhist + 1; i < nturns && used + 64 < sizeof(flat); i++) {
                 int n2 = snprintf(flat + used, sizeof(flat) - used, "\n\n%s",
                                   turns[i].content ? turns[i].content : "");
@@ -8712,6 +8747,32 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
     else if (strcmp(def->name, "llm.prompt") == 0)
         snprintf(app->llm.prompt, sizeof(app->llm.prompt), "%s", value);
     else if (strcmp(def->name, "llm.cli_tools") == 0) {
+        /* Checked against the names the CLI actually has.
+         *
+         * This field is a LIST of built-in tool names and it reads like
+         * a switch — one `on` in here is what silently emptied the whole
+         * registry, MCP tools included, and left the model insisting the
+         * server was still connecting. A name the CLI does not know is
+         * refused now, with the ones it does know printed. */
+        static const char *const known[] = { "WebFetch", "WebSearch",  "Read",       "Write",
+                                             "Glob",     "Bash",       "Monitor",    "Grep",
+                                             "Edit",     "CronList",   "CronDelete", "CronCreate",
+                                             "ToolSearch", NULL };
+        char copy[LLM_MAX_TOOLS];
+        snprintf(copy, sizeof(copy), "%.*s", (int)sizeof(copy) - 1, value);
+        for (char *tok = strtok(copy, ","); tok; tok = strtok(NULL, ",")) {
+            while (*tok == ' ') tok++;
+            size_t len = strlen(tok);
+            while (len && tok[len - 1] == ' ') tok[--len] = 0;
+            if (!*tok) continue;
+            bool ok = false;
+            for (size_t k = 0; known[k] && !ok; k++) ok = strcmp(known[k], tok) == 0;
+            if (ok) continue;
+            log_line(app, "/set llm.cli_tools: `%.20s` is not a CLI tool. This is a LIST, not a "
+                          "switch — try WebFetch,WebSearch,Read,Write,Glob,Bash,Monitor,Grep,"
+                          "Edit,CronList,CronDelete,CronCreate (empty means none)", tok);
+            return false;
+        }
         snprintf(app->llm.cli_tools, sizeof(app->llm.cli_tools), "%.*s",
                  (int)sizeof(app->llm.cli_tools) - 1, value);
         /* Said plainly, every time, because it is the one setting here
@@ -16773,6 +16834,13 @@ int main(int argc, char **argv) {
     snprintf(app->voice_source, sizeof(app->voice_source), "pulse:default");
     snprintf(app->video_source, sizeof(app->video_source), "v4l2:/dev/video0");
     app->rec.stdin_fd = -1;
+    /* The claude CLI's own tools that are safe to have on by default:
+     * they READ the world and change nothing in it. Everything else it
+     * offers — Read, Write, Edit, Glob, Grep, Bash, Monitor and the Cron
+     * verbs — is available through llm.cli_tools and off until asked
+     * for, because those run INSIDE the CLI and never pass shottino's
+     * approval gate. */
+    snprintf(app->llm.cli_tools, sizeof(app->llm.cli_tools), "WebFetch,WebSearch");
     bool have_ffmpeg = media_tool_available("ffmpeg");
     app->inline_media_enabled = have_ffmpeg;
     /* ALL HOSTS by default — the owner's call, made with the cost known.

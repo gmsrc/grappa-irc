@@ -316,6 +316,7 @@ static char *tools_json_shape(bool writes_allowed, bool mcp) {
 char *llm_tools_json(bool writes_allowed) { return tools_json_shape(writes_allowed, false); }
 char *llm_tools_mcp_json(bool writes_allowed) { return tools_json_shape(writes_allowed, true); }
 
+
 /* Defined with the request bodies below; the shim needs it too, and a
  * reply that reflects the caller's own strings must escape them. */
 static bool json_escape_into(const char *src, char *out, size_t out_sz, size_t *used);
@@ -381,6 +382,19 @@ bool llm_mcp_response(const char *line, const char *tools_json, char *out, size_
         w = snprintf(out, out_sz, "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"tools\":%s}}",
                      id, tools_json && tools_json[0] ? tools_json : "[]");
     } else if (strcmp(method, "tools/call") == 0) {
+        /* An ERROR sentinel, deliberately, and never silence.
+         *
+         * The shim advertises; it cannot execute — the tools need app
+         * state in another process. The caller's contract is that it
+         * tears the CLI down the moment a turn ends in tool calls and
+         * runs them itself, so this is normally never reached.
+         *
+         * When it IS reached the race has been lost, and the choice is
+         * between failing loudly here and not answering at all. Not
+         * answering hangs the CLI until its own timeout, with nothing in
+         * any log to say why; this way the transcript names the problem.
+         * Same reasoning, and the same sentinel, as the reference
+         * implementation this shim was modelled on. */
         w = snprintf(out, out_sz,
                      "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"content\":"
                      "[{\"type\":\"text\",\"text\":\"" MCP_CALL_SENTINEL "\"}],"

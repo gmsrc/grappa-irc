@@ -454,15 +454,19 @@ that advertises the same tool table. Same tools, same handlers, same approval
 gate — the shim only *advertises*, and every call is executed here, where the
 app state and the gate are.
 
-The CLI's own built-in tools stay off. (Not via `--tools ''`, which on CLI
-2.1.220 empties the registry *including* MCP tools and leaves the model told
-the server is "still connecting" — verified against the real binary. Shottino
-names `ToolSearch` instead: the one built-in that grants no capability of its
-own.) To enable some:
+The CLI's own built-in tools default to **`WebFetch,WebSearch`** — the two that
+read the world and change nothing in it. To change the set:
 
 ```sh
-/set llm.cli_tools Read,WebSearch    # empty (the default) means none
+/set llm.cli_tools WebFetch,WebSearch          # the default
+/set llm.cli_tools WebFetch,WebSearch,Read     # add one
+/set llm.cli_tools                             # none at all
 ```
+
+The names it accepts are `WebFetch`, `WebSearch`, `Read`, `Write`, `Glob`,
+`Bash`, `Monitor`, `Grep`, `Edit`, `CronList`, `CronDelete` and `CronCreate`.
+Anything else is **refused**, with that list printed — this field is a list and
+it reads like a switch, and a stray `on` in it used to be accepted silently.
 
 Be deliberate about that one: those run **inside** the CLI, under
 `--dangerously-skip-permissions`, and shottino's approval gate never sees

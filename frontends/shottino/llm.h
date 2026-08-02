@@ -203,6 +203,7 @@ const char *llm_mcp_strip_prefix(const char *name);
  * inputSchema), same allowlist rule as llm_tools_json. Caller frees. */
 char *llm_tools_mcp_json(bool writes_allowed);
 
+
 /* One line of JSON-RPC in, one line out. Returns false when no response
  * is owed (a notification, or unparseable input) — the shim must stay
  * silent then, not answer with an error to a request nobody made.
