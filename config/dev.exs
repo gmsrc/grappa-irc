@@ -71,9 +71,9 @@ config :grappa, :send_throttle, capacity: 1_000, refill_per_sec: 1_000
 # with a burst ceiling no honest interaction reaches.
 config :grappa, :request_budget,
   capacity: 200,
-  refill_per_sec: 100.0,
-  sever_after: 100,
-  sever_window_ms: 5_000
+  refill_per_sec: 20.0,
+  sever_after: 30,
+  sever_window_ms: 10_000
 
 # Cloak vault key — non-secret, dev-only. Anyone with the repo has it;
 # the dev sqlite file is gitignored. Prod reads from GRAPPA_ENCRYPTION_KEY
