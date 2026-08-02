@@ -80,6 +80,16 @@ defmodule Grappa.Application do
     # Delegates to BackgroundImage.boot/0 (kept internal to the Themes context).
     :ok = Grappa.Themes.boot()
 
+    # GH #630 — stash the coarse per-subject inbound request budget in
+    # `:persistent_term` so `Grappa.RateLimit.RequestBudget.check/1`
+    # (called from the REST write plug + the WS handle_in guard) reads it
+    # lock-free instead of a runtime `Application.get_env/2` (banned by
+    # CLAUDE.md). Mirrors `Grappa.Admission.Config.boot/0`. The
+    # TokenBucket + FailureWindow ETS singletons it consumes are supervised
+    # children (started below); this only seeds config, so ordering vs them
+    # is immaterial — `check/1` is never called before the tree is up.
+    :ok = Grappa.RateLimit.RequestBudget.boot()
+
     # #543 INC-5: stash the source-alias substrate → adapter + command runner
     # in `:persistent_term` so `Grappa.Net.SourceAlias.Config` resolves them
     # lock-free (the FreeBSD/Linux adapters + the ref-count manager read the

@@ -71,6 +71,7 @@ defmodule Grappa.AdminEvents.Wire do
           | :credential_updated
           | :credential_unbound
           | :login_throttled
+          | :web_session_severed
 
   @type circuit_open_event :: %{
           kind: :circuit_open,
@@ -353,6 +354,24 @@ defmodule Grappa.AdminEvents.Wire do
           at: String.t()
         }
 
+  @typedoc """
+  GH #630 — a subject's web session was SEVERED for sustained inbound
+  flooding: it kept sending past `failures` over-budget (429'd) requests
+  within `window_ms`, so the socket was closed and its auth session
+  revoked (re-auth required). System-initiated (no operator actor) — like
+  `:login_throttled`, this is an automatic protective action, not an admin
+  mutation. 🔴 The IRC `Session.Server` is untouched; only the web session
+  dies. `subject_kind`/`subject_id` name WHO was severed for the operator.
+  """
+  @type web_session_severed_event :: %{
+          kind: :web_session_severed,
+          subject_kind: :user | :visitor,
+          subject_id: String.t(),
+          failures: pos_integer(),
+          window_ms: pos_integer(),
+          at: String.t()
+        }
+
   @type event ::
           circuit_open_event()
           | circuit_close_event()
@@ -380,6 +399,7 @@ defmodule Grappa.AdminEvents.Wire do
           | credential_updated_event()
           | credential_unbound_event()
           | login_throttled_event()
+          | web_session_severed_event()
 
   ## ----- Constructors --------------------------------------------------
   ##
@@ -1095,6 +1115,22 @@ defmodule Grappa.AdminEvents.Wire do
     %{
       kind: :login_throttled,
       source_ip: source_ip,
+      failures: failures,
+      window_ms: window_ms,
+      at: now()
+    }
+  end
+
+  @doc false
+  @spec web_session_severed(:user | :visitor, String.t(), pos_integer(), pos_integer()) ::
+          web_session_severed_event()
+  def web_session_severed(subject_kind, subject_id, failures, window_ms)
+      when subject_kind in [:user, :visitor] and is_binary(subject_id) and
+             is_integer(failures) and failures > 0 and is_integer(window_ms) and window_ms > 0 do
+    %{
+      kind: :web_session_severed,
+      subject_kind: subject_kind,
+      subject_id: subject_id,
       failures: failures,
       window_ms: window_ms,
       at: now()

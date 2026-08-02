@@ -144,6 +144,30 @@ config :grappa, :send_throttle,
   capacity: 5,
   refill_per_sec: 0.5
 
+# GH #630 — coarse per-subject INBOUND request budget spanning EVERY WS
+# `handle_in` verb AND every REST write (POST/PUT/PATCH/DELETE). This is
+# the shared OUTER gate that a flooder cannot dodge by switching surface;
+# #340's per-(subject, network) send bucket stays ON TOP as the finer
+# send limit. Over budget → HTTP 429 / WS `rate_limited` error frame.
+# `sever_after` over-budget events within `sever_window_ms` → the web
+# session is SEVERED (socket closed + auth session revoked, re-auth
+# required) — the IRC `Session.Server` is never touched. Read via the
+# `:persistent_term` boot seam in `Grappa.RateLimit.RequestBudget`.
+#
+#   * capacity — burst allowance across all metered doors. 60 absorbs a
+#     login/window-open fan-out; a human interacting peaks well under it.
+#   * refill_per_sec — sustained ceiling once the burst is spent. 20/s is
+#     generous for interactive use, murderous for a scripted flood.
+#   * sever_after — over-budget (429'd) events in one window that mark a
+#     client as IGNORING the throttle → sustained abuse. A legit paste
+#     burst trips 1-2; only a hammering client reaches 20.
+#   * sever_window_ms — the rolling window the count lives in.
+config :grappa, :request_budget,
+  capacity: 60,
+  refill_per_sec: 20.0,
+  sever_after: 20,
+  sever_window_ms: 10_000
+
 # T31 admission control. Defaults match the design (CP11 S20 →
 # CP11 S21 brainstorm). All values configurable per-env via
 # config/runtime.exs at deployment time.

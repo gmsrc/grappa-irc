@@ -191,6 +191,19 @@ config :grappa, :send_throttle,
   capacity: 3,
   refill_per_sec: 0.5
 
+# GH #630 — tiny deterministic request budget so the plug + channel tests
+# trip the throttle after a handful of requests and the sever after a few
+# more, with refill slow enough that no token refills between the
+# sequential calls of one test (wall-clock-free; refill-over-time is
+# proven deterministically at the `TokenBucket` unit level via its now_ms
+# seam). capacity 5 → the 6th metered request in a burst 429s; sever_after
+# 3 → the 3rd over-budget event (8th request) severs.
+config :grappa, :request_budget,
+  capacity: 5,
+  refill_per_sec: 0.5,
+  sever_after: 3,
+  sever_window_ms: 60_000
+
 # Push notifications cluster B2 (2026-05-14) — fixed VAPID keypair for
 # the `:web_push_elixir` library so `Push.Sender` tests don't need to
 # generate a fresh pair per run (and so the lib's

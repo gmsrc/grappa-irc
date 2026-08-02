@@ -81,6 +81,16 @@ defmodule GrappaWeb.Router do
     plug GrappaWeb.Admin.AuthPlug
   end
 
+  # GH #630 — coarse per-subject inbound request budget on the REST door.
+  # Mounted downstream of `:authn` (reads `current_subject` +
+  # `current_session_id`); meters only write methods (the plug self-gates,
+  # so GET reads pass through). Over budget → 429; sustained abuse → the
+  # web session is severed. The SAME `GrappaWeb.RequestBudget.guard/3` the
+  # WS `handle_in` guard calls — one code path, both doors.
+  pipeline :request_budget do
+    plug GrappaWeb.Plugs.RequestBudget
+  end
+
   scope "/", GrappaWeb do
     pipe_through []
 
@@ -234,7 +244,7 @@ defmodule GrappaWeb.Router do
   end
 
   scope "/", GrappaWeb do
-    pipe_through [:api, :authn]
+    pipe_through [:api, :authn, :request_budget]
 
     delete "/auth/logout", AuthController, :logout
 
@@ -372,7 +382,7 @@ defmodule GrappaWeb.Router do
   end
 
   scope "/networks/:network_id", GrappaWeb do
-    pipe_through [:api, :authn, :resolve_network]
+    pipe_through [:api, :authn, :request_budget, :resolve_network]
 
     patch "/", NetworksController, :update
 

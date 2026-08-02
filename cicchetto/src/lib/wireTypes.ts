@@ -116,6 +116,7 @@ export const ADMIN_EVENTS_WIRE_EVENT_KIND = [
   "credential_updated",
   "credential_unbound",
   "login_throttled",
+  "web_session_severed",
 ] as const;
 export type AdminEventsWireEventKind = (typeof ADMIN_EVENTS_WIRE_EVENT_KIND)[number];
 
@@ -374,6 +375,15 @@ export type AdminEventsWireLoginThrottledEvent = {
   at: string;
 };
 
+export type AdminEventsWireWebSessionSeveredEvent = {
+  kind: "web_session_severed";
+  subject_kind: "user" | "visitor";
+  subject_id: string;
+  failures: number;
+  window_ms: number;
+  at: string;
+};
+
 export type AdminEventsWireEvent =
   | AdminEventsWireCircuitOpenEvent
   | AdminEventsWireCircuitCloseEvent
@@ -400,7 +410,8 @@ export type AdminEventsWireEvent =
   | AdminEventsWireCredentialBoundEvent
   | AdminEventsWireCredentialUpdatedEvent
   | AdminEventsWireCredentialUnboundEvent
-  | AdminEventsWireLoginThrottledEvent;
+  | AdminEventsWireLoginThrottledEvent
+  | AdminEventsWireWebSessionSeveredEvent;
 
 // === Grappa.Admission.NetworkCircuit.AdminWire ===
 
@@ -675,6 +686,13 @@ export type QueryWindowsWireWindowsEntry = {
 export type QueryWindowsWireWindowsListPayload = {
   kind: "query_windows_list";
   windows: QueryWindowsWireWindowsMap;
+};
+
+// === Grappa.RateLimit.Wire ===
+
+export type RateLimitWireWebSessionSeveredEvent = {
+  kind: "web_session_severed";
+  code: "rate_limit_flood";
 };
 
 // === Grappa.ReadCursor.Wire ===
@@ -1409,5 +1427,6 @@ export const ERROR_TOKENS_CHANNEL_ERROR_TOKEN = [
   "nothing_to_recover",
   "already_identified",
   "recovery_in_progress",
+  "rate_limited",
 ] as const;
 export type ErrorTokensChannelErrorToken = (typeof ERROR_TOKENS_CHANNEL_ERROR_TOKEN)[number];
