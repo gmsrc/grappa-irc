@@ -331,6 +331,73 @@ bool media_start_recv(struct media_leg *leg, const struct media_config *cfg, boo
     return true;
 }
 
+bool media_start_mix(struct media_leg *legs, int n, const struct media_config *cfg) {
+    if (!legs || n <= 0 || !cfg) return false;
+    if (n > 16) n = 16; /* the argv below is sized for it */
+
+    char *argv[MEDIA_MAX_ARGS + 16 * 2];
+    size_t a = 0;
+    argv[a++] = (char *)"ffmpeg";
+    argv[a++] = (char *)"-nostdin";
+    argv[a++] = (char *)"-loglevel";
+    argv[a++] = (char *)"error";
+
+    char filter[64];
+    /* normalize=0: with normalising, one person speaking is quieter the
+     * more silent people are in the room, which is exactly backwards. */
+    snprintf(filter, sizeof(filter), "amix=inputs=%d:normalize=0", n);
+
+    for (int i = 0; i < n; i++) {
+        memset(&legs[i], 0, sizeof(legs[i]));
+        legs[i].pid = -1;
+        legs[i].fd = -1;
+        int port = 0;
+        int probe = media_bind_loopback(&port);
+        if (probe < 0) goto fail;
+        close(probe); /* ffmpeg opens it itself */
+        char sdp[512];
+        if (!media_recv_sdp(cfg, false, port, sdp, sizeof(sdp))) goto fail;
+        char path[] = "/tmp/shottino-mix-XXXXXX";
+        int fd = mkstemp(path);
+        if (fd < 0) goto fail;
+        size_t len = strlen(sdp);
+        bool wrote = write(fd, sdp, len) == (ssize_t)len;
+        close(fd);
+        if (!wrote) { unlink(path); goto fail; }
+        snprintf(legs[i].sdp_path, sizeof(legs[i].sdp_path), "%s", path);
+        legs[i].peer_port = port;
+        /* The same #451 posture as every other untrusted input. */
+        argv[a++] = (char *)"-protocol_whitelist";
+        argv[a++] = (char *)"file,udp,rtp";
+        argv[a++] = (char *)"-i";
+        argv[a++] = legs[i].sdp_path;
+    }
+
+    argv[a++] = (char *)"-filter_complex";
+    argv[a++] = filter;
+    argv[a++] = (char *)"-vn";
+    char sink[256];
+    const char *fmt = NULL, *dev = NULL;
+    split_source(cfg->audio_sink && cfg->audio_sink[0] ? cfg->audio_sink : "alsa:default", &fmt,
+                 &dev, sink, sizeof(sink));
+    argv[a++] = (char *)"-f";
+    argv[a++] = (char *)(fmt && fmt[0] ? fmt : "alsa");
+    argv[a++] = (char *)(dev && dev[0] ? dev : "default");
+    argv[a] = NULL;
+
+    legs[0].pid = spawn_ffmpeg(argv, -1);
+    if (legs[0].pid < 0) goto fail;
+    for (int i = 0; i < n; i++) {
+        legs[i].fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (legs[i].fd < 0) { media_stop(&legs[0]); goto fail; }
+    }
+    return true;
+
+fail:
+    for (int i = 0; i < n; i++) media_stop(&legs[i]);
+    return false;
+}
+
 void media_feed(const struct media_leg *leg, const void *rtp, size_t len) {
     if (!leg || leg->fd < 0 || leg->peer_port <= 0 || !rtp || len == 0) return;
     struct sockaddr_in to;

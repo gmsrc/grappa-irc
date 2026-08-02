@@ -705,12 +705,11 @@ int main(int argc, char **argv) {
         int voices = call.pub.receives ? 1 : 0;
         for (int i = 0; i < call.sub_count; i++)
             if (call.sub[i].active && call.sub[i].state == RTC_CONNECTED) voices = i + 1;
-        /* One decoder per peer, every one playing to the same sink: N
-         * voices mix in the audio system, which already does that job
-         * far better than anything here would. */
-        for (int i = 0; i < voices; i++)
-            if (!media_start_recv(&call.recv_audio[i], &mcfg, false, -1))
-                emit_event("error", "message", "cannot start audio playback (is ffmpeg installed?)");
+        /* ONE decoder for all of them. N voices used to be N processes
+         * letting the audio system mix; that works and does not scale,
+         * and the process count is what hurts long before the CPU. */
+        if (voices > 0 && !media_start_mix(call.recv_audio, voices, &mcfg))
+            emit_event("error", "message", "cannot start audio playback (is ffmpeg installed?)");
         if (voices > 0 && video && !media_start_recv(&call.recv_video, &mcfg, true, STDOUT_FILENO))
             emit_event("error", "message", "cannot start video decoding");
         emit_event("media", "value",

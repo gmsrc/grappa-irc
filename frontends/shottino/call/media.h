@@ -89,6 +89,23 @@ bool media_start_recv(struct media_leg *leg, const struct media_config *cfg, boo
 /* Forward one RTP packet a track delivered to the decoder. */
 void media_feed(const struct media_leg *leg, const void *rtp, size_t len);
 
+/* ONE decoder for every peer: N inputs, amix, one output.
+ *
+ * N voices used to be N ffmpeg processes, each playing to the same sink
+ * and letting the audio system mix them. That works and does not scale:
+ * a call is 2N processes, and the count is what hurts long before the
+ * CPU does. ffmpeg reads all N SDPs itself and `amix` does the job one
+ * process, so an N-way call costs the same as a two-way one.
+ *
+ * `legs` is filled in as it would be by media_start_recv — each entry
+ * gets its own loopback port to be fed with media_feed — but only the
+ * FIRST holds the process. Stopping legs[0] stops the decode for all of
+ * them, which is why media_stop is safe on the rest: they own a socket
+ * and nothing else.
+ *
+ * Returns false and leaves nothing running if ffmpeg cannot be started. */
+bool media_start_mix(struct media_leg *legs, int n, const struct media_config *cfg);
+
 /* Stop ffmpeg and close the socket. Safe on a leg that never started,
  * and safe to call twice. */
 void media_stop(struct media_leg *leg);
