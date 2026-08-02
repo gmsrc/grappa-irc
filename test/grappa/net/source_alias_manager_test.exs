@@ -225,4 +225,41 @@ defmodule Grappa.Net.SourceAliasManagerTest do
       assert Manager.disarm_reason() == :no_static_prefix
     end
   end
+
+  describe "arm/1 — runtime re-arm (set-time probe, #609)" do
+    @new_prefix "2a03:4000:20:2d3:ca::/80"
+
+    test "probes the prefix, adopts it, and publishes armed on success" do
+      start_manager()
+      # start_manager stubbed arm_check(@prefix) for boot; arm/1 probes the NEW
+      # prefix, so expect that explicitly.
+      expect(Grappa.Net.SourceAliasMock, :arm_check, fn @new_prefix -> :ok end)
+
+      assert :ok = Manager.arm(@new_prefix)
+      assert Manager.armed?() == true
+      assert Manager.disarm_reason() == nil
+
+      # the adopted prefix is now the working prefix — a subsequent acquire binds
+      # against it, proving state.prefix moved.
+      addr = "2a03:4000:20:2d3:ca::1"
+      expect(Grappa.Net.SourceAliasMock, :ensure_source, fn ^addr, @new_prefix -> :ok end)
+      assert :ok = Manager.acquire(addr)
+    end
+
+    test "returns the reason and changes NO state on a refused probe" do
+      start_manager()
+      # boot armed true (@prefix); a refused arm/1 must NOT flip it to disarmed.
+      assert Manager.armed?() == true
+
+      expect(Grappa.Net.SourceAliasMock, :arm_check, fn @new_prefix ->
+        {:error, :alias_not_permitted}
+      end)
+
+      assert {:error, :alias_not_permitted} = Manager.arm(@new_prefix)
+
+      # unchanged: still armed against the boot prefix, no disarm published.
+      assert Manager.armed?() == true
+      assert Manager.disarm_reason() == nil
+    end
+  end
 end

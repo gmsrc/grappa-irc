@@ -102,6 +102,19 @@ const CASES: Array<{ code: string; matches: RegExp; info?: Record<string, unknow
   { code: "unsupported_media_type", matches: /file type isn't supported/i },
   // Admin settings / vhost / admin-guard tokens.
   { code: "invalid_setting", matches: /setting value isn't valid/i },
+  // #609 — mode-2 (static mapping) refused at set time; the wire `reason`
+  // drives the copy. `no_static_prefix` is the operator-actionable branch;
+  // any other reason is a substrate-capability refusal, surfaced verbatim.
+  {
+    code: "addressing_unusable",
+    matches: /static-mapping prefix before switching to mode 2/i,
+    info: { reason: "no_static_prefix" },
+  },
+  {
+    code: "addressing_unusable",
+    matches: /can't be enabled on this server: substrate_disabled/i,
+    info: { reason: "substrate_disabled" },
+  },
   { code: "forbidden_vhost", matches: /vhost isn't available/i },
   { code: "source_not_local", matches: /address this server can send from/i },
   { code: "already_exists", matches: /already exists/i },

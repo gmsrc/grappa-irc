@@ -85,6 +85,7 @@ defmodule GrappaWeb.FallbackController do
            | :fetch_failed
            | :image_reencode_failed
            | {:invalid_setting, String.t()}
+           | {:addressing_unusable, atom()}
            | {:file_too_large, pos_integer()}
            | {:metadata_strip, String.t()}
            | {:anon_collision, non_neg_integer()}
@@ -190,6 +191,20 @@ defmodule GrappaWeb.FallbackController do
     conn
     |> put_status(:unprocessable_entity)
     |> json(%{error: "invalid_setting", field: field})
+  end
+
+  # #609 — admin set mode 2 (static_mapping_with_reservations), or changed its
+  # prefix, but the substrate can't arm it: the capability probe ran at
+  # mode-set time and refused. 422 (well-formed + authorized, semantically
+  # unusable) carrying the concrete reason (:alias_not_permitted /
+  # :prefix_mismatch / :prefix_config_unavailable / :wrapper_unavailable /
+  # :probe_timeout / :no_static_prefix / …) so the admin UI shows WHY instead
+  # of the operator discovering it later as sessions stuck in hold. The
+  # settings row is NOT persisted — a mode that cannot arm never reaches the DB.
+  def call(conn, {:error, {:addressing_unusable, reason}}) when is_atom(reason) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{error: "addressing_unusable", reason: Atom.to_string(reason)})
   end
 
   def call(conn, {:error, :not_found}) do
