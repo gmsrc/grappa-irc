@@ -165,6 +165,62 @@ Two details make that work and are easy to get wrong:
   new dependencies; building the helper additionally needs cmake and a
   C++ compiler, which the .deb and AUR builders are not asked for.
 
+### The helper, as it stands
+
+`shottino-call` is built **opt-in** — `make call`, never `make all`, so
+the packaging path is untouched:
+
+```sh
+git submodule update --init --recursive frontends/shottino/vendor/libdatachannel
+make -C frontends/shottino call
+```
+
+```
+usage: shottino-call --whip <url> [options]
+  --whip <url>     the WHIP endpoint to negotiate against (required)
+  --stun <url>     a STUN server, e.g. stun:stun.example:19302
+  --video          negotiate a video track as well as audio
+  --timeout <ms>   how long to wait for ICE and for the answer (default 15000)
+  --verbose        interleave '#' notes on stderr
+  --protocol       print the helper protocol version and exit
+```
+
+**Output contract**, fixed now because the media stage depends on it:
+**stdout is reserved for the raw frame stream and nothing else writes
+there**; events are one JSON object per line on **stderr**, and
+`--verbose` notes are `#` comment lines a parser skips on the first
+character. `--protocol` exists so shottino can refuse a helper left
+behind by an older install rather than misbehaving with it.
+
+What it does today is the full signalling round trip: gather ICE, build
+the offer, POST it, resolve the session resource, apply the answer,
+report the connection state, and DELETE the resource on the way out.
+Piping ffmpeg into and out of the tracks is the next stage; the tracks
+are already declared `sendrecv` with the codecs those legs will use.
+
+The offer it generates, captured against a stub endpoint:
+
+```
+m=audio 48832 UDP/TLS/RTP/SAVPF 111     a=rtpmap:111 opus/48000/2   a=sendrecv
+m=video 48832 UDP/TLS/RTP/SAVPF 96      a=rtpmap:96 VP8/90000       a=sendrecv
+```
+
+Both m-lines on one port — BUNDLE with rtcp-mux — which is what an SFU
+expects and what makes the single-UDP-port firewall rule below possible.
+
+**Vanilla ICE, not trickle.** WHIP is one POST with one body, so there is
+nowhere to trickle a late candidate to: the offer has to be complete
+before it is sent. The spec has a PATCH for trickle and server support
+varies; needing it is not worth a second code path here.
+
+Two bugs this found on its first real run, both worth knowing if you
+touch the request path: the `Host` header must carry the **port** when it
+is not the scheme's default (omitting it reaches the right socket and
+then the wrong vhost, and an SFU behind a reverse proxy routes on that
+header), and the session resource exists from the moment the endpoint
+answers `201`, so **every** exit after that owes it a `DELETE` — a
+rejected answer and a media path that never came up included.
+
 ### What the host has to run
 
 **1. An SFU that speaks WHIP and WHEP.**

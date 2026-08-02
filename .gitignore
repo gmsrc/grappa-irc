@@ -112,3 +112,7 @@ Thumbs.db
 
 # orchestrator handoff brain (ephemeral run state, durable across reboot, never committed)
 .orchestrate/
+
+# shottino call helper (opt-in `make call`)
+frontends/shottino/shottino-call
+frontends/shottino/call/*.o

@@ -47,7 +47,7 @@ OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o ircd.
 # reaches, which is the drawing primitives and nothing else. Do not trust
 # this net for changes elsewhere in that file; add a test or reason about
 # the path by hand.
-TESTS := tests/test_llm tests/test_ws tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_layout tests/test_keys tests/test_ircd tests/test_commands tests/test_windows
+TESTS := tests/test_llm tests/test_ws tests/test_json tests/test_wire tests/test_alias tests/test_mirc tests/test_termcolor tests/test_http tests/test_media tests/test_whip tests/test_layout tests/test_keys tests/test_ircd tests/test_commands tests/test_windows
 SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O1 -g $(SANITIZE)
 
@@ -87,6 +87,14 @@ tests/test_wire: tests/test_wire.c tests/test.h wire.c wire.h json.c json.h
 
 tests/test_alias: tests/test_alias.c tests/test.h alias.c alias.h
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) -o $@ tests/test_alias.c alias.c
+
+# The WHIP signalling parsers. In the DEFAULT gate on purpose: these
+# bytes arrive from a URL that came out of an IRC message, so they get
+# the same sanitizer treatment as every other parser here. It links
+# whip.c and http.c only — NOT the vendored libdatachannel — so the gate
+# never depends on the opt-in submodule having been built.
+tests/test_whip: tests/test_whip.c tests/test.h call/whip.c call/whip.h http.c http.h
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) -o $@ tests/test_whip.c call/whip.c http.c -lssl -lcrypto
 
 tests/test_mirc: tests/test_mirc.c tests/test.h mirc.c mirc.h
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) -o $@ tests/test_mirc.c mirc.c
@@ -138,9 +146,67 @@ check: $(TESTS)
 		./$$t || rc=1; \
 	done; exit $$rc
 
+# ── shottino-call: the media helper (OPT-IN) ───────────────────────────
+#
+# NOT built by `make all`, and that is the whole point. The packaging
+# path runs `make -C frontends/shottino` and must keep producing ONE
+# binary whose runtime deps the bundled ERTS already pulls in (see
+# infra/packaging/nfpm.yaml); building this additionally needs cmake and
+# a C++ compiler, which the .deb and AUR builders are not asked for.
+# `make call` builds it, and nothing else references it.
+#
+# The four vendored archives link INTO the binary, so the helper ends up
+# depending on exactly what shottino already depends on — measured with
+# ldd: libssl, libcrypto, libm, libc, libz, libzstd. No libstdc++.
+#
+# Which needs two things that are easy to get wrong:
+#   - it compiles as C11 but LINKS with the C++ driver. libdatachannel
+#     is C++ inside, and linking with $(CC) fails on __cxxabiv1 vtables.
+#   - -static-libstdc++ -static-libgcc, or the binary picks up a
+#     libstdc++.so.6 runtime dependency that was the thing being avoided.
+CXX ?= c++
+LDC_DIR := vendor/libdatachannel
+LDC_BUILD := vendor/build
+LDC_LIBS := $(LDC_BUILD)/libdatachannel.a \
+            $(LDC_BUILD)/deps/libjuice/libjuice.a \
+            $(LDC_BUILD)/deps/libsrtp/libsrtp2.a \
+            $(LDC_BUILD)/deps/usrsctp/usrsctplib/libusrsctp.a
+CALL_BIN := shottino-call
+CALL_SRC := call/main.c call/whip.c http.c
+CALL_CFLAGS := $(CPPFLAGS) $(CFLAGS) -I$(LDC_DIR)/include
+
+.PHONY: call
+call: $(CALL_BIN)
+
+# A checked-out submodule is a precondition with a readable failure. The
+# bare cmake error for a missing CMakeLists is not one.
+$(LDC_DIR)/CMakeLists.txt:
+	@echo "the libdatachannel submodule is not checked out. From the repo root:" >&2
+	@echo "  git submodule update --init --recursive \\" >&2
+	@echo "      frontends/shottino/vendor/libdatachannel" >&2
+	@exit 1
+
+# USE_GNUTLS=OFF takes the OpenSSL already linked; USE_NICE=OFF takes the
+# bundled libjuice rather than adding a system libnice; NO_WEBSOCKET
+# because WHIP is plain HTTP and shottino has its own websocket.
+$(LDC_LIBS): $(LDC_DIR)/CMakeLists.txt
+	cmake -S $(LDC_DIR) -B $(LDC_BUILD) -DCMAKE_BUILD_TYPE=Release \
+	  -DBUILD_SHARED_LIBS=OFF -DUSE_GNUTLS=OFF -DUSE_NICE=OFF \
+	  -DNO_WEBSOCKET=ON -DNO_EXAMPLES=ON -DNO_TESTS=ON
+	cmake --build $(LDC_BUILD) -j
+
+$(CALL_BIN): $(CALL_SRC) call/whip.h http.h $(LDC_LIBS)
+	$(CC) $(CALL_CFLAGS) -c -o call/main.o call/main.c
+	$(CC) $(CALL_CFLAGS) -c -o call/whip.o call/whip.c
+	$(CXX) -o $@ call/main.o call/whip.o http.o $(LDC_LIBS) \
+	  -static-libstdc++ -static-libgcc -lssl -lcrypto -lpthread -lm
+
 install: $(BIN)
 	install -d "$(DESTDIR)$(BINDIR)"
 	install -m 0755 "$(BIN)" "$(DESTDIR)$(BINDIR)/$(BIN)"
 
+# The helper's objects and binary go too, but NOT vendor/build: rebuilding
+# libdatachannel from scratch is minutes, it is not what `clean` is for,
+# and it is already untracked. `rm -rf vendor/build` is the deliberate act.
 clean:
-	rm -f $(BIN) $(OBJS) $(OBJS:.o=.d) $(TESTS)
+	rm -f $(BIN) $(OBJS) $(OBJS:.o=.d) $(TESTS) $(CALL_BIN) call/main.o call/whip.o
