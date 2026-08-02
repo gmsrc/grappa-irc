@@ -26528,3 +26528,86 @@ design choice from #510. cic-only: two production files (`slashCommands.ts` type
 `channel:` to `channels:`. No wire token, no server/Elixir change. The
 IRC message-kind `"join"` (a JOIN *event* with `sender`/`body`) is a DIFFERENT
 type and was left untouched.
+
+---
+
+### 2026-08-02 — #666 — multi-line paste is resumable + self-pacing; the send-door 429 carries a retry-after (P0, cross-stack)
+
+Sonic + Mezmerize: pasting more than a handful of lines into the composer lost
+every line after the first throttled one, and left the box in a state where
+re-sending duplicated the lines that already went out. Four root causes, all
+verified on origin/main:
+
+1. **The client dropped lines.** `compose.ts sendBodyLines` fanned a body to one
+   PRIVMSG per line in a bare `for … await` loop with no `try`/`catch`. The
+   first refused line rejected the promise, the loop unwound, and **every
+   remaining line was dropped** — never attempted, never recorded.
+2. **The client couldn't resume, and duplicated.** `submit` cleared the draft
+   only on the success path, so on failure the composer still held the **whole**
+   body (including the delivered lines). Re-sending duplicated them AND re-tripped
+   the throttle.
+3. **The refusal is the #340 send door** — the per-`(subject, network)` token
+   bucket (`config :send_throttle`, capacity 5, refill 0.5/s). In a paste the
+   first 5 pass, the 6th 429s, the rest vanish.
+4. **The server omitted a retry hint.** The send-door 429 rendered as
+   `{error: "rate_limited"}` with **no `retry-after`**, so the client had no
+   principled interval to pace against.
+
+**Design fork (vjt-resolved): BOTH.** Auto-pace the remaining lines on the
+bucket's refill AND, at every instant, keep ONLY the unsent residue in the draft
+— not "send what you can then leave the residue for a manual resend." The paste
+drains itself over time; the composer visibly shrinks to the remainder.
+
+**Client (`compose.ts`).** `sendBodyLines` is now resumable + self-pacing. A
+send-door 429 (`ApiError.status === 429`) is a *pause*, not a failure: wait the
+server's `retry-after` (`info.retry_after`, seconds → ms), then retry the **same**
+line — a refused line was never delivered, so a retry is neither a drop nor a
+dup. `sent` never advances past a refusal. An optional `onProgress(sent, total,
+residue)` callback fires after every ack and before every pause; the new
+closure-scoped `sendPacedBody` (wrapping the privmsg / me / msg arms) mirrors the
+`residue` into the draft so it holds exactly `lines[sent..]`, and on a fatal error
+surfaces "sent N of M lines" with the residue preserved (early-return so the
+end-of-submit clear + history-push never wipe it). History still records the
+**whole** original body as one recall entry.
+
+Two deliberate bounds:
+
+* **Auto-pace only a multi-line paste** (`total > 1`). A *single* throttled send
+  still surfaces immediately — preserving #342's throttle-copy affordance
+  untouched (a lone "you're going too fast" message is worth showing; a batch is
+  the client's to meter out). This is why #342's e2e stays green with no edit.
+* **A per-line retry cap** (`MAX_PACED_RETRIES_PER_LINE`) is the safety valve
+  against a door that refuses *past* its own `retry-after` (a misbehaving /
+  severed server, or a proxy 429): an honest throttle admits on the first retry
+  once a token has refilled, so the cap is only reached pathologically — it keeps
+  the composer from hanging on an unbounded loop, then surfaces the throttle.
+
+External `sendBodyLines` callers (ServiceModal, RegistrationWizardModal) pass no
+callback and inherit the never-drop + pacing behaviour for free.
+
+**Server (`messages_controller.ex` + `fallback_controller.ex`).** The send-door
+429 now carries a `retry-after` header. `take_send_token/2` tags a refusal
+`{:error, {:rate_limited, secs}}` and a new `FallbackController` clause emits the
+header — the same "tuple carries the retry value" shape as
+`{:network_circuit_open, retry_after}` / `{:anon_collision, _}`. The value is the
+**send throttle's OWN** refill interval (`@send_throttle_retry_after_seconds =
+max(1, ceil(1.0 / refill_per_sec))` = 2s at 0.5/s), NOT
+`RequestBudget.retry_after_ms/0`: that reads the coarse #630 budget's much faster
+refill (20/s → 50ms) and would pace cic against the wrong bucket, re-429ing every
+line. The bare `:rate_limited` atom stays reserved for the #75 themes daily quota
+(a calendar-day reset that deliberately gets no seconds hint) — the two are now
+distinct clauses. Wire body is byte-identical (`error: "rate_limited"`), so this
+is **additive-only**: no new wire token (cic already parses `retry-after` in
+`api.ts readError`), no `protocol_version` bump.
+
+**Out of scope (vjt-declared):** #480 (send throttle mirroring the upstream oper
+allowance — that's *how much*, this is *not losing data when exceeded*) and the
+coarse `request_budget` sever ladder (a paste trips 1-2 over-budget events,
+nowhere near `sever_after`).
+
+**Apply:** a fan-out of independent sends over a rate-limited door is resumable
+by construction — never drop the tail on the first refusal, never re-send an
+acked item, keep the draft = the unsent residue, and pace on the refusing
+bucket's OWN advertised interval. When a 429 hint already flows on the wire
+(`retry-after` header, or a `retry_after_ms` JSON field), read it — don't
+back-to-back-refire and re-trip the throttle.
