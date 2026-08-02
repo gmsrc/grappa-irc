@@ -14,7 +14,7 @@ import { token } from "./auth";
 import { openBanlistModal } from "./banlistModal";
 import { buildBanMask } from "./banMask";
 import { setQuery } from "./channelDirectory";
-import { type ChannelKey, canonicalChannel } from "./channelKey";
+import { type ChannelKey, canonicalChannel, channelKey } from "./channelKey";
 import { friendlyError } from "./friendlyError";
 import { addHighlight, delHighlight } from "./highlightList";
 import { identityScopedStore } from "./identityScopedStore";
@@ -134,6 +134,12 @@ export const ctcpFrame = (verb: string, args: string): string =>
 // the header). Matches the send throttle's default 0.5/s refill (1 token / 2s).
 const DEFAULT_RETRY_AFTER_MS = 2_000;
 
+// Upper clamp on a server-supplied retry-after. grappa emits 2s; the clamp is
+// purely defensive so a hostile/misconfigured intermediary can't inject a huge
+// `retry-after` and freeze the composer (the retry cap bounds the COUNT of
+// waits, this bounds their DURATION).
+const MAX_RETRY_AFTER_MS = 60_000;
+
 // Safety valve: how many times ONE line is re-paced against a persistent 429
 // before the fan-out gives up and surfaces the throttle. An honest send door
 // admits on the FIRST retry once a token has refilled (we waited its own
@@ -155,9 +161,11 @@ const isSendThrottled = (e: unknown): e is ApiError => e instanceof ApiError && 
 // ms, falling back to the send-throttle default if it's missing/garbage.
 const retryAfterMs = (e: ApiError): number => {
   const seconds = e.info.retry_after;
-  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
-    ? seconds * 1_000
-    : DEFAULT_RETRY_AFTER_MS;
+  const ms =
+    typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+      ? seconds * 1_000
+      : DEFAULT_RETRY_AFTER_MS;
+  return Math.min(ms, MAX_RETRY_AFTER_MS);
 };
 
 // Split a free-text body into one PRIVMSG per line (see messageLines.ts for
@@ -631,9 +639,19 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // echo stays the sole render path (no optimistic local render — cf.
           // the #251 source_address abolition).
           await ensureQueryTopicJoined(networkSlug, canonical);
-          // #666 — resumable + paced. Residue keyed on the source window `key`
-          // (where /msg was typed), not the query window we just focused.
-          const r = await sendPacedBody(key, networkSlug, canonical, cmd.body, false);
+          // #666 — resumable + paced. Residue keyed on the QUERY window we just
+          // focused (`canonical`), NOT the source window: /msg already switched
+          // focus here, so a partial-send remainder + its error banner must
+          // co-locate in the window the operator is now looking at — and a
+          // resend of that plain-text residue from the query window goes to
+          // `canonical` (the intended peer), not back to the source channel.
+          const r = await sendPacedBody(
+            channelKey(networkSlug, canonical),
+            networkSlug,
+            canonical,
+            cmd.body,
+            false,
+          );
           if ("error" in r) return r;
           result = r;
           break;
