@@ -12,19 +12,26 @@
 //   4. THE POINT: a second, well-behaved subject (admin) keeps working
 //      normally throughout — A's flood does not become B's outage.
 //
-// The flood hammers the REST write door (a real metered door) with the
-// vjt bearer straight from the page; the shared per-subject budget means
-// the sever's effects (user-topic `web_session_severed` event → banner,
-// bearer revoke, socket close) land on the live WS all the same. The IRC
-// session is deliberately NOT touched — out of scope for a WEB sever.
+// The flood hammers the REST write door (a real metered door) with a
+// DEDICATED sacrificial victim's bearer straight from the page; the sever's
+// effects (user-topic `web_session_severed` event → banner, bearer revoke,
+// socket close) land on the live WS all the same. The IRC session is
+// deliberately NOT touched — out of scope for a WEB sever.
 //
-// Isolation: flooding vjt drains only vjt's per-subject bucket, which
-// self-heals via refill (dev config 20/s) long before the next spec's
-// vjt login; the bystander is a DISTINCT subject (admin), untouched.
+// 🔴 Isolation is load-bearing, not cosmetic. The terminal rung REVOKES the
+// flooded subject's bearer, and the e2e stack boots MIX_ENV=dev with an
+// ENFORCING budget (kept enforcing on purpose so this spec proves the REAL
+// 429 + sever + banner), so the flood MUST hit a throwaway `flood-victim`,
+// never the shared vjt: flooding vjt revoked the single globalSetup-minted
+// vjt bearer every downstream vjt spec reuses, cascading auth-death across
+// the whole tail of the 1-worker suite (issue66, issue71-inc1, …). Same
+// class as the GREEN-CI batch-1 sacrificial victim. The GUARD below asserts
+// the shared vjt + admin subjects survive the flood untouched — it FAILS
+// loudly if a future edit points the flood back at a shared identity.
 
 import { loginAs } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
+import { getSeededAdmin, getSeededFloodVictim, getSeededVjt } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
 // A metered WRITE both subjects may issue (visitor-parity route, user
@@ -55,8 +62,14 @@ test("sustained inbound flood 429s then severs the web session; a second subject
   expect(beforeWrite.status()).not.toBe(429);
   expect(beforeWrite.status()).not.toBe(401);
 
-  // Flooder — a live, authenticated cicchetto page (vjt) with an open WS.
-  await loginAs(page, getSeededVjt());
+  // Flooder — a live, authenticated cicchetto page on the DEDICATED
+  // sacrificial victim (NEVER vjt: the sever revokes this bearer) with an
+  // open WS. `noNetworks: true` — the victim is bind-less (no live
+  // Session.Server → invisible to the /admin/sessions leak canary, no
+  // user-cap slot), so loginAs gates on the registered empty-home pane +
+  // the user-topic subscribe (which delivers the sever event → banner),
+  // not a network header that never renders.
+  await loginAs(page, getSeededFloodVictim(), { noNetworks: true });
 
   // Capture the flood bearer BEFORE the sever (cic clears localStorage on
   // logout) so we can prove the OLD credential is refused afterwards.
@@ -137,4 +150,15 @@ test("sustained inbound flood 429s then severs the web session; a second subject
     headers: { authorization: `Bearer ${admin.token}` },
   });
   expect(bystanderMe.status()).toBe(200);
+
+  // (4c) 🔴 REGRESSION GUARD — the sever hit ONLY the dedicated victim. The
+  // shared vjt bearer (the single globalSetup-minted token every downstream
+  // vjt spec reuses) MUST still authenticate: if a future edit points the
+  // flood back at vjt (or any shared subject), the sever revokes that bearer
+  // and this 200 flips to 401, failing HERE instead of cascading auth-death
+  // across the tail of the suite.
+  const sharedVjtMe = await request.get(`${GRAPPA_BASE_URL}/me`, {
+    headers: { authorization: `Bearer ${getSeededVjt().token}` },
+  });
+  expect(sharedVjtMe.status()).toBe(200);
 });

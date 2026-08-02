@@ -25892,6 +25892,27 @@ tests); the ladder tests inject tiny thresholds per-test via `put_test_config/1`
 no honest spec trips but the #630 e2e's deliberate flood exercises the whole
 ladder full-stack.
 
+**The flood e2e MUST target a sacrificial victim (code-review, post-merge).**
+The e2e stack boots `MIX_ENV=dev` (`cicchetto/e2e/compose.yaml` `grappa-test`
+= `mix phx.server`), so the budget is ENFORCING there — kept that way ON
+PURPOSE so the full-stack e2e proves the REAL 429 + sever + banner, not a
+neutered one. The consequence: the ladder's terminal rung REVOKES the flooded
+subject's web bearer, so the flood spec must hit a dedicated throwaway
+`flood-victim` user, never the shared `vjt`. The first cut flooded vjt and
+revoked the SINGLE globalSetup-minted vjt bearer every downstream vjt spec
+reuses → auth-death cascaded across the whole tail of the 1-worker suite
+(issue630 sorts at ~208, immediately before issue66 + issue71-inc1, exactly
+where the wall landed). This is the SAME class as the GREEN-CI batch-1
+incident (a `.first()` destructive admin spec randomly severing vjt →
+`m9b-victim`) and the #498 witness: a DESTRUCTIVE spec gets a dedicated
+victim. The victim is created with NO network bind (only needs a web session
+to flood `/me` writes + be severed) so it consumes no bahamut-test user-cap
+slot and never surfaces in the `/admin/sessions` leak canary. Regression
+guard lives in the spec: after the sever it asserts the shared vjt + admin
+bearers STILL authenticate (200) — flips to 401 the instant the flood is
+re-pointed at a shared identity. Neutralising the e2e budget instead was
+rejected: it would stop the sever and gut the acceptance test.
+
 **Wire (additive, snake_case, no protocol bump).** New channel error token
 `rate_limited` (with `retry_after_ms`), new user-topic event
 `web_session_severed` (`Grappa.RateLimit.Wire`), new `AdminEvents` kind

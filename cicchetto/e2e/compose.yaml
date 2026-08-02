@@ -291,6 +291,14 @@ services:
         # (unique across the seeded set → no shared-leaf 433), joins its own
         # channel, and parks on teardown. The seeder creates only the USER.
         mix grappa.create_user --name i498-user --password test-password-not-secret
+        # #630 — sacrificial victim for the inbound-flood-protection e2e. The
+        # flood ladder SEVERS (revokes the bearer + closes the socket) the
+        # flooded subject, so the spec targets THIS throwaway user, never the
+        # shared vjt (a sever on vjt cascaded auth-death across every
+        # downstream vjt spec). NO bind_network: it only needs a web session
+        # to flood /me writes + be severed, so it consumes no bahamut-test
+        # user-cap slot and never surfaces in the /admin/sessions leak canary.
+        mix grappa.create_user --name flood-victim --password test-password-not-secret
         # GREEN-CI batch-1 — bahamut-test user cap defaults to 3, which
         # is exactly the seeded-user count (vjt + m9b-test + m9b-victim).
         # The victim-reconnect PATCH in destructive specs would 503
