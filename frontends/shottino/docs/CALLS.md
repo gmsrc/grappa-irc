@@ -176,8 +176,10 @@ make -C frontends/shottino call
 ```
 
 ```
-usage: shottino-call --whip <url> [options]
-  --whip <url>     the WHIP endpoint to negotiate against (required)
+usage: shottino-call [--whip <url>] [--whep <url>] [options]
+  --whip <url>     publish here. Alone, the session is sendrecv
+  --whep <url>     subscribe here. With --whip, publishing becomes
+                   sendonly and this is the receiving session
   --stun <url>     a STUN server, e.g. stun:stun.example:19302
   --video          negotiate a video track as well as audio
   --timeout <ms>   how long to wait for ICE and for the answer (default 15000)
@@ -254,6 +256,25 @@ m=video 48832 UDP/TLS/RTP/SAVPF 96      a=rtpmap:96 VP8/90000       a=sendrecv
 
 Both m-lines on one port — BUNDLE with rtcp-mux — which is what an SFU
 expects and what makes the single-UDP-port firewall rule below possible.
+
+**One or two sessions, because SFUs come in two shapes.** This is the
+thing to get right before blaming the network:
+
+| invocation | sessions | for |
+|---|---|---|
+| `--whip` alone | one `sendrecv` | a single-endpoint SFU — Galène, LiveKit |
+| `--whip` + `--whep` | `sendonly` + `recvonly` | **MediaMTX**, whose WHIP is publish-ONLY and WHEP read-only |
+| `--whep` alone | one `recvonly` | watch a room; no camera or microphone is opened |
+
+Posting a lone `sendrecv` offer to MediaMTX's WHIP does not fail — it is
+accepted as a publish and simply never sends anything back, which is a
+call with no sound and no error. Hence the pair.
+
+Verified against a stub that reports the direction attributes of each
+offer: `--whip` alone negotiates `sendrecv`; the pair negotiates
+`sendonly` on the WHIP endpoint and `recvonly` on the WHEP one; `--whep`
+alone negotiates `recvonly`. Exactly one session is wired to the
+decoders — feeding both would hand your own echo to the speakers.
 
 **Vanilla ICE, not trickle.** WHIP is one POST with one body, so there is
 nowhere to trickle a late candidate to: the offer has to be complete
