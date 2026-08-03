@@ -1585,6 +1585,16 @@ static void log_scope_of_locked(struct app *app, const char *line, char *out, si
 /* Append a row. Takes ownership of `line`. Caller holds app->lock. */
 /* Defined with the other desktop hand-offs; declared here because the
  * message path needs it and comes first. */
+/* The built-in web_search endpoint. DuckDuckGo's html endpoint exists
+ * precisely for readers with no JavaScript and returns the results
+ * themselves; `%s` is where the query goes, so pointing this at Google,
+ * a SearxNG instance or anything else is one /set away.
+ *
+ * Named rather than spelled twice: it is the value the setting falls
+ * back to AND the value the client starts with, and two copies of a URL
+ * is one of them going stale. */
+#define LLM_SEARCH_URL_DEFAULT "https://html.duckduckgo.com/html/?q=%s"
+
 static void desktop_notify(const char *title, const char *body);
 
 static void log_push_locked(struct app *app, char *line, bool mention, bool pending) {
@@ -9111,21 +9121,28 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
         char q[MAX_LINE];
         if (!tool_arg(call->arguments, "query", q, sizeof(q)))
             return xasprintf("error: query is required");
-        if (!app->llm.search_url[0])
-            return xasprintf("error: no search endpoint. The owner sets one with "
-                             "/set llm.search_url <url with %%s where the query goes>, for "
-                             "example a SearxNG instance");
+        /* Empty MEANS the built-in, exactly as an empty prompt does.
+         *
+         * llm_config_parse deliberately lets a key the file mentions
+         * win, empty included, so that "the user cleared this" survives
+         * a restart. For the prompt that is resolved at the point of
+         * use; search_url was not, so a `search_url = ` line — which is
+         * what an empty field is written as — turned the default off
+         * permanently and left /unset as the only way back. An empty
+         * search endpoint is not a state anybody wants, only one they
+         * end up in. */
+        const char *endpoint =
+            app->llm.search_url[0] ? app->llm.search_url : LLM_SEARCH_URL_DEFAULT;
         char *enc = url_encode(q);
         char url[LLM_MAX_URL + MAX_LINE];
         /* The template names where the query goes, so any search
          * front-end the user can reach works without shottino knowing
          * anything about it. */
-        const char *pct = strstr(app->llm.search_url, "%s");
+        const char *pct = strstr(endpoint, "%s");
         if (pct)
-            snprintf(url, sizeof(url), "%.*s%s%s", (int)(pct - app->llm.search_url),
-                     app->llm.search_url, enc, pct + 2);
+            snprintf(url, sizeof(url), "%.*s%s%s", (int)(pct - endpoint), endpoint, enc, pct + 2);
         else
-            snprintf(url, sizeof(url), "%s%s", app->llm.search_url, enc);
+            snprintf(url, sizeof(url), "%s%s", endpoint, enc);
         free(enc);
         struct fetch_result r;
         if (!http_fetch(app, url, &r) || !r.body)
@@ -9935,8 +9952,12 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "llm.tools") == 0)
         snprintf(out, out_sz, "%s", app->llm.tools[0] ? app->llm.tools : "(defaults)");
     else if (strcmp(name, "llm.search_url") == 0)
+        /* Shows the BUILT-IN when the field is empty, the way stt.local
+         * shows the binary it discovered: the listing must say what
+         * web_search will actually use, and "(unset)" said the feature
+         * was off when it was about to work. */
         snprintf(out, out_sz, "%.*s", (int)out_sz - 1,
-                 app->llm.search_url[0] ? app->llm.search_url : "(unset — web_search is off)");
+                 app->llm.search_url[0] ? app->llm.search_url : LLM_SEARCH_URL_DEFAULT);
     else if (strcmp(name, "llm.cdp_url") == 0)
         snprintf(out, out_sz, "%.*s", (int)out_sz - 1,
                  app->llm.cdp_url[0] ? app->llm.cdp_url : "(unset — browser_control is off)");
@@ -19533,8 +19554,7 @@ int main(int argc, char **argv) {
      * readers with no JavaScript and returns the results themselves.
      * `%s` is where the query goes, so pointing this at Google, a
      * SearxNG instance or anything else is one /set away. */
-    snprintf(app->llm.search_url, sizeof(app->llm.search_url),
-             "https://html.duckduckgo.com/html/?q=%%s");
+    snprintf(app->llm.search_url, sizeof(app->llm.search_url), "%s", LLM_SEARCH_URL_DEFAULT);
     bool have_ffmpeg = media_tool_available("ffmpeg");
     app->inline_media_enabled = have_ffmpeg;
     /* ALL HOSTS by default — the owner's call, made with the cost known.
