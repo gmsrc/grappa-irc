@@ -130,7 +130,7 @@ defmodule Grappa.Accounts.TOTPTest do
   # credential on an account whose login is password-only again.
   test "reset_totp/1 disarms the factor and revokes sessions, keeping a passkey's recovery set" do
     {user, codes} = armed_user_with_recovery_codes()
-    user |> Ecto.Changeset.change(passkey_mode: "passwordless") |> Repo.update!()
+    user |> Ecto.Changeset.change(passkey_mode: :passwordless) |> Repo.update!()
     session = session_fixture(user)
     assert TOTP.enabled?(user)
 
@@ -143,7 +143,7 @@ defmodule Grappa.Accounts.TOTPTest do
 
   test "reset_totp/1 takes the recovery set with it when TOTP was the last factor" do
     {user, _} = armed_user_with_recovery_codes()
-    assert Repo.get!(User, user.id).passkey_mode == "disabled"
+    assert Repo.get!(User, user.id).passkey_mode == :disabled
 
     {:ok, _} = Accounts.reset_totp(user.name)
 
@@ -152,7 +152,7 @@ defmodule Grappa.Accounts.TOTPTest do
 
   test "reset_passkeys/1 keeps the recovery set an armed TOTP still needs" do
     {user, codes} = armed_user_with_recovery_codes()
-    user |> Ecto.Changeset.change(passkey_mode: "second_factor") |> Repo.update!()
+    user |> Ecto.Changeset.change(passkey_mode: :second_factor) |> Repo.update!()
 
     {:ok, _} = Accounts.reset_passkeys(user.name)
 

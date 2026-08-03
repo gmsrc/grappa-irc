@@ -149,9 +149,9 @@ defmodule Grappa.Accounts.PasskeyTest do
     codes = Accounts.prepare_recovery_codes()
 
     assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 0
-    assert {:ok, "passwordless"} = WebAuthn.set_mode(user, "passwordless", current.id, codes)
+    assert {:ok, :passwordless} = WebAuthn.set_mode(user, :passwordless, current.id, codes)
     assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
-    assert Repo.get!(Accounts.User, user.id).passkey_mode == "passwordless"
+    assert Repo.get!(Accounts.User, user.id).passkey_mode == :passwordless
     assert is_nil(Repo.get!(Accounts.Session, current.id).revoked_at)
     assert %DateTime{} = Repo.get!(Accounts.Session, other.id).revoked_at
   end
@@ -161,13 +161,13 @@ defmodule Grappa.Accounts.PasskeyTest do
     current = session_fixture(user)
     codes = Accounts.prepare_recovery_codes()
 
-    assert {:ok, "passwordless"} = WebAuthn.set_mode(user, "passwordless", current.id, codes)
+    assert {:ok, :passwordless} = WebAuthn.set_mode(user, :passwordless, current.id, codes)
 
     other = session_fixture(user)
     passwordless_user = Repo.get!(Accounts.User, user.id)
-    assert {:ok, "disabled"} = WebAuthn.set_mode(passwordless_user, "disabled", current.id)
+    assert {:ok, :disabled} = WebAuthn.set_mode(passwordless_user, :disabled, current.id)
     assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 0
-    assert Repo.get!(Accounts.User, passwordless_user.id).passkey_mode == "disabled"
+    assert Repo.get!(Accounts.User, passwordless_user.id).passkey_mode == :disabled
     assert is_nil(Repo.get!(Accounts.Session, current.id).revoked_at)
     assert %DateTime{} = Repo.get!(Accounts.Session, other.id).revoked_at
   end
@@ -186,35 +186,59 @@ defmodule Grappa.Accounts.PasskeyTest do
 
     test "disabling passwordless keeps the codes an armed TOTP still needs", ctx do
       armed = arm_totp(ctx.user)
-      {:ok, "passwordless"} = WebAuthn.set_mode(armed, "passwordless", ctx.session.id, codes())
+      {:ok, :passwordless} = WebAuthn.set_mode(armed, :passwordless, ctx.session.id, codes())
 
       passwordless = Repo.get!(Accounts.User, armed.id)
-      assert {:ok, "disabled"} = WebAuthn.set_mode(passwordless, "disabled", ctx.session.id)
+      assert {:ok, :disabled} = WebAuthn.set_mode(passwordless, :disabled, ctx.session.id)
       assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
     end
 
     test "disabling second-factor keeps the codes an armed TOTP still needs", ctx do
       armed = arm_totp(ctx.user)
-      second_factor = set_passkey_mode(armed, "second_factor")
+      second_factor = set_passkey_mode(armed, :second_factor)
 
-      assert {:ok, "disabled"} = WebAuthn.set_mode(second_factor, "disabled", ctx.session.id)
+      assert {:ok, :disabled} = WebAuthn.set_mode(second_factor, :disabled, ctx.session.id)
       assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
     end
 
     test "disabling second-factor with no other factor takes the codes with it", ctx do
       :ok = Accounts.RecoveryCodes.replace(ctx.user.id, codes())
-      second_factor = set_passkey_mode(ctx.user, "second_factor")
+      second_factor = set_passkey_mode(ctx.user, :second_factor)
 
-      assert {:ok, "disabled"} = WebAuthn.set_mode(second_factor, "disabled", ctx.session.id)
+      assert {:ok, :disabled} = WebAuthn.set_mode(second_factor, :disabled, ctx.session.id)
       assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 0
     end
 
     test "moving passwordless to second-factor keeps the codes, still armed", ctx do
-      {:ok, "passwordless"} = WebAuthn.set_mode(ctx.user, "passwordless", ctx.session.id, codes())
+      {:ok, :passwordless} = WebAuthn.set_mode(ctx.user, :passwordless, ctx.session.id, codes())
 
       passwordless = Repo.get!(Accounts.User, ctx.user.id)
-      assert {:ok, "second_factor"} = WebAuthn.set_mode(passwordless, "second_factor", ctx.session.id)
+      assert {:ok, :second_factor} = WebAuthn.set_mode(passwordless, :second_factor, ctx.session.id)
       assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
+    end
+  end
+
+  # The mode decides which login door an account gets, so a value outside
+  # the set is not a cosmetic problem: `!= "disabled"` reads TRUE for it and
+  # no door matches, which wedges the account with no error anywhere. The
+  # column refuses to hold one at all, which is why this reaches for raw SQL
+  # — nothing above it can even express the write.
+  describe "passkey_mode closed set" do
+    test "a mode outside the set cannot be loaded back as an account" do
+      user = user_fixture()
+      Repo.query!("UPDATE users SET passkey_mode = 'bogus' WHERE name = ?", [user.name])
+
+      assert_raise ArgumentError, fn -> Repo.get!(Accounts.User, user.id) end
+    end
+
+    test "the wire spelling of every mode decodes, and nothing else does" do
+      assert {:ok, :disabled} = WebAuthn.decode_mode("disabled")
+      assert {:ok, :second_factor} = WebAuthn.decode_mode("second_factor")
+      assert {:ok, :passwordless} = WebAuthn.decode_mode("passwordless")
+
+      assert {:error, :invalid_mode} = WebAuthn.decode_mode("bogus")
+      assert {:error, :invalid_mode} = WebAuthn.decode_mode(:disabled)
+      assert {:error, :invalid_mode} = WebAuthn.decode_mode(nil)
     end
   end
 

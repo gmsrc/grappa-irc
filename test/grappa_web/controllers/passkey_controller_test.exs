@@ -21,8 +21,8 @@ defmodule GrappaWeb.PasskeyControllerTest do
       })
     )
 
-    {:ok, "passwordless"} =
-      WebAuthn.set_mode(user, "passwordless", session.id, Grappa.Accounts.prepare_recovery_codes())
+    {:ok, :passwordless} =
+      WebAuthn.set_mode(user, :passwordless, session.id, Grappa.Accounts.prepare_recovery_codes())
 
     {Repo.get!(User, user.id), password}
   end
@@ -80,7 +80,7 @@ defmodule GrappaWeb.PasskeyControllerTest do
 
     User
     |> where([u], u.id == ^user.id)
-    |> Repo.update_all(set: [passkey_mode: "passwordless"])
+    |> Repo.update_all(set: [passkey_mode: :passwordless])
 
     rejected = post(conn, "/auth/login", %{"identifier" => user.name, "password" => password})
     assert json_response(rejected, 401) == %{"error" => "invalid_credentials"}
@@ -108,7 +108,7 @@ defmodule GrappaWeb.PasskeyControllerTest do
 
     assert length(prepared["recovery_codes"]) == 10
     assert is_binary(prepared["recovery_token"])
-    assert Repo.get!(User, user.id).passkey_mode == "disabled"
+    assert Repo.get!(User, user.id).passkey_mode == :disabled
     assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 0
     assert is_nil(Repo.get!(Session, session.id).revoked_at)
   end
@@ -152,6 +152,28 @@ defmodule GrappaWeb.PasskeyControllerTest do
     decoded <> token
   end
 
+  # The column stores the mode as one of a closed set of atoms; the wire has
+  # always spelled it out in full, and `cicchetto/src/lib/api.ts` types the
+  # three spellings literally. Nothing else pinned that, so the encoding was
+  # free to drift the moment the storage type changed.
+  test "every mode reaches the wire in the spelling the client types", %{conn: conn} do
+    {user, _} = user_fixture_with_password()
+    session = session_fixture(user)
+
+    for {mode, wire} <- [{:disabled, "disabled"}, {:second_factor, "second_factor"}, {:passwordless, "passwordless"}] do
+      user |> Ecto.Changeset.change(passkey_mode: mode) |> Repo.update!()
+
+      body =
+        conn
+        |> recycle()
+        |> put_req_header("authorization", "Bearer #{session.id}")
+        |> get("/me/passkeys")
+        |> json_response(200)
+
+      assert body["mode"] == wire
+    end
+  end
+
   test "last passkey can be deleted after returning to password login", %{conn: conn} do
     {user, password} = user_fixture_with_password()
     session = session_fixture(user)
@@ -166,8 +188,8 @@ defmodule GrappaWeb.PasskeyControllerTest do
         })
       )
 
-    assert {:ok, "passwordless"} =
-             WebAuthn.set_mode(user, "passwordless", session.id, Grappa.Accounts.prepare_recovery_codes())
+    assert {:ok, :passwordless} =
+             WebAuthn.set_mode(user, :passwordless, session.id, Grappa.Accounts.prepare_recovery_codes())
 
     blocked =
       conn
@@ -177,7 +199,7 @@ defmodule GrappaWeb.PasskeyControllerTest do
     assert json_response(blocked, 409) == %{"error" => "passkey_required"}
 
     passwordless_user = Repo.get!(User, user.id)
-    assert {:ok, "disabled"} = WebAuthn.set_mode(passwordless_user, "disabled", session.id)
+    assert {:ok, :disabled} = WebAuthn.set_mode(passwordless_user, :disabled, session.id)
 
     conn = put_req_header(recycle(conn), "authorization", "Bearer #{session.id}")
     assert response(delete(conn, "/me/passkeys/#{passkey.id}", %{"password" => password}), 204)

@@ -714,7 +714,7 @@ defmodule Grappa.Accounts do
 
   defp reset_passkeys_transaction(user) do
     Passkey |> where([p], p.user_id == ^user.id) |> Repo.delete_all()
-    {1, _} = User |> where([u], u.id == ^user.id) |> Repo.update_all(set: [passkey_mode: "disabled"])
+    user |> User.passkey_mode_changeset(%{passkey_mode: :disabled}) |> Repo.update!()
     :ok = RecoveryCodes.drop_if_orphaned(user.id)
     :ok = revoke_sessions_for_user(user)
     Repo.get!(User, user.id)

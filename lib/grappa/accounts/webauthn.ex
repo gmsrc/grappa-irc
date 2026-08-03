@@ -8,7 +8,7 @@ defmodule Grappa.Accounts.WebAuthn do
   require Logger
 
   @type binding :: %{ip: String.t() | nil, client_id: String.t() | nil}
-  @type mode :: String.t()
+  @type mode :: User.passkey_mode()
 
   @doc "Lists public passkey metadata for account settings."
   @spec list(User.t()) :: [Passkey.t()]
@@ -107,27 +107,45 @@ defmodule Grappa.Accounts.WebAuthn do
     end
   end
 
+  @doc """
+  Decodes a wire mode string into the closed set the schema stores.
+
+  The wire speaks the three mode spellings; the column stores them as the
+  atoms that make the set closed. This is the single door between the two,
+  and it reads the schema's own mapping rather than restating the list, so
+  a fourth mode cannot exist on one side only.
+  """
+  @spec decode_mode(term()) :: {:ok, mode()} | {:error, :invalid_mode}
+  def decode_mode(value) when is_binary(value) do
+    case Enum.find(Ecto.Enum.mappings(User, :passkey_mode), fn {_, wire} -> wire == value end) do
+      {mode, _} -> {:ok, mode}
+      nil -> {:error, :invalid_mode}
+    end
+  end
+
+  def decode_mode(_), do: {:error, :invalid_mode}
+
   @doc "Changes passkey mode after a verified assertion; passwordless rotates recovery codes."
   @spec set_mode(User.t(), mode(), Ecto.UUID.t(), [String.t()]) :: {:ok, mode()} | {:error, term()}
   def set_mode(user, mode, current_session_id, recovery_codes \\ [])
 
-  def set_mode(user, "passwordless" = mode, current_session_id, recovery_codes)
+  def set_mode(user, :passwordless = mode, current_session_id, recovery_codes)
       when length(recovery_codes) == 10 do
     run_mode_transaction(user, mode, current_session_id, recovery_codes)
   end
 
-  def set_mode(user, "second_factor" = mode, current_session_id, []) do
+  def set_mode(user, :second_factor = mode, current_session_id, []) do
     run_mode_transaction(user, mode, current_session_id, [])
   end
 
-  def set_mode(user, "disabled" = mode, current_session_id, []) do
+  def set_mode(user, :disabled = mode, current_session_id, []) do
     run_mode_transaction(user, mode, current_session_id, [])
   end
 
-  def set_mode(_, "passwordless", _, _),
+  def set_mode(_, :passwordless, _, _),
     do: {:error, :recovery_codes_required}
 
-  def set_mode(_, "second_factor", _, _),
+  def set_mode(_, :second_factor, _, _),
     do: {:error, :unexpected_recovery_codes}
 
   @doc "Deletes one credential owned by the account."
@@ -280,9 +298,9 @@ defmodule Grappa.Accounts.WebAuthn do
   end
 
   defp set_mode_transaction(user, mode, current_session_id, recovery_codes) do
-    if mode == "passwordless", do: :ok = RecoveryCodes.replace(user.id, recovery_codes)
+    if mode == :passwordless, do: :ok = RecoveryCodes.replace(user.id, recovery_codes)
 
-    {1, _} = User |> where([u], u.id == ^user.id) |> Repo.update_all(set: [passkey_mode: mode])
+    user |> User.passkey_mode_changeset(%{passkey_mode: mode}) |> Repo.update!()
 
     # AFTER the mode write, so the shared-set rule reads the mode we just
     # committed. It replaces a narrower guard that fired only on

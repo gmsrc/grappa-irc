@@ -62,22 +62,32 @@ defmodule GrappaWeb.PasskeyController do
   @spec mode_options(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom()}
   def mode_options(
         %{assigns: %{current_subject: {:user, user}}} = conn,
-        %{"password" => password, "mode" => mode}
-      )
-      when mode in ["second_factor", "disabled"] do
-    if Argon2.verify_pass(password, user.password_hash) do
-      with {:ok, options} <-
-             WebAuthn.begin_authentication(user, :mode_change, client_binding(conn), PasskeyOrigin.origin(), %{
-               mode: mode
-             }) do
-        json(conn, options)
-      end
+        %{"password" => password, "mode" => wire_mode}
+      ) do
+    with {:ok, mode} <- settings_mode(wire_mode),
+         true <- Argon2.verify_pass(password, user.password_hash),
+         {:ok, options} <- mode_change_options(conn, user, %{mode: mode}) do
+      json(conn, options)
     else
-      {:error, :invalid_credentials}
+      false -> {:error, :invalid_credentials}
+      {:error, _} = error -> error
     end
   end
 
   def mode_options(_, _), do: {:error, :bad_request}
+
+  # Passwordless is deliberately not settable here. It may only be reached
+  # through `passwordless_options/2`, whose recovery token proves the codes
+  # were shown BEFORE arming the mode that makes them the only fallback.
+  defp settings_mode(wire_mode) do
+    case WebAuthn.decode_mode(wire_mode) do
+      {:ok, mode} when mode in [:second_factor, :disabled] -> {:ok, mode}
+      _ -> {:error, :bad_request}
+    end
+  end
+
+  defp mode_change_options(conn, user, metadata),
+    do: WebAuthn.begin_authentication(user, :mode_change, client_binding(conn), PasskeyOrigin.origin(), metadata)
 
   @doc "Generates the mandatory recovery set before passwordless activation."
   @spec prepare_passwordless(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom()}
@@ -119,11 +129,7 @@ defmodule GrappaWeb.PasskeyController do
     with {:ok, %{user_id: user_id, session_id: ^session_id, binding: ^binding, codes: codes}} <-
            verify_recovery_token(token),
          true <- user_id == user.id,
-         {:ok, options} <-
-           WebAuthn.begin_authentication(user, :mode_change, client_binding(conn), PasskeyOrigin.origin(), %{
-             mode: "passwordless",
-             recovery_codes: codes
-           }) do
+         {:ok, options} <- mode_change_options(conn, user, %{mode: :passwordless, recovery_codes: codes}) do
       json(conn, options)
     else
       _ -> {:error, :invalid_two_factor}
@@ -160,7 +166,7 @@ defmodule GrappaWeb.PasskeyController do
       not Argon2.verify_pass(password, user.password_hash) ->
         {:error, :invalid_credentials}
 
-      user.passkey_mode != "disabled" and length(WebAuthn.list(user)) == 1 ->
+      user.passkey_mode != :disabled and length(WebAuthn.list(user)) == 1 ->
         {:error, :passkey_required}
 
       true ->
@@ -201,7 +207,7 @@ defmodule GrappaWeb.PasskeyController do
   def login_options(_, _), do: {:error, :bad_request}
 
   defp begin_passwordless(conn, identifier) do
-    with %User{passkey_mode: "passwordless"} = user <- find_user(identifier),
+    with %User{passkey_mode: :passwordless} = user <- find_user(identifier),
          {:ok, options} <-
            WebAuthn.begin_authentication(user, :passwordless, client_binding(conn), PasskeyOrigin.origin()) do
       json(conn, options)
@@ -214,7 +220,7 @@ defmodule GrappaWeb.PasskeyController do
   @spec login_verify(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom()}
   def login_verify(conn, params) do
     case WebAuthn.authenticate(params, :passwordless, client_binding(conn)) do
-      {:ok, %User{passkey_mode: "passwordless"} = user, _} -> mint_session(conn, user)
+      {:ok, %User{passkey_mode: :passwordless} = user, _} -> mint_session(conn, user)
       _ -> {:error, :invalid_two_factor}
     end
   end
@@ -223,7 +229,7 @@ defmodule GrappaWeb.PasskeyController do
   @spec second_factor_verify(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom()}
   def second_factor_verify(conn, params) do
     case WebAuthn.authenticate(params, :second_factor, client_binding(conn)) do
-      {:ok, %User{passkey_mode: "second_factor"} = user, _} -> mint_session(conn, user)
+      {:ok, %User{passkey_mode: :second_factor} = user, _} -> mint_session(conn, user)
       _ -> {:error, :invalid_two_factor}
     end
   end
@@ -246,7 +252,7 @@ defmodule GrappaWeb.PasskeyController do
   # `alice@b.bb` are one account — spelled as three distinct strings. Keying
   # the window on the string handed the attacker a fresh bucket per spelling
   # and the per-account limit never tripped.
-  defp recover_resolved(conn, ip, %User{passkey_mode: "passwordless"} = user, code) do
+  defp recover_resolved(conn, ip, %User{passkey_mode: :passwordless} = user, code) do
     key = {ip, user.id}
 
     with :ok <- FailureWindow.check(:passkey_recovery, key, @recovery_account_attempts),

@@ -380,10 +380,10 @@ defmodule GrappaWeb.AuthController do
     with :ok <- check_mode1_throttle(ip),
          {:ok, user} <- authenticate_mode1(name, password, ip) do
       cond do
-        user.passkey_mode == "passwordless" ->
+        user.passkey_mode == :passwordless ->
           {:error, :invalid_credentials}
 
-        user.passkey_mode == "second_factor" ->
+        user.passkey_mode == :second_factor ->
           passkey_second_factor(conn, user)
 
         TOTP.enabled?(user) ->

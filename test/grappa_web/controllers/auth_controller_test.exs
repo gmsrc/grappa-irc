@@ -94,7 +94,7 @@ defmodule GrappaWeb.AuthControllerTest do
     )
 
     user
-    |> Ecto.Changeset.change(passkey_mode: "second_factor")
+    |> Ecto.Changeset.change(passkey_mode: :second_factor)
     |> Repo.update!()
 
     pending =

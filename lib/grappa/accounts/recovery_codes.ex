@@ -34,7 +34,7 @@ defmodule Grappa.Accounts.RecoveryCodes do
   # 2026-08-03): the conservative line is that codes outlive any 2FA
   # factor still standing, not just the one that happened to mint them.
   @spec armed_factor?(User.t()) :: boolean()
-  defp armed_factor?(user), do: TOTP.enabled?(user) or user.passkey_mode != "disabled"
+  defp armed_factor?(user), do: TOTP.enabled?(user) or user.passkey_mode != :disabled
 
   @spec drop_unless_armed(boolean(), Ecto.UUID.t()) :: :ok
   defp drop_unless_armed(true, _), do: :ok

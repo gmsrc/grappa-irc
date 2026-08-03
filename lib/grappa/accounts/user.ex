@@ -25,6 +25,8 @@ defmodule Grappa.Accounts.User do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type passkey_mode :: :disabled | :second_factor | :passwordless
+
   @type t :: %__MODULE__{
           id: Ecto.UUID.t() | nil,
           name: String.t() | nil,
@@ -33,7 +35,7 @@ defmodule Grappa.Accounts.User do
           totp_secret_encrypted: binary() | nil,
           totp_enabled_at: DateTime.t() | nil,
           totp_last_used_step: integer() | nil,
-          passkey_mode: String.t(),
+          passkey_mode: passkey_mode(),
           is_admin: boolean(),
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
@@ -47,7 +49,7 @@ defmodule Grappa.Accounts.User do
     field :totp_secret_encrypted, Grappa.EncryptedBinary, redact: true
     field :totp_enabled_at, :utc_datetime_usec
     field :totp_last_used_step, :integer
-    field :passkey_mode, :string, default: "disabled"
+    field :passkey_mode, Ecto.Enum, values: [:disabled, :second_factor, :passwordless], default: :disabled
     field :is_admin, :boolean, default: false
 
     timestamps(type: :utc_datetime_usec)
@@ -102,6 +104,24 @@ defmodule Grappa.Accounts.User do
     user
     |> cast(attrs, [:is_admin])
     |> validate_required([:is_admin])
+  end
+
+  @doc """
+  Narrow changeset for `:passkey_mode` transitions only.
+
+  The mode decides which login door the account gets, so it is the one
+  field where a value outside the set is an authentication bug rather than
+  a display bug. Both teardown paths used to write it through
+  `Repo.update_all/2`, which skips casting entirely — the set survived only
+  as pattern matches scattered across the callers. `Ecto.Enum` closes the
+  column and this changeset closes the write, so the two agree by
+  construction.
+  """
+  @spec passkey_mode_changeset(t(), %{required(:passkey_mode) => passkey_mode()}) :: Ecto.Changeset.t()
+  def passkey_mode_changeset(%__MODULE__{} = user, attrs) do
+    user
+    |> cast(attrs, [:passkey_mode])
+    |> validate_required([:passkey_mode])
   end
 
   @doc """
