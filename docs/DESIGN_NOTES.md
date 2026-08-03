@@ -27467,3 +27467,48 @@ cross-reload marker. Until it lands, the reload is silent.
 signals with no storage backing, so every reload already discards them — the
 manual banner click included. Auto-refresh makes that pre-existing loss easier
 to hit rather than introducing it.
+### 2026-08-03 — #723 — the paced-send residue has exactly one owner (cic)
+
+Follow-on defect from #666, found by the 2026-08 codebase review. #666 made a
+partial multi-line send leave ONLY the unsent remainder in the composer, so a
+resend could never re-deliver the lines that already went out. The `/msg` arm
+broke that guarantee in both directions.
+
+**Leg one — the remainder existed twice.** Every `sendPacedBody` call site
+passed the SOURCE window key, the same key the shared end-of-submit clear
+writes, so residue and clear agreed on one owner. `/msg` was the exception: it
+passed the freshly focused QUERY window key, deliberately, so the remainder
+lands where the operator is now looking. But its failure arm early-returns —
+it must, or the shared clear would wipe the residue — and that return skipped
+the clear for the source window too. So a `/msg bob l1\nl2\nl3` that died on
+`l2` left `l2\nl3` in bob's box AND the whole original command in `#chan`'s.
+Coming back to `#chan` later and hitting Enter re-delivered all three lines:
+exactly the duplicate resend #666 exists to prevent, reintroduced by the
+redirect.
+
+**Leg two — the redirect target is not ours to clobber.** The progress
+callback wrote the residue unconditionally, and the final residue of a
+SUCCESSFUL send is `""`. A query window is not a window the send started from:
+if the operator had a half-typed reply sitting in bob's box, a plain
+`/msg bob hi` from another window silently erased it.
+
+**The rule: one owner, resolved once, and a busy window outranks us.**
+`sendPacedBody` now takes `source` (where it was submitted) and `preferred`
+(where the remainder should surface — the same key for privmsg / me, the query
+window for /msg). It resolves the residue key ONCE before the first line:
+`preferred` when that window's composer is empty, otherwise `source`. Whichever
+one does not own the residue is emptied up front, so the full command cannot
+survive a partial send. Resolving per-tick instead would flip after the first
+residue write makes `preferred` non-empty and hop windows mid-drain.
+
+**Refusing the redirect beats merging.** The alternative — write the residue
+into a busy window anyway, prepended or appended — invents a merge semantic for
+two texts the operator never asked to join. Falling back to `source` keeps both
+texts intact and still leaves the remainder in exactly one place. The cost is
+that the remainder is then NOT where the operator is looking, so the error copy
+stops saying "the rest are in the box" (a lie in that case) and names the
+window they sent from — the log-honesty rule applied to operator-facing copy.
+
+**Scope.** cic-only, no wire change. The privmsg / me / services arms pass
+`(key, key)` and behave exactly as before; only the `/msg` redirect has two
+distinct keys, which is the only place the ownership question exists.

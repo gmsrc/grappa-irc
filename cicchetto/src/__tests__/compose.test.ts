@@ -892,6 +892,91 @@ describe("compose submit — slash command dispatch", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  // #723 — the residue has exactly ONE owner. `/msg` redirects the unsent
+  // remainder to the query window it just focused, so the SOURCE window must
+  // be emptied on the SAME path — pre-fix the `if ("error" in r) return r`
+  // early-return skipped the shared end-of-submit clear and left the WHOLE
+  // `/msg bob …` command sitting in the source composer, next to a residue
+  // copy in the query window. Hitting Enter there re-delivered every line.
+  it("#723 — a partial /msg leaves the residue ONLY in the query window; the source is emptied", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const api = await import("../lib/api");
+    const compose = await import("../lib/compose");
+    const source = channelKey("freenode", "#a");
+    const query = channelKey("freenode", "bob");
+
+    // l1 delivered; l2 fails FATALLY (400 invalid_line) → l3 never attempted.
+    let n = 0;
+    vi.mocked(sb.sendMessage).mockImplementation(async () => {
+      n += 1;
+      if (n === 2) throw new api.ApiError(400, "invalid_line");
+      return undefined as never;
+    });
+
+    compose.setDraft(source, "/msg bob l1\nl2\nl3");
+    const result = await compose.submit(source, "freenode", "#a");
+
+    expect(result).toHaveProperty("error");
+    // The remainder lives with the operator's new focus…
+    expect(compose.getDraft(query)).toBe("l2\nl3");
+    // …and NOWHERE else. The full command must not survive for a resend.
+    expect(compose.getDraft(source)).toBe("");
+  });
+
+  // #723 second leg — the query window's composer belongs to the OPERATOR.
+  // `sendPacedBody` wrote the residue unconditionally, and the final residue
+  // of a SUCCESSFUL send is "" — so `/msg bob hi` from #a silently erased a
+  // half-typed message sitting in bob's box.
+  it("#723 — a successful /msg does NOT clobber a half-typed draft in the query window", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const compose = await import("../lib/compose");
+    const source = channelKey("freenode", "#a");
+    const query = channelKey("freenode", "bob");
+
+    compose.setDraft(query, "half typed reply");
+    compose.setDraft(source, "/msg bob hi");
+    const result = await compose.submit(source, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "bob", "hi");
+    expect(result).toEqual({ ok: true });
+    expect(compose.getDraft(query)).toBe("half typed reply");
+    expect(compose.getDraft(source)).toBe("");
+  });
+
+  // #723 — when the query window is BUSY the redirect is refused outright and
+  // the source keeps ownership of the residue: the operator's text is never
+  // destroyed, and the remainder still has exactly one home. The error copy
+  // must say WHERE it went (log-honesty) — "in the box" is a lie when the
+  // operator is now looking at a different composer.
+  it("#723 — a partial /msg into a busy query window keeps the residue in the source", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const api = await import("../lib/api");
+    const compose = await import("../lib/compose");
+    const source = channelKey("freenode", "#a");
+    const query = channelKey("freenode", "bob");
+
+    let n = 0;
+    vi.mocked(sb.sendMessage).mockImplementation(async () => {
+      n += 1;
+      if (n === 2) throw new api.ApiError(400, "invalid_line");
+      return undefined as never;
+    });
+
+    compose.setDraft(query, "half typed reply");
+    compose.setDraft(source, "/msg bob l1\nl2\nl3");
+    const result = await compose.submit(source, "freenode", "#a");
+
+    expect(compose.getDraft(query)).toBe("half typed reply");
+    expect(compose.getDraft(source)).toBe("l2\nl3");
+    expect(result).toHaveProperty("error");
+    expect((result as { error: string }).error).toContain("sent 1 of 3 lines");
+    expect((result as { error: string }).error).not.toContain("in the box");
+  });
+
   // UX-4 bucket G — `/msg <Xserv> <text>` sends the wire frame but
   // does NOT open a query window or shift focus. Services responses
   // route to the `$server` window server-side (Identifier.services_sender?

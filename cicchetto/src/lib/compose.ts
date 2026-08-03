@@ -311,18 +311,40 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // paces and drains the rest over time (the composer stays busy while it
   // does); a fatal error stops with the residue in the draft and surfaces how
   // many lines made it out. Used by the privmsg / me / msg arms — the free-text
-  // paths whose body can be a multi-line paste. `key` is the SOURCE window (the
-  // one the operator submitted from), so a partial send leaves the remainder
-  // where it was typed. On error returns `{error}` — the caller MUST early-
-  // return it so the shared end-of-submit draft-clear + history-push never
-  // runs (which would wipe the residue and record a half-sent paste).
+  // paths whose body can be a multi-line paste. On error returns `{error}` —
+  // the caller MUST early-return it so the shared end-of-submit draft-clear +
+  // history-push never runs (which would wipe the residue and record a
+  // half-sent paste).
+  //
+  // #723 — the residue has EXACTLY ONE owner. `source` is the window the
+  // operator submitted from; `preferred` is where the remainder should surface
+  // (the same window for privmsg / me, the freshly focused query window for
+  // /msg, which moves the operator's eyes there). Two rules resolve them:
+  //
+  //   * A busy `preferred` outranks us. Its draft is the operator's own
+  //     half-typed text, and the final residue of a SUCCESSFUL send is `""` —
+  //     so an unconditional write silently ate it. When it is non-empty the
+  //     redirect is refused outright and `source` keeps the remainder.
+  //   * Whoever does NOT own the residue is emptied. Redirecting used to leave
+  //     the WHOLE `/msg bob …` command in `source` — the error arm returns
+  //     before the shared clear — so the remainder existed twice and hitting
+  //     Enter back in the source window re-delivered every line.
+  //
+  // Resolved ONCE, before the first line: per-tick resolution would flip after
+  // the first residue write makes `preferred` non-empty, hopping windows
+  // mid-drain.
   const sendPacedBody = async (
-    key: ChannelKey,
+    source: ChannelKey,
+    preferred: ChannelKey,
     slug: string,
     target: string,
     body: string,
     action: boolean,
   ): Promise<SubmitResult> => {
+    const residueKey = preferred === source || getDraft(preferred) === "" ? preferred : source;
+    if (residueKey !== source) {
+      writeState(source, (s) => ({ ...s, draft: "", historyCursor: null }));
+    }
     let sentCount = 0;
     let totalCount = 0;
     try {
@@ -331,19 +353,23 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         totalCount = total;
         // Residue-only draft, reset to the live bottom (historyCursor null):
         // we're typing the remainder, not walking history.
-        writeState(key, (s) => ({ ...s, draft: residue, historyCursor: null }));
+        writeState(residueKey, (s) => ({ ...s, draft: residue, historyCursor: null }));
       });
       return { ok: true };
     } catch (e) {
       // Fatal mid-fan-out (WS down, invalid_line, severed 401). The residue
       // draft is already set to the unsent remainder; surface the reason and,
       // for a genuine multi-line paste, how many lines went out so the operator
-      // knows the send partially landed and the rest is queued in the box.
+      // knows the send partially landed and where the rest is queued. "In the
+      // box" means the composer they are looking at — a lie when a busy
+      // `preferred` sent the remainder back to the window they submitted from.
       const reason = friendlyError(e);
+      const where =
+        residueKey === preferred
+          ? "the rest are in the box"
+          : "the rest are in the window you sent from";
       return totalCount > 1
-        ? {
-            error: `${reason} — sent ${sentCount} of ${totalCount} lines; the rest are in the box`,
-          }
+        ? { error: `${reason} — sent ${sentCount} of ${totalCount} lines; ${where}` }
         : { error: reason };
     }
   };
@@ -429,7 +455,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // a send-door 429 drains the rest over time; a fatal error leaves ONLY
           // the unsent remainder in the draft (early-return so the end-of-submit
           // clear never wipes it).
-          const r = await sendPacedBody(key, networkSlug, channelName, cmd.body, false);
+          const r = await sendPacedBody(key, key, networkSlug, channelName, cmd.body, false);
           if ("error" in r) return r;
           result = r;
           break;
@@ -437,7 +463,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "me": {
           // CTCP ACTION framing per line: \x01ACTION <text>\x01. Same #666
           // resumable + paced fan-out as privmsg.
-          const r = await sendPacedBody(key, networkSlug, channelName, cmd.body, true);
+          const r = await sendPacedBody(key, key, networkSlug, channelName, cmd.body, true);
           if ("error" in r) return r;
           result = r;
           break;
@@ -622,7 +648,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           if (networkId === undefined) return { error: "/msg: network not found" };
           if (isServicesSender(cmd.target)) {
             // #666 — resumable + paced; residue keyed on the source window `key`.
-            const svc = await sendPacedBody(key, networkSlug, cmd.target, cmd.body, false);
+            const svc = await sendPacedBody(key, key, networkSlug, cmd.target, cmd.body, false);
             if ("error" in svc) return svc;
             result = svc;
             break;
@@ -639,13 +665,18 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // echo stays the sole render path (no optimistic local render — cf.
           // the #251 source_address abolition).
           await ensureQueryTopicJoined(networkSlug, canonical);
-          // #666 — resumable + paced. Residue keyed on the QUERY window we just
-          // focused (`canonical`), NOT the source window: /msg already switched
-          // focus here, so a partial-send remainder + its error banner must
-          // co-locate in the window the operator is now looking at — and a
+          // #666 — resumable + paced. The residue PREFERS the QUERY window we
+          // just focused (`canonical`) over the source window: /msg already
+          // switched focus here, so a partial-send remainder + its error banner
+          // must co-locate in the window the operator is now looking at — and a
           // resend of that plain-text residue from the query window goes to
           // `canonical` (the intended peer), not back to the source channel.
+          // #723 — a preference, not a seizure: a half-typed draft already in
+          // that window belongs to the operator, so sendPacedBody refuses the
+          // redirect and keeps the remainder in `key`. Either way exactly one
+          // window ends up holding it.
           const r = await sendPacedBody(
+            key,
             channelKey(networkSlug, canonical),
             networkSlug,
             canonical,
