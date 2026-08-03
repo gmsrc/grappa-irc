@@ -107,6 +107,25 @@ defmodule Grappa.Accounts.TOTPTest do
     assert enrollment.provisioning_uri =~ "secret=#{enrollment.secret}"
   end
 
+  test "reset_totp/1 disarms the factor and revokes sessions, keeping the recovery set" do
+    {user, codes} = armed_user_with_recovery_codes()
+    session = session_fixture(user)
+    assert TOTP.enabled?(user)
+
+    {:ok, reset} = Accounts.reset_totp(user.name)
+
+    refute TOTP.enabled?(reset)
+    assert %DateTime{} = Repo.get!(Session, session.id).revoked_at
+
+    # The recovery set is shared with passkey passwordless mode, so
+    # disarming TOTP must not destroy the other factor's way back in.
+    assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == length(codes)
+  end
+
+  test "reset_totp/1 reports an unknown account rather than succeeding silently" do
+    assert {:error, :not_found} = Accounts.reset_totp("no-such-account")
+  end
+
   defp armed_user do
     {user, _} = armed_user_with_recovery_codes()
     user

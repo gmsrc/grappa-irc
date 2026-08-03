@@ -655,6 +655,47 @@ defmodule Grappa.Accounts do
     end
   end
 
+  @doc """
+  Operator recovery: disarms TOTP and revokes live sessions.
+
+  The undo for an enrolment the account owner did not make. `reset_passkeys/1`
+  deliberately does NOT cover this — it clears the passkey side and leaves
+  `totp_secret_encrypted` armed, so before this existed an operator with shell
+  access still could not restore password-only login.
+
+  Leaves the recovery-code set intact. That set is account-level and shared
+  with passkey passwordless mode, so disarming one factor is not entitled to
+  destroy the other factor's way back in.
+  """
+  @spec reset_totp(String.t()) :: {:ok, User.t()} | {:error, :not_found | :db_unavailable}
+  def reset_totp(name) when is_binary(name) do
+    case get_user_by_name(name) do
+      nil ->
+        {:error, :not_found}
+
+      user ->
+        Repo.BusyRetry.run(fn -> Repo.transaction(fn -> totp_reset_transaction(user) end) end)
+    end
+  end
+
+  defp totp_reset_transaction(user) do
+    user_query = from(u in User, where: u.id == ^user.id)
+
+    {1, _} =
+      Repo.update_all(
+        user_query,
+        set: [
+          totp_secret_encrypted: nil,
+          totp_enabled_at: nil,
+          totp_last_used_step: nil,
+          updated_at: DateTime.utc_now()
+        ]
+      )
+
+    :ok = revoke_sessions_for_user(user)
+    Repo.get!(User, user.id)
+  end
+
   defp consume_recovery_code_once(user_id, code) do
     case RecoveryCodes.consume(user_id, code) do
       :ok -> {:ok, :consumed}
