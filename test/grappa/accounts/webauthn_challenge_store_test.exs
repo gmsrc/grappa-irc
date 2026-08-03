@@ -14,4 +14,20 @@ defmodule Grappa.Accounts.WebAuthnChallengeStoreTest do
     assert {:ok, ^challenge, %{user_id: "user-1"}} = WebAuthnChallengeStore.take(second, :registration)
     assert {:error, :invalid_challenge} = WebAuthnChallengeStore.take(second, :registration)
   end
+
+  test "the sweep drops an abandoned ceremony and keeps a live one" do
+    # An abandoned ceremony is never taken, so the read-path TTL check
+    # never sees it — driving the callback directly is what proves the
+    # sweep, and needs no control over the monotonic clock.
+    now = System.monotonic_time(:second)
+    challenge = Wax.new_registration_challenge(origin: "https://irc.example", rp_id: "irc.example")
+
+    state = %{
+      "abandoned" => {challenge, :registration, %{}, now - 1},
+      "live" => {challenge, :registration, %{}, now + 300}
+    }
+
+    assert {:noreply, swept} = WebAuthnChallengeStore.handle_info(:sweep, state)
+    assert Map.keys(swept) == ["live"]
+  end
 end

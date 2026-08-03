@@ -1,8 +1,16 @@
 defmodule Grappa.Accounts.WebAuthnChallengeStore do
-  @moduledoc "One-shot, process-local WebAuthn ceremony challenge store."
+  @moduledoc """
+  One-shot, process-local WebAuthn ceremony challenge store.
+
+  A ceremony that is never completed is never `take/2`n, so the TTL check
+  on the read path alone retained abandoned entries for the life of the
+  node — and the endpoint that fills this store sits on the unauthenticated
+  login door. The periodic sweep is what bounds it.
+  """
   use GenServer
 
   @ttl_seconds 300
+  @sweep_interval_ms :timer.seconds(60)
 
   @type purpose :: :registration | :authentication | :mode_change | :passwordless | :second_factor
   @type metadata :: map()
@@ -27,7 +35,10 @@ defmodule Grappa.Accounts.WebAuthnChallengeStore do
   end
 
   @impl GenServer
-  def init(state), do: {:ok, state}
+  def init(state) do
+    schedule_sweep()
+    {:ok, state}
+  end
 
   @impl GenServer
   def handle_call({:put, id, challenge, purpose, metadata, expires_at}, _, state) do
@@ -42,5 +53,19 @@ defmodule Grappa.Accounts.WebAuthnChallengeStore do
       {_, next} ->
         {:reply, {:error, :invalid_challenge}, next}
     end
+  end
+
+  @impl GenServer
+  def handle_info(:sweep, state) do
+    schedule_sweep()
+    {:noreply, drop_expired(state, System.monotonic_time(:second))}
+  end
+
+  defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
+
+  defp drop_expired(state, now) do
+    Map.reject(state, fn {_id, {_challenge, _purpose, _metadata, expires_at}} ->
+      expires_at <= now
+    end)
   end
 end
