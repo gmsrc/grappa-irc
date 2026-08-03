@@ -28,6 +28,25 @@
 // race. The wrap array survives the in-context A → B switch (the SPA does the
 // whole detach + relogin in ONE page load; no reload).
 //
+// #769 — this spec went red at ~1/20 on a `/messages/count` GET and the URL
+// was ALL it reported, which is not enough to name a mechanism. Two questions
+// decide it, and the assertion now carries the answer to both:
+//
+//   * WHICH IDENTITY issued it. Every scrollback verb reads `token()` at
+//     entry, so a request under A's bearer was issued while A was still
+//     current (a continuation, or a fetch that beat the detach), while one
+//     under B's bearer is A's stale CHANNEL replayed by the new identity —
+//     the original #281 mechanism, reached through a route #693 added. So
+//     record the bearer per request (tail only — never a whole token into a
+//     CI artefact) and print both tails alongside.
+//   * WHICH PURGE it outlived. The identity timeline comes from the
+//     `grappa-token` localStorage writes (cic's `setToken` is the only writer)
+//     and the in-app ordering from `__cic_scrollbackProbes`, the #769 ring
+//     `scrollback.ts` stamps at every gap probe and identity purge.
+//
+// The assertion itself is UNCHANGED — zero offending requests, same filter.
+// Only the failure message got richer; a green run reads nothing.
+//
 // Two accounts: A = seeded vjt (bound to bahamut-test, autojoin #bofh), taken
 // as a FRESH bearer so the detach revoke can't 401 downstream vjt specs
 // (mirrors issue126-detach-lifecycle's freshVjtSeed). B = seeded admin-vjt,
@@ -61,14 +80,51 @@ test.describe("issue #281 — account switch replay", () => {
     // Installed FIRST so it wraps the fetch before the app's auth/networks
     // fetches fire on boot; survives the in-context A → B navigation.
     await page.addInitScript(() => {
-      const w = window as unknown as { __cic281Requests?: string[] };
+      const w = window as unknown as {
+        __cic281Requests?: { url: string; bearer: string | null; at: number }[];
+        __cic281Identity?: { token: string | null; at: number }[];
+      };
       w.__cic281Requests = [];
+      w.__cic281Identity = [];
+
+      // Tail only: enough to tell A from B, and no whole bearer ends up in a
+      // CI artefact. `null` means the call carried no Authorization at all.
+      const bearerTail = (input: RequestInfo | URL, init?: RequestInit): string | null => {
+        const headers =
+          init?.headers ?? (typeof input === "object" && "headers" in input ? input.headers : null);
+        if (!headers) return null;
+        const raw =
+          headers instanceof Headers
+            ? headers.get("authorization")
+            : ((headers as Record<string, string>).authorization ??
+              (headers as Record<string, string>).Authorization ??
+              null);
+        return raw ? raw.replace(/^Bearer\s+/i, "").slice(-8) : null;
+      };
+
       const orig = window.fetch.bind(window);
       window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        w.__cic281Requests?.push(url);
+        w.__cic281Requests?.push({ url, bearer: bearerTail(input, init), at: performance.now() });
         return orig(input, init);
+      };
+
+      // The identity timeline. `grappa-token` is written ONLY by cic's
+      // `setToken`, so wrapping the storage verbs times every transition
+      // without reaching into the app — including this spec's own pre-boot
+      // seed of account A, which is why A shows up as the first entry.
+      const setItem = Storage.prototype.setItem;
+      const removeItem = Storage.prototype.removeItem;
+      Storage.prototype.setItem = function (key: string, value: string): void {
+        if (key === "grappa-token") {
+          w.__cic281Identity?.push({ token: String(value).slice(-8), at: performance.now() });
+        }
+        setItem.call(this, key, value);
+      };
+      Storage.prototype.removeItem = function (key: string): void {
+        if (key === "grappa-token") w.__cic281Identity?.push({ token: null, at: performance.now() });
+        removeItem.call(this, key);
       };
     });
 
@@ -89,9 +145,11 @@ test.describe("issue #281 — account switch replay", () => {
     // to replay.
     await waitForChannelReady(page, NETWORK_SLUG, A_CHANNEL);
 
-    // Only care about what fires AFTER the switch — drop A's legit boot fetches.
+    // Only care about what fires AFTER the switch — drop A's legit boot
+    // fetches. The identity timeline is NOT cleared: A's arrival is the first
+    // fixed point every later entry is read against.
     await page.evaluate(() => {
-      (window as unknown as { __cic281Requests: string[] }).__cic281Requests.length = 0;
+      (window as unknown as { __cic281Requests: unknown[] }).__cic281Requests.length = 0;
     });
 
     // --- The account switch (the repro) ---
@@ -121,22 +179,39 @@ test.describe("issue #281 — account switch replay", () => {
     await page.waitForLoadState("networkidle");
 
     // Assert: ZERO history-fetch or featured-fetch for account A's network.
-    const offending = await page.evaluate((slug) => {
-      const reqs = (window as unknown as { __cic281Requests: string[] }).__cic281Requests;
-      return reqs.filter((u) => {
-        const path = u.replace(/^https?:\/\/[^/]+/, "");
-        const isAMessages =
-          path.includes(`/networks/${slug}/channels/`) && path.includes("/messages");
-        const isAFeatured =
-          path === `/networks/${slug}/featured` ||
-          path.startsWith(`/networks/${slug}/featured?`);
-        return isAMessages || isAFeatured;
-      });
+    // Same filter as ever; the identity timeline and the #769 probe ring ride
+    // along so a red run names its own mechanism instead of just its URL.
+    const forensics = await page.evaluate((slug) => {
+      const w = window as unknown as {
+        __cic281Requests: { url: string; bearer: string | null; at: number }[];
+        __cic281Identity: { token: string | null; at: number }[];
+        __cic_scrollbackProbes?: unknown[];
+      };
+      return {
+        offending: w.__cic281Requests.filter((r) => {
+          const path = r.url.replace(/^https?:\/\/[^/]+/, "");
+          const isAMessages =
+            path.includes(`/networks/${slug}/channels/`) && path.includes("/messages");
+          const isAFeatured =
+            path === `/networks/${slug}/featured` ||
+            path.startsWith(`/networks/${slug}/featured?`);
+          return isAMessages || isAFeatured;
+        }),
+        identity: w.__cic281Identity,
+        probes: w.__cic_scrollbackProbes ?? [],
+        liveToken: localStorage.getItem("grappa-token")?.slice(-8) ?? null,
+      };
     }, NETWORK_SLUG);
 
     expect(
-      offending,
-      `account switch replayed account A's fetches under B's session: ${offending.join(", ")}`,
+      forensics.offending,
+      [
+        "account switch replayed account A's fetches under B's session.",
+        `  offending:        ${JSON.stringify(forensics.offending)}`,
+        `  bearer tails:     A=${a.token.slice(-8)} B=${forensics.liveToken}`,
+        `  identity timeline:${JSON.stringify(forensics.identity)}`,
+        `  #769 probe ring:  ${JSON.stringify(forensics.probes)}`,
+      ].join("\n"),
     ).toEqual([]);
   });
 });
