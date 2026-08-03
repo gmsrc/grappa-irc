@@ -63,13 +63,23 @@ function makeResumeHost(): {
   fireVisibilityChange: () => void;
   vvListenerEvents: () => string[];
 } {
-  const winHandlers = new Map<string, () => void>();
-  const docHandlers = new Map<string, () => void>();
+  // Append-only, NOT a Map keyed by event name (#733): a Map silently
+  // OVERWROTE a second `addEventListener("focus", …)`, so a duplicate writer
+  // — the #79/#209/#649 root cause — was invisible to every test here, and
+  // the one-writer test below could not fail for the property it names.
+  // Pairs keep duplicates observable in the event list AND make every fire*
+  // invoke ALL handlers, so a second writer double-writes the vars in the
+  // other tests too.
+  const winHandlers: Array<[string, () => void]> = [];
+  const docHandlers: Array<[string, () => void]> = [];
+  const fire = (registered: ReadonlyArray<[string, () => void]>, event: string): void => {
+    for (const [name, h] of registered) if (name === event) h();
+  };
   let visibilityState: DocumentVisibilityState = "visible";
   return {
     win: {
       addEventListener(event, h) {
-        winHandlers.set(event, h);
+        winHandlers.push([event, h]);
       },
     },
     doc: {
@@ -77,16 +87,16 @@ function makeResumeHost(): {
         return visibilityState;
       },
       addEventListener(event, h) {
-        docHandlers.set(event, h);
+        docHandlers.push([event, h]);
       },
     },
     setVisibility: (state: DocumentVisibilityState) => {
       visibilityState = state;
     },
-    firePageShow: () => winHandlers.get("pageshow")?.(),
-    fireFocus: () => winHandlers.get("focus")?.(),
-    fireVisibilityChange: () => docHandlers.get("visibilitychange")?.(),
-    vvListenerEvents: () => [...winHandlers.keys(), ...docHandlers.keys()],
+    firePageShow: () => fire(winHandlers, "pageshow"),
+    fireFocus: () => fire(winHandlers, "focus"),
+    fireVisibilityChange: () => fire(docHandlers, "visibilitychange"),
+    vvListenerEvents: () => [...winHandlers, ...docHandlers].map(([event]) => event),
   };
 }
 
@@ -256,7 +266,9 @@ describe("viewportHeight module", () => {
     const host = makeResumeHost();
     installViewportHeightTracker(vp, host.win, host.doc);
     // No fourth mechanism, no wrapper, no second writer: the resume seams carry
-    // precisely the three documented triggers.
+    // precisely the three documented triggers. The list is append-only and keeps
+    // DUPLICATES (#733), so this one assertion pins the event set AND the total
+    // count — a second registration on any of the three shows up as a repeat.
     expect(host.vvListenerEvents().sort()).toEqual(["focus", "pageshow", "visibilitychange"]);
   });
 });
