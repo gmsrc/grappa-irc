@@ -54,7 +54,11 @@
 // genuine phantom, and (b) the real B login spawns NO upstream Session.Server,
 // so it can't dangle a session / cascade (feedback_e2e_real_login_poisons_shared_stack).
 
-import { openSettingsDrawer, waitForChannelReady } from "../fixtures/cicchettoPage";
+import {
+  openSettingsDrawer,
+  waitForChannelReady,
+  waitForScrollbackRefreshed,
+} from "../fixtures/cicchettoPage";
 import { login } from "../fixtures/grappaApi";
 import {
   ADMIN_IDENTIFIER,
@@ -148,6 +152,25 @@ test.describe("issue #281 — account switch replay", () => {
     // Only care about what fires AFTER the switch — drop A's legit boot
     // fetches. The identity timeline is NOT cleared: A's arrival is the first
     // fixed point every later entry is read against.
+    // #769 — DRAIN A's own join-ok backfill before judging anything.
+    //
+    // `waitForChannelReady` returns while `refreshScrollback` is still in
+    // flight: subscribe.ts fires it and stamps the ready seam synchronously
+    // right after (the #552 hazard, which is why this twin seam exists). With
+    // `#bofh` seeded at exactly PAGE_LIMIT rows, that backfill gets a FULL
+    // page and therefore probes `/messages/count` — measured firing 1.5–75ms
+    // before the clear across three fresh stacks, under A's own live bearer,
+    // hundreds of ms before any identity purge, at the very `?after=681` the
+    // issue reported. Legitimate traffic, landing on the wrong side of the
+    // clear whenever a loaded runner slips it by a few milliseconds.
+    //
+    // This seam is stamped in `refreshScrollback`'s `finally`, i.e. strictly
+    // after its probe, so awaiting it makes the drain structural rather than a
+    // timing hope. It does NOT weaken the assertion and does not widen the
+    // judged window: the mechanism this spec exists to catch (B replaying A's
+    // stale channel list) fires after the switch, far past this point.
+    await waitForScrollbackRefreshed(page, NETWORK_SLUG, A_CHANNEL);
+
     // The clear timestamp is itself evidence: a probe stamped BEFORE it is one
     // the assertion never saw, which is the difference between "the race
     // exists and lost" and "the race exists and won".
