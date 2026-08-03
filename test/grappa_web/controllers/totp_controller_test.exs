@@ -5,15 +5,35 @@ defmodule GrappaWeb.TotpControllerTest do
 
   alias Grappa.{Accounts, Accounts.Session, Accounts.TOTP, Accounts.TOTPRecoveryCode, Repo}
 
+  test "a bearer alone cannot start TOTP enrollment", %{conn: conn} do
+    {user, _password} = user_fixture_with_password()
+    session = session_fixture(user)
+
+    assert conn
+           |> put_bearer(session.id)
+           |> post("/me/totp/enrollment", %{})
+           |> json_response(400) == %{"error" => "bad_request"}
+  end
+
+  test "a wrong password cannot start TOTP enrollment", %{conn: conn} do
+    {user, _password} = user_fixture_with_password()
+    session = session_fixture(user)
+
+    assert conn
+           |> put_bearer(session.id)
+           |> post("/me/totp/enrollment", %{"password" => "not-the-password"})
+           |> json_response(401) == %{"error" => "invalid_credentials"}
+  end
+
   test "user enrolls TOTP, sees recovery codes once, and other sessions are revoked", %{conn: conn} do
-    {user, _} = user_fixture_with_password()
+    {user, password} = user_fixture_with_password()
     current = session_fixture(user)
     other = session_fixture(user)
 
     enrollment =
       conn
       |> put_bearer(current.id)
-      |> post("/me/totp/enrollment", %{})
+      |> post("/me/totp/enrollment", %{"password" => password})
       |> json_response(200)
 
     {:ok, code} = TOTP.code_at(enrollment["secret"], System.system_time(:second))
@@ -42,14 +62,14 @@ defmodule GrappaWeb.TotpControllerTest do
   end
 
   test "enrollment rolls back when other-session revocation fails", %{conn: conn} do
-    {user, _} = user_fixture_with_password()
+    {user, password} = user_fixture_with_password()
     current = session_fixture(user)
     other = session_fixture(user)
 
     enrollment =
       conn
       |> put_bearer(current.id)
-      |> post("/me/totp/enrollment", %{})
+      |> post("/me/totp/enrollment", %{"password" => password})
       |> json_response(200)
 
     {:ok, code} = TOTP.code_at(enrollment["secret"], System.system_time(:second))

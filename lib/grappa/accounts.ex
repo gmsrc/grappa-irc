@@ -605,14 +605,27 @@ defmodule Grappa.Accounts do
     end)
   end
 
+  @doc """
+  Re-confirms an account password for a privileged mutation.
+
+  The single door for "prove it is still you" on an already-authenticated
+  request. A bearer alone must never be enough to change how the account
+  authenticates: an enrolment, a mode switch or a credential deletion each
+  outlives the token that requested it, so each re-asks for the password.
+  """
+  @spec verify_password(User.t(), String.t()) :: :ok | {:error, :invalid_credentials}
+  def verify_password(%User{} = user, password) when is_binary(password) do
+    if Argon2.verify_pass(password, user.password_hash),
+      do: :ok,
+      else: {:error, :invalid_credentials}
+  end
+
   @doc "Atomically disables TOTP and revokes every other bearer session."
   @spec disable_totp(User.t(), Ecto.UUID.t(), String.t()) ::
           {:ok, User.t()} | {:error, term()}
   def disable_totp(user, current_session_id, password) do
-    if Argon2.verify_pass(password, user.password_hash) do
+    with :ok <- verify_password(user, password) do
       run_disable_totp_transaction(user, current_session_id)
-    else
-      {:error, :invalid_credentials}
     end
   end
 

@@ -16,28 +16,43 @@ defmodule GrappaWeb.TotpController do
 
   def show(_, _), do: {:error, :forbidden}
 
-  @doc "Starts enrollment; returned secret remains unarmed until confirmation."
+  @doc """
+  Starts enrollment; returned secret remains unarmed until confirmation.
+
+  Password-gated like `delete/2`: confirming an enrolment revokes every
+  other bearer session and hands out the recovery codes, so a borrowed
+  token alone must not be able to arm a second factor the real owner
+  does not hold.
+  """
   @spec start_enrollment(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom()}
-  def start_enrollment(%{assigns: %{current_subject: {:user, user}}} = conn, _) do
-    if TOTP.enabled?(user) do
-      {:error, :already_enabled}
-    else
-      issuer = "Grappa (#{conn.host})"
-      enrollment = TOTP.new_enrollment(user, issuer)
+  def start_enrollment(
+        %{assigns: %{current_subject: {:user, user}}} = conn,
+        %{"password" => password}
+      )
+      when is_binary(password) do
+    with :ok <- Accounts.verify_password(user, password) do
+      if TOTP.enabled?(user) do
+        {:error, :already_enabled}
+      else
+        issuer = "Grappa (#{conn.host})"
+        enrollment = TOTP.new_enrollment(user, issuer)
 
-      token =
-        Phoenix.Token.sign(GrappaWeb.Endpoint, @enrollment_salt, %{
-          "user_id" => user.id,
-          "secret" => enrollment.secret
+        token =
+          Phoenix.Token.sign(GrappaWeb.Endpoint, @enrollment_salt, %{
+            "user_id" => user.id,
+            "secret" => enrollment.secret
+          })
+
+        json(conn, %{
+          enrollment_token: token,
+          secret: enrollment.secret,
+          provisioning_uri: enrollment.provisioning_uri
         })
-
-      json(conn, %{
-        enrollment_token: token,
-        secret: enrollment.secret,
-        provisioning_uri: enrollment.provisioning_uri
-      })
+      end
     end
   end
+
+  def start_enrollment(%{assigns: %{current_subject: {:user, _}}}, _), do: {:error, :bad_request}
 
   def start_enrollment(_, _), do: {:error, :forbidden}
 
