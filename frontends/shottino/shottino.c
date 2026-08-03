@@ -10380,8 +10380,22 @@ static bool setting_reset(struct app *app, const char *name) {
 static void prefs_load(struct app *app) {
     char *path = prefs_path();
     FILE *f = fopen(path, "r");
-    free(path);
-    if (!f) return;
+    /* SAY WHAT HAPPENED. vjt keeps finding settings back at their
+     * defaults after a restart, and every mechanism inside this file
+     * has been ruled out by test: prefs_save and prefs_load round-trip
+     * every setting in the table. So the interesting question is no
+     * longer "does loading work" but "did loading happen, and over
+     * which file" — which only the run that goes wrong can answer.
+     *
+     * A missing file is the loud case: it is indistinguishable from a
+     * fresh install, and it is exactly what a settings reset looks like
+     * from in here. */
+    if (!f) {
+        startup("settings: no %s — starting from defaults", path);
+        free(path);
+        return;
+    }
+    size_t applied = 0, refused = 0;
     char line[LLM_MAX_PATH * 2];
     while (fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\r\n")] = 0;
@@ -10399,9 +10413,13 @@ static void prefs_load(struct app *app) {
         /* llm.* in this file would be a second source of truth for a
          * value llm.conf already owns, and the two would drift. */
         if (!def || setting_in_llm_conf(def->name)) continue;
-        setting_apply(app, def, value);
+        if (setting_apply(app, def, value)) applied++;
+        else refused++;
     }
     fclose(f);
+    startup("settings: %zu applied from %s%s", applied, path,
+            refused ? " (some refused — see above)" : "");
+    free(path);
 }
 
 /* One panel row per setting, from the same table /set reads.

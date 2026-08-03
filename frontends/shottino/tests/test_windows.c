@@ -1320,6 +1320,67 @@ TEST(stt_transcribes_and_dictate_types) {
  *
  * Asserted over the whole table rather than for those five, because the
  * next setting added is the one that gets missed the same way. */
+/* EVERY setting must survive save-and-load. Not one, not the ones
+ * somebody remembered — all of them.
+ *
+ * vjt keeps losing settings across restarts, and the display bug next
+ * door showed how: a setting can be in the table and missing from one
+ * of the three chains that serve it (apply, raw, value). Missing from
+ * `raw` means prefs_save writes nothing for it, and a key that is
+ * absent falls back to the default on load — which IS the reported
+ * symptom, silently and per setting.
+ *
+ * Table-driven on purpose: naming the settings here would only re-test
+ * the ones already known to work. */
+TEST(every_setting_survives_a_save_and_load) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    settings_capture_defaults(app);
+
+    /* A value each setting can actually hold: for a closed set, the
+     * LAST choice (least likely to be the default); for free text, a
+     * marker no default would collide with. */
+    char want[64][256];
+    bool probed[64] = { false };
+    size_t n = settings_count();
+    if (n > 64) n = 64;
+    for (size_t i = 0; i < n; i++) {
+        const struct setting_def *d = &SETTINGS[i];
+        char value[256] = "";
+        if (d->values && d->values[0]) {
+            const char *last = strrchr(d->values, '|');
+            snprintf(value, sizeof(value), "%s", last ? last + 1 : d->values);
+        } else {
+            snprintf(value, sizeof(value), "zz-probe-%zu", i);
+        }
+        if (!setting_apply(app, d, value)) continue; /* validators may refuse */
+        setting_raw(app, d->name, want[i], sizeof(want[i]));
+        /* Only settings that actually took the value are checked; one
+         * that normalises or derives its own is not a round-trip. */
+        probed[i] = want[i][0] != 0;
+    }
+    prefs_save(app);
+    llm_save(app);
+
+    struct app *next = window_app();
+    CHECK(next != NULL);
+    settings_capture_defaults(next);
+    llm_load(next);
+    prefs_load(next);
+
+    for (size_t i = 0; i < n; i++) {
+        if (!probed[i]) continue;
+        char got[256] = "";
+        setting_raw(next, SETTINGS[i].name, got, sizeof(got));
+        if (strcmp(got, want[i]) != 0)
+            fprintf(stderr, "  LOST: %s saved \"%s\" loaded \"%s\"\n", SETTINGS[i].name, want[i],
+                    got);
+        CHECK_STR(got, want[i]);
+    }
+    free_app(app);
+    free_app(next);
+}
+
 TEST(no_setting_displays_as_a_question_mark) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -3135,6 +3196,7 @@ int main(void) {
     RUN(a_settings_menu_offers_what_the_setting_accepts);
     RUN(tab_cycles_through_the_media_in_this_window);
     RUN(stt_transcribes_and_dictate_types);
+    RUN(every_setting_survives_a_save_and_load);
     RUN(no_setting_displays_as_a_question_mark);
     RUN(notifications_parse_refuse_and_persist);
     RUN(a_configured_setting_survives_save_and_load);
