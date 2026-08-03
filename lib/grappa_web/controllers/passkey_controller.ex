@@ -158,16 +158,10 @@ defmodule GrappaWeb.PasskeyController do
         %{"id" => id, "password" => password}
       ) do
     with :ok <- Accounts.verify_password(user, password),
-         false <- last_passkey?(user),
          :ok <- WebAuthn.delete(user, id) do
       send_resp(conn, :no_content, "")
-    else
-      true -> {:error, :passkey_required}
-      {:error, _} = error -> error
     end
   end
-
-  defp last_passkey?(user), do: user.passkey_mode != :disabled and length(WebAuthn.list(user)) == 1
 
   def delete(_, _), do: {:error, :bad_request}
 

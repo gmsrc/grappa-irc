@@ -146,15 +146,43 @@ defmodule Grappa.Accounts.WebAuthn do
   def set_mode(_, :second_factor, _, _),
     do: {:error, :unexpected_recovery_codes}
 
-  @doc "Deletes one credential owned by the account."
-  @spec delete(User.t(), Ecto.UUID.t()) :: :ok | {:error, :not_found}
-  def delete(user, id) do
-    query = from(p in Passkey, where: p.id == ^id and p.user_id == ^user.id)
+  @doc """
+  Deletes one credential owned by the account, refusing the last one an
+  armed mode still needs.
 
+  The "is this the last one" test is part of the DELETE rather than a read
+  before it. Counting first and deleting second is two statements, and two
+  concurrent requests both saw two credentials and both went ahead — which
+  leaves a passwordless account with zero passkeys and no door at all. As
+  one statement the second request re-decides against the row the first
+  already removed, and loses.
+  """
+  @spec delete(User.t(), Ecto.UUID.t()) :: :ok | {:error, :not_found | :passkey_required}
+  def delete(%User{passkey_mode: :disabled} = user, id), do: run_delete(user, id, owned(user, id))
+
+  def delete(user, id) do
+    others = from(o in Passkey, where: o.user_id == ^user.id and o.id != ^id)
+
+    run_delete(user, id, from(p in owned(user, id), where: exists(others)))
+  end
+
+  defp owned(user, id), do: from(p in Passkey, where: p.id == ^id and p.user_id == ^user.id)
+
+  defp run_delete(user, id, query) do
     case Repo.delete_all(query) do
       {1, _} -> :ok
-      {0, _} -> {:error, :not_found}
+      {0, _} -> refuse_delete(user, id)
     end
+  end
+
+  # A zero-row delete is either "not yours, or not there" or "it is the last
+  # one an armed mode needs", and one statement cannot report which. Asking
+  # afterwards can only mis-label under a concurrent delete, where both
+  # answers were true of some instant.
+  defp refuse_delete(user, id) do
+    if Repo.exists?(owned(user, id)),
+      do: {:error, :passkey_required},
+      else: {:error, :not_found}
   end
 
   defp challenge_opts(origin) do

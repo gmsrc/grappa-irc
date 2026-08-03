@@ -218,6 +218,68 @@ defmodule Grappa.Accounts.PasskeyTest do
     end
   end
 
+  # Counting the credentials and then deleting one is two statements, and
+  # two concurrent requests both saw two credentials and both went ahead —
+  # a passwordless account ends with zero passkeys and no door at all. The
+  # count belongs INSIDE the delete, which is what these assert: the second
+  # delete re-decides against the row the first one removed. A true
+  # concurrent race cannot be staged here (the sandbox serialises both
+  # processes onto one connection), so the sequential pair is what proves
+  # the guard moved into the statement rather than reading a stale count.
+  describe "delete/2 last-credential guard" do
+    setup do
+      user = user_fixture()
+      %{user: user, session: session_fixture(user)}
+    end
+
+    defp add_passkey(user, credential_id) do
+      Repo.insert!(
+        Passkey.changeset(%Passkey{}, %{
+          user_id: user.id,
+          credential_id: credential_id,
+          public_key: CBOR.encode(%{1 => 2}),
+          name: "key-#{byte_size(credential_id)}"
+        })
+      )
+    end
+
+    test "an armed account keeps the last credential it depends on", ctx do
+      passkey = add_passkey(ctx.user, <<1>>)
+      {:ok, :passwordless} = WebAuthn.set_mode(ctx.user, :passwordless, ctx.session.id, codes())
+      armed = Repo.get!(Accounts.User, ctx.user.id)
+
+      assert {:error, :passkey_required} = WebAuthn.delete(armed, passkey.id)
+      assert Repo.aggregate(Passkey, :count, :id) == 1
+    end
+
+    test "the delete itself re-decides, so the second of two cannot empty the account", ctx do
+      first = add_passkey(ctx.user, <<1>>)
+      second = add_passkey(ctx.user, <<2, 2>>)
+      {:ok, :passwordless} = WebAuthn.set_mode(ctx.user, :passwordless, ctx.session.id, codes())
+      armed = Repo.get!(Accounts.User, ctx.user.id)
+
+      assert :ok = WebAuthn.delete(armed, first.id)
+      assert {:error, :passkey_required} = WebAuthn.delete(armed, second.id)
+      assert Repo.aggregate(Passkey, :count, :id) == 1
+    end
+
+    test "an account back on password login may remove its last credential", ctx do
+      passkey = add_passkey(ctx.user, <<1>>)
+
+      assert :ok = WebAuthn.delete(ctx.user, passkey.id)
+      assert Repo.aggregate(Passkey, :count, :id) == 0
+    end
+
+    test "a credential owned by someone else is not found, armed or not", ctx do
+      other = add_passkey(user_fixture(), <<3>>)
+      {:ok, :passwordless} = WebAuthn.set_mode(ctx.user, :passwordless, ctx.session.id, codes())
+      armed = Repo.get!(Accounts.User, ctx.user.id)
+
+      assert {:error, :not_found} = WebAuthn.delete(armed, other.id)
+      assert Repo.aggregate(Passkey, :count, :id) == 1
+    end
+  end
+
   # The mode decides which login door an account gets, so a value outside
   # the set is not a cosmetic problem: `!= "disabled"` reads TRUE for it and
   # no door matches, which wedges the account with no error anywhere. The
