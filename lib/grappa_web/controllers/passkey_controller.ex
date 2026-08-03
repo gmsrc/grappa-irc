@@ -88,8 +88,12 @@ defmodule GrappaWeb.PasskeyController do
     if Argon2.verify_pass(password, user.password_hash) do
       codes = Accounts.prepare_recovery_codes()
 
+      # ENCRYPTED, not merely signed: this payload carries the plaintext
+      # recovery codes, and a signed token is tamper-proof but perfectly
+      # readable — anything the token passes through on its way back to us
+      # could lift the account's whole fallback credential out of it.
       token =
-        Phoenix.Token.sign(GrappaWeb.Endpoint, @recovery_salt, %{
+        Phoenix.Token.encrypt(GrappaWeb.Endpoint, @recovery_salt, %{
           user_id: user.id,
           session_id: session_id,
           binding: client_binding(conn),
@@ -291,7 +295,7 @@ defmodule GrappaWeb.PasskeyController do
     do: %{ip: RemoteIP.format(conn), client_id: conn.assigns[:current_client_id]}
 
   defp verify_recovery_token(token) do
-    Phoenix.Token.verify(GrappaWeb.Endpoint, @recovery_salt, token, max_age: @recovery_max_age_seconds)
+    Phoenix.Token.decrypt(GrappaWeb.Endpoint, @recovery_salt, token, max_age: @recovery_max_age_seconds)
   end
 
   defp public_passkey(passkey) do

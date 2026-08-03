@@ -113,6 +113,45 @@ defmodule GrappaWeb.PasskeyControllerTest do
     assert is_nil(Repo.get!(Session, session.id).revoked_at)
   end
 
+  # The checkpoint token carries the not-yet-armed recovery codes so the
+  # server need not store them before the ceremony commits. A SIGNED token
+  # is tamper-proof but not secret — its payload is plain base64 — so the
+  # codes would be readable by anything the token passes through.
+  test "the recovery checkpoint token does not carry the codes in the clear", %{conn: conn} do
+    {user, password} = user_fixture_with_password()
+    session = session_fixture(user)
+
+    prepared =
+      conn
+      |> put_req_header("authorization", "Bearer #{session.id}")
+      |> post("/me/passkeys/passwordless/recovery", %{"password" => password})
+      |> json_response(200)
+
+    readable = decoded_segments(prepared["recovery_token"])
+
+    for code <- prepared["recovery_codes"] do
+      refute readable =~ code
+    end
+  end
+
+  # Everything a bearer of the token can read without a key: the token
+  # itself plus each of its base64url segments decoded. A signed token
+  # yields its whole term-encoded payload here; an encrypted one yields
+  # ciphertext.
+  defp decoded_segments(token) do
+    decoded =
+      token
+      |> String.split(".")
+      |> Enum.map_join(" ", fn segment ->
+        case Base.url_decode64(segment, padding: false) do
+          {:ok, raw} -> raw
+          :error -> segment
+        end
+      end)
+
+    decoded <> token
+  end
+
   test "last passkey can be deleted after returning to password login", %{conn: conn} do
     {user, password} = user_fixture_with_password()
     session = session_fixture(user)
