@@ -27923,20 +27923,26 @@ it is arithmetic. This is why the issue's stated hypothesis ("captured the
 bearer, then awaited across the switch") cannot hold for the cold-open path it
 named.
 
-**A trace, and then not.** `window.__cic_scrollbackProbes` was a capped ring
-carrying one entry per gap probe (`site`, channel key, anchor, `staleBearer`)
-and one per identity purge, in ONE array so entry ORDER showed whether a probe
-outlived a rotation. It answered in a single run, and was then **deleted**. It
-was a deliberate departure from this codebase's other `__cic_*` globals, which
-are e2e SYNCHRONISATION points (`__cic_channelReady`,
-`__cic_scrollbackRefreshed`) rather than tracing; production never read it, and
-a trace nobody reads is a claim nobody maintains. A `console.warn` on the
-anomaly was considered and rejected for the same reason — dead-but-green code
-guarding a condition with no automatic remedy. What SURVIVES is `probeGap`'s
-`site` parameter: three call sites, one URL shape on the wire, so attribution
-is impossible without it, and it names the caller in the probe-failure warning
-that used to report only a channel. Cost of the deletion, stated: nothing now
-pins the `site` labels, and the ring's own test file went with it.
+**A trace, and then nothing.** `window.__cic_scrollbackProbes` was a capped ring
+carrying one entry per gap probe (caller, channel key, anchor, stale-bearer
+flag) and one per identity purge, in ONE array so entry ORDER showed whether a
+probe outlived a rotation. It answered in a single run, and was then **deleted**,
+along with the `site` parameter that fed it. It had been a deliberate departure
+from this codebase's other `__cic_*` globals, which are e2e SYNCHRONISATION
+points (`__cic_channelReady`, `__cic_scrollbackRefreshed`) rather than tracing;
+production never read it, and a trace nobody reads is a claim nobody maintains.
+
+Two consolation prizes were considered and both rejected on the same test —
+WHO READS THIS? A `console.warn` on the stale-bearer anomaly: dead code guarding
+a condition with no automatic remedy. And keeping `site` alone, on the argument
+that it enriched the probe-failure warning: audited, its only reader was that
+warning's error path, no spec observes it, and it never reaches the wire — so it
+could not do the very job it was introduced for (attributing a SUCCESSFUL probe
+seen in a network log). A parameter threaded through three call sites for one
+log line is the same scaffolding wearing a smaller hat.
+
+What survives is knowledge, not code: the callers' asymmetry is written at
+`probeGap`, and the retraction above stands.
 
 **Instrument before fixing** was vjt's explicit sequencing, and the measurement
 overturned the issue's own hypothesis. `waitForChannelReady` returns while the

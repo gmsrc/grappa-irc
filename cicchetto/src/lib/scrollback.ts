@@ -150,11 +150,6 @@ const capScrollbackRing = (key: ChannelKey, rows: ScrollbackMessage[]): Scrollba
   return dropCount > 0 ? rows.slice(dropCount) : rows;
 };
 
-// #769 — the three gap-probe sites, which are indistinguishable on the wire:
-// same URL shape, and two of the three anchor at the read cursor. `probeGap`
-// takes one so a probe can be attributed to its caller.
-type ProbeSite = "initial-load" | "reconnect-refresh" | "resolve-jump-target";
-
 const exports = identityScopedStore((onIdentityChange) => {
   const loadedChannels = new Set<ChannelKey>();
   // CP14 B2: per-key in-flight Set guards against scroll-burst fan-out
@@ -374,21 +369,15 @@ const exports = identityScopedStore((onIdentityChange) => {
   // "far behind": callers fall back to the pre-#693 cursor-anchored resume,
   // which is wrong-but-familiar rather than a destructive guess.
   //
-  // #769 — `site` names the caller. Three sites reach this verb and they are
-  // indistinguishable on the wire (same URL shape, and two of the three anchor
-  // at the read cursor), so a probe caught in a network log cannot be
-  // attributed without it. It also names the caller in the failure warning
-  // below, which used to say only which channel gave up.
-  //
-  // The sites are NOT symmetric, and it matters when reading such a log:
-  // `initial-load` runs with NO await between its `token()` capture and this
-  // call (`getReadCursor` is a synchronous signal read), so it cannot be on the
-  // wire under anything but the current bearer. Only `reconnect-refresh`
-  // (awaits a page first) and `resolve-jump-target` (awaits two) can carry a
-  // bearer across a rotation — that is #788, not this.
+  // Three callers reach this verb and they are indistinguishable on the wire —
+  // same URL shape, and two of the three anchor at the read cursor. They are
+  // also NOT symmetric with respect to identity, which is what #788 turns on:
+  // the cold-open call below runs with NO await between its `token()` capture
+  // and this request (`getReadCursor` is a synchronous signal read), so it
+  // cannot reach the wire under anything but the current bearer, while the two
+  // reconnect callers await first and can carry a revoked one.
   const probeGap = async (
     t: string,
-    site: ProbeSite,
     slug: string,
     name: string,
     anchor: number,
@@ -396,13 +385,7 @@ const exports = identityScopedStore((onIdentityChange) => {
     try {
       return await countMessagesAfter(t, slug, name, anchor);
     } catch (err) {
-      console.warn(
-        "[scrollback] gap probe failed — keeping the anchored resume",
-        site,
-        slug,
-        name,
-        err,
-      );
+      console.warn("[scrollback] gap probe failed — keeping the anchored resume", slug, name, err);
       return null;
     }
   };
@@ -473,7 +456,7 @@ const exports = identityScopedStore((onIdentityChange) => {
     if (cursor === null || cursor >= anchor) {
       return { missed: missedAtAnchor, resumeFrom: anchor };
     }
-    const missed = await probeGap(t, "resolve-jump-target", slug, name, cursor);
+    const missed = await probeGap(t, slug, name, cursor);
     return missed === null
       ? { missed: missedAtAnchor, resumeFrom: anchor }
       : { missed, resumeFrom: cursor };
@@ -658,7 +641,7 @@ const exports = identityScopedStore((onIdentityChange) => {
         // The probe is ONE extra small GET per cursor-present channel-open,
         // behind the load-once gate, on a human click; the pane is empty here
         // so `anchorAtTail` has nothing to discard.
-        const gap = await probeGap(t, "initial-load", slug, name, cursor);
+        const gap = await probeGap(t, slug, name, cursor);
         if (gap !== null && isFarBehind(gap)) {
           await anchorAtTail(t, slug, name, gap, cursor);
         } else {
@@ -972,7 +955,7 @@ const exports = identityScopedStore((onIdentityChange) => {
         // ordinary short-page reconnect, which is nearly all of them.
         const last = page[page.length - 1];
         const anchor = last ? last.id : cursor;
-        const gap = await probeGap(t, "reconnect-refresh", slug, name, anchor);
+        const gap = await probeGap(t, slug, name, anchor);
         if (gap !== null && isFarBehind(gap)) {
           const target = await resolveJumpTarget(t, slug, name, anchor, gap);
           await anchorAtTail(t, slug, name, target.missed, target.resumeFrom);
