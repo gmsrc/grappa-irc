@@ -151,6 +151,22 @@ static void on_signal(int sig) {
     stop_requested = 1;
 }
 
+/* libdatachannel's own diagnostics, onto STDERR where they belong.
+ *
+ * Given no callback it logs to STDOUT, which here is the raw rgb24
+ * frame stream — so a single warning writes text into the middle of a
+ * picture and everything downstream reads it as pixels. Caught against
+ * a real server, where the log said "Track is not open" and the frame
+ * file turned out to be plain text.
+ *
+ * Routed through note(), so it obeys the same rule as everything else
+ * this program prints: one `#` comment line, on stderr, skippable by a
+ * parser on the first character. */
+static void RTC_API on_rtc_log(rtcLogLevel level, const char *message) {
+    (void)level;
+    note("libdatachannel: %s", message ? message : "");
+}
+
 /* ── One negotiated PeerConnection ────────────────────────────────────── */
 
 struct call;
@@ -653,6 +669,13 @@ static bool session_negotiate(struct session *s, const char *url, rtcDirection d
     if (resp.location[0] && !s->have_resource)
         note("%s: the Location header could not be resolved: %s", s->label, resp.location);
 
+    /* The whole answer, at --verbose. Everything that goes wrong past
+     * this point — a codec we did not expect, a track that never
+     * carries RTP, a media section the server declined — is decided by
+     * these few hundred bytes, and without them the symptom is always
+     * the same silent black window. */
+    note("%s: answer\n%s", s->label, resp.body);
+
     bool ok = rtcSetRemoteDescription(s->pc, resp.body, "answer") >= 0;
     if (!ok) emit_event("error", "message", "the SDP answer was rejected");
 
@@ -854,7 +877,7 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
-    rtcInitLogger(verbose ? RTC_LOG_WARNING : RTC_LOG_NONE, NULL);
+    rtcInitLogger(verbose ? RTC_LOG_WARNING : RTC_LOG_NONE, on_rtc_log);
 
     struct call call;
     memset(&call, 0, sizeof(call));
@@ -953,11 +976,37 @@ int main(int argc, char **argv) {
      * person who is not here, reported and stepped over. */
     int joined = 0;
     for (int i = 0; ok && i < whep_count; i++) {
-        if (session_negotiate(&call.sub[i], whep_urls[i], RTC_DIRECTION_RECVONLY,
-                              video && i == 0, &mcfg, stun, timeout_ms))
+        /* EVERY peer gets a video track, not just the first.
+         *
+         * `video && i == 0` was right when the picture was one tile
+         * taken from one peer, and it silently outlived that: the mix
+         * composites up to CALL_TILE_MAX pictures, but only slot 0 ever
+         * had a video track to receive on, so a group call could never
+         * show more than one person however good the grid was. Caught
+         * against the real SFU, where two publishers produced exactly
+         * one tile. */
+        if (session_negotiate(&call.sub[i], whep_urls[i], RTC_DIRECTION_RECVONLY, video, &mcfg,
+                              stun, timeout_ms)) {
             joined++;
-        else
+        } else {
             note("subscribe %d: not in the call", i);
+            /* RELEASED, not merely reported.
+             *
+             * session_negotiate marks a session active the moment it
+             * creates the peer connection, which is before the POST that
+             * can refuse it. Left active, a peer who is simply not in
+             * the call yet is a session that never reaches a settled
+             * state, so all_settled() waits for it until the timeout and
+             * the whole call is then declared dead — with a message
+             * blaming the SFU's public IP.
+             *
+             * That is the NORMAL case for a channel: most members are
+             * not in the call, so most subscribes are refused with a
+             * 404. Measured against a real server, where the first
+             * caller in a room killed their own call waiting for the
+             * second to arrive. */
+            session_release(&call.sub[i]);
+        }
     }
     if (whep_count > 0 && joined == 0 && !whip_url) {
         emit_event("error", "message", "nobody is in this call yet");

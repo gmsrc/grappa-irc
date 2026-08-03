@@ -217,6 +217,22 @@ bool media_start_send(struct media_leg *leg, const struct media_config *cfg, boo
     argv[n++] = ssrc;
     argv[n++] = (char *)"-f";
     argv[n++] = (char *)"rtp";
+    /* RTP payloads small enough to SURVIVE the transport.
+     *
+     * ffmpeg's RTP muxer defaults to 1472 bytes, sized for a bare
+     * 1500-byte Ethernet MTU with room for UDP and IP. WebRTC then adds
+     * DTLS-SRTP on top, and the result no longer fits: libjuice refuses
+     * it outright with "Send failed, datagram is too large" and the
+     * packet never leaves the machine.
+     *
+     * It only ever bit VIDEO, which is why it survived this long. Opus
+     * frames are a hundred-odd bytes and never came close, so audio
+     * calls worked perfectly while video produced no picture and no
+     * error anybody saw — the failure was a libdatachannel log line on
+     * a stream that was being discarded. 1200 is the number every
+     * browser uses for the same reason. */
+    argv[n++] = (char *)"-pkt_size";
+    argv[n++] = (char *)"1200";
     argv[n++] = dest;
     argv[n] = NULL;
 
