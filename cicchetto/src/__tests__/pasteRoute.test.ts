@@ -14,6 +14,9 @@ vi.mock("../lib/channelKey", () => ({
 vi.mock("../lib/compose", () => ({
   getDraft: vi.fn(() => ""),
   setDraft: vi.fn(),
+  // #737 — the router drops a text paste aimed at a window a paced drain is
+  // still rewriting. Default false: every pre-existing case is idle.
+  isDraining: vi.fn(() => false),
 }));
 
 vi.mock("../lib/confirmDialog", () => ({
@@ -87,6 +90,40 @@ describe("pasteRoute — routeClipboardPaste", () => {
     expect(setDraft).toHaveBeenCalledWith("freenode #a", "one line");
     expect(preventDefault).toHaveBeenCalled();
     expect(requestConfirm).not.toHaveBeenCalled();
+  });
+
+  // #737 — a paced drain owns the target window's draft, so the text path has
+  // nowhere to put a paste. Drop it here instead of asking "Paste N lines?"
+  // and then discarding the answer when the store refuses the write.
+  it("#737 — text paste into a DRAINING window is dropped: no confirm, no insert", async () => {
+    const compose = await import("../lib/compose");
+    vi.mocked(compose.isDraining).mockReturnValue(true);
+    try {
+      for (const text of ["one line", "a\nb\nc\nd"]) {
+        const { e, preventDefault } = pasteEvent({ text });
+        routeClipboardPaste(e, textarea(), "freenode", "#a", false);
+        expect(requestConfirm).not.toHaveBeenCalled();
+        expect(setDraft).not.toHaveBeenCalled();
+        expect(preventDefault).toHaveBeenCalled();
+      }
+    } finally {
+      vi.mocked(compose.isDraining).mockReturnValue(false);
+    }
+  });
+
+  // …but an UPLOAD is a separate pipeline that never touches the draft, so a
+  // drain must not block it.
+  it("#737 — a FILE paste still uploads while the window is draining", async () => {
+    const compose = await import("../lib/compose");
+    vi.mocked(compose.isDraining).mockReturnValue(true);
+    try {
+      const file = pngFile();
+      const { e } = pasteEvent({ file });
+      routeClipboardPaste(e, textarea(), "freenode", "#a", true);
+      expect(dropUpload).toHaveBeenCalledWith([file], "freenode", "#a");
+    } finally {
+      vi.mocked(compose.isDraining).mockReturnValue(false);
+    }
   });
 
   it("empty text, native insert UNAVAILABLE → focus-only no-op (no insert, no preventDefault)", () => {

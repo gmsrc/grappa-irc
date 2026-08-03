@@ -597,11 +597,68 @@ describe("compose submit — slash command dispatch", () => {
       expect(compose.getDraft(k)).toBe("b\nc");
       compose.recallNext(k);
       expect(compose.getDraft(k)).toBe("b\nc");
-      expect(compose.tabComplete(k, "b\nc", 3, true)).toBeNull();
+
+      // Members MUST be seeded here, or tabComplete returns null on its own
+      // empty-members guard and this assertion proves nothing.
+      const members = await import("../lib/members");
+      vi.mocked(members.membersByChannel).mockReturnValue({
+        [k]: [{ nick: "bruno", modes: [] }],
+      });
+      expect(compose.tabComplete(k, "b", 1, true)).toBeNull();
       expect(compose.getDraft(k)).toBe("b\nc");
+      vi.mocked(members.membersByChannel).mockReturnValue({});
 
       await vi.advanceTimersByTimeAsync(2_000);
       await done;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #737 — the re-entrancy hole the store lock has to close. ComposeBox
+  // unmounts when the operator visits home / mentions / $list and on the
+  // desktop↔mobile swap, which resets its local `sending()`. Enter still fires
+  // on a readOnly textarea, so a second submit would fan the SAME residue out
+  // again — the #666 duplicate — and hand two drains one lock, so the first to
+  // finish would unlock a window the other is still rewriting.
+  it("#737 — a second submit on a draining window is refused, not fanned out again", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+
+      let n = 0;
+      let refused = false;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n === 2 && !refused) {
+          refused = true;
+          throw new api.ApiError(429, "rate_limited", { retry_after: 2 });
+        }
+        return undefined as never;
+      });
+
+      compose.setDraft(k, "a\nb\nc");
+      const done = compose.submit(k, "freenode", "#a");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(compose.isDraining(k)).toBe(true);
+
+      // The operator comes back to a remounted composer and hits Enter.
+      const sentBefore = vi.mocked(sb.sendMessage).mock.calls.length;
+      const second = await compose.submit(k, "freenode", "#a");
+      expect(second).toHaveProperty("error");
+      expect(vi.mocked(sb.sendMessage).mock.calls.length).toBe(sentBefore);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await done).toEqual({ ok: true });
+
+      // One drain, one delivery of each line — "b" twice on the CALL log is
+      // the 429 refusal plus its retry, never two fan-outs.
+      expect(vi.mocked(sb.sendMessage).mock.calls.map((c) => c[2])).toEqual(["a", "b", "b", "c"]);
+      expect(compose.isDraining(k)).toBe(false);
     } finally {
       vi.useRealTimers();
     }

@@ -1,5 +1,5 @@
 import { channelKey } from "./channelKey";
-import { getDraft, setDraft } from "./compose";
+import { getDraft, isDraining, setDraft } from "./compose";
 import { requestConfirm } from "./confirmDialog";
 import { dropUpload } from "./dropUpload";
 import { pastedLineCount, shouldGuardPaste } from "./pasteFlood";
@@ -83,6 +83,17 @@ export function routeClipboardPaste(
   if (files.length > 0) {
     e.preventDefault();
     dropUpload(files, networkSlug, channelName);
+    return;
+  }
+  // #737 — a paced drain owns this window's draft, so the text path has
+  // nowhere to put a paste: the store refuses the write. Drop it HERE rather
+  // than letting the flood modal ask "Paste 30 lines?" and then discard the
+  // answer. preventDefault covers the global-listener path, whose target
+  // textarea may not be the focused element and so is not protected by its own
+  // readOnly. The file branch above is untouched — an upload never touches the
+  // draft.
+  if (isDraining(channelKey(networkSlug, channelName))) {
+    e.preventDefault();
     return;
   }
   // #80 — plain-text multi-line paste flood guard. A pasted block is sent

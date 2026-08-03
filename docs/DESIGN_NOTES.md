@@ -27766,6 +27766,24 @@ dead until reload — worse than the overwrite it prevents. The fatal path
 unlocks too, and the test pins that the lock was actually HELD before the
 release, so it cannot pass by never locking at all.
 
+**The lock closes the SEND door too, found in review.** Refusing writes is not
+enough: `doSubmit`'s only re-entrancy guard was ComposeBox's local `sending()`,
+and that component unmounts when the operator visits home / mentions / $list or
+the desktop↔mobile layouts swap. Coming back gives a fresh `sending() === false`
+over a residue-filled draft, and `keydown` fires on a readOnly textarea — so
+Enter started a SECOND drain over the same residue. That is a duplicate
+delivery (the #666 bug) plus two drains sharing one lock, where the first to
+finish unlocks a window the other is still rewriting. `submit` now refuses a
+draining key outright, in the store, for the same reason the write gate lives
+there.
+
+**Two more doors closed in the same pass.** `routeClipboardPaste` drops a text
+paste aimed at a draining window instead of raising the flood modal and then
+discarding the confirmed answer (the file branch is untouched — an upload never
+touches the draft). And `drainingKeys` resets on identity change like every
+other piece of state in this store: a send that never settles never runs its
+release `finally`, and the lock would otherwise survive a logout/login.
+
 **Deliberately not built.** A richer "sending 7 of 30 — composer locked"
 progress affordance. The spinner plus a read-only box is proportionate; a
 progress surface is a UX change, not this defect. And the composer is locked

@@ -252,6 +252,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   onIdentityChange(() => {
     tabCycle = null;
   });
+  // #737 — the drain lock is identity-scoped like the drafts it guards. A
+  // send that never settles (a backgrounded tab whose fetch never resolves)
+  // never runs its release `finally`, and the lock would otherwise outlive a
+  // logout/login and leave the composer dead until reload.
+  onIdentityChange(() => setDrainingKeys({}));
 
   const getState = (key: ChannelKey): ComposeState => composeByChannel()[key] ?? empty();
 
@@ -460,6 +465,16 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     networkSlug: string,
     channelName: string,
   ): Promise<SubmitResult> => {
+    // #737 — a drain already owns this window's draft, and that draft holds
+    // the residue it has NOT sent yet. Re-submitting would fan the same
+    // remainder out a second time (the #666 duplicate this whole mechanism
+    // exists to prevent) and hand two drains one lock, so the first to finish
+    // would unlock a window the other is still rewriting. The guard lives
+    // here, not in ComposeBox: that component's `sending()` dies with it, and
+    // it unmounts whenever the operator visits home / mentions / $list or the
+    // desktop↔mobile layouts swap — after which Enter (keydown still fires on
+    // a readOnly textarea) started a fresh drain.
+    if (isDraining(key)) return { error: "still sending the previous paste" };
     const state = getState(key);
     // #385 — expand user-defined aliases (from the aliasList store) before
     // dispatch; the parser stays pure and takes the map as an argument.
