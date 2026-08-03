@@ -9317,7 +9317,7 @@ defmodule Grappa.Session.ServerTest do
       assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
       assert QueryWindows.open?({:user, user.id}, network.id, "ghost")
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
 
       # Subscribe AFTER the outbound send so the mailbox holds only the 401s.
@@ -9369,7 +9369,7 @@ defmodule Grappa.Session.ServerTest do
       # row would ALSO be duplicated into the WHOIS card's extra_lines.
       assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
 
       :ok =
@@ -9422,7 +9422,7 @@ defmodule Grappa.Session.ServerTest do
       # bundle is approximate by construction (P-0a).
       assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
 
       :ok =
@@ -9434,7 +9434,7 @@ defmodule Grappa.Session.ServerTest do
 
       # Re-prime BETWEEN the absorption and the first WHOIS's own reply — the
       # interleaving that actually destroys the record.
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
 
       IRCServer.feed(server, ":irc.test.org 401 grappa-test ghost :No such nick/channel\r\n")
       IRCServer.feed(server, ":irc.test.org 318 grappa-test ghost :End of /WHOIS list\r\n")
