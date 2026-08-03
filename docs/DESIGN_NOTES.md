@@ -28286,24 +28286,84 @@ cleared by the document that boots next. sessionStorage for #695's reason: it
 is scoped to THIS window and survives a reload, where localStorage would have a
 second tab announce a refresh it never performed.
 
-**Stranding is the failure mode that shape invites, and TIME is the guard.**
-`deps.reload` is a request, not a guarantee: the navigation can be blocked, the
-e2e `__refreshProbe` replaces it outright, the operator can kill the tab. The
-marker then survives in a document that never refreshed, and the next boot of
-that window — an hour later, for its own reasons — would announce an
-auto-refresh that never happened. Time is what actually separates the two
-cases: a reload lands within seconds of being asked for or it does not land at
-all, so a marker older than 60s is not evidence and is discarded. Read-and-
-clear happens either way, so an unusable marker cannot resurface. A
-target-hash guard was considered and rejected as strictly weaker: it catches
-the probe case and misses the one that matters (a manual reload later, onto the
-bundle the marker was written for, announces anyway).
+**There are TWO ways to lie, so there are two guards, and neither predicate
+covers the other.**
 
-Two consequences, both accepted: a document iOS suspends mid-navigation and
-thaws an hour later drops the toast — silence, which is what #674 shipped
-anyway, and never a false announcement — and the boot is never told which
-version it came FROM. It does not need to be: it reads the version it is now
-running off its own page.
+*The reload never lands.* `deps.reload` is a request, not a guarantee: the
+navigation can be blocked, the e2e `__refreshProbe` replaces it outright, the
+operator can kill the tab. The marker then survives in a document that never
+refreshed, and the next boot of that window — an hour later, for its own
+reasons — would announce an auto-refresh that never happened. TIME fences this:
+a reload lands within seconds of being asked for or it does not land at all.
+
+*The reload lands and changes nothing.* `performRefresh`'s own header documents
+the reload that keeps serving the OLD precached index.html — the
+three-presses-to-update bug it exists to mitigate and explicitly does not
+guarantee against, since `registration.update()` can reject on the same flaky
+resume link that made the refresh necessary. That reload is seconds old and on
+the same bytes: time waves it straight through, and the client announces
+"Updated to 0.10.0" while running exactly what it was running before, with the
+refresh banner reappearing next to it seconds later. The DEPARTING HASH fences
+it — the marker carries the bundle the leaving document was running, and the
+arriving one announces only if it booted on something else.
+
+**Retracted (review, same day):** the first cut of this entry rejected a hash
+guard as "strictly weaker" and shipped time alone. The reasoning was right about
+hash INSTEAD OF time — any later boot loads the current bundle, so hash alone
+lets the hour-later manual reload announce — and wrong as a general claim,
+because the two guards fence different modes and compose. The departing hash
+(rather than the target) is also what keeps the double-deploy case: a second
+deploy landing mid-reload still leaves the bundle we asked to replace.
+
+Read-and-clear happens on every path, so an unusable marker cannot resurface. A
+hash unknown on either side is silence rather than a guess, and costs no honest
+case: the branch that writes the marker only fires when both hashes are known
+and differ.
+
+**The window is five minutes, and it measures more than the navigation.** The
+marker is written when the branch DECIDES, and `performRefresh` then awaits an
+unbounded `registration.update()`, up to 2s for `controllerchange`, and a full
+cache purge before it navigates — after which the boot it just purged the caches
+for fetches everything over the same degraded link. A tight window drops the
+toast for a refresh that landed correctly, in exactly the slow case where the
+unexplained reset is most disorienting. Marking later — a `beforeReload` hook in
+`performRefresh`'s `finally` — would measure the navigation alone and allow a
+tighter number; rejected for now because `performRefresh` is shared with the
+manual banner click, which must not mark, so the hook puts a parameter on a
+shared verb for one caller. The hash guard, not this one, is what proves
+something changed.
+
+**The notice is consumed at MOUNT, not at boot.** An `aria-live` region only
+speaks mutations it is already in the tree for: a row queued during module
+evaluation is inside the container when the container enters the document, and
+nothing is announced. The one toast whose entire job is to explain an
+unexplained reset would have been the only one a screen-reader user could not
+hear. Consuming it in `Toasts`'s `onMount` fixes that and has a second payoff —
+the wiring becomes testable by rendering the component, instead of by grepping
+the composition root.
+
+**The toast labels the bundle through #292's `versionLabel`**, now exported
+rather than copied: a bundle-only rebuild reuses the semver, so "Updated to
+0.10.0" is indistinguishable from "nothing happened" for exactly the trivial
+rebuild that most often triggers this. #292 already answered that with a
+git-style 7-char build suffix.
+
+One consequence accepted: a document iOS suspends mid-navigation and thaws an
+hour later drops the toast — silence, which is what #674 shipped anyway, and
+never a false announcement.
+
+**One line stays untestable and is guarded by assertion instead.** `main.tsx` is
+the composition root, nothing imports it, so the marker write could be deleted
+with all 4031 tests green. `bundleRefreshWiring.test.ts` reads the source and
+asserts it, with an anti-vacuity case, in the established idiom of
+`moduleRootGuard` / `biomePin` / `versionSource`.
+
+**sessionStorage is scoped, not partitioned.** It is the right store — per
+window, survives a reload, does not hand the marker to every tab on the device
+the way localStorage would — but a browser-level "Duplicate Tab" CLONES it, so a
+duplicate made between the request and the navigation inherits a live marker.
+The hash guard covers that case too: the duplicate boots on whatever the
+original was running unless the deploy genuinely reached it.
 
 **`reload` carries WHICH branch asked for it** (`"absence" | "bundle"`).
 `staleResume` deliberately shares one reload verb between two independent
@@ -28312,11 +28372,13 @@ deploy announces itself and a document thrown away for age has nothing to say.
 Passing the reason keeps that knowledge where the branch is decided instead of
 growing a second verb beside the shared one.
 
-**Verified by displacement, not by a green run.** Three mutation arms, each
-run against the suite: removing the freshness window reddens exactly the two
-strand tests; making `announceAppliedBundleRefresh` skip the queue reddens six
-across the store and the surface; making the bundle branch report `"absence"`
-reddens the reason assertion. **Not verified:** the rendered appearance. jsdom
-draws no layout, so "the stack is positioned and legible, and the update tone
-reads as accent rather than severity" is a browser question this change does
-not answer.
+**Verified by displacement, not by a green run.** Six mutation arms, each run
+against the suite: removing the freshness window reddens exactly the two strand
+tests; removing the hash guard reddens the three same-bundle tests; making
+`announceAppliedBundleRefresh` skip the queue reddens six across the store and
+the surface; dropping the mount-time consume reddens three on the surface;
+deleting the marker write in `main.tsx` reddens the wiring assertion and nothing
+else; making the bundle branch report `"absence"` reddens the reason assertion.
+**Not verified:** the rendered appearance. jsdom draws no layout, so "the stack
+is positioned and legible, and the update tone reads as accent rather than
+severity" is a browser question this change does not answer.

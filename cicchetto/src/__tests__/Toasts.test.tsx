@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  announceAppliedBundleRefresh,
+  BUNDLE_REFRESH_NOTICE_KEY,
   bundleRefreshToasts,
   dismissBundleRefreshToast,
   markBundleRefreshApplied,
@@ -13,11 +13,27 @@ import Toasts from "../Toasts";
 // #775 — the ONE toast surface. Two producers, two queues, one stack element:
 // separate fixed overlays would render on top of each other.
 //
+// It is also where the cross-reload notice is CONSUMED, at mount, because an
+// `aria-live` region only speaks mutations it is already in the tree for — an
+// announcement made at boot in main.tsx would be inaudible. That makes the
+// wiring testable here by rendering, rather than by grepping the composition
+// root: these cases go red if the mount-time consume is dropped.
+//
 // jsdom renders no layout, so this covers the WIRING (a queued toast reaches
 // the DOM, a click removes it) and not the appearance. Whether the stack is
 // positioned and legible is a browser question, unverified here.
 
-const t0 = 1_700_000_000_000;
+const OLD_BUNDLE = "Tsa4Tfom";
+const NEW_BUNDLE = "CiYQNUz0";
+
+// The boot bundle identity is read once from the page's script + meta tags at
+// module init, which jsdom has neither of. `importOriginal` keeps `versionLabel`
+// (which `bundleRefreshNotice` formats through) real.
+vi.mock("../lib/bundleHash", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/bundleHash")>()),
+  bootBundleHashAccessor: () => NEW_BUNDLE,
+  bootBundleVersionAccessor: () => "0.10.1",
+}));
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -61,14 +77,25 @@ describe("Toasts", () => {
     expect(container.querySelectorAll(".toast")).toHaveLength(0);
   });
 
-  it("announces an auto-refresh that landed", () => {
-    markBundleRefreshApplied(t0);
-    announceAppliedBundleRefresh(t0 + 2_000, "0.10.1");
+  // The whole feature, end to end on the client side: the departing document
+  // left a marker, this one boots on a different bundle and says so — and it
+  // says so from INSIDE the mounted live region.
+  it("announces an auto-refresh that landed, at mount", () => {
+    markBundleRefreshApplied(Date.now(), OLD_BUNDLE);
 
     const { container } = render(() => <Toasts />);
 
-    expect(container.querySelectorAll(".toast-update")).toHaveLength(1);
-    expect(screen.getByText("Updated to 0.10.1")).toBeInTheDocument();
+    expect(container.querySelectorAll(".toast-stack[aria-live] .toast-update")).toHaveLength(1);
+    expect(screen.getByText("Updated to 0.10.1 (CiYQNUz)")).toBeInTheDocument();
+    expect(sessionStorage.getItem(BUNDLE_REFRESH_NOTICE_KEY)).toBeNull();
+  });
+
+  it("says nothing when the reload landed back on the same bundle", () => {
+    markBundleRefreshApplied(Date.now(), NEW_BUNDLE);
+
+    const { container } = render(() => <Toasts />);
+
+    expect(container.querySelectorAll(".toast")).toHaveLength(0);
   });
 
   it("says nothing on an ordinary boot", () => {
@@ -85,8 +112,7 @@ describe("Toasts", () => {
       initial: false,
       ts: "2026-08-03T12:00:00Z",
     });
-    markBundleRefreshApplied(t0);
-    announceAppliedBundleRefresh(t0 + 2_000, "0.10.1");
+    markBundleRefreshApplied(Date.now(), OLD_BUNDLE);
 
     const { container } = render(() => <Toasts />);
 
@@ -102,8 +128,7 @@ describe("Toasts", () => {
       initial: false,
       ts: "2026-08-03T12:00:00Z",
     });
-    markBundleRefreshApplied(t0);
-    announceAppliedBundleRefresh(t0 + 2_000, "0.10.1");
+    markBundleRefreshApplied(Date.now(), OLD_BUNDLE);
 
     const { container } = render(() => <Toasts />);
     fireEvent.click(container.querySelector(".toast-update")!);

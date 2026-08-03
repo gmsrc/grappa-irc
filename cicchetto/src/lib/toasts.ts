@@ -30,9 +30,11 @@ export const TOAST_MS = 6_000;
 // the wrong queue) a no-op instead of a wrong removal.
 let toastSeq = 0;
 
-// Injectable for tests — window.setTimeout in production. Module-level rather
-// than per-queue: an override must survive an identity switch rebuilding the
-// scoped queues underneath it.
+// Injectable for tests — window.setTimeout in production. ONE seam serves every
+// queue, so a test drives expiry for all producers with a single override
+// instead of reaching into each one. (Not because the queues are ever rebuilt:
+// `identityScopedStore` runs its `build` once and only calls the registered
+// resets afterwards, so the scoped queue object outlives every identity switch.)
 let scheduleExpiry: (fn: () => void, ms: number) => void = (fn, ms) => {
   setTimeout(fn, ms);
 };

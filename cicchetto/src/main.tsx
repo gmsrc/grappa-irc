@@ -18,12 +18,8 @@ import "./lib/subscribe";
 import "./lib/userTopic";
 import { isDiagEnabled } from "./DiagFloat";
 import { mountBadgeReconcile, mountBadgeSync } from "./lib/badge";
-import {
-  bootBundleVersionAccessor,
-  performRefresh,
-  shouldShowRefreshBanner,
-} from "./lib/bundleHash";
-import { announceAppliedBundleRefresh, markBundleRefreshApplied } from "./lib/bundleRefreshNotice";
+import { bootBundleHashAccessor, performRefresh, shouldShowRefreshBanner } from "./lib/bundleHash";
+import { markBundleRefreshApplied } from "./lib/bundleRefreshNotice";
 import { applyCachedCustomTheme, mountCustomThemeSync } from "./lib/customTheme";
 import { diagPush } from "./lib/diagLog";
 import { mountDisplayPrefsSync } from "./lib/displayPrefs";
@@ -259,19 +255,18 @@ window.addEventListener("beforeunload", notifyClientClosing);
 // while genuinely foreground, "the stamp is old" IS "the document was not
 // visible" — the dwell needs no second visibility read.
 // #775 — and it announces itself once it lands. The refresh throws this
-// document away, so the notice is handed across the navigation: marked here as
-// the reload is requested, announced below by the document that boots out of
-// it. Only the deploy branch marks — a document thrown away for age has nothing
-// to tell anyone. The announcement reads the version off the page it is now
-// running, so nothing about the old one needs carrying.
+// document away, so the notice is handed across the navigation: marked HERE as
+// the reload is requested, carrying the hash this document is leaving, and
+// consumed by the next document when `Toasts` mounts (an `aria-live` region
+// only speaks mutations it is already in the tree for). Only the deploy branch
+// marks — a document thrown away for age has nothing to tell anyone.
 moduleRoot(() => {
-  announceAppliedBundleRefresh(Date.now(), bootBundleVersionAccessor());
   const checkStaleResume = installStaleResumeReload({
     isVisible: isDocumentVisible,
     bundleMismatch: shouldShowRefreshBanner,
     now: () => Date.now(),
     reload: (reason) => {
-      if (reason === "bundle") markBundleRefreshApplied(Date.now());
+      if (reason === "bundle") markBundleRefreshApplied(Date.now(), bootBundleHashAccessor());
       void performRefresh();
     },
     win: window,

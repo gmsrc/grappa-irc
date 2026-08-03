@@ -108,7 +108,11 @@ function shortHash(hash: string | null): string | null {
 // the semver or the hash alone when only one is, "unknown" when neither
 // (the banner never actually shows in that case — both hashes are known
 // by construction). Pure so it's exhaustively unit-testable.
-function versionLabel(version: string | null, hash: string | null): string {
+//
+// Exported for #775's update toast, which names a bundle for the same reason
+// and would otherwise grow a second, weaker formatter that reads "Updated to
+// 0.10.0" after a rebuild that kept the semver.
+export function versionLabel(version: string | null, hash: string | null): string {
   const sh = shortHash(hash);
   if (version !== null && sh !== null) return `${version} (${sh})`;
   if (version !== null) return version;
