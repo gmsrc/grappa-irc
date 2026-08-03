@@ -33,11 +33,10 @@ import { getResumeCursor, recordSeen } from "./reconnectBackfill";
 // overlap in a small race window — the same row would otherwise
 // appear twice. `id` is monotonic per the schema's auto-increment column.
 //
-// Identity-scoped state via identityScopedStore (dup-A3 close): nine
-// resets registered, plus the #769 purge stamp that resets nothing (see the
-// registration block below). The factory preserves the A1 invariant —
-// registration runs before any verb fires, so no rotation can be missed for
-// want of a registered reset.
+// Identity-scoped state via identityScopedStore (dup-A3 close): nine resets
+// registered (see the registration block below). The factory preserves the A1
+// invariant — registration runs before any verb fires, so no rotation can be
+// missed for want of a registered reset.
 //
 // #769 — what that does NOT buy, and what this comment used to claim it
 // did ("a logout/rotation between `loadInitialScrollback` start and finish
@@ -47,9 +46,12 @@ import { getResumeCursor, recordSeen } from "./reconnectBackfill";
 // resuming past a rotation still holds the bearer it captured, and the
 // per-key in-flight guards that are NOT in the reset list (`refreshInFlight`,
 // `jumpInFlight`) still hold their keys. Ordering-with-cancellation was
-// never implemented; the wording promised it anyway. `probeGap` now stamps
-// `__cic_scrollbackProbes` so a failing run's ordering can be READ rather
-// than inferred — see the ring below.
+// never implemented; the wording promised it anyway.
+//
+// That is not theoretical: delaying the reconnect backfill 400ms in a browser
+// put a `/messages/count` on the wire 10ms AFTER the detach, carrying the
+// revoked bearer. Tracked as its own defect (see #788) — #769 turned out to be
+// a spec race and is NOT that bug.
 //
 // ---------------------------------------------------------------------------
 // CP14 B3 — DM history is now bidirectional server-side.
@@ -148,51 +150,10 @@ const capScrollbackRing = (key: ChannelKey, rows: ScrollbackMessage[]): Scrollba
   return dropCount > 0 ? rows.slice(dropCount) : rows;
 };
 
-// #769 — provenance ring for the `/messages/count` gap probe.
-//
-// The account-switch spec (issue281) caught that request firing for the
-// PREVIOUS identity's channel, and the URL alone cannot say which of the
-// three probe sites emitted it, nor whether the bearer it carried was still
-// the current one. Both are recorded here, in ONE array shared with the
-// identity-purge stamp, so the ORDER of the entries IS the evidence: a probe
-// entry sitting after a purge entry is a verb that outlived the rotation.
-//
-// Read `staleBearer` as PRIMARY and the order as corroboration, not the other
-// way round: `token()` flips synchronously inside `setToken` while the purge
-// rides `createEffect(on(token))`, so there is a (small, Solid-flushes-at-
-// batch-end) window where a probe is already stale but the purge entry has
-// not landed yet.
-//
-// `staleBearer` is the comparison, not the token — no bearer material is
-// stored. Cost is one entry per cursor-present channel open (the probe is
-// already behind the load-once gate) plus one per identity transition; the
-// ring is capped because a PWA stays open for days. Read by the e2e spec on
-// failure and by `probeProvenance.test.ts`; production never reads it —
-// mirror of the #552 `__cic_scrollbackRefreshed` seam below. Unlike that
-// seam this one is a TRACE, not a synchronisation point: it exists to explain
-// #769 and should leave with it.
-export type ProbeSite = "initial-load" | "reconnect-refresh" | "resolve-jump-target";
-
-type ProbeTraceInput =
-  | { event: "probe"; site: ProbeSite; key: ChannelKey; anchor: number; staleBearer: boolean }
-  | { event: "identity-purge"; hasToken: boolean };
-
-export type ProbeTraceEntry = ProbeTraceInput & { at: number };
-
-const PROBE_TRACE_CAP = 200;
-
-// Timestamped HERE, not at the call site: an argument would be evaluated
-// before the `window` guard below (harmless — node has a global
-// `performance` — but the guard would only look protective), and stamp time
-// should be record time.
-const pushProbeTrace = (entry: ProbeTraceInput): void => {
-  if (typeof window === "undefined") return;
-  const w = window as Window & { __cic_scrollbackProbes?: ProbeTraceEntry[] };
-  const ring = w.__cic_scrollbackProbes ?? [];
-  w.__cic_scrollbackProbes = ring;
-  ring.push({ ...entry, at: performance.now() });
-  if (ring.length > PROBE_TRACE_CAP) ring.splice(0, ring.length - PROBE_TRACE_CAP);
-};
+// #769 — the three gap-probe sites, which are indistinguishable on the wire:
+// same URL shape, and two of the three anchor at the read cursor. `probeGap`
+// takes one so a probe can be attributed to its caller.
+type ProbeSite = "initial-load" | "reconnect-refresh" | "resolve-jump-target";
 
 const exports = identityScopedStore((onIdentityChange) => {
   const loadedChannels = new Set<ChannelKey>();
@@ -295,8 +256,6 @@ const exports = identityScopedStore((onIdentityChange) => {
   // + loadMore{InFlight,Exhausted} + loadNewer{InFlight,Exhausted}, #161) +
   // four signal flushes (scrollbackByChannel + lastOwnSend + ownSendSubmitted,
   // #580 + farBehindByChannel, #693). Order matches the pre-A3 inline shape.
-  // A tenth registration follows them, and it resets nothing: the #769 trace
-  // stamp, deliberately last so its entry means "every reset above has run".
   onIdentityChange(() => loadedChannels.clear());
   onIdentityChange(() => loadMoreInFlight.clear());
   onIdentityChange(() => loadMoreExhausted.clear());
@@ -306,11 +265,6 @@ const exports = identityScopedStore((onIdentityChange) => {
   onIdentityChange(() => setLastOwnSend(null));
   onIdentityChange(() => setOwnSendSubmitted(null));
   onIdentityChange(() => setFarBehindByChannel({}));
-  // #769 — `hasToken` separates the two transitions the factory fires on: a detach
-  // (rotation to null) from a straight rotation to another bearer. Note the
-  // factory does NOT fire on `null → tokB`, so an A → detach → B switch
-  // leaves exactly ONE purge entry, at the detach.
-  onIdentityChange(() => pushProbeTrace({ event: "identity-purge", hasToken: token() !== null }));
 
   // Insert an incoming message into the per-channel ascending list at its
   // (server_time, id) position, deduping by id. REST + WS can overlap: the
@@ -422,16 +376,16 @@ const exports = identityScopedStore((onIdentityChange) => {
   //
   // #769 — `site` names the caller. Three sites reach this verb and they are
   // indistinguishable on the wire (same URL shape, and two of the three anchor
-  // at the read cursor), so a leaked probe could not be attributed without it.
-  // It also names the caller in the failure warning below, which used to say
-  // only which channel gave up.
+  // at the read cursor), so a probe caught in a network log cannot be
+  // attributed without it. It also names the caller in the failure warning
+  // below, which used to say only which channel gave up.
   //
-  // The sites are NOT symmetric, and reading the ring depends on knowing it:
+  // The sites are NOT symmetric, and it matters when reading such a log:
   // `initial-load` runs with NO await between its `token()` capture and this
-  // call (`getReadCursor` is a synchronous signal read), so its `staleBearer`
-  // is structurally always false — never read that as exculpatory. Only
-  // `reconnect-refresh` (awaits a page first) and `resolve-jump-target`
-  // (awaits two) can carry a bearer across a rotation.
+  // call (`getReadCursor` is a synchronous signal read), so it cannot be on the
+  // wire under anything but the current bearer. Only `reconnect-refresh`
+  // (awaits a page first) and `resolve-jump-target` (awaits two) can carry a
+  // bearer across a rotation — that is #788, not this.
   const probeGap = async (
     t: string,
     site: ProbeSite,
@@ -439,15 +393,6 @@ const exports = identityScopedStore((onIdentityChange) => {
     name: string,
     anchor: number,
   ): Promise<number | null> => {
-    // Stamped BEFORE the call, so a probe that hangs or throws still leaves a
-    // record — the ordering question survives a failed request.
-    pushProbeTrace({
-      event: "probe",
-      site,
-      key: channelKey(slug, name),
-      anchor,
-      staleBearer: t !== token(),
-    });
     try {
       return await countMessagesAfter(t, slug, name, anchor);
     } catch (err) {

@@ -40,9 +40,14 @@
 //     record the bearer per request (tail only — never a whole token into a
 //     CI artefact) and print both tails alongside.
 //   * WHICH PURGE it outlived. The identity timeline comes from the
-//     `grappa-token` localStorage writes (cic's `setToken` is the only writer)
-//     and the in-app ordering from `__cic_scrollbackProbes`, the #769 ring
-//     `scrollback.ts` stamps at every gap probe and identity purge.
+//     `grappa-token` localStorage writes — cic's `setToken` is the only writer,
+//     so every transition is timed without reaching into the app.
+//
+// Both answers came back "account A, before any purge" (see the drain below),
+// which is what settled #769. A third channel — a per-probe ring inside
+// `scrollback.ts` — carried the in-app ordering for that measurement and was
+// REMOVED once it had answered: production never read it, and a trace nobody
+// reads is a claim nobody maintains.
 //
 // The assertion itself is UNCHANGED — zero offending requests, same filter.
 // Only the failure message got richer; a green run reads nothing.
@@ -212,7 +217,6 @@ test.describe("issue #281 — account switch replay", () => {
       const w = window as unknown as {
         __cic281Requests: { url: string; bearer: string | null; at: number }[];
         __cic281Identity: { token: string | null; at: number }[];
-        __cic_scrollbackProbes?: unknown[];
       };
       return {
         offending: w.__cic281Requests.filter((r) => {
@@ -225,7 +229,6 @@ test.describe("issue #281 — account switch replay", () => {
           return isAMessages || isAFeatured;
         }),
         identity: w.__cic281Identity,
-        probes: w.__cic_scrollbackProbes ?? [],
         liveToken: localStorage.getItem("grappa-token")?.slice(-8) ?? null,
       };
     }, NETWORK_SLUG);
@@ -235,17 +238,7 @@ test.describe("issue #281 — account switch replay", () => {
       `  bearer tails:     A=${a.token.slice(-8)} B=${forensics.liveToken}`,
       `  cleared log at:   ${clearedAt}`,
       `  identity timeline:${JSON.stringify(forensics.identity)}`,
-      `  #769 probe ring:  ${JSON.stringify(forensics.probes)}`,
     ].join("\n");
-
-    // #769 — a GREEN run carries the same evidence as a red one: whether A's
-    // join-ok backfill probed at all, and on which side of the log clear and
-    // the identity purge it landed. Losing that to a passing assertion is how
-    // a ~1-in-N race stays unexplained for another round, so print it whenever
-    // there is anything to read. Silent when the probe never fired.
-    if (forensics.probes.length > 0 || forensics.offending.length > 0) {
-      console.log(`[#769 forensics]\n${evidence}`);
-    }
 
     expect(
       forensics.offending,

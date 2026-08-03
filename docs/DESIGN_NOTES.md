@@ -27923,27 +27923,46 @@ it is arithmetic. This is why the issue's stated hypothesis ("captured the
 bearer, then awaited across the switch") cannot hold for the cold-open path it
 named.
 
-**A trace, not a sync seam.** `window.__cic_scrollbackProbes` is a capped ring
+**A trace, and then not.** `window.__cic_scrollbackProbes` was a capped ring
 carrying one entry per gap probe (`site`, channel key, anchor, `staleBearer`)
-and one per identity purge, in ONE array so entry ORDER shows whether a probe
-outlived a rotation. It is a deliberate departure from this codebase's other
-`__cic_*` globals, which are e2e SYNCHRONISATION points (`__cic_channelReady`,
-`__cic_scrollbackRefreshed`) rather than tracing, and it is scoped to #769: it
-should leave with the issue. Read `staleBearer` as primary and the order as
-corroboration — `token()` flips synchronously inside `setToken` while the purge
-rides a `createEffect`, so a probe can be stale a beat before the purge entry
-lands. No bearer material is stored; `staleBearer` is a comparison.
+and one per identity purge, in ONE array so entry ORDER showed whether a probe
+outlived a rotation. It answered in a single run, and was then **deleted**. It
+was a deliberate departure from this codebase's other `__cic_*` globals, which
+are e2e SYNCHRONISATION points (`__cic_channelReady`,
+`__cic_scrollbackRefreshed`) rather than tracing; production never read it, and
+a trace nobody reads is a claim nobody maintains. A `console.warn` on the
+anomaly was considered and rejected for the same reason — dead-but-green code
+guarding a condition with no automatic remedy. What SURVIVES is `probeGap`'s
+`site` parameter: three call sites, one URL shape on the wire, so attribution
+is impossible without it, and it names the caller in the probe-failure warning
+that used to report only a channel. Cost of the deletion, stated: nothing now
+pins the `site` labels, and the ring's own test file went with it.
 
-**Instrument before fixing** was vjt's explicit sequencing, and it earned its
-keep immediately: review of this change surfaced a competing mechanism the
-instrumentation can now discriminate in one run. `waitForChannelReady` returns
-while the join-ok `refreshScrollback` is still in flight (the #552 hazard,
-documented in that fixture's own twin `waitForScrollbackRefreshed`), so account
-A's own backfill can still be running when the issue281 spec clears its request
-log — and `#bofh` is seeded with exactly `PAGE_LIMIT` rows, which is the
-condition that makes that backfill probe at all. Under that reading the leaked
-request is legitimate traffic caught inside the spec's judging window rather
-than a cross-identity leak, and the fix is a drain before the clear, with no
-production change. The ring settles which it is: A's bearer with the purge
-entry AFTER the probe is the spec artefact; B's bearer, or a purge entry
-BEFORE, is the real leak.
+**Instrument before fixing** was vjt's explicit sequencing, and the measurement
+overturned the issue's own hypothesis. `waitForChannelReady` returns while the
+join-ok `refreshScrollback` is still in flight (the #552 hazard, documented in
+that fixture's own twin `waitForScrollbackRefreshed`), so account A's backfill
+is still running when the issue281 spec clears its request log — and `#bofh` is
+seeded with exactly `PAGE_LIMIT` rows, the one condition that makes that
+backfill probe at all. Measured across three fresh stacks: `reconnect-refresh`,
+`staleBearer: false`, fired 1.5–75ms BEFORE the clear and hundreds of ms before
+any purge, at the very `?after=681` the issue reported. **A spec race, not a
+cross-identity leak.** Fixed by awaiting the completion seam before the clear —
+structural, because the seam is stamped in `refreshScrollback`'s `finally`,
+strictly after the probe.
+
+**A green run is not a fix.** 20/20 and 40/40 were green locally BEFORE the
+fix, so the drain was proven by displacing the probe instead: inject 400ms into
+the backfill and the clear stays put while the probe overshoots it by 357ms
+(RED, 1/1, the issue's exact URL); with the drain, injecting 400ms and then
+1500ms moves the probe by 1.5s and the clear FOLLOWS it, trailing by a constant
+10–25ms (the `waitForFunction` poll interval). A margin that tracks an
+arbitrary displacement is happens-before; a margin that sits at 1.5ms is a
+coin toss.
+
+**The instrumentation caught a second, unrelated defect on its way out.** Under
+that induced delay the ring recorded `staleBearer: true` with the purge stamped
+BEFORE the probe: a `/messages/count` on the wire 10ms after its own bearer was
+revoked, through production code paths in a real browser. That is #788 — the
+async verbs capture `token()` at entry and never re-check — and it is NOT what
+#769 turned out to be.
