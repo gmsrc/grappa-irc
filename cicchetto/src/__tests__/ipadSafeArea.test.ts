@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { ruleBody, themeCss } from "./helpers/themeCss";
 
 // #205 — cicchetto as an installed PWA on iPadOS rendered its top chrome
 // (settings cog included) UNDER the iOS status bar, clipped and
@@ -26,25 +27,11 @@ import { describe, expect, it } from "vitest";
 // the `/// <reference types="node" />` above scopes the Node types to this
 // file alone rather than widening ambient types for the whole `src` tree.
 // vitest runs on Node so readFileSync exists at runtime; relative paths
-// resolve against cwd (= cicchetto/, the vite root).
-const css = readFileSync("src/themes/default.css", "utf8");
+// resolve against cwd (= cicchetto/, the vite root). The stylesheet read +
+// `ruleBody` extractor moved to helpers/themeCss.ts when #734/#735 needed
+// the same guard.
+const css = themeCss;
 const indexHtml = readFileSync("index.html", "utf8");
-
-// Extract a single top-level CSS rule body by its selector. Matches
-// `selector {  ... }` at column 0 (the desktop `.shell` rule lives
-// outside any @media block, so it starts at the left margin). Returns the
-// text BETWEEN the braces, with CSS comments stripped so prose that
-// mentions a property (e.g. a comment describing the old `height: 100vh`)
-// can't satisfy or trip a declaration assertion. Throws if the rule is
-// absent so a rename can't silently pass the test.
-function ruleBody(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`^${escaped}\\s*\\{([^}]*)\\}`, "m");
-  const match = css.match(re);
-  const captured = match?.[1];
-  if (captured === undefined) throw new Error(`CSS rule not found: ${selector}`);
-  return captured.replace(/\/\*[\s\S]*?\*\//g, "");
-}
 
 describe("#205 iPad standalone-PWA safe area", () => {
   it("index.html viewport meta opts into viewport-fit=cover", () => {

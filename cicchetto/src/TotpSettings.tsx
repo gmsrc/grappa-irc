@@ -121,7 +121,7 @@ const TotpSettings: Component<Props> = (props) => {
             <form onSubmit={confirmEnrollment} data-testid="totp-enrollment-form">
               <p>Scan this QR code, or enter the key manually. Then confirm one code.</p>
               <div
-                class="share-qr"
+                class="qr-frame"
                 innerHTML={qrSvgWithLabel(pending.provisioning_uri, "TOTP enrollment QR code")}
               />
               <label for="totp-manual-key">Manual key</label>

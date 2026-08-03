@@ -205,7 +205,7 @@ const ShareSessionModal: Component = () => {
             <p class="share-modal-qr-heading">
               scan this code on another device to access your session
             </p>
-            <div class="share-modal-qr" data-testid="share-qr" innerHTML={qrMarkup()} />
+            <div class="qr-frame" data-testid="share-qr" innerHTML={qrMarkup()} />
 
             <p class="share-modal-alt muted">alternatively, send yourself a link</p>
             <Show when={canNativeShare()}>

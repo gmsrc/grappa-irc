@@ -9776,8 +9776,16 @@ audio.media-viewer-media {
 
 /* Black-on-white QR framed in its own light card so it stays scannable
    regardless of the cic theme (a light-on-dark QR is rejected by many
-   scanners). The inner <svg> is viewBox-scaled → it fills this box. */
-.share-modal-qr {
+   scanners). The inner <svg> is viewBox-scaled → it fills this box.
+
+   #734 — named `.qr-frame`, NOT `.share-modal-qr`: this IS the sized
+   container `lib/qr.ts` contracts for ("the caller injects it into a sized
+   container — no fixed px width/height"), and it has two call sites now
+   (the share modal and the TOTP enrolment pane). The modal-scoped old name
+   is what caused #734 — the security pane reached for `share-qr`, which is
+   the modal's data-testid, and landed on a class with no rule at all. One
+   QR frame primitive, both call sites; no second sized-box rule. */
+.qr-frame {
   width: 12rem;
   height: 12rem;
   max-width: 70vw;
@@ -9788,7 +9796,7 @@ audio.media-viewer-media {
   box-sizing: border-box;
 }
 
-.share-modal-qr svg {
+.qr-frame svg {
   display: block;
   width: 100%;
   height: 100%;

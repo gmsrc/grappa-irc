@@ -44,9 +44,13 @@ describe("ShareSessionModal (#392)", () => {
     await waitFor(() => expect(screen.getByTestId("share-modal")).toBeInTheDocument());
     expect(mintShareToken).toHaveBeenCalledWith("session-token");
 
-    // QR container carries an inline <svg> built from the share URL.
+    // QR container carries an inline <svg> built from the share URL, inside
+    // the shared sized frame. #734 — the testid and the class are different
+    // names on purpose; reaching for the testid as a class is what left the
+    // TOTP pane's QR unsized, so both call sites are pinned to `.qr-frame`.
     const qr = await screen.findByTestId("share-qr");
     expect(qr.querySelector("svg")).not.toBeNull();
+    expect(qr.className).toContain("qr-frame");
 
     // The link the user sends to themselves.
     const url = (await screen.findByTestId("share-url")) as HTMLInputElement;
