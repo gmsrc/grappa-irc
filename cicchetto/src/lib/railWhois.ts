@@ -40,14 +40,13 @@ import { pushWhois } from "./socket";
 // is therefore noise delivered onto a peer for a refresh nobody requested.
 // The rule this store is built against:
 //
-//     NEVER send a WHOIS the user did not initiate.
+//     The rail NEVER sends a WHOIS on a timer or as a speculative prefetch.
+//     It sends exactly ONE when it has to show a nick it does not have.
 //
-// Accepted tradeoff, stated plainly: the card is fetched once and is NOT
-// refreshable. `idle_seconds` / `signon` age badly (host, realname, channels
-// do not), so a long-lived rail card will show a stale idle clock. The one
-// thing that does refresh it is the operator's own `/whois <peer>` —
-// `userTopic` routes a `source: "user"` bundle for the shown nick here too —
-// and that is a WHOIS the user asked for.
+// So the card is fetched once and is not refreshable; a long-lived rail shows
+// a stale idle clock. The operator's own `/whois <peer>` still lands here
+// (`userTopic` routes a `source: "user"` bundle for the shown nick into this
+// cache) — that one the user asked for.
 //
 // Both stores are fed by the SAME `whois_bundle` user-topic event. The
 // server marks each bundle's origin (`source: "user" | "rail"`, #606

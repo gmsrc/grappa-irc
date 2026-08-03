@@ -28106,10 +28106,12 @@ shipped TTL, a peer with +y would be told someone was whoising them every time
 anyone re-selected their query window after 60s — forever, for a refresh
 neither party asked for. Hence the durable rule, which outlives this PR:
 
-> **The client MUST NEVER send a WHOIS the user did not initiate.**
+> **The rail NEVER sends a WHOIS on a timer or as a speculative prefetch. It
+> sends exactly ONE when it has to show a nick it does not have.**
 
 It binds every future surface tempted to prefetch WHOIS — member-list hover,
-nick autocomplete preview, notify/watch enrichment.
+nick autocomplete preview, notify/watch enrichment: enrichment nobody asked
+for is noise delivered onto a person.
 
 **What changed.** (1) The freshness TTL is DELETED: one WHOIS per nick on first
 select, cached for the life of the identity, no staleness refetch. Note there
@@ -28132,16 +28134,19 @@ and `is_registered` is CLEARED (307 RPL_WHOISREGNICK attests the NICK, not the
 person — carrying it would badge a renamed peer "registered" on no evidence).
 Everything else — host, realname, channels — describes the person and survives.
 
-**Accepted, stated plainly:** the card is fetched once and is not refreshable;
-a long-lived rail shows a stale idle clock. The only refresh is the operator's
-own `/whois <peer>`, which `userTopic` already routes into this cache — a WHOIS
-the user asked for. No refresh affordance is promised here.
+The card is therefore fetched once and is not refreshable; a long-lived rail
+shows a stale idle clock. The only refresh is the operator's own `/whois
+<peer>`, which `userTopic` already routes into this cache — a WHOIS the user
+asked for.
 
-**Adjacent finding, not fixed here.** `NumericRouter` delegates any scan-class
-numeric whose `params[1]` is a WHOIS in flight, so while a rail fetch is
-pending an ERR_NOSUCHNICK that actually answers the operator's `/msg` is folded
-into the WHOIS bundle instead of landing in the query window as the "message
-bounced" notice. Pre-#606 that state existed only just after someone typed
-`/whois`; the auto-fetch makes it routine. `cp13-s5-msg-ghost-401` (0 error
-notices) caught it in the same local run and passes in CI only on timing. The
-durable rule: `whois_pending` should consume at most ONE 401 per pending WHOIS.
+**Adjacent defect, filed as #785, fixed on main and NOT here.** `NumericRouter`
+delegates any scan-class numeric whose `params[1]` is a WHOIS in flight, so
+while a rail fetch is pending an ERR_NOSUCHNICK that actually answers the
+operator's `/msg` is folded into the WHOIS bundle instead of landing in the
+query window as the "message bounced" notice. That is a `main` defect — the
+window has always existed for the seconds after a typed `/whois` — which the
+auto-fetch widens into a routine race, so it is fixed there rather than here,
+where it would read as a branch artefact and vanish on merge.
+`cp13-s5-msg-ghost-401` caught it 2/2 in full local suites and passed CI on the
+same commit by timing luck alone. Durable rule: a pending WHOIS consumes at
+most ONE 401.
