@@ -27365,3 +27365,73 @@ success depended on services re-emitting `+r` after a foreign-nick IDENTIFY
 that the code believed was the thing committing it. Trace the wire before
 theorising about a flake, and when a spec cannot be re-run in place, fix that
 FIRST — the triage discipline is worthless against a spec that only runs once.
+
+## 2026-08-03 — #674: a deploy applies itself when the gap at the resume says nobody was there
+
+`registerType: "autoUpdate"` already installs a new bundle silently, but it
+never touches the page that is already open: a long-lived PWA session keeps
+executing the JS it booted with, indefinitely. Detection was live already
+(`bootBundleHash` vs the `serverBundleHash` pushed on user-topic join);
+application was the one deliberately manual step, because a blind
+`location.reload()` on deploy trades a minor annoyance for lost work at exactly
+the moment an operator is shipping.
+
+**The gate is local, not the away status.** Two earlier rulings on the issue —
+gate on IRC auto-away, and gate on compose focus + draft emptiness — were both
+withdrawn. Away and auto-refresh are two consequences of ONE cause ("the user
+is not at this client"), so the client-side concern reads the cause directly:
+`documentVisibility.ts`, already `visibilityState === "visible" &&
+document.hasFocus()` and already the SSOT for live-cursor gating. No wire
+change, no server round-trip, no dependency on #694 (closed as superseded) or
+the auto-away fixes behind it. It also covers the case the away gate was
+invented for — someone who typed `/away` by hand and is still sitting there —
+better than the away gate did, because window focus says so directly.
+
+**The dwell is derived from the #695 stamp, not stored again.** The #318
+heartbeat re-stamps every 30s while genuinely foreground and STOPS when the
+document goes hidden, so "the stamp is older than the dwell" already MEANS "the
+document was not visible for that long". No second timestamp, no extra
+listener, no visibility read inside the branch.
+
+**THE INVARIANT: the dwell verdict is judged on the gap AT THE RESUME.** This
+is the whole design and the naive shape gets it wrong. `bundle_hash` rides the
+user-topic JOIN, so on resume it lands a rejoin AFTER the visibility transition
+that observed the absence — by which time `check` has refreshed the stamp and
+`now - lastActive` reads ~0. A verdict computed when the hash arrives is
+therefore false forever, and the feature never fires for its single most common
+case: the operator deployed while you were away. So `check` READS the gap before
+`markActive` destroys it and carries it to the decision.
+
+The carry is not a parallel structure: the stamp overwrites the gap by
+construction, so the captured number is its only surviving copy, it has exactly
+one writer, and every check overwrites it. That overwrite is also what closes
+the window — a reload that never lands is followed 30s later by a heartbeat tick
+that resets the gap to ~30s, so the dwell simply stops being satisfied. No
+boolean latch, which #695 had already rejected for wedging the document.
+
+**Rejected: withhold the stamp until the discriminant is available.** Proposed
+as the way to avoid the carry, and it fails three ways. It breaks #695's "every
+check stamps" rule, so the 48h absence branch re-fires on every trigger. It
+couples that branch to a value it does not consume. And on a broken network,
+where `bundle_hash` never arrives at all, the stamp never advances, the measured
+gap grows without bound and the absence branch loops — the failure appears only
+once the network is already broken.
+
+**Two knobs, never one.** 48h for the absence, 10 minutes for the deploy dwell,
+sharing only the "absent / non-numeric / non-positive → default" validation. The
+server's `@auto_away_debounce_ms` happens to start at the same 10 minutes and is
+deliberately NOT read: it answers "should your peers be told you are away", not
+"may I throw this document away", and #348 may yet make it user-configurable — a
+user tuning their away grace must not silently retune when their client reloads.
+
+**Below the dwell the banner keeps the case, unchanged.** The operator is right
+there and owns the timing.
+
+**Still open, product call:** whether an applied auto-refresh should announce
+itself afterwards (a transient "updated to vX"), so the operator is not left
+wondering why the scrollback jumped. Not built.
+
+**Known, filed separately:** compose drafts live in `identityScopedStore`
+signals with no storage backing, so every reload already discards them — the
+manual banner click included. Auto-refresh makes that pre-existing loss easier
+to hit rather than introducing it.

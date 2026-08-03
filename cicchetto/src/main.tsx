@@ -16,7 +16,7 @@ import "./lib/subscribe";
 import "./lib/userTopic";
 import { isDiagEnabled } from "./DiagFloat";
 import { mountBadgeReconcile, mountBadgeSync } from "./lib/badge";
-import { performRefresh } from "./lib/bundleHash";
+import { performRefresh, shouldShowRefreshBanner } from "./lib/bundleHash";
 import { applyCachedCustomTheme, mountCustomThemeSync } from "./lib/customTheme";
 import { diagPush } from "./lib/diagLog";
 import { mountDisplayPrefsSync } from "./lib/displayPrefs";
@@ -245,9 +245,16 @@ window.addEventListener("beforeunload", notifyClientClosing);
 // frozen with the document and its first tick after the thaw is the only
 // trigger that can observe the absence at all. A tick that stamped without
 // checking would erase the evidence instead of acting on it.
+// #674 — the same check also applies a DEPLOY that landed while nobody was
+// looking, gated on a 10-minute dwell of its own. `shouldShowRefreshBanner` is
+// the discriminant; below the dwell the refresh banner keeps the case and the
+// operator owns the timing. Because that same heartbeat re-stamps every 30s
+// while genuinely foreground, "the stamp is old" IS "the document was not
+// visible" — the dwell needs no second visibility read.
 createRoot(() => {
   const checkStaleResume = installStaleResumeReload({
     isVisible: isDocumentVisible,
+    bundleMismatch: shouldShowRefreshBanner,
     now: () => Date.now(),
     reload: () => void performRefresh(),
     win: window,
