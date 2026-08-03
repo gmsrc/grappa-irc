@@ -192,6 +192,8 @@ defmodule GrappaWeb.PasskeyController do
     end
   end
 
+  def login_options(_, _), do: {:error, :bad_request}
+
   defp begin_passwordless(conn, identifier) do
     with %User{passkey_mode: "passwordless"} = user <- find_user(identifier),
          {:ok, options} <-
@@ -201,8 +203,6 @@ defmodule GrappaWeb.PasskeyController do
       _ -> {:error, :invalid_credentials}
     end
   end
-
-  def login_options(_, _), do: {:error, :bad_request}
 
   @doc "Verifies passwordless assertion and mints a bearer."
   @spec login_verify(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom()}
@@ -258,7 +258,7 @@ defmodule GrappaWeb.PasskeyController do
     end
   end
 
-  defp recover_resolved(_conn, ip, _unresolved, _code) do
+  defp recover_resolved(_, ip, _, _) do
     _ = FailureWindow.record_failure(:passkey_recovery, ip, @recovery_window_ms)
     {:error, :invalid_two_factor}
   end

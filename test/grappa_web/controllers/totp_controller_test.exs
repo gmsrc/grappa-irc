@@ -6,7 +6,7 @@ defmodule GrappaWeb.TotpControllerTest do
   alias Grappa.{Accounts, Accounts.Session, Accounts.TOTP, Accounts.TOTPRecoveryCode, Repo}
 
   test "a bearer alone cannot start TOTP enrollment", %{conn: conn} do
-    {user, _password} = user_fixture_with_password()
+    {user, _} = user_fixture_with_password()
     session = session_fixture(user)
 
     assert conn
@@ -16,7 +16,7 @@ defmodule GrappaWeb.TotpControllerTest do
   end
 
   test "a wrong password cannot start TOTP enrollment", %{conn: conn} do
-    {user, _password} = user_fixture_with_password()
+    {user, _} = user_fixture_with_password()
     session = session_fixture(user)
 
     assert conn

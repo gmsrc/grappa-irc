@@ -31,7 +31,7 @@ defmodule GrappaWeb.PasskeyControllerTest do
     # The abuse is challenge ALLOCATION, and the cheapest way to allocate
     # is to keep succeeding — so a failures-only window would never see
     # this traffic. Every 200 has to count against the bucket too.
-    {user, _password} = passwordless_user()
+    {user, _} = passwordless_user()
     on_exit(fn -> FailureWindow.clear(:passkey_login_options, "127.0.0.1") end)
 
     for _ <- 1..30 do
@@ -47,7 +47,7 @@ defmodule GrappaWeb.PasskeyControllerTest do
     # find_user/1 folds an email to its local part, so these all resolve to
     # ONE account. Keying the window on the wire string handed the attacker
     # a fresh bucket per spelling.
-    {user, _password} = passwordless_user()
+    {user, _} = passwordless_user()
 
     on_exit(fn ->
       FailureWindow.clear(:passkey_recovery, "127.0.0.1")

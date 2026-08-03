@@ -64,7 +64,7 @@ defmodule Grappa.Accounts.WebAuthnChallengeStore do
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
 
   defp drop_expired(state, now) do
-    Map.reject(state, fn {_id, {_challenge, _purpose, _metadata, expires_at}} ->
+    Map.reject(state, fn {_, {_, _, _, expires_at}} ->
       expires_at <= now
     end)
   end

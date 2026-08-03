@@ -674,9 +674,12 @@ defmodule Grappa.Accounts do
         {:error, :not_found}
 
       user ->
-        Repo.BusyRetry.run(fn -> Repo.transaction(fn -> totp_reset_transaction(user) end) end)
+        run_totp_reset(user)
     end
   end
+
+  defp run_totp_reset(user),
+    do: Repo.BusyRetry.run(fn -> Repo.transaction(fn -> totp_reset_transaction(user) end) end)
 
   defp totp_reset_transaction(user) do
     user_query = from(u in User, where: u.id == ^user.id)
