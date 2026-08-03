@@ -53,8 +53,11 @@ const directorySortMock = vi.fn<(slug: string) => "users" | "name">(() => "users
 const isLoadingMoreMock = vi.fn<(slug: string) => boolean>(() => false);
 const loadMoreMock = vi.fn<(slug: string) => Promise<void>>(() => Promise.resolve());
 const resetDirectoryMock = vi.fn<(slug: string) => void>(() => {});
+// #732 — per-slug load error the pane renders with a retry affordance.
+const directoryErrorMock = vi.fn<(slug: string) => string | null>(() => null);
 
 vi.mock("../lib/channelDirectory", () => ({
+  directoryError: (slug: string) => directoryErrorMock(slug),
   directoryPage: (slug: string) => directoryPageMock(slug),
   directorySort: (slug: string) => directorySortMock(slug),
   isLoadingMore: (slug: string) => isLoadingMoreMock(slug),
@@ -153,6 +156,7 @@ describe("DirectoryPane", () => {
     setSelectedChannelMock.mockClear();
     closeToPreviousWindowMock.mockClear();
     directorySortMock.mockReturnValue("users");
+    directoryErrorMock.mockReturnValue(null);
     isLoadingMoreMock.mockReturnValue(false);
     loadMoreMock.mockClear();
     resetDirectoryMock.mockClear();
@@ -590,6 +594,78 @@ describe("DirectoryPane", () => {
       directoryPageMock.mockReturnValue({ ...FRESH_PAGE, next_cursor: "CURSOR2" });
       const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
       expect(container.querySelector(".directory-loading-more")).not.toBeNull();
+    });
+  });
+
+  // #732 — a failed GET used to leave the pane blank forever: no message,
+  // no retry, and the mount effect only re-fires on a slug change. The
+  // store now records the failure per slug; the pane renders it with the
+  // retry the operator otherwise doesn't have.
+  describe("load error (#732)", () => {
+    it("renders the store's error with a retry affordance", () => {
+      directoryErrorMock.mockReturnValue("The service is momentarily busy. Please try again.");
+      directoryPageMock.mockReturnValue(undefined);
+      render(() => <DirectoryPane networkSlug={SLUG} />);
+      expect(screen.getByRole("alert")).toHaveTextContent(/momentarily busy/i);
+      expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    });
+
+    it("renders no alert when there is no error", () => {
+      directoryErrorMock.mockReturnValue(null);
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      render(() => <DirectoryPane networkSlug={SLUG} />);
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("retry re-runs loadDirectory for the slug", () => {
+      directoryErrorMock.mockReturnValue("nope");
+      directoryPageMock.mockReturnValue(undefined);
+      render(() => <DirectoryPane networkSlug={SLUG} />);
+      loadDirectoryMock.mockClear();
+      fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+      expect(loadDirectoryMock).toHaveBeenCalledWith(SLUG);
+    });
+  });
+
+  // #732 — every keystroke used to fire its own GET, and the responses
+  // raced. Debouncing collapses a burst into one GET for the final text
+  // (the store's request-ordering guard covers the rest).
+  describe("search debounce (#732)", () => {
+    it("a burst of keystrokes fires one setQuery with the final text", () => {
+      vi.useFakeTimers();
+      try {
+        directoryPageMock.mockReturnValue(FRESH_PAGE);
+        render(() => <DirectoryPane networkSlug={SLUG} />);
+        const input = screen.getByPlaceholderText(/search channels/i);
+
+        fireEvent.input(input, { target: { value: "ru" } });
+        fireEvent.input(input, { target: { value: "rust" } });
+        expect(setQueryMock).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(1000);
+        expect(setQueryMock).toHaveBeenCalledTimes(1);
+        expect(setQueryMock).toHaveBeenCalledWith(SLUG, "rust");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a pending keystroke never fires after the pane closes", () => {
+      vi.useFakeTimers();
+      try {
+        directoryPageMock.mockReturnValue(FRESH_PAGE);
+        const { unmount } = render(() => <DirectoryPane networkSlug={SLUG} />);
+        fireEvent.input(screen.getByPlaceholderText(/search channels/i), {
+          target: { value: "rust" },
+        });
+        unmount();
+        vi.advanceTimersByTime(1000);
+        // Firing here would re-populate the store for a slug resetDirectory
+        // just cleared — the closed pane resurrecting its own state.
+        expect(setQueryMock).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

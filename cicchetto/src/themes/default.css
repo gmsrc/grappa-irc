@@ -8844,6 +8844,26 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   padding: 0.1rem 0.3rem;
 }
 
+/* #732 — pane-level load failure: the message plus the Retry that is the
+ * only way back once a GET fails (the mount effect re-fires on slug change
+ * only). Sits between the header and the list. */
+.directory-error {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 1rem;
+  color: var(--error, #e06c75);
+}
+
+.directory-error-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.directory-error-retry {
+  flex: none;
+}
+
 .directory-row-error {
   display: block;
   padding: 0.25rem 1rem;

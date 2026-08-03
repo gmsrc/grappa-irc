@@ -28165,3 +28165,57 @@ and passed CI on the same commit by timing luck alone; it is the ONE red spec
 left in this branch's local run (476 passed, 1 failed), so per the CLAUDE.md
 ship gate #785 has to land on main BEFORE this merges. Durable rule: a pending
 WHOIS consumes at most ONE 401.
+
+### 2026-08-03 — #732 — a store verb nobody awaits must never reject (cic)
+
+`channelDirectory.ts` had no `catch` anywhere, and every caller invokes its
+verbs as `void`. A failed directory GET was therefore an unhandled rejection:
+`pages[slug]` stayed undefined, `<Show when={page()}>` rendered nothing, and
+the mount effect only re-fires on a slug change. The pane sat at header +
+search box forever, with no way to tell "this network has no channels" from
+"the request died" — and #677, by dropping the cached page on close, turned
+what used to be a stale snapshot into a blank pane.
+
+**Caught in the store IS the surfacing.** A store verb has no caller to return
+an error to, so the choice is not catch-vs-propagate, it is surface-vs-vanish.
+The verb catches, maps through `friendlyApiError` (a non-`ApiError` — offline,
+DNS, aborted socket — gets one generic line), and parks the copy in a per-slug
+`errors` map the pane renders as an alert with a Retry. One boundary covers
+every entry point: mount, sort, filter, the three server pings, the append,
+and the refresh POST.
+
+**Three uncaught verbs, not the two the issue reported.** `triggerRefresh` was
+the third: a refused refresh (no live session, upstream timeout) un-disabled
+its button and did nothing else, reading exactly like a refresh that worked.
+A per-defect fix would have left it open.
+
+**Ordering: one monotonic id per issued request; only the newest may write.**
+`setQuery` fires per keystroke, so `ru` and `rust` are in flight together and
+whichever the server answers first loses. The stale reply used to overwrite
+the newest one — rows for `ru` under a box reading `rust`, and a `next_cursor`
+belonging to the wrong view, so load-more paged the wrong query. Every
+response — page, append, or failure — now carries the id it was issued under
+and drops if a newer one exists.
+
+**The append rides its base's id rather than minting one.** `loadMore` does
+not supersede anything; it extends the page a `fetchInto` produced. Its old
+anti-clobber check compared cursors, which passes whenever a replacement page
+happens to carry the same cursor — the ordinary case of a progress ping
+re-GETting the same view — and spliced page 2 of the OLD capture onto the new
+page 1. Sharing the base's id is both stricter and one concept instead of two.
+
+**Ids are globally monotonic and invalidation DELETES.** `resetDirectory` and
+the identity-rotation reset drop the slug's entry rather than zeroing a
+counter, so an in-flight reply finds no match and dies. That also closes an
+unreported instance of the same class: a GET issued before the ✕ used to land
+after it and resurrect the page the close had just dropped. A per-slug counter
+reset to 0 could re-mint an id an older request still held — across an
+identity rotation, that is a cross-tenant write.
+
+**The debounce is in the pane, not the store.** It is input timing, and the
+store's `setQuery` must stay honest — awaiting a debounced verb that resolves
+before its own GET is a footgun for every other caller. The pending timer
+captures its slug and is cancelled on both unmount and slug switch, or it
+fires after `resetDirectory` and repopulates the state the close cleared. The
+debounce only stops making races; the request-id guard is what makes the ones
+that survive correct.

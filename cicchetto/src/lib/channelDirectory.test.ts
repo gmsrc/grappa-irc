@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import * as api from "./api";
 import { setToken } from "./auth";
 import {
+  directoryError,
   directoryPage,
   directorySort,
+  isLoadingMore,
   loadDirectory,
   loadMore,
   onDirectoryComplete,
@@ -26,6 +28,22 @@ import {
 // the provided "libera" tests for the same reason.
 
 const TOKEN = "test-bearer";
+
+// Externally-settled promise, so a test can choose the ORDER two in-flight
+// GETs resolve in — the whole point of the #732 request-ordering guard.
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+
+// Let Solid's on(token) identity-change effect flush (it runs off the
+// microtask queue, not synchronously inside setToken).
+const flushEffects = () => new Promise((r) => setTimeout(r, 0));
 
 const makePage = (overrides: Partial<api.DirectoryPage> = {}): api.DirectoryPage => ({
   entries: [],
@@ -222,6 +240,161 @@ describe("channelDirectory store", () => {
       await setSort("rd2", "name");
       resetDirectory("rd2");
       expect(directorySort("rd2")).toBe("name");
+    });
+  });
+
+  // --- #732: every async verb surfaces its failure ---
+
+  describe("error surfacing (#732)", () => {
+    test("a failed page GET surfaces friendly copy instead of rejecting", async () => {
+      vi.spyOn(api, "listDirectory").mockRejectedValue(new api.ApiError(503, "db_unavailable"));
+      await expect(loadDirectory("err1")).resolves.toBeUndefined();
+      expect(directoryError("err1")).toBe("The service is momentarily busy. Please try again.");
+      expect(directoryPage("err1")).toBeUndefined();
+    });
+
+    test("a non-ApiError failure surfaces generic copy, not a raw throw", async () => {
+      vi.spyOn(api, "listDirectory").mockRejectedValue(new TypeError("Failed to fetch"));
+      await loadDirectory("err2");
+      expect(directoryError("err2")).toBe("Couldn't reach the server.");
+    });
+
+    test("a failed re-GET keeps the page it already had", async () => {
+      const spy = vi.spyOn(api, "listDirectory");
+      spy.mockResolvedValueOnce(makePage({ total: 4 }));
+      await loadDirectory("err3");
+      spy.mockRejectedValueOnce(new api.ApiError(504, "session_timeout"));
+      await onDirectoryProgress("err3");
+      expect(directoryPage("err3")?.total).toBe(4);
+      expect(directoryError("err3")).not.toBeNull();
+    });
+
+    test("a successful GET clears a prior error", async () => {
+      const spy = vi.spyOn(api, "listDirectory");
+      spy.mockRejectedValueOnce(new api.ApiError(503, "db_unavailable"));
+      await loadDirectory("err4");
+      expect(directoryError("err4")).not.toBeNull();
+      spy.mockResolvedValueOnce(makePage({ total: 1 }));
+      await loadDirectory("err4");
+      expect(directoryError("err4")).toBeNull();
+    });
+
+    test("resetDirectory clears the error so a reopen starts clean", async () => {
+      vi.spyOn(api, "listDirectory").mockRejectedValue(new api.ApiError(503, "db_unavailable"));
+      await loadDirectory("err5");
+      expect(directoryError("err5")).not.toBeNull();
+      resetDirectory("err5");
+      expect(directoryError("err5")).toBeNull();
+    });
+
+    test("a failed loadMore surfaces the error and clears the spinner", async () => {
+      const spy = vi.spyOn(api, "listDirectory");
+      spy.mockResolvedValueOnce(makePage({ total: 9, next_cursor: "CUR2" }));
+      await loadDirectory("err6");
+      spy.mockRejectedValueOnce(new api.ApiError(503, "db_unavailable"));
+      await expect(loadMore("err6")).resolves.toBeUndefined();
+      expect(directoryError("err6")).not.toBeNull();
+      expect(isLoadingMore("err6")).toBe(false);
+    });
+
+    test("a failed triggerRefresh surfaces the error", async () => {
+      vi.spyOn(api, "refreshDirectory").mockRejectedValue(new api.ApiError(504, "session_timeout"));
+      await expect(triggerRefresh("err7")).resolves.toBeUndefined();
+      expect(directoryError("err7")).toBe(
+        "The network is taking too long to respond. Try again in a few seconds.",
+      );
+    });
+  });
+
+  // --- #732: request ordering — only the NEWEST request may write ---
+
+  describe("request ordering (#732)", () => {
+    test("a superseded GET does not clobber the newest results", async () => {
+      const slow = deferred<api.DirectoryPage>();
+      const fast = deferred<api.DirectoryPage>();
+      vi.spyOn(api, "listDirectory")
+        .mockReturnValueOnce(slow.promise)
+        .mockReturnValueOnce(fast.promise);
+
+      const stale = setQuery("ord1", "ru");
+      const newest = setQuery("ord1", "rust");
+      fast.resolve(makePage({ total: 2 }));
+      await newest;
+      slow.resolve(makePage({ total: 99 }));
+      await stale;
+
+      expect(directoryPage("ord1")?.total).toBe(2);
+    });
+
+    test("a superseded GET's failure does not surface over the newest success", async () => {
+      const slow = deferred<api.DirectoryPage>();
+      const fast = deferred<api.DirectoryPage>();
+      vi.spyOn(api, "listDirectory")
+        .mockReturnValueOnce(slow.promise)
+        .mockReturnValueOnce(fast.promise);
+
+      const stale = setQuery("ord2", "ru");
+      const newest = setQuery("ord2", "rust");
+      fast.resolve(makePage({ total: 2 }));
+      await newest;
+      slow.reject(new api.ApiError(503, "db_unavailable"));
+      await stale;
+
+      expect(directoryError("ord2")).toBeNull();
+      expect(directoryPage("ord2")?.total).toBe(2);
+    });
+
+    test("a GET in flight at close does not resurrect the page after resetDirectory", async () => {
+      const inflight = deferred<api.DirectoryPage>();
+      vi.spyOn(api, "listDirectory").mockReturnValueOnce(inflight.promise);
+
+      const pending = loadDirectory("ord3");
+      resetDirectory("ord3");
+      inflight.resolve(makePage({ total: 7 }));
+      await pending;
+
+      expect(directoryPage("ord3")).toBeUndefined();
+    });
+
+    test("a GET in flight across an identity rotation never writes", async () => {
+      const inflight = deferred<api.DirectoryPage>();
+      vi.spyOn(api, "listDirectory").mockReturnValueOnce(inflight.promise);
+
+      const pending = loadDirectory("ord4");
+      setToken("other-bearer");
+      await flushEffects();
+      inflight.resolve(makePage({ total: 7 }));
+      await pending;
+
+      expect(directoryPage("ord4")).toBeUndefined();
+    });
+
+    test("a fetchInto that lands mid-loadMore drops the stale append", async () => {
+      const spy = vi.spyOn(api, "listDirectory");
+      const ROW = (name: string): api.DirectoryEntry => ({
+        name,
+        topic: null,
+        user_count: 1,
+        featured: false,
+      });
+      spy.mockResolvedValueOnce(makePage({ entries: [ROW("#a")], next_cursor: "CUR2", total: 3 }));
+      await loadDirectory("ord5");
+
+      const append = deferred<api.DirectoryPage>();
+      spy.mockReturnValueOnce(append.promise);
+      const more = loadMore("ord5");
+
+      // A progress ping REPLACES page 1 while the append GET is in flight.
+      // The replacement happens to carry the same cursor (same view, fresh
+      // capture) — so a cursor-equality guard would wave the append through
+      // and splice page 2 of the OLD capture onto the new page 1.
+      spy.mockResolvedValueOnce(makePage({ entries: [ROW("#z")], next_cursor: "CUR2", total: 1 }));
+      await onDirectoryProgress("ord5");
+
+      append.resolve(makePage({ entries: [ROW("#b")], next_cursor: null }));
+      await more;
+
+      expect(directoryPage("ord5")?.entries.map((e) => e.name)).toEqual(["#z"]);
     });
   });
 });

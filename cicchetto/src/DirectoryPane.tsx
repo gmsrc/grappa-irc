@@ -2,6 +2,7 @@ import { type Component, createEffect, createSignal, For, on, onCleanup, Show } 
 import { ApiError, type DirectoryEntry, postJoin } from "./lib/api";
 import { token } from "./lib/auth";
 import {
+  directoryError,
   directoryPage,
   directorySort,
   isLoadingMore,
@@ -46,10 +47,21 @@ import { MircBody } from "./MircText";
 // (resetDirectory in onCleanup) so a reopened directory is unfiltered with an
 // empty box; sort is a sticky preference and rehydrates from directorySort.
 //
+// Failure + ordering (#732): the store never rejects — it parks per-slug
+// failure copy the pane renders as an alert with a Retry. The search box
+// debounces its GET (SEARCH_DEBOUNCE_MS) so a burst of keystrokes costs one
+// request instead of one per character; the store's request-id guard is what
+// makes the surviving races correct, the debounce just stops making them.
+//
 // Scroll preservation: the row container tracks scrollTop on scroll. A
 // createEffect on the page's entry COUNT restores it via queueMicrotask so
 // the viewport stays steady while rows update from a progress ping or an
 // append; a REPLACE that shrinks the list snaps back to the top.
+
+// Quiet window after the last keystroke before the filter GET fires. Long
+// enough to swallow a burst of typing, short enough that a deliberate pause
+// feels immediate.
+const SEARCH_DEBOUNCE_MS = 250;
 
 // Pure relative-time formatter. No external deps, exported for unit tests.
 // Thresholds: <60s → "just now", <60m → "Nm ago", <24h → "Nh ago", else "Nd ago".
@@ -192,6 +204,19 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
   // against the shorter list a ping reset produces). #677 constraint 4.
   let prevEntryCount = 0;
 
+  // #732 — debounce the filter GET. The local text updates on every
+  // keystroke (the box stays responsive); only the request waits. The slug is
+  // captured at keystroke time so a pending timer can never fire against a
+  // pane that has since switched networks, and both the slug switch and the
+  // unmount cancel it — a fire after resetDirectory would re-populate the
+  // store the close just cleared.
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  const cancelSearchTimer = () => {
+    if (searchTimer !== undefined) clearTimeout(searchTimer);
+    searchTimer = undefined;
+  };
+  onCleanup(cancelSearchTimer);
+
   // Load on mount / slug change. `on` makes networkSlug the sole reactive
   // trigger — reading directoryPage(s) inside does NOT create a directoryPage
   // dependency, so a successful load (page transitions from undefined to
@@ -204,7 +229,10 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
         // instance (the Shell <Match> stays true), so onCleanup does NOT
         // fire for A. Reset A's browse state here so reopening A later starts
         // fresh + unfiltered, exactly like closing via ✕ / switch-away.
-        if (prevS !== undefined && prevS !== s) resetDirectory(prevS);
+        if (prevS !== undefined && prevS !== s) {
+          cancelSearchTimer();
+          resetDirectory(prevS);
+        }
         mountedSlug = s;
         setActiveSort(directorySort(s));
         prevEntryCount = directoryPage(s)?.entries.length ?? 0;
@@ -268,8 +296,13 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
 
   const onSearchInput = (e: Event) => {
     const val = (e.currentTarget as HTMLInputElement).value;
+    const slug = props.networkSlug;
     setSearchText(val);
-    void setQuery(props.networkSlug, val);
+    cancelSearchTimer();
+    searchTimer = setTimeout(() => {
+      searchTimer = undefined;
+      void setQuery(slug, val);
+    }, SEARCH_DEBOUNCE_MS);
   };
 
   const onRefresh = () => void triggerRefresh(props.networkSlug);
@@ -316,6 +349,24 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
           ✕
         </button>
       </div>
+      {/* #732 — a failed GET used to leave the pane blank with no message and
+          no way to ask again: the mount effect only re-fires on a slug
+          change. Sits above the list so it is visible whether or not a
+          previous page is still on screen. */}
+      <Show when={directoryError(props.networkSlug)}>
+        {(message) => (
+          <div class="directory-error" role="alert">
+            <span class="directory-error-message">{message()}</span>
+            <button
+              type="button"
+              class="directory-error-retry"
+              onClick={() => void loadDirectory(props.networkSlug)}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+      </Show>
       <Show when={page()}>
         {(p) => (
           <>
