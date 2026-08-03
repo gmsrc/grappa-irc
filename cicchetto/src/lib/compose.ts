@@ -316,15 +316,26 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // history-push never runs (which would wipe the residue and record a
   // half-sent paste).
   //
-  // #723 — the residue has EXACTLY ONE owner. `source` is the window the
-  // operator submitted from; `preferred` is where the remainder should surface
-  // (the same window for privmsg / me, the freshly focused query window for
-  // /msg, which moves the operator's eyes there). Two rules resolve them:
+  // #723 — the residue has EXACTLY ONE owner, and it lands there in RESENDABLE
+  // form. A candidate home is a window plus the text that must precede the
+  // remainder for a plain resubmit FROM that window to reproduce the sends
+  // still owed. In the window that is itself the target, that prefix is empty
+  // and the bare remainder resends correctly — the #666 case. Anywhere else it
+  // is the command that re-addresses it (`/me `, `/msg <nick> `), because a
+  // bare remainder dropped in a CHANNEL composer resends a private message to
+  // the channel.
+  type ResidueHome = { key: ChannelKey; resubmitPrefix: string };
+
+  // `source` is the window the operator submitted from; `preferred` is where
+  // the remainder should surface — the same window for privmsg / me, the
+  // freshly focused query window for /msg, which moves the operator's eyes
+  // there. Two rules pick between them:
   //
   //   * A busy `preferred` outranks us. Its draft is the operator's own
   //     half-typed text, and the final residue of a SUCCESSFUL send is `""` —
   //     so an unconditional write silently ate it. When it is non-empty the
-  //     redirect is refused outright and `source` keeps the remainder.
+  //     redirect is refused and `source` keeps the remainder (re-addressed by
+  //     its own prefix, so it still resends to the intended peer).
   //   * Whoever does NOT own the residue is emptied. Redirecting used to leave
   //     the WHOLE `/msg bob …` command in `source` — the error arm returns
   //     before the shared clear — so the remainder existed twice and hitting
@@ -332,18 +343,20 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   //
   // Resolved ONCE, before the first line: per-tick resolution would flip after
   // the first residue write makes `preferred` non-empty, hopping windows
-  // mid-drain.
+  // mid-drain. Known hole: text typed into `preferred` AFTER that resolution
+  // (possible during a long 429-paced drain) is still overwritten.
   const sendPacedBody = async (
-    source: ChannelKey,
-    preferred: ChannelKey,
+    source: ResidueHome,
+    preferred: ResidueHome,
     slug: string,
     target: string,
     body: string,
     action: boolean,
   ): Promise<SubmitResult> => {
-    const residueKey = preferred === source || getDraft(preferred) === "" ? preferred : source;
-    if (residueKey !== source) {
-      writeState(source, (s) => ({ ...s, draft: "", historyCursor: null }));
+    const home =
+      preferred.key === source.key || getDraft(preferred.key) === "" ? preferred : source;
+    if (home.key !== source.key) {
+      writeState(source.key, (s) => ({ ...s, draft: "", historyCursor: null }));
     }
     let sentCount = 0;
     let totalCount = 0;
@@ -352,24 +365,27 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         sentCount = sent;
         totalCount = total;
         // Residue-only draft, reset to the live bottom (historyCursor null):
-        // we're typing the remainder, not walking history.
-        writeState(residueKey, (s) => ({ ...s, draft: residue, historyCursor: null }));
+        // we're typing the remainder, not walking history. A drained send
+        // leaves "" — never a bare prefix the operator would have to erase.
+        const draft = residue === "" ? "" : `${home.resubmitPrefix}${residue}`;
+        writeState(home.key, (s) => ({ ...s, draft, historyCursor: null }));
       });
       return { ok: true };
     } catch (e) {
       // Fatal mid-fan-out (WS down, invalid_line, severed 401). The residue
       // draft is already set to the unsent remainder; surface the reason and,
       // for a genuine multi-line paste, how many lines went out so the operator
-      // knows the send partially landed and where the rest is queued. "In the
-      // box" means the composer they are looking at — a lie when a busy
-      // `preferred` sent the remainder back to the window they submitted from.
+      // knows the send partially landed. "In the box" means the composer they
+      // are looking at — a lie when a busy `preferred` sent the remainder back
+      // to the window they submitted from, so that case says where it went
+      // whether or not the body was multi-line.
       const reason = friendlyError(e);
-      const where =
-        residueKey === preferred
-          ? "the rest are in the box"
-          : "the rest are in the window you sent from";
+      const sentOf = totalCount > 1 ? ` — sent ${sentCount} of ${totalCount} lines` : "";
+      if (home.key !== preferred.key) {
+        return { error: `${reason}${sentOf}; the rest are in the window you sent from` };
+      }
       return totalCount > 1
-        ? { error: `${reason} — sent ${sentCount} of ${totalCount} lines; ${where}` }
+        ? { error: `${reason}${sentOf}; the rest are in the box` }
         : { error: reason };
     }
   };
@@ -455,7 +471,10 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // a send-door 429 drains the rest over time; a fatal error leaves ONLY
           // the unsent remainder in the draft (early-return so the end-of-submit
           // clear never wipes it).
-          const r = await sendPacedBody(key, key, networkSlug, channelName, cmd.body, false);
+          // #723 — the residue stays in THIS window and this window IS the
+          // target, so the bare remainder resends correctly: no prefix.
+          const home = { key, resubmitPrefix: "" };
+          const r = await sendPacedBody(home, home, networkSlug, channelName, cmd.body, false);
           if ("error" in r) return r;
           result = r;
           break;
@@ -463,7 +482,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "me": {
           // CTCP ACTION framing per line: \x01ACTION <text>\x01. Same #666
           // resumable + paced fan-out as privmsg.
-          const r = await sendPacedBody(key, key, networkSlug, channelName, cmd.body, true);
+          //
+          // #723 — the remainder must resend as an ACTION, not as plain text:
+          // the residue carries the `/me ` back with it.
+          const home = { key, resubmitPrefix: "/me " };
+          const r = await sendPacedBody(home, home, networkSlug, channelName, cmd.body, true);
           if ("error" in r) return r;
           result = r;
           break;
@@ -647,8 +670,16 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/msg: network not found" };
           if (isServicesSender(cmd.target)) {
-            // #666 — resumable + paced; residue keyed on the source window `key`.
-            const svc = await sendPacedBody(key, key, networkSlug, cmd.target, cmd.body, false);
+            // #666 — resumable + paced; residue keyed on the source window
+            // `key`, because a services target opens no query window to move
+            // it to.
+            //
+            // #723 — that window is NOT the target, so the remainder must keep
+            // its `/msg <service> `. A bare residue here is how a partially
+            // sent `/msg nickserv IDENTIFY <pass>` ends up resent to the
+            // channel the operator typed it in.
+            const home = { key, resubmitPrefix: `/msg ${cmd.target} ` };
+            const svc = await sendPacedBody(home, home, networkSlug, cmd.target, cmd.body, false);
             if ("error" in svc) return svc;
             result = svc;
             break;
@@ -674,10 +705,12 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // #723 — a preference, not a seizure: a half-typed draft already in
           // that window belongs to the operator, so sendPacedBody refuses the
           // redirect and keeps the remainder in `key`. Either way exactly one
-          // window ends up holding it.
+          // window ends up holding it — and in the source window it keeps its
+          // `/msg <peer> `, so resending from a channel cannot spill a private
+          // message into that channel.
           const r = await sendPacedBody(
-            key,
-            channelKey(networkSlug, canonical),
+            { key, resubmitPrefix: `/msg ${canonical} ` },
+            { key: channelKey(networkSlug, canonical), resubmitPrefix: "" },
             networkSlug,
             canonical,
             cmd.body,

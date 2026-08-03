@@ -27507,8 +27507,33 @@ two texts the operator never asked to join. Falling back to `source` keeps both
 texts intact and still leaves the remainder in exactly one place. The cost is
 that the remainder is then NOT where the operator is looking, so the error copy
 stops saying "the rest are in the box" (a lie in that case) and names the
-window they sent from — the log-honesty rule applied to operator-facing copy.
+window they sent from, at any body length — the log-honesty rule applied to
+operator-facing copy. The "sent N of M lines" detail stays multi-line-only, so
+#342's copy for a single throttled send is untouched.
 
-**Scope.** cic-only, no wire change. The privmsg / me / services arms pass
-`(key, key)` and behave exactly as before; only the `/msg` redirect has two
-distinct keys, which is the only place the ownership question exists.
+**Leg three, found in review: ownership is not enough — the residue must be
+RESENDABLE where it lands.** The first cut of the fallback wrote the bare
+remainder into the source window. That window is a CHANNEL, so hitting Enter
+would have PRIVMSG'd a private message to the channel: a worse bug than the
+duplicate it replaced. Chasing the general rule found the same shape already
+shipped in two other arms — `/msg nickserv IDENTIFY <pass>` failing mid-send
+left the bare credential in the channel composer, and a partial `/me` left the
+remainder as plain text, silently downgrading the ACTION.
+
+So the residue's home is a window PLUS the text that must precede the remainder
+for a plain resubmit from that window to reproduce the sends still owed:
+`""` where the window is itself the target (the #666 case), `/me ` for an
+action, `/msg <nick> ` anywhere the target is someone else. Empty residue still
+writes an empty draft — never a bare prefix the operator has to erase.
+
+**Known holes, deliberate.** (1) The owner is resolved ONCE, so text typed into
+the preferred window DURING a long 429-paced drain is still overwritten;
+per-tick resolution trades that for hopping windows mid-drain, which is worse.
+(2) A remainder whose first line begins with `/` resubmits as a slash command;
+that stumbles into an "unknown command" error rather than sending, so it is a
+nuisance, not a leak.
+
+**Scope.** cic-only, no wire change. The privmsg arm carries an empty prefix
+and behaves exactly as before; /me and the services arm gain the re-addressing
+they always needed; only the `/msg` redirect has two distinct homes, which is
+the only place the ownership question exists.

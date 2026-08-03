@@ -948,10 +948,12 @@ describe("compose submit — slash command dispatch", () => {
 
   // #723 — when the query window is BUSY the redirect is refused outright and
   // the source keeps ownership of the residue: the operator's text is never
-  // destroyed, and the remainder still has exactly one home. The error copy
-  // must say WHERE it went (log-honesty) — "in the box" is a lie when the
-  // operator is now looking at a different composer.
-  it("#723 — a partial /msg into a busy query window keeps the residue in the source", async () => {
+  // destroyed, and the remainder still has exactly one home. It comes back
+  // RE-ADDRESSED — a bare remainder in a CHANNEL composer would resend the
+  // private message to the channel. The error copy must say where it went
+  // (log-honesty) — "in the box" is a lie when the operator is now looking at
+  // a different composer.
+  it("#723 — a partial /msg into a busy query window keeps the residue in the source, re-addressed", async () => {
     localStorage.setItem("grappa-token", "tok");
     const sb = await import("../lib/scrollback");
     const api = await import("../lib/api");
@@ -971,10 +973,98 @@ describe("compose submit — slash command dispatch", () => {
     const result = await compose.submit(source, "freenode", "#a");
 
     expect(compose.getDraft(query)).toBe("half typed reply");
-    expect(compose.getDraft(source)).toBe("l2\nl3");
+    expect(compose.getDraft(source)).toBe("/msg bob l2\nl3");
     expect(result).toHaveProperty("error");
     expect((result as { error: string }).error).toContain("sent 1 of 3 lines");
     expect((result as { error: string }).error).not.toContain("in the box");
+
+    // The whole point of the prefix: resending from the CHANNEL still reaches
+    // bob. Bare "l2\nl3" here would have spilled a private message into #a.
+    vi.mocked(sb.sendMessage).mockReset();
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    await compose.submit(source, "freenode", "#a");
+    expect(vi.mocked(sb.sendMessage).mock.calls.map((c) => [c[1], c[2]])).toEqual([
+      ["bob", "l2"],
+      ["bob", "l3"],
+    ]);
+  });
+
+  // #723 — a relocated remainder is announced even for a single-line body.
+  // The "sent N of M lines" detail stays multi-line-only (#342's throttle copy
+  // for a lone send), but "your text moved to another window" is news at any
+  // length.
+  it("#723 — a single-line /msg into a busy query window says where the text went", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const api = await import("../lib/api");
+    const compose = await import("../lib/compose");
+    const source = channelKey("freenode", "#a");
+    const query = channelKey("freenode", "bob");
+
+    vi.mocked(sb.sendMessage).mockRejectedValue(new api.ApiError(400, "invalid_line"));
+
+    compose.setDraft(query, "half typed reply");
+    compose.setDraft(source, "/msg bob hi");
+    const result = await compose.submit(source, "freenode", "#a");
+
+    expect(compose.getDraft(query)).toBe("half typed reply");
+    expect(compose.getDraft(source)).toBe("/msg bob hi");
+    expect((result as { error: string }).error).toContain("the window you sent from");
+    expect((result as { error: string }).error).not.toContain("lines");
+  });
+
+  // #723, same class — a services target opens NO query window, so the residue
+  // always stays in the channel the operator typed it in. Bare, it resends the
+  // credential to that channel. This is the leak that made the re-addressing
+  // rule general rather than a patch on the /msg fallback.
+  it("#723 — a partial /msg to a service keeps its /msg <service> (no channel spill)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const api = await import("../lib/api");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+
+    vi.mocked(sb.sendMessage).mockRejectedValue(new api.ApiError(400, "invalid_line"));
+
+    compose.setDraft(k, "/msg nickserv IDENTIFY s3cret");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(result).toHaveProperty("error");
+    expect(compose.getDraft(k)).toBe("/msg nickserv IDENTIFY s3cret");
+
+    // Resending goes to the service, never to #a.
+    vi.mocked(sb.sendMessage).mockReset();
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    await compose.submit(k, "freenode", "#a");
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "nickserv", "IDENTIFY s3cret");
+  });
+
+  // #723, same class — an ACTION remainder left bare resends as plain text,
+  // silently downgrading the message kind.
+  it("#723 — a partial /me keeps its /me so the remainder resends as an ACTION", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const api = await import("../lib/api");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+
+    let n = 0;
+    vi.mocked(sb.sendMessage).mockImplementation(async () => {
+      n += 1;
+      if (n === 2) throw new api.ApiError(400, "invalid_line");
+      return undefined as never;
+    });
+
+    compose.setDraft(k, "/me waves\nthen bows");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(result).toHaveProperty("error");
+    expect(compose.getDraft(k)).toBe("/me then bows");
+
+    vi.mocked(sb.sendMessage).mockReset();
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    await compose.submit(k, "freenode", "#a");
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01ACTION then bows\x01");
   });
 
   // UX-4 bucket G — `/msg <Xserv> <text>` sends the wire frame but
