@@ -1285,6 +1285,33 @@ TEST(a_message_to_ourselves_stays_in_the_own_nick_window) {
     free_app(app);
 }
 
+TEST(a_query_is_never_asked_for_a_member_list) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    /* A query has no members, so asking the channel-members endpoint
+     * about one earns a 204 and the client used to report "members for
+     * sarabean are not seeded yet" — a sentence about a roster that is
+     * not late but does not exist. /members built its job inline and so
+     * skipped the guards entirely; both spellings share this door now. */
+    size_t queued = app->jobs_tail;
+    enqueue_members(app, "azzurra", "sarabean", false);
+    CHECK_LONG(app->jobs_tail, queued); /* queue untouched */
+
+    /* Typed out loud, answered out loud: silence would be
+     * indistinguishable from a command that did not run. */
+    enqueue_members(app, "azzurra", "sarabean", true);
+    CHECK_LONG(app->jobs_tail, queued);
+    CHECK(logged_with_scope(app, "sarabean", "not a channel"));
+
+    /* A real channel still goes through, both ways. */
+    enqueue_members(app, "azzurra", "#grappa", false);
+    CHECK_LONG(app->jobs_tail, queued + 1);
+    /* And the local windows keep their own exemption. */
+    enqueue_members(app, "azzurra", "$server", true);
+    CHECK_LONG(app->jobs_tail, queued + 1);
+    free_app(app);
+}
+
 TEST(the_admin_uploads_tab_totals_the_bytes_field) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -1980,7 +2007,7 @@ TEST(a_client_local_window_is_never_fetched_from_the_server) {
 
     /* Neither door queues a job for it. */
     enqueue_fetch(app, "azzurra", "$llm");
-    enqueue_members(app, "azzurra", "$llm");
+    enqueue_members(app, "azzurra", "$llm", false);
     CHECK_LONG(app->jobs_head, app->jobs_tail); /* queue untouched */
 
     /* A real channel still goes. */
@@ -3588,6 +3615,7 @@ int main(void) {
     RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);
     RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
     RUN(audio_is_classified_before_the_uploads_heuristic);
+    RUN(a_query_is_never_asked_for_a_member_list);
     RUN(a_fetched_inbound_dm_lands_in_the_senders_window_not_our_own);
     RUN(a_message_to_ourselves_stays_in_the_own_nick_window);
     RUN(an_away_mention_is_replayed_in_the_window_it_was_said_in);

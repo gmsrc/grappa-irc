@@ -2767,7 +2767,8 @@ static bool roster_rename_locked(struct window *w, const char *from, const char 
     return false;
 }
 
-static void enqueue_members(struct app *app, const char *network, const char *channel);
+static void enqueue_members(struct app *app, const char *network, const char *channel,
+                            bool announce);
 
 /* Apply one presence row to the rosters it touches. `channel` is the row's
  * own channel; QUIT and NICK are network-wide, so they sweep every window
@@ -2810,7 +2811,7 @@ static void apply_membership_event(struct app *app, const char *network, const c
         if (touched) sort_members_locked(app, w->network, w->members, w->member_count);
     }
     pthread_mutex_unlock(&app->lock);
-    if (refetch) enqueue_members(app, network, channel);
+    if (refetch) enqueue_members(app, network, channel, false);
 }
 
 /* Sigil for the highest-ranked prefix a member holds. Defaults match the
@@ -11577,12 +11578,33 @@ static void enqueue_fetch(struct app *app, const char *network, const char *chan
     enqueue_job(app, job);
 }
 
-static void enqueue_members(struct app *app, const char *network, const char *channel) {
+/* Ask for a window's member list.
+ *
+ * `announce` false is the automatic path (focus, a MODE) and stays
+ * silent; true is /members, which the user typed and therefore expects
+ * an answer to — including when the answer is "not that kind of
+ * window".
+ *
+ * THE one door. /members used to build this job inline, which meant it
+ * skipped the local-window guard here and asked the channel-members
+ * endpoint about a QUERY: a query has no members, so the server
+ * answered 204 and the client reported "members for sarabean are not
+ * seeded yet" — a sentence about a roster that is not late but does not
+ * exist. Two spellings of the same request is how one of them ends up
+ * without the guard. */
+static void enqueue_members(struct app *app, const char *network, const char *channel,
+                            bool announce) {
     if (!network[0] || !channel[0] || is_local_window(channel)) return;
+    if (!is_channel_name(channel)) {
+        /* A query is two people; there is nobody to list. Said out loud
+         * only when it was asked for out loud. */
+        if (announce) log_line(app, "%s is a query, not a channel — it has no member list", channel);
+        return;
+    }
     struct job job = { .kind = JOB_MEMBERS };
     snprintf(job.network, sizeof(job.network), "%s", network);
     snprintf(job.channel, sizeof(job.channel), "%s", channel);
-    snprintf(job.arg1, sizeof(job.arg1), "quiet");
+    if (!announce) snprintf(job.arg1, sizeof(job.arg1), "quiet");
     enqueue_job(app, job);
 }
 
@@ -11600,7 +11622,7 @@ static void ensure_roster(struct app *app, const char *network, const char *chan
         }
     }
     pthread_mutex_unlock(&app->lock);
-    if (empty) enqueue_members(app, network, channel);
+    if (empty) enqueue_members(app, network, channel, false);
 }
 
 static void enqueue_send(struct app *app, const char *network, const char *channel, const char *body) {
@@ -16803,9 +16825,12 @@ static void handle_command_dispatch(struct app *app, char *line) {
         ws_push_user(app, "names", payload);
         free(chan); free(origin); free(payload);
     } else if (strcmp(line, "/members") == 0 || strcmp(line, "/users") == 0) {
-        struct job job = { .kind = JOB_MEMBERS };
-        current_window_key(app, job.network, sizeof(job.network), job.channel, sizeof(job.channel));
-        enqueue_job(app, job);
+        char net_now[MAX_SLUG], chan_now[MAX_CHANNEL];
+        current_window_key(app, net_now, sizeof(net_now), chan_now, sizeof(chan_now));
+        /* Through the same door the automatic path uses, so the guards
+         * cannot apply to one spelling of this request and not the
+         * other. Announcing, because the user typed it. */
+        enqueue_members(app, net_now, chan_now, true);
     } else if (strncmp(line, "/topic", 6) == 0) {
         const char *rest = line + 6;
         while (*rest == ' ') rest++;
