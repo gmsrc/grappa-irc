@@ -2,11 +2,11 @@ import { registerSW } from "virtual:pwa-register";
 import { Route, Router, useNavigate } from "@solidjs/router";
 import { type Component, createEffect, createSignal, type JSX, Show } from "solid-js";
 import { render } from "solid-js/web";
+import BootErrorBoundary from "./BootErrorBoundary";
 import InstallSplash, { INSTALL_CHOICE_KEY, shouldShowInstallSplash } from "./InstallSplash";
 import Login from "./Login";
 import { me } from "./lib/api";
 import { bootstrapAuth, isAuthenticated, token } from "./lib/auth";
-import BootErrorBoundary from "./BootErrorBoundary";
 import { moduleRoot } from "./lib/moduleRoot";
 import ShareConsume from "./ShareConsume";
 // Side-effect-only: registers the WS subscribe createRoot so per-
