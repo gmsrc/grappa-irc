@@ -27427,31 +27427,41 @@ user tuning their away grace must not silently retune when their client reloads.
 **Below the dwell the banner keeps the case, unchanged.** The operator is right
 there and owns the timing.
 
-**Decided, and the answer is nothing (owner, 2026-08-03).** The question was
-whether an applied auto-refresh should announce itself afterwards. A persistent
-banner is out — it would hand the operator something to close, which is the
-annoyance this feature exists to remove. A toast would have to be
-self-expiring, and only if that were cheap.
+**Decided: this ships silent, the notice is deferred to #775 (owner,
+2026-08-03).** The question was whether an applied auto-refresh should announce
+itself afterwards. A persistent banner is out — it would hand the operator
+something to close, which is the annoyance this feature exists to remove.
+Whatever announces has to auto-dismiss.
 
-It is not cheap, so nothing ships. The only self-expiring toast surface is
-#247's, and its queue lives inside `notifyWatch.ts` as
-`PresenceToast = transition | error`, each variant carrying `networkId` /
-`nick` / `presence` / `detail`, cleared on identity switch alongside the watch
-list. Adding a `bundle` variant is precisely the "shared data model with a type
-flag" this file forbids: the update notice would live in the /notify module,
-where nobody will look for it, and would vanish on an identity switch for
-reasons that have nothing to do with bundles. The clean route — extract a
-generic toast store and surface, then migrate #247 onto it, since leaving two
-toast systems is the half-migrated state — means reworking shipped, tested code
-to serve a nice-to-have.
+**The toast surface is NOT the cost — it is already built and already
+mounted.** `notifyWatch.ts` holds a self-expiring, click-to-dismiss toast
+store; `PresenceToasts.tsx` renders it; `Shell.tsx` mounts it in BOTH layouts
+(`:512` desktop, `:761` mobile), with the expiry timer, the stacking, the
+`role="status"` / `aria-live="polite"` semantics and the CSS all done. Those
+are the expensive parts of a toast and none of them need building. An earlier
+reading of this entry priced them as unpaid; that was wrong.
 
-Independently of the surface, the notice would also need to survive the reload
-that triggers it: a marker written before `performRefresh` and read-and-cleared
-at boot, with its own way to strand (marker written, navigation declined, a
-stale toast fires later). Two moving parts for a courtesy message.
+What stands is the coupling, not the cost. That queue is typed on presence
+semantics — `PresenceToast = transition | error`, each variant carrying
+`networkId` / `nick` / `presence` / `detail`, cleared on identity switch
+alongside the watch list. Adding a `bundle` variant is precisely the "shared
+data model with a type flag" this file forbids: the update notice would live in
+the /notify module, where nobody will look for it, and would vanish on an
+identity switch for reasons that have nothing to do with bundles. So the route
+is the other one — **extract a generic toast store + surface, then migrate
+#247's presence toasts onto it** (reuse the verbs, not the nouns; leaving two
+toast systems is the half-migrated state this file also forbids). That
+extraction is approved.
 
-If a generic toast surface ever lands for another reason, this becomes a
-two-line producer and is worth revisiting. Until then, the reload is silent.
+The genuinely expensive half is the reload. The notice has to survive the
+refresh that causes it: a marker written before `performRefresh`,
+read-and-cleared at boot, with its own way to strand — marker written,
+navigation declined, a stale toast fires later out of context. That is the real
+design work here, and it is why the notice does not ride along with the refresh
+itself.
+
+**Filed as #775**, which owns the extraction, the #247 migration and the
+cross-reload marker. Until it lands, the reload is silent.
 
 **Known, filed separately:** compose drafts live in `identityScopedStore`
 signals with no storage backing, so every reload already discards them — the
