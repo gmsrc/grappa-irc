@@ -25,12 +25,18 @@
 setup() {
     REPO_SRC="$BATS_TEST_DIRNAME/../.."
     BOX="$BATS_TEST_TMPDIR/box"
-    mkdir -p "$BOX/infra/docker" "$BOX/infra/lib" "$BOX/infra"
+    mkdir -p "$BOX/infra/docker" "$BOX/infra/lib" "$BOX/infra/packaging" "$BOX/infra"
 
     cp "$REPO_SRC/infra/docker/deploy.sh" "$BOX/infra/docker/"
     cp "$REPO_SRC/infra/lib/deploy_common.sh" "$BOX/infra/lib/"
     cp "$REPO_SRC/infra/nginx-tls-frontend.example.conf" "$BOX/infra/"
     cp "$REPO_SRC/.env.example" "$BOX/.env.example"
+    # The REAL version carrier + extractor (#538/#652): source mode derives
+    # GRAPPA_VERSION from them at init, so the cic build the prod profile pulls
+    # in gets a real number instead of refusing to start (#692).
+    cp "$REPO_SRC/VERSION" "$BOX/VERSION"
+    cp "$REPO_SRC/infra/packaging/version.sh" "$BOX/infra/packaging/version.sh"
+    chmod +x "$BOX/infra/packaging/version.sh"
     # Preflight checks its presence, and the ownership guard reads the
     # pinned container names out of it — those pins are what makes two
     # checkouts collide on one docker daemon (#485 dropped the nginx one).
@@ -54,6 +60,14 @@ EOF
 printf 'docker' >> "$ARGV_LOG"
 for a in "\$@"; do printf ' %q' "\$a" >> "$ARGV_LOG"; done
 printf '\n' >> "$ARGV_LOG"
+# Record the value a cic build would actually SEE. compose passes
+# \`GRAPPA_VERSION: \${GRAPPA_VERSION:-}\` through from this environment — the
+# prod profile pulls the cicchetto-build oneshot in via depends_on, so \`up -d\`
+# counts as a cic build launch just like an explicit run does (#692).
+case "\$*" in
+    *cicchetto-build*|*"up -d"*)
+        printf 'env GRAPPA_VERSION=%s\n' "\${GRAPPA_VERSION:-}" >> "$ARGV_LOG" ;;
+esac
 if [ "\$1" = inspect ]; then
     [ -n "\${FAKE_OWNER_DIR:-}" ] || exit 1
     printf '%s\n' "\$FAKE_OWNER_DIR"
@@ -74,6 +88,14 @@ stub_docker_failing_on() {
 printf 'docker' >> "$ARGV_LOG"
 for a in "\$@"; do printf ' %q' "\$a" >> "$ARGV_LOG"; done
 printf '\n' >> "$ARGV_LOG"
+# Record the value a cic build would actually SEE. compose passes
+# \`GRAPPA_VERSION: \${GRAPPA_VERSION:-}\` through from this environment — the
+# prod profile pulls the cicchetto-build oneshot in via depends_on, so \`up -d\`
+# counts as a cic build launch just like an explicit run does (#692).
+case "\$*" in
+    *cicchetto-build*|*"up -d"*)
+        printf 'env GRAPPA_VERSION=%s\n' "\${GRAPPA_VERSION:-}" >> "$ARGV_LOG" ;;
+esac
 for a in "\$@"; do
   [ "\$a" = "$1" ] && exit 1
 done
@@ -201,6 +223,14 @@ EOF
     themes_line="$(grep -n 'grappa.seed_themes' "$ARGV_LOG" | head -n1 | cut -d: -f1)"
     up_line="$(grep -n 'up -d' "$ARGV_LOG" | head -n1 | cut -d: -f1)"
     [ -n "$themes_line" ] && [ -n "$up_line" ] && [ "$themes_line" -lt "$up_line" ]
+}
+
+@test "install: the stack comes up carrying GRAPPA_VERSION from the VERSION file (#692)" {
+    run "$DEPLOY" install
+    [ "$status" -eq 0 ]
+    # Exact value, not just "non-empty": the bundle bakes it into
+    # <meta cicchetto-version>, so a wrong number is as bad as a missing one.
+    grep -Fqx "env GRAPPA_VERSION=$(cat "$BOX/VERSION")" "$ARGV_LOG"
 }
 
 @test "install: a theme seeding failure is a warning, not a failed install" {

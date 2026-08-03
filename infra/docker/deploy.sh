@@ -103,6 +103,19 @@ if [ "$DEPLOY_MODE" = source ]; then
 	# Pin to the committed compose file only — no override auto-merge.
 	# Every compose invocation reuses this array.
 	COMPOSE=(docker compose -f compose.yaml)
+	# #538/#652 — vite bakes GRAPPA_VERSION into <meta cicchetto-version> and
+	# REFUSES to build without it. The cicchetto-build container mounts only
+	# ./cicchetto, so it cannot read the repo-root VERSION file itself: the
+	# wrapper must derive it and compose passes it through (compose.yaml
+	# `GRAPPA_VERSION: ${GRAPPA_VERSION:-}`). Derived ONCE here rather than at
+	# the cic hook because TWO paths reach that build — `update`'s cold
+	# substrate_cic runs it explicitly, and `install`'s `--profile prod up -d`
+	# pulls it in through grappa's depends_on — and a third would drift again
+	# (#692: the installer was the one wrapper that never got the export, so
+	# every self-hosted install/update that reached a cic build died).
+	GRAPPA_VERSION="$(infra/packaging/version.sh)" \
+		|| die "could not derive the version from $REPO_ROOT/VERSION — is this a complete checkout?"
+	export GRAPPA_VERSION
 else
 	# ---- release-image mode: checkout-less, docker-only ---------------
 	# State (the prod env file, with every secret) lives per-user so the

@@ -26928,3 +26928,48 @@ A unit-tested branch behind a guard no caller satisfies reads as working code.
 And when a spec cites a protocol value, verify the value has arrived by the time
 you need it: "use the advertised NICKLEN" is unimplementable at 433 time, and
 the echo was the honest substitute sitting in the same line.
+
+## 2026-08-03 — #692: the cic-build version export is derived once per wrapper, and drift is a test
+
+**What broke.** `infra/docker/deploy.sh` — the self-hoster `install`/`update`
+path — never exported `GRAPPA_VERSION`. Since the #538/#652 guard landed in
+`cicchetto/vite.config.ts` (refuse to bake an empty `<meta cicchetto-version>`
+rather than ship a lying version), every self-hosted deploy that reached a cic
+build died. Nine other wrappers export it; the installer was the one that was
+missed, and nothing in CI exercised it, so it surfaced on a real box.
+
+**Two doors, not one.** The issue named `substrate_cic` (the `update` cold
+path's explicit `run --rm cicchetto-build`). `install` reaches the same oneshot
+by a different route: `--profile prod up -d` without `--no-deps`, where
+compose.yaml's grappa `depends_on: cicchetto-build` pulls it in as the
+safety net. Patching the hook would have left `install` broken — so the derive
+lands ONCE in the source-mode init block, next to `COMPOSE=(...)`, where every
+compose invocation in the script inherits it. Release-image mode does not
+derive: it has no checkout to read `VERSION` from, and the SPA is baked into
+the published image.
+
+**Why no shared helper.** The derive+export pair is now in ten places, which
+reads like a refactor waiting to happen. It is not one: the copies live in bash
+(`scripts/*.sh`), POSIX sh (the FreeBSD jail — no bash port), a `Dockerfile`
+RUN layer and a PKGBUILD `build()`. No sourceable shim spans those four, and
+`infra/docker/deploy.sh` is deliberately standalone (it does not source
+`scripts/_lib.sh`, by design — it is the vanilla-box path). The real cost of
+the duplication is drift, so the cure is a guard, not a tenth file:
+`test/infra/cic_version_export_test.bats` pins the known roster (fails when an
+export is REMOVED) and rediscovers launchers from what they invoke (fails when
+one is ADDED without the export — exactly this bug). It proves itself RED
+against a synthetic launcher, because a guard that cannot fail guards nothing.
+
+**Fake repos got more real.** The `deploy_docker_*` bats harnesses build a
+throwaway checkout that copied `deploy.sh` and `deploy_common.sh` and nothing
+else. A source-mode script that reads `VERSION` at init needs the real carrier
+and the real extractor in there — so both are now copied in, and the assertions
+compare against the file's actual contents rather than "non-empty": a wrong
+version bakes into the bundle just as badly as a missing one.
+
+**Apply:** when a guard is added at the LAST mile (the build refusing bad
+input), audit every wrapper that feeds it in the same change — the guard turns
+a silent wrong value into a hard failure, which is an improvement only for the
+paths someone remembered to fix. And when duplication spans languages that
+cannot share code, make the invariant testable instead of pretending a helper
+is possible.

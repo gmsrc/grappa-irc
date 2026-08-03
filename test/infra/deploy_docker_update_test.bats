@@ -36,10 +36,16 @@ setup() {
     # ---- throwaway upstream + clone ------------------------------------
     UPSTREAM="$BATS_TEST_TMPDIR/upstream"
     git init -q -b main "$UPSTREAM"
-    mkdir -p "$UPSTREAM/infra/docker" "$UPSTREAM/infra/lib" "$UPSTREAM/runtime" "$UPSTREAM/lib"
+    mkdir -p "$UPSTREAM/infra/docker" "$UPSTREAM/infra/lib" "$UPSTREAM/infra/packaging" \
+             "$UPSTREAM/runtime" "$UPSTREAM/lib"
     cp "$REPO_SRC/infra/docker/deploy.sh" "$UPSTREAM/infra/docker/deploy.sh"
     cp "$REPO_SRC/infra/lib/deploy_common.sh" "$UPSTREAM/infra/lib/deploy_common.sh"
-    chmod +x "$UPSTREAM/infra/docker/deploy.sh"
+    # The REAL version carrier + extractor (#538/#652): source mode derives
+    # GRAPPA_VERSION from them at init so every compose call inherits it, and a
+    # cic build with an empty value is refused by vite (#692).
+    cp "$REPO_SRC/VERSION" "$UPSTREAM/VERSION"
+    cp "$REPO_SRC/infra/packaging/version.sh" "$UPSTREAM/infra/packaging/version.sh"
+    chmod +x "$UPSTREAM/infra/docker/deploy.sh" "$UPSTREAM/infra/packaging/version.sh"
     # The ownership guard reads container_name out of compose.yaml.
     cat > "$UPSTREAM/compose.yaml" <<'EOF'
 services:
@@ -76,6 +82,12 @@ EOF
     cat > "$FAKE_DIR/docker" <<'EOF'
 #!/usr/bin/env bash
 printf 'docker %s\n' "$*" >> "$ARGV_LOG"
+# Record the value the cic build would actually SEE. compose passes
+# `GRAPPA_VERSION: ${GRAPPA_VERSION:-}` through from this environment, so an
+# unexported variable reaches vite empty and the build refuses to run (#692).
+case "$*" in
+    *cicchetto-build*) printf 'env GRAPPA_VERSION=%s\n' "${GRAPPA_VERSION:-}" >> "$ARGV_LOG" ;;
+esac
 if [ "$1" = inspect ]; then
     [ -n "${FAKE_OWNER_DIR:-}" ] || exit 1
     printf '%s\n' "$FAKE_OWNER_DIR"
@@ -182,6 +194,18 @@ run_update() {
     [ "$status" -eq 0 ]
     grep -q "up -d --force-recreate" "$ARGV_LOG"
     ! grep -q "exec -T grappa curl.*reload" "$ARGV_LOG"
+}
+
+@test "update: the cold cic rebuild carries GRAPPA_VERSION from the VERSION file (#692)" {
+    export PREFLIGHT_RC=3
+    commit_upstream lib/base.txt > /dev/null
+
+    run_update
+    [ "$status" -eq 0 ]
+    grep -q "run --rm cicchetto-build" "$ARGV_LOG"
+    # Exact value, not just "non-empty": the bundle bakes it into
+    # <meta cicchetto-version>, so a wrong number is as bad as a missing one.
+    grep -Fqx "env GRAPPA_VERSION=$(cat "$REPO_ROOT/VERSION")" "$ARGV_LOG"
 }
 
 @test "update: preflight non-verdict exit aborts and propagates the code" {
