@@ -1309,6 +1309,32 @@ TEST(stt_transcribes_and_dictate_types) {
  * app proves only that calloc zeroes memory — verified by flipping the
  * default to true, which left this test green. The claim is real but it
  * lives in the commit and the settings table, not here. */
+/* EVERY setting in the table must show a value, not a shrug.
+ *
+ * setting_value has a per-setting display chain and ended in a "?" for
+ * anything it did not name. call.base_url, call.ring, call.mode,
+ * call.video_codec and call.helper were all added to the table and to
+ * setting_raw and missed here — so /set listed five of them as `?`
+ * while saving and loading them perfectly, which reads as "the setting
+ * is gone" rather than "the panel does not know how to print it".
+ *
+ * Asserted over the whole table rather than for those five, because the
+ * next setting added is the one that gets missed the same way. */
+TEST(no_setting_displays_as_a_question_mark) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    settings_capture_defaults(app);
+    CHECK(settings_count() > 0);
+    for (size_t i = 0; i < settings_count(); i++) {
+        char shown[512] = "";
+        setting_value(app, SETTINGS[i].name, shown, sizeof(shown));
+        if (strcmp(shown, "?") == 0)
+            fprintf(stderr, "  setting %s displays as \"?\"\n", SETTINGS[i].name);
+        CHECK(strcmp(shown, "?") != 0);
+    }
+    free_app(app);
+}
+
 TEST(notifications_parse_refuse_and_persist) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -3109,6 +3135,7 @@ int main(void) {
     RUN(a_settings_menu_offers_what_the_setting_accepts);
     RUN(tab_cycles_through_the_media_in_this_window);
     RUN(stt_transcribes_and_dictate_types);
+    RUN(no_setting_displays_as_a_question_mark);
     RUN(notifications_parse_refuse_and_persist);
     RUN(a_configured_setting_survives_save_and_load);
     RUN(the_call_tile_map_is_parsed_or_rejected_whole);

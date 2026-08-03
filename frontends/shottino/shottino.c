@@ -9908,6 +9908,10 @@ static const struct setting_def *setting_find(const char *name) {
 /* Current value as text. `llm.token` is the one field that reports a
  * mask rather than itself — a listing that prints a secret is a listing
  * that puts it in the scrollback and the terminal's scrollback buffer. */
+
+/* Defined below; the display fallback reads the stored value. */
+static size_t setting_raw(struct app *app, const char *name, char *out, size_t out_sz);
+
 static void setting_value(struct app *app, const char *name, char *out, size_t out_sz) {
     if (strcmp(name, "mouse") == 0) snprintf(out, out_sz, "%s", app->mouse_enabled ? "on" : "off");
     else if (strcmp(name, "animate") == 0)
@@ -9973,7 +9977,20 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
         bot_dir_path(app, dir, sizeof(dir));
         snprintf(out, out_sz, "%.*s", (int)out_sz - 1, dir);
     }
-    else snprintf(out, out_sz, "?");
+    else {
+        /* NOT "?". A setting this function has no display case for still
+         * HAS a value — setting_raw knows it, because that is what gets
+         * written to disk — so falling back to it shows the truth
+         * instead of a shrug.
+         *
+         * The "?" was reached by every call.* setting: they were added
+         * to the table and to setting_raw, and the display chain was
+         * missed, so /set listed five settings as `?` while saving and
+         * loading them perfectly. A fallback that reads the stored value
+         * makes that class of omission invisible rather than confusing,
+         * and the panel is one place fewer to remember. */
+        setting_raw(app, name, out, out_sz);
+    }
 }
 
 /* The value as STORED, for writing back to disk.
