@@ -122,12 +122,14 @@ describe("#769 gap-probe provenance", () => {
 
     await loadInitialScrollback("net", "#p-initial");
 
+    // No `staleBearer` assertion here on purpose: this path has NO await
+    // between its `token()` capture and the probe, so the flag is
+    // structurally false and asserting it would prove nothing.
     expect(probes()).toHaveLength(1);
     expect(probes()[0]).toMatchObject({
       site: "initial-load",
       key: channelKey("net", "#p-initial"),
       anchor: 100,
-      staleBearer: false,
     });
   });
 
@@ -146,7 +148,7 @@ describe("#769 gap-probe provenance", () => {
 
     expect(probes().map((p) => [p.site, p.anchor])).toEqual([
       ["reconnect-refresh", 700],
-      ["jump-target", 500],
+      ["resolve-jump-target", 500],
     ]);
   });
 
@@ -175,10 +177,13 @@ describe("#769 gap-probe provenance", () => {
     releasePage(fullPage(501));
     await pending;
 
+    // The recorder's subject, not the leak's: that a continuation resuming
+    // past the purge is VISIBLE as one. Deliberately no assertion that the
+    // request reached the wire under the revoked bearer — that is the defect
+    // #769 exists to remove, and pinning it here would hand its fixer a red
+    // test to argue with.
     expect(trace().map((e) => e.event)).toEqual(["identity-purge", "probe"]);
     expect(probes()[0]).toMatchObject({ site: "reconnect-refresh", staleBearer: true });
-    // ...and it really did leave under the OLD bearer.
-    expect(countMessagesAfterSpy).toHaveBeenCalledWith("tok-a", "net", "#p-stale", 700);
   });
 
   it("records a detach as a purge with no surviving token", async () => {
@@ -186,8 +191,6 @@ describe("#769 gap-probe provenance", () => {
     // filters `null → tokB` (prev is null), so the switch leaves exactly ONE
     // purge entry, at the detach — anything stamped after it belongs to the
     // next identity's timeline.
-    await import("../scrollback");
-
     setMockToken(null);
     await Promise.resolve();
     setMockToken("tok-b");

@@ -34,15 +34,16 @@ import { getResumeCursor, recordSeen } from "./reconnectBackfill";
 // appear twice. `id` is monotonic per the schema's auto-increment column.
 //
 // Identity-scoped state via identityScopedStore (dup-A3 close): nine
-// resets registered (see the registration block below). The factory
-// preserves the A1 invariant — registration runs before any verb fires,
-// so no rotation can be missed for want of a registered reset.
+// resets registered, plus the #769 purge stamp that resets nothing (see the
+// registration block below). The factory preserves the A1 invariant —
+// registration runs before any verb fires, so no rotation can be missed for
+// want of a registered reset.
 //
 // #769 — what that does NOT buy, and what this comment used to claim it
 // did ("a logout/rotation between `loadInitialScrollback` start and finish
 // always wins the race"): the resets clear STATE, they do not cancel a
-// verb already in flight. Every verb here captures `token()` at entry and
-// then awaits, and nothing re-checks it afterwards — so a continuation
+// verb already in flight. Every ASYNC verb here captures `token()` at entry
+// and then awaits, and nothing re-checks it afterwards — so a continuation
 // resuming past a rotation still holds the bearer it captured, and the
 // per-key in-flight guards that are NOT in the reset list (`refreshInFlight`,
 // `jumpInFlight`) still hold their keys. Ordering-with-cancellation was
@@ -156,33 +157,40 @@ const capScrollbackRing = (key: ChannelKey, rows: ScrollbackMessage[]): Scrollba
 // identity-purge stamp, so the ORDER of the entries IS the evidence: a probe
 // entry sitting after a purge entry is a verb that outlived the rotation.
 //
+// Read `staleBearer` as PRIMARY and the order as corroboration, not the other
+// way round: `token()` flips synchronously inside `setToken` while the purge
+// rides `createEffect(on(token))`, so there is a (small, Solid-flushes-at-
+// batch-end) window where a probe is already stale but the purge entry has
+// not landed yet.
+//
 // `staleBearer` is the comparison, not the token — no bearer material is
 // stored. Cost is one entry per cursor-present channel open (the probe is
 // already behind the load-once gate) plus one per identity transition; the
 // ring is capped because a PWA stays open for days. Read by the e2e spec on
 // failure and by `probeProvenance.test.ts`; production never reads it —
-// mirror of the #552 `__cic_scrollbackRefreshed` seam below.
-export type ProbeSite = "initial-load" | "reconnect-refresh" | "jump-target";
+// mirror of the #552 `__cic_scrollbackRefreshed` seam below. Unlike that
+// seam this one is a TRACE, not a synchronisation point: it exists to explain
+// #769 and should leave with it.
+export type ProbeSite = "initial-load" | "reconnect-refresh" | "resolve-jump-target";
 
-export type ProbeTraceEntry =
-  | {
-      event: "probe";
-      site: ProbeSite;
-      key: ChannelKey;
-      anchor: number;
-      staleBearer: boolean;
-      at: number;
-    }
-  | { event: "identity-purge"; hasToken: boolean; at: number };
+type ProbeTraceInput =
+  | { event: "probe"; site: ProbeSite; key: ChannelKey; anchor: number; staleBearer: boolean }
+  | { event: "identity-purge"; hasToken: boolean };
+
+export type ProbeTraceEntry = ProbeTraceInput & { at: number };
 
 const PROBE_TRACE_CAP = 200;
 
-const pushProbeTrace = (entry: ProbeTraceEntry): void => {
+// Timestamped HERE, not at the call site: an argument would be evaluated
+// before the `window` guard below (harmless — node has a global
+// `performance` — but the guard would only look protective), and stamp time
+// should be record time.
+const pushProbeTrace = (entry: ProbeTraceInput): void => {
   if (typeof window === "undefined") return;
   const w = window as Window & { __cic_scrollbackProbes?: ProbeTraceEntry[] };
   const ring = w.__cic_scrollbackProbes ?? [];
   w.__cic_scrollbackProbes = ring;
-  ring.push(entry);
+  ring.push({ ...entry, at: performance.now() });
   if (ring.length > PROBE_TRACE_CAP) ring.splice(0, ring.length - PROBE_TRACE_CAP);
 };
 
@@ -287,6 +295,8 @@ const exports = identityScopedStore((onIdentityChange) => {
   // + loadMore{InFlight,Exhausted} + loadNewer{InFlight,Exhausted}, #161) +
   // four signal flushes (scrollbackByChannel + lastOwnSend + ownSendSubmitted,
   // #580 + farBehindByChannel, #693). Order matches the pre-A3 inline shape.
+  // A tenth registration follows them, and it resets nothing: the #769 trace
+  // stamp, deliberately last so its entry means "every reset above has run".
   onIdentityChange(() => loadedChannels.clear());
   onIdentityChange(() => loadMoreInFlight.clear());
   onIdentityChange(() => loadMoreExhausted.clear());
@@ -296,14 +306,11 @@ const exports = identityScopedStore((onIdentityChange) => {
   onIdentityChange(() => setLastOwnSend(null));
   onIdentityChange(() => setOwnSendSubmitted(null));
   onIdentityChange(() => setFarBehindByChannel({}));
-  // #769 — stamped LAST, so the entry means "every reset above has run".
-  // `hasToken` separates the two transitions the factory fires on: a detach
+  // #769 — `hasToken` separates the two transitions the factory fires on: a detach
   // (rotation to null) from a straight rotation to another bearer. Note the
   // factory does NOT fire on `null → tokB`, so an A → detach → B switch
   // leaves exactly ONE purge entry, at the detach.
-  onIdentityChange(() =>
-    pushProbeTrace({ event: "identity-purge", hasToken: token() !== null, at: performance.now() }),
-  );
+  onIdentityChange(() => pushProbeTrace({ event: "identity-purge", hasToken: token() !== null }));
 
   // Insert an incoming message into the per-channel ascending list at its
   // (server_time, id) position, deduping by id. REST + WS can overlap: the
@@ -418,9 +425,16 @@ const exports = identityScopedStore((onIdentityChange) => {
   // at the read cursor), so a leaked probe could not be attributed without it.
   // It also names the caller in the failure warning below, which used to say
   // only which channel gave up.
+  //
+  // The sites are NOT symmetric, and reading the ring depends on knowing it:
+  // `initial-load` runs with NO await between its `token()` capture and this
+  // call (`getReadCursor` is a synchronous signal read), so its `staleBearer`
+  // is structurally always false — never read that as exculpatory. Only
+  // `reconnect-refresh` (awaits a page first) and `resolve-jump-target`
+  // (awaits two) can carry a bearer across a rotation.
   const probeGap = async (
-    site: ProbeSite,
     t: string,
+    site: ProbeSite,
     slug: string,
     name: string,
     anchor: number,
@@ -433,7 +447,6 @@ const exports = identityScopedStore((onIdentityChange) => {
       key: channelKey(slug, name),
       anchor,
       staleBearer: t !== token(),
-      at: performance.now(),
     });
     try {
       return await countMessagesAfter(t, slug, name, anchor);
@@ -515,7 +528,7 @@ const exports = identityScopedStore((onIdentityChange) => {
     if (cursor === null || cursor >= anchor) {
       return { missed: missedAtAnchor, resumeFrom: anchor };
     }
-    const missed = await probeGap("jump-target", t, slug, name, cursor);
+    const missed = await probeGap(t, "resolve-jump-target", slug, name, cursor);
     return missed === null
       ? { missed: missedAtAnchor, resumeFrom: anchor }
       : { missed, resumeFrom: cursor };
@@ -700,7 +713,7 @@ const exports = identityScopedStore((onIdentityChange) => {
         // The probe is ONE extra small GET per cursor-present channel-open,
         // behind the load-once gate, on a human click; the pane is empty here
         // so `anchorAtTail` has nothing to discard.
-        const gap = await probeGap("initial-load", t, slug, name, cursor);
+        const gap = await probeGap(t, "initial-load", slug, name, cursor);
         if (gap !== null && isFarBehind(gap)) {
           await anchorAtTail(t, slug, name, gap, cursor);
         } else {
@@ -1014,7 +1027,7 @@ const exports = identityScopedStore((onIdentityChange) => {
         // ordinary short-page reconnect, which is nearly all of them.
         const last = page[page.length - 1];
         const anchor = last ? last.id : cursor;
-        const gap = await probeGap("reconnect-refresh", t, slug, name, anchor);
+        const gap = await probeGap(t, "reconnect-refresh", slug, name, anchor);
         if (gap !== null && isFarBehind(gap)) {
           const target = await resolveJumpTarget(t, slug, name, anchor, gap);
           await anchorAtTail(t, slug, name, target.missed, target.resumeFrom);
