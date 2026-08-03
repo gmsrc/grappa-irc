@@ -28228,13 +28228,24 @@ next tenant's.
 after a failed APPEND it discards the pages already scrolled through. Naming
 the action beats implying it resumes what failed.
 
-**Ids are globally monotonic and invalidation DELETES.** `resetDirectory` and
-the identity-rotation reset drop the slug's entry rather than zeroing a
-counter, so an in-flight reply finds no match and dies. That also closes an
-unreported instance of the same class: a GET issued before the ✕ used to land
-after it and resurrect the page the close had just dropped. A per-slug counter
-reset to 0 could re-mint an id an older request still held — across an
-identity rotation, that is a cross-tenant write.
+**Ids are globally monotonic, and invalidation BURNS one rather than deleting
+it.** `resetDirectory` and the identity-rotation reset issue an id and hand it
+to nobody, so every reply already in flight finds no match and dies. That
+closes an unreported instance of the same class: a GET issued before the ✕
+used to land after it and resurrect the page the close had just dropped. A
+per-slug counter reset to 0 could re-mint an id an older request still held —
+across a rotation, a cross-tenant write.
+
+Deleting the entry (the first attempt, caught in the second review pass) is
+subtly wrong for the one verb that issues no id of its own. The refresh POST
+must not supersede a page GET, so it rides whatever the slug currently holds —
+and with delete-semantics "invalidated" and "never touched" are both *absent*,
+so a rejection landing after a close matched and parked copy on a dead pane.
+Burning an id distinguishes them without a second flag: absent now means only
+"nothing has ever touched this slug", where a refresh failure genuinely is the
+newest word and must surface. The alternative offered in review — drop the
+error when no id exists — closes the hole by re-swallowing a real failure,
+which is the defect this issue is about.
 
 **The debounce is in the pane, not the store.** It is input timing, and the
 store's `setQuery` must stay honest — awaiting a debounced verb that resolves

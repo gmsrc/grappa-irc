@@ -435,6 +435,27 @@ describe("channelDirectory store", () => {
       expect(directoryError("ord7")).toBeNull();
     });
 
+    test("a refresh rejection after the close is dropped even with no prior load", async () => {
+      // The slug holds no id at all (nothing was ever loaded), so the refresh
+      // captures `undefined`. Closing must still supersede it — otherwise
+      // "never touched" and "invalidated" read the same and the rejection
+      // parks copy on a pane that is gone.
+      const refresh = deferred<void>();
+      vi.spyOn(api, "refreshDirectory").mockReturnValueOnce(refresh.promise);
+      const pending = triggerRefresh("ord9");
+      resetDirectory("ord9");
+      refresh.reject(new api.ApiError(504, "session_timeout"));
+      await pending;
+
+      expect(directoryError("ord9")).toBeNull();
+    });
+
+    test("a refresh rejection with no prior load surfaces while the pane is live", async () => {
+      vi.spyOn(api, "refreshDirectory").mockRejectedValue(new api.ApiError(504, "session_timeout"));
+      await triggerRefresh("ord10");
+      expect(directoryError("ord10")).not.toBeNull();
+    });
+
     test("an append issued while a top-of-view GET is in flight is not sent", async () => {
       const spy = vi.spyOn(api, "listDirectory");
       spy.mockResolvedValueOnce(makePage({ total: 9, next_cursor: "CUR2" }));

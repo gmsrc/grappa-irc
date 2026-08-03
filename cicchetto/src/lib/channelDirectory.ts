@@ -49,7 +49,7 @@ type Snapshot = { id: number; page: api.DirectoryPage };
 //      no one to return an error to), so a rejection would be an unhandled
 //      rejection and a pane that renders nothing forever. Each verb catches,
 //      maps via friendlyApiError, and parks the copy in `errors[slug]` for
-//      the pane to render with a retry. "No silent-swallow at boundaries" —
+//      the pane to render with a reload. "No silent-swallow at boundaries" —
 //      caught here IS the surfacing, not a swallow. Only a successful ROW
 //      write clears that copy: the refresh POST merely asks the server to
 //      re-capture, so clearing on its 202 would drop the banner off a pane
@@ -69,7 +69,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const [loadingMore, setLoadingMore] = createSignal<Record<string, boolean>>({});
   // #732 — per-slug failure copy for the LAST request that was still current
   // when it settled. Every async verb in this module writes it; the pane
-  // renders it with a retry.
+  // renders it with a reload affordance.
   const [errors, setErrors] = createSignal<Record<string, string>>({});
 
   // #732 — request identity. `issued` is a single monotonic counter and
@@ -77,11 +77,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // response may write only while it still holds that id. Plain mutable
   // state, not a signal — request identity is bookkeeping, never rendered.
   //
-  // Monotonic-and-never-reused is what makes the identity-rotation and
-  // close-while-in-flight resets safe: they DELETE the slug's entry rather
-  // than zeroing it, so an in-flight response finds no match and drops.
-  // A per-slug counter reset to 0 could re-mint an id an older request still
-  // held — a cross-tenant write.
+  // Ids are globally monotonic and never reused, which is what makes the
+  // close-while-in-flight and identity-rotation resets safe: they burn an id
+  // nobody holds, so every response already out there finds no match and
+  // drops. A per-slug counter reset to 0 could re-mint an id an older request
+  // still held — across a rotation, a cross-tenant write.
   let issued = 0;
   const newest: Record<string, number> = {};
   const issue = (slug: string): number => {
@@ -89,13 +89,18 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     newest[slug] = issued;
     return issued;
   };
-  // Invalidate every response in flight for `slug` without issuing one.
+  // Supersede everything in flight for `slug`: an id is issued and handed to
+  // nobody. DELETING the entry instead would conflate "invalidated" with
+  // "never touched", and `isNewest(slug, undefined)` reads those the same —
+  // a refresh rejection arriving after the close would then park copy on a
+  // dead pane, which is the case this guard exists for.
   const invalidate = (slug: string): void => {
-    delete newest[slug];
+    issue(slug);
   };
-  // `id` is undefined only for a verb that runs without issuing one against a
-  // slug nothing has ever been issued for (a refresh POST before any load) —
-  // still "newest", since nothing has superseded it.
+  // `undefined` is a legitimate id: the verbs that do not issue one (the
+  // refresh POST) pass what the slug currently holds, and a slug NOTHING has
+  // ever touched holds nothing. Nothing has superseded it either, so its
+  // failure is still the newest word on that slug and must surface.
   const isNewest = (slug: string, id: number | undefined): boolean => newest[slug] === id;
 
   onIdentityChange(() => setPages({}));
@@ -189,6 +194,9 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       // keeps the id of the fetchInto that seeded it — an append extends that
       // request's result, it does not become a new one.
       setPages((prev) => {
+        // `isNewest` above already proves the base survived, but
+        // noUncheckedIndexedAccess types this read as possibly-undefined:
+        // the narrowing is a tsc obligation, not a runtime guard.
         const base = prev[slug];
         if (!base) return prev;
         return {
