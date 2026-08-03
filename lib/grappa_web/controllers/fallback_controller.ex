@@ -54,6 +54,7 @@ defmodule GrappaWeb.FallbackController do
            | :malformed_ident
            | :password_required
            | :passkey_required
+           | :passkey_not_configured
            | :password_mismatch
            | :network_not_visitor_enabled
            | :network_ambiguous
@@ -408,6 +409,16 @@ defmodule GrappaWeb.FallbackController do
     conn
     |> put_status(:conflict)
     |> json(%{error: "passkey_required"})
+  end
+
+  # The mirror of `passkey_required`: a ceremony was asked for by an account
+  # that holds no credential to answer it with. Same 409 — the request
+  # conflicts with the account's state, and registering a passkey resolves
+  # it.
+  def call(conn, {:error, :passkey_not_configured}) do
+    conn
+    |> put_status(:conflict)
+    |> json(%{error: "passkey_not_configured"})
   end
 
   # T31 admission errors. Status-code split:

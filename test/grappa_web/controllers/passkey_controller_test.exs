@@ -152,6 +152,24 @@ defmodule GrappaWeb.PasskeyControllerTest do
     decoded <> token
   end
 
+  # A mode change is proved with a passkey assertion, so an account holding
+  # no passkey cannot start one. That is a plain conflict with the account's
+  # state and the caller can act on it — but nothing mapped the error, so it
+  # fell out of the FallbackController as an unhandled clause and the door
+  # answered a 500. Reachable with two lines of client: create an account,
+  # ask for second_factor before registering anything.
+  test "asking for a ceremony with no passkey registered is a conflict, not a crash", %{conn: conn} do
+    {user, password} = user_fixture_with_password()
+    session = session_fixture(user)
+
+    response =
+      conn
+      |> put_req_header("authorization", "Bearer #{session.id}")
+      |> post("/me/passkeys/mode/options", %{"password" => password, "mode" => "second_factor"})
+
+    assert json_response(response, 409) == %{"error" => "passkey_not_configured"}
+  end
+
   # A bearer alone must never be enough to change HOW an account
   # authenticates, so every one of these doors re-asks for the password. The
   # check was open-coded four times over and not one of the four had a test

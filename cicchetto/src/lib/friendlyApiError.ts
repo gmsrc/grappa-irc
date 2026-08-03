@@ -68,6 +68,11 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
       // lock the account out. Name both exits — a bare refusal reads as a
       // dead end.
       return "That's your only passkey. Add another, or turn off passkey sign-in first.";
+    case "passkey_not_configured":
+      // 409 — the mirror of `passkey_required`: a ceremony was asked for by
+      // an account holding no credential to answer it with. Name the exit;
+      // the account is one registration away from the thing it asked for.
+      return "You don't have a passkey yet. Add one before changing how you sign in.";
     case "too_many_sessions":
       // U-3 (UD3): ip_cap_exceeded — this source IP already holds
       // its allotted session(s) for this network (`max_per_ip`,

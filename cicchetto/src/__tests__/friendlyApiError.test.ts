@@ -156,6 +156,9 @@ const CASES: Array<{ code: string; matches: RegExp; info?: Record<string, unknow
   // still enabled (`PasskeyController.delete/2`). The copy has to name the
   // two ways out, because the refusal is otherwise a dead end for the user.
   { code: "passkey_required", matches: /only passkey/i },
+  // 409 asking for a ceremony with nothing registered to answer it — the
+  // mirror of the above, and the door that used to answer 500.
+  { code: "passkey_not_configured", matches: /don't have a passkey yet/i },
 ];
 
 describe("friendlyApiError", () => {
