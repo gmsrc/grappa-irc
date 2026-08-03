@@ -326,6 +326,22 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // the channel.
   type ResidueHome = { key: ChannelKey; resubmitPrefix: string };
 
+  // …with one correction for the empty prefix: a residue whose first line
+  // starts with `/` is no longer plain text once it is alone in the box —
+  // `parseSlash` would DISPATCH it. A paste of "notes\n/quit" that dies on
+  // line 2 leaves `/quit`, and Enter parks every network and logs the operator
+  // out; `/msg <someone-else>` re-addresses the remainder to a third party.
+  // `//` is the literal-privmsg escape the parser already ships, and it only
+  // ever needs to cover the FIRST character: parseSlash reads the whole draft,
+  // decides once, and hands the rest back for the per-line fan-out. A non-empty
+  // prefix needs no escape — the residue is already an argument by then, so
+  // `/me /quit` sends the literal text.
+  const residueDraft = (home: ResidueHome, residue: string): string => {
+    if (residue === "") return "";
+    if (home.resubmitPrefix !== "") return `${home.resubmitPrefix}${residue}`;
+    return residue.startsWith("/") ? `/${residue}` : residue;
+  };
+
   // `source` is the window the operator submitted from; `preferred` is where
   // the remainder should surface — the same window for privmsg / me, the
   // freshly focused query window for /msg, which moves the operator's eyes
@@ -367,8 +383,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // Residue-only draft, reset to the live bottom (historyCursor null):
         // we're typing the remainder, not walking history. A drained send
         // leaves "" — never a bare prefix the operator would have to erase.
-        const draft = residue === "" ? "" : `${home.resubmitPrefix}${residue}`;
-        writeState(home.key, (s) => ({ ...s, draft, historyCursor: null }));
+        writeState(home.key, (s) => ({
+          ...s,
+          draft: residueDraft(home, residue),
+          historyCursor: null,
+        }));
       });
       return { ok: true };
     } catch (e) {
@@ -382,7 +401,10 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       const reason = friendlyError(e);
       const sentOf = totalCount > 1 ? ` — sent ${sentCount} of ${totalCount} lines` : "";
       if (home.key !== preferred.key) {
-        return { error: `${reason}${sentOf}; the rest are in the window you sent from` };
+        // "The rest" presumes something went out; on a single-line body
+        // nothing did, so name the whole message instead.
+        const what = totalCount > 1 ? "the rest are" : "your message is";
+        return { error: `${reason}${sentOf}; ${what} in the window you sent from` };
       }
       return totalCount > 1
         ? { error: `${reason}${sentOf}; the rest are in the box` }

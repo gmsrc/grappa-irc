@@ -27526,12 +27526,26 @@ for a plain resubmit from that window to reproduce the sends still owed:
 action, `/msg <nick> ` anywhere the target is someone else. Empty residue still
 writes an empty draft — never a bare prefix the operator has to erase.
 
-**Known holes, deliberate.** (1) The owner is resolved ONCE, so text typed into
-the preferred window DURING a long 429-paced drain is still overwritten;
-per-tick resolution trades that for hopping windows mid-drain, which is worse.
-(2) A remainder whose first line begins with `/` resubmits as a slash command;
-that stumbles into an "unknown command" error rather than sending, so it is a
-nuisance, not a leak.
+**Leg four, found in the re-review: an empty prefix is not always the right
+answer either.** A line that is plain text INSIDE a paste stops being plain
+text once it is alone in the box. Paste `notes` + `/quit`, lose the second
+line, and the residue is a bare `/quit` — Enter parks every network and logs
+the operator out. `/msg <someone-else>` re-addresses the remainder to a third
+party; `/me` silently changes the message kind. An earlier draft of this entry
+called that a nuisance rather than a leak, which was wrong: every one of those
+verbs is in `DISPATCH`.
+
+The parser already ships the escape — `//foo` is a literal privmsg of `/foo` —
+and it only ever has to cover the FIRST character, because `parseSlash` reads
+the whole draft, decides once, and hands the body back for the per-line
+fan-out. A non-empty prefix needs no escape: by then the residue is an
+argument, so `/me /quit` sends the literal text. So `residueDraft` is the one
+place that renders a residue for its home, and the empty-prefix case doubles a
+leading slash.
+
+**Known hole, deliberate.** The owner is resolved ONCE, so text typed into the
+preferred window DURING a long 429-paced drain is still overwritten; per-tick
+resolution trades that for hopping windows mid-drain, which is worse.
 
 **Scope.** cic-only, no wire change. The privmsg arm carries an empty prefix
 and behaves exactly as before; /me and the services arm gain the re-addressing

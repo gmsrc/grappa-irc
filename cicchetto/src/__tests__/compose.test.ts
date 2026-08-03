@@ -1039,6 +1039,75 @@ describe("compose submit — slash command dispatch", () => {
     expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "nickserv", "IDENTIFY s3cret");
   });
 
+  // #723, worst of the class — a residue that is plain text INSIDE a paste
+  // stops being plain text once it is alone in the box. "notes\n/quit" dying on
+  // line 2 used to leave a bare `/quit`, and Enter parked every network and
+  // logged the operator out. The `//` literal escape keeps it text.
+  it("#723 — a residue starting with / is escaped so resending sends text, not a command", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const api = await import("../lib/api");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+
+    let n = 0;
+    vi.mocked(sb.sendMessage).mockImplementation(async () => {
+      n += 1;
+      if (n === 2) throw new api.ApiError(400, "invalid_line");
+      return undefined as never;
+    });
+
+    compose.setDraft(k, "notes\n/quit");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(result).toHaveProperty("error");
+    expect(compose.getDraft(k)).toBe("//quit");
+
+    vi.mocked(sb.sendMessage).mockReset();
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    vi.mocked(api.patchNetwork).mockClear();
+    await compose.submit(k, "freenode", "#a");
+
+    // The line goes out as the literal text it was in the paste…
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "/quit");
+    // …and emphatically does NOT disconnect the operator: a dispatched /quit
+    // parks every network through this endpoint.
+    expect(api.patchNetwork).not.toHaveBeenCalled();
+  });
+
+  // #723 — the multi-line form of the same escape: only the FIRST character
+  // needs it, because parseSlash decides once for the whole draft and the
+  // per-line fan-out sends the rest verbatim.
+  it("#723 — the / escape covers only the first char; later slash lines stay verbatim", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const api = await import("../lib/api");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+
+    let n = 0;
+    vi.mocked(sb.sendMessage).mockImplementation(async () => {
+      n += 1;
+      if (n === 2) throw new api.ApiError(400, "invalid_line");
+      return undefined as never;
+    });
+
+    compose.setDraft(k, "notes\n/part #a\n/nick bob");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(result).toHaveProperty("error");
+    expect(compose.getDraft(k)).toBe("//part #a\n/nick bob");
+
+    vi.mocked(sb.sendMessage).mockReset();
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    await compose.submit(k, "freenode", "#a");
+
+    expect(vi.mocked(sb.sendMessage).mock.calls.map((c) => c[2])).toEqual([
+      "/part #a",
+      "/nick bob",
+    ]);
+  });
+
   // #723, same class — an ACTION remainder left bare resends as plain text,
   // silently downgrading the message kind.
   it("#723 — a partial /me keeps its /me so the remainder resends as an ACTION", async () => {
