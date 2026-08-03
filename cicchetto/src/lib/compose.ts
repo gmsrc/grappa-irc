@@ -421,7 +421,13 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     // pacing takes. Released in `finally` so a fatal mid-fan-out unlocks the
     // window too: a lock that outlives its drain leaves the composer dead
     // until reload, which is worse than the overwrite it prevents.
-    claimDrafts([key]);
+    // #737 × #723 — lock BOTH ends of the drain: the residue home, whose draft
+    // the pacing callback rewrites on every acked line, and the window the
+    // operator submitted from, so a second Enter there cannot start a rival
+    // drain that fans the same remainder out twice. They collapse to one key
+    // whenever the residue stays in the window it was typed in.
+    const locked = [...new Set([source.key, home.key])];
+    claimDrafts(locked);
     try {
       await sendBodyLines(slug, target, body, action, (sent, total, residue) => {
         sentCount = sent;
@@ -456,7 +462,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         ? { error: `${reason}${sentOf}; the rest are in the box` }
         : { error: reason };
     } finally {
-      releaseDrafts([key]);
+      releaseDrafts(locked);
     }
   };
 
