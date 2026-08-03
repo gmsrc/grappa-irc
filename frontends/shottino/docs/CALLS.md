@@ -485,12 +485,40 @@ remaining gap exactly:
 | bob | 2nd | 1 |
 | cid | 3rd | **2**, plus 109 decoded frames |
 
-Everyone subscribes to whoever was ALREADY publishing when they joined,
-so the last to arrive sees everyone and the first sees nobody. **The
-missing piece is a resubscribe loop** — periodically retry the peers
-that had no publisher. It fixes late joiners and channel members who
-join the call afterwards with one mechanism, which is why it is worth
-building deliberately rather than bolting on.
+Everyone subscribed to whoever was ALREADY publishing when they joined,
+so the last to arrive saw everyone and **the first saw nobody, for the
+whole call**. A subscribe refused with a 404 was final.
+
+**Fixed by the resubscribe loop.** Every five seconds one absent peer is
+asked again — round-robin, ONE per tick, because session_negotiate is
+synchronous and gathers ICE before it posts, so retrying a channel's
+worth of absent members in a single pass would stall the control verbs
+behind it. A query has one peer and so retries every interval; a large
+channel cycles.
+
+Success needs no further wiring: the new session's RTP starts arriving,
+the supervisor sees the packets on its next tick, and both mixes rebuild
+to include them. Verified against the live SFU with the first caller
+alone for fifteen seconds:
+
+```
+# subscribe 0: not in the call          <- the initial 404
+# subscribe 0: publishing VP8 (payload type 96)
+# subscribe 0: joined late
+{"event":"peer","value":"joined"}
+{"event":"tiles","value":"160x120;0,0,0,160,120"}
+# audio: mixing 1 voice
+```
+
+579 frames for the first caller where there had been none, with
+MediaMTX's log confirming both directions reading.
+
+One consequence worth spelling out: **the AUDIO mix had to become
+dynamic too.** It was built once at connect over a contiguous 0..n-1,
+so a peer who joined afterwards landed on a slot nobody had prepared
+and was audible to no one. Fixing only the subscribe would have given
+late joiners a picture and no voice. Both mixes are now owned by the
+same supervisor and rebuilt from whoever's RTP is actually arriving.
 
 ### Mixed-codec rooms
 

@@ -70,6 +70,11 @@
 #define CALL_TILE_TICK_SECS 1
 #define CALL_TILE_MISSES 3
 
+/* How often an absent peer is asked again. See the resubscribe loop:
+ * one peer per interval, so this is also the pace at which a channel's
+ * worth of absent members is cycled through. */
+#define CALL_RESUB_SECS 5
+
 /* How many pictures the mix will composite at once. NOT a layout limit
  * — the layout would happily fit four — but a MEASURED one.
  *
@@ -206,7 +211,7 @@ struct call {
      * Video is ONE tile, from the first peer. N tiles means a layout
      * policy in the draw path, and that is a deliberate next step
      * rather than something to guess at. */
-    struct media_leg recv_audio[CALL_MAX_PEERS];
+    struct media_mix amix;
     /* Video is ONE decoder for everybody, compositing the peers into a
      * single frame: the focused one full size with the rest as
      * thumbnails along the bottom. N decoders would be N processes and
@@ -228,6 +233,14 @@ struct call {
     unsigned long vseen[CALL_MAX_PEERS];
     int vmisses[CALL_MAX_PEERS];
     bool vlive[CALL_MAX_PEERS];
+    /* The same, for voices. The audio mix used to be built ONCE at
+     * connect over a contiguous 0..n-1, which meant a peer who joined
+     * afterwards landed on a slot nobody had prepared and was audible
+     * to nobody — half of what "the late joiner is not there" was. */
+    _Atomic unsigned long apkts[CALL_MAX_PEERS];
+    unsigned long aseen[CALL_MAX_PEERS];
+    int amisses[CALL_MAX_PEERS];
+    bool alive[CALL_MAX_PEERS];
     bool want_video;
     int frame_fd;
     /* Borrowed from main's frame, which outlives every thread here. The
@@ -274,7 +287,13 @@ static void RTC_API on_audio_rtp(int id, const char *msg, int size, void *ptr) {
     (void)id;
     struct session *s = ptr;
     if (size > 0 && s->slot >= 0 && s->slot < CALL_MAX_PEERS)
-        media_feed(&s->owner->recv_audio[s->slot], msg, (size_t)size);
+        {
+        struct call *c = s->owner;
+        c->apkts[s->slot]++;
+        if (pthread_mutex_trylock(&c->vlock) != 0) return;
+        media_feed(&c->amix.legs[s->slot], msg, (size_t)size);
+        pthread_mutex_unlock(&c->vlock);
+        }
 }
 
 static void RTC_API on_video_rtp(int id, const char *msg, int size, void *ptr) {
@@ -313,7 +332,7 @@ static void video_retile(struct call *c) {
         /* Nobody is sending a picture. The decoder is stopped rather
          * than left running on inputs that produce nothing, which is
          * what makes an audio-only participant cost nothing. */
-        media_stop_video_mix(&c->vmix);
+        media_mix_stop(&c->vmix);
         c->vmix.tile_count = 0;
         pthread_mutex_unlock(&c->vlock);
         emit_event("tiles", "value", "");
@@ -358,6 +377,29 @@ static void video_retile(struct call *c) {
         note("video: %d of %d pictures shown — the window has no room for more", drawn, n);
 }
 
+/* Rebuild the audio mix over whoever is actually speaking-capable.
+ *
+ * Same shape as video_retile and for the same reason: the set changes
+ * when somebody joins late or mutes their microphone at the source, and
+ * an ffmpeg amix stalls on an input that never delivers a frame. */
+static void audio_retile(struct call *c) {
+    int slots[CALL_MAX_PEERS];
+    int n = 0;
+    for (int i = 0; i < CALL_MAX_PEERS; i++)
+        if (c->alive[i]) slots[n++] = i;
+
+    pthread_mutex_lock(&c->vlock);
+    if (n == 0) {
+        media_mix_stop(&c->amix);
+        pthread_mutex_unlock(&c->vlock);
+        return;
+    }
+    bool ok = media_start_audio_mix(&c->amix, slots, n, c->cfg);
+    pthread_mutex_unlock(&c->vlock);
+    if (!ok) emit_event("error", "message", "cannot start audio playback (is ffmpeg installed?)");
+    else note("audio: mixing %d voice%s", n, n == 1 ? "" : "s");
+}
+
 /* Who is sending a picture right now, re-examined on a slow tick.
  *
  * Not derived from who CONNECTED: a peer whose camera is off is
@@ -370,25 +412,30 @@ static void video_retile(struct call *c) {
  * and dropped only after several quiet ticks. Adding late costs a
  * moment of missing thumbnail; dropping early costs a re-tile, and a
  * re-tile on every jittery second is worse than a stale tile. */
-static void video_supervise(struct call *c) {
-    if (!c->want_video) return;
+static bool liveness_step(_Atomic unsigned long *pkts, unsigned long *seen, int *misses,
+                          bool *live) {
     bool changed = false;
     for (int i = 0; i < CALL_MAX_PEERS; i++) {
-        unsigned long now = c->vpkts[i];
-        bool moving = now != c->vseen[i];
-        c->vseen[i] = now;
+        unsigned long now = pkts[i];
+        bool moving = now != seen[i];
+        seen[i] = now;
         if (moving) {
-            c->vmisses[i] = 0;
-            if (!c->vlive[i]) {
-                c->vlive[i] = true;
+            misses[i] = 0;
+            if (!live[i]) {
+                live[i] = true;
                 changed = true;
             }
-        } else if (c->vlive[i] && ++c->vmisses[i] >= CALL_TILE_MISSES) {
-            c->vlive[i] = false;
+        } else if (live[i] && ++misses[i] >= CALL_TILE_MISSES) {
+            live[i] = false;
             changed = true;
         }
     }
-    if (changed) video_retile(c);
+    return changed;
+}
+
+static void media_supervise(struct call *c) {
+    if (liveness_step(c->apkts, c->aseen, c->amisses, c->alive)) audio_retile(c);
+    if (c->want_video && liveness_step(c->vpkts, c->vseen, c->vmisses, c->vlive)) video_retile(c);
 }
 
 /* The other direction: whatever the capture ffmpeg packetised, onto the
@@ -736,6 +783,22 @@ static void session_release(struct session *s) {
     s->active = false;
 }
 
+/* Put a session back to the state session_negotiate expects.
+ *
+ * A retry cannot reuse what the last attempt left behind: the gathering
+ * state in particular, because all_gathered() is what the negotiate
+ * waits on, and a stale COMPLETE from the previous attempt makes it
+ * return before the NEW connection has gathered anything at all. */
+static void session_reset(struct session *s) {
+    s->pc = -1;
+    s->audio_track = s->video_track = -1;
+    s->state = RTC_NEW;
+    s->gathering = RTC_GATHERING_NEW;
+    s->have_resource = false;
+    s->active = false;
+    s->resource[0] = 0;
+}
+
 static void usage(FILE *out) {
     fprintf(out,
             "usage: shottino-call [--whip <url>] [--whep <url>] [options]\n"
@@ -895,14 +958,16 @@ int main(int argc, char **argv) {
         call.sub[i].pc = -1;
         call.sub[i].audio_track = call.sub[i].video_track = -1;
         call.sub[i].slot = i;
-        call.recv_audio[i].fd = -1;
-        call.recv_audio[i].pid = -1;
+
     }
     call.send_audio.fd = call.send_video.fd = -1;
     call.send_audio.pid = call.send_video.pid = -1;
     pthread_mutex_init(&call.vlock, NULL);
     call.vmix.pid = -1;
+    call.amix.pid = -1;
     for (int i = 0; i < MEDIA_MAX_PEERS; i++) {
+        call.amix.legs[i].fd = -1;
+        call.amix.legs[i].pid = -1;
         call.vmix.legs[i].fd = -1;
         call.vmix.legs[i].pid = -1;
         /* Until this peer's answer says otherwise. Every leg is
@@ -1032,20 +1097,12 @@ int main(int argc, char **argv) {
          * negotiation error into a recording light nobody asked for. A
          * watch-only session opens neither. */
         bool sending = whip_url != NULL;
-        int voices = call.pub.receives ? 1 : 0;
-        for (int i = 0; i < call.sub_count; i++)
-            if (call.sub[i].active && call.sub[i].state == RTC_CONNECTED) voices = i + 1;
-        /* ONE decoder for all of them. N voices used to be N processes
-         * letting the audio system mix; that works and does not scale,
-         * and the process count is what hurts long before the CPU. */
-        if (voices > 0 && !media_start_mix(call.recv_audio, voices, &mcfg))
-            emit_event("error", "message", "cannot start audio playback (is ffmpeg installed?)");
-        /* The video decoder is NOT started here. It cannot be: its
-         * inputs are the peers actually sending pictures, and at this
-         * instant not one packet has arrived. video_supervise() starts
-         * it a tick later, when there is something to decode — which is
-         * the same path that adds a late joiner and drops somebody who
-         * turned their camera off. */
+        /* NEITHER mix is started here. Both are built by the supervisor
+         * a tick later, from the peers whose RTP is actually arriving —
+         * which is the same path that adds a late joiner and drops
+         * somebody who muted or turned their camera off. Building them
+         * here over whoever happened to be connected at this instant is
+         * exactly what left a late joiner inaudible. */
         emit_event("media", "value",
                    sending ? (video ? "audio+video" : "audio")
                            : (video ? "watching audio+video" : "watching audio"));
@@ -1055,6 +1112,8 @@ int main(int argc, char **argv) {
      * pipe shottino owns; poll so a closed pipe or a signal ends the
      * call rather than parking this thread forever. */
     time_t last_tile_check = 0;
+    time_t last_resub = 0;
+    int resub_next = 0;
     while (connected && !stop_requested) {
         struct pollfd in = { .fd = STDIN_FILENO, .events = POLLIN, .revents = 0 };
         int rc = poll(&in, 1, 200);
@@ -1089,13 +1148,51 @@ int main(int argc, char **argv) {
             else if (line[0]) continue; /* unknown verb: never fatal */
             emit_event("control", "value", line);
         }
-        /* Who is sending a picture, on a slow tick. See
-         * video_supervise(): membership cannot be assumed from who
-         * connected, or one peer with the camera off freezes the mix. */
+        /* Who is sending, on a slow tick. See media_supervise():
+         * membership cannot be assumed from who connected, or one peer
+         * with the camera off freezes the mix. */
         time_t now = time(NULL);
-        if (connected && call.want_video && now - last_tile_check >= CALL_TILE_TICK_SECS) {
+        if (connected && now - last_tile_check >= CALL_TILE_TICK_SECS) {
             last_tile_check = now;
-            video_supervise(&call);
+            media_supervise(&call);
+        }
+
+        /* THE RESUBSCRIBE LOOP: retry the peers who were not there.
+         *
+         * A subscribe is refused with a 404 when that person has no
+         * publisher, and until now that was final — so whoever placed
+         * the call subscribed to an empty room, was told no, and never
+         * asked again. The FIRST person in every call saw nobody, for
+         * as long as the call lasted, while everyone who arrived after
+         * them saw everyone. That asymmetry was the whole bug.
+         *
+         * One peer per tick, round-robin, rather than all of them:
+         * session_negotiate is synchronous and gathers ICE before it
+         * posts, so retrying a channel's worth of absent members in one
+         * pass would stall the control verbs behind it. A query has one
+         * peer and therefore retries every interval; a big channel
+         * cycles, which is the right trade — the absent are many and
+         * each is cheap to miss once more.
+         *
+         * Success needs no further wiring: the new session's RTP starts
+         * arriving, the supervisor sees the packets on the next tick,
+         * and both mixes rebuild to include them. */
+        if (connected && whep_count > 0 && now - last_resub >= CALL_RESUB_SECS) {
+            last_resub = now;
+            for (int tries = 0; tries < whep_count; tries++) {
+                int i = resub_next % whep_count;
+                resub_next++;
+                if (call.sub[i].active) continue; /* already here */
+                session_reset(&call.sub[i]);
+                if (session_negotiate(&call.sub[i], whep_urls[i], RTC_DIRECTION_RECVONLY, video,
+                                      &mcfg, stun, timeout_ms)) {
+                    note("subscribe %d: joined late", i);
+                    emit_event("peer", "value", "joined");
+                } else {
+                    session_release(&call.sub[i]); /* still not there */
+                }
+                break; /* ONE per tick, whatever the outcome */
+            }
         }
         pthread_mutex_lock(&call.lock);
         bool still = session_up(&call.pub);
@@ -1107,8 +1204,8 @@ int main(int argc, char **argv) {
     if (pumping) pthread_join(pump, NULL);
     media_stop(&call.send_audio);
     media_stop(&call.send_video);
-    for (int i = 0; i < CALL_MAX_PEERS; i++) media_stop(&call.recv_audio[i]);
-    media_free_video_mix(&call.vmix);
+    media_mix_free(&call.amix);
+    media_mix_free(&call.vmix);
     session_release(&call.pub);
     for (int i = 0; i < CALL_MAX_PEERS; i++) session_release(&call.sub[i]);
     rtcCleanup();

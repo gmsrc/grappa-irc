@@ -492,92 +492,27 @@ bool media_mix_filter(const struct media_tile *tiles, int n, int fps, int frame_
     return true;
 }
 
-bool media_start_mix(struct media_leg *legs, int n, const struct media_config *cfg) {
-    if (!legs || n <= 0 || !cfg) return false;
-    if (n > 16) n = 16; /* the argv below is sized for it */
-
-    char *argv[MEDIA_MAX_ARGS + 16 * 2];
-    size_t a = 0;
-    argv[a++] = (char *)"ffmpeg";
-    argv[a++] = (char *)"-nostdin";
-    argv[a++] = (char *)"-loglevel";
-    argv[a++] = (char *)"error";
-
-    char filter[64];
-    /* normalize=0: with normalising, one person speaking is quieter the
-     * more silent people are in the room, which is exactly backwards. */
-    snprintf(filter, sizeof(filter), "amix=inputs=%d:normalize=0", n);
-
-    for (int i = 0; i < n; i++) {
-        memset(&legs[i], 0, sizeof(legs[i]));
-        legs[i].pid = -1;
-        legs[i].fd = -1;
-        int port = 0;
-        int probe = media_bind_loopback(&port);
-        if (probe < 0) goto fail;
-        close(probe); /* ffmpeg opens it itself */
-        char sdp[512];
-        if (!media_recv_sdp_audio(port, cfg->audio_payload_type, sdp, sizeof(sdp))) goto fail;
-        char path[] = "/tmp/shottino-mix-XXXXXX";
-        int fd = mkstemp(path);
-        if (fd < 0) goto fail;
-        size_t len = strlen(sdp);
-        bool wrote = write(fd, sdp, len) == (ssize_t)len;
-        close(fd);
-        if (!wrote) { unlink(path); goto fail; }
-        snprintf(legs[i].sdp_path, sizeof(legs[i].sdp_path), "%s", path);
-        legs[i].peer_port = port;
-        /* The same #451 posture as every other untrusted input. */
-        argv[a++] = (char *)"-protocol_whitelist";
-        argv[a++] = (char *)"file,udp,rtp";
-        argv[a++] = (char *)"-i";
-        argv[a++] = legs[i].sdp_path;
-    }
-
-    argv[a++] = (char *)"-filter_complex";
-    argv[a++] = filter;
-    argv[a++] = (char *)"-vn";
-    char sink[256];
-    const char *fmt = NULL, *dev = NULL;
-    split_source(cfg->audio_sink && cfg->audio_sink[0] ? cfg->audio_sink : "alsa:default", &fmt,
-                 &dev, sink, sizeof(sink));
-    argv[a++] = (char *)"-f";
-    argv[a++] = (char *)(fmt && fmt[0] ? fmt : "alsa");
-    argv[a++] = (char *)(dev && dev[0] ? dev : "default");
-    argv[a] = NULL;
-
-    legs[0].pid = spawn_ffmpeg(argv, -1);
-    if (legs[0].pid < 0) goto fail;
-    for (int i = 0; i < n; i++) {
-        legs[i].fd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (legs[i].fd < 0) { media_stop(&legs[0]); goto fail; }
-    }
-    return true;
-
-fail:
-    for (int i = 0; i < n; i++) media_stop(&legs[i]);
-    return false;
-}
-
 /* Give a leg a loopback port and an SDP, without starting anything.
  * The port SURVIVES a re-tile: the RTP callback keeps writing to it
  * while the decoder behind it is being replaced, so a focus change
  * costs a moment of dropped packets rather than a renumbering the
  * callback cannot see. */
-static bool leg_prepare_video(struct media_leg *leg) {
+static bool leg_prepare(struct media_leg *leg, const struct media_config *cfg, bool video) {
     if (leg->peer_port > 0 && leg->fd >= 0 && leg->sdp_path[0]) return true; /* already has one */
-    leg->video = true;
+    leg->video = video;
     int port = 0;
     int probe = media_bind_loopback(&port);
     if (probe < 0) return false;
     close(probe); /* ffmpeg opens it itself */
 
-    /* The codec is the LEG'S, negotiated with that peer — not the
-     * call's preference. Two people in one room can publish different
-     * codecs and each subscribe settles separately, so a global answer
-     * here would decode one of them as the other. */
+    /* For video the codec is the LEG'S, negotiated with that peer — not
+     * the call's preference. Two people in one room can publish
+     * different codecs and each subscribe settles separately, so a
+     * global answer here would decode one of them as the other. */
     char sdp[512];
-    if (!media_recv_sdp_video(port, leg->codec, leg->payload_type, sdp, sizeof(sdp))) return false;
+    bool made = video ? media_recv_sdp_video(port, leg->codec, leg->payload_type, sdp, sizeof(sdp))
+                      : media_recv_sdp_audio(port, cfg->audio_payload_type, sdp, sizeof(sdp));
+    if (!made) return false;
     char path[] = "/tmp/shottino-mix-XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) return false;
@@ -594,16 +529,63 @@ static bool leg_prepare_video(struct media_leg *leg) {
     return leg->fd >= 0;
 }
 
-void media_stop_video_mix(struct media_mix *mix) {
+bool media_start_audio_mix(struct media_mix *mix, const int *slots, int n,
+                           const struct media_config *cfg) {
+    if (!mix || !slots || n <= 0 || !cfg) return false;
+    if (n > MEDIA_MAX_PEERS) n = MEDIA_MAX_PEERS;
+
+    media_mix_stop(mix); /* a rebuild replaces the decoder, not the ports */
+
+    for (int i = 0; i < n; i++) {
+        int slot = slots[i];
+        if (slot < 0 || slot >= MEDIA_MAX_PEERS) return false;
+        if (!leg_prepare(&mix->legs[slot], cfg, false)) return false;
+    }
+
+    char *argv[MEDIA_MAX_ARGS + MEDIA_MAX_PEERS * 4];
+    size_t a = 0;
+    argv[a++] = (char *)"ffmpeg";
+    argv[a++] = (char *)"-nostdin";
+    argv[a++] = (char *)"-loglevel";
+    argv[a++] = (char *)"error";
+    for (int i = 0; i < n; i++) {
+        /* The same #451 posture as every other untrusted input. */
+        argv[a++] = (char *)"-protocol_whitelist";
+        argv[a++] = (char *)"file,udp,rtp";
+        argv[a++] = (char *)"-i";
+        argv[a++] = mix->legs[slots[i]].sdp_path;
+    }
+
+    char filter[64];
+    /* normalize=0: with normalising, one person speaking is quieter the
+     * more silent people are in the room, which is exactly backwards. */
+    snprintf(filter, sizeof(filter), "amix=inputs=%d:normalize=0", n);
+    argv[a++] = (char *)"-filter_complex";
+    argv[a++] = filter;
+    argv[a++] = (char *)"-vn";
+    char sink[256];
+    const char *fmt = NULL, *dev = NULL;
+    split_source(cfg->audio_sink && cfg->audio_sink[0] ? cfg->audio_sink : "alsa:default", &fmt,
+                 &dev, sink, sizeof(sink));
+    argv[a++] = (char *)"-f";
+    argv[a++] = (char *)(fmt && fmt[0] ? fmt : "alsa");
+    argv[a++] = (char *)(dev && dev[0] ? dev : "default");
+    argv[a] = NULL;
+
+    mix->pid = spawn_ffmpeg(argv, -1);
+    return mix->pid > 0;
+}
+
+void media_mix_stop(struct media_mix *mix) {
     if (!mix || mix->pid <= 0) return;
     kill(mix->pid, SIGTERM);
     while (waitpid(mix->pid, NULL, 0) < 0 && errno == EINTR) {}
     mix->pid = -1;
 }
 
-void media_free_video_mix(struct media_mix *mix) {
+void media_mix_free(struct media_mix *mix) {
     if (!mix) return;
-    media_stop_video_mix(mix);
+    media_mix_stop(mix);
     for (int i = 0; i < MEDIA_MAX_PEERS; i++) media_stop(&mix->legs[i]);
     mix->tile_count = 0;
 }
@@ -613,12 +595,12 @@ bool media_start_video_mix(struct media_mix *mix, const struct media_config *cfg
     int n = mix->tile_count;
     if (n > MEDIA_MAX_PEERS) n = MEDIA_MAX_PEERS;
 
-    media_stop_video_mix(mix); /* a re-tile replaces the decoder, not the ports */
+    media_mix_stop(mix); /* a re-tile replaces the decoder, not the ports */
 
     for (int i = 0; i < n; i++) {
         int slot = mix->tiles[i].slot;
         if (slot < 0 || slot >= MEDIA_MAX_PEERS) return false;
-        if (!leg_prepare_video(&mix->legs[slot])) return false;
+        if (!leg_prepare(&mix->legs[slot], cfg, true)) return false;
     }
 
     /* Eight peers of scale-and-pad plus an overlay chain. Measured at

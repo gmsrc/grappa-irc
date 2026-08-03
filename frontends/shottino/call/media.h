@@ -220,12 +220,13 @@ bool media_mix_filter(const struct media_tile *tiles, int n, int fps, int frame_
  * mix->tiles / mix->tile_count first. */
 bool media_start_video_mix(struct media_mix *mix, const struct media_config *cfg, int stdout_fd);
 
-/* Stop the decoder but KEEP the legs and their ports, so a re-tile does
- * not renumber the loopback ports under the RTP callback. */
-void media_stop_video_mix(struct media_mix *mix);
+/* Stop a mix decoder but KEEP the legs and their ports, so a rebuild
+ * does not renumber the loopback ports under the RTP callback. Used by
+ * both mixes. */
+void media_mix_stop(struct media_mix *mix);
 
-/* Stop the decoder AND release every leg. For teardown. */
-void media_free_video_mix(struct media_mix *mix);
+/* Stop it AND release every leg. For teardown. */
+void media_mix_free(struct media_mix *mix);
 
 /* Bind a loopback UDP socket on an ephemeral port. Returns the fd and
  * writes the port, or -1. Used for both directions: the send leg reads
@@ -248,14 +249,13 @@ void media_feed(const struct media_leg *leg, const void *rtp, size_t len);
  * CPU does. ffmpeg reads all N SDPs itself and `amix` does the job one
  * process, so an N-way call costs the same as a two-way one.
  *
- * `legs` is filled in as it would be by media_start_recv — each entry
- * gets its own loopback port to be fed with media_feed — but only the
- * FIRST holds the process. Stopping legs[0] stops the decode for all of
- * them, which is why media_stop is safe on the rest: they own a socket
- * and nothing else.
- *
- * Returns false and leaves nothing running if ffmpeg cannot be started. */
-bool media_start_mix(struct media_leg *legs, int n, const struct media_config *cfg);
+ * `slots` is WHICH peers to mix, exactly as the video grid takes them,
+ * and for the same reason: the set has holes and it CHANGES. A peer who
+ * joins after the call started has a slot number nobody reserved, and
+ * an audio mix fixed at connect time leaves them audible to nobody —
+ * which is half of what "the late joiner is not there" looked like. */
+bool media_start_audio_mix(struct media_mix *mix, const int *slots, int n,
+                           const struct media_config *cfg);
 
 /* Stop ffmpeg and close the socket. Safe on a leg that never started,
  * and safe to call twice. */
