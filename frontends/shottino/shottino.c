@@ -12030,7 +12030,8 @@ static const char *commands[] = {
     "/admin", "/alias", "/answer", "/approve", "/archive", "/away", "/ban", "/banlist", "/block",
     "/bot", "/call",
     "/chat", "/clear", "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deny", "/deop",
-    "/devoice", "/dictate", "/die", "/disconnect", "/exec", "/exit", "/globops", "/hangup", "/help",
+    "/devoice", "/dictate", "/die", "/disconnect", "/exec", "/exit", "/focus", "/globops",
+    "/hangup", "/help",
     "/highlight",
     "/hilight", "/hs", "/ignore", "/info", "/invite", "/j", "/join", "/kb", "/keys", "/kick",
     "/kickban", "/kill", "/kline", "/links", "/list", "/llm", "/llm-clear", "/llm-compact",
@@ -14109,6 +14110,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "videocall") == 0) log_line(app, "/videocall — /call with a camera: the same room, posted as 📹 <url> so the other side knows to expect video before joining");
     else if (strcmp(cmd, "answer") == 0) log_line(app, "/answer — join the last call that came in, ringing or not. A channel invite does not ring under the default /set call.ring, and this is how you take it");
     else if (strcmp(cmd, "mute") == 0 || strcmp(cmd, "unmute") == 0) log_line(app, "/mute, /unmute — the microphone, while a call is running in the terminal. Local and instant: the capture keeps going and its packets are dropped, so unmuting does not wait for a device to open");
+    else if (strcmp(cmd, "focus") == 0) log_line(app, "/focus — in a group video call, show the next person full size and the rest as thumbnails. The mix re-tiles to do it, so the picture pauses for a moment; up to three people are drawn at once and the rest stay in the call with their audio");
     else if (strcmp(cmd, "hangup") == 0) log_line(app, "/hangup — stop a ringing call. LOCAL: the caller is not told, the same way not picking up a phone tells nobody. /answer still reaches the call afterwards");
     else if (strcmp(cmd, "view") == 0) log_line(app, "/view [url] — download it and open the desktop viewer for that file TYPE; an audio URL PLAYS instead (mpv/ffplay); bare /view offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
@@ -15672,6 +15674,15 @@ static void handle_command_dispatch(struct app *app, char *line) {
         call_answer(app);
     } else if (strcmp(line, "/hangup") == 0) {
         call_hangup(app);
+    } else if (strcmp(line, "/focus") == 0) {
+        /* Cycles who is BIG in a group video call. The helper re-tiles,
+         * which means it restarts its decoder — see docs/CALLS.md for
+         * why that is not instant and what would make it so. */
+        if (call_control(app, "focus next"))
+            log_line(app, "call: showing the next person — the picture takes a moment to come "
+                          "back while the mix re-tiles");
+        else
+            log_line(app, "/focus: no call is running");
     } else if (strcmp(line, "/mute") == 0 || strcmp(line, "/unmute") == 0) {
         bool on = line[1] == 'm';
         if (call_control(app, on ? "mute" : "unmute"))
