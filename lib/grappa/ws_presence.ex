@@ -287,9 +287,10 @@ defmodule Grappa.WSPresence do
   registration so `cic-bundle-changed` reaches every connected tab.
 
   CP23 S4 B5 — used by the `cic-bundle-changed` admin endpoint to fan
-  out the new bundle hash on every connected user's user-topic. Empty
-  socket maps (a user previously connected, all sockets dropped) are
-  filtered out so callers don't broadcast to dead audiences.
+  out the new bundle hash on every connected user's user-topic. Every
+  key is a live audience: a user loses its entry the moment its last
+  socket dies (see `put_user_sockets/3`), so there is nothing dead to
+  filter out.
   """
   @spec list_user_names() :: [String.t()]
   def list_user_names do
@@ -326,7 +327,8 @@ defmodule Grappa.WSPresence do
   active `stale_ms`. Backs the `/admin/ws_presence` diagnostic (#318): a
   backgrounded-iOS-PWA run reads back whether the socket went
   stale/hidden or is (wrongly) still fresh-visible. Users with no live
-  socket are omitted.
+  socket cannot appear: they stop being tracked at all when their last
+  socket dies (see `put_user_sockets/3`).
   """
   @spec snapshot() :: snapshot()
   def snapshot do
@@ -488,21 +490,14 @@ defmodule Grappa.WSPresence do
   end
 
   def handle_call(:list_user_names, _, state) do
-    names =
-      state.sockets
-      |> Enum.filter(fn {_, m} -> map_size(m) > 0 end)
-      |> Enum.map(fn {name, _} -> name end)
-
-    {:reply, names, state}
+    {:reply, Map.keys(state.sockets), state}
   end
 
   def handle_call(:snapshot, _, state) do
     now = now_ms()
 
     users =
-      state.sockets
-      |> Enum.reject(fn {_, pids} -> map_size(pids) == 0 end)
-      |> Enum.map(fn {user_name, pids} ->
+      Enum.map(state.sockets, fn {user_name, pids} ->
         %{
           user_name: user_name,
           any_visible: any_visible_in?(state, user_name),
@@ -600,7 +595,17 @@ defmodule Grappa.WSPresence do
   # Private helpers
   # ---------------------------------------------------------------------------
 
+  # The ONE write door for `sockets`, and the place the "no empty maps"
+  # invariant is kept: a user whose last socket just went away is REMOVED,
+  # not left pointing at `%{}`. `user_name` is `"visitor:" <> id` for
+  # visitors, so the key space is unbounded and every visitor that ever
+  # connected would otherwise leave a permanent entry in a `:permanent`
+  # GenServer that is never restarted to clear them.
   @spec put_user_sockets(t(), String.t(), %{pid() => pid_state()}) :: t()
+  defp put_user_sockets(state, user_name, user_sockets) when map_size(user_sockets) == 0 do
+    %{state | sockets: Map.delete(state.sockets, user_name)}
+  end
+
   defp put_user_sockets(state, user_name, user_sockets) do
     %{state | sockets: Map.put(state.sockets, user_name, user_sockets)}
   end

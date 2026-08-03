@@ -250,6 +250,35 @@ defmodule Grappa.WSPresenceTest do
 
       send(p2, :stop)
     end
+
+    # Visitor names are `"visitor:" <> id`, so the key space is unbounded and
+    # every visitor that ever connected used to leave a permanent empty map
+    # behind in a `:permanent` GenServer that never restarts.
+    test "the user's entry is dropped when its last socket dies, not left empty" do
+      p = stub_pid()
+      :ok = WSPresence.register("visitor:mallory", p)
+      assert Map.has_key?(:sys.get_state(WSPresence).sockets, "visitor:mallory")
+
+      Process.exit(p, :kill)
+      :timer.sleep(50)
+
+      refute Map.has_key?(:sys.get_state(WSPresence).sockets, "visitor:mallory")
+    end
+
+    test "a user keeping one socket alive stays tracked" do
+      p1 = stub_pid()
+      p2 = stub_pid()
+      :ok = WSPresence.register("dave", p1)
+      :ok = WSPresence.register("dave", p2)
+
+      Process.exit(p1, :kill)
+      :timer.sleep(50)
+
+      assert Map.has_key?(:sys.get_state(WSPresence).sockets, "dave")
+      assert WSPresence.ws_count("dave") == 1
+
+      send(p2, :stop)
+    end
   end
 
   describe "#671 — a STALE :visible pid still arms auto-away (every door)" do
