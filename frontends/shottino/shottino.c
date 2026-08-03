@@ -6673,14 +6673,26 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
     }
 
     case WIRE_MENTIONS_BUNDLE: {
-        /* Everything that mentioned you while you were away, replayed in
-         * one card so the catch-up is not a hunt through N channels. */
+        /* Everything that mentioned you while you were away.
+         *
+         * Each mention goes back to the window it was SAID in, not to
+         * whichever window happens to be focused when the bundle lands.
+         * It used to go through card(), which files a row under the
+         * focused window on that network — right for a WHOIS (an answer
+         * belongs where the question was typed) and wrong for this: a
+         * bundle is N mentions from N different channels, replayed all
+         * at once, and dumping them wholesale into whatever tab was
+         * open puts other rooms' conversation inside a private query.
+         *
+         * The summary is the one line that IS network-scoped, so it
+         * goes to $server rather than following the rows. */
         const char *net = ev->u.mentions_bundle.network;
         if (ev->u.mentions_bundle.message_count == 0) break;
-        card(app, net, "--- %zu mention%s while away%s%s", ev->u.mentions_bundle.message_count,
-             ev->u.mentions_bundle.message_count == 1 ? "" : "s",
-             ev->u.mentions_bundle.away_reason ? ": " : "",
-             ev->u.mentions_bundle.away_reason ? ev->u.mentions_bundle.away_reason : "");
+        log_line(app, "[%s/" SERVER_WINDOW "] --- %zu mention%s while away%s%s", net,
+                 ev->u.mentions_bundle.message_count,
+                 ev->u.mentions_bundle.message_count == 1 ? "" : "s",
+                 ev->u.mentions_bundle.away_reason ? ": " : "",
+                 ev->u.mentions_bundle.away_reason ? ev->u.mentions_bundle.away_reason : "");
         for (size_t i = 0; i < ev->u.mentions_bundle.message_count; i++) {
             struct wire_mention m;
             if (!wire_mention_at(ev->u.mentions_bundle.messages, i, &m)) continue;
@@ -6690,8 +6702,14 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
             struct tm tm;
             localtime_r(&ts, &tm);
             strftime(clock, sizeof(clock), "%H:%M", &tm);
-            card(app, net, "  %s %-14s <%s> %.*s", clock, m.channel, m.sender, 60,
-                 m.body ? m.body : "");
+            /* No window for it means the mention arrived somewhere this
+             * client is not showing — it still belongs to that name, so
+             * the row is filed under it and the sidebar grows a tab,
+             * rather than the line being redirected somewhere it will
+             * read as having been said in the wrong room. */
+            log_line(app, "[%s/%s] --- while away %s <%s> %.*s", net,
+                     m.channel && m.channel[0] ? m.channel : SERVER_WINDOW, clock, m.sender, 200,
+                     m.body ? m.body : "");
         }
         break;
     }

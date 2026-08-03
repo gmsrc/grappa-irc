@@ -1133,6 +1133,59 @@ TEST(closing_an_admin_menu_disarms_the_verb_it_was_holding) {
     free_app(app);
 }
 
+/* ── A mention goes back to the room it was said in ────────────────────
+ *
+ * The away bundle replays N mentions from N different channels in one
+ * go, and it used to render through card(), which files a row under
+ * whichever window is FOCUSED on that network. That is right for a
+ * WHOIS — an answer belongs where the question was typed — and wrong
+ * here: whatever tab happened to be open collected other rooms'
+ * conversation, and when that tab was a private query the result was
+ * three channels' worth of chat inside somebody's DM. */
+static const char *const MENTIONS_BUNDLE_JSON =
+    "{\"kind\":\"mentions_bundle\",\"network\":\"azzurra\","
+    "\"away_started_at\":\"2026-08-03T10:00:00Z\","
+    "\"away_ended_at\":\"2026-08-03T12:00:00Z\",\"away_reason\":\"lunch\","
+    "\"messages\":[{\"id\":1,\"server_time\":1754222400,\"network\":\"azzurra\","
+    "\"channel\":\"#grappa\",\"sender\":\"vjt\",\"kind\":\"privmsg\","
+    "\"body\":\"nextime: ping\"},"
+    "{\"id\":2,\"server_time\":1754222460,\"network\":\"azzurra\","
+    "\"channel\":\"#sniffo\",\"sender\":\"alice\",\"kind\":\"privmsg\","
+    "\"body\":\"nextime: and here\"}]}";
+
+static bool logged_with_scope(struct app *app, const char *scope, const char *needle) {
+    for (size_t i = 0; i < app->log_count; i++)
+        if (strstr(app->log[i], scope) && strstr(app->log[i], needle)) return true;
+    return false;
+}
+
+TEST(an_away_mention_is_replayed_in_the_window_it_was_said_in) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    /* Focused on a QUERY — the situation that made the old behaviour
+     * visible, and the one the fix has to survive. */
+    add_window_ex(app, "azzurra", "vjt", true);
+
+    json_doc *doc = json_parse(MENTIONS_BUNDLE_JSON, strlen(MENTIONS_BUNDLE_JSON), NULL, 0);
+    CHECK(doc != NULL);
+    if (!doc) { free_app(app); return; }
+    struct wire_event ev;
+    CHECK(wire_narrow(json_root(doc), &ev));
+    handle_wire_event(app, &ev);
+    json_free(doc);
+
+    /* Each mention under the channel it came from... */
+    CHECK(logged_with_scope(app, "[azzurra/#grappa]", "nextime: ping"));
+    CHECK(logged_with_scope(app, "[azzurra/#sniffo]", "nextime: and here"));
+    /* ...and NOT under the query that happened to be focused. */
+    CHECK(!logged_with_scope(app, "[azzurra/vjt]", "nextime: ping"));
+    CHECK(!logged_with_scope(app, "[azzurra/vjt]", "nextime: and here"));
+    /* The summary is the one line that really is network-scoped. */
+    CHECK(logged_with_scope(app, "[azzurra/$server]", "2 mentions while away"));
+    CHECK(logged_with_scope(app, "[azzurra/$server]", "lunch"));
+    free_app(app);
+}
+
 TEST(the_admin_uploads_tab_totals_the_bytes_field) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -3436,6 +3489,7 @@ int main(void) {
     RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);
     RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
     RUN(audio_is_classified_before_the_uploads_heuristic);
+    RUN(an_away_mention_is_replayed_in_the_window_it_was_said_in);
     RUN(the_admin_sessions_tab_reads_the_shape_the_server_sends);
     RUN(a_session_row_carries_the_composite_id_grappa_parses);
     RUN(an_orphan_session_is_rendered_but_not_actionable);
