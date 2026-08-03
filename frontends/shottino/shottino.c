@@ -12998,7 +12998,7 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
              video ? "audio and video" : "audio");
     if (!query)
         log_line(app, "call: group call with %zu other%s in %s — members not in the call are "
-                      "stepped over, and their video is not drawn (one tile for now)",
+                      "stepped over",
                  peers, peers == 1 ? "" : "s", channel ? channel : "?");
     if (video)
         log_line(app, "call: their picture appears top-right while the call runs");

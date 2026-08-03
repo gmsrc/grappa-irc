@@ -110,6 +110,76 @@ struct media_config {
     bool want_video;
 };
 
+/* How many other people one call carries. The helper's own cap lives
+ * here rather than beside it, because the leg arrays below are sized by
+ * it and two constants that must be equal are one waiting to not be. */
+#define MEDIA_MAX_PEERS 8
+
+/* Where one peer's picture goes in the composited frame, in pixels. */
+struct media_tile {
+    int slot; /* which peer, i.e. which leg feeds it */
+    int x, y, w, h;
+};
+
+/* The video receive path: N peers, ONE decoder, one composited frame.
+ *
+ * `legs` is indexed by PEER SLOT so the RTP callback can find its leg
+ * without a search; `tiles` is in DRAW order, which is a different
+ * order, because tiles[0] is whoever is focused. The process is held
+ * here rather than hidden in legs[0] as the audio mix does it: focus
+ * changes which slot draws first, and a pid living in a slot that moves
+ * is a pid that gets lost. */
+struct media_mix {
+    pid_t pid;
+    struct media_leg legs[MEDIA_MAX_PEERS];
+    struct media_tile tiles[MEDIA_MAX_PEERS];
+    int tile_count;
+};
+
+/* Lay N peers out in a frame: the focused one FULL SIZE, the rest as
+ * thumbnails along the bottom of it.
+ *
+ * Asymmetric on purpose — "bigger for whoever is talking, smaller for
+ * the others" is the whole request — and an even grid is the wrong
+ * shape for a terminal besides: split a 40x30-pixel window four ways
+ * and every tile is unreadable. Which is also why this returns a count
+ * that can be LESS than `n`: below a size where a thumbnail would carry
+ * any information it lays out the focused peer alone rather than
+ * pretending. The caller must report the difference — a silent cap
+ * reads as "everyone is here".
+ *
+ * `slots` is WHICH peers to draw and in what order — not 0..n-1. The
+ * set is a subset with holes in it: a peer with their camera off, or
+ * one who has not started sending, is dropped from the mix entirely
+ * (ffmpeg's filter graph stalls waiting on an input that never
+ * produces a frame, so a silent peer would freeze everybody). `focus`
+ * indexes THAT list, not the slot numbers, because it is what Tab
+ * cycles through.
+ *
+ * `focus` is clamped into range, so a stale focus after somebody leaves
+ * is a picture of the wrong person, never an out-of-bounds read. */
+int media_tile_layout(const int *slots, int n, int focus, int frame_w, int frame_h,
+                      struct media_tile *out, int max);
+
+/* The ffmpeg filter graph that composites `tiles`, in tile order: input
+ * i is tiles[i]. Pure, and therefore tested — a wrong label here is
+ * ffmpeg exiting with a parse error onto a discarded stderr, i.e. a
+ * video call that shows nothing and says nothing. */
+bool media_mix_filter(const struct media_tile *tiles, int n, int fps, char *out, size_t out_sz);
+
+/* Start (or restart) the composited video decoder. Ports already bound
+ * in `mix->legs` are KEPT, so RTP arriving during a re-tile lands
+ * somewhere valid rather than on a closed socket. Caller fills
+ * mix->tiles / mix->tile_count first. */
+bool media_start_video_mix(struct media_mix *mix, const struct media_config *cfg, int stdout_fd);
+
+/* Stop the decoder but KEEP the legs and their ports, so a re-tile does
+ * not renumber the loopback ports under the RTP callback. */
+void media_stop_video_mix(struct media_mix *mix);
+
+/* Stop the decoder AND release every leg. For teardown. */
+void media_free_video_mix(struct media_mix *mix);
+
 /* Bind a loopback UDP socket on an ephemeral port. Returns the fd and
  * writes the port, or -1. Used for both directions: the send leg reads
  * what ffmpeg writes to it, the recv leg learns which port to write to. */

@@ -400,6 +400,101 @@ bool media_start_recv(struct media_leg *leg, const struct media_config *cfg, boo
     return true;
 }
 
+/* Round down to even. The composited frame is drawn as half blocks —
+ * two pixel rows per cell — so an odd height loses its bottom row, and
+ * an odd width upsets every scaler that ever meets a chroma plane. */
+static int even_down(int v) { return v & ~1; }
+
+int media_tile_layout(const int *slots, int n, int focus, int frame_w, int frame_h,
+                      struct media_tile *out, int max) {
+    if (n <= 0 || max <= 0 || !out || !slots || frame_w <= 0 || frame_h <= 0) return 0;
+    if (n > max) n = max;
+    if (focus < 0 || focus >= n) focus = 0;
+
+    /* The focused peer IS the background: the whole frame, and also the
+     * first ffmpeg input, which is what lets the graph be a plain
+     * overlay chain with no synthetic colour source underneath it. */
+    out[0].slot = slots[focus];
+    out[0].x = out[0].y = 0;
+    out[0].w = even_down(frame_w);
+    out[0].h = even_down(frame_h);
+    if (n == 1) return 1;
+
+    /* A quarter of the frame each, with a small margin. Below the floor
+     * a thumbnail carries nothing a viewer could read — this is ASCII
+     * art of a face — so it is not drawn at all. That is the ordinary
+     * picture-in-picture case: a 40x30-pixel corner box has room for
+     * exactly one person, and says so by returning 1. */
+    const int gap = 2;
+    int tw = even_down(frame_w / 4), th = even_down(frame_h / 4);
+    if (tw < 16 || th < 12) return 1;
+
+    int fit = (frame_w - gap) / (tw + gap);
+    int want = n - 1;
+    int shown = want < fit ? want : fit;
+    if (shown > max - 1) shown = max - 1;
+    if (shown <= 0) return 1;
+
+    int count = 1;
+    for (int i = 0; i < n && count <= shown; i++) {
+        if (i == focus) continue; /* they are the background already */
+        out[count].slot = slots[i];
+        out[count].w = tw;
+        out[count].h = th;
+        out[count].x = gap + (count - 1) * (tw + gap);
+        out[count].y = frame_h - th - gap;
+        count++;
+    }
+    return count;
+}
+
+bool media_mix_filter(const struct media_tile *tiles, int n, int fps, char *out, size_t out_sz) {
+    if (!tiles || n <= 0 || !out || out_sz == 0) return false;
+    if (fps < 1) fps = 10;
+    size_t at = 0;
+    /* Every input scaled and padded into its cell. setsar=1 because an
+     * overlay refuses to compose sources whose sample aspect ratios
+     * disagree, and a camera that reports a non-square one otherwise
+     * kills the whole graph rather than just looking wrong. */
+    for (int i = 0; i < n; i++) {
+        int w = tiles[i].w > 0 ? tiles[i].w : 2, h = tiles[i].h > 0 ? tiles[i].h : 2;
+        int k = snprintf(out + at, out_sz - at,
+                         "[%d:v]fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease,"
+                         "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1[t%d];",
+                         i, fps, w, h, w, h, i);
+        if (k < 0 || (size_t)k >= out_sz - at) return false;
+        at += (size_t)k;
+    }
+    if (n == 1) {
+        /* One peer: the scaled input IS the output. A one-input overlay
+         * chain would be a no-op stage that still has to be parsed. */
+        int k = snprintf(out + at, out_sz - at, "[t0]null[out]");
+        return k > 0 && (size_t)k < out_sz - at;
+    }
+    /* Thumbnails overlaid on the focused peer, in order.
+     *
+     * eof_action=pass so a peer who hangs up leaves the call running
+     * instead of ending everybody's picture, and repeatlast so their
+     * last frame stays put rather than the tile going black-then-absent
+     * while the supervisor notices and re-tiles. */
+    for (int i = 1; i < n; i++) {
+        char base[16], sink[16];
+        /* The first overlay reads the focused peer; every later one
+         * reads what the previous overlay produced. The last writes the
+         * name the caller maps, and the others write a link. */
+        if (i == 1) snprintf(base, sizeof(base), "[t0]");
+        else snprintf(base, sizeof(base), "[m%d]", i - 1);
+        if (i == n - 1) snprintf(sink, sizeof(sink), "[out]");
+        else snprintf(sink, sizeof(sink), "[m%d];", i);
+        int k = snprintf(out + at, out_sz - at,
+                         "%s[t%d]overlay=%d:%d:eof_action=pass:repeatlast=1%s", base, i,
+                         tiles[i].x, tiles[i].y, sink);
+        if (k < 0 || (size_t)k >= out_sz - at) return false;
+        at += (size_t)k;
+    }
+    return true;
+}
+
 bool media_start_mix(struct media_leg *legs, int n, const struct media_config *cfg) {
     if (!legs || n <= 0 || !cfg) return false;
     if (n > 16) n = 16; /* the argv below is sized for it */
@@ -465,6 +560,100 @@ bool media_start_mix(struct media_leg *legs, int n, const struct media_config *c
 fail:
     for (int i = 0; i < n; i++) media_stop(&legs[i]);
     return false;
+}
+
+/* Give a leg a loopback port and an SDP, without starting anything.
+ * The port SURVIVES a re-tile: the RTP callback keeps writing to it
+ * while the decoder behind it is being replaced, so a focus change
+ * costs a moment of dropped packets rather than a renumbering the
+ * callback cannot see. */
+static bool leg_prepare_recv(struct media_leg *leg, const struct media_config *cfg, bool video) {
+    if (leg->peer_port > 0 && leg->fd >= 0 && leg->sdp_path[0]) return true; /* already has one */
+    leg->video = video;
+    int port = 0;
+    int probe = media_bind_loopback(&port);
+    if (probe < 0) return false;
+    close(probe); /* ffmpeg opens it itself */
+
+    char sdp[512];
+    if (!media_recv_sdp(cfg, video, port, sdp, sizeof(sdp))) return false;
+    char path[] = "/tmp/shottino-mix-XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) return false;
+    size_t len = strlen(sdp);
+    bool wrote = write(fd, sdp, len) == (ssize_t)len;
+    close(fd);
+    if (!wrote) {
+        unlink(path);
+        return false;
+    }
+    snprintf(leg->sdp_path, sizeof(leg->sdp_path), "%s", path);
+    leg->peer_port = port;
+    if (leg->fd < 0) leg->fd = socket(AF_INET, SOCK_DGRAM, 0);
+    return leg->fd >= 0;
+}
+
+void media_stop_video_mix(struct media_mix *mix) {
+    if (!mix || mix->pid <= 0) return;
+    kill(mix->pid, SIGTERM);
+    while (waitpid(mix->pid, NULL, 0) < 0 && errno == EINTR) {}
+    mix->pid = -1;
+}
+
+void media_free_video_mix(struct media_mix *mix) {
+    if (!mix) return;
+    media_stop_video_mix(mix);
+    for (int i = 0; i < MEDIA_MAX_PEERS; i++) media_stop(&mix->legs[i]);
+    mix->tile_count = 0;
+}
+
+bool media_start_video_mix(struct media_mix *mix, const struct media_config *cfg, int stdout_fd) {
+    if (!mix || !cfg || mix->tile_count <= 0) return false;
+    int n = mix->tile_count;
+    if (n > MEDIA_MAX_PEERS) n = MEDIA_MAX_PEERS;
+
+    media_stop_video_mix(mix); /* a re-tile replaces the decoder, not the ports */
+
+    for (int i = 0; i < n; i++) {
+        int slot = mix->tiles[i].slot;
+        if (slot < 0 || slot >= MEDIA_MAX_PEERS) return false;
+        if (!leg_prepare_recv(&mix->legs[slot], cfg, true)) return false;
+    }
+
+    /* Eight peers of scale-and-pad plus an overlay chain. Measured at
+     * about 130 bytes per input, so this has room for twice the cap. */
+    char filter[4096];
+    if (!media_mix_filter(mix->tiles, n, cfg->fps, filter, sizeof(filter))) return false;
+
+    char *argv[MEDIA_MAX_ARGS + MEDIA_MAX_PEERS * 4];
+    size_t a = 0;
+    argv[a++] = (char *)"ffmpeg";
+    argv[a++] = (char *)"-nostdin";
+    argv[a++] = (char *)"-loglevel";
+    argv[a++] = (char *)"error";
+    /* INPUTS IN TILE ORDER, which is why the filter can name them by
+     * index: input i is tiles[i], and tiles[0] is whoever is focused. */
+    for (int i = 0; i < n; i++) {
+        /* The same #451 posture as every other untrusted input. */
+        argv[a++] = (char *)"-protocol_whitelist";
+        argv[a++] = (char *)"file,udp,rtp";
+        argv[a++] = (char *)"-i";
+        argv[a++] = mix->legs[mix->tiles[i].slot].sdp_path;
+    }
+    argv[a++] = (char *)"-filter_complex";
+    argv[a++] = filter;
+    argv[a++] = (char *)"-map";
+    argv[a++] = (char *)"[out]";
+    argv[a++] = (char *)"-an";
+    argv[a++] = (char *)"-f";
+    argv[a++] = (char *)"rawvideo";
+    argv[a++] = (char *)"-pix_fmt";
+    argv[a++] = (char *)"rgb24";
+    argv[a++] = (char *)"pipe:1";
+    argv[a] = NULL;
+
+    mix->pid = spawn_ffmpeg(argv, stdout_fd);
+    return mix->pid > 0;
 }
 
 void media_feed(const struct media_leg *leg, const void *rtp, size_t len) {

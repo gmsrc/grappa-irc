@@ -492,9 +492,52 @@ that had no publisher. It fixes late joiners and channel members who
 join the call afterwards with one mechanism, which is why it is worth
 building deliberately rather than bolting on.
 
-**Video is one tile.** Audio is per peer — N decoders into one sink, and
-the audio system does the mixing, which it does far better than anything
-here would. N video tiles needs a layout policy in the draw path.
+### Group video: one decoder, and the wall it hits
+
+Video is now composited like the audio is mixed — ONE ffmpeg reading
+every peer, the focused person full-frame with the rest as thumbnails
+along the bottom, rather than a process per picture. The layout is a
+pure function (`media_tile_layout`) and so is the filter graph
+(`media_mix_filter`); both are unit-tested, and the graph was verified
+by composing synthetic colour sources and reading the output pixels back
+to confirm each tile lands where the layout said.
+
+Membership is measured, never assumed. A filter graph STALLS forever on
+an input that produces no frames, so a peer whose camera is off would
+freeze everybody's picture. `video_supervise()` therefore decides who is
+in the mix from arriving RTP: added on the first packet, dropped after
+three quiet seconds, and the mix is rebuilt when the set changes. The
+same rebuild serves a focus change and a window resize, because they are
+the same operation — new tiles, new decoder, the same loopback ports.
+
+**The wall: ffmpeg opens live RTP inputs sequentially**, and each open
+blocks long enough that the sockets already opened overflow and have to
+resync. Time from spawning the mix to its first composited frame, idle
+8-core box:
+
+| pictures | 1 | 2 | 3 | 4 | 6+ |
+|---|---|---|---|---|---|
+| first frame | 0.3s | 2.2s | 5.7s | 12.4s | never (>15s) |
+
+That is roughly a doubling per picture, and it is the *opening* rather
+than the compositing: four inputs opened with **no filter graph at all**
+and only one of them mapped still took 14s. It is unaffected by
+`-analyzeduration`/`-probesize` in either direction, by `setpts`
+alignment of the inputs, by the keyframe interval (shorter is *worse*),
+and by whether the helper or a hand-run shell spawns it.
+
+So the mix is capped at **three pictures** (`CALL_TILE_MAX`), where the
+curve is still tolerable. Everyone beyond that stays in the call with
+their audio and is reported as not drawn — the same honest degradation a
+peer with their camera off already gets.
+
+The cap is a symptom, not a fix. The consequence worth knowing: because
+a focus change restarts the decoder, **Tab costs that same startup
+time**. The design that removes it is for the mix to composite a FIXED
+grid — paying the opening cost once, at the start of the call — and for
+shottino to do the focus in the draw path, enlarging whichever cell it
+wants. That needs a sampled (nearest-neighbour) draw in the half-block
+renderer, which currently clips rather than scales.
 
 ## Roadmap
 

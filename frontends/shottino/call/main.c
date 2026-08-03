@@ -58,8 +58,42 @@
  * cheap here because the render target is ASCII — a peer costs ~24 kbps
  * of Opus and ~150 kbps of tiny VP8 — but it is not free, and a cap is
  * how "the channel had forty people in it" fails as a clear message
- * rather than as a machine that stops responding. */
-#define CALL_MAX_PEERS 8
+ * rather than as a machine that stops responding.
+ *
+ * Taken from media.h rather than spelled again: the leg and tile arrays
+ * there are sized by it, and two constants that must be equal are one
+ * waiting to not be. */
+#define CALL_MAX_PEERS MEDIA_MAX_PEERS
+
+/* How often the video mix is re-examined, and how many quiet ticks it
+ * takes to conclude a peer has stopped sending. See video_supervise(). */
+#define CALL_TILE_TICK_SECS 1
+#define CALL_TILE_MISSES 3
+
+/* How many pictures the mix will composite at once. NOT a layout limit
+ * — the layout would happily fit four — but a MEASURED one.
+ *
+ * ffmpeg opens live RTP inputs SEQUENTIALLY, and each open blocks long
+ * enough that the sockets already opened overflow and have to resync.
+ * The cost is therefore not linear in the number of pictures, it
+ * roughly doubles per picture. Measured on an idle 8-core box, time
+ * from spawning the mix to its first composited frame:
+ *
+ *     1 picture   0.3s      3 pictures   5.7s
+ *     2 pictures  2.2s      4 pictures  12.4s      6+  never (>15s)
+ *
+ * Established as the cause rather than assumed: four inputs opened with
+ * NO filter graph at all and only one of them mapped still took 14s, so
+ * it is the opening and not the compositing. It is also unaffected by
+ * -analyzeduration/-probesize (either direction), by setpts alignment
+ * of the inputs, by the keyframe interval (a shorter one is worse), and
+ * by whether the helper or a hand-run shell spawns it.
+ *
+ * Three is where the curve is still tolerable. Beyond it, peers stay in
+ * the call with their audio and are reported as not drawn — which is
+ * the same honest degradation a peer with their camera off already
+ * gets, rather than a call that appears to hang. */
+#define CALL_TILE_MAX 3
 
 static volatile sig_atomic_t stop_requested;
 
@@ -157,7 +191,36 @@ struct call {
      * policy in the draw path, and that is a deliberate next step
      * rather than something to guess at. */
     struct media_leg recv_audio[CALL_MAX_PEERS];
-    struct media_leg recv_video;
+    /* Video is ONE decoder for everybody, compositing the peers into a
+     * single frame: the focused one full size with the rest as
+     * thumbnails along the bottom. N decoders would be N processes and
+     * N pipes, and the process count is what hurts long before the CPU
+     * does — the same reason the audio is one amix.
+     *
+     * `vlock` is held by the RTP callbacks with TRYLOCK and never
+     * waited on: a re-tile forks and reaps ffmpeg, which is far longer
+     * than a media thread may be parked, and a dropped RTP packet
+     * during a deliberate re-tile is exactly what RTP is for. */
+    struct media_mix vmix;
+    pthread_mutex_t vlock;
+    /* Which peers are actually sending pictures, and the packet
+     * counters that decide it. A filter graph STALLS on an input that
+     * never produces a frame, so one peer with their camera off would
+     * otherwise freeze everybody's video — the set has to be live, not
+     * assumed from who connected. */
+    _Atomic unsigned long vpkts[CALL_MAX_PEERS];
+    unsigned long vseen[CALL_MAX_PEERS];
+    int vmisses[CALL_MAX_PEERS];
+    bool vlive[CALL_MAX_PEERS];
+    /* Which peer is big. An index into the LIVE list, because that is
+     * what Tab cycles through. */
+    int focus;
+    bool want_video;
+    int frame_fd;
+    /* Borrowed from main's frame, which outlives every thread here. The
+     * `frame` verb edits the geometry in it, so a re-tile picks up the
+     * new size without a second copy to keep in step. */
+    struct media_config *cfg;
     /* Mute is LOCAL and instant: the capture leg keeps running and its
      * packets are dropped on the way to the track. Tearing down ffmpeg
      * instead would make unmuting take as long as a device open, and a
@@ -204,10 +267,104 @@ static void RTC_API on_audio_rtp(int id, const char *msg, int size, void *ptr) {
 static void RTC_API on_video_rtp(int id, const char *msg, int size, void *ptr) {
     (void)id;
     struct session *s = ptr;
-    /* Only the first peer's picture is drawn, so only its packets are
-     * decoded — decoding the rest would burn CPU on frames with nowhere
-     * to go. */
-    if (size > 0 && s->slot == 0) media_feed(&s->owner->recv_video, msg, (size_t)size);
+    if (size <= 0 || s->slot < 0 || s->slot >= CALL_MAX_PEERS) return;
+    struct call *c = s->owner;
+    /* Counted BEFORE the lock and unconditionally: this is what tells
+     * the supervisor the peer is alive, and a packet dropped because a
+     * re-tile was in progress is still proof they are sending. */
+    c->vpkts[s->slot]++;
+    /* TRYLOCK, never lock. The only thing holding this is a re-tile,
+     * which forks and reaps ffmpeg — far longer than a media thread may
+     * be parked. Dropping a datagram is what RTP already expects;
+     * stalling libdatachannel's thread is not. */
+    if (pthread_mutex_trylock(&c->vlock) != 0) return;
+    media_feed(&c->vmix.legs[s->slot], msg, (size_t)size);
+    pthread_mutex_unlock(&c->vlock);
+}
+
+/* Rebuild the composited picture: who is in it, and who is big.
+ *
+ * ONE path for three different reasons — a peer started or stopped
+ * sending, Tab moved the focus, or shottino resized the window. They
+ * are the same operation (new tiles, new decoder, same ports), so they
+ * are the same function rather than three that would drift. */
+static void video_retile(struct call *c) {
+    if (!c->want_video) return;
+    int slots[CALL_MAX_PEERS];
+    int n = 0;
+    for (int i = 0; i < CALL_MAX_PEERS; i++)
+        if (c->vlive[i]) slots[n++] = i;
+
+    pthread_mutex_lock(&c->vlock);
+    if (n == 0) {
+        /* Nobody is sending a picture. The decoder is stopped rather
+         * than left running on inputs that produce nothing, which is
+         * what makes an audio-only participant cost nothing. */
+        media_stop_video_mix(&c->vmix);
+        c->vmix.tile_count = 0;
+        pthread_mutex_unlock(&c->vlock);
+        emit_event("tiles", "value", "");
+        return;
+    }
+    if (c->focus >= n) c->focus = 0;
+    c->vmix.tile_count = media_tile_layout(slots, n, c->focus, c->cfg->frame_w, c->cfg->frame_h,
+                                           c->vmix.tiles, CALL_TILE_MAX);
+    bool ok = media_start_video_mix(&c->vmix, c->cfg, c->frame_fd);
+    /* What is ACTUALLY on screen, slot by slot, in draw order. shottino
+     * knows which nick each slot is (it built the subscribe list), so
+     * this is what lets it label the tiles — and it is also how a cap
+     * is reported rather than silently applied: fewer slots here than
+     * peers in the call means the window had no room for the rest. */
+    char shown[CALL_MAX_PEERS * 4 + 1];
+    size_t at = 0;
+    int drawn = c->vmix.tile_count;
+    for (int i = 0; i < drawn && at + 5 < sizeof(shown); i++) {
+        if (i) shown[at++] = ',';
+        at += (size_t)snprintf(shown + at, sizeof(shown) - at, "%d", c->vmix.tiles[i].slot);
+    }
+    shown[at] = 0;
+    pthread_mutex_unlock(&c->vlock);
+
+    if (!ok) {
+        emit_event("error", "message", "cannot start video decoding");
+        return;
+    }
+    emit_event("tiles", "value", shown);
+    if (drawn < n)
+        note("video: %d of %d pictures shown — the window has no room for more", drawn, n);
+}
+
+/* Who is sending a picture right now, re-examined on a slow tick.
+ *
+ * Not derived from who CONNECTED: a peer whose camera is off is
+ * connected and silent on the video track, and an ffmpeg filter graph
+ * blocks forever on an input that never delivers a first frame. One
+ * such peer would freeze the whole mix, so membership is measured from
+ * arriving packets and nothing else.
+ *
+ * Asymmetric on purpose: a peer is added the moment a packet arrives,
+ * and dropped only after several quiet ticks. Adding late costs a
+ * moment of missing thumbnail; dropping early costs a re-tile, and a
+ * re-tile on every jittery second is worse than a stale tile. */
+static void video_supervise(struct call *c) {
+    if (!c->want_video) return;
+    bool changed = false;
+    for (int i = 0; i < CALL_MAX_PEERS; i++) {
+        unsigned long now = c->vpkts[i];
+        bool moving = now != c->vseen[i];
+        c->vseen[i] = now;
+        if (moving) {
+            c->vmisses[i] = 0;
+            if (!c->vlive[i]) {
+                c->vlive[i] = true;
+                changed = true;
+            }
+        } else if (c->vlive[i] && ++c->vmisses[i] >= CALL_TILE_MISSES) {
+            c->vlive[i] = false;
+            changed = true;
+        }
+    }
+    if (changed) video_retile(c);
 }
 
 /* The other direction: whatever the capture ffmpeg packetised, onto the
@@ -652,8 +809,17 @@ int main(int argc, char **argv) {
         call.recv_audio[i].fd = -1;
         call.recv_audio[i].pid = -1;
     }
-    call.send_audio.fd = call.send_video.fd = call.recv_video.fd = -1;
-    call.send_audio.pid = call.send_video.pid = call.recv_video.pid = -1;
+    call.send_audio.fd = call.send_video.fd = -1;
+    call.send_audio.pid = call.send_video.pid = -1;
+    pthread_mutex_init(&call.vlock, NULL);
+    call.vmix.pid = -1;
+    for (int i = 0; i < MEDIA_MAX_PEERS; i++) {
+        call.vmix.legs[i].fd = -1;
+        call.vmix.legs[i].pid = -1;
+    }
+    call.want_video = video;
+    call.frame_fd = STDOUT_FILENO;
+    call.cfg = &mcfg;
 
     /* Which session receives, and therefore which direction each one
      * negotiates. Decided ONCE, here, so nothing downstream has to work
@@ -752,8 +918,12 @@ int main(int argc, char **argv) {
          * and the process count is what hurts long before the CPU. */
         if (voices > 0 && !media_start_mix(call.recv_audio, voices, &mcfg))
             emit_event("error", "message", "cannot start audio playback (is ffmpeg installed?)");
-        if (voices > 0 && video && !media_start_recv(&call.recv_video, &mcfg, true, STDOUT_FILENO))
-            emit_event("error", "message", "cannot start video decoding");
+        /* The video decoder is NOT started here. It cannot be: its
+         * inputs are the peers actually sending pictures, and at this
+         * instant not one packet has arrived. video_supervise() starts
+         * it a tick later, when there is something to decode — which is
+         * the same path that adds a late joiner and drops somebody who
+         * turned their camera off. */
         emit_event("media", "value",
                    sending ? (video ? "audio+video" : "audio")
                            : (video ? "watching audio+video" : "watching audio"));
@@ -762,6 +932,7 @@ int main(int argc, char **argv) {
     /* Control lines on stdin, one verb per line. Blocking reads on a
      * pipe shottino owns; poll so a closed pipe or a signal ends the
      * call rather than parking this thread forever. */
+    time_t last_tile_check = 0;
     while (connected && !stop_requested) {
         struct pollfd in = { .fd = STDIN_FILENO, .events = POLLIN, .revents = 0 };
         int rc = poll(&in, 1, 200);
@@ -776,8 +947,41 @@ int main(int argc, char **argv) {
             else if (strcmp(line, "camera off") == 0) call.camera_off = true;
             else if (strcmp(line, "camera on") == 0) call.camera_off = false;
             else if (strcmp(line, "hangup") == 0) break;
+            else if (strcmp(line, "focus next") == 0) {
+                /* Cycles the LIVE list, which is what is on screen —
+                 * stepping through peers who are not sending a picture
+                 * would be a Tab that visibly does nothing. */
+                int live = 0;
+                for (int i = 0; i < CALL_MAX_PEERS; i++) live += call.vlive[i] ? 1 : 0;
+                if (live > 1) {
+                    call.focus = (call.focus + 1) % live;
+                    video_retile(&call);
+                }
+            } else if (strncmp(line, "focus ", 6) == 0) {
+                call.focus = atoi(line + 6);
+                video_retile(&call);
+            } else if (strncmp(line, "frame ", 6) == 0) {
+                /* The window changed size or the call moved between the
+                 * corner box and its own window. The helper still never
+                 * GUESSES a geometry — it is told one, exactly as at
+                 * startup — but it is no longer told only once. */
+                int w = 0, h = 0;
+                if (sscanf(line + 6, "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+                    mcfg.frame_w = w;
+                    mcfg.frame_h = h;
+                    video_retile(&call);
+                }
+            }
             else if (line[0]) continue; /* unknown verb: never fatal */
             emit_event("control", "value", line);
+        }
+        /* Who is sending a picture, on a slow tick. See
+         * video_supervise(): membership cannot be assumed from who
+         * connected, or one peer with the camera off freezes the mix. */
+        time_t now = time(NULL);
+        if (connected && call.want_video && now - last_tile_check >= CALL_TILE_TICK_SECS) {
+            last_tile_check = now;
+            video_supervise(&call);
         }
         pthread_mutex_lock(&call.lock);
         bool still = session_up(&call.pub);
@@ -790,7 +994,7 @@ int main(int argc, char **argv) {
     media_stop(&call.send_audio);
     media_stop(&call.send_video);
     for (int i = 0; i < CALL_MAX_PEERS; i++) media_stop(&call.recv_audio[i]);
-    media_stop(&call.recv_video);
+    media_free_video_mix(&call.vmix);
     session_release(&call.pub);
     for (int i = 0; i < CALL_MAX_PEERS; i++) session_release(&call.sub[i]);
     rtcCleanup();
