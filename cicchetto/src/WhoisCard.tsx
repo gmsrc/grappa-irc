@@ -1,6 +1,7 @@
 import { type Component, For, Show } from "solid-js";
 import type { WhoisBundle } from "./lib/api";
 import { formatDuration } from "./lib/duration";
+import { whoisBundleHasFields } from "./lib/whoisBundle";
 import { MircBody } from "./MircText";
 import NickText from "./NickText";
 
@@ -81,36 +82,7 @@ const WhoisCard: Component<Props> = (props) => {
   const bundle = () => props.bundle;
   const hasFields = (): boolean => {
     const b = bundle();
-    if (!b) return false;
-    return (
-      b.user !== null ||
-      b.host !== null ||
-      b.realname !== null ||
-      b.server !== null ||
-      b.is_operator ||
-      b.idle_seconds !== null ||
-      b.channels !== null ||
-      // P-0a — extended flags also count as "has data"
-      b.using_ssl ||
-      b.is_registered ||
-      b.is_admin ||
-      b.is_services_admin ||
-      b.is_helper ||
-      b.is_chanop ||
-      b.is_agent ||
-      b.is_java ||
-      b.umodes !== null ||
-      b.away_message !== null ||
-      b.actually_host !== null ||
-      // #221 — solanum-specific fields also count as "has data".
-      b.account !== null ||
-      b.secure ||
-      b.certfp !== null ||
-      // #673 — an oper-only or privacy-stripped reply can carry nothing
-      // but an extra line; without this the card claims "no WHOIS
-      // information returned" while holding the line /whois was run for.
-      (b.extra_lines?.length ?? 0) > 0
-    );
+    return b !== undefined && whoisBundleHasFields(b);
   };
 
   return (

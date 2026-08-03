@@ -28067,8 +28067,9 @@ thread): no message counters / conversation stats.
 
 ## 2026-08-03 — #606: never send a WHOIS the user did not initiate
 
-#606 shipped with `nick-follow-query.spec.ts` red 3/3 — a spec it does not
-touch and main passes — and the fix turned out to be a rule, not a patch.
+#606 shipped with `nick-follow-query.spec.ts` red — a spec it does not touch
+and main passes; red in CI, and reproduced locally in every full-suite run
+attempted — and the fix turned out to be a rule, not a patch.
 
 **Measure before theorising.** The first reading of the trace said the send
 routed to the NEW nick and returned 201, so "routing is fine, the peer just
@@ -28091,12 +28092,17 @@ took 48ms.
 
 **The mechanism is a ceiling, not a unit cost.** WHOIS and PRIVMSG carry the
 same fake-lag flag and the same `since += 2 + len/120` (bahamut
-`src/parse.c:236`) — a WHOIS is not "expensive". But `src/s_bsd.c:1657` reads a
-client's socket only while `since - now < 10`, so ~5 closely-spaced commands
-and the ircd STOPS READING grappa's socket; whatever the operator sends next
-sits in the kernel buffer until `since` drains. The fix can therefore never be
-"make the WHOIS cheaper" — it is "put fewer closely-spaced commands on the
-connection", and the cheapest command is the one never sent.
+`src/parse.c:236`) — a WHOIS is not "expensive". But `src/s_bsd.c:1657` gates
+the recvQ drain on `since - now < 10`: past that the ircd keeps READING the
+socket and stops PARSING it, so at ~2s of penalty per command about five
+closely-spaced ones buy a 10s ceiling and whatever the operator sends next
+waits in the ircd's receive queue until `since` drains. (Not the kernel
+buffer — `read_packet` keeps `recv()`ing into `cptr->recvQ`. Which makes the
+accurate version the scarier one: un-parsed recvQ past `CLIENT_FLOOD`, 2560
+bytes in `include/config.h`, kills a non-oper client for Excess Flood.) The
+fix can therefore never be "make the WHOIS cheaper" — it is "put fewer
+closely-spaced commands on the connection", and the cheapest command is the
+one never sent.
 
 **But the deciding argument is not performance.** A WHOIS is visible to the
 person it names: a target carrying umode +y receives `<nick> is doing a WHOIS
@@ -28137,16 +28143,25 @@ Everything else — host, realname, channels — describes the person and surviv
 The card is therefore fetched once and is not refreshable; a long-lived rail
 shows a stale idle clock. The only refresh is the operator's own `/whois
 <peer>`, which `userTopic` already routes into this cache — a WHOIS the user
-asked for.
+asked for. One case is NOT "answered", though, and deleting the TTL is what
+made it matter: a WHOIS for a nick nobody holds still returns a bundle (401
+then an unconditional 318), so an offline peer would otherwise be cached as
+unknown for the whole session and the card would still read "no WHOIS
+information returned" an hour later when they sign on and message you. An
+empty bundle is therefore stored — the card must be able to say so — but not
+counted as an answer: the ask stands for a 30s retry window, shared with a
+reply still in flight, since from the rail's side those are one state.
 
-**Adjacent defect, filed as #785, fixed on main and NOT here.** `NumericRouter`
-delegates any scan-class numeric whose `params[1]` is a WHOIS in flight, so
-while a rail fetch is pending an ERR_NOSUCHNICK that actually answers the
-operator's `/msg` is folded into the WHOIS bundle instead of landing in the
-query window as the "message bounced" notice. That is a `main` defect — the
-window has always existed for the seconds after a typed `/whois` — which the
-auto-fetch widens into a routine race, so it is fixed there rather than here,
-where it would read as a branch artefact and vanish on merge.
-`cp13-s5-msg-ghost-401` caught it 2/2 in full local suites and passed CI on the
-same commit by timing luck alone. Durable rule: a pending WHOIS consumes at
-most ONE 401.
+**Adjacent defect, filed as #785 (OPEN) and deliberately NOT fixed here.**
+`NumericRouter` delegates any scan-class numeric whose `params[1]` is a WHOIS
+in flight, so while a rail fetch is pending an ERR_NOSUCHNICK that actually
+answers the operator's `/msg` is folded into the WHOIS bundle instead of
+landing in the query window as the "message bounced" notice. That is a `main`
+defect — the window has always existed for the seconds after a typed
+`/whois` — which the auto-fetch widens into a routine race. It belongs on main
+rather than in this branch, where it would read as a branch artefact and
+vanish on merge. `cp13-s5-msg-ghost-401` caught it 2/2 in full local suites
+and passed CI on the same commit by timing luck alone; it is the ONE red spec
+left in this branch's local run (476 passed, 1 failed), so per the CLAUDE.md
+ship gate #785 has to land on main BEFORE this merges. Durable rule: a pending
+WHOIS consumes at most ONE 401.

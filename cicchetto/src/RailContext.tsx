@@ -48,13 +48,17 @@ const RailContext: Component = () => {
   const sel = () => selectedChannel();
 
   // #606 — fetch-on-select. When a query window is (re)focused, ask the rail
-  // WHOIS cache for its partner; the store de-dupes a fresh cache hit and an
-  // in-flight request, so re-selecting a query or fast A→B→A switching issues
-  // at most one WHOIS per nick. Keyed on the composed (slug, nick) string so
-  // the effect fires ONLY when the focused query's identity actually changes
-  // (a followQueryNick rename re-fetches for the new nick), not on every
-  // unrelated selection churn. A nick cannot contain a space, so the space
-  // separator is unambiguous.
+  // WHOIS cache for its partner; the store decides whether that costs an
+  // upstream command (it does not, for a nick already known). Keyed on the
+  // composed (slug, nick) string so the effect fires ONLY when the focused
+  // query's identity actually changes, not on every unrelated selection
+  // churn. A nick cannot contain a space, so the separator is unambiguous.
+  //
+  // A #373 rename DOES fire this effect — `followQueryNick` swaps the
+  // selection — but it must NOT cost a WHOIS: `subscribe.ts` migrates the
+  // rail cache old→new BEFORE that swap, so this lands on a hit. Solid
+  // flushes effects at the end of the write, so the ordering there is what
+  // holds this true; reverse it and every rename asks the ircd again.
   createEffect(
     on(
       () => {

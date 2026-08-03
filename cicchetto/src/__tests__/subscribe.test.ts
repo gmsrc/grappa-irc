@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createEffect, createRoot, createSignal, on } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { channelKey } from "../lib/channelKey";
 
@@ -1146,6 +1146,62 @@ describe("subscribe — WS join effect", () => {
 
       expect(rail.railWhoisFor("freenode", "Guest99")).toBeUndefined();
       expect(rail.railWhoisFor("freenode", "Renamed99")?.host).toBe("guest.example");
+    });
+
+    it("migrates the rail cache BEFORE the selection swap wakes its watchers", async () => {
+      // The load-bearing half of the fix. `followQueryNick` swaps the
+      // selection, and Solid flushes effects at the end of that write — so
+      // RailContext's fetch-on-select effect runs INSIDE the swap. If the
+      // rail cache were migrated after it, that effect would see a miss and
+      // send the very WHOIS this PR exists to stop (measured at 8s of delay
+      // on the operator's next message, and a "<nick> is doing a WHOIS on
+      // you" notice at a +y peer, for a rename nobody asked about).
+      //
+      // Pinned without mounting the component: an effect on the selection is
+      // scheduled exactly like RailContext's, so what it can see at wake time
+      // is what RailContext can see.
+      localStorage.setItem("grappa-token", "tok");
+      localStorage.setItem(
+        "grappa-subject",
+        JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+      );
+      await seedStubs();
+      const rail = await import("../lib/railWhois");
+      const store = await loadStores();
+      await vi.waitFor(() => {
+        expect(mockChannel.on).toHaveBeenCalled();
+      });
+
+      rail.ingestRailWhois("freenode", "Guest99", {
+        target: "Guest99",
+        host: "guest.example",
+      } as never);
+      store.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "Guest99",
+        kind: "query",
+      });
+
+      let seenAtSwap: unknown = "the watcher never woke";
+      createRoot(() =>
+        createEffect(
+          on(
+            () => store.selectedChannel()?.channelName,
+            (name) => {
+              if (name === "Renamed99") seenAtSwap = rail.railWhoisFor("freenode", "Renamed99");
+            },
+          ),
+        ),
+      );
+
+      fireMessageEvent("#grappa", {
+        id: 21,
+        kind: "nick_change",
+        sender: "Guest99",
+        meta: { new_nick: "Renamed99" },
+      });
+
+      expect(seenAtSwap).toEqual(expect.objectContaining({ host: "guest.example" }));
     });
 
     it("logout (token → null) clears scrollback + unread + selection", async () => {

@@ -2,22 +2,29 @@ import { createEffect, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WhoisBundle } from "../lib/api";
 
-// #606 — rail whois store. Per-nick TTL cache + in-flight de-dupe that
-// backs the query-window rail context (the deferred half of #474). It is
-// DISTINCT from the single-slot `whoisCard.ts` store (which stays owned by
-// the user-issued `/whois` scrollback card): the rail auto-fetches on
-// select and must NOT clobber that store nor stack requests.
+// #606 — rail whois store. Per-nick cache backing the query-window rail
+// context (the deferred half of #474). DISTINCT from the single-slot
+// `whoisCard.ts` store (owned by the user-issued `/whois` scrollback card):
+// the rail fetches on select and must NOT clobber that store nor stack
+// requests.
+//
+// The contract these tests pin: a nick the rail KNOWS is never asked about
+// again (no freshness TTL — a WHOIS costs the operator's next send fake-lag
+// budget and tells a +y peer it happened), while an ask that produced
+// nothing — reply in flight, or an empty reply because the peer is offline —
+// stands only for the retry window.
 //
 // Tests cover:
 //   1. requestRailWhois issues WHOIS on first select.
-//   2. re-select inside the TTL (bundle cached) does NOT re-issue.
-//   3. re-select after the TTL re-issues.
-//   4. two rapid selects for the same nick issue ONE WHOIS (in-flight).
-//   5. A→B→A inside the TTL issues one WHOIS per nick, not three.
-//   6. ingestRailWhois reports whether the bundle satisfied a rail request.
+//   2. a known nick is never re-asked, however old the bundle.
+//   3. an unanswered ask is retried once the retry window lapses.
+//   4. an EMPTY answer is not an answer: it is retried, not cached forever.
+//   5. two rapid selects for the same nick issue ONE WHOIS.
+//   6. A→B→A issues one WHOIS per nick, not three.
 //   7. railWhoisFor is reactive + case-folded.
 //   8. no live network id → no WHOIS, no throw.
 //   9. identity rotation wipes the cache.
+//  10. #373 — the cache follows a peer NICK instead of stranding it.
 
 vi.mock("../lib/auth", async () => {
   const { createSignal } = await import("solid-js");
@@ -74,6 +81,15 @@ const bundle = (target: string): WhoisBundle => ({
   extra_lines: null,
 });
 
+// What the server emits for a nick nobody holds: the accumulator drained by
+// 318 never received a field, so every slot is null/false.
+const emptyBundle = (target: string): WhoisBundle => ({
+  ...bundle(target),
+  user: null,
+  host: null,
+  realname: null,
+});
+
 beforeEach(() => {
   vi.resetModules();
   pushWhoisMock.mockReset();
@@ -119,6 +135,21 @@ describe("railWhois", () => {
     expect(pushWhoisMock).toHaveBeenCalledTimes(2);
   });
 
+  it("retries an EMPTY answer later — an offline peer is not unknown forever", async () => {
+    // bahamut answers a WHOIS for a nick nobody holds with 401 + 318, so the
+    // bundle arrives carrying nothing. Caching that as "answered" would leave
+    // the card reading "no WHOIS information returned" for the rest of the
+    // session even after the peer signs on and messages you in that window.
+    const { requestRailWhois, ingestRailWhois } = await import("../lib/railWhois");
+    requestRailWhois("azzurra", "ghost");
+    ingestRailWhois("azzurra", "ghost", emptyBundle("ghost"));
+    requestRailWhois("azzurra", "ghost"); // straight away: still inside the retry window
+    expect(pushWhoisMock).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(T0 + 31_000);
+    requestRailWhois("azzurra", "ghost");
+    expect(pushWhoisMock).toHaveBeenCalledTimes(2);
+  });
+
   it("issues ONE WHOIS for two rapid selects of the same nick (in-flight de-dupe)", async () => {
     const { requestRailWhois } = await import("../lib/railWhois");
     requestRailWhois("azzurra", "alice");
@@ -126,13 +157,13 @@ describe("railWhois", () => {
     expect(pushWhoisMock).toHaveBeenCalledTimes(1);
   });
 
-  it("A→B→A inside the TTL issues one WHOIS per nick, not three", async () => {
+  it("A→B→A issues one WHOIS per nick, not three", async () => {
     const { requestRailWhois, ingestRailWhois } = await import("../lib/railWhois");
     requestRailWhois("azzurra", "alice");
     ingestRailWhois("azzurra", "alice", bundle("alice"));
     requestRailWhois("azzurra", "bob");
     ingestRailWhois("azzurra", "bob", bundle("bob"));
-    requestRailWhois("azzurra", "alice"); // back to A, still fresh
+    requestRailWhois("azzurra", "alice"); // back to A, already known
     expect(pushWhoisMock).toHaveBeenCalledTimes(2);
     expect(pushWhoisMock).toHaveBeenNthCalledWith(1, 1, "alice", null, "rail");
     expect(pushWhoisMock).toHaveBeenNthCalledWith(2, 1, "bob", null, "rail");
@@ -145,7 +176,7 @@ describe("railWhois", () => {
     const { ingestRailWhois, requestRailWhois, railWhoisFor } = await import("../lib/railWhois");
     ingestRailWhois("azzurra", "carol", bundle("carol"));
     expect(railWhoisFor("azzurra", "carol")?.target).toBe("carol");
-    requestRailWhois("azzurra", "carol"); // fresh cache → no WHOIS
+    requestRailWhois("azzurra", "carol"); // already known → no WHOIS
     expect(pushWhoisMock).not.toHaveBeenCalled();
   });
 
@@ -163,7 +194,7 @@ describe("railWhois", () => {
     expect(seen.at(-1)).toBe("alice");
   });
 
-  it("a folded re-select (Alice → alice) inside the TTL issues one WHOIS", async () => {
+  it("a folded re-select (Alice → alice) issues one WHOIS", async () => {
     const { requestRailWhois, ingestRailWhois } = await import("../lib/railWhois");
     requestRailWhois("azzurra", "Alice");
     ingestRailWhois("azzurra", "Alice", bundle("Alice"));
@@ -226,18 +257,17 @@ describe("railWhois", () => {
       expect(pushWhoisMock).toHaveBeenNthCalledWith(2, 1, "NickTemporaneo", null, "rail");
     });
 
-    it("migrates a bundle whose refresh is in flight, and settles it", async () => {
-      // A stale bundle with a pending refresh DOES carry data worth moving;
-      // only the pending marker is dropped, so the card keeps rendering and
-      // the new nick is not re-asked.
+    it("drops an entry that only holds an EMPTY answer", async () => {
+      // Nothing known about this peer, so the rename has nothing to carry and
+      // the new nick must be free to ask.
       const { ingestRailWhois, renameRailWhois, requestRailWhois, railWhoisFor } = await import(
         "../lib/railWhois"
       );
-      ingestRailWhois("azzurra", "Guest87449", bundle("Guest87449"));
+      ingestRailWhois("azzurra", "Guest87449", emptyBundle("Guest87449"));
       renameRailWhois("azzurra", "Guest87449", "NickTemporaneo");
-      expect(railWhoisFor("azzurra", "NickTemporaneo")?.host).toBe("Guest87449.host");
+      expect(railWhoisFor("azzurra", "Guest87449")).toBeUndefined();
       requestRailWhois("azzurra", "NickTemporaneo");
-      expect(pushWhoisMock).not.toHaveBeenCalled();
+      expect(pushWhoisMock).toHaveBeenCalledTimes(1);
     });
 
     it("clears is_registered — 307 attests the NICK, not the person", async () => {

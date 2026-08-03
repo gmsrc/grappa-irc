@@ -4,6 +4,7 @@ import { identityScopedStore } from "./identityScopedStore";
 import { networkIdBySlug } from "./networks";
 import { normalizeNick } from "./nickEquals";
 import { pushWhois } from "./socket";
+import { whoisBundleHasFields } from "./whoisBundle";
 
 // #606 — rail whois store: the per-nick WHOIS cache that backs the
 // query-window rail context (the deferred half of #474). It is DELIBERATELY
@@ -17,17 +18,21 @@ import { pushWhois } from "./socket";
 //     card the user never asked for.
 //
 // Fetch policy (issue #606 scope 2, revised):
-//   * ONE WHOIS per nick, on FIRST select (`requestRailWhois`). Cached for
-//     the life of the identity — there is NO staleness refetch;
-//   * in-flight de-dupe — fast window switching cannot stack requests.
+//   * ONE WHOIS per nick, on FIRST select (`requestRailWhois`). Once the nick
+//     is KNOWN it is never asked about again — there is NO staleness refetch;
+//   * an ask that produced nothing (reply in flight, or a reply carrying no
+//     fields because the peer is offline) stands for `RAIL_WHOIS_RETRY_MS`,
+//     which both de-dupes fast window switching and lets a peer who was
+//     offline at first select be resolved later in the session.
 //
 // The freshness TTL this store shipped with is deliberately GONE. It was not
 // a cost problem: on bahamut a WHOIS and a PRIVMSG carry the same fake-lag
 // flag and the same `since += 2 + len/120` (src/parse.c:236). The problem is
-// the CEILING — `s_bsd.c:1657` reads a client's socket only while
-// `since - now < 10`, so ~5 closely-spaced commands and the ircd STOPS
-// READING grappa's socket; whatever the operator sends next sits in the
-// kernel buffer until `since` drains. A TTL invites exactly that burst
+// the CEILING — `s_bsd.c:1657` gates the recvQ drain on
+// `since - now < 10`, so after ~5 closely-spaced commands the ircd keeps
+// reading grappa's socket but STOPS PARSING it: whatever the operator sends
+// next sits in the ircd's receive queue until `since` drains. A TTL invites
+// exactly that burst
 // (cycle back through N query windows after a minute and every one refires),
 // and the operator's next message pays for it. Not refetching removes the
 // burst by construction instead of policing it — the cheapest rate limiter
@@ -57,16 +62,18 @@ import { pushWhois } from "./socket";
 // hit rather than a race). `requestRailWhois` therefore issues its WHOIS
 // tagged `"rail"`; `ingestRailWhois` just caches by nick.
 
-// A pending (issued, not-yet-answered) request is honoured for this long
-// before a re-select re-issues, so a bundle that never arrives (peer
-// offline, disconnect) does not wedge the nick forever.
-const RAIL_WHOIS_PENDING_TTL_MS = 30_000;
+// How long an ASK stands before a re-select is allowed to ask again. It
+// covers both ways an ask can fail to produce data — a reply still in flight,
+// and a reply that arrived carrying nothing (the peer was offline, so bahamut
+// answered 401 + 318 and the bundle is all-null) — because from the rail's
+// side those are the same state: asked at `at`, still nothing to show. It is
+// NOT a freshness clock: a bundle WITH fields is never re-asked.
+const RAIL_WHOIS_RETRY_MS = 30_000;
 
 type RailWhoisEntry = {
-  /** Epoch ms of the last request (while pending) or ingest (once settled). */
+  /** Epoch ms of the ask (`requestRailWhois`) or of the reply (`ingest`). */
   at: number;
   bundle: WhoisBundle | null;
-  pending: boolean;
 };
 
 const exports_ = identityScopedStore((onIdentityChange) => {
@@ -84,10 +91,10 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const railWhoisFor = (slug: string, nick: string): WhoisBundle | undefined =>
     byNick()[slug]?.[normalizeNick(nick)]?.bundle ?? undefined;
 
-  // Called on query select. Issues at most ONE WHOIS per nick per identity:
-  // an already-answered nick short-circuits FOREVER (no staleness rule), and
-  // a live in-flight request short-circuits until the pending TTL lapses, so
-  // fast A→B→A switching cannot stack requests. A WHOIS is visible to the
+  // Called on query select. A nick we already know short-circuits FOREVER
+  // (no staleness rule); a nick we asked about within the retry window
+  // short-circuits too, so fast A→B→A switching cannot stack. A WHOIS is
+  // visible to the
   // person it names — a target carrying umode +y is told "<nick> is doing a
   // WHOIS on you" (bahamut src/s_user.c:2200) — so every avoided refetch is
   // noise a peer does not receive, not merely a command grappa does not send.
@@ -96,30 +103,33 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     const now = Date.now();
     const entry = untrack(() => byNick()[slug]?.[key]);
     if (entry) {
-      if (entry.pending && now - entry.at < RAIL_WHOIS_PENDING_TTL_MS) return; // in flight
-      if (entry.bundle) return; // answered once — never re-asked
+      // Answered — the nick is known, and known is forever.
+      if (entry.bundle !== null && whoisBundleHasFields(entry.bundle)) return;
+      // Asked recently, nothing to show for it yet (in flight, or answered
+      // empty). One ask per retry window, so cycling windows cannot burst.
+      if (now - entry.at < RAIL_WHOIS_RETRY_MS) return;
     }
     const networkId = networkIdBySlug(slug);
     if (networkId === undefined) return;
-    // Reaching here means there is nothing cached (a bundle would have
-    // returned above), so this only ever marks a first fetch or a retry after
-    // an unanswered one.
-    put(slug, key, { at: now, bundle: null, pending: true });
+    // Keep any empty bundle visible (the card says "no WHOIS information
+    // returned" rather than blinking out) while the retry is in flight.
+    put(slug, key, { at: now, bundle: entry?.bundle ?? null });
     // Fire-and-forget: unlike the operator /whois (compose.ts awaits and
     // surfaces the reject inline), the rail auto-fetch was not user-initiated,
     // so a transient push reject (socket not connected, rate-limit) is
-    // non-actionable and stays silent. The pending-TTL covers the retry — a
-    // re-select after RAIL_WHOIS_PENDING_TTL_MS re-issues.
+    // non-actionable and stays silent. The retry window covers it — a
+    // re-select after RAIL_WHOIS_RETRY_MS asks again.
     void pushWhois(networkId, nick, null, "rail").catch(() => {});
   };
 
-  // Feed the per-nick cache from an arriving `whois_bundle`. Clears the
-  // pending marker (the request settled) and settles the nick for good — the
-  // only later writes are a user-issued `/whois` refresh (routed here by
-  // `userTopic.ts` off the server-marked `source`) and a #373 rename.
+  // Feed the per-nick cache from an arriving `whois_bundle`. A bundle WITH
+  // fields settles the nick for good; an empty one (401 + 318 for a nick
+  // nobody holds) is stored so the card can say so, but re-stamps `at` so the
+  // retry window governs when the rail may ask again. Origin routing is the
+  // caller's job in `userTopic.ts`, off the server-marked `source`.
   const ingestRailWhois = (slug: string, target: string, bundle: WhoisBundle): void => {
     const key = normalizeNick(target);
-    put(slug, key, { at: Date.now(), bundle, pending: false });
+    put(slug, key, { at: Date.now(), bundle });
   };
 
   // #373 — a peer renamed: move its cached bundle old→new. This cache is a
@@ -134,14 +144,12 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // person — host, realname, channels all still hold — and it is relabelled
   // rather than refetched.
   //
-  // ONLY an answered entry migrates. A still-pending one carries no bundle to
-  // move, and its reply keys on the OLD nick (`userTopic` routes on the wire
-  // `target`), so migrating the pending MARKER would suppress the new nick's
-  // fetch while the answer lands on the dead key — a card blank until the
-  // pending TTL lapses AND the selection identity changes, which it will not
-  // while the operator sits in the renamed window. Dropping it instead lets
-  // the new nick fetch once, which is the right outcome: nothing is known
-  // about this peer yet, so there is nothing a rename could carry over.
+  // ONLY an entry that KNOWS something migrates. An ask still in flight, or
+  // one answered empty, has nothing to carry — and its reply keys on the OLD
+  // nick (`userTopic` routes on the wire `target`), so moving the marker
+  // would suppress the new nick's ask while the answer landed on the dead
+  // key. Dropping it lets the new nick ask once, which is the right outcome:
+  // nothing is known about this peer, so a rename has nothing to preserve.
   //
   // Merge rule mirrors `renameReadCursorChannel`: an entry already under the
   // new nick wins (it is the fresher observation of that identity).
@@ -153,7 +161,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       const net = prev[slug];
       if (net === undefined || !(oldKey in net)) return prev;
       const { [oldKey]: moved, ...rest } = net;
-      if (moved === undefined || moved.bundle === null || newKey in rest) {
+      if (moved?.bundle == null || !whoisBundleHasFields(moved.bundle) || newKey in rest) {
         return { ...prev, [slug]: rest };
       }
       const carried = moved.bundle;
@@ -163,12 +171,12 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           ...rest,
           [newKey]: {
             at: moved.at,
-            // `pending` is dropped with the old key: any refresh still in
-            // flight will answer to the old nick, so the new key is settled.
-            pending: false,
             // 307 RPL_WHOISREGNICK is "identified for THIS nick", not for the
-            // person — the one field a rename genuinely invalidates. Carrying
-            // it would badge the renamed peer "registered" on no evidence.
+            // person, so it is the one bahamut field a rename invalidates:
+            // carrying it would badge the renamed peer "registered" on no
+            // evidence. A services `account` (330) is connection-scoped and
+            // legitimately survives — on those networks the badge stays, and
+            // rightly, because there the account IS the person.
             bundle: { ...carried, target: newNick, is_registered: false },
           },
         },
