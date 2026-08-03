@@ -214,6 +214,8 @@ vi.mock("../lib/compose", () => ({
   recallPrev: vi.fn(),
   recallNext: vi.fn(),
   tabComplete: vi.fn(),
+  // #737 — ComposeBox reads the per-window paced-drain lock for its readOnly.
+  isDraining: () => false,
 }));
 
 vi.mock("../lib/theme", () => ({

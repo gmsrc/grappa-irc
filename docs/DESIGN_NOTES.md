@@ -27727,3 +27727,47 @@ with only a console line.
 This change adds no competing layer — the failure screen is a terminal state
 that replaces the Shell subtree, deliberately bare, and must not become the
 place staged-progress copy accretes.
+
+### 2026-08-03 — #737 — a paced drain OWNS the draft it is draining (cic)
+
+Follow-on defect from #666, found by the 2026-08 codebase review. A multi-line
+paste mirrors the unsent remainder into a window's draft after every acked
+line, and the #666 pacing can hold that for a minute (per line: a 429, the
+server's retry-after, up to 5 retries clamped at 60s each). Only the submit
+BUTTON was disabled for that window. The textarea stayed editable over the
+same buffer, so an operator typing a reply mid-drain watched it vanish on the
+next acked line, every couple of seconds, and then get wiped by the
+end-of-submit clear. Enter did nothing the whole time.
+
+**The drain and operator input cannot share one buffer.** The residue has to
+stay IN the draft — that is what makes a resend deliver only the remainder
+(#666, and #723's re-addressing rests on it) — so the operator's writes are
+what must yield. The store refuses them while a drain holds the window, rather
+than accepting and losing them.
+
+**The lock lives in the store, not in ComposeBox.** Two reasons. It is
+per-WINDOW: `sending()` is a ComposeBox-local signal, and the component's
+`key()` follows the operator, so a `readOnly={sending()}` would freeze whatever
+window they switched to mid-drain while leaving the actually-draining one
+writable. And every door lands on the same store — typing, `pasteRoute`
+(shared by the textarea paste AND the #352 global paste listener), arrow-key
+history recall, swipe recall, tab-complete. Gating one door means the next door
+added is a fresh instance of this bug; gating `setDraft` / `recallPrev` /
+`recallNext` / `tabComplete` closes the class.
+
+**`readOnly`, never `disabled`.** `disabled` blurs the textarea, which
+collapses the on-screen keyboard — the focus steal #59 exists to prevent, and
+which `ComposeBox.test.tsx` already guards. `readOnly` keeps focus, caret and
+selection, and makes the refusal visible instead of silently swallowing
+keystrokes; the submit button's existing spinner carries the "why".
+
+**Released in `finally`.** A lock that outlives its drain leaves the composer
+dead until reload — worse than the overwrite it prevents. The fatal path
+unlocks too, and the test pins that the lock was actually HELD before the
+release, so it cannot pass by never locking at all.
+
+**Deliberately not built.** A richer "sending 7 of 30 — composer locked"
+progress affordance. The spinner plus a read-only box is proportionate; a
+progress surface is a UX change, not this defect. And the composer is locked
+for the RESIDUE window only — a `/msg` whose source window keeps a draft is
+#723's territory, not this one.

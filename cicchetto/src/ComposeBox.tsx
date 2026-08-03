@@ -1,7 +1,15 @@
 import { type Component, createSignal, onCleanup, Show } from "solid-js";
 import { isDiagEnabled } from "./DiagFloat";
 import { channelKey } from "./lib/channelKey";
-import { getDraft, recallNext, recallPrev, setDraft, submit, tabComplete } from "./lib/compose";
+import {
+  getDraft,
+  isDraining,
+  recallNext,
+  recallPrev,
+  setDraft,
+  submit,
+  tabComplete,
+} from "./lib/compose";
 import { composePlaceholder } from "./lib/composePlaceholder";
 import { diagPush } from "./lib/diagLog";
 import { networkBySlug } from "./lib/networks";
@@ -497,6 +505,18 @@ const ComposeBox: Component<Props> = (props) => {
           onInput={onInput}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
+          // #737 — a paced drain rewrites this draft every acked line for as
+          // long as the pacing lasts. The store refuses operator writes while
+          // it does (that is the real guard, and it covers the global paste
+          // listener too); readOnly makes the refusal VISIBLE instead of
+          // swallowing keystrokes, and the submit button's spinner says why.
+          // readOnly, not disabled: disabled blurs the textarea, which
+          // collapses the on-screen keyboard — the focus steal #59 exists to
+          // prevent. Keyed on the WINDOW, not the component-local sending():
+          // that one would follow the operator to whatever window they switch
+          // to mid-drain and freeze the wrong composer.
+          readOnly={isDraining(key())}
+          aria-busy={isDraining(key())}
           placeholder={composePlaceholder(props.networkSlug, props.channelName)}
           rows={1}
           aria-label="compose message"

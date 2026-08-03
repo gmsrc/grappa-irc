@@ -8,6 +8,9 @@ vi.mock("../lib/compose", () => ({
   recallPrev: vi.fn(),
   recallNext: vi.fn(),
   tabComplete: vi.fn(),
+  // #737 — the per-window paced-drain lock the textarea's readOnly is keyed
+  // on. Default false: every pre-existing case is a window nobody is draining.
+  isDraining: vi.fn(() => false),
 }));
 
 vi.mock("../lib/channelKey", () => ({
@@ -429,6 +432,30 @@ describe("ComposeBox", () => {
     render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
     const ta = screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
     expect(ta.hasAttribute("disabled")).toBe(false);
+  });
+
+  // #737 — while a paced drain owns this window's draft the textarea goes
+  // read-only, so the operator SEES the refusal instead of watching their
+  // keystrokes get overwritten on the next acked line.
+  it("#737 — textarea is readOnly (never disabled) while the window is draining", async () => {
+    const compose = await import("../lib/compose");
+    vi.mocked(compose.isDraining).mockReturnValue(true);
+    try {
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      const ta = screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
+      expect(ta.readOnly).toBe(true);
+      // `disabled` would blur it and collapse the on-screen keyboard — the
+      // focus steal #59 exists to prevent. readOnly keeps focus and caret.
+      expect(ta.hasAttribute("disabled")).toBe(false);
+    } finally {
+      vi.mocked(compose.isDraining).mockReturnValue(false);
+    }
+  });
+
+  it("#737 — textarea is writable when no drain owns the window", () => {
+    render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+    const ta = screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
+    expect(ta.readOnly).toBe(false);
   });
 
   // #177 removed the custom on-screen IRC keyboard. The compose textarea no

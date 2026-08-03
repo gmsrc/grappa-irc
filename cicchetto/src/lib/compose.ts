@@ -264,7 +264,41 @@ const exports_ = identityScopedStore((onIdentityChange) => {
 
   const getDraft = (key: ChannelKey): string => getState(key).draft;
 
+  // #737 — a #666 paced drain OWNS the draft it mirrors the residue into, and
+  // it can own it for a minute (per line: a 429, the server's retry-after, up
+  // to 5 retries clamped at 60s each). The operator cannot share that buffer:
+  // whatever they type is overwritten on the next acked line and then wiped by
+  // the end-of-submit clear. Refuse the write instead of losing it.
+  //
+  // The claim is per WINDOW, not per component: a ComposeBox-local `sending()`
+  // would follow the operator to whatever window they switch to, freezing that
+  // one while leaving the actually-draining window writable. It is also
+  // checked HERE rather than at the doors, because every door lands on this
+  // store — typing, both paste routes (`pasteRoute` → setDraft), arrow-key and
+  // swipe history recall, and tab-complete. Gating one door means the next
+  // door added is a fresh instance of this bug.
+  const [drainingKeys, setDrainingKeys] = createSignal<Record<ChannelKey, true>>({});
+
+  const isDraining = (key: ChannelKey): boolean => drainingKeys()[key] === true;
+
+  const claimDrafts = (keys: ChannelKey[]): void => {
+    setDrainingKeys((prev) => {
+      const next = { ...prev };
+      for (const k of keys) next[k] = true;
+      return next;
+    });
+  };
+
+  const releaseDrafts = (keys: ChannelKey[]): void => {
+    setDrainingKeys((prev) => {
+      const next = { ...prev };
+      for (const k of keys) delete next[k];
+      return next;
+    });
+  };
+
   const setDraft = (key: ChannelKey, value: string): void => {
+    if (isDraining(key)) return;
     // Any explicit edit (typing, paste, clear) breaks the tab-cycle
     // and resets the history cursor to null (we're back to live draft).
     tabCycle = null;
@@ -272,6 +306,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   };
 
   const recallPrev = (key: ChannelKey): void => {
+    if (isDraining(key)) return;
     writeState(key, (s) => {
       if (s.history.length === 0) return s;
       // Leaving the bottom: park the live draft so recallNext can restore it.
@@ -285,6 +320,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   };
 
   const recallNext = (key: ChannelKey): void => {
+    if (isDraining(key)) return;
     writeState(key, (s) => {
       if (s.historyCursor === null) return s;
       const next = s.historyCursor + 1;
@@ -376,6 +412,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     }
     let sentCount = 0;
     let totalCount = 0;
+    // #737 — the drain owns this draft until it stops, however long the
+    // pacing takes. Released in `finally` so a fatal mid-fan-out unlocks the
+    // window too: a lock that outlives its drain leaves the composer dead
+    // until reload, which is worse than the overwrite it prevents.
+    claimDrafts([key]);
     try {
       await sendBodyLines(slug, target, body, action, (sent, total, residue) => {
         sentCount = sent;
@@ -409,6 +450,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       return totalCount > 1
         ? { error: `${reason}${sentOf}; the rest are in the box` }
         : { error: reason };
+    } finally {
+      releaseDrafts([key]);
     }
   };
 
@@ -1488,6 +1531,9 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     cursor: number,
     forward: boolean,
   ): { newInput: string; newCursor: number } | null => {
+    // #737 — tab-complete writes the draft directly (see writeState below),
+    // so it needs the same refusal as setDraft / the history walk.
+    if (isDraining(key)) return null;
     const all = membersByChannel()[key] ?? [];
     if (all.length === 0) return null;
 
@@ -1568,6 +1614,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     recallNext,
     submit,
     tabComplete,
+    isDraining,
   };
 });
 
@@ -1578,3 +1625,4 @@ export const recallPrev = exports_.recallPrev;
 export const recallNext = exports_.recallNext;
 export const submit = exports_.submit;
 export const tabComplete = exports_.tabComplete;
+export const isDraining = exports_.isDraining;

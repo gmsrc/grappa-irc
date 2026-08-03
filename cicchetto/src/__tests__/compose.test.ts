@@ -510,6 +510,224 @@ describe("compose submit — slash command dispatch", () => {
     }
   });
 
+  // #737 — a paced drain OWNS the draft it is mirroring the residue into: it
+  // rewrites that buffer every acked line, for as long as the drain runs (a
+  // 429 ladder can hold it for a minute). The operator cannot share that
+  // buffer — anything they type is overwritten on the next tick and wiped by
+  // the end-of-submit clear. The store refuses the write instead of losing it,
+  // and refuses it at EVERY door, since typing, history recall, swipe recall,
+  // tab-complete and both paste routes all land on the same draft.
+  it("#737 — typing into a draining window is refused, residue intact, and unlocks after", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+
+      // "a" acks; "b" is refused ONCE with a 2s retry-after, then everything
+      // succeeds — a drain that is genuinely paused while the operator types.
+      let n = 0;
+      let refused = false;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n === 2 && !refused) {
+          refused = true;
+          throw new api.ApiError(429, "rate_limited", { retry_after: 2 });
+        }
+        return undefined as never;
+      });
+
+      compose.setDraft(k, "a\nb\nc");
+      const done = compose.submit(k, "freenode", "#a");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(compose.isDraining(k)).toBe(true);
+      expect(compose.getDraft(k)).toBe("b\nc");
+
+      // The operator types a reply mid-pause. Pre-fix this landed in the
+      // draft and the next acked line silently replaced it.
+      compose.setDraft(k, "wait what happened");
+      expect(compose.getDraft(k)).toBe("b\nc");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await done).toEqual({ ok: true });
+
+      // Drain over: the window is the operator's again.
+      expect(compose.isDraining(k)).toBe(false);
+      compose.setDraft(k, "now it takes");
+      expect(compose.getDraft(k)).toBe("now it takes");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#737 — history recall and tab-complete are refused mid-drain too", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+
+      // Seed one history entry so recallPrev has somewhere to walk.
+      vi.mocked(sb.sendMessage).mockResolvedValue();
+      compose.setDraft(k, "earlier line");
+      await compose.submit(k, "freenode", "#a");
+
+      let n = 0;
+      let refused = false;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n === 2 && !refused) {
+          refused = true;
+          throw new api.ApiError(429, "rate_limited", { retry_after: 2 });
+        }
+        return undefined as never;
+      });
+
+      compose.setDraft(k, "a\nb\nc");
+      const done = compose.submit(k, "freenode", "#a");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(compose.getDraft(k)).toBe("b\nc");
+
+      compose.recallPrev(k);
+      expect(compose.getDraft(k)).toBe("b\nc");
+      compose.recallNext(k);
+      expect(compose.getDraft(k)).toBe("b\nc");
+      expect(compose.tabComplete(k, "b\nc", 3, true)).toBeNull();
+      expect(compose.getDraft(k)).toBe("b\nc");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #737 — the lock is per WINDOW, not per component. A ComposeBox-local
+  // `sending()` flag would freeze whatever window the operator switched to
+  // while leaving the actually-draining one writable.
+  it("#737 — the lock is per key: a sibling window stays writable during a drain", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const draining = channelKey("freenode", "#a");
+      const other = channelKey("freenode", "#b");
+
+      let n = 0;
+      let refused = false;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n === 2 && !refused) {
+          refused = true;
+          throw new api.ApiError(429, "rate_limited", { retry_after: 2 });
+        }
+        return undefined as never;
+      });
+
+      compose.setDraft(draining, "a\nb\nc");
+      const done = compose.submit(draining, "freenode", "#a");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(compose.isDraining(draining)).toBe(true);
+      expect(compose.isDraining(other)).toBe(false);
+      compose.setDraft(other, "typed elsewhere");
+      expect(compose.getDraft(other)).toBe("typed elsewhere");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #737 — a lock that outlives its drain is worse than no lock: the window
+  // would be dead until reload. The fatal path must release it too.
+  it("#737 — a fatally failed drain releases the lock it was holding", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+
+      // "a" acks, "b" is paced once (so the lock is observably HELD), and the
+      // retry of "b" dies fatally — the path that must still unlock.
+      let n = 0;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n === 2) throw new api.ApiError(429, "rate_limited", { retry_after: 2 });
+        if (n === 3) throw new api.ApiError(400, "invalid_line");
+        return undefined as never;
+      });
+
+      compose.setDraft(k, "a\nb\nc");
+      const done = compose.submit(k, "freenode", "#a");
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Held during the pace…
+      expect(compose.isDraining(k)).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await done).toHaveProperty("error");
+
+      // …and released by the fatal exit, not just by the happy one.
+      expect(compose.isDraining(k)).toBe(false);
+      compose.setDraft(k, "b\nc fixed");
+      expect(compose.getDraft(k)).toBe("b\nc fixed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #737 — the lock follows the RESIDUE, not the window the operator typed in:
+  // /msg mirrors the remainder into the query window it just focused, which is
+  // the window that must stop accepting input.
+  it("#737 — a /msg drain locks the query window that receives the residue", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const source = channelKey("freenode", "#a");
+      const query = channelKey("freenode", "bob");
+
+      let n = 0;
+      let refused = false;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n === 2 && !refused) {
+          refused = true;
+          throw new api.ApiError(429, "rate_limited", { retry_after: 2 });
+        }
+        return undefined as never;
+      });
+
+      compose.setDraft(source, "/msg bob a\nb\nc");
+      const done = compose.submit(source, "freenode", "#a");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(compose.isDraining(query)).toBe(true);
+      expect(compose.getDraft(query)).toBe("b\nc");
+      compose.setDraft(query, "typed at the peer");
+      expect(compose.getDraft(query)).toBe("b\nc");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await done;
+      expect(compose.isDraining(query)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("/me action sends as ACTION via scrollback.sendMessage with CTCP framing", async () => {
     localStorage.setItem("grappa-token", "tok");
     const sb = await import("../lib/scrollback");
