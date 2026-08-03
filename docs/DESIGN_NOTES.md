@@ -27646,6 +27646,32 @@ under us. `AbortSignal.timeout` is constructed OUTSIDE the try: inside, a
 runtime lacking the API would be counted as a transport failure, retried three
 times, and reported as "the network is down" on a box whose network is fine.
 
+**Retry refetches all three resources, because `reset()` is synchronous and the
+cascade is not.** The first cut refetched only `user`, reasoning that `networks`
+is keyed on `user` and `channelsBySlug` on `networks`, so the root cascades
+through both, and that calling all three would race redundant requests. The
+cascade is real but it is ASYNCHRONOUS, and `reset()` re-renders in the same
+tick: on a `listNetworks` failure the re-render read a `networks` that was still
+errored with nothing in flight, rethrew, and landed straight back in the
+fallback. **The button read as dead and recovery took a SECOND press** — the
+force-kill-the-app behaviour the whole issue exists to remove. The third review
+round found it; it was reproduced by execution before being believed, and the
+existing retry spec had missed it by covering only the `/me` failure, the one
+link where refetching the root alone happens to work.
+
+What clears the throw is not the response but the in-flight request — solid's
+resource read is `if (err !== undefined && !pr) throw err` — so each resource
+needs its own `pr` before the re-render. The feared request storm does not
+materialise: a resource whose source is not yet resolved takes solid's
+`lookup == null` path, which clears the error without issuing a request.
+Measured for one press on a `listNetworks` failure: `listNetworks` twice (the
+verb, then the cascade off the fresh `user`), `listChannels` not at all, and the
+spec pins both numbers. Root-first ordering mirrors the cascade but is NOT
+load-bearing — measured, the reverse also recovers, because each verb evaluates
+its source memo and a memo that throws is handled rather than propagated; it is
+written root-first because the reverse only works by routing a throw through the
+error machinery on every press.
+
 **Reload must not purge the cache offline.** The failure screen carries a
 `Reload` beside `Retry`, because the boundary wraps Shell for the whole session
 and a mid-session throw is not something a boot refetch can fix. It uses

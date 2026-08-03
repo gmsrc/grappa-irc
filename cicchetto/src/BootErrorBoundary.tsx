@@ -3,7 +3,7 @@ import { ApiError } from "./lib/api";
 import { performRefresh } from "./lib/bundleHash";
 import { isOffline } from "./lib/connectivity";
 import { friendlyApiError } from "./lib/friendlyApiError";
-import { refetchUser } from "./lib/networks";
+import { refetchChannels, refetchNetworks, refetchUser } from "./lib/networks";
 
 // #717 — keep a failed boot recoverable.
 //
@@ -114,16 +114,43 @@ const BootErrorBoundary: Component<{ children: JSX.Element }> = (props) => (
       <BootFailure
         error={error}
         onRetry={() => {
-          // Refetch BEFORE reset, and in this order only: `reset()` re-renders
-          // the children, and a child that reads a still-errored resource
+          // Refetch BEFORE reset: `reset()` re-renders the children
+          // synchronously, and a child that reads a still-errored resource
           // rethrows immediately — the boundary would loop straight back into
           // this fallback without a single request going out.
           //
-          // ONE verb, not three. networks.ts states it: `user` is the ROOT of
-          // the burst — `networks` is keyed on `user` and `channelsBySlug` on
-          // `networks`, so refetching the root cascades through both. Calling
-          // all three would put redundant requests in flight racing the cascade.
+          // ALL THREE, ROOT FIRST, and both halves of that are load-bearing.
+          //
+          // Refetching only `user` is not enough even though the cascade is
+          // real (`networks` is keyed on `user`, `channelsBySlug` on
+          // `networks`): the cascade is ASYNCHRONOUS and `reset()` is not. A
+          // `listNetworks` failure leaves `networks` errored with no refetch in
+          // flight, so the re-render rethrows and the button reads as dead —
+          // recovery needed a SECOND press, after the chain had settled. That
+          // is the force-kill-the-app behaviour #717 exists to remove.
+          //
+          // What clears the throw is not the response, it is the in-flight
+          // request: solid's resource `read()` is `if (err !== undefined &&
+          // !pr) throw err`, so a resource with a load in flight reads as
+          // pending instead of rethrowing. Each verb gives its own resource a
+          // `pr`; then the children render the splash and the cascade lands.
+          //
+          // ROOT FIRST mirrors the cascade. It is not load-bearing — measured,
+          // the reverse order also recovers, because each verb evaluates its
+          // source memo and a memo that throws is handled, not propagated. It
+          // is written this way because the reverse only works by routing a
+          // throw through the error machinery on every press, which is a
+          // coincidence to rely on, not a design.
+          //
+          // Downstream is nearly free: with its source not yet resolved, the
+          // load takes solid's `lookup == null` path, which clears the error
+          // without issuing a request. Measured for one press on a
+          // `listNetworks` failure — `listNetworks` twice (the verb, then the
+          // cascade off the fresh `user`), `listChannels` not at all. The spec
+          // pins both numbers.
           refetchUser();
+          refetchNetworks();
+          refetchChannels();
           reset();
         }}
       />

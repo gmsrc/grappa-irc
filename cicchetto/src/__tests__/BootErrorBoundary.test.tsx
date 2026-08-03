@@ -83,16 +83,38 @@ async function renderBootTree(): Promise<void> {
   ));
 }
 
+// The DOWNSTREAM child, mirroring Sidebar.tsx / BottomBar.tsx: it reads
+// `networks()`, the second link of the chain. `user` is the only link the tree
+// above covers, and it is the one link whose retry works by refetching the root
+// alone — so a `networks` failure is a separate case, not a variation.
+async function renderNetworksTree(): Promise<void> {
+  const { networks } = await import("../lib/networks");
+  const BootErrorBoundary = (await import("../BootErrorBoundary")).default;
+
+  render(() => (
+    <BootErrorBoundary>
+      <Show when={networks() !== undefined} fallback={<div data-testid="crt-splash">LOADING</div>}>
+        <div data-testid="app">app</div>
+      </Show>
+    </BootErrorBoundary>
+  ));
+}
+
 // A `me()` whose promise this file settles on demand, so the rejection can be
 // placed AFTER the first render exactly as production places it.
-function deferredMe(api: { me: unknown }): { reject: (e: unknown) => void } {
+function deferredMe(api: { me: unknown }): {
+  reject: (e: unknown) => void;
+  resolve: (v: unknown) => void;
+} {
   let reject!: (e: unknown) => void;
+  let resolve!: (v: unknown) => void;
   (api.me as Mock).mockReturnValue(
-    new Promise((_resolve, rej) => {
+    new Promise((res, rej) => {
+      resolve = res;
       reject = rej;
     }),
   );
-  return { reject: (e) => reject(e) };
+  return { reject: (e) => reject(e), resolve: (v) => resolve(v) };
 }
 
 describe("BootErrorBoundary (#717 — a failed boot must not freeze on the splash)", () => {
@@ -149,5 +171,49 @@ describe("BootErrorBoundary (#717 — a failed boot must not freeze on the splas
     expect(await screen.findByTestId("app")).toBeInTheDocument();
     expect(screen.queryByTestId("boot-failure")).toBeNull();
     expect(me.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  // The case the `/me` retry above cannot cover, and the one that made the
+  // button read as dead. `reset()` is synchronous while the `user → networks`
+  // cascade is not, so refetching only the root left `networks` errored at
+  // re-render: the child rethrew and the boundary bounced straight back into
+  // the fallback. Recovery took a SECOND press. ONE press is the assertion.
+  //
+  // `me` hands back a FRESH object per call on purpose — production parses a
+  // new envelope each time, and a mock returning one shared reference would
+  // leave the `createMemo(user)` unchanged, so `networks` would never cascade
+  // and this test would measure an artefact of the mock instead of the fix.
+  it("recovers from a downstream listNetworks failure on ONE retry press", async () => {
+    localStorage.setItem("grappa-token", "tokA");
+    const api = await import("../lib/api");
+    const pending = deferredMe(api);
+    const listNetworks = api.listNetworks as Mock;
+    listNetworks.mockRejectedValue(new Error("networks down"));
+
+    await renderNetworksTree();
+    expect(screen.getByTestId("crt-splash")).toBeInTheDocument();
+
+    pending.resolve({ ...HEALTHY_ME });
+
+    expect(await screen.findByTestId("boot-failure")).toBeInTheDocument();
+
+    (api.me as Mock).mockImplementation(async () => ({ ...HEALTHY_ME }));
+    listNetworks.mockResolvedValue([]);
+    listNetworks.mockClear();
+    (api.listChannels as Mock).mockClear();
+
+    fireEvent.click(screen.getByTestId("boot-failure-retry"));
+
+    expect(await screen.findByTestId("app")).toBeInTheDocument();
+    expect(screen.queryByTestId("boot-failure")).toBeNull();
+
+    // Pins the cost the handler's comment claims, so a future "refetch
+    // everything" edit cannot quietly turn one press into a request storm.
+    // `listNetworks` twice — the explicit verb, then the cascade off the fresh
+    // `user`. `listChannels` NOT at all: its source is still unresolved when the
+    // verb runs, so that load takes solid's null-lookup path, which clears the
+    // error without issuing a request.
+    expect(listNetworks.mock.calls.length).toBe(2);
+    expect((api.listChannels as Mock).mock.calls.length).toBe(0);
   });
 });
