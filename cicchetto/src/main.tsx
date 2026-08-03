@@ -14,9 +14,11 @@ import ShareConsume from "./ShareConsume";
 // app entry has to wire the side-effect module explicitly.
 import "./lib/subscribe";
 import "./lib/userTopic";
+import { isDiagEnabled } from "./DiagFloat";
 import { mountBadgeReconcile, mountBadgeSync } from "./lib/badge";
 import { performRefresh } from "./lib/bundleHash";
 import { applyCachedCustomTheme, mountCustomThemeSync } from "./lib/customTheme";
+import { diagPush } from "./lib/diagLog";
 import { mountDisplayPrefsSync } from "./lib/displayPrefs";
 import { isDocumentVisible } from "./lib/documentVisibility";
 import { applyFontSizeFromStorage } from "./lib/fontSize";
@@ -25,6 +27,7 @@ import { installKeyboardPreserve } from "./lib/keepKeyboard";
 import { applyIosClass, isStandalonePwa } from "./lib/platform";
 import { installPushResubscribe } from "./lib/pushResubscribe";
 import { applyPushTargetFromUrl, installPushTargetListener } from "./lib/pushTarget";
+import { browserProbePerformance, installResumeProbe } from "./lib/resumeProbe";
 import { applySidebarWidthsFromStorage } from "./lib/sidebarWidths";
 import { notifyClientClosing, reportVisibility } from "./lib/socket";
 import { installStaleResumeReload } from "./lib/staleResume";
@@ -257,6 +260,21 @@ createRoot(() => {
     const visible = isDocumentVisible();
     reportVisibility();
     heartbeat.setVisible(visible);
+  });
+  // #697 — resume-path instrument. Measures the SYMPTOM (frame scheduling
+  // delay, plus feature-detected long-task and input-delay observers) rather
+  // than wrapping the ten consumers that run on this same transition, so one
+  // cheap reading can rule out "our JS blocks the main thread" before anything
+  // invasive is added. Gated on `isDiagEnabled` — nothing runs, and no line is
+  // recorded, unless the operator turned diagnostics on in Settings.
+  installResumeProbe({
+    isVisible: isDocumentVisible,
+    enabled: isDiagEnabled,
+    push: diagPush,
+    now: () => performance.now(),
+    raf: (cb) => void requestAnimationFrame(cb),
+    perf: browserProbePerformance(),
+    win: window,
   });
 });
 
