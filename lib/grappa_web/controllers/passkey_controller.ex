@@ -11,6 +11,19 @@ defmodule GrappaWeb.PasskeyController do
   @recovery_salt "account-passwordless-recovery-v1"
   @recovery_max_age_seconds 600
 
+  # Recovery is throttled on TWO buckets, because one is sidesteppable.
+  # The per-account bucket is the real control, but it can only be keyed
+  # once the identifier RESOLVES — and resolution is itself the work an
+  # attacker wants to amplify. So the IP bucket is checked first (cheap
+  # ETS, no DB) and bounds probing for accounts that do not exist; the
+  # account bucket then bounds guesses against one that does.
+  @recovery_window_ms :timer.minutes(15)
+  @recovery_ip_attempts 30
+  @recovery_account_attempts 10
+
+  # Ceremony allocation, not guessing: see `login_options/2`.
+  @login_options_attempts 30
+
   @doc "Lists passkeys and active login mode."
   @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom()}
   def index(%{assigns: %{current_subject: {:user, user}}} = conn, _) do
@@ -151,9 +164,35 @@ defmodule GrappaWeb.PasskeyController do
 
   def delete(_, _), do: {:error, :bad_request}
 
-  @doc "Starts passwordless login for an account identifier."
+  @doc """
+  Starts passwordless login for an account identifier.
+
+  IP-throttled: every call allocates a challenge in
+  `WebAuthnChallengeStore` that only a completed ceremony reclaims, so an
+  unauthenticated caller that never completes one must not be able to
+  allocate without bound. The store's own sweep is the second half of
+  that guarantee.
+  """
   @spec login_options(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom()}
-  def login_options(conn, %{"identifier" => identifier}) do
+  def login_options(conn, %{"identifier" => identifier}) when is_binary(identifier) do
+    ip = RemoteIP.format(conn)
+
+    case FailureWindow.check(:passkey_login_options, ip, @login_options_attempts) do
+      {:error, :limited} ->
+        {:error, :too_many_attempts}
+
+      :ok ->
+        # EVERY call is counted, not just the ones that fail. The abuse
+        # here is allocation, and the cheapest way to allocate is to keep
+        # succeeding: a loop against a known passwordless identifier gets
+        # a 200 each time, so a failures-only window would never trip on
+        # the exact traffic it needs to bound.
+        _ = FailureWindow.record_failure(:passkey_login_options, ip, @recovery_window_ms)
+        begin_passwordless(conn, identifier)
+    end
+  end
+
+  defp begin_passwordless(conn, identifier) do
     with %User{passkey_mode: "passwordless"} = user <- find_user(identifier),
          {:ok, options} <-
            WebAuthn.begin_authentication(user, :passwordless, client_binding(conn), origin()) do
@@ -186,10 +225,25 @@ defmodule GrappaWeb.PasskeyController do
   @doc "Consumes an account recovery code for passwordless fallback."
   @spec recover(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, atom()}
   def recover(conn, %{"identifier" => identifier, "recovery_code" => code}) do
-    key = {RemoteIP.format(conn), String.downcase(String.trim(identifier))}
+    ip = RemoteIP.format(conn)
 
-    with :ok <- FailureWindow.check(:passkey_recovery, key, 10),
-         %User{passkey_mode: "passwordless"} = user <- find_user(identifier),
+    case FailureWindow.check(:passkey_recovery, ip, @recovery_ip_attempts) do
+      {:error, :limited} -> {:error, :too_many_attempts}
+      :ok -> recover_resolved(conn, ip, find_user(identifier), code)
+    end
+  end
+
+  def recover(_, _), do: {:error, :bad_request}
+
+  # Keyed on the RESOLVED account, never on the wire identifier. `find_user/1`
+  # folds an email to its local part, so `alice`, `alice@a.aa` and
+  # `alice@b.bb` are one account — spelled as three distinct strings. Keying
+  # the window on the string handed the attacker a fresh bucket per spelling
+  # and the per-account limit never tripped.
+  defp recover_resolved(conn, ip, %User{passkey_mode: "passwordless"} = user, code) do
+    key = {ip, user.id}
+
+    with :ok <- FailureWindow.check(:passkey_recovery, key, @recovery_account_attempts),
          :ok <- Accounts.consume_recovery_code(user, code) do
       :ok = FailureWindow.clear(:passkey_recovery, key)
       mint_session(conn, user)
@@ -198,12 +252,16 @@ defmodule GrappaWeb.PasskeyController do
         {:error, :too_many_attempts}
 
       _ ->
-        _ = FailureWindow.record_failure(:passkey_recovery, key, :timer.minutes(15))
+        _ = FailureWindow.record_failure(:passkey_recovery, key, @recovery_window_ms)
+        _ = FailureWindow.record_failure(:passkey_recovery, ip, @recovery_window_ms)
         {:error, :invalid_two_factor}
     end
   end
 
-  def recover(_, _), do: {:error, :bad_request}
+  defp recover_resolved(_conn, ip, _unresolved, _code) do
+    _ = FailureWindow.record_failure(:passkey_recovery, ip, @recovery_window_ms)
+    {:error, :invalid_two_factor}
+  end
 
   defp mint_session(conn, user) do
     user_agent = conn |> get_req_header("user-agent") |> List.first()
