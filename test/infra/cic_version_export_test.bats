@@ -48,6 +48,16 @@ code_of() {
     sed -e 's/[[:space:]]*#.*$//' "$1"
 }
 
+# Every predicate below pipes `code_of` into grep and DISCARDS the match rather
+# than using `grep -q`. `-q` exits on the first hit, which SIGPIPEs the sed
+# upstream; GNU sed then prints `couldn't write N items to stdout: Broken pipe`
+# on stderr (BSD sed stays silent, so this only ever reddened CI). bats' `run`
+# folds stderr into `$output`, so that noise BECAME the diagnostic: the guard
+# reported pipe errors instead of the launchers at fault, and a clean scan read
+# as a failure. Only files larger than the pipe buffer trip it, which is why
+# the synthetic fixtures below never showed it. Reading the stream to EOF costs
+# nothing on files this size and keeps the diagnostic honest.
+
 # A launcher is a file whose CODE can reach a cic build. Five signals, because
 # the launchers do not all name it the same way:
 #   cicchetto-build   the compose service (substring: also cicchetto-build-test)
@@ -62,18 +72,18 @@ code_of() {
 # variables can still hide. That is what ROSTER is for, and why the two halves
 # cross-check each other below.
 launches_cic_build() {
-    code_of "$1" | grep -qE 'cicchetto-build|(bun|npm) run build|--profile prod|cicchetto/e2e|oven/bun'
+    code_of "$1" | grep -E 'cicchetto-build|(bun|npm) run build|--profile prod|cicchetto/e2e|oven/bun' > /dev/null
 }
 
 # Compliance is BOTH halves. `export GRAPPA_VERSION=0.10.0` alone would pass an
 # export-only check while planting a second hand-edited version carrier —
 # exactly what the VERSION file is the single source of truth against.
 exports_version() {
-    code_of "$1" | grep -q 'export GRAPPA_VERSION'
+    code_of "$1" | grep 'export GRAPPA_VERSION' > /dev/null
 }
 
 derives_version() {
-    code_of "$1" | grep -q 'version\.sh'
+    code_of "$1" | grep 'version\.sh' > /dev/null
 }
 
 complies() {
@@ -168,6 +178,35 @@ discovered_launchers() {
 export GRAPPA_VERSION=0.10.0
 docker compose --profile prod run --rm cicchetto-build
 EOF
+
+    run unexported_launchers "$fake"
+    [ "$status" -eq 0 ]
+    [ "$output" = "scripts/ship-the-bundle.sh" ]
+}
+
+# The pin for the GNU-sed EPIPE incident. Two conditions must BOTH hold to
+# reproduce it, which is why it only ever fired on the CI runner:
+#   * the signal matches near the top and megabytes of code follow, so an
+#     early-exiting matcher closes the pipe with the writer mid-stream;
+#   * SIGPIPE is IGNORED, so sed is not killed silently — the write returns
+#     EPIPE and GNU sed reports it on stderr. GitHub's runner hands steps that
+#     disposition; an interactive shell does not, which is why this passed
+#     locally and reddened in CI.
+# `trap '' PIPE` reproduces the runner's disposition here, so the pin holds on
+# every platform. The assertion is EQUALITY with the filename — a diagnostic
+# carrying one extra line of pipe noise is a diagnostic that lies.
+@test "scan: a launcher larger than the pipe buffer yields a clean diagnostic" {
+    local fake="$BATS_TEST_TMPDIR/repo"
+    mkdir -p "$fake/scripts"
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'docker compose --profile prod run --rm cicchetto-build\n'
+        yes 'echo padding past the pipe buffer' | head -40000
+    } > "$fake/scripts/ship-the-bundle.sh"
+
+    # AFTER the fixture: `yes | head` is itself an early-exiting pipeline, so
+    # arming the trap first would make the generator the thing that complains.
+    trap '' PIPE
 
     run unexported_launchers "$fake"
     [ "$status" -eq 0 ]
