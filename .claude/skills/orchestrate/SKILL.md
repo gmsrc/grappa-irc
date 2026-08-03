@@ -200,7 +200,7 @@ is DELETE-then-write, never append-only:
   `status:queued` (accepted, in build queue, not started), `status:cooking` (worker STILL ON IT —
   building, in code-review, waiting on CI **including post-merge CI polling**, addressing findings:
   ANY active worker attention on the issue), `status:soon` (worker FULLY DONE + handed off, no
-  active work and NO CI-wait remaining, purely awaiting a deploy window). The board's two
+  active work and NO CI-wait remaining, **awaiting a RELEASE**). The board's two
   plain-link columns are derived: **backlog = open issues with NO `status:*` label** (shown
   before Queued), **closed = closed issues** (after Soon) — both exclude `status:*`. The
   orchestrator OWNS keeping these labels truthful, or the board drifts from reality:
@@ -215,9 +215,16 @@ is DELETE-then-write, never append-only:
     handover). Your first touch is `status:queued → status:cooking` when the worker starts
     building. Move, don't add — mutually exclusive
     (`gh issue edit N --remove-label status:X --add-label status:Y`).
-  - **On deploy/close → REMOVE the `status:*` label entirely** (a shipped+closed issue leaves
-    the board's Soon column and shows only under the closed link). Removing it is part of the
-    ship/close-out step, alongside `gh issue close` + announce.
+  - 🔴 **`soon` ENDS AT THE RELEASE, NOT AT THE DEPLOY (vjt, #grappa 2026-08-03 13:1x — this SUPERSEDES
+    the old deploy-ends-soon rule and the "se son deployate son chiuse" ruling).** His reason, and it is
+    the whole point: **we are not the only deployment.** Self-hosters exist (Mezmerize's instance, the
+    #503 one-click AWS installer, the docker path), so "deployed" describes only what the m42 jail
+    pulled — for every other operator the work exists when **there is a tag to pull**. So:
+    **`gh issue close` + strip `status:*` both fire at the RELEASE CUT**, not when m42 deploys.
+    A deploy to m42 is an internal event that changes NO label and closes NO issue.
+    ⚠️ Consequence to keep in mind: the board's **Soon column will hold code that is already LIVE on
+    m42** — it means "shipped, not yet in a named release", not "not yet running". If that reads wrong
+    on grappa.chat, the column name is vjt's call, not a reason to bend the label.
   - A newly-filed backlog issue gets NO `status:*` label (it lives under the backlog link until
     triaged into the queue). The board is a shared artifact — keep it honest every transition.
   - **ANTI-DRIFT (vjt caught two misses 2026-07-16 — stale `cooking` on closed #268; forgotten
@@ -564,8 +571,13 @@ clearing on unverified edits leaves the next session unable to tell whether they
   🔴 **`bot.say` exits 0 even when wedged — VERIFY the PRIVMSG in `bot.log` / `bot.libera.log`.**
   🔴 **THE BOT LOGS SPAN DAYS, ARE NOT SORTED, AND CARRY NO DATE** — anchor to `TZ=Europe/Rome date` before reading any
   line as a reply; a stale *"faccio io"* from another day nearly read as authorization.
-- 🔴 `ci.yml` triggers ONLY on push-to-main or a PR targeting main, and is **Elixir-only ⇒ GitHub CI cannot see a red
-  cic vitest.** After ANY change to a shared cic verb, run the FULL vitest.
+- 🔴 `ci.yml` triggers ONLY on push-to-main or a PR targeting main. ✅ **CORRECTED 2026-08-03: it is NO LONGER
+  Elixir-only.** A `cicchetto (types + lint + unit)` job runs `bun run check` (biome + `tsc --noEmit`) AND
+  `bun run test` (vitest), in a digest-pinned `oven/bun:1` container, **unconditionally — no `paths:` filter at
+  workflow or job level.** So GitHub CI *does* see a red cic vitest, and a cic-only PR is genuinely gated.
+  🥇 *The trap that produced the stale rule: I read a LOCAL checkout's `ci.yml` (231 lines, no cicchetto job)
+  while origin/main's had one at line 245. **Read workflow files with `git show origin/main:<path>`, never from
+  a working tree whose freshness you have not proved.*** The #715 path-filter gap is about `integration.yml`.
 - **CI flakes (tracked):** #277 #279 #254 #291/#339 #519 #520 **#522** #506, bahamut IP-autokill.
   **OTP29 pair #355/#185 HELD**; **bats #44** pre-existing red; `hex.audit`/`deps.audit` CVE wall NON-FATAL.
 - 🔴 **Never cite DESIGN_NOTES as current behaviour without confirming it in the code first.**
@@ -583,10 +595,28 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
   order: **`gh pr view --json mergeable,mergeStateStatus` FIRST**, then the workflow `paths:` filter, then `[skip ci]`.
   Cure = rebase onto current main + `--force-with-lease`; CI restarts by itself. Neither `ci.yml` nor `integration.yml`
   has `workflow_dispatch`, so for a PR whose run NEVER STARTED, fixing mergeability is the only route.
+- ⚠️ **`ci-watch.sh`'s `NO-CHECKS (conflicting?)` line ALSO fires in the normal post-push window**, for the
+  ~30 s between a force-push and GitHub queueing the new check-runs. **Read the state field on the same
+  line**: `OPEN/CLEAN` or `MERGEABLE/UNSTABLE` = checks are merely spinning up, wait one cycle;
+  `CONFLICTING` = the real zero-CI trap. Do not reach for a rebase on the first NO-CHECKS event.
 - 🔧 **`gh run rerun <run-id> --failed` re-runs just the failed jobs of an EXISTING run, and needs no
   `workflow_dispatch`.** Use it when a settled run went red on a diagnosed-transient cause — it beats pushing an
   empty commit (no history pollution) and beats close/reopen (which does nothing). The "no manual lever" rule above
   applies ONLY when no run exists to re-run.
+- 🥇 **THE SAME JOB GREEN ON ONE PR AND RED ON ANOTHER, WITH THE SAME COMMITS, IS NOT A FLAKE — CHECK THE CLOCK.**
+  A PR's CI builds `refs/pull/N/merge`, i.e. the branch merged with main **as of when that check-run STARTED**. So a
+  fix landing on main silently turns the job green for every check-run started afterwards, while older runs keep
+  their red. On 2026-08-03 `shottino` was green on #715/#718 and red on #700/#703 with identical shottino commits:
+  the greens started at 09:24:54Z, the fix (#720) merged at 09:24:08Z, the reds ran at 08:55Z. **Compare the
+  check-run `started_at` against the merge time BEFORE reaching for non-determinism** —
+  `gh api repos/OWNER/REPO/commits/<head>/check-runs -q '.check_runs[] | "\(.name) \(.conclusion) \(.started_at)"'`
+  binds conclusions to the CURRENT head, which also rules out a stale badge.
+- 🥇 **`git branch -r --no-merged main` LIES about anything merged by rebase-then-ff.** The commits land with NEW
+  shas, so ancestry never matches and long-shipped branches look unmerged forever — that list is what makes a repo
+  look like it is hoarding work. **Judge a branch by its ISSUE and PR state** (closed issue + closed-not-merged PR =
+  the rebase-ff pattern = landed), never by ancestry. Conversely `--merged` IS proof, so it is the safe half.
+  Pruning from the Pi: `gh api -X DELETE repos/OWNER/REPO/git/refs/heads/<branch>` — it has no git credential
+  helper, so `git push --delete` dies on "could not read Username".
 - 🥇 **A FIXTURE-LEVEL FLAKE MUST BE MATCHED BY MECHANISM, NEVER BY SPEC NAME.** An auto-fixture (`_vjtReset`) runs
   for every test, so its race surfaces in whatever spec happens to be running — #195 originally, #263 on 2026-08-01,
   both the same bug (#277: `resetSubject` 500 → `{:nick_rejected, 433, "vjt-grappa"}`). Checking the tracked-flake

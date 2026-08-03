@@ -25,7 +25,13 @@ set -u
 
 [ $# -ge 1 ] || { echo "usage: ci-watch.sh <PR> [<PR>...]" >&2; exit 2; }
 
-INTERVAL="${CI_WATCH_INTERVAL:-60}"
+# 180s, not 60: a PR's e2e runs ~25 min, so per-minute granularity buys nothing and
+# every emitted line costs the orchestrator a turn.
+# NOTE: pass this as an ARGUMENT (`--interval N`), never as a `VAR=x` prefix — a
+# prefixed assignment makes the command stop starting with this script's path, which
+# breaks the settings.local.json prefix permission rule and re-prompts every arming.
+INTERVAL=180
+if [ "${1:-}" = "--interval" ]; then INTERVAL="$2"; shift 2; fi
 REPO_ARG=()
 [ -n "${CI_WATCH_REPO:-}" ] && REPO_ARG=(-R "$CI_WATCH_REPO")
 

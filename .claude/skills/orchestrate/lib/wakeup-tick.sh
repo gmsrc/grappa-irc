@@ -144,9 +144,15 @@ fi
 #
 # Only the `… (` path needs this. `esc to interrupt` / `Press up to edit` are
 # rendered by the live input frame, never left behind in history.
+# Grab the WHOLE parenthesised timer up to the first `·` or `)`, rather than
+# enumerating time formats. The old pattern (`[0-9]+m? ?[0-9]*s`) could not
+# parse an hours component, so `… (1h 1m 57s` matched NOTHING, `t2` came back
+# empty, and the `-z "$t2"` branch below forced state=idle — pinning any turn
+# older than an hour to a permanent false IDLE. Confirmed by execution on w2
+# 2026-08-03. Format-agnostic beats an enumeration that a UI change can outrun.
 spinner_timer() {
   tmux capture-pane -t "$1" -p -S -30 2>/dev/null \
-    | grep -oE '… \([0-9]+m? ?[0-9]*s' | tail -1
+    | grep -oE '… \([^·)]*' | tail -1
 }
 
 if [ "$state" = "busy" ] \
@@ -163,7 +169,12 @@ fi
 # --- Idle debounce (only on busy → idle) ---
 if [ "$state" = "idle" ] && [ "$prev_state" = "busy" ]; then
   sleep 5
-  out2=$(tmux capture-pane -t "$pane" -p 2>/dev/null)
+  # -S -30, NOT the bare viewport: vjt's worker panes are 63x9, so the visible
+  # nine rows hold only the input frame + status line and can never contain the
+  # `… (` shape. Re-reading the viewport alone made this debounce incapable of
+  # ever restoring `busy` — the same geometry lesson the main capture above
+  # already learned, left unapplied here.
+  out2=$(tmux capture-pane -t "$pane" -p -S -30 2>/dev/null)
   tail2=$(echo "$out2" | tail -30)
   if echo "$tail2" | grep -qE 'Do you want to .*\?'; then
     state="prompt"
