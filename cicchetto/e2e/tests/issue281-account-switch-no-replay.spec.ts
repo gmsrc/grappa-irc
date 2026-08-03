@@ -148,8 +148,12 @@ test.describe("issue #281 — account switch replay", () => {
     // Only care about what fires AFTER the switch — drop A's legit boot
     // fetches. The identity timeline is NOT cleared: A's arrival is the first
     // fixed point every later entry is read against.
-    await page.evaluate(() => {
+    // The clear timestamp is itself evidence: a probe stamped BEFORE it is one
+    // the assertion never saw, which is the difference between "the race
+    // exists and lost" and "the race exists and won".
+    const clearedAt = await page.evaluate(() => {
       (window as unknown as { __cic281Requests: unknown[] }).__cic281Requests.length = 0;
+      return performance.now();
     });
 
     // --- The account switch (the repro) ---
@@ -203,15 +207,26 @@ test.describe("issue #281 — account switch replay", () => {
       };
     }, NETWORK_SLUG);
 
+    const evidence = [
+      `  offending:        ${JSON.stringify(forensics.offending)}`,
+      `  bearer tails:     A=${a.token.slice(-8)} B=${forensics.liveToken}`,
+      `  cleared log at:   ${clearedAt}`,
+      `  identity timeline:${JSON.stringify(forensics.identity)}`,
+      `  #769 probe ring:  ${JSON.stringify(forensics.probes)}`,
+    ].join("\n");
+
+    // #769 — a GREEN run carries the same evidence as a red one: whether A's
+    // join-ok backfill probed at all, and on which side of the log clear and
+    // the identity purge it landed. Losing that to a passing assertion is how
+    // a ~1-in-N race stays unexplained for another round, so print it whenever
+    // there is anything to read. Silent when the probe never fired.
+    if (forensics.probes.length > 0 || forensics.offending.length > 0) {
+      console.log(`[#769 forensics]\n${evidence}`);
+    }
+
     expect(
       forensics.offending,
-      [
-        "account switch replayed account A's fetches under B's session.",
-        `  offending:        ${JSON.stringify(forensics.offending)}`,
-        `  bearer tails:     A=${a.token.slice(-8)} B=${forensics.liveToken}`,
-        `  identity timeline:${JSON.stringify(forensics.identity)}`,
-        `  #769 probe ring:  ${JSON.stringify(forensics.probes)}`,
-      ].join("\n"),
+      `account switch replayed account A's fetches under B's session.\n${evidence}`,
     ).toEqual([]);
   });
 });
