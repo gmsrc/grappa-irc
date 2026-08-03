@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ArchiveEntry } from "../lib/api";
+import { warmGraph } from "./helpers/warmGraph";
 
 vi.mock("../lib/api", () => ({
   listArchive: vi.fn(),
@@ -27,6 +28,10 @@ vi.mock("../lib/queryWindows", () => ({
 vi.mock("../lib/windowState", () => ({
   windowStateByChannel: () => ({}),
 }));
+
+// #781 — see helpers/warmGraph.ts. `lib/api` is NOT warmed: the factory at
+// the top of this file fully replaces it, so the real module never loads.
+beforeAll(() => warmGraph(() => import("../lib/archive")));
 
 beforeEach(() => {
   vi.resetModules();

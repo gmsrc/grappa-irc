@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmGraph } from "./helpers/warmGraph";
 
 // #364 cicchetto S1 — user-topic re-join across the token lifecycle.
 //
@@ -85,6 +86,11 @@ vi.mock("../lib/api", () => ({
     };
   },
 }));
+
+// #781 — this file IS the double join: an orphaned first import, still in
+// flight when its test was failed for overrunning, joined the user topic a
+// second time from inside the NEXT test. See helpers/warmGraph.ts.
+beforeAll(() => warmGraph(() => import("../lib/userTopic")));
 
 beforeEach(() => {
   vi.resetModules();

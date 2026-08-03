@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { Show } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { warmGraph } from "./helpers/warmGraph";
 
 // #717 — the recoverability half, tested through the REAL resource cascade.
 //
@@ -63,6 +64,11 @@ const HEALTHY_ME = {
   read_cursors: {},
   badge_count: 0,
 };
+
+// #781 — see helpers/warmGraph.ts. The component pulls api, bundleHash,
+// connectivity and networks, so warming it covers every graph these tests
+// re-import.
+beforeAll(() => warmGraph(() => import("../BootErrorBoundary")));
 
 beforeEach(() => {
   vi.resetModules();

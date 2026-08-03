@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmGraph } from "./helpers/warmGraph";
 
 // C4.2 — Cluster-wide focus-only-on-user-action invariant.
 //
@@ -103,6 +104,10 @@ vi.mock("../lib/queryWindows", () => ({
   queryWindowsByNetwork: vi.fn(() => ({})),
   setQueryWindowsByNetwork: vi.fn(),
 }));
+
+// #781 — see helpers/warmGraph.ts. `lib/subscribe` pulls `lib/selection`;
+// `lib/api` is fully replaced by the factory above, so it never loads.
+beforeAll(() => warmGraph(() => import("../lib/subscribe")));
 
 beforeEach(() => {
   vi.resetModules();
