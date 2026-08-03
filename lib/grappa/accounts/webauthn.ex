@@ -66,7 +66,7 @@ defmodule Grappa.Accounts.WebAuthn do
 
   @doc "Begins a passkey assertion for login or a settings mode change."
   @spec begin_authentication(User.t(), atom(), binding(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def begin_authentication(user, purpose, binding, origin, metadata \\ %{}) do
+  def begin_authentication(user, purpose, binding, origin, metadata) do
     credentials = credentials(user.id)
 
     if credentials == [] do
@@ -125,8 +125,6 @@ defmodule Grappa.Accounts.WebAuthn do
 
   @doc "Changes passkey mode after a verified assertion; passwordless rotates recovery codes."
   @spec set_mode(User.t(), mode(), Ecto.UUID.t(), [String.t()]) :: {:ok, mode()} | {:error, term()}
-  def set_mode(user, mode, current_session_id, recovery_codes \\ [])
-
   def set_mode(user, :passwordless = mode, current_session_id, recovery_codes)
       when length(recovery_codes) == 10 do
     run_mode_transaction(user, mode, current_session_id, recovery_codes)

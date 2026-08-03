@@ -52,7 +52,7 @@ defmodule Grappa.Accounts.PasskeyTest do
 
     test "passwordless stays discoverable and hands no credential id to an anonymous caller", ctx do
       assert {:ok, %{public_key: options}} =
-               WebAuthn.begin_authentication(ctx.user, :passwordless, ctx.binding, "https://irc.example")
+               WebAuthn.begin_authentication(ctx.user, :passwordless, ctx.binding, "https://irc.example", %{})
 
       assert options.rp_id == "irc.example"
       refute Map.has_key?(options, :allow_credentials)
@@ -61,7 +61,7 @@ defmodule Grappa.Accounts.PasskeyTest do
     for purpose <- [:second_factor, :mode_change] do
       test "#{purpose} lists the account's own credentials so a non-discoverable key can answer", ctx do
         assert {:ok, %{public_key: options}} =
-                 WebAuthn.begin_authentication(ctx.user, unquote(purpose), ctx.binding, "https://irc.example")
+                 WebAuthn.begin_authentication(ctx.user, unquote(purpose), ctx.binding, "https://irc.example", %{})
 
         assert [%{type: "public-key", id: id, transports: ["usb"]}] = options.allow_credentials
         assert Base.url_decode64!(id, padding: false) == <<1, 2, 3>>
@@ -72,7 +72,7 @@ defmodule Grappa.Accounts.PasskeyTest do
       Repo.update_all(Passkey, set: [transports: %{}])
 
       assert {:ok, %{public_key: options}} =
-               WebAuthn.begin_authentication(ctx.user, :second_factor, ctx.binding, "https://irc.example")
+               WebAuthn.begin_authentication(ctx.user, :second_factor, ctx.binding, "https://irc.example", %{})
 
       assert [credential] = options.allow_credentials
       refute Map.has_key?(credential, :transports)
@@ -165,7 +165,7 @@ defmodule Grappa.Accounts.PasskeyTest do
 
     other = session_fixture(user)
     passwordless_user = Repo.get!(Accounts.User, user.id)
-    assert {:ok, :disabled} = WebAuthn.set_mode(passwordless_user, :disabled, current.id)
+    assert {:ok, :disabled} = WebAuthn.set_mode(passwordless_user, :disabled, current.id, [])
     assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 0
     assert Repo.get!(Accounts.User, passwordless_user.id).passkey_mode == :disabled
     assert is_nil(Repo.get!(Accounts.Session, current.id).revoked_at)
@@ -189,7 +189,7 @@ defmodule Grappa.Accounts.PasskeyTest do
       {:ok, :passwordless} = WebAuthn.set_mode(armed, :passwordless, ctx.session.id, codes())
 
       passwordless = Repo.get!(Accounts.User, armed.id)
-      assert {:ok, :disabled} = WebAuthn.set_mode(passwordless, :disabled, ctx.session.id)
+      assert {:ok, :disabled} = WebAuthn.set_mode(passwordless, :disabled, ctx.session.id, [])
       assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
     end
 
@@ -197,7 +197,7 @@ defmodule Grappa.Accounts.PasskeyTest do
       armed = arm_totp(ctx.user)
       second_factor = set_passkey_mode(armed, :second_factor)
 
-      assert {:ok, :disabled} = WebAuthn.set_mode(second_factor, :disabled, ctx.session.id)
+      assert {:ok, :disabled} = WebAuthn.set_mode(second_factor, :disabled, ctx.session.id, [])
       assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
     end
 
@@ -205,7 +205,7 @@ defmodule Grappa.Accounts.PasskeyTest do
       :ok = Accounts.RecoveryCodes.replace(ctx.user.id, codes())
       second_factor = set_passkey_mode(ctx.user, :second_factor)
 
-      assert {:ok, :disabled} = WebAuthn.set_mode(second_factor, :disabled, ctx.session.id)
+      assert {:ok, :disabled} = WebAuthn.set_mode(second_factor, :disabled, ctx.session.id, [])
       assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 0
     end
 
@@ -213,7 +213,7 @@ defmodule Grappa.Accounts.PasskeyTest do
       {:ok, :passwordless} = WebAuthn.set_mode(ctx.user, :passwordless, ctx.session.id, codes())
 
       passwordless = Repo.get!(Accounts.User, ctx.user.id)
-      assert {:ok, :second_factor} = WebAuthn.set_mode(passwordless, :second_factor, ctx.session.id)
+      assert {:ok, :second_factor} = WebAuthn.set_mode(passwordless, :second_factor, ctx.session.id, [])
       assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
     end
   end

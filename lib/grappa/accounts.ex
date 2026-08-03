@@ -647,7 +647,13 @@ defmodule Grappa.Accounts do
   @spec prepare_recovery_codes() :: [String.t()]
   def prepare_recovery_codes, do: RecoveryCodes.generate()
 
-  @doc "Operator recovery: removes passkeys, recovery codes, passwordless mode, and live sessions."
+  @doc """
+  Operator recovery: removes passkeys, passwordless mode, and live sessions.
+
+  The recovery set is account-level and shared, so it goes only if nothing
+  is left armed to redeem it — see `RecoveryCodes.drop_if_orphaned/1` and
+  the `reset_totp/1` sibling.
+  """
   @spec reset_passkeys(String.t()) :: {:ok, User.t()} | {:error, :not_found | :db_unavailable}
   def reset_passkeys(name) when is_binary(name) do
     case get_user_by_name(name) do

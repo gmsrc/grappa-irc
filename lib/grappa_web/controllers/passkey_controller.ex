@@ -198,7 +198,7 @@ defmodule GrappaWeb.PasskeyController do
   defp begin_passwordless(conn, identifier) do
     with %User{passkey_mode: :passwordless} = user <- find_user(identifier),
          {:ok, options} <-
-           WebAuthn.begin_authentication(user, :passwordless, client_binding(conn), PasskeyOrigin.origin()) do
+           WebAuthn.begin_authentication(user, :passwordless, client_binding(conn), PasskeyOrigin.origin(), %{}) do
       json(conn, options)
     else
       _ -> {:error, :invalid_credentials}

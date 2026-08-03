@@ -7,10 +7,10 @@ defmodule Mix.Tasks.Grappa.ResetTotp do
 
       scripts/mix.sh grappa.reset_totp --user alice
 
-  Sibling of `grappa.reset_passkeys`, which covers the passkey side.
-  Neither touches the account recovery codes: that set is shared between
-  the two factors, so disarming one is not entitled to destroy the
-  other's way back in.
+  Sibling of `grappa.reset_passkeys`, which covers the passkey side. The
+  account recovery codes are shared between the two factors, so they go
+  only if this leaves nothing armed to redeem them — disarming one factor
+  is not entitled to destroy the other's way back in.
   """
   use Boundary, top_level?: true, deps: [Grappa.Accounts, Mix.Tasks.Grappa.Boot]
   use Mix.Task

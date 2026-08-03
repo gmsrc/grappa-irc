@@ -444,7 +444,7 @@ defmodule GrappaWeb.AuthController do
     binding = %{ip: format_ip(conn), client_id: conn.assigns[:current_client_id]}
 
     with {:ok, options} <-
-           WebAuthn.begin_authentication(user, :second_factor, binding, PasskeyOrigin.origin()) do
+           WebAuthn.begin_authentication(user, :second_factor, binding, PasskeyOrigin.origin(), %{}) do
       conn
       |> put_status(:accepted)
       |> json(%{
