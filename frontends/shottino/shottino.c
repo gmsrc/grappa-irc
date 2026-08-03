@@ -1141,6 +1141,11 @@ struct app {
      * /dev/video0 here and /dev/video2 on the machine with an IR
      * camera. */
     char voice_source[128];
+    /* Where call audio PLAYS. Its own setting because capture and
+     * playback are genuinely independent — and because until now it was
+     * not settable at all, just a hardcoded ALSA fallback inside the
+     * helper while capture went through pulse. */
+    char voice_sink[128];
     char video_source[128];
     /* ── /stt: speech to text ──────────────────────────────────────
      *
@@ -9836,6 +9841,8 @@ static const struct setting_def SETTINGS[] = {
     { "call.base_url", SET_TEXT, NULL, "where /call makes a room; any room-per-URL service" },
     { "call.ring", SET_CHOICE, "off|queries|all", "when an arriving call interrupts you" },
     { "call.mode", SET_CHOICE, "browser|terminal", "where a call runs; terminal needs a WHIP SFU" },
+    { "voice.sink", SET_TEXT, NULL,
+      "where call audio PLAYS, as format:device — e.g. pulse:default or alsa:hw:2" },
     { "call.video_codec", SET_CHOICE, "vp8|h264",
       "what a terminal call SENDS; receiving adapts to each peer on its own" },
     { "call.helper", SET_TEXT, NULL, "path to shottino-call (empty = found beside shottino)" },
@@ -9929,6 +9936,7 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
                                                        : "(none found)");
     }
     else if (strcmp(name, "voice.source") == 0) snprintf(out, out_sz, "%s", app->voice_source);
+    else if (strcmp(name, "voice.sink") == 0) snprintf(out, out_sz, "%s", app->voice_sink);
     else if (strcmp(name, "video.source") == 0) snprintf(out, out_sz, "%s", app->video_source);
     else if (strcmp(name, "bot.dir") == 0) {
         char dir[LLM_MAX_PATH];
@@ -9985,6 +9993,7 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "call.base_url") == 0) src = app->call_base_url;
     else if (strcmp(name, "call.ring") == 0) src = call_ring_word(app->call_ring);
     else if (strcmp(name, "call.mode") == 0) src = app->call_in_terminal ? "terminal" : "browser";
+    else if (strcmp(name, "voice.sink") == 0) src = app->voice_sink;
     else if (strcmp(name, "call.video_codec") == 0) src = call_vcodec_word(app->call_vcodec);
     else if (strcmp(name, "call.helper") == 0) src = app->call_helper;
     else if (strcmp(name, "bot.dir") == 0) src = app->bot_dir;
@@ -10156,6 +10165,9 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
     else if (strcmp(def->name, "voice.source") == 0)
         snprintf(app->voice_source, sizeof(app->voice_source), "%.*s",
                  (int)sizeof(app->voice_source) - 1, value);
+    else if (strcmp(def->name, "voice.sink") == 0)
+        snprintf(app->voice_sink, sizeof(app->voice_sink), "%.*s",
+                 (int)sizeof(app->voice_sink) - 1, value);
     else if (strcmp(def->name, "video.source") == 0)
         snprintf(app->video_source, sizeof(app->video_source), "%.*s",
                  (int)sizeof(app->video_source) - 1, value);
@@ -13280,7 +13292,10 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         /* Built as a list rather than a conditional initialiser: the
          * device settings are the SAME ones /voicemsg and /video use, so
          * one configured capture serves every feature here. */
-        char *argv[16 + 2 * CALL_MAX_PEERS];
+        /* helper + --whip/url + 2 per peer + the audio pair + the sink pair
+         * + --video + source + frame + codec + NULL. Sized with slack: it
+         * was exactly full at 8 peers before --audio-sink was added. */
+        char *argv[24 + 2 * CALL_MAX_PEERS];
         size_t a = 0;
         argv[a++] = helper;
         argv[a++] = (char *)"--whip";
@@ -13291,6 +13306,8 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         }
         argv[a++] = (char *)"--audio-source";
         argv[a++] = app->voice_source;
+        argv[a++] = (char *)"--audio-sink";
+        argv[a++] = app->voice_sink;
         if (video) {
             argv[a++] = (char *)"--video";
             argv[a++] = (char *)"--video-source";
@@ -19361,6 +19378,7 @@ int main(int argc, char **argv) {
      * pulse or a second webcam, which is exactly why they are settings
      * and not constants. */
     snprintf(app->voice_source, sizeof(app->voice_source), "pulse:default");
+    snprintf(app->voice_sink, sizeof(app->voice_sink), "pulse:default");
     snprintf(app->video_source, sizeof(app->video_source), "v4l2:/dev/video0");
     app->rec.stdin_fd = -1;
     /* Our own SFU, which is the only default that works BOTH ways: the

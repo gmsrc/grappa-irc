@@ -565,10 +565,15 @@ bool media_start_audio_mix(struct media_mix *mix, const int *slots, int n,
     argv[a++] = (char *)"-vn";
     char sink[256];
     const char *fmt = NULL, *dev = NULL;
-    split_source(cfg->audio_sink && cfg->audio_sink[0] ? cfg->audio_sink : "alsa:default", &fmt,
+    /* pulse, matching the capture default. These disagreed — capture
+     * through pulse, playback through ALSA — which on a pulse desktop
+     * is playback that fails or seizes the device exclusively, i.e. a
+     * call you cannot hear. Two halves of one path should not default
+     * to two different audio systems. */
+    split_source(cfg->audio_sink && cfg->audio_sink[0] ? cfg->audio_sink : "pulse:default", &fmt,
                  &dev, sink, sizeof(sink));
     argv[a++] = (char *)"-f";
-    argv[a++] = (char *)(fmt && fmt[0] ? fmt : "alsa");
+    argv[a++] = (char *)(fmt && fmt[0] ? fmt : "pulse");
     argv[a++] = (char *)(dev && dev[0] ? dev : "default");
     argv[a] = NULL;
 
