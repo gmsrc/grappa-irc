@@ -27427,9 +27427,31 @@ user tuning their away grace must not silently retune when their client reloads.
 **Below the dwell the banner keeps the case, unchanged.** The operator is right
 there and owns the timing.
 
-**Still open, product call:** whether an applied auto-refresh should announce
-itself afterwards (a transient "updated to vX"), so the operator is not left
-wondering why the scrollback jumped. Not built.
+**Decided, and the answer is nothing (owner, 2026-08-03).** The question was
+whether an applied auto-refresh should announce itself afterwards. A persistent
+banner is out — it would hand the operator something to close, which is the
+annoyance this feature exists to remove. A toast would have to be
+self-expiring, and only if that were cheap.
+
+It is not cheap, so nothing ships. The only self-expiring toast surface is
+#247's, and its queue lives inside `notifyWatch.ts` as
+`PresenceToast = transition | error`, each variant carrying `networkId` /
+`nick` / `presence` / `detail`, cleared on identity switch alongside the watch
+list. Adding a `bundle` variant is precisely the "shared data model with a type
+flag" this file forbids: the update notice would live in the /notify module,
+where nobody will look for it, and would vanish on an identity switch for
+reasons that have nothing to do with bundles. The clean route — extract a
+generic toast store and surface, then migrate #247 onto it, since leaving two
+toast systems is the half-migrated state — means reworking shipped, tested code
+to serve a nice-to-have.
+
+Independently of the surface, the notice would also need to survive the reload
+that triggers it: a marker written before `performRefresh` and read-and-cleared
+at boot, with its own way to strand (marker written, navigation declined, a
+stale toast fires later). Two moving parts for a courtesy message.
+
+If a generic toast surface ever lands for another reason, this becomes a
+two-line producer and is worth revisiting. Until then, the reload is silent.
 
 **Known, filed separately:** compose drafts live in `identityScopedStore`
 signals with no storage backing, so every reload already discards them — the
