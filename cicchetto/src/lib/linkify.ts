@@ -78,7 +78,7 @@
 //   comma-stop, negatives (bare `#`, digits-only `#1`, `&`/`+`/`!`
 //   prefixes)
 // - channel boundaries (#730): left-boundary negatives (`foo#bar`,
-//   `example.com#anchor`, `dir/#tag`) and positives (newline, `[`), the
+//   `example.com#anchor`, `dir/#tag`) and positives (newline, brackets), the
 //   URL recovered from inside a rejected run, and the length limit at
 //   49/50/60 name chars including the strip-then-measure order
 //

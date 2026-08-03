@@ -28382,3 +28382,50 @@ else; making the bundle branch report `"absence"` reddens the reason assertion.
 **Not verified:** the rendered appearance. jsdom draws no layout, so "the stack
 is positioned and legible, and the update tone reads as accent rather than
 severity" is a browser question this change does not answer.
+
+## 2026-08-03 — #730: alternative order does not bound a regex arm; a left boundary does
+
+`linkify`'s channel arm carried a comment asserting that listing the URL
+alternatives FIRST resolved the URL-vs-channel overlap, because "a `#` and a URL
+char never START at the same offset". Both halves are true and the conclusion
+does not follow. **A regex scan is leftmost-first; alternative order only breaks
+ties at the same offset.** In `example.com#anchor` the bare-domain arm cannot
+match at all (it requires a `/` after the TLD, the #212 false-positive guard),
+so nothing covers the `#`, and the channel arm takes it at the leftmost position
+where anything matches. Same for `foo#bar` and `dir/#tag`. The guard the arm
+actually needed was its own: a LEFT BOUNDARY — start of input, whitespace, `,`,
+or an opening bracket.
+
+**Consumed capture group, not a lookbehind.** A lookbehind reads better and
+costs nothing at runtime, but no regex in cic uses one today, and an unsupported
+lookbehind is a `SyntaxError` at module EVALUATION — not a wrong match, a blank
+PWA on older Safari. Trading a mis-rendered link for a boot failure is a bad
+trade, so the boundary char is captured and consumed, and `linkify` re-emits it
+through the pre-match text slice. One consequence worth keeping in mind for any
+future arm: the token handed to `stripTrailingPunctuation` must EXCLUDE the
+boundary, or the balanced-parens rule sees the `(` of `(#sniffo)` and starts
+preserving the closing `)`.
+
+**Reject in the regex, not after the match.** A post-match rejection would have
+been a smaller diff — test the character before `match.index` and emit the run
+as text — but it makes the whole run text. Rejecting in the pattern lets the
+scan continue INSIDE the rejected run, so `foo#bar.com/baz` still yields the
+bare-domain URL that the bogus channel used to swallow. Where a guard lives
+decides what the scanner can still find.
+
+**Truncation is not rejection.** The `{1,49}` cap clipped an over-long token to
+50 chars and offered it as a channel: a join affordance for a name the author
+never wrote, which is worse than no affordance at all. Past the RFC 2812 limit a
+token cannot be a real channel, so it is plain text now. The length is checked
+AFTER trailing-punct stripping, so `#<49 chars>.` stays a channel plus a period.
+The existing test pinned the truncation as intended behaviour — it was asserting
+the bug, and it is flipped.
+
+**Deliberately NOT fixed — hex colours (OPEN DECISION for vjt).** The issue's
+headline scenario is `background: #ff0000`, but that `#` follows a space, so the
+left boundary does not touch it; the issue asks for a negative test its own
+suggested mechanisms cannot produce. Rejecting `#` + 3/6/8 hex digits would
+catch it, and would also reject `#facade`, `#decade`, `#cafe`, `#bad` and
+`#abc` — real channel shapes. The mis-tap still needs a confirmation dialog,
+whereas a channel that silently stops being clickable has no recourse but
+`/join`. Left alone pending a call.
