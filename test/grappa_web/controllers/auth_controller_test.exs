@@ -107,7 +107,7 @@ defmodule GrappaWeb.AuthControllerTest do
       |> post("/auth/login", %{"identifier" => user.name, "password" => password})
       |> json_response(202)
 
-    assert pending["passkey_options"]["public_key"]["rpId"] == "login.example"
+    assert pending["passkey_options"]["public_key"]["rp_id"] == "login.example"
   end
 
   describe "POST /auth/login (mode-1 admin via email)" do

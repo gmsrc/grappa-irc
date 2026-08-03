@@ -3,18 +3,33 @@ export type PasskeyOptions = {
   public_key: Record<string, unknown>;
 };
 
-type CreationJSON = Omit<
-  PublicKeyCredentialCreationOptions,
-  "challenge" | "user" | "excludeCredentials"
-> & {
+// The wire is snake_case without exception, but `navigator.credentials`
+// wants the camelCase WebAuthn shape. Both ceremonies already have to
+// rebuild the options object to turn base64url strings into ArrayBuffers,
+// so that rebuild is the one place the two spellings meet.
+
+type DescriptorJSON = { type: "public-key"; id: string; transports?: AuthenticatorTransport[] };
+
+type CreationJSON = {
   challenge: string;
-  user: Omit<PublicKeyCredentialUserEntity, "id"> & { id: string };
-  excludeCredentials?: Array<Omit<PublicKeyCredentialDescriptor, "id"> & { id: string }>;
+  rp: PublicKeyCredentialRpEntity;
+  user: { id: string; name: string; display_name: string };
+  pub_key_cred_params: PublicKeyCredentialParameters[];
+  timeout?: number;
+  attestation?: AttestationConveyancePreference;
+  authenticator_selection?: {
+    resident_key?: ResidentKeyRequirement;
+    user_verification?: UserVerificationRequirement;
+  };
+  exclude_credentials?: DescriptorJSON[];
 };
 
-type RequestJSON = Omit<PublicKeyCredentialRequestOptions, "challenge" | "allowCredentials"> & {
+type RequestJSON = {
   challenge: string;
-  allowCredentials?: Array<Omit<PublicKeyCredentialDescriptor, "id"> & { id: string }>;
+  rp_id: string;
+  timeout?: number;
+  user_verification?: UserVerificationRequirement;
+  allow_credentials?: DescriptorJSON[];
 };
 
 const decode = (value: string): ArrayBuffer => {
@@ -31,17 +46,27 @@ const encode = (value: ArrayBuffer): string => {
   return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 };
 
+const toDescriptor = (item: DescriptorJSON): PublicKeyCredentialDescriptor => ({
+  type: item.type,
+  id: decode(item.id),
+  ...(item.transports === undefined ? {} : { transports: item.transports }),
+});
+
 export async function createPasskey(options: PasskeyOptions): Promise<Record<string, unknown>> {
   const json = options.public_key as CreationJSON;
-  const publicKey = {
-    ...json,
+  const publicKey: PublicKeyCredentialCreationOptions = {
     challenge: decode(json.challenge),
-    user: { ...json.user, id: decode(json.user.id) },
-    excludeCredentials: (json.excludeCredentials ?? []).map((item) => ({
-      ...item,
-      id: decode(item.id),
-    })),
-  } as PublicKeyCredentialCreationOptions;
+    rp: json.rp,
+    user: { id: decode(json.user.id), name: json.user.name, displayName: json.user.display_name },
+    pubKeyCredParams: json.pub_key_cred_params,
+    timeout: json.timeout,
+    attestation: json.attestation,
+    authenticatorSelection: {
+      residentKey: json.authenticator_selection?.resident_key,
+      userVerification: json.authenticator_selection?.user_verification,
+    },
+    excludeCredentials: (json.exclude_credentials ?? []).map(toDescriptor),
+  };
   const credential = (await navigator.credentials.create({
     publicKey,
   })) as PublicKeyCredential | null;
@@ -59,12 +84,11 @@ export async function createPasskey(options: PasskeyOptions): Promise<Record<str
 export async function getPasskey(options: PasskeyOptions): Promise<Record<string, unknown>> {
   const json = options.public_key as RequestJSON;
   const publicKey: PublicKeyCredentialRequestOptions = {
-    ...json,
     challenge: decode(json.challenge),
-    allowCredentials: (json.allowCredentials ?? []).map((item) => ({
-      ...item,
-      id: decode(item.id),
-    })),
+    rpId: json.rp_id,
+    timeout: json.timeout,
+    userVerification: json.user_verification,
+    allowCredentials: (json.allow_credentials ?? []).map(toDescriptor),
   };
   const credential = (await navigator.credentials.get({ publicKey })) as PublicKeyCredential | null;
   if (credential === null) throw new Error("Passkey authentication cancelled");

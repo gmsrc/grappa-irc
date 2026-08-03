@@ -158,11 +158,11 @@ defmodule Grappa.Accounts.WebAuthn do
       public_key: %{
         challenge: encode(challenge.bytes),
         rp: %{id: challenge.rp_id, name: "Grappa"},
-        user: %{id: encode(user.id), name: user.name, displayName: user.name},
-        pubKeyCredParams: [%{type: "public-key", alg: -7}, %{type: "public-key", alg: -257}],
+        user: %{id: encode(user.id), name: user.name, display_name: user.name},
+        pub_key_cred_params: [%{type: "public-key", alg: -7}, %{type: "public-key", alg: -257}],
         timeout: 300_000,
         attestation: "none",
-        authenticatorSelection: %{residentKey: "preferred", userVerification: "required"}
+        authenticator_selection: %{resident_key: "preferred", user_verification: "required"}
       }
     }
   end
@@ -185,9 +185,9 @@ defmodule Grappa.Accounts.WebAuthn do
         maybe_allow_credentials(
           %{
             challenge: encode(challenge.bytes),
-            rpId: challenge.rp_id,
+            rp_id: challenge.rp_id,
             timeout: 300_000,
-            userVerification: "required"
+            user_verification: "required"
           },
           credentials
         )
@@ -197,7 +197,7 @@ defmodule Grappa.Accounts.WebAuthn do
   defp maybe_allow_credentials(options, []), do: options
 
   defp maybe_allow_credentials(options, credentials),
-    do: Map.put(options, :allowCredentials, Enum.map(credentials, &allow_credential/1))
+    do: Map.put(options, :allow_credentials, Enum.map(credentials, &allow_credential/1))
 
   defp allow_credential(%Passkey{credential_id: credential_id, transports: transports}) do
     descriptor = %{type: "public-key", id: encode(credential_id)}

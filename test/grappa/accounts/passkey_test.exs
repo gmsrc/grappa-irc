@@ -19,7 +19,7 @@ defmodule Grappa.Accounts.PasskeyTest do
     assert is_binary(id)
     assert options.rp.id == "irc.example"
     assert options.user.name == user.name
-    assert options.authenticatorSelection.userVerification == "required"
+    assert options.authenticator_selection.user_verification == "required"
   end
 
   describe "begin_authentication/5 credential exposure" do
@@ -54,8 +54,8 @@ defmodule Grappa.Accounts.PasskeyTest do
       assert {:ok, %{public_key: options}} =
                WebAuthn.begin_authentication(ctx.user, :passwordless, ctx.binding, "https://irc.example")
 
-      assert options.rpId == "irc.example"
-      refute Map.has_key?(options, :allowCredentials)
+      assert options.rp_id == "irc.example"
+      refute Map.has_key?(options, :allow_credentials)
     end
 
     for purpose <- [:second_factor, :mode_change] do
@@ -63,7 +63,7 @@ defmodule Grappa.Accounts.PasskeyTest do
         assert {:ok, %{public_key: options}} =
                  WebAuthn.begin_authentication(ctx.user, unquote(purpose), ctx.binding, "https://irc.example")
 
-        assert [%{type: "public-key", id: id, transports: ["usb"]}] = options.allowCredentials
+        assert [%{type: "public-key", id: id, transports: ["usb"]}] = options.allow_credentials
         assert Base.url_decode64!(id, padding: false) == <<1, 2, 3>>
       end
     end
@@ -74,7 +74,7 @@ defmodule Grappa.Accounts.PasskeyTest do
       assert {:ok, %{public_key: options}} =
                WebAuthn.begin_authentication(ctx.user, :second_factor, ctx.binding, "https://irc.example")
 
-      assert [credential] = options.allowCredentials
+      assert [credential] = options.allow_credentials
       refute Map.has_key?(credential, :transports)
     end
   end

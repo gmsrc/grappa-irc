@@ -27972,3 +27972,37 @@ BEFORE the probe: a `/messages/count` on the wire 10ms after its own bearer was
 revoked, through production code paths in a real browser. That is #788 — the
 async verbs capture `token()` at entry and never re-check — and it is NOT what
 #769 turned out to be.
+---
+
+## 2026-08-03 — the auth wire joins the rest of the wire (snake_case)
+
+The WebAuthn ceremony options were the one place the client-facing wire spoke
+camelCase: `rpId`, `userVerification`, `pubKeyCredParams`,
+`authenticatorSelection`, `displayName`. The excuse was that
+`navigator.credentials` wants exactly those spellings, so passing the block
+through verbatim looked like it saved a translation.
+
+It did not save one. `cicchetto/src/lib/passkeys.ts` already had to rebuild the
+whole options object on both ceremonies, because `challenge`, `user.id` and
+every credential id arrive as base64url strings and the browser API wants
+`ArrayBuffer`s. The translation was always there; it was simply doing half a
+job, and the wire paid for the other half by breaking a rule CLAUDE.md states
+without exception.
+
+**vjt's call: snake_case now.** Passkeys are not in production and no client
+depends on the current spelling, so the cost is one commit today against a
+permanent exception in the contract. Grandfathering it would have made "the
+whole wire is snake_case" a claim a reader could no longer trust — and the next
+person adding an auth field would have had to guess which side of the line it
+fell on. The camelCase mapping now lives in the same step that decodes the
+buffers, which is the only place in cic that knows the WebAuthn shape at all.
+
+Not a `protocol_version` bump: the additive-only rule does not cover renaming
+fields, but there is no deployed client to break, so the version stays put.
+`wireTypes.ts` is untouched too — the options ride inside `public_key:
+Record<string, unknown>`, opaque to the generator.
+
+**Apply:** an exception to a wire rule is worth taking only while something
+actually depends on it. Before granting one, check whether the boundary code
+already does the work the exception was supposed to avoid — here it did, and
+the exception bought nothing but a footnote.
