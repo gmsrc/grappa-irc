@@ -16,6 +16,7 @@
 
 import { createSignal } from "solid-js";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmGraph } from "../../__tests__/helpers/warmGraph";
 import type { ScrollbackMessage } from "../api";
 import type { ProbeTraceEntry } from "../scrollback";
 
@@ -87,12 +88,11 @@ const probes = (): Extract<ProbeTraceEntry, { event: "probe" }>[] =>
   trace().filter((e): e is Extract<ProbeTraceEntry, { event: "probe" }> => e.event === "probe");
 
 describe("#769 gap-probe provenance", () => {
-  // #781 — a file whose first `await import()` of a heavy module happens
-  // INSIDE a test pays vite's transform (seconds under worker contention) on
-  // that test's 5s budget, and an overrun leaves the module evaluating in the
-  // NEXT test. Paying it in a hook keeps the failure attributable.
+  // #781 — pay the scrollback graph's transform in a hook, not inside the
+  // first test that imports it. Preconditions hold here: `lib/socket` is
+  // mocked, and nothing in this graph fetches at module scope.
   beforeAll(async () => {
-    await import("../scrollback");
+    await warmGraph(() => import("../scrollback"));
   });
 
   beforeEach(async () => {
