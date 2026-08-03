@@ -27898,3 +27898,52 @@ by auto-fetching a WHOIS on window focus, which is exactly what `/msg <ghost>`
 does; on the #613 branch cp13-s5 failed 2/2 in full local suites and passed in
 CI on the same commit. The window has always existed on main — #606 only makes
 it hit every time.
+## 2026-08-03 — #769: the identity resets clear state, they cancel nothing — and the probe now says so
+
+`cicchetto/src/lib/scrollback.ts`'s module header asserted that "a
+logout/rotation between `loadInitialScrollback` start and finish always wins
+the race". **Retracted.** That sentence is about REGISTRATION ordering — the
+`identityScopedStore` factory arms its resets before any verb can fire — and it
+was read, by the issue and by this comment's own neighbours, as a cancellation
+guarantee. The module has never implemented one. Every async verb in the file
+captures `token()` at entry and awaits with no re-check, and two of the per-key
+in-flight guards (`refreshInFlight`, `jumpInFlight`) are not even in the reset
+list, so a continuation resuming past a rotation keeps both the bearer it
+captured and its key lock. The header now says that.
+
+**The probe sites are asymmetric, and that decides how the evidence reads.**
+Three call sites reach `probeGap` and emit the same
+`GET /networks/:slug/channels/:chan/messages/count?after=<id>` URL, so the wire
+cannot tell them apart. But `initial-load` runs with NO await between its
+`token()` capture and the request (`getReadCursor` is a synchronous signal
+read), so it is structurally incapable of carrying a stale bearer — only
+`reconnect-refresh` (awaits a page first) and `resolve-jump-target` (awaits two)
+can. A `staleBearer: false` on the cold-open path is therefore not exculpatory,
+it is arithmetic. This is why the issue's stated hypothesis ("captured the
+bearer, then awaited across the switch") cannot hold for the cold-open path it
+named.
+
+**A trace, not a sync seam.** `window.__cic_scrollbackProbes` is a capped ring
+carrying one entry per gap probe (`site`, channel key, anchor, `staleBearer`)
+and one per identity purge, in ONE array so entry ORDER shows whether a probe
+outlived a rotation. It is a deliberate departure from this codebase's other
+`__cic_*` globals, which are e2e SYNCHRONISATION points (`__cic_channelReady`,
+`__cic_scrollbackRefreshed`) rather than tracing, and it is scoped to #769: it
+should leave with the issue. Read `staleBearer` as primary and the order as
+corroboration — `token()` flips synchronously inside `setToken` while the purge
+rides a `createEffect`, so a probe can be stale a beat before the purge entry
+lands. No bearer material is stored; `staleBearer` is a comparison.
+
+**Instrument before fixing** was vjt's explicit sequencing, and it earned its
+keep immediately: review of this change surfaced a competing mechanism the
+instrumentation can now discriminate in one run. `waitForChannelReady` returns
+while the join-ok `refreshScrollback` is still in flight (the #552 hazard,
+documented in that fixture's own twin `waitForScrollbackRefreshed`), so account
+A's own backfill can still be running when the issue281 spec clears its request
+log — and `#bofh` is seeded with exactly `PAGE_LIMIT` rows, which is the
+condition that makes that backfill probe at all. Under that reading the leaked
+request is legitimate traffic caught inside the spec's judging window rather
+than a cross-identity leak, and the fix is a drain before the clear, with no
+production change. The ring settles which it is: A's bearer with the purge
+entry AFTER the probe is the spec artefact; B's bearer, or a purge entry
+BEFORE, is the real leak.
