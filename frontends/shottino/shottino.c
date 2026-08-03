@@ -508,6 +508,66 @@ struct setting_def {
 
 static const struct setting_def *setting_find(const char *name);
 
+/* ── The admin panel as a control surface ──────────────────────────────
+ *
+ * The panel was a photograph of the server: five tables, none of them
+ * touchable, while grappa has offered the verbs behind them all along.
+ * These two closed sets are what turn the picture into a console — the
+ * RESOURCE a row stands for decides which verbs are on offer, and the
+ * VERB decides the one REST call to make.
+ *
+ * Neither is a string. A string admin action is a DELETE one typo away
+ * from a path nobody meant, and the compiler has nothing to say about
+ * it; an enum with a switch that names every case means adding a verb
+ * without wiring it is a build error rather than a menu entry that does
+ * nothing. */
+enum admin_res {
+    ADMIN_RES_NONE = 0,
+    ADMIN_RES_SESSION,
+    ADMIN_RES_USER,
+    ADMIN_RES_NETWORK,
+    ADMIN_RES_VISITOR,
+    ADMIN_RES_UPLOAD
+};
+
+enum admin_verb {
+    ADMIN_V_NONE = 0,
+    ADMIN_V_DISCONNECT,
+    ADMIN_V_RECONNECT,
+    ADMIN_V_KILL,
+    ADMIN_V_PROMOTE,
+    ADMIN_V_DEMOTE,
+    ADMIN_V_DELETE_USER,
+    ADMIN_V_DELETE_NETWORK,
+    ADMIN_V_DELETE_VISITOR,
+    ADMIN_V_DELETE_UPLOAD
+};
+
+/* One actionable line of the admin panel.
+ *
+ * `line` is the panel row it was drawn on, which is what lets the
+ * selection appear where the operator is looking WITHOUT the rows having
+ * to be contiguous — they are interleaved with five headings and five
+ * blank separators, so the settings panel's "first row plus an index"
+ * model does not fit here and recording the line is cheaper than
+ * teaching the panel to draw its tables in one block. */
+struct admin_row {
+    enum admin_res res;
+    size_t line;
+    /* The id the REST path needs. Usually the server's own — but a
+     * session has none on the wire and is addressed by a composite the
+     * client builds, so this is "what the path takes", not "what the
+     * JSON called id". */
+    char id[128];
+    char label[64];
+    /* Users only: which way the admin toggle currently points, so the
+     * menu offers the transition rather than both states. Meaningless
+     * on every other resource, and false there. */
+    bool is_admin;
+};
+
+#define ADMIN_ROWS 128
+
 enum overlay_kind {
     OVERLAY_NONE = 0,
     OVERLAY_MENU,
@@ -517,6 +577,10 @@ enum overlay_kind {
     /* One preference, opened for changing: a list of the values it
      * accepts, or a field to type one into when it accepts anything. */
     OVERLAY_SETTING,
+    /* One admin row, opened for acting on: the verbs its resource
+     * supports, and — once a destructive one is chosen — the second
+     * question that has to be answered before it runs. */
+    OVERLAY_ADMIN,
     /* Somebody is calling. The only overlay that is not opened by the
      * keyboard or the pointer — it ARRIVES, which is why it is also the
      * only one whose subject (app->call_last) outlives it: dismissing a
@@ -656,7 +720,14 @@ enum overlay_action {
      * says nothing to anyone, because posting "declined" into a channel
      * tells everyone in it something they did not ask about. */
     ACT_CALL_ANSWER,
-    ACT_CALL_DECLINE
+    ACT_CALL_DECLINE,
+    /* An admin verb on the selected admin row. ONE action for all nine
+     * verbs — they differ only in which REST call they make, and that
+     * is what the item's `verb` field says. Nine ACT_ values would be
+     * nine switch arms doing the same three lines. */
+    ACT_ADMIN,
+    /* The way out of the confirmation, and the entry it opens on. */
+    ACT_ADMIN_CANCEL
 };
 
 /* How many entries a picker offers. Twenty is what fits the phrase "the
@@ -671,6 +742,9 @@ struct overlay_item {
      * eye and carries the nick column; this is the raw text. */
     char body[MAX_LINE];
     enum overlay_action action;
+    /* ACT_ADMIN only: which verb this entry runs. ADMIN_V_NONE on every
+     * other entry, which is also what makes an unset one harmless. */
+    enum admin_verb verb;
 };
 
 struct overlay {
@@ -709,6 +783,13 @@ struct overlay {
      * /stt wants the audio and nothing else: a list where most entries
      * cannot be transcribed is a list you have to read twice. */
     enum media_kind pick_kind;
+    /* OVERLAY_ADMIN: the destructive verb waiting for a second answer,
+     * or ADMIN_V_NONE while the menu is still offering the choice. It
+     * lives on the overlay rather than beside the selection because it
+     * describes THIS box, and closing the box must forget it — a
+     * pending DELETE that outlived its menu would be armed the next
+     * time one opened. */
+    enum admin_verb pending;
 };
 
 /* ── The downstream IRC server (--ircd) ────────────────────────────────
@@ -909,6 +990,15 @@ struct app {
      * click test all silently do nothing the day the block moves to the
      * top. */
     bool settings_shown;
+    /* The admin panel's actionable rows, recorded as it draws them, and
+     * which one is selected. No `admin_shown` twin of settings_shown:
+     * "the block is on screen" is DERIVABLE here (a count of zero says
+     * it plainly, and unlike row0 == 0 there is no valid zero to
+     * confuse it with), and a second flag is a second thing to keep in
+     * step with the first. */
+    struct admin_row admin_rows[ADMIN_ROWS];
+    size_t admin_row_count;
+    size_t admin_sel;
     struct seen_message seen[SEEN_MESSAGES];
     size_t seen_count;
     size_t seen_next;
@@ -4319,6 +4409,210 @@ static void render_archive_rows(struct app *app, const json_value *root) {
     if (n == 0) panel_line(app, "  (nothing archived on this network)");
 }
 
+/* ── Admin verbs ───────────────────────────────────────────────────────
+ *
+ * Everything from here to admin_verb_run is PURE: which verbs a row
+ * offers, what each is called, whether it destroys something, and the
+ * exact request it makes. Only the runner touches the network.
+ *
+ * The split is not tidiness. A DELETE path is the one kind of string
+ * that cannot be checked by trying it, so the part that builds it has
+ * to be provable without a server — and it is, from the same captured
+ * payloads the renderers are tested against. */
+
+static const char *admin_res_name(enum admin_res r) {
+    switch (r) {
+    case ADMIN_RES_SESSION: return "session";
+    case ADMIN_RES_USER: return "user";
+    case ADMIN_RES_NETWORK: return "network";
+    case ADMIN_RES_VISITOR: return "visitor";
+    case ADMIN_RES_UPLOAD: return "upload";
+    case ADMIN_RES_NONE: break;
+    }
+    return "";
+}
+
+static const char *admin_verb_name(enum admin_verb v) {
+    switch (v) {
+    case ADMIN_V_DISCONNECT: return "Disconnect";
+    case ADMIN_V_RECONNECT: return "Reconnect";
+    case ADMIN_V_KILL: return "Kill the process";
+    case ADMIN_V_PROMOTE: return "Grant admin";
+    case ADMIN_V_DEMOTE: return "Revoke admin";
+    case ADMIN_V_DELETE_USER: return "Delete user";
+    case ADMIN_V_DELETE_NETWORK: return "Delete network";
+    case ADMIN_V_DELETE_VISITOR: return "Delete visitor";
+    case ADMIN_V_DELETE_UPLOAD: return "Delete upload";
+    case ADMIN_V_NONE: break;
+    }
+    return "";
+}
+
+/* True when the verb takes something away that no second call brings
+ * back. These ask twice. Disconnect and the admin toggle do not: a
+ * session reconnects and a flag flips back, so a modal in front of them
+ * would be ceremony rather than safety — and ceremony in front of the
+ * routine actions is what teaches people to confirm without reading. */
+static bool admin_verb_destructive(enum admin_verb v) {
+    switch (v) {
+    case ADMIN_V_KILL:
+    case ADMIN_V_DELETE_USER:
+    case ADMIN_V_DELETE_NETWORK:
+    case ADMIN_V_DELETE_VISITOR:
+    case ADMIN_V_DELETE_UPLOAD:
+        return true;
+    case ADMIN_V_NONE:
+    case ADMIN_V_DISCONNECT:
+    case ADMIN_V_RECONNECT:
+    case ADMIN_V_PROMOTE:
+    case ADMIN_V_DEMOTE:
+        return false;
+    }
+    return false;
+}
+
+/* What this row can actually have done to it.
+ *
+ * The menu offers what the thing under the pointer supports, never an
+ * entry that is a guaranteed error — the same rule the nick menu
+ * follows when it withholds Reply from a roster row. Two consequences
+ * are visible here: Reconnect is a VISITOR verb (grappa answers 400 for
+ * a user subject, whose reconnect is their own PATCH /networks/:id),
+ * and a user row offers the transition its flag is not already in
+ * rather than both states. */
+static size_t admin_verbs_for(const struct admin_row *row, enum admin_verb *out, size_t max) {
+    size_t n = 0;
+    if (!row || max == 0) return 0;
+    switch (row->res) {
+    case ADMIN_RES_SESSION:
+        if (n < max) out[n++] = ADMIN_V_DISCONNECT;
+        if (n < max && strncmp(row->id, "visitor:", 8) == 0) out[n++] = ADMIN_V_RECONNECT;
+        if (n < max) out[n++] = ADMIN_V_KILL;
+        break;
+    case ADMIN_RES_USER:
+        if (n < max) out[n++] = row->is_admin ? ADMIN_V_DEMOTE : ADMIN_V_PROMOTE;
+        if (n < max) out[n++] = ADMIN_V_DELETE_USER;
+        break;
+    case ADMIN_RES_NETWORK:
+        if (n < max) out[n++] = ADMIN_V_DELETE_NETWORK;
+        break;
+    case ADMIN_RES_VISITOR:
+        if (n < max) out[n++] = ADMIN_V_DELETE_VISITOR;
+        break;
+    case ADMIN_RES_UPLOAD:
+        if (n < max) out[n++] = ADMIN_V_DELETE_UPLOAD;
+        break;
+    case ADMIN_RES_NONE:
+        break;
+    }
+    return n;
+}
+
+/* The one REST call `v` makes on `row`: method, path, and a body for the
+ * two verbs that carry one. False when the pairing has no call — an
+ * empty id, or a verb that does not belong to the row's resource.
+ *
+ * The id is percent-encoded even though every id grappa hands out is
+ * already URL-safe. The composite session id is BUILT here rather than
+ * read from the wire, and the day something puts a stranger character
+ * into a label is not the day to discover that this path was
+ * concatenated raw. */
+static bool admin_verb_request(enum admin_verb v, const struct admin_row *row,
+                               const char **method, char *path, size_t path_sz, char *body,
+                               size_t body_sz) {
+    if (!row || !row->id[0] || !method || path_sz == 0 || body_sz == 0) return false;
+    /* Not a verb this resource offers: asked and answered by the same
+     * table the menu was built from, so the two cannot disagree. */
+    enum admin_verb offered[8];
+    size_t n = admin_verbs_for(row, offered, sizeof(offered) / sizeof(offered[0]));
+    bool ok = false;
+    for (size_t i = 0; i < n; i++)
+        if (offered[i] == v) ok = true;
+    if (!ok) return false;
+
+    char *id = url_encode(row->id);
+    if (!id) return false;
+    body[0] = 0;
+    switch (v) {
+    case ADMIN_V_DISCONNECT:
+        *method = "POST";
+        snprintf(path, path_sz, "/admin/sessions/%s/disconnect", id);
+        snprintf(body, body_sz, "{}");
+        break;
+    case ADMIN_V_RECONNECT:
+        *method = "POST";
+        snprintf(path, path_sz, "/admin/sessions/%s/reconnect", id);
+        snprintf(body, body_sz, "{}");
+        break;
+    case ADMIN_V_KILL:
+        *method = "DELETE";
+        snprintf(path, path_sz, "/admin/sessions/%s", id);
+        break;
+    case ADMIN_V_PROMOTE:
+    case ADMIN_V_DEMOTE:
+        /* The whitelist is `is_admin` and nothing else — grappa answers
+         * 400 to an extra key rather than ignoring it, which is the
+         * boundary being loud on purpose. */
+        *method = "PATCH";
+        snprintf(path, path_sz, "/admin/users/%s", id);
+        snprintf(body, body_sz, "{\"is_admin\":%s}", v == ADMIN_V_PROMOTE ? "true" : "false");
+        break;
+    case ADMIN_V_DELETE_USER:
+        *method = "DELETE";
+        snprintf(path, path_sz, "/admin/users/%s", id);
+        break;
+    case ADMIN_V_DELETE_NETWORK:
+        *method = "DELETE";
+        snprintf(path, path_sz, "/admin/networks/%s", id);
+        break;
+    case ADMIN_V_DELETE_VISITOR:
+        *method = "DELETE";
+        snprintf(path, path_sz, "/admin/visitors/%s", id);
+        break;
+    case ADMIN_V_DELETE_UPLOAD:
+        *method = "DELETE";
+        snprintf(path, path_sz, "/admin/uploads/%s", id);
+        break;
+    case ADMIN_V_NONE:
+        free(id);
+        return false;
+    }
+    free(id);
+    return true;
+}
+
+/* Record the row panel_line has just drawn as something a verb can act
+ * on. Called immediately after the line it describes — that adjacency IS
+ * the binding between a screen row and the resource behind it, and
+ * nothing else in the panel establishes one.
+ *
+ * A row with no id is not recorded rather than recorded unusable: a
+ * session whose subject_id is null is an orphan pid, which grappa sends
+ * deliberately and which no verb here can address. */
+static void admin_row_mark(struct app *app, enum admin_res res, const char *id, const char *label,
+                           bool is_admin) {
+    if (!id || !id[0]) return;
+    pthread_mutex_lock(&app->lock);
+    if (app->panel_line_count > 0 && app->admin_row_count < ADMIN_ROWS) {
+        struct admin_row *r = &app->admin_rows[app->admin_row_count++];
+        r->res = res;
+        r->line = app->panel_line_count - 1;
+        snprintf(r->id, sizeof(r->id), "%s", id);
+        snprintf(r->label, sizeof(r->label), "%s", label && label[0] ? label : id);
+        r->is_admin = is_admin;
+    }
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* The row the admin panel's selection is on, or NULL. Caller holds the
+ * lock. Every reader goes through this rather than indexing the array:
+ * the count changes under the selection every time the panel refreshes,
+ * and one unchecked index is a read past the end of it. */
+static const struct admin_row *admin_selected_locked(struct app *app) {
+    if (app->panel != PANEL_ADMIN || app->admin_sel >= app->admin_row_count) return NULL;
+    return &app->admin_rows[app->admin_sel];
+}
+
 static void render_admin_users(struct app *app, const json_value *root) {
     const json_value *rows = rows_of(root, "users");
     size_t n = json_len(rows);
@@ -4329,8 +4623,10 @@ static void render_admin_users(struct app *app, const json_value *root) {
         const char *name = json_string(json_get(e, "name"));
         const char *id = json_string(json_get(e, "id"));
         bool is_admin = json_bool(json_get(e, "is_admin"), false);
-        if (name)
+        if (name) {
             panel_line(app, "    %-24s %-6s %.8s", name, is_admin ? "yes" : "no", id ? id : "");
+            admin_row_mark(app, ADMIN_RES_USER, id, name, is_admin);
+        }
     }
     if (n > 50) panel_line(app, "    ... %zu more", n - 50);
 }
@@ -4372,6 +4668,17 @@ static void render_admin_sessions(struct app *app, const json_value *root) {
          * so it reads "gone" rather than an empty column. */
         panel_line(app, "    %-14s %-18s %-7s %-6zu %s", slug ? slug : "?", subject,
                    live ? (alive ? "alive" : "dead") : "gone", chans, when);
+        /* A session has NO id on the wire — the listing is keyed by
+         * (subject, network) and the verbs take the composite
+         * `kind:uuid:network_id` that grappa's parse_session_id splits
+         * back apart. Composing it here is the client's half of that
+         * contract; there is no field to read it from. */
+        const char *sid = json_string(json_get(e, "subject_id"));
+        if (kind && sid && net_id > 0) {
+            char id[128];
+            snprintf(id, sizeof(id), "%s:%s:%ld", kind, sid, net_id);
+            admin_row_mark(app, ADMIN_RES_SESSION, id, subject, false);
+        }
     }
     if (n > 50) panel_line(app, "    ... %zu more", n - 50);
 }
@@ -4393,6 +4700,7 @@ static void render_admin_visitors(struct app *app, const json_value *root) {
         bool identified = json_bool(json_get(e, "identified"), false);
         panel_line(app, "    %-14.14s %-12s expires %s", id ? id : "?",
                    identified ? "identified" : "anonymous", when);
+        admin_row_mark(app, ADMIN_RES_VISITOR, id, id, false);
         const json_value *nets = json_get(e, "networks");
         for (size_t k = 0; k < json_len(nets); k++) {
             const json_value *ne = json_at(nets, k);
@@ -4421,6 +4729,25 @@ static void render_admin_uploads(struct app *app, const json_value *root) {
     char human[32];
     human_bytes(total, human, sizeof(human));
     panel_line(app, "  uploads (%zu, %s total)", n, human);
+    /* A total is a disk budget; it is not something an operator can act
+     * on. The rows are here because "delete this one" needs a THIS —
+     * the endpoint has always existed, and a panel that reports only
+     * the sum can only ever recommend the reaper. */
+    if (n) panel_line(app, "    %-12s %-9s %-14s %s", "ID", "SIZE", "MIME", "FILENAME");
+    for (size_t i = 0; i < n && i < 30; i++) {
+        const json_value *e = json_at(rows, i);
+        const char *id = json_string(json_get(e, "id"));
+        const char *mime = json_string(json_get(e, "mime"));
+        const char *file = json_string(json_get(e, "original_filename"));
+        long sz = 0;
+        json_long(json_get(e, "bytes"), &sz);
+        char one[32];
+        human_bytes(sz, one, sizeof(one));
+        panel_line(app, "    %-12.12s %-9s %-14.14s %.32s", id ? id : "?", one,
+                   mime ? mime : "—", file ? file : "—");
+        admin_row_mark(app, ADMIN_RES_UPLOAD, id, file ? file : id, false);
+    }
+    if (n > 30) panel_line(app, "    ... %zu more", n - 30);
 }
 
 static void render_admin_networks(struct app *app, const json_value *root) {
@@ -4434,7 +4761,15 @@ static void render_admin_networks(struct app *app, const json_value *root) {
         long id = 0;
         json_long(json_get(e, "id"), &id);
         const char *flavor = json_string(json_get(e, "services_flavor"));
-        if (slug) panel_line(app, "    %-18s %-8ld %s", slug, id, flavor ? flavor : "—");
+        if (slug) {
+            panel_line(app, "    %-18s %-8ld %s", slug, id, flavor ? flavor : "—");
+            char sid[32];
+            snprintf(sid, sizeof(sid), "%ld", id);
+            /* DELETE takes the numeric id; PATCH takes the slug. The
+             * row carries the id because that is what the verb on
+             * offer here needs. */
+            if (id > 0) admin_row_mark(app, ADMIN_RES_NETWORK, sid, slug, false);
+        }
     }
 }
 
@@ -4484,6 +4819,12 @@ static void open_panel(struct app *app, enum panel_kind panel) {
     app->panel_offset = 0;
     app->settings_row0 = 0;
     app->settings_shown = false;
+    /* The admin rows are rebuilt by the render pass below, so the old
+     * ones go first — including when the panel being opened is a
+     * different one, or the selection would survive into a panel that
+     * has no rows to point at. */
+    app->admin_row_count = 0;
+    app->admin_sel = 0;
     struct window current = app->windows[focused_window_locked(app)];
     size_t window_count = app->window_count;
     size_t alias_count = app->aliases.count;
@@ -4551,7 +4892,7 @@ static void open_panel(struct app *app, enum panel_kind panel) {
         break;
 
     case PANEL_ADMIN:
-        panel_line(app, "admin");
+        panel_line(app, "admin — Up/Down picks a row, Enter or right-click acts on it");
         panel_line(app, "%s", "");
         /* Every tab is fetched independently and reports its own failure,
          * so a 403 on one (a non-admin subject, or a resource missing
@@ -4570,6 +4911,34 @@ static void open_panel(struct app *app, enum panel_kind panel) {
     case PANEL_CHAT:
         break;
     }
+}
+
+/* Run one admin verb, say what happened, and rebuild the panel.
+ *
+ * The refresh is not cosmetic. Every verb here changes the very table
+ * that was clicked, and a console that still shows the session you just
+ * killed is a console you cannot trust — so the panel is re-read from
+ * the server rather than patched locally, and what it then shows is the
+ * server's answer rather than the client's assumption about it.
+ *
+ * Takes a COPY of the row, not a pointer into app->admin_rows: the
+ * refresh at the end frees nothing but does rewrite the array, and the
+ * failure log below reads the label after that point. */
+static void admin_verb_run(struct app *app, enum admin_verb v, struct admin_row row) {
+    const char *method = NULL;
+    char path[512], body[256];
+    if (!admin_verb_request(v, &row, &method, path, sizeof(path), body, sizeof(body))) {
+        log_line(app, "admin: %s does not apply to %s", admin_verb_name(v), row.label);
+        return;
+    }
+    struct http_response r = http_request(app, method, path, body[0] ? body : NULL);
+    if (r.status >= 200 && r.status < 300)
+        log_line(app, "admin: %s — %s", admin_verb_name(v), row.label);
+    else
+        log_line(app, "admin: %s %s failed HTTP %d: %.200s", admin_verb_name(v), row.label,
+                 r.status, r.body ? r.body : "");
+    free(r.body);
+    open_panel(app, PANEL_ADMIN);
 }
 
 static int split_message_line(const char *line, char *prefix, size_t prefix_sz, char *nick, size_t nick_sz, const char **body) {
@@ -7534,8 +7903,14 @@ if (app->overlay.kind == OVERLAY_RECORD) {
      * titled, and answered with Enter. It differs only in WHERE its two
      * lines of heading come from — an arriving call, not a table. */
     bool ring = app->overlay.kind == OVERLAY_CALL;
-    bool picker =
-        app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA || modal || ring;
+    /* An admin menu is centred and titled rather than anchored where the
+     * pointer was, because the keyboard opens it too — an anchored box
+     * would have nowhere to anchor to — and because the one thing it
+     * must never be ambiguous about is WHICH row it is acting on. That
+     * goes in the heading. */
+    bool adminbox = app->overlay.kind == OVERLAY_ADMIN;
+    bool picker = app->overlay.kind == OVERLAY_REPLY || app->overlay.kind == OVERLAY_MEDIA ||
+                  modal || ring || adminbox;
     /* Free text has no list, so the single row IS the field. */
     bool typing = modal && n == 0;
     int box_w = picker ? (main_w > 76 ? 76 : main_w - 2) : 34;
@@ -7601,6 +7976,14 @@ if (app->overlay.kind == OVERLAY_RECORD) {
         draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM, "%s in %s",
                   call_kind_word(app->call_last.kind), app->call_last.channel);
         line_y++;
+    } else if (adminbox) {
+        const struct admin_row *arow = admin_selected_locked(app);
+        /* The subject, spelled out. Every entry below is a verb applied
+         * to THIS, and a menu that shows only verbs is a menu you have
+         * to trust your memory about. */
+        draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s %s",
+                  arow ? admin_res_name(arow->res) : "", arow ? arow->label : "(gone)");
+        line_y++;
     } else if (picker) {
         draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s: %s%s", verb,
                   app->overlay.filter, "_");
@@ -7638,6 +8021,10 @@ if (app->overlay.kind == OVERLAY_RECORD) {
          * reaches the call afterwards. */
         draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
                   "Up/Down | Enter choose | Esc dismiss");
+    else if (adminbox)
+        draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
+                  app->overlay.pending != ADMIN_V_NONE ? "this cannot be undone | Esc cancels"
+                                                       : "Up/Down | Enter choose | Esc cancel");
     else if (picker)
         draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
                   "%zu/%zu | type to filter | Up/Down | Enter | Esc", n ? app->overlay.sel + 1 : 0,
@@ -7822,14 +8209,24 @@ static void draw(struct app *app) {
             else if (sel >= app->panel_offset + (size_t)panel_h)
                 app->panel_offset = sel - (size_t)panel_h + 1;
         }
+        /* And the selected admin row, for the sharper version of the
+         * same reason: acting on a resource you cannot see is how you
+         * disconnect the wrong session. */
+        const struct admin_row *asel = admin_selected_locked(app);
+        if (asel) {
+            if (asel->line < app->panel_offset) app->panel_offset = asel->line;
+            else if (asel->line >= app->panel_offset + (size_t)panel_h)
+                app->panel_offset = asel->line - (size_t)panel_h + 1;
+        }
         app->panel_draw_y = area_y + 2;
         app->panel_draw_x0 = main_x + 1;
         app->panel_draw_x1 = main_x + main_w - 2;
         app->panel_draw_h = panel_h;
         for (size_t i = app->panel_offset;
              i < app->panel_line_count && (int)(i - app->panel_offset) < panel_h; i++) {
-            bool selected = app->panel == PANEL_SETTINGS && app->settings_shown &&
-                            i == app->settings_row0 + app->settings_sel;
+            bool selected = (app->panel == PANEL_SETTINGS && app->settings_shown &&
+                             i == app->settings_row0 + app->settings_sel) ||
+                            (asel && i == asel->line);
             int pair = selected ? CP_MENTION : (i == 0 ? CP_ACCENT : CP_MAIN);
             attr_t attr = selected ? A_BOLD | A_REVERSE : (i == 0 ? A_BOLD : 0);
             draw_text(area_y + 2 + (int)(i - app->panel_offset), main_x + 1, main_w - 2, pair, attr,
@@ -7841,6 +8238,11 @@ static void draw(struct app *app) {
                       "settings %zu/%zu | ↑↓ pick · Enter edit · Space toggle · PgUp/PgDn scroll · "
                       "Esc returns to chat",
                       app->settings_sel + 1, settings_count());
+        else if (asel)
+            draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0,
+                      "admin %zu/%zu | ↑↓ pick · Enter or right-click acts · PgUp/PgDn scroll · "
+                      "Esc returns to chat",
+                      app->admin_sel + 1, app->admin_row_count);
         else if (max_off)
             draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0,
                       "panel: %s %zu/%zu | PgUp/PgDn scroll | Esc or /chat returns to chat",
@@ -11478,6 +11880,32 @@ static bool menu_add(struct overlay_item *out, size_t *n, size_t max, enum overl
     snprintf(it->nick, sizeof(it->nick), "%s", nick ? nick : "");
     snprintf(it->body, sizeof(it->body), "%s", body ? body : "");
     it->action = action;
+    it->verb = ADMIN_V_NONE;
+    return *n < max;
+}
+
+/* menu_add for an admin entry: the same row, plus the verb it runs.
+ *
+ * Separate rather than a tenth parameter on menu_add, so its ten other
+ * callers do not have to name a field that means nothing to them — and
+ * so the verb cannot be forgotten on an entry that needs one, which is
+ * the mistake this shape exists to prevent. */
+static bool menu_add_verb(struct overlay_item *out, size_t *n, size_t max,
+                          enum overlay_action action, enum admin_verb verb, const char *fmt, ...)
+    __attribute__((format(printf, 6, 7)));
+
+static bool menu_add_verb(struct overlay_item *out, size_t *n, size_t max,
+                          enum overlay_action action, enum admin_verb verb, const char *fmt, ...) {
+    if (*n >= max) return false;
+    struct overlay_item *it = &out[(*n)++];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(it->label, sizeof(it->label), fmt, ap);
+    va_end(ap);
+    it->nick[0] = 0;
+    it->body[0] = 0;
+    it->action = action;
+    it->verb = verb;
     return *n < max;
 }
 
@@ -11493,6 +11921,30 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
         menu_add(out, &n, max, ACT_CALL_DECLINE, app->call_last.from, "", "Decline");
         menu_add(out, &n, max, ACT_CALL_ANSWER, app->call_last.from, "",
                  "Answer — open %s", app->call_last.url);
+        return n;
+    }
+    /* One admin row, opened for acting on. Two stages in one overlay:
+     * the verbs the row supports, and — once a destructive one is
+     * picked — the second question. */
+    if (ov->kind == OVERLAY_ADMIN) {
+        const struct admin_row *row = admin_selected_locked(app);
+        if (!row) return n;
+        if (ov->pending != ADMIN_V_NONE) {
+            /* Cancel FIRST, so the entry already selected is the one
+             * that does nothing. Same ordering as the ringing-call
+             * overlay, for the same reason: Enter pressed by reflex
+             * must never be the answer that cannot be taken back. */
+            menu_add_verb(out, &n, max, ACT_ADMIN_CANCEL, ADMIN_V_NONE, "Cancel");
+            menu_add_verb(out, &n, max, ACT_ADMIN, ov->pending, "%s %s — no undo",
+                          admin_verb_name(ov->pending), row->label);
+            return n;
+        }
+        enum admin_verb verbs[8];
+        size_t k = admin_verbs_for(row, verbs, sizeof(verbs) / sizeof(verbs[0]));
+        for (size_t i = 0; i < k; i++)
+            if (!menu_add_verb(out, &n, max, ACT_ADMIN, verbs[i], "%s %s",
+                               admin_verb_name(verbs[i]), row->label))
+                break;
         return n;
     }
     /* One preference, opened for changing. The values it can take are
@@ -11680,6 +12132,9 @@ static void overlay_close(struct app *app) {
     app->overlay.edit_len = 0;
     app->overlay.sel = 0;
     app->overlay.top = 0;
+    /* An armed verb must not outlive the box that armed it, or the next
+     * menu to open would already be holding a DELETE. */
+    app->overlay.pending = ADMIN_V_NONE;
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -11814,15 +12269,48 @@ static void overlay_activate(struct app *app) {
     char nick[MAX_CHANNEL] = "";
     char body[MAX_LINE] = "";
     enum overlay_action action = ACT_NONE;
+    /* The admin subject is read HERE, under the same lock as the item —
+     * the runner must not go back for it afterwards, because closing
+     * the overlay and refreshing the panel both rewrite the array it
+     * would be looking in. */
+    enum admin_verb verb = ADMIN_V_NONE, pending = ADMIN_V_NONE;
+    struct admin_row row;
+    memset(&row, 0, sizeof(row));
     pthread_mutex_lock(&app->lock);
     size_t n = overlay_items_locked(app, items, sizeof(items) / sizeof(items[0]));
     if (app->overlay.sel < n) {
         action = items[app->overlay.sel].action;
+        verb = items[app->overlay.sel].verb;
         snprintf(nick, sizeof(nick), "%s", items[app->overlay.sel].nick);
         snprintf(body, sizeof(body), "%s", items[app->overlay.sel].body);
     }
+    pending = app->overlay.pending;
+    if (app->overlay.kind == OVERLAY_ADMIN) {
+        const struct admin_row *sel = admin_selected_locked(app);
+        if (sel) row = *sel;
+    }
     pthread_mutex_unlock(&app->lock);
     overlay_close(app);
+    /* A destructive verb asks once more before it runs, and the asking
+     * REOPENS this same overlay with the verb armed — so the second
+     * screen is built from the same table as the first and cannot offer
+     * a confirmation for something the row does not support. Handled
+     * before the switch because it is the one action that does not
+     * leave the overlay closed. */
+    if (action == ACT_ADMIN && verb != ADMIN_V_NONE && pending == ADMIN_V_NONE &&
+        admin_verb_destructive(verb)) {
+        pthread_mutex_lock(&app->lock);
+        app->overlay.kind = OVERLAY_ADMIN;
+        app->overlay.pending = verb;
+        app->overlay.sel = 0;
+        app->overlay.top = 0;
+        pthread_mutex_unlock(&app->lock);
+        return;
+    }
+    if (action == ACT_ADMIN && verb != ADMIN_V_NONE) {
+        admin_verb_run(app, verb, row);
+        return;
+    }
     /* A media row need not carry a nick — a bare URL is still something
      * to look at — so each action checks the field it actually needs. */
     switch (action) {
@@ -11950,6 +12438,13 @@ static void overlay_activate(struct app *app) {
             settings_prefill_edit(app, nick);
         }
         break;
+    /* Both handled above the switch: ACT_ADMIN either arms the
+     * confirmation or runs, and Cancel's whole job was the
+     * overlay_close that has already happened. Named rather than
+     * defaulted, so adding an action still fails the build until it is
+     * wired. */
+    case ACT_ADMIN:
+    case ACT_ADMIN_CANCEL:
     case ACT_NONE:
         break;
     }
@@ -12558,6 +13053,33 @@ static void settings_open_modal(struct app *app, const char *name) {
     pthread_mutex_unlock(&app->lock);
 }
 
+/* Open the verb menu for whichever admin row is selected.
+ *
+ * Nothing is passed in: the selection is the subject, and reading it
+ * here — rather than accepting a row from the caller — means the
+ * keyboard and the pointer cannot disagree about which row the menu is
+ * about. The menu itself is built at draw time from the same selection,
+ * so a panel that refreshes underneath simply offers the new row's
+ * verbs rather than the old row's against the new id. */
+static void admin_open_menu(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    if (app->panel != PANEL_ADMIN || app->admin_sel >= app->admin_row_count) {
+        pthread_mutex_unlock(&app->lock);
+        return;
+    }
+    app->overlay.kind = OVERLAY_ADMIN;
+    app->overlay.pending = ADMIN_V_NONE;
+    app->overlay.sel = 0;
+    app->overlay.top = 0;
+    app->overlay.nick[0] = 0;
+    app->overlay.body[0] = 0;
+    app->overlay.media[0] = 0;
+    app->overlay.setting[0] = 0;
+    app->overlay.edit[0] = 0;
+    app->overlay.edit_len = 0;
+    pthread_mutex_unlock(&app->lock);
+}
+
 static void settings_prefill_edit(struct app *app, const char *name) {
     char raw[MAX_LINE];
     size_t need = setting_raw(app, name, raw, sizeof(raw));
@@ -12580,6 +13102,7 @@ static bool panel_key(struct app *app, int ch) {
     bool in_panel = app->panel != PANEL_CHAT;
     bool typing = app->input_len > 0;
     bool settings = app->panel == PANEL_SETTINGS && app->settings_shown;
+    bool admin = app->panel == PANEL_ADMIN && app->admin_row_count > 0;
     pthread_mutex_unlock(&app->lock);
     if (!in_panel || typing) return false;
 
@@ -12611,6 +13134,33 @@ static bool panel_key(struct app *app, int ch) {
     default:
         break;
     }
+
+    /* The admin panel steers like the settings one — Up/Down walks the
+     * rows, Enter acts — but the rows are resources rather than
+     * preferences, so Enter opens the verbs instead of prefilling a
+     * /set. Space is deliberately not bound here: there is no admin
+     * action safe enough to be a toggle. */
+    if (admin) {
+        switch (ch) {
+        case KEY_UP:
+            pthread_mutex_lock(&app->lock);
+            if (app->admin_sel) app->admin_sel--;
+            pthread_mutex_unlock(&app->lock);
+            return true;
+        case KEY_DOWN:
+            pthread_mutex_lock(&app->lock);
+            if (app->admin_sel + 1 < app->admin_row_count) app->admin_sel++;
+            pthread_mutex_unlock(&app->lock);
+            return true;
+        case '\n':
+        case '\r':
+            admin_open_menu(app);
+            return true;
+        default:
+            return false;
+        }
+    }
+
     if (!settings) return false;
 
     switch (ch) {
@@ -14417,7 +14967,8 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview-ascii") == 0) log_line(app, "/preview-ascii [url] — the same preview, forced to colour character art: skips the terminal's graphics protocol, which is what to try when a picture renders as garbage or not at all");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
-    else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "admin") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);
+    else if (strcmp(cmd, "admin") == 0) log_line(app, "/admin — the operator console: sessions, users, networks, visitors and uploads. Not just a listing — Up/Down picks a row and Enter (or a right-click) offers what can be done to it: disconnect, reconnect or kill a session, grant or revoke admin, delete a user, network, visitor or upload. Anything irreversible asks a second time, opening on Cancel. Needs an admin bearer; every tab reports its own 403 rather than blanking the panel");
+    else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);
     else if (strcmp(cmd, "help") == 0) log_line(app, "/help [command] — bare /help lists every command by group; /help command explains one");
     else if (strcmp(cmd, "kb") == 0 || strcmp(cmd, "kickban") == 0) log_line(app, "/kb nick [reason], /kickban nick [reason] — ban nick!*@* and then kick; the ban lands first so the kick cannot be outrun by a rejoin");
     else if (strcmp(cmd, "mode") == 0) log_line(app, "/mode [#chan] +modes [params] — change channel modes; without a channel it applies to the current one, and bare /mode requests the current modes");
@@ -17004,6 +17555,25 @@ static int settings_row_at_locked(struct app *app, int x, int y) {
     return (int)idx;
 }
 
+/* The admin row under the pointer, or -1.
+ *
+ * Same box test as its settings twin, and the same reason for existing:
+ * "the click does nothing" has several causes and this is the one that
+ * can be proved without a terminal. The lookup differs — admin rows are
+ * scattered through the panel rather than contiguous, so the panel line
+ * is matched against each row's recorded line instead of being turned
+ * into an index by subtraction. Caller holds app->lock. */
+static int admin_row_at_locked(struct app *app, int x, int y) {
+    if (app->panel != PANEL_ADMIN || app->admin_row_count == 0) return -1;
+    if (app->panel_draw_h <= 0) return -1;
+    if (y < app->panel_draw_y || y >= app->panel_draw_y + app->panel_draw_h) return -1;
+    if (x < app->panel_draw_x0 || x > app->panel_draw_x1) return -1;
+    size_t line = app->panel_offset + (size_t)(y - app->panel_draw_y);
+    for (size_t i = 0; i < app->admin_row_count; i++)
+        if (app->admin_rows[i].line == line) return (int)i;
+    return -1;
+}
+
 /* Map a mouse event to a link region: motion updates the hover hint, a
  * left button press over a region acts on the link — a picture previews
  * in place, anything else opens in the browser. */
@@ -17109,6 +17679,7 @@ static void handle_mouse(struct app *app) {
      * Falling through to the chat handlers here would hunt for message
      * regions that belong to a screen the panel is covering. */
     const char *open_setting = NULL;
+    bool open_admin = false;
     bool miss = false;
     pthread_mutex_lock(&app->lock);
     bool in_panel = app->panel != PANEL_CHAT;
@@ -17144,15 +17715,27 @@ static void handle_mouse(struct app *app) {
                     open_setting = right ? SETTINGS[app->settings_sel].name : NULL;
                 }
             }
+        } else if ((click || right) && app->panel == PANEL_ADMIN) {
+            /* Same two gestures as the settings panel, so the two
+             * consoles are not two different interfaces: a click picks
+             * the row, a right-click picks it AND asks what can be done
+             * to it. */
+            int row = admin_row_at_locked(app, ev.x, ev.y);
+            miss = right && row < 0;
+            if (row >= 0) {
+                app->admin_sel = (size_t)row;
+                open_admin = right;
+            }
         }
     }
     pthread_mutex_unlock(&app->lock);
     /* Opened after the lock is released: settings_open_modal takes it
      * itself, and reading the current value needs it too. */
     if (open_setting) settings_open_modal(app, open_setting);
+    else if (open_admin) admin_open_menu(app);
     else if (miss)
-        log_line(app, "right-click a preference ROW to change it — the rows start under the "
-                      "heading, and this click was above or past them");
+        log_line(app, "right-click a ROW to act on it — the rows start under the heading, and "
+                      "this click was above or past them");
     if (in_panel) return;
 
     if (right) {

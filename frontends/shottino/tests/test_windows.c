@@ -848,6 +848,29 @@ static const char *const ADMIN_VISITORS_JSON =
     "\"nick\":\"guest42\",\"connection_state\":\"connected\","
     "\"live_state\":{\"alive\":true}}]}]}";
 
+static const char *const ADMIN_USERS_JSON =
+    "{\"users\":[{\"id\":\"df744b5e-ff5a-4d01-bf6f-fffb049e7f9e\",\"name\":\"nextime\","
+    "\"is_admin\":true,\"live_session_count\":1,"
+    "\"inserted_at\":\"2026-05-01T00:00:00Z\",\"updated_at\":\"2026-08-01T00:00:00Z\"},"
+    "{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"name\":\"guest\","
+    "\"is_admin\":false,\"live_session_count\":0,"
+    "\"inserted_at\":\"2026-06-01T00:00:00Z\",\"updated_at\":\"2026-06-01T00:00:00Z\"}]}";
+
+static const char *const ADMIN_NETWORKS_JSON =
+    "{\"networks\":[{\"id\":1,\"slug\":\"azzurra\",\"services_flavor\":\"anope\","
+    "\"visitor_enabled\":true,\"live_counts\":{\"users\":1,\"visitors\":0}}]}";
+
+/* A session whose subject_id is null — grappa's deliberate signal for a
+ * BEAM pid whose DB row is gone. It is a row you can READ and not a row
+ * you can act on, because none of the verbs has an id to address. */
+static const char *const ADMIN_ORPHAN_SESSION_JSON =
+    "{\"sessions\":[{\"subject_kind\":\"user\",\"network_id\":1,"
+    "\"subject_label\":null,\"subject_id\":null,\"last_seen_at\":null,"
+    "\"live_state\":{\"alive\":true,\"joined_channels\":[],\"mailbox_len\":0,"
+    "\"memory_bytes\":1024,\"peer_address\":null,\"peer_port\":null,"
+    "\"peer_name\":null,\"introspection_degraded\":[],"
+    "\"pid_inspect\":\"#PID<0.900.0>\"}}]}";
+
 static void render_json(struct app *app, const char *json,
                         void (*render)(struct app *, const json_value *)) {
     json_doc *doc = json_parse(json, strlen(json), NULL, 0);
@@ -877,6 +900,236 @@ TEST(the_admin_sessions_tab_reads_the_shape_the_server_sends) {
     /* The old reader's tell was a row of literal question marks — one
      * per key it asked for and did not get. */
     CHECK(!panel_has(app, "?"));
+    free_app(app);
+}
+
+/* ── The admin panel as a control surface ──────────────────────────────
+ *
+ * The renderers above prove the panel reads the server correctly. These
+ * prove it can WRITE — and they exist because an admin verb is the one
+ * class of string that cannot be checked by trying it: a wrong DELETE
+ * path either 404s (harmless, and invisible until an operator needs it)
+ * or hits something real (not harmless at all). So the request builder
+ * is pure, and it is proved here against the same captured payloads,
+ * end to end from the JSON grappa sends to the path grappa parses. */
+
+/* The verb's request, or NULL when the pairing has none. Returns the
+ * path in a static buffer — one call per assertion, which is how they
+ * are written below. */
+static const char *verb_path(enum admin_verb v, const struct admin_row *row,
+                             const char **method, const char **body) {
+    static char path[512], bodybuf[256];
+    const char *m = NULL;
+    if (!admin_verb_request(v, row, &m, path, sizeof(path), bodybuf, sizeof(bodybuf))) return NULL;
+    if (method) *method = m;
+    if (body) *body = bodybuf;
+    return path;
+}
+
+TEST(a_session_row_carries_the_composite_id_grappa_parses) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    render_json(app, ADMIN_SESSIONS_JSON, render_admin_sessions);
+
+    /* One actionable row, and it points at the line it was drawn on. */
+    CHECK_LONG(app->admin_row_count, 1);
+    CHECK_LONG(app->admin_rows[0].res, ADMIN_RES_SESSION);
+    CHECK(app->admin_rows[0].line < app->panel_line_count);
+    CHECK(strstr(app->panel_lines[app->admin_rows[0].line], "nextime") != NULL);
+    /* The sessions listing has NO id field: `subject_kind:subject_id:
+     * network_id` is the shape grappa's parse_session_id splits back
+     * apart, and composing it is the client's half of the contract. */
+    CHECK_STR(app->admin_rows[0].id, "user:df744b5e-ff5a-4d01-bf6f-fffb049e7f9e:1");
+    free_app(app);
+}
+
+TEST(an_orphan_session_is_rendered_but_not_actionable) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    render_json(app, ADMIN_ORPHAN_SESSION_JSON, render_admin_sessions);
+    /* Still drawn — the divergence is exactly what the operator needs
+     * to see — but with no subject_id there is no id for a verb to
+     * address, so it is not offered as one. */
+    CHECK(panel_has(app, "azzurra"));
+    CHECK_LONG(app->admin_row_count, 0);
+    free_app(app);
+}
+
+TEST(the_admin_tabs_record_the_id_each_resource_is_addressed_by) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    render_json(app, ADMIN_USERS_JSON, render_admin_users);
+    CHECK_LONG(app->admin_row_count, 2);
+    CHECK_LONG(app->admin_rows[0].res, ADMIN_RES_USER);
+    CHECK_STR(app->admin_rows[0].id, "df744b5e-ff5a-4d01-bf6f-fffb049e7f9e");
+    CHECK_STR(app->admin_rows[0].label, "nextime");
+    /* The flag rides along, because the menu offers the transition
+     * rather than both states. */
+    CHECK(app->admin_rows[0].is_admin);
+    CHECK(!app->admin_rows[1].is_admin);
+
+    render_json(app, ADMIN_NETWORKS_JSON, render_admin_networks);
+    CHECK_LONG(app->admin_row_count, 3);
+    CHECK_LONG(app->admin_rows[2].res, ADMIN_RES_NETWORK);
+    /* DELETE takes the NUMERIC id, not the slug the row is labelled
+     * with — the two are different keys on the same resource and the
+     * panel shows one while the verb needs the other. */
+    CHECK_STR(app->admin_rows[2].id, "1");
+    CHECK_STR(app->admin_rows[2].label, "azzurra");
+
+    render_json(app, ADMIN_VISITORS_JSON, render_admin_visitors);
+    CHECK_LONG(app->admin_row_count, 4);
+    CHECK_LONG(app->admin_rows[3].res, ADMIN_RES_VISITOR);
+    CHECK_STR(app->admin_rows[3].id, "v-123456789");
+
+    render_json(app, ADMIN_UPLOADS_JSON, render_admin_uploads);
+    CHECK_LONG(app->admin_row_count, 5);
+    CHECK_LONG(app->admin_rows[4].res, ADMIN_RES_UPLOAD);
+    CHECK_STR(app->admin_rows[4].id, "u1");
+    /* The uploads tab used to report a TOTAL and nothing else, which
+     * is a disk budget rather than something an operator can act on.
+     * Deleting one needs a one to point at. */
+    CHECK(panel_has(app, "a.png"));
+    free_app(app);
+}
+
+TEST(every_admin_verb_builds_the_endpoint_it_names) {
+    /* Colons are percent-encoded on the way out and decoded back into
+     * path segments by Plug, the same round trip `#channel` → `%23`
+     * already makes on every channel path this client builds. */
+    struct admin_row session = {ADMIN_RES_SESSION, 0, "user:abc:1", "user:nextime", false};
+    struct admin_row visitor_session = {ADMIN_RES_SESSION, 0, "visitor:v1:1", "visitor:guest",
+                                        false};
+    struct admin_row user = {ADMIN_RES_USER, 0, "u-1", "nextime", false};
+    struct admin_row admin = {ADMIN_RES_USER, 0, "u-2", "root", true};
+    struct admin_row network = {ADMIN_RES_NETWORK, 0, "1", "azzurra", false};
+    struct admin_row visitor = {ADMIN_RES_VISITOR, 0, "v-1", "v-1", false};
+    struct admin_row upload = {ADMIN_RES_UPLOAD, 0, "up-1", "a.png", false};
+    const char *m = NULL, *b = NULL;
+
+    CHECK_STR(verb_path(ADMIN_V_DISCONNECT, &session, &m, &b),
+              "/admin/sessions/user%3Aabc%3A1/disconnect");
+    CHECK_STR(m, "POST");
+    CHECK_STR(verb_path(ADMIN_V_KILL, &session, &m, &b), "/admin/sessions/user%3Aabc%3A1");
+    CHECK_STR(m, "DELETE");
+    CHECK_STR(verb_path(ADMIN_V_RECONNECT, &visitor_session, &m, &b),
+              "/admin/sessions/visitor%3Av1%3A1/reconnect");
+    CHECK_STR(m, "POST");
+
+    /* The body whitelist is `is_admin` and nothing else: grappa answers
+     * 400 to an extra key rather than ignoring it. */
+    CHECK_STR(verb_path(ADMIN_V_PROMOTE, &user, &m, &b), "/admin/users/u-1");
+    CHECK_STR(m, "PATCH");
+    CHECK_STR(b, "{\"is_admin\":true}");
+    CHECK_STR(verb_path(ADMIN_V_DEMOTE, &admin, &m, &b), "/admin/users/u-2");
+    CHECK_STR(b, "{\"is_admin\":false}");
+
+    CHECK_STR(verb_path(ADMIN_V_DELETE_USER, &user, &m, &b), "/admin/users/u-1");
+    CHECK_STR(m, "DELETE");
+    CHECK_STR(verb_path(ADMIN_V_DELETE_NETWORK, &network, &m, &b), "/admin/networks/1");
+    CHECK_STR(verb_path(ADMIN_V_DELETE_VISITOR, &visitor, &m, &b), "/admin/visitors/v-1");
+    CHECK_STR(verb_path(ADMIN_V_DELETE_UPLOAD, &upload, &m, &b), "/admin/uploads/up-1");
+}
+
+TEST(a_verb_the_row_does_not_offer_builds_no_request) {
+    struct admin_row session = {ADMIN_RES_SESSION, 0, "user:abc:1", "user:nextime", false};
+    struct admin_row user = {ADMIN_RES_USER, 0, "u-1", "nextime", false};
+    struct admin_row nameless = {ADMIN_RES_USER, 0, "", "nothing", false};
+    const char *m = NULL, *b = NULL;
+
+    /* The builder asks the SAME table the menu was built from, so a
+     * verb that reached it by any other route cannot address a
+     * resource it does not belong to. Deleting a user by way of a
+     * session row would otherwise resolve to a real path. */
+    CHECK(verb_path(ADMIN_V_DELETE_USER, &session, &m, &b) == NULL);
+    CHECK(verb_path(ADMIN_V_DISCONNECT, &user, &m, &b) == NULL);
+    CHECK(verb_path(ADMIN_V_NONE, &user, &m, &b) == NULL);
+    /* No id, no request — an orphan row cannot be acted on even if one
+     * is somehow selected. */
+    CHECK(verb_path(ADMIN_V_DELETE_USER, &nameless, &m, &b) == NULL);
+}
+
+TEST(the_menu_offers_only_what_the_row_supports) {
+    enum admin_verb v[8];
+    struct admin_row user_session = {ADMIN_RES_SESSION, 0, "user:abc:1", "s", false};
+    struct admin_row visitor_session = {ADMIN_RES_SESSION, 0, "visitor:v1:1", "s", false};
+    struct admin_row plain = {ADMIN_RES_USER, 0, "u-1", "nextime", false};
+    struct admin_row admin = {ADMIN_RES_USER, 0, "u-2", "root", true};
+
+    /* Reconnect is a VISITOR verb — grappa answers 400 for a user
+     * subject, whose reconnect is their own PATCH /networks/:id — so
+     * offering it on a user session would be an entry that cannot
+     * succeed. */
+    CHECK_LONG(admin_verbs_for(&user_session, v, 8), 2);
+    CHECK_LONG(v[0], ADMIN_V_DISCONNECT);
+    CHECK_LONG(v[1], ADMIN_V_KILL);
+    CHECK_LONG(admin_verbs_for(&visitor_session, v, 8), 3);
+    CHECK_LONG(v[1], ADMIN_V_RECONNECT);
+
+    /* One transition, the one the flag is not already in. */
+    CHECK_LONG(admin_verbs_for(&plain, v, 8), 2);
+    CHECK_LONG(v[0], ADMIN_V_PROMOTE);
+    CHECK_LONG(admin_verbs_for(&admin, v, 8), 2);
+    CHECK_LONG(v[0], ADMIN_V_DEMOTE);
+}
+
+TEST(only_the_irreversible_verbs_ask_twice) {
+    /* Confirmation in front of the routine actions is what teaches
+     * people to confirm without reading, so the reversible ones do not
+     * ask: a session reconnects, and an admin flag flips back. */
+    CHECK(!admin_verb_destructive(ADMIN_V_DISCONNECT));
+    CHECK(!admin_verb_destructive(ADMIN_V_RECONNECT));
+    CHECK(!admin_verb_destructive(ADMIN_V_PROMOTE));
+    CHECK(!admin_verb_destructive(ADMIN_V_DEMOTE));
+    CHECK(admin_verb_destructive(ADMIN_V_KILL));
+    CHECK(admin_verb_destructive(ADMIN_V_DELETE_USER));
+    CHECK(admin_verb_destructive(ADMIN_V_DELETE_NETWORK));
+    CHECK(admin_verb_destructive(ADMIN_V_DELETE_VISITOR));
+    CHECK(admin_verb_destructive(ADMIN_V_DELETE_UPLOAD));
+}
+
+TEST(the_confirmation_opens_on_the_answer_that_does_nothing) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    app->panel = PANEL_ADMIN;
+    render_json(app, ADMIN_USERS_JSON, render_admin_users);
+    struct overlay_item items[16];
+
+    app->overlay.kind = OVERLAY_ADMIN;
+    app->overlay.pending = ADMIN_V_NONE;
+    size_t n = overlay_items_locked(app, items, 16);
+    CHECK_LONG(n, 2);
+    /* nextime is an admin in the fixture, so the toggle reads Revoke. */
+    CHECK(strstr(items[0].label, "Revoke admin") != NULL);
+    CHECK(strstr(items[0].label, "nextime") != NULL);
+    CHECK_LONG(items[1].verb, ADMIN_V_DELETE_USER);
+
+    /* Armed: two answers, and index 0 — where the selection starts and
+     * where Enter-by-reflex lands — is the one that cannot be
+     * regretted. Same ordering as the ringing-call overlay. */
+    app->overlay.pending = ADMIN_V_DELETE_USER;
+    n = overlay_items_locked(app, items, 16);
+    CHECK_LONG(n, 2);
+    CHECK_LONG(items[0].action, ACT_ADMIN_CANCEL);
+    CHECK_LONG(items[0].verb, ADMIN_V_NONE);
+    CHECK_LONG(items[1].action, ACT_ADMIN);
+    CHECK_LONG(items[1].verb, ADMIN_V_DELETE_USER);
+    free_app(app);
+}
+
+TEST(closing_an_admin_menu_disarms_the_verb_it_was_holding) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    app->panel = PANEL_ADMIN;
+    render_json(app, ADMIN_USERS_JSON, render_admin_users);
+    app->overlay.kind = OVERLAY_ADMIN;
+    app->overlay.pending = ADMIN_V_DELETE_USER;
+    overlay_close(app);
+    /* A pending DELETE that outlived its box would be armed the next
+     * time a menu opened — on whatever row happened to be selected
+     * then. */
+    CHECK_LONG(app->overlay.pending, ADMIN_V_NONE);
+    CHECK_LONG(app->overlay.kind, OVERLAY_NONE);
     free_app(app);
 }
 
@@ -3184,6 +3437,15 @@ int main(void) {
     RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
     RUN(audio_is_classified_before_the_uploads_heuristic);
     RUN(the_admin_sessions_tab_reads_the_shape_the_server_sends);
+    RUN(a_session_row_carries_the_composite_id_grappa_parses);
+    RUN(an_orphan_session_is_rendered_but_not_actionable);
+    RUN(the_admin_tabs_record_the_id_each_resource_is_addressed_by);
+    RUN(every_admin_verb_builds_the_endpoint_it_names);
+    RUN(a_verb_the_row_does_not_offer_builds_no_request);
+    RUN(the_menu_offers_only_what_the_row_supports);
+    RUN(only_the_irreversible_verbs_ask_twice);
+    RUN(the_confirmation_opens_on_the_answer_that_does_nothing);
+    RUN(closing_an_admin_menu_disarms_the_verb_it_was_holding);
     RUN(the_admin_uploads_tab_totals_the_bytes_field);
     RUN(the_admin_visitors_tab_renders_per_network_rows);
     RUN(a_setting_name_and_a_boolean_are_parsed_the_way_people_type_them);
