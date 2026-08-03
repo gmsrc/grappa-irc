@@ -478,9 +478,15 @@ The daemon at `/tmp/orchestrate-daemon-<pane>.pid` runs independently of the orc
 2. Re-read the active plan + active CP so you have the "as planned" frame again.
 3. Query current state: `lib/state.sh <PANE>` — gives you ground truth (state, ctx, last_state_change age, etc.) without consuming events.
 4. Capture **every** worker pane once for orientation: `tmux capture-pane -t <PANE_ID> -p | tail -40`. Do this for ALL of them, not just the one you were last thinking about — a worker halted on a question looks identical to a worker you simply forgot.
-5. **Re-arm the persistent `Monitor` on `lib/monitor-stream.sh` with ALL panes** (Setup step 5). A monitor does NOT survive the orchestrator's `/clear` — the daemons do, the monitor does not. `tail -n0` means it starts from *now*, so anything the daemons wrote while you were away is not replayed: **step 4's captures are what recover that window**, which is why they are not optional. For a precise diff of what you missed, `lib/wait-for-event.sh <PANE>` as a deliberate one-off drain still works (cursor-tracked), or read the tail of `/tmp/orchestrate-events-<id>.log`.
+5. **Deal with the OLD monitors FIRST, then re-arm on `lib/monitor-stream.sh` with ALL panes** (Setup step 5).
 
-The daemon-survives-clear design means the *record* is never lost. The **listener** is what you must re-establish, and its absence is silent — so re-arming the Monitor is step 5 of every resume, not an optional flourish.
+   🔴 **A Monitor CAN survive the orchestrator's `/clear` — verified 2026-08-03, and this section used to claim the opposite.** The pre-clear pane monitor was still streaming after a `/clear` + `/orchestrate`, so re-arming blindly left **two** monitors on the same panes and **every event arrived twice** (identical `CTX-BUMP 30%` from two task ids). Harmless-looking, but it doubles the notification volume that Monitor auto-stops a stream for, and a duplicate feed is one more thing to mistake for a real state change.
+
+   🔴 **`TaskList` does NOT enumerate Monitors** — it returns "No tasks found" even with two of them live. So the **only** handle on an orphan is its task id, which means: **record every monitor's task id in the handoff at arming time, and `TaskStop` the recorded ones before arming new.** An id you failed to write down is an orphan you cannot kill.
+
+   Whether it survived or not, re-arm: `tail -n0` starts from *now*, so anything the daemons wrote while you were away is not replayed — **step 4's captures are what recover that window**, which is why they are not optional. For a precise diff, `lib/wait-for-event.sh <PANE>` as a deliberate one-off drain still works (cursor-tracked), or read the tail of `/tmp/orchestrate-events-<id>.log`.
+
+The daemon-survives-clear design means the *record* is never lost. The **listener** is what you must re-establish — and note the two failure modes are mirrors: **a dead listener is silence, a duplicated one is echo, and neither announces itself.** Re-arming (and killing the old id) is step 5 of every resume, not an optional flourish.
 
 ## Pitfalls (learned in S29 of CP07 + CP08/CP09 Phase 2/3 + CP10 S6 + visitor-parity cluster v2 rewrite)
 
@@ -505,7 +511,21 @@ These are PERMANENT: they were living in `.orchestrate/orchestrator-resume.md`, 
 snapshot that gets pruned every flush — the wrong home for rules that must outlive the pruning. The
 handoff now carries state only and points here.
 
-## 🚢 DEPLOY POSTURE (prod = m42 bastille jail)
+## 🔀 THE ORCHESTRATOR MERGES THE PRs (vjt DM 2026-08-03 17:38: *"le pr mandale a orch che deve mergiarle"*)
+**Every PR is merged by the ORCHESTRATOR, including vjt's own** — he moved to maintenance/triage. So a PR
+handed over is a PR you own end-to-end: verify its checks yourself at the head SHA, decide whether a rebase
+is owed, get the fix implemented **by a worker** (implementation is never vjt's and never yours), then merge
++ close the PR + remove the worktree. ⚠️ **A handed-over PR can still be UNMERGEABLE ON MERIT** — #613
+arrived 4/5 green and had to be refused because its e2e red was a **real regression of the #373 invariant**,
+not infra. *Green-except-one is not a rounding error; find out which one and why before you merge.*
+
+## 🚢 DEPLOY POSTURE (prod = m42 bastille jail; STAGING = the Pi's own docker stack)
+🚦 **vjt 2026-08-03 17:32: STAGING is UNBLOCKED, PROD waits for the whole code-review finding queue to
+close.** Staging = the Pi's `grappa` container on `127.0.0.1:4000` (private IP + internal CA); vjt reaches it
+himself and device-verifies there. `scripts/deploy-cic.sh` = bundle only, no restart; `scripts/deploy.sh` =
+server. Both assert a main-checkout on main, so **commit your own working-tree edits before pulling** or the
+pull stashes them out from under you. Prove a cic deploy by the **served** hash (`curl` the page), never by
+the script's own broadcast line.
 Worker MERGES + pushes, **never deploys**; stays `cooking` until its DONE hand-off; ORCH flips to `soon`.
 ONE batched deploy (~4–5 issues), ONE dual-net announce, then close all + strip labels.
 - **COLD:** `/srv/grappa/scripts/deploy-m42.sh --force-cold` · **HOT:** `--force-hot` **THEN `--cic`** — a HOT deploy is
@@ -622,6 +642,15 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
   both the same bug (#277: `resetSubject` 500 → `{:nick_rejected, 433, "vjt-grappa"}`). Checking the tracked-flake
   list by spec name will never match it. **Key the triage off the ERROR SIGNATURE + the fixture frame in the stack**
   (`fixtures/test.ts` in the trace = not your test's fault), not off which spec went red.
+- 🔴🔴 **PUSHING main VIA THE EXPLICIT ssh URL DOES NOT UPDATE `refs/remotes/origin/main`.** The Pi pushes with
+  `git push git@github.com:...` (origin is credential-less https), and that leaves your remote-tracking ref
+  pointing at the PRE-merge main. **Rebasing onto that stale `origin/main` produces branches that still do not
+  contain your merge — they stay CONFLICTING and you "fix" them twice.** Did exactly this to #780 and #776 on
+  2026-08-03. **`git fetch origin` IMMEDIATELY after any direct main push, and re-read `origin/main` before
+  using it as a rebase base.**
+- 🔑 **NEVER HAND-TYPE THE SHA IN `--force-with-lease`.** Derive it: `gh pr view N --json headRefOid -q
+  .headRefOid`. A mistyped expected-SHA fails with *"stale info"*, which reads like a race and is really a
+  typo — the lease correctly refused rather than clobbering.
 - 🥇 **Verify a rebase with `git merge-base --is-ancestor origin/main <branch>`** — never with GitHub's `mergeable`
   field (async, lags a push) and never with the worker's belief that it rebased. **Rebase + force-push must be ONE
   immediate sequence:** main moving mid-rebase puts the PR straight back to CONFLICTING (cost two rounds on PR #600).
@@ -710,9 +739,12 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   observable — nothing. So never rely on "I'd have heard something by now".
   🥇 **The cure is structural, not vigilance:** ONE `Monitor` with `persistent: true` on
   `lib/monitor-stream.sh`, armed once per session, covering every pane. No re-arm ⇒ nothing to forget.
-  ⚠️ It is still not self-verifying: a monitor does not survive the orchestrator's `/clear`, and can be
-  auto-stopped for volume — **both silently**. So re-arm it on every resume, and if both panes have seemed
-  quiet for a stretch, **prove the feed is alive instead of enjoying the calm.**
+  ⚠️ It is still not self-verifying: a monitor can be auto-stopped for volume, and it **may or may not**
+  survive the orchestrator's `/clear` — **both silently, and the survival case is the one that surprised us**
+  (2026-08-03: it DID survive, so a blind re-arm produced two feeds and doubled every event; `TaskList` does
+  not list Monitors, so only the recorded task id can kill the orphan). So on every resume: **`TaskStop` the
+  ids the handoff records, then re-arm** — and if both panes have seemed quiet for a stretch, **prove the feed
+  is alive instead of enjoying the calm.**
 - 🔴 **Never background a waiter with `&` inside a foreground Bash** — it detaches, advances the cursor and eats
   events. Arm ONLY via `run_in_background: true`, **one per assistant message** (two in one message = both
   `killed`, observed 3×). This is the legacy v2 path; prefer the Monitor above.
