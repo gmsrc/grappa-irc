@@ -27551,3 +27551,127 @@ resolution trades that for hopping windows mid-drain, which is worse.
 and behaves exactly as before; /me and the services arm gain the re-addressing
 they always needed; only the `/msg` redirect has two distinct homes, which is
 the only place the ownership question exists.
+## 2026-08-03 — #717: a boot that fails must stay recoverable, and root creation owns the error context
+
+**Scope, stated up front.** #717 is "the installed PWA on Android + Firefox hangs
+on the CRT splash; a browser tab on the same phone never does". The Android
+**trigger** is NOT root-caused here and stays open: the issue's own first
+measurement is device-side (desktop Firefox attached to the phone via
+`about:debugging`) and nobody has taken it. What landed is the
+**recoverability** half — the part decidable from the code, and the part that
+turns the next user report into evidence instead of another dead end.
+
+**The measured mechanism.** `CrtSplash.loading()` is `!user() ||
+channelsBySlug() === undefined`. Those are `createResource`s
+(`lib/networks.ts`) fed by `me()` / `listNetworks()` / `listChannels()`. When
+one of those fetches REJECTS the resource enters state `errored`, and reading an
+errored Solid resource **re-throws**. cicchetto mounted **no `ErrorBoundary`
+anywhere** — grep for the literal returned zero mounts; the only hit was a
+comment in `lib/customTheme.ts` noting it ran "outside any ErrorBoundary". So
+the DOM kept the last painted frame, which on a cold boot is the splash,
+forever.
+
+**A timeout alone cannot fix it, and that is load-bearing.** Bounding a hang
+converts it into a rejection, and a rejection is exactly the state that freezes
+the UI. Retry absorbs the transient failure; the boundary catches the terminal
+one. Either half shipped alone would look like a fix and change nothing the
+operator sees.
+
+**Root CREATION owns the error context — not the store, not the reader.** A root
+opened with a bare `createRoot` has no error handler. `createResource(user, …)`
+compiles its source into a `createMemo(user)` inside that root, so when `user`
+errors the memo re-reads and throws there; a throw with no error context
+propagates out of `runUpdates`, which nulls `Effects`/`Updates` before
+rehandling. The queued render effects are DISCARDED and the error surfaces as an
+unhandled rejection no render-tree boundary ever sees.
+
+The first cut of this fix put the context in `identityScopedStore` alone. That
+was wrong, and the review caught it with a measured matrix: `activeWindows.ts` —
+a bare root whose memo reads `channelsBySlug()` and `networks()`, subscribed
+before the first render — runs EARLIER in the Updates queue than the store's own
+memo, so it aborted the cycle first and the `listNetworks`/`listChannels`
+failures still froze the splash. `/me` survived only because that memo does not
+read `user()`. **Two patterns, and the boot fell through the gap between them.**
+CLAUDE.md is explicit ("half-migrated creates two patterns; no exclusion
+lists"), so the context moved to `moduleRoot` — one door — every module-lifetime
+root was migrated to it, and `__tests__/moduleRootGuard.test.ts` fails the build
+if a bare `createRoot` reappears. Test files are out of that rule on a real
+distinction, not a convenience: their roots take the `dispose` callback and are
+scoped to the case, which is precisely what `createRoot` is for.
+
+**The reset loop is deliberately OUTSIDE the context.** `identityScopedStore`
+wraps only `build` in `withErrorContext`; its `on(token)` effect is registered
+after. Inside, a reset that throws would be caught and logged, and because the
+loop aborts at the throw the store's REMAINING resets would be silently skipped
+on logout or rotation — #281's failure mode, whose missed identity purge
+produces the 404 burst that trips the host's fail2ban jail and firewall-bans the
+client. Never widen the catch to swallow more.
+
+**Not a silent swallow.** The factory handler owns the DIAGNOSTIC; the
+render-tree `BootErrorBoundary` owns the USER-FACING state and the retry.
+Neither alone is enough: a boundary cannot catch what never reaches it, and a
+console line is not a recovery affordance. A throw during `build` itself stays
+fatal — there is no store to hand back — and is rethrown with the original as
+`cause`. It is caught by a plain `try` rather than read off the `catchError`
+handler because, measured, that handler does not necessarily run before
+`catchError` returns inside a `createRoot`; reading the error off it produced a
+rethrow with an empty `cause`, losing the stack on the one failure that most
+needs it.
+
+**Order is what makes the test real, and the first two attempts got it wrong.**
+Attempt one built its own resource inside the component and mocked
+`lib/networks` away. Attempt two used the real cascade but let `me()` reject
+during the `await import(...)` calls, BEFORE `render()` — a resource already
+`errored` at first paint throws synchronously inside the boundary, with no
+update cycle to abort, so the bug is invisible. Both passed against an
+implementation that did not fix anything; the second was proved vacuous by
+reverting the fix and watching it stay green. Production is the opposite order:
+`main.tsx` imports statically and renders in the same turn, so the rejection
+always lands after first paint. The spec now settles `me()` by hand after
+`render()`, and reverting the fix turns it red.
+
+**The property the factory test pins is "the update cycle SURVIVED", not "the
+handler ran".** A handler-ran assertion would have stayed green straight through
+the `activeWindows` hole.
+
+**`bootFetch` is scoped to three of ~100 call sites, deliberately.** api.ts has
+no central wrapper, and most of its fetches are user-initiated actions where a
+silent retry is wrong — a failed PATCH must report, not re-send. "Boot-critical
+GET" passes CLAUDE.md's own boundary test: idempotent, unattended, and the only
+thing between the user and a usable app. An HTTP response is never retried
+whatever its status (the server answered; 401 has its own path; re-sending on a
+503 turns a struggling server into a thundering herd of reloading PWAs); only a
+rejected `fetch` is, which also covers the #193 door of a server restarting
+under us. `AbortSignal.timeout` is constructed OUTSIDE the try: inside, a
+runtime lacking the API would be counted as a transport failure, retried three
+times, and reported as "the network is down" on a box whose network is fine.
+
+**Reload must not purge the cache offline.** The failure screen carries a
+`Reload` beside `Retry`, because the boundary wraps Shell for the whole session
+and a mid-session throw is not something a boot refetch can fix. It uses
+`performRefresh` — the existing SW-aware verb (#674, #695) — ONLY when online.
+That verb deletes every cache before reloading, which #674 can do safely because
+a bundle-hash advertisement means the client is online by construction. This
+screen inverts the precondition: the likeliest reason it is up is that the
+network is gone, and purging the precache then lands the installed PWA on the
+browser's offline error page with the app shell destroyed — strictly worse than
+the frozen splash. Offline it does a plain reload. Reuse the verb, not the noun.
+
+**Known residuals.** (a) `bootFetch` is attached to the FUNCTION, not the boot
+call site, so `me()` from `mountBadgeReconcile` (every resume) and the WS-driven
+`refetchNetworks`/`refetchChannels` inherit the retry budget too — harmless
+today, unintended. (b) The 8s per-attempt ceiling with two backoffs means a
+worst case of ~26.5s before the failure screen appears, and `channelsBySlug`
+fans out with `Promise.all` so each network gets its own budget. (c) **Recovery
+now depends on some component INSIDE the boundary reading the specific errored
+resource.** Today that holds — `CrtSplash.tsx:39` reads `user` and
+`channelsBySlug`, `Sidebar.tsx` and `BottomBar.tsx` read `networks` — but it is
+a new load-bearing invariant. If a refactor puts the last in-tree `networks()`
+read behind a `<Show>` that is false during boot, the app goes back to hanging
+with only a console line.
+
+**Boundary with #687.** #687 owns the splash's UI: the staged boot log
+("fetching my info... done") and a per-stage stuck state during a HEALTHY boot.
+This change adds no competing layer — the failure screen is a terminal state
+that replaces the Shell subtree, deliberately bare, and must not become the
+place staged-progress copy accretes.
