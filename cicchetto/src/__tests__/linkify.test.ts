@@ -352,13 +352,97 @@ describe("linkify", () => {
       ]);
     });
 
-    it("caps a channel at 50 chars (RFC 2812) and leaves the overflow as text", () => {
-      // `#` + 60 name chars → channel is the first 50 chars total, the
-      // remaining 11 name chars fall through as text.
-      const name = "a".repeat(60);
-      expect(linkify(`#${name}`)).toEqual([
-        { type: "channel", value: `#${"a".repeat(49)}` },
-        { type: "text", value: "a".repeat(11) },
+    it("tokenises a channel at exactly the RFC 2812 50-char limit", () => {
+      const token = `#${"a".repeat(49)}`;
+      expect(linkify(token)).toEqual([{ type: "channel", value: token }]);
+    });
+  });
+
+  // #730 — the channel alternative had no LEFT boundary, so a `#` fired
+  // wherever an earlier alternative had not already consumed it: `foo#bar`,
+  // `example.com#anchor` (the bare-domain arm needs a `/`, so it never
+  // matched), `dir/#tag`. Every one rendered a click-to-join affordance whose
+  // confirmation sends a real JOIN for a garbage channel UPSTREAM — the blast
+  // radius is someone else's IRC connection, not a cosmetic link.
+  describe("channel left boundary (#730)", () => {
+    it("does NOT tokenise a # glued to the end of a word", () => {
+      expect(linkify("look at foo#bar")).toEqual([{ type: "text", value: "look at foo#bar" }]);
+    });
+
+    it("does NOT tokenise a fragment on a path-less bare domain", () => {
+      expect(linkify("see example.com#anchor")).toEqual([
+        { type: "text", value: "see example.com#anchor" },
+      ]);
+    });
+
+    it("does NOT tokenise a # glued after a slash", () => {
+      expect(linkify("open dir/#tag now")).toEqual([{ type: "text", value: "open dir/#tag now" }]);
+    });
+
+    it("lets the scan recover a real URL a glued # used to swallow", () => {
+      // The rejection happens in the REGEX, not after the match, so the
+      // left-to-right scan continues INSIDE the rejected run and still finds
+      // the bare-domain URL. A post-match rejection would emit the whole
+      // `#bar.com/baz` run as text and lose the link.
+      expect(linkify("foo#bar.com/baz")).toEqual([
+        { type: "text", value: "foo#" },
+        { type: "url", value: "bar.com/baz", href: "https://bar.com/baz" },
+      ]);
+    });
+
+    it("tokenises a channel at the start of a line (newline is a boundary)", () => {
+      expect(linkify("line one\n#foo")).toEqual([
+        { type: "text", value: "line one\n" },
+        { type: "channel", value: "#foo" },
+      ]);
+    });
+
+    it("tokenises a channel after any opening bracket", () => {
+      // The opening-bracket class mirrors the closing brackets that
+      // stripTrailingPunctuation already removes on the right.
+      for (const [open, close] of [
+        ["[", "]"],
+        ["{", "}"],
+        ["<", ">"],
+      ]) {
+        expect(linkify(`${open}#foo${close}`)).toEqual([
+          { type: "text", value: open },
+          { type: "channel", value: "#foo" },
+          { type: "text", value: close },
+        ]);
+      }
+    });
+
+    it("keeps a fragment on a bare host.tld/path inside the URL", () => {
+      expect(linkify("example.com/page#frag")).toEqual([
+        { type: "url", value: "example.com/page#frag", href: "https://example.com/page#frag" },
+      ]);
+    });
+  });
+
+  // #730 second leg — the `{1,49}` cap TRUNCATED an over-long token instead of
+  // rejecting it, so a 60-char `#token` rendered as a clickable 50-char prefix:
+  // a join affordance for a DIFFERENT channel than the one written. A token
+  // past the RFC 2812 limit cannot be a real channel, so the honest handling
+  // is plain text.
+  describe("channel length limit (#730)", () => {
+    it("does NOT tokenise an over-long # run as a truncated channel", () => {
+      const token = `#${"a".repeat(60)}`;
+      expect(linkify(token)).toEqual([{ type: "text", value: token }]);
+    });
+
+    it("does NOT tokenise a token one char past the limit", () => {
+      const token = `#${"a".repeat(50)}`;
+      expect(linkify(token)).toEqual([{ type: "text", value: token }]);
+    });
+
+    it("measures the limit AFTER stripping trailing punctuation", () => {
+      // 49 name chars + a sentence period is a VALID 50-char channel plus
+      // punctuation, not a 51-char reject.
+      const token = `#${"a".repeat(49)}`;
+      expect(linkify(`${token}.`)).toEqual([
+        { type: "channel", value: token },
+        { type: "text", value: "." },
       ]);
     });
   });

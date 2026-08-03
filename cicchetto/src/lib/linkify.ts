@@ -18,6 +18,23 @@
 // future network needing `&` channels adds the prefix to TOKEN_REGEX's
 // char class (one line) with its own false-positive tests.
 //
+// ## Channel boundaries (#730)
+//
+// A `#` is tokenised as a channel only at a LEFT BOUNDARY — start of input,
+// whitespace, `,`, or an opening bracket. Without it the arm fired wherever a
+// `#` appeared (`foo#bar`, `example.com#anchor`, `dir/#tag`) and every hit
+// rendered a click-to-join affordance whose confirmation sends a real JOIN
+// upstream: the blast radius of a mis-tap is another network's connection, not
+// a dead link. An over-long run is likewise rejected outright instead of
+// truncated to the 50-char limit, which used to offer a DIFFERENT channel than
+// the one written.
+//
+// Known limit: the boundary is evaluated per mIRC-formatting RUN, since
+// MircText linkifies each run separately. A `#` glued to a word but split from
+// it by a colour/bold code starts its run at offset 0 and so reads as
+// boundary-led. Pre-existing for every alternative here (a URL split by a
+// colour code has always tokenised as two), not worth a cross-run pass.
+//
 // ## Regex shape + trade-offs
 //
 // - Schemes covered: http://, https://, ftp:// (+ bare www.).
@@ -59,7 +76,11 @@
 // - channels (#648): positive (`#chan`, hyphen/underscore, digit-led
 //   `#7dtd`), URL-wins-over-`#section`, trailing-punct + paren strip,
 //   comma-stop, negatives (bare `#`, digits-only `#1`, `&`/`+`/`!`
-//   prefixes), 50-char cap
+//   prefixes)
+// - channel boundaries (#730): left-boundary negatives (`foo#bar`,
+//   `example.com#anchor`, `dir/#tag`) and positives (newline, `[`), the
+//   URL recovered from inside a rejected run, and the length limit at
+//   49/50/60 name chars including the strip-then-measure order
 //
 // ## Why a separate file
 //
@@ -93,23 +114,39 @@ export type LinkifySegment =
 // letters) + a slash before consuming the rest with `\S*` — the slash
 // is what disambiguates a URL from ordinary prose (see moduledoc).
 //
-// The URL/www/bare-domain alternatives are listed FIRST so a single
-// left-to-right scan resolves all overlaps (the #648 single-pass
-// invariant): a scheme-qualified URL is matched whole, and neither the
-// bare-domain nor the channel branch fires inside it — a `#section`
-// fragment is consumed by the URL's `\S+`, never re-tokenised as a
-// channel. A `#` and a URL char never START at the same offset (`#` isn't
-// in `[a-z0-9-]` and no scheme starts with `#`), so ordering fully
-// resolves the URL-vs-channel overlap.
+// The URL/www/bare-domain alternatives are listed FIRST so a scheme-qualified
+// URL is matched whole and a `#section` fragment inside it is consumed by the
+// URL's `\S+`, never re-tokenised as a channel (the #648 single-pass
+// invariant). Alternative ORDER only decides ties at the SAME offset, though —
+// a regex scan is leftmost-first — so ordering alone never kept the channel
+// arm out of `example.com#anchor`, where the bare-domain arm cannot match at
+// all (it needs a `/` after the TLD) and the `#` sits further left than any
+// URL. What resolves that is the channel arm's own LEFT BOUNDARY (#730).
 //
-// Channel alternative (#648): `#` + 1..49 non-terminator octets (total
-// ≤ 50 per RFC 2812), stopping at space / comma / BELL (`\x07`) — the
-// RFC 2812 chanstring terminators relevant in a chat body. `#` is the
-// ONLY prefix (see moduledoc "Channel prefix"). Trailing punctuation and
-// the digits-only (`#1`) rejection are handled in `linkify` after the match.
+// Channel alternative (#648, bounded by #730): a left-boundary char, then `#`,
+// then 1+ non-terminator octets, stopping at space / comma / BELL (`\x07`) —
+// the RFC 2812 chanstring terminators relevant in a chat body. `#` is the ONLY
+// prefix (see moduledoc "Channel prefix").
+//
+// The left boundary is start-of-input or one of whitespace / `,` / an opening
+// bracket (`(`, `[`, `{`, `<`) — the shapes a channel mention actually takes in
+// prose. It is CONSUMED (a capture group, not a lookbehind: no cic regex uses
+// lookbehind, and an unsupported lookbehind is a module-load SyntaxError on
+// older Safari, i.e. a blank PWA). `linkify` re-emits the consumed char as
+// text via the pre-match slice. `,` is in the class because IRC's own
+// multi-channel list separator is a comma (`#foo,#bar` is two channels).
+//
+// Rejecting in the REGEX rather than after the match matters: the scan
+// continues INSIDE the rejected run, so `foo#bar.com/baz` still yields the
+// bare-domain URL instead of one long text segment.
+//
+// Length: the run is matched WHOLE (`+`, not `{1,49}`) and an over-long token
+// is rejected in `isChannelName` — truncating it would offer a join affordance
+// for a DIFFERENT channel than the one written (#730). Trailing punctuation
+// and the digits-only (`#1`) rejection are likewise handled after the match.
 const TOKEN_REGEX =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: `\x07` (BELL) is an RFC 2812 chanstring terminator — a channel name MUST stop at it, so matching it as a boundary is deliberate, not an accidental control char.
-  /(?:https?:\/\/|ftp:\/\/|www\.)\S+|(?:[a-z0-9-]+\.)+[a-z]{2,}\/\S*|#[^\s,\x07]{1,49}/gi;
+  /(?:https?:\/\/|ftp:\/\/|www\.)\S+|(?:[a-z0-9-]+\.)+[a-z]{2,}\/\S*|(^|[\s,([{<])(#[^\s,\x07]+)/gi;
 
 const TRAILING_PUNCT_RE = /[.,;:!?)\]}>]+$/;
 
@@ -136,14 +173,28 @@ function stripTrailingPunctuation(token: string): { value: string; trailing: str
   return { value: stripped, trailing };
 }
 
+// RFC 2812 caps a channel name at 50 chars INCLUDING the `#` prefix. Measured
+// in UTF-16 code units, matching the cap this replaced — the RFC counts bytes,
+// but a per-token TextEncoder pass on a render path buys nothing here: the
+// point is rejecting a token no server would accept, not framing it.
+const MAX_CHANNEL_LENGTH = 50;
+
 // #648 — a matched `#…` token is a real channel only if, AFTER trailing-punct
 // stripping, its NAME (the part past `#`) is non-empty AND not digits-only. A
-// bare `#` can't reach here (the regex requires ≥1 name char), but `#1` / `#123`
-// can — those are issue refs / prose hashtags, not channels. A name that merely
-// STARTS with a digit but carries any non-digit (`#7dtd`) IS a channel.
+// bare `#` can't reach here (the regex requires ≥1 name char), but stripping
+// can empty the name (`#.`), and `#1` / `#123` match — those are issue refs /
+// prose hashtags, not channels. A name that merely STARTS with a digit but
+// carries any non-digit (`#7dtd`) IS a channel.
+//
+// #730 — an over-long token is rejected here rather than truncated in the
+// regex. A 60-char `#token` clipped to 50 renders a click-to-join affordance
+// for a channel the author never wrote; past the RFC limit it cannot be a real
+// channel at all, so plain text is the honest handling. The measurement runs on
+// the STRIPPED value, so `#<49 chars>.` is a valid channel plus a period, not a
+// 51-char reject.
 function isChannelName(value: string): boolean {
   const name = value.slice(1);
-  return name.length > 0 && !/^\d+$/.test(name);
+  return name.length > 0 && value.length <= MAX_CHANNEL_LENGTH && !/^\d+$/.test(name);
 }
 
 function toHref(matched: string): string {
@@ -169,18 +220,23 @@ export function linkify(input: string): LinkifySegment[] {
     const match = TOKEN_REGEX.exec(input);
     if (!match) break;
 
-    const matchStart = match.index;
-    const rawMatch = match[0];
+    // The channel alternative CONSUMES its left-boundary char (group 1) so the
+    // token itself (group 2) starts one char in; both groups are undefined when
+    // a URL alternative matched. The boundary is NOT part of the token — it
+    // falls into the pre-match text slice below, and keeping it out of
+    // `stripTrailingPunctuation` is what makes `(#sniffo)` strip its `)` (the
+    // balanced-parens rule would otherwise see one `(` and preserve it).
+    const channelToken = match[2];
+    const matchStart = match.index + (match[1]?.length ?? 0);
+    const rawMatch = channelToken ?? match[0];
     const { value, trailing } = stripTrailingPunctuation(rawMatch);
 
-    // Pre-match text segment.
+    // Pre-match text segment — includes any consumed left-boundary char.
     if (matchStart > lastIndex) {
       segments.push({ type: "text", value: input.slice(lastIndex, matchStart) });
     }
 
-    // `#` prefix ⇒ channel branch; anything else the regex admits is a URL.
-    // (`#` never starts a URL alternative, so this dispatch is exact.)
-    if (rawMatch[0] === "#") {
+    if (channelToken !== undefined) {
       if (isChannelName(value)) {
         segments.push({ type: "channel", value });
         lastIndex = matchStart + value.length;
@@ -189,8 +245,9 @@ export function linkify(input: string): LinkifySegment[] {
           lastIndex += trailing.length;
         }
       } else {
-        // Bare-`#` can't match; a digits-only `#1`/`#123` reaches here — emit
-        // the whole raw token (name + any stripped trailing) as plain text.
+        // A digits-only `#1`/`#123`, a strip-emptied `#.`, or an over-long run
+        // reaches here — emit the whole raw token (name + any stripped
+        // trailing) as plain text.
         segments.push({ type: "text", value: rawMatch });
         lastIndex = matchStart + rawMatch.length;
       }
@@ -203,10 +260,10 @@ export function linkify(input: string): LinkifySegment[] {
       }
     }
 
-    // Defensive: prevent zero-width-match infinite loop (shouldn't
-    // happen with this regex but the `\S+` shape could in theory
-    // match empty after trailing-strip — guard anyway).
-    if (TOKEN_REGEX.lastIndex === matchStart) TOKEN_REGEX.lastIndex++;
+    // Defensive: prevent zero-width-match infinite loop (every alternative
+    // requires ≥1 char, so this shouldn't fire — guard anyway). Compares
+    // against the RAW match offset, not the boundary-shifted token start.
+    if (TOKEN_REGEX.lastIndex === match.index) TOKEN_REGEX.lastIndex++;
   }
 
   // Tail text after last match.
