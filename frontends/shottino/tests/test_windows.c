@@ -1293,6 +1293,62 @@ TEST(stt_transcribes_and_dictate_types) {
     free_app(app);
 }
 
+/* Settings must survive a restart. vjt reports losing them on every
+ * reinstall, and the evidence was one line: a configured
+ * `voice.source = alsa:hw:2` came back as `pulse:default`, the built-in
+ * default, written back over the file.
+ *
+ * Round-trips through the REAL prefs_save/prefs_load against a HOME of
+ * our own, because the bug can live in either half and asserting only
+ * the parser would prove nothing about what gets written. */
+TEST(a_configured_setting_survives_save_and_load) {
+    char home[] = "/tmp/shottino-prefs-XXXXXX";
+    CHECK(mkdtemp(home) != NULL);
+    char *old_home = getenv("HOME");
+    char keep[512];
+    snprintf(keep, sizeof(keep), "%s", old_home ? old_home : "");
+    setenv("HOME", home, 1);
+
+    struct app *app = window_app();
+    CHECK(app != NULL);
+
+    /* Defaults, as main() sets them before prefs_load runs. */
+    snprintf(app->voice_source, sizeof(app->voice_source), "pulse:default");
+    snprintf(app->video_source, sizeof(app->video_source), "v4l2:/dev/video0");
+    settings_capture_defaults(app);
+
+    /* What the user typed. */
+    const struct setting_def *def = setting_find("voice.source");
+    CHECK(def != NULL);
+    CHECK(setting_apply(app, def, "alsa:hw:2"));
+    CHECK_STR(app->voice_source, "alsa:hw:2");
+    prefs_save(app);
+
+    /* A FRESH process: defaults in memory, then load. */
+    struct app *next = window_app();
+    CHECK(next != NULL);
+    snprintf(next->voice_source, sizeof(next->voice_source), "pulse:default");
+    snprintf(next->video_source, sizeof(next->video_source), "v4l2:/dev/video0");
+    settings_capture_defaults(next);
+    prefs_load(next);
+    /* THE PROPERTY: what was set is what comes back. */
+    CHECK_STR(next->voice_source, "alsa:hw:2");
+
+    /* And saving again must not quietly drop it — the reinstall cycle
+     * is load, then some unrelated /set, then save. */
+    prefs_save(next);
+    struct app *third = window_app();
+    CHECK(third != NULL);
+    snprintf(third->voice_source, sizeof(third->voice_source), "pulse:default");
+    settings_capture_defaults(third);
+    prefs_load(third);
+    CHECK_STR(third->voice_source, "alsa:hw:2");
+
+    if (keep[0]) setenv("HOME", keep, 1);
+    else unsetenv("HOME");
+    free(app); free(next); free(third);
+}
+
 /* The grid the call helper publishes is what ties a rectangle of the
  * composited frame to a person. Getting it wrong is not a crash — it is
  * everybody's face drawn under somebody else's name, which is the kind
@@ -2991,6 +3047,7 @@ int main(void) {
     RUN(a_settings_menu_offers_what_the_setting_accepts);
     RUN(tab_cycles_through_the_media_in_this_window);
     RUN(stt_transcribes_and_dictate_types);
+    RUN(a_configured_setting_survives_save_and_load);
     RUN(the_call_tile_map_is_parsed_or_rejected_whole);
     RUN(a_client_local_window_is_never_fetched_from_the_server);
     RUN(a_conversation_is_remembered_and_rolls_to_fit);
