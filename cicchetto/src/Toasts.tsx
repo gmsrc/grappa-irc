@@ -1,4 +1,5 @@
 import { type Component, For, type JSX } from "solid-js";
+import { bundleRefreshToasts, dismissBundleRefreshToast } from "./lib/bundleRefreshNotice";
 import { dismissPresenceToast, presenceToasts } from "./lib/notifyWatch";
 import NickText from "./NickText";
 
@@ -6,13 +7,14 @@ import NickText from "./NickText";
 //
 // Self-expiring, click-to-dismiss, stacked in a corner overlay. Deliberately
 // quiet: the durable signal always lives elsewhere — the Watched panel dot for
-// presence — and this is the glance.
+// presence, the version in Settings for a bundle — and this is the glance.
 //
 // EVERY PRODUCER RENDERS INTO THIS ONE CONTAINER ELEMENT. Each owns its queue
-// and its payload type (see lib/toasts.ts on why the queues stay separate), but
-// a second `position: fixed` stack would land on top of this one, so a new
-// producer is one more <For> here — never a variant bolted onto somebody else's
-// union, and never a second overlay.
+// and its payload type (see lib/toasts.ts on why the queues stay separate: the
+// presence one is wiped on an account switch and the update notice must not
+// be), but a second `position: fixed` stack would land on top of this one, so a
+// new producer is one more <For> here — never a variant bolted onto somebody
+// else's union, and never a second overlay.
 //
 // `aria-live="polite"` on the container: toasts must not interrupt a screen
 // reader mid-flow the way an error banner does.
@@ -62,6 +64,19 @@ const Toasts: Component = () => {
             </ToastRow>
           )
         }
+      </For>
+      {/* #775 — an auto-refresh (#674) that actually landed, announced by the
+          document that booted out of it. */}
+      <For each={bundleRefreshToasts()}>
+        {(toast) => (
+          <ToastRow
+            tone="toast-update"
+            icon="↻"
+            onDismiss={() => dismissBundleRefreshToast(toast.id)}
+          >
+            <span class="toast-text">{toast.text}</span>
+          </ToastRow>
+        )}
       </For>
     </div>
   );

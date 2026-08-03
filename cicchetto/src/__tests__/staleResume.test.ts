@@ -8,6 +8,7 @@ import {
   installStaleResumeReload,
   isStaleResume,
   markActive,
+  type ReloadReason,
   readLastActive,
   STALE_RESUME_HOURS_KEY,
   STALE_RESUME_STAMP_KEY,
@@ -48,13 +49,16 @@ interface Harness {
   // production). Flipping it mid-test is how a case models the on-rejoin
   // `bundle_hash` push landing AFTER the resume that observed the absence.
   setMismatch: (v: boolean) => void;
-  reload: ReturnType<typeof vi.fn>;
+  // #775 — the reload carries WHICH branch asked for it, so the composition
+  // root can announce an applied deploy and stay quiet about a document
+  // thrown away for age.
+  reload: ReturnType<typeof vi.fn<(reason: ReloadReason) => void>>;
   dispose: () => void;
 }
 
 function install(startNow: number): Harness {
   let now = startNow;
-  const reload = vi.fn();
+  const reload = vi.fn<(reason: ReloadReason) => void>();
   const [isVisible, setVisible] = createSignal(true);
   const [bundleMismatch, setBundleMismatch] = createSignal(false);
   const handlers: Array<() => void> = [];
@@ -198,6 +202,8 @@ describe("installStaleResumeReload", () => {
     h.visible(true);
     await flush();
     expect(h.reload).toHaveBeenCalledTimes(1);
+    // #775 — an absence reload has nothing to announce afterwards.
+    expect(h.reload).toHaveBeenCalledWith("absence");
     h.dispose();
   });
 
@@ -367,6 +373,8 @@ describe("installStaleResumeReload — #674 bundle auto-refresh", () => {
     h.setMismatch(true);
     await flush();
     expect(h.reload).toHaveBeenCalledTimes(1);
+    // #775 — and it says so, which is what earns the toast after the reload.
+    expect(h.reload).toHaveBeenCalledWith("bundle");
     h.dispose();
   });
 

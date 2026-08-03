@@ -28254,3 +28254,69 @@ captures its slug and is cancelled on both unmount and slug switch, or it
 fires after `resetDirectory` and repopulates the state the close cleared. The
 debounce only stops making races; the request-id guard is what makes the ones
 that survive correct.
+
+### 2026-08-03 — #775 — the auto-refresh announces itself, across the reload
+
+Follow-on to #674, which applies a deploy while nobody is looking and ships
+SILENT. Coming back to a client that visibly reset with no explanation is its
+own small mystery; one auto-dismissing toast closes it. No banner — something
+the operator has to close is the annoyance the auto-refresh exists to remove.
+
+**A factory, not a shared queue.** `lib/toasts.ts` owns the mechanics #247 had
+hand-rolled inside `notifyWatch.ts` — monotonic ids, the self-expiry timer, the
+click-to-dismiss removal — and hands out an independent queue per producer,
+each keeping its own payload type. That separation is load-bearing, not tidy:
+#247's queue lives inside `identityScopedStore` and is wiped on an account
+switch, which is right for presence and wrong for an update notice. One queue
+with a `kind` field would have forced one lifetime on both, which is the
+shared-data-model-with-a-type-flag boundary this file forbids. The presence
+toasts moved onto the factory in the same change — no second toast system left
+behind.
+
+**Two queues, ONE stack element.** `Toasts.tsx` (was `PresenceToasts.tsx`)
+renders both `<For>`s into a single container; two `position: fixed` overlays
+would land on top of each other. The chrome classes generalised with it
+(`.presence-toast*` → `.toast*`, plus a `.toast-update` tone), so a third
+producer is one more `<For>` and its own queue.
+
+**The hard part was never the surface — it is that the announcement outlives
+the document that decided to make it.** The refresh throws the page away, so a
+marker is written to sessionStorage as the reload is requested and read-and-
+cleared by the document that boots next. sessionStorage for #695's reason: it
+is scoped to THIS window and survives a reload, where localStorage would have a
+second tab announce a refresh it never performed.
+
+**Stranding is the failure mode that shape invites, and TIME is the guard.**
+`deps.reload` is a request, not a guarantee: the navigation can be blocked, the
+e2e `__refreshProbe` replaces it outright, the operator can kill the tab. The
+marker then survives in a document that never refreshed, and the next boot of
+that window — an hour later, for its own reasons — would announce an
+auto-refresh that never happened. Time is what actually separates the two
+cases: a reload lands within seconds of being asked for or it does not land at
+all, so a marker older than 60s is not evidence and is discarded. Read-and-
+clear happens either way, so an unusable marker cannot resurface. A
+target-hash guard was considered and rejected as strictly weaker: it catches
+the probe case and misses the one that matters (a manual reload later, onto the
+bundle the marker was written for, announces anyway).
+
+Two consequences, both accepted: a document iOS suspends mid-navigation and
+thaws an hour later drops the toast — silence, which is what #674 shipped
+anyway, and never a false announcement — and the boot is never told which
+version it came FROM. It does not need to be: it reads the version it is now
+running off its own page.
+
+**`reload` carries WHICH branch asked for it** (`"absence" | "bundle"`).
+`staleResume` deliberately shares one reload verb between two independent
+branches; the composition root has to tell them apart, because an applied
+deploy announces itself and a document thrown away for age has nothing to say.
+Passing the reason keeps that knowledge where the branch is decided instead of
+growing a second verb beside the shared one.
+
+**Verified by displacement, not by a green run.** Three mutation arms, each
+run against the suite: removing the freshness window reddens exactly the two
+strand tests; making `announceAppliedBundleRefresh` skip the queue reddens six
+across the store and the surface; making the bundle branch report `"absence"`
+reddens the reason assertion. **Not verified:** the rendered appearance. jsdom
+draws no layout, so "the stack is positioned and legible, and the update tone
+reads as accent rather than severity" is a browser question this change does
+not answer.

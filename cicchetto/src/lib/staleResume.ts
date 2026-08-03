@@ -107,6 +107,17 @@ export interface ResumeWindowLike {
   addEventListener(event: "pageshow", handler: () => void): void;
 }
 
+/**
+ * Which of the two independent branches asked for the reload.
+ *
+ * #775 — the composition root needs to tell them apart: an applied deploy
+ * announces itself across the navigation, a document thrown away for age has
+ * nothing to announce. Passing the reason keeps that knowledge here, where the
+ * branch is decided, instead of adding a second reload verb beside the one
+ * this module deliberately shares between both branches.
+ */
+export type ReloadReason = "absence" | "bundle";
+
 export interface StaleResumeDeps {
   // The visibility SSOT (`documentVisibility.ts` — visibilitychange AND
   // window focus/blur). Consumed as a signal rather than re-registering
@@ -118,7 +129,7 @@ export interface StaleResumeDeps {
   // testable against a plain signal.
   bundleMismatch: Accessor<boolean>;
   now: () => number;
-  reload: () => void;
+  reload: (reason: ReloadReason) => void;
   win: ResumeWindowLike;
 }
 
@@ -214,7 +225,7 @@ export function installStaleResumeReload(deps: StaleResumeDeps): () => void {
     // Stamp FIRST, unconditionally: this is what makes the reload fire once
     // per absence rather than once per trigger.
     markActive(now);
-    if (stale) deps.reload();
+    if (stale) deps.reload("absence");
   };
 
   // BEFORE arming anything — see the loop guard in the module header.
@@ -237,7 +248,7 @@ export function installStaleResumeReload(deps: StaleResumeDeps): () => void {
   createEffect(() => {
     const mismatch = deps.bundleMismatch();
     const gap = resumeGapMs();
-    if (shouldAutoRefreshBundle(gap, bundleRefreshDwellMs(), mismatch)) deps.reload();
+    if (shouldAutoRefreshBundle(gap, bundleRefreshDwellMs(), mismatch)) deps.reload("bundle");
   });
 
   return check;
