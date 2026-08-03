@@ -31,7 +31,8 @@ defmodule Grappa.Session.NumericRouterTest do
     %{
       own_nick: Keyword.get(opts, :own_nick, "vjt"),
       labels_pending: Keyword.get(opts, :labels_pending, %{}),
-      whois_targets: Keyword.get(opts, :whois_targets, MapSet.new())
+      whois_targets: Keyword.get(opts, :whois_targets, MapSet.new()),
+      whois_nosuchnick_absorbed: Keyword.get(opts, :whois_nosuchnick_absorbed, MapSet.new())
     }
   end
 
@@ -461,6 +462,89 @@ defmodule Grappa.Session.NumericRouterTest do
       # exactly as before (pre-#221 behaviour preserved for the non-whois case).
       m = msg(617, ["vjt", "alice", "some line"])
       assert {:query, "alice"} = NumericRouter.route(m, state(whois_targets: MapSet.new()))
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # #785 — the error-class carve-out in the #221 guard
+  # ---------------------------------------------------------------------------
+
+  describe "whois-leg guard — error-class numerics (#785)" do
+    test "the FIRST 401 for an in-flight whois target is absorbed as the whois leg" do
+      m = msg(401, ["vjt", "ghost", "No such nick/channel"])
+      st = state(whois_targets: MapSet.new(["ghost"]))
+      assert :delegated = NumericRouter.route(m, st)
+    end
+
+    test "a SECOND 401 for the same in-flight whois target routes to the query window" do
+      m = msg(401, ["vjt", "ghost", "No such nick/channel"])
+
+      st =
+        state(
+          whois_targets: MapSet.new(["ghost"]),
+          whois_nosuchnick_absorbed: MapSet.new(["ghost"])
+        )
+
+      assert {:query, "ghost"} = NumericRouter.route(m, st)
+    end
+
+    test "the absorbed set folds the target case-insensitively (ASCII)" do
+      m = msg(401, ["vjt", "GHOST", "No such nick/channel"])
+
+      st =
+        state(
+          whois_targets: MapSet.new(["ghost"]),
+          whois_nosuchnick_absorbed: MapSet.new(["ghost"])
+        )
+
+      assert {:query, "GHOST"} = NumericRouter.route(m, st)
+    end
+
+    test "an absorbed 401 for ANOTHER target still absorbs for this one" do
+      m = msg(401, ["vjt", "ghost", "No such nick/channel"])
+
+      st =
+        state(
+          whois_targets: MapSet.new(["ghost", "alice"]),
+          whois_nosuchnick_absorbed: MapSet.new(["alice"])
+        )
+
+      assert :delegated = NumericRouter.route(m, st)
+    end
+
+    test "a non-401 error numeric is NEVER absorbed by an in-flight whois" do
+      # 407 ERR_TOOMANYTARGETS answers a PRIVMSG, never a WHOIS. Pre-#785 the
+      # generic guard swallowed it whole whenever a WHOIS for the same nick
+      # happened to be in flight — one command's failure eaten by another
+      # command's bundle.
+      m = msg(407, ["vjt", "ghost", "Too many recipients"])
+      st = state(whois_targets: MapSet.new(["ghost"]))
+      assert {:query, "ghost"} = NumericRouter.route(m, st)
+    end
+
+    test "a 5xx error numeric is NEVER absorbed by an in-flight whois" do
+      m = msg(531, ["vjt", "ghost", "You are not permitted to send private messages"])
+      st = state(whois_targets: MapSet.new(["ghost"]))
+      assert {:query, "ghost"} = NumericRouter.route(m, st)
+    end
+
+    test "an unknown 6xx numeric is still absorbed unconditionally (#221 intact)" do
+      # The absorbed set is 401-only bookkeeping: a non-error leg folds as
+      # many times as it arrives (a whois can emit several 320 lines).
+      m = msg(617, ["vjt", "ghost", "some new WHOIS line"])
+
+      st =
+        state(
+          whois_targets: MapSet.new(["ghost"]),
+          whois_nosuchnick_absorbed: MapSet.new(["ghost"])
+        )
+
+      assert :delegated = NumericRouter.route(m, st)
+    end
+
+    test "a 401 with NO whois in flight routes to the query window (pre-#221 behaviour)" do
+      m = msg(401, ["vjt", "ghost", "No such nick/channel"])
+      assert {:query, "ghost"} = NumericRouter.route(m, state())
     end
   end
 

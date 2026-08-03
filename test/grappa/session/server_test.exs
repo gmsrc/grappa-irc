@@ -9275,6 +9275,61 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "#785 — a pending WHOIS absorbs ONE 401; the next lands in the query window", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      # Server twin of the cp13-s5-msg-ghost-401 e2e. `/msg ghost hi` opens the
+      # query window and (#606) focusing it fires a WHOIS, so bahamut answers
+      # with TWO 401s for the same nick — s_user.c emits one per failing
+      # command — plus the WHOIS's own 318. Pre-#785 the in-flight WHOIS
+      # swallowed BOTH via the #221 guard and the operator got no feedback at
+      # all that the nick does not exist.
+      assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
+      assert QueryWindows.open?({:user, user.id}, network.id, "ghost")
+
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil)
+      _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
+
+      # Subscribe AFTER the outbound send so the mailbox holds only the 401s.
+      :ok =
+        Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.channel(user.name, network.slug, "ghost"))
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      IRCServer.feed(server, ":irc.test.org 401 grappa-test ghost :No such nick/channel\r\n")
+      IRCServer.feed(server, ":irc.test.org 401 grappa-test ghost :No such nick/channel\r\n")
+      IRCServer.feed(server, ":irc.test.org 318 grappa-test ghost :End of /WHOIS list\r\n")
+
+      # The second 401 is the operator's visible feedback, in the window they
+      # /msg'd — not $server, not swallowed.
+      assert_message_event(
+        kind: :notice,
+        channel: "ghost",
+        network: network.slug,
+        meta: %{
+          numeric: 401,
+          severity: :error,
+          raw_params: ["grappa-test", "ghost", "No such nick/channel"]
+        }
+      )
+
+      # ...and EXACTLY one: the first 401 went into the WHOIS card instead.
+      refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :message}}, 200
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :whois_bundle} = bundle
+                     },
+                     1_500
+
+      assert [%{numeric: 401, text: "No such nick/channel"}] = bundle.extra_lines
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "318 case-insensitive against typed target (server may echo different case)", %{
       server: server,
       user: user,

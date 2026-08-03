@@ -90,7 +90,7 @@ defmodule Grappa.Session.EventRouter do
 
   alias Grappa.IRC.{CTCP, Identifier, Message}
   alias Grappa.{Scrollback, Session}
-  alias Grappa.Session.{ISupport, Presence}
+  alias Grappa.Session.{ISupport, NumericRouter, Presence}
 
   @typedoc """
   The Session.Server state subset this module reads + mutates. The
@@ -3325,10 +3325,53 @@ defmodule Grappa.Session.EventRouter do
         state
 
       {:ok, accum} ->
-        existing = Map.get(accum, :extra_lines, [])
-        merged = Map.put(accum, :extra_lines, [%{numeric: code, text: text} | existing])
-        %{state | whois_pending: Map.put(pending, nick_key, merged)}
+        # #785 — the fold is the ABSORPTION. It has to honour the same
+        # carve-out `NumericRouter.route/2` used to decide whether this
+        # numeric was a WHOIS leg at all: the routed-elsewhere copy (a
+        # second 401, any other 4xx/5xx) is already persisted in its own
+        # window by Server, so folding it here would double it into the
+        # card as well.
+        if NumericRouter.absorbable_whois_leg?(code, nosuchnick_absorbed?(accum)) do
+          existing = Map.get(accum, :extra_lines, [])
+          merged = Map.put(accum, :extra_lines, [%{numeric: code, text: text} | existing])
+          %{state | whois_pending: Map.put(pending, nick_key, merged)}
+        else
+          state
+        end
     end
+  end
+
+  @doc """
+  The in-flight WHOIS targets whose bundle has already absorbed a 401
+  ERR_NOSUCHNICK (#785).
+
+  DERIVED from the `extra_lines` fold that absorbed it rather than tracked in
+  a parallel flag — the fold IS the absorption, so the two cannot drift.
+  `Session.Server` feeds this into `NumericRouter.new_router_state/4` so the
+  operator's NEXT 401 for the same nick routes to its query window instead of
+  being eaten by the bundle too.
+
+  Known edge: an ircd that emits 401 with no trailing text folds nothing
+  (`whois_trailing/1` returns nil), so absorption is never recorded and a
+  repeat is absorbed again. bahamut and solanum both always send the
+  trailing; the trailing-less shape is a separate silent-drop hole in the
+  generic pass-through, not one #785 widens.
+  """
+  @spec whois_nosuchnick_absorbed(state()) :: MapSet.t(String.t())
+  def whois_nosuchnick_absorbed(state) do
+    for {key, accum} <- Map.get(state, :whois_pending, %{}),
+        nosuchnick_absorbed?(accum),
+        into: MapSet.new(),
+        do: key
+  end
+
+  @spec nosuchnick_absorbed?(map()) :: boolean()
+  defp nosuchnick_absorbed?(accum) when is_map(accum) do
+    nosuchnick = NumericRouter.nosuchnick_numeric()
+
+    accum
+    |> Map.get(:extra_lines, [])
+    |> Enum.any?(&(Map.get(&1, :numeric) == nosuchnick))
   end
 
   # P-0d — fold one or more LUSERS fields into `state.lusers_pending`.

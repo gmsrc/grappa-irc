@@ -4314,7 +4314,10 @@ defmodule Grappa.Session.Server do
       # (keys are already canonical nicks). Lets NumericRouter delegate an
       # unhandled WHOIS-leg numeric to EventRouter's generic pass-through
       # instead of misrouting it to a bogus query window.
-      MapSet.new(Map.keys(Map.get(state, :whois_pending, %{})))
+      MapSet.new(Map.keys(Map.get(state, :whois_pending, %{}))),
+      # #785 — of those, the ones whose bundle already absorbed a 401. The
+      # accumulator shape is EventRouter's, so the derivation lives there.
+      EventRouter.whois_nosuchnick_absorbed(state)
     )
   end
 

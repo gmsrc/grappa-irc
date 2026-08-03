@@ -109,11 +109,15 @@ defmodule Grappa.Session.NumericRouter do
       `:delegated` so EventRouter's generic pass-through folds it into the
       bundle's `extra_lines`. This is the ROOT-cause fix: a numeric emitted
       next year needs zero code change to route correctly.
+    * `whois_nosuchnick_absorbed` — the subset of `whois_targets` whose
+      pending WHOIS has ALREADY absorbed a 401 ERR_NOSUCHNICK (#785). See
+      the error-class carve-out on `absorbable_whois_leg?/2`.
   """
   @type router_state :: %{
           required(:own_nick) => String.t() | nil,
           required(:labels_pending) => %{String.t() => window_ref()},
-          required(:whois_targets) => MapSet.t(String.t())
+          required(:whois_targets) => MapSet.t(String.t()),
+          required(:whois_nosuchnick_absorbed) => MapSet.t(String.t())
         }
 
   # ---------------------------------------------------------------------------
@@ -138,6 +142,15 @@ defmodule Grappa.Session.NumericRouter do
   # coverage: other ircds define STATS numerics in 220–239 too; add them
   # here if a bound network emits them.
   @stats_numerics Enum.to_list(211..219) ++ Enum.to_list(240..250)
+
+  # #785 — the RFC error range (4xx command failures, 5xx server errors).
+  # Distinct from `severity/1`'s `>= 400` cut, which deliberately paints
+  # the 6xx vendor replies red too; absorption keys off the RANGE, so a
+  # 671 RPL_WHOISSECURE stays a foldable WHOIS leg. 401 ERR_NOSUCHNICK is
+  # the one error a WHOIS emits about itself. Both are read by
+  # `absorbable_whois_leg?/2`.
+  @error_numerics 400..599
+  @nosuchnick_numeric 401
 
   # Active deny list: numerics whose params look nick-shaped but the
   # token is NOT a routing destination — it's the rejected/offending
@@ -510,15 +523,69 @@ defmodule Grappa.Session.NumericRouter do
   return spec, avoiding `call_without_opaque` false-positives at the
   `route/2` call site.
   """
-  @spec new_router_state(String.t() | nil, %{String.t() => window_ref()}, MapSet.t(String.t())) ::
-          router_state()
-  def new_router_state(own_nick, labels_pending, whois_targets) do
+  @spec new_router_state(
+          String.t() | nil,
+          %{String.t() => window_ref()},
+          MapSet.t(String.t()),
+          MapSet.t(String.t())
+        ) :: router_state()
+  def new_router_state(own_nick, labels_pending, whois_targets, whois_nosuchnick_absorbed) do
     %{
       own_nick: own_nick,
       labels_pending: labels_pending,
-      whois_targets: whois_targets
+      whois_targets: whois_targets,
+      whois_nosuchnick_absorbed: whois_nosuchnick_absorbed
     }
   end
+
+  @doc """
+  The one error numeric a WHOIS emits for itself: 401 ERR_NOSUCHNICK.
+
+  Public so `Session.EventRouter` can recognise the absorbed leg inside a
+  `whois_pending` accumulator against the SAME constant the routing rule
+  keys off — the two halves of the #785 carve-out cannot drift apart.
+  """
+  @spec nosuchnick_numeric() :: 401
+  def nosuchnick_numeric, do: @nosuchnick_numeric
+
+  @doc """
+  Whether an in-flight WHOIS may still absorb `code` as one of its legs.
+
+  #785 — the error-class carve-out on the #221 guard.
+
+  #221's guard captures ANY scan-class numeric whose `params[1]` is an
+  in-flight WHOIS target, on the premise that it must be an unhandled WHOIS
+  leg. That premise holds for WHOIS legs, which are all RPL_* — it does NOT
+  hold for the error numerics, which answer whatever command provoked them.
+  A 407 ERR_TOOMANYTARGETS or a 531 answering the operator's PRIVMSG was
+  being folded into an unrelated WHOIS bundle and never shown (the
+  "no silent-swallow at boundaries" rule, violated).
+
+  401 ERR_NOSUCHNICK is the single ambiguous code: bahamut emits it BOTH as
+  the WHOIS's own leg (`s_user.c` `m_whois`: 401 then 318) AND once per
+  failing PRIVMSG/CTCP/INVITE — identical on the wire, with no request
+  identity to correlate on. So a pending WHOIS absorbs the FIRST 401 for its
+  target and every later one falls through to the param scan, landing in the
+  target's query window (or `$server` when none is open, per #640). The
+  first 401 may be attributed to the wrong command, but the user-visible
+  outcome is right for every combination bahamut can emit: N failing
+  commands plus one WHOIS produce exactly N visible error rows.
+
+  Non-error codes stay unconditional — a WHOIS legitimately emits several
+  320 lines, and a 6xx numeric added to solanum next year must still fold
+  with zero code change here (#221's whole point).
+
+  Both halves of the carve-out read this one predicate: `route/2` decides
+  whether to delegate, `EventRouter`'s generic pass-through decides whether
+  to fold into `extra_lines`. They must agree, or a routed numeric is ALSO
+  duplicated into the WHOIS card.
+  """
+  @spec absorbable_whois_leg?(1..999, boolean()) :: boolean()
+  def absorbable_whois_leg?(@nosuchnick_numeric, nosuchnick_absorbed?),
+    do: not nosuchnick_absorbed?
+
+  def absorbable_whois_leg?(code, _) when code in @error_numerics, do: false
+  def absorbable_whois_leg?(_, _), do: true
 
   @doc """
   Routes one numeric `%Message{}` to a `routing_decision()`.
@@ -639,8 +706,8 @@ defmodule Grappa.Session.NumericRouter do
   # change here. Only the `:scan` class reaches this arm — delegated/active
   # numerics already resolved above, so a channel-state or STATS numeric is
   # never captured even if a WHOIS happens to be in flight.
-  defp route_for_class(:scan, %Message{params: params} = msg, state) do
-    if whois_leg?(params, state.whois_targets) do
+  defp route_for_class(:scan, %Message{command: {:numeric, code}, params: params} = msg, state) do
+    if whois_leg?(code, params, state) do
       :delegated
     else
       scan_params(msg.params, state)
@@ -648,13 +715,18 @@ defmodule Grappa.Session.NumericRouter do
   end
 
   # True iff `params[1]` (the numeric's target slot) is the canonical nick
-  # of a WHOIS in flight. Any other param shape (empty, own-nick-only,
-  # channel-shaped) yields false → normal param scan.
-  @spec whois_leg?([term()], MapSet.t(String.t())) :: boolean()
-  defp whois_leg?([_, target | _], whois_targets) when is_binary(target),
-    do: MapSet.member?(whois_targets, Identifier.canonical_target(target))
+  # of a WHOIS in flight AND the code is one this WHOIS may still absorb.
+  # Any other param shape (empty, own-nick-only, channel-shaped) yields
+  # false → normal param scan.
+  @spec whois_leg?(1..999, [term()], router_state()) :: boolean()
+  defp whois_leg?(code, [_, target | _], state) when is_binary(target) do
+    key = Identifier.canonical_target(target)
 
-  defp whois_leg?(_, _), do: false
+    MapSet.member?(state.whois_targets, key) and
+      absorbable_whois_leg?(code, MapSet.member?(state.whois_nosuchnick_absorbed, key))
+  end
+
+  defp whois_leg?(_, _, _), do: false
 
   # Walk the params skipping params[0] (own-nick echo) and the last element
   # (trailing human-readable text). The first channel-prefix param wins; if
