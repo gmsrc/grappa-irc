@@ -93,10 +93,8 @@ defmodule Grappa.Accounts do
   def get_user_by_credentials(name, password)
       when is_binary(name) and is_binary(password) do
     case Repo.get_by(User, name: name) do
-      %User{password_hash: hash} = user ->
-        if Argon2.verify_pass(password, hash),
-          do: {:ok, user},
-          else: {:error, :invalid_credentials}
+      %User{} = user ->
+        with :ok <- verify_password(user, password), do: {:ok, user}
 
       nil ->
         Argon2.no_user_verify()
@@ -606,12 +604,18 @@ defmodule Grappa.Accounts do
   end
 
   @doc """
-  Re-confirms an account password for a privileged mutation.
+  Checks a plaintext password against an account's stored hash.
 
-  The single door for "prove it is still you" on an already-authenticated
-  request. A bearer alone must never be enough to change how the account
-  authenticates: an enrolment, a mode switch or a credential deletion each
-  outlives the token that requested it, so each re-asks for the password.
+  The ONE place a password is compared. Two callers need it for different
+  reasons and both belong here: `get_user_by_credentials/2` at login, and
+  every privileged mutation that re-asks "prove it is still you" — a bearer
+  alone must never be enough to change how the account authenticates, since
+  an enrolment, a mode switch or a credential deletion each outlives the
+  token that requested it.
+
+  Takes a `%User{}`, so it says nothing about accounts that do not exist;
+  that timing oracle is `get_user_by_credentials/2`'s to close, with
+  `Argon2.no_user_verify/0`.
   """
   @spec verify_password(User.t(), String.t()) :: :ok | {:error, :invalid_credentials}
   def verify_password(%User{} = user, password) when is_binary(password) do

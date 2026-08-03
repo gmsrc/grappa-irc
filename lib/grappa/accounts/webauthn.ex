@@ -23,7 +23,7 @@ defmodule Grappa.Accounts.WebAuthn do
   @spec begin_registration(User.t(), String.t(), String.t(), binding(), String.t()) ::
           {:ok, map()} | {:error, :invalid_credentials}
   def begin_registration(user, password, name, binding, origin) do
-    if Argon2.verify_pass(password, user.password_hash) do
+    with :ok <- Grappa.Accounts.verify_password(user, password) do
       challenge = Wax.new_registration_challenge(challenge_opts(origin))
 
       id =
@@ -34,8 +34,6 @@ defmodule Grappa.Accounts.WebAuthn do
         })
 
       {:ok, registration_options(id, challenge, user)}
-    else
-      {:error, :invalid_credentials}
     end
   end
 

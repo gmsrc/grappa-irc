@@ -65,12 +65,9 @@ defmodule GrappaWeb.PasskeyController do
         %{"password" => password, "mode" => wire_mode}
       ) do
     with {:ok, mode} <- settings_mode(wire_mode),
-         true <- Argon2.verify_pass(password, user.password_hash),
+         :ok <- Accounts.verify_password(user, password),
          {:ok, options} <- mode_change_options(conn, user, %{mode: mode}) do
       json(conn, options)
-    else
-      false -> {:error, :invalid_credentials}
-      {:error, _} = error -> error
     end
   end
 
@@ -95,7 +92,7 @@ defmodule GrappaWeb.PasskeyController do
         %{assigns: %{current_subject: {:user, user}, current_session_id: session_id}} = conn,
         %{"password" => password}
       ) do
-    if Argon2.verify_pass(password, user.password_hash) do
+    with :ok <- Accounts.verify_password(user, password) do
       codes = Accounts.prepare_recovery_codes()
 
       # ENCRYPTED, not merely signed: this payload carries the plaintext
@@ -111,8 +108,6 @@ defmodule GrappaWeb.PasskeyController do
         })
 
       json(conn, %{recovery_codes: codes, recovery_token: token})
-    else
-      {:error, :invalid_credentials}
     end
   end
 
@@ -162,17 +157,17 @@ defmodule GrappaWeb.PasskeyController do
         %{assigns: %{current_subject: {:user, user}}} = conn,
         %{"id" => id, "password" => password}
       ) do
-    cond do
-      not Argon2.verify_pass(password, user.password_hash) ->
-        {:error, :invalid_credentials}
-
-      user.passkey_mode != :disabled and length(WebAuthn.list(user)) == 1 ->
-        {:error, :passkey_required}
-
-      true ->
-        with :ok <- WebAuthn.delete(user, id), do: send_resp(conn, :no_content, "")
+    with :ok <- Accounts.verify_password(user, password),
+         false <- last_passkey?(user),
+         :ok <- WebAuthn.delete(user, id) do
+      send_resp(conn, :no_content, "")
+    else
+      true -> {:error, :passkey_required}
+      {:error, _} = error -> error
     end
   end
+
+  defp last_passkey?(user), do: user.passkey_mode != :disabled and length(WebAuthn.list(user)) == 1
 
   def delete(_, _), do: {:error, :bad_request}
 
