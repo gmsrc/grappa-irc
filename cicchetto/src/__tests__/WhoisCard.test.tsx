@@ -311,28 +311,18 @@ describe("WhoisCard #221 solanum fields", () => {
 // wire delivers ARRIVAL order. The card must render that order as-is —
 // a card-side reverse would ship lines backwards. Locked below.
 describe("WhoisCard #673 extra_lines", () => {
-  afterEach(() => {
-    dismissWhoisCard("azzurra");
-  });
-
   it("renders the extra_line text for a shunned user (340 RPL_SHUNNED)", () => {
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
-      extra_lines: [{ numeric: 340, text: "is currently shunned" }],
-    });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ extra_lines: [{ numeric: 340, text: "is currently shunned" }] });
     expect(screen.getByTestId("whois-card").textContent).toContain("is currently shunned");
   });
 
   it("renders multiple extra_lines in ARRIVAL order", () => {
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
+    renderCard({
       extra_lines: [
         { numeric: 320, text: "is a volunteer staff member" },
         { numeric: 340, text: "is currently shunned" },
       ],
     });
-    render(() => <WhoisCard networkSlug="azzurra" />);
     const lines = screen.getByTestId("whois-card").querySelectorAll(".whois-card-extra-line");
     expect(Array.from(lines, (el) => el.textContent)).toEqual([
       "is a volunteer staff member",
@@ -343,11 +333,7 @@ describe("WhoisCard #673 extra_lines", () => {
   it("exposes the numeric on hover, keeping it out of the card body text", () => {
     // The bare trailing text keeps the card readable; the numeric is
     // oper-facing diagnostics, so it rides in `title` instead.
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
-      extra_lines: [{ numeric: 340, text: "is currently shunned" }],
-    });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ extra_lines: [{ numeric: 340, text: "is currently shunned" }] });
     const card = screen.getByTestId("whois-card");
     expect(card.querySelector(".whois-card-extra-line")?.getAttribute("title")).toContain("340");
     expect(card.textContent).not.toContain("340");
@@ -356,11 +342,7 @@ describe("WhoisCard #673 extra_lines", () => {
   it("routes extra_line text through the mIRC renderer, never leaking raw control bytes", () => {
     // Same class as `oper_text` / swhois (#142): a services-set line can
     // carry mIRC formatting, so it must not be interpolated raw.
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
-      extra_lines: [{ numeric: 320, text: "\x0304is a volunteer staff member\x0f" }],
-    });
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard({ extra_lines: [{ numeric: 320, text: "\x0304is a volunteer staff member\x0f" }] });
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).toContain("is a volunteer staff member");
     for (const byte of ["\x03", "\x0f"]) {
@@ -372,8 +354,7 @@ describe("WhoisCard #673 extra_lines", () => {
     // A privacy-stripped or oper-only reply can carry nothing but an
     // extra_line. Without this the card renders "no WHOIS information
     // returned" while holding the very line the user ran /whois for.
-    setWhoisBundle("azzurra", {
-      ...baseBundle,
+    renderCard({
       user: null,
       host: null,
       realname: null,
@@ -381,15 +362,13 @@ describe("WhoisCard #673 extra_lines", () => {
       server_info: null,
       extra_lines: [{ numeric: 340, text: "is currently shunned" }],
     });
-    render(() => <WhoisCard networkSlug="azzurra" />);
     const card = screen.getByTestId("whois-card");
     expect(card.textContent).toContain("is currently shunned");
     expect(card.textContent).not.toContain("no WHOIS information returned");
   });
 
   it("renders no extra-line row when extra_lines is null (the bahamut-plain path)", () => {
-    setWhoisBundle("azzurra", baseBundle);
-    render(() => <WhoisCard networkSlug="azzurra" />);
+    renderCard();
     expect(screen.getByTestId("whois-card").querySelector(".whois-card-extra-line")).toBeNull();
   });
 });
