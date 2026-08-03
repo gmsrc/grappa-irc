@@ -1288,7 +1288,163 @@ TEST(an_action_is_drawn_louder_than_system_noise) {
     CHECK_STR(body, "");
 }
 
+/* The sampling draw is what lets ONE decoded call frame appear at two
+ * sizes — a corner box while you read the channel, the whole pane when
+ * you switch to the call — without asking the helper to re-encode. The
+ * frame stream is a bare byte pipe with no framing, so a geometry
+ * change mid-stream would have no boundary to resynchronise on; size
+ * has to be a drawing question.
+ *
+ * The MAPPING is asserted directly rather than through the screen: this
+ * offscreen terminal reports COLORS == 0, so every cell reads back as
+ * the same colour pair and "which pixel did this come from" is
+ * unanswerable from the virtual screen. The draw itself is asserted for
+ * the property that does survive — that it FILLS its box rather than
+ * clipping, which is the whole reason it exists.
+ */
+TEST(a_source_rectangle_is_clamped_into_the_picture) {
+    /* The ordinary ask: the whole picture, spelled as "to the edge". */
+    struct media_src_rect r = media_clamp_rect(0, 0, 0, 0, 40, 40);
+    CHECK(r.x == 0 && r.y == 0 && r.w == 40 && r.h == 40);
+
+    /* One tile lifted out of a composited frame. */
+    r = media_clamp_rect(20, 20, 20, 20, 40, 40);
+    CHECK(r.x == 20 && r.y == 20 && r.w == 20 && r.h == 20);
+
+    /* Over-wide: trimmed to the edge, never past it. */
+    r = media_clamp_rect(30, 30, 999, 999, 40, 40);
+    CHECK(r.x == 30 && r.y == 30 && r.w == 10 && r.h == 10);
+
+    /* Entirely outside — a tile layout the terminal resized under —
+     * collapses to empty so the draw declines rather than reading past
+     * the buffer. */
+    r = media_clamp_rect(40, 0, 10, 10, 40, 40);
+    CHECK(r.w == 0 && r.h == 0);
+    r = media_clamp_rect(0, 99, 10, 10, 40, 40);
+    CHECK(r.w == 0 && r.h == 0);
+
+    /* Negative origins clamp to zero rather than indexing backwards. */
+    r = media_clamp_rect(-5, -5, 10, 10, 40, 40);
+    CHECK(r.x == 0 && r.y == 0 && r.w > 0 && r.h > 0);
+
+    /* No picture at all. */
+    r = media_clamp_rect(0, 0, 0, 0, 0, 40);
+    CHECK(r.w == 0 && r.h == 0);
+}
+
+TEST(a_cell_samples_across_the_whole_rectangle) {
+    struct media_src_rect full = media_clamp_rect(0, 0, 0, 0, 40, 40);
+    int px, pt, pb;
+
+    /* SMALLER than the source: the far corner cell must reach the far
+     * corner of the picture. This is exactly what the clipping draw
+     * fails to do — it would show the top-left tenth of a face. */
+    media_sample_cell(&full, 5, 10, 0, 0, 40, 40, &px, &pt, &pb);
+    CHECK(px == 0 && pt == 0);
+    media_sample_cell(&full, 5, 10, 4, 9, 40, 40, &px, &pt, &pb);
+    CHECK(px >= 36 && pt >= 32);
+    /* Every sample stays inside the buffer. */
+    for (int r = 0; r < 5; r++)
+        for (int c = 0; c < 10; c++) {
+            media_sample_cell(&full, 5, 10, r, c, 40, 40, &px, &pt, &pb);
+            CHECK(px >= 0 && px < 40 && pt >= 0 && pt < 40 && pb >= 0 && pb < 40);
+        }
+
+    /* The two halves of a cell come from DIFFERENT rows — that is what
+     * a half block is. Collapsing them would halve the resolution
+     * silently. */
+    media_sample_cell(&full, 5, 10, 0, 0, 40, 40, &px, &pt, &pb);
+    CHECK(pb > pt);
+
+    /* BIGGER than the source: nearest neighbour repeats pixels, and
+     * must still never step outside. */
+    for (int r = 0; r < 30; r++)
+        for (int c = 0; c < 60; c++) {
+            media_sample_cell(&full, 30, 60, r, c, 40, 40, &px, &pt, &pb);
+            CHECK(px >= 0 && px < 40 && pt >= 0 && pt < 40 && pb >= 0 && pb < 40);
+        }
+
+    /* A SOURCE RECTANGLE offsets: the bottom-right quadrant never
+     * reaches back into the top-left, which is how one peer's tile is
+     * lifted out of a composited frame without smearing its neighbour
+     * into it. */
+    struct media_src_rect qr = media_clamp_rect(20, 20, 20, 20, 40, 40);
+    for (int r = 0; r < 6; r++)
+        for (int c = 0; c < 12; c++) {
+            media_sample_cell(&qr, 6, 12, r, c, 40, 40, &px, &pt, &pb);
+            CHECK(px >= 20 && px < 40);
+            CHECK(pt >= 20 && pt < 40 && pb >= 20 && pb < 40);
+        }
+
+    /* An odd geometry — the case a resized terminal actually produces,
+     * where the divisions do not come out even. */
+    struct media_src_rect odd = media_clamp_rect(0, 0, 0, 0, 37, 41);
+    for (int r = 0; r < 7; r++)
+        for (int c = 0; c < 13; c++) {
+            media_sample_cell(&odd, 7, 13, r, c, 37, 41, &px, &pt, &pb);
+            CHECK(px >= 0 && px < 37 && pt >= 0 && pt < 41 && pb >= 0 && pb < 41);
+        }
+}
+
+/* Count the half-block glyphs in a box.
+ *
+ * mvin_wch, not mvinch: the block is a WIDE character, and mvinch
+ * reports it as a plain space with a flag bit — so the obvious
+ * "is this cell non-blank" test silently counts nothing. */
+static int count_blocks(int y0, int x0, int rows, int cols) {
+    int n = 0;
+    for (int y = y0; y < y0 + rows; y++)
+        for (int x = x0; x < x0 + cols; x++) {
+            cchar_t cc;
+            if (mvin_wch(y, x, &cc) == OK && cc.chars[0] == L'\u2580') n++;
+        }
+    return n;
+}
+
+/* And the draw itself: it FILLS the box it was given. The colour of
+ * each cell is unreadable here, but whether a cell was written at all
+ * is not — and fill-versus-clip is the property that matters. */
+TEST(the_sampling_draw_fills_its_box_rather_than_clipping) {
+    struct inline_media m;
+    memset(&m, 0, sizeof(m));
+    m.state = IM_READY;
+    m.cols = 40;
+    m.rows = 20; /* 40 x 40 pixels */
+    m.frame_count = 1;
+    m.rgb = calloc((size_t)40 * 40 * 3, 1);
+
+    /* A box SMALLER than the picture in cells. The ordinary draw clips
+     * to the picture's own cell size; this one must cover all 5x10. */
+    erase();
+    draw_media_region_locked(&m, 2, 3, 0, 0, 0, 0, 5, 10);
+    CHECK(count_blocks(2, 3, 5, 10) == 50);
+
+    /* A box BIGGER than the picture in cells: 20x60 from a 40x20-cell
+     * picture, every one written (and it fits this 24x80 screen — a box
+     * running off the bottom would assert nothing). Under ASan, a
+     * sampling slip past the pixel buffer fails here rather than in a
+     * call. */
+    erase();
+    draw_media_region_locked(&m, 0, 0, 0, 0, 0, 0, 20, 60);
+    CHECK(count_blocks(0, 0, 20, 60) == 1200);
+
+    /* Refusals draw nothing at all rather than a partial box. */
+    erase();
+    draw_media_region_locked(&m, 0, 0, 500, 500, 10, 10, 4, 8);
+    draw_media_region_locked(&m, 0, 0, 0, 0, 0, 0, 0, 10);
+    draw_media_region_locked(&m, 0, 0, 0, 0, 0, 0, 5, 0);
+    draw_media_region_locked(NULL, 0, 0, 0, 0, 0, 0, 5, 10);
+    CHECK(count_blocks(0, 0, 10, 20) == 0);
+
+    free(m.rgb);
+}
+
 int main(void) {
+    /* Same as the real program does before it touches ncurses. Without
+     * it ncursesw has no multibyte encoding to work with and writes a
+     * SPACE where a half block was asked for — which makes every
+     * assertion about drawn picture cells quietly vacuous. */
+    setlocale(LC_ALL, "");
     FILE *sink = fopen("/dev/null", "w");
     if (!sink) {
         fprintf(stderr, "test_layout: cannot open /dev/null — skipping\n");
@@ -1336,6 +1492,9 @@ int main(void) {
     RUN(the_topic_breaks_on_a_word);
     RUN(the_decoder_says_what_animates_not_the_url);
     RUN(an_action_is_drawn_louder_than_system_noise);
+    RUN(a_source_rectangle_is_clamped_into_the_picture);
+    RUN(a_cell_samples_across_the_whole_rectangle);
+    RUN(the_sampling_draw_fills_its_box_rather_than_clipping);
     endwin();
     fclose(sink);
     return test_report();

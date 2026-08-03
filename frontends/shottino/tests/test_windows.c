@@ -1304,13 +1304,24 @@ TEST(stt_transcribes_and_dictate_types) {
 TEST(a_client_local_window_is_never_fetched_from_the_server) {
     CHECK(is_local_window("$llm"));
     CHECK(is_local_window("$server"));
+    /* $call joined them: it exists only while a call is running and
+     * shows the picture full size, and the bouncer has never heard of
+     * it either. Missing from this set, opening it would fetch
+     * scrollback and members for a channel that does not exist —
+     * exactly the 400 that $llm used to produce. */
+    CHECK(is_local_window("$call"));
+    CHECK(is_call_window("$call"));
+    CHECK(!is_call_window("$llm"));
+    CHECK(!is_call_window("#sniffo"));
     /* Matched as a NAME, like every other window comparison. */
     CHECK(is_local_window("$LLM"));
+    CHECK(is_local_window("$CALL"));
     CHECK(!is_local_window("#sniffo"));
     CHECK(!is_local_window("alice"));
     /* Not a prefix match: a real channel that merely starts the same
      * way is still a real channel. */
     CHECK(!is_local_window("$llmx"));
+    CHECK(!is_local_window("$caller"));
 
     struct app *app = window_app();
     CHECK(app != NULL);

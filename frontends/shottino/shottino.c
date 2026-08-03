@@ -1413,6 +1413,18 @@ static bool window_matches(const struct window *w, const char *network, const ch
 /* The model conversation window. Client-local like $server: nothing on
  * the wire ever names it. */
 #define LLM_WINDOW "$llm"
+/* The live call, as a window you can switch away from and back to.
+ *
+ * A call used to be ONLY a corner box over whatever you were reading,
+ * which is right while you are reading — but it left no way to give the
+ * picture the screen. Making it a window means the existing machinery
+ * does the work: Alt-arrow reaches it, the sidebar lists it, /close is
+ * already refused for a local window. It exists only while a call is
+ * running, so there is no dead tab to explain when there isn't one.
+ *
+ * Client-local like $server and $llm: nothing on the wire ever names
+ * it, and every REST call naming one can only fail. */
+#define CALL_WINDOW "$call"
 /* The model conversation window. Client-local like $server: nothing on
  * the wire ever names it. */
 /* The model conversation window. Client-local like $server: nothing on
@@ -1431,8 +1443,13 @@ static bool is_server_window(const char *channel) {
  * channel the bouncer does not have and answered with the 400 and the
  * "not seeded yet" the user saw. */
 static bool is_local_window(const char *channel) {
-    return is_server_window(channel) || irc_name_eq(channel, LLM_WINDOW);
+    return is_server_window(channel) || irc_name_eq(channel, LLM_WINDOW) ||
+           irc_name_eq(channel, CALL_WINDOW);
 }
+
+/* The window that shows the running call full size, rather than in the
+ * corner of whatever else you are reading. */
+static bool is_call_window(const char *channel) { return irc_name_eq(channel, CALL_WINDOW); }
 
 /* A channel name, by its sigil — the four RFC sigils, which is what the
  * ircd itself accepts. The one copy: the bridge, the menu and the
@@ -6446,6 +6463,114 @@ static void ws_pump(struct app *app) {
     }
 }
 
+/* The corner box a call's picture occupies when you are reading
+ * something else. Defined with the rest of the call machinery; declared
+ * here because the draw needs it and comes first. */
+static void call_video_box(int cols_total, int *cols, int *rows);
+
+/* Draw a RECTANGLE of a decoded picture into a cell box, sampling.
+ *
+ * The ordinary draw below maps one cell to one source column and two
+ * source rows — a fixed 1:1 correspondence — so it CLIPS when the box
+ * is smaller than the picture. That is right for an inline image, whose
+ * box was measured to fit it in the first place.
+ *
+ * It is wrong for a call. The same decoded frame has to appear at two
+ * sizes (a corner box while you are reading the channel, the whole pane
+ * when you switch to the call) and one region of it has to be drawable
+ * bigger than the rest. Without this, changing the size means telling
+ * the helper to re-encode at a new geometry, and the frame stream is a
+ * bare byte pipe with no framing — so the reader and the writer would
+ * disagree about frame length across the change, with no boundary to
+ * resynchronise on. Sampling here keeps ONE geometry on the wire and
+ * makes size a drawing question, which is where it belongs.
+ *
+ * Nearest neighbour, deliberately: the destination is half-blocks of
+ * ASCII, and the cost of anything better would be spent on detail two
+ * pixels of terminal cell cannot show.
+ *
+ * `sx/sy/sw/sh` are the source rectangle IN PIXELS; `rows`/`cols` the
+ * destination box in CELLS. Art path only — a terminal-protocol image
+ * is placed atomically by the terminal and cannot be sampled here.
+ *
+ * Caller holds app->lock. */
+struct media_src_rect {
+    int x, y, w, h;
+};
+
+/* Clamp a source rectangle INTO the picture.
+ *
+ * Pure, and separated from the draw for a blunt reason: the offscreen
+ * test terminal reports no colours at all, so a drawn cell cannot be
+ * told from its neighbour by reading the screen back. The arithmetic
+ * that decides WHICH pixel a cell comes from therefore has to be
+ * assertable without a screen, or it is not assertable at all.
+ *
+ * A zero-or-negative extent means "to the edge", which is how a caller
+ * asks for the whole picture without restating its size. A rectangle
+ * that has fallen outside — a tile layout the terminal resized under —
+ * collapses to empty rather than reading past the buffer. */
+static struct media_src_rect media_clamp_rect(int sx, int sy, int sw, int sh, int src_w,
+                                              int src_h) {
+    struct media_src_rect r = { 0, 0, 0, 0 };
+    if (src_w <= 0 || src_h <= 0) return r;
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (sx >= src_w || sy >= src_h) return r;
+    if (sw <= 0 || sx + sw > src_w) sw = src_w - sx;
+    if (sh <= 0 || sy + sh > src_h) sh = src_h - sy;
+    if (sw <= 0 || sh <= 0) return r;
+    r.x = sx;
+    r.y = sy;
+    r.w = sw;
+    r.h = sh;
+    return r;
+}
+
+/* Which source pixels destination cell (r, c) is drawn from: one column,
+ * and the two rows that become the cell's upper and lower half. */
+static void media_sample_cell(const struct media_src_rect *s, int rows, int cols, int r, int c,
+                              int src_w, int src_h, int *px, int *py_top, int *py_bot) {
+    int x = s->x + (c * s->w) / cols;
+    int yt = s->y + ((2 * r) * s->h) / (2 * rows);
+    int yb = s->y + ((2 * r + 1) * s->h) / (2 * rows);
+    /* The divisions round down, so these only bite on the last cell of
+     * a box whose size does not divide the rectangle — but that is
+     * every odd geometry a resized terminal produces. */
+    if (x >= src_w) x = src_w - 1;
+    if (yt >= src_h) yt = src_h - 1;
+    if (yb >= src_h) yb = src_h - 1;
+    *px = x;
+    *py_top = yt;
+    *py_bot = yb;
+}
+
+static void draw_media_region_locked(const struct inline_media *m, int y, int x, int sx, int sy,
+                                     int sw, int sh, int rows, int cols) {
+    if (!m || m->state != IM_READY || !m->rgb || rows <= 0 || cols <= 0) return;
+    int src_w = m->cols, src_h = m->rows * 2;
+    struct media_src_rect rect = media_clamp_rect(sx, sy, sw, sh, src_w, src_h);
+    if (rect.w <= 0 || rect.h <= 0) return;
+
+    size_t stride = (size_t)src_w * (size_t)src_h * 3;
+    size_t idx = m->frame_count > 1 && m->frame < m->frame_count ? m->frame : 0;
+    const unsigned char *plane = m->rgb + idx * stride;
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            int px, py_top, py_bot;
+            media_sample_cell(&rect, rows, cols, r, c, src_w, src_h, &px, &py_top, &py_bot);
+            const unsigned char *top = plane + (((size_t)py_top * src_w) + px) * 3;
+            const unsigned char *bot = plane + (((size_t)py_bot * src_w) + px) * 3;
+            long tv = ((long)top[0] << 16) | ((long)top[1] << 8) | top[2];
+            long bv = ((long)bot[0] << 16) | ((long)bot[1] << 8) | bot[2];
+            int pair = mirc_pair_for(tv, bv, CP_MAIN);
+            attron(COLOR_PAIR(pair));
+            mvaddstr(y + r, x + c, "▀");
+            attroff(COLOR_PAIR(pair));
+        }
+    }
+}
+
 /* Draw a decoded image at (y, x).
  *
  * Character art goes through ncurses like any other text, so it
@@ -7736,17 +7861,51 @@ static void draw(struct app *app) {
      * mid-call letterboxes instead of writing past the region. */
     if (app->call_live.pid > 0 && app->call_live.frame.state == IM_READY &&
         app->call_live.cols > 0) {
-        int vw = app->call_live.cols, vh = app->call_live.rows;
-        if (vw > main_w - 2) vw = main_w - 2;
-        if (vh > rows - 4) vh = rows - 4;
+        /* TWO sizes, ONE decoded frame. Looking at the call window
+         * gives the picture the pane; looking at anything else keeps it
+         * in the corner. Both go through the sampling draw, so the
+         * helper is never asked to re-encode for a size change — the
+         * frame stream is a bare byte pipe with no framing, and a
+         * geometry change mid-stream has no boundary to resync on. */
+        bool full = is_call_window(w->channel);
+        int vw, vh, vx, vy;
+        if (full) {
+            vw = main_w - 2;
+            vh = rows - 4;
+            vx = main_x + 1;
+            vy = 1;
+        } else {
+            /* The corner box is measured from the CURRENT width, not
+             * from the frame's own size: the two are no longer the same
+             * thing now that the helper decodes once at the larger
+             * geometry and the draw scales. */
+            call_video_box(cols, &vw, &vh);
+            if (vw > main_w - 2) vw = main_w - 2;
+            if (vh > rows - 4) vh = rows - 4;
+            vx = main_x + main_w - vw - 1;
+            vy = 1;
+        }
         if (vw > 0 && vh > 0) {
-            int vx = main_x + main_w - vw - 1;
-            int vy = 1;
-            draw_inline_media_locked(&app->call_live.frame, vy, vx, 0, vh, vw);
-            /* A one-line label under it: a picture with no caption in
-             * the corner of a chat client reads as a glitch. */
-            if (vy + vh < rows - 2)
-                draw_text(vy + vh, vx, vw, CP_MENTION, A_BOLD, " %.*s ", vw - 2,
+            /* The whole frame, letterboxed into whatever box it got:
+             * keeping the aspect ratio matters more full-pane, where a
+             * stretched face is the first thing anyone notices. */
+            int src_w = app->call_live.frame.cols, src_h = app->call_live.frame.rows * 2;
+            int fit_w = vw, fit_h = vh;
+            if (src_w > 0 && src_h > 0) {
+                /* Cells are about twice as tall as wide, so a cell box
+                 * matching the picture's ratio is half as many rows. */
+                if (fit_w * src_h > fit_h * 2 * src_w) fit_w = (fit_h * 2 * src_w) / src_h;
+                else fit_h = (fit_w * src_h) / (2 * src_w);
+            }
+            if (fit_w < 1) fit_w = 1;
+            if (fit_h < 1) fit_h = 1;
+            int ox = vx + (vw - fit_w) / 2, oy = vy + (full ? (vh - fit_h) / 2 : 0);
+            draw_media_region_locked(&app->call_live.frame, oy, ox, 0, 0, src_w, src_h, fit_h,
+                                     fit_w);
+            /* A one-line label: a picture with no caption in the corner
+             * of a chat client reads as a glitch. */
+            if (oy + fit_h < rows - 2)
+                draw_text(oy + fit_h, ox, fit_w, CP_MENTION, A_BOLD, " %.*s ", fit_w - 2,
                           app->call_live.channel);
         }
     }
@@ -12687,6 +12846,27 @@ static void call_url_for_me(struct app *app, const char *network, const char *ur
  * Fixed for the whole call: the helper is TOLD a size at exec and there
  * is no way to retell it, so a resize letterboxes (the draw clamps)
  * rather than tearing. */
+/* What the helper is asked to DECODE to, in cells.
+ *
+ * Sized for the biggest box the frame will be drawn in — the call
+ * window, which gets the whole pane — rather than for the corner box.
+ * The draw samples, so one decoded frame serves both; and scaling DOWN
+ * to the corner looks like a small picture, where scaling a
+ * corner-sized frame UP to the pane looks like a mistake.
+ *
+ * Capped, because this is ASCII in the end: past a certain size the
+ * extra pixels are decoded, sampled and thrown away, and the cost is
+ * paid every frame. */
+static void call_frame_box(int cols_total, int rows_total, int *cols, int *rows) {
+    int w = cols_total - 2, h = rows_total - 4;
+    if (w > 160) w = 160;
+    if (h > 60) h = 60;
+    if (w < 16) w = 16;
+    if (h < 6) h = 6;
+    *cols = w;
+    *rows = h;
+}
+
 static void call_video_box(int cols_total, int *cols, int *rows) {
     int w = cols_total / 4;
     if (w > 40) w = 40;
@@ -12814,11 +12994,18 @@ static void call_helper_stop(struct app *app) {
     pthread_mutex_unlock(&app->lock);
     if (out_fd >= 0) close(out_fd);
     if (vreading) pthread_join(vreader, NULL);
+    char net[MAX_SLUG];
     pthread_mutex_lock(&app->lock);
     free(app->call_live.frame.rgb);
     app->call_live.frame.rgb = NULL;
     app->call_live.frame.state = IM_IDLE;
+    snprintf(net, sizeof(net), "%s", app->call_live.network);
     pthread_mutex_unlock(&app->lock);
+    /* The window goes with the call. Leaving it behind would be a tab
+     * that draws nothing and cannot be explained — and remove_window
+     * moves the selection somewhere real, so hanging up while looking
+     * at the call lands you back in a window with content. */
+    remove_window(app, net, CALL_WINDOW);
 }
 
 /* Start a call in the terminal. Returns false when the helper is not
@@ -12908,7 +13095,7 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     }
     int vcols = 0, vrows = 0;
     if (video) {
-        call_video_box(COLS > 0 ? COLS : 80, &vcols, &vrows);
+        call_frame_box(COLS > 0 ? COLS : 80, LINES > 0 ? LINES : 24, &vcols, &vrows);
         if (pipe(out_pipe) != 0) {
             close(in_pipe[0]); close(in_pipe[1]);
             close(err_pipe[0]); close(err_pipe[1]);
@@ -12992,6 +13179,12 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     app->call_live.vreading =
         video && pthread_create(&app->call_live.vreader, NULL, call_frame_main, app) == 0;
     pthread_mutex_unlock(&app->lock);
+
+    /* A window for the call, so the picture can have the screen when
+     * you want it and stay in the corner when you don't. Created only
+     * for a video call: an audio call has nothing to show, and a tab
+     * that draws an empty box is worse than no tab. */
+    if (video) add_window_ex(app, network, CALL_WINDOW, false);
 
     log_line(app, "call: connecting in the terminal (%s) — /hangup ends it, /mute and /unmute "
                   "while it runs",
