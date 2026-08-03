@@ -1146,6 +1146,10 @@ struct app {
      * not settable at all, just a hardcoded ALSA fallback inside the
      * helper while capture went through pulse. */
     char voice_sink[128];
+    /* Desktop notification on a mention. OFF by default: a client that
+     * starts popping toasts without being asked is a client people
+     * uninstall. */
+    bool notifications;
     char video_source[128];
     /* ── /stt: speech to text ──────────────────────────────────────
      *
@@ -1579,6 +1583,10 @@ static void log_scope_of_locked(struct app *app, const char *line, char *out, si
 }
 
 /* Append a row. Takes ownership of `line`. Caller holds app->lock. */
+/* Defined with the other desktop hand-offs; declared here because the
+ * message path needs it and comes first. */
+static void desktop_notify(const char *title, const char *body);
+
 static void log_push_locked(struct app *app, char *line, bool mention, bool pending) {
     if (app->log_count == LOG_LINES) log_shift_locked(app);
     size_t i = app->log_count;
@@ -3498,6 +3506,24 @@ static void render_message(struct app *app, const struct wire_scrollback_message
      * they drown the count that signals someone actually spoke. */
     if (conversational && !hidden) maybe_mark_unread(app, network, display_channel, live);
     bool mention = conversational && !hidden && message_mentions_me(app, network, sender, body);
+    /* The desktop copy, for when you are looking at something else.
+     *
+     * `live` is doing the load-bearing work: this same path replays
+     * scrollback on join and on a history fetch, and notifying for
+     * those would fire a toast per mention for everything said while
+     * you were away — every time you open the window. Only a message
+     * arriving NOW is news. */
+    if (mention && live && app->notifications) {
+        char title[MAX_CHANNEL * 2 + 32], text[MAX_LINE];
+        snprintf(title, sizeof(title), "%s in %s", sender, display_channel);
+        /* The action marker is stripped for the same reason it is on
+         * screen: \001ACTION in a toast is a decoding failure, not a
+         * message. */
+        char act[MAX_LINE];
+        const char *shown = m->kind == MSG_ACTION ? ctcp_action_text(body, act, sizeof(act)) : NULL;
+        snprintf(text, sizeof(text), "%.400s", shown ? shown : body);
+        desktop_notify(title, text);
+    }
     char clock[16];
     time_t ts = server_time > 100000000000L ? (time_t)(server_time / 1000) : time(NULL);
     struct tm tm;
@@ -9841,6 +9867,8 @@ static const struct setting_def SETTINGS[] = {
     { "call.base_url", SET_TEXT, NULL, "where /call makes a room; any room-per-URL service" },
     { "call.ring", SET_CHOICE, "off|queries|all", "when an arriving call interrupts you" },
     { "call.mode", SET_CHOICE, "browser|terminal", "where a call runs; terminal needs a WHIP SFU" },
+    { "notifications", SET_CHOICE, "off|on",
+      "send a desktop notification (notify-send) when a message mentions you" },
     { "voice.sink", SET_TEXT, NULL,
       "where call audio PLAYS, as format:device — e.g. pulse:default or alsa:hw:2" },
     { "call.video_codec", SET_CHOICE, "vp8|h264",
@@ -9937,6 +9965,8 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     }
     else if (strcmp(name, "voice.source") == 0) snprintf(out, out_sz, "%s", app->voice_source);
     else if (strcmp(name, "voice.sink") == 0) snprintf(out, out_sz, "%s", app->voice_sink);
+    else if (strcmp(name, "notifications") == 0)
+        snprintf(out, out_sz, "%s", app->notifications ? "on" : "off");
     else if (strcmp(name, "video.source") == 0) snprintf(out, out_sz, "%s", app->video_source);
     else if (strcmp(name, "bot.dir") == 0) {
         char dir[LLM_MAX_PATH];
@@ -9993,6 +10023,7 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "call.base_url") == 0) src = app->call_base_url;
     else if (strcmp(name, "call.ring") == 0) src = call_ring_word(app->call_ring);
     else if (strcmp(name, "call.mode") == 0) src = app->call_in_terminal ? "terminal" : "browser";
+    else if (strcmp(name, "notifications") == 0) src = app->notifications ? "on" : "off";
     else if (strcmp(name, "voice.sink") == 0) src = app->voice_sink;
     else if (strcmp(name, "call.video_codec") == 0) src = call_vcodec_word(app->call_vcodec);
     else if (strcmp(name, "call.helper") == 0) src = app->call_helper;
@@ -10165,7 +10196,14 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
     else if (strcmp(def->name, "voice.source") == 0)
         snprintf(app->voice_source, sizeof(app->voice_source), "%.*s",
                  (int)sizeof(app->voice_source) - 1, value);
-    else if (strcmp(def->name, "voice.sink") == 0)
+    else if (strcmp(def->name, "notifications") == 0) {
+        if (strcasecmp(value, "on") == 0) app->notifications = true;
+        else if (strcasecmp(value, "off") == 0) app->notifications = false;
+        else {
+            log_line(app, "/set notifications: `%.20s` is not one of %s", value, def->values);
+            return false;
+        }
+    } else if (strcmp(def->name, "voice.sink") == 0)
         snprintf(app->voice_sink, sizeof(app->voice_sink), "%.*s",
                  (int)sizeof(app->voice_sink) - 1, value);
     else if (strcmp(def->name, "video.source") == 0)
@@ -12614,6 +12652,42 @@ static void play_audio_url(struct app *app, const char *url) {
     }
     if (pid > 0) waitpid(pid, NULL, 0);
     log_line(app, "playing %.120s — mpv/ffplay if installed, otherwise your desktop handler", url);
+}
+
+/* A desktop notification for a mention.
+ *
+ * "When it is possible": notify-send is the freedesktop way in and is
+ * not always installed, so a missing one is silence, not an error —
+ * this fires on a message arriving and a log line per mention
+ * complaining about a missing tool would be worse than the thing it
+ * reports. The mention is already on screen and already counted; this
+ * is the copy for when you are looking at something else.
+ *
+ * Double-fork, like open_external_url and for the same two reasons: the
+ * UI thread must not wait on a notification daemon, and a single fork
+ * would leak a zombie per mention — which, unlike a browser launch,
+ * happens all day.
+ *
+ * argv, never a shell: `body` is a stranger's text off the network, and
+ * the one thing it must never be is a command line. */
+static void desktop_notify(const char *title, const char *body) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (fork() == 0) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                if (devnull > STDERR_FILENO) close(devnull);
+            }
+            execlp("notify-send", "notify-send", "-a", "shottino", "-u", "normal", "-i",
+                   "utilities-terminal", title, body, (char *)NULL);
+            _exit(127);
+        }
+        _exit(0);
+    }
+    if (pid < 0) return;
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
 }
 
 static void open_external_url(struct app *app, const char *url) {

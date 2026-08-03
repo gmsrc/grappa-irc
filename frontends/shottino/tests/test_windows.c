@@ -1301,6 +1301,53 @@ TEST(stt_transcribes_and_dictate_types) {
  * Round-trips through the REAL prefs_save/prefs_load against a HOME of
  * our own, because the bug can live in either half and asserting only
  * the parser would prove nothing about what gets written. */
+/* The notifications setting parses, refuses, and survives a restart —
+ * one that forgets you turned it on is one you turn on every day.
+ *
+ * NOT covered: that the shipped default is off. That is set in main(),
+ * which this harness cannot call, and asserting it against a calloc'd
+ * app proves only that calloc zeroes memory — verified by flipping the
+ * default to true, which left this test green. The claim is real but it
+ * lives in the commit and the settings table, not here. */
+TEST(notifications_parse_refuse_and_persist) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    settings_capture_defaults(app);
+
+    const struct setting_def *def = setting_find("notifications");
+    CHECK(def != NULL);
+    CHECK(setting_apply(app, def, "on"));
+    CHECK(app->notifications);
+    /* A word that is neither is REFUSED, not taken as one of them. */
+    CHECK(!setting_apply(app, def, "yes"));
+    CHECK(app->notifications);
+    prefs_save(app);
+
+    /* A fresh process holding the opposite value must be overwritten by
+     * what was saved — otherwise "it persisted" would just be the new
+     * app happening to agree. */
+    struct app *next = window_app();
+    CHECK(next != NULL);
+    settings_capture_defaults(next);
+    next->notifications = false;
+    prefs_load(next);
+    CHECK(next->notifications);
+
+    CHECK(setting_apply(next, def, "off"));
+    CHECK(!next->notifications);
+    prefs_save(next);
+    struct app *third = window_app();
+    CHECK(third != NULL);
+    settings_capture_defaults(third);
+    third->notifications = true;
+    prefs_load(third);
+    CHECK(!third->notifications);
+
+    free_app(app);
+    free_app(next);
+    free_app(third);
+}
+
 TEST(a_configured_setting_survives_save_and_load) {
     /* HOME is already a temp dir for the whole suite — see main(). */
     struct app *app = window_app();
@@ -3062,6 +3109,7 @@ int main(void) {
     RUN(a_settings_menu_offers_what_the_setting_accepts);
     RUN(tab_cycles_through_the_media_in_this_window);
     RUN(stt_transcribes_and_dictate_types);
+    RUN(notifications_parse_refuse_and_persist);
     RUN(a_configured_setting_survives_save_and_load);
     RUN(the_call_tile_map_is_parsed_or_rejected_whole);
     RUN(a_client_local_window_is_never_fetched_from_the_server);
