@@ -673,6 +673,54 @@ defmodule Grappa.IRC.AuthFSMTest do
       assert send_lines(sends) == ["NICK vjt_"]
     end
 
+    # A duplicate / stale 433 still echoing the ORIGINAL nick arrives while
+    # we are already flying a longer candidate. That echo is shorter, but it
+    # is not proof of truncation — believing it would derive an absurd
+    # 3-char cap and (with a 3-char suffix) drive
+    # `collision_fallback/3` straight through its own guard.
+    test "a stale 433 echoing the original nick does not derive an absurd cap" do
+      state = new!(%{nick: "vjt"})
+
+      {:cont, first, _} = AuthFSM.step(state, four_three_three("vjt"))
+      assert first.nick == "vjt_"
+
+      assert {:cont, second, _} = AuthFSM.step(first, four_three_three("vjt")),
+             "a repeated 433 for the original nick must not crash the ladder"
+
+      assert Identifier.valid_nick?(second.nick)
+      assert String.starts_with?(second.nick, "vjt")
+    end
+
+    # A 433 whose second param is NOT our nick (a short/odd ircd shape, or a
+    # hostile one) is not truncation evidence — it is noise. Reading it
+    # positionally would clamp against a reason string.
+    test "an echo that is not a prefix of what we sent is ignored, not believed" do
+      state = new!(%{nick: "verylongnickname"})
+
+      assert {:cont, next, _} =
+               AuthFSM.step(state, %Message{command: {:numeric, 433}, params: ["*", "nope"]})
+
+      assert next.nick == "verylongnickname_",
+             "an unrelated echo must not be mistaken for a truncation"
+    end
+
+    test "the ladder runs for every mode that is not :nickserv_identify" do
+      for opts <- [
+            %{auth_method: :none},
+            %{auth_method: :sasl, password: "s3cret"},
+            %{auth_method: :server_pass, password: "s3cret"},
+            %{auth_method: :auto, password: "s3cret"}
+          ] do
+        state = new!(opts)
+
+        assert {:cont, next, sends} = AuthFSM.step(state, four_three_three("vjt")),
+               "expected mode #{inspect(opts.auth_method)} to retry on 433"
+
+        assert next.nick == "vjt_"
+        assert send_lines(sends) == ["NICK vjt_"]
+      end
+    end
+
     test ":nickserv_identify keeps its silent :cont — the host owns that wire" do
       state = new!(%{auth_method: :nickserv_identify, password: "s3cret"})
 

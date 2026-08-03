@@ -26891,6 +26891,23 @@ same collision, burning the whole ladder on one unreachable nick.
 `Identifier.collision_fallback/3` trims the BASE, never the suffix, for the same
 reason.
 
+Code review found the first cut of that heuristic too credulous, and both
+failure modes were reproduced before fixing. It read the echo *positionally* and
+took any shorter string as proof, so (a) a 433 whose second param is a reason
+string clamped against the reason text, and (b) a duplicate/stale 433 still
+echoing the ORIGINAL nick, arriving while a longer candidate was already in
+flight, derived a 3-char cap — which with a 3-char suffix drove
+`collision_fallback/3` through its own `cap > suffix` guard and crashed the
+Client on the very numeric it was meant to recover from (a 502, where #676 was
+supposed to preserve the 409 at the end of the ladder). Two guards close both:
+proof of truncation requires the echo to be a **folded proper prefix** of what
+we sent (truncation means the server CUT our nick; nothing else counts), and an
+inferred cap is floored at 9, RFC 1459's NICKLEN — no real ircd advertises less,
+so a smaller number is never a short network, only a stale echo.
+`collision_fallback/3` stays deliberately partial: a cap too small to hold the
+suffix has no correct answer, since trimming the suffix would re-send the
+rejected nick.
+
 **Telling the user (point 3).** A silent rename becomes permanent by accident.
 At 001, when the welcomed nick differs from the requested one, `EventRouter`
 persists a `:server_event` row on `$server` naming both. The comparison folds

@@ -84,6 +84,16 @@ defmodule Grappa.IRC.IdentifierTest do
       assert Identifier.collision_fallback("abcdefghij", "x9", 9) == "abcdefgx9"
     end
 
+    # Deliberately PARTIAL. A cap that cannot hold the suffix has no correct
+    # answer — trimming the suffix to fit would re-send the rejected nick —
+    # so the guard refuses instead of inventing one. Callers are responsible
+    # for a sane cap; `AuthFSM` floors its inferred one for exactly this.
+    test "refuses a cap too small to hold the suffix" do
+      assert_raise FunctionClauseError, fn ->
+        Identifier.collision_fallback("vjt", "abc", 3)
+      end
+    end
+
     test "the result is always a valid nick and never exceeds the cap" do
       check all(
               base <- string(?a..?z, min_length: 1, max_length: 30),

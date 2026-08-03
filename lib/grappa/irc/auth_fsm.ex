@@ -217,6 +217,15 @@ defmodule Grappa.IRC.AuthFSM do
   # fixtures hit with shared-leaf 433 autokill.
   @nick_fallback_attempts 3
 
+  # Floor for a cap inferred from a 433 echo. RFC 1459's NICKLEN is 9 and no
+  # real ircd advertises less, so anything below it is not a short network —
+  # it is a stale/duplicate 433 still echoing an earlier, shorter nick while
+  # we already fly a longer candidate. Believing that echo derives an absurd
+  # cap and (with a 3-char suffix) drives `Identifier.collision_fallback/3`
+  # through its own `cap > suffix` guard, crashing the Client on a numeric
+  # it was supposed to recover from.
+  @min_learnable_nick_cap 9
+
   defp nick_fallback_ladder do
     draws = Stream.repeatedly(&Identifier.random_nick_suffix/0)
 
@@ -478,10 +487,26 @@ defmodule Grappa.IRC.AuthFSM do
   # fresh truncation lowers it — an equal-length echo says nothing.
   defp learned_nick_cap(%__MODULE__{nick: sent, nick_cap: cap}, [_, echoed | _])
        when is_binary(echoed) do
-    if String.length(echoed) < String.length(sent), do: String.length(echoed), else: cap
+    if truncation_of?(echoed, sent),
+      do: max(String.length(echoed), @min_learnable_nick_cap),
+      else: cap
   end
 
   defp learned_nick_cap(%__MODULE__{nick_cap: cap}, _), do: cap
+
+  # Truncation means the server took our nick and CUT it, so the echo is a
+  # proper prefix of what we sent — nothing else counts as evidence. Read
+  # positionally instead, and a 433 whose second param is a reason string
+  # (a short or hostile ircd shape) gets mistaken for a cap.
+  #
+  # The fold is the identity authority (#121/#537): an ircd may echo the
+  # nick case-normalised, and that is still us.
+  defp truncation_of?(echoed, sent) do
+    folded = Identifier.canonical_target(sent)
+
+    String.length(echoed) < String.length(sent) and
+      String.starts_with?(folded, Identifier.canonical_target(echoed))
+  end
 
   # CAP LS continuation: 4th param == "*" marks "more lines coming."
   # IRCv3.2 splits long cap lists; accumulate in `caps_buffer` until a
