@@ -747,7 +747,7 @@ export async function openMembersDrawer(page: Page): Promise<void> {
   // is unchanged (one probe + click + visibility assert on the first pass).
   const deadline = Date.now() + 15_000;
   for (;;) {
-    if (await drawer.isVisible().catch(() => false)) return;
+    if (await drawer.isVisible().catch(() => false)) break;
     try {
       const topicHamburger = page.getByLabel(/open members sidebar/i);
       if ((await topicHamburger.count()) > 0) {
@@ -756,11 +756,35 @@ export async function openMembersDrawer(page: Page): Promise<void> {
         await page.getByTestId("shell-chrome-rail-opener").click({ timeout: 3_000 });
       }
       await expect(drawer).toBeVisible({ timeout: 3_000 });
-      return;
+      break;
     } catch (err) {
       if (Date.now() >= deadline) throw err;
     }
   }
+  // #653 — SETTLE the slide-in before returning. `.shell-members.open` visible
+  // is true the instant the `open` class lands, i.e. at the START of the 200ms
+  // `translateX(100%) → 0` transition (themes/default.css), not its end. Every
+  // caller's next act is a click INSIDE the drawer (the rail launcher, a member
+  // row), and Playwright's actionability does not close that window: `stable`
+  // (two consecutive animation frames with an identical box) is checked, and
+  // the hit-target interceptor verifies the target of the pointer DOWN — but
+  // mousedown and mouseup are two separate protocol round-trips and nothing
+  // re-verifies the second. If the element moves between them the two land on
+  // different nodes and WebKit synthesizes NO `click` at all (click fires on
+  // the nearest common ancestor). The handler is a synchronous signal, so a
+  // swallowed click is silent: the affordance simply never opens and the
+  // caller's assert burns its full timeout. Under full-gate CPU load that
+  // inter-message gap stretches from ~1ms to hundreds, which is exactly why
+  // this is green in isolation and red in the gate (#519, #531, #512).
+  // Waiting for the drawer to be FULLY in the viewport is the open-side mirror
+  // of openAdminConsole's `not.toBeInViewport()` close-side wait: the drawer is
+  // `position: fixed; top: 0; right: 0`, `height: var(--viewport-height)`,
+  // `* { box-sizing: border-box }` — so ratio 1 is reachable only once the
+  // transform has settled at translateX(0), the instant it stops moving under
+  // the next click. Kept OUT of the retry loop above deliberately: the openers
+  // are TOGGLES, so re-clicking on a settle failure would close the drawer we
+  // just opened. A genuine failure surfaces loudly here instead.
+  await expect(drawer).toBeInViewport({ ratio: 1, timeout: 5_000 });
 }
 
 // #500 — reveal the RailActions launcher menu, the SINGLE door to every rail
@@ -774,12 +798,36 @@ export async function openMembersDrawer(page: Page): Promise<void> {
 // openArchive / openSettingsSection, which now do); tapping a rail button
 // without opening the launcher first finds nothing.
 export async function openRailMenu(page: Page): Promise<void> {
-  if ((await page.locator(".rail-actions-menu").count()) > 0) return;
+  const menu = page.locator(".rail-actions-menu");
   if (isMobileViewport(page) && (await page.locator(".shell-members.open").count()) === 0) {
     await openMembersDrawer(page);
   }
-  await page.getByTestId("rail-actions-launcher").click();
-  await expect(page.locator(".rail-actions-menu")).toBeVisible({ timeout: 5_000 });
+  // #653 — drive the launcher off the app's OWN state, not off a single blind
+  // click. `openMembersDrawer` now settles the slide, which removes the biggest
+  // source of late movement, but the rail keeps re-laying-out while the stores
+  // hydrate (the launcher is pinned at the bottom of a flex column whose rows
+  // are `<Show>`-gated on selection / isAdmin / presence), so a click can still
+  // be swallowed between mousedown and mouseup — see the why-comment on
+  // openMembersDrawer for the mechanism. The launcher publishes the truth we
+  // need: `aria-expanded` (RailActions.tsx) mirrors the `open()` signal the
+  // menu renders from. Re-issuing ONLY while it still reads "false" is what
+  // makes this safe on a TOGGLE — a blind retry would close a menu that opened
+  // late. This is not a longer wait for a slow render: the per-attempt assert
+  // is STRICTER than the 5s it replaces, and an app that reports expanded
+  // without mounting the menu still fails loudly at the deadline.
+  const launcher = page.getByTestId("rail-actions-launcher");
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    try {
+      if ((await launcher.getAttribute("aria-expanded")) === "false") {
+        await launcher.click({ timeout: 3_000 });
+      }
+      await expect(menu).toBeVisible({ timeout: 3_000 });
+      return;
+    } catch (err) {
+      if (Date.now() >= deadline) throw err;
+    }
+  }
 }
 
 // Mobile "reach the settings drawer" primitive (#71 INC-2 → #500).
