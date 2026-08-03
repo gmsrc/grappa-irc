@@ -152,6 +152,64 @@ defmodule GrappaWeb.PasskeyControllerTest do
     decoded <> token
   end
 
+  # A bearer alone must never be enough to change HOW an account
+  # authenticates, so every one of these doors re-asks for the password. The
+  # check was open-coded four times over and not one of the four had a test
+  # behind it — this pins all of them at once, before they are folded into a
+  # single door.
+  describe "password re-authentication" do
+    setup %{conn: conn} do
+      {user, password} = user_fixture_with_password()
+      session = session_fixture(user)
+
+      passkey =
+        Repo.insert!(
+          Passkey.changeset(%Passkey{}, %{
+            user_id: user.id,
+            credential_id: <<9, 9, 9>>,
+            public_key: CBOR.encode(%{1 => 2, 3 => -7}),
+            name: "phone"
+          })
+        )
+
+      %{conn: conn, user: user, password: password, session: session, passkey: passkey}
+    end
+
+    test "every privileged passkey verb refuses the wrong password", ctx do
+      wrong = ctx.password <> "-nope"
+
+      requests = [
+        {:post, "/me/passkeys/registration/options", %{"password" => wrong, "name" => "phone"}},
+        {:post, "/me/passkeys/mode/options", %{"password" => wrong, "mode" => "second_factor"}},
+        {:post, "/me/passkeys/passwordless/recovery", %{"password" => wrong}},
+        {:delete, "/me/passkeys/#{ctx.passkey.id}", %{"password" => wrong}}
+      ]
+
+      for {verb, path, params} <- requests do
+        conn =
+          ctx.conn
+          |> recycle()
+          |> put_req_header("authorization", "Bearer #{ctx.session.id}")
+
+        response = dispatch(conn, GrappaWeb.Endpoint, verb, path, params)
+
+        assert json_response(response, 401) == %{"error" => "invalid_credentials"},
+               "#{verb} #{path} accepted a wrong password"
+      end
+
+      assert Repo.aggregate(Passkey, :count, :id) == 1
+    end
+
+    test "the right password gets past the door it guards", ctx do
+      response =
+        ctx.conn
+        |> put_req_header("authorization", "Bearer #{ctx.session.id}")
+        |> post("/me/passkeys/passwordless/recovery", %{"password" => ctx.password})
+
+      assert length(json_response(response, 200)["recovery_codes"]) == 10
+    end
+  end
+
   # The column stores the mode as one of a closed set of atoms; the wire has
   # always spelled it out in full, and `cicchetto/src/lib/api.ts` types the
   # three spellings literally. Nothing else pinned that, so the encoding was
