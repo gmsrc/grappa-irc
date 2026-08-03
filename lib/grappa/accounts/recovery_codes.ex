@@ -2,10 +2,47 @@ defmodule Grappa.Accounts.RecoveryCodes do
   @moduledoc "Account-level one-shot recovery codes shared by TOTP and passkeys."
   import Ecto.Query
 
-  alias Grappa.Accounts.TOTPRecoveryCode
+  alias Grappa.Accounts.{TOTP, TOTPRecoveryCode, User}
   alias Grappa.Repo
 
   @count 10
+
+  @doc """
+  Drops the recovery set once the last factor that could redeem it is gone.
+
+  There is ONE flat account-level set, shared by TOTP and passkey login,
+  with no per-factor ownership recorded anywhere — so no single teardown
+  is entitled to assume the codes are its own to destroy. Every teardown
+  calls this AFTER its own mutation has landed, and the codes go only
+  when nothing is armed to use them.
+
+  The conservative half of that (keeping codes a surviving factor still
+  needs) is the half that had been getting this wrong: disabling passkey
+  login, or an operator resetting passkeys, wiped a TOTP user's codes
+  outright.
+  """
+  @spec drop_if_orphaned(Ecto.UUID.t()) :: :ok
+  def drop_if_orphaned(user_id) when is_binary(user_id) do
+    User
+    |> Repo.get!(user_id)
+    |> armed_factor?()
+    |> drop_unless_armed(user_id)
+  end
+
+  # "Armed" means the factor could still be the only thing between the
+  # account and a locked door. Passkey `second_factor` counts (vjt,
+  # 2026-08-03): the conservative line is that codes outlive any 2FA
+  # factor still standing, not just the one that happened to mint them.
+  @spec armed_factor?(User.t()) :: boolean()
+  defp armed_factor?(user), do: TOTP.enabled?(user) or user.passkey_mode != "disabled"
+
+  @spec drop_unless_armed(boolean(), Ecto.UUID.t()) :: :ok
+  defp drop_unless_armed(true, _), do: :ok
+
+  defp drop_unless_armed(false, user_id) do
+    TOTPRecoveryCode |> where([r], r.user_id == ^user_id) |> Repo.delete_all()
+    :ok
+  end
 
   @doc "Rotates all recovery codes and returns their plaintext values once."
   @spec rotate(Ecto.UUID.t()) :: [String.t()]

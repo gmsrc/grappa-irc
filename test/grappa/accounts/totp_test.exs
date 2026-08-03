@@ -107,8 +107,13 @@ defmodule Grappa.Accounts.TOTPTest do
     assert enrollment.provisioning_uri =~ "secret=#{enrollment.secret}"
   end
 
-  test "reset_totp/1 disarms the factor and revokes sessions, keeping the recovery set" do
+  # The recovery set is shared, so disarming TOTP must not destroy a
+  # surviving passkey factor's way back in — but once TOTP was the last
+  # factor standing, leaving the codes behind would strand a live
+  # credential on an account whose login is password-only again.
+  test "reset_totp/1 disarms the factor and revokes sessions, keeping a passkey's recovery set" do
     {user, codes} = armed_user_with_recovery_codes()
+    user |> Ecto.Changeset.change(passkey_mode: "passwordless") |> Repo.update!()
     session = session_fixture(user)
     assert TOTP.enabled?(user)
 
@@ -116,9 +121,24 @@ defmodule Grappa.Accounts.TOTPTest do
 
     refute TOTP.enabled?(reset)
     assert %DateTime{} = Repo.get!(Session, session.id).revoked_at
+    assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == length(codes)
+  end
 
-    # The recovery set is shared with passkey passwordless mode, so
-    # disarming TOTP must not destroy the other factor's way back in.
+  test "reset_totp/1 takes the recovery set with it when TOTP was the last factor" do
+    {user, _} = armed_user_with_recovery_codes()
+    assert Repo.get!(User, user.id).passkey_mode == "disabled"
+
+    {:ok, _} = Accounts.reset_totp(user.name)
+
+    assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 0
+  end
+
+  test "reset_passkeys/1 keeps the recovery set an armed TOTP still needs" do
+    {user, codes} = armed_user_with_recovery_codes()
+    user |> Ecto.Changeset.change(passkey_mode: "second_factor") |> Repo.update!()
+
+    {:ok, _} = Accounts.reset_passkeys(user.name)
+
     assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == length(codes)
   end
 

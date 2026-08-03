@@ -172,15 +172,64 @@ defmodule Grappa.Accounts.PasskeyTest do
     assert %DateTime{} = Repo.get!(Accounts.Session, other.id).revoked_at
   end
 
-  test "disabling second-factor passkeys preserves TOTP recovery codes" do
-    user = user_fixture()
-    current = session_fixture(user)
-    codes = Accounts.prepare_recovery_codes()
-    :ok = Accounts.RecoveryCodes.replace(user.id, codes)
-    user |> Ecto.Changeset.change(passkey_mode: "second_factor") |> Repo.update!()
+  # The recovery set is ONE flat account-level set with no record of which
+  # factor minted it, so a teardown may only destroy it once nothing is
+  # left that could redeem it. Both directions are asserted here because
+  # the earlier guard got each one wrong in a different way: it wiped the
+  # codes a surviving TOTP still needed, and it kept codes no factor could
+  # ever spend.
+  describe "set_mode/4 recovery-set teardown" do
+    setup do
+      user = user_fixture()
+      %{user: user, session: session_fixture(user)}
+    end
 
-    second_factor_user = Repo.get!(Accounts.User, user.id)
-    assert {:ok, "disabled"} = WebAuthn.set_mode(second_factor_user, "disabled", current.id)
-    assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
+    test "disabling passwordless keeps the codes an armed TOTP still needs", ctx do
+      armed = arm_totp(ctx.user)
+      {:ok, "passwordless"} = WebAuthn.set_mode(armed, "passwordless", ctx.session.id, codes())
+
+      passwordless = Repo.get!(Accounts.User, armed.id)
+      assert {:ok, "disabled"} = WebAuthn.set_mode(passwordless, "disabled", ctx.session.id)
+      assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
+    end
+
+    test "disabling second-factor keeps the codes an armed TOTP still needs", ctx do
+      armed = arm_totp(ctx.user)
+      second_factor = set_passkey_mode(armed, "second_factor")
+
+      assert {:ok, "disabled"} = WebAuthn.set_mode(second_factor, "disabled", ctx.session.id)
+      assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
+    end
+
+    test "disabling second-factor with no other factor takes the codes with it", ctx do
+      :ok = Accounts.RecoveryCodes.replace(ctx.user.id, codes())
+      second_factor = set_passkey_mode(ctx.user, "second_factor")
+
+      assert {:ok, "disabled"} = WebAuthn.set_mode(second_factor, "disabled", ctx.session.id)
+      assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 0
+    end
+
+    test "moving passwordless to second-factor keeps the codes, still armed", ctx do
+      {:ok, "passwordless"} = WebAuthn.set_mode(ctx.user, "passwordless", ctx.session.id, codes())
+
+      passwordless = Repo.get!(Accounts.User, ctx.user.id)
+      assert {:ok, "second_factor"} = WebAuthn.set_mode(passwordless, "second_factor", ctx.session.id)
+      assert Repo.aggregate(TOTPRecoveryCode, :count, :id) == 10
+    end
+  end
+
+  defp codes, do: Accounts.prepare_recovery_codes()
+
+  defp set_passkey_mode(user, mode) do
+    user |> Ecto.Changeset.change(passkey_mode: mode) |> Repo.update!()
+    Repo.get!(Accounts.User, user.id)
+  end
+
+  defp arm_totp(user) do
+    secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+    now = 1_700_000_000
+    {:ok, code} = Accounts.TOTP.code_at(secret, now)
+    {:ok, _} = Accounts.TOTP.confirm_enrollment(user, secret, code, now)
+    Repo.get!(Accounts.User, user.id)
   end
 end

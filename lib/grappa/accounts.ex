@@ -663,9 +663,10 @@ defmodule Grappa.Accounts do
   `totp_secret_encrypted` armed, so before this existed an operator with shell
   access still could not restore password-only login.
 
-  Leaves the recovery-code set intact. That set is account-level and shared
-  with passkey passwordless mode, so disarming one factor is not entitled to
-  destroy the other factor's way back in.
+  The recovery set is account-level and shared, so it survives exactly as
+  long as some factor can still redeem it: it stays when passkey login is
+  armed, and goes with the last factor standing. See
+  `Grappa.Accounts.RecoveryCodes.drop_if_orphaned/1`.
   """
   @spec reset_totp(String.t()) :: {:ok, User.t()} | {:error, :not_found | :db_unavailable}
   def reset_totp(name) when is_binary(name) do
@@ -695,6 +696,7 @@ defmodule Grappa.Accounts do
         ]
       )
 
+    :ok = RecoveryCodes.drop_if_orphaned(user.id)
     :ok = revoke_sessions_for_user(user)
     Repo.get!(User, user.id)
   end
@@ -712,8 +714,8 @@ defmodule Grappa.Accounts do
 
   defp reset_passkeys_transaction(user) do
     Passkey |> where([p], p.user_id == ^user.id) |> Repo.delete_all()
-    TOTPRecoveryCode |> where([r], r.user_id == ^user.id) |> Repo.delete_all()
     {1, _} = User |> where([u], u.id == ^user.id) |> Repo.update_all(set: [passkey_mode: "disabled"])
+    :ok = RecoveryCodes.drop_if_orphaned(user.id)
     :ok = revoke_sessions_for_user(user)
     Repo.get!(User, user.id)
   end
