@@ -3512,6 +3512,63 @@ html.resize-dragging * {
   color: var(--accent);
 }
 
+/* #735 — base <button> treatment for the whole settings drawer, the twin of
+   the #497/#508 global input rule above. The drawer had NO base button rule:
+   every pane that forgot a class (the TOTP + passkey security panes, the
+   watchlists/aliases/perform "add" buttons, whose `.watchlists-add-btn` has
+   never had a rule behind it) rendered a UA-default control — UA font, UA
+   grey, and roughly 20px tall — inside a themed dark drawer. Five more
+   per-class rules would have been five more places to forget; this is the
+   one treatment every drawer button gets for free.
+
+   `:where()` keeps the selector at element-only specificity (0,0,1), so a
+   per-class rule at (0,1,0) always wins the properties it DECLARES:
+   .settings-back, .logout, .watchlists-remove, .inline-confirm-btn and the
+   theme cards keep their own paint. The look IS .settings-back's (transparent
+   + accent + border) — the drawer's existing idiom promoted to the base
+   rather than a new one invented beside it.
+
+   A base rule is only a floor for what the class DIDN'T declare, so keep the
+   declaration list to what a styled button can safely inherit. Two effects
+   are deliberate and DO reach shipped controls:
+     * the 44px floor lands on the borderless micro-buttons too
+       (.watchlists-remove ×, .aliases-edit), so watch-list / keyword / alias
+       rows grow from ~20px to 44px. That is the SAME sub-HIG target #735
+       reports, in panes that never reported it — fixing the class, not the
+       instance. Revert path if the density is unwanted: exempt those two
+       classes with an explicit min-height of their own.
+     * .logout / .admin-console-entry / .delete-account-entry declare
+       font-family but no font-size, so they move off the UA's 13.3px onto
+       the drawer's --font-size — the same unification #497 made for inputs.
+   NO border-radius here: the drawer is square by documented intent (see the
+   .settings-section comment, "sharp corners, irssi aesthetic"), and NO drawer
+   button class declares one, so a radius on the base would round all of them.
+   box-sizing is load-bearing, not tidiness: with content-box the 44px floor
+   would be 44px PLUS padding and border on every button.
+
+   min-height in ABSOLUTE px via --tap-min (44px): the html root font-size is
+   14px, so a rem-based tap target under-shoots the Apple-HIG floor. The
+   :disabled pair is not decoration — both security panes gate their controls
+   on busy(), and custom colours drop the UA's own greying-out. That one sits
+   at (0,1,1) on purpose (a pseudo-class carries class weight): a disabled
+   control must read as disabled whatever its own class paints. */
+:where(.settings-drawer) button {
+  box-sizing: border-box;
+  min-height: var(--tap-min);
+  padding: 0.4rem 0.7rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  cursor: pointer;
+}
+
+:where(.settings-drawer) button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .settings-drawer h2 {
   font-size: 1rem;
   font-weight: normal;

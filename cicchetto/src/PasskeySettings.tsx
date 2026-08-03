@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import InlineConfirmButton from "./InlineConfirmButton";
 import {
   deletePasskey,
   finishPasskeyModeChange,
@@ -21,6 +22,11 @@ const PasskeySettings: Component = () => {
   const [recoveryToken, setRecoveryToken] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
+  // #735 — deleting a passkey is irreversible and, in passwordless mode, can
+  // lock the account out entirely, so removal goes through the drawer's
+  // existing two-tap InlineConfirmButton rather than firing on first tap.
+  // One armed id across the whole list: arming a row disarms its siblings.
+  const [armedRemoval, setArmedRemoval] = createSignal<string | null>(null);
 
   const currentToken = (): string => {
     const value = token();
@@ -127,6 +133,7 @@ const PasskeySettings: Component = () => {
       setError(value instanceof Error ? value.message : String(value));
     } finally {
       setBusy(false);
+      setArmedRemoval(null);
     }
   };
 
@@ -143,9 +150,15 @@ const PasskeySettings: Component = () => {
                 {(passkey) => (
                   <li>
                     {passkey.name}{" "}
-                    <button type="button" disabled={busy()} onClick={() => void remove(passkey.id)}>
-                      remove
-                    </button>
+                    <InlineConfirmButton
+                      idleLabel={`remove ${passkey.name}`}
+                      confirmLabel={`confirm removing ${passkey.name}`}
+                      testId={`passkey-remove-${passkey.id}`}
+                      disabled={busy()}
+                      armed={armedRemoval() === passkey.id}
+                      onArm={() => setArmedRemoval(passkey.id)}
+                      onConfirm={() => void remove(passkey.id)}
+                    />
                   </li>
                 )}
               </For>

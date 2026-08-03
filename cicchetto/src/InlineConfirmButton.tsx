@@ -20,6 +20,10 @@ import type { Component } from "solid-js";
 // IS the load-bearing UX signal. No `::before` sigils or wrapping
 // spans — the visible label is the inner text directly.
 
+// `disabled` is optional like `extraClass`: the admin tables that first used
+// this button have no in-flight state to gate on, and requiring the prop
+// there would mean nine `disabled={false}` call sites saying nothing. #735's
+// passkey rows DO have one — the removal they confirm is a request in flight.
 export type Props = {
   idleLabel: string;
   confirmLabel: string;
@@ -28,6 +32,7 @@ export type Props = {
   onConfirm: () => void | Promise<void>;
   testId: string;
   extraClass?: string;
+  disabled?: boolean;
 };
 
 const InlineConfirmButton: Component<Props> = (props) => {
@@ -37,6 +42,7 @@ const InlineConfirmButton: Component<Props> = (props) => {
       class={`inline-confirm-btn ${props.extraClass ?? ""}`.trim()}
       classList={{ confirming: props.armed }}
       data-testid={props.testId}
+      disabled={props.disabled ?? false}
       onClick={() => {
         if (props.armed) {
           void props.onConfirm();
