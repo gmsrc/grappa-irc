@@ -1115,6 +1115,39 @@ describe("subscribe — WS join effect", () => {
       );
     });
 
+    it("a peer NICK migrates the rail WHOIS cache too (#373 migration set)", async () => {
+      // The rail's per-nick WHOIS cache (#606) joined the #373 set: without
+      // this wiring the rename strands the bundle under the dead nick, the
+      // card blanks, and the rail's fetch-on-select fires a redundant
+      // upstream WHOIS right before the operator's next send.
+      localStorage.setItem("grappa-token", "tok");
+      localStorage.setItem(
+        "grappa-subject",
+        JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+      );
+      await seedStubs();
+      const rail = await import("../lib/railWhois");
+      await loadStores();
+      await vi.waitFor(() => {
+        expect(mockChannel.on).toHaveBeenCalled();
+      });
+
+      rail.ingestRailWhois("freenode", "Guest99", {
+        target: "Guest99",
+        host: "guest.example",
+      } as never);
+
+      fireMessageEvent("#grappa", {
+        id: 20,
+        kind: "nick_change",
+        sender: "Guest99",
+        meta: { new_nick: "Renamed99" },
+      });
+
+      expect(rail.railWhoisFor("freenode", "Guest99")).toBeUndefined();
+      expect(rail.railWhoisFor("freenode", "Renamed99")?.host).toBe("guest.example");
+    });
+
     it("logout (token → null) clears scrollback + unread + selection", async () => {
       localStorage.setItem("grappa-token", "tokA");
       localStorage.setItem(

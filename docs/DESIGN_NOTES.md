@@ -28064,3 +28064,84 @@ reused `.whois-card-fields dd` and the new `.rail-query-heading` are
 `word-break`-able — the exact gotcha #605 flagged ("a future RailContext card
 without break-word would re-starve"). Explicitly out of scope (maintainer, same
 thread): no message counters / conversation stats.
+
+## 2026-08-03 — #606: never send a WHOIS the user did not initiate
+
+#606 shipped with `nick-follow-query.spec.ts` red 3/3 — a spec it does not
+touch and main passes — and the fix turned out to be a rule, not a patch.
+
+**Measure before theorising.** The first reading of the trace said the send
+routed to the NEW nick and returned 201, so "routing is fine, the peer just
+didn't get it". Measured instead, with a throwaway spec awaiting the followup
+for 60s instead of 5 and timestamping every WHOIS frame, run LAST in a full
+local suite (it does NOT reproduce on a cold single-spec run; it reproduces at
+#379 of the suite, exactly where CI sees it):
+
+```
++ 886ms  WS-> whois {nick: NickTmp…, source: "rail"}   ← rail refetch after the rename
++1004ms  HTTP 201 POST …/channels/NickTmp…/messages
++5008ms  WS<- whois_bundle          ← 4.1s for a reply the first one gave in 6ms
++9021ms  FOLLOWUP delivered 8047ms
++9144ms  SECOND   delivered   48ms
+```
+
+The message ARRIVES, 8s late. Not routing: the server puts the URL's RAW target
+on the wire (`handle_persisting_send/3`) and the next send to that same nick
+took 48ms.
+
+**The mechanism is a ceiling, not a unit cost.** WHOIS and PRIVMSG carry the
+same fake-lag flag and the same `since += 2 + len/120` (bahamut
+`src/parse.c:236`) — a WHOIS is not "expensive". But `src/s_bsd.c:1657` reads a
+client's socket only while `since - now < 10`, so ~5 closely-spaced commands
+and the ircd STOPS READING grappa's socket; whatever the operator sends next
+sits in the kernel buffer until `since` drains. The fix can therefore never be
+"make the WHOIS cheaper" — it is "put fewer closely-spaced commands on the
+connection", and the cheapest command is the one never sent.
+
+**But the deciding argument is not performance.** A WHOIS is visible to the
+person it names: a target carrying umode +y receives `<nick> is doing a WHOIS
+on you` (`src/s_user.c:2200`, a `sendto_one` to the TARGET — which is why
+grepping for `sendto_realops` finds nothing and proves nothing). Under the
+shipped TTL, a peer with +y would be told someone was whoising them every time
+anyone re-selected their query window after 60s — forever, for a refresh
+neither party asked for. Hence the durable rule, which outlives this PR:
+
+> **The client MUST NEVER send a WHOIS the user did not initiate.**
+
+It binds every future surface tempted to prefetch WHOIS — member-list hover,
+nick autocomplete preview, notify/watch enrichment.
+
+**What changed.** (1) The freshness TTL is DELETED: one WHOIS per nick on first
+select, cached for the life of the identity, no staleness refetch. Note there
+never was polling — the TTL was a ceiling on the NEXT select, not a timer — so
+the work was a deletion, not the dismantling of a loop. (2) The nick-keyed
+cache joins the #373 rename migration set (`renameRailWhois/3`, called from the
+`subscribe.ts` #373 block BEFORE `followQueryNick` — ORDER IS LOAD-BEARING: the
+selection swap synchronously wakes RailContext's fetch-on-select effect, so
+migrating first leaves it a cache hit; migrating after means it has already
+fired). CLAUDE.md already demanded (2) — "a NEW nick-keyed store MUST be added
+to this migration set" — and #606 simply missed it. Without it a peer who
+renames is told "is doing a WHOIS on you" for the crime of renaming, by a user
+who did nothing.
+
+Two migration details that are NOT mechanical: only an ANSWERED entry migrates
+(a pending one carries no bundle, and its reply keys on the OLD nick, so
+migrating the marker would suppress the new nick's fetch while the answer lands
+on the dead key — blank card with no recovery while the operator stays put);
+and `is_registered` is CLEARED (307 RPL_WHOISREGNICK attests the NICK, not the
+person — carrying it would badge a renamed peer "registered" on no evidence).
+Everything else — host, realname, channels — describes the person and survives.
+
+**Accepted, stated plainly:** the card is fetched once and is not refreshable;
+a long-lived rail shows a stale idle clock. The only refresh is the operator's
+own `/whois <peer>`, which `userTopic` already routes into this cache — a WHOIS
+the user asked for. No refresh affordance is promised here.
+
+**Adjacent finding, not fixed here.** `NumericRouter` delegates any scan-class
+numeric whose `params[1]` is a WHOIS in flight, so while a rail fetch is
+pending an ERR_NOSUCHNICK that actually answers the operator's `/msg` is folded
+into the WHOIS bundle instead of landing in the query window as the "message
+bounced" notice. Pre-#606 that state existed only just after someone typed
+`/whois`; the auto-fetch makes it routine. `cp13-s5-msg-ghost-401` (0 error
+notices) caught it in the same local run and passes in CI only on timing. The
+durable rule: `whois_pending` should consume at most ONE 401 per pending WHOIS.

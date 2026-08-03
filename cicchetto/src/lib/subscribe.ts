@@ -27,6 +27,7 @@ import { isOwnPresenceEvent } from "./ownPresenceEvent";
 import { resolvePing } from "./pingCorrelation";
 import { setEnsureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, queryWindowsByNetwork } from "./queryWindows";
+import { renameRailWhois } from "./railWhois";
 import { applyJoinReply, applyReadCursorSet, renameReadCursorChannel } from "./readCursor";
 import { recordSeen } from "./reconnectBackfill";
 import { appendToScrollback, refreshScrollback, renameScrollbackKey } from "./scrollback";
@@ -550,6 +551,13 @@ moduleRoot(() => {
               const oldNick = net ? canonicalQueryNick(net.id, message.sender) : message.sender;
               renameScrollbackKey(channelKey(slug, oldNick), channelKey(slug, newNick));
               renameReadCursorChannel(slug, oldNick, newNick);
+              // #606 — the rail's per-nick WHOIS cache is a nick-keyed store,
+              // so it migrates with the rest. ORDER IS LOAD-BEARING: it must
+              // run BEFORE `followQueryNick`, whose selection swap wakes the
+              // RailContext fetch-on-select effect. Migrate first and that
+              // effect finds a fresh cache entry and stays quiet; migrate
+              // after and it has already fired a redundant upstream WHOIS.
+              renameRailWhois(slug, oldNick, newNick);
               followQueryNick(slug, oldNick, newNick);
             }
           }

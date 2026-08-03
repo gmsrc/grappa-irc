@@ -96,20 +96,25 @@ describe("railWhois", () => {
     expect(pushWhoisMock).toHaveBeenCalledWith(1, "alice", null, "rail");
   });
 
-  it("does NOT re-issue WHOIS on a re-select inside the TTL once a bundle is cached", async () => {
+  it("never re-issues WHOIS for an answered nick, however old the bundle", async () => {
+    // The freshness TTL is deliberately gone. A WHOIS is not free and not
+    // invisible: on bahamut it shares PRIVMSG's fake-lag budget (~5 close
+    // commands and the ircd stops reading grappa's socket, so the operator's
+    // next message waits in the kernel buffer), and a +y target is TOLD it
+    // happened. A staleness refetch spends both on data nobody asked to
+    // refresh, so an answered nick is answered for good.
     const { requestRailWhois, ingestRailWhois } = await import("../lib/railWhois");
     requestRailWhois("azzurra", "alice");
     ingestRailWhois("azzurra", "alice", bundle("alice"));
-    vi.setSystemTime(T0 + 30_000); // still inside the 60s TTL
+    vi.setSystemTime(T0 + 6 * 60 * 60 * 1000); // six hours later
     requestRailWhois("azzurra", "alice");
     expect(pushWhoisMock).toHaveBeenCalledTimes(1);
   });
 
-  it("re-issues WHOIS on a re-select after the TTL lapses", async () => {
-    const { requestRailWhois, ingestRailWhois } = await import("../lib/railWhois");
-    requestRailWhois("azzurra", "alice");
-    ingestRailWhois("azzurra", "alice", bundle("alice"));
-    vi.setSystemTime(T0 + 61_000); // past the 60s TTL
+  it("re-issues only for a request that was never answered (pending TTL lapsed)", async () => {
+    const { requestRailWhois } = await import("../lib/railWhois");
+    requestRailWhois("azzurra", "alice"); // no bundle ever arrives
+    vi.setSystemTime(T0 + 31_000);
     requestRailWhois("azzurra", "alice");
     expect(pushWhoisMock).toHaveBeenCalledTimes(2);
   });
@@ -170,6 +175,102 @@ describe("railWhois", () => {
     const { requestRailWhois } = await import("../lib/railWhois");
     requestRailWhois("ghost", "alice");
     expect(pushWhoisMock).not.toHaveBeenCalled();
+  });
+
+  // #373 migration set (CLAUDE.md: a NEW nick-keyed store that skips it
+  // strands its old-nick rows). Stranded, a rename makes the rail card go
+  // blank and fires a SECOND upstream WHOIS on grappa's own IRC connection
+  // microseconds before the operator's next send — measured on the testnet at
+  // #379 of a full suite run, that WHOIS crossed bahamut's fake-lag threshold
+  // and deferred the following PRIVMSG by 8s (the nick-follow-query e2e red).
+  describe("renameRailWhois (#373 — the rail cache follows a peer NICK)", () => {
+    it("moves the cached bundle old→new and relabels its target", async () => {
+      const { ingestRailWhois, railWhoisFor, renameRailWhois } = await import("../lib/railWhois");
+      ingestRailWhois("azzurra", "Guest87449", bundle("Guest87449"));
+      renameRailWhois("azzurra", "Guest87449", "NickTemporaneo");
+      expect(railWhoisFor("azzurra", "Guest87449")).toBeUndefined();
+      expect(railWhoisFor("azzurra", "NickTemporaneo")?.host).toBe("Guest87449.host");
+      // The card renders `bundle.target`; leaving the dead nick there would
+      // label the live peer with the name it just abandoned.
+      expect(railWhoisFor("azzurra", "NickTemporaneo")?.target).toBe("NickTemporaneo");
+    });
+
+    it("leaves the migrated entry fresh, so the post-rename select issues NO WHOIS", async () => {
+      const { ingestRailWhois, renameRailWhois, requestRailWhois } = await import(
+        "../lib/railWhois"
+      );
+      ingestRailWhois("azzurra", "Guest87449", bundle("Guest87449"));
+      renameRailWhois("azzurra", "Guest87449", "NickTemporaneo");
+      requestRailWhois("azzurra", "NickTemporaneo");
+      expect(pushWhoisMock).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op when the old nick holds nothing (a member rename, no query)", async () => {
+      const { railWhoisFor, renameRailWhois, requestRailWhois } = await import("../lib/railWhois");
+      renameRailWhois("azzurra", "stranger", "wanderer");
+      expect(railWhoisFor("azzurra", "wanderer")).toBeUndefined();
+      requestRailWhois("azzurra", "wanderer");
+      expect(pushWhoisMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a still-pending entry instead of migrating the marker", async () => {
+      // The in-flight reply keys on the OLD nick, so a migrated pending marker
+      // would suppress the new nick's fetch while the answer lands on the dead
+      // key — blank card, no recovery while the operator stays in the window.
+      const { renameRailWhois, requestRailWhois, railWhoisFor } = await import("../lib/railWhois");
+      requestRailWhois("azzurra", "Guest87449"); // issued, unanswered
+      renameRailWhois("azzurra", "Guest87449", "NickTemporaneo");
+      expect(railWhoisFor("azzurra", "Guest87449")).toBeUndefined();
+      requestRailWhois("azzurra", "NickTemporaneo");
+      expect(pushWhoisMock).toHaveBeenCalledTimes(2);
+      expect(pushWhoisMock).toHaveBeenNthCalledWith(2, 1, "NickTemporaneo", null, "rail");
+    });
+
+    it("migrates a bundle whose refresh is in flight, and settles it", async () => {
+      // A stale bundle with a pending refresh DOES carry data worth moving;
+      // only the pending marker is dropped, so the card keeps rendering and
+      // the new nick is not re-asked.
+      const { ingestRailWhois, renameRailWhois, requestRailWhois, railWhoisFor } = await import(
+        "../lib/railWhois"
+      );
+      ingestRailWhois("azzurra", "Guest87449", bundle("Guest87449"));
+      renameRailWhois("azzurra", "Guest87449", "NickTemporaneo");
+      expect(railWhoisFor("azzurra", "NickTemporaneo")?.host).toBe("Guest87449.host");
+      requestRailWhois("azzurra", "NickTemporaneo");
+      expect(pushWhoisMock).not.toHaveBeenCalled();
+    });
+
+    it("clears is_registered — 307 attests the NICK, not the person", async () => {
+      const { ingestRailWhois, railWhoisFor, renameRailWhois } = await import("../lib/railWhois");
+      ingestRailWhois("azzurra", "Guest87449", { ...bundle("Guest87449"), is_registered: true });
+      renameRailWhois("azzurra", "Guest87449", "NickTemporaneo");
+      expect(railWhoisFor("azzurra", "NickTemporaneo")?.is_registered).toBe(false);
+      // Everything else describes the person and survives the rename.
+      expect(railWhoisFor("azzurra", "NickTemporaneo")?.user).toBe("Guest87449_u");
+    });
+
+    it("keeps the existing new-nick entry on a collision (mirrors the cursor merge)", async () => {
+      const { ingestRailWhois, railWhoisFor, renameRailWhois } = await import("../lib/railWhois");
+      ingestRailWhois("azzurra", "old", bundle("old"));
+      ingestRailWhois("azzurra", "new", bundle("new"));
+      renameRailWhois("azzurra", "old", "new");
+      expect(railWhoisFor("azzurra", "new")?.host).toBe("new.host");
+      expect(railWhoisFor("azzurra", "old")).toBeUndefined();
+    });
+
+    it("folds both ends, so a window opened `guest` follows a NICK from `Guest`", async () => {
+      const { ingestRailWhois, railWhoisFor, renameRailWhois } = await import("../lib/railWhois");
+      ingestRailWhois("azzurra", "guest", bundle("guest"));
+      renameRailWhois("azzurra", "Guest", "NEWNICK");
+      expect(railWhoisFor("azzurra", "newnick")?.host).toBe("guest.host");
+    });
+
+    it("is a no-op on a case-only shift (old ≡ new under the fold)", async () => {
+      const { ingestRailWhois, railWhoisFor, renameRailWhois } = await import("../lib/railWhois");
+      ingestRailWhois("azzurra", "alice", bundle("alice"));
+      renameRailWhois("azzurra", "alice", "Alice");
+      expect(railWhoisFor("azzurra", "alice")?.target).toBe("alice");
+    });
   });
 
   it("wipes the cache on identity rotation (logout/token change)", async () => {
