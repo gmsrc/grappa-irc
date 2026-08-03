@@ -59,12 +59,45 @@ const char *media_video_codec_name(enum media_video_codec codec);
  * asked for H.264 is the failure this whole enum exists to prevent. */
 bool media_video_codec_parse(const char *word, enum media_video_codec *out);
 
+/* The video m-line to OFFER when subscribing, listing every codec we
+ * can decode so the server can answer with the one that peer actually
+ * publishes.
+ *
+ * This is what makes a room with mixed codecs work. An SFU does not
+ * transcode, so the codec is a property of each PUBLISHER, not of the
+ * room: one person on a browser that speaks H.264 and another on a
+ * terminal sending VP8 is an ordinary situation, and a subscriber that
+ * offers only its own preference sees a black tile for half the call.
+ * Since every peer is a separate WHEP session, each one can settle on
+ * a different answer, which is exactly the granularity needed.
+ *
+ * Built by hand rather than via rtcAddTrackEx because that API takes
+ * ONE codec per track, and the whole point here is to name several. */
+bool media_video_offer_mline(int vp8_payload_type, int h264_payload_type, char *out,
+                             size_t out_sz);
+
+/* Which video codec an SDP ANSWER settled on, and under which payload
+ * type. Pure, so the thing that decides how a peer's picture is decoded
+ * can be asserted without a server.
+ *
+ * Returns false when the answer carries no video we can decode — a
+ * rejected m-line (port 0), or one naming only codecs we did not offer.
+ * That is a real answer to report, not a parse failure to guess past:
+ * guessing here means feeding an H.264 stream to a VP8 decoder, which
+ * produces silence and no error. */
+bool media_sdp_video_codec(const char *sdp, enum media_video_codec *codec, int *payload_type);
+
 /* One direction of one medium. */
 struct media_leg {
     pid_t pid;   /* the ffmpeg doing the codec work, or -1 */
     int fd;      /* the loopback UDP socket this side owns, or -1 */
     int peer_port; /* recv legs: where ffmpeg is listening */
     bool video;
+    /* What THIS leg carries, as negotiated for THIS peer — not what the
+     * call as a whole prefers. Two peers in one call can be decoded
+     * differently, and the decoder has to be told which is which. */
+    enum media_video_codec codec;
+    int payload_type;
     /* recv legs: the SDP handed to ffmpeg, removed at stop. It CANNOT be
      * unlinked right after the spawn — the child may not have exec'd,
      * let alone opened it, and the decoder then starts on nothing and
@@ -204,13 +237,6 @@ int media_bind_loopback(int *port_out);
  * if ffmpeg cannot be started. */
 bool media_start_send(struct media_leg *leg, const struct media_config *cfg, bool video);
 
-/* Start decoding. `stdout_fd` is where a VIDEO leg writes its rgb24
- * frames — normally STDOUT_FILENO; audio legs ignore it and play to the
- * system's default sink. The caller forwards each RTP packet from the
- * track to `leg->peer_port` on loopback. */
-bool media_start_recv(struct media_leg *leg, const struct media_config *cfg, bool video,
-                      int stdout_fd);
-
 /* Forward one RTP packet a track delivered to the decoder. */
 void media_feed(const struct media_leg *leg, const void *rtp, size_t len);
 
@@ -239,7 +265,15 @@ void media_stop(struct media_leg *leg);
  *
  * Pure, and therefore tested: a wrong payload type or rtpmap here is a
  * decoder that sits silent with no error, which is the least debuggable
- * failure this design has. */
-bool media_recv_sdp(const struct media_config *cfg, bool video, int port, char *out, size_t out_sz);
+ * failure this design has.
+ *
+ * Two functions rather than one with a `video` flag, because since
+ * codecs became per-peer they no longer take the same arguments: video
+ * needs the codec THIS peer negotiated, audio is always Opus. A shared
+ * signature would have carried a parameter that is meaningless in half
+ * its calls. */
+bool media_recv_sdp_audio(int port, int payload_type, char *out, size_t out_sz);
+bool media_recv_sdp_video(int port, enum media_video_codec codec, int payload_type, char *out,
+                          size_t out_sz);
 
 #endif /* SHOTTINO_CALL_MEDIA_H */

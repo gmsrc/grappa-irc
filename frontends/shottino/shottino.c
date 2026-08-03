@@ -541,12 +541,15 @@ enum call_ring_policy { CALL_RING_OFF, CALL_RING_QUERIES, CALL_RING_ALL };
 
 /* What a terminal call speaks on the video track.
  *
- * An SFU does not transcode, so this is NOT a private preference: it is
- * an agreement with whoever else is in the room. VP8 is the default
- * because every browser has it and it carries no licensing baggage;
- * H.264 exists because a far end that publishes it — a phone, a browser
- * built without VP8 — is one we can either speak to or not see at all,
- * and "connected, no picture, no error" is the worst of the three.
+ * SENDING only. An SFU does not transcode, so we have to encode
+ * SOMETHING and this decides what — VP8 by default, because every
+ * browser has it and it carries no licensing baggage.
+ *
+ * RECEIVING needs no setting and has none: the helper offers every
+ * codec it can decode on each subscribe and takes whatever that peer's
+ * answer settles on. The codec belongs to the PUBLISHER, so a room can
+ * hold a browser sending H.264 and a terminal sending VP8 at once, and
+ * each peer is decoded as whatever they actually send.
  *
  * Mirrors the helper's own enum (call/media.h) rather than sharing it:
  * the two are separate binaries, and the WORD on the command line is
@@ -9834,7 +9837,7 @@ static const struct setting_def SETTINGS[] = {
     { "call.ring", SET_CHOICE, "off|queries|all", "when an arriving call interrupts you" },
     { "call.mode", SET_CHOICE, "browser|terminal", "where a call runs; terminal needs a WHIP SFU" },
     { "call.video_codec", SET_CHOICE, "vp8|h264",
-      "what a terminal call speaks; an SFU does not transcode, so it must match the room" },
+      "what a terminal call SENDS; receiving adapts to each peer on its own" },
     { "call.helper", SET_TEXT, NULL, "path to shottino-call (empty = found beside shottino)" },
     { "bot.dir", SET_TEXT, NULL, "where AGENT.md and the bot's notes live" },
     { "stt.enabled", SET_BOOL, NULL, "/stt speech to text (off: nothing is transcribed)" },

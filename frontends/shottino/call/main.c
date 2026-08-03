@@ -536,32 +536,62 @@ static bool session_negotiate(struct session *s, const char *url, rtcDirection d
     if (s->receives) rtcSetMessageCallback(s->audio_track, on_audio_rtp);
 
     if (video) {
-        /* VP8 by default and H.264 on request — see media.h for why the
-         * choice exists at all. In short: an SFU does not transcode, so
-         * the codec is not ours to pick unilaterally. A far end that
-         * publishes H.264 while we offer only VP8 produces a call that
-         * connects, reports nothing wrong, and shows no picture. */
-        rtcTrackInit vid;
-        memset(&vid, 0, sizeof(vid));
-        vid.direction = dir;
-        if (mcfg->video_codec == MEDIA_VIDEO_H264) {
-            vid.codec = RTC_CODEC_H264;
-            /* Spelled out rather than left NULL: the C API turns a NULL
-             * profile into NO fmtp line at all, and an H.264 m-line
-             * without packetization-mode is one a browser may decline or
-             * read as single-NAL. Constrained Baseline 3.1 is what the
-             * capture leg is told to produce. */
-            vid.profile = "profile-level-id=42e01f;packetization-mode=1;level-asymmetry-allowed=1";
-        } else {
-            vid.codec = RTC_CODEC_VP8;
+        /* RECEIVING: offer EVERY codec we can decode and let the server
+         * answer with the one this peer actually publishes.
+         *
+         * The codec is a property of the PUBLISHER, not of the room. An
+         * SFU does not transcode, so a browser sending H.264 and a
+         * terminal sending VP8 in the same call is ordinary — and a
+         * subscriber that offered only its own preference would see a
+         * black tile for half the people in the room, with no error
+         * anywhere. Every peer is a separate WHEP session, so each one
+         * settles independently, which is exactly the granularity the
+         * problem has.
+         *
+         * SENDING is the opposite case and stays a choice: we have to
+         * encode SOMETHING, so `call.video_codec` decides, and offering
+         * a list there would only be ambiguous.
+         *
+         * The multi-codec m-line is built by hand because rtcAddTrackEx
+         * takes one codec per track. If that is refused we fall back to
+         * the single-codec track rather than losing video entirely —
+         * reported, never silent, because it means this peer is only
+         * watchable if they happen to publish what we guessed. */
+        bool receiving = dir == RTC_DIRECTION_RECVONLY;
+        s->video_track = -1;
+        if (receiving) {
+            char mline[768];
+            if (media_video_offer_mline(mcfg->video_payload_type, mcfg->video_payload_type + 1,
+                                        mline, sizeof(mline)))
+                s->video_track = rtcAddTrack(s->pc, mline);
+            if (s->video_track < 0)
+                note("%s: the multi-codec offer was refused — falling back to %s only", s->label,
+                     media_video_codec_name(mcfg->video_codec));
         }
-        vid.payloadType = mcfg->video_payload_type;
-        vid.ssrc = mcfg->video_ssrc;
-        vid.mid = "video";
-        vid.name = "shottino";
-        vid.msid = "shottino";
-        vid.trackId = "video";
-        s->video_track = rtcAddTrackEx(s->pc, &vid);
+        if (s->video_track < 0) {
+            rtcTrackInit vid;
+            memset(&vid, 0, sizeof(vid));
+            vid.direction = dir;
+            if (mcfg->video_codec == MEDIA_VIDEO_H264) {
+                vid.codec = RTC_CODEC_H264;
+                /* Spelled out rather than left NULL: the C API turns a
+                 * NULL profile into NO fmtp line at all, and an H.264
+                 * m-line without packetization-mode is one a browser may
+                 * decline or read as single-NAL. Constrained Baseline
+                 * 3.1 is what the capture leg is told to produce. */
+                vid.profile =
+                    "profile-level-id=42e01f;packetization-mode=1;level-asymmetry-allowed=1";
+            } else {
+                vid.codec = RTC_CODEC_VP8;
+            }
+            vid.payloadType = mcfg->video_payload_type;
+            vid.ssrc = mcfg->video_ssrc;
+            vid.mid = "video";
+            vid.name = "shottino";
+            vid.msid = "shottino";
+            vid.trackId = "video";
+            s->video_track = rtcAddTrackEx(s->pc, &vid);
+        }
         if (s->video_track < 0) {
             emit_event("error", "message", "cannot add the video track");
             return false;
@@ -625,6 +655,33 @@ static bool session_negotiate(struct session *s, const char *url, rtcDirection d
 
     bool ok = rtcSetRemoteDescription(s->pc, resp.body, "answer") >= 0;
     if (!ok) emit_event("error", "message", "the SDP answer was rejected");
+
+    /* WHAT THIS PEER ACTUALLY PUBLISHES, read out of their answer.
+     *
+     * The offer named every codec we can decode; the answer says which
+     * one the server settled on, and under which payload type. That is
+     * per-peer information and it has to reach that peer's decoder — a
+     * global setting would decode one participant as another. Read
+     * before the body is freed, and only for a session that receives.
+     *
+     * An answer with no video we recognise leaves the leg on the
+     * configured default and SAYS SO. It is not fatal: their audio
+     * still works, and the alternative — dropping the peer — turns a
+     * codec we did not expect into a person who vanished. */
+    if (ok && video && s->receives && s->slot >= 0 && s->slot < CALL_MAX_PEERS) {
+        struct media_leg *leg = &s->owner->vmix.legs[s->slot];
+        enum media_video_codec got;
+        int pt = 0;
+        if (media_sdp_video_codec(resp.body, &got, &pt)) {
+            leg->codec = got;
+            leg->payload_type = pt;
+            note("%s %d: publishing %s (payload type %d)", s->label, s->slot,
+                 media_video_codec_name(got), pt);
+        } else {
+            note("%s %d: the answer named no video codec we can decode — assuming %s",
+                 s->label, s->slot, media_video_codec_name(leg->codec));
+        }
+    }
     whip_response_free(&resp);
     return ok;
 }
@@ -676,8 +733,9 @@ static void usage(FILE *out) {
             "  --capture <WxH[@fps]>  what we SEND (default 640x480@20) — the far end\n"
             "                   may be a browser, so this is not the render size\n"
             "  --bitrate <kbps> video bitrate we send (default 800)\n"
-            "  --video-codec <c>  vp8 (default) or h264. An SFU does not transcode,\n"
-            "                   so this has to match what the far end publishes\n"
+            "  --video-codec <c>  what we SEND: vp8 (default) or h264. Receiving needs\n"
+            "                   no setting — every codec we decode is offered and each\n"
+            "                   peer is decoded as whatever their answer settled on\n"
             "  --fps <n>        video frame rate (default 10)\n"
             "  --verbose        interleave '#' notes on stderr\n"
             "  --protocol       print the helper protocol version and exit\n"
@@ -824,6 +882,13 @@ int main(int argc, char **argv) {
     for (int i = 0; i < MEDIA_MAX_PEERS; i++) {
         call.vmix.legs[i].fd = -1;
         call.vmix.legs[i].pid = -1;
+        /* Until this peer's answer says otherwise. Every leg is
+         * overwritten from its own answer during negotiation; this is
+         * only what an answer that named nothing we understand falls
+         * back to, so that a leg is never prepared with a codec of
+         * zero-by-accident. */
+        call.vmix.legs[i].codec = mcfg.video_codec;
+        call.vmix.legs[i].payload_type = mcfg.video_payload_type;
     }
     call.want_video = video;
     call.frame_fd = STDOUT_FILENO;

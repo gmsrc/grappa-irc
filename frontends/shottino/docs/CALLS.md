@@ -492,6 +492,44 @@ that had no publisher. It fixes late joiners and channel members who
 join the call afterwards with one mechanism, which is why it is worth
 building deliberately rather than bolting on.
 
+### Mixed-codec rooms
+
+A room does NOT have one codec. Because an SFU does not transcode, the
+codec belongs to each **publisher** — a browser sending H.264 and a
+terminal sending VP8 in the same call is an ordinary situation, and a
+subscriber that offered only its own preference would see a black tile
+for half the room, with no error anywhere.
+
+Since every peer is a separate WHEP session, each one negotiates
+separately. So the two directions are not symmetric:
+
+- **Sending** is a choice, because we have to encode *something*:
+  `call.video_codec`, VP8 by default.
+- **Receiving** has no setting and needs none. Each subscribe offers a
+  video m-line naming every codec we can decode; the answer says which
+  one that peer publishes and under which payload type. That pair is
+  stored **per leg** and used to write that peer's decoder SDP — the
+  legs no longer share a codec, so one call can decode VP8 in one tile
+  and H.264 in the next.
+
+The multi-codec m-line is built by hand (`media_video_offer_mline`)
+because `rtcAddTrackEx` takes one codec per track. Verified offline that
+libdatachannel accepts it and that the offer it then produces still
+carries both rtpmaps, the H.264 fmtp and the rtcp-fb lines:
+
+```
+m=video 9 UDP/TLS/RTP/SAVPF 96 97
+a=rtpmap:96 VP8/90000
+a=rtpmap:97 H264/90000
+a=fmtp:97 profile-level-id=42e01f;packetization-mode=1;level-asymmetry-allowed=1
+```
+
+If that m-line were ever refused, the helper falls back to the single
+configured codec and says so rather than losing video. An answer naming
+nothing we decode leaves that leg on the default and reports it — not
+fatal, because their audio still works, and dropping the peer would turn
+an unexpected codec into a person who vanished.
+
 ### Group video: one decoder, and the wall it hits
 
 Video is composited like the audio is mixed — ONE ffmpeg reading every

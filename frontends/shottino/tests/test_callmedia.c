@@ -31,13 +31,13 @@ TEST(the_receive_sdp_describes_what_was_negotiated) {
                                 .want_video = true };
     char sdp[512];
 
-    CHECK(media_recv_sdp(&cfg, true, 45123, sdp, sizeof(sdp)));
+    CHECK(media_recv_sdp_video(45123, cfg.video_codec, cfg.video_payload_type, sdp, sizeof(sdp)));
     CHECK(strstr(sdp, "m=video 45123 RTP/AVP 96") != NULL);
     CHECK(strstr(sdp, "a=rtpmap:96 VP8/90000") != NULL);
     /* Loopback, because that is the only place the helper writes. */
     CHECK(strstr(sdp, "c=IN IP4 127.0.0.1") != NULL);
 
-    CHECK(media_recv_sdp(&cfg, false, 45125, sdp, sizeof(sdp)));
+    CHECK(media_recv_sdp_audio(45125, cfg.audio_payload_type, sdp, sizeof(sdp)));
     CHECK(strstr(sdp, "m=audio 45125 RTP/AVP 111") != NULL);
     CHECK(strstr(sdp, "a=rtpmap:111 opus/48000/2") != NULL);
 
@@ -46,18 +46,18 @@ TEST(the_receive_sdp_describes_what_was_negotiated) {
      * copies of "Opus is 111" is one of them going stale. */
     cfg.audio_payload_type = 120;
     cfg.video_payload_type = 100;
-    CHECK(media_recv_sdp(&cfg, true, 1, sdp, sizeof(sdp)));
+    CHECK(media_recv_sdp_video(1, cfg.video_codec, cfg.video_payload_type, sdp, sizeof(sdp)));
     CHECK(strstr(sdp, "RTP/AVP 100") != NULL);
     CHECK(strstr(sdp, "a=rtpmap:100 VP8/90000") != NULL);
-    CHECK(media_recv_sdp(&cfg, false, 1, sdp, sizeof(sdp)));
+    CHECK(media_recv_sdp_audio(1, cfg.audio_payload_type, sdp, sizeof(sdp)));
     CHECK(strstr(sdp, "a=rtpmap:120 opus/48000/2") != NULL);
 
     /* Refused rather than half-written: a truncated SDP is a decoder
      * that starts and then understands nothing. */
     char tiny[16];
-    CHECK(!media_recv_sdp(&cfg, true, 45123, tiny, sizeof(tiny)));
-    CHECK(!media_recv_sdp(&cfg, true, 0, sdp, sizeof(sdp)));
-    CHECK(!media_recv_sdp(NULL, true, 45123, sdp, sizeof(sdp)));
+    CHECK(!media_recv_sdp_video(45123, cfg.video_codec, cfg.video_payload_type, tiny, sizeof(tiny)));
+    CHECK(!media_recv_sdp_video(0, cfg.video_codec, cfg.video_payload_type, sdp, sizeof(sdp)));
+    CHECK(!media_recv_sdp_video(45123, cfg.video_codec, cfg.video_payload_type, NULL, 0));
 }
 
 /* An SFU does not transcode, so the codec is not ours to pick alone: a
@@ -68,13 +68,13 @@ TEST(the_receive_sdp_follows_the_negotiated_video_codec) {
     struct media_config cfg = { .video_payload_type = 96, .video_codec = MEDIA_VIDEO_VP8 };
     char sdp[512];
 
-    CHECK(media_recv_sdp(&cfg, true, 5000, sdp, sizeof(sdp)));
+    CHECK(media_recv_sdp_video(5000, cfg.video_codec, cfg.video_payload_type, sdp, sizeof(sdp)));
     CHECK(strstr(sdp, "a=rtpmap:96 VP8/90000") != NULL);
     /* VP8 gets NO fmtp rather than an empty one. */
     CHECK(strstr(sdp, "a=fmtp:") == NULL);
 
     cfg.video_codec = MEDIA_VIDEO_H264;
-    CHECK(media_recv_sdp(&cfg, true, 5000, sdp, sizeof(sdp)));
+    CHECK(media_recv_sdp_video(5000, cfg.video_codec, cfg.video_payload_type, sdp, sizeof(sdp)));
     CHECK(strstr(sdp, "a=rtpmap:96 H264/90000") != NULL);
     /* Without this the depacketiser assumes single-NAL and drops every
      * fragmented keyframe — i.e. all of them. */
@@ -82,7 +82,7 @@ TEST(the_receive_sdp_follows_the_negotiated_video_codec) {
 
     /* Audio is unaffected by the video codec. */
     cfg.audio_payload_type = 111;
-    CHECK(media_recv_sdp(&cfg, false, 5001, sdp, sizeof(sdp)));
+    CHECK(media_recv_sdp_audio(5001, cfg.audio_payload_type, sdp, sizeof(sdp)));
     CHECK(strstr(sdp, "a=rtpmap:111 opus/48000/2") != NULL);
     CHECK(strstr(sdp, "H264") == NULL);
 }
@@ -106,6 +106,100 @@ TEST(the_video_codec_is_parsed_or_refused) {
 
     CHECK(strcmp(media_video_codec_name(MEDIA_VIDEO_VP8), "VP8") == 0);
     CHECK(strcmp(media_video_codec_name(MEDIA_VIDEO_H264), "H264") == 0);
+}
+
+/* A room where different people publish different codecs is the
+ * ordinary case, not an edge one: an SFU does not transcode, so the
+ * codec belongs to each PUBLISHER. Offering only our own preference
+ * means a black tile for half the room, with no error anywhere. */
+TEST(the_subscribe_offer_names_every_codec_we_decode) {
+    char m[768];
+    CHECK(media_video_offer_mline(96, 97, m, sizeof(m)));
+    /* Both codecs on ONE m-line, both payload types in the format list
+     * — a server picks from that list, so a codec missing from it is a
+     * codec we will never be sent. */
+    CHECK(strstr(m, "m=video 9 UDP/TLS/RTP/SAVPF 96 97") != NULL);
+    CHECK(strstr(m, "a=rtpmap:96 VP8/90000") != NULL);
+    CHECK(strstr(m, "a=rtpmap:97 H264/90000") != NULL);
+    /* H.264 without packetization-mode is one a peer may decline or
+     * read as single-NAL. */
+    CHECK(strstr(m, "a=fmtp:97 profile-level-id=42e01f;packetization-mode=1") != NULL);
+    /* Receive-only: this is a subscribe, and saying sendrecv would
+     * invite the server to expect media we are not sending. */
+    CHECK(strstr(m, "a=recvonly") != NULL);
+    /* Keyframe requests, because a subscriber always joins mid-stream. */
+    CHECK(strstr(m, "a=rtcp-fb:96 nack pli") != NULL);
+    CHECK(strstr(m, "a=rtcp-fb:97 nack pli") != NULL);
+
+    /* One number cannot mean two codecs. */
+    CHECK(!media_video_offer_mline(96, 96, m, sizeof(m)));
+    CHECK(!media_video_offer_mline(-1, 97, m, sizeof(m)));
+    char tiny[32];
+    CHECK(!media_video_offer_mline(96, 97, tiny, sizeof(tiny)));
+}
+
+/* And reading back what the server settled on. Guessing here means
+ * feeding an H.264 stream to a VP8 decoder: silence, and no error. */
+TEST(the_answer_says_which_codec_this_peer_publishes) {
+    enum media_video_codec c = MEDIA_VIDEO_H264;
+    int pt = 0;
+
+    const char *vp8 = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\n"
+                      "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n"
+                      "m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 VP8/90000\r\n";
+    CHECK(media_sdp_video_codec(vp8, &c, &pt));
+    CHECK(c == MEDIA_VIDEO_VP8 && pt == 96);
+
+    /* The SAME room, a different peer: H.264 under a payload type we
+     * did not choose. Both halves have to be carried through — a right
+     * codec with a wrong payload type decodes nothing either. */
+    const char *h264 = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\n"
+                       "a=rtpmap:102 H264/90000\r\n"
+                       "a=fmtp:102 packetization-mode=1\r\n";
+    CHECK(media_sdp_video_codec(h264, &c, &pt));
+    CHECK(c == MEDIA_VIDEO_H264 && pt == 102);
+
+    /* Audio first, video second — the ordinary shape. */
+    const char *audio_first = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+                              "a=rtpmap:111 opus/48000/2\r\n"
+                              "m=video 9 UDP/TLS/RTP/SAVPF 97\r\n"
+                              "a=rtpmap:97 H264/90000\r\n";
+    CHECK(media_sdp_video_codec(audio_first, &c, &pt));
+    CHECK(c == MEDIA_VIDEO_H264 && pt == 97);
+
+    /* The rtpmap must be read from the VIDEO SECTION, not from wherever
+     * it first appears in the file.
+     *
+     * The case above does not actually prove that — it passes either
+     * way, because "opus" is simply not a codec we recognise, so a
+     * whole-file search steps over it and lands on the right line by
+     * luck. This one has a VIDEO codec named in the AUDIO section,
+     * which a whole-file search reads as the answer and gets both the
+     * codec and the payload type wrong. */
+    const char *misleading = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 96\r\n"
+                             "a=rtpmap:96 VP8/90000\r\n"
+                             "m=video 9 UDP/TLS/RTP/SAVPF 97\r\n"
+                             "a=rtpmap:97 H264/90000\r\n";
+    CHECK(media_sdp_video_codec(misleading, &c, &pt));
+    CHECK(c == MEDIA_VIDEO_H264 && pt == 97);
+
+    /* A REJECTED video m-line is port 0. Reported as no video rather
+     * than silently decoded as the default, which would be a decoder
+     * running on a stream that does not exist. */
+    const char *rejected = "v=0\r\nm=video 0 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 VP8/90000\r\n";
+    CHECK(!media_sdp_video_codec(rejected, &c, &pt));
+
+    /* A codec we cannot decode is not a codec. */
+    const char *av1 = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 45\r\na=rtpmap:45 AV1/90000\r\n";
+    CHECK(!media_sdp_video_codec(av1, &c, &pt));
+
+    /* Audio-only answers, and nonsense. */
+    CHECK(!media_sdp_video_codec("v=0\r\nm=audio 9 RTP/AVP 111\r\na=rtpmap:111 opus/48000/2\r\n",
+                                 &c, &pt));
+    CHECK(!media_sdp_video_codec("", &c, &pt));
+    CHECK(!media_sdp_video_codec(NULL, &c, &pt));
+    CHECK(!media_sdp_video_codec(vp8, NULL, &pt));
+    CHECK(!media_sdp_video_codec(vp8, &c, NULL));
 }
 
 /* An EVEN grid, and — the property the whole design rests on — one
@@ -257,6 +351,8 @@ int main(void) {
     RUN(the_receive_sdp_describes_what_was_negotiated);
     RUN(the_receive_sdp_follows_the_negotiated_video_codec);
     RUN(the_video_codec_is_parsed_or_refused);
+    RUN(the_subscribe_offer_names_every_codec_we_decode);
+    RUN(the_answer_says_which_codec_this_peer_publishes);
     RUN(the_grid_is_even_and_independent_of_focus);
     RUN(the_mix_filter_chains_every_tile_into_one_output);
     RUN(loopback_ports_are_distinct_and_reported);

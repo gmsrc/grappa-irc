@@ -229,16 +229,12 @@ bool media_start_send(struct media_leg *leg, const struct media_config *cfg, boo
     return true;
 }
 
-bool media_recv_sdp(const struct media_config *cfg, bool video, int port, char *out,
-                    size_t out_sz) {
-    if (!cfg || !out || out_sz == 0 || port <= 0) return false;
-    int pt = video ? cfg->video_payload_type : cfg->audio_payload_type;
+bool media_recv_sdp_audio(int port, int payload_type, char *out, size_t out_sz) {
+    if (!out || out_sz == 0 || port <= 0 || payload_type < 0) return false;
     /* c= is the loopback the helper writes to; the rtpmap must match
      * what the offer negotiated or the decoder sits silent with no
      * error, which is the least debuggable failure this design has. */
-    int w;
-    if (!video) {
-        w = snprintf(out, out_sz,
+    int w = snprintf(out, out_sz,
                      "v=0\r\n"
                      "o=- 0 0 IN IP4 127.0.0.1\r\n"
                      "s=shottino\r\n"
@@ -246,9 +242,13 @@ bool media_recv_sdp(const struct media_config *cfg, bool video, int port, char *
                      "t=0 0\r\n"
                      "m=audio %d RTP/AVP %d\r\n"
                      "a=rtpmap:%d opus/48000/2\r\n",
-                     port, pt, pt);
-        return w > 0 && (size_t)w < out_sz;
-    }
+                     port, payload_type, payload_type);
+    return w > 0 && (size_t)w < out_sz;
+}
+
+bool media_recv_sdp_video(int port, enum media_video_codec codec, int payload_type, char *out,
+                          size_t out_sz) {
+    if (!out || out_sz == 0 || port <= 0 || payload_type < 0) return false;
     /* H.264 additionally needs its packetization mode spelled out: a
      * depacketiser told nothing assumes single-NAL, and a real sender
      * fragments (FU-A) the moment a frame exceeds the MTU — which is
@@ -256,148 +256,118 @@ bool media_recv_sdp(const struct media_config *cfg, bool video, int port, char *
      * shows nothing. VP8 carries no such ambiguity, so it gets no fmtp
      * rather than an empty one. */
     char fmtp[64] = { 0 };
-    if (cfg->video_codec == MEDIA_VIDEO_H264)
-        snprintf(fmtp, sizeof(fmtp), "a=fmtp:%d packetization-mode=1\r\n", pt);
-    w = snprintf(out, out_sz,
-                 "v=0\r\n"
-                 "o=- 0 0 IN IP4 127.0.0.1\r\n"
-                 "s=shottino\r\n"
-                 "c=IN IP4 127.0.0.1\r\n"
-                 "t=0 0\r\n"
-                 "m=video %d RTP/AVP %d\r\n"
-                 "a=rtpmap:%d %s/90000\r\n"
-                 "%s",
-                 port, pt, pt, media_video_codec_name(cfg->video_codec), fmtp);
+    if (codec == MEDIA_VIDEO_H264)
+        snprintf(fmtp, sizeof(fmtp), "a=fmtp:%d packetization-mode=1\r\n", payload_type);
+    int w = snprintf(out, out_sz,
+                     "v=0\r\n"
+                     "o=- 0 0 IN IP4 127.0.0.1\r\n"
+                     "s=shottino\r\n"
+                     "c=IN IP4 127.0.0.1\r\n"
+                     "t=0 0\r\n"
+                     "m=video %d RTP/AVP %d\r\n"
+                     "a=rtpmap:%d %s/90000\r\n"
+                     "%s",
+                     port, payload_type, payload_type, media_video_codec_name(codec), fmtp);
     return w > 0 && (size_t)w < out_sz;
 }
 
-bool media_start_recv(struct media_leg *leg, const struct media_config *cfg, bool video,
-                      int stdout_fd) {
-    memset(leg, 0, sizeof(*leg));
-    leg->pid = -1;
-    leg->fd = -1;
-    leg->video = video;
-    if (!cfg) return false;
+bool media_video_offer_mline(int vp8_payload_type, int h264_payload_type, char *out,
+                             size_t out_sz) {
+    if (!out || out_sz == 0 || vp8_payload_type < 0 || h264_payload_type < 0) return false;
+    if (vp8_payload_type == h264_payload_type) return false; /* one number, two meanings */
+    /* Port 9 and the discard address are what an offer carries before
+     * ICE has said anything; libdatachannel fills in the rest. The
+     * rtcp-fb lines are the ones it emits itself for a video codec, and
+     * a server that sees them knows it may ask for a keyframe — which
+     * matters here, since a subscriber joins mid-stream. */
+    int w = snprintf(out, out_sz,
+                     "m=video 9 UDP/TLS/RTP/SAVPF %d %d\r\n"
+                     "c=IN IP4 0.0.0.0\r\n"
+                     "a=mid:video\r\n"
+                     "a=recvonly\r\n"
+                     "a=rtcp-mux\r\n"
+                     "a=rtpmap:%d VP8/90000\r\n"
+                     "a=rtcp-fb:%d nack\r\n"
+                     "a=rtcp-fb:%d nack pli\r\n"
+                     "a=rtcp-fb:%d goog-remb\r\n"
+                     "a=rtpmap:%d H264/90000\r\n"
+                     "a=fmtp:%d profile-level-id=42e01f;packetization-mode=1;"
+                     "level-asymmetry-allowed=1\r\n"
+                     "a=rtcp-fb:%d nack\r\n"
+                     "a=rtcp-fb:%d nack pli\r\n"
+                     "a=rtcp-fb:%d goog-remb\r\n",
+                     vp8_payload_type, h264_payload_type, vp8_payload_type, vp8_payload_type,
+                     vp8_payload_type, vp8_payload_type, h264_payload_type, h264_payload_type,
+                     h264_payload_type, h264_payload_type, h264_payload_type);
+    return w > 0 && (size_t)w < out_sz;
+}
 
-    /* Bind the port ffmpeg will listen on, learn its number, then close
-     * it: ffmpeg opens it itself, and two holders of one UDP port is a
-     * race over who receives. The window between is on loopback and
-     * ends immediately. */
+/* The start of the line `name` introduces, within [p, end). */
+static const char *sdp_find_line(const char *p, const char *end, const char *name) {
+    size_t n = strlen(name);
+    while (p && p < end) {
+        if ((size_t)(end - p) >= n && strncmp(p, name, n) == 0) return p;
+        const char *nl = memchr(p, '\n', (size_t)(end - p));
+        if (!nl) return NULL;
+        p = nl + 1;
+    }
+    return NULL;
+}
+
+bool media_sdp_video_codec(const char *sdp, enum media_video_codec *codec, int *payload_type) {
+    if (!sdp || !codec || !payload_type) return false;
+    const char *end = sdp + strlen(sdp);
+    const char *m = sdp;
+    /* The VIDEO m-line, and only the attributes belonging to it: an
+     * a=rtpmap under the audio section would otherwise be read as the
+     * video codec, which is how a call ends up decoding Opus as VP8. */
+    for (;;) {
+        m = sdp_find_line(m, end, "m=");
+        if (!m) return false;
+        if (strncmp(m, "m=video ", 8) == 0) break;
+        const char *nl = memchr(m, '\n', (size_t)(end - m));
+        if (!nl) return false;
+        m = nl + 1;
+    }
     int port = 0;
-    int probe = media_bind_loopback(&port);
-    if (probe < 0) return false;
-    close(probe);
+    if (sscanf(m, "m=video %d", &port) != 1) return false;
+    /* Port 0 means the far end REJECTED the media. Reporting that as
+     * "no video" rather than falling through to a default is the whole
+     * reason this returns a bool. */
+    if (port == 0) return false;
 
-    char sdp[512];
-    if (!media_recv_sdp(cfg, video, port, sdp, sizeof(sdp))) return false;
-
-    /* ffmpeg reads the description from a file; a template in TMPDIR so
-     * two calls cannot collide, unlinked as soon as ffmpeg has it. */
-    char path[] = "/tmp/shottino-call-XXXXXX";
-    int sdp_fd = mkstemp(path);
-    if (sdp_fd < 0) return false;
-    size_t sdp_len = strlen(sdp);
-    bool wrote = write(sdp_fd, sdp, sdp_len) == (ssize_t)sdp_len;
-    close(sdp_fd);
-    if (!wrote) {
-        unlink(path);
-        return false;
+    /* This section ends where the next m-line begins. */
+    const char *nl = memchr(m, '\n', (size_t)(end - m));
+    const char *section = nl ? nl + 1 : end;
+    const char *next = section;
+    for (;;) {
+        next = sdp_find_line(next, end, "m=");
+        if (!next || next >= section) break;
     }
+    const char *sec_end = next ? next : end;
 
-    /* fps= is not decoration: without a rate bound ffmpeg emits frames
-     * as fast as the RTP timebase lets it — a measured 14 800 frames in
-     * eight seconds, i.e. ~1850 fps of rgb24 down a pipe shottino reads
-     * at ten. The same rate the sender was told to use. */
-    char scale[192];
-    snprintf(scale, sizeof(scale), "fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease,"
-                                   "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=rgb24",
-             cfg->fps > 0 ? cfg->fps : 10,
-             cfg->frame_w > 0 ? cfg->frame_w : 320, cfg->frame_h > 0 ? cfg->frame_h : 240,
-             cfg->frame_w > 0 ? cfg->frame_w : 320, cfg->frame_h > 0 ? cfg->frame_h : 240);
-
-    char *argv[MEDIA_MAX_ARGS];
-    size_t n = 0;
-    argv[n++] = (char *)"ffmpeg";
-    /* -nostdin, or the leg dies the instant it starts.
-     *
-     * ffmpeg reads stdin for interactive keys; this one is handed
-     * /dev/null, which is EOF, and it quits before a single packet
-     * arrives — reporting "Output file does not contain any stream",
-     * which reads like a filter or codec problem and is neither. The
-     * capture leg has the same mouth to stop. */
-    argv[n++] = (char *)"-nostdin";
-    argv[n++] = (char *)"-loglevel";
-    argv[n++] = (char *)"error";
-    /* The same #451 posture the inline decoder takes: this input is
-     * driven by a stranger's media, so ffmpeg gets only the protocols
-     * this path needs and none of the demuxers a hostile stream could
-     * otherwise reach. */
-    argv[n++] = (char *)"-protocol_whitelist";
-    argv[n++] = (char *)"file,udp,rtp";
-    /* NO -fflags nobuffer / -flags low_delay here, deliberately.
-     *
-     * They looked like the obvious choice for a call and they cost the
-     * whole picture: they make the demuxer discard rather than reorder,
-     * so any jitter loses packets, the keyframe never assembles, and the
-     * decoder reports "Invalid data found" on EVERY packet and gives up
-     * at a 100% error rate. A stream sent straight from ffmpeg is paced
-     * tightly enough to survive it; one that has crossed a network and a
-     * relay is not — measured both ways, 0 frames with the flags and 118
-     * without, same six seconds and the same packets.
-     *
-     * The tens of milliseconds they would save are not worth a blank
-     * window. */
-    argv[n++] = (char *)"-i";
-    argv[n++] = path;
-    if (video) {
-        /* Straight to the helper's own stdout, which IS the frame
-         * stream: no copy, no framing layer to desynchronise. Same
-         * scale-and-pad convention as shottino's inline decoder, so a
-         * call frame is byte-identical in shape to a clip frame and
-         * everything downstream indexes it the same way. */
-        argv[n++] = (char *)"-an";
-        argv[n++] = (char *)"-vf";
-        argv[n++] = scale;
-        argv[n++] = (char *)"-f";
-        argv[n++] = (char *)"rawvideo";
-        argv[n++] = (char *)"-pix_fmt";
-        argv[n++] = (char *)"rgb24";
-        argv[n++] = (char *)"pipe:1";
-    } else {
-        /* The SINK is its own setting, never inferred from how the
-         * capture source is spelled. Deriving one from the other turns
-         * `--audio-source lavfi:sine=…` into `-f lavfi` as an OUTPUT
-         * format, which is not a thing — and on a real machine it would
-         * quietly assume that whoever captures with pulse plays back
-         * with it. */
-        char sink[256];
-        const char *fmt = NULL, *dev = NULL;
-        split_source(cfg->audio_sink && cfg->audio_sink[0] ? cfg->audio_sink : "alsa:default",
-                     &fmt, &dev, sink, sizeof(sink));
-        argv[n++] = (char *)"-vn";
-        argv[n++] = (char *)"-f";
-        argv[n++] = (char *)(fmt && fmt[0] ? fmt : "alsa");
-        argv[n++] = (char *)(dev && dev[0] ? dev : "default");
+    /* The FIRST rtpmap we recognise wins: an answer lists what the
+     * server settled on, and where it lists several the order is its
+     * preference. */
+    const char *p = section;
+    while (p < sec_end) {
+        const char *line = sdp_find_line(p, sec_end, "a=rtpmap:");
+        if (!line || line >= sec_end) break;
+        int pt = 0;
+        char name[32] = "";
+        if (sscanf(line, "a=rtpmap:%d %31[^/]", &pt, name) == 2 && pt >= 0) {
+            enum media_video_codec found;
+            if (media_video_codec_parse(name, &found)) {
+                *codec = found;
+                *payload_type = pt;
+                return true;
+            }
+        }
+        const char *ln = memchr(line, '\n', (size_t)(sec_end - line));
+        if (!ln) break;
+        p = ln + 1;
     }
-    argv[n] = NULL;
-
-    leg->pid = spawn_ffmpeg(argv, video ? stdout_fd : -1);
-    if (leg->pid < 0) {
-        unlink(path);
-        return false;
-    }
-    /* Removed at stop, NOT here: the child may not have exec'd yet, and
-     * unlinking under it leaves the decoder reading nothing and emitting
-     * no frames — silently, because its stderr is discarded. */
-    snprintf(leg->sdp_path, sizeof(leg->sdp_path), "%s", path);
-
-    leg->fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (leg->fd < 0) {
-        media_stop(leg);
-        return false;
-    }
-    leg->peer_port = port;
-    return true;
+    return false;
 }
 
 /* Round down to even. The composited frame is drawn as half blocks —
@@ -531,7 +501,7 @@ bool media_start_mix(struct media_leg *legs, int n, const struct media_config *c
         if (probe < 0) goto fail;
         close(probe); /* ffmpeg opens it itself */
         char sdp[512];
-        if (!media_recv_sdp(cfg, false, port, sdp, sizeof(sdp))) goto fail;
+        if (!media_recv_sdp_audio(port, cfg->audio_payload_type, sdp, sizeof(sdp))) goto fail;
         char path[] = "/tmp/shottino-mix-XXXXXX";
         int fd = mkstemp(path);
         if (fd < 0) goto fail;
@@ -578,16 +548,20 @@ fail:
  * while the decoder behind it is being replaced, so a focus change
  * costs a moment of dropped packets rather than a renumbering the
  * callback cannot see. */
-static bool leg_prepare_recv(struct media_leg *leg, const struct media_config *cfg, bool video) {
+static bool leg_prepare_video(struct media_leg *leg) {
     if (leg->peer_port > 0 && leg->fd >= 0 && leg->sdp_path[0]) return true; /* already has one */
-    leg->video = video;
+    leg->video = true;
     int port = 0;
     int probe = media_bind_loopback(&port);
     if (probe < 0) return false;
     close(probe); /* ffmpeg opens it itself */
 
+    /* The codec is the LEG'S, negotiated with that peer — not the
+     * call's preference. Two people in one room can publish different
+     * codecs and each subscribe settles separately, so a global answer
+     * here would decode one of them as the other. */
     char sdp[512];
-    if (!media_recv_sdp(cfg, video, port, sdp, sizeof(sdp))) return false;
+    if (!media_recv_sdp_video(port, leg->codec, leg->payload_type, sdp, sizeof(sdp))) return false;
     char path[] = "/tmp/shottino-mix-XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) return false;
@@ -628,7 +602,7 @@ bool media_start_video_mix(struct media_mix *mix, const struct media_config *cfg
     for (int i = 0; i < n; i++) {
         int slot = mix->tiles[i].slot;
         if (slot < 0 || slot >= MEDIA_MAX_PEERS) return false;
-        if (!leg_prepare_recv(&mix->legs[slot], cfg, true)) return false;
+        if (!leg_prepare_video(&mix->legs[slot])) return false;
     }
 
     /* Eight peers of scale-and-pad plus an overlay chain. Measured at
