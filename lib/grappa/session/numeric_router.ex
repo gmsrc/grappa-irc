@@ -144,8 +144,8 @@ defmodule Grappa.Session.NumericRouter do
   @stats_numerics Enum.to_list(211..219) ++ Enum.to_list(240..250)
 
   # #785 — the RFC error range (4xx command failures, 5xx server errors).
-  # Distinct from `severity/1`'s `>= 400` cut, which deliberately paints
-  # the 6xx vendor replies red too; absorption keys off the RANGE, so a
+  # Distinct from `severity/1`'s `>= 400` cut, which also lands the 6xx
+  # vendor replies on `:error`; absorption keys off the RANGE instead, so a
   # 671 RPL_WHOISSECURE stays a foldable WHOIS leg. 401 ERR_NOSUCHNICK is
   # the one error a WHOIS emits about itself. Both are read by
   # `absorbable_whois_leg?/2`.
@@ -555,25 +555,34 @@ defmodule Grappa.Session.NumericRouter do
 
   #221's guard captures ANY scan-class numeric whose `params[1]` is an
   in-flight WHOIS target, on the premise that it must be an unhandled WHOIS
-  leg. That premise holds for WHOIS legs, which are all RPL_* — it does NOT
-  hold for the error numerics, which answer whatever command provoked them.
-  A 407 ERR_TOOMANYTARGETS or a 531 answering the operator's PRIVMSG was
-  being folded into an unrelated WHOIS bundle and never shown (the
-  "no silent-swallow at boundaries" rule, violated).
+  leg. That premise holds for every WHOIS leg EXCEPT 401 — the rest are all
+  RPL_* — and it does NOT hold for the error numerics, which answer whatever
+  command provoked them. A 407 ERR_TOOMANYTARGETS answering the operator's
+  PRIVMSG (bahamut `s_user.c:2087`) was being folded into an unrelated WHOIS
+  bundle and never shown (the "no silent-swallow at boundaries" rule,
+  violated).
 
   401 ERR_NOSUCHNICK is the single ambiguous code: bahamut emits it BOTH as
   the WHOIS's own leg (`s_user.c` `m_whois`: 401 then 318) AND once per
-  failing PRIVMSG/CTCP/INVITE — identical on the wire, with no request
+  failing PRIVMSG/CTCP/INVITE (`m_message`, reached via `m_private`) —
+  identical on the wire, with no request
   identity to correlate on. So a pending WHOIS absorbs the FIRST 401 for its
   target and every later one falls through to the param scan, landing in the
   target's query window (or `$server` when none is open, per #640). The
   first 401 may be attributed to the wrong command, but the user-visible
   outcome is right for every combination bahamut can emit: N failing
-  commands plus one WHOIS produce exactly N visible error rows.
+  commands plus ONE in-flight WHOIS produce exactly N visible error rows.
 
   Non-error codes stay unconditional — a WHOIS legitimately emits several
   320 lines, and a 6xx numeric added to solanum next year must still fold
   with zero code change here (#221's whole point).
+
+  The carve-out is deliberately the RFC error BLOCK, not every error numeric
+  in existence. solanum puts some PRIVMSG-time errors above it (707
+  ERR_TARGCHANGE, 716 ERR_TARGUMODEG, 723 ERR_NOPRIVS) and those stay
+  absorbable: widening to 7xx would cost #221's actual promise — a vendor
+  numeric invented next year folding into the card with zero code change —
+  to cover a reply Azzurra never emits.
 
   Both halves of the carve-out read this one predicate: `route/2` decides
   whether to delegate, `EventRouter`'s generic pass-through decides whether

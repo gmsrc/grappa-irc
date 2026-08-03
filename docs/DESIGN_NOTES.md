@@ -27807,36 +27807,49 @@ premise that it must be a WHOIS leg grappa has no typed handler for yet.
 318, so for the whole in-flight window EVERY 401 for that nick was folded into
 the bundle's `extra_lines` instead of being routed to `{:query, nick}` and
 persisted. bahamut emits one 401 **per failing command** (`src/s_user.c`:
-`m_whois` sends 401 then 318; `m_privmsg` sends its own), so a `/msg` plus a
+`m_whois` sends 401 then 318; `m_message` sends its own), so a `/msg` plus a
 WHOIS to the same dead nick make two 401s and the guard ate both.
 
-**Why #221's premise is only half true.** WHOIS legs are all RPL_* — that is
-what makes "delegate anything arriving during a WHOIS" a safe default for
-numerics invented next year. Error numerics are not legs: they answer whatever
-command provoked them. A 407 ERR_TOOMANYTARGETS or a 531 answering the
-operator's PRIVMSG was being swallowed by an unrelated WHOIS bundle and never
-shown — a silent swallow at a boundary, which CLAUDE.md forbids. So the guard
-now carves out the RFC error range (400..599) wholesale. This is the general
-rule; 401 was the instance that got reported.
+**Why #221's premise is only half true.** Every WHOIS leg except 401 is RPL_* —
+that is what makes "delegate anything arriving during a WHOIS" a safe default
+for numerics invented next year. Error numerics are not legs: they answer
+whatever command provoked them. A 407 ERR_TOOMANYTARGETS answering the
+operator's PRIVMSG (`src/s_user.c:2087`) was being swallowed by an unrelated
+WHOIS bundle and never shown — a silent swallow at a boundary, which CLAUDE.md
+forbids. So the guard now carves out the RFC error range (400..599) wholesale.
+401 was the instance that got reported; the range is the rule.
+
+**The range is the RFC block, not "every error numeric", and that is a
+deliberate stop.** solanum puts some PRIVMSG-time errors above the block — 707
+ERR_TARGCHANGE, 716 ERR_TARGUMODEG, 723 ERR_NOPRIVS — and those remain
+absorbable, so on Libera a `/msg` to a `+g` nick during a WHOIS for that nick is
+still folded into the card. Widening to 7xx would buy that case at the cost of
+#221's actual promise (a vendor numeric invented next year folds with zero code
+change here), for a reply Azzurra never emits. Reconsider if grappa ever binds a
+solanum network in anger.
 
 **401 is the one genuinely ambiguous code, and it is unresolvable.** bahamut
-emits it both as the WHOIS's own leg and once per failing PRIVMSG/CTCP/INVITE.
+emits it both as the WHOIS's own leg and once per failing PRIVMSG/CTCP/INVITE
+(`m_message`, reached via `m_private` — there is no `m_privmsg` in bahamut).
 The two are byte-identical on the wire and IRC numerics carry no request
 identity, so no amount of care distinguishes them. The rule adopted: a pending
 WHOIS absorbs the **first** 401 for its target; every later one falls through to
 the param scan and lands in the target's query window (or `$server` when none is
 open, per #640). The first 401 may be attributed to the wrong command. That is
 accepted deliberately, because the user-visible outcome is right for every
-combination bahamut can emit: **N failing commands plus one WHOIS produce
-exactly N visible error rows**, whichever order they arrive in. That ordering
+combination bahamut can emit: **N failing commands plus ONE in-flight WHOIS
+produce exactly N visible error rows**, whichever order they arrive in. That ordering
 independence is the point — the bug was load-dependent precisely because the
 outcome used to depend on whether the WHOIS was primed before the PRIVMSG's 401
 came back.
 
 **The alternative — never absorb a 401 — was rejected.** It is simpler and
-purer, but #606 auto-fetches a WHOIS whenever a query window is focused, so it
-would turn every focus of a window with a departed peer into a fresh red row in
-that window's scrollback. Absorbing one keeps the WHOIS's own 401 in the card
+purer (the fold gate collapses to the range test, and two public functions plus
+the fourth `router_state` field disappear), but #606 WILL auto-fetch a WHOIS
+whenever a query window is focused — that is the open PR #613, not main today —
+so it would turn every focus of a window with a departed peer into a fresh red
+row in that window's scrollback. If #613 slips indefinitely, the simpler shape
+is the one to revert to. Absorbing one keeps the WHOIS's own 401 in the card
 where it belongs.
 
 **Absorption had to be ONE rule read from two places.** The first cut put the
@@ -27848,16 +27861,36 @@ so EventRouter can update state") and the generic pass-through folds
 the absorption: `NumericRouter.absorbable_whois_leg?/2` is the single predicate,
 `whois_extra_line_fold/4` gates on it, and
 `EventRouter.whois_nosuchnick_absorbed/1` derives the already-absorbed target
-set from the folded `extra_lines` rather than tracking a parallel flag. Nothing
-to keep in sync, so nothing can drift.
+set from the folded `extra_lines` rather than tracking a parallel flag. The two
+halves cannot drift because there is only one record.
+
+**There is a third writer, and the review found it.** `prime_pending/3`
+REPLACES the accumulator, so a second WHOIS for a target that already has one in
+flight wipes `extra_lines` and with it the absorption record. The predicted
+consequence was that the operator sees nothing again; measured, it is not — each
+WHOIS brings its own 401, so a reset that costs one absorption arrives together
+with the numeric that needs it, and the reported case still produces its row.
+`server_test.exs` pins that interleaving rather than arguing it. The real
+boundary is older than #785: `whois_pending` is keyed by NICK, so two concurrent
+WHOISes for one target are one entry and the first 318 drains it for both. With
+a duplicate in flight the bundle is approximate by construction (P-0a), and the
+"exactly N" claim above is scoped to one.
 
 **Known edge, left open on purpose.** An ircd that emits 401 with no trailing
 text folds nothing (`whois_trailing/1` returns nil), so absorption is never
-recorded and a repeat is absorbed again. bahamut and solanum both always send
-the trailing. The trailing-less shape is a pre-existing silent-drop hole in the
-generic pass-through — a delegated numeric with no trailing is dropped by
-EventRouter and never persisted by Server — and #785 neither widens nor closes
-it.
+recorded and EVERY 401 in the window is delegated and dropped — for that wire
+shape #785 is a no-op, not a partial fix. bahamut and solanum both always send
+the trailing, and `candidate_params/1` already documents the 2-param shape as a
+legacy-ircd thing, so this is bounded rather than hypothetical. The underlying
+hole — a delegated numeric with no trailing is dropped by EventRouter and never
+persisted by Server — is older than #785, which neither widens nor closes it.
+
+Same derivation, related fragility: if anyone later gives 401 a typed
+`do_route` clause, `whois_extra_line_fold/4` stops being reached, the absorbed
+set is permanently empty, and the router silently reverts to eating every 401
+with no test failing. A router-side record taken at the delegation decision
+would remove both problems at the cost of the parallel state this deliberately
+avoids; the trade is worth revisiting if 401 ever earns a typed handler.
 
 **Ordering.** This landed on main before #613 (#606 query-rail context) merges.
 #606 turns the race from "the seconds after a typed `/whois`" into a routine one

@@ -522,7 +522,10 @@ defmodule Grappa.Session.NumericRouterTest do
       assert {:query, "ghost"} = NumericRouter.route(m, st)
     end
 
-    test "a 5xx error numeric is NEVER absorbed by an in-flight whois" do
+    test "an unassigned 5xx code is NEVER absorbed — the carve-out is the RANGE, not a list" do
+      # 531 is `NULL` in bahamut's err_str table (src/s_err.c) and unknown to
+      # solanum; it is here precisely BECAUSE no bound ircd emits it. The
+      # carve-out must hold for a code nobody enumerated.
       m = msg(531, ["vjt", "ghost", "You are not permitted to send private messages"])
       st = state(whois_targets: MapSet.new(["ghost"]))
       assert {:query, "ghost"} = NumericRouter.route(m, st)

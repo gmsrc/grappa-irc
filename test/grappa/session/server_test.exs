@@ -9330,6 +9330,106 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "#785 — a non-401 error numeric is neither absorbed NOR folded into the card", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      # The fold-side half of the carve-out. Routing the 407 to the query
+      # window is not enough: Server calls EventRouter on the non-delegated
+      # branch too, so without the same gate on `whois_extra_line_fold/4` the
+      # row would ALSO be duplicated into the WHOIS card's extra_lines.
+      assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
+
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil)
+      _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
+
+      :ok =
+        Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.channel(user.name, network.slug, "ghost"))
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      IRCServer.feed(server, ":irc.test.org 407 grappa-test ghost :Too many recipients\r\n")
+      IRCServer.feed(server, ":irc.test.org 318 grappa-test ghost :End of /WHOIS list\r\n")
+
+      assert_message_event(
+        kind: :notice,
+        channel: "ghost",
+        network: network.slug,
+        meta: %{
+          numeric: 407,
+          severity: :error,
+          raw_params: ["grappa-test", "ghost", "Too many recipients"]
+        }
+      )
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :whois_bundle} = bundle
+                     },
+                     1_500
+
+      assert bundle.extra_lines == nil
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#785 — a re-issued WHOIS resets the bundle, and the row accounting survives it", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      # `prime_pending/3` REPLACES the accumulator, so a second WHOIS for a
+      # target that already has one in flight wipes `extra_lines` — and with
+      # it the absorption record this fix derives from. That is a third writer
+      # to the field, so the accounting is pinned here rather than argued:
+      # each WHOIS brings its own 401, so a reset that costs one absorption
+      # arrives together with the numeric that needs it.
+      #
+      # Boundary of the model, NOT introduced by #785: `whois_pending` is
+      # keyed by NICK, so two concurrent WHOISes for the same target are one
+      # entry and the first 318 drains it for both. The count below is exact
+      # for the reported case (one WHOIS); with a duplicate in flight the
+      # bundle is approximate by construction (P-0a).
+      assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
+
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil)
+      _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
+
+      :ok =
+        Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.channel(user.name, network.slug, "ghost"))
+
+      # The /msg's 401 is absorbed by the first WHOIS.
+      IRCServer.feed(server, ":irc.test.org 401 grappa-test ghost :No such nick/channel\r\n")
+      refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :message}}, 300
+
+      # Re-prime BETWEEN the absorption and the first WHOIS's own reply — the
+      # interleaving that actually destroys the record.
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil)
+
+      IRCServer.feed(server, ":irc.test.org 401 grappa-test ghost :No such nick/channel\r\n")
+      IRCServer.feed(server, ":irc.test.org 318 grappa-test ghost :End of /WHOIS list\r\n")
+      IRCServer.feed(server, ":irc.test.org 401 grappa-test ghost :No such nick/channel\r\n")
+      IRCServer.feed(server, ":irc.test.org 318 grappa-test ghost :End of /WHOIS list\r\n")
+
+      # The operator still gets feedback — the failure is never fully silent,
+      # which is the #785 regression this pins against.
+      assert_message_event(
+        kind: :notice,
+        channel: "ghost",
+        network: network.slug,
+        meta: %{
+          numeric: 401,
+          severity: :error,
+          raw_params: ["grappa-test", "ghost", "No such nick/channel"]
+        }
+      )
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "318 case-insensitive against typed target (server may echo different case)", %{
       server: server,
       user: user,
