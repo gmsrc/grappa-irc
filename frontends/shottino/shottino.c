@@ -242,6 +242,12 @@ struct network {
     wire_connection_state conn_state;
     bool conn_known;
     bool connecting;
+    /* Which own-nick topic this network's DM listener is subscribed to,
+     * or empty for none. Recorded rather than derived from `nick`
+     * because the two go out of step exactly when it matters: a NICK
+     * change moves the topic inbound DMs arrive on, and the old
+     * subscription keeps delivering nothing at all. */
+    char ws_dm_nick[MAX_CHANNEL];
 };
 
 /* Server-owned window state. Grappa owns this state machine; shottino
@@ -5833,6 +5839,44 @@ static bool current_window_key(struct app *app, char *network, size_t net_sz, ch
     return have;
 }
 
+/* Subscribe to the own-nick topic on every network: the DM LISTENER.
+ *
+ * This client had no such thing, and it is why an incoming query only
+ * ever showed your own half of it.
+ *
+ * grappa broadcasts a message on the topic derived from the row's
+ * `channel` — and an INBOUND DM persists at `channel = your own nick`,
+ * `dm_with = the peer`. So the peer's lines arrive on
+ * `.../channel:<ownNick>`, while the window they belong to is named
+ * after the PEER. Subscribing per window therefore picks up the
+ * outbound echoes (which do persist at `channel = peer`) and nothing
+ * coming the other way: the query filled up with one side of a
+ * conversation, and a query somebody opened to us stayed invisible
+ * until something else — a client that does subscribe here — caused the
+ * server to re-broadcast the window list.
+ *
+ * The re-keying was already in place at the other end (render_message
+ * turns `channel == own nick` back into the sender's window). Only the
+ * subscription was missing. cicchetto calls the same thing its
+ * dm-listener loop; this is shottino's half of the same contract.
+ *
+ * Idempotent by comparison, so it can be called from anywhere the nick
+ * or the socket might have changed. */
+static void ws_sync_dm_listeners(struct app *app) {
+    for (size_t i = 0; i < app->network_count; i++) {
+        struct network *n = &app->networks[i];
+        if (!n->nick[0] || strcmp(n->nick, n->ws_dm_nick) == 0) continue;
+        char *nick = json_escape(n->nick);
+        char *net = json_escape(n->slug);
+        char *topic = xasprintf("grappa:user:%s/network:%s/channel:%s", app->subject, net, nick);
+        free(nick);
+        free(net);
+        ws_join(app, topic);
+        free(topic);
+        snprintf(n->ws_dm_nick, sizeof(n->ws_dm_nick), "%s", n->nick);
+    }
+}
+
 static void ws_join_topics(struct app *app) {
     char *subject = json_escape(app->subject);
     char *topic = xasprintf("grappa:user:%s", subject);
@@ -5855,6 +5899,12 @@ static void ws_join_topics(struct app *app) {
         app->windows[i].joined_ws = true;
         free(t);
     }
+    /* A fresh socket has none of the old subscriptions, so the record of
+     * what was joined is cleared before the listeners are re-joined —
+     * otherwise a reconnect would decide it had already subscribed to
+     * every one of them and silently subscribe to none. */
+    for (size_t i = 0; i < app->network_count; i++) app->networks[i].ws_dm_nick[0] = 0;
+    ws_sync_dm_listeners(app);
 }
 
 /* Read the next complete websocket MESSAGE, if one has arrived.
@@ -6516,6 +6566,11 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
         const char *slug = n ? n->slug : NULL;
         if (n) snprintf(n->nick, sizeof(n->nick), "%s", ev->u.own_nick.nick);
         pthread_mutex_unlock(&app->lock);
+        /* The topic inbound DMs arrive on is named after this nick, so
+         * changing it MOVES the listener — without this, queries stop
+         * receiving the moment you /nick. Outside the lock: ws_join logs,
+         * and log_line takes the lock this just released. */
+        ws_sync_dm_listeners(app);
         if (slug) log_line(app, "[%s/$server] --- you are now known as %s", slug, ev->u.own_nick.nick);
         break;
     }
@@ -6590,6 +6645,10 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
                     app->windows[i].state = WS_PARKED;
         }
         pthread_mutex_unlock(&app->lock);
+        /* A network that connects AFTER the socket did learns its nick
+         * here, and the DM listener is named after that nick — so this
+         * is the other door into the same subscription. */
+        ws_sync_dm_listeners(app);
         log_line(app, "[%s/$server] --- network %s -> %s%s%s", ev->u.connection_state.network_slug,
                  wire_connection_state_name(ev->u.connection_state.from),
                  wire_connection_state_name(ev->u.connection_state.to),

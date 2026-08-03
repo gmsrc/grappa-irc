@@ -1186,6 +1186,38 @@ TEST(an_away_mention_is_replayed_in_the_window_it_was_said_in) {
     free_app(app);
 }
 
+TEST(the_dm_listener_follows_the_nick_the_topic_is_named_after) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    /* grappa broadcasts an INBOUND DM on the topic named after the
+     * row's channel, and an inbound DM persists at `channel = your own
+     * nick`. So the subscription that carries the other person's half
+     * of a query is named after OUR nick, not theirs — and it moves
+     * when we do. Nothing tracked that before: the query filled up
+     * with one side of the conversation. */
+    CHECK_STR(app->networks[0].ws_dm_nick, "");
+    ws_sync_dm_listeners(app);
+    CHECK_STR(app->networks[0].ws_dm_nick, "vjt");
+
+    /* Idempotent: the same nick does not re-subscribe. */
+    ws_sync_dm_listeners(app);
+    CHECK_STR(app->networks[0].ws_dm_nick, "vjt");
+
+    /* A NICK change moves the topic, so the listener has to follow or
+     * the queries go quiet from that moment on. */
+    snprintf(app->networks[0].nick, sizeof(app->networks[0].nick), "%s", "nextime");
+    ws_sync_dm_listeners(app);
+    CHECK_STR(app->networks[0].ws_dm_nick, "nextime");
+
+    /* A network with no nick yet has no topic to name. */
+    struct network *n = &app->networks[app->network_count++];
+    memset(n, 0, sizeof(*n));
+    snprintf(n->slug, sizeof(n->slug), "libera");
+    ws_sync_dm_listeners(app);
+    CHECK_STR(n->ws_dm_nick, "");
+    free_app(app);
+}
+
 TEST(the_admin_uploads_tab_totals_the_bytes_field) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -3490,6 +3522,7 @@ int main(void) {
     RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
     RUN(audio_is_classified_before_the_uploads_heuristic);
     RUN(an_away_mention_is_replayed_in_the_window_it_was_said_in);
+    RUN(the_dm_listener_follows_the_nick_the_topic_is_named_after);
     RUN(the_admin_sessions_tab_reads_the_shape_the_server_sends);
     RUN(a_session_row_carries_the_composite_id_grappa_parses);
     RUN(an_orphan_session_is_rendered_but_not_actionable);
