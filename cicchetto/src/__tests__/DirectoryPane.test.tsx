@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DirectoryPage } from "../lib/api";
 import { channelKey } from "../lib/channelKey";
@@ -607,7 +608,7 @@ describe("DirectoryPane", () => {
       directoryPageMock.mockReturnValue(undefined);
       render(() => <DirectoryPane networkSlug={SLUG} />);
       expect(screen.getByRole("alert")).toHaveTextContent(/momentarily busy/i);
-      expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /reload/i })).toBeInTheDocument();
     });
 
     it("renders no alert when there is no error", () => {
@@ -617,12 +618,12 @@ describe("DirectoryPane", () => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    it("retry re-runs loadDirectory for the slug", () => {
+    it("reload re-runs loadDirectory for the slug", () => {
       directoryErrorMock.mockReturnValue("nope");
       directoryPageMock.mockReturnValue(undefined);
       render(() => <DirectoryPane networkSlug={SLUG} />);
       loadDirectoryMock.mockClear();
-      fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+      fireEvent.click(screen.getByRole("button", { name: /reload/i }));
       expect(loadDirectoryMock).toHaveBeenCalledWith(SLUG);
     });
   });
@@ -645,6 +646,26 @@ describe("DirectoryPane", () => {
         vi.advanceTimersByTime(1000);
         expect(setQueryMock).toHaveBeenCalledTimes(1);
         expect(setQueryMock).toHaveBeenCalledWith(SLUG, "rust");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a pending keystroke never fires against a pane that switched networks", () => {
+      vi.useFakeTimers();
+      try {
+        directoryPageMock.mockReturnValue(FRESH_PAGE);
+        // An A-$list → B-$list switch reuses this component INSTANCE (Shell's
+        // <Match> stays true), so onCleanup never runs for A — the slug
+        // effect is the only thing that can cancel A's pending timer.
+        const [slug, setSlug] = createSignal(SLUG);
+        render(() => <DirectoryPane networkSlug={slug()} />);
+        fireEvent.input(screen.getByPlaceholderText(/search channels/i), {
+          target: { value: "rust" },
+        });
+        setSlug("other-net");
+        vi.advanceTimersByTime(1000);
+        expect(setQueryMock).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }

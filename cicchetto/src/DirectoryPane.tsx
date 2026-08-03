@@ -357,12 +357,15 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
         {(message) => (
           <div class="directory-error" role="alert">
             <span class="directory-error-message">{message()}</span>
+            {/* "Reload", not "Retry": this always re-fetches page 1, which
+                after a failed APPEND discards the pages already scrolled
+                through. The label names what the button does. */}
             <button
               type="button"
               class="directory-error-retry"
               onClick={() => void loadDirectory(props.networkSlug)}
             >
-              Retry
+              Reload
             </button>
           </div>
         )}

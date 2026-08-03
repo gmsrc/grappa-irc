@@ -297,6 +297,39 @@ describe("channelDirectory store", () => {
       expect(isLoadingMore("err6")).toBe(false);
     });
 
+    test("a successful triggerRefresh does NOT clear a page error", async () => {
+      // The Refresh button is live while the pane is blank (status() is
+      // undefined → not disabled), so clearing on the 202 would leave the
+      // operator with no message and no retry — #732 all over again.
+      vi.spyOn(api, "listDirectory").mockRejectedValue(new api.ApiError(503, "db_unavailable"));
+      await loadDirectory("err8");
+      const before = directoryError("err8");
+      vi.spyOn(api, "refreshDirectory").mockResolvedValue(undefined);
+      await triggerRefresh("err8");
+      expect(directoryError("err8")).toBe(before);
+    });
+
+    test("a successful loadMore clears a prior error", async () => {
+      const spy = vi.spyOn(api, "listDirectory");
+      spy.mockResolvedValueOnce(makePage({ total: 9, next_cursor: "CUR2" }));
+      await loadDirectory("err9");
+      spy.mockRejectedValueOnce(new api.ApiError(503, "db_unavailable"));
+      await loadMore("err9");
+      expect(directoryError("err9")).not.toBeNull();
+      spy.mockResolvedValueOnce(makePage({ total: 9, next_cursor: null }));
+      await loadMore("err9");
+      expect(directoryError("err9")).toBeNull();
+    });
+
+    test("an identity rotation clears the error with the rest of the state", async () => {
+      vi.spyOn(api, "listDirectory").mockRejectedValue(new api.ApiError(503, "db_unavailable"));
+      await loadDirectory("err10");
+      expect(directoryError("err10")).not.toBeNull();
+      setToken("other-bearer");
+      await flushEffects();
+      expect(directoryError("err10")).toBeNull();
+    });
+
     test("a failed triggerRefresh surfaces the error", async () => {
       vi.spyOn(api, "refreshDirectory").mockRejectedValue(new api.ApiError(504, "session_timeout"));
       await expect(triggerRefresh("err7")).resolves.toBeUndefined();
@@ -367,6 +400,57 @@ describe("channelDirectory store", () => {
       await pending;
 
       expect(directoryPage("ord4")).toBeUndefined();
+    });
+
+    test("a superseded append's failure does not surface", async () => {
+      const spy = vi.spyOn(api, "listDirectory");
+      spy.mockResolvedValueOnce(makePage({ total: 9, next_cursor: "CUR2" }));
+      await loadDirectory("ord6");
+
+      const append = deferred<api.DirectoryPage>();
+      spy.mockReturnValueOnce(append.promise);
+      const more = loadMore("ord6");
+      spy.mockResolvedValueOnce(makePage({ total: 1, next_cursor: null }));
+      await onDirectoryProgress("ord6");
+      append.reject(new api.ApiError(503, "db_unavailable"));
+      await more;
+
+      // The append belonged to a page that is no longer on screen; banner-ing
+      // its failure would blame the fresh, healthy page.
+      expect(directoryError("ord6")).toBeNull();
+    });
+
+    test("a refresh rejection arriving after the close does not park copy", async () => {
+      const spy = vi.spyOn(api, "listDirectory").mockResolvedValue(makePage({ total: 1 }));
+      await loadDirectory("ord7");
+      spy.mockClear();
+
+      const refresh = deferred<void>();
+      vi.spyOn(api, "refreshDirectory").mockReturnValueOnce(refresh.promise);
+      const pending = triggerRefresh("ord7");
+      resetDirectory("ord7");
+      refresh.reject(new api.ApiError(504, "session_timeout"));
+      await pending;
+
+      expect(directoryError("ord7")).toBeNull();
+    });
+
+    test("an append issued while a top-of-view GET is in flight is not sent", async () => {
+      const spy = vi.spyOn(api, "listDirectory");
+      spy.mockResolvedValueOnce(makePage({ total: 9, next_cursor: "CUR2" }));
+      await loadDirectory("ord8");
+
+      // A filter change is in flight: the page loadMore would extend is
+      // already superseded, and its cursor belongs to the OLD view.
+      const replacement = deferred<api.DirectoryPage>();
+      spy.mockReturnValueOnce(replacement.promise);
+      const requery = setQuery("ord8", "rust");
+      spy.mockClear();
+      await loadMore("ord8");
+      expect(spy).not.toHaveBeenCalled();
+
+      replacement.resolve(makePage({ total: 1, next_cursor: null }));
+      await requery;
     });
 
     test("a fetchInto that lands mid-loadMore drops the stale append", async () => {

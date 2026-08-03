@@ -28204,6 +28204,30 @@ happens to carry the same cursor — the ordinary case of a progress ping
 re-GETting the same view — and spliced page 2 of the OLD capture onto the new
 page 1. Sharing the base's id is both stricter and one concept instead of two.
 
+**Which id the append rides is the whole subtlety, and the first attempt got
+it wrong** (caught in review). Reading the slug's NEWEST id at call time is
+not the same as reading the id that produced the page on screen: a filter
+change bumps the counter and mutates the view synchronously, so a sentinel
+firing during that GET would send the NEW query with the OLD view's cursor and
+then pass its own guard. The id therefore lives ON the stored snapshot
+(`{id, page}`) rather than in a parallel map — written, dropped and
+identity-reset as one value, with no housekeeping to drift — and `loadMore`
+now bails before it even fetches when its base is already superseded.
+
+**A refresh 202 clears nothing.** The POST only asks the server to re-capture;
+the rows arrive later via the pings. Clearing the error on its success looked
+symmetrical and re-created the exact #732 symptom: the Refresh button is live
+while the pane is blank (no page → no `refreshing` status → not disabled), so
+a failed load followed by a refresh left the operator with no message and no
+way back. Only a successful ROW write clears. The failure path is id-guarded
+like the rest — a rejection landing after the ✕ (or after an identity
+rotation) would otherwise park copy on a pane that no longer exists, or on the
+next tenant's.
+
+**The button says "Reload", not "Retry".** It always re-fetches page 1, so
+after a failed APPEND it discards the pages already scrolled through. Naming
+the action beats implying it resumes what failed.
+
 **Ids are globally monotonic and invalidation DELETES.** `resetDirectory` and
 the identity-rotation reset drop the slug's entry rather than zeroing a
 counter, so an in-flight reply finds no match and dies. That also closes an

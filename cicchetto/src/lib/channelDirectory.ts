@@ -8,6 +8,11 @@ import { identityScopedStore } from "./identityScopedStore";
 // Default = user-count sort, no filter.
 type View = { sort: "users" | "name"; q: string };
 
+// #732 — a stored page plus the id of the request that produced it. The id
+// travels WITH the page instead of in a parallel map so it cannot drift: the
+// two are written, dropped and identity-reset as one value.
+type Snapshot = { id: number; page: api.DirectoryPage };
+
 // Per-network channel-directory store.
 //
 // Holds the last-fetched DirectoryPage and the active view (sort + q) per
@@ -45,7 +50,10 @@ type View = { sort: "users" | "name"; q: string };
 //      rejection and a pane that renders nothing forever. Each verb catches,
 //      maps via friendlyApiError, and parks the copy in `errors[slug]` for
 //      the pane to render with a retry. "No silent-swallow at boundaries" —
-//      caught here IS the surfacing, not a swallow.
+//      caught here IS the surfacing, not a swallow. Only a successful ROW
+//      write clears that copy: the refresh POST merely asks the server to
+//      re-capture, so clearing on its 202 would drop the banner off a pane
+//      that still has nothing to show — the #732 symptom, restored.
 //   2. Only the NEWEST request may write. Every response — page, append, or
 //      failure — is stamped with the request id it was issued under and
 //      dropped if a newer one has since been issued for that slug. Without
@@ -53,7 +61,7 @@ type View = { sort: "users" | "name"; q: string };
 //      `ru` rows under a box reading `rust`, with a next_cursor that pages
 //      the wrong query.
 const exports_ = identityScopedStore((onIdentityChange) => {
-  const [pages, setPages] = createSignal<Record<string, api.DirectoryPage>>({});
+  const [pages, setPages] = createSignal<Record<string, Snapshot>>({});
   const [views, setViews] = createSignal<Record<string, View>>({});
   // Per-slug load-more in-flight guard. Doubles as the sentinel's spinner
   // source (isLoadingMore). Prevents a burst of IntersectionObserver fires
@@ -85,7 +93,10 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const invalidate = (slug: string): void => {
     delete newest[slug];
   };
-  const isNewest = (slug: string, id: number): boolean => newest[slug] === id;
+  // `id` is undefined only for a verb that runs without issuing one against a
+  // slug nothing has ever been issued for (a refresh POST before any load) —
+  // still "newest", since nothing has superseded it.
+  const isNewest = (slug: string, id: number | undefined): boolean => newest[slug] === id;
 
   onIdentityChange(() => setPages({}));
   onIdentityChange(() => setViews({}));
@@ -121,7 +132,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     try {
       const page = await api.listDirectory(t, slug, { sort: view.sort, q: view.q });
       if (!isNewest(slug, id)) return;
-      setPages((prev) => ({ ...prev, [slug]: page }));
+      setPages((prev) => ({ ...prev, [slug]: { id, page } }));
       clearError(slug);
     } catch (err) {
       if (!isNewest(slug, id)) return;
@@ -129,7 +140,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     }
   };
 
-  const directoryPage = (slug: string): api.DirectoryPage | undefined => pages()[slug];
+  const directoryPage = (slug: string): api.DirectoryPage | undefined => pages()[slug]?.page;
 
   // #732 — the last failure for this slug, already mapped to human copy, or
   // null when the newest request succeeded. Null (not undefined) so the
@@ -153,32 +164,37 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     const t = token();
     if (!t) return;
     const current = pages()[slug];
-    if (!current || current.next_cursor === null) return;
+    if (!current || current.page.next_cursor === null) return;
     if (loadingMore()[slug]) return;
+    // #732 — an append does NOT supersede anything, so it issues no id of its
+    // own: it rides the id of the snapshot it is extending. Reading the
+    // slug's NEWEST id instead would be wrong in both directions — a
+    // top-of-view GET already in flight has bumped it, so the append would
+    // splice the new view's keyset onto the old view's rows and pass its own
+    // guard. Bail here rather than fetch: the page this would extend is
+    // already superseded.
+    const { id } = current;
+    if (!isNewest(slug, id)) return;
     setLoadingMore((prev) => ({ ...prev, [slug]: true }));
-    // #732 — an append does NOT supersede anything, so it does not issue a
-    // new id: it rides the id of the fetchInto whose page it extends, and
-    // drops if a newer request has been issued since. That replaces the
-    // former cursor-equality check, which waved an append through whenever a
-    // replacement page happened to carry the same cursor (a re-GET of the
-    // same view) — splicing page 2 of the OLD capture onto the new page 1.
-    // `?? 0` is the invalidated case: ids start at 1, so 0 never matches and
-    // the append drops — the same outcome as a superseding fetchInto.
-    const id = newest[slug] ?? 0;
     try {
       const view = currentView(slug);
       const next = await api.listDirectory(t, slug, {
         sort: view.sort,
         q: view.q,
-        cursor: current.next_cursor,
+        cursor: current.page.next_cursor,
       });
       if (!isNewest(slug, id)) return;
-      // Merge: keep the accumulated entries, append the new page's rows,
-      // and adopt the new page's cursor/total/captured_at/status.
+      // Merge: keep the accumulated entries, append the new page's rows, and
+      // adopt the new page's cursor/total/captured_at/status. The snapshot
+      // keeps the id of the fetchInto that seeded it — an append extends that
+      // request's result, it does not become a new one.
       setPages((prev) => {
         const base = prev[slug];
         if (!base) return prev;
-        return { ...prev, [slug]: { ...next, entries: [...base.entries, ...next.entries] } };
+        return {
+          ...prev,
+          [slug]: { id, page: { ...next, entries: [...base.page.entries, ...next.entries] } },
+        };
       });
       clearError(slug);
     } catch (err) {
@@ -223,18 +239,24 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   };
 
   // The POST only ASKS the server to re-capture; the rows arrive later via
-  // the progress/complete pings. #732 — its rejection was the third silent
-  // one in this module: the button un-disabled itself and nothing else
-  // happened, so a refresh refused (no live session, upstream timeout) read
-  // exactly like a refresh that worked.
+  // the progress/complete pings — which is also why a 202 clears nothing. It
+  // proves the server took the request, not that the list GET now works, and
+  // the pane it would un-banner may still be empty. #732 — the rejection was
+  // the third silent one in this module: the button un-disabled itself and
+  // nothing else happened, so a refresh refused (no live session, upstream
+  // timeout) read exactly like a refresh that worked.
   const triggerRefresh = async (slug: string): Promise<void> => {
     const t = token();
     if (!t) return;
+    // Not `issue`: a re-capture request must not supersede a page GET in
+    // flight. It rides the current id purely so a rejection arriving after a
+    // close — or after an identity rotation — cannot park copy on a slug that
+    // no longer has a pane, or on the next tenant's.
+    const id = newest[slug];
     try {
       await api.refreshDirectory(t, slug);
-      clearError(slug);
     } catch (err) {
-      setErrors((prev) => ({ ...prev, [slug]: describe(err) }));
+      if (isNewest(slug, id)) setErrors((prev) => ({ ...prev, [slug]: describe(err) }));
     }
   };
 
