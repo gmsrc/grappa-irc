@@ -124,6 +124,15 @@ commit_upstream() {
     git -C "$UPSTREAM" rev-parse HEAD
 }
 
+# Land a version bump upstream, the way a real release does: VERSION only, no
+# deploy-code change — so the re-exec guard does NOT fire and the running
+# process keeps whatever it derived before the pull.
+bump_upstream_version() {
+    printf '%s\n' "$1" > "$UPSTREAM/VERSION"
+    git -C "$UPSTREAM" add -A
+    git -C "$UPSTREAM" commit -qm "bump to $1"
+}
+
 run_update() {
     cd "$REPO_ROOT"
     run "$DEPLOY" update "$@"
@@ -206,6 +215,20 @@ run_update() {
     # Exact value, not just "non-empty": the bundle bakes it into
     # <meta cicchetto-version>, so a wrong number is as bad as a missing one.
     grep -Fqx "env GRAPPA_VERSION=$(cat "$REPO_ROOT/VERSION")" "$ARGV_LOG"
+}
+
+@test "update: the cic rebuild carries the version the pull brought IN, not the one the box was on (#692)" {
+    export PREFLIGHT_RC=3
+    was_on="$(cat "$REPO_ROOT/VERSION")"
+    bump_upstream_version 99.99.99
+
+    run_update
+    [ "$status" -eq 0 ]
+    # Deriving before the pull still "works" — the build succeeds and bakes the
+    # PREVIOUS number into <meta cicchetto-version>, which is the silent
+    # staleness #652 exists to prevent. Pin both halves.
+    grep -Fqx "env GRAPPA_VERSION=99.99.99" "$ARGV_LOG"
+    ! grep -Fqx "env GRAPPA_VERSION=$was_on" "$ARGV_LOG"
 }
 
 @test "update: preflight non-verdict exit aborts and propagates the code" {

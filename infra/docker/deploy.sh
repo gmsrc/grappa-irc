@@ -103,19 +103,6 @@ if [ "$DEPLOY_MODE" = source ]; then
 	# Pin to the committed compose file only — no override auto-merge.
 	# Every compose invocation reuses this array.
 	COMPOSE=(docker compose -f compose.yaml)
-	# #538/#652 — vite bakes GRAPPA_VERSION into <meta cicchetto-version> and
-	# REFUSES to build without it. The cicchetto-build container mounts only
-	# ./cicchetto, so it cannot read the repo-root VERSION file itself: the
-	# wrapper must derive it and compose passes it through (compose.yaml
-	# `GRAPPA_VERSION: ${GRAPPA_VERSION:-}`). Derived ONCE here rather than at
-	# the cic hook because TWO paths reach that build — `update`'s cold
-	# substrate_cic runs it explicitly, and `install`'s `--profile prod up -d`
-	# pulls it in through grappa's depends_on — and a third would drift again
-	# (#692: the installer was the one wrapper that never got the export, so
-	# every self-hosted install/update that reached a cic build died).
-	GRAPPA_VERSION="$(infra/packaging/version.sh)" \
-		|| die "could not derive the version from $REPO_ROOT/VERSION — is this a complete checkout?"
-	export GRAPPA_VERSION
 else
 	# ---- release-image mode: checkout-less, docker-only ---------------
 	# State (the prod env file, with every secret) lives per-user so the
@@ -151,6 +138,25 @@ require_compose_file() {
 require_docker() {
 	command -v docker >/dev/null 2>&1 || die "docker not found — install Docker Engine first."
 	docker compose version >/dev/null 2>&1 || die "docker compose v2 not found — install the Compose plugin."
+}
+
+# ---- the cic build's version input (#538/#652, #692) ------------------
+# vite bakes GRAPPA_VERSION into <meta cicchetto-version> and REFUSES to build
+# without it rather than ship a bundle that lies about its version. The
+# cicchetto-build container mounts only ./cicchetto, so it cannot read the
+# repo-root VERSION file itself: this wrapper derives it and compose passes it
+# through (`GRAPPA_VERSION: ${GRAPPA_VERSION:-}`).
+#
+# Called AT each launch point rather than once at startup, for two reasons.
+# `update` pulls before it builds, so a startup derive would stamp the bundle
+# with the version the box was ALREADY on — the exact staleness #652 exists to
+# prevent, and invisible because the build still succeeds. And `stop` must not
+# depend on a readable VERSION: a box you cannot bring down because a file went
+# missing is the trap cmd_stop is written to avoid.
+export_cic_version() {
+	GRAPPA_VERSION="$(infra/packaging/version.sh)" \
+		|| die "could not derive the version from $REPO_ROOT/VERSION — is this a complete checkout?"
+	export GRAPPA_VERSION
 }
 
 # ---- one-box-per-host ownership guard ---------------------------------
@@ -433,6 +439,9 @@ cmd_install() {
 	fi
 
 	# ---- 7. bring up the stack ----------------------------------------
+	# cicchetto-build is IN the prod profile, so this `up` starts it — the
+	# bundle is built here, not by a separate step, and it needs the version.
+	export_cic_version
 	say "Starting the stack (grappa + cicchetto build)"
 	"${COMPOSE[@]}" --profile prod up -d --remove-orphans
 
@@ -690,6 +699,9 @@ cmd_update() {
 
 	substrate_cic() {
 		mkdir -p runtime/cicchetto-dist
+		# AFTER substrate_pull, so the bundle carries the version the box is
+		# moving TO, not the one it is on (the pull may have bumped VERSION).
+		export_cic_version
 		say "Rebuilding the cicchetto bundle"
 		"${COMPOSE[@]}" --profile prod run --rm cicchetto-build
 		touch runtime/cicchetto-dist/.gitkeep

@@ -48,18 +48,36 @@ code_of() {
     sed -e 's/[[:space:]]*#.*$//' "$1"
 }
 
-# A launcher is a file that NAMES a cic build: the compose service, or the
-# package-manager verb the bun/npm substrates run.
+# A launcher is a file whose CODE can reach a cic build. Five signals, because
+# the launchers do not all name it the same way:
+#   cicchetto-build   the compose service (substring: also cicchetto-build-test)
+#   bun|npm run build the verb the bun/npm substrates run directly
+#   --profile prod    the profile the compose oneshot is gated behind, so any
+#                     `up` on it STARTS the build (not merely depends_on it)
+#   cicchetto/e2e     the e2e stack, whose bring-up builds cicchetto-build-test
+#                     (its drivers cd into the dir and run a bare `compose up`,
+#                     so the service name never appears in their code)
+#   oven/bun          the raw bun oneshot scripts/bun.sh runs by image
+# Known limit: this reads text, so a launcher that resolves everything through
+# variables can still hide. That is what ROSTER is for, and why the two halves
+# cross-check each other below.
 launches_cic_build() {
-    code_of "$1" | grep -qE 'cicchetto-build|(bun|npm) run build'
+    code_of "$1" | grep -qE 'cicchetto-build|(bun|npm) run build|--profile prod|cicchetto/e2e|oven/bun'
 }
 
+# Compliance is BOTH halves. `export GRAPPA_VERSION=0.10.0` alone would pass an
+# export-only check while planting a second hand-edited version carrier —
+# exactly what the VERSION file is the single source of truth against.
 exports_version() {
     code_of "$1" | grep -q 'export GRAPPA_VERSION'
 }
 
 derives_version() {
     code_of "$1" | grep -q 'version\.sh'
+}
+
+complies() {
+    derives_version "$1" && exports_version "$1"
 }
 
 # The shell/build entrypoints a cic build can be launched from. compose files
@@ -76,13 +94,23 @@ candidate_files() {
     fi
 }
 
-# Echo every launcher under $1 that does NOT export GRAPPA_VERSION.
+# Echo every launcher under $1 that does not derive AND export GRAPPA_VERSION.
 unexported_launchers() {
     local root="$1" f
     while IFS= read -r f; do
         [ -n "$f" ] || continue
         launches_cic_build "$f" || continue
-        exports_version "$f" && continue
+        complies "$f" && continue
+        printf '%s\n' "${f#"$root"/}"
+    done < <(candidate_files "$root")
+}
+
+# Echo every launcher the scan can SEE under $1, compliant or not.
+discovered_launchers() {
+    local root="$1" f
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        launches_cic_build "$f" || continue
         printf '%s\n' "${f#"$root"/}"
     done < <(candidate_files "$root")
 }
@@ -109,6 +137,41 @@ unexported_launchers() {
         printf 'cic-build launchers with no GRAPPA_VERSION export (see #692):\n%s\n' "$output" >&2
         return 1
     }
+}
+
+@test "roster: every launcher the scan can see is on the roster" {
+    run discovered_launchers "$REPO_SRC"
+    [ "$status" -eq 0 ]
+
+    local unrostered=() found
+    while IFS= read -r found; do
+        [ -n "$found" ] || continue
+        local known=0 rel
+        for rel in "${ROSTER[@]}"; do
+            [ "$rel" = "$found" ] && known=1
+        done
+        [ "$known" -eq 1 ] || unrostered+=("$found")
+    done <<< "$output"
+
+    [ "${#unrostered[@]}" -eq 0 ] || {
+        printf 'cic-build launchers missing from ROSTER (add them, see #692):\n' >&2
+        printf '  %s\n' "${unrostered[@]}" >&2
+        return 1
+    }
+}
+
+@test "scan: RED — a launcher that hardcodes the version instead of deriving it is caught" {
+    local fake="$BATS_TEST_TMPDIR/repo"
+    mkdir -p "$fake/scripts"
+    cat > "$fake/scripts/ship-the-bundle.sh" <<'EOF'
+#!/usr/bin/env bash
+export GRAPPA_VERSION=0.10.0
+docker compose --profile prod run --rm cicchetto-build
+EOF
+
+    run unexported_launchers "$fake"
+    [ "$status" -eq 0 ]
+    [ "$output" = "scripts/ship-the-bundle.sh" ]
 }
 
 @test "scan: RED — a new launcher that forgets the export is caught" {

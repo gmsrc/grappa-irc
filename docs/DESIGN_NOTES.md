@@ -26935,41 +26935,67 @@ the echo was the honest substitute sitting in the same line.
 path — never exported `GRAPPA_VERSION`. Since the #538/#652 guard landed in
 `cicchetto/vite.config.ts` (refuse to bake an empty `<meta cicchetto-version>`
 rather than ship a lying version), every self-hosted deploy that reached a cic
-build died. Nine other wrappers export it; the installer was the one that was
+build died. Ten other wrappers export it; the installer was the one that was
 missed, and nothing in CI exercised it, so it surfaced on a real box.
 
 **Two doors, not one.** The issue named `substrate_cic` (the `update` cold
 path's explicit `run --rm cicchetto-build`). `install` reaches the same oneshot
-by a different route: `--profile prod up -d` without `--no-deps`, where
-compose.yaml's grappa `depends_on: cicchetto-build` pulls it in as the
-safety net. Patching the hook would have left `install` broken — so the derive
-lands ONCE in the source-mode init block, next to `COMPOSE=(...)`, where every
-compose invocation in the script inherits it. Release-image mode does not
-derive: it has no checkout to read `VERSION` from, and the SPA is baked into
-the published image.
+by a different route: the service carries `profiles: [prod]`, so
+`--profile prod up -d` STARTS it outright (grappa's `depends_on` only orders
+it). Patching the hook would have left `install` broken.
 
-**Why no shared helper.** The derive+export pair is now in ten places, which
-reads like a refactor waiting to happen. It is not one: the copies live in bash
-(`scripts/*.sh`), POSIX sh (the FreeBSD jail — no bash port), a `Dockerfile`
-RUN layer and a PKGBUILD `build()`. No sourceable shim spans those four, and
-`infra/docker/deploy.sh` is deliberately standalone (it does not source
-`scripts/_lib.sh`, by design — it is the vanilla-box path). The real cost of
-the duplication is drift, so the cure is a guard, not a tenth file:
-`test/infra/cic_version_export_test.bats` pins the known roster (fails when an
-export is REMOVED) and rediscovers launchers from what they invoke (fails when
-one is ADDED without the export — exactly this bug). It proves itself RED
-against a synthetic launcher, because a guard that cannot fail guards nothing.
+**Derived at each launch point, not once at startup.** The first cut put the
+derive in the source-mode init block, where every compose call inherits it —
+and code review killed it. `update` pulls BEFORE it builds, and the re-exec
+guard only re-enters the script when the pulled range touched the deploy code,
+which a release pull does not: so a startup derive stamps the bundle with the
+version the box was ALREADY on. That build SUCCEEDS, which is what makes it
+worse than the crash it replaced — the refresh banner then advertises the old
+number as available. One `export_cic_version` helper, called from
+`cmd_install` before the prod `up` and from `substrate_cic` after the pull.
+The regression test bumps `VERSION` upstream and asserts the NEW number
+reaches the build; the naive "is it non-empty" assertion stayed green against
+the stale value. Release-image mode does not derive at all: no checkout to
+read `VERSION` from, and the SPA is baked into the published image.
+
+**A guard on every verb was the wrong blast radius, too.** A startup derive
+also made `stop` depend on a readable `VERSION` — and `cmd_stop` is written
+around the opposite principle: a box you cannot bring down because a file went
+missing is a trap. Deriving at the launch point keeps the failure where the
+need is.
+
+**Why a guard and not a shared helper.** The derive+export pair now sits in
+eleven launchers, which reads like a refactor waiting to happen. A partial one
+IS available and was deliberately not taken: the five `scripts/*.sh` launchers
+already source `scripts/_lib.sh`, so a helper there would serve them. It would
+not serve the other six — POSIX sh (the FreeBSD jail, no bash port), the native
+Linux builder, a `Dockerfile` RUN layer, a PKGBUILD `build()`, and
+`infra/docker/deploy.sh`, which is standalone BY DESIGN (the vanilla-box path
+that must run with nothing but a checkout). Five-of-eleven is the half-migration
+this repo's rules warn about: two patterns, and the next author copies whichever
+is nearer. The real cost of the duplication is drift, so the cure is aimed at
+drift — `test/infra/cic_version_export_test.bats` pins the known roster (fails
+when an export is REMOVED), rediscovers launchers from what their code invokes
+(fails when one is ADDED without the export — exactly this bug), and
+cross-checks the two halves so a discovered launcher missing from the roster is
+itself a failure. It proves itself RED against synthetic launchers that forget
+the export and that hardcode the number instead of deriving it, because a guard
+that cannot fail guards nothing. Its limit is stated where it lives: it reads
+text, so a launcher that resolves the service name through variables is roster
+business.
 
 **Fake repos got more real.** The `deploy_docker_*` bats harnesses build a
 throwaway checkout that copied `deploy.sh` and `deploy_common.sh` and nothing
-else. A source-mode script that reads `VERSION` at init needs the real carrier
-and the real extractor in there — so both are now copied in, and the assertions
-compare against the file's actual contents rather than "non-empty": a wrong
-version bakes into the bundle just as badly as a missing one.
+else. A script that reads `VERSION` needs the real carrier and the real
+extractor in there — so both are now copied in, and the assertions compare
+against the file's actual contents rather than "non-empty": a wrong version
+bakes into the bundle just as badly as a missing one.
 
 **Apply:** when a guard is added at the LAST mile (the build refusing bad
 input), audit every wrapper that feeds it in the same change — the guard turns
 a silent wrong value into a hard failure, which is an improvement only for the
-paths someone remembered to fix. And when duplication spans languages that
-cannot share code, make the invariant testable instead of pretending a helper
-is possible.
+paths someone remembered to fix. When duplication spans languages that cannot
+share code, make the invariant testable instead of pretending a helper is
+possible. And when a value is derived for a deploy, derive it where it is USED:
+anything read before the pull describes the box you are leaving, and a stale
+number that still builds is harder to notice than one that crashes.
