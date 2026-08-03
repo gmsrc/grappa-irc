@@ -1218,6 +1218,73 @@ TEST(the_dm_listener_follows_the_nick_the_topic_is_named_after) {
     free_app(app);
 }
 
+/* ── An inbound DM belongs to the sender, however it arrived ───────────
+ *
+ * grappa stores an inbound DM at `channel = OUR nick, dm_with = peer`
+ * and does not put `dm_with` on the wire, so the client re-derives the
+ * window from the sender. That re-key used to run on LIVE rows only:
+ * fetched history kept our own nick as its channel and was filed under
+ * a window with our own name that nothing opens. A query then showed
+ * only our own half of the conversation — the outbound rows, which
+ * really are stored at `channel = peer` — while the other side sat
+ * parsed and invisible. */
+static void feed_dm(struct app *app, bool live, const char *sender, const char *channel,
+                    long id, const char *body) {
+    struct wire_scrollback_message m;
+    memset(&m, 0, sizeof(m));
+    m.id = id;
+    m.server_time = 1754222400;
+    m.network = "azzurra";
+    m.channel = channel;
+    m.sender = sender;
+    m.body = body;
+    m.kind = MSG_PRIVMSG;
+    render_message(app, &m, live);
+}
+
+static bool window_exists(struct app *app, const char *network, const char *channel) {
+    for (size_t i = 0; i < app->window_count; i++)
+        if (irc_name_eq(app->windows[i].network, network) &&
+            irc_name_eq(app->windows[i].channel, channel))
+            return true;
+    return false;
+}
+
+TEST(a_fetched_inbound_dm_lands_in_the_senders_window_not_our_own) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    /* window_app's own nick on azzurra is "vjt". A DM from sarabean is
+     * stored with OUR nick as its channel — this is the shape the
+     * scrollback endpoint returns for the peer's half. */
+    feed_dm(app, false, "sarabean", "vjt", 101, "hello from her");
+    CHECK(window_exists(app, "azzurra", "sarabean"));
+    /* And NOT under our own name, which is where it used to go. */
+    CHECK(!window_exists(app, "azzurra", "vjt"));
+
+    /* The live path already did this; both doors must agree, because
+     * "which window does this row belong to" is a fact about the row
+     * and not about how it reached us. */
+    feed_dm(app, true, "sarabean", "vjt", 102, "and a live one");
+    CHECK(window_exists(app, "azzurra", "sarabean"));
+    CHECK(!window_exists(app, "azzurra", "vjt"));
+    free_app(app);
+}
+
+TEST(a_message_to_ourselves_stays_in_the_own_nick_window) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    /* `/msg vjt hello` — sender and channel are both us. There is no
+     * peer to re-key TO, so the branch must not fire: the re-key is the
+     * only thing on this path that opens a window, and firing here
+     * would open one named after ourselves off the back of our own
+     * message. Counting windows is what proves the branch stayed shut;
+     * the row itself files under whatever own-nick window exists. */
+    size_t before = app->window_count;
+    feed_dm(app, false, "vjt", "vjt", 201, "note to self");
+    CHECK_LONG(app->window_count, before);
+    free_app(app);
+}
+
 TEST(the_admin_uploads_tab_totals_the_bytes_field) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -3521,6 +3588,8 @@ int main(void) {
     RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);
     RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
     RUN(audio_is_classified_before_the_uploads_heuristic);
+    RUN(a_fetched_inbound_dm_lands_in_the_senders_window_not_our_own);
+    RUN(a_message_to_ourselves_stays_in_the_own_nick_window);
     RUN(an_away_mention_is_replayed_in_the_window_it_was_said_in);
     RUN(the_dm_listener_follows_the_nick_the_topic_is_named_after);
     RUN(the_admin_sessions_tab_reads_the_shape_the_server_sends);

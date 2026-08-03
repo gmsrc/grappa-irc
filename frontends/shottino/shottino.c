@@ -3511,7 +3511,26 @@ static void render_message(struct app *app, const struct wire_scrollback_message
     char display_channel[MAX_CHANNEL];
     snprintf(display_channel, sizeof(display_channel), "%s", channel);
     const char *own_nick = own_nick_for_network(app, network);
-    if (live && !ctcp_reply && !ctcp_request && own_nick && nick_case_equal(channel, own_nick) &&
+    /* An inbound DM is stored at `channel = OUR nick`, and the window it
+     * belongs to is named after the SENDER. grappa does not put
+     * `dm_with` on the wire, so re-deriving that is the client's job —
+     * cicchetto does the same thing in its own dm listener.
+     *
+     * This used to be gated on `live`, which made history behave
+     * differently from arrival: a FETCHED inbound DM kept `channel =
+     * our own nick` and was therefore filed under a window with our own
+     * name that nothing opens and nobody reads. The visible result was
+     * a query showing only our own half of the conversation — the
+     * outbound rows, which really are stored at `channel = peer` — with
+     * the other side present in the response, parsed, and dropped into
+     * an invisible bucket. It only looked like a live-subscription
+     * problem because new messages did re-key and old ones did not.
+     *
+     * Whose window a row belongs to is a fact about the row, not about
+     * how it reached us, so the two paths ask the same question now. A
+     * message to ourselves (sender == our nick) is excluded and stays
+     * where it is: that window IS the own-nick one. */
+    if (!ctcp_reply && !ctcp_request && own_nick && nick_case_equal(channel, own_nick) &&
         sender[0] && !nick_case_equal(sender, own_nick)) {
         snprintf(display_channel, sizeof(display_channel), "%s", sender);
         add_window_ex(app, network, display_channel, false);
