@@ -75,28 +75,46 @@ const BootFailure: Component<{ error: unknown; onRetry: () => void }> = (props) 
             resources) loops straight back here. Force-killing the app is what
             #717 exists to eliminate; this is what replaces it.
 
-            OFFLINE IT MUST NOT PURGE. `performRefresh` is the right SW-aware
-            verb when a stale bundle is the problem (#674's banner, #695's
-            stale-resume) — but it deletes every cache before reloading, and
-            #674 can only do that safely because a bundle-hash advertisement
-            means the client is online by construction. This screen inverts that
-            precondition: the likeliest reason it is up at all is that the
-            network is gone. Purging the precache and reloading offline lands
-            the installed PWA on the browser's offline error page with the app
-            shell destroyed — strictly worse than the frozen splash. Reusing the
-            verb, not the noun: the shared part is "reload", the cache purge is
-            the 20% that does not fit. */}
+            IT MUST NOT PURGE WITHOUT PROOF THE SERVER ANSWERS. `performRefresh`
+            is the right SW-aware verb when a stale bundle is the problem
+            (#674's banner, #695's stale-resume) — but it deletes every cache
+            before reloading, and #674 can only do that safely because a
+            bundle-hash advertisement means the client is online by
+            construction. This screen inverts that precondition: the likeliest
+            reason it is up at all is that the network is gone. Purging the
+            precache and reloading then lands the installed PWA on the browser's
+            offline error page with the app shell destroyed — strictly worse
+            than the frozen splash. Reusing the verb, not the noun: the shared
+            part is "reload", the cache purge is the 20% that does not fit.
+
+            `navigator.onLine` ALONE CANNOT GATE THAT, which is why the error is
+            read too. It is trustworthy in one direction only: false means
+            definitely no link, true means only "an interface exists". Behind a
+            captive portal, on dead mobile data with the radio still attached,
+            or on a Wi-Fi association with no route, it reads true — and those
+            are exactly the conditions this screen comes up in. The guard was
+            weakest in its own motivating case.
+
+            So the purge needs POSITIVE evidence the server is reachable, and
+            an `ApiError` is precisely that: it exists only because a response
+            came back with a status. A transport failure is not one — `bootFetch`
+            has already spent three attempts and the server never answered.
+            Anything else (a mid-session render throw) is connectivity-unknown,
+            and unknown takes the safe branch by the asymmetry of harm: purging
+            offline destroys the app shell, while not purging costs one more
+            reload and leaves #674's banner to offer the new bundle once the
+            link is back. */}
       <button
         type="button"
         class="boot-failure-reload"
         data-testid="boot-failure-reload"
         onClick={() => {
           setReloading(true);
-          if (isOffline()) {
-            window.location.reload();
+          if (props.error instanceof ApiError && !isOffline()) {
+            void performRefresh();
             return;
           }
-          void performRefresh();
+          window.location.reload();
         }}
       >
         {/* `performRefresh` can take up to ~2s waiting on controllerchange.

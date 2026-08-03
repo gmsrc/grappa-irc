@@ -48,6 +48,14 @@ vi.mock("../lib/api", async (importOriginal) => {
   };
 });
 
+// The cache-purging reload verb. Stubbed so the reload branch can be asserted
+// on WHICH verb ran — the whole point of the discriminator at the bottom of
+// this file is that picking the wrong one destroys the app shell.
+vi.mock("../lib/bundleHash", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/bundleHash")>();
+  return { ...actual, performRefresh: vi.fn().mockResolvedValue(undefined) };
+});
+
 const HEALTHY_ME = {
   kind: "user",
   id: "u1",
@@ -215,5 +223,101 @@ describe("BootErrorBoundary (#717 — a failed boot must not freeze on the splas
     // error without issuing a request.
     expect(listNetworks.mock.calls.length).toBe(2);
     expect((api.listChannels as Mock).mock.calls.length).toBe(0);
+  });
+});
+
+// #717 review round 3 — the Reload button must not purge the cache without
+// positive evidence the server answers.
+//
+// `performRefresh` deletes EVERY cache before reloading. Doing that with no
+// network lands the installed PWA on the browser's offline error page with the
+// app shell destroyed — strictly worse than the frozen splash it replaced.
+//
+// The first cut gated it on `isOffline()` alone. That is `!navigator.onLine`,
+// which is trustworthy in one direction only: false means definitely no link,
+// true means merely "an interface exists". Behind a captive portal, on dead
+// mobile data with the radio attached, or on a Wi-Fi association with no route
+// it reads TRUE — and those are precisely the conditions this screen comes up
+// in, so the guard was weakest in its own motivating case. The error carries
+// the honest signal instead: an ApiError exists only because a response came
+// back with a status.
+describe("BootErrorBoundary reload — purge needs proof the server answers", () => {
+  const originalLocation = window.location;
+  let reloadSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    reloadSpy = vi.fn();
+    Object.defineProperty(window, "location", {
+      writable: true,
+      configurable: true,
+      value: { ...originalLocation, reload: reloadSpy },
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      writable: true,
+      configurable: true,
+      value: originalLocation,
+    });
+  });
+
+  async function renderFailed(error: unknown): Promise<{ performRefresh: Mock }> {
+    localStorage.setItem("grappa-token", "tokA");
+    const api = await import("../lib/api");
+    const pending = deferredMe(api);
+    const { performRefresh } = await import("../lib/bundleHash");
+
+    await renderBootTree();
+    pending.reject(error);
+    await screen.findByTestId("boot-failure");
+
+    return { performRefresh: performRefresh as unknown as Mock };
+  }
+
+  // THE REGRESSION. A transport failure means bootFetch spent three attempts
+  // and the server never answered — no proof of a link, whatever
+  // `navigator.onLine` claims. Pre-fix this purged.
+  it("does NOT purge on a transport failure, even when navigator reports online", async () => {
+    const { __setConnectivityForTests } = await import("../lib/connectivity");
+    __setConnectivityForTests(true);
+
+    const { performRefresh } = await renderFailed(new TypeError("Failed to fetch"));
+
+    fireEvent.click(screen.getByTestId("boot-failure-reload"));
+
+    expect(performRefresh).not.toHaveBeenCalled();
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("purges on an ApiError while online — a status came back, so the link is real", async () => {
+    const { ApiError } = await import("../lib/api");
+    const { __setConnectivityForTests } = await import("../lib/connectivity");
+    __setConnectivityForTests(true);
+
+    const { performRefresh } = await renderFailed(new ApiError(500, "internal_error"));
+
+    fireEvent.click(screen.getByTestId("boot-failure-reload"));
+
+    expect(performRefresh).toHaveBeenCalledTimes(1);
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  // Both conditions are required: a status came back earlier, but the link has
+  // since dropped. `navigator.onLine === false` is the one direction that IS
+  // conclusive.
+  it("does NOT purge on an ApiError once the device reports offline", async () => {
+    const { ApiError } = await import("../lib/api");
+    const { __setConnectivityForTests } = await import("../lib/connectivity");
+    __setConnectivityForTests(false);
+
+    const { performRefresh } = await renderFailed(new ApiError(503, "unavailable"));
+
+    fireEvent.click(screen.getByTestId("boot-failure-reload"));
+
+    expect(performRefresh).not.toHaveBeenCalled();
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+
+    __setConnectivityForTests(true);
   });
 });

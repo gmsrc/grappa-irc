@@ -27672,6 +27672,32 @@ its source memo and a memo that throws is handled rather than propagated; it is
 written root-first because the reverse only works by routing a throw through the
 error machinery on every press.
 
+**The purge needs positive evidence the server answers — `navigator.onLine`
+could not provide it.** The first cut gated `performRefresh` on `isOffline()`
+alone. Review round three killed that: `isOffline()` is `!navigator.onLine`,
+which is trustworthy in ONE direction only. `false` means definitely no link;
+`true` means merely "an interface exists". Behind a captive portal, on dead
+mobile data with the radio still attached, or on a Wi-Fi association with no
+route, it reads `true` — and those are exactly the conditions this screen comes
+up in. **The guard was weakest in its own motivating case**: on the reporter's
+Android PWA with the data link dead, the tap would have purged.
+
+The error carries the honest signal instead. An `ApiError` exists only because a
+response came back with a status, which is positive proof of reachability; a
+transport failure is not one, and by then `bootFetch` has already spent three
+attempts without the server ever answering. So the purge requires
+`error instanceof ApiError && !isOffline()` — both, because a status that came
+back earlier does not mean the link survived, and `navigator.onLine === false`
+is the one direction that IS conclusive.
+
+Everything else — a mid-session render throw the session-wide boundary caught —
+is connectivity-unknown, and unknown takes the plain reload by the **asymmetry
+of harm**: purging offline destroys the app shell and lands the PWA on the
+browser's offline error page, while not purging costs one extra reload and
+leaves #674's banner to offer the new bundle once the link is back. The accepted
+trade-off is that a genuinely stale bundle causing a render throw no longer gets
+cured by this button; that is #674's door, and it is the cheap failure.
+
 **Reload must not purge the cache offline.** The failure screen carries a
 `Reload` beside `Retry`, because the boundary wraps Shell for the whole session
 and a mid-session throw is not something a boot refetch can fix. It uses
