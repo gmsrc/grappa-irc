@@ -11,6 +11,7 @@
 // unauthenticated 401 from `Plugs.Authn` and the credential-failure 401
 // from login both surface here as `ApiError`.
 
+import { bootFetch } from "./bootFetch";
 import type { ModesEntry, TopicEntry } from "./channelTopic";
 import { getOrCreateClientId } from "./clientId";
 import type { MemberEntry } from "./memberTypes";
@@ -1577,8 +1578,13 @@ export async function deletePasskey(token: string, id: string, password: string)
   if (!res.ok) throw await readError(res, false);
 }
 
+// #717 — one of the three BOOT-CRITICAL GETs (with `listNetworks` and
+// `listChannels`). They feed the resource chain the CRT splash gates on, so
+// they go through `bootFetch`: per-attempt timeout + bounded retry on a
+// transport failure. See lib/bootFetch.ts for why the other ~100 call sites
+// in this module deliberately do NOT.
 export async function me(token: string): Promise<MeResponse> {
-  const res = await fetch("/me", {
+  const res = await bootFetch("/me", {
     headers: buildHeaders(token),
   });
   if (!res.ok) throw await readError(res);
@@ -2059,16 +2065,18 @@ export async function deleteAccount(token: string): Promise<void> {
 // park/reconnect each network via `patchNetwork(t, slug, {...})` like
 // users; global disconnect is the client-composed park-all in `quit.ts`.
 
+// #717 boot-critical GET — see `me` above.
 export async function listNetworks(token: string): Promise<RawNetwork[]> {
-  const res = await fetch("/networks", {
+  const res = await bootFetch("/networks", {
     headers: buildHeaders(token),
   });
   if (!res.ok) throw await readError(res);
   return (await res.json()) as RawNetwork[];
 }
 
+// #717 boot-critical GET — see `me` above.
 export async function listChannels(token: string, networkSlug: string): Promise<ChannelEntry[]> {
-  const res = await fetch(`/networks/${encodeURIComponent(networkSlug)}/channels`, {
+  const res = await bootFetch(`/networks/${encodeURIComponent(networkSlug)}/channels`, {
     headers: buildHeaders(token),
   });
   if (!res.ok) throw await readError(res);
