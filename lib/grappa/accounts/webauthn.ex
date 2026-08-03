@@ -5,6 +5,8 @@ defmodule Grappa.Accounts.WebAuthn do
   alias Grappa.Accounts.{Passkey, RecoveryCodes, TOTPRecoveryCode, User, WebAuthnChallengeStore}
   alias Grappa.Repo
 
+  require Logger
+
   @type binding :: %{ip: String.t() | nil, client_id: String.t() | nil}
   @type mode :: String.t()
 
@@ -97,7 +99,7 @@ defmodule Grappa.Accounts.WebAuthn do
          {:ok, credential_id} <- decode(params["raw_id"]),
          %Passkey{} = passkey <- Repo.get_by(Passkey, credential_id: credential_id, user_id: user_id),
          {:ok, auth_data} <- verify_assertion(params, credential_id, challenge),
-         :ok <- accept_counter(passkey, auth_data.sign_count),
+         :ok <- consume_sign_count(passkey, auth_data.sign_count),
          %User{} = user <- Repo.get(User, user_id) do
       {:ok, user, metadata}
     else
@@ -214,22 +216,57 @@ defmodule Grappa.Accounts.WebAuthn do
     end
   end
 
-  defp accept_counter(%Passkey{id: id}, new_count) when new_count == 0 do
-    touch_query(from(p in Passkey, where: p.id == ^id), 0)
-  end
+  @doc """
+  Consumes the signature counter an assertion presented, refusing one that
+  did not advance.
 
-  defp accept_counter(%Passkey{id: id, sign_count: old_count}, new_count)
-       when new_count > old_count do
-    touch_query(from(p in Passkey, where: p.id == ^id and p.sign_count < ^new_count), new_count)
-  end
+  The assertion-time step of `authenticate/3`, exposed because it is the
+  clone-detection rule and deserves to be tested against real rows rather
+  than through a hand-forged WebAuthn ceremony.
 
-  defp accept_counter(_, _), do: {:error, :cloned_authenticator}
+  A zero counter means "this authenticator does not count" ONLY when the
+  credential has never counted either. Once a stored counter has moved, a
+  zero is the clone signal WebAuthn L3 7.2.21 describes — and the old
+  unguarded clause not only accepted it, it wrote the zero back, so the
+  clone erased the very evidence and every later assertion looked clean.
 
-  defp touch_query(query, count) do
-    case Repo.update_all(query, set: [sign_count: count, last_used_at: DateTime.utc_now()]) do
+  The write is a compare-and-set on the stored counter, so two assertions
+  racing on one credential cannot both win.
+  """
+  @spec consume_sign_count(Passkey.t(), non_neg_integer()) :: :ok | {:error, :cloned_authenticator}
+  def consume_sign_count(%Passkey{sign_count: 0} = passkey, 0), do: commit_counter(passkey, 0, 0)
+
+  def consume_sign_count(%Passkey{sign_count: old_count} = passkey, new_count)
+      when new_count > old_count,
+      do: commit_counter(passkey, new_count, old_count)
+
+  def consume_sign_count(passkey, new_count), do: refuse_clone(passkey, new_count)
+
+  # Compare-and-set against the counter we read. A concurrent assertion that
+  # already moved the row wins and this one is refused, so a captured
+  # assertion cannot be replayed alongside the genuine one.
+  defp commit_counter(%Passkey{id: id} = passkey, new_count, expected) do
+    query = from(p in Passkey, where: p.id == ^id and p.sign_count == ^expected)
+
+    case Repo.update_all(query, set: [sign_count: new_count, last_used_at: DateTime.utc_now()]) do
       {1, _} -> :ok
-      {0, _} -> {:error, :cloned_authenticator}
+      {0, _} -> refuse_clone(passkey, new_count)
     end
+  end
+
+  # `authenticate/3` collapses this into `:invalid_passkey` so the wire
+  # never confirms to an attacker that their clone was spotted. That makes
+  # the log the ONLY place the operator can learn it happened, so it has to
+  # carry enough to act on: which account, which credential, both counters.
+  defp refuse_clone(%Passkey{id: id, user_id: user_id, sign_count: stored}, presented) do
+    Logger.warning("passkey assertion refused: sign counter did not advance",
+      passkey_id: id,
+      user_id: user_id,
+      stored_sign_count: stored,
+      presented_sign_count: presented
+    )
+
+    {:error, :cloned_authenticator}
   end
 
   defp encode(binary), do: Base.url_encode64(binary, padding: false)

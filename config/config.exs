@@ -386,6 +386,15 @@ config :logger, :console,
     # audit line (admin password rotation, S8) — sibling of
     # `visitor_id` on `revoke_sessions_for_visitor/1`.
     :user_id,
+    # Passkey clone detection: an assertion whose signature counter did not
+    # advance is refused with the same opaque error every other passkey
+    # failure returns, so the wire tells an attacker nothing — which leaves
+    # this log line as the only place the operator can see it. It carries
+    # both counters so a genuine authenticator glitch can be told apart
+    # from a credential that is being replayed.
+    :passkey_id,
+    :stored_sign_count,
+    :presented_sign_count,
     # IRC client (Phase 2 sub-task 2f): SASL handshake numerics
     # (904 / 905 failures, etc.) ride this key so operator log search
     # can grep "sasl" + numeric in a single pass. `:sasl_user` is the
