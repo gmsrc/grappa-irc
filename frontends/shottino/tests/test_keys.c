@@ -248,10 +248,66 @@ TEST(the_input_line_has_a_cursor_you_can_move) {
     free(app);
 }
 
+/* A key that arrives mid-escape-sequence must SURVIVE it.
+ *
+ * With `mouse on` shottino asks for 1003, which reports every mouse
+ * MOVE, so escape sequences arrive more or less continuously. Any Tab
+ * pressed while one was being decoded used to be read by resolve_csi's
+ * scanner, fail its "is this a CSI byte" test, and be dropped on the
+ * floor — so nick completion simply stopped working, and only with the
+ * mouse enabled, which made it look like a mouse feature rather than a
+ * lost keystroke.
+ *
+ * Tab is the one that got reported, but the property is general: the
+ * scanner must put back anything that turned out not to belong to it. */
+TEST(a_key_interrupting_an_escape_sequence_is_not_swallowed) {
+    int mfd = -1, sfd = -1;
+    if (openpty(&mfd, &sfd, NULL, NULL, NULL) != 0) {
+        fprintf(stderr, "test_keys: no pty — skipping\n");
+        return;
+    }
+    FILE *in = fdopen(sfd, "r+");
+    FILE *out = fdopen(dup(sfd), "w");
+    SCREEN *screen = in && out ? newterm("xterm", out, in) : NULL;
+    if (!screen) {
+        fprintf(stderr, "test_keys: no terminfo for xterm — skipping\n");
+        close(mfd);
+        return;
+    }
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+    define_pane_keys();
+    timeout(200);
+
+    /* An INCOMPLETE CSI — no final byte — with a Tab hard behind it,
+     * which is exactly the shape a mouse report interrupted by a
+     * keypress produces. */
+    const char *seq = "\033[1;\t";
+    ssize_t w = write(mfd, seq, strlen(seq));
+    (void)w;
+    usleep(20000);
+
+    int first = getch();
+    if (first == 27) first = resolve_escape();
+    /* Whatever the truncated sequence resolves to is not the point. */
+    (void)first;
+    /* THE POINT: the Tab is still there, as its own key. */
+    int next = getch();
+    CHECK_LONG(next, '\t');
+
+    endwin();
+    delscreen(screen);
+    if (in) fclose(in);
+    if (out) fclose(out);
+    close(mfd);
+}
+
 int main(void) {
     RUN(the_input_line_has_a_cursor_you_can_move);
     RUN(modified_keys_decode_where_terminfo_describes_them);
     RUN(modified_keys_decode_where_terminfo_describes_nothing);
     RUN(roster_focus_takes_the_arrows_and_gives_them_back);
+    RUN(a_key_interrupting_an_escape_sequence_is_not_swallowed);
     return test_report();
 }

@@ -17253,7 +17253,21 @@ static int resolve_csi(void) {
     int c;
     timeout(0);
     while ((c = getch()) != ERR) {
-        if (c < 0x20 || c > 0x7e) break; /* not part of a CSI: give up */
+        if (c < 0x20 || c > 0x7e) {
+            /* Not part of a CSI — so it is the NEXT KEY, and it goes
+             * back on the queue rather than into the bin.
+             *
+             * Swallowing it is why Tab stopped completing nicks with
+             * `mouse on`: 1003 reports every mouse MOVE, so an escape
+             * sequence is arriving more or less constantly, this
+             * function runs constantly with it, and a Tab (0x09, below
+             * 0x20) pressed anywhere in that window was read here and
+             * dropped. With the mouse off almost nothing reaches this
+             * loop and Tab worked, which is what made it look like a
+             * mouse feature rather than a lost keystroke. */
+            ungetch(c);
+            break;
+        }
         if (n < sizeof(buf) - 1) buf[n++] = (char)c;
         if (c >= 0x40) break;            /* final byte */
     }
@@ -17301,7 +17315,11 @@ static int resolve_escape(void) {
     case KEY_UP: return KEY_PANE_PREV;
     case KEY_DOWN: return KEY_PANE_NEXT;
     case '[': return resolve_csi();
-    default: return 27;
+    default:
+        /* Same rule: an Escape followed by a key we have no binding for
+         * is an Escape AND that key, not an Escape that ate it. */
+        ungetch(next);
+        return 27;
     }
 }
 
