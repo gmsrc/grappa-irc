@@ -1302,13 +1302,7 @@ TEST(stt_transcribes_and_dictate_types) {
  * our own, because the bug can live in either half and asserting only
  * the parser would prove nothing about what gets written. */
 TEST(a_configured_setting_survives_save_and_load) {
-    char home[] = "/tmp/shottino-prefs-XXXXXX";
-    CHECK(mkdtemp(home) != NULL);
-    char *old_home = getenv("HOME");
-    char keep[512];
-    snprintf(keep, sizeof(keep), "%s", old_home ? old_home : "");
-    setenv("HOME", home, 1);
-
+    /* HOME is already a temp dir for the whole suite — see main(). */
     struct app *app = window_app();
     CHECK(app != NULL);
 
@@ -1344,8 +1338,6 @@ TEST(a_configured_setting_survives_save_and_load) {
     prefs_load(third);
     CHECK_STR(third->voice_source, "alsa:hw:2");
 
-    if (keep[0]) setenv("HOME", keep, 1);
-    else unsetenv("HOME");
     free(app); free(next); free(third);
 }
 
@@ -3005,6 +2997,21 @@ TEST(the_settings_panel_lists_every_setting) {
 }
 
 int main(void) {
+    /* A HOME OF OUR OWN, before a single test runs.
+     *
+     * This suite calls the real prefs_save/prefs_load, and prefs_path
+     * resolves $HOME at call time — so without this it writes the
+     * developer's OWN ~/.local/share/shottino/shottino.conf, with
+     * whatever defaults a test app happens to hold. That is exactly
+     * what it did: vjt lost `voice.source = alsa:hw:2` to
+     * `pulse:default` on every `make check`, and blamed the reinstall
+     * that always happened alongside it.
+     *
+     * Set once here rather than per test, because the next test to call
+     * prefs_save is the one nobody remembers to guard. */
+    char test_home[] = "/tmp/shottino-test-home-XXXXXX";
+    if (mkdtemp(test_home)) setenv("HOME", test_home, 1);
+
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
     RUN(a_query_answered_in_another_case_reuses_its_window);
