@@ -78,12 +78,12 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
     //    peer isn't connected yet). Baseline must NOT toast.
     await expect(entryRow).toHaveCount(1, { timeout: 10_000 });
     await expect(dot).toHaveAttribute("data-state", "offline", { timeout: 10_000 });
-    await expect(page.locator(".presence-toast")).toHaveCount(0);
+    await expect(page.locator(".toast")).toHaveCount(0);
 
     // 2. Peer connects → 600 RPL_LOGON → genuine transition: toast +
     //    dot flip. Arm the toast wait BEFORE connecting so the 6s
     //    self-expiry can't outrace the first poll.
-    const onlineToast = page.locator(".presence-toast-online", { hasText: PEER_NICK });
+    const onlineToast = page.locator(".toast-online", { hasText: PEER_NICK });
     const onlineToastSeen = expect(onlineToast).toBeVisible({ timeout: 15_000 });
     peer = await IrcPeer.connect({ nick: PEER_NICK });
     await onlineToastSeen;
@@ -100,7 +100,7 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
     await expect(dot).toHaveAttribute("data-state", "online", { timeout: 10_000 });
 
     // 4. Peer quits → 601 RPL_LOGOFF → offline transition toast + flip.
-    const offlineToast = page.locator(".presence-toast-offline", { hasText: PEER_NICK });
+    const offlineToast = page.locator(".toast-offline", { hasText: PEER_NICK });
     const offlineToastSeen = expect(offlineToast).toBeVisible({ timeout: 15_000 });
     await peer.disconnect("gone (#247 e2e)");
     peer = null;

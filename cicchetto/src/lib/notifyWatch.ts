@@ -35,17 +35,19 @@ import { createSignal } from "solid-js";
 import type { NotifyEntry } from "./api";
 import { identityScopedStore } from "./identityScopedStore";
 import { asciiFold } from "./nickEquals";
+import { createToastQueue } from "./toasts";
 
 export type PresenceState = "online" | "offline" | "unknown";
 
 // Discriminated on `kind`: a genuine online/offline transition, or an
 // upstream watch-list rejection (`presence_error` — review 2026-07-19
 // R2: routed here so the failure is VISIBLE in production, not just in
-// the cic_diag ring buffer). Both share the queue, expiry, and
-// dismissal mechanics.
+// the cic_diag ring buffer). Both are PRESENCE, which is why they share
+// one queue — and why #775's update notice does not join them: see
+// `toasts.ts`, whose factory now owns the ids, the expiry timer and the
+// dismissal that used to be hand-rolled here.
 export type PresenceToast =
   | {
-      id: number;
       kind: "transition";
       networkId: number;
       nick: string;
@@ -53,58 +55,30 @@ export type PresenceToast =
       ts: string;
     }
   | {
-      id: number;
       kind: "error";
       networkId: number;
       detail: string;
     };
-
-// How long a transition toast stays up. Non-intrusive: it self-expires;
-// the Watched panel keeps the durable signal (the dot).
-const TOAST_MS = 6_000;
-let toastSeq = 0;
-// Injectable for tests — window.setTimeout in production. Module-level (not
-// identity-scoped): a scheduler override must survive an account switch.
-let scheduleExpiry: (fn: () => void, ms: number) => void = (fn, ms) => {
-  setTimeout(fn, ms);
-};
-
-export function _setScheduleExpiryForTest(fn: typeof scheduleExpiry): void {
-  scheduleExpiry = fn;
-}
-
-// Omit must distribute over the union arm-by-arm (a bare
-// Omit<PresenceToast, "id"> would collapse the discriminant).
-type ToastInput =
-  | Omit<Extract<PresenceToast, { kind: "transition" }>, "id">
-  | Omit<Extract<PresenceToast, { kind: "error" }>, "id">;
 
 const exports_ = identityScopedStore((onIdentityChange) => {
   const [watchByNetwork, setWatchByNetwork] = createSignal<Record<number, NotifyEntry[]>>({});
   const [presenceByNetwork, setPresenceByNetwork] = createSignal<
     Record<number, Record<string, PresenceState>>
   >({});
-  const [toasts, setToasts] = createSignal<PresenceToast[]>([]);
+  // Scoped WITH the watch list: presence is a property of the identity that
+  // asked to watch those nicks, so an account switch must take the dots and
+  // the toasts with it.
+  const toastQueue = createToastQueue<PresenceToast>();
 
   // Identity teardown (logout / account switch) — mirror of the other
   // identity-scoped stores' reset shape.
   const resetNotifyWatch = (): void => {
     setWatchByNetwork({});
     setPresenceByNetwork({});
-    setToasts([]);
+    toastQueue.clear();
   };
 
   onIdentityChange(resetNotifyWatch);
-
-  const dismissToast = (id: number): void => {
-    setToasts((ts) => ts.filter((t) => t.id !== id));
-  };
-
-  function queueToast(toast: ToastInput): void {
-    const id = ++toastSeq;
-    setToasts((ts) => [...ts, { ...toast, id }]);
-    scheduleExpiry(() => dismissToast(id), TOAST_MS);
-  }
 
   // `notify_list` full snapshot (per-mutation broadcast + after-join
   // push). Simple setState — no delta tracking, same contract as
@@ -146,7 +120,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
 
     if (payload.initial) return;
 
-    queueToast({
+    toastQueue.queue({
       kind: "transition",
       networkId: payload.network_id,
       nick: payload.nick,
@@ -161,7 +135,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // registration refused) is never production-invisible; the raw
   // numeric also lands as a $server notice row server-side.
   const applyPresenceError = (payload: { network_id: number; detail: string }): void => {
-    queueToast({ kind: "error", networkId: payload.network_id, detail: payload.detail });
+    toastQueue.queue({ kind: "error", networkId: payload.network_id, detail: payload.detail });
   };
 
   // Dot state for a display-form nick (the Watched panel iterates the
@@ -173,9 +147,9 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   return {
     watchByNetwork,
     presenceByNetwork,
-    toasts,
+    toasts: toastQueue.toasts,
     resetNotifyWatch,
-    dismissToast,
+    dismissToast: toastQueue.dismiss,
     setNotifyList,
     applyPresenceSnapshot,
     applyPresenceChange,
@@ -188,7 +162,7 @@ export const watchByNetwork = exports_.watchByNetwork;
 export const presenceByNetwork = exports_.presenceByNetwork;
 export const presenceToasts = exports_.toasts;
 export const resetNotifyWatch = exports_.resetNotifyWatch;
-export const dismissToast = exports_.dismissToast;
+export const dismissPresenceToast = exports_.dismissToast;
 export const setNotifyList = exports_.setNotifyList;
 export const applyPresenceSnapshot = exports_.applyPresenceSnapshot;
 export const applyPresenceChange = exports_.applyPresenceChange;

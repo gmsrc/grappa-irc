@@ -2,11 +2,10 @@
 // ingestion, and the baseline-vs-transition toast gate.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  _setScheduleExpiryForTest,
   applyPresenceChange,
   applyPresenceError,
   applyPresenceSnapshot,
-  dismissToast,
+  dismissPresenceToast,
   presenceByNetwork,
   presenceFor,
   presenceToasts,
@@ -14,6 +13,8 @@ import {
   setNotifyList,
   watchByNetwork,
 } from "../lib/notifyWatch";
+// #775 — the expiry seam moved to the shared queue factory with the mechanics.
+import { _setScheduleExpiryForTest } from "../lib/toasts";
 
 // asciiFold's own tests live with its definition in nickEquals.test.ts
 // (#364 S13 — one client fold). These exercise the store's use of it.
@@ -73,7 +74,7 @@ describe("notifyWatch store", () => {
       presence: "offline",
     });
 
-    dismissToast(toasts[0]!.id);
+    dismissPresenceToast(toasts[0]!.id);
     expect(presenceToasts()).toEqual([]);
   });
 
@@ -84,7 +85,7 @@ describe("notifyWatch store", () => {
     expect(toasts).toHaveLength(1);
     expect(toasts[0]).toMatchObject({ kind: "error", networkId: 42, detail: "aaa,bbb" });
 
-    dismissToast(toasts[0]!.id);
+    dismissPresenceToast(toasts[0]!.id);
     expect(presenceToasts()).toEqual([]);
   });
 
@@ -156,7 +157,8 @@ describe("notifyWatch store — identity-rotation cleanup (#364 S3)", () => {
     localStorage.setItem("grappa-token", "tokA");
     const auth = await import("../lib/auth");
     const nw = await import("../lib/notifyWatch");
-    nw._setScheduleExpiryForTest(() => {});
+    const toasts = await import("../lib/toasts");
+    toasts._setScheduleExpiryForTest(() => {});
 
     nw.setNotifyList({ "42": [{ network_id: 42, nick: "Foo", added_at: "2026-07-18T00:00:00Z" }] });
     nw.applyPresenceSnapshot(42, { foo: "online" });

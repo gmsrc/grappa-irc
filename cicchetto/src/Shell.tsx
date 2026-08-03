@@ -55,7 +55,6 @@ import MentionsWindow from "./MentionsWindow";
 import ModeModal from "./ModeModal";
 import NamesModal from "./NamesModal";
 import NextActiveButton from "./NextActiveButton";
-import PresenceToasts from "./PresenceToasts";
 import PrivacyModal from "./PrivacyModal";
 import RailActions from "./RailActions";
 import RailContext from "./RailContext";
@@ -70,6 +69,7 @@ import ShareSessionModal from "./ShareSessionModal";
 import ShellChrome from "./ShellChrome";
 import Sidebar from "./Sidebar";
 import ThemeEditor from "./ThemeEditor";
+import Toasts from "./Toasts";
 import TopicBar from "./TopicBar";
 import UmodeModal from "./UmodeModal";
 import WhoModal from "./WhoModal";
@@ -509,7 +509,7 @@ const Shell: Component = () => {
         // ── Desktop three-pane layout (unchanged from pre-C6) ─────────
         <div class="shell" classList={{ "shell-no-members": !isActiveChannelJoined() }}>
           <ErrorBanners />
-          <PresenceToasts />
+          <Toasts />
           <PrivacyModal />
           <MediaViewerModal />
           <NamesModal />
@@ -758,7 +758,7 @@ const Shell: Component = () => {
           <DiagFloat />
         </Portal>
         <ErrorBanners />
-        <PresenceToasts />
+        <Toasts />
         <PrivacyModal />
         <MediaViewerModal />
         <NamesModal />

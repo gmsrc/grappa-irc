@@ -1498,7 +1498,7 @@ moduleRoot(() => {
 
         case "presence_error":
           // Upstream rejected the watch registration (list full).
-          // Error-styled toast via the shared presence-toast queue
+          // Error-styled toast via the presence toast queue
           // (review 2026-07-19 R2 — diagPush alone renders only behind
           // the cic_diag flag, i.e. never in production); the raw
           // numeric also landed as a $server notice row server-side.
