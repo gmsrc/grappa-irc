@@ -10,7 +10,7 @@ defmodule Grappa.Accounts.TOTP do
   import Ecto.Query
   import Bitwise
 
-  alias Grappa.Accounts.{RecoveryCodes, TOTPRecoveryCode, User}
+  alias Grappa.Accounts.{RecoveryCodes, User}
   alias Grappa.Repo
 
   @digits 6
@@ -99,19 +99,19 @@ defmodule Grappa.Accounts.TOTP do
     end
   end
 
+  # `RecoveryCodes` owns the set — it mints them (`arm/4` above rotates
+  # through it) so it also spends them. This used to be a second, private
+  # copy of the same normalise-hash-delete, which only worked while the two
+  # agreed byte for byte; the day one grew a rule the other lacked, codes
+  # minted at one door would have stopped opening the other.
+  #
+  # The error is re-shaped, not re-decided: `verify/3` speaks one opaque
+  # `:invalid_two_factor` for a bad TOTP code and a bad recovery code
+  # alike, so a caller cannot learn which of the two it got wrong.
   defp consume_recovery_code(%User{id: user_id}, code) do
-    normalized = normalize_recovery_code(code)
-
-    if valid_recovery_code?(normalized) do
-      hash = recovery_code_hash(normalized)
-      query = from(r in TOTPRecoveryCode, where: r.user_id == ^user_id and r.code_hash == ^hash)
-
-      case Repo.delete_all(query) do
-        {1, _} -> :recovery
-        {0, _} -> Repo.rollback(:invalid_two_factor)
-      end
-    else
-      Repo.rollback(:invalid_two_factor)
+    case RecoveryCodes.consume(user_id, code) do
+      :ok -> :recovery
+      {:error, :invalid_recovery_code} -> Repo.rollback(:invalid_two_factor)
     end
   end
 
@@ -161,15 +161,4 @@ defmodule Grappa.Accounts.TOTP do
         Repo.rollback(:already_enabled)
     end
   end
-
-  defp normalize_recovery_code(code) do
-    code
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "")
-    |> String.replace(" ", "")
-  end
-
-  defp valid_recovery_code?(code), do: Regex.match?(~r/^[a-z2-7]{26}$/, code)
-  defp recovery_code_hash(code), do: :crypto.hash(:sha256, normalize_recovery_code(code))
 end

@@ -55,6 +55,23 @@ defmodule Grappa.Accounts.TOTPTest do
     assert {:error, :invalid_two_factor} = TOTP.verify(user, recovery, 1_700_000_030)
   end
 
+  # One set, two doors. They must agree on normalisation and hashing or a
+  # code minted behind one is unspendable at the other — and the account
+  # holder has no way to tell which door their code belongs to.
+  test "a code minted by TOTP enrolment is spendable at the passkey recovery door" do
+    {user, [code | _]} = armed_user_with_recovery_codes()
+
+    assert :ok = Accounts.consume_recovery_code(user, code)
+    assert {:error, :invalid_recovery_code} = Accounts.consume_recovery_code(user, code)
+  end
+
+  test "a code spent at the passkey door is gone from the TOTP door too" do
+    {user, [code | _]} = armed_user_with_recovery_codes()
+
+    assert :ok = Accounts.consume_recovery_code(user, code)
+    assert {:error, :invalid_two_factor} = TOTP.verify(user, code, 1_700_000_030)
+  end
+
   test "disable requires password and removes secret plus recovery codes" do
     {user, password} = user_fixture_with_password()
     {armed, _} = arm(user)
