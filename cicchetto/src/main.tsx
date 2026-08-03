@@ -6,6 +6,7 @@ import InstallSplash, { INSTALL_CHOICE_KEY, shouldShowInstallSplash } from "./In
 import Login from "./Login";
 import { me } from "./lib/api";
 import { bootstrapAuth, isAuthenticated, token } from "./lib/auth";
+import BootErrorBoundary from "./BootErrorBoundary";
 import { moduleRoot } from "./lib/moduleRoot";
 import ShareConsume from "./ShareConsume";
 // Side-effect-only: registers the WS subscribe createRoot so per-
@@ -328,11 +329,21 @@ render(
             signed token and navigates into Shell once localStorage
             is populated. */}
         <Route path="/share/:token" component={ShareConsume} />
+        {/* #717 — the boundary wraps Shell ONLY, inside RequireAuth. A boot
+            fetch that rejects puts its resource in `errored` state and every
+            read re-throws (CrtSplash's `!user()` predicate among them); with
+            no boundary the throw froze the DOM on the splash forever, which
+            is the reported installed-PWA symptom. Scoped to Shell rather than
+            the Router so routing survives the crash: RequireAuth's effect
+            still bounces to /login if the token is cleared while the failure
+            state is up, and /login + /share keep their own error surfaces. */}
         <Route
           path="/"
           component={() => (
             <RequireAuth>
-              <Shell />
+              <BootErrorBoundary>
+                <Shell />
+              </BootErrorBoundary>
             </RequireAuth>
           )}
         />

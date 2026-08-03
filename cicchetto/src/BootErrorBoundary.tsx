@@ -1,0 +1,136 @@
+import { type Component, createSignal, ErrorBoundary, type JSX } from "solid-js";
+import { ApiError } from "./lib/api";
+import { performRefresh } from "./lib/bundleHash";
+import { isOffline } from "./lib/connectivity";
+import { friendlyApiError } from "./lib/friendlyApiError";
+import { refetchUser } from "./lib/networks";
+
+// #717 — keep a failed boot recoverable.
+//
+// The boot chain is three resources (`user` → `networks` → `channelsBySlug`,
+// see lib/networks.ts) and every consumer reads them through a predicate:
+// CrtSplash's is `!user() || channelsBySlug() === undefined`. When one of the
+// underlying fetches REJECTS, the resource enters state `errored` and reading
+// it RE-THROWS. That throw lands mid-render, and before this component
+// cicchetto mounted no ErrorBoundary at all — so the throw was swallowed, the
+// DOM kept the last painted frame (the splash), and the only way out was to
+// force-kill the app. That is the reported #717 symptom on the installed
+// Android/Firefox PWA.
+//
+// Why this is not solved by the timeout in `lib/api.ts`: a timeout REJECTS.
+// Bounding the slow path converts a hang into a rejection, which is the exact
+// state that freezes the UI. The bound and this boundary are two halves of one
+// fix — retry absorbs the transient failure, the boundary catches the terminal
+// one.
+//
+// DELIBERATELY BARE. This is a recovery affordance, not a loading screen:
+// #687 owns the staged boot log the splash should show while it is healthy,
+// and a second screen competing with it would be the layer that issue exists
+// to avoid. Message + retry, nothing else.
+//
+// The error text IS shown. #717 is a diagnosis-starved bug reported by a
+// self-hoster we cannot attach a debugger to; the failure string is the one
+// thing they can read back to us. Same rationale as #120 capturing the
+// service-worker registration error name+message.
+
+// A typed server error goes through `friendlyApiError`, the SSOT for that copy
+// (#411, "ogni cazzo di errore deve avere un copy"). Without it an ApiError
+// renders its own `message`, which is the raw `"<status> <code>"` pair — the
+// screen would greet a self-hoster with "500 internal_error". A transport
+// failure is not an ApiError and has no token to localise, so its message
+// (e.g. "Failed to fetch") is the honest text.
+function failureText(error: unknown): string {
+  if (error instanceof ApiError) return friendlyApiError(error);
+  if (error instanceof Error && error.message !== "") return error.message;
+  if (typeof error === "string" && error !== "") return error;
+  return "unknown error";
+}
+
+// Rendered by the boundary below. Split out of the inline `fallback` because it
+// owns a signal (the reload's in-flight state) and a component is where a signal
+// belongs.
+const BootFailure: Component<{ error: unknown; onRetry: () => void }> = (props) => {
+  const [reloading, setReloading] = createSignal(false);
+
+  return (
+    <div class="boot-failure" data-testid="boot-failure">
+      {/* The live region is the message, not the container: putting
+            role="alert" on a box that also holds the buttons announces the
+            controls as part of the alert. */}
+      <p class="boot-failure-title" role="alert">
+        Could not load Grappa.
+      </p>
+      <p class="boot-failure-detail">{failureText(props.error)}</p>
+      <button
+        type="button"
+        class="boot-failure-retry"
+        data-testid="boot-failure-retry"
+        onClick={() => props.onRetry()}
+      >
+        Retry
+      </button>
+      {/* The escape hatch of last resort. The boundary wraps Shell for the
+            whole session, so it also catches throws with nothing to do with the
+            boot chain — and for those, Retry (which only refetches the boot
+            resources) loops straight back here. Force-killing the app is what
+            #717 exists to eliminate; this is what replaces it.
+
+            OFFLINE IT MUST NOT PURGE. `performRefresh` is the right SW-aware
+            verb when a stale bundle is the problem (#674's banner, #695's
+            stale-resume) — but it deletes every cache before reloading, and
+            #674 can only do that safely because a bundle-hash advertisement
+            means the client is online by construction. This screen inverts that
+            precondition: the likeliest reason it is up at all is that the
+            network is gone. Purging the precache and reloading offline lands
+            the installed PWA on the browser's offline error page with the app
+            shell destroyed — strictly worse than the frozen splash. Reusing the
+            verb, not the noun: the shared part is "reload", the cache purge is
+            the 20% that does not fit. */}
+      <button
+        type="button"
+        class="boot-failure-reload"
+        data-testid="boot-failure-reload"
+        onClick={() => {
+          setReloading(true);
+          if (isOffline()) {
+            window.location.reload();
+            return;
+          }
+          void performRefresh();
+        }}
+      >
+        {/* `performRefresh` can take up to ~2s waiting on controllerchange.
+              On a dead-boot screen a button that appears to do nothing is
+              exactly what sends the user back to force-killing the app. */}
+        {reloading() ? "Reloading…" : "Reload"}
+      </button>
+    </div>
+  );
+};
+
+const BootErrorBoundary: Component<{ children: JSX.Element }> = (props) => (
+  <ErrorBoundary
+    fallback={(error, reset) => (
+      <BootFailure
+        error={error}
+        onRetry={() => {
+          // Refetch BEFORE reset, and in this order only: `reset()` re-renders
+          // the children, and a child that reads a still-errored resource
+          // rethrows immediately — the boundary would loop straight back into
+          // this fallback without a single request going out.
+          //
+          // ONE verb, not three. networks.ts states it: `user` is the ROOT of
+          // the burst — `networks` is keyed on `user` and `channelsBySlug` on
+          // `networks`, so refetching the root cascades through both. Calling
+          // all three would put redundant requests in flight racing the cascade.
+          refetchUser();
+          reset();
+        }}
+      />
+    )}
+  >
+    {props.children}
+  </ErrorBoundary>
+);
+
+export default BootErrorBoundary;

@@ -8043,6 +8043,78 @@ html.resize-dragging * {
   font-style: italic;
 }
 
+/* #717 — boot-failure recovery state (BootErrorBoundary.tsx). Deliberately
+   plain, and deliberately NOT a second splash: this is the "the boot died,
+   here is the way out" state, while #687 owns the staged boot log the CRT
+   splash shows during a HEALTHY boot. Full-viewport because the boundary
+   replaces the entire Shell subtree — there is no pane left to sit inside.
+
+   Above .install-splash (z-index 200) and the .error-banners stack (1000):
+   when the boot dies this is the only reachable control on screen, so nothing
+   may paint over it.
+
+   The retry box is absolute px, NOT rem. The app's root font-size is 14px
+   (`:root --font-size`), so a rem-sized control lands well under the 44px HIG
+   minimum — the trap #459 fixed on the banner ×. On the Android PWA this
+   button is the ONLY escape from a dead boot; it gets the full tap target. */
+
+.boot-failure {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* `safe` matters: with a plain `center`, a column flex container that
+     overflows pushes its content past the START edge, which is unreachable by
+     scrolling — the title would clip with no way to read it. */
+  justify-content: safe center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  /* A long transport error on a 360px phone can outgrow the viewport, and the
+     buttons sit BELOW it — without a scroll the only way out would be
+     off-screen, which is the dead end this screen exists to remove. */
+  overflow: auto;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  text-align: center;
+}
+
+.boot-failure-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.boot-failure-detail {
+  margin: 0;
+  max-width: 32rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.boot-failure-retry,
+.boot-failure-reload {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 1.25rem;
+  background: var(--bg-alt);
+  color: var(--fg);
+  border: 1px solid var(--fg);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+/* Reload is the fallback-of-the-fallback, not the primary action — muted so
+   Retry reads as the thing to try first. */
+.boot-failure-reload {
+  border-color: var(--muted);
+  color: var(--muted);
+}
+
 /* #134 — retro CRT loading splash. LOADING-ONLY content of the Shell
    main-pane <Switch fallback> (desktop + mobile): fills the content
    pane while cic boots, then unmounts as the home window auto-selects.
