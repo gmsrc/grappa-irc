@@ -48,15 +48,16 @@ code_of() {
     sed -e 's/[[:space:]]*#.*$//' "$1"
 }
 
-# Every predicate below pipes `code_of` into grep and DISCARDS the match rather
-# than using `grep -q`. `-q` exits on the first hit, which SIGPIPEs the sed
-# upstream; GNU sed then prints `couldn't write N items to stdout: Broken pipe`
-# on stderr (BSD sed stays silent, so this only ever reddened CI). bats' `run`
-# folds stderr into `$output`, so that noise BECAME the diagnostic: the guard
-# reported pipe errors instead of the launchers at fault, and a clean scan read
-# as a failure. Only files larger than the pipe buffer trip it, which is why
-# the synthetic fixtures below never showed it. Reading the stream to EOF costs
-# nothing on files this size and keeps the diagnostic honest.
+# Every predicate below feeds grep a HERE-STRING, never a pipe. A pipe into
+# `grep -q` exits on the first hit and leaves sed mid-stream; where SIGPIPE is
+# ignored (the disposition GitHub's runner hands a step) the write returns
+# EPIPE and GNU sed reports it on stderr, which the `run` sites then folded
+# into `$output` — the guard printed pipe noise instead of the launchers at
+# fault, and a clean scan read as a failure. BSD sed is silent on EPIPE, so it
+# only ever reddened CI. A here-string has no reader to close, so the condition
+# cannot arise; `--separate-stderr` below closes the other half (any OTHER
+# stderr, e.g. an unreadable candidate file, must not masquerade as a finding
+# either).
 
 # A launcher is a file whose CODE can reach a cic build. Five signals, because
 # the launchers do not all name it the same way:
@@ -72,18 +73,18 @@ code_of() {
 # variables can still hide. That is what ROSTER is for, and why the two halves
 # cross-check each other below.
 launches_cic_build() {
-    code_of "$1" | grep -E 'cicchetto-build|(bun|npm) run build|--profile prod|cicchetto/e2e|oven/bun' > /dev/null
+    grep -qE 'cicchetto-build|(bun|npm) run build|--profile prod|cicchetto/e2e|oven/bun' <<< "$(code_of "$1")"
 }
 
 # Compliance is BOTH halves. `export GRAPPA_VERSION=0.10.0` alone would pass an
 # export-only check while planting a second hand-edited version carrier —
 # exactly what the VERSION file is the single source of truth against.
 exports_version() {
-    code_of "$1" | grep 'export GRAPPA_VERSION' > /dev/null
+    grep -q 'export GRAPPA_VERSION' <<< "$(code_of "$1")"
 }
 
 derives_version() {
-    code_of "$1" | grep 'version\.sh' > /dev/null
+    grep -q 'version\.sh' <<< "$(code_of "$1")"
 }
 
 complies() {
@@ -141,8 +142,15 @@ discovered_launchers() {
 }
 
 @test "scan: no shell or build entrypoint launches a cic build without exporting GRAPPA_VERSION" {
-    run unexported_launchers "$REPO_SRC"
+    run --separate-stderr unexported_launchers "$REPO_SRC"
     [ "$status" -eq 0 ]
+    # The scan's own errors are not findings, and must not pass silently
+    # either — an unreadable candidate means the guard covered less than it
+    # claims (see the stderr note above).
+    [ -z "$stderr" ] || {
+        printf 'the scan itself errored (coverage is incomplete):\n%s\n' "$stderr" >&2
+        return 1
+    }
     [ -z "$output" ] || {
         printf 'cic-build launchers with no GRAPPA_VERSION export (see #692):\n%s\n' "$output" >&2
         return 1
@@ -150,8 +158,12 @@ discovered_launchers() {
 }
 
 @test "roster: every launcher the scan can see is on the roster" {
-    run discovered_launchers "$REPO_SRC"
+    run --separate-stderr discovered_launchers "$REPO_SRC"
     [ "$status" -eq 0 ]
+    [ -z "$stderr" ] || {
+        printf 'the scan itself errored (coverage is incomplete):\n%s\n' "$stderr" >&2
+        return 1
+    }
 
     local unrostered=() found
     while IFS= read -r found; do
@@ -179,7 +191,7 @@ export GRAPPA_VERSION=0.10.0
 docker compose --profile prod run --rm cicchetto-build
 EOF
 
-    run unexported_launchers "$fake"
+    run --separate-stderr unexported_launchers "$fake"
     [ "$status" -eq 0 ]
     [ "$output" = "scripts/ship-the-bundle.sh" ]
 }
@@ -192,9 +204,10 @@ EOF
 #     EPIPE and GNU sed reports it on stderr. GitHub's runner hands steps that
 #     disposition; an interactive shell does not, which is why this passed
 #     locally and reddened in CI.
-# `trap '' PIPE` reproduces the runner's disposition here, so the pin holds on
-# every platform. The assertion is EQUALITY with the filename — a diagnostic
-# carrying one extra line of pipe noise is a diagnostic that lies.
+# `trap '' PIPE` reproduces the runner's disposition, so the pin holds on every
+# platform. It asserts the SCAN IS SILENT (empty stderr) as well as exact — a
+# reader that abandons its writer is caught even though `--separate-stderr` now
+# keeps the noise out of the finding itself.
 @test "scan: a launcher larger than the pipe buffer yields a clean diagnostic" {
     local fake="$BATS_TEST_TMPDIR/repo"
     mkdir -p "$fake/scripts"
@@ -208,8 +221,9 @@ EOF
     # arming the trap first would make the generator the thing that complains.
     trap '' PIPE
 
-    run unexported_launchers "$fake"
+    run --separate-stderr unexported_launchers "$fake"
     [ "$status" -eq 0 ]
+    [ -z "$stderr" ]
     [ "$output" = "scripts/ship-the-bundle.sh" ]
 }
 
@@ -221,7 +235,7 @@ EOF
 docker compose --profile prod run --rm cicchetto-build
 EOF
 
-    run unexported_launchers "$fake"
+    run --separate-stderr unexported_launchers "$fake"
     [ "$status" -eq 0 ]
     [ "$output" = "scripts/ship-the-bundle.sh" ]
 }
@@ -236,7 +250,7 @@ export GRAPPA_VERSION
 docker compose --profile prod run --rm cicchetto-build
 EOF
 
-    run unexported_launchers "$fake"
+    run --separate-stderr unexported_launchers "$fake"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
