@@ -53,6 +53,7 @@ defmodule GrappaWeb.FallbackController do
            | :malformed_nick
            | :malformed_ident
            | :password_required
+           | :passkey_required
            | :password_mismatch
            | :network_not_visitor_enabled
            | :network_ambiguous
@@ -401,6 +402,12 @@ defmodule GrappaWeb.FallbackController do
     conn
     |> put_status(:conflict)
     |> json(%{error: "already_enabled"})
+  end
+
+  def call(conn, {:error, :passkey_required}) do
+    conn
+    |> put_status(:conflict)
+    |> json(%{error: "passkey_required"})
   end
 
   # T31 admission errors. Status-code split:
