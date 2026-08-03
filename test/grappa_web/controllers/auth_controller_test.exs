@@ -29,6 +29,7 @@ defmodule GrappaWeb.AuthControllerTest do
   alias Grappa.RateLimit.FailureWindow
   alias Grappa.Session.Server, as: SessionServer
   alias Grappa.Visitors.Visitor
+  alias GrappaWeb.PasskeyOrigin
 
   # NetworkCircuit is ETS-backed and survives Ecto sandbox resets.
   # Clear before each test so spawn failures from one test don't trip
@@ -78,14 +79,8 @@ defmodule GrappaWeb.AuthControllerTest do
 
   test "passkey second-factor options use the configured WebAuthn origin", %{conn: conn} do
     {user, password} = user_fixture_with_password()
-    previous_origin = Application.get_env(:grappa, :passkey_origin)
-    Application.put_env(:grappa, :passkey_origin, "https://login.example:8443")
-
-    on_exit(fn ->
-      if previous_origin,
-        do: Application.put_env(:grappa, :passkey_origin, previous_origin),
-        else: Application.delete_env(:grappa, :passkey_origin)
-    end)
+    :ok = PasskeyOrigin.put_test_origin("https://login.example:8443")
+    on_exit(fn -> PasskeyOrigin.put_test_origin(nil) end)
 
     key = %{1 => 2, 3 => -7, -1 => 1, -2 => <<0::256>>, -3 => <<0::256>>}
 

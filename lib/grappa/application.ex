@@ -112,6 +112,14 @@ defmodule Grappa.Application do
     # CLAUDE.md-designated boundary (mirrors `Grappa.Uploads.boot/1`).
     :ok = Grappa.HttpHosts.boot(http_host_aliases())
 
+    # A passkey is bound to an origin at registration and refuses to answer
+    # for any other, so the RP origin is a deployment property, not a
+    # per-request one. Stash the operator's `GRAPPA_PASSKEY_ORIGIN` override
+    # (nil when unset — the Endpoint fallback resolves at call time, since
+    # the Endpoint is not up yet here). Boot-time read of
+    # `Application.get_env/2` is the CLAUDE.md-designated boundary.
+    :ok = GrappaWeb.PasskeyOrigin.boot()
+
     # #399: stash the built cicchetto SPA dist root in `:persistent_term`
     # so the endpoint's `Plug.Static` + SPA history-fallback and
     # `Grappa.Cic.Bundle`'s hash/version live-read resolve against ONE

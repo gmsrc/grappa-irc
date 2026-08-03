@@ -63,7 +63,11 @@ defmodule GrappaWeb do
         GrappaWeb.BodyLimit
       ] ++
         if(Mix.env() in [:dev, :test], do: [Grappa.TestSupport.SubjectReset], else: []),
-    exports: [Endpoint]
+    # `PasskeyOrigin` joins `Endpoint` on the export list for the same
+    # reason: `Grappa.Application.start/2` reaches in to boot it, the
+    # documented boot-time-config boundary. Nothing else outside
+    # `GrappaWeb` may call it.
+    exports: [Endpoint, PasskeyOrigin]
 
   @doc "Imports for `use GrappaWeb, :controller` — Phoenix.Controller + Plug.Conn + the JSON fallback."
   @spec controller() :: Macro.t()

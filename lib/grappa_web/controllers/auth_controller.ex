@@ -45,7 +45,7 @@ defmodule GrappaWeb.AuthController do
   alias Grappa.Auth.IdentifierClassifier
   alias Grappa.RateLimit.FailureWindow
   alias Grappa.Visitors.{Login, Visitor}
-  alias GrappaWeb.RemoteIP
+  alias GrappaWeb.{PasskeyOrigin, RemoteIP}
 
   require Logger
 
@@ -444,7 +444,7 @@ defmodule GrappaWeb.AuthController do
     binding = %{ip: format_ip(conn), client_id: conn.assigns[:current_client_id]}
 
     with {:ok, options} <-
-           WebAuthn.begin_authentication(user, :second_factor, binding, passkey_origin()) do
+           WebAuthn.begin_authentication(user, :second_factor, binding, PasskeyOrigin.origin()) do
       conn
       |> put_status(:accepted)
       |> json(%{
@@ -455,9 +455,6 @@ defmodule GrappaWeb.AuthController do
       })
     end
   end
-
-  defp passkey_origin,
-    do: Application.get_env(:grappa, :passkey_origin, GrappaWeb.Endpoint.url())
 
   defp check_totp_throttle(conn, user_id) do
     case FailureWindow.check(:totp_login, {format_ip(conn), user_id}, @totp_max_failures) do

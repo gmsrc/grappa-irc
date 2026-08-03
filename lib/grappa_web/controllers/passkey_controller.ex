@@ -6,7 +6,7 @@ defmodule GrappaWeb.PasskeyController do
   alias Grappa.Accounts.{User, WebAuthn}
   alias Grappa.Auth.IdentifierClassifier
   alias Grappa.RateLimit.FailureWindow
-  alias GrappaWeb.RemoteIP
+  alias GrappaWeb.{PasskeyOrigin, RemoteIP}
 
   @recovery_salt "account-passwordless-recovery-v1"
   @recovery_max_age_seconds 600
@@ -40,7 +40,7 @@ defmodule GrappaWeb.PasskeyController do
         %{"password" => password, "name" => name}
       ) do
     with {:ok, options} <-
-           WebAuthn.begin_registration(user, password, name, client_binding(conn), origin()) do
+           WebAuthn.begin_registration(user, password, name, client_binding(conn), PasskeyOrigin.origin()) do
       json(conn, options)
     end
   end
@@ -67,7 +67,9 @@ defmodule GrappaWeb.PasskeyController do
       when mode in ["second_factor", "disabled"] do
     if Argon2.verify_pass(password, user.password_hash) do
       with {:ok, options} <-
-             WebAuthn.begin_authentication(user, :mode_change, client_binding(conn), origin(), %{mode: mode}) do
+             WebAuthn.begin_authentication(user, :mode_change, client_binding(conn), PasskeyOrigin.origin(), %{
+               mode: mode
+             }) do
         json(conn, options)
       end
     else
@@ -114,7 +116,7 @@ defmodule GrappaWeb.PasskeyController do
            verify_recovery_token(token),
          true <- user_id == user.id,
          {:ok, options} <-
-           WebAuthn.begin_authentication(user, :mode_change, client_binding(conn), origin(), %{
+           WebAuthn.begin_authentication(user, :mode_change, client_binding(conn), PasskeyOrigin.origin(), %{
              mode: "passwordless",
              recovery_codes: codes
            }) do
@@ -197,7 +199,7 @@ defmodule GrappaWeb.PasskeyController do
   defp begin_passwordless(conn, identifier) do
     with %User{passkey_mode: "passwordless"} = user <- find_user(identifier),
          {:ok, options} <-
-           WebAuthn.begin_authentication(user, :passwordless, client_binding(conn), origin()) do
+           WebAuthn.begin_authentication(user, :passwordless, client_binding(conn), PasskeyOrigin.origin()) do
       json(conn, options)
     else
       _ -> {:error, :invalid_credentials}
@@ -287,8 +289,6 @@ defmodule GrappaWeb.PasskeyController do
 
   defp client_binding(conn),
     do: %{ip: RemoteIP.format(conn), client_id: conn.assigns[:current_client_id]}
-
-  defp origin, do: Application.get_env(:grappa, :passkey_origin, GrappaWeb.Endpoint.url())
 
   defp verify_recovery_token(token) do
     Phoenix.Token.verify(GrappaWeb.Endpoint, @recovery_salt, token, max_age: @recovery_max_age_seconds)
