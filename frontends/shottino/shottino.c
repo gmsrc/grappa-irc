@@ -4912,7 +4912,7 @@ static void open_panel(struct app *app, enum panel_kind panel) {
         panel_fetch(app, "settings", "/api/server-settings", render_settings_caps);
         panel_line(app, "%s", "");
         panel_line(app, "keys");
-        panel_line(app, "  PgUp/PgDn scroll   End bottom   Ctrl-N/Ctrl-P cycle windows");
+        panel_line(app, "  PgUp/PgDn scroll   End bottom   Ctrl-Tab or Ctrl-N/Ctrl-P cycle windows");
         panel_line(app, "  Tab complete       Up/Down history   Esc or /chat returns to chat");
         panel_line(app, "  click a media link to preview it in the terminal");
         break;
@@ -8429,7 +8429,7 @@ static void draw(struct app *app) {
                   focused_pane_locked(app)->scroll_pinned ? " | scrolled" : "");
     } else {
         draw_text(compose_y, main_x + 1, main_w - 2, CP_STATUS, 0,
-                  "[%s] %s | End bottom | Tab complete | Up/Down history | /open | /exit%s",
+                  "[%s] %s | Ctrl-Tab window | Tab complete | Up/Down history | /open | /exit%s",
                   w->channel,
                   app->pane_count > 1 ? "PgUp/PgDn scroll | C-M-\u2191\u2193 pane | C-M-+/- size"
                                       : "PgUp/PgDn scroll",
@@ -18030,7 +18030,14 @@ enum {
     KEY_ROSTER_UP,
     KEY_ROSTER_DOWN,
     KEY_CHAT_UP,
-    KEY_CHAT_DOWN
+    KEY_CHAT_DOWN,
+    /* Ctrl-Tab / Ctrl-Shift-Tab: walk the WINDOW list, which is the
+     * thing people reach for that key expecting. Ctrl-N / Ctrl-P have
+     * always done it; this is the same verb under the key most clients
+     * put it on. Note that plenty of terminals keep Ctrl-Tab for their
+     * OWN tabs and send nothing — /keys shows what actually arrives. */
+    KEY_WIN_NEXT,
+    KEY_WIN_PREV
 };
 
 static void define_pane_keys(void) {
@@ -18046,6 +18053,14 @@ static void define_pane_keys(void) {
         {"\033[27;7;61~", KEY_PANE_GROW},   /* Ctrl-Alt-= (same key, unshifted) */
         {"\033[27;7;45~", KEY_PANE_SHRINK}, /* Ctrl-Alt-- */
         {"\033[27;7;9~", KEY_PANE_CYCLE},   /* Ctrl-Alt-Tab */
+        /* Ctrl-Tab in its two spellings: xterm's modifyOtherKeys form
+         * and the CSI-u form kitty, foot and wezterm send. Bound
+         * directly rather than through terminfo, which describes
+         * neither. */
+        {"\033[27;5;9~", KEY_WIN_NEXT},
+        {"\033[9;5u", KEY_WIN_NEXT},
+        {"\033[27;6;9~", KEY_WIN_PREV},   /* Ctrl-Shift-Tab */
+        {"\033[9;6u", KEY_WIN_PREV},
         {"\033[27;3;43~", KEY_PANE_GROW},
         {"\033[27;3;45~", KEY_PANE_SHRINK},
         /* The member list. Shift+PgUp/PgDn was bound through terminfo's
@@ -19784,9 +19799,9 @@ static void event_loop(struct app *app) {
             pthread_mutex_unlock(&app->lock);
         } else if (ch == KEY_MOUSE) {
             handle_mouse(app);
-        } else if (ch == 14) {
+        } else if (ch == 14 || ch == KEY_WIN_NEXT) {
             cycle_window(app, 1);
-        } else if (ch == 16) {
+        } else if (ch == 16 || ch == KEY_WIN_PREV) {
             cycle_window(app, -1);
 #ifdef KEY_CTAB
         } else if (ch == KEY_CTAB) {

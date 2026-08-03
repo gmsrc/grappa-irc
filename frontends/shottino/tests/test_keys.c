@@ -101,6 +101,14 @@ static const struct expectation MODIFIED_KEYS[] = {
     {"Ctrl-Alt-Down",   "\033[1;7B", KEY_PANE_NEXT},
     {"Alt-Up",          "\033[1;3A", KEY_PANE_PREV},
     {"Alt-Down",        "\033[1;3B", KEY_PANE_NEXT},
+    /* Ctrl-Tab walks the WINDOW list, in both spellings terminals use:
+     * xterm's modifyOtherKeys form and the CSI-u form kitty, foot and
+     * wezterm send. Terminfo describes neither, which is exactly why
+     * they are bound directly. */
+    {"Ctrl-Tab",        "\033[27;5;9~", KEY_WIN_NEXT},
+    {"Ctrl-Tab (CSI-u)", "\033[9;5u",   KEY_WIN_NEXT},
+    {"Ctrl-Shift-Tab",  "\033[27;6;9~", KEY_WIN_PREV},
+    {"Ctrl-Shift-Tab (CSI-u)", "\033[9;6u", KEY_WIN_PREV},
     {"plain Up",        "\033[A",    KEY_UP},
     {"plain Down",      "\033[B",    KEY_DOWN},
 };
