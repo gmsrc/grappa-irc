@@ -212,9 +212,6 @@ struct call {
     unsigned long vseen[CALL_MAX_PEERS];
     int vmisses[CALL_MAX_PEERS];
     bool vlive[CALL_MAX_PEERS];
-    /* Which peer is big. An index into the LIVE list, because that is
-     * what Tab cycles through. */
-    int focus;
     bool want_video;
     int frame_fd;
     /* Borrowed from main's frame, which outlives every thread here. The
@@ -306,22 +303,33 @@ static void video_retile(struct call *c) {
         emit_event("tiles", "value", "");
         return;
     }
-    if (c->focus >= n) c->focus = 0;
-    c->vmix.tile_count = media_tile_layout(slots, n, c->focus, c->cfg->frame_w, c->cfg->frame_h,
-                                           c->vmix.tiles, CALL_TILE_MAX);
+    c->vmix.tile_count =
+        media_grid_layout(slots, n, c->cfg->frame_w, c->cfg->frame_h, c->vmix.tiles,
+                          CALL_TILE_MAX);
     bool ok = media_start_video_mix(&c->vmix, c->cfg, c->frame_fd);
-    /* What is ACTUALLY on screen, slot by slot, in draw order. shottino
-     * knows which nick each slot is (it built the subscribe list), so
-     * this is what lets it label the tiles — and it is also how a cap
-     * is reported rather than silently applied: fewer slots here than
-     * peers in the call means the window had no room for the rest. */
-    char shown[CALL_MAX_PEERS * 4 + 1];
+    /* THE GRID, PUBLISHED. Not a status line — a contract.
+     *
+     * The composited frame is one picture on a byte pipe, so without
+     * these rectangles the other end cannot tell whose face is where.
+     * With them it can sample any cell into any box, which is what
+     * makes focus a drawing decision there instead of a decoder restart
+     * here.
+     *
+     *     <frame_w>x<frame_h>;slot,x,y,w,h;slot,x,y,w,h...
+     *
+     * shottino knows which nick each slot is — it built the subscribe
+     * list — so the slot number is enough to label a cell. Fewer tiles
+     * here than peers in the call is also how the cap is REPORTED
+     * rather than silently applied. */
+    char shown[64 + CALL_MAX_PEERS * 32];
     size_t at = 0;
     int drawn = c->vmix.tile_count;
-    for (int i = 0; i < drawn && at + 5 < sizeof(shown); i++) {
-        if (i) shown[at++] = ',';
-        at += (size_t)snprintf(shown + at, sizeof(shown) - at, "%d", c->vmix.tiles[i].slot);
-    }
+    at += (size_t)snprintf(shown + at, sizeof(shown) - at, "%dx%d", c->cfg->frame_w,
+                           c->cfg->frame_h);
+    for (int i = 0; i < drawn && at + 40 < sizeof(shown); i++)
+        at += (size_t)snprintf(shown + at, sizeof(shown) - at, ";%d,%d,%d,%d,%d",
+                               c->vmix.tiles[i].slot, c->vmix.tiles[i].x, c->vmix.tiles[i].y,
+                               c->vmix.tiles[i].w, c->vmix.tiles[i].h);
     shown[at] = 0;
     pthread_mutex_unlock(&c->vlock);
 
@@ -947,20 +955,12 @@ int main(int argc, char **argv) {
             else if (strcmp(line, "camera off") == 0) call.camera_off = true;
             else if (strcmp(line, "camera on") == 0) call.camera_off = false;
             else if (strcmp(line, "hangup") == 0) break;
-            else if (strcmp(line, "focus next") == 0) {
-                /* Cycles the LIVE list, which is what is on screen —
-                 * stepping through peers who are not sending a picture
-                 * would be a Tab that visibly does nothing. */
-                int live = 0;
-                for (int i = 0; i < CALL_MAX_PEERS; i++) live += call.vlive[i] ? 1 : 0;
-                if (live > 1) {
-                    call.focus = (call.focus + 1) % live;
-                    video_retile(&call);
-                }
-            } else if (strncmp(line, "focus ", 6) == 0) {
-                call.focus = atoi(line + 6);
-                video_retile(&call);
-            } else if (strncmp(line, "frame ", 6) == 0) {
+            /* NO `focus` verb, deliberately. Who is big is decided
+             * where the drawing happens, by sampling a cell out of the
+             * published grid — the helper composites the same even grid
+             * either way. Handling focus here is what used to make it
+             * cost a decoder restart. */
+            else if (strncmp(line, "frame ", 6) == 0) {
                 /* The window changed size or the call moved between the
                  * corner box and its own window. The helper still never
                  * GUESSES a geometry — it is told one, exactly as at

@@ -405,63 +405,74 @@ bool media_start_recv(struct media_leg *leg, const struct media_config *cfg, boo
  * an odd width upsets every scaler that ever meets a chroma plane. */
 static int even_down(int v) { return v & ~1; }
 
-int media_tile_layout(const int *slots, int n, int focus, int frame_w, int frame_h,
-                      struct media_tile *out, int max) {
-    if (n <= 0 || max <= 0 || !out || !slots || frame_w <= 0 || frame_h <= 0) return 0;
-    if (n > max) n = max;
-    if (focus < 0 || focus >= n) focus = 0;
-
-    /* The focused peer IS the background: the whole frame, and also the
-     * first ffmpeg input, which is what lets the graph be a plain
-     * overlay chain with no synthetic colour source underneath it. */
-    out[0].slot = slots[focus];
-    out[0].x = out[0].y = 0;
-    out[0].w = even_down(frame_w);
-    out[0].h = even_down(frame_h);
-    if (n == 1) return 1;
-
-    /* A quarter of the frame each, with a small margin. Below the floor
-     * a thumbnail carries nothing a viewer could read — this is ASCII
-     * art of a face — so it is not drawn at all. That is the ordinary
-     * picture-in-picture case: a 40x30-pixel corner box has room for
-     * exactly one person, and says so by returning 1. */
-    const int gap = 2;
-    int tw = even_down(frame_w / 4), th = even_down(frame_h / 4);
-    if (tw < 16 || th < 12) return 1;
-
-    int fit = (frame_w - gap) / (tw + gap);
-    int want = n - 1;
-    int shown = want < fit ? want : fit;
-    if (shown > max - 1) shown = max - 1;
-    if (shown <= 0) return 1;
-
-    int count = 1;
-    for (int i = 0; i < n && count <= shown; i++) {
-        if (i == focus) continue; /* they are the background already */
-        out[count].slot = slots[i];
-        out[count].w = tw;
-        out[count].h = th;
-        out[count].x = gap + (count - 1) * (tw + gap);
-        out[count].y = frame_h - th - gap;
-        count++;
-    }
-    return count;
+/* Smallest k with k*k >= n, for n up to the peer cap. */
+static int grid_cols_for(int n) {
+    int k = 1;
+    while (k * k < n) k++;
+    return k;
 }
 
-bool media_mix_filter(const struct media_tile *tiles, int n, int fps, char *out, size_t out_sz) {
-    if (!tiles || n <= 0 || !out || out_sz == 0) return false;
+int media_grid_layout(const int *slots, int n, int frame_w, int frame_h, struct media_tile *out,
+                      int max) {
+    if (n <= 0 || max <= 0 || !out || !slots || frame_w <= 0 || frame_h <= 0) return 0;
+    if (n > max) n = max;
+
+    /* Wider than tall: one row of two beats a column of two, because a
+     * terminal cell is about twice as tall as it is wide and the
+     * pictures are landscape to begin with. */
+    int cols = grid_cols_for(n);
+    int rows = (n + cols - 1) / cols;
+    int cw = even_down(frame_w / cols), ch = even_down(frame_h / rows);
+    /* Below this a cell carries nothing a viewer could read — this
+     * becomes ASCII art of a face — so rather than lay out confetti,
+     * drop back to a coarser grid and report fewer. */
+    while ((cw < 16 || ch < 12) && n > 1) {
+        n--;
+        cols = grid_cols_for(n);
+        rows = (n + cols - 1) / cols;
+        cw = even_down(frame_w / cols);
+        ch = even_down(frame_h / rows);
+    }
+    if (cw <= 0 || ch <= 0) return 0;
+
+    for (int i = 0; i < n; i++) {
+        out[i].slot = slots[i];
+        out[i].w = cw;
+        out[i].h = ch;
+        out[i].x = (i % cols) * cw;
+        out[i].y = (i / cols) * ch;
+    }
+    return n;
+}
+
+bool media_mix_filter(const struct media_tile *tiles, int n, int fps, int frame_w, int frame_h,
+                      char *out, size_t out_sz) {
+    if (!tiles || n <= 0 || !out || out_sz == 0 || frame_w <= 0 || frame_h <= 0) return false;
     if (fps < 1) fps = 10;
     size_t at = 0;
     /* Every input scaled and padded into its cell. setsar=1 because an
      * overlay refuses to compose sources whose sample aspect ratios
      * disagree, and a camera that reports a non-square one otherwise
-     * kills the whole graph rather than just looking wrong. */
+     * kills the whole graph rather than just looking wrong.
+     *
+     * The FIRST one is padded twice: once into its cell, then out to
+     * the whole frame at that cell's position, so it becomes the canvas
+     * the rest are overlaid onto. Without the second pad the canvas is
+     * one cell and every other peer is clipped off the edge of it — an
+     * output silently a quarter of the size it should be. Doing it this
+     * way rather than with a synthetic colour source keeps the input
+     * count equal to the peer count, which is what the tile indices and
+     * the -i order both assume. */
     for (int i = 0; i < n; i++) {
         int w = tiles[i].w > 0 ? tiles[i].w : 2, h = tiles[i].h > 0 ? tiles[i].h : 2;
+        char canvas[64] = "";
+        if (i == 0)
+            snprintf(canvas, sizeof(canvas), "pad=%d:%d:%d:%d,", frame_w, frame_h, tiles[0].x,
+                     tiles[0].y);
         int k = snprintf(out + at, out_sz - at,
                          "[%d:v]fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease,"
-                         "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1[t%d];",
-                         i, fps, w, h, w, h, i);
+                         "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,%ssetsar=1[t%d];",
+                         i, fps, w, h, w, h, canvas, i);
         if (k < 0 || (size_t)k >= out_sz - at) return false;
         at += (size_t)k;
     }
@@ -623,7 +634,9 @@ bool media_start_video_mix(struct media_mix *mix, const struct media_config *cfg
     /* Eight peers of scale-and-pad plus an overlay chain. Measured at
      * about 130 bytes per input, so this has room for twice the cap. */
     char filter[4096];
-    if (!media_mix_filter(mix->tiles, n, cfg->fps, filter, sizeof(filter))) return false;
+    if (!media_mix_filter(mix->tiles, n, cfg->fps, cfg->frame_w, cfg->frame_h, filter,
+                          sizeof(filter)))
+        return false;
 
     char *argv[MEDIA_MAX_ARGS + MEDIA_MAX_PEERS * 4];
     size_t a = 0;

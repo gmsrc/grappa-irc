@@ -494,13 +494,38 @@ building deliberately rather than bolting on.
 
 ### Group video: one decoder, and the wall it hits
 
-Video is now composited like the audio is mixed — ONE ffmpeg reading
-every peer, the focused person full-frame with the rest as thumbnails
-along the bottom, rather than a process per picture. The layout is a
-pure function (`media_tile_layout`) and so is the filter graph
-(`media_mix_filter`); both are unit-tested, and the graph was verified
-by composing synthetic colour sources and reading the output pixels back
-to confirm each tile lands where the layout said.
+Video is composited like the audio is mixed — ONE ffmpeg reading every
+peer, rather than a process per picture. It composites an **even grid**
+(`media_grid_layout`), and the grid does NOT depend on who is focused.
+That is the load-bearing choice: an earlier version put the focused
+peer full-frame with the rest as thumbnails, which meant every focus
+change rebuilt the filter graph and restarted the decoder — seconds,
+every time, for "show me the other person".
+
+Now the helper opens its inputs once per call and publishes the grid as
+a contract:
+
+```
+{"event":"tiles","value":"160x120;0,0,0,80,60;2,80,0,80,60;5,0,60,80,60"}
+                          frame     slot,x,y,w,h ...
+```
+
+shottino keeps the slot→nick mapping (it built the subscribe list, and
+that order *is* the slot number), so a cell can be labelled. Which peer
+is big is then purely a drawing decision: it samples the focused cell
+into a large box and the others into a strip. `/focus` moves an index
+and nothing else — no message to the helper, no process restarted,
+visible on the next frame drawn.
+
+The tile map is adopted **all or nothing**. A cell that does not fit the
+frame it claims to belong to would sample somebody else's pixels, so a
+line that fails validation leaves the previous grid in place: a stale
+picture beats a mislabelled one.
+
+The filter graph (`media_mix_filter`) and the grid are both pure
+functions and unit-tested; the graph was additionally verified by
+composing synthetic colour sources through real ffmpeg and reading the
+output pixels back to confirm each tile lands where the layout said.
 
 Membership is measured, never assumed. A filter graph STALLS forever on
 an input that produces no frames, so a peer whose camera is off would
@@ -531,13 +556,15 @@ curve is still tolerable. Everyone beyond that stays in the call with
 their audio and is reported as not drawn — the same honest degradation a
 peer with their camera off already gets.
 
-The cap is a symptom, not a fix. The consequence worth knowing: because
-a focus change restarts the decoder, **Tab costs that same startup
-time**. The design that removes it is for the mix to composite a FIXED
-grid — paying the opening cost once, at the start of the call — and for
-shottino to do the focus in the draw path, enlarging whichever cell it
-wants. That needs a sampled (nearest-neighbour) draw in the half-block
-renderer, which currently clips rather than scales.
+The cap is a symptom, not a fix — but it is now paid **once per call**
+rather than once per focus change, which is what the fixed grid bought.
+The decoder still restarts when the SET changes (somebody turns their
+camera on or off, or joins), and that is unavoidable: the inputs are
+genuinely different. It no longer restarts for anything the viewer does.
+
+Still open: the startup cost itself. Something in ffmpeg's sequential
+opening of live RTP inputs is the cause, and nothing tried so far moves
+it. Worth another look if group video is used in anger.
 
 ## Roadmap
 

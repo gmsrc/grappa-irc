@@ -1293,6 +1293,62 @@ TEST(stt_transcribes_and_dictate_types) {
     free_app(app);
 }
 
+/* The grid the call helper publishes is what ties a rectangle of the
+ * composited frame to a person. Getting it wrong is not a crash — it is
+ * everybody's face drawn under somebody else's name, which is the kind
+ * of bug that gets believed rather than reported. */
+TEST(the_call_tile_map_is_parsed_or_rejected_whole) {
+    struct call_tile t[CALL_MAX_PEERS];
+    int fw = 0, fh = 0;
+
+    /* One peer: the whole frame. */
+    CHECK(call_tiles_parse("160x120;0,0,0,160,120", &fw, &fh, t, CALL_MAX_PEERS) == 1);
+    CHECK(fw == 160 && fh == 120);
+    CHECK(t[0].slot == 0 && t[0].w == 160 && t[0].h == 120);
+
+    /* Four in a 2x2, and the SLOT is carried through — it is not the
+     * index. The live set has holes in it, so a cell for slot 5 must
+     * stay slot 5 or it labels the wrong person. */
+    int n = call_tiles_parse("160x120;0,0,0,80,60;2,80,0,80,60;5,0,60,80,60;7,80,60,80,60", &fw,
+                             &fh, t, CALL_MAX_PEERS);
+    CHECK(n == 4);
+    CHECK(t[0].slot == 0 && t[1].slot == 2 && t[2].slot == 5 && t[3].slot == 7);
+    CHECK(t[1].x == 80 && t[1].y == 0);
+    CHECK(t[2].x == 0 && t[2].y == 60);
+
+    /* ALL OR NOTHING. A cell that does not fit the frame it claims to
+     * belong to would sample somebody else's pixels, so the whole line
+     * is refused and the caller keeps the grid it already had — better
+     * a stale picture than a mislabelled one. */
+    CHECK(call_tiles_parse("160x120;0,0,0,80,60;1,100,0,80,60", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("160x120;0,0,0,80,200", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("160x120;0,-1,0,80,60", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("160x120;0,0,0,0,60", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    /* A slot outside the cap would index the nick table past its end. */
+    CHECK(call_tiles_parse("160x120;99,0,0,80,60", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("160x120;-1,0,0,80,60", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+
+    /* Malformed in the ways a truncated or reordered line actually is. */
+    CHECK(call_tiles_parse("", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("160x120", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("160x120;0,0,0,80", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("160x120;0,0,0,80,60;junk", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("160x120;0,0,0,80,60trailing", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("0x0;0,0,0,80,60", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse(NULL, &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(call_tiles_parse("160x120;0,0,0,80,60", &fw, &fh, NULL, CALL_MAX_PEERS) == 0);
+
+    /* An empty grid — everybody turned their camera off — is reported
+     * as none rather than as a parse failure the caller would ignore. */
+    CHECK(call_tiles_parse("160x120;", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+
+    /* The frame size is only adopted when the line as a whole was
+     * good: a rejected line must not leave half of it applied. */
+    fw = fh = 0;
+    CHECK(call_tiles_parse("640x480;0,0,0,999,999", &fw, &fh, t, CALL_MAX_PEERS) == 0);
+    CHECK(fw == 0 && fh == 0);
+}
+
 /* A client-local window is never asked about over REST.
  *
  * $llm is a conversation with a model; nothing on the wire has ever
@@ -2935,6 +2991,7 @@ int main(void) {
     RUN(a_settings_menu_offers_what_the_setting_accepts);
     RUN(tab_cycles_through_the_media_in_this_window);
     RUN(stt_transcribes_and_dictate_types);
+    RUN(the_call_tile_map_is_parsed_or_rejected_whole);
     RUN(a_client_local_window_is_never_fetched_from_the_server);
     RUN(a_conversation_is_remembered_and_rolls_to_fit);
     RUN(the_context_budget_leaves_room_for_the_fixed_parts);

@@ -555,6 +555,25 @@ enum call_ring_policy { CALL_RING_OFF, CALL_RING_QUERIES, CALL_RING_ALL };
  * failure the setting exists to prevent. */
 enum call_vcodec { CALL_VCODEC_VP8, CALL_VCODEC_H264 };
 
+/* Kept in step with the helper's own cap: shottino builds the argument
+ * list, so it is the side that must not overrun it. Declared with the
+ * tile map below, which is sized by it. */
+#define CALL_MAX_PEERS 8
+
+/* One peer's rectangle inside the composited call frame, in PIXELS.
+ *
+ * The helper sends ONE picture down a byte pipe: an even grid of
+ * everybody who is sending. Without these rectangles there is no way to
+ * tell whose face is where. With them, which peer is drawn big is a
+ * decision made HERE, by sampling that cell into a large box — so it
+ * costs nothing and happens between one frame and the next. The helper
+ * composites the same grid either way, which is exactly why it never
+ * has to restart its decoder to change the focus. */
+struct call_tile {
+    int slot; /* which peer, matching the subscribe order */
+    int x, y, w, h;
+};
+
 /* A recording stops itself here rather than running until the disk or
  * the upload limit says so. Declared with the overlay because the box
  * that draws the timer prints it. */
@@ -967,6 +986,25 @@ struct app {
          * the helper was TOLD a size and cannot be retold mid-call. */
         struct inline_media frame;
         int cols, rows;
+        /* The grid the helper published, and who is big in it.
+         *
+         * `focus` indexes `tiles` and is OURS alone — changing it draws
+         * a different cell large on the very next frame, with nothing
+         * to tell the helper and nothing to restart. `tile_count <= 1`
+         * is the ordinary one-person call and every path degrades to
+         * exactly what it did before the grid existed. */
+        struct call_tile tiles[CALL_MAX_PEERS];
+        int tile_count;
+        int frame_w, frame_h;
+        int focus;
+        /* Who focus is ON, not merely where. A re-grid moves cells
+         * around; following the index would silently swap the person
+         * you were watching. -1 when nobody is. */
+        int focus_slot;
+        /* Slot -> nick, so a cell can be labelled. We built the
+         * subscribe list, so the mapping is ours to keep; the helper
+         * only ever refers to a slot number. */
+        char peers[CALL_MAX_PEERS][MAX_CHANNEL];
         char network[MAX_SLUG];
         char channel[MAX_CHANNEL];
     } call_live;
@@ -3027,10 +3065,6 @@ static void render_ctcp_reply(struct app *app, const char *network, const char *
  * privacy statement true: a call is exactly as private as the window
  * its link was posted in. Which is why the ring says where it came
  * from, and why /call refuses to guess a window. */
-/* Kept in step with the helper's own cap: shottino builds the argument
- * list, so it is the side that must not overrun it. */
-#define CALL_MAX_PEERS 8
-
 #define CALL_MARKER_AUDIO "📞"
 #define CALL_MARKER_VIDEO "📹"
 
@@ -3170,6 +3204,44 @@ static bool call_ring_parse(const char *word, enum call_ring_policy *out) {
     if (strcasecmp(word, "queries") == 0)      { *out = CALL_RING_QUERIES; return true; }
     if (strcasecmp(word, "all") == 0)          { *out = CALL_RING_ALL;     return true; }
     return false;
+}
+
+/* Parse the grid the helper publishes:
+ *
+ *     <frame_w>x<frame_h>;slot,x,y,w,h;slot,x,y,w,h...
+ *
+ * Pure, so the one thing that decides whose face is drawn where can be
+ * asserted without a call running. Getting it wrong is not a crash —
+ * it is everybody's picture labelled with the wrong name, which is the
+ * kind of bug that gets believed.
+ *
+ * All or nothing: a line that does not parse cleanly leaves the caller
+ * with the grid it already had rather than a half-updated one. Returns
+ * the tile count, or 0. */
+static int call_tiles_parse(const char *value, int *frame_w, int *frame_h, struct call_tile *out,
+                            int max) {
+    if (!value || !frame_w || !frame_h || !out || max <= 0) return 0;
+    int fw = 0, fh = 0, used = 0;
+    if (sscanf(value, "%dx%d%n", &fw, &fh, &used) != 2 || fw <= 0 || fh <= 0) return 0;
+    const char *p = value + used;
+    int n = 0;
+    while (*p == ';' && n < max) {
+        struct call_tile t;
+        int adv = 0;
+        if (sscanf(p, ";%d,%d,%d,%d,%d%n", &t.slot, &t.x, &t.y, &t.w, &t.h, &adv) != 5) return 0;
+        /* A cell outside the frame it claims to be part of would sample
+         * somebody else's pixels, or none. Refuse the whole line. */
+        if (t.slot < 0 || t.slot >= CALL_MAX_PEERS) return 0;
+        if (t.w <= 0 || t.h <= 0 || t.x < 0 || t.y < 0 || t.x + t.w > fw || t.y + t.h > fh)
+            return 0;
+        out[n++] = t;
+        p += adv;
+    }
+    if (*p) return 0; /* trailing junk: the line was not what we think */
+    if (n == 0) return 0;
+    *frame_w = fw;
+    *frame_h = fh;
+    return n;
 }
 
 /* The same pair for the video codec. `h.264` is accepted as well as
@@ -7885,28 +7957,70 @@ static void draw(struct app *app) {
             vx = main_x + main_w - vw - 1;
             vy = 1;
         }
+        int nt = app->call_live.tile_count;
+        int focus = app->call_live.focus;
+        if (focus < 0 || focus >= nt) focus = 0;
         if (vw > 0 && vh > 0) {
-            /* The whole frame, letterboxed into whatever box it got:
-             * keeping the aspect ratio matters more full-pane, where a
-             * stretched face is the first thing anyone notices. */
-            int src_w = app->call_live.frame.cols, src_h = app->call_live.frame.rows * 2;
-            int fit_w = vw, fit_h = vh;
-            if (src_w > 0 && src_h > 0) {
+            /* The FOCUSED cell gets the box; the others, if there is
+             * room, go in a strip under it. Which cell that is comes
+             * from `focus`, which /focus moves — so switching person is
+             * this arithmetic picking a different rectangle out of the
+             * same composited frame, and nothing more.
+             *
+             * With no tile map (one-person call, or the helper has not
+             * published yet) the whole frame is the picture, which is
+             * exactly the pre-grid behaviour. */
+            struct call_tile whole = { 0, 0, 0, app->call_live.frame.cols,
+                                       app->call_live.frame.rows * 2 };
+            struct call_tile big = nt > 0 ? app->call_live.tiles[focus] : whole;
+
+            /* A strip only when there is somebody else AND room: in the
+             * corner box there is neither. */
+            int strip_h = (full && nt > 1) ? vh / 4 : 0;
+            if (strip_h > 0 && strip_h < 4) strip_h = 0;
+            int big_h = vh - strip_h;
+
+            int fit_w = vw, fit_h = big_h;
+            if (big.w > 0 && big.h > 0) {
                 /* Cells are about twice as tall as wide, so a cell box
                  * matching the picture's ratio is half as many rows. */
-                if (fit_w * src_h > fit_h * 2 * src_w) fit_w = (fit_h * 2 * src_w) / src_h;
-                else fit_h = (fit_w * src_h) / (2 * src_w);
+                if (fit_w * big.h > fit_h * 2 * big.w) fit_w = (fit_h * 2 * big.w) / big.h;
+                else fit_h = (fit_w * big.h) / (2 * big.w);
             }
             if (fit_w < 1) fit_w = 1;
             if (fit_h < 1) fit_h = 1;
-            int ox = vx + (vw - fit_w) / 2, oy = vy + (full ? (vh - fit_h) / 2 : 0);
-            draw_media_region_locked(&app->call_live.frame, oy, ox, 0, 0, src_w, src_h, fit_h,
-                                     fit_w);
+            int ox = vx + (vw - fit_w) / 2, oy = vy + (full ? (big_h - fit_h) / 2 : 0);
+            draw_media_region_locked(&app->call_live.frame, oy, ox, big.x, big.y, big.w, big.h,
+                                     fit_h, fit_w);
             /* A one-line label: a picture with no caption in the corner
-             * of a chat client reads as a glitch. */
+             * of a chat client reads as a glitch — and in a group call
+             * it is the only thing saying whose face this is. */
+            const char *who = nt > 0 && big.slot < CALL_MAX_PEERS && app->call_live.peers[big.slot][0]
+                                  ? app->call_live.peers[big.slot]
+                                  : app->call_live.channel;
             if (oy + fit_h < rows - 2)
-                draw_text(oy + fit_h, ox, fit_w, CP_MENTION, A_BOLD, " %.*s ", fit_w - 2,
-                          app->call_live.channel);
+                draw_text(oy + fit_h, ox, fit_w, CP_MENTION, A_BOLD, " %.*s ", fit_w - 2, who);
+
+            /* Everybody else, small, in the order the grid names them —
+             * skipping whoever is already filling the big box. */
+            if (strip_h > 0) {
+                int others = nt - 1;
+                int tw = vw / (others > 4 ? 4 : others);
+                if (tw > strip_h * 4) tw = strip_h * 4;
+                int sy = vy + vh - strip_h;
+                int sx = vx;
+                for (int i = 0; i < nt && sx + tw <= vx + vw; i++) {
+                    if (i == focus) continue;
+                    struct call_tile t = app->call_live.tiles[i];
+                    draw_media_region_locked(&app->call_live.frame, sy, sx, t.x, t.y, t.w, t.h,
+                                             strip_h - 1, tw - 1);
+                    const char *n2 = t.slot < CALL_MAX_PEERS && app->call_live.peers[t.slot][0]
+                                         ? app->call_live.peers[t.slot]
+                                         : "?";
+                    draw_text(sy + strip_h - 1, sx, tw - 1, CP_MUTED, 0, "%.*s", tw - 2, n2);
+                    sx += tw;
+                }
+            }
         }
     }
 
@@ -12941,6 +13055,29 @@ static void *call_reader_main(void *arg) {
         else if (strcmp(event, "state") == 0) log_line(app, "call: %s", value);
         else if (strcmp(event, "media") == 0) log_line(app, "call: carrying %s", value);
         else if (strcmp(event, "closed") == 0) log_line(app, "call: ended");
+        else if (strcmp(event, "tiles") == 0) {
+            /* The grid changed: somebody started or stopped sending a
+             * picture. Adopted wholesale or not at all — a half-applied
+             * grid draws faces under the wrong names. */
+            struct call_tile tiles[CALL_MAX_PEERS];
+            int fw = 0, fh = 0;
+            int n = call_tiles_parse(value, &fw, &fh, tiles, CALL_MAX_PEERS);
+            pthread_mutex_lock(&app->lock);
+            memcpy(app->call_live.tiles, tiles, sizeof(tiles));
+            app->call_live.tile_count = n;
+            app->call_live.frame_w = fw;
+            app->call_live.frame_h = fh;
+            /* Keep looking at the same PERSON across a re-grid where we
+             * can: the cell they occupy moves when the set changes, and
+             * following the index instead would silently swap who you
+             * were watching. */
+            int keep = 0;
+            for (int i = 0; i < n; i++)
+                if (tiles[i].slot == app->call_live.focus_slot) keep = i;
+            app->call_live.focus = keep;
+            app->call_live.focus_slot = n > 0 ? tiles[keep].slot : -1;
+            pthread_mutex_unlock(&app->lock);
+        }
     }
     fclose(f); /* owns err_fd */
     pthread_mutex_lock(&app->lock);
@@ -13067,9 +13204,17 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
      * what makes a late joiner work: they are simply a member whose
      * path started answering. */
     char whep[CALL_MAX_PEERS][sizeof(rtc) + 160];
+    /* Slot -> nick, kept in the SAME order the --whep arguments go out
+     * in, because that order IS the slot number the helper reports back
+     * in its tile map. This is the only place the two are tied
+     * together, so a cell can be labelled with whose face it is. */
+    char peer_nicks[CALL_MAX_PEERS][MAX_CHANNEL];
+    memset(peer_nicks, 0, sizeof(peer_nicks));
     size_t peers = 0;
     if (query) {
-        snprintf(whep[peers], sizeof(whep[0]), "%s%s%s/whep", rtc, sep, them); peers++;
+        snprintf(whep[peers], sizeof(whep[0]), "%s%s%s/whep", rtc, sep, them);
+        snprintf(peer_nicks[peers], sizeof(peer_nicks[0]), "%s", channel);
+        peers++;
     } else if (channel && channel[0]) {
         pthread_mutex_lock(&app->lock);
         for (size_t i = 0; i < app->window_count && peers < CALL_MAX_PEERS; i++) {
@@ -13080,7 +13225,9 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
                 if (own && irc_name_eq(w->members[k].nick, own)) continue;
                 char pn[128];
                 call_path_nick(w->members[k].nick, pn, sizeof(pn));
-                snprintf(whep[peers], sizeof(whep[0]), "%s%s%s/whep", rtc, sep, pn); peers++;
+                snprintf(whep[peers], sizeof(whep[0]), "%s%s%s/whep", rtc, sep, pn);
+                snprintf(peer_nicks[peers], sizeof(peer_nicks[0]), "%s", w->members[k].nick);
+                peers++;
             }
             break;
         }
@@ -13169,6 +13316,10 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     app->call_live.cols = vcols;
     app->call_live.rows = vrows;
     app->call_live.frame.state = IM_IDLE;
+    memcpy(app->call_live.peers, peer_nicks, sizeof(peer_nicks));
+    app->call_live.tile_count = 0;
+    app->call_live.focus = 0;
+    app->call_live.focus_slot = -1;
     app->call_live.pid = pid;
     app->call_live.in_fd = in_pipe[1];
     app->call_live.err_fd = err_pipe[0];
@@ -14110,7 +14261,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "videocall") == 0) log_line(app, "/videocall — /call with a camera: the same room, posted as 📹 <url> so the other side knows to expect video before joining");
     else if (strcmp(cmd, "answer") == 0) log_line(app, "/answer — join the last call that came in, ringing or not. A channel invite does not ring under the default /set call.ring, and this is how you take it");
     else if (strcmp(cmd, "mute") == 0 || strcmp(cmd, "unmute") == 0) log_line(app, "/mute, /unmute — the microphone, while a call is running in the terminal. Local and instant: the capture keeps going and its packets are dropped, so unmuting does not wait for a device to open");
-    else if (strcmp(cmd, "focus") == 0) log_line(app, "/focus — in a group video call, show the next person full size and the rest as thumbnails. The mix re-tiles to do it, so the picture pauses for a moment; up to three people are drawn at once and the rest stay in the call with their audio");
+    else if (strcmp(cmd, "focus") == 0) log_line(app, "/focus — in a group video call, show the next person full size and the rest along the bottom. Instant: the helper composites the same grid whoever is focused, so this only changes which part of it is drawn big. Up to three people are on camera at once; the rest stay in the call with their audio");
     else if (strcmp(cmd, "hangup") == 0) log_line(app, "/hangup — stop a ringing call. LOCAL: the caller is not told, the same way not picking up a phone tells nobody. /answer still reaches the call afterwards");
     else if (strcmp(cmd, "view") == 0) log_line(app, "/view [url] — download it and open the desktop viewer for that file TYPE; an audio URL PLAYS instead (mpv/ffplay); bare /view offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
@@ -15675,14 +15826,24 @@ static void handle_command_dispatch(struct app *app, char *line) {
     } else if (strcmp(line, "/hangup") == 0) {
         call_hangup(app);
     } else if (strcmp(line, "/focus") == 0) {
-        /* Cycles who is BIG in a group video call. The helper re-tiles,
-         * which means it restarts its decoder — see docs/CALLS.md for
-         * why that is not instant and what would make it so. */
-        if (call_control(app, "focus next"))
-            log_line(app, "call: showing the next person — the picture takes a moment to come "
-                          "back while the mix re-tiles");
-        else
-            log_line(app, "/focus: no call is running");
+        /* Cycles who is BIG. Entirely local: the helper composites the
+         * same even grid whoever is focused, so this moves which cell
+         * gets sampled into the large box and takes effect on the next
+         * frame drawn. Nothing is sent, nothing restarts. */
+        char who[MAX_CHANNEL] = "";
+        int n;
+        pthread_mutex_lock(&app->lock);
+        n = app->call_live.pid > 0 ? app->call_live.tile_count : 0;
+        if (n > 1) {
+            app->call_live.focus = (app->call_live.focus + 1) % n;
+            int slot = app->call_live.tiles[app->call_live.focus].slot;
+            app->call_live.focus_slot = slot;
+            snprintf(who, sizeof(who), "%s", app->call_live.peers[slot]);
+        }
+        pthread_mutex_unlock(&app->lock);
+        if (n > 1) log_line(app, "call: showing %s", who[0] ? who : "the next person");
+        else if (n == 1) log_line(app, "/focus: only one person is on camera");
+        else log_line(app, "/focus: no video call is running");
     } else if (strcmp(line, "/mute") == 0 || strcmp(line, "/unmute") == 0) {
         bool on = line[1] == 'm';
         if (call_control(app, on ? "mute" : "unmute"))

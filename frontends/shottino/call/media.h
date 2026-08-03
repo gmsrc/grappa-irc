@@ -136,36 +136,50 @@ struct media_mix {
     int tile_count;
 };
 
-/* Lay N peers out in a frame: the focused one FULL SIZE, the rest as
- * thumbnails along the bottom of it.
+/* Lay N peers out as an EVEN GRID filling the frame.
  *
- * Asymmetric on purpose — "bigger for whoever is talking, smaller for
- * the others" is the whole request — and an even grid is the wrong
- * shape for a terminal besides: split a 40x30-pixel window four ways
- * and every tile is unreadable. Which is also why this returns a count
- * that can be LESS than `n`: below a size where a thumbnail would carry
- * any information it lays out the focused peer alone rather than
- * pretending. The caller must report the difference — a silent cap
- * reads as "everyone is here".
+ * Even, and — the whole point — INDEPENDENT OF WHO IS FOCUSED. An
+ * earlier version composited the focused peer full-size with the rest
+ * as thumbnails, which meant every focus change rebuilt the graph and
+ * restarted the decoder. That is measured at seconds, because ffmpeg
+ * opens live RTP inputs sequentially (see CALL_TILE_MAX), so "show me
+ * the other person" cost a pause every time.
+ *
+ * With the grid, the decoder opens its inputs ONCE per call. Which peer
+ * is big is then purely a drawing decision on shottino's side: it
+ * samples the focused cell into a large box and the others into small
+ * ones. Nothing restarts, so focus is instant.
+ *
+ * The grid is therefore also a CONTRACT, not just an internal layout —
+ * the caller publishes these rectangles so the other end knows which
+ * pixels belong to whom.
  *
  * `slots` is WHICH peers to draw and in what order — not 0..n-1. The
  * set is a subset with holes in it: a peer with their camera off, or
  * one who has not started sending, is dropped from the mix entirely
  * (ffmpeg's filter graph stalls waiting on an input that never
- * produces a frame, so a silent peer would freeze everybody). `focus`
- * indexes THAT list, not the slot numbers, because it is what Tab
- * cycles through.
+ * produces a frame, so a silent peer would freeze everybody).
  *
- * `focus` is clamped into range, so a stale focus after somebody leaves
- * is a picture of the wrong person, never an out-of-bounds read. */
-int media_tile_layout(const int *slots, int n, int focus, int frame_w, int frame_h,
-                      struct media_tile *out, int max);
+ * Returns the number laid out, which can be less than `n` when the
+ * frame has no room for another usable cell. The caller must report the
+ * difference — a silent cap reads as "everyone is here". */
+int media_grid_layout(const int *slots, int n, int frame_w, int frame_h, struct media_tile *out,
+                      int max);
 
 /* The ffmpeg filter graph that composites `tiles`, in tile order: input
  * i is tiles[i]. Pure, and therefore tested — a wrong label here is
  * ffmpeg exiting with a parse error onto a discarded stderr, i.e. a
- * video call that shows nothing and says nothing. */
-bool media_mix_filter(const struct media_tile *tiles, int n, int fps, char *out, size_t out_sz);
+ * video call that shows nothing and says nothing.
+ *
+ * `frame_w`/`frame_h` are the size of the COMPOSITED picture, and they
+ * are not optional: the overlay chain needs a canvas that size, which
+ * it makes by padding the first tile out to it. Taking the first tile
+ * as the canvas instead only works when that tile covers the frame —
+ * true of a focused-big layout, false of a grid, and the failure is an
+ * output silently the size of ONE CELL with every other peer clipped
+ * off it. */
+bool media_mix_filter(const struct media_tile *tiles, int n, int fps, int frame_w, int frame_h,
+                      char *out, size_t out_sz);
 
 /* Start (or restart) the composited video decoder. Ports already bound
  * in `mix->legs` are KEPT, so RTP arriving during a re-tile lands
