@@ -23,7 +23,8 @@
 // applies the same routing. Deferred until networks() seed so the
 // selection doesn't fire on a still-loading store.
 
-import { createEffect, createRoot, on } from "solid-js";
+import { createEffect, on } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 import { networkBySlug, networks } from "./networks";
 import { type PushTarget, parsePushTargetUrl } from "./pushPayload";
 import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
@@ -168,7 +169,7 @@ declare global {
 
 function deferUntilNetworksSeed(target: PushTarget): void {
   let applied = false;
-  createRoot(() => {
+  moduleRoot(() => {
     createEffect(
       on(networks, (nets) => {
         if (applied) return;

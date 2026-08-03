@@ -1,4 +1,5 @@
-import { createEffect, createRoot, createSignal } from "solid-js";
+import { createEffect, createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 // Boot-time base theme + reactive viewport-mode signal.
 // Module-singleton pattern mirroring auth.ts / socket.ts / scrollback.ts:
@@ -60,7 +61,7 @@ const DARK_QUERY = "(prefers-color-scheme: dark)";
 // the SAME `prefers-color-scheme` media query the base already follows (no
 // scheduler, no geolocation). createRoot anchors the listeners since
 // module-level effects need an owner.
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const initial =
     typeof window !== "undefined" && window.matchMedia
       ? window.matchMedia(MOBILE_QUERY).matches

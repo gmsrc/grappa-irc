@@ -1,4 +1,5 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 // #443 — "show colored nicklist" display preference. Boolean, OFF by
 // default: the members pane renders nicks monochrome on purpose
@@ -41,7 +42,7 @@ function readStored(): boolean {
 // Module-singleton signal seeded from storage. createRoot anchors it for the
 // app lifetime (same shape as timeFormat.ts) — the preference is
 // identity-agnostic, so no token-rotation reset arm is needed.
-const { current, setCurrent } = createRoot(() => {
+const { current, setCurrent } = moduleRoot(() => {
   const [current, setCurrent] = createSignal<boolean>(readStored());
   return { current, setCurrent };
 });

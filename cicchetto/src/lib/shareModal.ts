@@ -1,4 +1,5 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 // #392 — session-share modal open/close. A module-singleton boolean signal
 // (like serviceModal / umodeModal). The share is SESSION-WIDE (it shares the
@@ -15,7 +16,7 @@ import { createRoot, createSignal } from "solid-js";
 // Transient UI state, not identity-scoped survival — a logout unmounts the
 // shell and the flag resets with it.
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [shareModalOpen, setShareModalOpen] = createSignal(false);
   const openShareModal = (): void => {
     setShareModalOpen(true);

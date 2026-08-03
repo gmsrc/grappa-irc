@@ -1,5 +1,5 @@
 import type { Channel } from "phoenix";
-import { createEffect, createRoot, on, untrack } from "solid-js";
+import { createEffect, on, untrack } from "solid-js";
 import { assertNever, type ChannelEvent, ownNickForNetwork } from "./api";
 import { socketUserName, token } from "./auth";
 import { incrementBadge, setBadge } from "./badge";
@@ -12,6 +12,7 @@ import { seedIsupport } from "./isupport";
 import { applyPresenceEvent, seedMembers } from "./members";
 import { matchesWatchlist } from "./mentionMatch";
 import { setServerMention } from "./mentions";
+import { moduleRoot } from "./moduleRoot";
 import {
   channelsBySlug,
   networkIdBySlug,
@@ -115,7 +116,13 @@ import { narrowChannelEvent } from "./wireNarrow";
 // ONLY by `__cic_suppressChannelDeliveryForTests`; empty in production.
 const suppressedDeliveryKeys = new Set<ChannelKey>();
 
-createRoot(() => {
+// #717 — `moduleRoot`, not a bare `createRoot`. The join effects below read
+// `user()` and `channelsBySlug()`; in a bare root a throw from an errored boot
+// resource escapes `runUpdates`, which discards the queued render effects and so
+// denies the render-tree ErrorBoundary the chance to recover. This root handles
+// rotation itself via the `joined` map below, so it wants the root and the error
+// context, not the identity-reset wiring.
+moduleRoot(() => {
   // Codebase review 2026-05-08 cic H2 (HIGH): track Channel objects, not
   // just keys. On rotation we MUST `phx.leave()` each prior Channel
   // before clearing — phoenix.js's `socket.channel(topic)` always

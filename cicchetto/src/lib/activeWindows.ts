@@ -1,6 +1,7 @@
-import { createMemo, createRoot, untrack } from "solid-js";
+import { createMemo, untrack } from "solid-js";
 import { type ChannelKey, channelKey } from "./channelKey";
 import { mentionCounts } from "./mentions";
+import { moduleRoot } from "./moduleRoot";
 import { channelsBySlug, networks } from "./networks";
 import { queryWindowsByNetwork } from "./queryWindows";
 import { scrollbackByChannel } from "./scrollback";
@@ -165,7 +166,7 @@ function buildActivityIds(): Record<ChannelKey, number> {
 // Consumed reactively by the affordance button (visibility + count) and
 // untracked by the jump verbs. Wrapped in createRoot so the memo has an
 // owner (module-singleton, never disposed) — mirrors queryWindows.ts.
-const root = createRoot(() => {
+const root = moduleRoot(() => {
   const activeWindows = createMemo((): ActiveWindow[] =>
     orderUnreadWindows({
       candidates: buildCandidates(),

@@ -1,4 +1,5 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 // #216 — per-network ISUPPORT channel-mode capability store.
 //
@@ -42,7 +43,7 @@ export const DEFAULT_ISUPPORT: IsupportEntry = {
   prefix: { o: "@", h: "%", v: "+" },
 };
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [isupportByNetwork, setIsupportByNetwork] = createSignal<Record<number, IsupportEntry>>({});
 
   const seedIsupport = (networkId: number, entry: IsupportEntry): void => {

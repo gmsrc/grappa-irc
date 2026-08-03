@@ -1,6 +1,7 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import type { ScrollbackMessage } from "./api";
 import { channelKey } from "./channelKey";
+import { moduleRoot } from "./moduleRoot";
 import { scrollbackByChannel } from "./scrollback";
 import { SERVER_WINDOW_NAME } from "./windowKinds";
 
@@ -60,7 +61,7 @@ export const serviceMirrorRows = (
   return [...server, ...query].sort((a, b) => a.id - b.id);
 };
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [serviceModalState, setServiceModalState] = createSignal<ServiceModalTarget | null>(null);
 
   const openServiceModal = (networkSlug: string, service: string): void => {

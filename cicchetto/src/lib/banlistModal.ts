@@ -1,4 +1,5 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 // #386 — ban-management modal open/close store.
 //
@@ -20,7 +21,7 @@ import { createRoot, createSignal } from "solid-js";
 
 export type BanlistModalTarget = { networkSlug: string; channel: string };
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [banlistModalState, setBanlistModalState] = createSignal<BanlistModalTarget | null>(null);
 
   const openBanlistModal = (networkSlug: string, channel: string): void => {

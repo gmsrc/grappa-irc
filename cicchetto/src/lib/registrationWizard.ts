@@ -1,4 +1,5 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 import { serviceMirrorRows } from "./serviceModal";
 
 // #349 — NickServ registration wizard open/close + step store.
@@ -63,7 +64,7 @@ const clampStep = (n: number): WizardStep => {
   return n as WizardStep;
 };
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [registrationWizardState, setRegistrationWizardState] =
     createSignal<RegistrationWizardState | null>(null);
 

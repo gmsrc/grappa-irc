@@ -1,5 +1,6 @@
-import { createEffect, createRoot, createSignal } from "solid-js";
+import { createEffect, createSignal } from "solid-js";
 import { token } from "./auth";
+import { moduleRoot } from "./moduleRoot";
 import { prefersDark } from "./theme";
 import type { ActiveThemePair, TokenPayload } from "./themesApi";
 import { getActiveThemePair, setActiveThemePair } from "./themesApi";
@@ -229,7 +230,7 @@ function writeCache(pair: PayloadPair): void {
 // the night theme even in daylight (cleared on leaving the gallery — the
 // automatic behaviour always follows the OS). Own root (module-lifetime), fed
 // by the boot cache, the mount sync, and `activateThemePair`.
-const store = createRoot(() => {
+const store = moduleRoot(() => {
   const [activePair, setActivePair] = createSignal<{ light: number | null; dark: number | null }>({
     light: null,
     dark: null,

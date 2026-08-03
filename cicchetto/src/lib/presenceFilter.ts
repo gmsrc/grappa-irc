@@ -1,6 +1,7 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import type { ScrollbackMessage } from "./api";
 import type { ChannelKey } from "./channelKey";
+import { moduleRoot } from "./moduleRoot";
 
 // #222 — hide join/part/quit/nick-change signalling on large channels by
 // default, with a per-channel opt-in to re-show. Closed-set per-channel
@@ -105,7 +106,7 @@ function readStored(): PrefMap {
 // Module-singleton signal seeded from storage. createRoot anchors it for the
 // app lifetime (same shape as timeFormat.ts) — the preference is identity-
 // agnostic display state, so no token-rotation reset arm is needed.
-const { prefs, setPrefs } = createRoot(() => {
+const { prefs, setPrefs } = moduleRoot(() => {
   const [prefs, setPrefs] = createSignal<PrefMap>(readStored());
   return { prefs, setPrefs };
 });

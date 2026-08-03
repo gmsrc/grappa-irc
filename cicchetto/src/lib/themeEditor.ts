@@ -1,5 +1,6 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import { activateTheme } from "./customTheme";
+import { moduleRoot } from "./moduleRoot";
 import type { ThemeColorKey, TokenPayload } from "./themesApi";
 import { createTheme, updateTheme } from "./themesApi";
 import type { ThemesWireT } from "./wireTypes";
@@ -45,7 +46,7 @@ export type ThemeEditorSeed =
 
 // Module-lifetime open/close signal — same shape as archiveModalNetwork.
 // null = closed; a seed = open (which mode + the initial draft source).
-const store = createRoot(() => {
+const store = moduleRoot(() => {
   const [state, setState] = createSignal<ThemeEditorSeed | null>(null);
   return { state, setState };
 });
@@ -65,7 +66,7 @@ export function closeThemeEditor(): void {
 // sub-page mounted underneath, so it won't re-fetch on its own. Rather than
 // couple the editor to the gallery's load verb, the editor bumps a revision
 // the gallery derives its reload from (one source, no parallel state).
-const rev = createRoot(() => {
+const rev = moduleRoot(() => {
   const [revision, setRevision] = createSignal(0);
   return { revision, setRevision };
 });

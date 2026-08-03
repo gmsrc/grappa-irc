@@ -1,5 +1,5 @@
 import type { Channel } from "phoenix";
-import { createEffect, createRoot, untrack } from "solid-js";
+import { createEffect, untrack } from "solid-js";
 import { refreshAliases } from "./aliasList";
 import {
   assertNever,
@@ -28,6 +28,7 @@ import { seedIsupport } from "./isupport";
 import { setLinksReply } from "./linksModal";
 import { applyLusersBundle, clearLusersRequested } from "./lusersBundle";
 import { setMentionsBundle } from "./mentionsWindow";
+import { moduleRoot } from "./moduleRoot";
 import { setNamesReply } from "./namesModal";
 import { mutateNetworkNick, refetchChannels, refetchNetworks } from "./networks";
 import {
@@ -946,7 +947,7 @@ function clearUserTopicReady(): void {
   w.__cic_userTopicReady?.clear();
 }
 
-createRoot(() => {
+moduleRoot(() => {
   // The user-topic Channel currently held on the live socket, or null
   // when logged out / mid-transition. Tracked (not a boolean guard) so a
   // rotation can `leave()` the orphaned prior Channel before re-joining —

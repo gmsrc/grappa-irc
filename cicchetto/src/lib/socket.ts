@@ -1,8 +1,9 @@
 import { type Channel, Socket } from "phoenix";
-import { createEffect, createRoot, on } from "solid-js";
+import { createEffect, on } from "solid-js";
 import { channelPushError } from "./api";
 import { token } from "./auth";
 import { canonicalChannel } from "./channelKey";
+import { moduleRoot } from "./moduleRoot";
 import { recordSocketClose, recordSocketError, recordSocketOpen } from "./socketHealth";
 
 // Phoenix Channels singleton. Mirrors `auth.ts`'s module-singleton shape:
@@ -124,7 +125,7 @@ function getSocket(): Socket {
   return _socket;
 }
 
-createRoot(() => {
+moduleRoot(() => {
   createEffect(
     on(token, (t, prev) => {
       if (t === null) {

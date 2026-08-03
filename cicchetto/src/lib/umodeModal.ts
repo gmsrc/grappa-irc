@@ -1,4 +1,5 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 // #229 — /mode <nick> (umode) viewer/editor modal open/close store.
 //
@@ -23,7 +24,7 @@ import { createRoot, createSignal } from "solid-js";
 
 export type UmodeModalTarget = { networkSlug: string };
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [umodeModalState, setUmodeModalState] = createSignal<UmodeModalTarget | null>(null);
 
   const openUmodeModal = (networkSlug: string): void => {

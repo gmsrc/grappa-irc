@@ -1,5 +1,6 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import type { RecoverOutcome, RecoverStatus, RecoverStep, WireUserEvent } from "./api";
+import { moduleRoot } from "./moduleRoot";
 
 // #581 — "recover my identity" progress store.
 //
@@ -59,7 +60,7 @@ function upsertStep(steps: RecoverStepEntry[], evt: RecoverProgressEvent): Recov
   return next;
 }
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [recoverState, setRecoverState] = createSignal<RecoverState | null>(null);
 
   // Apply `fn` to the current open state; no-op when closed (a late event must

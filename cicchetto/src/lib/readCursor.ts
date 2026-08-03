@@ -30,15 +30,16 @@
 // on logout / token rotation, mirroring scrollback.ts / selection.ts /
 // members.ts.
 
-import { createEffect, createRoot, createSignal, on } from "solid-js";
+import { createEffect, createSignal, on } from "solid-js";
 import { token } from "./auth";
+import { moduleRoot } from "./moduleRoot";
 import { isVirtualWindowName } from "./windowKinds";
 
 const LEGACY_KEY_PREFIX = "rc:";
 
 const cacheKey = (networkSlug: string, channel: string): string => `${networkSlug} ${channel}`;
 
-const [cursors, setCursors] = createRoot(() => createSignal<Record<string, number>>({}));
+const [cursors, setCursors] = moduleRoot(() => createSignal<Record<string, number>>({}));
 
 /**
  * Returns the stored read-cursor `last_read_message_id` for
@@ -292,7 +293,7 @@ purgeLegacyKeys();
 // `prev != null` filters both the initial run (prev === undefined) and
 // the cold-start login (prev === null) — only logout (tokA→null) and
 // rotation (tokA→tokB) trigger the wipe.
-createRoot(() => {
+moduleRoot(() => {
   createEffect(
     on(token, (t, prev) => {
       if (prev != null && t !== prev) {

@@ -1,4 +1,5 @@
-import { createRoot, createSignal, untrack } from "solid-js";
+import { createSignal, untrack } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 import { nickEquals } from "./nickEquals";
 import { pushCloseQueryWindow, pushOpenQueryWindow } from "./socket";
 
@@ -36,7 +37,7 @@ export type QueryWindow = {
   openedAt: string;
 };
 
-const exports = createRoot(() => {
+const exports = moduleRoot(() => {
   const [queryWindowsByNetwork, setQueryWindowsByNetwork] = createSignal<
     Record<number, QueryWindow[]>
   >({});

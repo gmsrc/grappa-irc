@@ -1,4 +1,5 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 // #249 — per-network SUPPORTED user-mode (umode) store.
 //
@@ -20,7 +21,7 @@ import { createRoot, createSignal } from "solid-js";
 // `supportedUmodesForNetwork/1` returns `[]` for an unseeded network, which
 // `availableUmodes` reads as "no server set → use the static fallback".
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [supportedUmodesByNetwork, setSupportedUmodesByNetwork] = createSignal<
     Record<number, string[]>
   >({});

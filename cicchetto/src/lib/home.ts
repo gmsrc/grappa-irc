@@ -1,5 +1,6 @@
-import { createMemo, createRoot, createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import type { HomeData, HomeNetworkRow, MeResponse } from "./api";
+import { moduleRoot } from "./moduleRoot";
 import { user } from "./networks";
 
 // UX-4 bucket B / #211 phase 6 — HomePane data signal.
@@ -30,7 +31,12 @@ import { user } from "./networks";
 // HomePane renders `HomePaneRegistered` off the non-null result for
 // either subject; `null` renders nothing (logged out / loading).
 
-const exports = createRoot(() => {
+// #717 — `moduleRoot`, not a bare `createRoot`. `homeData` is a module-root memo
+// that reads `user()`, so when the boot resource errors it re-throws in a root
+// with no error handler and takes the update cycle down with it. This store
+// scopes itself by subject id below, so it wants the root and the error
+// context, not the identity-reset wiring.
+const exports = moduleRoot(() => {
   // Live overrides keyed by slug. Patches from typed events land here;
   // `homeData` overlays them on top of the /me envelope.
   const [overrides, setOverrides] = createSignal<Record<string, HomeNetworkRow>>({});

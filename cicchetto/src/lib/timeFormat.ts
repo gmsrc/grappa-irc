@@ -1,4 +1,5 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 // #217 — message-timestamp format preference. Closed-set union with
 // localStorage persistence, backed by a module-singleton Solid signal so
@@ -57,7 +58,7 @@ function readStored(): TimeFormatKey {
 // Module-singleton signal seeded from storage. createRoot anchors it for
 // the app lifetime (same shape as theme.ts's isMobile) — the preference is
 // identity-agnostic, so no token-rotation reset arm is needed.
-const { current, setCurrent } = createRoot(() => {
+const { current, setCurrent } = moduleRoot(() => {
   const [current, setCurrent] = createSignal<TimeFormatKey>(readStored());
   return { current, setCurrent };
 });

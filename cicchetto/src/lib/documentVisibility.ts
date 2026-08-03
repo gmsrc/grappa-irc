@@ -21,14 +21,15 @@
 // SSR-cheap defensive boundary kept (cicchetto isn't SSR'd today, but the
 // guard costs nothing and matches theme.ts).
 
-import { createEffect, createRoot, createSignal } from "solid-js";
+import { createEffect, createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 const computeVisible = (): boolean => {
   if (typeof document === "undefined") return true;
   return document.visibilityState === "visible" && document.hasFocus();
 };
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [visible, setVisible] = createSignal(computeVisible());
 
   if (typeof document !== "undefined") {

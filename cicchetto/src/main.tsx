@@ -1,11 +1,12 @@
 import { registerSW } from "virtual:pwa-register";
 import { Route, Router, useNavigate } from "@solidjs/router";
-import { type Component, createEffect, createRoot, createSignal, type JSX, Show } from "solid-js";
+import { type Component, createEffect, createSignal, type JSX, Show } from "solid-js";
 import { render } from "solid-js/web";
 import InstallSplash, { INSTALL_CHOICE_KEY, shouldShowInstallSplash } from "./InstallSplash";
 import Login from "./Login";
 import { me } from "./lib/api";
 import { bootstrapAuth, isAuthenticated, token } from "./lib/auth";
+import { moduleRoot } from "./lib/moduleRoot";
 import ShareConsume from "./ShareConsume";
 // Side-effect-only: registers the WS subscribe createRoot so per-
 // channel join effects fire once `user()` + `channelsBySlug()` resolve.
@@ -74,13 +75,13 @@ applyIosClass();
 // root so the createEffect has an app-lifetime owner; the signal is fed
 // from the `/me` seed, `read_cursor_set` broadcasts, the SW push, and
 // the optimistic foreground mention bump.
-createRoot(() => mountBadgeSync());
+moduleRoot(() => mountBadgeSync());
 
 // #75 — refresh the custom theme from the server on every `token()`
 // change: on login apply + cache the resolved `GET /me/theme` payload, on
 // logout clear back to the base cascade. Own root (app-lifetime owner for
 // the createEffect), alongside the other createRoot-wired effects.
-createRoot(() => mountCustomThemeSync());
+moduleRoot(() => mountCustomThemeSync());
 
 // #449 — reconcile the server-backed display prefs (presence filter #222, time
 // format #217, colored nicklist #443) on every `token()` change: on login apply
@@ -88,7 +89,7 @@ createRoot(() => mountCustomThemeSync());
 // persisted), so a single account converges its UI across devices. Boot already
 // seeded each owner module's signal from localStorage (FOUC-free). Own root,
 // alongside the other createRoot-wired token effects.
-createRoot(() => mountDisplayPrefsSync());
+moduleRoot(() => mountDisplayPrefsSync());
 
 // PWA icon badge foreground reconcile (#badge-orphan, 2026-06-21) — the
 // SW push path (door #1) writes `setAppBadge` directly off-signal while
@@ -251,7 +252,7 @@ window.addEventListener("beforeunload", notifyClientClosing);
 // operator owns the timing. Because that same heartbeat re-stamps every 30s
 // while genuinely foreground, "the stamp is old" IS "the document was not
 // visible" — the dwell needs no second visibility read.
-createRoot(() => {
+moduleRoot(() => {
   const checkStaleResume = installStaleResumeReload({
     isVisible: isDocumentVisible,
     bundleMismatch: shouldShowRefreshBanner,

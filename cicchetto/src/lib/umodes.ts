@@ -1,4 +1,5 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { moduleRoot } from "./moduleRoot";
 
 // #229 — per-network USER-mode (umode) store.
 //
@@ -18,7 +19,7 @@ import { createRoot, createSignal } from "solid-js";
 // returns `[]` for a network not yet seeded, so the modal always has a usable
 // (empty) set even before the WS snapshot lands or for a parked session.
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [umodesByNetwork, setUmodesByNetwork] = createSignal<Record<number, string[]>>({});
 
   const seedUmodes = (networkId: number, modes: string[]): void => {

@@ -1,5 +1,6 @@
-import { createRoot, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import type { ChannelKey } from "./channelKey";
+import { moduleRoot } from "./moduleRoot";
 
 // Per-channel topic + modes store. Module-singleton reactive signals.
 //
@@ -40,7 +41,7 @@ export type ModesEntry = {
   params: Record<string, string | null>;
 };
 
-const exports_ = createRoot(() => {
+const exports_ = moduleRoot(() => {
   const [topicByChannel, setTopicByChannel] = createSignal<Record<ChannelKey, TopicEntry>>({});
   const [modesByChannel, setModesByChannel] = createSignal<Record<ChannelKey, ModesEntry>>({});
 
