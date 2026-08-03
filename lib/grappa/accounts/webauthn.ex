@@ -85,7 +85,7 @@ defmodule Grappa.Accounts.WebAuthn do
           })
         )
 
-      {:ok, authentication_options(id, challenge)}
+      {:ok, authentication_options(id, challenge, exposed_credentials(purpose, credentials))}
     end
   end
 
@@ -165,16 +165,45 @@ defmodule Grappa.Accounts.WebAuthn do
     }
   end
 
-  defp authentication_options(id, challenge) do
+  # `residentKey: "preferred"` lets an authenticator hand back a
+  # NON-discoverable credential, and the browser cannot find one of those
+  # without being told the id. So every ceremony whose caller has already
+  # proven who they are gets the account's credential list; the
+  # passwordless login door does not, because it answers an anonymous
+  # caller and credential ids are a tracking handle we will not hand out.
+  defp exposed_credentials(purpose, credentials) when purpose in [:second_factor, :mode_change],
+    do: credentials
+
+  defp exposed_credentials(_, _), do: []
+
+  defp authentication_options(id, challenge, credentials) do
     %{
       challenge_id: id,
-      public_key: %{
-        challenge: encode(challenge.bytes),
-        rpId: challenge.rp_id,
-        timeout: 300_000,
-        userVerification: "required"
-      }
+      public_key:
+        maybe_allow_credentials(
+          %{
+            challenge: encode(challenge.bytes),
+            rpId: challenge.rp_id,
+            timeout: 300_000,
+            userVerification: "required"
+          },
+          credentials
+        )
     }
+  end
+
+  defp maybe_allow_credentials(options, []), do: options
+
+  defp maybe_allow_credentials(options, credentials),
+    do: Map.put(options, :allowCredentials, Enum.map(credentials, &allow_credential/1))
+
+  defp allow_credential(%Passkey{credential_id: credential_id, transports: transports}) do
+    descriptor = %{type: "public-key", id: encode(credential_id)}
+
+    case Map.get(transports, "values", []) do
+      [] -> descriptor
+      values -> Map.put(descriptor, :transports, values)
+    end
   end
 
   defp verify_assertion(params, credential_id, challenge) do

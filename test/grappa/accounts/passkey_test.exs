@@ -21,39 +21,61 @@ defmodule Grappa.Accounts.PasskeyTest do
     assert options.authenticatorSelection.userVerification == "required"
   end
 
-  test "authentication keeps account credentials server-side and uses discoverable client options" do
-    user = user_fixture()
-    other = user_fixture()
-    key = %{1 => 2, 3 => -7, -1 => 1, -2 => <<0::256>>, -3 => <<0::256>>}
+  describe "begin_authentication/5 credential exposure" do
+    setup do
+      user = user_fixture()
+      other = user_fixture()
+      key = %{1 => 2, 3 => -7, -1 => 1, -2 => <<0::256>>, -3 => <<0::256>>}
 
-    Repo.insert!(
-      Passkey.changeset(%Passkey{}, %{
-        user_id: user.id,
-        credential_id: <<1, 2, 3>>,
-        public_key: CBOR.encode(key),
-        name: "phone"
-      })
-    )
+      Repo.insert!(
+        Passkey.changeset(%Passkey{}, %{
+          user_id: user.id,
+          credential_id: <<1, 2, 3>>,
+          public_key: CBOR.encode(key),
+          name: "phone",
+          transports: %{"values" => ["usb"]}
+        })
+      )
 
-    Repo.insert!(
-      Passkey.changeset(%Passkey{}, %{
-        user_id: other.id,
-        credential_id: <<4, 5, 6>>,
-        public_key: CBOR.encode(key),
-        name: "other"
-      })
-    )
+      Repo.insert!(
+        Passkey.changeset(%Passkey{}, %{
+          user_id: other.id,
+          credential_id: <<4, 5, 6>>,
+          public_key: CBOR.encode(key),
+          name: "other"
+        })
+      )
 
-    assert {:ok, %{public_key: options}} =
-             WebAuthn.begin_authentication(
-               user,
-               :passwordless,
-               %{ip: "192.0.2.1", client_id: nil},
-               "https://irc.example"
-             )
+      %{user: user, binding: %{ip: "192.0.2.1", client_id: nil}}
+    end
 
-    assert options.rpId == "irc.example"
-    refute Map.has_key?(options, :allowCredentials)
+    test "passwordless stays discoverable and hands no credential id to an anonymous caller", ctx do
+      assert {:ok, %{public_key: options}} =
+               WebAuthn.begin_authentication(ctx.user, :passwordless, ctx.binding, "https://irc.example")
+
+      assert options.rpId == "irc.example"
+      refute Map.has_key?(options, :allowCredentials)
+    end
+
+    for purpose <- [:second_factor, :mode_change] do
+      test "#{purpose} lists the account's own credentials so a non-discoverable key can answer", ctx do
+        assert {:ok, %{public_key: options}} =
+                 WebAuthn.begin_authentication(ctx.user, unquote(purpose), ctx.binding, "https://irc.example")
+
+        assert [%{type: "public-key", id: id, transports: ["usb"]}] = options.allowCredentials
+        assert Base.url_decode64!(id, padding: false) == <<1, 2, 3>>
+      end
+    end
+
+    test "an account with no transports hint omits the key rather than sending an empty list", ctx do
+      Repo.update_all(Passkey, set: [transports: %{}])
+
+      assert {:ok, %{public_key: options}} =
+               WebAuthn.begin_authentication(ctx.user, :second_factor, ctx.binding, "https://irc.example")
+
+      assert [credential] = options.allowCredentials
+      refute Map.has_key?(credential, :transports)
+    end
   end
 
   test "passwordless activation persists the pre-shown recovery set only at commit" do
