@@ -118,3 +118,58 @@ void termcolor_render_rgb(const unsigned char *rgb, int w, int h, term_color_dep
         fputs("\033[0m\r\n", out);
     }
 }
+
+int termcolor_luminance(long rgb) {
+    if (rgb < 0) return -1;
+    int r = (int)((rgb >> 16) & 0xff), g = (int)((rgb >> 8) & 0xff), b = (int)(rgb & 0xff);
+    return (r * 30 + g * 59 + b * 11) / 100;
+}
+
+long termcolor_readable(long rgb, int bg_lum, int min_delta) {
+    if (rgb < 0) return rgb;
+    if (bg_lum < 0) bg_lum = 0;
+    if (bg_lum > 255) bg_lum = 255;
+    int lum = termcolor_luminance(rgb);
+    if (abs(lum - bg_lum) >= min_delta) return rgb;
+
+    int r = (int)((rgb >> 16) & 0xff), g = (int)((rgb >> 8) & 0xff), b = (int)(rgb & 0xff);
+    /* Which way is away from the background. Exactly at the midpoint the
+     * two directions are equally far, and lightening is the choice that
+     * keeps a colour looking like itself on the dark terminals this
+     * mostly runs on. */
+    bool lighten = bg_lum <= 127;
+    int want = lighten ? bg_lum + min_delta : bg_lum - min_delta;
+    if (want > 255) want = 255;
+    if (want < 0) want = 0;
+
+    if (lighten) {
+        /* Move each channel toward white by the fraction that lifts the
+         * weighted mean to `want`. Blending toward white rather than
+         * scaling channels up keeps a colour with a zero channel (pure
+         * blue, 0x0000fc) from staying exactly as dark as it was —
+         * scaling multiplies zero by anything and gets zero. */
+        int room = 255 - lum;
+        int need = want - lum;
+        int t = room > 0 ? (need * 255) / room : 255;
+        if (t < 0) t = 0;
+        if (t > 255) t = 255;
+        r += ((255 - r) * t) / 255;
+        g += ((255 - g) * t) / 255;
+        b += ((255 - b) * t) / 255;
+    } else {
+        int need = lum - want;
+        int t = lum > 0 ? (need * 255) / lum : 0;
+        if (t < 0) t = 0;
+        if (t > 255) t = 255;
+        r -= (r * t) / 255;
+        g -= (g * t) / 255;
+        b -= (b * t) / 255;
+    }
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    if (r < 0) r = 0;
+    if (g < 0) g = 0;
+    if (b < 0) b = 0;
+    return ((long)r << 16) | ((long)g << 8) | (long)b;
+}

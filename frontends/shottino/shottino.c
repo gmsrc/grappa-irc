@@ -609,6 +609,12 @@ enum call_kind { CALL_AUDIO, CALL_VIDEO };
  * default without one of them being wrong. */
 enum call_ring_policy { CALL_RING_OFF, CALL_RING_QUERIES, CALL_RING_ALL };
 
+/* How hard to work at making a bot's colours readable against a
+ * background they were never chosen for. Declared up here with the other
+ * closed sets because struct app carries one. */
+enum mirc_contrast { MIRC_CONTRAST_OFF, MIRC_CONTRAST_AUTO, MIRC_CONTRAST_DARK,
+                     MIRC_CONTRAST_LIGHT };
+
 /* What a terminal call speaks on the video track.
  *
  * SENDING only. An SFU does not transcode, so we have to encode
@@ -1058,6 +1064,7 @@ struct app {
     /* Where a room lives, and when an arriving one rings. */
     char call_base_url[256];
     enum call_ring_policy call_ring;
+    enum mirc_contrast mirc_contrast;
     /* Browser or terminal. `browser` is the permanent fallback and the
      * default: it works with any room-per-URL service and needs nothing
      * installed. `helper` requires call.base_url to be an SFU that
@@ -3312,6 +3319,58 @@ static bool call_invite_parse(const char *body, enum call_kind *kind, char *url,
 /* The policy's spelling, and its spelling read back. One pair, so the
  * word /set accepts, the word /set shows and the word the config file
  * holds cannot drift into three. */
+/* How hard to work at making a bot's colours readable.
+ *
+ * mIRC's palette was chosen against mIRC's own WHITE background, and
+ * nothing carries that assumption to a terminal. A bot writing dark
+ * blue (0x0000fc) on a black terminal has posted text nobody can read,
+ * and it is not the bot's mistake to fix — it is ours, at the point the
+ * colour meets a background it was never picked for.
+ *
+ * `off` renders exactly what was sent. `auto` believes COLORFGBG when
+ * the terminal sets it and assumes dark otherwise, which is the common
+ * case and the one that fails loudest. `dark` and `light` are for the
+ * terminals that say nothing. */
+static const char *mirc_contrast_word(enum mirc_contrast c) {
+    switch (c) {
+    case MIRC_CONTRAST_OFF:   return "off";
+    case MIRC_CONTRAST_AUTO:  return "auto";
+    case MIRC_CONTRAST_DARK:  return "dark";
+    case MIRC_CONTRAST_LIGHT: return "light";
+    }
+    return "auto";
+}
+
+static bool mirc_contrast_parse(const char *word, enum mirc_contrast *out) {
+    if (!word || !out) return false;
+    if (strcasecmp(word, "off") == 0)   { *out = MIRC_CONTRAST_OFF;   return true; }
+    if (strcasecmp(word, "auto") == 0)  { *out = MIRC_CONTRAST_AUTO;  return true; }
+    if (strcasecmp(word, "dark") == 0)  { *out = MIRC_CONTRAST_DARK;  return true; }
+    if (strcasecmp(word, "light") == 0) { *out = MIRC_CONTRAST_LIGHT; return true; }
+    return false;
+}
+
+/* The background brightness to measure a foreground against, 0-255.
+ *
+ * COLORFGBG is the one thing terminals actually publish about their own
+ * colours ("15;0" = light text on colour 0). It is a hint, not a fact —
+ * plenty of terminals never set it — so `auto` falls back to dark,
+ * because unreadable-on-dark is the failure people hit. */
+static int mirc_background_lum(enum mirc_contrast c) {
+    if (c == MIRC_CONTRAST_DARK) return 0;
+    if (c == MIRC_CONTRAST_LIGHT) return 255;
+    const char *fgbg = getenv("COLORFGBG");
+    const char *semi = fgbg ? strrchr(fgbg, ';') : NULL;
+    if (semi && semi[1]) {
+        int bg = atoi(semi + 1);
+        /* The classic 16: 0-6 and 8 are the dark half, 7 and 9-15 the
+         * light one. Anything else is a number we do not recognise, and
+         * guessing from it would be worse than the default. */
+        if (bg >= 0 && bg <= 15) return (bg == 7 || bg >= 9) ? 255 : 0;
+    }
+    return 0;
+}
+
 static const char *call_ring_word(enum call_ring_policy policy) {
     switch (policy) {
     case CALL_RING_OFF:     return "off";
@@ -4037,6 +4096,24 @@ static void mirc_colors_init(void) {
     mirc_pair_limit = (short)cap;
 }
 
+/* How much brighter (or darker) than the background a foreground has to
+ * be before it counts as readable, out of 255. Low enough that colours
+ * still look like themselves; high enough that navy on black stops
+ * being a rumour. */
+#define MIRC_MIN_CONTRAST 64
+
+/* The background brightness mIRC foregrounds are measured against, or -1
+ * for "render exactly what was sent".
+ *
+ * Cached rather than computed per run: the draw path asks once for every
+ * coloured RUN of every visible line, and the answer changes only when
+ * /set mirc.contrast does. */
+static int mirc_bg_lum = -1;
+
+static void mirc_contrast_refresh(enum mirc_contrast c) {
+    mirc_bg_lum = c == MIRC_CONTRAST_OFF ? -1 : mirc_background_lum(c);
+}
+
 /* Quantisation lives in termcolor.[ch]; the choice of WHICH quantiser is
  * a curses-runtime question (COLORS), so it stays here. */
 static short mirc_terminal_color(long rgb) {
@@ -4056,6 +4133,12 @@ static long mirc_run_rgb(int value, bool is_rgb) {
 static int mirc_pair_for(long fg_rgb, long bg_rgb, int fallback_pair) {
     if (fg_rgb < 0 && bg_rgb < 0) return fallback_pair;
     if (!has_colors()) return fallback_pair;
+    /* Only when the run INHERITS the terminal background. A run that
+     * sets its own background is internally consistent — the bot chose
+     * that pair, and lifting one half of it would break a contrast that
+     * was never broken. */
+    if (mirc_bg_lum >= 0 && bg_rgb < 0)
+        fg_rgb = termcolor_readable(fg_rgb, mirc_bg_lum, MIRC_MIN_CONTRAST);
     short fg = fg_rgb < 0 ? (short)-1 : mirc_terminal_color(fg_rgb);
     short bg = bg_rgb < 0 ? (short)-1 : mirc_terminal_color(bg_rgb);
     for (size_t i = 0; i < mirc_pair_count; i++)
@@ -10382,6 +10465,8 @@ static const struct setting_def SETTINGS[] = {
     { "llm.cdp_url", SET_TEXT, NULL, "browser_control: Chrome debug endpoint, e.g. http://127.0.0.1:9222" },
     { "call.base_url", SET_TEXT, NULL, "where /call makes a room; any room-per-URL service" },
     { "call.ring", SET_CHOICE, "off|queries|all", "when an arriving call interrupts you" },
+    { "mirc.contrast", SET_CHOICE, "auto|off|dark|light",
+      "lift a bot's colours off the background when they vanish into it" },
     { "call.mode", SET_CHOICE, "browser|terminal", "where a call runs; terminal needs a WHIP SFU" },
     { "notifications", SET_CHOICE, "off|on",
       "send a desktop notification (notify-send) when a message mentions you" },
@@ -10559,6 +10644,7 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "video.source") == 0) src = app->video_source;
     else if (strcmp(name, "call.base_url") == 0) src = app->call_base_url;
     else if (strcmp(name, "call.ring") == 0) src = call_ring_word(app->call_ring);
+    else if (strcmp(name, "mirc.contrast") == 0) src = mirc_contrast_word(app->mirc_contrast);
     else if (strcmp(name, "call.mode") == 0) src = app->call_in_terminal ? "terminal" : "browser";
     else if (strcmp(name, "notifications") == 0) src = app->notifications ? "on" : "off";
     else if (strcmp(name, "voice.sink") == 0) src = app->voice_sink;
@@ -10766,6 +10852,15 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
     else if (strcmp(def->name, "call.base_url") == 0)
         snprintf(app->call_base_url, sizeof(app->call_base_url), "%.*s",
                  (int)sizeof(app->call_base_url) - 1, value);
+    else if (strcmp(def->name, "mirc.contrast") == 0) {
+        enum mirc_contrast c;
+        if (!mirc_contrast_parse(value, &c)) {
+            log_line(app, "/set mirc.contrast: `%.20s` is not one of %s", value, def->values);
+            return false;
+        }
+        app->mirc_contrast = c;
+        mirc_contrast_refresh(c);
+    }
     else if (strcmp(def->name, "call.ring") == 0) {
         /* The table's `values` string is what the error message quotes,
          * so a word this rejects is a word the user was already shown. */
@@ -15085,6 +15180,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview-ascii") == 0) log_line(app, "/preview-ascii [url] — the same preview, forced to colour character art: skips the terminal's graphics protocol, which is what to try when a picture renders as garbage or not at all");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
+    else if (strcmp(cmd, "mirc.contrast") == 0) log_line(app, "/set mirc.contrast auto|off|dark|light — mIRC colours were chosen against mIRC's WHITE background, so a bot writing navy into a black terminal posts text nobody can read. This lifts a foreground off the background until it is legible, keeping its hue; only when the bot set no background of its own, since a bot that picked BOTH colours already has a contrast. `auto` believes COLORFGBG and assumes dark otherwise; `off` renders exactly what was sent");
     else if (strcmp(cmd, "admin") == 0) log_line(app, "/admin — the operator console: sessions, users, networks, visitors and uploads. Not just a listing — Up/Down picks a row and Enter (or a right-click) offers what can be done to it: disconnect, reconnect or kill a session, grant or revoke admin, delete a user, network, visitor or upload. Anything irreversible asks a second time, opening on Cancel. Needs an admin bearer; every tab reports its own 403 rather than blanking the panel");
     else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);
     else if (strcmp(cmd, "help") == 0) log_line(app, "/help [command] — bare /help lists every command by group; /help command explains one");
@@ -20262,6 +20358,8 @@ int main(int argc, char **argv) {
     /* Queries ring, channels do not. A channel doorbell any member can
      * press is a doorbell that gets pressed. */
     app->call_ring = CALL_RING_QUERIES;
+    app->mirc_contrast = MIRC_CONTRAST_AUTO;
+    mirc_contrast_refresh(app->mirc_contrast);
     app->call_live.in_fd = app->call_live.err_fd = app->call_live.out_fd = -1;
     /* web_search needs somewhere to point, and the choice is decided by
      * what answers a plain socket rather than by brand.

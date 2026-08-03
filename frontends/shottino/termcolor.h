@@ -63,4 +63,25 @@ bool termcolor_has_graphics(void);
 void termcolor_render_rgb(const unsigned char *rgb, int w, int h, term_color_depth depth,
                           FILE *out);
 
+
+/* Perceived brightness of an RGB triple, 0-255 (Rec.601 weights — the
+ * same ones the art ramp uses, because "how bright is this" has one
+ * answer in this codebase). */
+int termcolor_luminance(long rgb);
+
+/* Lift (or sink) `rgb` until it is readable against a background of
+ * brightness `bg_lum`, preserving hue.
+ *
+ * A bot that writes dark blue on a terminal whose background is black
+ * has posted text nobody can read — mIRC colours were chosen against
+ * mIRC's own white background, and nothing carries that assumption
+ * across. `min_delta` is the brightness separation demanded; the colour
+ * is scaled toward white (on a dark background) or toward black (on a
+ * light one) until it clears, so the hue survives and only the
+ * readability changes.
+ *
+ * Returns `rgb` unchanged when it already clears the floor, and for a
+ * negative (inherit) input. Pure — no terminal, no globals. */
+long termcolor_readable(long rgb, int bg_lum, int min_delta);
+
 #endif /* SHOTTINO_TERMCOLOR_H */

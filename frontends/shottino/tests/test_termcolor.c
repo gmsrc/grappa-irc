@@ -221,6 +221,48 @@ TEST(graphics_detection) {
     unsetenv("SHOTTINO_GRAPHICS");
 }
 
+
+/* ── Readability against a background the colour never met ────────────
+ *
+ * mIRC's palette was picked against mIRC's own WHITE background. A bot
+ * writing navy (0x00007f) into a black terminal has posted text nobody
+ * can read, and no amount of quantisation fixes that — the colour is
+ * faithfully reproduced and faithfully invisible. */
+TEST(a_colour_too_close_to_the_background_is_lifted_off_it) {
+    /* Navy on black: 12 luminance against 0, nowhere near a 64 floor. */
+    CHECK_LONG(termcolor_luminance(0x00007f), 13);
+    long fixed = termcolor_readable(0x00007f, 0, 64);
+    CHECK(termcolor_luminance(fixed) >= 64);
+    /* Still blue: the blue channel stays the largest. It is the same
+     * colour, made visible — not a substitution, which would lose the
+     * one thing the bot was trying to say with it. */
+    CHECK(( fixed        & 0xff) > ((fixed >> 16) & 0xff));
+    CHECK(((fixed >> 8)  & 0xff) < ( fixed        & 0xff));
+
+    /* The mirror case: pale yellow on a white background. */
+    long dark = termcolor_readable(0xffff9c, 255, 64);
+    CHECK(termcolor_luminance(dark) <= 255 - 64);
+
+    /* Pure blue has a zero red and a zero green channel. Scaling the
+     * channels up multiplies those zeros by anything and gets zero, so
+     * the lift has to blend toward white instead — a colour that came
+     * back unchanged would be the bug this guards. */
+    long pureblue = termcolor_readable(0x0000fc, 0, 64);
+    CHECK(pureblue != 0x0000fc);
+    CHECK(termcolor_luminance(pureblue) >= 64);
+}
+
+TEST(a_colour_that_already_reads_is_left_exactly_alone) {
+    /* White on black clears any floor; touching it would shift a colour
+     * that was never a problem. */
+    CHECK_LONG(termcolor_readable(0xffffff, 0, 64), 0xffffff);
+    CHECK_LONG(termcolor_readable(0x00ff00, 0, 64), 0x00ff00);
+    /* "Inherit" is not a colour and must survive as itself. */
+    CHECK_LONG(termcolor_readable(-1, 0, 64), -1);
+    /* A floor of zero is the off switch, and asks nothing of anything. */
+    CHECK_LONG(termcolor_readable(0x00007f, 0, 0), 0x00007f);
+}
+
 int main(void) {
     RUN(xterm256_primaries);
     RUN(xterm256_greys_use_the_ramp);
@@ -231,5 +273,7 @@ int main(void) {
     RUN(render_handles_degenerate_sizes);
     RUN(depth_detection_is_conservative);
     RUN(graphics_detection);
+    RUN(a_colour_too_close_to_the_background_is_lifted_off_it);
+    RUN(a_colour_that_already_reads_is_left_exactly_alone);
     return test_report();
 }
