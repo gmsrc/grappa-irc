@@ -883,6 +883,17 @@ static const char *const ADMIN_NETWORKS_JSON =
 /* A session whose subject_id is null — grappa's deliberate signal for a
  * BEAM pid whose DB row is gone. It is a row you can READ and not a row
  * you can act on, because none of the verbs has an id to address. */
+/* The shape `Grappa.WSPresence.snapshot/0` returns. Two sockets for one
+ * user: one reporting visible and fresh, one that has NEVER reported —
+ * which is what a client that does not send the `visibility` verb looks
+ * like from the server's side, and the state that arms auto-away. */
+static const char *const WS_PRESENCE_JSON =
+    "{\"stale_ms\":60000,\"users\":[{\"user_name\":\"nextime\",\"any_visible\":false,"
+    "\"sockets\":[{\"pid\":\"#PID<0.901.0>\",\"visibility\":\"visible\",\"age_ms\":4000,"
+    "\"fresh\":true},"
+    "{\"pid\":\"#PID<0.902.0>\",\"visibility\":\"hidden\",\"age_ms\":null,"
+    "\"fresh\":false}]}]}";
+
 static const char *const ADMIN_ORPHAN_SESSION_JSON =
     "{\"sessions\":[{\"subject_kind\":\"user\",\"network_id\":1,"
     "\"subject_label\":null,\"subject_id\":null,\"last_seen_at\":null,"
@@ -1506,6 +1517,25 @@ TEST(a_query_is_never_asked_for_a_member_list) {
     /* And the local windows keep their own exemption. */
     enqueue_members(app, "azzurra", "$server", true);
     CHECK_LONG(app->jobs_tail, queued + 1);
+    free_app(app);
+}
+
+TEST(the_presence_tab_names_the_socket_that_never_reported) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    render_json(app, WS_PRESENCE_JSON, render_ws_presence);
+    /* Per SOCKET, not per user: several clients share one user_name and
+     * the whole point is finding the one that is not reporting. */
+    CHECK(panel_has(app, "#PID<0.901.0>"));
+    CHECK(panel_has(app, "#PID<0.902.0>"));
+    CHECK(panel_has(app, "never reported"));
+    CHECK(panel_has(app, "visible"));
+    /* `any_visible` false is the state that ARMS auto-away, so it is
+     * spelled out rather than left to be inferred from the rows —
+     * inferring it is exactly what made this a guessing game. */
+    CHECK(panel_has(app, "auto-away will arm"));
+    /* The staleness window, in the units a person reads. */
+    CHECK(panel_has(app, "stale after 60s"));
     free_app(app);
 }
 
@@ -3891,6 +3921,7 @@ int main(void) {
     RUN(only_the_irreversible_verbs_ask_twice);
     RUN(the_confirmation_opens_on_the_answer_that_does_nothing);
     RUN(closing_an_admin_menu_disarms_the_verb_it_was_holding);
+    RUN(the_presence_tab_names_the_socket_that_never_reported);
     RUN(the_admin_uploads_tab_totals_the_bytes_field);
     RUN(the_admin_visitors_tab_renders_per_network_rows);
     RUN(a_setting_name_and_a_boolean_are_parsed_the_way_people_type_them);

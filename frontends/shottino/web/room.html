@@ -91,6 +91,64 @@ function tile(nick) {
   return t;
 }
 
+// ── ICE servers ──────────────────────────────────────────────────────
+//
+// Every RTCPeerConnection here used to be constructed bare, so the
+// browser gathered HOST candidates only — its own interface addresses.
+// On the same network as the SFU that works and hides the problem. From
+// a phone on mobile data it cannot: the handset sits behind carrier-grade
+// NAT with a private address, the SFU has no route back to it, and with
+// no STUN there is no reflexive candidate to offer instead. ICE finds
+// nothing, and the page sits there looking connected with no media.
+//
+// Asked for the standard way rather than hardcoded: RFC 9725 §4.6 says
+// an OPTIONS on the WHIP/WHEP endpoint answers with `Link:` headers
+// naming the STUN/TURN servers to use. That keeps the answer with the
+// OPERATOR — configure `webrtcICEServers2` in MediaMTX and every client
+// picks it up with no page change, and no third party learns anyone's
+// IP because we shipped a default pointing at one.
+//
+// `&ice=` in the link overrides, for testing a STUN before committing it
+// to the server config.
+let iceCache = null;
+async function iceServers() {
+  if (iceCache) return iceCache;
+  const override = (frag.get('ice') || '').trim();
+  if (override) {
+    iceCache = override.split(',').map(u => ({ urls: u.trim() })).filter(s => s.urls);
+    return iceCache;
+  }
+  iceCache = [];
+  try {
+    const res = await fetch(base + '/whip', { method: 'OPTIONS' });
+    // One header may carry several links, comma-separated — but a URL
+    // can hold a comma too, so the split is on the comma that STARTS the
+    // next `<...>` rather than on every comma.
+    const raw = res.headers.get('Link') || '';
+    for (const link of raw.split(/,\s*(?=<)/)) {
+      const url = (link.match(/<([^>]+)>/) || [])[1];
+      if (!url || !/^(stun|turn|turns):/i.test(url)) continue;
+      if (!/rel\s*=\s*"?ice-server"?/i.test(link)) continue;
+      const server = { urls: url };
+      const user = link.match(/username\s*=\s*"([^"]*)"/i);
+      const cred = link.match(/credential\s*=\s*"([^"]*)"/i);
+      if (user) server.username = user[1];
+      if (cred) server.credential = cred[1];
+      iceCache.push(server);
+    }
+  } catch (e) { /* no answer is the same as none offered */ }
+  if (!iceCache.length)
+    note('the server offers no STUN or TURN — a call across mobile data will ' +
+         'likely find no route. Set webrtcICEServers2 on the SFU, or add &ice=stun:host:port');
+  return iceCache;
+}
+
+// One place both connections are built, so neither can be the one that
+// forgets the servers.
+async function peerConnection() {
+  return new RTCPeerConnection({ iceServers: await iceServers() });
+}
+
 async function gathered(pc) {
   // Vanilla ICE: WHIP/WHEP is one POST with one body, so the offer has
   // to be complete before it is sent.
@@ -107,7 +165,7 @@ async function gathered(pc) {
 async function subscribe(nick) {
   const t = tile(nick);
   if (t.pc) return true;
-  const pc = new RTCPeerConnection();
+  const pc = await peerConnection();
   pc.addTransceiver('video', { direction: 'recvonly' });
   pc.addTransceiver('audio', { direction: 'recvonly' });
   const stream = new MediaStream();
@@ -144,7 +202,7 @@ async function publish(withVideo) {
   try {
     media = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
   } catch (e) { return note('no camera or microphone: ' + e.message); }
-  const pc = new RTCPeerConnection();
+  const pc = await peerConnection();
   media.getTracks().forEach(tr => pc.addTrack(tr, media));
   await pc.setLocalDescription(await pc.createOffer());
   await gathered(pc);

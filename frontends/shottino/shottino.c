@@ -5046,6 +5046,53 @@ static void render_admin_networks(struct app *app, const json_value *root) {
     admin_row_mark(app, ADMIN_RES_NEW_NETWORK, "new", "a network", false);
 }
 
+/* Who grappa thinks is watching.
+ *
+ * The auto-away FSM keys off this and nothing else: a socket registers
+ * as HIDDEN and stays that way until it reports otherwise, and when no
+ * socket is visible the bouncer sets AWAY on the user's behalf. When
+ * that goes wrong the question is always the same — is THIS client in
+ * the list, and does grappa think it is visible — and until now it was
+ * unanswerable from inside the client, which is how a presence bug
+ * becomes a guessing game.
+ *
+ * Per-socket, not per-user: several clients share one user_name and the
+ * whole point is finding the one that is not reporting. `fresh` is the
+ * #671 staleness view — a socket whose last report has aged out counts
+ * for push suppression as if it were hidden. */
+static void render_ws_presence(struct app *app, const json_value *root) {
+    long stale = 0;
+    json_long(json_get(root, "stale_ms"), &stale);
+    const json_value *users = rows_of(root, "users");
+    size_t n = json_len(users);
+    panel_line(app, "  ws presence (%zu user%s, stale after %lds)", n, n == 1 ? "" : "s",
+               stale / 1000);
+    for (size_t i = 0; i < n && i < 20; i++) {
+        const json_value *u = json_at(users, i);
+        const char *name = json_string(json_get(u, "user_name"));
+        bool any = json_bool(json_get(u, "any_visible"), false);
+        const json_value *socks = json_get(u, "sockets");
+        /* `any_visible` false is the state that arms auto-away, so it is
+         * spelled out rather than left to be inferred from the rows. */
+        panel_line(app, "    %-20s %s", name ? name : "?",
+                   any ? "someone is watching" : "nobody visible — auto-away will arm");
+        for (size_t k = 0; k < json_len(socks) && k < 10; k++) {
+            const json_value *sk = json_at(socks, k);
+            const char *pid = json_string(json_get(sk, "pid"));
+            const char *vis = json_string(json_get(sk, "visibility"));
+            bool fresh = json_bool(json_get(sk, "fresh"), false);
+            long age = 0;
+            bool has_age = json_long(json_get(sk, "age_ms"), &age);
+            if (has_age)
+                panel_line(app, "      %-16s %-8s %s, last report %lds ago", pid ? pid : "?",
+                           vis ? vis : "?", fresh ? "fresh" : "STALE", age / 1000);
+            else
+                panel_line(app, "      %-16s %-8s never reported", pid ? pid : "?",
+                           vis ? vis : "?");
+        }
+    }
+}
+
 static void render_settings_caps(struct app *app, const json_value *root) {
     const json_value *up = json_get(root, "upload");
     if (!up) up = root;
@@ -5179,6 +5226,8 @@ static void open_panel(struct app *app, enum panel_kind panel) {
         panel_fetch(app, "visitors", "/admin/visitors", render_admin_visitors);
         panel_line(app, "%s", "");
         panel_fetch(app, "uploads", "/admin/uploads", render_admin_uploads);
+        panel_line(app, "%s", "");
+        panel_fetch(app, "presence", "/admin/ws_presence", render_ws_presence);
         break;
 
     case PANEL_CHAT:
