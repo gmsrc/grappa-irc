@@ -497,6 +497,26 @@ TEST(a_push_carries_the_joins_ref_not_its_own) {
     free(hb);
 }
 
+/* ── Presence: a terminal that never says it is here ──────────────────
+ *
+ * grappa registers every new socket as HIDDEN and waits for it to say
+ * otherwise. shottino never did, so it stayed hidden for its whole life:
+ * when the last browser closed, `any_visible?` went false, the
+ * ten-minute debounce fired, and the bouncer set AWAY. Worse, it could
+ * not be undone — the unaway keys off the hidden->visible TRANSITION,
+ * and a client that never reports visible never makes one.
+ *
+ * The frame is pinned rather than the call, because the frame is the
+ * whole contract: grappa reads `visible` as a BOOLEAN and answers
+ * anything else with an error, and the join_ref must be the user
+ * channel's or Phoenix discards the push in silence — the exact failure
+ * the sibling test above exists for. */
+TEST(the_client_reports_itself_visible_in_the_shape_grappa_reads) {
+    char *push = ws_v2_frame(3, 11, "grappa:user:vjt", "visibility", "{\"visible\":true}");
+    CHECK_STR(push, "[\"3\",\"11\",\"grappa:user:vjt\",\"visibility\",{\"visible\":true}]");
+    free(push);
+}
+
 /* ── CTCP ping lifecycle ───────────────────────────────────────────── */
 
 TEST(a_ping_reply_is_matched_against_the_pings_we_are_waiting_on) {
@@ -3784,6 +3804,7 @@ int main(void) {
     RUN(kill_is_offered_only_to_an_oper);
     RUN(the_wire_echo_never_prints_a_payload);
     RUN(a_push_carries_the_joins_ref_not_its_own);
+    RUN(the_client_reports_itself_visible_in_the_shape_grappa_reads);
     RUN(a_ping_reply_is_matched_against_the_pings_we_are_waiting_on);
     RUN(a_backfilled_ping_reply_still_reports_its_round_trip);
     RUN(a_ping_reply_routed_to_server_still_lands_in_the_active_window);

@@ -6278,6 +6278,28 @@ static void ws_sync_dm_listeners(struct app *app) {
     }
 }
 
+/* Tell grappa this client is in front of a human.
+ *
+ * grappa registers every new socket as HIDDEN and waits for it to say
+ * otherwise: a browser tab reports `document.visibilitychange` over this
+ * verb, and a tab that never reports is assumed backgrounded. shottino
+ * never sent it, so it stayed hidden for its whole life — which meant
+ * that when the last browser closed, `any_visible?` went false, the
+ * 10-minute debounce fired, and the bouncer set AWAY on our behalf. And
+ * it could not be undone: the unaway keys off the hidden->visible
+ * TRANSITION, and a client that never reports visible never makes one.
+ * /away back cleared it until the next debounce, which is why it read as
+ * "shottino cannot restore the presence".
+ *
+ * A terminal has no visibilitychange to forward. The truthful thing
+ * shottino knows is that it is running and drawing, and that IS the
+ * foreground — so it says so on join and keeps saying it, rather than
+ * modelling a hidden state it has no way to observe. */
+static void ws_report_visible(struct app *app) {
+    if (!app->ws_connected) return;
+    ws_push_user(app, "visibility", "{\"visible\":true}");
+}
+
 static void ws_join_topics(struct app *app) {
     char *subject = json_escape(app->subject);
     char *topic = xasprintf("grappa:user:%s", subject);
@@ -6306,6 +6328,10 @@ static void ws_join_topics(struct app *app) {
      * every one of them and silently subscribe to none. */
     for (size_t i = 0; i < app->network_count; i++) app->networks[i].ws_dm_nick[0] = 0;
     ws_sync_dm_listeners(app);
+    /* Immediately, not at the first heartbeat: a reconnect registers a
+     * fresh socket as hidden, and up to 25s of "nobody is here" is long
+     * enough to lose a race with a debounce that was already counting. */
+    ws_report_visible(app);
 }
 
 /* Read the next complete websocket MESSAGE, if one has arrived.
@@ -7400,6 +7426,12 @@ static void ws_pump(struct app *app) {
         /* Same cadence: a ping that never came back is reported rather
          * than forgotten. */
         ping_sweep(app);
+        /* And the same cadence keeps our presence FRESH — see
+         * ws_report_visible. 25s is comfortably inside grappa's 60s
+         * staleness window, so a running client never reads as one
+         * whose timers have suspended. After the unlock: ws_push_user
+         * takes ws_lock itself. */
+        ws_report_visible(app);
         app->next_heartbeat = now + 25;
     }
     for (;;) {
