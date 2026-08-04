@@ -582,6 +582,26 @@ struct admin_row {
 
 #define ADMIN_ROWS 128
 
+/* A field in a create form.
+ *
+ * SECRET is not a decoration: a password typed into a box that echoes it
+ * is a password on someone's screen, and this is the one place shottino
+ * asks for one. BOOL exists so "is this an admin" is a toggle with a
+ * default rather than a word the operator has to spell correctly. */
+enum admin_field_kind { ADMIN_FIELD_TEXT, ADMIN_FIELD_SECRET, ADMIN_FIELD_BOOL };
+
+struct admin_field {
+    const char *label;
+    const char *key;   /* the JSON key grappa's whitelist accepts */
+    enum admin_field_kind kind;
+    bool required;
+    char value[128];
+    size_t len;
+    bool on;           /* BOOL only */
+};
+
+#define ADMIN_FORM_MAX 4
+
 enum overlay_kind {
     OVERLAY_NONE = 0,
     OVERLAY_MENU,
@@ -810,6 +830,17 @@ struct overlay {
      * pending DELETE that outlived its menu would be armed the next
      * time one opened. */
     enum admin_verb pending;
+    /* OVERLAY_ADMIN in FORM mode: the fields being filled in, which one
+     * has the cursor, and what they will create. ADMIN_V_NONE means this
+     * is the ordinary verb menu instead.
+     *
+     * On the overlay rather than on app, so closing the box forgets a
+     * half-typed password rather than leaving it in memory for the next
+     * form to inherit. */
+    struct admin_field form[ADMIN_FORM_MAX];
+    size_t form_count;
+    size_t form_sel;
+    enum admin_verb form_verb;
 };
 
 /* ── The downstream IRC server (--ircd) ────────────────────────────────
@@ -4602,19 +4633,98 @@ static bool admin_verb_destructive(enum admin_verb v) {
     return false;
 }
 
-/* The command an "add" verb types for the operator to finish, or NULL
- * for a verb that acts on its own.
+/* What a create verb asks for.
  *
- * Creating a user needs a NAME and a PASSWORD, and a menu cannot invent
- * either — the same reason the nick menu prefills `/kill nick ` rather
- * than sending it. So the console types the verb with its arguments
- * named, and the operator supplies them and presses Enter. It also
- * keeps the credential out of a modal that would have to decide whether
- * to echo it. */
-static const char *admin_verb_prefill(enum admin_verb v) {
+ * One table, so the FORM the operator fills in and the JSON body it
+ * becomes cannot describe different things — the keys here are the ones
+ * grappa's whitelist accepts, and it answers 400 to anything else rather
+ * than ignoring it.
+ *
+ * `is_admin` is a BOOL defaulting to off. A new user is an ordinary user
+ * until somebody decides otherwise, and a create form whose default
+ * grants admin is one mis-press from a mistake that is not obvious
+ * afterwards. */
+static const struct {
+    enum admin_verb verb;
+    const char *label;
+    const char *key;
+    enum admin_field_kind kind;
+    bool required;
+} ADMIN_FORM_DEFS[] = {
+    { ADMIN_V_ADD_USER,    "name",     "name",            ADMIN_FIELD_TEXT,   true  },
+    { ADMIN_V_ADD_USER,    "password", "password",        ADMIN_FIELD_SECRET, true  },
+    { ADMIN_V_ADD_USER,    "admin",    "is_admin",        ADMIN_FIELD_BOOL,   false },
+    { ADMIN_V_ADD_NETWORK, "slug",     "slug",            ADMIN_FIELD_TEXT,   true  },
+    { ADMIN_V_ADD_NETWORK, "flavor",   "services_flavor", ADMIN_FIELD_TEXT,   false },
+};
+
+/* The fields `v` needs, blank and ready to fill. Zero for a verb that
+ * creates nothing, which is what makes "does this verb open a form"
+ * answerable without a second table to keep in step. */
+static size_t admin_form_fields(enum admin_verb v, struct admin_field *out, size_t max) {
+    size_t n = 0;
+    for (size_t i = 0; i < sizeof(ADMIN_FORM_DEFS) / sizeof(ADMIN_FORM_DEFS[0]) && n < max; i++) {
+        if (ADMIN_FORM_DEFS[i].verb != v) continue;
+        memset(&out[n], 0, sizeof(out[n]));
+        out[n].label = ADMIN_FORM_DEFS[i].label;
+        out[n].key = ADMIN_FORM_DEFS[i].key;
+        out[n].kind = ADMIN_FORM_DEFS[i].kind;
+        out[n].required = ADMIN_FORM_DEFS[i].required;
+        n++;
+    }
+    return n;
+}
+
+/* The JSON body these fields make, or false with `missing` naming the
+ * first required field left empty.
+ *
+ * Pure, and separate from the POST for the same reason the verb paths
+ * are: a body is a string that cannot be checked by sending it, and a
+ * wrong one earns a 400 whose text describes grappa's whitelist rather
+ * than the field the operator forgot.
+ *
+ * An empty OPTIONAL text field is omitted entirely rather than sent as
+ * "": the whitelist accepts the key, and an empty string is a value,
+ * not an absence. A BOOL is always sent — false is the answer, not the
+ * lack of one. */
+static bool admin_form_body(const struct admin_field *f, size_t n, char *out, size_t out_sz,
+                            const char **missing) {
+    if (missing) *missing = NULL;
+    size_t w = 0;
+    int k = snprintf(out, out_sz, "{");
+    if (k < 0) return false;
+    w = (size_t)k;
+    for (size_t i = 0; i < n; i++) {
+        if (f[i].kind == ADMIN_FIELD_BOOL) {
+            k = snprintf(out + w, out_sz - w, "%s\"%s\":%s", w > 1 ? "," : "", f[i].key,
+                         f[i].on ? "true" : "false");
+        } else {
+            if (f[i].len == 0) {
+                if (f[i].required) {
+                    if (missing) *missing = f[i].label;
+                    return false;
+                }
+                continue;
+            }
+            char *esc = json_escape(f[i].value);
+            if (!esc) return false;
+            k = snprintf(out + w, out_sz - w, "%s\"%s\":\"%s\"", w > 1 ? "," : "", f[i].key, esc);
+            free(esc);
+        }
+        if (k < 0 || (size_t)k >= out_sz - w) return false;
+        w += (size_t)k;
+    }
+    if (w + 2 > out_sz) return false;
+    out[w] = '}';
+    out[w + 1] = 0;
+    return true;
+}
+
+/* Where a create verb POSTs its form. */
+static const char *admin_form_path(enum admin_verb v) {
     switch (v) {
-    case ADMIN_V_ADD_USER: return "/admin adduser <name> <password> [admin]";
-    case ADMIN_V_ADD_NETWORK: return "/admin addnetwork <slug> [services_flavor]";
+    case ADMIN_V_ADD_USER: return "/admin/users";
+    case ADMIN_V_ADD_NETWORK: return "/admin/networks";
     default: return NULL;
     }
 }
@@ -5102,16 +5212,22 @@ static void admin_create_command(struct app *app, const char *rest);
  * refresh at the end frees nothing but does rewrite the array, and the
  * failure log below reads the label after that point. */
 static void admin_verb_run(struct app *app, enum admin_verb v, struct admin_row row) {
-    const char *prefill = admin_verb_prefill(v);
-    if (prefill) {
-        /* Typed, not sent. The arguments are named in the line so the
-         * shape is visible without going to /help, and the operator is
-         * the one who decides a password. */
+    /* A create verb OPENS A FORM rather than making a call: it needs
+     * several answers, and one of them is a password. The form is filled
+     * in the box that asked — a modal that asks a question should take
+     * the answer itself. */
+    struct admin_field fields[ADMIN_FORM_MAX];
+    size_t nf = admin_form_fields(v, fields, ADMIN_FORM_MAX);
+    if (nf) {
         pthread_mutex_lock(&app->lock);
-        snprintf(app->input, sizeof(app->input), "%s", prefill);
-        app->input_len = strlen(app->input);
-        app->input_pos = app->input_len;
-        app->panel = PANEL_CHAT;
+        app->overlay.kind = OVERLAY_ADMIN;
+        app->overlay.pending = ADMIN_V_NONE;
+        app->overlay.form_verb = v;
+        app->overlay.form_count = nf;
+        app->overlay.form_sel = 0;
+        app->overlay.sel = 0;
+        app->overlay.top = 0;
+        memcpy(app->overlay.form, fields, sizeof(fields));
         pthread_mutex_unlock(&app->lock);
         return;
     }
@@ -5127,6 +5243,41 @@ static void admin_verb_run(struct app *app, enum admin_verb v, struct admin_row 
     else
         log_line(app, "admin: %s %s failed HTTP %d: %.200s", admin_verb_name(v), row.label,
                  r.status, r.body ? r.body : "");
+    free(r.body);
+    open_panel(app, PANEL_ADMIN);
+}
+
+static void overlay_close(struct app *app);
+
+/* Send the filled-in form. Says which field is missing rather than
+ * letting grappa answer 400 with a sentence about its own whitelist —
+ * the operator forgot a field, and that is what they need told. */
+static void admin_form_submit(struct app *app) {
+    struct admin_field fields[ADMIN_FORM_MAX];
+    size_t n;
+    enum admin_verb v;
+    pthread_mutex_lock(&app->lock);
+    v = app->overlay.form_verb;
+    n = app->overlay.form_count;
+    memcpy(fields, app->overlay.form, sizeof(fields));
+    pthread_mutex_unlock(&app->lock);
+    const char *path = admin_form_path(v);
+    if (!path || n == 0) return;
+
+    char body[1024];
+    const char *missing = NULL;
+    if (!admin_form_body(fields, n, body, sizeof(body), &missing)) {
+        log_line(app, "admin: %s needs a %s", admin_verb_name(v), missing ? missing : "value");
+        return;
+    }
+    overlay_close(app);
+    struct http_response r = http_request(app, "POST", path, body);
+    if (r.status >= 200 && r.status < 300)
+        log_line(app, "admin: %s — done%s", admin_verb_name(v),
+                 v == ADMIN_V_ADD_NETWORK ? " (it has no servers yet)" : "");
+    else
+        log_line(app, "admin: %s failed HTTP %d: %.200s", admin_verb_name(v), r.status,
+                 r.body ? r.body : "");
     free(r.body);
     open_panel(app, PANEL_ADMIN);
 }
@@ -8241,6 +8392,7 @@ if (app->overlay.kind == OVERLAY_RECORD) {
     /* Free text has no list, so the single row IS the field. */
     bool typing = modal && n == 0;
     int box_w = picker ? (main_w > 76 ? 76 : main_w - 2) : 34;
+    (void)0;
     if (box_w > main_w - 2) box_w = main_w - 2;
     if (box_w < 20) box_w = 20;
     int list_h = (int)(n > 12 ? 12 : n);
@@ -8304,12 +8456,17 @@ if (app->overlay.kind == OVERLAY_RECORD) {
                   call_kind_word(app->call_last.kind), app->call_last.channel);
         line_y++;
     } else if (adminbox) {
-        const struct admin_row *arow = admin_selected_locked(app);
-        /* The subject, spelled out. Every entry below is a verb applied
-         * to THIS, and a menu that shows only verbs is a menu you have
-         * to trust your memory about. */
-        draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s %s",
-                  arow ? admin_res_name(arow->res) : "", arow ? arow->label : "(gone)");
+        if (app->overlay.form_verb != ADMIN_V_NONE) {
+            draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s",
+                      admin_verb_name(app->overlay.form_verb));
+        } else {
+            const struct admin_row *arow = admin_selected_locked(app);
+            /* The subject, spelled out. Every entry below is a verb
+             * applied to THIS, and a menu that shows only verbs is a
+             * menu you have to trust your memory about. */
+            draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s %s",
+                      arow ? admin_res_name(arow->res) : "", arow ? arow->label : "(gone)");
+        }
         line_y++;
     } else if (picker) {
         draw_text(line_y, box_x + 1, box_w - 2, CP_TITLE_ACCENT, A_BOLD, "%s: %s%s", verb,
@@ -8350,8 +8507,11 @@ if (app->overlay.kind == OVERLAY_RECORD) {
                   "Up/Down | Enter choose | Esc dismiss");
     else if (adminbox)
         draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
-                  app->overlay.pending != ADMIN_V_NONE ? "this cannot be undone | Esc cancels"
-                                                       : "Up/Down | Enter choose | Esc cancel");
+                  app->overlay.form_verb != ADMIN_V_NONE
+                      ? "type | Tab/Up/Down field | Space toggles | Enter next, then creates | Esc"
+                      : (app->overlay.pending != ADMIN_V_NONE
+                             ? "this cannot be undone | Esc cancels"
+                             : "Up/Down | Enter choose | Esc cancel"));
     else if (picker)
         draw_text(line_y, box_x + 1, box_w - 2, CP_SELECTED, A_DIM,
                   "%zu/%zu | type to filter | Up/Down | Enter | Esc", n ? app->overlay.sel + 1 : 0,
@@ -12287,6 +12447,39 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
      * the verbs the row supports, and — once a destructive one is
      * picked — the second question. */
     if (ov->kind == OVERLAY_ADMIN) {
+        /* FORM mode: a row per field, then the row that sends it. The
+         * submit row is an ITEM rather than a key, so there is one
+         * obvious place the creation happens and Enter on a field can
+         * mean "next field" without being ambiguous. */
+        if (ov->form_verb != ADMIN_V_NONE) {
+            for (size_t i = 0; i < ov->form_count && n < max; i++) {
+                const struct admin_field *f = &ov->form[i];
+                char shown[64];
+                if (f->kind == ADMIN_FIELD_BOOL) {
+                    snprintf(shown, sizeof(shown), "%s", f->on ? "yes" : "no");
+                } else if (f->kind == ADMIN_FIELD_SECRET) {
+                    /* Never the characters. A password echoed into a box
+                     * is a password on the screen, and the length is all
+                     * the feedback typing needs. */
+                    size_t stars = f->len < sizeof(shown) - 1 ? f->len : sizeof(shown) - 1;
+                    memset(shown, '*', stars);
+                    shown[stars] = 0;
+                } else {
+                    snprintf(shown, sizeof(shown), "%s", f->value);
+                }
+                /* ACT_NONE: a field row is a place to TYPE, not a thing
+                 * to activate. overlay_activate handles the form before
+                 * it ever reads an action, so this is belt and braces
+                 * against a future path that does not. */
+                menu_add_verb(out, &n, max, ACT_NONE, ADMIN_V_NONE, "%c %-9s %s%s",
+                              i == ov->form_sel ? '>' : ' ', f->label, shown,
+                              i == ov->form_sel && f->kind != ADMIN_FIELD_BOOL ? "_" : "");
+                (void)0;
+            }
+            menu_add_verb(out, &n, max, ACT_ADMIN, ov->form_verb, "%c %s",
+                          ov->form_sel >= ov->form_count ? '>' : ' ', admin_verb_name(ov->form_verb));
+            return n;
+        }
         const struct admin_row *row = admin_selected_locked(app);
         if (!row) return n;
         if (ov->pending != ADMIN_V_NONE) {
@@ -12493,8 +12686,14 @@ static void overlay_close(struct app *app) {
     app->overlay.sel = 0;
     app->overlay.top = 0;
     /* An armed verb must not outlive the box that armed it, or the next
-     * menu to open would already be holding a DELETE. */
+     * menu to open would already be holding a DELETE. The form goes with
+     * it, memory and all: a half-typed password has no business
+     * surviving the box that asked for it. */
     app->overlay.pending = ADMIN_V_NONE;
+    app->overlay.form_verb = ADMIN_V_NONE;
+    app->overlay.form_count = 0;
+    app->overlay.form_sel = 0;
+    memset(app->overlay.form, 0, sizeof(app->overlay.form));
     pthread_mutex_unlock(&app->lock);
 }
 
@@ -12625,6 +12824,21 @@ static void request_view(struct app *app, const char *url);
 static void play_audio_url(struct app *app, const char *url);
 
 static void overlay_activate(struct app *app) {
+    /* A create form answers for itself, BEFORE the close below.
+     *
+     * Two things go wrong otherwise. Clicking a FIELD would dismiss the
+     * form, because activating always closes first — and clicking the
+     * submit row would reach admin_verb_run, whose job for a create verb
+     * is to open a form, so the box would reopen empty forever. */
+    pthread_mutex_lock(&app->lock);
+    bool form = app->overlay.kind == OVERLAY_ADMIN && app->overlay.form_verb != ADMIN_V_NONE;
+    bool on_submit = form && app->overlay.form_sel >= app->overlay.form_count;
+    pthread_mutex_unlock(&app->lock);
+    if (form) {
+        if (on_submit) admin_form_submit(app);
+        return;
+    }
+
     struct overlay_item items[64];
     char nick[MAX_CHANNEL] = "";
     char body[MAX_LINE] = "";
@@ -12896,6 +13110,54 @@ static bool overlay_key(struct app *app, int ch) {
         /* A modal swallows the rest rather than letting it reach the
          * channel behind it. */
         return true;
+    }
+
+    /* A create form owns the keyboard the way the settings modal does:
+     * the characters are the ANSWER, not commands. Handled before the
+     * generic keys below so typing an "n" into a name is not read as
+     * navigation. */
+    if (kind == OVERLAY_ADMIN) {
+        enum admin_verb fv;
+        pthread_mutex_lock(&app->lock);
+        fv = app->overlay.form_verb;
+        pthread_mutex_unlock(&app->lock);
+        if (fv != ADMIN_V_NONE) {
+            if (ch == 27) {
+                overlay_close(app);
+                return true;
+            }
+            pthread_mutex_lock(&app->lock);
+            struct overlay *ov = &app->overlay;
+            size_t last = ov->form_count; /* the submit row */
+            bool submit = false;
+            if (ch == KEY_UP) {
+                if (ov->form_sel) ov->form_sel--;
+            } else if (ch == KEY_DOWN || ch == '\t') {
+                if (ov->form_sel < last) ov->form_sel++;
+            } else if (ch == '\n' || ch == '\r') {
+                /* Enter walks to the next field and SENDS from the last
+                 * row. One key, one meaning per row — rather than Enter
+                 * sometimes creating a user from the middle of a
+                 * half-filled form. */
+                if (ov->form_sel < last) ov->form_sel++;
+                else submit = true;
+            } else if (ov->form_sel < ov->form_count) {
+                struct admin_field *f = &ov->form[ov->form_sel];
+                if (f->kind == ADMIN_FIELD_BOOL) {
+                    if (ch == ' ') f->on = !f->on;
+                } else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
+                    utf8_backspace(f->value, &f->len);
+                } else if (ch >= 32 && ch < 256 && isprint(ch)) {
+                    utf8_append(f->value, sizeof(f->value), &f->len, (wchar_t)ch);
+                }
+            }
+            ov->sel = ov->form_sel;
+            pthread_mutex_unlock(&app->lock);
+            if (submit) admin_form_submit(app);
+            /* A modal swallows everything else rather than letting it
+             * reach the channel behind it. */
+            return true;
+        }
     }
 
     if (ch == 27) {
@@ -15355,7 +15617,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "preview-ascii") == 0) log_line(app, "/preview-ascii [url] — the same preview, forced to colour character art: skips the terminal's graphics protocol, which is what to try when a picture renders as garbage or not at all");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
     else if (strcmp(cmd, "mirc.contrast") == 0) log_line(app, "/set mirc.contrast auto|off|dark|light — mIRC colours were chosen against mIRC's WHITE background, so a bot writing navy into a black terminal posts text nobody can read. This lifts a foreground off the background until it is legible, keeping its hue; only when the bot set no background of its own, since a bot that picked BOTH colours already has a contrast. `auto` believes COLORFGBG and assumes dark otherwise; `off` renders exactly what was sent");
-    else if (strcmp(cmd, "admin") == 0) log_line(app, "/admin [adduser <name> <password> [admin]|addnetwork <slug> [flavor]] — the operator console: sessions, users, networks, visitors and uploads. Not just a listing — Up/Down picks a row and Enter (or a right-click) offers what can be done to it: disconnect, reconnect or kill a session, grant or revoke admin, delete a user, network, visitor or upload. Anything irreversible asks a second time, opening on Cancel. The tables end in a `+ add` row that types the create command for you, since a name and a password are not things a menu can invent. A new network has no servers yet — that is its own endpoint. Needs an admin bearer; every tab reports its own 403 rather than blanking the panel");
+    else if (strcmp(cmd, "admin") == 0) log_line(app, "/admin [adduser <name> <password> [admin]|addnetwork <slug> [flavor]] — the operator console: sessions, users, networks, visitors and uploads. Not just a listing — Up/Down picks a row and Enter (or a right-click) offers what can be done to it: disconnect, reconnect or kill a session, grant or revoke admin, delete a user, network, visitor or upload. Anything irreversible asks a second time, opening on Cancel. The users and networks tables end in a `+ add` row: right-click or Enter opens a form — type, Tab or Up/Down moves between fields, Space toggles the admin flag (off by default), Enter walks down and creates from the last row. The password is never echoed. The same thing is typeable as /admin adduser and /admin addnetwork. A new network has no servers yet — that is its own endpoint. Needs an admin bearer; every tab reports its own 403 rather than blanking the panel");
     else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);
     else if (strcmp(cmd, "help") == 0) log_line(app, "/help [command] — bare /help lists every command by group; /help command explains one");
     else if (strcmp(cmd, "kb") == 0 || strcmp(cmd, "kickban") == 0) log_line(app, "/kb nick [reason], /kickban nick [reason] — ban nick!*@* and then kick; the ban lands first so the kick cannot be outrun by a rejoin");
@@ -18048,6 +18310,12 @@ static void handle_mouse(struct app *app) {
             /* Hover highlights, so the item that acts is the item the
              * pointer is on — whether the click follows or not. */
             app->overlay.sel = idx;
+            /* In a form the FIELD cursor is the authority — the item
+             * list is drawn from it — so moving one without the other
+             * would highlight a row the keys then edit past. */
+            if (app->overlay.kind == OVERLAY_ADMIN && app->overlay.form_verb != ADMIN_V_NONE &&
+                idx <= app->overlay.form_count)
+                app->overlay.form_sel = idx;
             hit = true;
         }
         if (n && (wheel_up || wheel_down)) {

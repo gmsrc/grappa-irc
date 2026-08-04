@@ -1034,14 +1034,87 @@ TEST(the_tables_that_can_grow_offer_a_row_that_grows_them) {
     const char *m = NULL;
     char path[512], body[256];
     CHECK(!admin_verb_request(ADMIN_V_ADD_USER, add, &m, path, sizeof(path), body, sizeof(body)));
-    CHECK(admin_verb_prefill(ADMIN_V_ADD_USER) != NULL);
-    CHECK(strstr(admin_verb_prefill(ADMIN_V_ADD_USER), "/admin adduser") != NULL);
-    CHECK(admin_verb_prefill(ADMIN_V_ADD_NETWORK) != NULL);
-    /* Every verb that DOES call has no prefill, so the two sets cannot
-     * overlap and leave a verb doing both or neither. */
-    CHECK(admin_verb_prefill(ADMIN_V_DELETE_USER) == NULL);
-    CHECK(admin_verb_prefill(ADMIN_V_DISCONNECT) == NULL);
+    /* It opens a FORM instead, and every verb that DOES call has no
+     * form — so the two sets cannot overlap and leave a verb doing both
+     * or neither. */
+    struct admin_field fields[ADMIN_FORM_MAX];
+    CHECK_LONG(admin_form_fields(ADMIN_V_ADD_USER, fields, ADMIN_FORM_MAX), 3);
+    CHECK_LONG(admin_form_fields(ADMIN_V_ADD_NETWORK, fields, ADMIN_FORM_MAX), 2);
+    CHECK_LONG(admin_form_fields(ADMIN_V_DELETE_USER, fields, ADMIN_FORM_MAX), 0);
+    CHECK_LONG(admin_form_fields(ADMIN_V_DISCONNECT, fields, ADMIN_FORM_MAX), 0);
     free_app(app);
+}
+
+TEST(the_create_form_asks_for_what_the_endpoint_accepts) {
+    struct admin_field f[ADMIN_FORM_MAX];
+    size_t n = admin_form_fields(ADMIN_V_ADD_USER, f, ADMIN_FORM_MAX);
+    CHECK_LONG(n, 3);
+    /* The keys are grappa's whitelist verbatim: it answers 400 to an
+     * extra key rather than ignoring it, so a label that drifted from a
+     * key would fail the create rather than fail quietly. */
+    CHECK_STR(f[0].key, "name");
+    CHECK_STR(f[1].key, "password");
+    CHECK_STR(f[2].key, "is_admin");
+    /* A password is never echoed, and that is a property of the FIELD
+     * rather than of the drawing code — one place to get right. */
+    CHECK_LONG(f[1].kind, ADMIN_FIELD_SECRET);
+    /* A new user is an ordinary user. A create form whose default grants
+     * admin is one mis-press from a mistake nobody sees afterwards. */
+    CHECK_LONG(f[2].kind, ADMIN_FIELD_BOOL);
+    CHECK(!f[2].on);
+    CHECK(!f[2].required);
+    CHECK(f[0].required);
+    CHECK(f[1].required);
+
+    char body[1024];
+    const char *missing = NULL;
+    /* Empty required field: named, rather than left to grappa's 400 —
+     * that reply describes its whitelist, not the box the operator left
+     * blank. */
+    CHECK(!admin_form_body(f, n, body, sizeof(body), &missing));
+    CHECK_STR(missing, "name");
+
+    snprintf(f[0].value, sizeof(f[0].value), "sarabean");
+    f[0].len = strlen(f[0].value);
+    CHECK(!admin_form_body(f, n, body, sizeof(body), &missing));
+    CHECK_STR(missing, "password");
+
+    snprintf(f[1].value, sizeof(f[1].value), "s3cret");
+    f[1].len = strlen(f[1].value);
+    CHECK(admin_form_body(f, n, body, sizeof(body), &missing));
+    CHECK_STR(body, "{\"name\":\"sarabean\",\"password\":\"s3cret\",\"is_admin\":false}");
+
+    /* A BOOL is always sent: false is the answer, not the lack of one. */
+    f[2].on = true;
+    CHECK(admin_form_body(f, n, body, sizeof(body), &missing));
+    CHECK(strstr(body, "\"is_admin\":true") != NULL);
+}
+
+TEST(an_empty_optional_field_is_omitted_not_sent_blank) {
+    struct admin_field f[ADMIN_FORM_MAX];
+    size_t n = admin_form_fields(ADMIN_V_ADD_NETWORK, f, ADMIN_FORM_MAX);
+    CHECK_LONG(n, 2);
+    snprintf(f[0].value, sizeof(f[0].value), "libera");
+    f[0].len = strlen(f[0].value);
+
+    char body[1024];
+    const char *missing = NULL;
+    CHECK(admin_form_body(f, n, body, sizeof(body), &missing));
+    /* services_flavor left blank is an ABSENCE, and "" is a value — the
+     * whitelist accepts the key either way, so sending the empty string
+     * would create a network with a flavour of nothing rather than a
+     * network with no flavour set. */
+    CHECK_STR(body, "{\"slug\":\"libera\"}");
+
+    snprintf(f[1].value, sizeof(f[1].value), "anope");
+    f[1].len = strlen(f[1].value);
+    CHECK(admin_form_body(f, n, body, sizeof(body), &missing));
+    CHECK_STR(body, "{\"slug\":\"libera\",\"services_flavor\":\"anope\"}");
+
+    /* The paths the two forms POST to. */
+    CHECK_STR(admin_form_path(ADMIN_V_ADD_USER), "/admin/users");
+    CHECK_STR(admin_form_path(ADMIN_V_ADD_NETWORK), "/admin/networks");
+    CHECK(admin_form_path(ADMIN_V_DELETE_USER) == NULL);
 }
 
 TEST(every_admin_verb_builds_the_endpoint_it_names) {
@@ -3676,6 +3749,8 @@ int main(void) {
     RUN(an_orphan_session_is_rendered_but_not_actionable);
     RUN(the_admin_tabs_record_the_id_each_resource_is_addressed_by);
     RUN(the_tables_that_can_grow_offer_a_row_that_grows_them);
+    RUN(the_create_form_asks_for_what_the_endpoint_accepts);
+    RUN(an_empty_optional_field_is_omitted_not_sent_blank);
     RUN(every_admin_verb_builds_the_endpoint_it_names);
     RUN(a_verb_the_row_does_not_offer_builds_no_request);
     RUN(the_menu_offers_only_what_the_row_supports);
