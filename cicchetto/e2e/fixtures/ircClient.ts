@@ -35,6 +35,27 @@ const KICK_TIMEOUT_MS = 5_000;
 // echo arrives — so 15s is headroom above bahamut's ~10s fake-lag bank cap,
 // matching the #23/#220 topic asserts, NOT a fixed sleep.
 const TOPIC_TIMEOUT_MS = 15_000;
+// #806 defect 3 — an inbound PRIVMSG is the OTHER wait exposed to the same
+// fake-lag class as TOPIC above, and it had no budget of its own: it borrowed
+// `NICK_TIMEOUT_MS`, a constant sized for a NICK echo, purely because
+// `waitForPrivmsg` was written next to `changeNick`. Of the seven specs that
+// block on grappa-originated traffic this was the only one at 5s, and not by
+// anyone's decision.
+//
+// Measured 2026-08-04 (#807's per-send accounting, live testnet): with the
+// bank empty the message arrives in 26-28ms; with it full, at 3024ms and
+// 4989ms — the second inside 5s by eleven milliseconds. The delay is the
+// bank's overshoot, so it is bounded by the ~10s cap, exactly the bound
+// TOPIC_TIMEOUT_MS is already sized against. 15s clears that ceiling and
+// matches the budget the sibling upstream-waiting specs (issue536, issue386)
+// already use.
+//
+// Same shape as TOPIC_TIMEOUT_MS and NOT a timeout raised to bury a red: this
+// is a condition-wait that resolves the instant the message lands, so a
+// genuine routing regression (#373's stale-nick 401 — nothing arrives, ever)
+// still fails, just 10s later. What it stops doing is failing when the
+// message is merely queued behind the harness's own reconnect burst.
+const PRIVMSG_TIMEOUT_MS = 15_000;
 const OPER_TIMEOUT_MS = 5_000;
 const NICKSERV_TIMEOUT_MS = 5_000;
 const AWAY_TIMEOUT_MS = 5_000;
@@ -166,7 +187,7 @@ export class IrcPeer {
       "privmsg",
       (event: { nick: string; message: string }) =>
         event.nick === fromNick && event.message.includes(body),
-      NICK_TIMEOUT_MS,
+      PRIVMSG_TIMEOUT_MS,
       `privmsg from ${fromNick} containing "${body}"`,
     );
   }
