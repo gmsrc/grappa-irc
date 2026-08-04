@@ -157,6 +157,25 @@ is DELETE-then-write, never append-only:
   A HOT `--cic`-only deploy needs NO before-announce (no session drop) — just the after/bundle-refresh
   note. Both legs go to BOTH networks. **Forgetting the BEFORE is the failure mode — it is the only one
   that costs users anything.**
+- 🔴🔴 **NEVER RELAY WHAT WAS SAID IN ONE CHANNEL INTO ANOTHER (vjt, #grappa 2026-08-04 10:25 —
+  *"non devi parlare in un canale di ciò che si parla in altro canale — scrivilo in modo permanente,
+  standing order, critical, not negotiable"*).** Said to the ircbot, and it binds every post made
+  through that surface, which includes yours. #grappa, #it-opers, #sniffo and any DM are SEPARATE
+  rooms: a question asked in one is not context you may quote in another, and "he said X in #sniffo"
+  never becomes a line in #grappa. Summarising, paraphrasing and "just for context" all count as
+  relaying. Report the OUTCOME of work in the channel that owns the work — never the conversation
+  that produced it. This is not a style preference; he classed it critical and non-negotiable.
+- 🔴 **BRIEF + `/caveman` ON IRC, ALWAYS (vjt 10:17 *"sempre /caveman full perdio"*, restated 10:33
+  *"devi essere BRIEF e /CAVEMAN, puoi scrivere anche questo in modo permanente"*).** 2–3 lines,
+  OUTCOME ONLY. Mezmerize — a self-hoster reading #grappa, not an audience for your reasoning —
+  called a long report *"dio porco che wall of text"* in front of everyone. **Evidence goes in the
+  ISSUE, outcome in the channel.** 🥇 *A standing style order decays unless it is written where the
+  next session reads it: caveman was active from session start and essays got posted anyway.*
+- ℹ️ **vjt ANSWERS THE ORCHESTRATOR IN-SESSION, NOT ON IRC** (#grappa 2026-08-04 10:52,
+  *"vjt-claude: parlo con orch direttamente"*). The ircbot ping is still mandatory as the PUSH that
+  reaches him — he lives on IRC and an in-session reply alone can sit unseen for hours — but expect
+  the ANSWER to arrive in the orchestrator conversation. **Do not read channel silence as no answer,
+  and do not re-ping because the channel stayed quiet.**
 - **BATCH ALL DEPLOYS — never deploy per-issue (vjt STANDING ORDER 2026-07-17).** A per-issue
   `--cic` bundle deploy (OR cold restart) spams live users with a BundleRefreshBanner every
   ~20min. So: as each issue completes, worker MERGES + pushes to origin/main (the CI-green
@@ -177,6 +196,12 @@ is DELETE-then-write, never append-only:
   banner), just never HOLD a hot-ready batch for a cold restart it does not need. When the two
   rules pull against each other, the tiebreak is **users see one banner per batch, and no work
   sits waiting on a restart it does not require**.
+- 🔴 **EVERY ISSUE CLOSED AT A RELEASE GETS A COMMENT NAMING THAT RELEASE (vjt STANDING ORDER 2026-08-04).**
+  Closing is not enough: the closing comment must say **which release the work shipped in** (e.g. *"shipped in
+  v0.11.1"*), because a self-hoster reading the issue needs to know **which tag to pull** — that is the same
+  reason `soon` ends at the release and not at our deploy. **And strip `status:soon` from everything that
+  goes into the release, in the same pass.** Close + release-comment + label-strip are ONE action, never
+  three chores to remember separately. Do it for every issue in the batch, not just the headline ones.
 - **RELEASE-CUTTING + NEWS.JSON (vjt STANDING ORDERS 2026-07-24).** After a batch DEPLOYS to
   Azzurra + verifies healthy: cut a GitHub **release + tag** (tag ≡ CTCP VERSION exactly, #391),
   THEN produce the site's **News/Releases `news.json` entry** — bilingual, curated by vjt, and
@@ -585,6 +610,11 @@ clearing on unverified edits leaves the next session unable to tell whether they
 - 🛑🛑 **NEVER SEND A BARE `Enter` WITHOUT CAPTURING THE PANE FIRST** — if a picker opened meanwhile, that Enter SELECTS
   the highlighted option. Never `Esc` a picker either. (The guard caught exactly this tonight.)
 - 🔴 **LONG send-keys GET SWALLOWED** — short one-line orders, one constraint each; often needs a THIRD Enter.
+  ⚠️ **It also truncates MID-STRING, not just whole-message** (2026-08-04): a chunk vanished from the middle
+  of an order, eating both the WHAT and a key constraint while the head and tail arrived intact — so the
+  order read as complete and plausible. **Re-read your own order in the `❯` block after sending.** For
+  anything with more than ~2 constraints, **write it to the worker's host `/tmp` and send a six-word
+  "leggi <path> ed eseguilo"** — immune by construction, and it survives the worker's `/clear`.
 - 🔴 **IRCBOT:** `cd /home/vjt/code/IRC/vjt-claude && ./bot.say '#grappa' <<'EOF' … EOF`.
   🔴 **FLAGS GO BEFORE THE TARGET** — `bot.say -f …/bot.send.libera '#grappa'`, NEVER `'#grappa' -f …`: the parse loop
   stops at the first non-flag arg, so a trailing `-f` is **silently ignored and the message goes to AZZURRA**.
@@ -609,6 +639,33 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
 **Enqueue is vjt's or the ircbot's** — except when he says "fix it" in conversation: that IS the enqueue (#526, #522).
 
 ## 🔀 PR / MERGE / GATING MECHANICS (learned the hard way 2026-08-01 — permanent)
+- 🔴🔴 **MERGING N GREEN PRs IN ONE MOVE LEAVES THE UNION GATED BY NOTHING — this broke main for 12 hours
+  on 2026-08-03/04.** Five PRs were each gated against the SAME base *separately*; four of them had never
+  been gated with the fifth. Every one was green, and the merge was still a regression, because **a PR's
+  green attests to `branch + base`, never to `branch + the other branches you are about to land`.**
+  🥇 ***Textual non-overlap is NOT semantic independence.*** I cleared that merge by checking that the
+  diffs touched different files — and the defect was a shared *upstream connection budget*, which no file
+  diff can show. **Cure, pick one: gate the union on a temp branch first, or merge ONE and let the rest
+  re-gate against the new main.** Never batch-merge on per-PR greens alone.
+  ⚠️ Corollary: after such a break, **every open PR inherits the red** — say so explicitly in each dispatch
+  brief, or a worker will burn hours chasing a failure that is not its branch's.
+- 🔴 **A MONITOR FIRING IS NOT THE ORCHESTRATOR READING IT.** The union-gate monitor reported that red at
+  22:05; it was not processed until 08:41, **idling both workers ~9 hours.** This is the twin of the
+  dead-listener trap below — there the events never arrived, here they arrived and were not read, and
+  **both look exactly like a quiet night.** 🥇 **`STALL state=idle` means the orchestrator is the
+  bottleneck: act on the FIRST one, not the twentieth.**
+- 🔴🔴 **A STACKED PR WHOSE BASE IS NOT `main` ALSO RUNS *NO* CI — the second costume of the zero-CI trap
+  (hit 2026-08-04 on #809).** Both workflows declare `pull_request: branches: [main]`, so a PR opened against
+  another feature branch (the natural thing to do when stacking B on A) fires nothing: `gh pr checks` says
+  *"no checks reported"* and `gh run list --branch <b>` is EMPTY, which reads exactly like "not started yet".
+  **Cure: point the PR's base at `main`** — the diff then IS the union (A's commits + B's), which is the
+  union gate you wanted anyway. 🔑 `gh pr edit --base` DIES on the classic-projects deprecation; use
+  `gh api -X PATCH repos/OWNER/REPO/pulls/N -f base=main`.
+  ⚠️ **Retargeting alone does NOT start CI** — `pull_request` workflows fire on opened/synchronize/reopened,
+  not on a base `edited`. You need a push. **The legitimate one is a rebase onto current `origin/main`**
+  (stale branches are the norm), not an empty commit. 🥇 *Distinguish the two zero-CI causes by
+  `mergeStateStatus`: `CONFLICTING` = the merge-ref cannot be built; `CLEAN` with no runs = wrong base, or
+  the ~30s spin-up window.*
 - 🔴 **A CONFLICTING PR RUNS *NO* CI AT ALL.** GitHub cannot build `refs/pull/N/merge` for a conflicting PR, so
   `pull_request` workflows never fire — **zero runs, zero check-runs**, and `gh pr checks` says *"no checks reported"*,
   which reads like "not started yet" and **strands a poller forever**. When an expected run never appears, check in this
@@ -679,6 +736,19 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
 - 🥇 **Diff the e2e test COUNT across the gate:** +1 proves a new spec really ran; an UNCHANGED count is expected only
   when the change is server-side with ExUnit coverage. State which case applies before calling a green real.
 
+## 🔬 READING CODE GIVES YOU STRUCTURE, NEVER MAGNITUDE (2026-08-04 — three strikes in one morning)
+Same root, three times: **my** fake-lag mechanism (`since += 2 + len/120`, read in bahamut source, asserted
+as the cause); **my** "the rename fires a second WHOIS" (a mocked-store effect count, relayed as wire
+behaviour); **a worker's** issue title *"the 5s budget is spent before the send"* (a real code path, an
+invented quantity). Each was a correct structural reading wearing a number it had never measured.
+🥇 **The rule: source tells you a path EXISTS. It never tells you how much time it takes, how often it
+fires, or that it is THE cause. Those need an observation.** State the path, then say "unmeasured".
+🥇 **Corollary for the orchestrator: never relay a finding onward until it is verified at the FAR END of
+the pipe** — the wire, not the mock; the served bundle, not the deploy log; the arrival, not the theory.
+A wrong fact you publish comes back wearing someone else's name (the ircbot repeated mine to vjt within the
+hour). **Retract where it SPREAD, not only where you said it.**
+🥇 A worker correcting you — or correcting ITSELF — is the system working. Say so plainly and move on.
+
 ## 🧪 FLAKE FORENSICS
 - 🥇 **A fixed identifier in a shared namespace is the classic flake**: a hard-coded nick/channel/port collides with a
   ghost from a prior run, so **re-running is exactly what triggers it**, and it **does not fail where it is caused**.
@@ -727,6 +797,12 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   the orchestrator, via ssh), THEN branch/rebase onto **`origin/main`**. 🥇 *A rule's rationale, not its
   wording, decides whether it applies on a given host — check which of the two mains is actually ahead.*
 - **`| tail && echo OK` MASKS the exit code** — redirect to a file and capture `$?`.
+- 🔴 **THE BASH cwd PERSISTS AND SILENTLY RESETS TO THE MAIN CHECKOUT** after any `cd` outside the project,
+  so a later `scripts/*.sh` runs against **main's tree**, not the worktree — the twin of the FALSE-GREEN TRAP
+  above (`scripts/_lib.sh:34`). Open EVERY `scripts/*.sh` invocation with an explicit `cd <worktree> &&`.
+  🥇 **Detection signal, learned 2026-08-04: a test run complaining THE FILES DO NOT EXIST is a cwd alarm,
+  not a test failure** — that is how w2 caught itself having run `mix.sh format` on main (no damage, clean
+  tree). Read "file not found" as "wrong directory" before reading it as anything else.
 
 ## 🧷 ORCHESTRATOR TRAPS (mechanics of driving the panes)
 - 🔴🔴 **THE BLINDING, 2026-08-02 — the worst failure this skill has had, and the reason v3 exists.**
@@ -745,6 +821,16 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   not list Monitors, so only the recorded task id can kill the orphan). So on every resume: **`TaskStop` the
   ids the handoff records, then re-arm** — and if both panes have seemed quiet for a stretch, **prove the feed
   is alive instead of enjoying the calm.**
+- 🔴🔴 **A MONITOR CAN RETURN A TASK ID AND STILL NOT BE LISTENING — it can sit on a permission prompt,
+  and you will not be told (2026-08-04).** I armed a read-only `tail -F` on the ircbot log at 09:47, got
+  `Monitor started (task …)` back, **told the user "his reply now arrives as an event rather than something
+  I poll for" — and it was false.** The underlying command was blocked awaiting approval; vjt's 09:55
+  decision went unseen until he relayed it by hand. 🥇 **The third costume of "you cannot notice silence":
+  a dead listener, a duplicated listener, and now an UNAPPROVED one all look exactly like a quiet channel.**
+  ⚠️ Also: **`tail -n0` does NOT replay**, so an approval that lands late silently loses the whole gap.
+  **Cure: after arming a monitor on anything you are actually waiting for, prove it is live before you rely
+  on it** (touch the file / check the task is running), and **keep polling until you have that proof** —
+  never downgrade an active check to "the monitor has it" on the strength of the arming call alone.
 - 🔴 **Never background a waiter with `&` inside a foreground Bash** — it detaches, advances the cursor and eats
   events. Arm ONLY via `run_in_background: true`, **one per assistant message** (two in one message = both
   `killed`, observed 3×). This is the legacy v2 path; prefer the Monitor above.
