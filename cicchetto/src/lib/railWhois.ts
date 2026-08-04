@@ -17,23 +17,33 @@ import { whoisBundleHasFields } from "./whoisBundle";
 //     (opening two queries would stomp the card) nor forge a scrollback
 //     card the user never asked for.
 //
-// Fetch policy (#606 scope 2, then #800):
-//   * NOTHING in the rail asks on its own. #606 called `requestRailWhois` on
-//     first select of a query window; #800 removed that call, because that one
-//     extra command measurably delayed the operator's NEXT message by seconds
-//     (the ircd-side mechanism is unconfirmed — the fake-lag reading below is
-//     the leading hypothesis, not a measurement). The store now fills only
-//     from the user's OWN `/whois` (`userTopic.ts` routes a `source: "user"`
-//     bundle for the nick the rail is showing into here).
-//   * `requestRailWhois` therefore has NO production caller today. It is kept
-//     deliberately, not by oversight: it is the seam #782's explicit fetch
-//     control attaches to, and its de-dupe rules below are the ones that
-//     button will need. It is NOT to be wired to any automatic trigger.
-//   * When it IS called: ONE WHOIS per nick. Once the nick is KNOWN it is
-//     never asked about again — there is NO staleness refetch. An ask that
-//     produced nothing (reply in flight, or a reply carrying no fields
-//     because the peer is offline) stands for `RAIL_WHOIS_RETRY_MS`, which
-//     de-dupes rapid re-asks and lets an offline peer resolve later.
+// Fetch policy (#606 scope 2, then #800, settled by #782):
+//   * The rail asks when the card is ON SCREEN showing a nick this store does
+//     not have — `RailContext` calls `requestRailWhois` gated on its
+//     `onScreen` prop. Nothing else may call it.
+//   * The two rejected shapes, so neither comes back: #606 asked on SELECT,
+//     which spent an upstream command filling a card the mobile operator
+//     could not see (the rail is mounted-but-off-screen when the drawer is
+//     shut) and measurably delayed the operator's NEXT message by seconds —
+//     the ircd-side mechanism is still unconfirmed (#800; the fake-lag
+//     reading below is the leading hypothesis, not a measurement), but the
+//     rule does not rest on it: cic cannot see the connection's upstream cost
+//     at all, so it must not spend it speculatively. #800 then removed the
+//     ask outright, which is the opposite error — a card that can never fill.
+//     Visibility is the line between the two: a card on screen is not a
+//     speculation, it is a nick the operator is looking at right now.
+//   * A user-driven control was considered and is NOT what shipped (#782 was
+//     reshaped away from a button — vjt: "rail is on screen, cache is empty,
+//     do a whois and when response comes display it"). Do not add one as well.
+//   * ONE WHOIS per nick. Once the nick is KNOWN it is never asked about
+//     again — there is NO staleness refetch, and re-opening the drawer over a
+//     known nick therefore costs nothing. An ask that produced nothing (reply
+//     in flight, or a reply carrying no fields because the peer is offline)
+//     stands for `RAIL_WHOIS_RETRY_MS`, which de-dupes rapid re-asks and lets
+//     an offline peer resolve later.
+//   * The store also fills WITHOUT being asked, from the user's OWN `/whois`
+//     (`userTopic.ts` routes a `source: "user"` bundle for the nick the rail
+//     is showing into here) — a free refresh that then satisfies the de-dupe.
 //
 // The freshness TTL this store shipped with is deliberately GONE. The reading
 // that follows is INFERRED FROM BAHAMUT SOURCE and has never been measured
@@ -61,6 +71,9 @@ import { whoisBundleHasFields } from "./whoisBundle";
 //
 //     The rail NEVER sends a WHOIS on a timer or as a speculative prefetch.
 //     It sends exactly ONE when it has to show a nick it does not have.
+//
+// "Show" is literal, and #782 is what made it literal: on screen, in front of
+// the operator. A selected-but-hidden card is a prefetch and gets nothing.
 //
 // So the card is fetched once and is not refreshable; a long-lived rail shows
 // a stale idle clock. The operator's own `/whois <peer>` still lands here
@@ -105,13 +118,16 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const railWhoisFor = (slug: string, nick: string): WhoisBundle | undefined =>
     byNick()[slug]?.[normalizeNick(nick)]?.bundle ?? undefined;
 
-  // Called on query select. A nick we already know short-circuits FOREVER
-  // (no staleness rule); a nick we asked about within the retry window
-  // short-circuits too, so fast A→B→A switching cannot stack. A WHOIS is
-  // visible to the
-  // person it names — a target carrying umode +y is told "<nick> is doing a
-  // WHOIS on you" (bahamut src/s_user.c:2200) — so every avoided refetch is
+  // Called by `RailContext` when the query card comes ON SCREEN (#782), which
+  // is the ONLY caller. A nick we already know short-circuits FOREVER (no
+  // staleness rule), so re-opening the drawer over a known nick is free; a
+  // nick we asked about within the retry window short-circuits too, so fast
+  // A→B→A switching and open/close/open cannot stack. A WHOIS is visible to
+  // the person it names — a target carrying umode +y is told "<nick> is doing
+  // a WHOIS on you" (bahamut src/s_user.c:2200) — so every avoided refetch is
   // noise a peer does not receive, not merely a command grappa does not send.
+  // (vjt has been told this twice and wants the on-screen fetch regardless;
+  // it is the argument for never asking MORE than once, not for not asking.)
   const requestRailWhois = (slug: string, nick: string): void => {
     const key = normalizeNick(nick);
     const now = Date.now();

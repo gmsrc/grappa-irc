@@ -684,8 +684,13 @@ const Shell: Component = () => {
             {/* #474 — the per-window-kind rail context surface (server info
                 today; a /whois card is the deferred follow-on), grafted as a
                 SIBLING of the drawer below. Renders nothing on kinds with no
-                context, so the drawer still floors the rail. */}
-            <RailContext />
+                context, so the drawer still floors the rail.
+                #782 — `onScreen` is unconditionally true here: this rail is a
+                PERMANENT grid column (#71 INC-2, `.shell-no-members` narrows
+                it but never drops it), and a query window renders no
+                MembersPane above the card, so it cannot be scrolled out of
+                view either. */}
+            <RailContext onScreen={true} />
             {/* #473 — the ONE unified rail action drawer, floored at the bottom
                 (CSS `.rail-actions { margin-top: auto }`). Supersedes the desktop
                 top ActionCluster (cog + denoise) and, crucially, brings the
@@ -935,8 +940,13 @@ const Shell: Component = () => {
           </Show>
           {/* #474 — per-window-kind rail context (server info today), grafted
               as a SIBLING of the drawer below; renders nothing off a server
-              window. Same component the desktop rail mounts. */}
-          <RailContext />
+              window. Same component the desktop rail mounts.
+              #782 — this drawer is MOUNTED whether open or shut (closed is
+              `transform: translateX(100%)`, not an unmount), so `membersOpen`
+              is the only honest answer to "is the card on screen": without it
+              every mobile session would spend a WHOIS on a card behind the
+              right edge. */}
+          <RailContext onScreen={membersOpen()} />
           {/* #473 — the ONE unified rail action drawer, floored at the bottom.
               Same component + same handler set the desktop rail mounts (the
               drawer-closing arm of the mobilePanel helpers is meaningful here on

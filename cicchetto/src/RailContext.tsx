@@ -1,6 +1,15 @@
-import { type Component, createSignal, Match, onCleanup, Show, Switch } from "solid-js";
+import {
+  type Component,
+  createEffect,
+  createSignal,
+  Match,
+  on,
+  onCleanup,
+  Show,
+  Switch,
+} from "solid-js";
 import { networkBySlug } from "./lib/networks";
-import { railWhoisFor } from "./lib/railWhois";
+import { railWhoisFor, requestRailWhois } from "./lib/railWhois";
 import { selectedChannel } from "./lib/selection";
 import ServerInfoCard from "./ServerInfoCard";
 import WhoisCard from "./WhoisCard";
@@ -16,20 +25,44 @@ import WhoisCard from "./WhoisCard";
 //              overlay but is fed by the per-nick `railWhois` cache (NOT the
 //              single-slot `whoisCard` store the user-issued /whois owns) and
 //              carries no × affordance (persistent, like the server card).
-//              It RENDERS what is known and asks for nothing — #800 removed
-//              the fetch-on-select, because that WHOIS measurably delayed the
-//              operator's next message and cic cannot see the upstream cost it
-//              was spending. The cache fills from the user's own
-//              /whois (#606 routes a `source: user` bundle for the shown nick
-//              here); #782 adds the explicit fetch control.
+//              It fetches the bundle when the card is ON SCREEN and the cache
+//              has nothing for that nick (#782 — see the `onScreen` contract
+//              below).
 // It renders NOTHING for kinds with no context content (channel already has
 // the MembersPane above; home/admin/list/mentions have none). Built as a
 // container, not a hardcoded server card, so the rail is the per-kind
 // context surface the RailActions moduledoc (#473) always earmarked.
+//
+// #782 — WHEN the rail may ask, and why it is VISIBILITY and not selection.
+// #606 fetched on SELECT of a query window. That spent an upstream command
+// filling a card the operator could not see: `.shell-members` is MOUNTED on
+// both form factors and merely slid off-screen when closed
+// (`transform: translateX(100%)`), so on mobile the default state is a card
+// nobody is looking at. #800 measured the cost of that command landing on the
+// operator's NEXT message and removed the fetch entirely, which left the card
+// permanently empty. Both are wrong at one end. The rule that survives, and
+// that this component now implements exactly:
+//
+//     The rail asks when — and only when — it is SHOWING a nick it does not
+//     have. Not on a timer, not on a selection it cannot display.
+//
+// So the trigger is `onScreen`, supplied per mount site because only the
+// mount site knows: the desktop rail is a permanent column (and a query
+// window renders no MembersPane above it, so the card cannot be scrolled
+// out), while the mobile drawer is on screen exactly when it is open. Passing
+// it as a REQUIRED prop keeps this component blind to form factor and makes
+// each Shell mount state its own truth — a default here would silently make
+// the mobile drawer claim to be visible.
 
 const TICK_MS = 60_000;
 
-const RailContext: Component = () => {
+export type Props = {
+  /** True when this rail is actually on screen — desktop rail: always; mobile
+      drawer: only while open. Gates the WHOIS fetch (#782). */
+  onScreen: boolean;
+};
+
+const RailContext: Component<Props> = (props) => {
   // Coarse clock so a live "connected for Xh Ym" stays fresh. `.shell-members`
   // is a permanent column (#71 INC-2), so this ticker runs for the whole
   // authenticated session, not just while a server window is focused — off a
@@ -42,6 +75,34 @@ const RailContext: Component = () => {
   onCleanup(() => clearInterval(timer));
 
   const sel = () => selectedChannel();
+
+  // Fetch-on-visible. The key composes BOTH halves of "showing a nick we may
+  // not have" — the identity on display and whether it is on display at all —
+  // so the effect fires on a query being selected while open, on the drawer
+  // opening over an already-selected query, and on a #373 rename swapping the
+  // nick underneath. It does NOT fire when the drawer closes (key goes to
+  // null) nor on unrelated selection churn. The store decides whether the ask
+  // costs an upstream command: a nick already known short-circuits, which is
+  // also why a rename is free — `subscribe.ts` migrates the rail cache
+  // old→new BEFORE `followQueryNick` swaps the selection, so this lands on a
+  // hit. Solid flushes effects at the end of the write, so that ordering is
+  // what holds it true; reverse it and every rename asks the ircd again.
+  //
+  // A nick cannot contain a space, so the separator is unambiguous.
+  createEffect(
+    on(
+      () => {
+        const s = sel();
+        if (!props.onScreen || s?.kind !== "query") return null;
+        return `${s.networkSlug} ${s.channelName}`;
+      },
+      (key) => {
+        if (key === null) return;
+        const sep = key.indexOf(" ");
+        requestRailWhois(key.slice(0, sep), key.slice(sep + 1));
+      },
+    ),
+  );
 
   return (
     <Switch>
