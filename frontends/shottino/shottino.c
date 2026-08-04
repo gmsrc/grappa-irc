@@ -14067,8 +14067,42 @@ static void call_command(struct app *app, enum call_kind kind) {
                                                 net, chan, time(NULL));
     pthread_mutex_unlock(&app->lock);
     if (join_existing) {
-        log_line(app, "call: one is already running in %s — joining it rather than starting a "
-                      "second. /hangup first if you meant a new one",
+        /* Same room, POSTED AGAIN.
+         *
+         * Not minting a second room is the invariant — two rooms means
+         * two people each waiting in a different one. Staying SILENT was
+         * never part of it, and it is what made a second /call look like
+         * a command that did nothing: the link is how anyone else joins,
+         * and the one moment they need to see it is the moment somebody
+         * says "call me". Re-posting is a fresh invitation to the same
+         * place, which is exactly what was wanted.
+         *
+         * Rebuilt rather than replayed: the stored URL carries the peer
+         * list from the FIRST post, and the roster has had time to
+         * change. Split it back to base + room, then rebuild with who is
+         * here now. */
+        char base[MAX_LINE], room_again[128];
+        char again[sizeof(app->call_base_url) + 128 + 640];
+        pthread_mutex_lock(&app->lock);
+        snprintf(again, sizeof(again), "%s", app->call_last.url);
+        pthread_mutex_unlock(&app->lock);
+        if (call_invite_split(again, base, sizeof(base), room_again, sizeof(room_again))) {
+            call_invite_build(kind, base, room_again, again, sizeof(again));
+            call_invite_peers(app, net, chan, again, sizeof(again));
+            /* The kind travels with the re-post: /videocall into a room
+             * announced as audio means video is on offer now, and the
+             * marker is how anyone reading learns that. */
+            pthread_mutex_lock(&app->lock);
+            app->call_last.kind = kind;
+            app->call_last.at = time(NULL);
+            snprintf(app->call_last.url, sizeof(app->call_last.url), "%s",
+                     again + strlen(call_marker(kind)) + 1);
+            pthread_mutex_unlock(&app->lock);
+            add_pending_echo(app, net, chan, own_nick_for_network(app, net), again);
+            enqueue_send(app, net, chan, again);
+        }
+        log_line(app, "call: one is already running in %s — link posted again, joining it rather "
+                      "than starting a second. /hangup first if you meant a new one",
                  chan);
         call_answer(app);
         return;
@@ -14278,8 +14312,18 @@ static void call_invite_peers(struct app *app, const char *network, const char *
         n++;
     }
     if (channel && channel[0] && !is_channel_name(channel)) {
-        call_path_nick(channel, pn, sizeof(pn));
-        snprintf(out + at, out_sz - at, "%s%s", n ? "," : "&peers=", pn);
+        /* A query with YOURSELF has one participant, not two.
+         *
+         * The caller is added above and the query TARGET is added here,
+         * and in a self-query those are the same person — so the browser
+         * page was told to expect `nextime,nextime` and would lay out
+         * two tiles for one person. The channel branch below has always
+         * skipped our own nick when walking the roster; this branch
+         * never asked. */
+        if (!(own && own[0] && irc_name_eq(channel, own))) {
+            call_path_nick(channel, pn, sizeof(pn));
+            snprintf(out + at, out_sz - at, "%s%s", n ? "," : "&peers=", pn);
+        }
         return;
     }
     pthread_mutex_lock(&app->lock);

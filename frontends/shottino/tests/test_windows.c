@@ -3068,6 +3068,64 @@ TEST(an_invite_carries_its_room_in_the_fragment) {
     CHECK_STR(room, "shottino-99");
 }
 
+TEST(a_call_in_a_query_with_yourself_lists_one_person) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    /* window_app's own nick on azzurra is "vjt". */
+    char line[512];
+
+    /* An ordinary query: both people, caller first. */
+    snprintf(line, sizeof(line), "%s", "https://h/call/#r=x");
+    call_invite_peers(app, "azzurra", "sarabean", line, sizeof(line));
+    CHECK_STR(line, "https://h/call/#r=x&peers=vjt,sarabean");
+
+    /* A query with OURSELVES is one participant, not two. The caller is
+     * added unconditionally and the query target was added after it —
+     * so the browser page was told to expect the same person twice and
+     * laid out two tiles for one. */
+    snprintf(line, sizeof(line), "%s", "https://h/call/#r=x");
+    call_invite_peers(app, "azzurra", "vjt", line, sizeof(line));
+    CHECK_STR(line, "https://h/call/#r=x&peers=vjt");
+
+    /* Case is not identity: IRC folds nicks, so VJT is still us. */
+    snprintf(line, sizeof(line), "%s", "https://h/call/#r=x");
+    call_invite_peers(app, "azzurra", "VJT", line, sizeof(line));
+    CHECK_STR(line, "https://h/call/#r=x&peers=vjt");
+    free_app(app);
+}
+
+TEST(rejoining_a_running_call_rebuilds_the_link_rather_than_replaying_it) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    /* What the FIRST post produced: a room, and the peers as they were
+     * then. Re-posting must not replay this string — the peer list is a
+     * snapshot, and the roster has had time to change. */
+    char first[512];
+    call_invite_build(CALL_AUDIO, "https://h/call", "shottino-99", first, sizeof(first));
+    call_invite_peers(app, "azzurra", "sarabean", first, sizeof(first));
+    CHECK_STR(first, "\U0001F4DE https://h/call/#r=shottino-99&peers=vjt,sarabean");
+
+    /* Split back and rebuild, which is what the re-post does: the SAME
+     * room — two rooms would leave two people each waiting in a
+     * different one — with the marker of the verb just typed, so
+     * /videocall into an audio room announces that video is on offer. */
+    char base[MAX_LINE], room[128], url[MAX_LINE];
+    enum call_kind kind;
+    CHECK(call_invite_parse(first, &kind, url, sizeof(url)));
+    CHECK(call_invite_split(url, base, sizeof(base), room, sizeof(room)));
+    CHECK_STR(room, "shottino-99");
+
+    char again[512];
+    call_invite_build(CALL_VIDEO, base, room, again, sizeof(again));
+    call_invite_peers(app, "azzurra", "sarabean", again, sizeof(again));
+    CHECK_STR(again, "\U0001F4F9 https://h/call/#r=shottino-99&peers=vjt,sarabean");
+    /* Same room, different marker — that is the whole contract of a
+     * re-post. */
+    CHECK(strstr(again, "shottino-99") != NULL);
+    CHECK(strcmp(first, again) != 0);
+    free_app(app);
+}
+
 TEST(a_query_rings_and_a_channel_only_announces) {
     CHECK(call_should_ring(CALL_RING_QUERIES, true));
     CHECK(!call_should_ring(CALL_RING_QUERIES, false));
@@ -3881,6 +3939,8 @@ int main(void) {
     RUN(an_invite_round_trips_through_its_own_parser);
     RUN(a_call_already_running_here_is_the_call);
     RUN(an_invite_carries_its_room_in_the_fragment);
+    RUN(a_call_in_a_query_with_yourself_lists_one_person);
+    RUN(rejoining_a_running_call_rebuilds_the_link_rather_than_replaying_it);
     RUN(a_query_rings_and_a_channel_only_announces);
     RUN(an_arriving_call_rings_only_where_it_should);
     return test_report();
