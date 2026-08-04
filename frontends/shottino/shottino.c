@@ -13963,6 +13963,50 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
 static void call_helper_stop(struct app *app);
 static bool call_control(struct app *app, const char *verb);
 
+/* Reap `pid` if it dies within `ms`. False means it is still running.
+ *
+ * The rule this exists to enforce: NEVER wait without a bound for a
+ * child you have only ASKED to die. A signal a process catches is a
+ * request, and a request can be deferred forever — which is exactly what
+ * happened here. The call helper catches SIGTERM to hand the SFU its
+ * DELETE, and it was itself blocked in an unbounded wait for an ffmpeg
+ * wedged inside PulseAudio. So shottino's own unbounded wait for the
+ * helper froze the whole client: three waits in a row, none of them
+ * bounded, and the UI thread at the end of the chain. */
+static bool wait_bounded(pid_t pid, int ms) {
+    for (int waited = 0; waited < ms; waited += 25) {
+        int status = 0;
+        pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid) return true;
+        if (r < 0 && errno != EINTR) return true; /* already reaped or gone */
+        struct timespec tick = { .tv_sec = 0, .tv_nsec = 25 * 1000 * 1000 };
+        nanosleep(&tick, NULL);
+    }
+    return false;
+}
+
+/* Ask a child to stop, then insist. SIGKILL cannot be caught, blocked or
+ * deferred, so the final wait always returns — which is the property
+ * that keeps this off the UI thread's critical path forever.
+ *
+ * `group` sends to the child's process GROUP rather than the child. The
+ * helper leads its own group, so this reaches the ffmpegs it spawned
+ * even when the helper dies before it can reap them — otherwise a
+ * SIGKILLed helper orphans an ffmpeg holding the microphone. */
+static void child_stop(pid_t pid, bool group, int grace_ms) {
+    if (pid <= 0) return;
+    pid_t target = group ? -pid : pid;
+    kill(target, SIGTERM);
+    if (wait_bounded(pid, grace_ms)) return;
+    kill(target, SIGKILL);
+    /* Bounded even here. A process in uninterruptible sleep cannot be
+     * killed at all, and blocking on that possibility is the bug this
+     * function exists to prevent — a leaked zombie is a smaller problem
+     * than a frozen client, and the reaper below takes it next time. */
+    if (!wait_bounded(pid, 2000))
+        fprintf(stderr, "shottino: child %d survived SIGKILL — leaving it\n", (int)pid);
+}
+
 /* ── /call, /videocall, /answer, /hangup ───────────────────────────────
  *
  * Placing a call is: mint a room nobody can guess, post the invite as
@@ -14425,17 +14469,12 @@ static void call_helper_stop(struct app *app) {
         (void)ignored;
         close(in_fd);
     }
-    int status = 0;
-    for (int i = 0; i < 50; i++) { /* ~2.5s for the DELETE to go out */
-        pid_t r = waitpid(pid, &status, WNOHANG);
-        if (r == pid) { pid = 0; break; }
-        struct timespec tick = { .tv_sec = 0, .tv_nsec = 50 * 1000 * 1000 };
-        nanosleep(&tick, NULL);
-    }
-    if (pid > 0) {
-        kill(pid, SIGTERM);
-        while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
-    }
+    /* Time for the polite exit — the helper owes the SFU a DELETE and
+     * has been told to hang up. Then the ladder, which always ends. */
+    if (!wait_bounded(pid, 2500)) child_stop(pid, true, 1000);
+    /* Safe only because the helper is now GONE: the reader is blocked in
+     * fgets on its stdout, and the pipe closing is what ends it. Joining
+     * before the kill ladder would have been a fourth unbounded wait. */
     if (reading) pthread_join(reader, NULL);
     /* The frame reader is blocked in read(); closing the pipe is what
      * ends it. Closed AFTER the helper is gone so a frame in flight
@@ -14577,6 +14616,11 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         return false;
     }
     if (pid == 0) {
+        /* Lead our own process group, so the ffmpegs this helper spawns
+         * inherit it and one signal reaches the whole tree. Without it
+         * the helper shares shottino's group — which is the TERMINAL's
+         * group — and a group kill would take the terminal with it. */
+        setpgid(0, 0);
         dup2(in_pipe[0], STDIN_FILENO);
         dup2(err_pipe[1], STDERR_FILENO);
         /* stdout is the FRAME stream. For an audio call nothing reads

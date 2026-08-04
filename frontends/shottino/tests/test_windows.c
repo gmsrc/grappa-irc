@@ -1409,6 +1409,59 @@ TEST(a_message_to_ourselves_stays_in_the_own_nick_window) {
     free_app(app);
 }
 
+/* ── Never wait unbounded on a child you only ASKED to die ────────────
+ *
+ * /hangup froze the whole client. The chain, caught live with gdb: an
+ * ffmpeg wedged inside PulseAudio ignored SIGTERM; the call helper —
+ * which catches SIGTERM so it can hand the SFU its DELETE — sat in an
+ * unbounded waitpid for that ffmpeg; and shottino's UI thread sat in an
+ * unbounded waitpid for the helper. Three waits in a row, none bounded,
+ * with the thread that draws the screen at the end of it.
+ *
+ * A caught signal is a REQUEST and a request can be deferred forever.
+ * SIGKILL cannot be caught, blocked or deferred, so the ladder always
+ * ends — that is the property under test. */
+TEST(a_child_that_ignores_sigterm_is_still_stopped) {
+    pid_t pid = fork();
+    CHECK(pid >= 0);
+    if (pid == 0) {
+        /* Exactly the shape that hung: SIGTERM caught and never acted
+         * on. Nothing here can choose to exit. */
+        signal(SIGTERM, SIG_IGN);
+        for (;;) pause();
+        _exit(0);
+    }
+    /* A short grace, so the test spends it rather than the 2.5s the
+     * client gives a helper that owes the SFU a DELETE. */
+    child_stop(pid, false, 200);
+    /* Gone, and reaped: waitpid can no longer find it. A surviving
+     * child would leave this returning 0 with the process still in the
+     * table. */
+    CHECK_LONG(waitpid(pid, NULL, WNOHANG), -1);
+}
+
+TEST(a_bounded_wait_reports_what_it_found) {
+    /* The child exits at once: the wait must notice rather than burn
+     * its whole budget. */
+    pid_t quick = fork();
+    CHECK(quick >= 0);
+    if (quick == 0) _exit(0);
+    CHECK(wait_bounded(quick, 2000));
+
+    /* And a child that outlives the bound is reported as still running
+     * rather than waited on forever — the distinction the whole fix
+     * rests on. */
+    pid_t slow = fork();
+    CHECK(slow >= 0);
+    if (slow == 0) {
+        signal(SIGTERM, SIG_IGN);
+        for (;;) pause();
+        _exit(0);
+    }
+    CHECK(!wait_bounded(slow, 100));
+    child_stop(slow, false, 100);
+}
+
 TEST(a_query_is_never_asked_for_a_member_list) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -3739,6 +3792,8 @@ int main(void) {
     RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);
     RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
     RUN(audio_is_classified_before_the_uploads_heuristic);
+    RUN(a_child_that_ignores_sigterm_is_still_stopped);
+    RUN(a_bounded_wait_reports_what_it_found);
     RUN(a_query_is_never_asked_for_a_member_list);
     RUN(a_fetched_inbound_dm_lands_in_the_senders_window_not_our_own);
     RUN(a_message_to_ourselves_stays_in_the_own_nick_window);

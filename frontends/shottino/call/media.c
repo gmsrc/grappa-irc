@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -581,10 +582,38 @@ bool media_start_audio_mix(struct media_mix *mix, const int *slots, int n,
     return mix->pid > 0;
 }
 
+/* Reap `pid` if it dies within `ms`; false means it is still running. */
+static bool wait_bounded(pid_t pid, int ms) {
+    for (int waited = 0; waited < ms; waited += 25) {
+        pid_t r = waitpid(pid, NULL, WNOHANG);
+        if (r == pid) return true;
+        if (r < 0 && errno != EINTR) return true; /* already reaped or gone */
+        struct timespec tick = { .tv_sec = 0, .tv_nsec = 25 * 1000 * 1000 };
+        nanosleep(&tick, NULL);
+    }
+    return false;
+}
+
+/* Ask ffmpeg to stop, then insist.
+ *
+ * SIGTERM is a REQUEST, and ffmpeg can be slow to honour it or miss it
+ * entirely — one wedged inside PulseAudio ignored it indefinitely, which
+ * left this function's old unbounded wait blocked forever. That in turn
+ * blocked shottino's wait for THIS process, and the client froze: three
+ * waits in a row with no bound between them and a UI thread at the end.
+ *
+ * SIGKILL cannot be caught or deferred, so the ladder always ends. */
+static void ffmpeg_stop(pid_t pid) {
+    if (pid <= 0) return;
+    kill(pid, SIGTERM);
+    if (wait_bounded(pid, 1000)) return;
+    kill(pid, SIGKILL);
+    (void)wait_bounded(pid, 2000);
+}
+
 void media_mix_stop(struct media_mix *mix) {
     if (!mix || mix->pid <= 0) return;
-    kill(mix->pid, SIGTERM);
-    while (waitpid(mix->pid, NULL, 0) < 0 && errno == EINTR) {}
+    ffmpeg_stop(mix->pid);
     mix->pid = -1;
 }
 
@@ -662,10 +691,10 @@ void media_feed(const struct media_leg *leg, const void *rtp, size_t len) {
 void media_stop(struct media_leg *leg) {
     if (!leg) return;
     if (leg->pid > 0) {
-        kill(leg->pid, SIGTERM);
         /* Reaped here rather than left to init: a call that is restarted
-         * a few times would otherwise leave a zombie per leg. */
-        while (waitpid(leg->pid, NULL, 0) < 0 && errno == EINTR) {}
+         * a few times would otherwise leave a zombie per leg. Bounded,
+         * then insistent — see ffmpeg_stop. */
+        ffmpeg_stop(leg->pid);
         leg->pid = -1;
     }
     if (leg->fd >= 0) {
