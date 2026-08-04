@@ -1476,7 +1476,14 @@ static void startup(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
  * the user is dropped back into inherits the raw mode, no echo and no
  * line discipline, which reads as a hung terminal rather than as an
  * error. isendwin() answers safely whether or not curses ever started. */
+static void modified_keys_reporting(bool on);
+
 static void die(const char *fmt, ...) {
+    /* Before endwin, and unconditionally: a terminal left reporting the
+     * modified forms hands them to the shell as text, which belongs in
+     * the same class of damage this function exists to prevent. A
+     * terminal that never had the mode on ignores the string. */
+    modified_keys_reporting(false);
     if (!isendwin()) endwin();
     va_list ap;
     va_start(ap, fmt);
@@ -14651,6 +14658,33 @@ static void mouse_reporting(bool on) {
     fflush(stdout);
 }
 
+/* Ask the terminal to report modified keys that are otherwise
+ * indistinguishable from their unmodified selves — and stop asking on
+ * the way out.
+ *
+ * Ctrl-Tab produces byte 0x09. So does Tab. A terminal in its default
+ * mode has nothing to send that would tell the two apart, so it sends
+ * the ambiguous byte and Ctrl-Tab is simply not reportable. Binding the
+ * escape sequence was therefore never enough on its own: shottino knew
+ * exactly what Ctrl-Tab looks like and never asked the terminal to send
+ * it, which is a binding for a sequence that had no reason to arrive.
+ *
+ * xterm's modifyOtherKeys is the ask. LEVEL 1, deliberately: it
+ * switches to `CSI 27;mod;code~` for exactly the keys that were
+ * ambiguous and leaves everything else alone. Level 2 re-encodes far
+ * more, including keys that already worked, and terminals implement it
+ * unevenly — a bigger change than the problem, and the kind that breaks
+ * ordinary typing somewhere nobody tested.
+ *
+ * Terminals that do not implement the mode ignore both strings, so this
+ * costs nothing where it does nothing. It IS restored at shutdown: a
+ * terminal left reporting the modified forms hands them to the SHELL
+ * afterwards, which shows them as text. */
+static void modified_keys_reporting(bool on) {
+    fputs(on ? "\033[>4;1m" : "\033[>4;0m", stdout);
+    fflush(stdout);
+}
+
 /* Apply the user's preference. Used everywhere tracking is (re-)asserted
  * so a `/mouse off` is never silently undone by a preview or a resize.
  *
@@ -19827,6 +19861,10 @@ static void event_loop(struct app *app) {
     define_pane_keys();
     timeout(50);
     mouse_apply(app);
+    /* After initscr and the terminfo setup, which would otherwise reset
+     * it — and after define_pane_keys, so the sequences it binds are
+     * registered before the terminal can start sending them. */
+    modified_keys_reporting(true);
     app->running = true;
     while (app->running) {
         ws_pump(app);
@@ -19966,6 +20004,7 @@ static void event_loop(struct app *app) {
         }
     }
     mouse_reporting(false);
+    modified_keys_reporting(false);
     app->ui_active = false;
     endwin();
 }
