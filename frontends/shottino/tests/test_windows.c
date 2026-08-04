@@ -955,41 +955,92 @@ TEST(an_orphan_session_is_rendered_but_not_actionable) {
     free_app(app);
 }
 
+/* Find the first row of a given kind. By RESOURCE, not by index: the
+ * tables grow synthetic "+ add" rows and each other's row counts shift,
+ * and a test that hardcodes positions breaks on a change that did not
+ * break anything. */
+static const struct admin_row *row_of_kind(struct app *app, enum admin_res res) {
+    for (size_t i = 0; i < app->admin_row_count; i++)
+        if (app->admin_rows[i].res == res) return &app->admin_rows[i];
+    return NULL;
+}
+
 TEST(the_admin_tabs_record_the_id_each_resource_is_addressed_by) {
     struct app *app = window_app();
     CHECK(app != NULL);
     render_json(app, ADMIN_USERS_JSON, render_admin_users);
-    CHECK_LONG(app->admin_row_count, 2);
-    CHECK_LONG(app->admin_rows[0].res, ADMIN_RES_USER);
-    CHECK_STR(app->admin_rows[0].id, "df744b5e-ff5a-4d01-bf6f-fffb049e7f9e");
-    CHECK_STR(app->admin_rows[0].label, "nextime");
+    const struct admin_row *u = row_of_kind(app, ADMIN_RES_USER);
+    CHECK(u != NULL);
+    if (!u) { free_app(app); return; }
+    CHECK_STR(u->id, "df744b5e-ff5a-4d01-bf6f-fffb049e7f9e");
+    CHECK_STR(u->label, "nextime");
     /* The flag rides along, because the menu offers the transition
      * rather than both states. */
-    CHECK(app->admin_rows[0].is_admin);
-    CHECK(!app->admin_rows[1].is_admin);
+    CHECK(u->is_admin);
+    CHECK(!u[1].is_admin);
 
     render_json(app, ADMIN_NETWORKS_JSON, render_admin_networks);
-    CHECK_LONG(app->admin_row_count, 3);
-    CHECK_LONG(app->admin_rows[2].res, ADMIN_RES_NETWORK);
+    const struct admin_row *n = row_of_kind(app, ADMIN_RES_NETWORK);
+    CHECK(n != NULL);
+    if (!n) { free_app(app); return; }
     /* DELETE takes the NUMERIC id, not the slug the row is labelled
      * with — the two are different keys on the same resource and the
      * panel shows one while the verb needs the other. */
-    CHECK_STR(app->admin_rows[2].id, "1");
-    CHECK_STR(app->admin_rows[2].label, "azzurra");
+    CHECK_STR(n->id, "1");
+    CHECK_STR(n->label, "azzurra");
 
     render_json(app, ADMIN_VISITORS_JSON, render_admin_visitors);
-    CHECK_LONG(app->admin_row_count, 4);
-    CHECK_LONG(app->admin_rows[3].res, ADMIN_RES_VISITOR);
-    CHECK_STR(app->admin_rows[3].id, "v-123456789");
+    const struct admin_row *v = row_of_kind(app, ADMIN_RES_VISITOR);
+    CHECK(v != NULL);
+    if (v) CHECK_STR(v->id, "v-123456789");
 
     render_json(app, ADMIN_UPLOADS_JSON, render_admin_uploads);
-    CHECK_LONG(app->admin_row_count, 5);
-    CHECK_LONG(app->admin_rows[4].res, ADMIN_RES_UPLOAD);
-    CHECK_STR(app->admin_rows[4].id, "u1");
+    const struct admin_row *up = row_of_kind(app, ADMIN_RES_UPLOAD);
+    CHECK(up != NULL);
+    if (up) CHECK_STR(up->id, "u1");
     /* The uploads tab used to report a TOTAL and nothing else, which
      * is a disk budget rather than something an operator can act on.
      * Deleting one needs a one to point at. */
     CHECK(panel_has(app, "a.png"));
+    free_app(app);
+}
+
+TEST(the_tables_that_can_grow_offer_a_row_that_grows_them) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    render_json(app, ADMIN_USERS_JSON, render_admin_users);
+    /* Two real users plus the synthetic add row. */
+    CHECK(row_of_kind(app, ADMIN_RES_NEW_USER) != NULL);
+    CHECK(panel_has(app, "+ add a user"));
+
+    render_json(app, ADMIN_NETWORKS_JSON, render_admin_networks);
+    CHECK(row_of_kind(app, ADMIN_RES_NEW_NETWORK) != NULL);
+    CHECK(panel_has(app, "+ add a network"));
+
+    /* Each offers exactly its own create verb, and creating is not
+     * destructive — it asks nothing twice. */
+    enum admin_verb v[8];
+    const struct admin_row *add = row_of_kind(app, ADMIN_RES_NEW_USER);
+    CHECK(add != NULL);
+    if (!add) { free_app(app); return; }
+    CHECK_LONG(admin_verbs_for(add, v, 8), 1);
+    CHECK_LONG(v[0], ADMIN_V_ADD_USER);
+    CHECK(!admin_verb_destructive(ADMIN_V_ADD_USER));
+
+    /* A create verb makes NO request of its own: it types a command,
+     * because a name and a password are not things a menu can invent.
+     * Reporting "no request" is what stops a caller half-running one by
+     * ignoring the prefill. */
+    const char *m = NULL;
+    char path[512], body[256];
+    CHECK(!admin_verb_request(ADMIN_V_ADD_USER, add, &m, path, sizeof(path), body, sizeof(body)));
+    CHECK(admin_verb_prefill(ADMIN_V_ADD_USER) != NULL);
+    CHECK(strstr(admin_verb_prefill(ADMIN_V_ADD_USER), "/admin adduser") != NULL);
+    CHECK(admin_verb_prefill(ADMIN_V_ADD_NETWORK) != NULL);
+    /* Every verb that DOES call has no prefill, so the two sets cannot
+     * overlap and leave a verb doing both or neither. */
+    CHECK(admin_verb_prefill(ADMIN_V_DELETE_USER) == NULL);
+    CHECK(admin_verb_prefill(ADMIN_V_DISCONNECT) == NULL);
     free_app(app);
 }
 
@@ -3624,6 +3675,7 @@ int main(void) {
     RUN(a_session_row_carries_the_composite_id_grappa_parses);
     RUN(an_orphan_session_is_rendered_but_not_actionable);
     RUN(the_admin_tabs_record_the_id_each_resource_is_addressed_by);
+    RUN(the_tables_that_can_grow_offer_a_row_that_grows_them);
     RUN(every_admin_verb_builds_the_endpoint_it_names);
     RUN(a_verb_the_row_does_not_offer_builds_no_request);
     RUN(the_menu_offers_only_what_the_row_supports);

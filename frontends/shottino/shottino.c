@@ -533,7 +533,13 @@ enum admin_res {
     ADMIN_RES_USER,
     ADMIN_RES_NETWORK,
     ADMIN_RES_VISITOR,
-    ADMIN_RES_UPLOAD
+    ADMIN_RES_UPLOAD,
+    /* Not a row that exists — a row that MAKES one. The panel carries a
+     * synthetic "add" line under the tables that support creation, so
+     * the console can grow a user or a network rather than only edit the
+     * ones already there. */
+    ADMIN_RES_NEW_USER,
+    ADMIN_RES_NEW_NETWORK
 };
 
 enum admin_verb {
@@ -546,7 +552,9 @@ enum admin_verb {
     ADMIN_V_DELETE_USER,
     ADMIN_V_DELETE_NETWORK,
     ADMIN_V_DELETE_VISITOR,
-    ADMIN_V_DELETE_UPLOAD
+    ADMIN_V_DELETE_UPLOAD,
+    ADMIN_V_ADD_USER,
+    ADMIN_V_ADD_NETWORK
 };
 
 /* One actionable line of the admin panel.
@@ -3996,6 +4004,7 @@ static void draw_fill(int y, int x, int n, int pair) {
 }
 
 static void draw_text(int y, int x, int max, int pair, attr_t attrs, const char *fmt, ...) __attribute__((format(printf, 6, 7)));
+
 static int split_message_line(const char *line, char *prefix, size_t prefix_sz, char *nick, size_t nick_sz, const char **body);
 static int split_action_line(const char *line, char *prefix, size_t prefix_sz, char *nick, size_t nick_sz, const char **body);
 
@@ -4543,6 +4552,8 @@ static const char *admin_res_name(enum admin_res r) {
     case ADMIN_RES_NETWORK: return "network";
     case ADMIN_RES_VISITOR: return "visitor";
     case ADMIN_RES_UPLOAD: return "upload";
+    case ADMIN_RES_NEW_USER: return "new";
+    case ADMIN_RES_NEW_NETWORK: return "new";
     case ADMIN_RES_NONE: break;
     }
     return "";
@@ -4559,6 +4570,8 @@ static const char *admin_verb_name(enum admin_verb v) {
     case ADMIN_V_DELETE_NETWORK: return "Delete network";
     case ADMIN_V_DELETE_VISITOR: return "Delete visitor";
     case ADMIN_V_DELETE_UPLOAD: return "Delete upload";
+    case ADMIN_V_ADD_USER: return "Add a user";
+    case ADMIN_V_ADD_NETWORK: return "Add a network";
     case ADMIN_V_NONE: break;
     }
     return "";
@@ -4582,9 +4595,28 @@ static bool admin_verb_destructive(enum admin_verb v) {
     case ADMIN_V_RECONNECT:
     case ADMIN_V_PROMOTE:
     case ADMIN_V_DEMOTE:
+    case ADMIN_V_ADD_USER:
+    case ADMIN_V_ADD_NETWORK:
         return false;
     }
     return false;
+}
+
+/* The command an "add" verb types for the operator to finish, or NULL
+ * for a verb that acts on its own.
+ *
+ * Creating a user needs a NAME and a PASSWORD, and a menu cannot invent
+ * either — the same reason the nick menu prefills `/kill nick ` rather
+ * than sending it. So the console types the verb with its arguments
+ * named, and the operator supplies them and presses Enter. It also
+ * keeps the credential out of a modal that would have to decide whether
+ * to echo it. */
+static const char *admin_verb_prefill(enum admin_verb v) {
+    switch (v) {
+    case ADMIN_V_ADD_USER: return "/admin adduser <name> <password> [admin]";
+    case ADMIN_V_ADD_NETWORK: return "/admin addnetwork <slug> [services_flavor]";
+    default: return NULL;
+    }
 }
 
 /* What this row can actually have done to it.
@@ -4617,6 +4649,12 @@ static size_t admin_verbs_for(const struct admin_row *row, enum admin_verb *out,
         break;
     case ADMIN_RES_UPLOAD:
         if (n < max) out[n++] = ADMIN_V_DELETE_UPLOAD;
+        break;
+    case ADMIN_RES_NEW_USER:
+        if (n < max) out[n++] = ADMIN_V_ADD_USER;
+        break;
+    case ADMIN_RES_NEW_NETWORK:
+        if (n < max) out[n++] = ADMIN_V_ADD_NETWORK;
         break;
     case ADMIN_RES_NONE:
         break;
@@ -4689,7 +4727,12 @@ static bool admin_verb_request(enum admin_verb v, const struct admin_row *row,
         *method = "DELETE";
         snprintf(path, path_sz, "/admin/uploads/%s", id);
         break;
+    case ADMIN_V_ADD_USER:
+    case ADMIN_V_ADD_NETWORK:
     case ADMIN_V_NONE:
+        /* These type a command rather than making a call — see
+         * admin_verb_prefill. Reported as "no request" so a caller
+         * cannot half-run one by ignoring the prefill. */
         free(id);
         return false;
     }
@@ -4745,6 +4788,8 @@ static void render_admin_users(struct app *app, const json_value *root) {
         }
     }
     if (n > 50) panel_line(app, "    ... %zu more", n - 50);
+    panel_line(app, "    %-24s %s", "+ add a user", "");
+    admin_row_mark(app, ADMIN_RES_NEW_USER, "new", "a user", false);
 }
 
 static void render_admin_sessions(struct app *app, const json_value *root) {
@@ -4887,6 +4932,8 @@ static void render_admin_networks(struct app *app, const json_value *root) {
             if (id > 0) admin_row_mark(app, ADMIN_RES_NETWORK, sid, slug, false);
         }
     }
+    panel_line(app, "    %-18s", "+ add a network");
+    admin_row_mark(app, ADMIN_RES_NEW_NETWORK, "new", "a network", false);
 }
 
 static void render_settings_caps(struct app *app, const json_value *root) {
@@ -5029,6 +5076,20 @@ static void open_panel(struct app *app, enum panel_kind panel) {
     }
 }
 
+/* The two admin verbs that CREATE.
+ *
+ * They are commands rather than a modal because both need several
+ * fields and one of them is a password: a form would have to decide
+ * whether to echo it, and the input line already has that answer (it
+ * does, and the operator can see what they typed before pressing
+ * Enter). The panel's "+ add" rows type the line; this runs it, so the
+ * click and the typed command are the same door.
+ *
+ * Only `slug` is required to create a network — servers are their own
+ * endpoint, and a network with none is a legitimate half-built state
+ * the operator fills in next. */
+static void admin_create_command(struct app *app, const char *rest);
+
 /* Run one admin verb, say what happened, and rebuild the panel.
  *
  * The refresh is not cosmetic. Every verb here changes the very table
@@ -5041,6 +5102,19 @@ static void open_panel(struct app *app, enum panel_kind panel) {
  * refresh at the end frees nothing but does rewrite the array, and the
  * failure log below reads the label after that point. */
 static void admin_verb_run(struct app *app, enum admin_verb v, struct admin_row row) {
+    const char *prefill = admin_verb_prefill(v);
+    if (prefill) {
+        /* Typed, not sent. The arguments are named in the line so the
+         * shape is visible without going to /help, and the operator is
+         * the one who decides a password. */
+        pthread_mutex_lock(&app->lock);
+        snprintf(app->input, sizeof(app->input), "%s", prefill);
+        app->input_len = strlen(app->input);
+        app->input_pos = app->input_len;
+        app->panel = PANEL_CHAT;
+        pthread_mutex_unlock(&app->lock);
+        return;
+    }
     const char *method = NULL;
     char path[512], body[256];
     if (!admin_verb_request(v, &row, &method, path, sizeof(path), body, sizeof(body))) {
@@ -5055,6 +5129,72 @@ static void admin_verb_run(struct app *app, enum admin_verb v, struct admin_row 
                  r.status, r.body ? r.body : "");
     free(r.body);
     open_panel(app, PANEL_ADMIN);
+}
+
+/* `/admin adduser <name> <password> [admin]` and
+ * `/admin addnetwork <slug> [services_flavor]`.
+ *
+ * Both bodies are whitelisted at the server: grappa answers 400 to an
+ * extra key rather than ignoring it, so what is sent here is exactly
+ * what those endpoints accept and nothing more. */
+static void admin_create_command(struct app *app, const char *rest) {
+    while (*rest == ' ') rest++;
+    if (strncmp(rest, "adduser ", 8) == 0) {
+        const char *args = rest + 8;
+        char name[64], pass[128], flag[16];
+        int got = sscanf(args, "%63s %127s %15s", name, pass, flag);
+        if (got < 2) {
+            log_line(app, "/admin adduser <name> <password> [admin]");
+            return;
+        }
+        bool is_admin = got >= 3 && strcasecmp(flag, "admin") == 0;
+        char *n = json_escape(name);
+        char *p = json_escape(pass);
+        char *body = xasprintf("{\"name\":\"%s\",\"password\":\"%s\",\"is_admin\":%s}", n, p,
+                               is_admin ? "true" : "false");
+        free(n);
+        free(p);
+        struct http_response r = http_request(app, "POST", "/admin/users", body);
+        free(body);
+        if (r.status >= 200 && r.status < 300)
+            log_line(app, "admin: created user %s%s", name, is_admin ? " (admin)" : "");
+        else
+            log_line(app, "admin: create user failed HTTP %d: %.200s", r.status,
+                     r.body ? r.body : "");
+        free(r.body);
+        open_panel(app, PANEL_ADMIN);
+        return;
+    }
+    if (strncmp(rest, "addnetwork ", 11) == 0) {
+        const char *args = rest + 11;
+        char slug[64], flavor[32];
+        int got = sscanf(args, "%63s %31s", slug, flavor);
+        if (got < 1) {
+            log_line(app, "/admin addnetwork <slug> [services_flavor]");
+            return;
+        }
+        char *sl = json_escape(slug);
+        char *body;
+        if (got >= 2) {
+            char *fl = json_escape(flavor);
+            body = xasprintf("{\"slug\":\"%s\",\"services_flavor\":\"%s\"}", sl, fl);
+            free(fl);
+        } else {
+            body = xasprintf("{\"slug\":\"%s\"}", sl);
+        }
+        free(sl);
+        struct http_response r = http_request(app, "POST", "/admin/networks", body);
+        free(body);
+        if (r.status >= 200 && r.status < 300)
+            log_line(app, "admin: created network %s — add its servers next", slug);
+        else
+            log_line(app, "admin: create network failed HTTP %d: %.200s", r.status,
+                     r.body ? r.body : "");
+        free(r.body);
+        open_panel(app, PANEL_ADMIN);
+        return;
+    }
+    log_line(app, "/admin [adduser <name> <password> [admin]|addnetwork <slug> [flavor]]");
 }
 
 static int split_message_line(const char *line, char *prefix, size_t prefix_sz, char *nick, size_t nick_sz, const char **body) {
@@ -15215,7 +15355,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "preview-ascii") == 0) log_line(app, "/preview-ascii [url] — the same preview, forced to colour character art: skips the terminal's graphics protocol, which is what to try when a picture renders as garbage or not at all");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
     else if (strcmp(cmd, "mirc.contrast") == 0) log_line(app, "/set mirc.contrast auto|off|dark|light — mIRC colours were chosen against mIRC's WHITE background, so a bot writing navy into a black terminal posts text nobody can read. This lifts a foreground off the background until it is legible, keeping its hue; only when the bot set no background of its own, since a bot that picked BOTH colours already has a contrast. `auto` believes COLORFGBG and assumes dark otherwise; `off` renders exactly what was sent");
-    else if (strcmp(cmd, "admin") == 0) log_line(app, "/admin — the operator console: sessions, users, networks, visitors and uploads. Not just a listing — Up/Down picks a row and Enter (or a right-click) offers what can be done to it: disconnect, reconnect or kill a session, grant or revoke admin, delete a user, network, visitor or upload. Anything irreversible asks a second time, opening on Cancel. Needs an admin bearer; every tab reports its own 403 rather than blanking the panel");
+    else if (strcmp(cmd, "admin") == 0) log_line(app, "/admin [adduser <name> <password> [admin]|addnetwork <slug> [flavor]] — the operator console: sessions, users, networks, visitors and uploads. Not just a listing — Up/Down picks a row and Enter (or a right-click) offers what can be done to it: disconnect, reconnect or kill a session, grant or revoke admin, delete a user, network, visitor or upload. Anything irreversible asks a second time, opening on Cancel. The tables end in a `+ add` row that types the create command for you, since a name and a password are not things a menu can invent. A new network has no servers yet — that is its own endpoint. Needs an admin bearer; every tab reports its own 403 rather than blanking the panel");
     else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);
     else if (strcmp(cmd, "help") == 0) log_line(app, "/help [command] — bare /help lists every command by group; /help command explains one");
     else if (strcmp(cmd, "kb") == 0 || strcmp(cmd, "kickban") == 0) log_line(app, "/kb nick [reason], /kickban nick [reason] — ban nick!*@* and then kick; the ban lands first so the kick cannot be outrun by a rejoin");
@@ -16654,6 +16794,8 @@ static void handle_command_dispatch(struct app *app, char *line) {
         open_panel(app, PANEL_SETTINGS);
     } else if (strcmp(line, "/admin") == 0) {
         open_panel(app, PANEL_ADMIN);
+    } else if (strncmp(line, "/admin ", 7) == 0) {
+        admin_create_command(app, line + 7);
     } else if (strcmp(line, "/share") == 0) {
         mint_share_link(app);
     } else if (strcmp(line, "/wire") == 0) {
