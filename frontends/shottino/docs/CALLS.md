@@ -342,10 +342,17 @@ Three ways out, best first:
 2. **A path the PWA already excludes.** Cheap and immediate if you cannot
    add a host: publish the page under one of the prefixes on that
    service worker's denylist. On the deploy this was found on, an nginx
-   `alias` at `/uploads/call/` alongside the original `/call/` did it —
-   safe to borrow because grappa serves `/uploads/<slug>` with generated
-   slugs and can never produce a literal `call/` path of its own. Same
-   `call.sfu_url` caveat.
+   `alias` at `/api/call/` alongside the original `/call/` did it —
+   grappa's own `/api` scope holds one route, so there is nothing to
+   shadow. Same `call.sfu_url` caveat.
+
+   **Check the prefix against every client, not just the one you are
+   working around.** `/uploads/call/` was the first attempt and it broke
+   differently: shottino reads any URL containing `/uploads/` as an
+   image, because grappa serves uploads with no file extension and the
+   path is the only type signal available — so every call link rendered
+   as a broken inline picture. The page loaded; the link stopped looking
+   like a link.
 3. **Add the page's path to that denylist.** One line, and the cleanest of
    the three if the PWA is yours to change.
 

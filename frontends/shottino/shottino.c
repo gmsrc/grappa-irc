@@ -14548,11 +14548,46 @@ static void call_path_nick(const char *nick, char *out, size_t out_sz) {
  * Appended before the peer list so the fragment reads room, sfu, peers —
  * the order a person debugging one would want. Nothing is added when the
  * setting is unset, so existing links keep their exact shape. */
+/* `call.sfu_url` without a trailing slash, so callers can append one
+ * without producing `//`. Shared by the invite builder and the helper:
+ * the URL the browser is TOLD to use and the URL the terminal actually
+ * uses have to be built from the same string. */
+static const char *call_sfu_base(struct app *app) {
+    size_t n = strlen(app->call_sfu_url);
+    while (n > 0 && app->call_sfu_url[n - 1] == '/') app->call_sfu_url[--n] = 0;
+    return app->call_sfu_url;
+}
+
+/* The WHIP/WHEP base for a room: where THIS client publishes and
+ * subscribes.
+ *
+ * Pure, and extracted from call_helper_start for one reason — it was
+ * wrong there and nothing could see it. The media endpoints used to sit
+ * under the page's own prefix, so one setting covered both; moving the
+ * page off `/call/` to escape the PWA's service worker broke that,
+ * because the proxy did not move with it. Every publish then answered
+ * 404 against a path nothing serves, and the only test that could have
+ * caught it would have had to spawn the helper.
+ *
+ * Same composition the room page does with `&sfu=` (`sfu + "/" + room`),
+ * because the terminal has to publish where the browser subscribes and a
+ * disagreement between them is SILENT — both ends connect, nobody hears
+ * anybody. */
+static void call_rtc_base(struct app *app, const char *room_url, char *out, size_t out_sz) {
+    char page_base[MAX_LINE], room_id[160];
+    if (!call_invite_split(room_url, page_base, sizeof(page_base), room_id, sizeof(room_id)))
+        snprintf(out, out_sz, "%s", room_url); /* an invite from before the room page */
+    else if (app->call_sfu_url[0])
+        snprintf(out, out_sz, "%s/%s", call_sfu_base(app), room_id);
+    else
+        snprintf(out, out_sz, "%s/rtc/%s", page_base, room_id);
+}
+
 static void call_invite_sfu(struct app *app, char *out, size_t out_sz) {
     if (!app->call_sfu_url[0]) return;
     size_t at = strlen(out);
     if (at + strlen(app->call_sfu_url) + 6 >= out_sz) return;
-    snprintf(out + at, out_sz - at, "&sfu=%s", app->call_sfu_url);
+    snprintf(out + at, out_sz - at, "&sfu=%s", call_sfu_base(app));
 }
 
 static void call_invite_peers(struct app *app, const char *network, const char *channel, char *out,
@@ -14875,15 +14910,23 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         return false;
     }
 
-    /* The media endpoints live under the page's own prefix, so ONE
-     * setting covers both: the page is <base>/ and a participant is
-     * <base>/rtc/<room>/<nick>/{whip,whep}. */
-    char page_base[MAX_LINE], room_id[160];
-    char rtc[MAX_LINE + sizeof(room_id) + 8];
-    if (call_invite_split(room_url, page_base, sizeof(page_base), room_id, sizeof(room_id)))
-        snprintf(rtc, sizeof(rtc), "%s/rtc/%s", page_base, room_id);
-    else
-        snprintf(rtc, sizeof(rtc), "%s", room_url); /* an invite from before the room page */
+    /* Where the media endpoints are.
+     *
+     * They USED to be under the page's own prefix, so one setting
+     * covered both: the page at <base>/ and a participant at
+     * <base>/rtc/<room>/<nick>/{whip,whep}. That stopped being true the
+     * moment the page had to move off `/call/` to escape the PWA's
+     * service worker — the proxy stayed where it was, so deriving the
+     * SFU from the page sent WHIP to a path nothing serves and every
+     * publish answered 404.
+     *
+     * `call.sfu_url` is the same answer the page reads out of `&sfu=`,
+     * and the two MUST agree: the terminal publishes to a path the
+     * browser subscribes to, so a disagreement is two clients in one
+     * room unable to hear each other. Unset still means "under the
+     * page", which is what an invite from before the move assumes. */
+    char rtc[MAX_LINE + 168];
+    call_rtc_base(app, room_url, rtc, sizeof(rtc));
 
     /* ONE PATH PER PERSON, under the room.
      *
@@ -21230,18 +21273,25 @@ int main(int argc, char **argv) {
      * and any deployment of web/room.html + web/nginx-call.conf serves
      * the same shape.
      *
-     * `/uploads/call/` rather than `/call/`, and the reason is entirely
+     * `/api/call/` rather than `/call/`, and the reason is entirely
      * about somebody else's client: the cicchetto PWA on that origin
      * answers every top-level navigation from its own cache unless the
      * path is on its denylist, and `/call` is not. A call link therefore
      * opened the PWA — an install prompt in a browser, a blank page
      * inside the app — on every device with cicchetto installed, which
-     * is to say every phone. `/uploads` IS on that denylist, so the same
-     * page under that prefix reaches the network. See docs/CALLS.md;
-     * `/call/` is still served and still works where no PWA is
-     * installed. */
+     * is to say every phone. `/api` IS on that denylist.
+     *
+     * NOT `/uploads/call/`, which was the first attempt at the same
+     * trick: THIS client reads any URL containing `/uploads/` as an
+     * image, because grappa serves uploads with no file extension and
+     * the path is the only type signal there is. Every call link then
+     * rendered as a broken inline picture. A prefix has to clear both
+     * clients' heuristics, not just the one being worked around.
+     *
+     * See docs/CALLS.md; `/call/` is still served and still works
+     * wherever no PWA is installed. */
     snprintf(app->call_base_url, sizeof(app->call_base_url),
-             "https://grappa.nexlab.net/uploads/call");
+             "https://grappa.nexlab.net/api/call");
     /* And where the SFU is, which is NOT under the page any more.
      *
      * The page derives the SFU from its own path by default, so moving

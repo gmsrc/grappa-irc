@@ -232,9 +232,15 @@ TEST(nothing_spells_its_own_version) {
  * gone rather than merely joined: leaving it behind is how one of a pair
  * gets updated later and the other does not. */
 TEST(the_call_defaults_move_the_page_and_the_sfu_together) {
-    CHECK(strstr(source, "\"https://grappa.nexlab.net/uploads/call\"") != NULL);
+    CHECK(strstr(source, "\"https://grappa.nexlab.net/api/call\"") != NULL);
     CHECK(strstr(source, "\"https://grappa.nexlab.net/call/rtc\"") != NULL);
     CHECK(strstr(source, "\"https://grappa.nexlab.net/call\"") == NULL);
+    /* And not the first attempt either: `/uploads/` is on the PWA's
+     * denylist but THIS client reads any URL containing it as an image
+     * (grappa serves uploads with no extension), so every call link
+     * rendered as a broken picture. A prefix has to clear both clients'
+     * heuristics. */
+    CHECK(strstr(source, "\"https://grappa.nexlab.net/uploads/call\"") == NULL);
 }
 
 int main(void) {

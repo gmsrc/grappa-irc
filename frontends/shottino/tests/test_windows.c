@@ -3373,6 +3373,55 @@ TEST(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it) {
     free_app(app);
 }
 
+/* The terminal must publish where the browser subscribes.
+ *
+ * The two derive the SFU separately — the page from `&sfu=` in the link,
+ * the helper from `call.sfu_url` — and a disagreement is SILENT: both
+ * ends come up, both report connected, and nobody hears anybody. So one
+ * function builds the base for both, and this pins the composition.
+ *
+ * The regression this exists for: the media endpoints used to live under
+ * the page's own prefix, so one setting covered both. Moving the page off
+ * `/call/` to escape the PWA's service worker broke that — the proxy did
+ * not move — and every publish answered 404 against a path nothing
+ * serves. */
+TEST(the_terminal_and_the_browser_agree_on_where_the_sfu_is) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    snprintf(app->call_sfu_url, sizeof(app->call_sfu_url), "%s",
+             "https://grappa.nexlab.net/call/rtc");
+
+    /* What the invite TELLS the browser. */
+    char line[512];
+    call_invite_build(CALL_VIDEO, "https://grappa.nexlab.net/api/call", "shottino-1", line,
+                      sizeof(line));
+    call_invite_sfu(app, line, sizeof(line));
+    CHECK(strstr(line, "&sfu=https://grappa.nexlab.net/call/rtc") != NULL);
+
+    /* And where the HELPER actually publishes. The page composes
+     * `sfu + "/" + room`; the terminal must reach the same string, or
+     * one publishes to a path the other is not reading. */
+    char rtc[512];
+    call_rtc_base(app, "https://grappa.nexlab.net/api/call/#r=shottino-1", rtc, sizeof(rtc));
+    CHECK_STR(rtc, "https://grappa.nexlab.net/call/rtc/shottino-1");
+
+    /* Without the setting it falls back to the OLD rule — under the
+     * page — which is what an invite from before the move assumes and
+     * what a deployment that never moved its page still wants. */
+    app->call_sfu_url[0] = 0;
+    call_rtc_base(app, "https://h/call/#r=shottino-1", rtc, sizeof(rtc));
+    CHECK_STR(rtc, "https://h/call/rtc/shottino-1");
+    snprintf(app->call_sfu_url, sizeof(app->call_sfu_url), "%s",
+             "https://grappa.nexlab.net/call/rtc");
+
+    /* A trailing slash on the setting must not produce a doubled one:
+     * `//` is a different path to an SFU that matches paths literally. */
+    snprintf(app->call_sfu_url, sizeof(app->call_sfu_url), "%s",
+             "https://grappa.nexlab.net/call/rtc/");
+    CHECK_STR(call_sfu_base(app), "https://grappa.nexlab.net/call/rtc");
+    free_app(app);
+}
+
 TEST(a_call_in_a_query_with_yourself_lists_one_person) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -4237,6 +4286,7 @@ int main(void) {
     RUN(an_invite_carries_its_room_in_the_fragment);
     RUN(a_room_is_a_path_segment_and_is_encoded_like_one);
     RUN(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it);
+    RUN(the_terminal_and_the_browser_agree_on_where_the_sfu_is);
     RUN(a_call_in_a_query_with_yourself_lists_one_person);
     RUN(rejoining_a_running_call_rebuilds_the_link_rather_than_replaying_it);
     RUN(a_query_rings_and_a_channel_only_announces);
