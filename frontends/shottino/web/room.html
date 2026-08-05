@@ -189,8 +189,21 @@ async function gathered(pc) {
   });
 }
 
+// Who WE are publishing as, once we have joined. The one authority on
+// "is this us": `wanted` is keyed by the raw spellings out of the link,
+// and identity here is decided by the FOLD, so the two disagree the
+// moment somebody types their nick with different capitalisation.
+let publishing = '';
+
 // ── watch one peer ───────────────────────────────────────────────────
 async function subscribe(nick) {
+  // NEVER READ OURSELVES BACK. Subscribing to our own path plays our own
+  // microphone out of our own speaker, loudly and with a round trip of
+  // delay — and it is the SFU doing it, so muting the tile does not
+  // help. Guarded here, at the single door every subscribe goes
+  // through, rather than only where `wanted` is maintained: this cannot
+  // be bypassed by any future path that adds a name to that set.
+  if (publishing && pathNick(nick) === pathNick(publishing)) return false;
   const t = tile(nick);
   if (t.pc) return true;
   const pc = await peerConnection();
@@ -223,9 +236,21 @@ async function subscribe(nick) {
 async function publish(withVideo) {
   const nick = document.getElementById('nick').value.trim();
   if (!nick) return note('a nick is needed to join — it decides your path');
-  wanted.delete(nick);                       // never read ourselves back
-  const selfTile = tiles.get(nick);
-  if (selfTile && selfTile.pc) { selfTile.pc.close(); selfTile.pc = null; }
+  // Folded, not raw. `wanted` holds the spellings the LINK used and this
+  // is what the user typed: `Nextime2` and `nextime2` are one person and
+  // one path, so a raw delete misses, the name stays wanted, and the
+  // next sweep subscribes us to ourselves — which is the loud echo.
+  publishing = nick;
+  for (const n of [...wanted]) if (pathNick(n) === pathNick(nick)) wanted.delete(n);
+  // And drop any subscription the first sweep already opened, along with
+  // its tile: the page load ran a sweep before anyone typed a nick, so
+  // ours was in the set then.
+  for (const [name, t] of [...tiles]) {
+    if (pathNick(name) !== pathNick(nick)) continue;
+    if (t.pc) { t.pc.close(); t.pc = null; }
+    if (t.el && t.el.parentNode) t.el.parentNode.removeChild(t.el);
+    tiles.delete(name);
+  }
   let media;
   try {
     media = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
@@ -300,6 +325,11 @@ document.getElementById('add').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   const n = e.target.value.trim();
   if (!n) return;
+  if (publishing && pathNick(n) === pathNick(publishing)) {
+    note('that is you — adding yourself would play your own microphone back');
+    e.target.value = '';
+    return;
+  }
   wanted.add(n); tile(n); sweep(); e.target.value = '';
 });
 if (!room) note('this link carries no room — open the one posted in the channel');

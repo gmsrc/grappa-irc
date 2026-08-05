@@ -190,6 +190,30 @@ check: check-home-guard $(TESTS)
 		./$$t || rc=1; \
 	done; exit $$rc
 
+# ── web/room.html (OPT-IN) ─────────────────────────────────────────────
+#
+# The room page is JavaScript, so its tests need node — and `make check`
+# must not grow a toolchain the C suites do not need. Opt-in for the same
+# reason `call` is: the packaging path stays a C build.
+#
+# It has earned tests. Three bugs shipped from this file — a warning
+# that fired on every healthy call, a path a service worker swallowed,
+# and a self-subscribe that played the microphone back at whoever
+# joined — and none of them could have been caught by reading it, which
+# is exactly what "no coverage" costs.
+#
+# The tests copy the page's own logic rather than importing it: the file
+# is one <script> in an HTML document with no module boundary, and a
+# harness that extracted it would test the extractor. Each one is
+# written to FAIL against the code it replaced — the value is in that,
+# not in the copy.
+check-web:
+	@command -v node >/dev/null || { echo "node not found - skipping web tests"; exit 0; }
+	@rc=0; for t in tests/web/*.mjs; do \
+		printf '== %s\n' "$$t"; \
+		node "$$t" || rc=1; \
+	done; exit $$rc
+
 # ── shottino-call: the media helper (OPT-IN) ───────────────────────────
 #
 # NOT built by `make all`, and that is the whole point. The packaging
