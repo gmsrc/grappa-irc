@@ -553,11 +553,38 @@ sequence:
    suffix. Keep the `VERSION` file and the tag in lockstep at cut time.
 3. **Ping vjt** (via the ircbot) with **the tag + the release URL + 2 lines of
    highlight**. vjt then writes the site's News entry (next step) from that.
-4. **News/Releases `news.json` entry — vjt's lane.** vjt writes a `news.json`
-   entry that LINKS the GitHub release + ~20 words of highlight (NOT a changelog
-   dump), then **commits/pushes it to `grappa-www` AND deploys** (scp to m42
-   `htdocs`) **+ CF-purge**. Anti-drift: the News content is never
-   deployed-not-committed (the trigger was testimonials left live-but-uncommitted).
+4. **News/Releases `news.json` entry.** An entry that LINKS the GitHub release
+   plus a curated bilingual highlight (NOT a changelog dump), prepended to
+   `items[]` in `grappa-www`'s `public/news.json`. **Whose lane it is: vjt's by
+   default, but he hands it over** — on 2026-08-05 he told the orchestrator
+   *"falla tu la copy news"*, so ASK rather than assume, and write it yourself
+   when he says so.
+   **Publishing, as MEASURED on 2026-08-05** (the old text here said "scp to m42
+   `htdocs` + CF-purge"; both halves were stale, and what replaced them was
+   wrong too — see the warning below):
+   - The origin is a **pull** design: `/srv/www/grappa.chat/deploy.sh` `git
+     fetch`es + hard-resets the checkout whose `public/` IS the nginx document
+     root. No build, no upload. Cloudflare fronts it but answers
+     `cf-cache-status: DYNAMIC`, so **no purge is needed** — verified with a
+     cache-buster.
+   - 🔴 **THE PULL IS NOT ACTUALLY WIRED, AND ITS DEPLOY KEY IS DEAD.** On m42
+     there is **no cron entry** for it and **no `/var/log/grappa-www-deploy.log`**,
+     and running it by hand as root fails at `git@github.com: Permission denied
+     (publickey)`. So a `git push` alone publishes NOTHING. Until vjt restores
+     the read-only deploy key, publish by copying the **committed** file into the
+     doc root (`install -o root -g wheel -m 644`) and checksum both ends — the
+     content still comes from a pushed commit, so nothing is
+     deployed-not-committed.
+   🔴 **VERIFY FROM THE LIVE URL** (`curl https://grappa.chat/news.json`), never
+   from the push succeeding. That is exactly how the dead key was found: the push
+   went fine, `last-modified` stayed a day old. *A pull-based deploy fails
+   silently by construction — nothing you did reports an error.*
+   Anti-drift: the News content is never deployed-not-committed (the trigger was
+   testimonials left live-but-uncommitted); with a pull-based origin that is now
+   structurally impossible, which is the point.
+   ⚠️ **Check the page for GAPS at every cut.** v0.11.0 was tagged, released, and
+   never got an entry — the page jumped 0.10.0 → 0.12.0 until it was backfilled a
+   day later. A missing entry is invisible from the release side.
    Schema authoritative in **grappa-www#4**; reuse the existing item shape (no
    `news.js` renderer change):
 
@@ -572,14 +599,23 @@ sequence:
    }
    ```
 
-   - **Prepend** to `items[]` (newest first). `text` = a curated, bilingual,
-     ~20-word highlight (NOT the raw dev changelog); `link` → the GitHub release.
+   - **Prepend** to `items[]` (newest first). `text` = a curated, bilingual
+     highlight (NOT the raw dev changelog); `link` → the GitHub release.
+     ℹ️ The "~20 words" this used to specify has never matched the file: every
+     shipped entry is a ~150-word paragraph. **Follow the file, not this line** —
+     lead with what changed for a reader who does not already run it.
 
    **Division of labor:** ORCHESTRATOR = create the GH release + ping vjt with
-   (tag, URL, 2-line highlight). vjt = news.json entry + grappa-www commit / push
-   / deploy / CF-purge.
+   (tag, URL, 2-line highlight), and write + push the news entry whenever he
+   hands that lane over. vjt = the call on whether he writes the copy himself.
 5. **Dual-net announce** (#grappa on Azzurra + Libera via the ircbot) + `gh issue
-   close` the deployed issues + strip their `status:soon`.
+   close` the closed-at-release issues + strip their `status:soon`.
+   ⚠️ **A TAG-ONLY release (no deploy) does NOT get the "we shipped" announce** —
+   nothing changed for a user of the hosted instance, and saying otherwise is
+   simply false. What is worth one line is that self-hosters have a tag to pull.
+   🔴 **Not every `status:soon` issue is DONE.** #96 shipped one leg of three in
+   v0.12.0 and vjt said explicitly the rest stays open: at the sweep it got the
+   release comment and its label stripped, but was NOT closed. Check each one.
 
 ### The published release image (ghcr.io) — #503 unit C
 
