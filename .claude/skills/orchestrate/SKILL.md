@@ -551,6 +551,14 @@ himself and device-verifies there. `scripts/deploy-cic.sh` = bundle only, no res
 server. Both assert a main-checkout on main, so **commit your own working-tree edits before pulling** or the
 pull stashes them out from under you. Prove a cic deploy by the **served** hash (`curl` the page), never by
 the script's own broadcast line.
+🔎 **AN UNCHANGED SERVED HASH IS NOT A FAILED CIC DEPLOY — vite hashes are CONTENT-derived (2026-08-05).**
+Staging rebuilt to the *same* `index-DZvSYJMc.js` because cic deploys are ORTHOGONAL to server deploys and
+the bundle was already current. **What settles it is the MTIME of the actually-served artefact**
+(`runtime/cicchetto-dist/assets/*.js`), not the hash and not the log. ⚠️ **`cicchetto/dist/` holds a STALE
+local artefact the container NEVER serves — do not read deploy state from it.** Three hashes in play looked
+exactly like a broken deploy; one `ls -l` on the served path ended it.
+ℹ️ A `✓ built in 70ms` line is the **service-worker sub-build**, not the bundle — read the whole log before
+calling a build suspiciously fast.
 Worker MERGES + pushes, **never deploys**; stays `cooking` until its DONE hand-off; ORCH flips to `soon`.
 ONE batched deploy (~4–5 issues), ONE dual-net announce, then close all + strip labels.
 - **COLD:** `/srv/grappa/scripts/deploy-m42.sh --force-cold` · **HOT:** `--force-hot` **THEN `--cic`** — a HOT deploy is
@@ -649,6 +657,27 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
   re-gate against the new main.** Never batch-merge on per-PR greens alone.
   ⚠️ Corollary: after such a break, **every open PR inherits the red** — say so explicitly in each dispatch
   brief, or a worker will burn hours chasing a failure that is not its branch's.
+  ✅ **THE UNION EXECUTED WELL, 2026-08-05 (#851 = #847+#848+#849):** cherry-pick each PR's own commits
+  (`base=$(git merge-base origin/main $H); git cherry-pick $B..$H`) onto a fresh branch off CURRENT main,
+  open it as ONE PR, gate once, merge once. All seven applied clean.
+  🥇 **The union is the HONEST gate, not merely the cheap one, WHEN ONE PR IS THE CI STEP FOR ANOTHER'S
+  FILE** — #754 *is* the step that compiles the `call/main.c` that #759 rewrote. Three separate merges would
+  each have been green and **none would have asked whether the file still compiles after the rewrite.**
+  🔴🔴 **A CHERRY-PICKED UNION REWRITES THE SHAs, SO GITHUB CANNOT CLOSE THE SUPERSEDED PRs — CLOSE THEM BY
+  CONTENT, NAMING THE UNION, AS PART OF THE MERGE STEP.** (This leaked 5× in one day before it was written
+  down; done correctly for #847/#848/#849.)
+- 🥇 **PAY EACH EXPENSIVE GATE ONCE, ON THE MAIN THAT WILL ACTUALLY RECEIVE IT — the ordering rule that ran
+  the whole 2026-08-05 queue.** With one `integration`-paying PR and N cheap ones: **do all the cheap
+  movement first**, merge the expensive one when green, and let the cheap ones re-gate (a cheap suite IS the
+  union check, for the price of the cheap suite). **Rebase each PR ONCE, at its turn, never ahead of time** —
+  main moves at every merge, so a rebase deferred until main stops moving is a rebase not done twice.
+  ⚠️ **Refuse the tempting inversion:** merging a *stale* green because it is already green, to save the
+  expensive re-run, buys ~20 minutes and means the union is **never** checked. Nothing is waiting when the
+  deploy is frozen — take the honest gate.
+- 🔴 **CATCH A STALE BASE EARLY AND THE REBASE IS FREE.** #853 was EIGHT commits behind ~2 min into its
+  30-min `integration`; rebasing then cost nothing, and a stale green would have cost a full re-run.
+  **Check `git merge-base --is-ancestor origin/main <pr head>` the moment a PR appears**, not when it goes
+  green.
 - 🔴 **A MONITOR FIRING IS NOT THE ORCHESTRATOR READING IT.** The union-gate monitor reported that red at
   22:05; it was not processed until 08:41, **idling both workers ~9 hours.** This is the twin of the
   dead-listener trap below — there the events never arrived, here they arrived and were not read, and
@@ -748,6 +777,38 @@ the pipe** — the wire, not the mock; the served bundle, not the deploy log; th
 A wrong fact you publish comes back wearing someone else's name (the ircbot repeated mine to vjt within the
 hour). **Retract where it SPREAD, not only where you said it.**
 🥇 A worker correcting you — or correcting ITSELF — is the system working. Say so plainly and move on.
+🔴 **I COMMITTED THIS EXACT ERROR AGAIN 2026-08-05, ABOUT MY OWN CI.** I stated twice — in conversation and
+in the handoff, with a compensating commitment built on top — that my merges had **cancelled two in-flight
+main `integration` baselines**. They had not: both ran to completion GREEN. I had read `integration.yml`'s
+`concurrency` + `cancel-in-progress` and asserted an OUTCOME from a RULE. 🥇 **A concurrency rule tells you
+what CAN be cancelled, never what WAS.** One call ends it:
+`gh run list --branch main --workflow integration --json status,conclusion,headSha`.
+🥇 **The tell to watch for in yourself: a mechanism you can name confidently, attached to an outcome you
+never queried.** The fix is not more caution, it is one query.
+
+## ✅ THE MEASUREMENT STANDARD (what a good worker result looks like — 2026-08-05, hold others to it)
+Four results in one night, and what made each credible:
+- **Displacement beats correlation.** The #653 plateau was named `Session.wait_until_unregistered/3` by
+  MOVING its two constants and showing the band moved with them (100×5⇒400-900 ms, 20×5⇒100-190 ms,
+  100×10⇒900 ms+) while incidence did NOT. *Correlation would have survived a wrong answer; displacement
+  does not.*
+- **Exclusion BY MEASUREMENT, not by argument.** DNS/TLS/SQLITE_BUSY/pool-checkout/scheduler-noise were each
+  killed with a number (the Ecto timeline INSIDE the plateau is empty: last query +3.9 ms, next +664 ms).
+- **Prove the RED is load-bearing by MUTATING production.** #762: `r=(w*3)/8→w/4` old green / **23 red**;
+  `INADDR_LOOPBACK→INADDR_ANY` 0/**2**; port +1 0/**2**; draw ignoring the source rect 0/**5**. *An assertion
+  nobody mutated is an assertion nobody has tested.*
+- **A proved NEGATIVE is a result.** #539 is immune BY CONSTRUCTION (`reset_all/0` in setup kills injected
+  zombies 2 ms in); #277's signature is unreachable since #676's nick-fallback ladder (433 now needs FOUR
+  nicks held at once). Both closed hypotheses that would otherwise be re-guessed forever.
+- **Corrections travel UPWARD.** #729 undercounted itself (five password-spending actions, not four); #726
+  counts seven catches, not six; #762's defect 3 is simply WRONG (measured: reordering the enum already
+  reddened the OLD test). **A worker that refuses one of the issue's own claims, with a measurement, is the
+  standard — say so.**
+🥇 **And the highest one: a worker that names a thing and in the SAME comment withdraws its own previous
+claim about that thing.** w2 named the plateau and immediately demoted it from cause to symptom (~99 %
+post-decision tail), retracting its own earlier timing table as having measured the wrong quantity.
+**Ask for that posture explicitly in briefs: "state what you refused to claim."** It is the single clause
+that has paid off most.
 
 ## 🧪 FLAKE FORENSICS
 - 🥇 **A fixed identifier in a shared namespace is the classic flake**: a hard-coded nick/channel/port collides with a
