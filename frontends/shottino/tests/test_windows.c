@@ -3101,6 +3101,89 @@ TEST(a_call_already_running_here_is_the_call) {
 /* The cache key for a probe verdict, and the whole of what it may
  * contain: scheme, host, port. A path in the key would make every room
  * its own cache entry and every invite its own request. */
+/* The invite names where the call IS, and the terminal now reads it.
+ *
+ * A room exists on ONE SFU — the caller's. Reading our own setting
+ * instead is what let two shottinos with different `call.sfu_url` each
+ * publish to their own server and hear nothing, while the browser room
+ * page (which has always read `&sfu=`) joined whichever it was told. */
+TEST(the_invite_names_the_sfu_the_call_is_on) {
+    char sfu[MAX_LINE];
+
+    CHECK(call_invite_sfu_of("https://pages.example/call/#r=abc&sfu=https://sfu.example/rtc", sfu,
+                             sizeof(sfu)));
+    CHECK_STR(sfu, "https://sfu.example/rtc");
+    /* Order within the fragment is not ours to assume. */
+    CHECK(call_invite_sfu_of("https://pages.example/#sfu=https://sfu.example/rtc&r=abc", sfu,
+                             sizeof(sfu)));
+    CHECK_STR(sfu, "https://sfu.example/rtc");
+    /* And it stops at the next parameter, not at the end of the line. */
+    CHECK(call_invite_sfu_of("https://p/#r=a&sfu=https://s/rtc&peers=vjt,alk", sfu, sizeof(sfu)));
+    CHECK_STR(sfu, "https://s/rtc");
+    /* The base owns no trailing slash — the same rule the page base
+     * follows, because a doubled slash is a 404 on some servers. */
+    CHECK(call_invite_sfu_of("https://p/#r=a&sfu=https://s/rtc//", sfu, sizeof(sfu)));
+    CHECK_STR(sfu, "https://s/rtc");
+    CHECK(call_invite_sfu_of("https://p/#r=a&sfu=http://s:8889", sfu, sizeof(sfu)));
+    CHECK_STR(sfu, "http://s:8889");
+
+    /* Names none: every older invite, and every caller with no
+     * call.sfu_url set. The caller falls back rather than inventing one. */
+    CHECK(!call_invite_sfu_of("https://pages.example/call/#r=abc", sfu, sizeof(sfu)));
+    CHECK_STR(sfu, "");
+    CHECK(!call_invite_sfu_of("https://pages.example/call/", sfu, sizeof(sfu)));
+    /* A parameter that merely ENDS in sfu is not this one. */
+    CHECK(!call_invite_sfu_of("https://p/#r=a&mysfu=https://s/rtc", sfu, sizeof(sfu)));
+
+    /* This value arrives in a stranger's message and becomes a URL we
+     * POST MEDIA to, so it is checked rather than trusted. */
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=file:///etc/passwd", sfu, sizeof(sfu)));
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=javascript:alert(1)", sfu, sizeof(sfu)));
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=//sfu.example/rtc", sfu, sizeof(sfu)));
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=/rtc", sfu, sizeof(sfu)));
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=", sfu, sizeof(sfu)));
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=https://", sfu, sizeof(sfu)));
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=https://s/r tc", sfu, sizeof(sfu)));
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=https://s/r\ttc", sfu, sizeof(sfu)));
+    /* Refused rather than truncated: half a URL is a DIFFERENT host, and
+     * publishing to it is worse than not publishing at all. */
+    char tiny[12];
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=https://sfu.example/rtc", tiny, sizeof(tiny)));
+    CHECK_STR(tiny, "");
+
+    CHECK(!call_invite_sfu_of(NULL, sfu, sizeof(sfu)));
+}
+
+/* And the precedence that uses it. */
+TEST(the_media_base_prefers_the_invite_over_our_setting) {
+    char out[MAX_LINE + 168];
+
+    /* Theirs wins over ours — the bug this fixes. */
+    call_rtc_base_from("https://mine.example/rtc",
+                       "https://pages.example/call/#r=abc&sfu=https://theirs.example/rtc", out,
+                       sizeof(out));
+    CHECK_STR(out, "https://theirs.example/rtc/abc");
+
+    /* Naming none falls back to ours, which is what this deployment has
+     * always done for an invite from an older client. */
+    call_rtc_base_from("https://mine.example/rtc", "https://pages.example/call/#r=abc", out,
+                       sizeof(out));
+    CHECK_STR(out, "https://mine.example/rtc/abc");
+
+    /* With neither, the SFU is assumed to sit beside the page. */
+    call_rtc_base_from("", "https://pages.example/call/#r=abc", out, sizeof(out));
+    CHECK_STR(out, "https://pages.example/call/rtc/abc");
+
+    /* A refused `&sfu=` falls back rather than poisoning the base. */
+    call_rtc_base_from("https://mine.example/rtc",
+                       "https://pages.example/call/#r=abc&sfu=file:///etc", out, sizeof(out));
+    CHECK_STR(out, "https://mine.example/rtc/abc");
+
+    /* An invite from before the room page existed: the URL WAS the base. */
+    call_rtc_base_from("https://mine.example/rtc", "https://old.example/room42", out, sizeof(out));
+    CHECK_STR(out, "https://old.example/room42");
+}
+
 TEST(a_probe_is_cached_by_origin) {
     char o[256];
     call_url_origin("https://grappa.nexlab.net/api/call/#r=abc", o, sizeof(o));
@@ -4497,6 +4580,8 @@ int main(void) {
     RUN(random_bytes_are_the_sources_or_the_caller_is_told);
     RUN(a_call_already_running_here_is_the_call);
     RUN(a_call_that_ended_is_not_one_already_running);
+    RUN(the_invite_names_the_sfu_the_call_is_on);
+    RUN(the_media_base_prefers_the_invite_over_our_setting);
     RUN(a_probe_is_cached_by_origin);
     RUN(a_probe_refuses_the_private_network);
     RUN(an_invite_carries_its_room_in_the_fragment);

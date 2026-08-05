@@ -368,6 +368,20 @@ TEST(an_unchecked_invite_neither_rings_nor_is_remembered) {
     CHECK(strstr(source, "snprintf(sfu, sizeof(sfu), \"%s\", call_sfu_base(app));") != NULL);
 }
 
+/* The invite's SFU has to be consulted at the ONE place the media base
+ * is derived, or half the call paths read it and half do not. */
+TEST(the_terminal_reads_the_invites_sfu) {
+    CHECK(strstr(source, "else if (call_invite_sfu_of(room_url, theirs, sizeof(theirs)))") != NULL);
+    /* Ahead of our own setting, which is the whole point — reading ours
+     * first is the bug. */
+    size_t theirs = (size_t)(strstr(source, "call_invite_sfu_of(room_url, theirs") - source);
+    size_t ours = (size_t)(strstr(source, "else if (sfu && sfu[0])") - source);
+    CHECK(theirs < ours);
+    /* One derivation, so the probe and the publish cannot disagree about
+     * where the SFU is. */
+    CHECK(strstr(source, "static void call_rtc_base_from(") != NULL);
+}
+
 int main(void) {
     test_use_temp_home();
 
@@ -397,6 +411,7 @@ int main(void) {
     RUN(a_stopped_call_marks_its_invite_spent);
     RUN(call_new_mints_rather_than_joining);
     RUN(an_unchecked_invite_neither_rings_nor_is_remembered);
+    RUN(the_terminal_reads_the_invites_sfu);
     RUN(the_call_window_is_offered_never_forced);
 
     free(source);

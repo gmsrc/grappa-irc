@@ -3498,6 +3498,63 @@ static bool call_invite_split(const char *url, char *base, size_t base_sz, char 
     return room[0] != 0;
 }
 
+/* The SFU an invite NAMES, if it names one.
+ *
+ * `&sfu=` is the caller saying WHERE THE CALL IS, and it is the whole
+ * answer to "two people, two SFUs". Before this, the terminal read only
+ * its OWN `call.sfu_url` and ignored what the invite said — so two
+ * shottinos with different settings each published to their own server
+ * and neither could hear the other, while the browser room page (which
+ * has always read `&sfu=`) joined the right one. The two clients
+ * disagreed about the meaning of the same link.
+ *
+ * The value arrives in a stranger's message and becomes a URL this
+ * client POSTs MEDIA to, so it is checked here rather than trusted:
+ * http(s) only, no whitespace or control bytes, and it must fit. A room
+ * name is a path segment and gets encoded; this is a BASE and cannot be,
+ * so anything not plainly a URL is refused and the caller falls back.
+ * Whether that host is one we will talk to at all is a separate gate
+ * (call_probe_host_allowed), asked before anything is dialled. */
+static bool call_invite_sfu_of(const char *url, char *out, size_t out_sz) {
+    if (!url || !out || out_sz == 0) return false;
+    out[0] = 0;
+    const char *hash = strchr(url, '#');
+    if (!hash) return false;
+    size_t n = 0;
+    bool found = false;
+    for (const char *p = hash + 1; *p;) {
+        if (strncmp(p, "sfu=", 4) == 0) {
+            for (p += 4; *p && *p != '&'; p++) {
+                if (n + 1 >= out_sz) goto refuse; /* truncated is a DIFFERENT host */
+                out[n++] = *p;
+            }
+            found = true;
+            break;
+        }
+        while (*p && *p != '&') p++;
+        if (*p == '&') p++;
+    }
+    out[n] = 0;
+    if (!found || n == 0) goto refuse; /* `&sfu=&…` names nothing */
+    size_t scheme;
+    if (strncmp(out, "https://", 8) == 0) scheme = 8;
+    else if (strncmp(out, "http://", 7) == 0) scheme = 7;
+    else goto refuse;
+    for (size_t i = 0; i < n; i++)
+        if (isspace((unsigned char)out[i]) || (unsigned char)out[i] < 0x20) goto refuse;
+    /* A doubled slash is a different path on some servers and a 404 on
+     * others, so the base owns no trailing one — the same rule
+     * call_invite_split applies to the page base. Never INTO the scheme:
+     * `https://` must not be trimmed down to something that then passes
+     * for a URL. */
+    while (n > scheme && out[n - 1] == '/') out[--n] = 0;
+    if (n <= scheme) goto refuse; /* a scheme with no host is not an SFU */
+    return true;
+refuse:
+    out[0] = 0;
+    return false;
+}
+
 /* Is `body` an invite, and if so to what?
  *
  * Strict in three ways, each of which is the difference between a
@@ -15021,9 +15078,23 @@ static const char *call_sfu_base(struct app *app) {
  * disagreement between them is SILENT — both ends connect, nobody hears
  * anybody. */
 static void call_rtc_base_from(const char *sfu, const char *room_url, char *out, size_t out_sz) {
-    char page_base[MAX_LINE], room_id[160];
+    char page_base[MAX_LINE], room_id[160], theirs[MAX_LINE];
     if (!call_invite_split(room_url, page_base, sizeof(page_base), room_id, sizeof(room_id)))
         snprintf(out, out_sz, "%s", room_url); /* an invite from before the room page */
+    /* THE INVITE WINS. Whoever placed the call chose the SFU, and the
+     * room only exists on that one — an SFU is the meeting point, so
+     * "my setting" is not an opinion anybody can hold about somebody
+     * else's call. This is also what the browser room page has always
+     * done with `&sfu=`; the terminal reading its own setting instead
+     * is what made two shottinos with different SFUs unable to hear
+     * each other while a browser joined either happily. */
+    else if (call_invite_sfu_of(room_url, theirs, sizeof(theirs)))
+        snprintf(out, out_sz, "%s/%s", theirs, room_id);
+    /* Ours, for an invite that names none: an older client, or a caller
+     * with no call.sfu_url set. A guess, and the only one available —
+     * the alternative is the page base below, which is right only when
+     * the caller hosts the SFU beside the page. Kept as the middle rung
+     * because that is what this deployment has always done. */
     else if (sfu && sfu[0])
         snprintf(out, out_sz, "%s/%s", sfu, room_id);
     else

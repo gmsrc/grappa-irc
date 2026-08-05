@@ -80,6 +80,24 @@ pretended away. `call.probe off` is the complete answer for anyone who
 wants one; it restores the older behaviour, where the marker alone is
 the proof.
 
+**The invite names where the call is.** `&sfu=<base>` in the fragment is
+the caller saying which SFU the room is on, and a room exists on exactly
+one — an SFU is the meeting point, so "my setting" is not an opinion
+anyone can hold about somebody else's call. `call.sfu_url` is therefore
+consumed when an invite is *built*, and the invite is what's read when
+one is *joined*. Before this, the terminal read its own setting either
+way, so two shottinos with different `call.sfu_url` values each published
+to their own server and heard nothing, while the browser room page —
+which has always read `&sfu=` — joined whichever it was told. An invite
+naming no SFU (an older client, or a caller with none set) still falls
+back to the local setting, then to the page base.
+
+The value arrives in a stranger's message and becomes a URL this client
+POSTs *media* to, so it is validated, not trusted: http(s) only, a host
+must be present, no whitespace or control bytes, and it is refused rather
+than truncated — half a URL is a different host. Whether that host is one
+we will talk to at all is the probe's separate gate.
+
 **A marker, never a URL pattern.** Ringing at any recognised meeting link
 would mean anyone who pastes one — or quotes one, or links a recording of
 one — makes every shottino in the channel ring. The marker must *open*
