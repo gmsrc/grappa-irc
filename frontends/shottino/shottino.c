@@ -1024,6 +1024,10 @@ struct app {
      * below the panel — which is the same bug the overlay hit test
      * already learned (see struct overlay). */
     int panel_draw_y, panel_draw_x0, panel_draw_x1, panel_draw_h;
+    /* The box the live call's picture was drawn into last frame, or a
+     * zero width when there was none. The chat underneath keeps its link
+     * regions, so the pointer needs to know the picture is on top. */
+    int call_draw_x, call_draw_y, call_draw_w, call_draw_h;
     /* A panel is taller than the terminal — the settings one always is
      * now that it lists every preference — so it scrolls. The draw path
      * clamps this against the real height, which only it knows. */
@@ -8778,6 +8782,9 @@ static void draw(struct app *app) {
     erase();
     app->frame_seq++;
     app->link_region_count = 0;
+    /* Cleared every frame like the region lists: a rect left behind by
+     * the last call would keep eating clicks after the call ended. */
+    app->call_draw_w = app->call_draw_h = 0;
     app->msg_region_count = 0;
     app->win_region_count = 0;
     app->topic_region_count = 0;
@@ -9140,6 +9147,18 @@ static void draw(struct app *app) {
         int nt = app->call_live.tile_count;
         int focus = app->call_live.focus;
         if (focus < 0 || focus >= nt) focus = 0;
+        /* WHERE THE PICTURE LANDED, for the pointer.
+         *
+         * The call draws OVER the chat area, so the message rows and
+         * their link regions are still underneath it — and a click was
+         * being answered by whatever link shared that cell, which is how
+         * clicking a face tried to open somebody's screenshot. The
+         * pointer has to know the picture is there, and only the draw
+         * knows where it went. */
+        app->call_draw_x = vx;
+        app->call_draw_y = vy;
+        app->call_draw_w = vw;
+        app->call_draw_h = vh;
         if (vw > 0 && vh > 0) {
             /* The FOCUSED cell gets the box; the others, if there is
              * room, go in a strip under it. Which cell that is comes
@@ -18876,6 +18895,37 @@ static void handle_mouse(struct app *app) {
         log_line(app, "right-click a ROW to act on it — the rows start under the heading, and "
                       "this click was above or past them");
     if (in_panel) return;
+
+    /* THE PICTURE IS ON TOP, so it answers first.
+     *
+     * A click here used to fall through to the chat underneath and open
+     * whatever link shared the cell — a face, and then somebody's
+     * screenshot in a viewer. The call is not a link.
+     *
+     * It is not dead either: the obvious thing to want from a small
+     * picture is a big one, and `$call` already exists for exactly that.
+     * From inside `$call` there is nothing bigger to ask for, so the
+     * click is simply consumed. */
+    pthread_mutex_lock(&app->lock);
+    bool on_call = app->call_draw_w > 0 && app->call_draw_h > 0 && ev.x >= app->call_draw_x &&
+                   ev.x < app->call_draw_x + app->call_draw_w && ev.y >= app->call_draw_y &&
+                   ev.y < app->call_draw_y + app->call_draw_h;
+    bool already_full = is_call_window(app->windows[focused_window_locked(app)].channel);
+    char call_net[MAX_SLUG];
+    snprintf(call_net, sizeof(call_net), "%s", app->call_live.network);
+    pthread_mutex_unlock(&app->lock);
+    if (on_call && (click || right)) {
+        if (!already_full && call_net[0]) {
+            pthread_mutex_lock(&app->lock);
+            for (size_t i = 0; i < app->window_count; i++) {
+                if (!window_matches(&app->windows[i], call_net, CALL_WINDOW)) continue;
+                focused_pane_locked(app)->window = i;
+                break;
+            }
+            pthread_mutex_unlock(&app->lock);
+        }
+        return;
+    }
 
     if (right) {
         /* A picture (or its link) under the pointer answers first: it is

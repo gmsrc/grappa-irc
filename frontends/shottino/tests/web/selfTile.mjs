@@ -41,4 +41,27 @@ function joinTwice(closeFirst) {
 ok(joinTwice(true) === 1, 'one publisher after two joins');
 ok(joinTwice(false) === 2, 'without the close, two publishers - the 409');
 
+// 3. Joining as somebody already publishing is refused.
+//
+// The nick decides the PATH and an SFU allows one publisher per path, so
+// typing a name already in the call does not join beside them — it
+// contends for their path. Their picture vanishes and yours is the only
+// one left, which reads as "the other camera disappeared" rather than as
+// a name clash. Easy to walk into: the invite carries no `me=`, so the
+// box starts empty and your own IRC nick is the obvious thing to type —
+// which is the caller's name when you are calling yourself.
+function wouldRefuse(tileNames, receiving, typed) {
+  const tiles = new Map(tileNames.map(n => [n, { pc: receiving.includes(n) ? {} : null }]));
+  return !![...tiles.keys()].find(
+    n => n !== typed + ' (you)' && pathNick(n) === pathNick(typed) && tiles.get(n).pc);
+}
+ok(wouldRefuse(['nextime'], ['nextime'], 'nextime'), 'clash with a sending peer');
+ok(wouldRefuse(['NextIme'], ['NextIme'], 'nextime'), 'clash across capitalisation');
+ok(!wouldRefuse(['nextime'], ['nextime'], 'nextime2'), 'a free name is allowed');
+// A tile with no connection is somebody expected but absent — their path
+// is free, so taking that name is not a takeover.
+ok(!wouldRefuse(['nextime'], [], 'nextime'), 'an absent peer is not a clash');
+// And our own self tile never blocks a re-join.
+ok(!wouldRefuse(['nextime2 (you)'], ['nextime2 (you)'], 'nextime2'), 'self tile is not a clash');
+
 console.log(fails ? fails + ' FAILED' : 'self tile: all cases pass');

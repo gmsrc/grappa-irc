@@ -246,6 +246,23 @@ async function subscribe(nick) {
 async function publish(withVideo) {
   const nick = document.getElementById('nick').value.trim();
   if (!nick) return note('a nick is needed to join — it decides your path');
+  // JOINING AS SOMEBODY WHO IS ALREADY HERE.
+  //
+  // The nick decides the PATH, and an SFU allows one publisher per path.
+  // Type the name of someone already publishing and you do not join
+  // beside them, you contend for their path: depending on the server you
+  // are refused, or you take it over and they are dropped. Either way
+  // their picture vanishes and yours is the only one left, which reads
+  // as "the other camera disappeared" rather than as a name clash.
+  //
+  // Easy to walk into, because the posted invite carries no `me=` — it
+  // is read by several people — so the box starts empty and the obvious
+  // thing to type is your own IRC nick, which is exactly the name the
+  // caller is already publishing under if you are calling yourself.
+  const clash = [...tiles.keys()].find(
+    n => n !== nick + ' (you)' && pathNick(n) === pathNick(nick) && tiles.get(n).pc);
+  if (clash) return note('"' + nick + '" is already in this call and sending — pick a different ' +
+                         'name, or you will take over their path and they will drop out');
   // Folded, not raw. `wanted` holds the spellings the LINK used and this
   // is what the user typed: `Nextime2` and `nextime2` are one person and
   // one path, so a raw delete misses, the name stays wanted, and the
