@@ -194,6 +194,16 @@ async function gathered(pc) {
 // and identity here is decided by the FOLD, so the two disagree the
 // moment somebody types their nick with different capitalisation.
 let publishing = '';
+// Our own publish, so a SECOND join can retire the first.
+//
+// The self tile is filed under `<nick> (you)` — it is a different thing
+// from the peer named `<nick>` and must not be mistaken for one — so a
+// lookup by nick never finds it. That is why the old cleanup here was
+// dead code, and why joining twice (camera, then audio-only, or just an
+// impatient second press) left the first peer connection publishing:
+// the SFU then refused the second with "someone may already be using
+// that nick", which is true and reads as though somebody else took it.
+let selfPc = null;
 
 // ── watch one peer ───────────────────────────────────────────────────
 async function subscribe(nick) {
@@ -251,6 +261,10 @@ async function publish(withVideo) {
     if (t.el && t.el.parentNode) t.el.parentNode.removeChild(t.el);
     tiles.delete(name);
   }
+  // Retire our previous publish before asking for a second one. An SFU
+  // allows a single publisher per path, so the old connection IS the
+  // thing that would refuse the new one.
+  if (selfPc) { selfPc.close(); selfPc = null; }
   let media;
   try {
     media = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
@@ -265,8 +279,12 @@ async function publish(withVideo) {
   if (!res.ok) return note('the server refused the publish (' + res.status +
     ') — someone may already be using that nick');
   await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+  selfPc = pc;
   const t = tile(nick + ' (you)');
-  t.video.srcObject = media; t.video.muted = true;   // never hear yourself
+  // OUR OWN CAMERA, straight from the capture — never read back off the
+  // SFU, which would cost a round trip to see ourselves and put our own
+  // microphone in our own speaker. Muted for that second reason.
+  t.video.srcObject = media; t.video.muted = true;
   t.el.classList.remove('pending');
   note('publishing as ' + nick);
 }
