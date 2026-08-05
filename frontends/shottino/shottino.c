@@ -767,7 +767,12 @@ enum overlay_action {
      * nine switch arms doing the same three lines. */
     ACT_ADMIN,
     /* The way out of the confirmation, and the entry it opens on. */
-    ACT_ADMIN_CANCEL
+    ACT_ADMIN_CANCEL,
+    /* The two things worth reaching for mid-call, from the picture
+     * itself. Both toggle: the menu is built from the CURRENT state, so
+     * an entry always names the transition rather than the setting. */
+    ACT_CALL_MIC,
+    ACT_CALL_CAMERA
 };
 
 /* How many entries a picker offers. Twenty is what fits the phrase "the
@@ -829,6 +834,9 @@ struct overlay {
      * describes THIS box, and closing the box must forget it — a
      * pending DELETE that outlived its menu would be armed the next
      * time one opened. */
+    /* This OVERLAY_MENU is about the running call rather than about a
+     * nick or a URL — the picture was what the pointer was over. */
+    bool call_controls;
     enum admin_verb pending;
     /* OVERLAY_ADMIN in FORM mode: the fields being filled in, which one
      * has the cursor, and what they will create. ADMIN_V_NONE means this
@@ -1131,6 +1139,16 @@ struct app {
         pthread_t reader;
         pthread_t vreader;
         bool reading;
+        /* The helper exited on its OWN — an SFU hangup, a crash, a net
+         * that went away. Set by the reader at EOF and acted on by the
+         * main loop, NOT by the reader: the teardown joins that thread, so
+         * a reader that tore down would join itself. */
+        bool ended;
+        /* Mirrors the helper's camera and microphone state, so a toggle,
+         * a menu and a key ask for the TRANSITION rather than guessing
+         * which way each one points. */
+        bool camera_off;
+        bool muted;
         bool vreading;
         bool video;
         /* The live frame, as an inline_media so the SAME half-block
@@ -8065,6 +8083,7 @@ static int media_claim_locked(struct app *app, const char *url, bool is_video) {
  * screen, so the row is still clickable and /preview still finds it. */
 static void settings_prefill_edit(struct app *app, const char *name);
 static void settings_open_modal(struct app *app, const char *name);
+static void call_camera_set(struct app *app, bool off);
 
 static void hide_media_url(struct app *app, const char *url) {
     pthread_mutex_lock(&app->lock);
@@ -12831,6 +12850,19 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
         return 0; /* free text: the modal offers a field instead */
     }
 
+    if (ov->kind == OVERLAY_MENU && ov->call_controls) {
+        /* Named for what the press DOES, from the state as it is now: a
+         * menu that says "mute" while already muted is a menu you have
+         * to test to read. */
+        menu_add(out, &n, max, ACT_CALL_MIC, "", "", "%s the microphone",
+                 app->call_live.muted ? "Unmute" : "Mute");
+        if (app->call_live.video)
+            menu_add(out, &n, max, ACT_CALL_CAMERA, "", "", "Turn the camera %s",
+                     app->call_live.camera_off ? "on" : "off");
+        menu_add(out, &n, max, ACT_ADMIN_CANCEL, "", "", "Hang up is /hangup");
+        return n;
+    }
+
     if (ov->kind == OVERLAY_MENU) {
         /* A picture under the pointer, rather than a person. The URL
          * rides in `body` so the actions are the SAME ones the media
@@ -12983,6 +13015,7 @@ static void overlay_close(struct app *app) {
      * it, memory and all: a half-typed password has no business
      * surviving the box that asked for it. */
     app->overlay.pending = ADMIN_V_NONE;
+    app->overlay.call_controls = false;
     app->overlay.form_verb = ADMIN_V_NONE;
     app->overlay.form_count = 0;
     app->overlay.form_sel = 0;
@@ -13310,6 +13343,15 @@ static void overlay_activate(struct app *app) {
      * overlay_close that has already happened. Named rather than
      * defaulted, so adding an action still fails the build until it is
      * wired. */
+    case ACT_CALL_MIC:
+        /* Through the ordinary verbs, so the menu cannot become a
+         * second implementation of muting that drifts from the one a
+         * user could have typed. */
+        handle_command(app, app->call_live.muted ? "/unmute" : "/mute");
+        break;
+    case ACT_CALL_CAMERA:
+        call_camera_set(app, !app->call_live.camera_off);
+        break;
     case ACT_ADMIN:
     case ACT_ADMIN_CANCEL:
     case ACT_NONE:
@@ -13661,7 +13703,7 @@ static void cycle_window(struct app *app, int delta) {
  * Adding a verb means adding it in three places; that test names them. */
 static const char *commands[] = {
     "/admin", "/alias", "/answer", "/approve", "/archive", "/away", "/ban", "/banlist", "/block",
-    "/bot", "/call",
+    "/bot", "/call", "/camera",
     "/chat", "/clear", "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deny", "/deop",
     "/devoice", "/dictate", "/die", "/disconnect", "/exec", "/exit", "/focus", "/globops",
     "/hangup", "/help",
@@ -14852,8 +14894,20 @@ static void *call_reader_main(void *arg) {
         call_event_apply(app, line);
     }
     fclose(f); /* owns err_fd */
+    /* THE HELPER IS GONE.
+     *
+     * Told to stop or died on its own — an SFU hangup, a crash, a
+     * network that went away — the pipe closing is the same fact. Only
+     * /hangup used to act on it, so a call that dropped for any other
+     * reason left a `$call` window drawing nothing and a client that
+     * believed it was still in a call.
+     *
+     * Flagged, not torn down here: the teardown joins THIS thread, so
+     * doing it from inside would be a thread joining itself. The main
+     * loop notices. */
     pthread_mutex_lock(&app->lock);
     app->call_live.err_fd = -1;
+    app->call_live.ended = true;
     pthread_mutex_unlock(&app->lock);
     return NULL;
 }
@@ -14871,6 +14925,11 @@ static void call_helper_stop(struct app *app) {
     app->call_live.pid = 0;
     app->call_live.in_fd = -1;
     app->call_live.reading = false;
+    /* Cleared with the rest of the call, or the NEXT call would be torn
+     * down the moment it started by a flag the last one left behind. */
+    app->call_live.ended = false;
+    app->call_live.camera_off = false;
+    app->call_live.muted = false;
     pthread_mutex_unlock(&app->lock);
     if (pid <= 0) return;
     /* Ask first: the helper owes the SFU a DELETE, and killing it
@@ -15153,6 +15212,25 @@ static bool call_control(struct app *app, const char *verb) {
     char line[32];
     int n = snprintf(line, sizeof(line), "%s\n", verb);
     return n > 0 && write(fd, line, (size_t)n) == n;
+}
+
+/* Camera on or off, mid-call. ONE door for the verb, the menu and the
+ * key, so the three cannot drift on what "off" means or forget to
+ * mirror the state the menu reads back.
+ *
+ * The helper drops the frames rather than closing the device: turning
+ * the camera back on is then instant, where reopening v4l2 is not. Our
+ * own tile goes dark with it, because the self-view is fed from the very
+ * packets being dropped. */
+static void call_camera_set(struct app *app, bool off) {
+    if (!call_control(app, off ? "camera off" : "camera on")) {
+        log_line(app, "/camera: no call is running");
+        return;
+    }
+    pthread_mutex_lock(&app->lock);
+    app->call_live.camera_off = off;
+    pthread_mutex_unlock(&app->lock);
+    log_line(app, "call: camera %s", off ? "off" : "on");
 }
 
 static void call_hangup(struct app *app) {
@@ -16081,6 +16159,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "call") == 0) log_line(app, "/call — start an audio call in this window: a room nobody can guess is minted, its link is posted as 📞 <url>, and your browser opens it. The link IS the credential, so the call is exactly as private as the window you posted it in. /set call.base_url picks the service");
     else if (strcmp(cmd, "videocall") == 0) log_line(app, "/videocall — /call with a camera: the same room, posted as 📹 <url> so the other side knows to expect video before joining");
     else if (strcmp(cmd, "answer") == 0) log_line(app, "/answer — join the last call that came in, ringing or not. A channel invite does not ring under the default /set call.ring, and this is how you take it");
+    else if (strcmp(cmd, "camera") == 0) log_line(app, "/camera [on|off] — the camera, while a video call runs. Bare /camera toggles. Alt-V does the same from anywhere, and a right-click on the call picture offers it beside the microphone. The frames are DROPPED rather than the device closed, so turning it back on is instant — and your own tile goes dark with it, because the self-view is fed from the packets being dropped");
     else if (strcmp(cmd, "mute") == 0 || strcmp(cmd, "unmute") == 0) log_line(app, "/mute, /unmute — the microphone, while a call is running in the terminal. Local and instant: the capture keeps going and its packets are dropped, so unmuting does not wait for a device to open");
     else if (strcmp(cmd, "focus") == 0) log_line(app, "/focus — in a group video call, show the next person full size and the rest along the bottom. Instant: the helper composites the same grid whoever is focused, so this only changes which part of it is drawn big. Up to three people are on camera at once; the rest stay in the call with their audio");
     else if (strcmp(cmd, "hangup") == 0) log_line(app, "/hangup — stop a ringing call. LOCAL: the caller is not told, the same way not picking up a phone tells nobody. /answer still reaches the call afterwards");
@@ -17696,10 +17775,19 @@ static void handle_command_dispatch(struct app *app, char *line) {
         else log_line(app, "/focus: no video call is running");
     } else if (strcmp(line, "/mute") == 0 || strcmp(line, "/unmute") == 0) {
         bool on = line[1] == 'm';
-        if (call_control(app, on ? "mute" : "unmute"))
+        if (call_control(app, on ? "mute" : "unmute")) {
+            pthread_mutex_lock(&app->lock);
+            app->call_live.muted = on;
+            pthread_mutex_unlock(&app->lock);
             log_line(app, "call: microphone %s", on ? "muted" : "live");
-        else
+        } else
             log_line(app, "/%s: no call is running", on ? "mute" : "unmute");
+    } else if (strcmp(line, "/camera") == 0 || strcmp(line, "/camera on") == 0 ||
+               strcmp(line, "/camera off") == 0) {
+        /* Bare /camera TOGGLES, because that is what a person reaching
+         * for it wants; the explicit words exist so a keybinding or a
+         * script can be definite. */
+        call_camera_set(app, line[7] == 0 ? !app->call_live.camera_off : line[8] == 'f');
     } else if (strcmp(line, "/clear") == 0) {
         clear_active_window_log(app);
     } else if (strcmp(line, "/close") == 0) {
@@ -18914,7 +19002,24 @@ static void handle_mouse(struct app *app) {
     char call_net[MAX_SLUG];
     snprintf(call_net, sizeof(call_net), "%s", app->call_live.network);
     pthread_mutex_unlock(&app->lock);
-    if (on_call && (click || right)) {
+    if (on_call && right) {
+        /* The controls, where the call is. Reaching for /mute means
+         * leaving the picture to type, and the two things anybody wants
+         * mid-call are the microphone and the camera. */
+        pthread_mutex_lock(&app->lock);
+        app->overlay.kind = OVERLAY_MENU;
+        app->overlay.call_controls = true;
+        app->overlay.sel = 0;
+        app->overlay.top = 0;
+        app->overlay.x = ev.x;
+        app->overlay.y = ev.y + 1;
+        app->overlay.nick[0] = 0;
+        app->overlay.body[0] = 0;
+        app->overlay.media[0] = 0;
+        pthread_mutex_unlock(&app->lock);
+        return;
+    }
+    if (on_call && click) {
         if (!already_full && call_net[0]) {
             pthread_mutex_lock(&app->lock);
             for (size_t i = 0; i < app->window_count; i++) {
@@ -19105,7 +19210,10 @@ enum {
      * put it on. Note that plenty of terminals keep Ctrl-Tab for their
      * OWN tabs and send nothing — /keys shows what actually arrives. */
     KEY_WIN_NEXT,
-    KEY_WIN_PREV
+    KEY_WIN_PREV,
+    /* Mid-call controls, bound to Alt-M and Alt-V. */
+    KEY_CALL_MIC,
+    KEY_CALL_CAMERA
 };
 
 static void define_pane_keys(void) {
@@ -19225,6 +19333,15 @@ static int resolve_escape(void) {
     timeout(50);
     if (next == ERR) return 27; /* a real Escape */
     switch (next) {
+    /* Alt-M and Alt-V: the microphone and the camera, without leaving
+     * the picture to type a verb. Alt because the control range is
+     * spoken for and these have to work from the `$call` window AND
+     * from the conversation the call is in — the same keys either
+     * side, since the call is one thing seen two ways. */
+    case 'm':
+    case 'M': return KEY_CALL_MIC;
+    case 'v':
+    case 'V': return KEY_CALL_CAMERA;
     case '+':
     case '=': return KEY_PANE_GROW;
     case '-': return KEY_PANE_SHRINK;
@@ -20806,6 +20923,18 @@ static void event_loop(struct app *app) {
     app->running = true;
     while (app->running) {
         ws_pump(app);
+        /* A call that ended without being told to. The reader saw the
+         * pipe close and flagged it; the teardown happens HERE because
+         * it joins that reader. Same path as /hangup, so the window
+         * goes, the frame buffer is freed and the state is honest —
+         * whatever killed the call. */
+        pthread_mutex_lock(&app->lock);
+        bool call_ended = app->call_live.ended && app->call_live.pid > 0;
+        pthread_mutex_unlock(&app->lock);
+        if (call_ended) {
+            log_line(app, "call: ended");
+            call_helper_stop(app);
+        }
         /* A requested preview displays as soon as the worker finishes.
          * Until then the client keeps running normally — that is the
          * whole point of splitting decode from display. */
@@ -20871,6 +21000,12 @@ static void event_loop(struct app *app) {
             pthread_mutex_unlock(&app->lock);
         } else if (ch == KEY_MOUSE) {
             handle_mouse(app);
+        } else if (ch == KEY_CALL_MIC) {
+            /* Through the verbs, like the menu: one implementation of
+             * muting, three ways to reach it. */
+            handle_command(app, app->call_live.muted ? "/unmute" : "/mute");
+        } else if (ch == KEY_CALL_CAMERA) {
+            call_camera_set(app, !app->call_live.camera_off);
         } else if (ch == 14 || ch == KEY_WIN_NEXT) {
             cycle_window(app, 1);
         } else if (ch == 16 || ch == KEY_WIN_PREV) {

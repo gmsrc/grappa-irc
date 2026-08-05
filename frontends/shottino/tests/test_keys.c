@@ -109,6 +109,12 @@ static const struct expectation MODIFIED_KEYS[] = {
     {"Ctrl-Tab (CSI-u)", "\033[9;5u",   KEY_WIN_NEXT},
     {"Ctrl-Shift-Tab",  "\033[27;6;9~", KEY_WIN_PREV},
     {"Ctrl-Shift-Tab (CSI-u)", "\033[9;6u", KEY_WIN_PREV},
+    /* Mid-call controls. Alt because the control range is spoken for,
+     * and they must work from the `$call` window AND from the
+     * conversation the call is in — one call, two views, same keys. */
+    {"Alt-M",           "\033m",     KEY_CALL_MIC},
+    {"Alt-V",           "\033v",     KEY_CALL_CAMERA},
+    {"Alt-Shift-M",     "\033M",     KEY_CALL_MIC},
     {"plain Up",        "\033[A",    KEY_UP},
     {"plain Down",      "\033[B",    KEY_DOWN},
 };
