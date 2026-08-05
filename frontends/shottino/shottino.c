@@ -15098,19 +15098,20 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         video && pthread_create(&app->call_live.vreader, NULL, call_frame_main, app) == 0;
     pthread_mutex_unlock(&app->lock);
 
-    /* NO window for the call.
+    /* A window for the call, and ONLY for the full-size view.
      *
-     * There used to be one, so the picture could have the whole screen.
-     * But a call belongs to the conversation it was placed in — that is
-     * the window you are talking to the other person in, and moving the
-     * picture somewhere else splits one conversation across two tabs.
-     * The picture-in-picture draw already puts it in whatever window you
-     * are reading, which is the behaviour that was wanted all along; the
-     * extra tab was the part nobody asked for.
+     * The call itself happens where it was placed: the picture-in-picture
+     * draw puts it in whatever window you are reading, the conversation
+     * it belongs to included, and that is the default. This tab exists
+     * so the picture can have the whole screen when you WANT it — it is
+     * a second view of one call, not a second place the call lives.
      *
-     * The full-size branch in the draw path is kept: it costs one
-     * comparison and it is what a `$call` window would still do if one
-     * ever existed again. */
+     * Never focused (`false`), which is the whole distinction: a tab
+     * that appears is an offer, and a tab that steals the screen moves
+     * you out of the conversation you are having. Video only — an audio
+     * call has nothing to show, and a tab that draws an empty box is
+     * worse than no tab. */
+    if (video) add_window_ex(app, network, CALL_WINDOW, false);
 
     log_line(app, "call: connecting in the terminal (%s) — /hangup ends it, /mute and /unmute "
                   "while it runs",

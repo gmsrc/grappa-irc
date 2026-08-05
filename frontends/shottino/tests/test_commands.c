@@ -243,17 +243,25 @@ TEST(the_call_defaults_move_the_page_and_the_sfu_together) {
     CHECK(strstr(source, "\"https://grappa.nexlab.net/uploads/call\"") == NULL);
 }
 
-/* A call belongs to the conversation it was placed in.
+/* `$call` is a SECOND VIEW of one call, not a second place it lives.
  *
- * Starting a video call used to mint a `$call` tab so the picture could
- * have the whole screen — which split one conversation across two
- * windows: the person you are talking to in one, their face in the
- * other. The picture-in-picture draw already puts the call in whatever
- * window you are reading, so the tab was the part nobody asked for. */
-TEST(a_call_does_not_mint_a_window_of_its_own) {
-    CHECK(strstr(source, "add_window_ex(app, network, CALL_WINDOW") == NULL);
-    /* The full-size branch survives: one comparison, and it is what such
-     * a window would still do if one ever existed again. */
+ * The call happens where it was placed: the picture-in-picture draw puts
+ * it in whatever window is being read, the conversation included. This
+ * tab exists only so the picture can have the whole screen when it is
+ * wanted.
+ *
+ * The load-bearing part is the `false` — never focused. A tab that
+ * appears is an offer; a tab that steals the screen moves you out of the
+ * conversation you are having, which is what made the first version of
+ * this feel wrong. Video only: an audio call has nothing to show, and a
+ * tab drawing an empty box is worse than no tab. */
+TEST(the_call_window_is_offered_never_forced) {
+    CHECK(strstr(source, "if (video) add_window_ex(app, network, CALL_WINDOW, false);") != NULL);
+    /* Not `true` under any spelling — that is the regression that would
+     * put somebody in a video tab mid-sentence. */
+    CHECK(strstr(source, "add_window_ex(app, network, CALL_WINDOW, true)") == NULL);
+    /* And the small view still has its branch: one call, two sizes, one
+     * decoded frame. */
     CHECK(strstr(source, "is_call_window(w->channel)") != NULL);
 }
 
@@ -282,7 +290,7 @@ int main(void) {
     RUN(every_dispatched_verb_has_a_help_topic);
     RUN(nothing_spells_its_own_version);
     RUN(the_call_defaults_move_the_page_and_the_sfu_together);
-    RUN(a_call_does_not_mint_a_window_of_its_own);
+    RUN(the_call_window_is_offered_never_forced);
 
     free(source);
     return test_report();
