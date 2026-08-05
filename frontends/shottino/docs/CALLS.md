@@ -319,7 +319,40 @@ plain HTTP, so any host that also serves the browser page needs a real
 certificate. Let's Encrypt via the SFU's own ACME support or a reverse
 proxy in front.
 
-**3. Ports.**
+**3. Somewhere to serve the room page that a service worker does not
+already own.** This is the one that bites, and nothing about it is
+obvious from a failing call.
+
+`web/room.html` is a static page. If it is served from the same ORIGIN as
+a PWA — cicchetto, for instance — that PWA's service worker decides what
+every top-level navigation gets, and it answers from its own cache unless
+the path is on its navigation denylist. A call invite then opens the PWA
+instead of the room: an install prompt in a browser, and inside the app a
+shell whose router has no such route, which renders as a blank page. The
+page is not slow or broken. It is never fetched: the service worker
+answers before the network is consulted, so no amount of server config
+overrides it.
+
+Three ways out, best first:
+
+1. **A different origin.** No service worker, nothing to argue with. Needs
+   its own TLS certificate (see 2 above) — and then `call.sfu_url`,
+   because the page derives the SFU from its own path by default and that
+   assumption is exactly what breaks once it moves.
+2. **A path the PWA already excludes.** Cheap and immediate if you cannot
+   add a host: publish the page under one of the prefixes on that
+   service worker's denylist. On the deploy this was found on, an nginx
+   `alias` at `/uploads/call/` alongside the original `/call/` did it —
+   safe to borrow because grappa serves `/uploads/<slug>` with generated
+   slugs and can never produce a literal `call/` path of its own. Same
+   `call.sfu_url` caveat.
+3. **Add the page's path to that denylist.** One line, and the cleanest of
+   the three if the PWA is yours to change.
+
+A device with no PWA installed never sees any of this, which is why it
+reproduces on a phone and not on the desktop it was built on.
+
+**4. Ports.**
 
 - **TCP 443** — WHIP/WHEP signalling and the browser page.
 - **UDP** for the media itself. Prefer an SFU configured for a **single
