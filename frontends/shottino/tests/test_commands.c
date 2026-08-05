@@ -255,6 +255,27 @@ TEST(the_call_defaults_move_the_page_and_the_sfu_together) {
  * conversation you are having, which is what made the first version of
  * this feel wrong. Video only: an audio call has nothing to show, and a
  * tab drawing an empty box is worse than no tab. */
+/* Leaving does not orphan a call.
+ *
+ * /quit and /exit only cleared `running`, so leaving mid-call left the
+ * helper and its ffmpeg alive — still holding the webcam, with nothing
+ * left to stop them — while the reader threads went on touching state
+ * the exit was tearing down. That is a segfault on the way out AND a
+ * camera nobody can use afterwards.
+ *
+ * Pinned by POSITION, because the fix is where it lives: the teardown
+ * has to run where every exit passes, not on one verb. Attach it to
+ * /quit and /exit misses it; attach it to both and the next exit path
+ * misses it again. */
+TEST(leaving_stops_a_running_call) {
+    /* The EXIT SEQUENCE specifically, not merely somewhere in the same
+     * function — there is another teardown inside the loop, for a call
+     * that dropped on its own, and matching that one would make this
+     * test pass with the exit path still broken. It did, before this
+     * was tightened; a test that cannot fail is worse than none. */
+    CHECK(strstr(source, "call_helper_stop(app);\n    mouse_reporting(false);") != NULL);
+}
+
 TEST(the_call_window_is_offered_never_forced) {
     CHECK(strstr(source, "if (video) add_window_ex(app, network, CALL_WINDOW, false);") != NULL);
     /* Not `true` under any spelling — that is the regression that would
@@ -290,6 +311,7 @@ int main(void) {
     RUN(every_dispatched_verb_has_a_help_topic);
     RUN(nothing_spells_its_own_version);
     RUN(the_call_defaults_move_the_page_and_the_sfu_together);
+    RUN(leaving_stops_a_running_call);
     RUN(the_call_window_is_offered_never_forced);
 
     free(source);

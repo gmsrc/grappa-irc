@@ -21138,8 +21138,41 @@ static void ircd_loop(struct app *app) {
     ircd_stop(app);
 }
 
+/* Set by the handler; read by the loop. `volatile sig_atomic_t` is the
+ * only thing a handler may touch here. */
+static volatile sig_atomic_t ui_signalled;
+
+static void ui_signal_handler(int sig) {
+    (void)sig;
+    ui_signalled = 1;
+}
+
 static void event_loop(struct app *app) {
     setlocale(LC_ALL, "");
+    /* A TERMINAL THAT CLOSES STILL OWES THE CAMERA BACK.
+     *
+     * SIGHUP is the window going away, SIGTERM is a `kill`, SIGINT is
+     * Ctrl-C reaching us rather than the shell. None of them run the
+     * exit path below on their own, so each would leave the helper and
+     * its ffmpeg alive holding the webcam — the same orphan /quit used
+     * to leave.
+     *
+     * The handler only drops `running`; the loop below notices and
+     * leaves through the ordinary teardown. Doing the work IN the
+     * handler would mean waitpid, pthread_join and free from a signal
+     * context, none of which is async-signal-safe.
+     *
+     * SIGKILL is deliberately absent because it cannot be caught — that
+     * is what it is for. A kill -9 mid-call leaves the SFU holding the
+     * slot until its own timeout; nothing a process can do changes
+     * that, and pretending otherwise here would be a comment that
+     * lies. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = ui_signal_handler;
+    sigaction(SIGHUP, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
     initscr();
     app->ui_active = true;
     init_theme();
@@ -21157,7 +21190,7 @@ static void event_loop(struct app *app) {
      * registered before the terminal can start sending them. */
     modified_keys_reporting(true);
     app->running = true;
-    while (app->running) {
+    while (app->running && !ui_signalled) {
         ws_pump(app);
         /* A call that ended without being told to. The reader saw the
          * pipe close and flagged it; the teardown happens HERE because
@@ -21318,6 +21351,20 @@ static void event_loop(struct app *app) {
             input_append_wide(app, (wchar_t)wch);
         }
     }
+    /* A RUNNING CALL DOES NOT SURVIVE THE CLIENT.
+     *
+     * /quit and /exit only cleared `running`, so leaving mid-call did
+     * two bad things at once. The helper and its ffmpeg were orphaned —
+     * still holding the webcam, with nothing left to tell them to stop —
+     * and the reader threads went on touching app state that the exit
+     * was already tearing down, which is a segfault on the way out.
+     *
+     * Here rather than in the verbs: this is the ONE place every way of
+     * leaving passes through, and a teardown attached to /quit would
+     * miss /exit, a signal, or whatever the next exit path turns out to
+     * be. It joins the reader threads and kills the helper's process
+     * GROUP with the usual escalation, so ffmpeg goes with it. */
+    call_helper_stop(app);
     mouse_reporting(false);
     modified_keys_reporting(false);
     app->ui_active = false;
