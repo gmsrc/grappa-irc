@@ -113,23 +113,30 @@ function tile(nick) {
 
 // ── ICE servers ──────────────────────────────────────────────────────
 //
-// Every RTCPeerConnection here used to be constructed bare, so the
-// browser gathered HOST candidates only — its own interface addresses.
-// On the same network as the SFU that works and hides the problem. From
-// a phone on mobile data it cannot: the handset sits behind carrier-grade
-// NAT with a private address, the SFU has no route back to it, and with
-// no STUN there is no reflexive candidate to offer instead. ICE finds
-// nothing, and the page sits there looking connected with no media.
+// Asked for, but NOT required — and the difference matters, because
+// warning about it on every call would be crying wolf.
 //
-// Asked for the standard way rather than hardcoded: RFC 9725 §4.6 says
-// an OPTIONS on the WHIP/WHEP endpoint answers with `Link:` headers
-// naming the STUN/TURN servers to use. That keeps the answer with the
-// OPERATOR — configure `webrtcICEServers2` in MediaMTX and every client
-// picks it up with no page change, and no third party learns anyone's
-// IP because we shipped a default pointing at one.
+// Against an SFU with a PUBLIC address and an open UDP port, a browser
+// needs no STUN of its own. It sends its connectivity checks to the
+// server's address; the NAT it sits behind creates a mapping on the way
+// out; the server sees the check arrive from that mapping and learns the
+// browser as a peer-reflexive candidate. That is the whole handshake,
+// and it works from mobile data behind carrier-grade NAT.
 //
-// `&ice=` in the link overrides, for testing a STUN before committing it
-// to the server config.
+// STUN and TURN earn their keep in the cases that shape does not cover:
+// a peer-to-peer leg with no public end, or a network that blocks
+// outbound UDP entirely and needs a TURN relay over TCP.
+//
+// So they are requested the standard way — RFC 9725 says an OPTIONS on
+// the WHIP/WHEP endpoint answers with `Link:` headers naming them —
+// which keeps the answer with the OPERATOR: configure
+// `webrtcICEServers2` on the SFU and every client picks it up with no
+// change here, and no third party learns anyone's IP because we shipped
+// a default pointing at one. Finding none is normal, so it is not
+// reported as a fault.
+//
+// `&ice=` overrides, which is how to test a STUN or TURN before
+// committing it to the server config.
 let iceCache = null;
 async function iceServers() {
   if (iceCache) return iceCache;
@@ -157,9 +164,10 @@ async function iceServers() {
       iceCache.push(server);
     }
   } catch (e) { /* no answer is the same as none offered */ }
-  if (!iceCache.length)
-    note('the server offers no STUN or TURN — a call across mobile data will ' +
-         'likely find no route. Set webrtcICEServers2 on the SFU, or add &ice=stun:host:port');
+  // Deliberately silent when none are offered: against a publicly
+  // addressable SFU that is the expected and working configuration, and
+  // a warning on every call for the normal case is a warning nobody
+  // reads by the time it matters.
   return iceCache;
 }
 
