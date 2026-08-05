@@ -9254,7 +9254,12 @@ static void draw(struct app *app) {
              * Landscape pictures in a terminal go side by side rather
              * than stacked: a cell is about twice as tall as it is
              * wide, so two columns cost half the rows two rows would. */
-            bool pair = nt == 2;
+            /* ...UNTIL one of them is chosen. Clicking a half enlarges
+             * it and shrinks the other; Esc clears the choice and the
+             * pair comes back. It is the SAME selection the group layout
+             * uses, so there is one notion of "who am I watching" rather
+             * than a second one for two-person calls. */
+            bool pair = nt == 2 && app->call_live.selected < 0;
             int strip_h = (full && nt > 1 && !pair) ? vh / 4 : 0;
             if (strip_h > 0 && strip_h < 4) strip_h = 0;
             int big_h = vh - strip_h;
@@ -9324,6 +9329,10 @@ static void draw(struct app *app) {
                 int drawn = 0;
                 for (int i = 0; i < nt && sx + tw <= vx + vw; i++) {
                     if (i == focus) continue;
+                    /* Ours has its own corner in this view — see below.
+                     * Drawing it twice would spend a strip cell on
+                     * something already on screen. */
+                    if (full && app->call_live.tiles[i].slot == CALL_MAX_PEERS - 1) continue;
                     /* The last cell is the list when there are more than
                      * fit; everything before it is a picture. */
                     if (overflow && drawn == cells - 1) break;
@@ -9361,6 +9370,39 @@ static void draw(struct app *app) {
                     draw_text(sy, sx, tw - 1, CP_ACCENT, A_BOLD, " +%d more", left);
                     if (rest[0] && strip_h > 1)
                         draw_text(sy + 1, sx, tw - 1, CP_MUTED, 0, " %.*s", tw - 3, rest);
+                }
+            }
+            /* OUR OWN PICTURE, TOP RIGHT.
+             *
+             * Pinned rather than placed in the grid, because it is the
+             * one tile whose position should never move: everybody
+             * else's cell depends on who is talking and who was chosen,
+             * and a self-view that wandered with them would be a thing
+             * you have to look for. Top right is out of the way of the
+             * name captions, which sit under each picture.
+             *
+             * Drawn LAST, over the big cell, and only in the call
+             * window: the corner view is already small and a second
+             * picture inside it would be two unreadable ones. Skipped
+             * when we are the big cell — chosen deliberately — since
+             * that is already us. */
+            if (full && !pair) {
+                int self_at = -1;
+                for (int i = 0; i < nt; i++)
+                    if (app->call_live.tiles[i].slot == CALL_MAX_PEERS - 1) self_at = i;
+                if (self_at >= 0 && self_at != focus) {
+                    int sw = vw / 5;
+                    if (sw > 24) sw = 24;
+                    int sh = sw / 2;
+                    if (sh > big_h / 3) sh = big_h / 3;
+                    if (sw > 3 && sh > 1) {
+                        struct call_tile me = app->call_live.tiles[self_at];
+                        int mx = vx + vw - sw, my = vy;
+                        draw_media_region_locked(&app->call_live.frame, my, mx, me.x, me.y, me.w,
+                                                 me.h, sh, sw);
+                        draw_text(my + sh, mx, sw, CP_MUTED, A_DIM, " you%s",
+                                  app->call_live.camera_off ? " (camera off)" : "");
+                    }
                 }
             }
         }
@@ -19188,7 +19230,14 @@ static void handle_mouse(struct app *app) {
         int nt = app->call_live.tile_count;
         int strip_top = app->call_draw_y + app->call_draw_h - app->call_draw_h / 4;
         int picked = -1;
-        if (nt > 1 && ev.y >= strip_top) {
+        /* TWO PEOPLE ARE A PAIR until one is clicked, so a click here
+         * picks the HALF it landed in — there is no strip yet, the
+         * whole box is the two of them. Clicking again on the one
+         * already big does nothing new; Esc is what restores the pair. */
+        if (nt == 2 && app->call_live.selected < 0) {
+            int half = ev.x < app->call_draw_x + app->call_draw_w / 2 ? 0 : 1;
+            picked = app->call_live.tiles[half].slot;
+        } else if (nt > 1 && ev.y >= strip_top) {
             int others = nt - 1;
             int cells = others > CALL_STRIP_MAX ? CALL_STRIP_MAX : others;
             int tw = cells > 0 ? app->call_draw_w / cells : app->call_draw_w;

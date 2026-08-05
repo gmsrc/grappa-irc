@@ -3427,6 +3427,46 @@ TEST(the_big_cell_follows_the_choice_then_the_voice) {
     CHECK_LONG(call_big_index(t, 0, -1, -1, self), -1);
 }
 
+/* Two people are a pair UNTIL one is chosen.
+ *
+ * The same selection drives both, which is the point: there is one
+ * notion of "who am I watching" rather than a special case for
+ * two-person calls that then has to be kept in step with the group one.
+ * The layout question is only ever "is anybody chosen".
+ *
+ * And once one IS chosen, the big cell obeys the same precedence as any
+ * group call — so choosing the other person, or ourselves, works here
+ * without a second code path. */
+TEST(a_two_person_call_is_a_pair_until_one_is_chosen) {
+    const int self = CALL_MAX_PEERS - 1;
+    struct call_tile t[2];
+    memset(t, 0, sizeof(t));
+    t[0].slot = 0;      /* them */
+    t[1].slot = self;   /* us */
+
+    /* The layout predicate, spelled exactly as the draw spells it. */
+    const int n = 2;
+    int selected = -1;
+    CHECK(n == 2 && selected < 0);           /* a pair: two equal cells */
+
+    /* Clicking the left half chooses them; the pair becomes big+small,
+     * and the big one is the one clicked. */
+    selected = t[0].slot;
+    CHECK(!(n == 2 && selected < 0));
+    CHECK_LONG(call_big_index(t, n, selected, -1, self), 0);
+
+    /* Clicking the right half chooses US — deliberately allowed, and
+     * the default rule that skips our own tile must not override an
+     * explicit choice. */
+    selected = t[1].slot;
+    CHECK_LONG(call_big_index(t, n, selected, -1, self), 1);
+
+    /* Esc clears it and the pair comes back, whoever was talking. */
+    selected = -1;
+    CHECK(n == 2 && selected < 0);
+    CHECK_LONG(call_big_index(t, n, selected, self, self), 0);
+}
+
 TEST(the_terminal_and_the_browser_agree_on_where_the_sfu_is) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -4329,6 +4369,7 @@ int main(void) {
     RUN(a_room_is_a_path_segment_and_is_encoded_like_one);
     RUN(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it);
     RUN(the_big_cell_follows_the_choice_then_the_voice);
+    RUN(a_two_person_call_is_a_pair_until_one_is_chosen);
     RUN(the_terminal_and_the_browser_agree_on_where_the_sfu_is);
     RUN(a_call_in_a_query_with_yourself_lists_one_person);
     RUN(rejoining_a_running_call_rebuilds_the_link_rather_than_replaying_it);
