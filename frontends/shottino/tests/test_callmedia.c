@@ -304,6 +304,69 @@ TEST(the_grid_is_even_and_independent_of_focus) {
  * peer can never take it — peers are capped one short of the array for
  * exactly this. A self-view that vanishes once the room fills up is one
  * nobody can rely on. */
+/* The publisher must ENCODE what the answer chose.
+ *
+ * The offer names BOTH codecs so the far end can pick, and for a long
+ * time only SUBSCRIBERS read the choice back — the encoder started from
+ * the configured preference regardless. Answer H264, encode VP8, and the
+ * SFU faithfully forwards packets whose payload type describes something
+ * else: every subscriber gets a tile that never paints, while our own
+ * side of the call works perfectly because it reads each peer's own
+ * answer. One cause, and a symptom that points away from it.
+ *
+ * The wiring lives in call/main.c, which nothing here compiles — it
+ * needs libdatachannel and a network. So it is pinned at the source,
+ * which is worth more than the coverage it lacks: the ORDER is the
+ * property, and ordering is exactly what a reader gets wrong. */
+static char *read_main_source(void) {
+    const char *paths[] = { "call/main.c", "../call/main.c" };
+    for (size_t i = 0; i < 2; i++) {
+        FILE *f = fopen(paths[i], "rb");
+        if (!f) continue;
+        if (fseek(f, 0, SEEK_END) != 0) { fclose(f); continue; }
+        long n = ftell(f);
+        rewind(f);
+        if (n <= 0) { fclose(f); continue; }
+        char *buf = malloc((size_t)n + 1);
+        size_t got = fread(buf, 1, (size_t)n, f);
+        buf[got] = 0;
+        fclose(f);
+        return buf;
+    }
+    return NULL;
+}
+
+TEST(the_publisher_encodes_the_codec_the_answer_chose) {
+    char *src = read_main_source();
+    CHECK(src != NULL);
+    if (!src) return;
+
+    /* The answer is recorded for EVERY session, not only receivers —
+     * the `s->receives &&` guard on the whole block was the bug. */
+    const char *record = strstr(src, "s->negotiated = media_sdp_video_codec(");
+    CHECK(record != NULL);
+
+    /* And applied to the capture config. */
+    const char *apply = strstr(src, "mcfg.video_codec = call.pub.neg_codec;");
+    CHECK(apply != NULL);
+
+    /* BEFORE the capture starts, which is the whole property: the
+     * encoder reads codec and payload type out of that config, so
+     * starting it first encodes one thing while the SDP promised
+     * another. */
+    const char *capture = strstr(src, "media_start_send(&call.send_audio");
+    CHECK(capture != NULL);
+    if (apply && capture) CHECK(apply < capture);
+
+    /* The self-view decodes those very packets, so it follows the same
+     * choice — otherwise everyone else renders and we are a black
+     * tile. */
+    const char *self = strstr(src, "call.vmix.legs[CALL_SELF_SLOT].codec = mcfg.video_codec;");
+    CHECK(self != NULL);
+    if (self && capture) CHECK(self < capture);
+    free(src);
+}
+
 TEST(the_reserved_self_slot_lays_out_like_any_other) {
     struct media_tile t[MEDIA_MAX_PEERS];
     const int self_slot = MEDIA_MAX_PEERS - 1;
@@ -656,6 +719,7 @@ int main(void) {
     RUN(the_subscribe_offer_names_every_codec_we_decode);
     RUN(the_answer_says_which_codec_this_peer_publishes);
     RUN(the_grid_is_even_and_independent_of_focus);
+    RUN(the_publisher_encodes_the_codec_the_answer_chose);
     RUN(the_reserved_self_slot_lays_out_like_any_other);
     RUN(the_mix_filter_chains_every_tile_into_one_output);
     RUN(the_published_grid_is_complete_or_refused);

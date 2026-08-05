@@ -163,6 +163,14 @@ struct session {
      * in, once on the way out; survives session_reset, which runs on
      * every retry. */
     bool absent;
+    /* What the ANSWER settled on for video, which is not necessarily
+     * what we asked for: the offer names both codecs and the far end
+     * chooses. Recorded for every session, used differently by each — a
+     * subscriber decodes with it, and the publisher must ENCODE with it.
+     * Zeroed means "the answer named nothing we understood". */
+    enum media_video_codec neg_codec;
+    int neg_pt;
+    bool negotiated;
 };
 
 struct call {
@@ -743,18 +751,47 @@ static bool session_negotiate(struct session *s, const char *url, rtcDirection d
      * configured default and SAYS SO. It is not fatal: their audio
      * still works, and the alternative — dropping the peer — turns a
      * codec we did not expect into a person who vanished. */
-    if (ok && video && s->receives && s->slot >= 0 && s->slot < CALL_MAX_PEERS) {
-        struct media_leg *leg = &s->owner->vmix.legs[s->slot];
+    if (ok && video) {
         enum media_video_codec got;
         int pt = 0;
-        if (media_sdp_video_codec(resp.body, &got, &pt)) {
-            leg->codec = got;
-            leg->payload_type = pt;
-            note("%s %d: publishing %s (payload type %d)", s->label, s->slot,
-                 media_video_codec_name(got), pt);
-        } else {
-            note("%s %d: the answer named no video codec we can decode — assuming %s",
-                 s->label, s->slot, media_video_codec_name(leg->codec));
+        s->negotiated = media_sdp_video_codec(resp.body, &got, &pt);
+        if (s->negotiated) {
+            s->neg_codec = got;
+            s->neg_pt = pt;
+        }
+        /* A SUBSCRIBER decodes with it. */
+        if (s->receives && s->slot >= 0 && s->slot < CALL_MAX_PEERS) {
+            struct media_leg *leg = &s->owner->vmix.legs[s->slot];
+            if (s->negotiated) {
+                leg->codec = got;
+                leg->payload_type = pt;
+                note("%s %d: publishing %s (payload type %d)", s->label, s->slot,
+                     media_video_codec_name(got), pt);
+            } else {
+                note("%s %d: the answer named no video codec we can decode — assuming %s",
+                     s->label, s->slot, media_video_codec_name(leg->codec));
+            }
+        } else if (!s->receives) {
+            /* And the PUBLISHER must ENCODE with it.
+             *
+             * This half was missing, and it is the whole of a call that
+             * arrives one-way. The offer names BOTH codecs and lets the
+             * far end choose; the encoder was then started from the
+             * configured preference regardless of what came back. Answer
+             * H264, encode VP8, and the SFU faithfully forwards packets
+             * carrying a payload type that describes something else —
+             * so every subscriber sees a tile that never paints, while
+             * OUR side of the call, which reads each peer's own answer,
+             * works perfectly. Asymmetric symptom, single cause.
+             *
+             * The caller reads this before starting the capture, which
+             * is why negotiation happens first. */
+            if (s->negotiated)
+                note("%s: the server chose %s (payload type %d) — encoding that",
+                     s->label, media_video_codec_name(got), pt);
+            else
+                note("%s: the answer named no video codec — encoding the configured default",
+                     s->label);
         }
     }
     whip_response_free(&resp);
@@ -1015,6 +1052,23 @@ int main(int argc, char **argv) {
      * The device still does not open until the SFU said yes, which is
      * the gate that matters: a call nobody accepted never lights the
      * microphone. */
+    /* ENCODE WHAT THE SERVER ACCEPTED, not what we asked for.
+     *
+     * The publish offer names both codecs so the far end can choose, and
+     * this is where the choice is honoured. It must happen before
+     * media_start_send: the capture reads the codec and the payload type
+     * out of the config, and starting it first would encode one thing
+     * while the SDP promised another.
+     *
+     * The self-view leg follows, because it decodes the very packets
+     * this encoder produces — a mismatch there would show everyone else
+     * correctly and us as a black tile. */
+    if (ok && whip_url && video && call.pub.negotiated) {
+        mcfg.video_codec = call.pub.neg_codec;
+        mcfg.video_payload_type = call.pub.neg_pt;
+        call.vmix.legs[CALL_SELF_SLOT].codec = mcfg.video_codec;
+        call.vmix.legs[CALL_SELF_SLOT].payload_type = mcfg.video_payload_type;
+    }
     if (ok && whip_url) {
         if (!media_start_send(&call.send_audio, &mcfg, false))
             emit_event("error", "message", "cannot open the microphone");
