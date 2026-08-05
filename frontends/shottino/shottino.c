@@ -15098,11 +15098,19 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
         video && pthread_create(&app->call_live.vreader, NULL, call_frame_main, app) == 0;
     pthread_mutex_unlock(&app->lock);
 
-    /* A window for the call, so the picture can have the screen when
-     * you want it and stay in the corner when you don't. Created only
-     * for a video call: an audio call has nothing to show, and a tab
-     * that draws an empty box is worse than no tab. */
-    if (video) add_window_ex(app, network, CALL_WINDOW, false);
+    /* NO window for the call.
+     *
+     * There used to be one, so the picture could have the whole screen.
+     * But a call belongs to the conversation it was placed in — that is
+     * the window you are talking to the other person in, and moving the
+     * picture somewhere else splits one conversation across two tabs.
+     * The picture-in-picture draw already puts it in whatever window you
+     * are reading, which is the behaviour that was wanted all along; the
+     * extra tab was the part nobody asked for.
+     *
+     * The full-size branch in the draw path is kept: it costs one
+     * comparison and it is what a `$call` window would still do if one
+     * ever existed again. */
 
     log_line(app, "call: connecting in the terminal (%s) — /hangup ends it, /mute and /unmute "
                   "while it runs",

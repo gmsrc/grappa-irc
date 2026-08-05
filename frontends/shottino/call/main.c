@@ -146,6 +146,17 @@ struct session {
      * to. Every subscriber has its OWN legs: N people are N streams,
      * and one decoder fed from several would be a blender. */
     int slot;
+    /* KNOWN ABSENT: this peer is not in the call, and the resubscribe
+     * loop is asking again every few seconds.
+     *
+     * Not an error state — in a channel most members are not in the
+     * call, so this is the steady state for most subscribers. It exists
+     * to keep them QUIET: an attempt that fails the same way it failed
+     * five seconds ago has nothing new to report, and three lines per
+     * peer per tick buries the events that do. Reported once on the way
+     * in, once on the way out; survives session_reset, which runs on
+     * every retry. */
+    bool absent;
 };
 
 struct call {
@@ -216,6 +227,10 @@ static void RTC_API on_state(int pc, rtcState state, void *ptr) {
     s->state = state;
     pthread_cond_broadcast(&s->owner->cv);
     pthread_mutex_unlock(&s->owner->lock);
+    /* A peer we already know is absent walks the same
+     * connecting -> closed pair every retry. Saying so each time is how
+     * a working call looks like a failing one. */
+    if (s->absent) return;
     if (state >= 0 && (size_t)state < sizeof(names) / sizeof(names[0])) {
         char msg[64];
         snprintf(msg, sizeof(msg), "%s %s", s->label, names[state]);
@@ -638,9 +653,22 @@ static bool session_negotiate(struct session *s, const char *url, rtcDirection d
      * is reported WITH its status, because "it did not work" without the
      * number is the kind of message that wastes an afternoon. */
     if (resp.status != 201 && resp.status != 200) {
-        char msg[128];
-        snprintf(msg, sizeof(msg), "%s: the endpoint answered %d", s->label, resp.status);
-        emit_event("error", "message", msg);
+        /* 404 on a SUBSCRIBE is not a failure: it is "that person is not
+         * in the call", which for a channel is true of most members most
+         * of the time. Said once, then the retries go quiet — see
+         * `absent`. Every other status, and every status on a PUBLISH,
+         * is a real error and carries its number, because "it did not
+         * work" without the number wastes an afternoon. */
+        bool not_here = resp.status == 404 && dir == RTC_DIRECTION_RECVONLY;
+        if (!not_here || !s->absent) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "%s: %s", s->label,
+                     not_here ? "not in the call — retrying quietly" : "the endpoint answered");
+            if (!not_here) snprintf(msg + strlen(msg), sizeof(msg) - strlen(msg), " %d",
+                                    resp.status);
+            emit_event(not_here ? "state" : "error", not_here ? "value" : "message", msg);
+        }
+        if (not_here) s->absent = true;
         whip_response_free(&resp);
         return false;
     }
@@ -652,6 +680,7 @@ static bool session_negotiate(struct session *s, const char *url, rtcDirection d
 
     /* The resource URL, for the DELETE that hangs up. Resolved now,
      * while the request URL it is relative to is still in hand. */
+    s->absent = false; /* here now: routine chatter is informative again */
     s->have_resource =
         resp.location[0] && whip_resolve(&endpoint, resp.location, s->resource, sizeof(s->resource));
     if (resp.location[0] && !s->have_resource)
@@ -996,6 +1025,7 @@ int main(int argc, char **argv) {
             joined++;
         } else {
             note("subscribe %d: not in the call", i);
+            call.sub[i].absent = true;
             /* RELEASED, not merely reported.
              *
              * session_negotiate marks a session active the moment it

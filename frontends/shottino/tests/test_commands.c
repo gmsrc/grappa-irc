@@ -243,6 +243,20 @@ TEST(the_call_defaults_move_the_page_and_the_sfu_together) {
     CHECK(strstr(source, "\"https://grappa.nexlab.net/uploads/call\"") == NULL);
 }
 
+/* A call belongs to the conversation it was placed in.
+ *
+ * Starting a video call used to mint a `$call` tab so the picture could
+ * have the whole screen — which split one conversation across two
+ * windows: the person you are talking to in one, their face in the
+ * other. The picture-in-picture draw already puts the call in whatever
+ * window you are reading, so the tab was the part nobody asked for. */
+TEST(a_call_does_not_mint_a_window_of_its_own) {
+    CHECK(strstr(source, "add_window_ex(app, network, CALL_WINDOW") == NULL);
+    /* The full-size branch survives: one comparison, and it is what such
+     * a window would still do if one ever existed again. */
+    CHECK(strstr(source, "is_call_window(w->channel)") != NULL);
+}
+
 int main(void) {
     test_use_temp_home();
 
@@ -268,6 +282,7 @@ int main(void) {
     RUN(every_dispatched_verb_has_a_help_topic);
     RUN(nothing_spells_its_own_version);
     RUN(the_call_defaults_move_the_page_and_the_sfu_together);
+    RUN(a_call_does_not_mint_a_window_of_its_own);
 
     free(source);
     return test_report();
