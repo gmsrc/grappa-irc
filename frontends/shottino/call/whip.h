@@ -68,9 +68,32 @@ bool whip_resolve(const struct whip_url *base, const char *location, char *out, 
 struct whip_response {
     int status;
     char location[WHIP_MAX_URL];
+    /* RFC 9725 §4.1: an OPTIONS to a WHIP endpoint advertises what it
+     * will accept a POST of, and for WHIP that is `application/sdp`.
+     * Captured because it is the one header that tells a WHIP endpoint
+     * apart from any other URL that happens to answer — see
+     * whip_endpoint_verdict. */
+    char accept_post[128];
     char *body;
     size_t body_len;
 };
+
+/* Is what answered an OPTIONS actually a WHIP/WHEP endpoint?
+ *
+ * Pure, so the rule lives in one place and is tested without a socket.
+ *
+ * A 2xx alone proves nothing — a web server, a redirect target, a
+ * captive portal and a 404 page all answer. What a WHIP endpoint owes,
+ * and nothing else does, is `Accept-Post: application/sdp`. So both are
+ * required, and the parameters an `Accept-Post` may legally carry
+ * (`application/sdp; charset=utf-8`) are tolerated while a different
+ * type is not.
+ *
+ * Fails CLOSED on every uncertainty. A verdict of "not an endpoint"
+ * costs a link that stays an ordinary clickable link; a false yes costs
+ * a ring, a call window and a camera for something that was never a
+ * call. */
+bool whip_endpoint_verdict(int status, const char *accept_post);
 
 /* Parse a whole HTTP/1.1 response.
  *

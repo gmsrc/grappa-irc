@@ -3098,6 +3098,90 @@ TEST(a_call_already_running_here_is_the_call) {
  * so the call stopped. Without this, hanging up and calling again inside
  * the half-hour window re-posted the DEAD room — and the message said
  * "one is already running" about a call that had just ended. */
+/* The cache key for a probe verdict, and the whole of what it may
+ * contain: scheme, host, port. A path in the key would make every room
+ * its own cache entry and every invite its own request. */
+TEST(a_probe_is_cached_by_origin) {
+    char o[256];
+    call_url_origin("https://grappa.nexlab.net/api/call/#r=abc", o, sizeof(o));
+    CHECK_STR(o, "https://grappa.nexlab.net");
+    /* The port is part of the origin — a different port is a different
+     * server, and one of them speaking WHIP says nothing about the other. */
+    call_url_origin("http://example.net:8889/call/#r=abc", o, sizeof(o));
+    CHECK_STR(o, "http://example.net:8889");
+    /* No path at all is still an origin. */
+    call_url_origin("https://example.net", o, sizeof(o));
+    CHECK_STR(o, "https://example.net");
+    /* A query or fragment ends it as surely as a slash. */
+    call_url_origin("https://example.net?x=1", o, sizeof(o));
+    CHECK_STR(o, "https://example.net");
+    call_url_origin("https://example.net#r=1", o, sizeof(o));
+    CHECK_STR(o, "https://example.net");
+
+    /* Anything that is not an absolute http(s) URL yields nothing, and
+     * the caller drops the probe rather than guessing at a key. */
+    call_url_origin("ftp://example.net/x", o, sizeof(o));
+    CHECK_STR(o, "");
+    call_url_origin("/just/a/path", o, sizeof(o));
+    CHECK_STR(o, "");
+    call_url_origin("https://", o, sizeof(o));
+    CHECK_STR(o, "");
+    call_url_origin(NULL, o, sizeof(o));
+    CHECK_STR(o, "");
+    /* An origin that does not fit is refused rather than truncated: half
+     * a hostname is a DIFFERENT host, and caching a verdict under it
+     * would answer for somebody else. */
+    char tiny[10];
+    call_url_origin("https://example.net/x", tiny, sizeof(tiny));
+    CHECK_STR(tiny, "");
+}
+
+/* Where a probe will NOT go.
+ *
+ * The URL came out of a stranger's message, so this is an SSRF in
+ * shape: a host unreachable from the internet but reachable from here
+ * would otherwise learn it exists. */
+TEST(a_probe_refuses_the_private_network) {
+    /* Ordinary public hosts and names. */
+    CHECK(call_probe_host_allowed("grappa.nexlab.net"));
+    CHECK(call_probe_host_allowed("94.23.108.58"));
+    CHECK(call_probe_host_allowed("8.8.8.8"));
+    CHECK(call_probe_host_allowed("2001:db8::1"));
+
+    /* Loopback, by name and by both literals. */
+    CHECK(!call_probe_host_allowed("localhost"));
+    CHECK(!call_probe_host_allowed("LOCALHOST"));
+    CHECK(!call_probe_host_allowed("127.0.0.1"));
+    CHECK(!call_probe_host_allowed("127.1.2.3"));
+    CHECK(!call_probe_host_allowed("::1"));
+
+    /* RFC 1918. */
+    CHECK(!call_probe_host_allowed("10.0.0.1"));
+    CHECK(!call_probe_host_allowed("192.168.1.1"));
+    CHECK(!call_probe_host_allowed("172.16.0.1"));
+    CHECK(!call_probe_host_allowed("172.31.255.255"));
+    /* And the edges of that range, which ARE public. */
+    CHECK(call_probe_host_allowed("172.15.0.1"));
+    CHECK(call_probe_host_allowed("172.32.0.1"));
+
+    /* Link-local, which is where a cloud metadata service lives. */
+    CHECK(!call_probe_host_allowed("169.254.169.254"));
+    CHECK(!call_probe_host_allowed("fe80::1"));
+    /* Unique-local IPv6. */
+    CHECK(!call_probe_host_allowed("fd00::1"));
+    CHECK(!call_probe_host_allowed("fc00::1"));
+    /* CGNAT — somebody else's customer network, not ours to poke. */
+    CHECK(!call_probe_host_allowed("100.64.0.1"));
+    CHECK(call_probe_host_allowed("100.63.0.1"));
+    CHECK(call_probe_host_allowed("100.128.0.1"));
+    /* 0.0.0.0/8, and an octet that cannot be one. */
+    CHECK(!call_probe_host_allowed("0.0.0.0"));
+    CHECK(!call_probe_host_allowed("999.1.1.1"));
+
+    CHECK(!call_probe_host_allowed(""));
+    CHECK(!call_probe_host_allowed(NULL));
+}
+
 TEST(a_call_that_ended_is_not_one_already_running) {
     const time_t now = 1000000;
 
@@ -4413,6 +4497,8 @@ int main(void) {
     RUN(random_bytes_are_the_sources_or_the_caller_is_told);
     RUN(a_call_already_running_here_is_the_call);
     RUN(a_call_that_ended_is_not_one_already_running);
+    RUN(a_probe_is_cached_by_origin);
+    RUN(a_probe_refuses_the_private_network);
     RUN(an_invite_carries_its_room_in_the_fragment);
     RUN(a_room_is_a_path_segment_and_is_encoded_like_one);
     RUN(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it);

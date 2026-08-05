@@ -26,7 +26,12 @@ CFLAGS += $(CFLAGS_DEPS)
 LDLIBS += $(LDLIBS_DEPS)
 
 BIN := shottino
-OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o ircd.o ws.o llm.o
+# call/whip.c is in the CLIENT's link set, not only the helper's: the
+# client probes an arriving invite to decide whether the URL is a WHIP
+# endpoint at all, and "what a WHIP endpoint looks like" must have ONE
+# answer. Built to whip_client.o rather than call/whip.o because the
+# opt-in helper compiles the same file with its own flags into that name.
+OBJS := shottino.o json.o wire.o alias.o mirc.o termcolor.o http.o media.o ircd.o ws.o llm.o whip_client.o
 
 # Test binaries link only the pure modules they exercise — no ncurses, no
 # OpenSSL, no terminal. That is the point of keeping the narrowing and
@@ -64,6 +69,9 @@ $(BIN): $(OBJS)
 # rebuild it and the binary could ship a version string it no longer had.
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c -o $@ $<
+
+whip_client.o: call/whip.c call/whip.h http.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c -o $@ call/whip.c
 
 -include $(OBJS:.o=.d)
 
@@ -125,8 +133,8 @@ tests/test_media: tests/test_media.c tests/test.h media.c media.h termcolor.c te
 # shottino.c, so it takes the same feature-test macros ($(CFLAGS_DEPS),
 # which is what puts strcasestr and cfmakeraw in scope) and links what
 # shottino links.
-tests/test_layout: tests/test_layout.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_layout.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
+tests/test_layout: tests/test_layout.c tests/test.h shottino.c call/whip.c call/whip.h json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_layout.c call/whip.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
 
 # test_keys needs a pty (-lutil): it feeds real byte sequences through the
 # client's own key decoding, because every key bug so far has been about
@@ -134,31 +142,31 @@ tests/test_layout: tests/test_layout.c tests/test.h shottino.c json.c wire.c ali
 # test_ircd opens a real socket to the bridge and speaks IRC to it: a
 # bridge is judged by what a client sees, and that cannot be asserted
 # from the inside.
-tests/test_ircd: tests/test_ircd.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_ircd.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
+tests/test_ircd: tests/test_ircd.c tests/test.h shottino.c call/whip.c call/whip.h json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_ircd.c call/whip.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
 
 # test_commands reads shottino.c off disk as well as compiling it: the
 # invariant it guards is that three lists inside that file agree, and the
 # only honest source for "what the dispatcher accepts" is the dispatcher.
-tests/test_commands: tests/test_commands.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_commands.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
+tests/test_commands: tests/test_commands.c tests/test.h shottino.c call/whip.c call/whip.h json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_commands.c call/whip.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
 
 # test_windows drives the app's own window bookkeeping — no screen, no
 # socket, just state — because "which window does this name mean" is the
 # question every other bug in the sidebar has turned out to be.
-tests/test_windows: tests/test_windows.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_windows.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
+tests/test_windows: tests/test_windows.c tests/test.h shottino.c call/whip.c call/whip.h json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_windows.c call/whip.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
 
 # test_call is the only suite linked against BOTH binaries: it compiles
 # shottino.c for the call helpers and links call/media.c so the codec
 # word shottino puts in the helper's argv can be handed to the helper's
 # own parser. Asserting that word against a literal here would only say
 # what this side already believes.
-tests/test_call: tests/test_call.c tests/test.h shottino.c call/media.c call/media.h json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_call.c call/media.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
+tests/test_call: tests/test_call.c tests/test.h shottino.c call/media.c call/media.h call/whip.c call/whip.h json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_call.c call/media.c call/whip.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
 
-tests/test_keys: tests/test_keys.c tests/test.h shottino.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
-	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_keys.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS) -lutil
+tests/test_keys: tests/test_keys.c tests/test.h shottino.c call/whip.c call/whip.h json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
+	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_keys.c call/whip.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS) -lutil
 
 # Compiling shottino.c means inheriting its reach into $HOME: anything
 # that calls shottino_state_dir() mkdirs there, and prefs_save writes the
@@ -307,4 +315,4 @@ install: $(BIN)
 # libdatachannel from scratch is minutes, it is not what `clean` is for,
 # and it is already untracked. `rm -rf vendor/build` is the deliberate act.
 clean:
-	rm -f $(BIN) $(OBJS) $(OBJS:.o=.d) $(TESTS) $(CALL_BIN) call/main.o call/whip.o call/media.o call/note.o
+	rm -f $(BIN) $(OBJS) $(OBJS:.o=.d) whip_client.d $(TESTS) $(CALL_BIN) call/main.o call/whip.o call/media.o call/note.o

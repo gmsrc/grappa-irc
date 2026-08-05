@@ -324,6 +324,50 @@ TEST(call_new_mints_rather_than_joining) {
     CHECK(strstr(source, "/call new (or /videocall new) mints a fresh room") != NULL);
 }
 
+/* An unverified marker writes nothing and rings nothing.
+ *
+ * The verdict and the host rule are unit-tested; what no test can
+ * observe is the ORDER — that call_consider hands off to the queue and
+ * returns, and that everything which writes call state or rings sits
+ * behind the probe in call_invite_accept. Get that backwards and both
+ * halves still pass while any link rings the terminal again. */
+TEST(an_unchecked_invite_neither_rings_nor_is_remembered) {
+    /* The gate: probing on means enqueue and return, nothing else. */
+    CHECK(strstr(source, "if (!app->call_probe) {\n        call_invite_accept(") != NULL);
+    CHECK(strstr(source, "struct job job = {.kind = JOB_CALL_PROBE, .num = (int)kind};") != NULL);
+    /* Believing happens in ONE place, and the probe is the only caller
+     * besides the probe-off shortcut above. */
+    CHECK(strstr(source, "static void call_invite_accept(") != NULL);
+    /* The ring and the record are inside it, not beside it. */
+    size_t accept_at = (size_t)(strstr(source, "static void call_invite_accept(") - source);
+    const char *ring = strstr(source, "app->call_ring_bell = true;");
+    const char *record = strstr(source, "app->call_last.present = true;\n        /* A NEW invite");
+    CHECK(ring != NULL && (size_t)(ring - source) > accept_at);
+    CHECK(record != NULL && (size_t)(record - source) > accept_at);
+
+    /* Checked by default: a default of off would ship the bug with a
+     * setting that nobody turns on. */
+    CHECK(strstr(source, "app->call_probe = true;") != NULL);
+
+    /* The probe asks with OPTIONS and no credentials, and judges with
+     * the shared verdict rather than a second local rule. */
+    CHECK(strstr(source, "whip_request(&u, \"OPTIONS\", NULL, NULL, CALL_PROBE_TIMEOUT_MS") != NULL);
+    CHECK(strstr(source, "whip_endpoint_verdict(resp.status, resp.accept_post)") != NULL);
+    /* And refuses the private network before dialling anything. */
+    CHECK(strstr(source, "!whip_url_parse(target, &u) || !call_probe_host_allowed(u.host)") != NULL);
+
+    /* Never on the socket thread: the probe reaches the worker through
+     * the job queue, like every other network round trip here. */
+    CHECK(strstr(source, "case JOB_CALL_PROBE:\n            call_probe_job(app, &job);") != NULL);
+
+    /* And being on the worker, it SNAPSHOTS what it needs rather than
+     * reading app state live. call_sfu_base trims its buffer in place,
+     * so the probe must not be the thing that calls it — a write racing
+     * /set is not a bug any test could reproduce afterwards. */
+    CHECK(strstr(source, "call_rtc_base_from(sfu, job->arg1, rtc, sizeof(rtc));") != NULL);
+    CHECK(strstr(source, "snprintf(sfu, sizeof(sfu), \"%s\", call_sfu_base(app));") != NULL);
+}
+
 int main(void) {
     test_use_temp_home();
 
@@ -352,6 +396,7 @@ int main(void) {
     RUN(leaving_stops_a_running_call);
     RUN(a_stopped_call_marks_its_invite_spent);
     RUN(call_new_mints_rather_than_joining);
+    RUN(an_unchecked_invite_neither_rings_nor_is_remembered);
     RUN(the_call_window_is_offered_never_forced);
 
     free(source);

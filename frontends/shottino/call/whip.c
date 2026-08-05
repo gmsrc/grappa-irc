@@ -186,6 +186,18 @@ static bool header_value(const char *block, size_t len, const char *name, char *
     return false;
 }
 
+bool whip_endpoint_verdict(int status, const char *accept_post) {
+    if (status < 200 || status > 299) return false;
+    if (!accept_post) return false;
+    while (*accept_post == ' ' || *accept_post == '\t') accept_post++;
+    if (strncasecmp(accept_post, "application/sdp", 15) != 0) return false;
+    /* The type ends where the media type ends: at a parameter, at the
+     * comma of a second type, or at the end. `application/sdpfoo` is a
+     * different type and must not pass on a prefix match. */
+    char after = accept_post[15];
+    return after == 0 || after == ';' || after == ',' || after == ' ' || after == '\t';
+}
+
 bool whip_response_parse(const char *raw, size_t len, struct whip_response *out) {
     if (!raw || !out) return false;
     memset(out, 0, sizeof(*out));
@@ -237,6 +249,7 @@ bool whip_response_parse(const char *raw, size_t len, struct whip_response *out)
     size_t hlen = hblock < hdr_end ? (size_t)(hdr_end - hblock) : 0;
 
     header_value(hblock, hlen, "Location", out->location, sizeof(out->location));
+    header_value(hblock, hlen, "Accept-Post", out->accept_post, sizeof(out->accept_post));
 
     size_t body_len = len - body_at;
     char enc[64];

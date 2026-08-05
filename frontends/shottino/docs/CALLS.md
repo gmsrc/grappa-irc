@@ -31,7 +31,9 @@ so a human reading it in irssi or cicchetto needs no explanation.
 | verb | what it does |
 |---|---|
 | `/call` | mint a room, post `📞 <url>` to this window, open it |
+| `/call new` | the same, ignoring a call already running here (see below) |
 | `/videocall` | the same with `📹`, so the other side knows to expect a camera |
+| `/videocall new` | the video form of `/call new` |
 | `/answer` | join the last call that came in — ringing or not |
 | `/hangup` | stop a ring. **Local**: the caller is not told |
 
@@ -41,8 +43,42 @@ so a human reading it in irssi or cicchetto needs no explanation.
 |---|---|---|
 | `call.base_url` | `https://meet.jit.si` | where a room is made. Any room-per-URL service |
 | `call.ring` | `queries` | `off` / `queries` / `all` — when an arriving call interrupts you |
+| `call.probe` | `on` | check an arriving invite really is a WHIP endpoint before it rings |
 
 ### The rules the implementation actually enforces
+
+**A marker is a claim, and the claim is checked.** `call.probe` on (the
+default) means an arriving invite does not ring, does not open a window
+and does not become call state until the URL it names has answered as a
+WHIP endpoint: an `OPTIONS` returning 2xx with `Accept-Post:
+application/sdp`, which is what RFC 9725 §4.1 requires of a WHIP
+endpoint and what no ordinary web page returns. Until then the row is
+an ordinary message with a clickable link in it, and if the check fails
+that is all it ever becomes.
+
+The endpoint probed is the one this client would *publish* to —
+`<rtc base>/<your nick>/whip`, derived exactly as a real call derives
+it — not the page URL in the message. The page is a page: the reference
+deployment answers `405` to an `OPTIONS` on it, so probing the page
+would fail every real call.
+
+**What the probe proves, and what it does not.** A WHIP endpoint answers
+`OPTIONS` identically for a room that does not exist — verified against
+the deployment. So a pass means *this is a real SFU*, never *somebody is
+in that room*. Liveness is a separate question, answered separately (see
+"a call already running here").
+
+**The probe costs an outbound request to a host a stranger chose.** It
+is an `OPTIONS`: no body, no credentials, no session token, nothing read
+back but a header, a four-second timeout, and one request per origin per
+fifteen minutes. Literal loopback, RFC 1918, link-local (including cloud
+metadata), CGNAT and IPv6 unique-local addresses are refused before
+anything is dialled. A *hostname* that resolves to a private address is
+still probed — closing that needs the resolved address at the connect,
+which the WHIP client does not take, so it is named here rather than
+pretended away. `call.probe off` is the complete answer for anyone who
+wants one; it restores the older behaviour, where the marker alone is
+the proof.
 
 **A marker, never a URL pattern.** Ringing at any recognised meeting link
 would mean anyone who pastes one — or quotes one, or links a recording of
@@ -57,6 +93,25 @@ than a call.
 
 **A URL that does not fit is refused, never truncated.** Half a room name
 is not a shorter link; it is a different room.
+
+**A call already running here is joined, not duplicated.** A second
+`/call` in a window that already has one re-posts *that* room's link
+rather than minting a second, because two rooms means two people each
+waiting somewhere the other isn't. Whether one is "already running" is
+answered from three places, in order of how much they actually know:
+
+1. **Did we watch it end?** Every teardown — `/hangup`, an SFU drop, a
+   crash, closing the window — passes through one place, which marks the
+   invite it was serving as spent. Matched on (network, channel), so a
+   call ending in `#a` leaves an invite that arrived meanwhile in `#b`
+   alone. This is knowledge, not a guess.
+2. **`/call new`.** The operator saying so outright. Needed because (1)
+   cannot cover a room somebody else minted, which we never joined and
+   never saw end.
+3. **The clock**, 30 minutes, as the fallback for exactly that case.
+
+The probe deliberately does not help here: it says the SFU is real, not
+that the room has anyone in it.
 
 **The room name is 128 bits from the CSPRNG.** A room of this shape is
 public to whoever knows its name — *the link is the credential*. That

@@ -276,11 +276,51 @@ TEST(a_control_character_never_reaches_the_request_line) {
     CHECK(strstr(err, "control character") == NULL); /* refused by the socket, not the gate */
 }
 
+/* The one header that tells a WHIP endpoint from any other URL.
+ *
+ * This verdict is what stops a link that merely CARRIES a call marker
+ * from ringing a terminal. Everything that is not positive proof of a
+ * WHIP endpoint has to come back false, because the cost of a wrong
+ * "yes" is a ring, a call window and a camera for something that was
+ * never a call, and the cost of a wrong "no" is a link that stays a
+ * link. */
+TEST(only_an_sdp_accepting_endpoint_is_a_whip_endpoint) {
+    /* What the deployment actually answers: 204 + the header. */
+    CHECK(whip_endpoint_verdict(204, "application/sdp"));
+    CHECK(whip_endpoint_verdict(200, "application/sdp"));
+    /* Parameters are legal on a media type and change nothing. */
+    CHECK(whip_endpoint_verdict(204, "application/sdp; charset=utf-8"));
+    CHECK(whip_endpoint_verdict(204, "application/sdp, application/json"));
+    /* Leading whitespace is the header parser's slack, not a difference. */
+    CHECK(whip_endpoint_verdict(204, "  application/sdp"));
+    /* Case-insensitive, like every media type comparison. */
+    CHECK(whip_endpoint_verdict(204, "Application/SDP"));
+
+    /* A status that is not success, however friendly the header. */
+    CHECK(!whip_endpoint_verdict(404, "application/sdp"));
+    CHECK(!whip_endpoint_verdict(405, "application/sdp"));
+    CHECK(!whip_endpoint_verdict(301, "application/sdp"));
+    CHECK(!whip_endpoint_verdict(500, "application/sdp"));
+
+    /* A success that proves nothing. An ordinary web page, a redirect
+     * target and a captive portal all answer 200 — this is the case the
+     * whole probe exists for. */
+    CHECK(!whip_endpoint_verdict(200, ""));
+    CHECK(!whip_endpoint_verdict(200, NULL));
+    CHECK(!whip_endpoint_verdict(200, "text/html"));
+    CHECK(!whip_endpoint_verdict(200, "application/json"));
+    /* A PREFIX is not the type: `application/sdpfoo` is something else. */
+    CHECK(!whip_endpoint_verdict(200, "application/sdpfoo"));
+    /* And not merely CONTAINING it either — the type has to lead. */
+    CHECK(!whip_endpoint_verdict(200, "text/html, application/sdp"));
+}
+
 int main(void) {
     RUN(a_url_is_split_or_refused);
     RUN(a_location_resolves_against_the_request);
     RUN(a_response_is_parsed_or_refused);
     RUN(a_header_block_can_be_empty_but_never_endless);
     RUN(a_control_character_never_reaches_the_request_line);
+    RUN(only_an_sdp_accepting_endpoint_is_a_whip_endpoint);
     return test_report();
 }

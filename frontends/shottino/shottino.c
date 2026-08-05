@@ -45,6 +45,7 @@
 
 #include "alias.h"
 #include "http.h"
+#include "call/whip.h"
 #include "ircd.h"
 #include "ws.h"
 #include "llm.h"
@@ -325,7 +326,8 @@ enum job_kind {
     JOB_CHATHISTORY,
     JOB_EXEC,
     JOB_STT,
-    JOB_UPLOAD
+    JOB_UPLOAD,
+    JOB_CALL_PROBE
 };
 
 struct job {
@@ -339,6 +341,11 @@ struct job {
      * to hold it, when it is done. False for a file the user named —
      * /upload of a holiday photo must not eat the photo. */
     bool owns_file;
+    /* One integer, for a job whose argument is not text. JOB_CALL_PROBE
+     * carries an enum call_kind here rather than spelling it into arg2
+     * and parsing it back — a closed set of two does not become a string
+     * because the queue happened to be made of them. */
+    int num;
 };
 
 struct seen_message {
@@ -723,6 +730,8 @@ static size_t settings_count(void);
  * approval path, which comes before the directory helper. */
 static void bot_dir_path(struct app *app, char *out, size_t out_sz);
 static void stt_job(struct app *app, const struct job *job);
+static void call_probe_job(struct app *app, const struct job *job);
+static bool enqueue_job(struct app *app, struct job job);
 static void upload_file_to(struct app *app, const char *path, const char *marker,
                            const char *up_net, const char *up_chan);
 
@@ -1118,6 +1127,35 @@ struct app {
         char channel[MAX_CHANNEL];
         char url[MAX_LINE];
     } call_last;
+    /* Whether an arriving invite is CHECKED before it is believed.
+     *
+     * On (the default), a marker only rings once the URL it names has
+     * been shown to be a WHIP endpoint. Off restores the older
+     * behaviour: the marker alone is the claim, and anyone who can
+     * type `📞 https://…` can ring your terminal.
+     *
+     * A setting rather than a constant because the check costs an
+     * outbound request to a host a STRANGER chose — see call_probe_job
+     * for what that does and does not expose, and #451 for the same
+     * question asked about images and answered the other way. */
+    bool call_probe;
+    /* What the last few probes concluded, keyed by ORIGIN.
+     *
+     * Small and fixed: this is a cache, and a cache that grows on
+     * attacker-supplied keys is a memory bug waiting for someone to post
+     * ten thousand hostnames. Oldest entry is overwritten, which for a
+     * cache is a miss and one more request, not a fault.
+     *
+     * Keyed by origin because that is the granularity the answer has:
+     * the SFU either speaks WHIP at that host or it does not, and the
+     * room in the path does not change that (the endpoint answers OPTIONS
+     * for a room that does not exist — verified against the deployment). */
+    struct {
+        char origin[256];
+        bool ok;
+        time_t at;
+    } call_probe_cache[8];
+    size_t call_probe_next;
     /* Raised when a ring goes up, lowered by the DRAW thread after it
      * beeps. ncurses is not thread-safe and invites arrive on the socket
      * thread, so the bell cannot be rung where the decision is made. */
@@ -3695,16 +3733,75 @@ static bool call_should_ring(enum call_ring_policy policy, bool query) {
     return false;
 }
 
-static void call_consider(struct app *app, const char *network, const char *channel,
-                          const char *sender, const char *body) {
-    enum call_kind kind;
-    char url[MAX_LINE];
-    if (!call_invite_parse(body, &kind, url, sizeof(url))) return;
-    /* Our own invite, arriving back from the server. Ringing at it would
-     * mean every call rings its own caller. */
-    const char *own = own_nick_for_network(app, network);
-    if (own && sender && irc_name_eq(sender, own)) return;
+/* The origin of a URL — scheme://host[:port] — which is the granularity
+ * a "does this speak WHIP" answer actually has. Empty on anything that
+ * is not an absolute http(s) URL. */
+static void call_url_origin(const char *url, char *out, size_t out_sz) {
+    out[0] = 0;
+    if (!url) return;
+    const char *p;
+    if (strncmp(url, "https://", 8) == 0) p = url + 8;
+    else if (strncmp(url, "http://", 7) == 0) p = url + 7;
+    else return;
+    size_t lead = (size_t)(p - url);
+    size_t n = 0;
+    while (p[n] && p[n] != '/' && p[n] != '?' && p[n] != '#') n++;
+    if (n == 0 || lead + n + 1 > out_sz) return;
+    memcpy(out, url, lead + n);
+    out[lead + n] = 0;
+}
 
+/* Is this a host we are willing to send a probe TO?
+ *
+ * The probe is an outbound request to a URL a STRANGER put in a message,
+ * which is the shape of an SSRF: a host that is unreachable from the
+ * internet but reachable from here — a router's admin page, a metadata
+ * service, something else on the LAN — learns it exists and is running.
+ * An OPTIONS carries no credentials and reads nothing back but a header,
+ * so the leak is small; it is not nothing.
+ *
+ * Refused by LITERAL, which is what this can honestly check. A hostname
+ * that RESOLVES to a private address still gets probed — closing that
+ * means resolving here and handing the address to the connect, which the
+ * WHIP client does not take. Named as a known limit rather than
+ * pretended away; the SETTING (call.probe off) is the complete answer
+ * for anyone who wants one. */
+static bool call_probe_host_allowed(const char *host) {
+    if (!host || !host[0]) return false;
+    if (strcasecmp(host, "localhost") == 0) return false;
+    /* IPv6 literals: loopback, unique-local (fc00::/7) and link-local
+     * (fe80::/10). whip_url_parse has already stripped the brackets. */
+    if (strchr(host, ':')) {
+        if (strcmp(host, "::1") == 0) return false;
+        if (strncasecmp(host, "fc", 2) == 0 || strncasecmp(host, "fd", 2) == 0) return false;
+        if (strncasecmp(host, "fe8", 3) == 0 || strncasecmp(host, "fe9", 3) == 0 ||
+            strncasecmp(host, "fea", 3) == 0 || strncasecmp(host, "feb", 3) == 0)
+            return false;
+        return true;
+    }
+    unsigned a, b, c, d;
+    char tail;
+    if (sscanf(host, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4) return true; /* a name */
+    if (a > 255 || b > 255 || c > 255 || d > 255) return false;
+    if (a == 127 || a == 0 || a == 10) return false;
+    if (a == 172 && b >= 16 && b <= 31) return false;
+    if (a == 192 && b == 168) return false;
+    if (a == 169 && b == 254) return false; /* link-local, incl. cloud metadata */
+    if (a == 100 && b >= 64 && b <= 127) return false; /* CGNAT */
+    return true;
+}
+
+/* The half of call_consider that BELIEVES the invite.
+ *
+ * Split out so the believing can happen LATER — on the worker, once the
+ * URL has been shown to be a WHIP endpoint. Everything here writes call
+ * state or rings, which is exactly what an unverified marker must not
+ * be able to do. Called directly only when probing is off.
+ *
+ * Runs on the worker thread when the probe called it, so it takes the
+ * lock for every read of app state and holds nothing across a send. */
+static void call_invite_accept(struct app *app, const char *network, const char *channel,
+                               const char *sender, enum call_kind kind, const char *url) {
     bool query = !is_channel_name(channel);
     bool ring = call_should_ring(app->call_ring, query);
     bool busy = false;
@@ -3766,6 +3863,51 @@ static void call_consider(struct app *app, const char *network, const char *chan
     else if (!ring)
         log_line(app, "call: %s started a %s in %s — /answer to join", sender ? sender : "someone",
                  call_kind_word(kind), channel ? channel : "?");
+}
+
+/* Does a marked line get to ring? Only once the URL answers as WHIP.
+ *
+ * A call marker is a CLAIM, and until now the claim was the proof:
+ * anyone who could type `📞 https://anything` made a terminal ring,
+ * open a call window and reach for a camera. So the claim is now
+ * CHECKED, and the check is the one thing that distinguishes a WHIP
+ * endpoint from every other URL that answers — `Accept-Post:
+ * application/sdp` on an OPTIONS (RFC 9725 §4.1).
+ *
+ * Nothing is written and nothing rings until it comes back. On failure
+ * the line stays exactly what it looks like: a message with a link in
+ * it, clickable like any other, and no call state anywhere.
+ *
+ * Never on this thread. This runs on the socket reader, and a probe is
+ * a TLS handshake to a host that may be a black hole — a client that
+ * stopped receiving messages while it waited would be a worse bug than
+ * the one being fixed. */
+static void call_consider(struct app *app, const char *network, const char *channel,
+                          const char *sender, const char *body) {
+    enum call_kind kind;
+    char url[MAX_LINE];
+    if (!call_invite_parse(body, &kind, url, sizeof(url))) return;
+    /* Our own invite, arriving back from the server. Ringing at it would
+     * mean every call rings its own caller. */
+    const char *own = own_nick_for_network(app, network);
+    if (own && sender && irc_name_eq(sender, own)) return;
+
+    if (!app->call_probe) {
+        call_invite_accept(app, network, channel, sender, kind, url);
+        return;
+    }
+    struct job job = {.kind = JOB_CALL_PROBE, .num = (int)kind};
+    snprintf(job.network, sizeof(job.network), "%s", network ? network : "");
+    snprintf(job.channel, sizeof(job.channel), "%s", channel ? channel : "");
+    snprintf(job.arg1, sizeof(job.arg1), "%s", url);
+    snprintf(job.arg2, sizeof(job.arg2), "%s", sender ? sender : "");
+    /* A full queue drops the probe, and therefore the call. That is the
+     * right way round: the alternative is ringing on an unchecked URL
+     * because we were busy, which is the exact thing this prevents. */
+    if (!enqueue_job(app, job))
+        log_line(app, "call: %s posted an invite while the work queue was full — it was not "
+                      "checked, so it did not ring. The link is in the message",
+                 sender ? sender : "someone");
 }
 
 static void render_message(struct app *app, const struct wire_scrollback_message *m, bool live) {
@@ -11281,6 +11423,8 @@ static const struct setting_def SETTINGS[] = {
     { "call.sfu_url", SET_TEXT, NULL,
       "where the SFU is, when the room page is not hosted beside it" },
     { "call.ring", SET_CHOICE, "off|queries|all", "when an arriving call interrupts you" },
+    { "call.probe", SET_CHOICE, "on|off",
+      "check an arriving invite really is a WHIP endpoint before it rings" },
     { "mirc.contrast", SET_CHOICE, "auto|off|dark|light",
       "lift a bot's colours off the background when they vanish into it" },
     { "call.mode", SET_CHOICE, "browser|terminal", "where a call runs; terminal needs a WHIP SFU" },
@@ -11392,6 +11536,8 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "voice.sink") == 0) snprintf(out, out_sz, "%s", app->voice_sink);
     else if (strcmp(name, "notifications") == 0)
         snprintf(out, out_sz, "%s", app->notifications ? "on" : "off");
+    else if (strcmp(name, "call.probe") == 0)
+        snprintf(out, out_sz, "%s", app->call_probe ? "on" : "off");
     else if (strcmp(name, "video.source") == 0) snprintf(out, out_sz, "%s", app->video_source);
     else if (strcmp(name, "bot.dir") == 0) {
         char dir[LLM_MAX_PATH];
@@ -11461,6 +11607,7 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "call.base_url") == 0) src = app->call_base_url;
     else if (strcmp(name, "call.sfu_url") == 0) src = app->call_sfu_url;
     else if (strcmp(name, "call.ring") == 0) src = call_ring_word(app->call_ring);
+    else if (strcmp(name, "call.probe") == 0) src = app->call_probe ? "on" : "off";
     else if (strcmp(name, "mirc.contrast") == 0) src = mirc_contrast_word(app->mirc_contrast);
     else if (strcmp(name, "call.mode") == 0) src = app->call_in_terminal ? "terminal" : "browser";
     else if (strcmp(name, "notifications") == 0) src = app->notifications ? "on" : "off";
@@ -11636,7 +11783,14 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
     else if (strcmp(def->name, "voice.source") == 0)
         snprintf(app->voice_source, sizeof(app->voice_source), "%.*s",
                  (int)sizeof(app->voice_source) - 1, value);
-    else if (strcmp(def->name, "notifications") == 0) {
+    else if (strcmp(def->name, "call.probe") == 0) {
+        if (strcasecmp(value, "on") == 0) app->call_probe = true;
+        else if (strcasecmp(value, "off") == 0) app->call_probe = false;
+        else {
+            log_line(app, "/set call.probe: `%.20s` is not one of %s", value, def->values);
+            return false;
+        }
+    } else if (strcmp(def->name, "notifications") == 0) {
         if (strcasecmp(value, "on") == 0) app->notifications = true;
         else if (strcasecmp(value, "off") == 0) app->notifications = false;
         else {
@@ -12447,6 +12601,9 @@ static void *worker_main(void *arg) {
             break;
         case JOB_STT:
             stt_job(app, &job);
+            break;
+        case JOB_CALL_PROBE:
+            call_probe_job(app, &job);
             break;
         case JOB_UPLOAD:
             upload_file_to(app, job.arg1, job.arg2, job.network, job.channel);
@@ -14863,14 +15020,141 @@ static const char *call_sfu_base(struct app *app) {
  * because the terminal has to publish where the browser subscribes and a
  * disagreement between them is SILENT — both ends connect, nobody hears
  * anybody. */
-static void call_rtc_base(struct app *app, const char *room_url, char *out, size_t out_sz) {
+static void call_rtc_base_from(const char *sfu, const char *room_url, char *out, size_t out_sz) {
     char page_base[MAX_LINE], room_id[160];
     if (!call_invite_split(room_url, page_base, sizeof(page_base), room_id, sizeof(room_id)))
         snprintf(out, out_sz, "%s", room_url); /* an invite from before the room page */
-    else if (app->call_sfu_url[0])
-        snprintf(out, out_sz, "%s/%s", call_sfu_base(app), room_id);
+    else if (sfu && sfu[0])
+        snprintf(out, out_sz, "%s/%s", sfu, room_id);
     else
         snprintf(out, out_sz, "%s/rtc/%s", page_base, room_id);
+}
+
+/* The app-state adapter. Takes `sfu` by value from a caller that already
+ * read it, which is what lets the WORKER derive the same base without
+ * touching app->call_sfu_url: call_sfu_base TRIMS that buffer in place,
+ * so calling it off the UI thread would be a write racing /set. */
+static void call_rtc_base(struct app *app, const char *room_url, char *out, size_t out_sz) {
+    call_rtc_base_from(call_sfu_base(app), room_url, out, out_sz);
+}
+
+/* How long a verdict about an origin is worth keeping, and how long we
+ * are willing to wait for one.
+ *
+ * The timeout is short because it sits between an invite arriving and it
+ * ringing: past a few seconds the ring has stopped being about a call
+ * somebody is placing NOW. The cache lifetime is long enough that a
+ * channel full of invites costs one request, short enough that an SFU
+ * coming back up is noticed within the hour. */
+#define CALL_PROBE_TIMEOUT_MS 4000
+#define CALL_PROBE_CACHE_SECS (15 * 60)
+
+/* Look up an origin's verdict. Returns false when there is no usable
+ * entry, in which case `*out` is untouched. */
+static bool call_probe_cached(struct app *app, const char *origin, bool *out) {
+    bool found = false;
+    time_t now = time(NULL);
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < (sizeof(app->call_probe_cache) / sizeof(app->call_probe_cache[0])); i++) {
+        if (strcmp(app->call_probe_cache[i].origin, origin) != 0) continue;
+        /* A clock that went backwards must not make an entry eternal —
+         * the same rule the invite freshness test follows. */
+        time_t at = app->call_probe_cache[i].at;
+        if (now < at || now - at > CALL_PROBE_CACHE_SECS) break;
+        *out = app->call_probe_cache[i].ok;
+        found = true;
+        break;
+    }
+    pthread_mutex_unlock(&app->lock);
+    return found;
+}
+
+static void call_probe_remember(struct app *app, const char *origin, bool ok) {
+    pthread_mutex_lock(&app->lock);
+    size_t at = (sizeof(app->call_probe_cache) / sizeof(app->call_probe_cache[0]));
+    for (size_t i = 0; i < (sizeof(app->call_probe_cache) / sizeof(app->call_probe_cache[0])); i++)
+        if (strcmp(app->call_probe_cache[i].origin, origin) == 0) at = i;
+    if (at == (sizeof(app->call_probe_cache) / sizeof(app->call_probe_cache[0]))) {
+        at = app->call_probe_next % (sizeof(app->call_probe_cache) / sizeof(app->call_probe_cache[0]));
+        app->call_probe_next++;
+    }
+    snprintf(app->call_probe_cache[at].origin, sizeof(app->call_probe_cache[at].origin), "%s",
+             origin);
+    app->call_probe_cache[at].ok = ok;
+    app->call_probe_cache[at].at = time(NULL);
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Ask the URL whether it is a WHIP endpoint, then let the invite through
+ * or drop it. Worker thread only.
+ *
+ * The target is the endpoint this client would actually PUBLISH to —
+ * `<rtc base>/<my nick>/whip` — not the page URL in the message. The
+ * page is a page: the deployment's own answers 405 to an OPTIONS, and
+ * probing it would fail every real call. Deriving the target the same
+ * way call_helper_start does also means the probe and the publish agree
+ * about where the SFU is, so a wrong call.sfu_url is caught here rather
+ * than as a 404 halfway into a call.
+ *
+ * What this proves and what it does not: the endpoint answers OPTIONS
+ * identically for a room that does not exist, so a pass means "this is a
+ * real SFU", never "somebody is in that room". Liveness is a different
+ * question with a different answer (call_last.ended, and /call new). */
+static void call_probe_job(struct app *app, const struct job *job) {
+    char origin[256];
+    call_url_origin(job->arg1, origin, sizeof(origin));
+    if (!origin[0]) return; /* call_invite_parse already required http(s) */
+
+    /* Snapshot, then compute. This is the worker thread: the SFU setting
+     * can change under it and the nick is a pointer INTO app state that
+     * a reconnect can rewrite. Both are copied under the lock and
+     * nothing is held across the request that follows. */
+    char sfu[sizeof(app->call_sfu_url)], nick[MAX_CHANNEL];
+    pthread_mutex_lock(&app->lock);
+    snprintf(sfu, sizeof(sfu), "%s", call_sfu_base(app));
+    const char *own = own_nick_for_network(app, job->network);
+    snprintf(nick, sizeof(nick), "%s", own && own[0] ? own : "me");
+    pthread_mutex_unlock(&app->lock);
+
+    char rtc[MAX_LINE + 168];
+    call_rtc_base_from(sfu, job->arg1, rtc, sizeof(rtc));
+    char me[128];
+    call_path_nick(nick, me, sizeof(me));
+    size_t len = strlen(rtc);
+    const char *sep = (len > 0 && rtc[len - 1] == '/') ? "" : "/";
+    char target[sizeof(rtc) + 160];
+    snprintf(target, sizeof(target), "%s%s%s/whip", rtc, sep, me);
+
+    bool ok = false;
+    if (!call_probe_cached(app, origin, &ok)) {
+        struct whip_url u;
+        if (!whip_url_parse(target, &u) || !call_probe_host_allowed(u.host)) {
+            ok = false;
+        } else {
+            struct whip_response resp;
+            char err[256] = "";
+            /* OPTIONS, with no body and no credentials: the least this
+             * can ask and still get an answer. */
+            if (whip_request(&u, "OPTIONS", NULL, NULL, CALL_PROBE_TIMEOUT_MS, &resp, err,
+                             sizeof(err))) {
+                ok = whip_endpoint_verdict(resp.status, resp.accept_post);
+                whip_response_free(&resp);
+            }
+        }
+        call_probe_remember(app, origin, ok);
+    }
+
+    if (ok) {
+        call_invite_accept(app, job->network, job->channel, job->arg2, (enum call_kind)job->num,
+                           job->arg1);
+        return;
+    }
+    /* Said, not silently swallowed. The row is already in scrollback and
+     * the link is clickable; what would otherwise be missing is WHY a
+     * line with a call marker on it did nothing. */
+    log_line(app, "call: %s posted a call marker but %s does not answer as a WHIP endpoint — "
+                  "treating it as an ordinary link",
+             job->arg2[0] ? job->arg2 : "someone", origin);
 }
 
 static void call_invite_sfu(struct app *app, char *out, size_t out_sz) {
@@ -21865,6 +22149,11 @@ int main(int argc, char **argv) {
     /* Queries ring, channels do not. A channel doorbell any member can
      * press is a doorbell that gets pressed. */
     app->call_ring = CALL_RING_QUERIES;
+    /* CHECKED by default. A marker is a claim anyone in a channel can
+     * make, and believing it unverified is what let a plain link ring a
+     * terminal and reach for a camera. Off is available and honest about
+     * what it restores — see call_consider. */
+    app->call_probe = true;
     app->mirc_contrast = MIRC_CONTRAST_AUTO;
     mirc_contrast_refresh(app->mirc_contrast);
     app->call_live.in_fd = app->call_live.err_fd = app->call_live.out_fd = -1;
