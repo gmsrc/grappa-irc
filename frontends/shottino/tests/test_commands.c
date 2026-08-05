@@ -353,8 +353,11 @@ TEST(an_unchecked_invite_neither_rings_nor_is_remembered) {
      * the shared verdict rather than a second local rule. */
     CHECK(strstr(source, "whip_request(&u, \"OPTIONS\", NULL, NULL, CALL_PROBE_TIMEOUT_MS") != NULL);
     CHECK(strstr(source, "whip_endpoint_verdict(resp.status, resp.accept_post)") != NULL);
-    /* And refuses the private network before dialling anything. */
-    CHECK(strstr(source, "!whip_url_parse(target, &u) || !call_probe_host_allowed(u.host)") != NULL);
+    /* And judges by the ANSWER, not by the address. An address-class
+     * filter here refused a LAN or VPN SFU — an ordinary setup — while
+     * buying almost nothing, since nothing but a WHIP endpoint can
+     * produce a pass. Named so it is not reintroduced by reflex. */
+    CHECK(strstr(source, "call_probe_host_allowed") == NULL);
 
     /* Never on the socket thread: the probe reaches the worker through
      * the job queue, like every other network round trip here. */

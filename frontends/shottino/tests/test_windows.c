@@ -3219,50 +3219,50 @@ TEST(a_probe_is_cached_by_origin) {
     CHECK_STR(tiny, "");
 }
 
-/* Where a probe will NOT go.
+/* A private SFU is an ordinary SFU.
  *
- * The URL came out of a stranger's message, so this is an SSRF in
- * shape: a host unreachable from the internet but reachable from here
- * would otherwise learn it exists. */
-TEST(a_probe_refuses_the_private_network) {
-    /* Ordinary public hosts and names. */
-    CHECK(call_probe_host_allowed("grappa.nexlab.net"));
-    CHECK(call_probe_host_allowed("94.23.108.58"));
-    CHECK(call_probe_host_allowed("8.8.8.8"));
-    CHECK(call_probe_host_allowed("2001:db8::1"));
+ * An earlier cut refused loopback, RFC 1918 and link-local hosts before
+ * dialling, on the grounds that a probe aimed by a stranger at an
+ * internal host is SSRF-shaped. It broke two people on a LAN or a VPN,
+ * whose SFU has no public address and whose invites then never rang, and
+ * it bought almost nothing: the attacker observes NOTHING — the response
+ * never leaves the process, and the only outcome is whether a call rings
+ * here, which a router page cannot produce.
+ *
+ * So the verdict is the whole gate, and this test exists to keep an
+ * address-class filter from being reintroduced without the argument
+ * being had again. Asserted through call_rtc_base_from, because that is
+ * the path an invite's SFU actually travels.
+ */
+TEST(a_private_sfu_is_reached_like_any_other) {
+    char out[MAX_LINE + 168];
 
-    /* Loopback, by name and by both literals. */
-    CHECK(!call_probe_host_allowed("localhost"));
-    CHECK(!call_probe_host_allowed("LOCALHOST"));
-    CHECK(!call_probe_host_allowed("127.0.0.1"));
-    CHECK(!call_probe_host_allowed("127.1.2.3"));
-    CHECK(!call_probe_host_allowed("::1"));
+    /* A LAN SFU named by an invite composes exactly like a public one. */
+    call_rtc_base_from("", "https://pages.example/call/#r=abc&sfu=http://192.168.1.10:8889", out,
+                       sizeof(out));
+    CHECK_STR(out, "http://192.168.1.10:8889/abc");
+    call_rtc_base_from("", "https://pages.example/call/#r=abc&sfu=http://10.0.0.5/rtc", out,
+                       sizeof(out));
+    CHECK_STR(out, "http://10.0.0.5/rtc/abc");
+    /* Loopback, for anyone running an SFU beside their client. */
+    call_rtc_base_from("", "https://pages.example/call/#r=abc&sfu=http://127.0.0.1:8889", out,
+                       sizeof(out));
+    CHECK_STR(out, "http://127.0.0.1:8889/abc");
+    call_rtc_base_from("", "https://pages.example/call/#r=abc&sfu=http://localhost:8889", out,
+                       sizeof(out));
+    CHECK_STR(out, "http://localhost:8889/abc");
+    /* A VPN range, and IPv6 unique-local. */
+    call_rtc_base_from("", "https://pages.example/call/#r=abc&sfu=http://172.16.4.2/rtc", out,
+                       sizeof(out));
+    CHECK_STR(out, "http://172.16.4.2/rtc/abc");
+    call_rtc_base_from("", "https://pages.example/call/#r=abc&sfu=http://[fd00::1]:8889", out,
+                       sizeof(out));
+    CHECK_STR(out, "http://[fd00::1]:8889/abc");
 
-    /* RFC 1918. */
-    CHECK(!call_probe_host_allowed("10.0.0.1"));
-    CHECK(!call_probe_host_allowed("192.168.1.1"));
-    CHECK(!call_probe_host_allowed("172.16.0.1"));
-    CHECK(!call_probe_host_allowed("172.31.255.255"));
-    /* And the edges of that range, which ARE public. */
-    CHECK(call_probe_host_allowed("172.15.0.1"));
-    CHECK(call_probe_host_allowed("172.32.0.1"));
-
-    /* Link-local, which is where a cloud metadata service lives. */
-    CHECK(!call_probe_host_allowed("169.254.169.254"));
-    CHECK(!call_probe_host_allowed("fe80::1"));
-    /* Unique-local IPv6. */
-    CHECK(!call_probe_host_allowed("fd00::1"));
-    CHECK(!call_probe_host_allowed("fc00::1"));
-    /* CGNAT — somebody else's customer network, not ours to poke. */
-    CHECK(!call_probe_host_allowed("100.64.0.1"));
-    CHECK(call_probe_host_allowed("100.63.0.1"));
-    CHECK(call_probe_host_allowed("100.128.0.1"));
-    /* 0.0.0.0/8, and an octet that cannot be one. */
-    CHECK(!call_probe_host_allowed("0.0.0.0"));
-    CHECK(!call_probe_host_allowed("999.1.1.1"));
-
-    CHECK(!call_probe_host_allowed(""));
-    CHECK(!call_probe_host_allowed(NULL));
+    /* The validation that DOES apply is about the URL, not the address:
+     * a scheme it can dial, and a host that is actually there. */
+    CHECK(call_invite_sfu_of("https://p/#r=a&sfu=http://192.168.1.10:8889", out, sizeof(out)));
+    CHECK(!call_invite_sfu_of("https://p/#r=a&sfu=http://", out, sizeof(out)));
 }
 
 TEST(a_call_that_ended_is_not_one_already_running) {
@@ -4583,7 +4583,7 @@ int main(void) {
     RUN(the_invite_names_the_sfu_the_call_is_on);
     RUN(the_media_base_prefers_the_invite_over_our_setting);
     RUN(a_probe_is_cached_by_origin);
-    RUN(a_probe_refuses_the_private_network);
+    RUN(a_private_sfu_is_reached_like_any_other);
     RUN(an_invite_carries_its_room_in_the_fragment);
     RUN(a_room_is_a_path_segment_and_is_encoded_like_one);
     RUN(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it);

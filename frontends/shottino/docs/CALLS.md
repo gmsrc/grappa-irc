@@ -71,14 +71,22 @@ in that room*. Liveness is a separate question, answered separately (see
 **The probe costs an outbound request to a host a stranger chose.** It
 is an `OPTIONS`: no body, no credentials, no session token, nothing read
 back but a header, a four-second timeout, and one request per origin per
-fifteen minutes. Literal loopback, RFC 1918, link-local (including cloud
-metadata), CGNAT and IPv6 unique-local addresses are refused before
-anything is dialled. A *hostname* that resolves to a private address is
-still probed — closing that needs the resolved address at the connect,
-which the WHIP client does not take, so it is named here rather than
-pretended away. `call.probe off` is the complete answer for anyone who
-wants one; it restores the older behaviour, where the marker alone is
-the proof.
+fifteen minutes.
+
+**Any host, including a private one.** An earlier cut refused loopback,
+RFC 1918, link-local and IPv6 unique-local addresses before dialling,
+reasoning that a probe aimed by a stranger at an internal host is
+SSRF-shaped. That was wrong twice over. It broke an ordinary case — two
+people on a LAN or a VPN, whose SFU has no public address and whose
+invites then never rang — and it bought very little, because *the
+attacker observes nothing*: the response never leaves the process, the
+only outcome is whether a call rings here, and a router admin page or a
+metadata service cannot produce that outcome anyway. The verdict is the
+gate. Nothing answers `Accept-Post: application/sdp` except a WHIP
+endpoint, and reaching one on a private address is what a private SFU
+*is*. `call.probe off` remains the complete answer for anyone who would
+rather no request happened at all; it restores the older behaviour,
+where the marker alone is the proof.
 
 **The invite names where the call is.** `&sfu=<base>` in the fragment is
 the caller saying which SFU the room is on, and a room exists on exactly

@@ -3513,8 +3513,9 @@ static bool call_invite_split(const char *url, char *base, size_t base_sz, char 
  * http(s) only, no whitespace or control bytes, and it must fit. A room
  * name is a path segment and gets encoded; this is a BASE and cannot be,
  * so anything not plainly a URL is refused and the caller falls back.
- * Whether that host is one we will talk to at all is a separate gate
- * (call_probe_host_allowed), asked before anything is dialled. */
+ * WHICH host it names is deliberately NOT restricted — see call_probe_job
+ * for why an SFU on a LAN or a VPN is an ordinary case rather than a
+ * threat. */
 static bool call_invite_sfu_of(const char *url, char *out, size_t out_sz) {
     if (!url || !out || out_sz == 0) return false;
     out[0] = 0;
@@ -3806,46 +3807,6 @@ static void call_url_origin(const char *url, char *out, size_t out_sz) {
     if (n == 0 || lead + n + 1 > out_sz) return;
     memcpy(out, url, lead + n);
     out[lead + n] = 0;
-}
-
-/* Is this a host we are willing to send a probe TO?
- *
- * The probe is an outbound request to a URL a STRANGER put in a message,
- * which is the shape of an SSRF: a host that is unreachable from the
- * internet but reachable from here — a router's admin page, a metadata
- * service, something else on the LAN — learns it exists and is running.
- * An OPTIONS carries no credentials and reads nothing back but a header,
- * so the leak is small; it is not nothing.
- *
- * Refused by LITERAL, which is what this can honestly check. A hostname
- * that RESOLVES to a private address still gets probed — closing that
- * means resolving here and handing the address to the connect, which the
- * WHIP client does not take. Named as a known limit rather than
- * pretended away; the SETTING (call.probe off) is the complete answer
- * for anyone who wants one. */
-static bool call_probe_host_allowed(const char *host) {
-    if (!host || !host[0]) return false;
-    if (strcasecmp(host, "localhost") == 0) return false;
-    /* IPv6 literals: loopback, unique-local (fc00::/7) and link-local
-     * (fe80::/10). whip_url_parse has already stripped the brackets. */
-    if (strchr(host, ':')) {
-        if (strcmp(host, "::1") == 0) return false;
-        if (strncasecmp(host, "fc", 2) == 0 || strncasecmp(host, "fd", 2) == 0) return false;
-        if (strncasecmp(host, "fe8", 3) == 0 || strncasecmp(host, "fe9", 3) == 0 ||
-            strncasecmp(host, "fea", 3) == 0 || strncasecmp(host, "feb", 3) == 0)
-            return false;
-        return true;
-    }
-    unsigned a, b, c, d;
-    char tail;
-    if (sscanf(host, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4) return true; /* a name */
-    if (a > 255 || b > 255 || c > 255 || d > 255) return false;
-    if (a == 127 || a == 0 || a == 10) return false;
-    if (a == 172 && b >= 16 && b <= 31) return false;
-    if (a == 192 && b == 168) return false;
-    if (a == 169 && b == 254) return false; /* link-local, incl. cloud metadata */
-    if (a == 100 && b >= 64 && b <= 127) return false; /* CGNAT */
-    return true;
 }
 
 /* The half of call_consider that BELIEVES the invite.
@@ -15167,6 +15128,22 @@ static void call_probe_remember(struct app *app, const char *origin, bool ok) {
  * about where the SFU is, so a wrong call.sfu_url is caught here rather
  * than as a 404 halfway into a call.
  *
+ * NO RESTRICTION ON WHICH HOST. An earlier cut refused private, loopback
+ * and link-local addresses, reasoning that a probe aimed by a stranger at
+ * an internal host is SSRF-shaped. That was wrong twice over. It broke a
+ * legitimate and ordinary case — two people on a LAN or a VPN, whose SFU
+ * has no public address and whose invite then never rang — and it bought
+ * very little, because the ATTACKER OBSERVES NOTHING: the response never
+ * leaves this process, the only outcome is whether a call rings here, and
+ * a router admin page or a metadata service cannot produce that outcome
+ * anyway. The verdict IS the gate. Nothing answers `Accept-Post:
+ * application/sdp` except a WHIP endpoint, and reaching one on a private
+ * address is what a private SFU IS.
+ *
+ * What remains: one OPTIONS to a host somebody else chose, carrying no
+ * body, no credentials and no session token. `call.probe off` turns even
+ * that off for anyone who would rather it did not happen.
+ *
  * What this proves and what it does not: the endpoint answers OPTIONS
  * identically for a room that does not exist, so a pass means "this is a
  * real SFU", never "somebody is in that room". Liveness is a different
@@ -15199,7 +15176,7 @@ static void call_probe_job(struct app *app, const struct job *job) {
     bool ok = false;
     if (!call_probe_cached(app, origin, &ok)) {
         struct whip_url u;
-        if (!whip_url_parse(target, &u) || !call_probe_host_allowed(u.host)) {
+        if (!whip_url_parse(target, &u)) {
             ok = false;
         } else {
             struct whip_response resp;
