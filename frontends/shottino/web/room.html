@@ -71,7 +71,27 @@ const pathNick = n => [...n.toLowerCase()].map(c =>
   /[a-z0-9._~-]/.test(c) ? c
     : '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('');
 
-const base = location.pathname.replace(/\/$/, '') + '/rtc/' + room;
+// WHERE THE SFU IS, which is not necessarily where this page is.
+//
+// It used to be derived from location.pathname alone, which quietly
+// required the page to sit at the same path as the SFU proxy — and
+// therefore on the grappa origin. That origin belongs to the cicchetto
+// PWA: its service worker answers EVERY top-level navigation it has not
+// denylisted with the app shell, and `/call` is not on that list. So on
+// any device where cicchetto is installed, opening a call link served
+// the PWA instead of this page — the "install cicchetto" screen in a
+// browser, a blank one inside the app. The server's SPA fallback does
+// the same thing to `/call` without its trailing slash.
+//
+// `&sfu=` breaks the tie: the page can be hosted anywhere — an origin
+// with no service worker and no SPA fallback — and still reach the SFU.
+// MediaMTX already answers cross-origin (`access-control-allow-origin:
+// *` on the WHIP/WHEP endpoints), so nothing else has to change.
+//
+// Absent, it means what it always meant, so existing links keep working.
+const sfu = (frag.get('sfu') || '').trim();
+const base = sfu ? sfu.replace(/\/$/, '') + '/' + room
+                 : location.pathname.replace(/\/$/, '') + '/rtc/' + room;
 const grid = document.getElementById('grid');
 const tiles = new Map();   // nick -> {el, video, pc, audio}
 const note = m => document.getElementById('note').textContent = m;

@@ -1102,6 +1102,10 @@ struct app {
     bool call_ring_bell;
     /* Where a room lives, and when an arriving one rings. */
     char call_base_url[256];
+    /* Where the SFU is, when the room page is NOT hosted beside it — see
+     * the `sfu` fragment note in web/room.html. Empty means "beside it",
+     * which is what every existing link assumes. */
+    char call_sfu_url[256];
     enum call_ring_policy call_ring;
     enum mirc_contrast mirc_contrast;
     /* Browser or terminal. `browser` is the permanent fallback and the
@@ -10960,6 +10964,8 @@ static const struct setting_def SETTINGS[] = {
     { "llm.search_url", SET_TEXT, NULL, "web_search endpoint; %s is where the query goes" },
     { "llm.cdp_url", SET_TEXT, NULL, "browser_control: Chrome debug endpoint, e.g. http://127.0.0.1:9222" },
     { "call.base_url", SET_TEXT, NULL, "where /call makes a room; any room-per-URL service" },
+    { "call.sfu_url", SET_TEXT, NULL,
+      "where the SFU is, when the room page is not hosted beside it" },
     { "call.ring", SET_CHOICE, "off|queries|all", "when an arriving call interrupts you" },
     { "mirc.contrast", SET_CHOICE, "auto|off|dark|light",
       "lift a bot's colours off the background when they vanish into it" },
@@ -11139,6 +11145,7 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     else if (strcmp(name, "voice.source") == 0) src = app->voice_source;
     else if (strcmp(name, "video.source") == 0) src = app->video_source;
     else if (strcmp(name, "call.base_url") == 0) src = app->call_base_url;
+    else if (strcmp(name, "call.sfu_url") == 0) src = app->call_sfu_url;
     else if (strcmp(name, "call.ring") == 0) src = call_ring_word(app->call_ring);
     else if (strcmp(name, "mirc.contrast") == 0) src = mirc_contrast_word(app->mirc_contrast);
     else if (strcmp(name, "call.mode") == 0) src = app->call_in_terminal ? "terminal" : "browser";
@@ -11348,6 +11355,9 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
     else if (strcmp(def->name, "call.base_url") == 0)
         snprintf(app->call_base_url, sizeof(app->call_base_url), "%.*s",
                  (int)sizeof(app->call_base_url) - 1, value);
+    else if (strcmp(def->name, "call.sfu_url") == 0)
+        snprintf(app->call_sfu_url, sizeof(app->call_sfu_url), "%.*s",
+                 (int)sizeof(app->call_sfu_url) - 1, value);
     else if (strcmp(def->name, "mirc.contrast") == 0) {
         enum mirc_contrast c;
         if (!mirc_contrast_parse(value, &c)) {
@@ -14145,6 +14155,7 @@ static void call_answer(struct app *app);
 static void call_open_url(struct app *app, const char *url);
 static void call_invite_peers(struct app *app, const char *network, const char *channel,
                               char *out, size_t out_sz);
+static void call_invite_sfu(struct app *app, char *out, size_t out_sz);
 static void call_url_for_me(struct app *app, const char *network, const char *url, char *out,
                             size_t out_sz);
 static bool call_helper_start(struct app *app, const char *room_url, bool video,
@@ -14245,6 +14256,7 @@ static void call_command(struct app *app, enum call_kind kind) {
         pthread_mutex_unlock(&app->lock);
         if (call_invite_split(again, base, sizeof(base), room_again, sizeof(room_again))) {
             call_invite_build(kind, base, room_again, again, sizeof(again));
+            call_invite_sfu(app, again, sizeof(again));
             call_invite_peers(app, net, chan, again, sizeof(again));
             /* The kind travels with the re-post: /videocall into a room
              * announced as audio means video is on offer now, and the
@@ -14287,6 +14299,7 @@ static void call_command(struct app *app, enum call_kind kind) {
      * The CALLER is in the list. From a recipient's side the caller is
      * just another person to read — leaving them out is how the one
      * participant guaranteed to be there becomes the one nobody sees. */
+    call_invite_sfu(app, message, sizeof(message));
     call_invite_peers(app, net, chan, message, sizeof(message));
 
     /* The caller is a participant too: a call you start and do not join
@@ -14448,6 +14461,25 @@ static void call_path_nick(const char *nick, char *out, size_t out_sz) {
 
 /* Append `&peers=…` — every folded nick that could be in this call,
  * caller first. Bounded by CALL_MAX_PEERS, like the helper's own cap. */
+/* Name the SFU in the link, when it is not where the page is.
+ *
+ * The room page derives the SFU from its own path by default, which
+ * silently requires it to be hosted beside the proxy — and therefore on
+ * the grappa origin, where the cicchetto PWA's service worker answers
+ * every navigation it has not denylisted with the app shell. Hosting the
+ * page anywhere else is the way out of that, and this is what lets the
+ * page still find the SFU once it moves.
+ *
+ * Appended before the peer list so the fragment reads room, sfu, peers —
+ * the order a person debugging one would want. Nothing is added when the
+ * setting is unset, so existing links keep their exact shape. */
+static void call_invite_sfu(struct app *app, char *out, size_t out_sz) {
+    if (!app->call_sfu_url[0]) return;
+    size_t at = strlen(out);
+    if (at + strlen(app->call_sfu_url) + 6 >= out_sz) return;
+    snprintf(out + at, out_sz - at, "&sfu=%s", app->call_sfu_url);
+}
+
 static void call_invite_peers(struct app *app, const char *network, const char *channel, char *out,
                               size_t out_sz) {
     const char *own = own_nick_for_network(app, network);
@@ -15884,6 +15916,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview-ascii") == 0) log_line(app, "/preview-ascii [url] — the same preview, forced to colour character art: skips the terminal's graphics protocol, which is what to try when a picture renders as garbage or not at all");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
+    else if (strcmp(cmd, "call.sfu_url") == 0) log_line(app, "/set call.sfu_url <url> — where the SFU is, when the room page is NOT hosted beside it. The page normally derives that from its own path, which quietly requires it to sit on the grappa origin — and that origin belongs to the cicchetto PWA, whose service worker answers every navigation it has not denylisted with the app shell (`/call` is not on that list, so a call link opens the PWA instead of the room). Host the page anywhere without a service worker, point call.base_url at it and this at the SFU: `https://host/call/rtc`. Unset means \"beside the page\", which is what every existing link assumes");
     else if (strcmp(cmd, "mirc.contrast") == 0) log_line(app, "/set mirc.contrast auto|off|dark|light — mIRC colours were chosen against mIRC's WHITE background, so a bot writing navy into a black terminal posts text nobody can read. This lifts a foreground off the background until it is legible, keeping its hue; only when the bot set no background of its own, since a bot that picked BOTH colours already has a contrast. `auto` believes COLORFGBG and assumes dark otherwise; `off` renders exactly what was sent");
     else if (strcmp(cmd, "admin") == 0) log_line(app, "/admin [adduser <name> <password> [admin]|addnetwork <slug> [flavor]] — the operator console: sessions, users, networks, visitors and uploads. Not just a listing — Up/Down picks a row and Enter (or a right-click) offers what can be done to it: disconnect, reconnect or kill a session, grant or revoke admin, delete a user, network, visitor or upload. Anything irreversible asks a second time, opening on Cancel. The users and networks tables end in a `+ add` row: right-click or Enter opens a form — type, Tab or Up/Down moves between fields, Space toggles the admin flag (off by default), Enter walks down and creates from the last row. The password is never echoed. The same thing is typeable as /admin adduser and /admin addnetwork. A new network has no servers yet — that is its own endpoint. Needs an admin bearer; every tab reports its own 403 rather than blanking the panel");
     else if (strcmp(cmd, "archive") == 0 || strcmp(cmd, "settings") == 0 || strcmp(cmd, "chat") == 0) log_line(app, "/%s — switch to the %s panel", cmd, cmd);

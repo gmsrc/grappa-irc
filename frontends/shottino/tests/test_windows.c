@@ -3236,6 +3236,43 @@ TEST(a_room_is_a_path_segment_and_is_encoded_like_one) {
     CHECK_STR(room, "Shottino-AB");
 }
 
+TEST(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    char line[512];
+
+    /* Unset is the default and the existing behaviour: the page derives
+     * the SFU from its own path, so the link says nothing about it and
+     * every already-posted invite keeps its exact shape. */
+    call_invite_build(CALL_VIDEO, "https://h/call", "shottino-1", line, sizeof(line));
+    call_invite_sfu(app, line, sizeof(line));
+    call_invite_peers(app, "azzurra", "sarabean", line, sizeof(line));
+    CHECK(strstr(line, "sfu=") == NULL);
+    CHECK_STR(line, "\U0001F4F9 https://h/call/#r=shottino-1&peers=vjt,sarabean");
+
+    /* Set, because the page had to move off the grappa origin — the
+     * cicchetto PWA's service worker answers every navigation there
+     * that it has not denylisted with the app shell, and /call is not
+     * on that list. The page can be hosted anywhere now and still find
+     * the SFU. Room, then sfu, then peers: the order somebody debugging
+     * a link would want to read them in. */
+    snprintf(app->call_sfu_url, sizeof(app->call_sfu_url), "%s", "https://sfu.example/rtc");
+    call_invite_build(CALL_VIDEO, "https://pages.example/room", "shottino-1", line, sizeof(line));
+    call_invite_sfu(app, line, sizeof(line));
+    call_invite_peers(app, "azzurra", "sarabean", line, sizeof(line));
+    CHECK_STR(line, "\U0001F4F9 https://pages.example/room/#r=shottino-1"
+                    "&sfu=https://sfu.example/rtc&peers=vjt,sarabean");
+
+    /* The room still parses back out of it — the splitter reads the
+     * fragment by NAME, so a new parameter cannot displace an old one. */
+    enum call_kind kind;
+    char url[MAX_LINE], base[MAX_LINE], room[128];
+    CHECK(call_invite_parse(line, &kind, url, sizeof(url)));
+    CHECK(call_invite_split(url, base, sizeof(base), room, sizeof(room)));
+    CHECK_STR(room, "shottino-1");
+    free_app(app);
+}
+
 TEST(a_call_in_a_query_with_yourself_lists_one_person) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -4110,6 +4147,7 @@ int main(void) {
     RUN(a_call_already_running_here_is_the_call);
     RUN(an_invite_carries_its_room_in_the_fragment);
     RUN(a_room_is_a_path_segment_and_is_encoded_like_one);
+    RUN(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it);
     RUN(a_call_in_a_query_with_yourself_lists_one_person);
     RUN(rejoining_a_running_call_rebuilds_the_link_rather_than_replaying_it);
     RUN(a_query_rings_and_a_channel_only_announces);
