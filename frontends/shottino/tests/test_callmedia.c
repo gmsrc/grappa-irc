@@ -291,6 +291,48 @@ TEST(the_grid_is_even_and_independent_of_focus) {
 
 /* A wrong label here is ffmpeg exiting on a parse error onto a
  * discarded stderr: a video call that shows nothing and says nothing. */
+/* Our own picture is a tile like any other.
+ *
+ * The self-view is fed from the packets already on their way to the SFU
+ * — one capture, one encode, two destinations — and it enters the grid
+ * through the SAME liveness path as a peer: packets arrive, the
+ * supervisor marks the slot live, the layout includes it. So the only
+ * thing the layout has to get right is that the RESERVED slot is not
+ * special to it.
+ *
+ * Slot 7 is that reservation (MEDIA_MAX_PEERS - 1), held at the end so a
+ * peer can never take it — peers are capped one short of the array for
+ * exactly this. A self-view that vanishes once the room fills up is one
+ * nobody can rely on. */
+TEST(the_reserved_self_slot_lays_out_like_any_other) {
+    struct media_tile t[MEDIA_MAX_PEERS];
+    const int self_slot = MEDIA_MAX_PEERS - 1;
+
+    /* Alone in the call: our own picture fills the frame, which is what
+     * a video call with nobody else in it should look like — not an
+     * empty box. */
+    const int just_me[1] = { self_slot };
+    CHECK(media_grid_layout(just_me, 1, 640, 480, t, MEDIA_MAX_PEERS) == 1);
+    CHECK(t[0].slot == self_slot);
+    CHECK(t[0].w == 640 && t[0].h == 480);
+
+    /* With one peer: two cells, and ours is not privileged — slot order
+     * decides, so the reserved slot lands last. */
+    const int me_and_one[2] = { 0, self_slot };
+    CHECK(media_grid_layout(me_and_one, 2, 640, 480, t, MEDIA_MAX_PEERS) == 2);
+    CHECK(t[0].slot == 0 && t[1].slot == self_slot);
+    CHECK(t[0].w == 320 && t[1].w == 320);
+    CHECK(t[1].x == 320 && t[1].y == 0);
+
+    /* And it counts against the tile cap like everybody else: three
+     * pictures is three ffmpeg inputs whatever they are of. That cost
+     * is why the cap exists. */
+    const int crowd[4] = { 0, 1, 2, self_slot };
+    int n = media_grid_layout(crowd, 4, 640, 480, t, 3);
+    CHECK(n == 3);
+    for (int i = 0; i < n; i++) CHECK(t[i].slot != self_slot);
+}
+
 TEST(the_mix_filter_chains_every_tile_into_one_output) {
     struct media_tile t[MEDIA_MAX_PEERS];
     const int slots[4] = { 0, 2, 5, 7 };
@@ -614,6 +656,7 @@ int main(void) {
     RUN(the_subscribe_offer_names_every_codec_we_decode);
     RUN(the_answer_says_which_codec_this_peer_publishes);
     RUN(the_grid_is_even_and_independent_of_focus);
+    RUN(the_reserved_self_slot_lays_out_like_any_other);
     RUN(the_mix_filter_chains_every_tile_into_one_output);
     RUN(the_published_grid_is_complete_or_refused);
     RUN(loopback_ports_are_distinct_and_reported);

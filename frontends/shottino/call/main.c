@@ -65,6 +65,12 @@
  * waiting to not be. */
 #define CALL_MAX_PEERS MEDIA_MAX_PEERS
 
+/* Our OWN picture gets a slot, reserved at the end so a peer can never
+ * take it. Peers are capped one short of the array for the same reason —
+ * a self-view that disappears once the room is full is a self-view
+ * nobody can rely on. */
+#define CALL_SELF_SLOT (CALL_MAX_PEERS - 1)
+
 /* How often the video mix is re-examined, and how many quiet ticks it
  * takes to conclude a peer has stopped sending. See video_supervise(). */
 #define CALL_TILE_TICK_SECS 1
@@ -439,6 +445,35 @@ static void *pump_main(void *arg) {
                  * a muted minute would burst on unmute. */
                 if (is_video ? c->camera_off : c->muted) continue;
                 if (track >= 0) rtcSendMessage(track, buf, (int)got);
+                /* OUR OWN PICTURE, from the packets we are already
+                 * holding.
+                 *
+                 * Not a second camera open (v4l2 is exclusive, so it
+                 * would simply fail) and not a subscribe to our own path
+                 * (that is an echo off the SFU, costing a round trip to
+                 * see ourselves). This is the SAME encoded frame on its
+                 * way out, handed to a decoder on loopback — one
+                 * capture, one encode, two destinations.
+                 *
+                 * Camera-off drops it above, so the self tile goes dark
+                 * exactly when the far end does. trylock and drop, the
+                 * same as an arriving peer packet: a frame lost to a
+                 * re-tile in progress is not worth blocking the pump
+                 * that is also feeding the call. */
+                if (is_video && c->want_video) {
+                    /* Counted BEFORE the lock, exactly as an arriving
+                     * peer packet is: this is what tells the supervisor
+                     * the tile is alive, and a frame dropped because a
+                     * re-tile was in progress is still proof the camera
+                     * is running. The self tile then joins the grid
+                     * through the SAME liveness path as everybody else
+                     * — no special case, and it disappears on
+                     * camera-off for the same reason theirs does. */
+                    c->vpkts[CALL_SELF_SLOT]++;
+                    if (pthread_mutex_trylock(&c->vlock) != 0) continue;
+                    media_feed(&c->vmix.legs[CALL_SELF_SLOT], buf, (size_t)got);
+                    pthread_mutex_unlock(&c->vlock);
+                }
             }
         }
     }
@@ -854,7 +889,7 @@ int main(int argc, char **argv) {
         case 'w': whip_url = optarg; break;
         case OPT_WHEP:
             /* Repeatable: one per person in the call. */
-            if (whep_count < CALL_MAX_PEERS) whep_urls[whep_count++] = optarg;
+            if (whep_count < CALL_SELF_SLOT) whep_urls[whep_count++] = optarg;
             else emit_event("error", "message", "too many peers — extra --whep ignored");
             break;
         case 's': stun = optarg; break;
