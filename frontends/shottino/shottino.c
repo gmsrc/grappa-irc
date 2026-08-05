@@ -5396,6 +5396,41 @@ static void admin_verb_run(struct app *app, enum admin_verb v, struct admin_row 
 
 static void overlay_close(struct app *app);
 
+static bool current_window_key(struct app *app, char *net, size_t net_sz, char *chan,
+                               size_t chan_sz);
+
+/* Ask grappa to bring a network's session back up.
+ *
+ * `PATCH /networks/:slug {connection_state: connected}` is the verb a
+ * USER has for their own session — the admin reconnect is visitor-only
+ * and needs a bearer most people do not have. Without this, a session
+ * whose pid is gone could only be recovered from another client, which
+ * is a poor answer for a bouncer's own terminal.
+ *
+ * NULL means the network of the focused window: the common case is
+ * "the one I am looking at just refused my message". */
+static void reconnect_network(struct app *app, const char *which) {
+    char net[MAX_SLUG];
+    if (which && which[0]) {
+        snprintf(net, sizeof(net), "%s", which);
+    } else if (!current_window_key(app, net, sizeof(net), NULL, 0)) {
+        log_line(app, "/reconnect [network] — which network?");
+        return;
+    }
+    char *slug = url_encode(net);
+    char *path = xasprintf("/networks/%s", slug);
+    free(slug);
+    struct http_response r = http_request(app, "PATCH", path,
+                                          "{\"connection_state\":\"connected\"}");
+    free(path);
+    if (r.status >= 200 && r.status < 300)
+        log_line(app, "reconnecting %s — the session comes back on the server's schedule, not "
+                      "instantly", net);
+    else
+        log_line(app, "/reconnect %s failed HTTP %d: %.200s", net, r.status, r.body ? r.body : "");
+    free(r.body);
+}
+
 /* Send the filled-in form. Says which field is missing rather than
  * letting grappa answer 400 with a sentence about its own whitelist —
  * the operator forgot a field, and that is what they need told. */
@@ -11773,8 +11808,29 @@ static void send_message_target(struct app *app, const char *network, const char
     free(chan);
     free(escaped);
     struct http_response r = http_request(app, "POST", path, json);
-    if (r.status < 200 || r.status >= 300) log_line(app, "send failed HTTP %d: %.200s", r.status, r.body);
-    else if (r.status == 201) render_created_message(app, r.body, r.body_len);
+    if (r.status == 404) {
+        /* 404 on a SEND is almost never "no such channel".
+         *
+         * grappa collapses `:no_session` onto the same wire body as
+         * `:not_found`, so the one thing this status really means here
+         * is that the bouncer has no live process for this network —
+         * the credential can still read `connected` in the database
+         * while the pid is gone, which is the DB-vs-live divergence the
+         * project treats as a first-class state rather than a bug.
+         *
+         * Saying "HTTP 404" to that is telling somebody their message
+         * went to a channel that does not exist, which sends them
+         * looking at the channel name. The state has a name and a cure,
+         * so both are said. */
+        log_line(app, "%s: the bouncer has no live session on %s — the message was not sent. "
+                      "/reconnect brings it back (/admin shows whether the pid or the DB row "
+                      "is the one that disagrees)",
+                 channel, network);
+    } else if (r.status < 200 || r.status >= 300) {
+        log_line(app, "send failed HTTP %d: %.200s", r.status, r.body);
+    } else if (r.status == 201) {
+        render_created_message(app, r.body, r.body_len);
+    }
     free(path);
     free(json);
     free(r.body);
@@ -13578,7 +13634,7 @@ static const char *commands[] = {
     "/media", "/members", "/mode", "/motd", "/mouse", "/ms", "/msg", "/mute", "/names", "/nick",
     "/notify", "/ns", "/op", "/open", "/oper", "/os", "/part", "/ping", "/preview",
     "/preview-ascii", "/q",
-    "/query", "/quit", "/quote", "/rehash", "/restart", "/rs", "/sconnect", "/set", "/settings",
+    "/query", "/quit", "/quote", "/reconnect", "/rehash", "/restart", "/rs", "/sconnect", "/set", "/settings",
     "/share", "/split", "/splith", "/splitv", "/splitw", "/squit", "/stats", "/stt", "/topic",
     "/trace",
     "/umode", "/unalias", "/unban", "/unblock", "/unignore", "/unkline", "/unmute", "/unset", "/unsplit",
@@ -15916,6 +15972,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview-ascii") == 0) log_line(app, "/preview-ascii [url] — the same preview, forced to colour character art: skips the terminal's graphics protocol, which is what to try when a picture renders as garbage or not at all");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
+    else if (strcmp(cmd, "reconnect") == 0) log_line(app, "/reconnect [network] — ask grappa to bring this network's session back up (PATCH connection_state=connected). What a send answering 404 usually means: grappa collapses \"no live session\" onto the same not_found body as \"no such channel\", so the message did not go anywhere and the channel name is not the problem. Bare /reconnect uses the focused window's network; /admin shows whether the live pid or the DB row is the one that disagrees");
     else if (strcmp(cmd, "call.sfu_url") == 0) log_line(app, "/set call.sfu_url <url> — where the SFU is, when the room page is NOT hosted beside it. The page normally derives that from its own path, which quietly requires it to sit on the grappa origin — and that origin belongs to the cicchetto PWA, whose service worker answers every navigation it has not denylisted with the app shell (`/call` is not on that list, so a call link opens the PWA instead of the room). Host the page anywhere without a service worker, point call.base_url at it and this at the SFU: `https://host/call/rtc`. Unset means \"beside the page\", which is what every existing link assumes");
     else if (strcmp(cmd, "mirc.contrast") == 0) log_line(app, "/set mirc.contrast auto|off|dark|light — mIRC colours were chosen against mIRC's WHITE background, so a bot writing navy into a black terminal posts text nobody can read. This lifts a foreground off the background until it is legible, keeping its hue; only when the bot set no background of its own, since a bot that picked BOTH colours already has a contrast. `auto` believes COLORFGBG and assumes dark otherwise; `off` renders exactly what was sent");
     else if (strcmp(cmd, "admin") == 0) log_line(app, "/admin [adduser <name> <password> [admin]|addnetwork <slug> [flavor]] — the operator console: sessions, users, networks, visitors and uploads. Not just a listing — Up/Down picks a row and Enter (or a right-click) offers what can be done to it: disconnect, reconnect or kill a session, grant or revoke admin, delete a user, network, visitor or upload. Anything irreversible asks a second time, opening on Cancel. The users and networks tables end in a `+ add` row: right-click or Enter opens a form — type, Tab or Up/Down moves between fields, Space toggles the admin flag (off by default), Enter walks down and creates from the last row. The password is never echoed. The same thing is typeable as /admin adduser and /admin addnetwork. A new network has no servers yet — that is its own endpoint. Needs an admin bearer; every tab reports its own 403 rather than blanking the panel");
@@ -17380,6 +17437,8 @@ static void handle_command_dispatch(struct app *app, char *line) {
         open_panel(app, PANEL_ADMIN);
     } else if (strncmp(line, "/admin ", 7) == 0) {
         admin_create_command(app, line + 7);
+    } else if (strcmp(line, "/reconnect") == 0 || strncmp(line, "/reconnect ", 11) == 0) {
+        reconnect_network(app, line[10] ? line + 11 : NULL);
     } else if (strcmp(line, "/share") == 0) {
         mint_share_link(app);
     } else if (strcmp(line, "/wire") == 0) {
