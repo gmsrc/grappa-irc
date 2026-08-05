@@ -3059,36 +3059,55 @@ TEST(the_call_picture_is_a_share_of_the_width) {
  *
  * Minting a second room would put two people in two rooms, each waiting
  * for the other and each having told the channel to come somewhere
- * else. Currency is judged by the clock because there is no way to ask
- * the SFU "is anyone in room X" without also publishing what rooms
- * exist — and a room name is the credential. */
+ * else. Currency is judged by the clock: nothing here reaches the
+ * network, and a window's own record cannot know whether a room somebody
+ * else minted still has anyone in it. */
 TEST(a_call_already_running_here_is_the_call) {
     const time_t now = 1000000;
 
     /* Same window, recent: join it. */
-    CHECK(call_invite_is_current(true, now - 60, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
+    CHECK(call_invite_is_current(true, false, now - 60, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
     /* Channels are matched as NAMES, like every other window compare. */
-    CHECK(call_invite_is_current(true, now - 60, "azzurra", "#SNIFFO", "azzurra", "#sniffo", now));
+    CHECK(call_invite_is_current(true, false, now - 60, "azzurra", "#SNIFFO", "azzurra", "#sniffo", now));
 
     /* A different window is a different call. */
-    CHECK(!call_invite_is_current(true, now - 60, "azzurra", "#other", "azzurra", "#sniffo", now));
-    CHECK(!call_invite_is_current(true, now - 60, "libera", "#sniffo", "azzurra", "#sniffo", now));
+    CHECK(!call_invite_is_current(true, false, now - 60, "azzurra", "#other", "azzurra", "#sniffo", now));
+    CHECK(!call_invite_is_current(true, false, now - 60, "libera", "#sniffo", "azzurra", "#sniffo", now));
 
     /* Stale: this morning's invite must not swallow tonight's /call into
      * a room nobody is in. */
-    CHECK(!call_invite_is_current(true, now - CALL_INVITE_CURRENT_SECS - 1, "azzurra", "#sniffo",
+    CHECK(!call_invite_is_current(true, false, now - CALL_INVITE_CURRENT_SECS - 1, "azzurra", "#sniffo",
                                   "azzurra", "#sniffo", now));
     /* Exactly at the edge still counts — the boundary belongs to the
      * side that joins, because joining an empty room is recoverable and
      * splitting a live call is not. */
-    CHECK(call_invite_is_current(true, now - CALL_INVITE_CURRENT_SECS, "azzurra", "#sniffo",
+    CHECK(call_invite_is_current(true, false, now - CALL_INVITE_CURRENT_SECS, "azzurra", "#sniffo",
                                  "azzurra", "#sniffo", now));
 
     /* Nothing seen at all. */
-    CHECK(!call_invite_is_current(false, now, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
+    CHECK(!call_invite_is_current(false, false, now, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
     /* A clock that went backwards must not make an invite eternal. */
-    CHECK(!call_invite_is_current(true, now + 500, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
-    CHECK(!call_invite_is_current(true, now, NULL, "#sniffo", "azzurra", "#sniffo", now));
+    CHECK(!call_invite_is_current(true, false, now + 500, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
+    CHECK(!call_invite_is_current(true, false, now, NULL, "#sniffo", "azzurra", "#sniffo", now));
+}
+
+/* An invite whose call we watched end is not "probably still going".
+ *
+ * The clock above is a guess, and it has to be for somebody else's room.
+ * For a room we were IN there is nothing to guess: the helper stopped,
+ * so the call stopped. Without this, hanging up and calling again inside
+ * the half-hour window re-posted the DEAD room — and the message said
+ * "one is already running" about a call that had just ended. */
+TEST(a_call_that_ended_is_not_one_already_running) {
+    const time_t now = 1000000;
+
+    CHECK(call_invite_is_current(true, false, now - 60, "azzurra", "#sniffo", "azzurra", "#sniffo",
+                                 now));
+    CHECK(!call_invite_is_current(true, true, now - 60, "azzurra", "#sniffo", "azzurra", "#sniffo",
+                                  now));
+    /* Freshness cannot resurrect it: a call that ended one second ago is
+     * as over as one that ended half an hour ago. */
+    CHECK(!call_invite_is_current(true, true, now, "azzurra", "#sniffo", "azzurra", "#sniffo", now));
 }
 
 /* ── Calls ─────────────────────────────────────────────────────────────
@@ -4393,6 +4412,7 @@ int main(void) {
     RUN(an_invite_round_trips_through_its_own_parser);
     RUN(random_bytes_are_the_sources_or_the_caller_is_told);
     RUN(a_call_already_running_here_is_the_call);
+    RUN(a_call_that_ended_is_not_one_already_running);
     RUN(an_invite_carries_its_room_in_the_fragment);
     RUN(a_room_is_a_path_segment_and_is_encoded_like_one);
     RUN(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it);

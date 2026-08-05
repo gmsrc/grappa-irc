@@ -1102,6 +1102,16 @@ struct app {
          * from this morning must not quietly swallow this evening's
          * /call into a room nobody is in. */
         time_t at;
+        /* This invite's call is OVER, as distinct from stale.
+         *
+         * `at` answers "could this still be running?" with a clock,
+         * because for somebody else's room that is genuinely all we
+         * have. For a room we were IN there is no guessing: the helper
+         * stopped, so the call stopped. Kept SEPARATE from `present`
+         * because the two doors want different answers — /call must not
+         * re-join a room that ended, while /answer stays reachable, and
+         * collapsing them would make dismissing a ring unanswerable. */
+        bool ended;
         enum call_kind kind;
         char from[MAX_CHANNEL];
         char network[MAX_SLUG];
@@ -3646,19 +3656,30 @@ static bool call_vcodec_parse(const char *word, enum call_vcodec *out) {
 
 /* How long an invite still names a call worth JOINING.
  *
- * There is no way to ask the SFU "is anyone in room X" without an
- * endpoint that also answers "what rooms exist", which is the one thing
- * this design refuses to publish — a room name is the credential. So
- * currency is judged by the clock, and the number is a compromise: long
+ * The clock is the FALLBACK, not the only answer. Two better sources
+ * override it where they exist: a call we watched end sets `ended` and
+ * needs no guessing at all, and `/call new` is the operator saying so
+ * outright. What is left for the clock is the case neither covers —
+ * somebody else's room, which we never joined and never saw end.
+ *
+ * (Asking the SFU is possible for a room we can NAME — a WHEP subscribe
+ * to a known room publishes nothing, since we already hold the only
+ * secret there is. What stays refused is an endpoint that answers "what
+ * rooms exist", which would hand every call in progress to whoever
+ * asks.) The number is a compromise: long
  * enough that joining a call that started ten minutes ago works, short
  * enough that this morning's invite does not swallow tonight's /call
  * into an empty room. */
 #define CALL_INVITE_CURRENT_SECS (30 * 60)
 
-static bool call_invite_is_current(bool present, time_t at, const char *inv_net,
+static bool call_invite_is_current(bool present, bool ended, time_t at, const char *inv_net,
                                    const char *inv_chan, const char *network, const char *channel,
                                    time_t now) {
     if (!present || !inv_net || !inv_chan || !network || !channel) return false;
+    /* Knowledge beats the clock. An invite whose call we watched end is
+     * not "probably still going for another 28 minutes" — it is over,
+     * and the next /call must mint rather than re-join a dead room. */
+    if (ended) return false;
     if (strcmp(inv_net, network) != 0 || !irc_name_eq(inv_chan, channel)) return false;
     /* A clock that went backwards must not make an invite eternal. */
     if (now < at) return false;
@@ -3720,6 +3741,10 @@ static void call_consider(struct app *app, const char *network, const char *chan
         busy = true;
     } else {
         app->call_last.present = true;
+        /* A NEW invite is a new call, whatever became of the last one.
+         * Not clearing here is how one ended call would poison every
+         * invite that followed it in the same window. */
+        app->call_last.ended = false;
         app->call_last.at = time(NULL);
         app->call_last.kind = kind;
         snprintf(app->call_last.from, sizeof(app->call_last.from), "%s", sender ? sender : "");
@@ -14547,7 +14572,7 @@ static void child_stop(pid_t pid, bool group, int grace_ms) {
  * opener — the same thing /open does with any other link, which is the
  * whole of stage 1. What changes later is what "join" runs, not what
  * gets posted or how it is recognised. */
-static void call_command(struct app *app, enum call_kind kind) {
+static void call_command(struct app *app, enum call_kind kind, bool fresh) {
     char net[MAX_SLUG], chan[MAX_CHANNEL];
     if (!current_window_key(app, net, sizeof(net), chan, sizeof(chan)) || is_local_window(chan)) {
         log_line(app, "/call: this window has nobody to call — switch to a channel or a query");
@@ -14561,11 +14586,18 @@ static void call_command(struct app *app, enum call_kind kind) {
      * would put two people in two rooms, each waiting for the other —
      * and each having told the channel to come to a different place.
      * That is the same failure a simultaneous /call produces, so the
-     * two share a fix: whoever is second joins. */
+     * two share a fix: whoever is second joins.
+     *
+     * `fresh` is the way out, and it exists because the test above can
+     * only be a guess about somebody else's room. When it guesses wrong
+     * — the call ended somewhere we could not see it end — every /call
+     * in the window re-posts a dead link, and there was no way to say
+     * "no, really, a new one". `/call new` is that word. */
     pthread_mutex_lock(&app->lock);
-    bool join_existing = call_invite_is_current(app->call_last.present, app->call_last.at,
-                                                app->call_last.network, app->call_last.channel,
-                                                net, chan, time(NULL));
+    bool join_existing =
+        !fresh && call_invite_is_current(app->call_last.present, app->call_last.ended,
+                                         app->call_last.at, app->call_last.network,
+                                         app->call_last.channel, net, chan, time(NULL));
     pthread_mutex_unlock(&app->lock);
     if (join_existing) {
         /* Same room, POSTED AGAIN.
@@ -14604,7 +14636,7 @@ static void call_command(struct app *app, enum call_kind kind) {
             enqueue_send(app, net, chan, again);
         }
         log_line(app, "call: one is already running in %s — link posted again, joining it rather "
-                      "than starting a second. /hangup first if you meant a new one",
+                      "than starting a second. /call new (or /videocall new) mints a fresh room",
                  chan);
         call_answer(app);
         return;
@@ -15137,6 +15169,18 @@ static void call_helper_stop(struct app *app) {
     app->call_live.muted = false;
     app->call_live.speaker = -1;
     app->call_live.selected = -1;
+    /* The invite this call was serving is now spent.
+     *
+     * Whatever stopped us — /hangup, the SFU, a crash, closing the
+     * window — the room is not one to walk back into, and the next
+     * /call here has to mint. Matched on (network, channel) rather
+     * than assumed: a call ending in #a says nothing about an invite
+     * that arrived meanwhile in #b, and `call_last` may well be
+     * holding that one. */
+    if (pid > 0 && app->call_last.present &&
+        strcmp(app->call_last.network, app->call_live.network) == 0 &&
+        irc_name_eq(app->call_last.channel, app->call_live.channel))
+        app->call_last.ended = true;
     pthread_mutex_unlock(&app->lock);
     if (pid <= 0) return;
     /* Ask first: the helper owes the SFU a DELETE, and killing it
@@ -16403,8 +16447,8 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "quote") == 0) log_line(app, "/quote raw-line — send a raw IRC line through grappa");
     else if (strcmp(cmd, "oper") == 0) log_line(app, "/oper name password — send IRC OPER credentials; password is not logged");
     else if (strcmp(cmd, "open") == 0) log_line(app, "/open — open the most recent URL using xdg-open (the browser: the handler comes from the scheme)");
-    else if (strcmp(cmd, "call") == 0) log_line(app, "/call — start an audio call in this window: a room nobody can guess is minted, its link is posted as 📞 <url>, and your browser opens it. The link IS the credential, so the call is exactly as private as the window you posted it in. /set call.base_url picks the service");
-    else if (strcmp(cmd, "videocall") == 0) log_line(app, "/videocall — /call with a camera: the same room, posted as 📹 <url> so the other side knows to expect video before joining");
+    else if (strcmp(cmd, "call") == 0) log_line(app, "/call — start an audio call in this window: a room nobody can guess is minted, its link is posted as 📞 <url>, and your browser opens it. The link IS the credential, so the call is exactly as private as the window you posted it in. /set call.base_url picks the service. A call already running in this window is JOINED rather than duplicated; /call new overrides that and mints a fresh room");
+    else if (strcmp(cmd, "videocall") == 0) log_line(app, "/videocall — /call with a camera: the same room, posted as 📹 <url> so the other side knows to expect video before joining. /videocall new mints a fresh room instead of joining one already running here");
     else if (strcmp(cmd, "answer") == 0) log_line(app, "/answer — join the last call that came in, ringing or not. A channel invite does not ring under the default /set call.ring, and this is how you take it");
     else if (strcmp(cmd, "focus-off") == 0) log_line(app, "/focus-off — stop watching one person and follow whoever is talking again. Esc does the same inside the $call window. The choice a click or /focus makes OUTRANKS the speaker, deliberately: clicking somebody means watching them, not watching whoever speaks next");
     else if (strcmp(cmd, "camera") == 0) log_line(app, "/camera [on|off] — the camera, while a video call runs. Bare /camera toggles. Alt-V does the same from anywhere, and a right-click on the call picture offers it beside the microphone. The frames are DROPPED rather than the device closed, so turning it back on is instant — and your own tile goes dark with it, because the self-view is fed from the packets being dropped");
@@ -17995,9 +18039,13 @@ static void handle_command_dispatch(struct app *app, char *line) {
     } else if (strcmp(line, "/open") == 0) {
         call_open_url(app, app->last_url);
     } else if (strcmp(line, "/call") == 0) {
-        call_command(app, CALL_AUDIO);
+        call_command(app, CALL_AUDIO, false);
+    } else if (strcmp(line, "/call new") == 0) {
+        call_command(app, CALL_AUDIO, true);
     } else if (strcmp(line, "/videocall") == 0) {
-        call_command(app, CALL_VIDEO);
+        call_command(app, CALL_VIDEO, false);
+    } else if (strcmp(line, "/videocall new") == 0) {
+        call_command(app, CALL_VIDEO, true);
     } else if (strcmp(line, "/answer") == 0) {
         call_answer(app);
     } else if (strcmp(line, "/hangup") == 0) {

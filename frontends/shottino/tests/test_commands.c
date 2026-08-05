@@ -286,6 +286,44 @@ TEST(the_call_window_is_offered_never_forced) {
     CHECK(strstr(source, "is_call_window(w->channel)") != NULL);
 }
 
+/* The two wiring points behind `call_invite_is_current`'s `ended` flag.
+ *
+ * The predicate itself is unit-tested; nothing reachable from a test can
+ * observe who SETS the flag, and a flag nobody sets is a fix that does
+ * not exist. Both live in the source, so the source is what gets read. */
+TEST(a_stopped_call_marks_its_invite_spent) {
+    /* Set where the call is torn down — one choke point for /hangup, an
+     * SFU drop, a crash and closing the window alike. */
+    CHECK(strstr(source, "app->call_last.ended = true;") != NULL);
+    /* Matched on the window, not assumed: a call ending in #a says
+     * nothing about an invite that arrived meanwhile in #b. */
+    CHECK(strstr(source, "irc_name_eq(app->call_last.channel, app->call_live.channel)") != NULL);
+    /* And cleared by a NEW invite, or one ended call would poison every
+     * invite that followed it in the same window. */
+    CHECK(strstr(source, "app->call_last.ended = false;") != NULL);
+}
+
+TEST(call_new_mints_rather_than_joining) {
+    /* The override reaches call_command as `true`, and the plain verbs
+     * still reach it as `false` — a `true` on those would mint a second
+     * room every time two people called at once, which is the failure
+     * the join-existing branch exists to prevent. */
+    CHECK(strstr(source, "\"/call new\") == 0) {\n        call_command(app, CALL_AUDIO, true);") !=
+          NULL);
+    CHECK(strstr(source,
+                 "\"/videocall new\") == 0) {\n        call_command(app, CALL_VIDEO, true);") !=
+          NULL);
+    CHECK(strstr(source, "call_command(app, CALL_AUDIO, false);") != NULL);
+    CHECK(strstr(source, "call_command(app, CALL_VIDEO, false);") != NULL);
+    /* And it is the flag that suppresses the join, not a second copy of
+     * the currency test. */
+    CHECK(strstr(source, "!fresh && call_invite_is_current(") != NULL);
+    /* The advice printed when a call IS running has to name the way out
+     * that exists. It used to say "/hangup first", which never cleared
+     * the record and so never helped. */
+    CHECK(strstr(source, "/call new (or /videocall new) mints a fresh room") != NULL);
+}
+
 int main(void) {
     test_use_temp_home();
 
@@ -312,6 +350,8 @@ int main(void) {
     RUN(nothing_spells_its_own_version);
     RUN(the_call_defaults_move_the_page_and_the_sfu_together);
     RUN(leaving_stops_a_running_call);
+    RUN(a_stopped_call_marks_its_invite_spent);
+    RUN(call_new_mints_rather_than_joining);
     RUN(the_call_window_is_offered_never_forced);
 
     free(source);
