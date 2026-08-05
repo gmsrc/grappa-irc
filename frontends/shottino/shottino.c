@@ -9194,7 +9194,21 @@ static void draw(struct app *app) {
 
             /* A strip only when there is somebody else AND room: in the
              * corner box there is neither. */
-            int strip_h = (full && nt > 1) ? vh / 4 : 0;
+            /* TWO PEOPLE ARE A PAIR, not a big one and a small one.
+             *
+             * A 1:1 call is the common case and it was drawn like a
+             * group: one tile filling the box and the other shrunk into
+             * a strip — in the conversation window the strip did not
+             * exist at all, so the second person was simply not drawn.
+             * Two equal cells side by side is what a call between two
+             * people looks like, and it is the same in both views
+             * because it is the same call.
+             *
+             * Landscape pictures in a terminal go side by side rather
+             * than stacked: a cell is about twice as tall as it is
+             * wide, so two columns cost half the rows two rows would. */
+            bool pair = nt == 2;
+            int strip_h = (full && nt > 1 && !pair) ? vh / 4 : 0;
             if (strip_h > 0 && strip_h < 4) strip_h = 0;
             int big_h = vh - strip_h;
 
@@ -9208,6 +9222,27 @@ static void draw(struct app *app) {
             if (fit_w < 1) fit_w = 1;
             if (fit_h < 1) fit_h = 1;
             int ox = vx + (vw - fit_w) / 2, oy = vy + (full ? (big_h - fit_h) / 2 : 0);
+            if (pair) {
+                /* Both, equal, in the order the grid names them — which
+                 * puts our own tile last, because the self slot is
+                 * reserved at the end of the array. */
+                int cw = vw / 2;
+                int chh = big_h;
+                if (chh > cw / 2) chh = cw / 2; /* keep the aspect sane */
+                if (chh < 1) chh = 1;
+                for (int i = 0; i < 2; i++) {
+                    struct call_tile t = app->call_live.tiles[i];
+                    int cx = vx + i * cw;
+                    int cy = vy + (full ? (big_h - chh) / 2 : 0);
+                    draw_media_region_locked(&app->call_live.frame, cy, cx, t.x, t.y, t.w, t.h,
+                                             chh, cw - 1);
+                    const char *nm = t.slot < CALL_MAX_PEERS && app->call_live.peers[t.slot][0]
+                                         ? app->call_live.peers[t.slot]
+                                         : (t.slot == CALL_MAX_PEERS - 1 ? "you" : "?");
+                    if (cy + chh < rows - 2)
+                        draw_text(cy + chh, cx, cw - 1, CP_MENTION, A_BOLD, " %.*s ", cw - 3, nm);
+                }
+            } else {
             draw_media_region_locked(&app->call_live.frame, oy, ox, big.x, big.y, big.w, big.h,
                                      fit_h, fit_w);
             /* A one-line label: a picture with no caption in the corner
@@ -9218,6 +9253,7 @@ static void draw(struct app *app) {
                                   : app->call_live.channel;
             if (oy + fit_h < rows - 2)
                 draw_text(oy + fit_h, ox, fit_w, CP_MENTION, A_BOLD, " %.*s ", fit_w - 2, who);
+            }
 
             /* Everybody else, small, in the order the grid names them —
              * skipping whoever is already filling the big box. */
