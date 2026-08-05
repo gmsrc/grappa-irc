@@ -4044,6 +4044,35 @@ static bool url_has_gif_suffix(const char *url) {
     return token_has_suffix(lower, gif);
 }
 
+/* Does the last path segment name a file type?
+ *
+ * The `/uploads/` rule below reads a path as a picture on the strength of
+ * a deployment convention, and that convention only answers a question
+ * the path itself left OPEN: grappa serves uploads under a generated slug
+ * with no extension, so there is nothing else to go on. A link that DOES
+ * name its type and reached that rule unmatched has already answered —
+ * `.txt`, `.pdf`, `.zip` are not pictures, and handing one to the image
+ * decoder renders somebody's text file as a broken image.
+ *
+ * Deliberately narrow: a dot in the LAST segment, followed by 1-5
+ * alphanumerics and nothing else. A dotted directory earlier in the path
+ * says nothing about the file, and `#fragment` is not part of the name. */
+static bool url_token_has_extension(const char *lower) {
+    const char *slash = strrchr(lower, '/');
+    const char *seg = slash ? slash + 1 : lower;
+    const char *hash = strchr(seg, '#');
+    size_t len = hash ? (size_t)(hash - seg) : strlen(seg);
+    size_t dot = len;
+    for (size_t i = 0; i < len; i++)
+        if (seg[i] == '.') dot = i;
+    if (dot == len) return false;
+    size_t ext = len - dot - 1;
+    if (ext == 0 || ext > 5) return false;
+    for (size_t i = dot + 1; i < len; i++)
+        if (!isalnum((unsigned char)seg[i])) return false;
+    return true;
+}
+
 static enum media_kind media_kind_of(const char *url) {
     static const char *const img[] = {".jpg", ".jpeg", ".png", ".gif",
                                       ".webp", ".bmp", NULL};
@@ -4065,7 +4094,9 @@ static enum media_kind media_kind_of(const char *url) {
      * /uploads/ too, and handing it to the image decoder is how audio
      * would look "broken" rather than unsupported. */
     if (token_has_suffix(lower, aud)) return MEDIA_AUDIO;
-    if (token_has_suffix(lower, img) || strstr(lower, "/uploads/")) return MEDIA_IMAGE;
+    if (token_has_suffix(lower, img)) return MEDIA_IMAGE;
+    /* The convention, and only where the path stayed silent. */
+    if (strstr(lower, "/uploads/") && !url_token_has_extension(lower)) return MEDIA_IMAGE;
     return MEDIA_NONE;
 }
 

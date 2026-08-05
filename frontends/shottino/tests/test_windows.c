@@ -830,6 +830,33 @@ TEST(audio_is_classified_before_the_uploads_heuristic) {
     CHECK_LONG(media_kind_of("http://h/shot.png.txt"), MEDIA_IMAGE);
 }
 
+TEST(an_upload_that_names_its_type_is_not_guessed_at) {
+    /* Reported from a live channel: a .txt upload rendered as a broken
+     * inline image. The `/uploads/` rule answers a question the path left
+     * OPEN — grappa's slugs carry no extension — so a path that DID name
+     * its type must not be overruled by it. */
+    CHECK_LONG(media_kind_of("https://irc.sniffo.org/uploads/2sp4upqexbhd3vcakuat73y6oy.txt"),
+               MEDIA_NONE);
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/doc.pdf"), MEDIA_NONE);
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/bundle.zip"), MEDIA_NONE);
+
+    /* The extensionless slug the rule was written for still reads as a
+     * picture, with or without a query or fragment. */
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/2sp4upqexbhd3vcakuat73y6oy"), MEDIA_IMAGE);
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc123?sig=x"), MEDIA_IMAGE);
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc123#top"), MEDIA_IMAGE);
+    /* A dotted DIRECTORY says nothing about the file in it. */
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/v1.2/abc123"), MEDIA_IMAGE);
+    /* And a real extension still wins for the kinds we do handle. */
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc123.png"), MEDIA_IMAGE);
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc123.mp3"), MEDIA_AUDIO);
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc123.mp4"), MEDIA_VIDEO);
+
+    /* Not an extension: too long to be one, and a bare trailing dot. */
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc.abcdefgh"), MEDIA_IMAGE);
+    CHECK_LONG(media_kind_of("https://irc.example/uploads/abc."), MEDIA_IMAGE);
+}
+
 /* ── Admin panel wire shapes ───────────────────────────────────────────
  *
  * These renderers read the ADMIN API's JSON directly, and nothing linked
@@ -4295,6 +4322,7 @@ int main(void) {
     RUN(a_ctcp_query_is_answered_only_where_it_is_ours_to_answer);
     RUN(a_ctcp_query_is_framed_the_way_the_protocol_expects);
     RUN(audio_is_classified_before_the_uploads_heuristic);
+    RUN(an_upload_that_names_its_type_is_not_guessed_at);
     RUN(a_child_that_ignores_sigterm_is_still_stopped);
     RUN(a_bounded_wait_reports_what_it_found);
     RUN(a_query_is_never_asked_for_a_member_list);
