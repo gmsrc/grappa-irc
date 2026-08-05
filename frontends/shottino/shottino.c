@@ -21228,8 +21228,28 @@ int main(int argc, char **argv) {
      *
      * Nothing in the call code knows what this host is: it is a base,
      * and any deployment of web/room.html + web/nginx-call.conf serves
-     * the same shape. */
-    snprintf(app->call_base_url, sizeof(app->call_base_url), "https://grappa.nexlab.net/call");
+     * the same shape.
+     *
+     * `/uploads/call/` rather than `/call/`, and the reason is entirely
+     * about somebody else's client: the cicchetto PWA on that origin
+     * answers every top-level navigation from its own cache unless the
+     * path is on its denylist, and `/call` is not. A call link therefore
+     * opened the PWA — an install prompt in a browser, a blank page
+     * inside the app — on every device with cicchetto installed, which
+     * is to say every phone. `/uploads` IS on that denylist, so the same
+     * page under that prefix reaches the network. See docs/CALLS.md;
+     * `/call/` is still served and still works where no PWA is
+     * installed. */
+    snprintf(app->call_base_url, sizeof(app->call_base_url),
+             "https://grappa.nexlab.net/uploads/call");
+    /* And where the SFU is, which is NOT under the page any more.
+     *
+     * The page derives the SFU from its own path by default, so moving
+     * it off `/call/` breaks that derivation — this is the half that
+     * keeps the move working, and it must travel WITH the base_url
+     * above rather than being left for the operator to discover. */
+    snprintf(app->call_sfu_url, sizeof(app->call_sfu_url),
+             "https://grappa.nexlab.net/call/rtc");
     /* Queries ring, channels do not. A channel doorbell any member can
      * press is a doorbell that gets pressed. */
     app->call_ring = CALL_RING_QUERIES;

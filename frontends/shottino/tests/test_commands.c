@@ -216,6 +216,27 @@ TEST(nothing_spells_its_own_version) {
     for (size_t i = 0; v[i]; i++) CHECK((v[i] >= '0' && v[i] <= '9') || v[i] == '.');
 }
 
+/* The two call defaults are only correct TOGETHER.
+ *
+ * The room page derives the SFU from its own path, so moving it off
+ * `/call/` breaks that derivation — and it had to move: the cicchetto
+ * PWA on that origin answers every top-level navigation it has not
+ * denylisted from its own cache, and `/call` is not on that list, so a
+ * call link opened the PWA on every device with it installed. `/uploads`
+ * IS denylisted.
+ *
+ * Shipping the new base_url WITHOUT the sfu_url beside it would be a
+ * default that loads the page and then cannot reach the SFU — a worse
+ * failure than the one it replaces, because it looks like it is
+ * working. Hence one test over both, and a check that the old value is
+ * gone rather than merely joined: leaving it behind is how one of a pair
+ * gets updated later and the other does not. */
+TEST(the_call_defaults_move_the_page_and_the_sfu_together) {
+    CHECK(strstr(source, "\"https://grappa.nexlab.net/uploads/call\"") != NULL);
+    CHECK(strstr(source, "\"https://grappa.nexlab.net/call/rtc\"") != NULL);
+    CHECK(strstr(source, "\"https://grappa.nexlab.net/call\"") == NULL);
+}
+
 int main(void) {
     test_use_temp_home();
 
@@ -240,6 +261,7 @@ int main(void) {
     RUN(completion_table_is_sorted);
     RUN(every_dispatched_verb_has_a_help_topic);
     RUN(nothing_spells_its_own_version);
+    RUN(the_call_defaults_move_the_page_and_the_sfu_together);
 
     free(source);
     return test_report();
