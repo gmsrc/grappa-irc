@@ -1149,6 +1149,14 @@ struct app {
          * which way each one points. */
         bool camera_off;
         bool muted;
+        /* Who the helper says is talking, as a SLOT, or -1. */
+        int speaker;
+        /* A tile chosen by hand — click, or Tab — which outranks the
+         * speaker until Esc gives the choice back. Held as a SLOT rather
+         * than a grid index: the grid is rebuilt whenever somebody joins
+         * or turns a camera off, and an index would then point at
+         * somebody else. */
+        int selected;
         bool vreading;
         bool video;
         /* The live frame, as an inline_media so the SAME half-block
@@ -1685,6 +1693,12 @@ static bool window_matches(const struct window *w, const char *network, const ch
  * Client-local like $server and $llm: nothing on the wire ever names
  * it, and every REST call naming one can only fail. */
 #define CALL_WINDOW "$call"
+
+/* How many faces fit along the bottom of the call window before the last
+ * cell stops being a face and starts being a list. Six is where a strip
+ * cell is still big enough to recognise somebody in at a normal terminal
+ * width. */
+#define CALL_STRIP_MAX 6
 /* The model conversation window. Client-local like $server: nothing on
  * the wire ever names it. */
 /* The model conversation window. Client-local like $server: nothing on
@@ -7777,6 +7791,35 @@ static void media_sample_cell(const struct media_src_rect *s, int rows, int cols
     *py_bot = yb;
 }
 
+/* WHICH TILE GETS THE BIG CELL.
+ *
+ * A hand-made choice outranks the speaker — clicking or Tabbing to
+ * somebody means watching THEM, and having the box jump away the moment
+ * anybody else talks is the opposite of a choice. Esc drops the
+ * selection and the speaker takes over again.
+ *
+ * Our own tile never wins by default. Watching yourself full size while
+ * somebody else talks is nobody's intent, and the self-view has a
+ * reserved corner of its own; it can still be chosen deliberately.
+ *
+ * Returns a grid INDEX (what the draw walks), taking slots (what the
+ * rest of the call speaks in). -1 when the grid is empty.
+ *
+ * Pure, so the precedence can be proved without a call running — it is
+ * three rules that interact, which is exactly the kind of thing that
+ * looks obvious and is wrong. */
+static int call_big_index(const struct call_tile *tiles, int n, int selected, int speaker,
+                          int self_slot) {
+    if (n <= 0) return -1;
+    for (int i = 0; i < n; i++)
+        if (selected >= 0 && tiles[i].slot == selected) return i;
+    for (int i = 0; i < n; i++)
+        if (speaker >= 0 && tiles[i].slot == speaker && speaker != self_slot) return i;
+    for (int i = 0; i < n; i++)
+        if (tiles[i].slot != self_slot) return i;
+    return 0; /* alone in the call: our own picture is all there is */
+}
+
 static void draw_media_region_locked(const struct inline_media *m, int y, int x, int sx, int sy,
                                      int sw, int sh, int rows, int cols) {
     if (!m || m->state != IM_READY || !m->rgb || rows <= 0 || cols <= 0) return;
@@ -9164,7 +9207,11 @@ static void draw(struct app *app) {
             vy = 1;
         }
         int nt = app->call_live.tile_count;
-        int focus = app->call_live.focus;
+        /* Chosen by hand, else whoever is talking, else the first person
+         * who is not us — see call_big_index. `focus` is kept as the
+         * name the draw uses because everything below reads it. */
+        int focus = call_big_index(app->call_live.tiles, nt, app->call_live.selected,
+                                   app->call_live.speaker, CALL_MAX_PEERS - 1);
         if (focus < 0 || focus >= nt) focus = 0;
         /* WHERE THE PICTURE LANDED, for the pointer.
          *
@@ -9258,21 +9305,62 @@ static void draw(struct app *app) {
             /* Everybody else, small, in the order the grid names them —
              * skipping whoever is already filling the big box. */
             if (strip_h > 0) {
+                /* SIX ALONG THE BOTTOM, and the sixth becomes a LIST
+                 * once there are more than six.
+                 *
+                 * A strip that keeps subdividing ends in cells too small
+                 * to recognise anybody in, which is worse than not
+                 * showing them: it looks like the call is broken. Past
+                 * the cap the last cell says how many are not drawn and
+                 * names as many as fit — a caption is a truthful thing
+                 * to be told, a two-pixel face is not. */
                 int others = nt - 1;
-                int tw = vw / (others > 4 ? 4 : others);
+                int cells = others > CALL_STRIP_MAX ? CALL_STRIP_MAX : others;
+                bool overflow = others > CALL_STRIP_MAX;
+                int tw = cells > 0 ? vw / cells : vw;
                 if (tw > strip_h * 4) tw = strip_h * 4;
                 int sy = vy + vh - strip_h;
                 int sx = vx;
+                int drawn = 0;
                 for (int i = 0; i < nt && sx + tw <= vx + vw; i++) {
                     if (i == focus) continue;
+                    /* The last cell is the list when there are more than
+                     * fit; everything before it is a picture. */
+                    if (overflow && drawn == cells - 1) break;
                     struct call_tile t = app->call_live.tiles[i];
                     draw_media_region_locked(&app->call_live.frame, sy, sx, t.x, t.y, t.w, t.h,
                                              strip_h - 1, tw - 1);
                     const char *n2 = t.slot < CALL_MAX_PEERS && app->call_live.peers[t.slot][0]
                                          ? app->call_live.peers[t.slot]
-                                         : "?";
+                                         : (t.slot == CALL_MAX_PEERS - 1 ? "you" : "?");
                     draw_text(sy + strip_h - 1, sx, tw - 1, CP_MUTED, 0, "%.*s", tw - 2, n2);
                     sx += tw;
+                    drawn++;
+                }
+                if (overflow && sx + tw <= vx + vw) {
+                    char rest[128] = "";
+                    size_t w = 0;
+                    int left = 0;
+                    for (int i = 0, seen = 0; i < nt; i++) {
+                        if (i == focus) continue;
+                        if (seen++ < drawn) continue;
+                        const char *nm = app->call_live.tiles[i].slot < CALL_MAX_PEERS
+                                             ? app->call_live.peers[app->call_live.tiles[i].slot]
+                                             : "";
+                        left++;
+                        if (nm && nm[0] && w + strlen(nm) + 2 < sizeof(rest))
+                            w += (size_t)snprintf(rest + w, sizeof(rest) - w, "%s%s",
+                                                  w ? ", " : "", nm);
+                    }
+                    /* A count, then as many names as the cell holds.
+                     * Truncated rather than wrapped: this is a caption,
+                     * and a caption that reflows is a caption competing
+                     * with the faces beside it. */
+                    draw_fill(sy, sx, tw - 1, CP_ALT);
+                    for (int r = 1; r < strip_h; r++) draw_fill(sy + r, sx, tw - 1, CP_ALT);
+                    draw_text(sy, sx, tw - 1, CP_ACCENT, A_BOLD, " +%d more", left);
+                    if (rest[0] && strip_h > 1)
+                        draw_text(sy + 1, sx, tw - 1, CP_MUTED, 0, " %.*s", tw - 3, rest);
                 }
             }
         }
@@ -13741,7 +13829,7 @@ static const char *commands[] = {
     "/admin", "/alias", "/answer", "/approve", "/archive", "/away", "/ban", "/banlist", "/block",
     "/bot", "/call", "/camera",
     "/chat", "/clear", "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deny", "/deop",
-    "/devoice", "/dictate", "/die", "/disconnect", "/exec", "/exit", "/focus", "/globops",
+    "/devoice", "/dictate", "/die", "/disconnect", "/exec", "/exit", "/focus", "/focus-off", "/globops",
     "/hangup", "/help",
     "/highlight",
     "/hilight", "/hs", "/ignore", "/info", "/invite", "/j", "/join", "/kb", "/keys", "/kick",
@@ -14873,6 +14961,14 @@ static void call_event_apply(struct app *app, const char *line) {
     else if (strcmp(event, "state") == 0) log_line(app, "call: %s", value);
     else if (strcmp(event, "media") == 0) log_line(app, "call: carrying %s", value);
     else if (strcmp(event, "closed") == 0) log_line(app, "call: ended");
+    else if (strcmp(event, "speaker") == 0) {
+        /* WHO IS TALKING, decided by the helper from how much each peer
+         * is sending. Stored, never announced: a line of scrollback per
+         * turn of a conversation is a conversation nobody can read. */
+        pthread_mutex_lock(&app->lock);
+        app->call_live.speaker = atoi(value);
+        pthread_mutex_unlock(&app->lock);
+    }
     else if (strcmp(event, "tiles") == 0) {
         /* The grid changed: somebody started or stopped sending a
          * picture. Adopted wholesale or not at all — a half-applied
@@ -14966,6 +15062,8 @@ static void call_helper_stop(struct app *app) {
     app->call_live.ended = false;
     app->call_live.camera_off = false;
     app->call_live.muted = false;
+    app->call_live.speaker = -1;
+    app->call_live.selected = -1;
     pthread_mutex_unlock(&app->lock);
     if (pid <= 0) return;
     /* Ask first: the helper owes the SFU a DELETE, and killing it
@@ -15195,6 +15293,8 @@ static bool call_helper_start(struct app *app, const char *room_url, bool video,
     app->call_live.out_fd = out_pipe[0];
     app->call_live.cols = vcols;
     app->call_live.rows = vrows;
+    app->call_live.speaker = -1;
+    app->call_live.selected = -1;
     app->call_live.frame.state = IM_IDLE;
     memcpy(app->call_live.peers, peer_nicks, sizeof(peer_nicks));
     app->call_live.tile_count = 0;
@@ -15258,6 +15358,44 @@ static bool call_control(struct app *app, const char *verb) {
  * the camera back on is then instant, where reopening v4l2 is not. Our
  * own tile goes dark with it, because the self-view is fed from the very
  * packets being dropped. */
+/* Choose the next person by hand, cycling. Skips nobody — our own tile
+ * included, because deliberately looking at yourself is a thing people
+ * do to check their camera.
+ *
+ * A selection OUTRANKS the speaker until it is cleared, which is the
+ * whole point: clicking somebody means watching them, not watching
+ * whoever talks next. */
+static void call_select_next(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    int n = app->call_live.tile_count;
+    if (n > 0) {
+        int at = -1;
+        for (int i = 0; i < n; i++)
+            if (app->call_live.tiles[i].slot == app->call_live.selected) at = i;
+        app->call_live.selected = app->call_live.tiles[(at + 1) % n].slot;
+    }
+    int sel = app->call_live.selected;
+    const char *who = sel >= 0 && sel < CALL_MAX_PEERS && app->call_live.peers[sel][0]
+                          ? app->call_live.peers[sel]
+                          : (sel == CALL_MAX_PEERS - 1 ? "you" : NULL);
+    char name[MAX_CHANNEL];
+    snprintf(name, sizeof(name), "%s", who ? who : "");
+    pthread_mutex_unlock(&app->lock);
+    if (n <= 0) log_line(app, "/focus: no video call is running");
+    else if (n == 1) log_line(app, "/focus: only one person is on camera");
+    else log_line(app, "call: watching %s — Esc goes back to whoever is talking",
+                  name[0] ? name : "the next person");
+}
+
+/* Give the choice back to the speaker. */
+static void call_select_clear(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    bool had = app->call_live.selected >= 0;
+    app->call_live.selected = -1;
+    pthread_mutex_unlock(&app->lock);
+    if (had) log_line(app, "call: following whoever is talking");
+}
+
 static void call_camera_set(struct app *app, bool off) {
     if (!call_control(app, off ? "camera off" : "camera on")) {
         log_line(app, "/camera: no call is running");
@@ -16195,6 +16333,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "call") == 0) log_line(app, "/call — start an audio call in this window: a room nobody can guess is minted, its link is posted as 📞 <url>, and your browser opens it. The link IS the credential, so the call is exactly as private as the window you posted it in. /set call.base_url picks the service");
     else if (strcmp(cmd, "videocall") == 0) log_line(app, "/videocall — /call with a camera: the same room, posted as 📹 <url> so the other side knows to expect video before joining");
     else if (strcmp(cmd, "answer") == 0) log_line(app, "/answer — join the last call that came in, ringing or not. A channel invite does not ring under the default /set call.ring, and this is how you take it");
+    else if (strcmp(cmd, "focus-off") == 0) log_line(app, "/focus-off — stop watching one person and follow whoever is talking again. Esc does the same inside the $call window. The choice a click or /focus makes OUTRANKS the speaker, deliberately: clicking somebody means watching them, not watching whoever speaks next");
     else if (strcmp(cmd, "camera") == 0) log_line(app, "/camera [on|off] — the camera, while a video call runs. Bare /camera toggles. Alt-V does the same from anywhere, and a right-click on the call picture offers it beside the microphone. The frames are DROPPED rather than the device closed, so turning it back on is instant — and your own tile goes dark with it, because the self-view is fed from the packets being dropped");
     else if (strcmp(cmd, "mute") == 0 || strcmp(cmd, "unmute") == 0) log_line(app, "/mute, /unmute — the microphone, while a call is running in the terminal. Local and instant: the capture keeps going and its packets are dropped, so unmuting does not wait for a device to open");
     else if (strcmp(cmd, "focus") == 0) log_line(app, "/focus — in a group video call, show the next person full size and the rest along the bottom. Instant: the helper composites the same grid whoever is focused, so this only changes which part of it is drawn big. Up to three people are on camera at once; the rest stay in the call with their audio");
@@ -17791,24 +17930,9 @@ static void handle_command_dispatch(struct app *app, char *line) {
     } else if (strcmp(line, "/hangup") == 0) {
         call_hangup(app);
     } else if (strcmp(line, "/focus") == 0) {
-        /* Cycles who is BIG. Entirely local: the helper composites the
-         * same even grid whoever is focused, so this moves which cell
-         * gets sampled into the large box and takes effect on the next
-         * frame drawn. Nothing is sent, nothing restarts. */
-        char who[MAX_CHANNEL] = "";
-        int n;
-        pthread_mutex_lock(&app->lock);
-        n = app->call_live.pid > 0 ? app->call_live.tile_count : 0;
-        if (n > 1) {
-            app->call_live.focus = (app->call_live.focus + 1) % n;
-            int slot = app->call_live.tiles[app->call_live.focus].slot;
-            app->call_live.focus_slot = slot;
-            snprintf(who, sizeof(who), "%s", app->call_live.peers[slot]);
-        }
-        pthread_mutex_unlock(&app->lock);
-        if (n > 1) log_line(app, "call: showing %s", who[0] ? who : "the next person");
-        else if (n == 1) log_line(app, "/focus: only one person is on camera");
-        else log_line(app, "/focus: no video call is running");
+        call_select_next(app);
+    } else if (strcmp(line, "/focus-off") == 0) {
+        call_select_clear(app);
     } else if (strcmp(line, "/mute") == 0 || strcmp(line, "/unmute") == 0) {
         bool on = line[1] == 'm';
         if (call_control(app, on ? "mute" : "unmute")) {
@@ -19052,6 +19176,33 @@ static void handle_mouse(struct app *app) {
         app->overlay.nick[0] = 0;
         app->overlay.body[0] = 0;
         app->overlay.media[0] = 0;
+        pthread_mutex_unlock(&app->lock);
+        return;
+    }
+    if (on_call && click && already_full) {
+        /* IN THE CALL WINDOW a click CHOOSES. The strip runs along the
+         * bottom, so a click low in the box is aimed at one of the small
+         * faces; anywhere else means the big one, which is already
+         * chosen. Esc gives the choice back to whoever is talking. */
+        pthread_mutex_lock(&app->lock);
+        int nt = app->call_live.tile_count;
+        int strip_top = app->call_draw_y + app->call_draw_h - app->call_draw_h / 4;
+        int picked = -1;
+        if (nt > 1 && ev.y >= strip_top) {
+            int others = nt - 1;
+            int cells = others > CALL_STRIP_MAX ? CALL_STRIP_MAX : others;
+            int tw = cells > 0 ? app->call_draw_w / cells : app->call_draw_w;
+            int at = tw > 0 ? (ev.x - app->call_draw_x) / tw : 0;
+            int big = call_big_index(app->call_live.tiles, nt, app->call_live.selected,
+                                     app->call_live.speaker, CALL_MAX_PEERS - 1);
+            for (int i = 0, seen = 0; i < nt; i++) {
+                if (i == big) continue;
+                if (seen++ != at) continue;
+                picked = app->call_live.tiles[i].slot;
+                break;
+            }
+        }
+        if (picked >= 0) app->call_live.selected = picked;
         pthread_mutex_unlock(&app->lock);
         return;
     }
@@ -21036,6 +21187,12 @@ static void event_loop(struct app *app) {
             pthread_mutex_unlock(&app->lock);
         } else if (ch == KEY_MOUSE) {
             handle_mouse(app);
+        } else if (ch == 27 && app->call_live.pid > 0 &&
+                   is_call_window(app->windows[focused_window_locked(app)].channel)) {
+            /* Esc here means "stop watching that one", not "leave" —
+             * the spec's restore. Leaving the call window is what the
+             * window keys are for. */
+            call_select_clear(app);
         } else if (ch == KEY_CALL_MIC) {
             /* Through the verbs, like the menu: one implementation of
              * muting, three ways to reach it. */

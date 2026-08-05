@@ -3385,6 +3385,48 @@ TEST(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it) {
  * `/call/` to escape the PWA's service worker broke that — the proxy did
  * not move — and every publish answered 404 against a path nothing
  * serves. */
+/* Which tile gets the big cell: three rules that interact.
+ *
+ * A hand-made choice outranks the speaker — clicking somebody means
+ * watching THEM, and a box that jumps away the moment anyone else talks
+ * is the opposite of a choice. Our own tile never wins by default:
+ * watching yourself full size while somebody else speaks is nobody's
+ * intent. Both are easy to state and easy to get backwards, which is
+ * why they are proved rather than reasoned about. */
+TEST(the_big_cell_follows_the_choice_then_the_voice) {
+    const int self = CALL_MAX_PEERS - 1;
+    struct call_tile t[3];
+    memset(t, 0, sizeof(t));
+    t[0].slot = 0;      /* alice */
+    t[1].slot = 2;      /* bob */
+    t[2].slot = self;   /* us */
+
+    /* Nobody chosen, nobody talking: the first person who is not us. */
+    CHECK_LONG(call_big_index(t, 3, -1, -1, self), 0);
+    /* Talking wins over the default. */
+    CHECK_LONG(call_big_index(t, 3, -1, 2, self), 1);
+    /* A CHOICE wins over talking, even while somebody else talks. */
+    CHECK_LONG(call_big_index(t, 3, 0, 2, self), 0);
+    /* A choice of OURSELVES is honoured — checking your own camera is a
+     * thing people do deliberately. */
+    CHECK_LONG(call_big_index(t, 3, self, 2, self), 2);
+    /* But us TALKING never takes the box on its own. */
+    CHECK_LONG(call_big_index(t, 3, -1, self, self), 0);
+    /* A stale choice — that person left, so the grid no longer names
+     * their slot — falls through to the speaker rather than pinning a
+     * cell nobody is in. */
+    CHECK_LONG(call_big_index(t, 3, 5, 2, self), 1);
+
+    /* Alone: our own picture is all there is, so it does get the box. */
+    struct call_tile solo[1];
+    memset(solo, 0, sizeof(solo));
+    solo[0].slot = self;
+    CHECK_LONG(call_big_index(solo, 1, -1, -1, self), 0);
+    /* An empty grid has no answer, and says so rather than naming a
+     * cell nobody drew. */
+    CHECK_LONG(call_big_index(t, 0, -1, -1, self), -1);
+}
+
 TEST(the_terminal_and_the_browser_agree_on_where_the_sfu_is) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -4286,6 +4328,7 @@ int main(void) {
     RUN(an_invite_carries_its_room_in_the_fragment);
     RUN(a_room_is_a_path_segment_and_is_encoded_like_one);
     RUN(the_invite_names_the_sfu_only_when_the_page_is_not_beside_it);
+    RUN(the_big_cell_follows_the_choice_then_the_voice);
     RUN(the_terminal_and_the_browser_agree_on_where_the_sfu_is);
     RUN(a_call_in_a_query_with_yourself_lists_one_person);
     RUN(rejoining_a_running_call_rebuilds_the_link_rather_than_replaying_it);

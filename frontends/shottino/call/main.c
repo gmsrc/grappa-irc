@@ -213,6 +213,22 @@ struct call {
      * connect over a contiguous 0..n-1, which meant a peer who joined
      * afterwards landed on a slot nobody had prepared and was audible
      * to nobody — half of what "the late joiner is not there" was. */
+    /* HOW MUCH each peer is sending on its audio track, in bytes.
+     *
+     * A cheap stand-in for "who is talking", and deliberately not a
+     * loudness measurement: Opus encodes silence into very small frames,
+     * so a peer saying nothing costs a fraction of the bytes of one
+     * mid-sentence. Reading the SIZE of packets we already handle costs
+     * nothing, where measuring real level would mean decoding every
+     * stream — which is the thing this whole design avoids.
+     *
+     * The consequence to be honest about: it tracks speech ACTIVITY, not
+     * volume. Somebody whispering steadily can out-score somebody
+     * shouting a single word. For deciding which tile to enlarge that is
+     * the better answer anyway. */
+    _Atomic unsigned long abytes[CALL_MAX_PEERS];
+    unsigned long abseen[CALL_MAX_PEERS];
+    int speaker; /* the slot with the big cell, or -1 */
     _Atomic unsigned long apkts[CALL_MAX_PEERS];
     unsigned long aseen[CALL_MAX_PEERS];
     int amisses[CALL_MAX_PEERS];
@@ -270,6 +286,7 @@ static void RTC_API on_audio_rtp(int id, const char *msg, int size, void *ptr) {
         {
         struct call *c = s->owner;
         c->apkts[s->slot]++;
+        c->abytes[s->slot] += (unsigned long)size;
         if (pthread_mutex_trylock(&c->vlock) != 0) return;
         media_feed(&c->amix.legs[s->slot], msg, (size_t)size);
         pthread_mutex_unlock(&c->vlock);
@@ -403,7 +420,45 @@ static bool liveness_step(_Atomic unsigned long *pkts, unsigned long *seen, int 
     return changed;
 }
 
+/* Who is talking, from bytes sent since the last tick.
+ *
+ * The winner needs a MARGIN over the runner-up, not merely the most:
+ * two people in a quiet room produce near-identical comfort noise, and a
+ * speaker that flips every tick is worse than one that is occasionally
+ * stale. A quarter more than the next is the threshold, and below a
+ * floor nobody wins — silence promotes nobody, so the last speaker keeps
+ * the box rather than the picture jumping to whoever coughed.
+ *
+ * Emitted only on CHANGE. The client redraws from it; a per-tick event
+ * saying the same thing would be noise in the same way the absent-peer
+ * retries were. */
+static void speaker_step(struct call *c) {
+    unsigned long best = 0, second = 0;
+    int who = -1;
+    for (int i = 0; i < CALL_MAX_PEERS; i++) {
+        unsigned long now = c->abytes[i];
+        unsigned long delta = now - c->abseen[i];
+        c->abseen[i] = now;
+        if (delta > best) {
+            second = best;
+            best = delta;
+            who = i;
+        } else if (delta > second) {
+            second = delta;
+        }
+    }
+    /* Roughly a few hundred bytes a second of Opus is somebody breathing
+     * near a microphone; speech is an order of magnitude more. */
+    if (best < 400 || best * 4 < second * 5) return; /* nobody clearly, or too close */
+    if (who == c->speaker) return;
+    c->speaker = who;
+    char msg[32];
+    snprintf(msg, sizeof(msg), "%d", who);
+    emit_event("speaker", "value", msg);
+}
+
 static void media_supervise(struct call *c) {
+    speaker_step(c);
     if (liveness_step(c->apkts, c->aseen, c->amisses, c->alive)) audio_retile(c);
     if (c->want_video && liveness_step(c->vpkts, c->vseen, c->vmisses, c->vlive)) video_retile(c);
 }
@@ -1021,6 +1076,7 @@ int main(int argc, char **argv) {
         call.vmix.legs[i].payload_type = mcfg.video_payload_type;
     }
     call.want_video = video;
+    call.speaker = -1;
     call.frame_fd = STDOUT_FILENO;
     call.cfg = &mcfg;
 
