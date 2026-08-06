@@ -231,8 +231,15 @@ defmodule GrappaWeb.GrappaChannel do
   @impl Phoenix.Channel
   def join(topic, _, socket) do
     with {:ok, parsed} <- Topic.parse(topic),
-         parsed <- canonicalize_topic(parsed),
          :ok <- authorize(parsed, socket) do
+      # `authorize/2` runs on the PARSED topic, before `canonicalize_topic/1`:
+      # the decision reads only `Topic.user_of/1`, which the channel-segment
+      # fold never touches, while the fold itself resolves the topic's subject
+      # + network and queries that subject's session. A rejected join must not
+      # do work on behalf of the user named in the topic — see the authz test
+      # in `GrappaWeb.GrappaChannelTest`.
+      parsed = canonicalize_topic(parsed)
+
       # NO manual `Phoenix.PubSub.subscribe/2` here — the framework's
       # fastlane subscription (installed by Phoenix.Channel.Server.init/1)
       # is the ONLY subscriber needed. See moduledoc + BUG 6.
@@ -273,8 +280,8 @@ defmodule GrappaWeb.GrappaChannel do
   # `resolve_subject/1` yields the session subject; `get_network_by_slug/1`
   # the network_id; `Session.casemapping/2` reads the live Server (`:ascii`
   # when no pid). Any unresolvable leg degrades to `:ascii` — the safe,
-  # prod-invariant default (the join then falls through to `authorize/2`'s
-  # own `:error`/`:forbidden` handling on a genuinely bad topic).
+  # prod-invariant default. Only ever reached for an ALREADY-authorized
+  # topic, so `user_name` is the socket's own subject label.
   @spec topic_casemapping(String.t(), String.t()) :: Identifier.casemapping()
   defp topic_casemapping(user_name, network_slug) do
     with {:ok, subject} <- resolve_subject(user_name),

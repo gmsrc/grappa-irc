@@ -1177,6 +1177,47 @@ defmodule GrappaWeb.GrappaChannelTest do
                |> build_socket()
                |> subscribe_and_join(Topic.channel("alice", "azzurra", "#sniffo"), %{})
     end
+
+    # A rejected join must not do work on behalf of the topic's user. The
+    # channel-segment fold resolves the topic's subject + network and asks
+    # THAT subject's `Session.Server` for its CASEMAPPING; `authorize/2`
+    # reads only `Topic.user_of/1`, which the fold never touches, so the
+    # authz decision is available before any of it. This test pins the
+    # ordering: a stand-in registered under the victim's session key must
+    # see no request at all.
+    test "a forbidden channel join never calls the topic owner's session" do
+      victim = user_fixture(name: "victim-#{System.unique_integer([:positive])}")
+
+      {:ok, network} =
+        Networks.find_or_create_network(%{slug: "victimnet-#{System.unique_integer([:positive])}"})
+
+      test_pid = self()
+      key = Session.Server.registry_key({:user, victim.id}, network.id)
+
+      spy =
+        spawn(fn ->
+          {:ok, _} = Registry.register(Grappa.SessionRegistry, key, nil)
+          send(test_pid, :spy_registered)
+
+          receive do
+            {:"$gen_call", from, request} ->
+              send(test_pid, {:session_called, request})
+              GenServer.reply(from, :ascii)
+          end
+
+          receive do: (:stop -> :ok)
+        end)
+
+      on_exit(fn -> Process.exit(spy, :kill) end)
+      assert_receive :spy_registered
+
+      assert {:error, %{error: "forbidden"}} =
+               "vjt"
+               |> build_socket()
+               |> subscribe_and_join(Topic.channel(victim.name, network.slug, "#sniffo"), %{})
+
+      refute_receive {:session_called, _}, 100
+    end
   end
 
   # ---------------------------------------------------------------------------
