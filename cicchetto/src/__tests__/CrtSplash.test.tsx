@@ -19,16 +19,27 @@ import CrtSplash from "../CrtSplash";
 // Mocks: networks.ts (user + channelsBySlug signals).
 
 const userMock = vi.fn<() => unknown>(() => null);
+const networksMock = vi.fn<() => unknown>(() => undefined);
 const channelsBySlugMock = vi.fn<() => unknown>(() => undefined);
 
 vi.mock("../lib/networks", () => ({
   user: () => userMock(),
+  networks: () => networksMock(),
   channelsBySlug: () => channelsBySlugMock(),
 }));
+
+const USER = { kind: "visitor", id: "v1", nick: "guest", network_slug: "azzurra" };
+
+function stageLine(id: string): HTMLElement {
+  const el = document.querySelector(`[data-stage="${id}"]`);
+  if (el === null) throw new Error(`no boot-register line for stage "${id}"`);
+  return el as HTMLElement;
+}
 
 describe("CrtSplash (#134 — retro CRT loading splash)", () => {
   beforeEach(() => {
     userMock.mockReturnValue(null);
+    networksMock.mockReturnValue(undefined);
     channelsBySlugMock.mockReturnValue(undefined);
   });
 
@@ -48,15 +59,63 @@ describe("CrtSplash (#134 — retro CRT loading splash)", () => {
   });
 
   it("still renders while the channels resource is loading (user resolved, channels undefined)", () => {
-    userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest", network_slug: "azzurra" });
+    userMock.mockReturnValue(USER);
+    networksMock.mockReturnValue([]);
     channelsBySlugMock.mockReturnValue(undefined);
     render(() => <CrtSplash />);
 
     expect(screen.getByTestId("crt-splash")).toBeInTheDocument();
   });
 
+  // #687 — the register must say WHERE the boot is, not merely exist. A
+  // test that asserts the three lines are present would pass against a
+  // register hard-coded to "done", so every case below pins the done
+  // FLAG against a resource state, in both directions.
+  it("prints one un-done line per stage while nothing has resolved", () => {
+    render(() => <CrtSplash />);
+
+    expect(screen.getByTestId("crt-boot-stages").children).toHaveLength(3);
+
+    for (const id of ["me", "networks", "channels"]) {
+      expect(stageLine(id).dataset.done).toBe("false");
+      expect(stageLine(id).textContent).not.toMatch(/done/);
+    }
+
+    expect(stageLine("me").textContent).toBe("fetching my info...");
+  });
+
+  it("marks a stage done the moment its resource resolves, and only that stage", () => {
+    // /me answered; the networks fetch it unblocks is still in flight.
+    userMock.mockReturnValue(USER);
+    networksMock.mockReturnValue(undefined);
+    channelsBySlugMock.mockReturnValue(undefined);
+    render(() => <CrtSplash />);
+
+    expect(stageLine("me").dataset.done).toBe("true");
+    expect(stageLine("me").textContent).toBe("fetching my info... done");
+
+    // The stall is now named: this is the line the user is waiting on.
+    expect(stageLine("networks").dataset.done).toBe("false");
+    expect(stageLine("networks").textContent).toBe("fetching networks...");
+    expect(stageLine("channels").dataset.done).toBe("false");
+  });
+
+  it("marks the networks stage done on a resolved EMPTY list, not just a populated one", () => {
+    // `[]` is a resolved resource — a subject with no networks has
+    // finished that stage. Reading it as "still fetching" would leave
+    // the register stuck on a boot that is in fact past it.
+    userMock.mockReturnValue(USER);
+    networksMock.mockReturnValue([]);
+    channelsBySlugMock.mockReturnValue(undefined);
+    render(() => <CrtSplash />);
+
+    expect(stageLine("networks").dataset.done).toBe("true");
+    expect(stageLine("channels").dataset.done).toBe("false");
+  });
+
   it("hands off — renders nothing once both /me and channels have loaded", () => {
-    userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest", network_slug: "azzurra" });
+    userMock.mockReturnValue(USER);
+    networksMock.mockReturnValue([]);
     // A resolved empty object is truthy: load is DONE, there just are no
     // channels yet. The splash must hand off (render null), not linger.
     channelsBySlugMock.mockReturnValue({});
