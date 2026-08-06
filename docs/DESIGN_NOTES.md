@@ -31029,8 +31029,12 @@ every other case reads freshness through a window wide enough to survive either
 precision, so a migration to `:utc_datetime_usec` would have made three
 statements silently false. `"captured_at is stored at second precision"` now
 fails if the precision changes. Verified by mutation rather than assumed —
-switching the schema field to `:utc_datetime_usec` and dropping both truncates
-turns it red while the rest of the module stays green.
+switching the schema field to `:utc_datetime_usec` and dropping `finalize/2`'s
+truncate turns exactly that one case red (1 failure in 9 tests + 1 property)
+while the rest of the module stays green. `ingest/3`'s truncate was left in
+place for the measurement on purpose: `inserted_at`/`updated_at` are still
+`:utc_datetime`, so dropping it makes Ecto refuse the dump and every case in
+the module dies for an unrelated reason — which would have measured nothing.
 
 **Not done, and deliberately.** `total_directory_rows/1` having to invent a TTL
 to ask for a row count is a smell — a `count/2` would let it stop lying. That
