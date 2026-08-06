@@ -66,6 +66,20 @@ defmodule Grappa.ChannelDirectoryTest do
     assert Enum.map(entries, & &1.name) == ["#c3", "#c2", "#c1"]
   end
 
+  # #713 — the premise the TTL constants above and `list/3`'s documented
+  # granularity floor both rest on. Migrating `captured_at` to
+  # `:utc_datetime_usec` would retire the born-up-to-999ms-old problem and
+  # make all three statements false, and nothing else in the suite would
+  # notice: every other case reads freshness through a window wide enough to
+  # survive either precision.
+  test "captured_at is stored at second precision", %{subject: s, network_id: nid} do
+    :ok = Dir.replace_start(s, nid)
+    :ok = Dir.ingest(s, nid, rows(1))
+    :ok = Dir.finalize(s, nid)
+
+    assert %{captured_at: %DateTime{microsecond: {0, 0}}} = Dir.list(s, nid, ttl_ms: @ample_ttl_ms)
+  end
+
   test "replace_start clears a prior snapshot", %{subject: s, network_id: nid} do
     :ok = Dir.replace_start(s, nid)
     :ok = Dir.ingest(s, nid, rows(2))

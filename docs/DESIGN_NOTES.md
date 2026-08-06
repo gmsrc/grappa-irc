@@ -30994,3 +30994,48 @@ those three had rolled a bad tick yet. The pin
 `Supervisor.which_children/1` rather than a hand-written list, so a fourth
 reaper is covered on the day it is added, and asserts set-equality against the
 known three so the filter cannot silently match nothing.
+## 2026-08-06 — #713: a granularity floor is a documented fact, not a guard
+
+#718 fixed the flake itself (`ChannelDirectoryTest` asserted `:fresh` with
+`ttl_ms: 1_000` against a second-precision `captured_at`, so the whole budget
+could be spent before `list/3` was called). It left one question open: should
+`list/3` REJECT a `ttl_ms` below the column's granularity, so the next caller
+cannot ask an unanswerable question? Decided here: **no** — and the reasons are
+measurements, not taste.
+
+**It would not have caught the case that prompted it.** The value that went red
+was `ttl_ms: 1_000` — exactly the granularity, not below it. A `ttl_ms < 1_000`
+guard passes that call through untouched. The hazard is not "sub-second
+window"; it is "window comparable to the anchor's uncertainty", and the guard
+cannot see the difference because it cannot know how old the caller expects the
+snapshot to be.
+
+**It would reject two legitimate callers.** `Session.Server.total_directory_rows/1`
+passes `ttl_ms: 0` and reads `.total` only — it never looks at `status`, so the
+zero is a "don't care", not a question. And `@expired_ttl_ms -1` in
+`ChannelDirectoryTest` forces `:stale` deterministically; `0` is NOT equivalent
+there, because the comparison is `age_ms <= ttl_ms` and a stamp and a read
+landing in the same millisecond would score `:fresh`. A sub-granularity guard
+breaks a production path and the very constant that closed the flake.
+
+**So the floor goes where a caller reads it**, on `list/3`'s `:ttl_ms` option:
+the anchor is second-precision, the derived age overstates by up to 999 ms and
+never understates, and a window near that granularity answers by the clock.
+Production is clear by five orders of magnitude (48h).
+
+**One pin was missing.** Everything above — the doc, the test constants, this
+entry — rests on `captured_at` being `:utc_datetime`. Nothing asserted it:
+every other case reads freshness through a window wide enough to survive either
+precision, so a migration to `:utc_datetime_usec` would have made three
+statements silently false. `"captured_at is stored at second precision"` now
+fails if the precision changes. Verified by mutation rather than assumed —
+switching the schema field to `:utc_datetime_usec` and dropping `finalize/2`'s
+truncate turns exactly that one case red (1 failure in 9 tests + 1 property)
+while the rest of the module stays green. `ingest/3`'s truncate was left in
+place for the measurement on purpose: `inserted_at`/`updated_at` are still
+`:utc_datetime`, so dropping it makes Ecto refuse the dump and every case in
+the module dies for an unrelated reason — which would have measured nothing.
+
+**Not done, and deliberately.** `total_directory_rows/1` having to invent a TTL
+to ask for a row count is a smell — a `count/2` would let it stop lying. That
+is an API change with no defect behind it, out of scope for a decision entry.
