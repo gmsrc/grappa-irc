@@ -3517,6 +3517,27 @@ html.resize-dragging * {
   transform: translateX(0);
 }
 
+/* #962 — the drawer is a FIXED-height column flex container, so when its
+   content is taller than the box (XXL text, short viewport, or the keyboard
+   shortening `--viewport-height`) the flex algorithm looks for something to
+   shrink. `:where(.settings-drawer) button` (cd626369, #735) gives every
+   button an EXPLICIT `min-height: var(--tap-min)`, and an explicit min-height
+   REPLACES `min-height: auto` — so the index rows lose their automatic
+   minimum size and collapse to the 44px HIG floor while their content needs
+   68-87px. `align-items: center` + visible overflow then spill the label
+   above the top border and the second subtitle line below the bottom one
+   (measured on device: every row `box 44 serve 87`). Not a WebKit quirk —
+   Chrome collapses them identically, and the chromium leg of
+   `issue962-settings-drawer-row-squash.spec.ts` pins that.
+   The 44px floor is deliberate and stays; flooring the children at their
+   content height instead sends the overflow where it already belongs, the
+   drawer's own `overflow-y: auto`. Child-selector form because every direct
+   child shares the shape, and none of them owns an internal scroll
+   (`.settings-subpage` is a plain flex column). */
+.settings-drawer > * {
+  flex-shrink: 0;
+}
+
 .settings-drawer-backdrop {
   position: fixed;
   inset: 0;
