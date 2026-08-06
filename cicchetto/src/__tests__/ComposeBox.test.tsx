@@ -324,12 +324,29 @@ describe("ComposeBox", () => {
     expect(compose.submit).toHaveBeenCalledWith(expect.anything(), "freenode", "#a");
   });
 
-  it("Shift+Enter inserts a newline (does NOT submit)", async () => {
+  // #816 — Shift+Enter is a NO-OP: it neither submits nor inserts a line
+  // break. The composer stays single-line, because a newline cannot travel
+  // inside a PRIVMSG and the only way to honour one is to split into N
+  // messages — a flood hazard the operator never asked for by pressing a
+  // modifier. No client sets the precedent either (mIRC's editbox is
+  // single-line; hexchat splits paste). Paste remains the ONE way a
+  // multi-line body reaches the box, and paste is guarded.
+  it("#816 — Shift+Enter is a no-op: no submit and no line break", async () => {
     const compose = await import("../lib/compose");
     render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
     const ta = screen.getByPlaceholderText(/message #a/i);
-    fireEvent.keyDown(ta, { key: "Enter", shiftKey: true });
+    const ev = new KeyboardEvent("keydown", {
+      key: "Enter",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    ta.dispatchEvent(ev);
     expect(compose.submit).not.toHaveBeenCalled();
+    // preventDefault is what stops the textarea's own newline insertion —
+    // asserting "no submit" alone passed against the old behaviour too.
+    expect(ev.defaultPrevented).toBe(true);
+    expect(compose.setDraft).not.toHaveBeenCalled();
   });
 
   it("Up arrow on first-line cursor calls recallPrev", async () => {
@@ -1180,6 +1197,23 @@ describe("ComposeBox", () => {
       expect(req?.confirmLabel).toBe("Paste");
     });
 
+    // #816 — the dialog must declare how many MESSAGES the paste becomes, not
+    // how many lines it occupies. The two differ whenever a blank line is in
+    // play, and only the message count is a promise the send path keeps.
+    it("#816 — the count quoted is MESSAGES, so blank interior lines are not counted", async () => {
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      const ta = screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
+      // Four lines as typed, two of them blank → two messages on the wire.
+      ta.dispatchEvent(makeTextPaste("uno\n\n   \ndue"));
+
+      const req = confirmRequest();
+      expect(req).not.toBeNull();
+      expect(req?.title).toContain("2");
+      expect(req?.body).toContain("2");
+      expect(req?.title).not.toContain("4");
+      expect(req?.body).toMatch(/messages/i);
+    });
+
     it("confirming (Paste) inserts the pasted text into the compose draft", async () => {
       const compose = await import("../lib/compose");
       render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
@@ -1228,11 +1262,87 @@ describe("ComposeBox", () => {
       expect(confirmRequest()).toBeNull();
     });
 
-    it("a 3-line paste (at the threshold) does NOT open the dialog — native paste proceeds", async () => {
+    // #816 — the pre-existing 3-line carve-out is GONE. Any paste that
+    // becomes more than one message confirms, because every one of them is a
+    // burst the operator did not explicitly compose.
+    it("#816 — a 2-line paste opens the dialog (the old 3-line carve-out is gone)", async () => {
       render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
       const ta = screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
 
-      const paste = makeTextPaste("uno\ndue\ntre");
+      const paste = makeTextPaste("uno\ndue");
+      ta.dispatchEvent(paste);
+
+      expect(paste.defaultPrevented).toBe(true);
+      expect(confirmRequest()?.title).toContain("2");
+    });
+
+    // #816 — above the hard cap the paste does not land in the box at all.
+    // The operator gets two doors instead: upload the block as a file and
+    // post the link (the same shape as the 📸 image path — `text/plain` is
+    // already an accepted `document` MIME, so this reuses the upload verb
+    // rather than inventing a service), or cancel. Never a bare refusal.
+    describe("#816 — over the hard cap", () => {
+      const OVER_CAP = Array.from({ length: 6 }, (_, i) => `riga ${i}`).join("\n");
+
+      it("offers 'Upload as file' instead of the paste affirmative", async () => {
+        render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+        const ta = screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
+        const paste = makeTextPaste(OVER_CAP);
+        ta.dispatchEvent(paste);
+
+        expect(paste.defaultPrevented).toBe(true);
+        const req = confirmRequest();
+        expect(req).not.toBeNull();
+        expect(req?.confirmLabel).toBe("Upload as file");
+        // The copy has to carry BOTH numbers: what they pasted and where the
+        // ceiling is. "Too many" without the limit leaves them guessing.
+        expect(req?.body).toContain("6");
+        expect(req?.body).toContain("5");
+      });
+
+      it("confirming uploads the block as a text file and never touches the draft", async () => {
+        const compose = await import("../lib/compose");
+        const orch = await import("../lib/uploadOrchestrator");
+        render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+        const ta = screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
+        ta.dispatchEvent(makeTextPaste(OVER_CAP));
+
+        acceptConfirm();
+
+        expect(orch.triggerUploads).toHaveBeenCalledTimes(1);
+        const files = vi.mocked(orch.triggerUploads).mock.calls[0]?.[3] as File[];
+        expect(files).toHaveLength(1);
+        expect(files[0]?.type).toBe("text/plain");
+        // The bytes are the paste itself — an upload that dropped or mangled
+        // the text would still satisfy "a file was uploaded".
+        await expect(files[0]?.text()).resolves.toBe(OVER_CAP);
+        // The whole point of this arm: the burst never enters the composer.
+        expect(compose.setDraft).not.toHaveBeenCalled();
+      });
+
+      it("cancelling neither uploads nor pastes", async () => {
+        const compose = await import("../lib/compose");
+        const orch = await import("../lib/uploadOrchestrator");
+        render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+        const ta = screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
+        ta.dispatchEvent(makeTextPaste(OVER_CAP));
+        // Pin WHICH dialog was dismissed — without this the case passes
+        // against a build that never grew the over-cap arm at all.
+        expect(confirmRequest()?.confirmLabel).toBe("Upload as file");
+
+        dismissConfirm();
+
+        expect(orch.triggerUploads).not.toHaveBeenCalled();
+        expect(compose.setDraft).not.toHaveBeenCalled();
+      });
+    });
+
+    it("#816 — a one-message paste with a trailing newline stays frictionless", async () => {
+      // The commonest copy artifact must not start costing a dialog.
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      const ta = screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
+
+      const paste = makeTextPaste("just one pasted line\n");
       ta.dispatchEvent(paste);
 
       expect(paste.defaultPrevented).toBe(false);

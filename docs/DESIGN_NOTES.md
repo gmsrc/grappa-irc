@@ -31195,3 +31195,268 @@ tags. And the dry-run paragraph keeps its mechanism — validating the shipping
 job pre-merge is still right — it just loses the false premise that the job is
 unproven; the reason to run it is now "you changed the Dockerfile or the job",
 not "it has never run".
+## 2026-08-06 — #816: a multi-line body is a burst, and a burst needs consent
+
+**The hazard.** A newline cannot travel inside a `PRIVMSG` — CRLF terminates
+the frame — so honouring one means splitting into N messages. N messages at
+once is precisely what upstream flood protection closes the connection for,
+the limits differ per network, and users with the right usermode are exempt,
+so there is no safe value to assume. The composer had two routes onto that and
+neither asked the operator anything.
+
+**Shift+Enter is a no-op, not a line break.** `preventDefault` with no send:
+the composer stays single-line. It used to insert a newline, which is a burst
+requested by holding a modifier, and there is no precedent to match — mIRC's
+editbox is single-line and pops a "paste N lines?" dialog, hexchat splits
+paste line by line. Closing this door is what makes the remaining one
+sufficient: paste is now the ONLY way a multi-line body reaches the box, and
+paste is guarded. `composeSend` in the e2e fixtures fills the textarea
+programmatically, so the fan-out spec still exercises the split — the
+behaviour is untouched, only the keyboard route to it is gone.
+
+**The guard trips on the second message, not the fourth line.** #80 carved out
+1–3 lines as frictionless, reasoning that short pastes (a URL, an address) are
+the overwhelming common case and should not cost a dialog. The ruling withdrew
+the carve-out: every multi-message paste is a burst the operator did not
+compose by hand, and the dialog is where they learn what it will become.
+
+**It counts MESSAGES, and that is a reversal worth recording.** #80's counter
+was deliberately *not* `splitMessageLines`: it counted lines as SEEN in the
+box, blank interior lines included, and its comment defended the difference —
+"how big is this paste" was held to be a different question from the send-time
+fan-out. That was right while the dialog only warned about size. It stopped
+being right the moment the dialog has to state how many *messages* the paste
+becomes, because that number is a promise about what the send path will do. So
+the guard now calls `splitMessageLines` itself and `pasteFlood.test.ts` pins
+the two together with an equality assertion rather than restating the rule —
+if the send-side notion of "blank" moves again (#863 moved it once, from
+`!== ""` to a trim), the dialog cannot silently start lying. Visible effects: a
+lone trailing newline, the commonest copy artifact, no longer costs a dialog;
+and a block with a blank line between paragraphs quotes the real frame count
+instead of an inflated one.
+
+**What this deliberately does NOT ship.** The ruling also sets a hard constant
+cap (5 lines) above which the operator gets a paste service *or* cancel. The
+cap cannot be built without its doors, and the service's mechanism was
+unspecified — so it is proposed rather than guessed at. The proposal, and the
+reason it is cheap: `text/plain` is ALREADY an accepted upload MIME in the
+`document` category (`uploadCategory.ts`, mirroring the server's
+`@mime_categories`), so a paste service needs no new category, no new server
+surface and no new taxonomy — it is the pasted text wrapped in a `File` and
+handed to the existing `dropUpload`, which posts the URL as a clickable link
+in the body, the same shape as the 📸 image-upload pattern CLAUDE.md names as
+the model. Recorded here so the next reader does not re-derive the survey.
+
+**Known gap, flagged not closed.** The cap, when it lands, is per-paste. Two
+consecutive within-limit pastes still accumulate in the draft, so a paste-time
+cap is not a send-time guarantee. Whether the limit belongs at submit instead
+of (or as well as) at paste is a design question, not an oversight.
+
+## 2026-08-06 — #816 cap: the second door is the upload verb, not a new service
+
+**The cap is a constant, deliberately.** `PASTE_HARD_MESSAGE_LIMIT = 5`, not
+derived from anything the server says (vjt's ruling). The issue's open question
+asked whether to derive it; the answer is that there is nothing honest to
+derive from — flood limits differ per network and usermode-exempt users are
+exempt from them entirely, so a "computed" ceiling would be a guess wearing a
+formula. A flat number we picked and can retune is the truthful shape.
+
+**Refusing outright was rejected.** Above the ceiling the operator gets two
+doors — upload the block as a file and post the link, or cancel — never a bare
+"no". A dead end teaches the operator nothing except to paste it in two halves,
+which is the same burst with extra steps.
+
+**The service is the upload verb, and that is the whole point.** `text/plain`
+is ALREADY an accepted upload MIME in the `document` category
+(`uploadCategory.ts`, a 1:1 mirror of the server's `@mime_categories`, 10 MiB
+on the default host). So the second door needs no new category, no new server
+surface and no new taxonomy: the pasted text is wrapped in a `File` and handed
+to the existing `dropUpload`, and the orchestrator posts the resulting URL as
+one 📄-prefixed PRIVMSG. That is the same shape as the 📸 image path CLAUDE.md
+names as the model — media is a link, IRC stays text — and it is CLAUDE.md's
+"reuse the verbs, not the nouns" applied literally. The 20% that did not fit
+would have been the domain boundary; there wasn't any.
+
+**Shape: a three-way verdict, not two booleans.** `classifyPaste/1` returns
+`"insert" | "confirm" | "over-limit"` and `pasteRoute` switches on it once.
+Two predicates (`shouldGuard` + `exceedsLimit`) would have let a call site
+answer one and forget the other; the closed set makes a future fourth arm a
+compile error at every switch instead of a silent fall-through.
+
+**The e2e is the gate that proves the reuse reuses.** jsdom can only assert
+that `triggerUploads` was called with the right `File`; the multipart POST →
+auto-send → IRC echo is what shows a *text* paste really does traverse the
+*image* plumbing. That spec was verified by mutation, not by its green: with
+the upload MIME changed to an unaccepted one, `dropUpload` filters the file out
+and the spec fails at the 📄 assertion after its full 20s poll. It also asserts
+the burst did NOT also happen (none of the pasted lines appear as their own
+message), so an implementation that uploaded AND pasted cannot pass.
+
+**Still open, and deliberately not closed here.** The cap is per-paste. Two
+consecutive within-limit pastes accumulate in the draft, so a paste-time cap is
+not a send-time guarantee. Whether the ceiling belongs at submit as well is a
+product question, referred to vjt rather than settled by whoever happened to be
+writing the guard.
+---
+
+## 2026-08-06 — #923: a substrate class must be scoped to the substrate that reads it
+
+`Grappa.Deploy.Preflight.classify_paths/2` scopes every boot-substrate class with
+`filter_on/4` — `:image_substrate` to `:docker`, `:rc_d` to `:jail`, `:systemd_unit`
+to `:linux`. `:nginx` was the one that was not, so BOTH substrates' configs were
+cold everywhere. Measured before the fix, by calling the classifier directly:
+`infra/linux/nginx.conf` on `:jail` → COLD; `infra/freebsd/nginx.conf` on `:linux`
+and on `:docker` → COLD.
+
+That is not cosmetic. Editing the **Linux** nginx config forced a COLD deploy on
+the m42 jail: a restart that drops every live IRC session in production, for a
+file the jail never opens. It is the same failure as 2026-06-10, when a Dockerfile
+diff the jail never reads cold-restarted prod — the incident that made `substrate`
+an explicit required argument in the first place. The rule generalises: **a class
+that names a substrate-specific path must be scoped, or the other substrates pay
+its restart.**
+
+`infra/snippets/*` stays substrate-independent on purpose: it is genuinely shared
+(the jail nginx, the Linux nginx and the e2e conf all `include` it), so a change
+there really does concern everyone.
+
+The scoping lives in a 2-arity `nginx?/2` rather than `filter_on/4` because this
+class is MIXED — two substrate-scoped literals plus a shared prefix — and routing
+it through `filter_on/4` would split one class across concatenated filters,
+reordering the reported file list for no gain.
+
+**Two existing tests asserted the defect verbatim** ("cold on both substrates"),
+so the fix rewrote them instead of adding beside them: a test that encodes a bug
+stops anyone from finding the bug. The replacements mirror the `:rc_d` /
+`:systemd_unit` blocks — cold on its own substrate, hot on the other two — and the
+guard was proved by mutation: making both clauses substrate-blind again turns
+exactly those four cross-substrate assertions red while the two same-substrate
+ones stay green.
+
+**Found by the #923 parity audit, but it was never FreeBSD-only** — it hurt the
+jail and the Linux host symmetrically. The audit's *named* target, the "double
+nginx", turned out not to be a divergence at all: both substrates run a two-hop
+chain by design (`infra/linux/nginx.conf` says "same shape as the m42 host→jail
+hop"), both are dumb proxies since #485, and both include the same snippet.
+Removing the jail's hop would move `RemoteIpFromProxy` off its loopback+XFF row —
+the row `Plugs.LoopbackOnly` gates `/admin/reload` on, the endpoint the hot deploy
+itself calls — so it stays untouched pending a staging jail.
+
+**Also deleted here:** the retired `grappa_ndp_keepalive` triple
+(`ndp_keepalive.{pl,sh}` + `rc.d/grappa_ndp_keepalive`). The service was retired
+2026-08-02 by #628 when the VNET cutover removed the proxy-NDP neighbour cache it
+kept warm; the files survived. Nothing copied, installed, enabled, started or
+tested them — their only live edge was the derived shellcheck gate, which still
+linted two of the three on every CI run.
+## 2026-08-06 — #793: an invite link is a second door into the deep-link reader
+
+`irc.sindro.me/azzurra/sniffo` — paste it to a normal person, they click, they
+are asked, they land in the channel. The machinery for that already existed
+twice over, so the shipment is mostly about NOT building it a third time.
+
+**Two of the issue's five open decisions were already answered by the code.**
+Decision 4 (an index.html fallback so the SPA can be served on a two-segment
+path) has been true since #399: `SpaController`'s `GET /*path` catch-all serves
+the shell for any browser navigation that matched no static file and no API
+route, and since #485 every nginx substrate is a dumb `location / → BEAM`
+proxy, so there is no allowlist to extend either. Nothing server-side was
+written for this feature. And the issue's pointer to the join path —
+`slashCommands.ts` `{kind:"join"}` via `compose.ts` — was aimed one verb short:
+`channelJoin.ts`'s `confirmJoinChannel` (#648) already IS confirm → `postJoin`
+→ switch, including the already-in-the-channel case that switches with no
+modal. The invite route delegates to it and adds nothing.
+
+**What was genuinely new is the reader.** `pushTarget.ts` read
+`location.search` only. It now reads both shapes and dispatches:
+`?network=&channel=` routes a selection as before, `/<network>/<channel>`
+normalises into the SAME `PushTarget` and routes a join. One boot reader, one
+defer-until-`networks()`-seeds, two routes — hence the rename to
+`applyDeepLinkFromUrl`. The two gates differ on purpose: a push target must
+resolve against a non-empty list, while an invite fires as soon as the resource
+RESOLVES, so a recipient with nothing bound gets an answer instead of silence.
+
+**The URL is cleaned before `render()`, not after routing.** The push path
+cleans once the selection lands; the invite cannot wait that long, because the
+router has no route for a two-segment path and would mount the app on nothing
+at all. Cleaning early also satisfies the requirement the push path cleans for
+— a refresh must not re-fire the invite — and it is why no new `<Route>` was
+added. The pending invite then survives the login round-trip in memory: cic's
+login is a client-side navigate, and `networks()` cannot resolve before the
+session is up, so the existing defer IS the auth round-trip handling. A hard
+refresh while sitting on `/login` does lose it; that corner was accepted rather
+than given a sessionStorage store of its own.
+
+**Encoding (decision 2) is where the bytes matter.** A literal `#` is a
+fragment delimiter and never reaches the server, so the shareable spelling is
+bare (`/azzurra/sniffo`) and the parser implies the sigil; `%23` is accepted
+and not doubled; `& + !` pass through. The segment is percent-decoded once,
+and a channel name carrying anything at or below 0x20, a comma, or DEL is
+REJECTED rather than escaped. The comma is the load-bearing one: JOIN takes a
+comma-separated LIST, so an unfiltered `/azzurra/a,b` would turn one invite
+into a two-channel join nobody wrote. `/share/:token` is reserved — it is the
+only other two-segment client route, and without the exclusion a visitor share
+link would parse as an invite to a network called `share`.
+
+**Keyed channels (decision 3) stay out of scope**, as the issue defaults: a key
+in a path lands in history, logs and referrers.
+
+**Decision 1 was NOT settled here.** `networkBySlug` resolves against this
+user's bound networks and an invite is cross-user by definition, so the
+recipient may not have `azzurra` at all. Whether the segment becomes a globally
+resolvable identifier or the flow grows an "add this network, then join" step
+is a product call that has not been taken. The branch therefore joins nothing
+and says so, in one toast naming the network — a visible dead end, because the
+silent one is indistinguishable from a broken link.
+
+**The already-in check reads the channel LIST, not the window states.** That is
+the one place the invite deliberately diverges from `confirmJoinChannel`'s own
+source: an invite fires at BOOT, and `windowStateByChannel` is filled later,
+per channel, off the per-channel WS join replies that `channelsBySlug` itself
+drives. Asking the live projection at boot would race it and pop a modal for a
+channel the operator is already sitting in. Same fact, read from the source
+that is ready at the moment the question is asked.
+## 2026-08-06 — #149: the derogation grew from two advisories to four, unread
+
+`mix hex.audit` was demoted to advisory-only in #147 for two cowlib advisories
+that no version fixes. Two more have landed under it since — one of them a
+network-reachable availability-HIGH — and nobody re-read the note. The measured
+state, from OSV rather than from the note:
+
+- **cowlib 2.18.0** carries THREE. `CVE-2026-43966` (response splitting in
+  `cow_http_struct_hd:escape_string/2`) and `CVE-2026-43969`
+  (`cow_cookie:cookie/1` injection) have **no fixed release at any version** —
+  2.19.0 is explicitly enumerated as affected. `CVE-2026-59248` (unbounded
+  HPACK/QPACK integer decode → memory exhaustion, AV:N VA:H) **is fixed in
+  2.19.0**.
+- **cowboy 2.17.0** carries `CVE-2026-65624` (max_headers bypass via duplicate
+  header names), **fixed in 2.18.0**.
+
+**So the issue's question has a number: no bump closes all four.** A bump to
+cowlib 2.19.0 + cowboy 2.18.0 closes exactly two, and the two survivors are the
+ones that keep hex.audit red. The hard gate cannot be restored, and #149 stays
+open. That is why this change is a comment and not a lock file.
+
+**The justification was also wrong, not just stale.** #147 recorded both
+unfixable advisories as `cow_cookie:cookie/1` request-cookie *composition*
+issues, N/A because grappa only consumes Cookie headers via Plug. 43966 is a
+response-header path in `cow_http_struct_hd`, so that argument never covered
+it. The honest one is narrower and stronger: **cowboy and cowlib enter the tree
+ONLY through `bypass` (`only: :test`, via plug_cowboy)**, prod serves on Bandit,
+and the release is built at `MIX_ENV=prod` — so none of the four is present in
+a deployed grappa at all. Reachability, not severity, is what holds the
+derogation up, and that is what makes it falsifiable: it dies the moment
+cowboy/cowlib become a runtime dep or grappa moves off Bandit, independently of
+whether anything gets patched.
+
+**One list, three readers.** The derogation was described in three places —
+the `ci.check` alias, the ci.yml step, and CLAUDE.md's security section, which
+still called `mix hex.audit` a blocking gate two months after it stopped being
+one. The full advisory list now lives ONCE, on the alias in `mix.exs`; the other
+two state the posture and point at it. Three copies of a list is how this drifted
+in the first place.
+
+**Declined, and why:** taking the two available fixes is a `mix.lock` change,
+which the deploy preflight reads as COLD — for packages that are not in the
+prod release, so the COLD buys no production security. Worth folding into the
+next COLD-forcing change rather than shipping alone. `mix deps.audit` remains
+the hard CVE gate throughout and is untouched.
