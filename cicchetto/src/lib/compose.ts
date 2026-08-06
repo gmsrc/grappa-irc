@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createEffect, createSignal, on } from "solid-js";
 import { addAlias, aliases, delAlias } from "./aliasList";
 import {
   ApiError,
@@ -133,6 +133,64 @@ const empty = (): ComposeState => ({
   stashedDraft: "",
 });
 
+// #772 — an unsent draft used to die with the document, so every reload path
+// ate it: the #674 refresh banner, a manual reload, the #695 stale resume.
+// #674 made that automatic once the operator has been away past a dwell — and
+// the draft they walked away from mid-sentence is exactly the one it discards.
+//
+// sessionStorage, NOT localStorage. The issue left the tier open; the codebase
+// had already answered it for this exact question. `staleResume.ts` keeps its
+// "when was THIS document last alive" stamp in sessionStorage because that is
+// per-window-lifetime: it survives a reload and a suspension, and it does not
+// leak between tabs. A half-typed line is the same kind of fact — it belongs
+// to the window the operator is typing in. In localStorage two tabs on the
+// same channel would overwrite each other's buffer, which is a worse bug than
+// the one being fixed, and every reload path #772 names happens in-place
+// (`window.location.reload()`), so nothing needs to outlive the tab.
+//
+// The issue also asked how drafts get evicted. They don't, because this is not
+// an archive: it MIRRORS the live store, and the store clears a draft when it
+// is sent or erased. What is persisted is "which channels have unsent text
+// right now", which a human bounds on their own. Nothing accumulates, so
+// nothing needs sweeping — and a logout purges it for free, because the
+// identity reset empties the store and the mirror follows it down.
+//
+// Only `draft` crosses. History, the history cursor and the #666 stashed
+// draft are in-session mechanics, not the thing the operator would miss.
+const DRAFTS_KEY = "cicchetto.composeDrafts";
+
+// Boundary parse: these bytes can come from a different bundle version or a
+// hand-edited devtools session, and a throw here would abort the whole store
+// build and leave cic with no composer at all. Shape-check each entry and drop
+// what doesn't fit, rather than trusting the cast.
+const loadPersistedDrafts = (): Record<ChannelKey, ComposeState> => {
+  const raw = sessionStorage.getItem(DRAFTS_KEY);
+  if (raw === null) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+  const out: Record<ChannelKey, ComposeState> = {};
+  for (const [key, draft] of Object.entries(parsed)) {
+    if (typeof draft !== "string" || draft === "") continue;
+    out[key as ChannelKey] = { ...empty(), draft };
+  }
+  return out;
+};
+
+const persistDrafts = (states: Record<ChannelKey, ComposeState>): void => {
+  const drafts: Record<string, string> = {};
+  for (const [key, state] of Object.entries(states)) {
+    if (state.draft !== "") drafts[key] = state.draft;
+  }
+  const keys = Object.keys(drafts);
+  if (keys.length === 0) sessionStorage.removeItem(DRAFTS_KEY);
+  else sessionStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+};
+
 // #591 — the single CTCP frame builder: `\x01VERB\x01` (no args) or
 // `\x01VERB args\x01`. This is the ONE place that wraps a body in CTCP `\x01`
 // framing — shared by /me (verb ACTION, one frame per line) and /ctcp
@@ -250,9 +308,21 @@ export const sendBodyLines = async (
 };
 
 const exports_ = identityScopedStore((onIdentityChange) => {
+  // #772 — seeded from the previous document's unsent drafts. The textarea is
+  // `value={getDraft(key())}`, so restoring the store IS restoring the UI:
+  // nothing in ComposeBox changes, and a restored draft simply looks like the
+  // reload never happened (no "restored" badge — a textarea that kept its text
+  // is what every other text field on the web already does).
   const [composeByChannel, setComposeByChannel] = createSignal<Record<ChannelKey, ComposeState>>(
-    {},
+    loadPersistedDrafts(),
   );
+
+  // The mirror. `defer` so the boot read is not immediately written back, and
+  // `on` so this tracks the store and nothing else. It is write-only toward
+  // storage — it never puts anything INTO the composer after boot, which is
+  // what keeps #907's guarantee intact: the claim→prepare→first-write window
+  // gains no new writer, and no await is introduced anywhere near it.
+  createEffect(on(composeByChannel, persistDrafts, { defer: true }));
 
   // Tab-complete cycle anchor. Continuation is detected by RANGE, not by
   // word equality, so it survives the ": "/" " suffix that sits after the

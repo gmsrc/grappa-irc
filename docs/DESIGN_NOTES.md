@@ -31095,3 +31095,60 @@ site that turned the column into a duration is the one that was wrong.
 
 **What is not claimed.** Mezmerize's database was never read; the mechanism is a
 code reading whose symptom matches, not an observation of his row.
+## 2026-08-06 — #772: the draft is window state, so it lives where windows live
+
+An unsent compose draft died with the document. `composeByChannel` is an
+in-memory `identityScopedStore` signal and nothing in `compose.ts` or
+`identityScopedStore.ts` ever touched storage, so every reload path ate it: the
+#674 refresh banner, a manual reload, the #695 stale resume. Nothing here was a
+regression — what changed is that #674 now reloads on its own once the operator
+has been away past a dwell, and the draft they abandoned mid-sentence and
+walked away from is precisely the one that gets discarded.
+
+**The issue left three questions open. Picking the tier answered two of them.**
+
+*Tier: sessionStorage.* The codebase had already reasoned this out for the same
+shape of fact. `staleResume.ts` keeps its "when was THIS document last alive"
+stamp in sessionStorage because that is per-window-lifetime: it survives a
+reload and a suspension and does not leak between tabs. A half-typed line is
+the same kind of fact — it belongs to the window being typed in. localStorage
+would let two tabs on one channel overwrite each other's buffer, a worse bug
+than the one being fixed, and buys nothing: every reload path #772 names is
+in-place (`window.location.reload()`), so nothing needs to outlive the tab.
+
+*Eviction: none, because this is not an archive.* The persisted value MIRRORS
+the live store, and the store clears a draft when it is sent or erased. What is
+on disk is "which channels have unsent text right now" — a set a human bounds
+on their own. Nothing accumulates, so nothing needs sweeping.
+
+*Identity purge: also free.* `onIdentityChange` already empties the store, and
+the mirror follows it down to `{}`. No second reset, no key scoped by subject.
+
+*Restored-marker: no.* A textarea that kept its text is what every other text
+field on the web does; a badge would be an affordance to dismiss for an event
+the operator did not ask about.
+
+**Only `draft` crosses.** History, the history cursor and the #666 stashed
+draft stay in-session: #772 asked for the unsent buffer, and a reload that
+silently restored send history would be a wider promise than anyone made. A
+test pins it.
+
+**The UI needed no change at all.** ComposeBox renders
+`value={getDraft(key())}`, so seeding the store IS restoring the composer.
+
+**It does not touch #907.** The mirror is an `on(composeByChannel, …,
+{defer: true})` effect that only ever writes TOWARD storage; it never puts
+anything into the composer after boot and introduces no await. The
+claim→prepare→first-residue-write window gains no new writer.
+
+**One catch, deliberately.** The seed `JSON.parse` is wrapped, because those
+bytes are a boundary — a different bundle version or a devtools edit — and a
+throw there would abort the whole store build and leave cic with no composer.
+Each entry is shape-checked and dropped if it does not fit. The write is NOT
+wrapped: no other `setItem` in cic is, and inventing a second pattern for a
+quota ceiling nobody has hit would be speculation.
+
+**Not measured:** the mirror serialises on every store write, which includes
+every keystroke and every acked line of a #666 paced drain. For drafts of human
+size that is noise, and no debounce was added on a guess; a pathological paste
+was not benchmarked.
