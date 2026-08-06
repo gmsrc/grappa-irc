@@ -19,6 +19,13 @@ belongs elsewhere — in a bot on the network, or behind a plain link.
 - **No inline image display** — #315. Image URLs stay URLs; the client renders
   text. Uploading and sharing a link is fine — embedding and rendering media in
   the scrollback is not.
+- **No DCC** — #167. No IRC-native peer-to-peer file transfer or chat (DCC
+  SEND, DCC CHAT). Sharing a file means uploading it to grappa and posting the
+  link, which is already how images, video and documents work; DCC instead
+  needs a direct connection between two clients, and the always-on bouncer
+  sitting between them is the wrong thing to broker it. This has been in
+  `README.md`'s out-of-scope list since `3c7a0357` — it is written here so the
+  answer is in one place.
 
 ## Why keep a list of things we won't build
 
