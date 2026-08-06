@@ -626,7 +626,13 @@ describe("tagNetwork (bucket F H4)", () => {
   });
 
   it("#474 B — passes connection through; defaults a missing one to null", () => {
-    const conn = { server: "89.31.72.10", port: 6697, tls: true, registered: true };
+    const conn = {
+      server: "89.31.72.10",
+      port: 6697,
+      tls: true,
+      registered: true,
+      connected_at: "2026-07-31T08:00:00.000Z",
+    };
     expect(api.tagNetwork({ ...rawComplete, connection: conn })?.connection).toEqual(conn);
     // rawComplete omits it → null (session not live / pre-field server), the
     // honest "no live connection" the server-info rail renders as no card.

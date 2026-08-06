@@ -2271,6 +2271,15 @@ defmodule Grappa.Session.Server do
   # projection over this same call (no second overlapping handler). `tls` +
   # `umodes` via `Map.get` for the #216 hot-reload-safety contract (a session
   # started before #474 has neither key in state).
+  #
+  # #897 — `connected_at` rides along: it is the instant THIS link came up
+  # (stamped at `:irc_connected`, so it resets with the socket), the only
+  # honest anchor for "how long has the connection been up". The credential's
+  # `connection_state_changed_at` cannot answer that — `Networks.connect/1`
+  # no-ops without a DB write on an already-`:connected` row and a bouncer
+  # restart leaves the row `:connected`, so the column outlives the link. It
+  # belongs HERE, inside the live-only facts, precisely so it disappears with
+  # them when there is no live socket. `Map.get` for the same #216 contract.
   def handle_call({:connection_info}, _, %{peer_address: nil} = state) do
     {:reply, {:error, :no_peer}, state}
   end
@@ -2280,7 +2289,8 @@ defmodule Grappa.Session.Server do
       server: state.peer_address,
       port: state.peer_port,
       tls: Map.get(state, :tls, false),
-      registered: "r" in Map.get(state, :umodes, [])
+      registered: "r" in Map.get(state, :umodes, []),
+      connected_at: Map.get(state, :connected_at)
     }
 
     {:reply, {:ok, info}, state}

@@ -228,10 +228,17 @@ defmodule Grappa.Networks.WireTest do
         connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
       }
 
-      conn = %{server: "89.31.72.10", port: 6697, tls: true, registered: true}
+      at = ~U[2026-08-06T10:00:00Z]
+      conn = %{server: "89.31.72.10", port: 6697, tls: true, registered: true, connected_at: at}
       json = Wire.network_with_nick_to_json(network, "vjt", cred, conn)
 
-      assert json.connection == %{server: "89.31.72.10", port: 6697, tls: true, registered: true}
+      assert json.connection == %{
+               server: "89.31.72.10",
+               port: 6697,
+               tls: true,
+               registered: true,
+               connected_at: "2026-08-06T10:00:00Z"
+             }
     end
 
     test "visitor_network_to_json/4 embeds the live connection facts",
@@ -243,9 +250,46 @@ defmodule Grappa.Networks.WireTest do
         connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
       }
 
-      conn = %{server: "127.0.0.1", port: 6667, tls: false, registered: false}
+      conn = %{
+        server: "127.0.0.1",
+        port: 6667,
+        tls: false,
+        registered: false,
+        connected_at: ~U[2026-08-06T10:00:00Z]
+      }
 
-      assert Wire.visitor_network_to_json(network, "vjt", cred, conn).connection == conn
+      assert Wire.visitor_network_to_json(network, "vjt", cred, conn).connection == %{
+               server: "127.0.0.1",
+               port: 6667,
+               tls: false,
+               registered: false,
+               connected_at: "2026-08-06T10:00:00Z"
+             }
+    end
+
+    test "connected_at renders as an ISO-8601 string, and nil stays nil (#897)",
+         %{network: network} do
+      # #897 — the link's connect instant travels inside `:connection`, the
+      # live-only sub-object, so it is absent exactly when there is no live
+      # pid. `nil` is reachable on a session whose state predates the field
+      # (the #216 hot-reload contract): the wire says "unknown", never a
+      # fabricated instant, and cic omits the row.
+      cred = %Credential{
+        network: network,
+        nick: "vjt",
+        connection_state: :connected,
+        connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
+      }
+
+      base = %{server: "127.0.0.1", port: 6667, tls: false, registered: false, connected_at: nil}
+
+      live = %{base | connected_at: ~U[2026-08-06T09:30:45Z]}
+
+      assert Wire.network_with_nick_to_json(network, "vjt", cred, live).connection.connected_at ==
+               "2026-08-06T09:30:45Z"
+
+      assert Wire.network_with_nick_to_json(network, "vjt", cred, base).connection.connected_at ==
+               nil
     end
 
     test "connection: nil when the session is not live (honest, no fabricated facts)",

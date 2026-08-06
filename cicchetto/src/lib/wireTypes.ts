@@ -586,6 +586,7 @@ export type NetworksWireConnectionInfo = {
   port: number;
   tls: boolean;
   registered: boolean;
+  connected_at: string | null;
 };
 
 export type NetworksWireNetworkWithNickJson = {

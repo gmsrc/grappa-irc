@@ -322,6 +322,33 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "carries connected_at — the instant THIS link came up (#897)" do
+      # #897 — the rail card's "connected <duration>" must measure the LIVE
+      # link, and the only anchor that resets with the link is per-process
+      # (`state.connected_at`, stamped at `:irc_connected`). The credential's
+      # `connection_state_changed_at` cannot serve: `Networks.connect/1`
+      # no-ops without a DB write on an already-`:connected` row, and a
+      # bouncer restart leaves the row `:connected` throughout, so that
+      # column survives restarts that the link does not.
+      #
+      # No sleep needed for the ordering: `IRC.Client` sends `:irc_connected`
+      # BEFORE it writes the NICK/USER frames (client.ex handle_continue
+      # {:connect, _}), so a fake server that has SEEN the USER line proves
+      # the message is already in the Session's mailbox — the subsequent
+      # GenServer.call is serialised behind it.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      before = DateTime.utc_now()
+      _ = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      assert {:ok, %{connected_at: %DateTime{} = at}} =
+               Session.connection_info({:user, user.id}, network.id)
+
+      assert DateTime.compare(at, before) != :lt
+      assert DateTime.compare(at, DateTime.utc_now()) != :gt
+    end
+
     test "returns {:error, :no_session} when no session is registered" do
       assert {:error, :no_session} =
                Session.connection_info({:user, Ecto.UUID.generate()}, -1)

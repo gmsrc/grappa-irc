@@ -47,7 +47,13 @@ const net: Network = {
   connection_state: "connected",
   connection_state_reason: null,
   connection_state_changed_at: "2026-07-31T08:00:00.000Z",
-  connection: { server: "89.31.72.10", port: 6697, tls: true, registered: true },
+  connection: {
+    server: "89.31.72.10",
+    port: 6697,
+    tls: true,
+    registered: true,
+    connected_at: "2026-07-31T08:00:00.000Z",
+  },
   inserted_at: "2026-07-01T00:00:00.000Z",
   updated_at: "2026-07-01T00:00:00.000Z",
 };

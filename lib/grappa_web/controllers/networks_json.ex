@@ -17,6 +17,7 @@ defmodule GrappaWeb.NetworksJSON do
     longer from the retired singular `me.network_slug`.
   """
   alias Grappa.Networks.{Credential, Network, Wire}
+  alias Grappa.Session
 
   @doc """
   Renders the `:index` action — flat JSON array of network maps.
@@ -30,8 +31,9 @@ defmodule GrappaWeb.NetworksJSON do
   """
   @spec index(%{
           networks:
-            {:user, [{Network.t(), String.t(), Credential.t(), Wire.connection_info() | nil}]}
-            | {:visitor, [{Network.t(), String.t(), Credential.t(), Wire.connection_info() | nil}]}
+            {:user, [{Network.t(), String.t(), Credential.t(), Session.connection_info() | nil}]}
+            | {:visitor,
+               [{Network.t(), String.t(), Credential.t(), Session.connection_info() | nil}]}
         }) :: [Wire.network_with_nick_json()] | [Wire.visitor_network_with_nick_json()]
   def index(%{networks: {:user, network_rows}}) do
     Enum.map(network_rows, fn {network, nick, cred, connection} ->
