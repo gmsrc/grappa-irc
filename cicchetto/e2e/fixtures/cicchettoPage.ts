@@ -680,9 +680,9 @@ export function composeTextarea(page: Page) {
 }
 
 // Type a body into the focused window's compose textarea and submit
-// (Enter, no shift). Returns once the textarea is empty (compose.ts
-// clears the draft on successful submit) — that's the synchronous
-// signal the slash-command / privmsg path consumed the input.
+// (Enter, no shift). Returns once the send has SETTLED — not merely once
+// the textarea emptied, which is a much weaker fact than it looks (see the
+// barrier below).
 //
 // Use for both regular PRIVMSG bodies AND slash-commands (`/msg`,
 // `/query`, `/join`, `/me`, etc.) — compose.ts dispatches by leading
@@ -721,10 +721,38 @@ export async function composeSend(
     await expect(ta).toHaveCount(0, { timeout: 5_000 });
     return;
   }
-  // Successful submit clears the draft → textarea empties. If the
-  // submit fails (e.g. /msg with no network), the textarea retains
-  // the body — wait would time out, surfacing the failure.
+  // The empty textarea is the DISPATCH signal, and nothing more. #904's pump
+  // calls `takeDraft` synchronously as it takes the text — before the POST is
+  // issued, on every submit, success or not — and hands the body BACK from its
+  // `finally` if the dispatch fails. On a multi-line body it is weaker still:
+  // the emptiness is a transient window between that take and the #666 drain's
+  // first residue write, after which the box refills and locks.
+  //
+  // Two specs were already paying for the difference, and both looked like
+  // flakes: #951 (reload right after the clear aborted the in-flight POST, the
+  // pump handed the body back, and #772's mirror restored a sent line) and
+  // #173 (ArrowUp right after the clear landed inside the drain, where
+  // `isDraining` refuses the recall). Same false premise, two shapes — so the
+  // barrier belongs HERE, in the seam all 200+ call sites come through, not in
+  // whichever spec notices next.
   await expect(ta).toHaveValue("", { timeout: 5_000 });
+  // The pump's own in-flight flag, read off the surface the product already
+  // publishes it on: ComposeBox binds the submit button's `aria-busy` to
+  // `isSending(key)`, which `submit` raises before it takes the draft and drops
+  // in its `finally`. So false means the pump is done — POST settled, drain
+  // finished, queue empty — for every body shape and every arm. It cannot pass
+  // vacuously either: the flag goes up BEFORE the box empties, so "empty and
+  // not busy" is unreachable mid-flight.
+  //
+  // 30s, not the 5s above: a paced #666 drain has no fixed cadence, it fans out
+  // until the #340 token bucket refuses and then sleeps the server's
+  // retry-after (2s default, up to 5 ladders per line). A dozen-line paste
+  // legitimately takes tens of seconds under load; a stuck pump still surfaces.
+  await expect(page.locator('.compose-box button[aria-label="send message"]')).toHaveAttribute(
+    "aria-busy",
+    "false",
+    { timeout: 30_000 },
+  );
 }
 
 // Mobile members/rail-drawer OPEN primitive (#71 INC-2).
