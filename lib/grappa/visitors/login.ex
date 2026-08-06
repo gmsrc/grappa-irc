@@ -343,6 +343,42 @@ defmodule Grappa.Visitors.Login do
     end
   end
 
+  # The network circuit fails fast on ONE thing: an upstream we would have to
+  # dial that is known to be bad (`NetworkCircuit` moduledoc, "Why"). Its
+  # window is keyed on `network_id` alone, so every failure it counts is
+  # spent from a budget shared by every visitor of that network — which makes
+  # "what counts as a failure" a correctness question, not a tuning one.
+  #
+  # An error that only reports the REQUEST's own payload as invalid carries no
+  # information about the upstream: nothing was dialled, so the circuit must
+  # not move. `:malformed_ident` is the single such error reachable from
+  # `continue_case_1/4` — the client's ident string failing the credential
+  # changeset in `apply_login_identity/3`, a 400 on the input. Everything else
+  # that lands in the caller's error branch comes from `spawn_and_await/4`
+  # (`:upstream_unreachable`, the connect / welcome timeouts, a `:DOWN`) or
+  # from `issue_token/2`, and those DO describe upstream or host health.
+  #
+  # The domain is spelled out rather than left as `term()` so the closed set
+  # is visible AND enforced: an error reason added to `continue_case_1/4`
+  # later fails Dialyzer here, which forces whoever adds it to classify it
+  # into one of the two clauses instead of inheriting the catch-all by
+  # default. A new client-input rejection belongs in the first clause;
+  # anything describing the world outside the request belongs in the second.
+  @spec maybe_record_circuit_failure(
+          :connect_timeout
+          | :malformed_ident
+          | :network_unconfigured
+          | :nick_in_use
+          | :no_server
+          | :upstream_unreachable
+          | :welcome_timeout,
+          pos_integer()
+        ) :: :ok
+  defp maybe_record_circuit_failure(:malformed_ident, _), do: :ok
+
+  defp maybe_record_circuit_failure(_, network_id),
+    do: NetworkCircuit.record_failure(network_id)
+
   # #211 phase 4c — credential-first identity resolution. Delegates to the
   # context's `(fold(nick), network_id)` **Credential** lookup (GH #121) so
   # a different-case reconnect resolves to the SAME visitor.id — which is
@@ -394,8 +430,8 @@ defmodule Grappa.Visitors.Login do
           :ok = NetworkCircuit.record_failure(network.id)
           err
 
-        {:error, _} = err ->
-          :ok = NetworkCircuit.record_failure(network.id)
+        {:error, reason} = err ->
+          :ok = maybe_record_circuit_failure(reason, network.id)
           # Purge the just-provisioned anon row so a retry starts
           # clean. purge_if_anon/1 short-circuits on registered rows
           # (which can't be reached in case 1 anyway) — the call is

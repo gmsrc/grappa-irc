@@ -192,6 +192,46 @@ defmodule Grappa.Visitors.LoginTest do
       assert Visitors.resolve_identity_by_nick("orphan152", network.id) == nil
     end
 
+    test "a full threshold of malformed-ident logins leaves the circuit closed (#960)" do
+      {_, port} = start_server()
+      {network, _} = setup_visitor_network(port)
+
+      # The circuit is a fail-fast signal about the UPSTREAM's health, and its
+      # window is per-network and shared by every visitor of that network. A
+      # request whose own payload is rejected says nothing about the upstream
+      # — it never dials one — so it must not move the circuit, no matter how
+      # many times it repeats.
+      for i <- 1..NetworkCircuit.threshold() do
+        assert {:error, :malformed_ident} =
+                 Login.login(
+                   login_input(%{nick: "badident#{i}", ident: "way-too-long"}),
+                   []
+                 )
+      end
+
+      # record_failure/1 is a cast — flush the mailbox before reading.
+      _ = :sys.get_state(NetworkCircuit)
+
+      assert NetworkCircuit.check(network.id) == :ok
+    end
+
+    test "a refused connect still counts toward the circuit (#960 boundary)" do
+      port = pick_unused_port()
+      {network, _} = setup_visitor_network(port)
+
+      # The other side of the same boundary: an error that DOES describe the
+      # upstream must keep moving the circuit. Without this, narrowing what
+      # counts as a failure could silently disarm the breaker and the suite
+      # would stay green.
+      assert {:error, :upstream_unreachable} = Login.login(login_input(), [])
+
+      _ = :sys.get_state(NetworkCircuit)
+
+      assert Enum.any?(NetworkCircuit.entries(), fn {id, count, _, _, _} ->
+               id == network.id and count == 1
+             end)
+    end
+
     test "fresh-nick login with a password identifies via :nickserv_identify at 001" do
       {server, port} = start_server()
       {network, _} = setup_visitor_network(port)
