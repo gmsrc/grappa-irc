@@ -4,19 +4,32 @@ import { channelsBySlug, networkBySlug } from "./networks";
 import type { PushTarget } from "./pushPayload";
 import { createToastQueue } from "./toasts";
 
-// #793 — shareable channel invite links: paste `https://irc.sindro.me/azzurra/sniffo`
+// #793 — shareable channel invite links: paste `https://irc.sindro.me/?go=azzurra/sniffo`
 // anywhere, the recipient clicks, gets a confirm, and lands in the channel.
 //
-// This is the READ side (decision 5 of the issue): consuming a link. The
-// "copy invite link" affordance in the channel UI is a separate shipment.
+// This is the READ side (decision 5 of the issue): consuming a link. Links are
+// written BY HAND — vjt ruled out a generation UI, a token and an expiry — so
+// there is no builder here. The canonical spelling is therefore written down
+// rather than generated: this comment, the parse tests, `inviteUrl` in the
+// #793 e2e spec, and the DESIGN_NOTES entry. Nothing in the product composes
+// one, and nothing should until the write side (decision 5) is asked for.
+//
+// **`?go=` is the canonical form, and it is a query param on purpose.** vjt's
+// words: *"a query param, deliberately, to avoid the fronting problem (no
+// path-prefix collision with the SPA routes)"*. The first shipment read
+// `/<network>/<channel>` from `location.pathname` instead, which put every
+// invite in the same namespace as every present and future client route —
+// `/login`, `/share/:token`, and whatever comes next — and needed a
+// reserved-segment denylist to keep them apart. A query param has no such
+// namespace to share, so the denylist is gone with it.
 //
 // It is a second ENTRY POINT into the deep-link machinery, not a second
 // subsystem. `pushTarget.ts` already reads `?network=&channel=` at boot,
-// normalises it into a `PushTarget`, and defers routing until `networks()`
-// seeds; the invite path normalises into the SAME `PushTarget` and reuses the
-// SAME reader and the SAME defer (see `applyDeepLinkFromUrl`). Only two things
-// are genuinely new: parsing the PATH (the old reader looked at
-// `location.search` only), and routing to a JOIN instead of a selection.
+// normalises it into a `PushTarget`, and defers routing until its store seeds;
+// the invite normalises into the SAME `PushTarget` and reuses the SAME reader
+// and the SAME defer (see `applyDeepLinkFromUrl`). Only two things are
+// genuinely new: a second param spelling, and routing to a JOIN instead of a
+// selection.
 //
 // The join itself is the #648 verb — `confirmJoinChannel` — untouched: it
 // already owns confirm -> `postJoin` -> switch, and already switches with no
@@ -24,28 +37,25 @@ import { createToastQueue } from "./toasts";
 // implementation, no parallel window state.
 
 // RFC 2812 chantypes. A segment that already starts with one is taken
-// verbatim; a bare segment gets `#` (vjt's `irc.sindro.me/azzurra/sniffo`
-// example — the overwhelming case, and the only spelling a normal person
-// will ever type).
+// verbatim; a bare segment gets `#` (vjt's `?go=azzurra/sniffo` example —
+// "the `#` is implied", the overwhelming case, and the only spelling a normal
+// person will ever type).
 //
-// A literal `#` cannot travel in a path: the browser reads it as the start of
-// the fragment and the server never sees the segment at all. #755 is the
-// precedent for getting this wrong — the room segment there was the one URL
-// component never encoded. So `#` MUST arrive percent-encoded (`%23`), which
-// is also why the bare form exists: `/azzurra/sniffo` is what people paste.
+// Inside a query param the three delimiters bite differently, and all three
+// are pinned by measurement in `inviteLink.test.ts` rather than by reasoning:
+// a literal `#` starts the FRAGMENT (the value truncates and the channel never
+// reaches the app), a literal `&` starts the NEXT PARAM (same truncation), and
+// a literal `+` decodes to a SPACE (the value survives but says something
+// else). Truncation costs a segment, so those two refuse the whole invite;
+// the space is caught by the forbidden-byte scan below. Encoded — `%23`,
+// `%26`, `%2B` — each arrives intact. #755 is the precedent for getting this
+// wrong: the room segment was the one URL component never encoded.
 const CHANTYPES = "#&+!";
-
-// Two-segment client routes that are NOT invites. `/share/:token` (the visitor
-// session-sharing landing) is the only one today; `/login` and `/` are single
-// segment and cannot collide. Everything else two-segment reaching the SPA is
-// an invite — real API/asset paths are answered by the server before the
-// `GET /*path` SPA fallback (#399) ever runs.
-const RESERVED_FIRST_SEGMENT = new Set(["share"]);
 
 // Bytes RFC 2812 forbids inside a channel name, rejected rather than escaped.
 // The comma is the one that matters: JOIN takes a comma-separated LIST, so an
-// unfiltered `/azzurra/sniffo,bofh` would turn one invite into a multi-channel
-// join the sender never wrote. Everything at or below 0x20 covers
+// unfiltered `?go=azzurra/sniffo,bofh` would turn one invite into a
+// multi-channel join the sender never wrote. Everything at or below 0x20 covers
 // NUL/BEL/CR/LF/space, which cannot appear in a real channel and are the shape
 // a frame-injection attempt takes. Deliberately NOT rejecting `:` — also
 // illegal per the RFC, but harmless in a JSON body, and a false reject breaks
@@ -66,31 +76,46 @@ function hasForbiddenChannelByte(name: string): boolean {
 }
 
 /**
- * Parses `/<network>/<channel>` into the same `PushTarget` the push deep-link
- * reader produces. Returns null for anything that is not an invite — a
- * reserved route, a wrong segment count, an undecodable escape, or a channel
- * name carrying bytes IRC forbids.
+ * Parses `?go=<network>/<channel>` into the same `PushTarget` the push
+ * deep-link reader produces. Returns null for anything that is not an invite —
+ * no `go` param, a wrong segment count, or a channel name carrying bytes IRC
+ * forbids.
+ *
+ * Takes a whole URL rather than a query string, absolute or relative, so the
+ * boot reader can hand it `location.href` exactly as it hands the same value
+ * to `parsePushTargetUrl`. The PATH is read for nothing, and that is the whole
+ * point of the shape: a parser that still glanced at the path would keep the
+ * route collision `?go=` was chosen to remove.
+ *
+ * Decoding is `URLSearchParams`', not `decodeURIComponent`'s, and the
+ * difference is deliberate: the WHATWG rules leave an undecodable escape as
+ * its own bytes instead of throwing, so `%ZZ` names a silly channel rather
+ * than being refused. The consent modal prints the channel before anyone
+ * joins it, which is where a typo gets caught by the only reader that can
+ * judge it.
+ *
+ * A value split on `/` also tolerates further components LATER (vjt: "further
+ * path components may be added later") — today anything past the second is
+ * refused rather than ignored, because a silently-dropped component is a lie
+ * about what the link asked for.
  *
  * `kind` is always `"channel"`: unlike `parsePushTargetUrl` there is no
  * sigil-sniffing for a DM target, because a DM invite link is meaningless —
  * the whole point is joining a room.
  */
-export function parseInviteLinkPath(pathname: string): PushTarget | null {
-  const [rawNetwork, rawChannel, ...rest] = pathname.split("/").filter((s) => s.length > 0);
-  if (rawNetwork === undefined || rawChannel === undefined || rest.length > 0) return null;
-  if (RESERVED_FIRST_SEGMENT.has(rawNetwork)) return null;
-
-  let networkSlug: string;
-  let channel: string;
+export function parseInviteLinkUrl(rawUrl: string): PushTarget | null {
+  let url: URL;
   try {
-    networkSlug = decodeURIComponent(rawNetwork);
-    channel = decodeURIComponent(rawChannel);
+    url = new URL(rawUrl, "https://placeholder.invalid");
   } catch {
-    // Malformed percent-escape — `decodeURIComponent` throws URIError.
     return null;
   }
 
-  if (networkSlug.length === 0 || channel.length === 0) return null;
+  const value = url.searchParams.get("go");
+  if (value === null) return null;
+
+  const [networkSlug, channel, ...rest] = value.split("/").filter((s) => s.length > 0);
+  if (networkSlug === undefined || channel === undefined || rest.length > 0) return null;
   if (hasForbiddenChannelByte(channel)) return null;
 
   const channelName = CHANTYPES.includes(channel.charAt(0)) ? channel : `#${channel}`;
@@ -102,8 +127,8 @@ export function parseInviteLinkPath(pathname: string): PushTarget | null {
 
 // Open decision 1 of #793, deliberately NOT settled here: `networkBySlug`
 // resolves against THIS user's bound networks, but an invite is cross-user by
-// definition, so the recipient may have no `azzurra` at all. Whether the path
-// segment becomes a globally-resolvable network identifier or the flow grows
+// definition, so the recipient may have no `azzurra` at all. Whether the
+// network segment becomes a globally-resolvable identifier or the flow grows
 // an "add this network, then join" step is a product decision that has not
 // been taken. What this branch must not do is fail silently: somebody clicked
 // a link and is owed an answer, so it says what it observed and stops.

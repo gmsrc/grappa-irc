@@ -24,7 +24,7 @@
 // selection doesn't fire on a still-loading store.
 
 import { createEffect, untrack } from "solid-js";
-import { parseInviteLinkPath, routeInviteTarget } from "./inviteLink";
+import { parseInviteLinkUrl, routeInviteTarget } from "./inviteLink";
 import { moduleRoot } from "./moduleRoot";
 import { channelsBySlug, networkBySlug, networks } from "./networks";
 import { type PushTarget, parsePushTargetUrl } from "./pushPayload";
@@ -157,13 +157,14 @@ export function installPushTargetListener(): void {
  * short-circuit means a re-fire would no-op anyway, but cleaning
  * the URL removes the question entirely.
  *
- * Invite link (#793): the second shape, `/<network>/<channel>`, read
- * from `location.pathname` by `lib/inviteLink.ts` into the SAME
- * `PushTarget` and deferred by the SAME mechanism. What differs is
- * only what the target DOES on arrival — a confirm-then-join instead
- * of a selection — and when the URL is cleaned. The two shapes cannot
- * co-occur meaningfully; a push payload wins, since it carries an
- * explicit notification the operator just tapped.
+ * Invite link (#793): the second shape, `?go=<network>/<channel>`,
+ * read by `lib/inviteLink.ts` into the SAME `PushTarget` and deferred
+ * by the SAME mechanism. Both shapes are now query params on the same
+ * URL, which is what makes "one reader, two shapes" literally true
+ * rather than a figure of speech. What differs is only what the target
+ * DOES on arrival — a confirm-then-join instead of a selection. The two
+ * cannot co-occur meaningfully; a push payload wins, since it carries
+ * an explicit notification the operator just tapped.
  */
 export function applyDeepLinkFromUrl(): void {
   if (typeof window === "undefined" || !window.location) return;
@@ -184,15 +185,17 @@ export function applyDeepLinkFromUrl(): void {
     return;
   }
 
-  // #793 — the same reader, second URL shape: `/<network>/<channel>`.
-  const invite = parseInviteLinkPath(window.location.pathname);
+  // #793 — the same reader, second URL shape: `?go=<network>/<channel>`.
+  //
+  // No early URL clean, unlike the path form this replaced. That clean existed
+  // because a two-segment path matched no route, so leaving it in the address
+  // bar across `render()` mounted the app on nothing; `?go=` sits on `/`, a
+  // real route, so the router is content and `deferUntilReady`'s own
+  // post-routing clean is the only one needed. One cleaning site, and the
+  // invite stays legible in the address bar for as long as it is still
+  // pending.
+  const invite = parseInviteLinkUrl(window.location.href);
   if (invite === null) return;
-  // Cleaned HERE rather than after the routing (the push path's timing),
-  // because this call happens BEFORE `render()` and the router has no route
-  // for a two-segment path: left in place, the address bar would mount the
-  // app on nothing at all. It also satisfies the same requirement the push
-  // path cleans for — a refresh must not re-fire the invite.
-  if (window.history) window.history.replaceState({}, "", "/");
   deferUntilReady({
     target: invite,
     route: routeInviteTarget,

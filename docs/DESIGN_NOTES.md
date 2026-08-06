@@ -31618,3 +31618,57 @@ a cold open whose gap probe *failed* — `loadInitialScrollback` then keeps the
 anchored resume and loads one page of an unknown gap. There is no honest number
 to show there, because the failure of the probe is exactly the absence of the
 measurement. Left alone rather than guessed at.
+## 2026-08-06 — #793: the invite link moves to `?go=`, which was the order all along
+
+The read side shipped `/<network>/<channel>` (union #942). vjt's enqueue
+comment on the issue had specified something else, in these words: **"URL
+shape: `?go=azzurra/sniffo` — a query param, deliberately, to avoid the
+fronting problem (no path-prefix collision with the SPA routes)"**. The
+shipment reversed that silently, and the reversal is what this entry corrects.
+It is not a style preference: the query param is load-bearing for the reason
+vjt gave, and the previous entry above documents a design that argued its way
+around the instruction instead of following it.
+
+**Where the collision was.** A path-shaped invite lives in the same namespace
+as every present and future client route, so the parser needed a denylist of
+reserved first segments (`share`, for `/share/:token`) and a standing
+obligation on whoever adds the next route to remember to extend it. `?go=` has
+no namespace to share. The denylist is deleted, not moved.
+
+**The early URL clean goes with it.** The path reader rewrote the address bar
+to `/` before `render()`, because a two-segment path matched no route and the
+app would otherwise mount on nothing. `?go=` sits on `/`, a real route, so
+`deferUntilReady`'s post-routing clean is the only one left — one cleaning
+site, and a pending invite stays legible in the address bar until it is spent.
+The auth round-trip is unchanged: the target is captured in memory before
+`render()`, and cic's redirect to `/login` drops the query string either way,
+so the hard-refresh-on-`/login` corner is still lost and still accepted.
+
+**The delimiters bite differently in a query param, and were measured.** In a
+path the hazard was one character; here there are three, and each fails its own
+way. A literal `#` starts the FRAGMENT, so `?go=azzurra/#sniffo` arrives as
+`azzurra/` — truncated to one segment, and the whole invite is refused rather
+than half-read. A literal `&` starts the NEXT PARAM: same truncation, same
+refusal. A literal `+` is the nasty one, because it does not truncate — form
+decoding turns it into a SPACE, so the value survives while saying something
+else, and it is the existing forbidden-byte scan (anything ≤ 0x20) that catches
+it. Encoded (`%23`, `%26`, `%2B`) all three arrive intact, and
+`encodeURIComponent` over the whole value works too, separator slash included.
+These are pinned by test against node's WHATWG URL, not derived from the specs.
+
+**One behaviour deliberately changed.** The path reader called
+`decodeURIComponent` by hand and returned null when it threw, so `%ZZ` was
+refused. `URLSearchParams` follows WHATWG and leaves an undecodable escape as
+its own bytes, so the same typo now names the legal-if-silly channel `#%ZZ`.
+Left as it is rather than re-adding a validity check: the safety property that
+rejection was protecting is "do not throw", which the new decoder gives for
+free, and the consent modal prints the channel name before anyone joins it —
+the human reading `Join #%ZZ?` is a better judge of a typo than a parser.
+
+**The old path form is NOT accepted in reading.** It shipped at 17:27 today, is
+in no tag (v0.12.0 predates it), and every link is written by hand — vjt ruled
+out a generator, a token and an expiry — so there is no plausible population of
+path-shaped links in the wild to protect. Keeping it as a second accepted form
+would have preserved precisely the route-namespace collision that `?go=` exists
+to remove, in exchange for compatibility with a spelling that existed for one
+evening.

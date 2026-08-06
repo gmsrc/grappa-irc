@@ -188,10 +188,11 @@ bootstrapAuth();
 // reloaded the SPA at `/` and dropped the deep-link entirely.
 //
 // #793 — the same boot reader also consumes an invite link
-// (`/<network>/<channel>`), which is why it is no longer named after
-// push alone. It MUST stay above `render()`: the invite path is not a
-// route, so the reader rewrites the address bar to `/` before the
-// router ever looks at it.
+// (`?go=<network>/<channel>`), which is why it is no longer named after
+// push alone. Both shapes are query params on `/`, so neither one needs
+// the router's cooperation; the reader captures the target before
+// `render()` and holds it until the store it depends on resolves, which
+// is what lets an invite survive the login round-trip.
 installPushTargetListener();
 applyDeepLinkFromUrl();
 

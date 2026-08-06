@@ -3,17 +3,22 @@ import { confirmJoinChannel, switchToChannelWindow } from "../lib/channelJoin";
 import {
   dismissInviteToast,
   inviteToasts,
-  parseInviteLinkPath,
+  parseInviteLinkUrl,
   routeInviteTarget,
 } from "../lib/inviteLink";
 
-// #793 — shareable channel invite links: `irc.sindro.me/<network>/<channel>`.
+// #793 — shareable channel invite links: `irc.sindro.me/?go=azzurra/sniffo`.
 //
-// Two halves, both here: the PATH parser (the new reader — `pushTarget.ts`
-// only ever read `location.search`) and the ROUTE (what the parsed target
-// does). The route delegates to the #648 join verb rather than reimplementing
-// confirm-then-join, so these assertions are about DELEGATION, not about the
-// modal's internals (ConfirmModal has its own tests).
+// Two halves, both here: the QUERY parser and the ROUTE (what the parsed
+// target does). The route delegates to the #648 join verb rather than
+// reimplementing confirm-then-join, so these assertions are about DELEGATION,
+// not about the modal's internals (ConfirmModal has its own tests).
+//
+// Half of the parse block is about what the BROWSER does to the value before
+// this code ever sees it. `?go=` puts the channel inside a query param, where
+// `#`, `&` and `+` each have a meaning of their own — those cases are pinned
+// against measured behaviour (node's WHATWG URL), not against what the
+// characters "should" do.
 
 vi.mock("../lib/channelJoin", () => ({
   confirmJoinChannel: vi.fn(),
@@ -27,71 +32,125 @@ vi.mock("../lib/networks", () => ({
   channelsBySlug: vi.fn(() => ({ azzurra: [{ id: 10, name: "#bofh" }] })),
 }));
 
-describe("parseInviteLinkPath", () => {
-  it("reads a bare two-segment path and implies the # sigil", () => {
-    expect(parseInviteLinkPath("/azzurra/sniffo")).toEqual({
+describe("parseInviteLinkUrl", () => {
+  it("reads ?go=<network>/<channel> and implies the # sigil", () => {
+    expect(parseInviteLinkUrl("/?go=azzurra/sniffo")).toEqual({
       networkSlug: "azzurra",
       channelName: "#sniffo",
       kind: "channel",
     });
   });
 
-  it("keeps a percent-encoded # sigil instead of doubling it", () => {
-    // `#` cannot travel literally in a path — a browser would read it as the
-    // fragment and the server would never see the segment at all (#755: the
-    // room segment was the one URL component never encoded).
-    expect(parseInviteLinkPath("/azzurra/%23sniffo")?.channelName).toBe("#sniffo");
+  it("reads an absolute URL the same as a relative one", () => {
+    // `location.href` is what the boot reader passes, and it is absolute.
+    expect(parseInviteLinkUrl("https://irc.sindro.me/?go=azzurra/sniffo")?.channelName).toBe(
+      "#sniffo",
+    );
   });
 
-  it("passes the non-# chantypes sigils through untouched", () => {
-    expect(parseInviteLinkPath("/azzurra/&local")?.channelName).toBe("&local");
-    expect(parseInviteLinkPath("/azzurra/+modeless")?.channelName).toBe("+modeless");
-    expect(parseInviteLinkPath("/azzurra/!ABCDEsecret")?.channelName).toBe("!ABCDEsecret");
+  it("ignores the path — a two-segment path is no longer an invite", () => {
+    // The retired form. `?go=` exists precisely so an invite cannot collide
+    // with a client route, so the path must carry no meaning at all here.
+    expect(parseInviteLinkUrl("/azzurra/sniffo")).toBeNull();
+    expect(parseInviteLinkUrl("/share/abc123")).toBeNull();
+  });
+
+  it("takes a percent-encoded # sigil instead of doubling it", () => {
+    expect(parseInviteLinkUrl("/?go=azzurra/%23sniffo")?.channelName).toBe("#sniffo");
+  });
+
+  it("gets nothing from a LITERAL # — the browser eats it as the fragment", () => {
+    // Measured: `new URL("/?go=azzurra/#sniffo")` has search `?go=azzurra/`
+    // and hash `#sniffo`. The channel never reaches the app, so the value is
+    // one segment and the whole invite is refused rather than half-read.
+    // This is #755's lesson in a query param: the room segment is the one URL
+    // component people forget to encode.
+    expect(parseInviteLinkUrl("/?go=azzurra/#sniffo")).toBeNull();
+  });
+
+  it("gets nothing from a LITERAL & — the browser reads it as the next param", () => {
+    // Same shape as the `#` case, different delimiter: `&local` starts a
+    // second query param and `go` truncates to `azzurra/`.
+    expect(parseInviteLinkUrl("/?go=azzurra/&local")).toBeNull();
+  });
+
+  it("reads a literal + as a SPACE, and a space is refused", () => {
+    // `application/x-www-form-urlencoded` decoding turns `+` into a space —
+    // the one delimiter that does NOT truncate the value but silently
+    // rewrites it. A space cannot appear in a channel name, so the forbidden
+    // -byte scan catches it. Encoded (`%2B`), the sigil arrives intact.
+    expect(parseInviteLinkUrl("/?go=azzurra/+modeless")).toBeNull();
+    expect(parseInviteLinkUrl("/?go=azzurra/%2Bmodeless")?.channelName).toBe("+modeless");
+  });
+
+  it("takes the non-# chantypes sigils when they are encoded", () => {
+    expect(parseInviteLinkUrl("/?go=azzurra/%26local")?.channelName).toBe("&local");
+    expect(parseInviteLinkUrl("/?go=azzurra/!ABCDEsecret")?.channelName).toBe("!ABCDEsecret");
+  });
+
+  it("reads a wholly-encoded value, separator slash included", () => {
+    // `encodeURIComponent("azzurra/#sniffo")` escapes the separator too. The
+    // decode restores it, so the over-careful writer gets the same target as
+    // the minimal one.
+    expect(parseInviteLinkUrl(`/?go=${encodeURIComponent("azzurra/#sniffo")}`)).toEqual({
+      networkSlug: "azzurra",
+      channelName: "#sniffo",
+      kind: "channel",
+    });
   });
 
   it("percent-decodes a non-ASCII channel name", () => {
-    expect(parseInviteLinkPath("/azzurra/caff%C3%A8")?.channelName).toBe("#caffè");
+    expect(parseInviteLinkUrl("/?go=azzurra/caff%C3%A8")?.channelName).toBe("#caffè");
   });
 
   it("preserves the raw casing (the display spelling goes on the wire)", () => {
-    expect(parseInviteLinkPath("/azzurra/Sniffo")?.channelName).toBe("#Sniffo");
+    expect(parseInviteLinkUrl("/?go=azzurra/Sniffo")?.channelName).toBe("#Sniffo");
   });
 
   it("tolerates a trailing slash", () => {
-    expect(parseInviteLinkPath("/azzurra/sniffo/")?.channelName).toBe("#sniffo");
+    expect(parseInviteLinkUrl("/?go=azzurra/sniffo/")?.channelName).toBe("#sniffo");
   });
 
-  it("rejects a path that is not exactly two segments", () => {
-    expect(parseInviteLinkPath("/")).toBeNull();
-    expect(parseInviteLinkPath("/azzurra")).toBeNull();
-    expect(parseInviteLinkPath("/azzurra/sniffo/extra")).toBeNull();
+  it("rejects a value that is not exactly two segments", () => {
+    expect(parseInviteLinkUrl("/?go=azzurra")).toBeNull();
+    expect(parseInviteLinkUrl("/?go=azzurra/sniffo/extra")).toBeNull();
   });
 
-  it("rejects the reserved /share/:token client route", () => {
-    // A real two-segment route already exists — without this, a visitor
-    // share link would be read as an invite to network `share`.
-    expect(parseInviteLinkPath("/share/abc123")).toBeNull();
+  it("returns null when there is no go param at all", () => {
+    expect(parseInviteLinkUrl("/")).toBeNull();
+    expect(parseInviteLinkUrl("/?network=azzurra&channel=%23sniffo")).toBeNull();
+    expect(parseInviteLinkUrl("/?go=")).toBeNull();
+  });
+
+  it("returns null on an unparseable URL instead of throwing", () => {
+    expect(parseInviteLinkUrl("http://[")).toBeNull();
   });
 
   it("rejects a channel segment carrying a comma", () => {
     // JOIN takes a comma-separated LIST: an unfiltered comma turns one
     // invite into a multi-channel join the sender never wrote.
-    expect(parseInviteLinkPath("/azzurra/sniffo,bofh")).toBeNull();
-    expect(parseInviteLinkPath("/azzurra/sniffo%2Cbofh")).toBeNull();
+    expect(parseInviteLinkUrl("/?go=azzurra/sniffo,bofh")).toBeNull();
+    expect(parseInviteLinkUrl("/?go=azzurra/sniffo%2Cbofh")).toBeNull();
   });
 
   it("rejects a channel segment carrying whitespace or control bytes", () => {
-    expect(parseInviteLinkPath("/azzurra/sniffo%20bofh")).toBeNull();
-    expect(parseInviteLinkPath("/azzurra/sniffo%0D%0AQUIT")).toBeNull();
-    expect(parseInviteLinkPath("/azzurra/sniffo%07")).toBeNull();
+    expect(parseInviteLinkUrl("/?go=azzurra/sniffo%20bofh")).toBeNull();
+    expect(parseInviteLinkUrl("/?go=azzurra/sniffo%0D%0AQUIT")).toBeNull();
+    expect(parseInviteLinkUrl("/?go=azzurra/sniffo%07")).toBeNull();
   });
 
-  it("rejects a malformed percent-escape instead of throwing", () => {
-    expect(parseInviteLinkPath("/azzurra/%ZZ")).toBeNull();
+  it("keeps a malformed percent-escape verbatim rather than throwing", () => {
+    // Measured, and a DELIBERATE change from the path reader, which decoded
+    // by hand and got a URIError for `%ZZ`. `URLSearchParams` follows WHATWG
+    // and leaves an undecodable sequence as its own bytes, so a typo names a
+    // legal-if-silly channel instead of being refused. Safe because the
+    // consent modal prints the channel it is about to join: the human reads
+    // `#%ZZ` and says no.
+    expect(parseInviteLinkUrl("/?go=azzurra/%ZZ")?.channelName).toBe("#%ZZ");
   });
 
   it("rejects a bare sigil with no name", () => {
-    expect(parseInviteLinkPath("/azzurra/%23")).toBeNull();
+    expect(parseInviteLinkUrl("/?go=azzurra/%23")).toBeNull();
   });
 });
 
