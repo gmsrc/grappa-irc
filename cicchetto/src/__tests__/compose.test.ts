@@ -254,6 +254,9 @@ vi.mock("../lib/nickEquals", async (importOriginal) => ({
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear();
+  // #772 — drafts persist in sessionStorage, so it needs the same per-test
+  // wipe localStorage gets or one test's draft seeds the next one's boot.
+  sessionStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -272,6 +275,101 @@ describe("compose draft state", () => {
   it("getDraft returns empty string for an untouched channel", async () => {
     const compose = await import("../lib/compose");
     expect(compose.getDraft(channelKey("freenode", "#never"))).toBe("");
+  });
+});
+
+// #772 — an unsent draft used to die with the document. `vi.resetModules()` +
+// a fresh import re-executes the module exactly as a page load does, so it is
+// the reload these tests are about: whatever survives it is what the operator
+// gets back. sessionStorage is deliberately NOT cleared between the two
+// imports — clearing it would be clearing the browser, not reloading it.
+describe("compose draft persistence across a reload (#772)", () => {
+  it("restores an unsent draft on the next boot", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const k = channelKey("freenode", "#a");
+
+    const before = await import("../lib/compose");
+    before.setDraft(k, "half-written thought");
+
+    vi.resetModules();
+    const after = await import("../lib/compose");
+
+    expect(after.getDraft(k)).toBe("half-written thought");
+  });
+
+  it("keeps drafts apart per channel across the reload", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const k1 = channelKey("freenode", "#a");
+    const k2 = channelKey("libera", "#b");
+
+    const before = await import("../lib/compose");
+    before.setDraft(k1, "for #a");
+    before.setDraft(k2, "for #b");
+
+    vi.resetModules();
+    const after = await import("../lib/compose");
+
+    expect(after.getDraft(k1)).toBe("for #a");
+    expect(after.getDraft(k2)).toBe("for #b");
+  });
+
+  it("does NOT resurrect a message that was already sent", async () => {
+    // The failure mode worse than the bug: re-posting text the operator
+    // already dispatched. `submit` clears the draft on success, and the
+    // persisted copy mirrors the store, so the clear must travel too.
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const before = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    before.setDraft(k, "already said this");
+    await before.submit(k, "freenode", "#a");
+    expect(before.getDraft(k)).toBe("");
+
+    vi.resetModules();
+    const after = await import("../lib/compose");
+
+    expect(after.getDraft(k)).toBe("");
+  });
+
+  it("does NOT resurrect a draft the operator cleared by hand", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const k = channelKey("freenode", "#a");
+
+    const before = await import("../lib/compose");
+    before.setDraft(k, "typed then thought better of it");
+    before.setDraft(k, "");
+
+    vi.resetModules();
+    const after = await import("../lib/compose");
+
+    expect(after.getDraft(k)).toBe("");
+  });
+
+  it("carries the draft ONLY — send history does not cross the reload", async () => {
+    // Scope pin. History is a different feature with a different lifetime
+    // question (and a server-side answer if it ever wants one); #772 asked
+    // for the unsent buffer. Persisting it by accident would silently widen
+    // what a reload restores.
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const before = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    before.setDraft(k, "sent one");
+    await before.submit(k, "freenode", "#a");
+    before.setDraft(k, "still typing");
+
+    vi.resetModules();
+    const after = await import("../lib/compose");
+
+    expect(after.getDraft(k)).toBe("still typing");
+    // recallPrev on a boot with no history is a no-op — it must NOT hand
+    // back "sent one", and it must not eat the restored draft either.
+    after.recallPrev(k);
+    expect(after.getDraft(k)).toBe("still typing");
   });
 });
 
