@@ -13,8 +13,9 @@ import { MircBody } from "./MircText";
 // Facts-only, sourced from existing session/network state:
 //   * slug   — the network label (there is no separate human name)
 //   * status — DB-canonical connection_state glyph + word + reason
-//   * uptime — connected-since, ONLY while genuinely connected (honesty:
-//              a duration next to a parked/failed state would lie)
+//   * uptime — how long the LIVE link has been up (#897), read from the
+//              `connection` sub-object below, so it is absent exactly when
+//              there is no live socket to measure
 //   * nick   — own IRC nick on this network
 //   * services — which NickServ software (omitted when "unknown")
 //
@@ -24,6 +25,7 @@ import { MircBody } from "./MircText";
 //              peer IP, so a round-robin landing is visible (#550 capture)
 //   * tls    — a 🔒 lock when the transport is TLS
 //   * identified — yes/no, from the +r umode (the #561 identity signal)
+//   * connected_at — the instant this socket came up, the uptime anchor (#897)
 // `connection` is null whenever there is no live connected session, so
 // these rows appear ONLY on a real socket — honesty over a stale value.
 //
@@ -40,13 +42,18 @@ type Props = {
 
 const ServerInfoCard: Component<Props> = (props) => {
   const state = () => connectionStateEmoji(props.network.connection_state);
-  // Uptime ONLY while connected — connection_state_changed_at is "time of
-  // last state transition", which IS the connect instant for a live link,
-  // but next to a parked/failed state it would read as a lie.
+  // #897 — how long THIS link has been up, from the live `connection`
+  // sub-object. Never `connection_state_changed_at`: that is the credential
+  // ROW's last state transition, and a bouncer restart leaves the row at
+  // `connected` without writing it, so it kept counting across restarts
+  // (Mezmerize saw "connected 10d 9h" on a box he power-cycled daily).
+  // Sourcing it from `connection` also makes the honest silence automatic:
+  // no live pid ⇒ no `connection` ⇒ no duration, rather than a number
+  // computed from a DB column that outlived the socket.
+  // `?? null` because cic and the server deploy independently — a server
+  // that predates the field sends `connection` without it.
   const uptime = () =>
-    props.network.connection_state === "connected"
-      ? formatDurationSince(props.network.connection_state_changed_at, props.now)
-      : null;
+    formatDurationSince(props.network.connection?.connected_at ?? null, props.now);
   const services = () => {
     const flavor = props.network.services_flavor;
     return flavor && flavor !== "unknown" ? flavor : null;

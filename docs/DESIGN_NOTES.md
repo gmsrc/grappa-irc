@@ -31039,3 +31039,59 @@ the module dies for an unrelated reason — which would have measured nothing.
 **Not done, and deliberately.** `total_directory_rows/1` having to invent a TTL
 to ask for a row count is a smell — a `count/2` would let it stop lying. That
 is an API change with no defect behind it, out of scope for a decision entry.
+
+## 2026-08-06 — #897: the uptime anchor belongs to the link, not to the row
+
+Mezmerize's server-info card read `connected 10d 9h` on a box he was shutting
+down for an upgrade every day. The card sourced that duration from the
+credential's `connection_state_changed_at`, above a comment claiming the column
+"IS the connect instant for a live link".
+
+**The comment was the bug.** `Networks.connect/1` has an explicit
+already-`:connected` clause that returns without a DB write, and a restart is
+deliberately not a state change — a transient loss must not park the network,
+the session reconnects and re-asserts at 001. So `docker stop` + `docker up`
+leaves the row `:connected` from end to end, the connect no-ops on the way back
+in, and the column keeps the timestamp of the last time the ROW moved. That is a
+perfectly good answer to a question nobody was asking.
+
+**The honest anchor already existed:** `Session.Server.connected_at`, stamped at
+`:irc_connected`, per-process, therefore resetting with the socket. The card had
+never been able to see it.
+
+**Where it goes is the design decision.** `connected_at` joins the map returned
+by `Session.connection_info/2` — the live-only facts already embedded as
+`:connection` on both `GET /networks` twins — rather than sitting beside the
+credential's own timestamp. `connection` is already `null` whenever there is no
+live pid, so "no socket ⇒ no duration" falls out of the shape instead of needing
+a second honesty rule bolted onto the renderer. A DB row stuck at `:connected`
+behind a dead session now shows its state and says nothing about uptime: the
+CLAUDE.md DB-vs-live separation, rendered.
+
+**One path, both doors.** `connection` reaches cic only through `GET /networks`,
+through a single `connection_json/1` shared by the user and visitor twins, and
+cic already refetches on the `connection_progress` "connected" edge — so a
+runtime reconnect refreshes the anchor along with the peer IP and the +r flag.
+No push carries `connection` today and none was added: the only place a
+`connection_state_changed` broadcast is built is inside the DB transition path,
+which would have to `GenServer.call` the very session that sometimes triggers it.
+
+Two smaller calls. `connection_json/1` MATCHES `connected_at` instead of
+`Map.get`-defaulting it — the sole producer is `connection_info/2`, so an absent
+key means a new producer forgot, and a FunctionClauseError beats a row that
+quietly stops rendering. And its input spec becomes
+`Grappa.Session.connection_info()`: the domain map carries `%DateTime{}` where
+the wire carries ISO-8601, a split that was invisible only while the two shapes
+happened to coincide. Codegen reads `@type`, not `@spec`, so naming the domain
+type there costs `wireTypes.ts` nothing.
+
+**The class was checked, and it is a class of one.** The issue left "does any
+other reader carry the same assumption?" open. Grepping every caller of
+`formatDuration*` in cic answers it: `ServerInfoCard` and `WhoisCard`, and the
+latter formats a WHOIS `idle_seconds` that never touched the column. `AdminWire`
+and `HomePane` carry `connection_state_changed_at` but render it as a
+transition timestamp, which is what it is. So the fix has no siblings — the one
+site that turned the column into a duration is the one that was wrong.
+
+**What is not claimed.** Mezmerize's database was never read; the mechanism is a
+code reading whose symptom matches, not an observation of his row.

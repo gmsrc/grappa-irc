@@ -1069,23 +1069,31 @@ defmodule Grappa.Session do
   and whether the nick is identified to services (`registered`, from the
   +r umode). Present only while connected; the accessors below degrade to
   `{:error, :no_peer}` otherwise.
+
+  #897 — `connected_at` is the instant THIS link came up (stamped at
+  `:irc_connected`, per-process, so it resets with the socket). `nil` only
+  on a session whose state predates the field (#216 hot-reload contract).
   """
   @type connection_info :: %{
           server: String.t(),
           port: :inet.port_number(),
           tls: boolean(),
-          registered: boolean()
+          registered: boolean(),
+          connected_at: DateTime.t() | nil
         }
 
   @doc """
   Returns the live upstream connection facts for the session at
-  `(subject, network_id)` — `%{server, port, tls, registered}` (#474 B,
-  the server-window rail card).
+  `(subject, network_id)` — `%{server, port, tls, registered, connected_at}`
+  (#474 B, the server-window rail card).
 
   `server` is the peer IP as a string (`:inet.ntoa/1` of the v6/v4 tuple),
   captured once at connect and cached (immutable for the connection), so
   this is an instant state read; `registered` is derived from the live
-  umode set (the same +r identity signal #561 keys on).
+  umode set (the same +r identity signal #561 keys on); `connected_at` is
+  the connect instant of THIS link (#897 — the honest uptime anchor, since
+  the credential's `connection_state_changed_at` survives bouncer restarts
+  the link does not).
 
   Returns `{:error, :no_peer}` in every not-connected window (pre-connect,
   mid-reconnect, socket just closed) — the honest "unknown", never

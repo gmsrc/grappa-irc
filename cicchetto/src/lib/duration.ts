@@ -23,7 +23,7 @@ export function formatDuration(seconds: number | null): string | null {
 
 /**
  * Format the span between a wire ISO-8601 instant and `nowMs` (epoch ms)
- * as a human duration — e.g. a network's `connection_state_changed_at`
+ * as a human duration — e.g. a network's `connection.connected_at`
  * rendered as "connected for 4h 12m".
  *
  * Returns null for a null or unparseable timestamp (prefer omitting the

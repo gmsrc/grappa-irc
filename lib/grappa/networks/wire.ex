@@ -55,12 +55,23 @@ defmodule Grappa.Networks.Wire do
   reconnecting), the honest "no live connection" signal — prefer omitting
   over a stale value. Sourced by the controller via
   `Grappa.Session.connection_info/2`.
+
+  #897 — `:connected_at` (ISO-8601) is the instant THIS link came up, and
+  it lives HERE rather than beside `:connection_state_changed_at` for one
+  reason: it is live state, so it must vanish with the rest of `:connection`
+  when there is no live pid. The credential column next to it answers a
+  DIFFERENT question — when the ROW last changed state — and a bouncer
+  restart never moves the row out of `:connected` (`Networks.connect/1`
+  no-ops without a DB write), so it outlives the link by however many
+  restarts happened since. `nil` on a session whose state predates the
+  field (#216 hot-reload contract): "unknown", never a fabricated instant.
   """
   @type connection_info :: %{
           server: String.t(),
           port: integer(),
           tls: boolean(),
-          registered: boolean()
+          registered: boolean(),
+          connected_at: String.t() | nil
         }
 
   @typedoc """
@@ -313,7 +324,7 @@ defmodule Grappa.Networks.Wire do
           Network.t(),
           String.t(),
           Credential.t(),
-          connection_info() | nil
+          Grappa.Session.connection_info() | nil
         ) :: network_with_nick_json()
   def network_with_nick_to_json(%Network{} = n, nick, %Credential{} = cred, connection)
       when is_binary(nick) and nick != "" and (is_map(connection) or is_nil(connection)) do
@@ -357,7 +368,7 @@ defmodule Grappa.Networks.Wire do
           Network.t(),
           String.t(),
           Credential.t(),
-          connection_info() | nil
+          Grappa.Session.connection_info() | nil
         ) :: visitor_network_with_nick_json()
   def visitor_network_to_json(%Network{} = n, nick, %Credential{} = cred, connection)
       when is_binary(nick) and nick != "" and (is_map(connection) or is_nil(connection)) do
@@ -486,10 +497,29 @@ defmodule Grappa.Networks.Wire do
   # the controller resolved, or nil when there is no live connected session)
   # onto the exact `:connection` wire shape. Rebuilt field-by-field rather
   # than passed through so this module stays the SSOT for the JSON shape.
-  @spec connection_json(connection_info() | nil) :: connection_info() | nil
+  # It is also where the domain/wire type split is paid: the session speaks
+  # `%DateTime{}`, the wire speaks ISO-8601 (#897).
+  #
+  # `connected_at` is matched, not `Map.get`-defaulted: every producer is
+  # `Grappa.Session.connection_info/2`, so a map without the key means a
+  # NEW producer forgot it — a loud FunctionClauseError beats a silently
+  # missing uptime row.
+  @spec connection_json(Grappa.Session.connection_info() | nil) :: connection_info() | nil
   defp connection_json(nil), do: nil
 
-  defp connection_json(%{server: server, port: port, tls: tls, registered: registered}) do
-    %{server: server, port: port, tls: tls, registered: registered}
+  defp connection_json(%{
+         server: server,
+         port: port,
+         tls: tls,
+         registered: registered,
+         connected_at: connected_at
+       }) do
+    %{
+      server: server,
+      port: port,
+      tls: tls,
+      registered: registered,
+      connected_at: WireTime.iso8601_or_nil(connected_at)
+    }
   end
 end

@@ -1,6 +1,6 @@
 import { render, screen } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
-import type { Network } from "../lib/api";
+import type { ConnectionInfo, Network } from "../lib/api";
 import ServerInfoCard from "../ServerInfoCard";
 
 // #474 — the server-window rail card. Pure presentational: it takes the
@@ -14,6 +14,18 @@ import ServerInfoCard from "../ServerInfoCard";
 
 const now = Date.parse("2026-07-31T12:00:00.000Z");
 
+// #897 — the LIVE link facts. `connected_at` is the instant THIS socket came
+// up (Session.Server's per-process stamp), deliberately 4h12m ago while the
+// credential row below last TRANSITIONED 10 days ago: the two must not be
+// confused, and the card renders the former.
+const baseConn: ConnectionInfo = {
+  server: "89.31.72.10",
+  port: 6697,
+  tls: true,
+  registered: true,
+  connected_at: new Date(now - (4 * 3600 + 12 * 60) * 1000).toISOString(),
+};
+
 const baseNet: Network = {
   kind: "user",
   id: 7,
@@ -24,8 +36,8 @@ const baseNet: Network = {
   realname: "VJT",
   connection_state: "connected",
   connection_state_reason: null,
-  connection_state_changed_at: new Date(now - (4 * 3600 + 12 * 60) * 1000).toISOString(),
-  connection: { server: "89.31.72.10", port: 6697, tls: true, registered: true },
+  connection_state_changed_at: new Date(now - 10 * 86400 * 1000).toISOString(),
+  connection: baseConn,
   inserted_at: "2026-07-01T00:00:00.000Z",
   updated_at: "2026-07-01T00:00:00.000Z",
 };
@@ -77,12 +89,45 @@ describe("ServerInfoCard", () => {
     expect(card.textContent).toContain("SASL 904 authentication failed");
   });
 
-  it("omits the uptime row when connected but the timestamp is unknown (null)", () => {
+  it("omits the uptime row when connected but the connect instant is unknown (null)", () => {
     render(() => (
-      <ServerInfoCard network={{ ...baseNet, connection_state_changed_at: null }} now={now} />
+      <ServerInfoCard
+        network={{ ...baseNet, connection: { ...baseConn, connected_at: null } }}
+        now={now}
+      />
     ));
     const card = screen.getByTestId("rail-server-info");
     expect(card.textContent).toContain("connected");
+    expect(card.textContent).not.toContain("4h 12m");
+  });
+
+  // #897 — Mezmerize's report: the card read `connection_state_changed_at`,
+  // the credential's last state TRANSITION. A bouncer restart never moves the
+  // row out of `:connected` (Networks.connect/1 no-ops without a DB write), so
+  // that column outlives the link by however many restarts happened since. The
+  // card must measure the LIVE link, which is what `connection.connected_at`
+  // (Session.Server's per-process stamp) is.
+  it("measures the live link, not the last DB state transition (#897)", () => {
+    render(() => <ServerInfoCard network={baseNet} now={now} />);
+    const card = screen.getByTestId("rail-server-info");
+    // The fixture's link came up 4h12m ago; its row last transitioned 10d ago.
+    expect(card.textContent).toContain("4h 12m");
+    expect(card.textContent).not.toContain("10d");
+  });
+
+  it("shows NO uptime when the DB row says connected but no link is live (#897)", () => {
+    // DB state and live state are separate sources of truth and may diverge
+    // (CLAUDE.md). A `:connected` row with a dead/reconnecting session gets an
+    // honest silence, never a duration computed from the DB column.
+    render(() => (
+      <ServerInfoCard
+        network={{ ...baseNet, connection_state: "connected", connection: null }}
+        now={now}
+      />
+    ));
+    const card = screen.getByTestId("rail-server-info");
+    expect(card.textContent).toContain("connected");
+    expect(card.textContent).not.toContain("10d");
     expect(card.textContent).not.toContain("4h 12m");
   });
 
@@ -110,7 +155,13 @@ describe("ServerInfoCard", () => {
       <ServerInfoCard
         network={{
           ...baseNet,
-          connection: { server: "127.0.0.1", port: 6667, tls: false, registered: false },
+          connection: {
+            ...baseConn,
+            server: "127.0.0.1",
+            port: 6667,
+            tls: false,
+            registered: false,
+          },
         }}
         now={now}
       />
