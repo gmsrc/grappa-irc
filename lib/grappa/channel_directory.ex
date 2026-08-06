@@ -134,6 +134,18 @@ defmodule Grappa.ChannelDirectory do
 
     * `:ttl_ms` (required) — freshness window in milliseconds; used to derive
       `status` (`:fresh` if `captured_at` is within TTL, `:stale` otherwise).
+      **The anchor is second-precision** (`Entry`'s `captured_at` is
+      `:utc_datetime`, so `finalize/2` truncates), so the derived age
+      OVERSTATES the true age by up to 999 ms and never understates it: a
+      snapshot is born up to a second old. A window comparable to that
+      granularity therefore answers by the clock rather than by the data —
+      `ttl_ms: 1_000` read immediately after `finalize/2` yields `:fresh` or
+      `:stale` depending on where in the wall-clock second the stamp landed
+      (#713). Production is clear of it by five orders of magnitude
+      (`ttl_ms/0` is 48h). This is a documented floor and NOT a runtime
+      rejection, deliberately — see #713 in `docs/DESIGN_NOTES.md` for why a
+      sub-granularity guard would have rejected two legitimate callers and
+      still not have caught the case that prompted the question.
     * `:sort` — `:users` (default, descending user count then ascending name) or
       `:name` (ascending name).
     * `:q` — case-insensitive substring filter applied to both `name` and `topic`.
