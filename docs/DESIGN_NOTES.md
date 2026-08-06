@@ -30830,3 +30830,167 @@ currently pinned only by `issue443-colored-nicklist.spec.ts` in a real browser.
 Recorded here rather than fixed in #914's diff — the finding is worth more than
 the two-line edit, and widening an unrelated PR to bury it is how findings get
 lost.
+
+## 2026-08-06 — #907: claim the buffer, THEN await — the rule becomes a parameter
+
+`/msg` awaited `ensureQueryTopicJoined` (the #254 subscribe-before-send join
+ACK) in the dispatch arm, and only then called `sendPacedBody`, which claims
+the #737 drain lock. Between those two lines the composer was empty (#904 takes
+the text out AT DISPATCH) and unclaimed: a keystroke landing there was
+overwritten by the first residue write of the paced drain. Every other
+paced-send arm is safe by SHAPE rather than by care — `sendPacedBody` resolves
+the residue home and claims in one synchronous block, so no gap exists to type
+into. Nothing protected that shape.
+
+**The fix is the shape, not the arm.** `sendPacedBody` grew a required
+`prepare: () => Promise<void>` and runs it INSIDE the claim; `/msg` hands it
+`() => ensureQueryTopicJoined(slug, canonical)` and the other three call sites
+pass `nothingToPrepare`. Required, not optional: an arm that grows an await
+before its first line now has one place to put it, and the ceremony of passing
+a no-op is the question being asked out loud. Patching only the `/msg` arm —
+claim, await, release, then let `sendPacedBody` re-claim — also closes the hole
+(there is no await between that release and the re-claim, so no keystroke can
+interleave), but it duplicates the `multi` rule and the key set in the arm, and
+"safe because no yield point sits between these two statements" is precisely
+the reasoning that was already load-bearing and already unprotected.
+
+**Both candidate homes are claimed across `prepare`, and the loser is released
+the moment the choice is made.** The home choice reads `preferred`'s draft
+(#723: a busy query window refuses the redirect), and reading it after an await
+it stayed writable during would be deciding on stale ground. Post-`prepare` the
+locked set is byte-identical to the pre-fix one, so the drain's own posture is
+unchanged — the query window that ends up owning nothing goes straight back to
+the operator, whose eyes `/msg` just moved into it. Freezing a window the drain
+will never write to would be its own defect.
+
+**What is NOT measured.** Nobody has timed a join ACK, and no repro was run
+against production. The issue is a code-structure reading and stays one: the
+window's WIDTH and how often it bites are unknown, and no claim here rests on
+them. What IS measured is that the path exists — the test below fails on the
+pre-fix code at the exact assertion that says so.
+
+**One trigger from the issue is falsified.** #907 lists a QUEUED submission
+(#904's one-deep slot) among the conditions. It is not required: #904 empties
+the composer on the FIRST Enter too, so the gap opens on a plain single
+submission. The test queues nothing and still reds.
+
+**The oracle is mid-await, and that is not a shortcut.** Post-fix and pre-fix
+the FINAL draft is identical — the residue write lands on an empty box either
+way, because the operator's text was destroyed rather than merged. So a
+before/after assertion on the settled state passes against the bug. The test
+holds the join promise open under its own control (`setEnsureQueryTopicJoined`,
+the #254 seam, is an injection point), types into the source window while it is
+unresolved, and asserts the write was REFUSED — the #737 posture, refuse rather
+than lose. No timing is guessed anywhere: the promise is resolved by the test,
+not by a clock.
+
+**No e2e, deliberately.** The observable is a textarea that is readOnly for the
+length of one WS round trip. A browser spec racing that window would pass by
+luck, which is worse than not having one.
+## 2026-08-06 — #925: the send button waits for a click that iOS does not always send
+
+**The report.** On iPhone (installed PWA, keyboard up) a tap on the compose
+send button sometimes did nothing: `:active` lit up, the message did not go,
+and the text stayed in the field. That last detail is the discriminator — the
+draft is cleared by the send path, so a still-full field means the send never
+ran, not that the render lied.
+
+**The suspicion vjt filed, and what reading the code actually established.**
+`ComposeBox.tsx` wired the button with `onPointerDown={(e) =>
+e.preventDefault()}` — the one place in the app doing what `lib/keepKeyboard.ts`
+was written to forbid, since `pointerdown` is also iOS's gesture-start signal
+(that same mistake cost the un-scrollable archive modal, 2026-05-18). Reading
+the code proves the path EXISTS. It does not prove it fires. It was left
+labelled as a suspicion, and it is not what this change is justified on.
+
+**What the code already knew.** The mechanism that predicts this symptom
+exactly was measured on a real device eleven days earlier, for #366, and is
+written down in `keepKeyboard.ts`: on real iOS Safari a press the OS routes
+into a long-press gesture *synthesizes no mouse events at all* — only taps do.
+A `type="submit"` button sends only when a `click` reaches the form. No mouse
+events means no click means no submit, while `:active` (driven by touch, not
+by mouse) still lights up. The field report and the repro log both feature
+presses in the 650–980 ms band. So the send button's activation was resting on
+an event iOS is documented — in this repo, from this project's own dogfood —
+to withhold.
+
+**The fix: activation rides `pointerup`, focus retention rides `mousedown`.**
+`pointerup` fires whether or not the OS decides to synthesize mouse events;
+the repro log shows it on all six long presses. The synthetic click that
+follows a normal tap is swallowed so a tap cannot send twice — gated on
+`detail > 0`, because a keyboard activation reports `detail 0` and has no
+pointerup to have sent for it, so swallowing that one would drop the send
+outright. Release is hit-tested against the button's box (`releasedInside`):
+touch pointers are implicitly captured by the element the press landed on, so
+without the test, pressing send and sliding away to abort would still fire —
+and a message to a channel is not undoable.
+
+**Why the button keeps a focus-retention handler at all, on `mousedown`.**
+The issue proposed simply deleting the per-button wiring and letting the
+global `keepKeyboard` listener do its job. It cannot: that listener is
+`isIos()`-gated, and #59 was reported on Android ("Android especially"). On
+iOS the button's `mousedown` cancel is redundant with the global one and
+harmless; on Android it is the only thing there is.
+
+**Stated plainly: not reproduced.** Playwright webkit does not reproduce iOS
+touch physics, so the failing arm was not observed here — only field-reported,
+plus a device log of the *proposed* wiring succeeding 6/6. What is NOT
+established is that the old `pointerdown` cancel was the thing losing the send;
+a control run with the old wiring on the same device is what would close that.
+The fix is justified on the click's absence being the failure mode the repo had
+already measured, not on the suspicion the issue opened with.
+
+**Two comments were lying, and comments are what write this class of bug.**
+`main.tsx` described the global preserve listener as "preventDefault on
+pointerdown" (it hooks `mousedown`), and the send button's own comment claimed
+"same trick as the image-picker button" (that button has carried a plain
+`onClick` for some time). Both were fixed here. A comment that misnames the
+event is how the next person re-adds a `pointerdown` cancel.
+## 2026-08-06 — #893: the flaky test was right; the suite had an unarmed writer
+
+`Uploads.ReaperTest`'s sustained-busy case failed once in 5185 tests on CI and
+was filed as a tracked flake with the two candidate causes left explicitly
+undecided: load-sensitive setup, or a genuine mishandling of sustained BUSY.
+
+**It was neither.** The CI log settles it. The failing assertion was
+`assert is_nil(reloaded.deleted_at)` — and BOTH degrade lines were logged in
+the same block (`db write unavailable … 300ms retry budget (31 attempts)` and
+`uploads reaper failure error=:db_unavailable`). So the resilience path did
+exactly what the test claims it does: the injected fault fired on all 31
+attempts, the budget expired, the flip degraded, the sweep returned `{:ok, 0}`.
+The row was nonetheless soft-deleted. `BusyRetry` injects its fault BEFORE the
+op, so the test process never ran that `UPDATE`. Something else did.
+
+**The three ambient reapers tick during `mix test`.** The application
+supervisor starts `Visitors.Reaper`, `Uploads.Reaper` and `Accounts.Reaper` in
+every env, each on a 60s timer, and `Grappa.DataCase` puts the Sandbox in
+SHARED mode for `async: false` tests. A shared-mode connection belongs to
+whichever test is live, so an ambient tick runs its `delete_all` /
+soft-delete on THAT test's connection and mutates rows it just created. The
+reaper does not even need the file: `File.rm` returns `:enoent` for a row whose
+bytes live under some other test's temp root, and the enoent arm soft-deletes
+anyway. Wall-clock 60s landing inside a ~300ms window is the 1-in-thousands.
+
+**Proven by displacement, not by re-rolling the dice.** A probe test created an
+expired upload, sent the app-supervised reaper a single `:tick`, and read the
+row back: `deleted_at` set, the exact CI signature, first try. Twenty green
+repeats of the original test would have proven nothing — the failure needs a
+timer coincidence, not a code path. What is NOT claimed: the original 1-in-5185
+timing was never reproduced, and no attempt was made to.
+
+**Fix: remove the writer, do not soften the reader.** The cadence moves to a
+`:reaper_interval_ms` knob read once at the application boot boundary, pushed
+past any suite runtime in `config/test.exs`. The reapers still boot — that
+matters, `Uploads.Reaper.init/1` mkdir_p's the global storage root, and every
+reaper unit test either calls `sweep/2` directly or starts its own instance
+with an explicit short interval. No assert was weakened and no timeout raised;
+a nondeterministic cross-test writer was taken out of the suite.
+
+**Widened past the one test that noticed.** All three reapers get the knob, not
+just Uploads: the exposure is any `async: false` test whose rows match an
+expired-visitor, expired-upload, or idle-session predicate, and only one of
+those three had rolled a bad tick yet. The pin
+(`application_ambient_reapers_test.exs`) derives its set from
+`Supervisor.which_children/1` rather than a hand-written list, so a fourth
+reaper is covered on the day it is added, and asserts set-equality against the
+known three so the filter cannot silently match nothing.
