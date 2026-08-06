@@ -31152,3 +31152,46 @@ quota ceiling nobody has hit would be speculation.
 every keystroke and every acked line of a #666 paced drain. For drafts of human
 size that is noise, and no debounce was added on a guess; a pathological paste
 was not benchmarked.
+
+## 2026-08-06 — #503 scope 5: the doc outlived the fact it was documenting
+
+Scope item 5 of #503 (publish the self-contained release image to ghcr) was
+picked up as new work. It was not new: `Dockerfile.release`, the `docker` job in
+`release.yml`, the multi-arch ruling and the pull-path docs all landed
+2026-07-31, and the surrounding scope items landed either side of it. Nothing
+was built here. What WAS wrong was the record: two paragraphs in
+`docs/OPERATIONS.md` still asserted a world that had since ended.
+
+**The failure class is not "stale docs", it is a claim about the ABSENCE of
+evidence.** Both sentences were true the minute they were written and became
+false without anyone touching them: *"`release.yml` has had ZERO runs"* and
+*"the `docker` release job is tag-driven with zero prior real runs and ghcr
+carries no grappa image yet"*. A statement of the form "this has never run" has
+an expiry date baked in, and unlike a wrong API name nothing fails when it
+rots — no test, no compile, no gate. It just quietly redirects the next reader
+to validate something that has been validated four times. The general rule: when
+a doc records that a thing is UNVERIFIED, it must name what would change the
+verdict, because someone will eventually do it and will not think to come back.
+
+**Measured, not reasoned.** The `docker` job has run on four real tag pushes
+(`v0.9.0`, `v0.10.0`, `v0.11.0`, `v0.12.0`), green on each. `ghcr.io/vjt/grappa`
+answers an ANONYMOUS pull token, so the package is public; `:latest`,
+`:v0.12.0`, `:v0.11.0`, `:v0.10.0` all resolve, `:latest` serves the same
+manifest as `:v0.12.0`, and the manifest is a genuine multi-arch OCI index
+(`linux/amd64` + `linux/arm64`). Reading the config blob of the published arm64
+manifest: `org.opencontainers.image.revision` is exactly the `v0.12.0` commit
+and `version` is `0.12.0`. Then the two verbs the doc itself nominated, against
+the real tag rather than a local build —
+`GRAPPA_TEST_IMAGE=ghcr.io/vjt/grappa:v0.12.0 scripts/release-image.sh
+fresh-boot`, then `warm-boot` — both reached `/healthz` 200, and `/api/config`
+on the running container reported `"version":"0.12.0"`. That last one is the
+check with teeth: the image takes the #391 no-git bare-version path, so tag and
+running code agreeing is a property of the build, not a tautology.
+
+**Not measured, and the replacement text says so.** The host is arm64, so only
+the `linux/arm64` leg was ever booted; the QEMU-built `amd64` leg is proven to
+build and to publish, never to run. `update` was not driven across two published
+tags. And the dry-run paragraph keeps its mechanism — validating the shipping
+job pre-merge is still right — it just loses the false premise that the job is
+unproven; the reason to run it is now "you changed the Dockerfile or the job",
+not "it has never run".

@@ -602,9 +602,11 @@ D** — see **Running the published image** below.
 - **Version.** The image reports the BARE `X.Y.Z` (no `.git` in the build
   context → the `#391` no-git path, like the AUR tarball). `docker inspect`
   shows the image tag; the RUNNING app is the version source of truth.
-- **VALIDATE BEFORE A REAL TAG — the zero-publication dry-run.** `release.yml`
-  has had ZERO runs, so validate the `docker` job (the SAME job that ships, not a
-  copy) BEFORE trusting it on a real tag, via the `docker_validation` dispatch:
+- **VALIDATE BEFORE A REAL TAG — the zero-publication dry-run.** A tag push is
+  the only thing that publishes, so a broken `docker` job is discovered with the
+  tag already cut and `:latest` possibly moved. Validate the job (the SAME one
+  that ships, not a copy) BEFORE a real tag whenever `Dockerfile.release`, the
+  job, or the release toolchain changes — via the `docker_validation` dispatch:
 
   ```sh
   # runs from ANY branch, so it works BEFORE merge; publishes NOTHING
@@ -735,14 +737,25 @@ curl -fsSL https://raw.githubusercontent.com/vjt/grappa-irc/main/infra/docker/ge
   its own CSP + security headers (#485) — put your TLS front door in front as a
   dumb reverse proxy, exactly as the from-source path.
 
-> **Verification of the PUBLISHED image is pending the first `vX.Y.Z` tag.** The
-> `docker` release job is tag-driven with zero prior real runs and ghcr carries
-> no grappa image yet. The bare-run one-liner IS now measured end to end, but
-> against a **locally built** image: `scripts/release-image.sh build` then
-> `fresh-boot` / `warm-boot` (#867) — that is the reproduction, use it. What
-> remains unverified is the published artifact and the job that pushes it, so
-> run the same two verbs against the real tag once one has cut, with
-> `GRAPPA_TEST_IMAGE=ghcr.io/vjt/grappa:vX.Y.Z`.
+> **The PUBLISHED image is verified — measured 2026-08-06 against
+> `ghcr.io/vjt/grappa:v0.12.0`.** The `docker` job has now run on four real tag
+> pushes (`v0.9.0`, `v0.10.0`, `v0.11.0`, `v0.12.0`) and was green on every one.
+> `:latest`, `:v0.12.0`, `:v0.11.0` and `:v0.10.0` all resolve to an ANONYMOUS
+> pull (the package is public), `:latest` serves the same manifest as
+> `:v0.12.0`, and it is a real multi-arch OCI index — `linux/amd64` +
+> `linux/arm64`. On the published artifact the OCI `revision` label equals the
+> `v0.12.0` commit and `version` equals `0.12.0`. Reproduce with the same two
+> verbs the local build uses:
+> `GRAPPA_TEST_IMAGE=ghcr.io/vjt/grappa:v0.12.0 scripts/release-image.sh
+> fresh-boot`, then `warm-boot` — both answered `/healthz` 200, and the running
+> app reported `"version":"0.12.0"` on `/api/config`, so the tag and the code it
+> runs agree (the check that matters, since the image reports the bare no-git
+> version).
+>
+> **Still NOT measured**, so do not read the above as more than it says: the
+> boot ran on an arm64 host, so only the **`linux/arm64`** leg has been
+> executed — the QEMU-built `amd64` leg is proven to BUILD and to publish, never
+> to boot. And `update` has not been driven across two published tags.
 
 ### AWS one-click box (CloudFormation) — #665
 
