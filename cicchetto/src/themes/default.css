@@ -8452,6 +8452,23 @@ html.resize-dragging * {
   color: var(--crt-phosphor-dim);
 }
 
+/* #687 — the boot register. Same phosphor-dim body as the banner above
+   so it reads as one continuous CRT print-out; a completed stage steps
+   up to full phosphor, which is the only visual difference between
+   "waiting here" and "past this". */
+.crt-splash-stages {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 1.04rem;
+  line-height: 1.5;
+  color: var(--crt-phosphor-dim);
+}
+
+.crt-splash-stage-done {
+  color: var(--crt-phosphor);
+}
+
 .crt-splash-status {
   margin: 0;
   display: flex;
