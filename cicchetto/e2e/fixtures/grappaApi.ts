@@ -344,6 +344,29 @@ export async function fetchAllMessagesAsc(
   return [...byId.values()].sort((a, b) => a.id - b.id);
 }
 
+// M-9a — force-stop a live Session.Server pid, leaving every DB row
+// untouched (`DELETE /admin/sessions/:id` → `Operator.terminate_session`).
+// The m9b spec drives the same verb through the admin UI; this is the
+// runner-side twin for specs that need the RESULTING STATE rather than the
+// button. That state is the only way to manufacture, over a real stack, the
+// divergence #897 is about: a credential row still reading `:connected` with
+// no live link behind it.
+//
+// `sessionId` is the composite `"<kind>:<subject_uuid>:<network_id>"` the
+// admin surface keys on. Idempotent (204 even when the pid is already gone).
+export async function terminateSession(adminToken: string, sessionId: string): Promise<void> {
+  const url = `${GRAPPA_BASE_URL}/admin/sessions/${encodeURIComponent(sessionId)}`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(
+      `grappaApi.terminateSession: ${sessionId} → ${res.status} ${await res.text()}`,
+    );
+  }
+}
+
 // M-cluster M-8 — operator-side delete via admin bearer. Mirrors
 // `Grappa.Operator.delete_visitor/1`. Used by e2e tests that mint
 // a visitor and need teardown cleanup on early-assertion-failure
