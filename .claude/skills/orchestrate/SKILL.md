@@ -157,6 +157,15 @@ is DELETE-then-write, never append-only:
   A HOT `--cic`-only deploy needs NO before-announce (no session drop) — just the after/bundle-refresh
   note. Both legs go to BOTH networks. **Forgetting the BEFORE is the failure mode — it is the only one
   that costs users anything.**
+- 🔴🔴 **NON DEVI LEGGERE IRC — vjt, 2026-08-06, urlato. NON NEGOZIABILE.**
+  I tailed `bot.log` to confirm my own PRIVMSG landed, and that tail carried #sniffo, #sbiffo and
+  #it-opers — other people's conversations, which I had no business having in front of me. **Posting is
+  ordered; READING is forbidden.** So: **never `tail`/`cat`/`grep` `bot.log`, `bot.libera.log`, or any
+  channel log. Never capture the ircbot pane to read what people said.** If a send must be verified, take
+  `bot.say`'s exit status and stop there — an unverified send is a smaller harm than reading his IRC.
+  Do NOT rationalise an exception ("just to check my own line", "just the last 3"): the tail does not let
+  you choose whose words arrive. This SUPERSEDES every earlier instruction in this file that says to
+  verify a PRIVMSG in the log — those lines are wrong and are struck.
 - 🔴🔴 **NEVER RELAY WHAT WAS SAID IN ONE CHANNEL INTO ANOTHER (vjt, #grappa 2026-08-04 10:25 —
   *"non devi parlare in un canale di ciò che si parla in altro canale — scrivilo in modo permanente,
   standing order, critical, not negotiable"*).** Said to the ircbot, and it binds every post made
@@ -758,6 +767,12 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
   a rebase legitimately rewrites context lines. Then diff the PR's touched files against main and look ONLY for lines
   **the PR has that main LACKS**; none ⇒ landed. (#603 differed by exactly one comment terminator that a sibling PR
   had extended.)
+  🔴 **DIFF WITH THREE DOTS, NEVER TWO, when the branch is cut from an OLD main (w1, 2026-08-06).**
+  `git diff origin/main..branch` shows main's own progress REVERSED — on a stale branch that was **4091 lines
+  across ~380 files**, and the one line that looked branch-only was main's drift, not the branch's content.
+  `git diff origin/main...branch` (merge-base) shows what the BRANCH added: 36 lines, all 36 already present on
+  main ⇒ superseded, sweep. **The two-dot form manufactures unlanded content that does not exist**, which is the
+  exact wrong direction for a sweep decision — it makes disposable work look precious.
 - 🥇 **"ancestor of main" does NOT prove a worktree's work merged** — it equally matches a branch with NO commits.
   Check for commits before concluding a worktree is disposable.
 - 🥇 **Gate via PR CI, not the local STACK, whenever a lane is contended** — the PR runs the full suite for free and
