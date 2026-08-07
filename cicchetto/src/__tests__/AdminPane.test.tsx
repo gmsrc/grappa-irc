@@ -50,12 +50,12 @@ import AdminPane from "../AdminPane";
 
 describe("AdminPane", () => {
   it("renders the 'admin console' header", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     expect(screen.getByRole("heading", { name: /admin console/i })).toBeInTheDocument();
   });
 
   it("renders all five tabs with Visitors as the default-active tab", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     const visitorsTab = screen.getByTestId("admin-tab-visitors");
     const sessionsTab = screen.getByTestId("admin-tab-sessions");
     const networksTab = screen.getByTestId("admin-tab-networks");
@@ -77,7 +77,7 @@ describe("AdminPane", () => {
   });
 
   it("mounts AdminVisitorsTab inside the active tabpanel by default", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     expect(screen.getByTestId("admin-visitors-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-sessions-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-networks-tab-mock")).toBeNull();
@@ -86,7 +86,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Sessions tab swaps the active panel + flips aria-selected", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-sessions"));
     expect(screen.getByTestId("admin-sessions-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
@@ -97,7 +97,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Networks tab swaps the active panel + flips aria-selected", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-networks"));
     expect(screen.getByTestId("admin-networks-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-events-tab-mock")).toBeNull();
@@ -105,7 +105,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Events tab swaps the active panel + flips aria-selected", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-events"));
     expect(screen.getByTestId("admin-events-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
@@ -116,7 +116,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Session Log tab swaps the active panel + flips aria-selected (#215)", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-session_log"));
     expect(screen.getByTestId("admin-session-log-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
@@ -127,7 +127,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Settings tab swaps the active panel + flips aria-selected (UX-6-B2)", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-settings"));
     expect(screen.getByTestId("admin-settings-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
@@ -138,7 +138,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking back to Visitors after Sessions returns the original panel", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-sessions"));
     fireEvent.click(screen.getByTestId("admin-tab-visitors"));
     expect(screen.getByTestId("admin-visitors-tab-mock")).toBeInTheDocument();
@@ -147,20 +147,20 @@ describe("AdminPane", () => {
 
   it("close button fires onClose", () => {
     const onClose = vi.fn();
-    render(() => <AdminPane onClose={onClose} />);
+    render(() => <AdminPane onClose={onClose} onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-pane-close"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("close button carries an a11y label", () => {
-    render(() => <AdminPane onClose={vi.fn()} />);
+    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     expect(screen.getByLabelText(/close admin console/i)).toBeInTheDocument();
   });
 
   it("starts admin-events subscription on mount, tears down on unmount (M-11)", () => {
     startSub.mockClear();
     uninstall.mockClear();
-    const { unmount } = render(() => <AdminPane onClose={vi.fn()} />);
+    const { unmount } = render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
     expect(startSub).toHaveBeenCalledTimes(1);
     expect(uninstall).toHaveBeenCalledTimes(0);
     unmount();

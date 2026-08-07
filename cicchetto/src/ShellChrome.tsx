@@ -64,22 +64,49 @@ export type Props = {
   onOpenRail: () => void;
 };
 
+/**
+ * #71 INC-2 — the rail opener (☰). Opens the same `.shell-members` drawer the
+ * channel-window TopicBar hamburger opens (paletto: ONE drawer, one ☰ glyph
+ * across both openers). The settings cog it replaced now lives in that rail's
+ * RailActions drawer.
+ *
+ * Admin redesign (2026-08-07) — extracted from the ShellChrome body so the
+ * AdminPane header can host the SAME button on mobile. The admin window is a
+ * non-channel kind, so it used to stack a nearly-empty `.shell-chrome` row on
+ * top of the pane's own "admin console" header — two bands of chrome for one
+ * title. Shell suppresses the row for the admin kind and AdminPane renders this
+ * opener inline instead, so the glyph, aria-label and `shell-chrome-rail-opener`
+ * testid stay singular (bucket L: settings reachable from every window kind, and
+ * on mobile the door is this ☰ — asserted for the admin window at
+ * `ux-4-z-cluster-journey.spec.ts`). The two mounts are mutually exclusive:
+ * ShellChrome never renders on the admin window, AdminPane only renders there.
+ *
+ * That exclusivity got MORE load-bearing after #985, not less. The original
+ * reason was vertical: the band was a row, and stacking it over the pane's own
+ * header spent two bands of chrome on one title. #985 made the band
+ * zero-height and floated the lone ☰ over the pane's top-RIGHT corner — which
+ * is exactly where the admin pane now puts its close × and, on a phone, its
+ * refresh. So the suppression stops an overlap now, where before it only saved
+ * a row.
+ */
+export const RailOpenerButton: Component<Props> = (props) => {
+  return (
+    <button
+      type="button"
+      class="shell-chrome-btn shell-chrome-rail-opener"
+      aria-label="open actions"
+      data-testid="shell-chrome-rail-opener"
+      onClick={props.onOpenRail}
+    >
+      {"\u{2630}"}
+    </button>
+  );
+};
+
 const ShellChrome: Component<Props> = (props) => {
   return (
     <header class="shell-chrome" data-testid="shell-chrome">
-      {/* #71 INC-2 — rail opener (☰). Opens the same `.shell-members` drawer
-          the channel-window TopicBar hamburger opens (paletto: ONE drawer, one
-          ☰ glyph across both openers). The settings cog it replaced now lives
-          in that rail's RailActions drawer. */}
-      <button
-        type="button"
-        class="shell-chrome-btn shell-chrome-rail-opener"
-        aria-label="open actions"
-        data-testid="shell-chrome-rail-opener"
-        onClick={props.onOpenRail}
-      >
-        {"\u{2630}"}
-      </button>
+      <RailOpenerButton onOpenRail={props.onOpenRail} />
     </header>
   );
 };

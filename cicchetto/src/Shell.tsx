@@ -570,6 +570,9 @@ const Shell: Component = () => {
                     the demote-redirect effect; both paths terminate at the
                     same landing window. */}
                 <AdminPane
+                  onOpenRail={() =>
+                    toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
+                  }
                   onClose={() =>
                     setSelectedChannel({
                       networkSlug: HOME_WINDOW_SLUG,
@@ -783,7 +786,14 @@ const Shell: Component = () => {
               per the Opt-A ruling). Mobile-channel still suppresses this row so
               the scrollback reclaims the ~32px. Earlier history of this surface
               in the bucket commits (UX-4 L, UX-5 A, UX-5 BT, UX-5 BM). */}
-          <Show when={selectedChannel()?.kind !== "channel"}>
+          {/* Admin redesign (2026-08-07) — the admin kind is excluded too. The
+              row would hold nothing but the ☰ and sit directly above the pane's
+              own "admin console" header: two chrome bands for one title on a
+              phone. AdminPane renders the SAME `RailOpenerButton` inline in that
+              header instead, so the opener stays reachable on the admin window
+              (bucket L, asserted in ux-4-z-cluster-journey) and the testid stays
+              singular — the two mounts are mutually exclusive by this gate. */}
+          <Show when={selectedChannel()?.kind !== "channel" && !isAdminPaneVisible()}>
             <ShellChrome
               onOpenRail={() =>
                 toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
@@ -795,6 +805,9 @@ const Shell: Component = () => {
           <Switch fallback={<CrtSplash />}>
             <Match when={isAdminPaneVisible()}>
               <AdminPane
+                onOpenRail={() =>
+                  toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
+                }
                 onClose={() =>
                   setSelectedChannel({
                     networkSlug: HOME_WINDOW_SLUG,

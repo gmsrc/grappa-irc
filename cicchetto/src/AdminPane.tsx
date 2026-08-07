@@ -11,6 +11,7 @@ import AdminVhostsTab from "./AdminVhostsTab";
 import AdminVisitorsTab from "./AdminVisitorsTab";
 import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav";
 import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminEvents";
+import { RailOpenerButton } from "./ShellChrome";
 
 // M-7 — Admin console pane. Replaces the channel content in
 // Shell.tsx when an admin operator clicks "admin console" in
@@ -53,6 +54,15 @@ import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminE
 
 export type Props = {
   onClose: () => void;
+  /**
+   * Admin redesign (2026-08-07) — opens the right rail (`.shell-members`), the
+   * mobile door to settings. Rendered as the header's leading ☰ so the admin
+   * window shows ONE band of chrome instead of the near-empty `.shell-chrome`
+   * row stacked above the pane's own title; Shell suppresses that row for the
+   * admin kind. CSS-hidden at ≥900px, where the desktop Shell branch renders no
+   * `ShellChrome` at all and the rail is permanent.
+   */
+  onOpenRail: () => void;
 };
 
 type TabKey =
@@ -112,6 +122,7 @@ const AdminPane: Component<Props> = (props) => {
   return (
     <section class="admin-pane" data-testid="admin-pane">
       <header class="admin-pane-header">
+        <RailOpenerButton onOpenRail={props.onOpenRail} />
         <h1>admin console</h1>
         <button
           type="button"

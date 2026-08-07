@@ -4152,9 +4152,27 @@ html.resize-dragging * {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--adm-space-3);
   border-bottom: 1px solid var(--adm-line);
   padding-bottom: 0.5rem;
   margin-bottom: 1rem;
+}
+
+/* Admin redesign (2026-08-07) — the ☰ rail opener, hosted here on mobile so
+   the admin window carries ONE chrome band instead of the `.shell-chrome` row
+   stacked above this header (Shell suppresses that row for the admin kind).
+   Restyled onto the `--adm-*` layer so it reads as part of the pane's chrome
+   rather than the IRC client's; the base `.shell-chrome-btn` rule keeps the tap
+   floor and the focus ring, and this (0,2,0) selector lands after it. */
+.admin-pane-header .shell-chrome-rail-opener {
+  color: var(--adm-text-dim);
+  border-color: var(--adm-line);
+  border-radius: var(--adm-radius-sm);
+}
+
+.admin-pane-header .shell-chrome-rail-opener:hover {
+  background: var(--adm-surface-2);
+  color: var(--adm-text);
 }
 
 .admin-pane-header h1 {
@@ -4278,6 +4296,14 @@ html.resize-dragging * {
 
   .admin-pane-header {
     grid-column: 1 / -1;
+  }
+
+  /* The ☰ is a MOBILE door: Shell's desktop branch renders no `ShellChrome`
+     at all and the rail is permanent there, so there is nothing to open. Same
+     posture as `.topic-bar-hamburger`, which is CSS-hidden above this
+     breakpoint for the same reason. */
+  .admin-pane-header .shell-chrome-rail-opener {
+    display: none;
   }
 
   .adm-nav {
