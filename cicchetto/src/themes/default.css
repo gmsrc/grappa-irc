@@ -5070,6 +5070,91 @@ html.resize-dragging * {
   }
 }
 
+/* Debug tab's phosphor panel — the one easter egg in the pane.
+   Deliberately does NOT follow the active theme: it commits to a green
+   terminal, which is the point. Allowed here and nowhere else because
+   Debug is admin-gated, carries no product data, and nobody lands on it
+   by accident. Everything around it — the cards, the headings, the
+   toggle — stays themed, so the tab still reads as part of the console
+   rather than as a different application.
+
+   Colours are literal rather than tokens for the same reason: a token
+   would make it follow the theme, which would delete the joke. */
+.adm-matrix {
+  position: relative;
+  padding: var(--adm-space-4);
+  background: #05100a;
+  border-radius: var(--adm-radius-sm);
+  color: #55ff9a;
+  font-family: var(--font-mono);
+  overflow: hidden;
+}
+
+/* Scanlines. A repeating gradient rather than an animation — the pane
+   already re-renders on every resize and focus event, and a moving
+   overlay on top of that is nausea, not atmosphere. `pointer-events:
+   none` so it never eats a tap on the text underneath. */
+.adm-matrix::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgb(0 0 0 / 0%) 0,
+    rgb(0 0 0 / 0%) 2px,
+    rgb(0 0 0 / 22%) 3px
+  );
+}
+
+.adm-matrix-prompt {
+  margin: 0 0 var(--adm-space-3);
+  font-size: 0.72rem;
+  color: #2f9e5e;
+}
+
+.adm-matrix-prompt::after {
+  content: "▊";
+  animation: adm-matrix-caret 1.1s steps(1) infinite;
+}
+
+@keyframes adm-matrix-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* The caret is the only motion here, and it stops for anyone who asked
+   for less of it. */
+@media (prefers-reduced-motion: reduce) {
+  .adm-matrix-prompt::after {
+    animation: none;
+  }
+}
+
+.adm-matrix-facts dt {
+  color: #2f9e5e;
+}
+
+.adm-matrix-facts dd {
+  color: #7dffb8;
+  text-shadow: 0 0 6px rgb(85 255 154 / 35%);
+}
+
+.adm-matrix-line {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  text-shadow: 0 0 6px rgb(85 255 154 / 35%);
+}
+
+.adm-matrix-log {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+}
+
 /* Truncates a data-heavy cell (e.g. Sessions' UPSTREAM, which can
    carry a full reverse-DNS name plus the raw address in parens) to a
    fixed width with an ellipsis, so it can't crowd every column after
