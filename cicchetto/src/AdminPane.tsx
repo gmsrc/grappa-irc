@@ -9,6 +9,7 @@ import AdminSettingsTab from "./AdminSettingsTab";
 import AdminUsersTab from "./AdminUsersTab";
 import AdminVhostsTab from "./AdminVhostsTab";
 import AdminVisitorsTab from "./AdminVisitorsTab";
+import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav";
 import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminEvents";
 
 // M-7 — Admin console pane. Replaces the channel content in
@@ -38,6 +39,17 @@ import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminE
 // admin-gated, EXEMPT. The Playwright spec at m7-admin-gate covers
 // reachability; per-tab specs cover only the admin case since
 // non-admin can't reach the AdminPane at all.
+//
+// Admin redesign (2026-08-07 plan, direzione B) — Layer 3. The 10
+// hand-unrolled `<button role="tab">` + `<Show>` pairs collapsed into
+// the `TABS` array below, rendered by the shared `AdminNav` (Layer 2)
+// as a rail grouped into Live / Configuration / Diagnostics. The
+// GROUPING IS VISUAL ONLY: every tab still renders as one flat
+// `role="tab"` button with its original `admin-tab-<key>` testid, so
+// the 31 e2e specs that click it directly keep working in one click
+// (plan "Vincoli non negoziabili" #1). `.admin-tab-panel` (the active
+// tab's wrapper) is unchanged — same id, same class, same touch-
+// action/overflow-x/max-height CSS contract 4 specs depend on (#2/#3/#5).
 
 export type Props = {
   onClose: () => void;
@@ -54,6 +66,29 @@ type TabKey =
   | "session_log"
   | "settings"
   | "debug";
+
+// Group order matches the approved mockup (shots/mockup-B.html,
+// direzione B rail markup); labels are English — the product's UI
+// language, unlike the mockup which was written for the (Italian-
+// speaking) reviewer.
+const GROUPS: AdminNavGroup[] = [
+  { key: "live", label: "Live" },
+  { key: "config", label: "Configuration" },
+  { key: "diag", label: "Diagnostics" },
+];
+
+const TABS: (AdminNavTab & { key: TabKey })[] = [
+  { key: "sessions", label: "Sessions", group: "live" },
+  { key: "visitors", label: "Visitors", group: "live" },
+  { key: "events", label: "Events", group: "live" },
+  { key: "session_log", label: "Session Log", group: "live" },
+  { key: "networks", label: "Networks", group: "config" },
+  { key: "vhosts", label: "Vhosts", group: "config" },
+  { key: "credentials", label: "Credentials", group: "config" },
+  { key: "users", label: "Users", group: "config" },
+  { key: "settings", label: "Settings", group: "config" },
+  { key: "debug", label: "Debug", group: "diag" },
+];
 
 const AdminPane: Component<Props> = (props) => {
   const [currentTab, setCurrentTab] = createSignal<TabKey>("visitors");
@@ -88,133 +123,12 @@ const AdminPane: Component<Props> = (props) => {
           ×
         </button>
       </header>
-      {/* `<div role="tablist">` not `<nav>` — biome a11y rule
-          `noNoninteractiveElementToInteractiveRole` flags `<nav>`
-          with `role="tablist"` because `<nav>` is a landmark
-          element, not a tab container. The WAI-ARIA APG canonical
-          tablist container IS a `div`. */}
-      <div class="admin-tab-nav" role="tablist" aria-label="admin tabs">
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("visitors")}
-          aria-controls="admin-tab-visitors"
-          id="admin-tab-visitors-handle"
-          data-testid="admin-tab-visitors"
-          onClick={() => setCurrentTab("visitors")}
-        >
-          Visitors
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("sessions")}
-          aria-controls="admin-tab-sessions"
-          id="admin-tab-sessions-handle"
-          data-testid="admin-tab-sessions"
-          onClick={() => setCurrentTab("sessions")}
-        >
-          Sessions
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("networks")}
-          aria-controls="admin-tab-networks"
-          id="admin-tab-networks-handle"
-          data-testid="admin-tab-networks"
-          onClick={() => setCurrentTab("networks")}
-        >
-          Networks
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("vhosts")}
-          aria-controls="admin-tab-vhosts"
-          id="admin-tab-vhosts-handle"
-          data-testid="admin-tab-vhosts"
-          onClick={() => setCurrentTab("vhosts")}
-        >
-          Vhosts
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("users")}
-          aria-controls="admin-tab-users"
-          id="admin-tab-users-handle"
-          data-testid="admin-tab-users"
-          onClick={() => setCurrentTab("users")}
-        >
-          Users
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("credentials")}
-          aria-controls="admin-tab-credentials"
-          id="admin-tab-credentials-handle"
-          data-testid="admin-tab-credentials"
-          onClick={() => setCurrentTab("credentials")}
-        >
-          Credentials
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("events")}
-          aria-controls="admin-tab-events"
-          id="admin-tab-events-handle"
-          data-testid="admin-tab-events"
-          onClick={() => setCurrentTab("events")}
-        >
-          Events
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("session_log")}
-          aria-controls="admin-tab-session_log"
-          id="admin-tab-session_log-handle"
-          data-testid="admin-tab-session_log"
-          onClick={() => setCurrentTab("session_log")}
-        >
-          Session Log
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("settings")}
-          aria-controls="admin-tab-settings"
-          id="admin-tab-settings-handle"
-          data-testid="admin-tab-settings"
-          onClick={() => setCurrentTab("settings")}
-        >
-          Settings
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="admin-tab"
-          aria-selected={isActive("debug")}
-          aria-controls="admin-tab-debug"
-          id="admin-tab-debug-handle"
-          data-testid="admin-tab-debug"
-          onClick={() => setCurrentTab("debug")}
-        >
-          Debug
-        </button>
-      </div>
+      <AdminNav
+        groups={GROUPS}
+        tabs={TABS}
+        current={currentTab()}
+        onSelect={(key) => setCurrentTab(key as TabKey)}
+      />
       <Show when={isActive("visitors")}>
         <div
           role="tabpanel"
