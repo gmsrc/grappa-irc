@@ -85,7 +85,7 @@ test("U-5 Networks live user-count drops after a session is terminated", async (
   const victimTerminate = page.getByTestId(`admin-session-terminate-${victim.sessionId}`);
   await expect(victimTerminate).toHaveText(/^Terminate$/, { timeout: 15_000 });
   await victimTerminate.click();
-  await expect(victimTerminate).toHaveText(/^Confirm terminate\?$/);
+  await expect(victimTerminate).toHaveText(/^Confirm$/);
   await victimTerminate.click();
   // Allow the action a moment to settle (REST round-trip + Session.Server
   // terminate/2 emits :cap_counts_changed telemetry which the AdminEvents

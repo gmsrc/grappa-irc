@@ -222,7 +222,7 @@ test("admin deletes a server via inline-confirm", async ({ page }) => {
     const delBtn = page.getByTestId(`admin-network-server-delete-${slug}-${serverId}`);
     await expect(delBtn).toHaveText(/^Delete$/);
     await delBtn.click();
-    await expect(delBtn).toHaveText(/^Confirm delete\?$/);
+    await expect(delBtn).toHaveText(/^Confirm$/);
     await delBtn.click();
 
     // Row gone.

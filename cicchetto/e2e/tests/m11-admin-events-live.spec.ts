@@ -52,7 +52,7 @@ test("M-11 Events tab renders + receives reaper_swept after Sweep visitors", asy
 
   const reap = page.getByTestId("admin-networks-force-reap");
   await reap.click();
-  await expect(reap).toHaveText(/^Sweep now\?$/);
+  await expect(reap).toHaveText(/^Confirm$/);
   await reap.click();
   await expect(page.getByTestId("admin-networks-reap-result")).toBeVisible({ timeout: 5_000 });
 

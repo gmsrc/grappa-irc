@@ -395,7 +395,7 @@ describe("AdminNetworksTab", () => {
     )) as HTMLButtonElement;
     expect(btn.textContent?.trim()).toBe("Reset Circuit");
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm reset?");
+    expect(btn.textContent?.trim()).toBe("Confirm");
     expect(api.adminResetCircuit).not.toHaveBeenCalled();
     fireEvent.click(btn);
     await waitFor(() => {
@@ -432,7 +432,7 @@ describe("AdminNetworksTab", () => {
     const btn = (await screen.findByTestId("admin-networks-force-reap")) as HTMLButtonElement;
     expect(btn.textContent?.trim()).toBe("Sweep visitors");
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Sweep now?");
+    expect(btn.textContent?.trim()).toBe("Confirm");
     fireEvent.click(btn);
     await waitFor(() => {
       expect(api.adminRunReaper).toHaveBeenCalledWith("test-bearer");
@@ -559,7 +559,7 @@ describe("AdminNetworksTab", () => {
       const btn = screen.getByTestId(`admin-network-delete-${BAHAMUT.slug}`);
       expect(btn.textContent).toBe("Delete");
       fireEvent.click(btn);
-      expect(btn.textContent).toBe("Confirm delete?");
+      expect(btn.textContent).toBe("Confirm");
       fireEvent.click(btn);
       await waitFor(() => {
         expect(api.adminDeleteNetwork).toHaveBeenCalledWith("test-bearer", BAHAMUT.id);

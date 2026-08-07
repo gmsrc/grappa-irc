@@ -568,7 +568,7 @@ const AdminNetworksTab: Component = () => {
           <>
             <InlineConfirmButton
               idleLabel="Sweep visitors"
-              confirmLabel="Sweep now?"
+              confirmLabel="Confirm"
               armed={confirmingKey() === reapKey()}
               onArm={() => setConfirmingKey(reapKey())}
               onConfirm={onForceReap}
@@ -812,7 +812,7 @@ const AdminNetworksTab: Component = () => {
                           <Show when={net.circuit_state !== null}>
                             <InlineConfirmButton
                               idleLabel="Reset Circuit"
-                              confirmLabel="Confirm reset?"
+                              confirmLabel="Confirm"
                               armed={confirmingKey() === resetKey(net.slug)}
                               onArm={() => setConfirmingKey(resetKey(net.slug))}
                               onConfirm={() => onResetCircuit(net)}
@@ -822,7 +822,7 @@ const AdminNetworksTab: Component = () => {
                           </Show>
                           <InlineConfirmButton
                             idleLabel="Delete"
-                            confirmLabel="Confirm delete?"
+                            confirmLabel="Confirm"
                             armed={confirmingKey() === `delete:${net.slug}`}
                             onArm={() => setConfirmingKey(`delete:${net.slug}`)}
                             onConfirm={() => onDeleteNetwork(net)}
@@ -1095,7 +1095,7 @@ const ServersDisclosure: Component<{
                       </button>
                       <InlineConfirmButton
                         idleLabel="Delete"
-                        confirmLabel="Confirm delete?"
+                        confirmLabel="Confirm"
                         armed={props.confirmingServerKey === `${props.net.id}:${s.id}`}
                         onArm={() => props.onArmServerDelete(`${props.net.id}:${s.id}`)}
                         onConfirm={() => props.onDeleteServer(s)}
@@ -1214,7 +1214,7 @@ const FeaturedChannelsDisclosure: Component<{
                     </button>
                     <InlineConfirmButton
                       idleLabel="Delete"
-                      confirmLabel="Confirm delete?"
+                      confirmLabel="Confirm"
                       armed={props.confirmingFeaturedKey === `${props.net.id}:${fc.id}`}
                       onArm={() => props.onArmFeaturedDelete(`${props.net.id}:${fc.id}`)}
                       onConfirm={() => props.onDeleteFeatured(fc)}

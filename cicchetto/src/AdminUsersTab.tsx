@@ -383,7 +383,7 @@ const AdminUsersTab: Component = () => {
                         </button>
                         <InlineConfirmButton
                           idleLabel="Delete"
-                          confirmLabel="Confirm delete?"
+                          confirmLabel="Confirm"
                           armed={confirmingId() === u.id}
                           onArm={() => setConfirmingId(u.id)}
                           onConfirm={() => onDelete(u)}

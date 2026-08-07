@@ -114,7 +114,7 @@ test("M-10 Sweep visitors inline-confirm fires + renders swept count", async ({ 
   const reap = page.getByTestId("admin-networks-force-reap");
   await expect(reap).toHaveText(/^Sweep visitors$/);
   await reap.click();
-  await expect(reap).toHaveText(/^Sweep now\?$/);
+  await expect(reap).toHaveText(/^Confirm$/);
   await expect(reap).toHaveClass(/confirming/);
   await reap.click();
 

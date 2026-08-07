@@ -136,15 +136,15 @@ test("M-9b arming Disconnect on one row disarms the same row's Terminate (single
   const term = firstRow.locator("[data-testid^='admin-session-terminate-']");
 
   await term.click();
-  await expect(term).toHaveText(/^Confirm terminate\?$/);
+  await expect(term).toHaveText(/^Confirm$/);
   await expect(disc).toHaveText(/^Disconnect$/);
 
   await disc.click();
-  await expect(disc).toHaveText(/^Confirm disconnect\?$/);
+  await expect(disc).toHaveText(/^Confirm$/);
   await expect(term).toHaveText(/^Terminate$/);
 });
 
-test("M-9b admin Disconnect inline-confirm transitions Disconnect → Confirm disconnect? → fires", async ({
+test("M-9b admin Disconnect inline-confirm transitions Disconnect → Confirm → fires", async ({
   page,
 }) => {
   // GREEN-CI batch-1 — target m9b-victim's row deterministically (NOT
@@ -166,7 +166,7 @@ test("M-9b admin Disconnect inline-confirm transitions Disconnect → Confirm di
   await expect(victimDisconnect).toHaveText(/^Disconnect$/, { timeout: 15_000 });
 
   await victimDisconnect.click();
-  await expect(victimDisconnect).toHaveText(/^Confirm disconnect\?$/);
+  await expect(victimDisconnect).toHaveText(/^Confirm$/);
   await expect(victimDisconnect).toHaveClass(/confirming/);
 
   await victimDisconnect.click();
@@ -194,7 +194,7 @@ test("M-9b admin Terminate inline-confirm fires DELETE", async ({ page }) => {
   await expect(victimTerminate).toHaveText(/^Terminate$/, { timeout: 15_000 });
 
   await victimTerminate.click();
-  await expect(victimTerminate).toHaveText(/^Confirm terminate\?$/);
+  await expect(victimTerminate).toHaveText(/^Confirm$/);
   await expect(victimTerminate).toHaveClass(/confirming/);
 
   await victimTerminate.click();

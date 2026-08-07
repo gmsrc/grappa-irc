@@ -115,7 +115,7 @@ test("admin deletes a featured channel via inline-confirm", async ({ page }) => 
     const delBtn = page.getByTestId(`admin-network-featured-delete-${slug}-${featuredId}`);
     await expect(delBtn).toHaveText(/^Delete$/);
     await delBtn.click();
-    await expect(delBtn).toHaveText(/^Confirm delete\?$/);
+    await expect(delBtn).toHaveText(/^Confirm$/);
     await delBtn.click();
 
     await expect(

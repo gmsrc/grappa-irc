@@ -38,7 +38,7 @@ import AdminVisitorsTab from "../AdminVisitorsTab";
 // the behavior assuming the gate has already passed.
 //
 // Per `feedback_css_block_button_wraps_inline_prefix`: the inline-
-// confirm button's text transition ("Delete" → "Confirm delete?") is
+// confirm button's text transition ("Delete" → "Confirm") is
 // the load-bearing UX signal. textContent is asserted directly.
 
 const ALIVE: AdminVisitor = {
@@ -275,7 +275,7 @@ describe("AdminVisitorsTab", () => {
     const btn = await screen.findByTestId(`admin-visitor-delete-${ALIVE.id}`);
     expect(btn.textContent?.trim()).toBe("Delete");
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm delete?");
+    expect(btn.textContent?.trim()).toBe("Confirm");
     expect(api.adminDeleteVisitor).not.toHaveBeenCalled();
   });
 
@@ -311,9 +311,9 @@ describe("AdminVisitorsTab", () => {
     const aBtn = await screen.findByTestId(`admin-visitor-delete-${ALIVE.id}`);
     const bBtn = screen.getByTestId(`admin-visitor-delete-${ORPHANED.id}`);
     fireEvent.click(aBtn); // arm A
-    expect(aBtn.textContent?.trim()).toBe("Confirm delete?");
+    expect(aBtn.textContent?.trim()).toBe("Confirm");
     fireEvent.click(bBtn); // switch arm to B → disarm A
-    expect(bBtn.textContent?.trim()).toBe("Confirm delete?");
+    expect(bBtn.textContent?.trim()).toBe("Confirm");
     expect(aBtn.textContent?.trim()).toBe("Delete");
   });
 
@@ -547,7 +547,7 @@ describe("AdminVisitorsTab", () => {
 
       const btn = await screen.findByTestId(toggleId(TOGGLE_LIVE, "azzurra"));
       fireEvent.click(btn); // arm
-      expect(btn.textContent?.trim()).toBe("Confirm disconnect?");
+      expect(btn.textContent?.trim()).toBe("Confirm");
       expect(api.adminDisconnectSession).not.toHaveBeenCalled();
       fireEvent.click(btn); // confirm
 
@@ -576,7 +576,7 @@ describe("AdminVisitorsTab", () => {
 
       const btn = await screen.findByTestId(toggleId(TOGGLE_DOWN, "azzurra"));
       fireEvent.click(btn); // arm
-      expect(btn.textContent?.trim()).toBe("Confirm reconnect?");
+      expect(btn.textContent?.trim()).toBe("Confirm");
       expect(api.adminReconnectSession).not.toHaveBeenCalled();
       fireEvent.click(btn); // confirm
 

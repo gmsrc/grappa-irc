@@ -195,7 +195,7 @@ test("admin unbinds a credential via inline-confirm — row spliced", async ({ p
     const unbindBtn = page.getByTestId(`admin-credential-unbind-${credKey}`);
     await expect(unbindBtn).toHaveText(/^Unbind$/);
     await unbindBtn.click();
-    await expect(unbindBtn).toHaveText(/^Confirm unbind\?$/);
+    await expect(unbindBtn).toHaveText(/^Confirm$/);
     await unbindBtn.click();
 
     await expect(page.getByTestId(`admin-credential-row-${credKey}`)).toHaveCount(0, {

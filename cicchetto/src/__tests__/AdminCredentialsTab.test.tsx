@@ -244,7 +244,7 @@ describe("AdminCredentialsTab — unbind flow", () => {
     const btn = screen.getByTestId(`admin-credential-unbind-${CRED.user_id}:${CRED.network_id}`);
     expect(btn.textContent).toBe("Unbind");
     fireEvent.click(btn);
-    expect(btn.textContent).toBe("Confirm unbind?");
+    expect(btn.textContent).toBe("Confirm");
     fireEvent.click(btn);
     await waitFor(() => {
       expect(adminUnbindCredential).toHaveBeenCalledWith(
