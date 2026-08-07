@@ -26,6 +26,24 @@ defmodule Grappa.Repo.Migrations.FoldNickservPassOntoPassword do
   NULL. Filling the gaps would have quietly demoted a working secret to the
   losing one on every row that carried both.
 
+  ## GH #1028 — the fold carries the SAME `auth_method` guard as the promotion
+
+  "Preserves the effective secret" holds only where `password_encrypted` IS the
+  NickServ secret. On `:server_pass` and `:auto` it is the single `PASS` wire
+  token (`AuthFSM.maybe_send_pass/1`), and on `:sasl` and `:auto` it is the
+  SASL PLAIN payload — there the fold does not preserve anything, it DESTROYS a
+  live server password, and `down/0` cannot put it back. Shipped in v0.14.0
+  unguarded; the observed symptom was `Closing Link: wrong password` with no
+  breadcrumb pointing here.
+
+  So the fold is restricted to the two methods where the column really is the
+  NickServ secret: `:none` (about to be promoted to `:nickserv_identify` by the
+  statement above) and `:nickserv_identify` itself. An ALLOWLIST, not a
+  denylist of the three damaged methods: `auth_method` is a closed set
+  (`Credential.auth_methods/0`), and a sixth method added later must earn its
+  way into the fold deliberately rather than inherit it by omission. A NULL
+  `auth_method` matches neither form and is left alone, which is the safe side.
+
   ## Ciphertext copy, not decrypt-and-re-encrypt
 
   Both columns are `Grappa.EncryptedBinary` (`Cloak.Ecto.Binary`) on the SAME
@@ -90,6 +108,7 @@ defmodule Grappa.Repo.Migrations.FoldNickservPassOntoPassword do
     UPDATE network_credentials
        SET password_encrypted = nickserv_pass_encrypted
      WHERE nickserv_pass_encrypted IS NOT NULL
+       AND auth_method IN ('none', 'nickserv_identify')
     """)
   end
 

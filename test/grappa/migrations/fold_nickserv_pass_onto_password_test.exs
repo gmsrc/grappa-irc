@@ -49,6 +49,7 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
   UPDATE network_credentials
      SET password_encrypted = nickserv_pass_encrypted
    WHERE nickserv_pass_encrypted IS NOT NULL
+     AND auth_method IN ('none', 'nickserv_identify')
   """
 
   defp uniq, do: System.unique_integer([:positive])
@@ -135,19 +136,35 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
       assert Credential.recover_secret(folded) == nil
     end
 
-    test ":server_pass is NOT promoted — the password is spent on PASS, not NickServ" do
-      # Promoting this would change what the password is SPENT ON and break a
-      # working handshake, so only `:none` is in the promotion's WHERE clause.
-      cred =
-        %{auth_method: :server_pass, password: "server-side"}
-        |> seed()
-        |> seed_perform_secret("ns-side")
+    # GH #1028 — the three methods that SPEND `password_encrypted` on the wire.
+    # `:server_pass` and `:auto` ship it as the single PASS token
+    # (`AuthFSM.maybe_send_pass/1`, `when m in [:auto, :server_pass]`); `:auto`
+    # and `:sasl` also spend it as the SASL PLAIN payload. On none of the three
+    # is it the NickServ secret, so folding the perform secret onto it does not
+    # preserve an effective secret — it DESTROYS a live one, and `down/0`
+    # cannot put it back.
+    #
+    # Generated rather than written three times: the claim is about a CLOSED
+    # SET (`Credential.auth_methods/0` minus the two the fold is for), and a
+    # fourth method added later must be a deliberate decision, not an omission.
+    for method <- [:server_pass, :sasl, :auto] do
+      test "#{method}: the fold leaves the password alone — it is spent on the wire, not on NickServ" do
+        cred =
+          %{auth_method: unquote(method), password: "wire-side"}
+          |> seed()
+          |> seed_perform_secret("ns-side")
 
-      run_migration()
+        run_migration()
 
-      folded = reload(cred)
-      assert folded.auth_method == :server_pass
-      assert Credential.upstream_password(folded) == "ns-side"
+        folded = reload(cred)
+        # Not promoted: rewriting the method would change what the password is
+        # SPENT ON. This half was always true.
+        assert folded.auth_method == unquote(method)
+        # Not folded either — the #1028 half. Before the guard this read
+        # "ns-side", and the row's upstream handshake died with
+        # `Closing Link: wrong password`.
+        assert Credential.upstream_password(folded) == "wire-side"
+      end
     end
 
     test "re-running the fold changes nothing (idempotent)" do
@@ -179,10 +196,19 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
     test "the migration file embeds both statements" do
       source = squash(File.read!(Path.join(File.cwd!(), @migration_path)))
 
-      assert String.contains?(source, squash(@promote_sql))
-      assert String.contains?(source, squash(@fold_sql))
+      assert embeds?(source, @promote_sql)
+      assert embeds?(source, @fold_sql)
     end
 
     defp squash(text), do: text |> String.replace(~r/\s+/, " ") |> String.trim()
+
+    # GH #1028 — anchored on the heredoc TERMINATOR, not a bare substring.
+    # A plain `String.contains?` is satisfied by a PREFIX, so the copy here
+    # could lose a trailing WHERE clause the migration still has and the pin
+    # would stay green — measured: with the `auth_method` guard deleted from
+    # `@fold_sql` alone, the old pin passed while the three behaviour tests
+    # failed. That is the exact drift the pin exists to catch, so it has to see
+    # the end of the statement, not just its beginning.
+    defp embeds?(source, sql), do: String.contains?(source, squash(sql) <> ~S[ """)])
   end
 end
