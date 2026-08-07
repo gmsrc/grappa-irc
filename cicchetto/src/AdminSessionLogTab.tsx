@@ -116,7 +116,7 @@ const AdminSessionLogTab: Component = () => {
                 {(ev) => (
                   <li class="adm-log-row" data-testid={`session-log-row-${ev.event}`}>
                     <time class="adm-log-at">{formatLogInstant(ev.at)}</time>
-                    <AdminBadge tone={EVENT_TONE[ev.event]} class={`event-${ev.event}`}>
+                    <AdminBadge tone={EVENT_TONE} class={`event-${ev.event}`}>
                       {eventLabel(ev.event)}
                     </AdminBadge>
                     <span class="adm-log-text">{subjectLabel(ev)}</span>
@@ -145,34 +145,26 @@ const AdminSessionLogTab: Component = () => {
 // scanning: the session came up, the session went away, or something is
 // retrying.
 //
-// The seven values pair off along the lifecycle, and the pairs are what
-// the colours encode — a tone names a KIND of event, the word names the
-// event:
+// The lifecycle events are a CLOSED set of exactly seven — the guard on
+// `Grappa.SessionLog.emit/3` admits these and nothing else, and `tsc`
+// enforces the same closure here through `SessionLogEvent`:
 //
-//   neutral  the link itself       connected / disconnected
-//   info     identity on the wire  registered / nick changed
-//   ok       authenticated         identified
-//   warn     something lost        de-identified / reconnect backoff
+//   connected      registered     identified    nick_changed
+//   deidentified   backoff        disconnected
 //
-// `connected` is neutral, not ok: a TCP connect has achieved nothing yet
-// — `registered` is the first state that means anything to a user, and
-// `identified` is the only one that means the session is fully itself.
-// (The first cut had connected / registered / identified all on `ok`,
-// which made the three indistinguishable while scrolling.)
+// They get their own seven colours rather than the shared ok/warn/danger
+// tone scale, because they are not severities — they are STAGES, and
+// mapping seven stages onto four severities forced collisions that made
+// the log unreadable while scrolling (the first cut had connected,
+// registered and identified all green; the second left connected grey,
+// which read as "nothing happened"). The hues live in default.css as
+// `.adm-badge.event-<name>`, each mixed against the theme's fg/bg like
+// every other admin colour, so they still follow a custom theme.
 //
-// `disconnected` is neutral, not danger: a session ending is the normal
-// end of its life, and the row carries a `clean` flag for the case that
-// isn't. `backoff` is a warn — a session actively failing to reconnect
-// is the one line worth catching mid-scroll.
-const EVENT_TONE: Record<SessionLogEvent, Tone> = {
-  connected: "neutral",
-  registered: "info",
-  identified: "ok",
-  deidentified: "warn",
-  disconnected: "neutral",
-  backoff: "warn",
-  nick_changed: "info",
-};
+// `tone` is therefore only the FALLBACK an unstyled event would land on;
+// the per-event rule wins. It stays `info` rather than neutral so a
+// future eighth event shows up as something rather than as grey.
+const EVENT_TONE: Tone = "info";
 
 // Human label for a lifecycle event kind — cic owns the wording.
 function eventLabel(event: SessionLogEvent): string {

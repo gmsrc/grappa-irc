@@ -235,27 +235,6 @@ const AdminVisitorsTab: Component = () => {
                                   <span class="admin-visitor-network-nick">{net.nick}</span>
                                   <span class="admin-visitor-network-slug">{net.network_slug}</span>
                                   <NetworkStateEmoji state={net.connection_state} />
-                                  {/* #269 — per-network Disconnect ⇄ Reconnect
-                                      toggle. Affordance keys off LIVE truth
-                                      (net.live_state), NOT the DB
-                                      connection_state, so a `:connected` row
-                                      whose pid is gone correctly offers
-                                      Reconnect. */}
-                                  <InlineConfirmButton
-                                    idleLabel={net.live_state !== null ? "Disconnect" : "Reconnect"}
-                                    confirmLabel={
-                                      net.live_state !== null
-                                        ? "Confirm disconnect?"
-                                        : "Confirm reconnect?"
-                                    }
-                                    armed={confirmingToggleKey() === toggleKey(v, net)}
-                                    onArm={() => setConfirmingToggleKey(toggleKey(v, net))}
-                                    onConfirm={() => runToggle(v, net)}
-                                    testId={`admin-visitor-toggle-${v.id}-${net.network_slug}`}
-                                    extraClass={
-                                      net.live_state !== null ? "disconnect-btn" : "reconnect-btn"
-                                    }
-                                  />
                                 </li>
                               )}
                             </For>
@@ -266,6 +245,40 @@ const AdminVisitorsTab: Component = () => {
                       <td>{renderExpires(v)}</td>
                       <td>{renderInserted(v.inserted_at)}</td>
                       <td class="adm-table-sticky-actions">
+                        {/* #269 — the per-network Disconnect ⇄ Reconnect toggle
+                            lives HERE, ahead of Delete, so the actions column
+                            reads the same as the Sessions tab's.
+
+                            It stays per-NETWORK, because that is what the verb
+                            acts on: a visitor attached to two networks gets two
+                            buttons, each naming its network so the pair is never
+                            ambiguous. With one network — the common case — the
+                            cell is Disconnect + Delete, exactly like Sessions.
+
+                            The affordance keys off LIVE truth (net.live_state),
+                            NOT the DB connection_state, so a `:connected` row
+                            whose pid is gone correctly offers Reconnect. */}
+                        <For each={v.networks}>
+                          {(net) => (
+                            <InlineConfirmButton
+                              idleLabel={`${net.live_state !== null ? "Disconnect" : "Reconnect"}${
+                                v.networks.length > 1 ? ` ${net.network_slug}` : ""
+                              }`}
+                              confirmLabel={
+                                net.live_state !== null
+                                  ? "Confirm disconnect?"
+                                  : "Confirm reconnect?"
+                              }
+                              armed={confirmingToggleKey() === toggleKey(v, net)}
+                              onArm={() => setConfirmingToggleKey(toggleKey(v, net))}
+                              onConfirm={() => runToggle(v, net)}
+                              testId={`admin-visitor-toggle-${v.id}-${net.network_slug}`}
+                              extraClass={
+                                net.live_state !== null ? "disconnect-btn" : "reconnect-btn"
+                              }
+                            />
+                          )}
+                        </For>
                         <InlineConfirmButton
                           idleLabel="Delete"
                           confirmLabel="Confirm delete?"

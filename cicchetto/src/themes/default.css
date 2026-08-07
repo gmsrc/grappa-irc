@@ -4746,8 +4746,13 @@ html.resize-dragging * {
   cursor: pointer;
 }
 
-.admin-network-expand-btn:hover {
+.admin-network-expand-btn {
   color: var(--adm-accent);
+  font-weight: 600;
+}
+
+.admin-network-expand-btn:hover {
+  text-decoration: underline;
 }
 
 .admin-network-expand-btn:focus-visible {
@@ -4898,28 +4903,18 @@ html.resize-dragging * {
 .adm-expand-row td {
   background: var(--adm-surface-1);
   padding: var(--adm-space-3) var(--adm-space-4);
-  /* Pinned to the left edge of the scroll wrapper. The expand row lives
-     inside a table that is deliberately WIDER than the viewport (the
-     UX-6-G contract), so without this its edit form inherited that width
-     and the operator had to swipe right to reach the very controls the
-     row exists to offer. Sticky keeps the form under the thumb while the
-     data columns above still pan. */
-  position: sticky;
-  left: 0;
 }
 
-/* …and the content inside it is capped to the visible width rather than
-   the table's, so it wraps instead of running off. */
-.adm-expand-row td > * {
-  max-width: 92vw;
-}
-
-@media (min-width: 900px) {
-  /* Minus the 220px nav rail. */
-  .adm-expand-row td > * {
-    max-width: calc(100vw - 220px - 4rem);
-  }
-}
+/* This cell was `position: sticky; left: 0` with a `92vw` cap on its
+   children, to stop the operator having to swipe right to reach an edit
+   form inside a table that is deliberately wider than the viewport.
+   REVERTED: it put a horizontally-scrolling nested table inside a
+   sticky, viewport-capped cell of another horizontally-scrolling table,
+   and the two scroll contexts fought — panning the outer one clipped the
+   nested Servers table, while panning the nested one directly worked
+   fine. Trading a swipe for a rendering glitch is a bad trade, and the
+   real fix is structural (don't nest scroll containers), which is more
+   than a CSS tweak. */
 
 /* Every button inside an admin table or form is the same size. The
    InlineConfirmButton family (Delete / Unbind / Revoke / Reset Circuit)
@@ -5013,6 +5008,63 @@ html.resize-dragging * {
   color: var(--adm-danger);
   background: var(--adm-danger-bg);
   border-color: color-mix(in oklab, var(--adm-danger), transparent 65%);
+}
+
+/* Session Log's seven lifecycle events, one colour each.
+   `Grappa.SessionLog.emit/3` admits exactly these seven and no more, so
+   the set is closed and can afford a colour per member.
+
+   They are STAGES, not severities, which is why they do not use the
+   ok/warn/danger scale: seven stages onto four severities forced
+   collisions that made the log unscannable (first cut had connected,
+   registered and identified all green; second left connected grey, which
+   reads as "nothing happened"). Hues are anchored to fixed values and
+   mixed against the theme's fg/bg exactly like `--adm-ok` and friends,
+   so they still follow a custom theme.
+
+   Ordered as the lifecycle runs, so the ramp itself carries meaning:
+   cyan arrives, blue registers, green is fully itself, violet renames,
+   amber loses identity, orange is retrying, slate has gone. */
+.adm-badge.event-connected {
+  color: color-mix(in oklab, #1f9aa8, var(--fg) 22%);
+  background: color-mix(in oklab, #1f9aa8, var(--bg) 86%);
+  border-color: color-mix(in oklab, #1f9aa8, transparent 65%);
+}
+
+.adm-badge.event-registered {
+  color: color-mix(in oklab, #3f74d8, var(--fg) 22%);
+  background: color-mix(in oklab, #3f74d8, var(--bg) 86%);
+  border-color: color-mix(in oklab, #3f74d8, transparent 65%);
+}
+
+.adm-badge.event-identified {
+  color: color-mix(in oklab, #2f9e5e, var(--fg) 22%);
+  background: color-mix(in oklab, #2f9e5e, var(--bg) 86%);
+  border-color: color-mix(in oklab, #2f9e5e, transparent 65%);
+}
+
+.adm-badge.event-nick_changed {
+  color: color-mix(in oklab, #8b5cd6, var(--fg) 22%);
+  background: color-mix(in oklab, #8b5cd6, var(--bg) 86%);
+  border-color: color-mix(in oklab, #8b5cd6, transparent 65%);
+}
+
+.adm-badge.event-deidentified {
+  color: color-mix(in oklab, #c98a15, var(--fg) 22%);
+  background: color-mix(in oklab, #c98a15, var(--bg) 86%);
+  border-color: color-mix(in oklab, #c98a15, transparent 65%);
+}
+
+.adm-badge.event-backoff {
+  color: color-mix(in oklab, #d2662f, var(--fg) 22%);
+  background: color-mix(in oklab, #d2662f, var(--bg) 86%);
+  border-color: color-mix(in oklab, #d2662f, transparent 65%);
+}
+
+.adm-badge.event-disconnected {
+  color: color-mix(in oklab, #7c8794, var(--fg) 22%);
+  background: color-mix(in oklab, #7c8794, var(--bg) 86%);
+  border-color: color-mix(in oklab, #7c8794, transparent 65%);
 }
 
 .adm-badge--neutral {
@@ -5194,6 +5246,40 @@ html.resize-dragging * {
    a gap reads as a text field that lost its border. */
 .adm-form-row > button {
   flex: 0 0 auto;
+}
+
+/* Grid variant, for the forms with enough fields to need real columns
+   (Credentials' eight-field bind form, its six-field edit form). Flex
+   wrapping sized each control to its own content, so the last row came
+   out with two wide leftovers under four narrow ones and the submit
+   wedged in beside them.
+
+   A grid gives every field the same width whatever row it lands on, and
+   the submit gets a row of its own spanning the full width — which also
+   makes it unmissable, instead of hiding at the end of a wrapped line. */
+.adm-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--adm-space-3);
+  padding: var(--adm-space-4);
+}
+
+.adm-subsection .adm-form-grid {
+  padding: 0;
+}
+
+.adm-form-grid > .adm-check {
+  min-width: 0;
+}
+
+.adm-form-grid-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--adm-space-2);
+}
+
+.adm-form-grid-actions > button {
+  flex: 1 1 0;
 }
 
 /* Admin form controls. There was NO rule for these at all: every input

@@ -286,7 +286,7 @@ const AdminCredentialsTab: Component = () => {
 
         <AdminCard title="Bind a credential" subtitle="POST /admin/credentials">
           <form
-            class="admin-credentials-bind-form adm-form-row"
+            class="admin-credentials-bind-form adm-form-grid"
             onSubmit={(e) => {
               void onBind(e);
             }}
@@ -398,19 +398,21 @@ const AdminCredentialsTab: Component = () => {
               }
               data-testid="admin-credentials-bind-autojoin"
             />
-            <button
-              type="submit"
-              class="adm-btn"
-              disabled={
-                binding() ||
-                bindForm().user_id === "" ||
-                bindForm().network_id === "" ||
-                bindForm().nick === ""
-              }
-              data-testid="admin-credentials-bind-submit"
-            >
-              Bind
-            </button>
+            <div class="adm-form-grid-actions">
+              <button
+                type="submit"
+                class="adm-btn adm-btn--ok"
+                disabled={
+                  binding() ||
+                  bindForm().user_id === "" ||
+                  bindForm().network_id === "" ||
+                  bindForm().nick === ""
+                }
+                data-testid="admin-credentials-bind-submit"
+              >
+                Bind
+              </button>
+            </div>
           </form>
         </AdminCard>
 
@@ -508,7 +510,7 @@ const AdminCredentialsTab: Component = () => {
                           data-testid={`admin-credential-edit-form-${credKey(c)}`}
                         >
                           <form
-                            class="adm-form-row"
+                            class="adm-form-grid"
                             onSubmit={(e) => {
                               e.preventDefault();
                               void onSubmitEdit(c);
@@ -519,21 +521,23 @@ const AdminCredentialsTab: Component = () => {
                               onChange={(next) => setEditForm(next)}
                               credKey={credKey(c)}
                             />
-                            <button
-                              type="submit"
-                              class="adm-btn adm-btn--ok"
-                              data-testid={`admin-credential-edit-submit-${credKey(c)}`}
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              class="adm-btn adm-btn--danger"
-                              onClick={onCancelEdit}
-                              data-testid={`admin-credential-edit-cancel-${credKey(c)}`}
-                            >
-                              Cancel
-                            </button>
+                            <div class="adm-form-grid-actions">
+                              <button
+                                type="submit"
+                                class="adm-btn adm-btn--ok"
+                                data-testid={`admin-credential-edit-submit-${credKey(c)}`}
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                class="adm-btn adm-btn--danger"
+                                onClick={onCancelEdit}
+                                data-testid={`admin-credential-edit-cancel-${credKey(c)}`}
+                              >
+                                Cancel
+                              </button>
+                            </div>
                           </form>
                         </AdminExpandRow>
                       </Show>
