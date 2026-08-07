@@ -1,5 +1,6 @@
-import { type Component, createSignal, For, onCleanup, onMount } from "solid-js";
+import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import AdminCard from "./admin/AdminCard";
+import MatrixRain from "./admin/MatrixRain";
 import { isDiagEnabled, setDiagEnabled } from "./DiagFloat";
 
 // UX-6 D12 (2026-05-21) — Admin → Debug tab. Hosts the iOS PWA
@@ -44,6 +45,21 @@ const AdminDebugTab: Component = () => {
   const [diagElems, setDiagElems] = createSignal<string>("(none)");
   const [diagLog, setDiagLog] = createSignal<string[]>([]);
   const [diagFloatOn, setDiagFloatOn] = createSignal(isDiagEnabled());
+
+  // Counter resets on the toggle rather than on a timer — no reason to
+  // make this depend on how fast anyone taps.
+  const [rainTaps, setRainTaps] = createSignal(0);
+  const [rainOn, setRainOn] = createSignal(false);
+
+  const tapHeading = (): void => {
+    const next = rainTaps() + 1;
+    if (next >= 5) {
+      setRainTaps(0);
+      setRainOn((v) => !v);
+      return;
+    }
+    setRainTaps(next);
+  };
 
   const snapshotDiag = (eventName: string): void => {
     const vv = typeof window !== "undefined" ? window.visualViewport : null;
@@ -133,8 +149,8 @@ const AdminDebugTab: Component = () => {
 
           With ONE deliberate divergence: the readouts render on a
           phosphor-green terminal panel rather than the theme's surfaces.
-          It is an easter egg and it is the only place in the pane that
-          does not follow the active theme — allowed here because this is
+          It is the only place in the pane that does not follow the
+          active theme — allowed here because this is
           the debug tab, it is admin-gated, and nobody lands on it by
           accident. Everything OUTSIDE the panel (cards, headings,
           controls) stays themed, so the tab still reads as part of the
@@ -164,7 +180,11 @@ const AdminDebugTab: Component = () => {
           </div>
         </AdminCard>
 
-        <AdminCard title="Viewport diagnostics" subtitle="read-only probes, no side effects">
+        <AdminCard
+          title="Viewport diagnostics"
+          subtitle="read-only probes, no side effects"
+          onTitleClick={tapHeading}
+        >
           <div class="adm-matrix">
             <p class="adm-matrix-prompt" aria-hidden="true">
               grappa@cicchetto:~$ tail -f /dev/viewport
@@ -218,6 +238,9 @@ const AdminDebugTab: Component = () => {
           </div>
         </AdminCard>
       </div>
+      <Show when={rainOn()}>
+        <MatrixRain />
+      </Show>
     </div>
   );
 };

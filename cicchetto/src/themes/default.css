@@ -5070,7 +5070,30 @@ html.resize-dragging * {
   }
 }
 
-/* Debug tab's phosphor panel — the one easter egg in the pane.
+/* Decorative overlay (`admin/MatrixRain.tsx`). Portalled to `<body>`
+   and painted OVER the pane; `pointer-events: none` so it can never take
+   a tap meant for a control underneath.
+
+   The alpha is the design constraint — it has to stay readable-through.
+   Glyph alpha lives in the canvas paint calls; this caps the layer on
+   top of that, and `mix-blend-mode: screen` keeps it from muddying the
+   surfaces it lies over: it adds light rather than painting over. */
+.adm-rain {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.45;
+  mix-blend-mode: screen;
+}
+
+.adm-rain canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Debug tab's phosphor panel.
    AMBER, not green: on a diagnostics surface green reads as "everything
    is fine", which is the one thing a debug panel must not claim. Amber
    is also the other CRT phosphor, so the reference survives intact.
@@ -10284,13 +10307,39 @@ html.resize-dragging * {
   font-size: 0.9em;
 }
 
-.home-pane-networks {
+.home-pane-networks,
+.home-pane-available {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--adm-space-4);
+}
+
+/* `.home-pane-available` had NO rule at all — it rendered as a UA list,
+   with disc bullets and a ~40px indent, inside a card that had already
+   paid for its own padding. */
+.home-pane-available-item {
+  padding: var(--adm-space-3);
+  background: var(--adm-surface-1);
+  border: 1px solid var(--adm-line);
+  border-radius: var(--adm-radius-sm);
+}
+
+/* Desktop lays the network blocks out side by side. A single column is
+   right on a phone and wasteful at 1440px, where three or four networks
+   become a very tall list of very wide cards with one button each.
+   `auto-fit` rather than a fixed count: an operator with one network
+   should not get a card taking a third of the screen with two empty
+   columns beside it. */
+@media (min-width: 900px) {
+  .home-pane-networks,
+  .home-pane-available {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+    align-items: start;
+  }
 }
 
 /* #392/#529 — each network is a heading/separator block: a title row (name +
