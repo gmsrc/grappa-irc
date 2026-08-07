@@ -73,7 +73,11 @@ const LusersCard: Component<Props> = (props) => {
             </Show>
             <Show when={s.local_clients !== null || s.local_servers !== null}>
               <dt>this server</dt>
-              <dd>
+              {/* #579 — the one per-SERVER field on the card (RPL_LUSERME's
+                  m_client / m_server), so it is what changes when the two-token
+                  `/lusers <mask> <server>` form routes the query elsewhere. The
+                  e2e reads it by testid rather than by dt/dd adjacency. */}
+              <dd data-testid="lusers-card-this-server">
                 {fmt(s.local_clients)} clients
                 <Show when={s.local_servers !== null}>, {fmt(s.local_servers)} servers</Show>
               </dd>
