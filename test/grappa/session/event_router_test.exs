@@ -1465,8 +1465,7 @@ defmodule Grappa.Session.EventRouterTest do
     test "primed /admin drains on 447 ERR_RESTRICTED" do
       state = base_state(%{admin_pending: %{lines: []}})
 
-      assert {:cont, drained,
-              [{:server_reply, :admin, ["You need a registered nick to issue commands!"]}]} =
+      assert {:cont, drained, [{:server_reply, :admin, ["You need a registered nick to issue commands!"]}]} =
                EventRouter.route(
                  msg(
                    {:numeric, 447},

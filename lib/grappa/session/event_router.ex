@@ -2218,8 +2218,7 @@ defmodule Grappa.Session.EventRouter do
         if admin_numeric in [256, 257, 258] do
           {:cont, %{state | admin_pending: folded}, []}
         else
-          {:cont, %{state | admin_pending: nil},
-           [{:server_reply, :admin, server_reply_drain(folded)}]}
+          {:cont, %{state | admin_pending: nil}, [{:server_reply, :admin, server_reply_drain(folded)}]}
         end
     end
   end

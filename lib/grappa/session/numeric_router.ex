@@ -45,8 +45,8 @@ defmodule Grappa.Session.NumericRouter do
      server-directed REPORT family whose middles are data, type labels or
      table headers (`@stats_numerics` #184/#911, `@trace_numerics` #908,
      `@list_numerics` #910, `@help_numerics` /
-     `@sasl_numerics` / `@monitor_list_numerics` #911 (`@admin_numerics`
-     left for the delegated set in #992), the connect-storm
+     `@sasl_numerics` / `@monitor_list_numerics` #911 (ADMIN's 256-259
+     left this list for the delegated set in #992), the connect-storm
      tokens). These ALWAYS go to
      `{:server, nil}`. Without this deny
      list, the param-scan below would happily route 433's "BLEH-as-nick"
@@ -288,56 +288,6 @@ defmodule Grappa.Session.NumericRouter do
   # never because an RFC suggests it might. Rows the reading DISPROVED are
   # recorded at the end of this block; a falsified row is the more useful
   # half of an audit, because it is the evidence the rest were measured.
-
-  # ADMIN reply family (256–259). Server-directed by definition — it
-  # describes the SERVER's operator, and `m_admin` (bahamut
-  # `s_serv.c:2695`) answers with the A-line fields verbatim.
-  #
-  # 257/258/259 are `":%s 25N %s :%s"` on bahamut and `":%s"` on solanum:
-  # a TWO-param numeric whose only middle IS the trailing. That matters,
-  # because `candidate_params/1`'s 2-elem clause (B6.1 HIGH-4, added so a
-  # tail-less 401 still reaches its target's window) hands that trailing
-  # straight to the scan. So the routing destination of an ADMIN reply is
-  # whatever the operator typed into `admin { }`: a one-word dotless
-  # A-line — "Azzurra", "staff", a nick — resolves to `{:query, <that>}`.
-  # Nothing about the family says "conversation"; the exposure is purely
-  # that a config string happened to be nick-shaped.
-  #
-  # 256 RPL_ADMINME carries the server NAME and was saved pre-#992 only by
-  # `query_candidate?/2`'s `.`-exclusion — the same accident that saved
-  # 262 RPL_ENDOFTRACE and 323 RPL_LISTEND. Covered for the same reason
-  # those two are: a family-wide rule must not rest on how a server
-  # happens to be spelled.
-  #
-  # #992 — the family MOVED from `@active_numerics` into
-  # `@delegated_numerics`: /admin became a native verb, so EventRouter's
-  # clause owns it. Delegation short-circuits AHEAD of the deny list, and
-  # the clause's unprimed branch persists to `$server`, so the #911
-  # guarantee above is preserved rather than repealed — but it is now
-  # proven at the new owner (`event_router_test.exs`, the DOTLESS A-line
-  # test), because a routing decision that changed rungs is not
-  # automatically still true.
-  @admin_numerics Enum.to_list(256..259)
-
-  # #992 — ADMIN's two OWN error terminators. Neither is accompanied by any
-  # 256-259, so an accumulator waiting only on 259 dangles on exactly the
-  # paths that have no other reply:
-  #
-  #   * 423 ERR_NOADMININFO — `m_admin`'s `else` branch (bahamut
-  #     `s_serv.c:2703`) when `find_admin()` misses: no A-line configured.
-  #   * 447 ERR_RESTRICTED — `check_restricted_user` (`s_misc.c:1211`)
-  #     fires and returns BEFORE `hunt_server`, for a non-oper, non-
-  #     `IsKnownNick` client on an `I:`-line with CONF_FLAGS_I_RESTRICTED.
-  #     Reachable by a visitor on a restricted class.
-  #
-  # The fourth terminator, 402 ERR_NOSUCHSERVER, is already delegated by
-  # #374 and is SHARED with `/motd <target>` — see EventRouter's dedicated
-  # 402 clause for how ownership is resolved.
-  #
-  # 447 is itself emitted from several handlers (`m_admin`, `m_links`,
-  # channel.c, s_user.c), so an unprimed one still lands on `$server` via
-  # the clause's nil branch — visible, never silent.
-  @admin_terminators [423, 447]
 
   # HELP reply family (704–706, solanum; bahamut has no 7xx HELP). The
   # topic token sits in `params[1]` on all three —
@@ -811,8 +761,59 @@ defmodule Grappa.Session.NumericRouter do
                         601,
                         602,
                         604,
-                        605
-                      ] ++ @admin_numerics ++ @admin_terminators)
+                        605,
+                        # #992 — ADMIN (256 RPL_ADMINME, 257 RPL_ADMINLOC1,
+                        # 258 RPL_ADMINLOC2, 259 RPL_ADMINEMAIL) plus its two
+                        # OWN error terminators. /admin became a native verb,
+                        # so EventRouter's clause owns the family: primed by
+                        # :send_admin it drains a {:server_reply, :admin,
+                        # lines} modal; unprimed it persists to $server.
+                        #
+                        # These four LEFT @active_numerics, where #911 put
+                        # them. #911 measured the real exposure: 257/258/259
+                        # are `":%s 25N %s :%s"` on bahamut and `":%s"` on
+                        # solanum — a TWO-param numeric whose only middle IS
+                        # the trailing — so `candidate_params/1`'s 2-elem
+                        # clause hands the A-line straight to the scan, and a
+                        # one-word dotless A-line ("Azzurra", "staff", a nick)
+                        # resolved to `{:query, <that>}`. 256 carries the
+                        # server NAME and was saved only by
+                        # `query_candidate?/2`'s `.`-exclusion, the same
+                        # accident that saved 262 and 323.
+                        #
+                        # Delegation short-circuits AHEAD of the deny list and
+                        # the clause's unprimed branch persists to $server, so
+                        # that guarantee is preserved rather than repealed —
+                        # but it is now proven at the NEW owner
+                        # (event_router_test's DOTLESS A-line case), because a
+                        # routing decision that changed rungs is not
+                        # automatically still true.
+                        256,
+                        257,
+                        258,
+                        259,
+                        # 423 ERR_NOADMININFO — `m_admin`'s else branch
+                        # (bahamut `s_serv.c:2703`) when `find_admin()` misses.
+                        # 447 ERR_RESTRICTED — `check_restricted_user`
+                        # (`s_misc.c:1211`) fires and returns BEFORE
+                        # `hunt_server`, for a non-oper, non-`IsKnownNick`
+                        # client on an `I:`-line with CONF_FLAGS_I_RESTRICTED;
+                        # reachable by a visitor on a restricted class.
+                        #
+                        # Neither is accompanied by ANY 256-259, so an
+                        # accumulator waiting only on 259 dangles on exactly
+                        # the paths that have no other reply. The fourth
+                        # terminator, 402, is already delegated by #374 and is
+                        # SHARED with `/motd <target>` — see EventRouter's
+                        # dedicated 402 clause for how ownership is resolved.
+                        #
+                        # 447 is emitted from several handlers (`m_admin`,
+                        # `m_links`, channel.c, s_user.c), so an unprimed one
+                        # still lands on $server via the clause's nil branch —
+                        # visible, never silent.
+                        423,
+                        447
+                      ])
 
   # ---------------------------------------------------------------------------
   # Public API
