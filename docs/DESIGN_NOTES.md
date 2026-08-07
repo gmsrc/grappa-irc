@@ -33198,7 +33198,9 @@ entry points rather than the jail's alone — the Linux copy was previously
 untested, which is a large part of how it drifted — plus one structural case
 asserting that exactly one file under `infra/` defines the algorithm. That last
 one is red on the parent commit for the right reason: two definers.
+
 ---
+
 ## 2026-08-07 — #992: /admin has four ways to answer, and 402 belongs to nobody
 
 **`/admin` was filed as the fourth member of the #127/#374 server-text family,
