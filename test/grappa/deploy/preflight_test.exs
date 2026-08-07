@@ -136,6 +136,32 @@ defmodule Grappa.Deploy.PreflightTest do
                  Preflight.classify_paths(["infra/freebsd/grappa.env.example"], substrate)
       end
     end
+
+    test "the shared BEAM-wait lib + both entry points → HOT (run from the checkout, never installed out-of-repo)" do
+      # #923 deduped the defect-#9 stop/start wait into
+      # infra/lib/beam_wait.sh, reached through the jail's
+      # jail_beam_wait.sh (rc.d/grappa + deploy.sh's cold path) and the
+      # systemd host's grappa_beam_wait.sh (grappa.service ExecStartPre).
+      # None of the three is COPIED anywhere: every call site invokes the
+      # repo path directly, and jail_install_rcd.sh only re-asserts the
+      # exec bit. So a pull is already enough for the NEXT stop or start
+      # to run the new bytes, and a restart would pick up nothing a
+      # restart is needed for.
+      #
+      # This is the #646 rule read in the other direction: the
+      # source-alias wrapper must be reconciled on EVERY deploy precisely
+      # because it is installed to /usr/local/sbin and the checkout is
+      # not what runs. These files are what runs.
+      for path <- [
+            "infra/lib/beam_wait.sh",
+            "infra/freebsd/jail_beam_wait.sh",
+            "infra/linux/grappa_beam_wait.sh"
+          ],
+          substrate <- @substrates do
+        assert {:hot, []} = Preflight.classify_paths([path], substrate),
+               "expected #{path} to classify HOT on #{substrate}"
+      end
+    end
   end
 
   describe "exit_code/1 — verdict-to-CLI exit code contract" do
