@@ -231,6 +231,24 @@ describe("#973 read-cursor store keys on the folded identifier", () => {
     expect(getReadCursor(SLUG, "newnick")).toBe(900);
   });
 
+  it("treats a pure re-casing as one identity, leaving the map object untouched", async () => {
+    const { applyReadCursorSet, readCursors, renameReadCursorChannel, clearReadCursors } =
+      await import("../lib/readCursor");
+    clearReadCursors();
+
+    applyReadCursorSet(SLUG, PEER_FOLDED, 900);
+    const before = readCursors();
+
+    // `Foo` → `foo` is not a rename, it is the same window spelled twice.
+    // The guard has to answer that as a KEY question: raw-compared it reads
+    // "different", falls into the body, and puts the entry back under the key
+    // it just removed — same contents, NEW object identity, which wakes every
+    // consumer of the cursor signal to recompute nothing.
+    renameReadCursorChannel(SLUG, PEER_FOLDED, PEER_RAW);
+
+    expect(readCursors()).toBe(before);
+  });
+
   it("is a no-op for a channel, whose name is already canonical", async () => {
     const { applyReadCursorSet, readCursors, getReadCursor, clearReadCursors } = await import(
       "../lib/readCursor"
