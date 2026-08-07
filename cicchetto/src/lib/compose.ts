@@ -1515,7 +1515,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // typed `:lusers_bundle` wire event in userTopic.ts and renders
         // the LusersCard pinned at the top of the current window (#231).
         // #579 — the mask + target server ride along (they were dropped at
-        // the parser, so a filtered request silently answered network-wide).
+        // the parser, so a routed request silently answered from the local
+        // server and any mask never reached the wire at all).
         case "lusers": {
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/lusers: network not found" };

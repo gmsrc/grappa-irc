@@ -476,11 +476,11 @@ describe("pushAwaySet / pushAwayUnset (S3.4 — /away channel push)", () => {
 });
 
 // #579 — /lusers [<mask> [<server>]]. The two RFC 2812 §3.4.2 args were
-// dropped client-side, so a filtered request silently answered network-wide.
-// These assert the WIRE PAYLOAD, not that a function was called: a null arg
-// must OMIT its key (pushMotd/pushLinks' shape — grappa's
-// `validate_lusers_args/2` clauses match on absent, and an unfiltered LUSERS
-// is what a bare form must still produce), a present one must carry its value.
+// dropped client-side, so the routed two-token form could not be issued at
+// all. These assert the WIRE PAYLOAD, not that a function was called: a null
+// arg must OMIT its key (pushMotd/pushLinks' shape — grappa's
+// `validate_lusers_args/2` clauses match on absent, and a bare LUSERS is what
+// the bare form must still produce), a present one must carry its value.
 describe("pushLusers (#579 — mask + target server on the wire)", () => {
   const okReply = (): void => {
     const okCb = h.mockPush.receive.mock.calls.find(([ev]) => ev === "ok")?.[1] as () => void;

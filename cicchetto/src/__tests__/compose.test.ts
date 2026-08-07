@@ -1323,9 +1323,9 @@ describe("compose submit — slash command dispatch", () => {
   });
 
   // #579 — the typed args survive the whole submit path. Pre-#579 the parser
-  // dropped them, so `/lusers <mask>` reached the wire as a bare LUSERS and
-  // the operator silently read network-wide counts instead of the filtered
-  // ones they asked for.
+  // dropped them, so `/lusers <mask> <server>` reached the wire as a bare
+  // LUSERS: no routing, and the operator read the local server's counts
+  // while believing they had queried the one they named.
   it("/lusers <mask> threads the mask through pushLusers", async () => {
     const socket = await import("../lib/socket");
     const compose = await import("../lib/compose");

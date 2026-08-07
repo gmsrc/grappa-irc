@@ -637,9 +637,14 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
   },
 
   // #579 — /lusers [<mask> [<server>]] (RFC 2812 §3.4.2). Pre-#579 `rest` was
-  // dropped, so `/lusers *.azzurra.org` silently returned the UNFILTERED
-  // network-wide counts — the wrong answer with no error, the failure mode
+  // dropped, so a user's arguments vanished with no error — the failure mode
   // #374 closed for /motd. #571 already threads both tokens server-side.
+  // What the args buy on bahamut (azzurra/bahamut src/s_serv.c, read for
+  // #579): `m_lusers` routes via `hunt_server` only when BOTH tokens are
+  // present, and the answering server reports ITS OWN local counts — that
+  // two-token form is the one with a visible effect. `send_lusers` never
+  // match()es the mask, so a mask ALONE is accepted and ignored there (an
+  // RFC-honouring ircd is free to filter on it, hence we still send it).
   // Two-optional-token split, same shape as /stats' `query` + `target`.
   // ORDER NOTE: /whois's two-arg form is `<server> <nick>` (server FIRST,
   // RFC 2812 §3.6.2) — LUSERS is the other way round, mask FIRST. Reading the
