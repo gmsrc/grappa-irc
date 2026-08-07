@@ -398,8 +398,8 @@ const AdminUsersTab: Component = () => {
                           {u.is_admin ? "yes" : "no"}
                         </AdminBadge>
                       </td>
-                      <td>{u.live_session_count}</td>
-                      <td>{formatInstant(u.inserted_at)}</td>
+                      <td class="adm-col-detail">{u.live_session_count}</td>
+                      <td class="adm-col-detail">{formatInstant(u.inserted_at)}</td>
                       <td class="admin-users-actions adm-table-sticky-actions">
                         <button
                           type="button"

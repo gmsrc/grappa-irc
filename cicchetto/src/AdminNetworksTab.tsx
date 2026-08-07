@@ -1042,11 +1042,16 @@ const ServersDisclosure: Component<{
         >
           <thead>
             <tr>
-              <th class="adm-table-grow">host</th>
-              <th>port</th>
-              <th>tls</th>
-              <th>priority</th>
-              <th>enabled</th>
+              {/* host and port were two columns for one fact — a server
+                  IS `host:port`, and splitting it spent a column to say
+                  nothing. Merged, not hidden. tls / priority / enabled
+                  are the ones that defer on a phone: tls duplicates what
+                  the Enable/Disable TLS button already says, and the
+                  other two are almost never the reason you opened this. */}
+              <th class="adm-table-grow">host:port</th>
+              <th class="adm-col-detail">tls</th>
+              <th class="adm-col-detail">priority</th>
+              <th class="adm-col-detail">enabled</th>
               <th>source</th>
               <th>actions</th>
             </tr>
@@ -1061,11 +1066,12 @@ const ServersDisclosure: Component<{
                 const [sourceDraft, setSourceDraft] = createSignal(s.source_address ?? "");
                 return (
                   <tr data-testid={`admin-network-server-row-${props.net.slug}-${s.id}`}>
-                    <td>{s.host}</td>
-                    <td>{s.port}</td>
-                    <td>{s.tls ? "yes" : "no"}</td>
-                    <td>{s.priority}</td>
-                    <td>{s.enabled ? "yes" : "no"}</td>
+                    <td>
+                      {s.host}:{s.port}
+                    </td>
+                    <td class="adm-col-detail">{s.tls ? "yes" : "no"}</td>
+                    <td class="adm-col-detail">{s.priority}</td>
+                    <td class="adm-col-detail">{s.enabled ? "yes" : "no"}</td>
                     <td>
                       <input
                         type="text"
@@ -1188,9 +1194,9 @@ const FeaturedChannelsDisclosure: Component<{
         >
           <thead>
             <tr>
-              <th>channel</th>
-              <th class="adm-table-grow">description</th>
-              <th>position</th>
+              <th class="adm-table-grow">channel</th>
+              <th class="adm-col-detail">description</th>
+              <th class="adm-col-detail">position</th>
               <th>enabled</th>
               <th>actions</th>
             </tr>
@@ -1200,8 +1206,8 @@ const FeaturedChannelsDisclosure: Component<{
               {(fc) => (
                 <tr data-testid={`admin-network-featured-row-${props.net.slug}-${fc.id}`}>
                   <td>{fc.name}</td>
-                  <td>{fc.description}</td>
-                  <td>{fc.position}</td>
+                  <td class="adm-col-detail">{fc.description}</td>
+                  <td class="adm-col-detail">{fc.position}</td>
                   <td>{fc.enabled ? "yes" : "no"}</td>
                   <td>
                     <button

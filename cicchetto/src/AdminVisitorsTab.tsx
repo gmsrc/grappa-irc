@@ -219,7 +219,10 @@ const AdminVisitorsTab: Component = () => {
             <AdminTable data-testid="admin-visitors-table">
               <thead>
                 <tr>
-                  <th>identified</th>
+                  {/* "id", not "identified": the header was the widest
+                      thing in a one-dot column and it was squeezing the
+                      actions column until Disconnect read as "Disc". */}
+                  <th>id</th>
                   <th class="adm-table-grow">networks (state · nick)</th>
                   {/* Secondary below 900px — into the row's detail panel.
                       The networks cell IS the visitor's identity here
