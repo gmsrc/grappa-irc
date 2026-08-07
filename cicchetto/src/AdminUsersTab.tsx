@@ -1,4 +1,11 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import AdminBadge from "./admin/AdminBadge";
+import AdminCard from "./admin/AdminCard";
+import AdminExpandRow from "./admin/AdminExpandRow";
+import AdminField from "./admin/AdminField";
+import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
+import AdminTable from "./admin/AdminTable";
+import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminUser,
@@ -57,6 +64,14 @@ type CreateForm = {
 };
 
 const EMPTY_CREATE: CreateForm = { name: "", password: "", is_admin: false };
+
+// Admin redesign (2026-08-07 plan, Layer 4) — the table's column count,
+// fed to `AdminExpandRow` so the password-rotation row's `colspan` is
+// DERIVED rather than the hardcoded `colspan="5"` it used to carry. It
+// is also a contract: admin-users.spec.ts reads the admin cell as
+// `row.locator("td").nth(1)`, so the column ORDER and count are pinned
+// by an e2e assertion, not just by taste.
+const USER_COLUMNS = 5;
 
 const AdminUsersTab: Component = () => {
   const [users, setUsers] = createSignal<AdminUser[] | null>(null);
@@ -178,193 +193,220 @@ const AdminUsersTab: Component = () => {
 
   return (
     <div class="admin-users-tab">
-      <header class="admin-users-header">
-        <button
-          type="button"
-          class="admin-refresh-btn"
-          aria-label="refresh users list"
-          aria-busy={loading()}
-          onClick={() => {
-            void refresh();
-          }}
-          data-testid="admin-users-refresh"
-        >
-          ↻ refresh
-        </button>
-      </header>
-
-      <form
-        class="admin-users-create-form"
-        onSubmit={(e) => {
-          void onCreate(e);
-        }}
-        data-testid="admin-users-create-form"
-      >
-        <input
-          type="text"
-          placeholder="name"
-          value={createForm().name}
-          onInput={(e) =>
-            setCreateForm({ ...createForm(), name: (e.currentTarget as HTMLInputElement).value })
-          }
-          data-testid="admin-users-create-name"
-          aria-label="new user name"
-          required
-        />
-        <input
-          type="password"
-          placeholder="password"
-          value={createForm().password}
-          onInput={(e) =>
-            setCreateForm({
-              ...createForm(),
-              password: (e.currentTarget as HTMLInputElement).value,
-            })
-          }
-          data-testid="admin-users-create-password"
-          aria-label="new user password"
-          required
-        />
-        <label class="admin-users-create-admin">
-          <input
-            type="checkbox"
-            checked={createForm().is_admin}
-            onChange={(e) =>
-              setCreateForm({
-                ...createForm(),
-                is_admin: (e.currentTarget as HTMLInputElement).checked,
-              })
-            }
-            data-testid="admin-users-create-is-admin"
+      <AdminToolbar
+        title="Users"
+        actions={
+          <AdminRefreshButton
+            onClick={() => {
+              void refresh();
+            }}
+            busy={loading()}
+            label="refresh users list"
+            testId="admin-users-refresh"
           />
-          admin
-        </label>
-        <button
-          type="submit"
-          disabled={creating() || createForm().name === "" || createForm().password === ""}
-          data-testid="admin-users-create-submit"
-        >
-          Create user
-        </button>
-      </form>
+        }
+      />
 
-      <Show when={error() !== null}>
-        <p class="admin-error" role="alert" data-testid="admin-users-error">
-          failed: {error()} — click ↻ refresh to retry
-        </p>
-      </Show>
+      <div class="adm-scroll">
+        <Show when={error() !== null}>
+          <AdminError message={error() ?? ""} testId="admin-users-error" />
+        </Show>
 
-      <Show when={users() === null && error() === null}>
-        <p class="muted">loading…</p>
-      </Show>
+        <AdminCard title="Create user" subtitle="POST /admin/users">
+          <form
+            class="admin-users-create-form adm-form-row"
+            onSubmit={(e) => {
+              void onCreate(e);
+            }}
+            data-testid="admin-users-create-form"
+          >
+            <AdminField label="name" for="admin-users-create-name">
+              <input
+                id="admin-users-create-name"
+                type="text"
+                value={createForm().name}
+                onInput={(e) =>
+                  setCreateForm({
+                    ...createForm(),
+                    name: (e.currentTarget as HTMLInputElement).value,
+                  })
+                }
+                data-testid="admin-users-create-name"
+                required
+              />
+            </AdminField>
+            <AdminField label="password" for="admin-users-create-password">
+              <input
+                id="admin-users-create-password"
+                type="password"
+                value={createForm().password}
+                onInput={(e) =>
+                  setCreateForm({
+                    ...createForm(),
+                    password: (e.currentTarget as HTMLInputElement).value,
+                  })
+                }
+                data-testid="admin-users-create-password"
+                required
+              />
+            </AdminField>
+            {/* Not an `AdminField`: that primitive stacks label ABOVE
+                control, which is right for a text input and wrong for a
+                checkbox, where the label belongs beside the box. */}
+            <label class="admin-users-create-admin adm-check">
+              <input
+                type="checkbox"
+                checked={createForm().is_admin}
+                onChange={(e) =>
+                  setCreateForm({
+                    ...createForm(),
+                    is_admin: (e.currentTarget as HTMLInputElement).checked,
+                  })
+                }
+                data-testid="admin-users-create-is-admin"
+              />
+              admin
+            </label>
+            <button
+              type="submit"
+              class="adm-btn"
+              disabled={creating() || createForm().name === "" || createForm().password === ""}
+              data-testid="admin-users-create-submit"
+            >
+              Create user
+            </button>
+          </form>
+        </AdminCard>
 
-      <Show when={users() !== null && (users() ?? []).length === 0}>
-        <p class="muted" data-testid="admin-users-empty">
-          no users
-        </p>
-      </Show>
+        <Show when={users() === null && error() === null}>
+          <AdminLoading />
+        </Show>
 
-      <Show when={users() !== null && (users() ?? []).length > 0}>
-        <table class="admin-users-table" data-testid="admin-users-table">
-          <thead>
-            <tr>
-              <th>name</th>
-              <th>admin</th>
-              <th>live sessions</th>
-              <th>inserted</th>
-              <th>
-                <span class="sr-only">actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <For each={users() ?? []}>
-              {(u) => (
-                <>
-                  <tr class="admin-users-row" data-testid={`admin-user-row-${u.id}`}>
-                    <td>{u.name}</td>
-                    <td>
-                      <span class={u.is_admin ? "admin-badge yes" : "admin-badge no"}>
-                        {u.is_admin ? "yes" : "no"}
-                      </span>
-                    </td>
-                    <td>{u.live_session_count}</td>
-                    <td>{u.inserted_at}</td>
-                    <td class="admin-users-actions">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void onToggleAdmin(u);
-                        }}
-                        data-testid={`admin-user-toggle-admin-${u.id}`}
-                      >
-                        {u.is_admin ? "Demote" : "Promote"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onArmRotate(u.id)}
-                        data-testid={`admin-user-rotate-password-${u.id}`}
-                      >
-                        Rotate password
-                      </button>
-                      <InlineConfirmButton
-                        idleLabel="Delete"
-                        confirmLabel="Confirm delete?"
-                        armed={confirmingId() === u.id}
-                        onArm={() => setConfirmingId(u.id)}
-                        onConfirm={() => onDelete(u)}
-                        testId={`admin-user-delete-${u.id}`}
-                        extraClass="delete-btn"
-                      />
-                    </td>
-                  </tr>
-                  <Show when={rotatingId() === u.id}>
-                    <tr
-                      class="admin-users-row-rotate"
-                      data-testid={`admin-user-rotate-form-${u.id}`}
-                    >
-                      <td colspan="5">
-                        <form
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            void onSubmitRotate(u);
-                          }}
-                        >
-                          <input
-                            type="password"
-                            placeholder="new password"
-                            value={passwordInput()}
-                            onInput={(e) =>
-                              setPasswordInput((e.currentTarget as HTMLInputElement).value)
-                            }
-                            data-testid={`admin-user-rotate-input-${u.id}`}
-                            aria-label={`new password for ${u.name}`}
-                            required
-                          />
+        <Show when={users() !== null && (users() ?? []).length === 0}>
+          <AdminEmpty message="no users" testId="admin-users-empty" />
+        </Show>
+
+        <Show when={users() !== null && (users() ?? []).length > 0}>
+          <AdminCard
+            title="Accounts"
+            subtitle="live sessions is the Registry count, not a DB column"
+          >
+            <AdminTable data-testid="admin-users-table">
+              <thead>
+                <tr>
+                  <th class="adm-table-grow">name</th>
+                  <th>admin</th>
+                  <th>live sessions</th>
+                  <th>inserted</th>
+                  {/* Visible, like the other migrated tabs: an unlabelled
+                      column reads as a rendering bug, and the actions here
+                      are destructive enough to deserve naming. */}
+                  <th class="adm-table-sticky-actions">actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={users() ?? []}>
+                  {(u) => (
+                    <>
+                      <tr class="admin-users-row" data-testid={`admin-user-row-${u.id}`}>
+                        <td>{u.name}</td>
+                        <td>
+                          {/* The WORD stays: admin-users.spec.ts reads this
+                              cell as text (`td.nth(1)` matching /yes|no/), and
+                              it is a yes/no question a colour alone cannot
+                              answer. Neutral rather than danger for "no" — a
+                              non-admin account is the normal case. */}
+                          <AdminBadge tone={u.is_admin ? "ok" : "neutral"}>
+                            {u.is_admin ? "yes" : "no"}
+                          </AdminBadge>
+                        </td>
+                        <td>{u.live_session_count}</td>
+                        <td>{u.inserted_at}</td>
+                        <td class="admin-users-actions adm-table-sticky-actions">
                           <button
-                            type="submit"
-                            disabled={passwordInput() === ""}
-                            data-testid={`admin-user-rotate-submit-${u.id}`}
+                            type="button"
+                            class="adm-btn"
+                            onClick={() => {
+                              void onToggleAdmin(u);
+                            }}
+                            data-testid={`admin-user-toggle-admin-${u.id}`}
                           >
-                            Rotate
+                            {u.is_admin ? "Demote" : "Promote"}
                           </button>
                           <button
                             type="button"
-                            onClick={onCancelRotate}
-                            data-testid={`admin-user-rotate-cancel-${u.id}`}
+                            class="adm-btn"
+                            onClick={() => onArmRotate(u.id)}
+                            data-testid={`admin-user-rotate-password-${u.id}`}
                           >
-                            Cancel
+                            Rotate password
                           </button>
-                        </form>
-                      </td>
-                    </tr>
-                  </Show>
-                </>
-              )}
-            </For>
-          </tbody>
-        </table>
-      </Show>
+                          <InlineConfirmButton
+                            idleLabel="Delete"
+                            confirmLabel="Confirm delete?"
+                            armed={confirmingId() === u.id}
+                            onArm={() => setConfirmingId(u.id)}
+                            onConfirm={() => onDelete(u)}
+                            testId={`admin-user-delete-${u.id}`}
+                            extraClass="delete-btn"
+                          />
+                        </td>
+                      </tr>
+                      <Show when={rotatingId() === u.id}>
+                        <AdminExpandRow
+                          columns={USER_COLUMNS}
+                          class="admin-users-row-rotate"
+                          data-testid={`admin-user-rotate-form-${u.id}`}
+                        >
+                          <form
+                            class="adm-form-row"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void onSubmitRotate(u);
+                            }}
+                          >
+                            <AdminField
+                              label={`new password for ${u.name}`}
+                              for={`admin-user-rotate-input-${u.id}`}
+                            >
+                              <input
+                                id={`admin-user-rotate-input-${u.id}`}
+                                type="password"
+                                value={passwordInput()}
+                                onInput={(e) =>
+                                  setPasswordInput((e.currentTarget as HTMLInputElement).value)
+                                }
+                                data-testid={`admin-user-rotate-input-${u.id}`}
+                                required
+                              />
+                            </AdminField>
+                            <button
+                              type="submit"
+                              class="adm-btn"
+                              disabled={passwordInput() === ""}
+                              data-testid={`admin-user-rotate-submit-${u.id}`}
+                            >
+                              Rotate
+                            </button>
+                            <button
+                              type="button"
+                              class="adm-btn"
+                              onClick={onCancelRotate}
+                              data-testid={`admin-user-rotate-cancel-${u.id}`}
+                            >
+                              Cancel
+                            </button>
+                          </form>
+                        </AdminExpandRow>
+                      </Show>
+                    </>
+                  )}
+                </For>
+              </tbody>
+            </AdminTable>
+          </AdminCard>
+        </Show>
+      </div>
     </div>
   );
 };

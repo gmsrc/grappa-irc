@@ -5061,6 +5061,39 @@ html.resize-dragging * {
   color: var(--adm-danger);
 }
 
+/* A horizontal band of `AdminField`s plus the submit buttons — the
+   shape every admin add-form and inline edit-form takes. Wraps rather
+   than scrolls: a form is not tabular data, so the UX-6-G "wide table +
+   pan-x" contract does not apply and a phone should stack the fields.
+   `align-items: end` keeps the buttons on the control baseline while
+   each field is a label-over-control column of its own height. */
+.adm-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--adm-space-3);
+}
+
+.adm-form-row .adm-field {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+/* Checkbox + word, side by side — the one form control `AdminField`
+   deliberately does not own (it stacks label ABOVE control, which is
+   wrong for a checkbox). `min-height` matches `.adm-btn` so the row's
+   `align-items: end` lines all three up. */
+.adm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--adm-space-2);
+  min-height: var(--tap-min);
+  font-family: var(--adm-font);
+  font-size: 0.85rem;
+  color: var(--adm-text);
+  white-space: nowrap;
+}
+
 /* Loading/empty/error states (`admin/AdminStatus.tsx`) — the 7
    byte-identical "failed: … — click ↻ refresh to retry" copies
    collapse into one rule. */
