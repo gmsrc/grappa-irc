@@ -219,6 +219,51 @@
   scrollbar-width: thin;
 }
 
+/* Admin redesign Layer 1 — `--adm-*` tokens (2026-08-07 plan). Derived
+ * from the theme's own `--bg` / `--fg` / `--accent` / `--muted` via
+ * `color-mix`, never a fixed hex, so the admin console follows
+ * `irssi-dark`, `mirc-light`, AND any operator custom theme
+ * (`lib/customTheme.ts` writes arbitrary `--bg`/`--fg`/… inline on
+ * `<html>`) without touching the server-side token model
+ * (`Grappa.Themes.TokenModel`). Replaces the hardcoded `#c00` / `#0a0`
+ * / `#c80` that used to live in the admin CSS block below and broke
+ * under `mirc-light`.
+ *
+ * The 22%-toward-`--fg` mix on ok/warn/danger is what keeps a fixed
+ * hue readable on both a near-black and a near-white canvas; the
+ * 86%-toward-`--bg` mix on the `-bg` companions keeps the badge fill
+ * a tint, not a block of color. Values match the approved mockup
+ * (`shots/mockup-B.html` `.mk` block) byte-for-byte — that mockup IS
+ * the spec for this layer.
+ */
+:root {
+  --adm-surface-0: var(--bg);
+  --adm-surface-1: color-mix(in oklab, var(--bg), var(--fg) 4%);
+  --adm-surface-2: color-mix(in oklab, var(--bg), var(--fg) 8%);
+  --adm-line: color-mix(in oklab, var(--bg), var(--fg) 16%);
+  --adm-line-strong: color-mix(in oklab, var(--bg), var(--fg) 30%);
+  --adm-text: var(--fg);
+  --adm-text-dim: var(--muted);
+  --adm-accent: var(--accent);
+  --adm-accent-bg: color-mix(in oklab, var(--accent), var(--bg) 86%);
+  --adm-ok: color-mix(in oklab, #2f9e5e, var(--fg) 22%);
+  --adm-ok-bg: color-mix(in oklab, #2f9e5e, var(--bg) 86%);
+  --adm-warn: color-mix(in oklab, #c98a15, var(--fg) 22%);
+  --adm-warn-bg: color-mix(in oklab, #c98a15, var(--bg) 86%);
+  --adm-danger: color-mix(in oklab, #d24b52, var(--fg) 22%);
+  --adm-danger-bg: color-mix(in oklab, #d24b52, var(--bg) 86%);
+  --adm-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --adm-space-1: 4px;
+  --adm-space-2: 8px;
+  --adm-space-3: 12px;
+  --adm-space-4: 16px;
+  --adm-space-5: 24px;
+  --adm-space-6: 32px;
+  --adm-radius: 6px;
+  --adm-radius-sm: 4px;
+  --adm-shadow: 0 1px 2px color-mix(in oklab, var(--fg), transparent 88%);
+}
+
 :root[data-theme="irssi-dark"] {
   --bg: #0a0a0a;
   --bg-alt: #111111;
@@ -4107,56 +4152,162 @@ html.resize-dragging * {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--adm-line);
   padding-bottom: 0.5rem;
   margin-bottom: 1rem;
 }
 
 .admin-pane-header h1 {
-  font-family: var(--font-mono);
-  font-size: 1.1rem;
+  font-family: var(--adm-font);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   margin: 0;
-  color: var(--accent);
+  color: var(--adm-text-dim);
 }
 
 .admin-pane-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
-  color: var(--mode-op);
-  border: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: 1rem;
-  width: 2rem;
-  height: 2rem;
+  color: var(--adm-text-dim);
+  border: 1px solid var(--adm-line);
+  border-radius: var(--adm-radius-sm);
+  font-family: var(--adm-font);
+  font-size: 1.1rem;
+  width: var(--tap-min);
+  height: var(--tap-min);
   cursor: pointer;
   line-height: 1;
 }
 
-/* M-cluster M-8 — admin tab nav + Visitors tab. M-9/M-10/M-11
-   append more `<button role="tab">` siblings + their own tabpanels;
-   the active-tab styling uses [aria-selected="true"] so future
-   tab-switching only needs the attribute flip. */
-
-.admin-tab-nav {
-  display: flex;
-  gap: 0.25rem;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 1rem;
+.admin-pane-close:hover {
+  background: var(--adm-surface-2);
+  color: var(--adm-text);
 }
 
-.admin-tab {
-  background: transparent;
-  color: var(--muted);
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 0.5rem 1rem;
-  font-family: var(--font-mono);
-  font-size: 0.9rem;
+.admin-pane-close:focus-visible {
+  outline: 2px solid var(--adm-accent);
+  outline-offset: 2px;
+}
+
+/* Admin redesign Layer 2/3 — `AdminNav` (cicchetto/src/admin/AdminNav.tsx).
+   Mobile-first: a horizontal scrolling chip strip (`.adm-nav` row +
+   `.adm-nav-group` row), grouped by a non-interactive label. The
+   ≥900px media query below (next to `.admin-pane`'s own desktop
+   rule) turns the SAME markup into a vertical rail — no DOM
+   duplication, so the 10 `admin-tab-<key>` buttons stay singular and
+   clickable in one click regardless of viewport. */
+.adm-nav {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--adm-space-3);
+  overflow-x: auto;
+  background: var(--adm-surface-1);
+  border-bottom: 1px solid var(--adm-line);
+  padding: var(--adm-space-2);
+  margin: 0 0 var(--adm-space-2);
+}
+
+.adm-nav-group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--adm-space-2);
+  flex-shrink: 0;
+}
+
+.adm-nav-group-label {
+  margin: 0;
+  padding-right: var(--adm-space-2);
+  border-right: 1px solid var(--adm-line);
+  font-family: var(--adm-font);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--adm-text-dim);
+  white-space: nowrap;
+}
+
+.adm-nav-item {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  min-height: var(--tap-min);
+  padding: 0 var(--adm-space-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--adm-radius-sm);
+  color: var(--adm-text);
+  font-family: var(--adm-font);
+  font-size: 0.85rem;
   cursor: pointer;
 }
 
-.admin-tab[aria-selected="true"] {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+.adm-nav-item:hover {
+  background: var(--adm-surface-2);
+}
+
+.adm-nav-item[aria-selected="true"] {
+  background: var(--adm-accent-bg);
+  color: var(--adm-accent);
+  font-weight: 600;
+}
+
+.adm-nav-item:focus-visible {
+  outline: 2px solid var(--adm-accent);
+  outline-offset: -2px;
+}
+
+/* Desktop rail (direzione B, mockup `.mk-body` grid). `.admin-pane`
+   becomes `[nav 220px][content 1fr]`; the header stays a full-width
+   top bar. `.admin-tab-panel` (whichever one is mounted) is the
+   grid's second cell — a plain sibling of `.adm-nav` in the DOM, so
+   it needs an explicit grid placement here. */
+@media (min-width: 900px) {
+  .admin-pane {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    grid-template-rows: auto 1fr;
+    column-gap: 0;
+  }
+
+  .admin-pane-header {
+    grid-column: 1 / -1;
+  }
+
+  .adm-nav {
+    grid-column: 1;
+    grid-row: 2;
+    flex-direction: column;
+    align-items: stretch;
+    overflow-x: visible;
+    overflow-y: auto;
+    border-bottom: 0;
+    border-right: 1px solid var(--adm-line);
+    margin: 0;
+    gap: var(--adm-space-5);
+  }
+
+  .adm-nav-group {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .adm-nav-group-label {
+    border-right: 0;
+    padding: 0 0 var(--adm-space-1) var(--adm-space-2);
+  }
+
+  .admin-tab-panel {
+    grid-column: 2;
+    grid-row: 2;
+  }
 }
 
 .admin-tab-panel {
@@ -4591,6 +4742,331 @@ html.resize-dragging * {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ─────────────────────────────────────────────────────────────
+ * Admin redesign Layer 2/3 — shared `adm-*` primitives
+ * (cicchetto/src/admin/*.tsx). Direzione B (card layout, mockup
+ * `shots/mockup-B.html`). Only `AdminSessionsTab` consumes these so
+ * far (this tranche's proof-of-use); the other 9 tabs migrate in a
+ * follow-up tranche and keep their existing `.admin-X-*` rules
+ * below until then.
+ * ───────────────────────────────────────────────────────────── */
+
+/* Scroll body wrapping a tab's cards, on the raised surface — the
+   "dashboard" backdrop the cards sit on (mockup `.mk-scroll`). */
+.adm-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--adm-space-4);
+  padding: var(--adm-space-4);
+  background: var(--adm-surface-1);
+}
+
+.adm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--adm-space-4);
+  padding: var(--adm-space-3) var(--adm-space-4);
+  border-bottom: 1px solid var(--adm-line);
+}
+
+.adm-toolbar-title {
+  margin: 0;
+  font-family: var(--adm-font);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--adm-text);
+}
+
+.adm-toolbar-sub {
+  margin: 0.1rem 0 0;
+  font-family: var(--adm-font);
+  font-size: 0.78rem;
+  color: var(--adm-text-dim);
+}
+
+.adm-toolbar-actions {
+  display: flex;
+  gap: var(--adm-space-2);
+  flex-shrink: 0;
+}
+
+/* Shared button shape — absorbs the 7 byte-identical `↻ refresh`
+   copies (`AdminRefreshButton` in `admin/AdminToolbar.tsx`) plus any
+   other admin chrome button built on the primitives. */
+.adm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-min);
+  padding: 0 var(--adm-space-3);
+  background: var(--adm-surface-1);
+  color: var(--adm-text);
+  border: 1px solid var(--adm-line-strong);
+  border-radius: var(--adm-radius-sm);
+  font-family: var(--adm-font);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.adm-btn:hover {
+  background: var(--adm-surface-2);
+}
+
+.adm-btn:focus-visible {
+  outline: 2px solid var(--adm-accent);
+  outline-offset: -2px;
+}
+
+.adm-btn[aria-busy="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* One table shape for all 10 tabs (`admin/AdminTable.tsx`), replacing
+   10 distinct `.admin-X-table` class names. `.adm-table-wrap` OWNS
+   `overflow-x: auto` — the table itself never scrolls on its own
+   (mobile tables stay wide, plan constraint #4). Data cells stay
+   `--font-mono` (nick/host/slug/id/byte/timestamp); the header row is
+   chrome, so it's `--adm-font`. */
+.adm-table-wrap {
+  overflow-x: auto;
+}
+
+.adm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.adm-table th,
+.adm-table td {
+  text-align: left;
+  padding: var(--adm-space-2) var(--adm-space-3);
+  border-bottom: 1px solid var(--adm-line);
+  vertical-align: middle;
+}
+
+.adm-table th {
+  font-family: var(--adm-font);
+  color: var(--adm-text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  background: var(--adm-surface-1);
+}
+
+.adm-table tbody tr:hover td {
+  background: var(--adm-surface-1);
+}
+
+/* Sticky action column — the pre-redesign Sessions/Networks/Visitors
+   tables ran the panel's full width so every row's action buttons
+   were always on-screen. Direzione B's card layout narrows that
+   (220px nav rail + card padding), so a dense table (Sessions: 9
+   columns) now genuinely overflows even on a 1440px desktop and
+   Disconnect/Terminate scroll out of view. Pinning the actions
+   column to the table's own right edge keeps it reachable without
+   scrolling, in EITHER scroll container (`.adm-table-wrap` here, or
+   `.admin-tab-panel` for the not-yet-migrated tabs) — `position:
+   sticky` tracks whichever ancestor is actually scrolling. Does not
+   touch `overflow-x: auto` (mobile still needs it — `ux-6-g`).
+   `border-left` + the inset shadow read as "the table continues
+   under here", not a rendering glitch — without them the pinned
+   cell just overlaps the scrolled column's text with no seam.
+   Desktop-only (`min-width: 769px`, this file's existing
+   breakpoint-mobile convention): on a 393px phone the pinned column
+   alone eats ~180px, roughly half the screen, and crowds WHO down
+   to a couple of characters. Below that width the column stays in
+   normal table flow and is reached by the horizontal pan `ux-6-g`
+   already exercises — mobile has no width to spare for a pin. */
+.adm-table-sticky-actions {
+  position: static;
+}
+
+@media (min-width: 769px) {
+  .adm-table-sticky-actions {
+    position: sticky;
+    right: 0;
+    background: var(--adm-surface-0);
+    border-left: 1px solid var(--adm-line-strong);
+    box-shadow: -6px 0 6px -6px color-mix(in oklab, var(--fg), transparent 80%);
+  }
+
+  .adm-table tbody tr:hover td.adm-table-sticky-actions {
+    background: var(--adm-surface-1);
+  }
+}
+
+/* Truncates a data-heavy cell (e.g. Sessions' UPSTREAM, which can
+   carry a full reverse-DNS name plus the raw address in parens) to a
+   fixed width with an ellipsis, so it can't crowd every column after
+   it off the visible desktop width. The full value stays reachable —
+   `renderUpstream` already sets a native `title` on the cell's inner
+   span. */
+.adm-table-truncate {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Expanded detail row (`admin/AdminExpandRow.tsx`) — one shape for
+   the 4 tables that expand a row inline, `colspan` derived from the
+   caller's column count rather than hardcoded per call site. */
+.adm-expand-row td {
+  background: var(--adm-surface-1);
+  padding: var(--adm-space-3) var(--adm-space-4);
+}
+
+/* One badge idiom (`admin/AdminBadge.tsx`) replacing `LiveBadge`×2 +
+   `CircuitBadge` + the bare `.admin-badge` class + the raw ternary
+   text in AdminCredentialsTab. `tone` maps onto the Layer 1
+   `--adm-ok` / `--adm-warn` / `--adm-danger` tokens, so a badge
+   follows the active theme instead of a hardcoded hex. */
+.adm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-family: var(--adm-font);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+
+.adm-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.adm-badge--ok {
+  color: var(--adm-ok);
+  background: var(--adm-ok-bg);
+  border-color: color-mix(in oklab, var(--adm-ok), transparent 65%);
+}
+
+.adm-badge--warn {
+  color: var(--adm-warn);
+  background: var(--adm-warn-bg);
+  border-color: color-mix(in oklab, var(--adm-warn), transparent 65%);
+}
+
+.adm-badge--danger {
+  color: var(--adm-danger);
+  background: var(--adm-danger-bg);
+  border-color: color-mix(in oklab, var(--adm-danger), transparent 65%);
+}
+
+.adm-badge--neutral {
+  color: var(--adm-text-dim);
+  background: var(--adm-surface-2);
+  border-color: var(--adm-line);
+}
+
+/* Section container (`admin/AdminCard.tsx`, mockup `.mk-card`) — the
+   "dashboard" surface a tab with several independent sections (e.g.
+   Sessions: capacity summary + live sessions) renders one of per
+   section, instead of one flat table. */
+.adm-card {
+  background: var(--adm-surface-0);
+  border: 1px solid var(--adm-line);
+  border-radius: var(--adm-radius);
+  box-shadow: var(--adm-shadow);
+  overflow: hidden;
+}
+
+.adm-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--adm-space-4);
+  padding: var(--adm-space-3) var(--adm-space-4);
+  border-bottom: 1px solid var(--adm-line);
+}
+
+.adm-card-title {
+  margin: 0;
+  font-family: var(--adm-font);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--adm-text);
+}
+
+.adm-card-sub {
+  margin: 0.1rem 0 0;
+  font-family: var(--adm-font);
+  font-size: 0.75rem;
+  color: var(--adm-text-dim);
+}
+
+.adm-card-actions {
+  display: flex;
+  gap: var(--adm-space-2);
+  flex-shrink: 0;
+}
+
+/* Card body has no default padding: a table fills it edge-to-edge
+   (the table cells already carry their own padding); a card whose
+   body is NOT a table supplies its own via a local rule. */
+.adm-card .adm-table th {
+  background: var(--adm-surface-0);
+}
+
+/* Label + control + hint/error (`admin/AdminField.tsx`), used by
+   add-forms and inline edit forms. */
+.adm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.adm-field-label {
+  font-family: var(--adm-font);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--adm-text-dim);
+}
+
+.adm-field-hint {
+  font-family: var(--adm-font);
+  font-size: 0.7rem;
+  color: var(--adm-text-dim);
+}
+
+.adm-field-error {
+  font-family: var(--adm-font);
+  font-size: 0.7rem;
+  color: var(--adm-danger);
+}
+
+/* Loading/empty/error states (`admin/AdminStatus.tsx`) — the 7
+   byte-identical "failed: … — click ↻ refresh to retry" copies
+   collapse into one rule. */
+.adm-error {
+  color: var(--adm-danger);
+  font-family: var(--adm-font);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.adm-empty,
+.adm-loading {
+  color: var(--adm-text-dim);
+  font-family: var(--adm-font);
+  font-size: 0.85rem;
+  margin: 0;
 }
 
 /* SettingsDrawer notifications section (B3) */
