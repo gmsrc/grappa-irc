@@ -5132,6 +5132,18 @@ html.resize-dragging * {
   margin: 0;
 }
 
+/* Post-mutation confirmation line (today: Credentials' session_action
+   toast). The themed replacement for `.admin-success`, whose `#0a0` is
+   one of the hardcoded greens this redesign is removing — it stays
+   below only until AdminNetworksTab, its last other consumer,
+   migrates. */
+.adm-success {
+  color: var(--adm-ok);
+  font-family: var(--adm-font);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
 /* Log-line shape, shared by `AdminEventsTab` and `AdminSessionLogTab`.
    Both render the same thing — a timestamped line — and before the
    redesign each did it through its own set of class names with NO CSS

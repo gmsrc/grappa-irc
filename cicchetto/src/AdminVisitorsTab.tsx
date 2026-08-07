@@ -4,6 +4,7 @@ import AdminCard from "./admin/AdminCard";
 import { AdminEmpty, AdminError } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
+import { connectionTone } from "./admin/connectionTone";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminVisitor,
@@ -345,13 +346,9 @@ const LiveBadge: Component<{ live: AdminVisitorNetwork["live_state"] }> = (props
 // stays the source of truth for the WORD — the a11y text and the vitest
 // seam, asserted by label rather than codepoint — and keeps its glyph
 // for `ServerInfoCard`, which is IRC-client chrome and outside this
-// redesign.
-const STATE_TONE: Record<string, "ok" | "warn" | "danger" | "neutral"> = {
-  connected: "ok",
-  parked: "warn",
-  failed: "danger",
-  unknown: "neutral",
-};
+// redesign. The word → tone mapping lives in `admin/connectionTone.ts`
+// because Credentials renders the same field and a second copy is how
+// the two tabs would drift.
 
 const NetworkStateEmoji: Component<{ state: AdminVisitorNetwork["connection_state"] }> = (
   props,
@@ -359,7 +356,7 @@ const NetworkStateEmoji: Component<{ state: AdminVisitorNetwork["connection_stat
   const label = () => connectionStateEmoji(props.state).label;
   return (
     <AdminBadge
-      tone={STATE_TONE[label()] ?? "neutral"}
+      tone={connectionTone(props.state)}
       class="admin-visitor-network-state adm-badge--dot"
       ariaLabel={label()}
     >
