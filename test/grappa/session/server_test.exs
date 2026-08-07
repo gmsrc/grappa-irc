@@ -10238,6 +10238,52 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # #961 — the leak this closes is NOT the log line above (that one has a
+    # static body and holds). It is the Backoff respawn window: after a drop
+    # the session serves calls for the whole deferred-spawn delay (5s..5min
+    # in production) with `client: nil`. The OPER used to reach
+    # `GenServer.call(nil, {:send, "OPER vjt <password>\r\n"})`, whose
+    # `:noproc` exit reason embeds the frame — and that reason is echoed by
+    # the session's crash report AND persisted verbatim by `terminate/2` →
+    # `SessionLog.emit(:disconnected, reason: inspect(reason))`. Both sinks
+    # sit at levels production keeps. The guard is in `Client.send_line/2`
+    # (one door for every verb); here we pin the end-to-end outcome: the
+    # secret reaches no sink and the session does not die for having been
+    # asked to oper while reconnecting.
+    test "an OPER submitted in the Backoff respawn window leaks nothing and does not kill the session" do
+      {_, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      subject = {:user, user.id}
+      sentinel = "sentinel-oper-pw-961"
+
+      # Ladder at the cap → `handle_continue({:start_client, _})` defers the
+      # Client spawn, so this session serves the call below with no upstream
+      # process. `{:error, :no_socket}` IS the precondition assertion: had
+      # the deferred spawn already won, the OPER would have gone on the wire
+      # and replied `:ok`.
+      :ok = Backoff.reset(subject, network.id)
+      Enum.each(1..10, fn _ -> :ok = Backoff.record_failure(subject, network.id) end)
+      on_exit(fn -> Backoff.reset(subject, network.id) end)
+
+      pid = start_session_for(user, network)
+
+      {result, log} =
+        with_log(fn ->
+          try do
+            Session.send_oper(subject, network.id, "vjt", sentinel)
+          catch
+            :exit, reason -> {:exited, reason}
+          end
+        end)
+
+      refute inspect(result) =~ sentinel,
+             "the OPER password rode back inside the caller's term — the same term the crash report and the persisted session-log reason are built from"
+
+      assert result == {:error, :no_socket}
+      refute log =~ sentinel
+      assert Process.alive?(pid), "a /oper during the reconnect window must not take the session down"
+    end
+
     test "rejects CRLF in name before whereis lookup" do
       assert {:error, :invalid_line} =
                Session.send_oper({:user, Ecto.UUID.generate()}, 999_999, "vjt\r\nKILL", "p")

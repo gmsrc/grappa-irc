@@ -314,9 +314,23 @@ defmodule Grappa.IRC.Client do
   (connect_failed pre-assignment, peer RST in flight). Callers that
   don't care about delivery may `_ = `-discard the result;
   `Session.Server.terminate/2` does this for the best-effort QUIT.
+
+  A `nil` client — `Session.Server`'s honest "no upstream process
+  right now", held for the whole Backoff-deferred respawn window —
+  is the same "nothing to write to" condition and answers with the
+  same `{:error, :no_socket}` as `transport_send(%{socket: nil}, _)`
+  one layer down. It must NOT reach `GenServer.call/3`: that exits
+  `:noproc` with `line` embedded in the exit reason, and the reason
+  is echoed by the caller's crash report AND persisted by
+  `Session.Server.terminate/2` → `SessionLog.emit(:disconnected,
+  reason: inspect(reason))`. `line` is a verbatim IRC frame, so for
+  `OPER` it carries the operator password (#961). Deliberately no
+  Logger call here for the same reason — the rejection is reported
+  by returning it, never by writing the frame anywhere.
   """
-  @spec send_line(pid(), iodata()) :: send_result()
-  def send_line(client, line), do: GenServer.call(client, {:send, line})
+  @spec send_line(pid() | nil, iodata()) :: send_result()
+  def send_line(client, line) when is_pid(client), do: GenServer.call(client, {:send, line})
+  def send_line(_, _), do: {:error, :no_socket}
 
   @doc """
   Sends `PRIVMSG <target> :<body>\\r\\n`. Rejects CR/LF/NUL in either

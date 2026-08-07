@@ -1601,6 +1601,40 @@ defmodule Grappa.IRC.ClientTest do
     end
   end
 
+  describe "no upstream Client process (#961)" do
+    # Between an upstream drop and the deferred respawn, `Session.Server`
+    # holds `client: nil` — the Backoff ladder defers the Client spawn to
+    # `{:start_client_after_backoff, _}`, and the session serves calls for
+    # the whole delay (5s..5min in production). Every `send_*` funnels
+    # through `send_line/2`, which used to reach `GenServer.call(nil, ...)`
+    # and exit `:noproc` with the ENTIRE line inside the exit reason. That
+    # reason is echoed at a level production keeps — the session's crash
+    # report, and `terminate/2` → `SessionLog.emit(:disconnected, reason:
+    # inspect(reason))`, which also persists it to `session_log_events`.
+    test "send_line/2 with no client returns a transport error instead of exiting" do
+      assert {:error, :no_socket} = Client.send_line(nil, "PING :x\r\n")
+    end
+
+    # The OPER frame is the instance of that class which carries a secret,
+    # so it gets its own sentinel: whatever term the caller ends up
+    # holding (returned OR raised) must not contain the password.
+    test "send_oper/3 with no client keeps the password out of the caller's term" do
+      sentinel = "sentinel-oper-pw-961"
+
+      result =
+        try do
+          Client.send_oper(nil, "vjt", sentinel)
+        catch
+          :exit, reason -> {:exited, reason}
+        end
+
+      refute inspect(result) =~ sentinel,
+             "the OPER password must not ride inside the term the caller sees — that term becomes the crash report and the persisted session-log reason"
+
+      assert result == {:error, :no_socket}
+    end
+  end
+
   describe "init/1 non-blocking (C2)" do
     # C2 cluster — `init/1` must NOT call `:gen_tcp.connect`/`:ssl.connect`
     # synchronously. Connect + handshake live in `handle_continue(:connect, _)`
