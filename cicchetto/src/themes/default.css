@@ -4734,9 +4734,9 @@ html.resize-dragging * {
 /* ─────────────────────────────────────────────────────────────
  * Admin redesign Layer 2/3 — shared `adm-*` primitives
  * (cicchetto/src/admin/*.tsx). Direzione B (card layout, mockup
- * `shots/mockup-B.html`). Only `AdminSessionsTab` consumes these so
- * far (this tranche's proof-of-use); the other 9 tabs migrate in a
- * follow-up tranche and keep their existing `.admin-X-*` rules
+ * `shots/mockup-B.html`). Consumed so far by Sessions, Visitors,
+ * Settings, Events and Session Log; the remaining tabs migrate in
+ * follow-up tranches and keep their existing `.admin-X-*` rules
  * below until then.
  * ───────────────────────────────────────────────────────────── */
 
@@ -5077,6 +5077,87 @@ html.resize-dragging * {
   font-family: var(--adm-font);
   font-size: 0.85rem;
   margin: 0;
+}
+
+/* Log-line shape, shared by `AdminEventsTab` and `AdminSessionLogTab`.
+   Both render the same thing — a timestamped line — and before the
+   redesign each did it through its own set of class names with NO CSS
+   rule behind either, so both rendered as UA-default bullet lists.
+   Shared as CSS and not as a component because the SHAPE is common and
+   the COLUMNS are not: Events has three cells, Session Log five.
+
+   `flex-wrap`, not a table: these two are the only admin surfaces the
+   UX-6-G "wide table + pan-x" contract does NOT cover (it names
+   visitors / sessions / networks), so a narrow screen may wrap the line
+   instead of forcing a sideways swipe. `.adm-log-text` takes the slack
+   so the timestamp and the kind chip keep their intrinsic width. */
+.adm-log {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.adm-log-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--adm-space-1) var(--adm-space-3);
+  padding: var(--adm-space-2) 0;
+  border-bottom: 1px solid var(--adm-line);
+}
+
+.adm-log-row:last-child {
+  border-bottom: 0;
+}
+
+/* Machine data stays monospace (the plan's typography split): a
+   timestamp, a session id and a nick are read as tokens, not prose. */
+.adm-log-at,
+.adm-log-id {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--adm-text-dim);
+  white-space: nowrap;
+}
+
+.adm-log-id {
+  margin-left: auto;
+}
+
+/* The kind is a fixed vocabulary, so it reads as a chip. Deliberately
+   NOT an `AdminBadge`: the badge's tones are a semantic ok/warn/danger
+   scale, and there is no such ranking over ~25 event kinds — colouring
+   them would invent a severity the server never emitted. */
+.adm-log-kind {
+  font-family: var(--adm-font);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--adm-text-dim);
+  background: var(--adm-surface-2);
+  border-radius: var(--adm-radius-sm);
+  padding: 0.1rem var(--adm-space-2);
+  white-space: nowrap;
+}
+
+.adm-log-text {
+  flex: 1 1 12rem;
+  font-family: var(--adm-font);
+  font-size: 0.82rem;
+  color: var(--adm-text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.adm-log-detail {
+  font-family: var(--adm-font);
+  font-size: 0.78rem;
+  color: var(--adm-text-dim);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* SettingsDrawer notifications section (B3) */

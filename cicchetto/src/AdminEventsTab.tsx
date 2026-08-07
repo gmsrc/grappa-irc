@@ -1,4 +1,7 @@
 import { type Component, For } from "solid-js";
+import AdminCard from "./admin/AdminCard";
+import { AdminEmpty } from "./admin/AdminStatus";
+import AdminToolbar from "./admin/AdminToolbar";
 import { adminEvents } from "./lib/adminEvents";
 import { assertNever, type WireAdminEvent } from "./lib/api";
 import type {
@@ -16,24 +19,51 @@ import type {
 // arm without a case here trips `tsc` via `assertNever`.
 //
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated EXEMPT.
+//
+// Admin redesign (2026-08-07 plan, Layer 4) — onto the shared
+// primitives. This tab and Session Log render the same thing, a
+// timestamped log line, and used to do it through two disjoint sets of
+// class names with no CSS behind either; they now share the `.adm-log*`
+// shape (default.css). Shared as CSS rather than as a component on
+// purpose: the SHAPE is common, the COLUMNS are not (Events has three
+// cells, Session Log five), and a primitive parameterised over a column
+// array would be heavier than the markup it replaced.
+//
+// This tab has NO refresh button and NO error row, and gains neither
+// here: `adminEvents()` is a live in-memory ring fed by the channel
+// subscription AdminPane owns, so there is nothing to re-fetch and no
+// request that can fail. The toolbar carries the count line alone.
 
 const AdminEventsTab: Component = () => {
   return (
     <div class="admin-events-tab" data-testid="admin-events-tab">
-      <header class="admin-events-header">
-        <span class="muted">last {adminEvents().length} event(s) (newest first)</span>
-      </header>
-      <ul class="admin-events-list">
-        <For each={adminEvents()} fallback={<li class="admin-events-empty">no events yet</li>}>
-          {(ev) => (
-            <li class="admin-event-row" data-testid={`admin-event-${ev.kind}`}>
-              <time class="admin-event-at">{ev.at}</time>
-              <span class={`admin-event-kind kind-${ev.kind}`}>{ev.kind}</span>
-              <span class="admin-event-summary">{renderEvent(ev)}</span>
-            </li>
-          )}
-        </For>
-      </ul>
+      <AdminToolbar
+        title="Events"
+        subtitle={`last ${adminEvents().length} event(s), newest first`}
+      />
+
+      <div class="adm-scroll">
+        <AdminCard title="Admin event stream" subtitle="live — no refresh, no fetch">
+          <ul class="adm-log">
+            <For
+              each={adminEvents()}
+              fallback={
+                <li>
+                  <AdminEmpty message="no events yet" />
+                </li>
+              }
+            >
+              {(ev) => (
+                <li class="adm-log-row" data-testid={`admin-event-${ev.kind}`}>
+                  <time class="adm-log-at">{ev.at}</time>
+                  <span class={`adm-log-kind kind-${ev.kind}`}>{ev.kind}</span>
+                  <span class="adm-log-text">{renderEvent(ev)}</span>
+                </li>
+              )}
+            </For>
+          </ul>
+        </AdminCard>
+      </div>
     </div>
   );
 };

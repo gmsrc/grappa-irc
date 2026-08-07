@@ -1,4 +1,7 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
+import AdminCard from "./admin/AdminCard";
+import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
+import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
 import { ApiError, adminListSessionLog, assertNever } from "./lib/api";
 import { token } from "./lib/auth";
 import { sessionLogEvents } from "./lib/sessionLog";
@@ -22,6 +25,13 @@ import type { SessionLogEvent, SessionLogWireT } from "./lib/wireTypes";
 // kind trips `tsc` via `assertNever`.
 //
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated, EXEMPT.
+//
+// Admin redesign (2026-08-07 plan, Layer 4) — onto the shared
+// primitives, sharing the `.adm-log*` row shape with AdminEventsTab
+// (see that file for why the shape is shared as CSS and not as a
+// component). Unlike Events this tab DOES fetch, so it keeps its
+// refresh button, its error row and its loading line — now the shared
+// `AdminRefreshButton` / `AdminError` / `AdminLoading`.
 
 const AdminSessionLogTab: Component = () => {
   const [snapshot, setSnapshot] = createSignal<SessionLogWireT[] | null>(null);
@@ -61,58 +71,69 @@ const AdminSessionLogTab: Component = () => {
 
   return (
     <div class="admin-session-log-tab" data-testid="admin-session-log-tab">
-      <header class="admin-session-log-header">
-        <button
-          type="button"
-          class="admin-refresh-btn"
-          aria-label="refresh session log"
-          aria-busy={loading()}
-          onClick={() => {
-            void refresh();
-          }}
-          data-testid="admin-session-log-refresh"
-        >
-          ↻ refresh
-        </button>
-        <span class="muted">last {rows().length} entry(ies) (newest first)</span>
-      </header>
+      <AdminToolbar
+        title="Session Log"
+        subtitle={`last ${rows().length} entry(ies), newest first`}
+        actions={
+          <AdminRefreshButton
+            onClick={() => {
+              void refresh();
+            }}
+            busy={loading()}
+            label="refresh session log"
+            testId="admin-session-log-refresh"
+          />
+        }
+      />
 
-      <Show when={error() !== null}>
-        <p class="admin-error" role="alert" data-testid="admin-session-log-error">
-          failed: {error()} — click ↻ refresh to retry
-        </p>
-      </Show>
+      <div class="adm-scroll">
+        <Show when={error() !== null}>
+          <AdminError message={error() ?? ""} testId="admin-session-log-error" />
+        </Show>
 
-      <Show when={snapshot() === null && error() === null && rows().length === 0}>
-        <p class="muted">loading…</p>
-      </Show>
+        <Show when={snapshot() === null && error() === null && rows().length === 0}>
+          <AdminLoading />
+        </Show>
 
-      <Show when={error() === null}>
-        <ul class="admin-session-log-list">
-          <For
-            each={rows()}
-            fallback={
-              <Show when={snapshot() !== null}>
-                <li class="admin-session-log-empty" data-testid="admin-session-log-empty">
-                  no session log entries yet
-                </li>
-              </Show>
-            }
+        <Show when={error() === null}>
+          <AdminCard
+            title="Session lifecycle"
+            subtitle="REST snapshot merged with the live channel feed"
           >
-            {(ev) => (
-              <li class="admin-session-log-row" data-testid={`session-log-row-${ev.event}`}>
-                <time class="session-log-at">{ev.at}</time>
-                <span class={`session-log-event event-${ev.event}`}>{eventLabel(ev.event)}</span>
-                <span class="session-log-subject">{subjectLabel(ev)}</span>
-                <span class="session-log-detail">{renderDetail(ev)}</span>
-                <span class="session-log-session-id" title="session id">
-                  {ev.session_id}
-                </span>
-              </li>
-            )}
-          </For>
-        </ul>
-      </Show>
+            <ul class="adm-log">
+              <For
+                each={rows()}
+                fallback={
+                  <Show when={snapshot() !== null}>
+                    <li>
+                      <AdminEmpty
+                        message="no session log entries yet"
+                        testId="admin-session-log-empty"
+                      />
+                    </li>
+                  </Show>
+                }
+              >
+                {(ev) => (
+                  <li class="adm-log-row" data-testid={`session-log-row-${ev.event}`}>
+                    <time class="adm-log-at">{ev.at}</time>
+                    <span class={`adm-log-kind event-${ev.event}`}>{eventLabel(ev.event)}</span>
+                    <span class="adm-log-text">{subjectLabel(ev)}</span>
+                    <span class="adm-log-detail">{renderDetail(ev)}</span>
+                    {/* `.session-log-session-id` is a CLASS contract, not just
+                        a style hook: issue215-session-log.spec.ts locates the
+                        cell by it. Kept verbatim alongside the shared
+                        `.adm-log-id` shape rather than renamed. */}
+                    <span class="adm-log-id session-log-session-id" title="session id">
+                      {ev.session_id}
+                    </span>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </AdminCard>
+        </Show>
+      </div>
     </div>
   );
 };
