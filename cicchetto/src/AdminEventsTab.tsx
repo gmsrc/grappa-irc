@@ -60,6 +60,13 @@ import type {
 // projection tick, not an operator's decision.
 const EVENT_TONE: Record<WireAdminEvent["kind"], Tone> = {
   // created / restored
+  //
+  // #982's share-token mint is an admin handing a locked-out visitor a
+  // way back in — something granted, not something destroyed — so it
+  // sits with the other constructive verbs. It is also worth SEEING: it
+  // is the one event here that hands out access, so it should not read
+  // as routine.
+  visitor_share_token_minted: "ok",
   user_created: "ok",
   network_created: "ok",
   server_added: "ok",
