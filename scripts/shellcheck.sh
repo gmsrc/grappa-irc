@@ -21,7 +21,7 @@
 # sourced by pacman, not a shell program we ship).
 #
 # No per-file dialect table: every script already declares its own dialect,
-# via its shebang or (for the two sourced libs, which have none) a
+# via its shebang or (for the sourced libs under infra/lib, which have none) a
 # `# shellcheck shell=` directive on line 1. shellcheck reads both. A table
 # here would be a second place for that to drift.
 #

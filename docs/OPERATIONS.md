@@ -952,7 +952,9 @@ name too.
   verifies the node comes up (an early boot death is a loud ERROR,
   not a silent "Starting grappa."). Both sides delegate to
   `infra/freebsd/jail_beam_wait.sh` — shared with deploy.sh's cold
-  path. If a restart still aborts with `name grappa@grappa … in use`
+  path, and since #923 a thin substrate entry point over the one
+  implementation in `infra/lib/beam_wait.sh` (the Linux substrate's
+  `grappa_beam_wait.sh` is the other entry point over the same file). If a restart still aborts with `name grappa@grappa … in use`
   (e.g. a stale pre-fix wrapper): confirm no `beam.smp`, check
   `epmd -names` is clean, then a plain `service grappa start`
   (cold boot ~20s); re-run `jail_install_rcd.sh` to refresh the

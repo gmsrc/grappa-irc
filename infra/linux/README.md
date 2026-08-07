@@ -208,3 +208,12 @@ porting the FreeBSD wrapper's full machinery. `grappa_beam_wait.sh`'s
 `wait-name-free` is kept as a defense-in-depth `ExecStartPre` guard,
 not the primary sync mechanism. See comments in
 `infra/linux/systemd/grappa.service` for the full rationale.
+
+What IS shared: the wait algorithm itself. `grappa_beam_wait.sh` and
+the jail's `jail_beam_wait.sh` are both thin entry points over
+`infra/lib/beam_wait.sh` (#923) — same extraction as
+`infra/lib/deploy_common.sh` (#503), for the same reason. This file
+used to be a "trimmed port" of the jail's copy and had already lost
+two of its escalation-safety comments; one algorithm and one bats
+suite (`test/infra/beam_wait_test.bats`, which runs every case through
+BOTH entry points) is what stops that from happening a second time.

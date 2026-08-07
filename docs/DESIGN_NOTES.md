@@ -33150,3 +33150,51 @@ is the same family as weakening an assertion. Also rejected: a `.doctor.exs`
 that excludes test-gated functions from the dev count, which would encode the
 lie in configuration and leave two doctor runs disagreeing about the same
 module.
+## 2026-08-07 — #923: the BEAM wait had two copies, and the copy had already drifted
+
+#923 item 3 asks to *deduplicate what both substrates genuinely need, rather
+than maintaining two copies that drift again*. Items 1 (the diff) and 2 (drop
+the leftovers — the jail's nginx, the retired `ndp_keepalive` triple) are done.
+The remaining duplicate is the defect-#9 stop/start wait:
+`infra/freebsd/jail_beam_wait.sh` and `infra/linux/grappa_beam_wait.sh` were the
+same 116-line algorithm twice — `name_registered`, `beam_alive`, `wait_stopped`,
+`wait_name_free`, the same escalation ladder, the same exit codes.
+
+**Drift is not hypothetical here; it had already started.** The Linux file's own
+header called itself a "trimmed port", and what got trimmed was the WHY: the two
+comments explaining that `pkill epmd` is safe ONLY after the BEAM is confirmed
+dead (a live BEAM respawns epmd and re-races the registration — live-repro
+2026-05-31), and that `wait-name-free` must never escalate because the
+registered name may belong to a still-draining node. Those comments are the
+reason the ladder is shaped the way it is. A copy that keeps the code and drops
+the reason is a copy that gets "simplified" by the next reader.
+
+**Shape: the `deploy_common.sh` shape, deliberately.** `infra/lib/beam_wait.sh`
+is a SOURCED POSIX-sh lib (no shebang, no exec bit, `# shellcheck shell=sh` on
+line 1), exactly like `infra/lib/deploy_common.sh` (#503) — the consumer keeps
+its own shebang, sets whatever substrate config it needs, sources the lib and
+calls `beam_wait_main "$@"`. The jail's substrate config is the one real
+difference between the old copies: the `/usr/local/lib/erlang28/bin` PATH pin,
+which rc(8) does not provide. That now lives in the jail's entry point, where it
+belongs, instead of inside a "shared" implementation that would carry a FreeBSD
+path into the Linux one. The lib's epmd probe moved from source-time to
+`beam_wait_main` so that the pin is in place before the probe runs — and so
+sourcing the lib has no side effects.
+
+**Why both entry-point FILES survive, rather than one of them being deleted in
+favour of the lib path.** Neither path is free to change. `infra/freebsd/rc.d/grappa`
+defaults `grappa_beam_wait` to the jail path, and that default is read by the
+wrapper INSTALLED BY THE PREVIOUS DEPLOY — retargeting it would mean editing
+`rc.d/grappa`, which is `Preflight`'s `:rc_d` class and therefore a COLD deploy
+on m42, i.e. every IRC session dropped, to move a file. The Linux path is
+`ExecStartPre` in `grappa.service`, the `:systemd_unit` class, same argument.
+Keeping both paths stable makes the entire dedupe classify HOT on every
+substrate, which for a change that alters no runtime behaviour is the honest
+verdict as well as the cheap one.
+
+**The guard against a third copy.** `test/infra/beam_wait_test.bats` (renamed
+from `jail_beam_wait_test.bats`) now runs every behavioural case through BOTH
+entry points rather than the jail's alone — the Linux copy was previously
+untested, which is a large part of how it drifted — plus one structural case
+asserting that exactly one file under `infra/` defines the algorithm. That last
+one is red on the parent commit for the right reason: two definers.
