@@ -2,7 +2,7 @@ import { type Component, createMemo, createSignal, For, onMount, Show } from "so
 import AdminBadge, { type Tone } from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
-import { formatInstant } from "./admin/formatInstant";
+import { formatLogInstant } from "./admin/formatInstant";
 import { useRefreshSlot } from "./admin/refreshSlot";
 import { ApiError, adminListSessionLog, assertNever } from "./lib/api";
 import { token } from "./lib/auth";
@@ -115,7 +115,7 @@ const AdminSessionLogTab: Component = () => {
               >
                 {(ev) => (
                   <li class="adm-log-row" data-testid={`session-log-row-${ev.event}`}>
-                    <time class="adm-log-at">{formatInstant(ev.at)}</time>
+                    <time class="adm-log-at">{formatLogInstant(ev.at)}</time>
                     <AdminBadge tone={EVENT_TONE[ev.event]} class={`event-${ev.event}`}>
                       {eventLabel(ev.event)}
                     </AdminBadge>

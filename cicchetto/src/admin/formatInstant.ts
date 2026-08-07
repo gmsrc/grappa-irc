@@ -20,11 +20,30 @@
 
 const pad = (n: number): string => n.toString().padStart(2, "0");
 
+function datePart(d: Date): string {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** `YYYY-MM-DD HH:mm` — for a table cell, where the row is a record. */
 export function formatInstant(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    ` ${pad(d.getHours())}:${pad(d.getMinutes())}`
-  );
+  return `${datePart(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * `YYYY-MM-DD HH:mm:ss` — for a LOG line, where the row is an event.
+ *
+ * Seconds are load-bearing here and nowhere else: reading a log means
+ * reading ORDER and spacing, and two events a few seconds apart are the
+ * whole story of a reconnect loop. A table cell like `users.inserted_at`
+ * has no such neighbour to be compared against, so it drops them.
+ * (Sub-second is still dropped in both: the wire's six microsecond
+ * digits made this the widest column on the page and no operator reads
+ * them.)
+ */
+export function formatLogInstant(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${datePart(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }

@@ -320,7 +320,7 @@ const AdminUsersTab: Component = () => {
                         <td class="admin-users-actions adm-table-sticky-actions">
                           <button
                             type="button"
-                            class="adm-btn"
+                            class={`adm-btn ${u.is_admin ? "adm-btn--danger" : "adm-btn--ok"}`}
                             onClick={() => {
                               void onToggleAdmin(u);
                             }}
@@ -373,7 +373,7 @@ const AdminUsersTab: Component = () => {
                             />
                             <button
                               type="submit"
-                              class="adm-btn"
+                              class="adm-btn adm-btn--ok"
                               disabled={passwordInput() === ""}
                               data-testid={`admin-user-rotate-submit-${u.id}`}
                             >
@@ -381,7 +381,7 @@ const AdminUsersTab: Component = () => {
                             </button>
                             <button
                               type="button"
-                              class="adm-btn"
+                              class="adm-btn adm-btn--danger"
                               onClick={onCancelRotate}
                               data-testid={`admin-user-rotate-cancel-${u.id}`}
                             >

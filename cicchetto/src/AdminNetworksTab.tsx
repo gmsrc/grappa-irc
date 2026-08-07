@@ -724,7 +724,7 @@ const AdminNetworksTab: Component = () => {
                         <td class="admin-networks-actions adm-table-sticky-actions">
                           <button
                             type="button"
-                            class="adm-btn"
+                            class="adm-btn adm-btn--ok"
                             disabled={!isDirtyAndValid(net, edits[net.slug])}
                             onClick={() => {
                               void onSave(net);
@@ -1072,7 +1072,7 @@ const ServersDisclosure: Component<{
                       />
                       <button
                         type="button"
-                        class="adm-btn"
+                        class="adm-btn adm-btn--ok"
                         onClick={() => props.onSaveSource(s, sourceDraft())}
                         data-testid={`admin-network-server-source-save-${props.net.slug}-${s.id}`}
                       >

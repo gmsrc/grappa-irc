@@ -521,14 +521,14 @@ const AdminCredentialsTab: Component = () => {
                             />
                             <button
                               type="submit"
-                              class="adm-btn"
+                              class="adm-btn adm-btn--ok"
                               data-testid={`admin-credential-edit-submit-${credKey(c)}`}
                             >
                               Save
                             </button>
                             <button
                               type="button"
-                              class="adm-btn"
+                              class="adm-btn adm-btn--danger"
                               onClick={onCancelEdit}
                               data-testid={`admin-credential-edit-cancel-${credKey(c)}`}
                             >

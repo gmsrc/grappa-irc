@@ -4535,6 +4535,24 @@ html.resize-dragging * {
   border-color: #c00;
 }
 
+/* Disconnect and Terminate sit side by side in one cell and did the same
+   irreversible-looking thing to the eye, because the tint only appeared
+   once armed — by which point the operator has already chosen. Terminate
+   is the harsher verb (it kills the live pid; Disconnect parks the
+   credential and the session comes back), so it wears danger at REST and
+   Disconnect wears warn. Scoped inside `.adm-table` so the shared
+   InlineConfirmButton keeps its neutral look everywhere else. */
+.adm-table .disconnect-btn {
+  color: var(--adm-warn);
+  border-color: color-mix(in oklab, var(--adm-warn), transparent 55%);
+}
+
+.adm-table .terminate-btn {
+  color: var(--adm-danger);
+  border-color: var(--adm-danger);
+  background: var(--adm-danger-bg);
+}
+
 /* #269 — Reconnect half of the Visitors-tab toggle. Positive/green tint
    distinguishes "bring it back up" from the amber Disconnect. */
 .reconnect-btn.confirming {
@@ -4656,8 +4674,32 @@ html.resize-dragging * {
   cursor: pointer;
 }
 
+/* Intent-tinted buttons. Colour is a SHORTCUT, never the only signal —
+   each still carries its verb as text, so a colour-blind operator loses
+   nothing. Applied only where the pair is genuinely opposed and sits
+   side by side, which is where two identical-looking buttons cost real
+   time: Save vs Cancel, Promote vs Demote. A lone neutral action stays
+   neutral; tinting everything would spend the signal and mean nothing. */
+.adm-btn--ok {
+  color: var(--adm-ok);
+  border-color: color-mix(in oklab, var(--adm-ok), transparent 45%);
+}
+
+.adm-btn--danger {
+  color: var(--adm-danger);
+  border-color: color-mix(in oklab, var(--adm-danger), transparent 45%);
+}
+
 .adm-btn:hover {
   background: var(--adm-surface-2);
+}
+
+.adm-btn--ok:hover {
+  background: var(--adm-ok-bg);
+}
+
+.adm-btn--danger:hover {
+  background: var(--adm-danger-bg);
 }
 
 .adm-btn:focus-visible {
@@ -4858,6 +4900,18 @@ html.resize-dragging * {
   border-radius: var(--adm-radius-sm);
   font-family: var(--adm-font);
   font-size: 0.85rem;
+}
+
+/* The Disconnect/Reconnect toggle is pushed to the right edge of the
+   cell, so across rows the buttons line up in a column that sits
+   immediately before the actions column and its Delete.
+
+   It cannot MOVE into that column: Delete is per-visitor and this
+   toggle is per-NETWORK, and a visitor with three networks has three of
+   them. Right-aligning gives the alignment without pretending the two
+   are the same kind of action. */
+.admin-visitor-networks li > .inline-confirm-btn {
+  margin-left: auto;
 }
 
 /* One badge idiom (`admin/AdminBadge.tsx`) replacing `LiveBadge`×2 +
@@ -5089,9 +5143,22 @@ html.resize-dragging * {
   padding: 0;
 }
 
-.adm-form-row .adm-field {
-  flex: 1 1 10rem;
+/* The form row's controls share the slack. This used to hang off
+   `.adm-field`, which wrapped each control until the labels moved
+   inside as placeholders — leaving the bare inputs with no flex rule at
+   all, so each sized to its own intrinsic width and the row came out
+   ragged. The rule has to name the controls now, not the wrapper. */
+.adm-form-row .adm-field,
+.adm-form-row > input:not([type="checkbox"]),
+.adm-form-row > select {
+  flex: 1 1 9rem;
   min-width: 0;
+}
+
+/* Buttons keep their intrinsic width — a submit that stretches to fill
+   a gap reads as a text field that lost its border. */
+.adm-form-row > button {
+  flex: 0 0 auto;
 }
 
 /* Admin form controls. There was NO rule for these at all: every input
