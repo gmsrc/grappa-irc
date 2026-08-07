@@ -1,4 +1,9 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import AdminBadge from "./admin/AdminBadge";
+import AdminCard from "./admin/AdminCard";
+import { AdminEmpty, AdminError } from "./admin/AdminStatus";
+import AdminTable from "./admin/AdminTable";
+import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminVisitor,
@@ -148,118 +153,125 @@ const AdminVisitorsTab: Component = () => {
 
   return (
     <div class="admin-visitors-tab">
-      <header class="admin-visitors-header">
-        <button
-          type="button"
-          class="admin-refresh-btn"
-          aria-label="refresh visitors list"
-          aria-busy={loading()}
-          onClick={() => {
-            void refresh();
-          }}
-          data-testid="admin-visitors-refresh"
-        >
-          ↻ refresh
-        </button>
-      </header>
+      <AdminToolbar
+        title="Visitors"
+        actions={
+          <AdminRefreshButton
+            onClick={() => {
+              void refresh();
+            }}
+            busy={loading()}
+            label="refresh visitors list"
+            testId="admin-visitors-refresh"
+          />
+        }
+      />
 
-      <Show when={error() !== null}>
-        <p class="admin-error" role="alert" data-testid="admin-visitors-error">
-          failed: {error()} — click ↻ refresh to retry
-        </p>
-      </Show>
+      <div class="adm-scroll">
+        <Show when={error() !== null}>
+          <AdminError message={error() ?? ""} testId="admin-visitors-error" />
+        </Show>
 
-      <Show when={visitors() === null && error() === null}>
-        <p class="muted">loading…</p>
-      </Show>
+        <Show when={visitors() === null && error() === null}>
+          <AdminEmpty message="loading…" />
+        </Show>
 
-      <Show when={visitors() !== null && (visitors() ?? []).length === 0}>
-        <p class="muted" data-testid="admin-visitors-empty">
-          no visitors
-        </p>
-      </Show>
+        <Show when={visitors() !== null && (visitors() ?? []).length === 0}>
+          <AdminEmpty message="no visitors" testId="admin-visitors-empty" />
+        </Show>
 
-      <Show when={visitors() !== null && (visitors() ?? []).length > 0}>
-        <table class="admin-visitors-table" data-testid="admin-visitors-table">
-          <thead>
-            <tr>
-              <th>identified</th>
-              <th>networks (state · nick)</th>
-              <th>ip</th>
-              <th>expires</th>
-              <th>joined</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            <For each={visitors() ?? []}>
-              {(v) => (
-                <tr class="admin-visitors-row" data-testid={`admin-visitor-row-${v.id}`}>
-                  <td>{v.identified ? "yes" : "no"}</td>
-                  <td>
-                    {/* #211 phase 7 — a visitor is multi-network; render
-                        one line per attached network with its own
-                        live-state badge + nick + slug. Empty = a
-                        credential-less identity. */}
-                    <Show
-                      when={v.networks.length > 0}
-                      fallback={<span class="muted">no networks</span>}
-                    >
-                      <ul class="admin-visitor-networks">
-                        <For each={v.networks}>
-                          {(net) => (
-                            <li data-testid={`admin-visitor-network-${v.id}-${net.network_slug}`}>
-                              <LiveBadge live={net.live_state} />
-                              <span class="admin-visitor-network-nick">{net.nick}</span>
-                              <span class="admin-visitor-network-slug">{net.network_slug}</span>
-                              <NetworkStateEmoji state={net.connection_state} />
-                              {/* #269 — per-network Disconnect ⇄ Reconnect
-                                  toggle. Affordance keys off LIVE truth
-                                  (net.live_state), NOT the DB
-                                  connection_state, so a `:connected` row
-                                  whose pid is gone correctly offers
-                                  Reconnect. */}
-                              <InlineConfirmButton
-                                idleLabel={net.live_state !== null ? "Disconnect" : "Reconnect"}
-                                confirmLabel={
-                                  net.live_state !== null
-                                    ? "Confirm disconnect?"
-                                    : "Confirm reconnect?"
-                                }
-                                armed={confirmingToggleKey() === toggleKey(v, net)}
-                                onArm={() => setConfirmingToggleKey(toggleKey(v, net))}
-                                onConfirm={() => runToggle(v, net)}
-                                testId={`admin-visitor-toggle-${v.id}-${net.network_slug}`}
-                                extraClass={
-                                  net.live_state !== null ? "disconnect-btn" : "reconnect-btn"
-                                }
-                              />
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </Show>
-                  </td>
-                  <td>{v.ip ?? "—"}</td>
-                  <td>{renderExpires(v)}</td>
-                  <td>{renderInserted(v.inserted_at)}</td>
-                  <td>
-                    <InlineConfirmButton
-                      idleLabel="Delete"
-                      confirmLabel="Confirm delete?"
-                      armed={confirmingId() === v.id}
-                      onArm={() => setConfirmingId(v.id)}
-                      onConfirm={() => onDeleteConfirm(v)}
-                      testId={`admin-visitor-delete-${v.id}`}
-                      extraClass="delete-btn"
-                    />
-                  </td>
+        <Show when={visitors() !== null && (visitors() ?? []).length > 0}>
+          <AdminCard
+            title="Visitors"
+            subtitle={`${(visitors() ?? []).length} visitors`}
+            data-testid="admin-visitors-table-card"
+          >
+            <AdminTable data-testid="admin-visitors-table">
+              <thead>
+                <tr>
+                  <th>identified</th>
+                  <th>networks (state · nick)</th>
+                  <th>ip</th>
+                  <th>expires</th>
+                  <th>joined</th>
+                  <th class="adm-table-sticky-actions">
+                    <span class="sr-only">actions</span>
+                  </th>
                 </tr>
-              )}
-            </For>
-          </tbody>
-        </table>
-      </Show>
+              </thead>
+              <tbody>
+                <For each={visitors() ?? []}>
+                  {(v) => (
+                    <tr class="admin-visitors-row" data-testid={`admin-visitor-row-${v.id}`}>
+                      <td>{v.identified ? "yes" : "no"}</td>
+                      <td>
+                        {/* #211 phase 7 — a visitor is multi-network; render
+                            one line per attached network with its own
+                            live-state badge + nick + slug. Empty = a
+                            credential-less identity. */}
+                        <Show
+                          when={v.networks.length > 0}
+                          fallback={<span class="muted">no networks</span>}
+                        >
+                          <ul class="admin-visitor-networks">
+                            <For each={v.networks}>
+                              {(net) => (
+                                <li
+                                  data-testid={`admin-visitor-network-${v.id}-${net.network_slug}`}
+                                >
+                                  <LiveBadge live={net.live_state} />
+                                  <span class="admin-visitor-network-nick">{net.nick}</span>
+                                  <span class="admin-visitor-network-slug">{net.network_slug}</span>
+                                  <NetworkStateEmoji state={net.connection_state} />
+                                  {/* #269 — per-network Disconnect ⇄ Reconnect
+                                      toggle. Affordance keys off LIVE truth
+                                      (net.live_state), NOT the DB
+                                      connection_state, so a `:connected` row
+                                      whose pid is gone correctly offers
+                                      Reconnect. */}
+                                  <InlineConfirmButton
+                                    idleLabel={net.live_state !== null ? "Disconnect" : "Reconnect"}
+                                    confirmLabel={
+                                      net.live_state !== null
+                                        ? "Confirm disconnect?"
+                                        : "Confirm reconnect?"
+                                    }
+                                    armed={confirmingToggleKey() === toggleKey(v, net)}
+                                    onArm={() => setConfirmingToggleKey(toggleKey(v, net))}
+                                    onConfirm={() => runToggle(v, net)}
+                                    testId={`admin-visitor-toggle-${v.id}-${net.network_slug}`}
+                                    extraClass={
+                                      net.live_state !== null ? "disconnect-btn" : "reconnect-btn"
+                                    }
+                                  />
+                                </li>
+                              )}
+                            </For>
+                          </ul>
+                        </Show>
+                      </td>
+                      <td>{v.ip ?? "—"}</td>
+                      <td>{renderExpires(v)}</td>
+                      <td>{renderInserted(v.inserted_at)}</td>
+                      <td class="adm-table-sticky-actions">
+                        <InlineConfirmButton
+                          idleLabel="Delete"
+                          confirmLabel="Confirm delete?"
+                          armed={confirmingId() === v.id}
+                          onArm={() => setConfirmingId(v.id)}
+                          onConfirm={() => onDeleteConfirm(v)}
+                          testId={`admin-visitor-delete-${v.id}`}
+                          extraClass="delete-btn"
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </AdminTable>
+          </AdminCard>
+        </Show>
+      </div>
     </div>
   );
 };
@@ -272,20 +284,24 @@ const LiveBadge: Component<{ live: AdminVisitorNetwork["live_state"] }> = (props
     // U-0 honesty signal per `feedback_no_silent_drops_closed`.
     // DB intent active, BEAM has no pid for this visitor.
     return (
-      <span class="live-badge none" role="status" aria-label="BEAM has no pid for this visitor">
+      <AdminBadge
+        tone="danger"
+        class="live-badge none"
+        ariaLabel="BEAM has no pid for this visitor"
+      >
         BEAM has no pid
-      </span>
+      </AdminBadge>
     );
   }
   if (props.live.alive === false) {
     return (
-      <span
+      <AdminBadge
+        tone="warn"
         class="live-badge dead"
-        role="status"
-        aria-label="pid registered but Session.Server is dead"
+        ariaLabel="pid registered but Session.Server is dead"
       >
         pid registered but dead
-      </span>
+      </AdminBadge>
     );
   }
   const channels = props.live.joined_channels;
@@ -295,9 +311,9 @@ const LiveBadge: Component<{ live: AdminVisitorNetwork["live_state"] }> = (props
   // M-9 (Sessions tab) renders the full degradation list.
   const count = channels === null ? "?" : channels.length;
   return (
-    <span class="live-badge alive" role="status" aria-label={`alive on ${count} channels`}>
-      ● {count} chan
-    </span>
+    <AdminBadge tone="ok" class="live-badge alive" ariaLabel={`alive on ${count} channels`}>
+      {count} chan
+    </AdminBadge>
   );
 };
 
