@@ -31672,3 +31672,107 @@ path-shaped links in the wild to protect. Keeping it as a second accepted form
 would have preserved precisely the route-namespace collision that `?go=` exists
 to remove, in exchange for compatibility with a spelling that existed for one
 evening.
+
+## 2026-08-07 — #960: the circuit counts upstream health, not request payloads
+
+`Grappa.Admission.NetworkCircuit` exists to answer one question — is the
+upstream we are about to dial known to be bad — and case-1 login fed it every
+error its provisioning path could produce, including `:malformed_ident`. That
+reason comes from `apply_login_identity/3`: the client's own ident string
+failing the credential changeset, a 400 on the request body. Nothing is
+dialled on that path, so the error says nothing about the upstream the circuit
+reports on.
+
+**Why that is correctness and not tuning.** The circuit's window is keyed on
+`network_id` ALONE — the moduledoc says so in as many words ("per-`network_id`
+failure window across all subjects"), and it has to be, because a fresh anon
+login has no subject yet to key on: that gap is the whole reason the circuit
+exists beside `Session.Backoff`'s per-`(subject, network_id)` pacing. The
+consequence is that every failure the circuit counts is spent from a budget
+shared by everyone reaching that network. A window with a shared owner cannot
+be corrected by moving its threshold; the only lever that means anything is
+*what is allowed to spend from it*. So classifying an error is a correctness
+decision, and an error that only reports the request's own payload as invalid
+must not move the circuit at all.
+
+**`maybe_record_circuit_failure/2` names the split**, and the naming is the
+point: the caller's error branch used to be a bare `{:error, _}` that recorded
+unconditionally, which is a classification decision written as an absence of
+one. Two clauses now state it — the payload rejection returns `:ok`, everything
+else records — and the second clause is deliberately the catch-all so a
+misfiled reason errs toward reporting rather than toward silence.
+
+**The reusable part is the `@spec`, not the function.** Its domain is spelled
+as the closed set of reasons that actually reach that branch
+(`:connect_timeout | :malformed_ident | :network_unconfigured | :nick_in_use |
+:no_server | :upstream_unreachable | :welcome_timeout`) instead of `term()`.
+A private helper does not need a spec at all, and a `term()` domain would have
+type-checked forever. Written as a closed set, a reason added to
+`continue_case_1/4` tomorrow fails Dialyzer HERE and forces whoever added it to
+put it in one clause or the other. That is the general pattern worth copying:
+when a function's job is to CLASSIFY, spell the domain as the closed set, so
+the classification cannot be inherited by inertia. It is the same instinct as
+the codebase's "atoms or `@type t :: literal | literal`, never untyped strings"
+rule, applied to a dispatch point rather than to stored data.
+
+**Both sides of the boundary are pinned.** A full threshold of
+malformed-ident logins leaves the circuit closed (red before the change:
+`{:error, :open, _}`), and a refused connect still bumps the count — because
+the failure mode of narrowing a classification is disarming the thing you
+narrowed. Verified by mutation: collapsing the second clause to `:ok` reds the
+boundary test alone, so the two tests are measuring different halves and
+neither is a mirror of the other.
+
+## 2026-08-07 — #962: an explicit min-height is a licence to shrink
+
+The #460 settings index rows drew their label above the row's top border and
+the second subtitle line below the bottom one — on iOS, at XXL text, with a
+shortened viewport. The durable finding is not the one-line cure; it is the
+interaction that produced it, which is a trap any tap-target floor can fall
+into.
+
+**The mechanism.** A flex item's default `min-height: auto` is what normally
+stops the flex algorithm from shrinking it below its content. An EXPLICIT
+`min-height` REPLACES that automatic minimum — it does not add to it. The
+drawer's index rows are `<button>` DIRECT flex children of `.settings-drawer`,
+which is a column flex container at a FIXED height
+(`height: var(--viewport-height, 100dvh)`), and `:where(.settings-drawer)
+button` — added by cd626369 (#735) to give the drawer one base button rule
+instead of a sixth exception — sets `min-height: var(--tap-min)`. So the rows
+traded their content-derived minimum for a flat 44px floor. The moment the
+content is taller than the box, the algorithm shrinks them to it. With
+`align-items: center` and visible overflow, the content then spills out of BOTH
+borders, which is why the symptom looks like a rendering bug rather than a
+layout one.
+
+**Not a WebKit peculiarity.** Chrome collapses them identically, and the new
+spec runs on both projects for exactly that reason — before the fix both legs
+are red, the webkit one reporting `rowHeight 44 / textHeight 64` on all seven
+rows. Recording this because the issue body asserted the opposite ("WebKit does
+not apply the automatic minimum to buttons"), and a browser-specific premise
+sends the next reader looking for a browser-specific workaround.
+
+**How the wrong diagnoses died.** Two of them, both plausible, both killed by
+measurement rather than by argument. The WebKit premise was falsified on a
+real iPhone, where the clone did NOT break. A later correction narrowed the fix
+to `.settings-nav-row`, which treated the reported row as the defect instead of
+the shape it shares with its siblings. What closed the question was the console
+on the device: `box 44 serve 87` on every row — the box was 44 and the content
+wanted 87, so the number was not arbitrary, it was the token. That is the
+diagnostic worth keeping: **when a collapsed box measures exactly a round
+number that is also one of your design tokens, grep your own CSS for that token
+before you blame the engine.**
+
+**The 44px floor stays.** It is the Apple HIG tap target and it is wanted; the
+bug is that a *floor* was being used as a *height*. So the cure removes the
+shrink instead — `.settings-drawer > * { flex-shrink: 0 }` — and the overflow
+falls to the drawer's own `overflow-y: auto`, where it already belonged. The
+child-selector form is safe because every direct child shares the shape and
+none of them owns an internal scroll (`.settings-subpage` is a plain flex
+column), so nothing under that selector needs to shrink.
+
+**The general rule, for the next tap-target floor.** If you put a `min-height`
+on a flex child, ask whether the parent has a fixed height. If it does, you
+have not set a minimum — you have replaced one, and handed the algorithm
+permission to use yours as the target.
+
