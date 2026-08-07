@@ -505,10 +505,14 @@ not the surrounding code.**
   skip-the-plug shortcuts. Distinct from the loopback `:admin`
   pipeline (which gates `/admin/reload` + `/admin/cic-bundle-changed`
   on `Plugs.LoopbackOnly`); same URL prefix, separate scopes.
-  **No nginx allowlist to maintain (GH #485).** Every nginx substrate
-  is a dumb reverse proxy now (`infra/snippets/locations-api.conf`,
+  **No nginx allowlist to maintain (GH #485).** Every nginx that
+  survives is a dumb reverse proxy (`infra/snippets/locations-api.conf`,
   `location / → BEAM`) — it forwards `/admin/*` unfiltered, so a new
-  `/admin` route needs NO proxy edit. The gate is BEAM-side only:
+  `/admin` route needs NO proxy edit. Two substrates have no nginx at
+  all: Docker since #485, and the m42 bastille jail since its nginx was
+  deleted (the HOST vhost proxies straight to the jail BEAM on :4000) —
+  there the BEAM gates are the ONLY gates, by construction. The gate is
+  BEAM-side only:
   `:admin_authn` (bearer + `is_admin`) for the cic-facing routes and
   `Plugs.LoopbackOnly` (real client IP via `RemoteIpFromProxy`) for the
   loopback ones. The old snippet allowlist that used to keep new routes

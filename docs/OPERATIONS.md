@@ -390,19 +390,21 @@ downtime):
 - `priv/repo/migrations/*` — hot path skips `mix ecto.migrate`;
   new tables/columns 500 on first query post-reload, Bootstrap
   crash-loops if it reads them.
-- `infra/snippets/*` — COLD on **every** substrate: every surviving
-  nginx includes this shared proxy surface. Each substrate's OWN
-  config (`infra/freebsd/nginx.conf`, `infra/linux/nginx.conf`) is
-  COLD **only on that substrate** since #923 — before the scoping,
-  editing the Linux config forced a session-dropping COLD on the m42
-  jail, for a file the jail never opens. Hot path doesn't reload
-  nginx. Since #485
-  these are DUMB reverse proxies (no headers, no allowlist), so a
-  change here is rare; when it happens, the hot BEAM swap won't
-  pick it up — reload nginx by hand or COLD-deploy. NOTE: the CSP
+- `infra/linux/nginx.conf` + `infra/snippets/*` — COLD on **`:linux`
+  only**. `:linux` is the last deploy substrate that runs an nginx:
+  #485 dropped the Docker container and the bastille jail's nginx was
+  deleted outright (the m42 HOST vhost proxies straight to the jail
+  BEAM on :4000). Neither reads these files, and charging a
+  session-dropping COLD on m42 prod for a file nothing there opens is
+  the #923 failure the scoping exists to prevent. Hot path doesn't
+  reload nginx, so when a `:linux` change happens the hot BEAM swap
+  won't pick it up — reload nginx by hand or COLD-deploy. NOTE: the CSP
   itself is NO LONGER here — it moved into the BEAM
   (`GrappaWeb.Plugs.SecurityHeaders`), so a captcha-provider CSP
-  edit is now a code change (COLD), not an nginx reload.
+  edit is now a code change (COLD), not an nginx reload. The snippet is
+  ALSO included by the e2e proxy and fetched by the AWS box's
+  `infra/cloud/first-boot.sh` — neither is a deploy substrate this
+  classifier is ever called with.
 - `config/*.exs` (any) — SECRET_SIGNING_SALT motivation; runtime
   config is hot-safe via `runtime.exs` but compile-time
   `config.exs` requires a recompile boot.
@@ -457,6 +459,16 @@ scripts/deploy-m42.sh --force-cold   # server, force cold (passthrough)
 scripts/deploy-m42.sh --cic          # cic-only bundle, hot, no BEAM restart (jail_deploy_cic.sh)
 scripts/deploy-m42.sh --full-restart # cold deploy + single host bastille-restart (binds NEW vhosts in one bounce)
 ```
+
+**There is no nginx inside the jail.** The BEAM binds `*:4000` and the
+m42 HOST vhost proxies straight to it — the jail matches the Docker
+posture (BEAM published directly, nothing in front of it inside the
+box). #485 had already hollowed the jail nginx into a pure pass-through;
+the shell was deleted after. So no deploy path installs, validates or
+reloads an nginx config any more, and `infra/snippets/*` is not read on
+this substrate. The host vhost (TLS termination, `/socket` upgrade,
+`X-Forwarded-For`, body ceiling) is the operator's, lives outside this
+repo, and is the ONLY proxy hop.
 
 **Push first.** The jail scripts `git pull --ff-only` from origin/main,
 so push before deploying. `deploy-m42.sh` fetches origin and refuses to
@@ -1317,13 +1329,15 @@ they moved into the app so EVERY substrate — the Docker single
 container, the m42 jail behind its dumb proxy, an operator's own TLS
 front door — carries the same headers with no per-substrate config.
 
-**nginx MUST NOT re-assert them.** Every nginx substrate is a dumb
-reverse proxy now (`infra/snippets/locations-api.conf`,
-`location / → BEAM`); it emits none of these headers. If a proxy also
-sends a `Content-Security-Policy`, the browser enforces the
-**intersection** of all policies (not the union) — a prod-only footgun
-that silently tightens the CSP and breaks the widgets it drops. Confirm
-the BEAM emits them and nginx doesn't double them:
+**No proxy may re-assert them.** Every nginx that survives is a dumb
+reverse proxy (`infra/snippets/locations-api.conf`,
+`location / → BEAM`); it emits none of these headers. On m42 the only
+proxy left is the HOST vhost — the jail's own nginx is gone — and the
+rule binds it the same way. If a proxy also sends a
+`Content-Security-Policy`, the browser enforces the **intersection** of
+all policies (not the union) — a prod-only footgun that silently
+tightens the CSP and breaks the widgets it drops. Confirm the BEAM emits
+them and nothing doubles them:
 `curl -sD - http://127.0.0.1:4000/ -o /dev/null` inside the jail shows
 exactly ONE `content-security-policy` line; through the public host it
 must still show exactly one, byte-identical. Prod hosts:
@@ -1352,31 +1366,17 @@ editing it is a **code change** (a plain plug — `deploy-m42.sh`'s
 auto-classifier treats it as HOT, and the running-module swap does update
 the header). Still, PREFER a COLD deploy for any security-header change
 and verify the live value explicitly — a wrong or intersection-narrowed
-CSP is a security regression, not a cosmetic one. No nginx reload needed.
-(This is the routine case; the one-time #485 cutover below is COLD because
-`jail_install_nginx.sh` must run alongside the release.) Verify the live
+CSP is a security regression, not a cosmetic one. No nginx reload needed —
+on m42 there is no jail-side nginx left to reload at all. Verify the live
 header:
 
 ```sh
 ssh m42 "curl -fsSL -D - -o /dev/null https://irc.sniffo.org/ 2>&1 | grep -i content-security-policy"
 ```
 
-### m42: the #485 cutover is ONE coordinated COLD deploy
-
-The move off the two-container topology on the jail is a single COLD
-deploy that lands TWO changes at once, and they MUST land together:
-
-1. the **release** (ships `SecurityHeaders`, so the BEAM starts emitting
-   the CSP), and
-2. a re-run of **`infra/freebsd/jail_install_nginx.sh`** (installs the
-   dumb-proxy `nginx.conf` that no longer includes the header snippet).
-
-If (1) lands without (2), prod **double-emits** the CSP (old nginx
-snippet + new plug) and the browser enforces the intersection = an
-incident. If (2) lands without (1), there's a **zero-header window**
-(nginx stopped adding them, the BEAM isn't emitting them yet). Deploy
-both in the same COLD window, then verify **exactly ONE** of each header
-and that the CSP is byte-identical to the pre-#485 value:
+After any security-header change, check the full set is emitted **exactly
+once** through the public host (a duplicate means the operator's host
+vhost started asserting one too):
 
 ```sh
 ssh m42 "curl -fsSL -D - -o /dev/null https://irc.sindro.me/ 2>&1 \

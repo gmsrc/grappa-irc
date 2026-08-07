@@ -179,54 +179,43 @@ defmodule Grappa.Deploy.PreflightTest do
     end
   end
 
-  describe "classify_paths/2 — Class 6: nginx (substrate-scoped) + infra/snippets (shared)" do
-    test "infra/snippets/locations-api.conf → cold on both substrates" do
-      file = "infra/snippets/locations-api.conf"
-
-      for substrate <- @substrates do
-        assert {:cold, reasons} = Preflight.classify_paths([file], substrate)
-        assert {:nginx, [^file]} = List.keyfind(reasons, :nginx, 0)
-      end
-    end
-
-    test "infra/snippets/admin/cors.conf → cold (H20 deeper-paths gap)" do
-      file = "infra/snippets/admin/cors.conf"
-      assert {:cold, reasons} = Preflight.classify_paths([file], :docker)
-      assert {:nginx, [^file]} = List.keyfind(reasons, :nginx, 0)
-    end
-
-    # #923 — the per-substrate nginx CONFIGS are scoped like their siblings
-    # (:rc_d, :systemd_unit, :image_substrate); only infra/snippets/ above is
-    # shared. Before the scoping, editing the LINUX nginx.conf classified COLD
-    # on the JAIL — a session-dropping restart on m42 prod for a file the jail
-    # never reads, the same incident class as the 2026-06-10 Dockerfile COLD.
-    @jail_nginx "infra/freebsd/nginx.conf"
+  describe "classify_paths/2 — Class 6: nginx (:linux-scoped, whole)" do
+    # `:linux` is the last deploy substrate that runs an nginx: #485 dropped
+    # the Docker container and the bastille jail's nginx was deleted (the m42
+    # HOST vhost proxies straight to the jail BEAM on :4000). So the WHOLE
+    # class — the config AND the shared snippet prefix — is scoped like its
+    # siblings :rc_d / :systemd_unit / :image_substrate.
     @linux_nginx "infra/linux/nginx.conf"
-
-    test "#{@jail_nginx} → cold (:nginx) on jail (the jail's own proxy config)" do
-      assert {:cold, reasons} = Preflight.classify_paths([@jail_nginx], :jail)
-      assert {:nginx, [@jail_nginx]} = List.keyfind(reasons, :nginx, 0)
-    end
-
-    test "#{@jail_nginx} → hot on linux (a systemd host never reads the jail's config)" do
-      assert {:hot, []} = Preflight.classify_paths([@jail_nginx], :linux)
-    end
-
-    test "#{@jail_nginx} → hot on docker (#485 left the docker substrate no nginx)" do
-      assert {:hot, []} = Preflight.classify_paths([@jail_nginx], :docker)
-    end
+    @snippet "infra/snippets/locations-api.conf"
+    @nested_snippet "infra/snippets/admin/cors.conf"
+    @no_nginx_substrates [:jail, :docker]
 
     test "#{@linux_nginx} → cold (:nginx) on linux (the host's own proxy config)" do
       assert {:cold, reasons} = Preflight.classify_paths([@linux_nginx], :linux)
       assert {:nginx, [@linux_nginx]} = List.keyfind(reasons, :nginx, 0)
     end
 
-    test "#{@linux_nginx} → hot on jail (m42 prod must NOT restart for a file it never reads)" do
-      assert {:hot, []} = Preflight.classify_paths([@linux_nginx], :jail)
+    test "#{@snippet} → cold (:nginx) on linux (its nginx includes it)" do
+      assert {:cold, reasons} = Preflight.classify_paths([@snippet], :linux)
+      assert {:nginx, [@snippet]} = List.keyfind(reasons, :nginx, 0)
     end
 
-    test "#{@linux_nginx} → hot on docker (#485 left the docker substrate no nginx)" do
-      assert {:hot, []} = Preflight.classify_paths([@linux_nginx], :docker)
+    test "#{@nested_snippet} → cold on linux (H20 deeper-paths gap: the whole prefix)" do
+      assert {:cold, reasons} = Preflight.classify_paths([@nested_snippet], :linux)
+      assert {:nginx, [@nested_snippet]} = List.keyfind(reasons, :nginx, 0)
+    end
+
+    # The load-bearing half of the jail-nginx removal. The snippet used to be
+    # COLD on EVERY substrate ("every surviving nginx includes it"), so left
+    # alone it would now drop every live IRC session on m42 prod to install a
+    # file the jail no longer has an nginx to read — the #923 failure class,
+    # and the 2026-06-10 Dockerfile-COLD incident before it.
+    test "no nginx path is COLD on a substrate that runs no nginx" do
+      for substrate <- @no_nginx_substrates,
+          path <- [@linux_nginx, @snippet, @nested_snippet] do
+        assert {:hot, []} = Preflight.classify_paths([path], substrate),
+               "#{path} must be HOT on #{substrate}: that substrate runs no nginx to reload"
+      end
     end
   end
 

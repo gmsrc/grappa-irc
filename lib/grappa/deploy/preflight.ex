@@ -31,16 +31,15 @@ defmodule Grappa.Deploy.Preflight do
   stack via `scripts/deploy.sh`, `:jail` for the m42 bastille jail via
   `infra/freebsd/deploy.sh`, `:linux` for a native systemd host via
   `infra/linux/deploy.sh`). Most classes are substrate-independent
-  (deps, supervision tree, migrations, config, state-shape, and the
-  shared `infra/snippets/*` proxy surface),
+  (deps, supervision tree, migrations, config, state-shape),
   but the boot-substrate files are not: a `Dockerfile` diff is COLD
   on Docker and irrelevant to the jail or a systemd host,
   `infra/freebsd/rc.d/grappa` is COLD on the jail and irrelevant
   elsewhere, `infra/linux/systemd/grappa.service` is COLD on
-  `:linux` and irrelevant elsewhere, and each substrate's OWN
-  `nginx.conf` is COLD only there (#923 — the shared
-  `infra/snippets/*` proxy surface stays substrate-independent,
-  because every surviving nginx includes it). The 2026-06-10 metadata-strip
+  `:linux` and irrelevant elsewhere, and the whole nginx class —
+  `infra/linux/nginx.conf` plus the shared `infra/snippets/*` proxy
+  surface — is HOT on `:jail`, which since the jail-nginx removal
+  runs no proxy of its own at all (#923 scoping, widened). The 2026-06-10 metadata-strip
   deploy cold-restarted prod (ALL IRC sessions dropped) for a
   Dockerfile diff the jail never reads — on an always-on bouncer
   every needless restart is incident-grade, so the substrate is an
@@ -105,7 +104,7 @@ defmodule Grappa.Deploy.Preflight do
       |> add_reason(:rc_d, filter_on(:jail, substrate, paths, &rc_d?/1))
       |> add_reason(:systemd_unit, filter_on(:linux, substrate, paths, &systemd_unit?/1))
       |> add_reason(:migration, Enum.filter(paths, &migration?/1))
-      |> add_reason(:nginx, Enum.filter(paths, &nginx?(&1, substrate)))
+      |> add_reason(:nginx, filter_on(:linux, substrate, paths, &nginx?/1))
       |> add_reason(:config, Enum.filter(paths, &config?/1))
       |> Enum.reverse()
 
@@ -357,35 +356,33 @@ defmodule Grappa.Deploy.Preflight do
 
   # Class 6: nginx config + ALL infra/snippets (H20 deeper-paths gap —
   # prior regex was `^infra/(nginx\.conf|snippets/)` which only matched
-  # files DIRECTLY under snippets/, not nested ones). #485 dropped the
-  # Docker `infra/nginx.conf` (that substrate no longer runs nginx — the
-  # BEAM is published directly). The surviving nginx substrates are both
-  # dumb reverse proxies: the bastille jail's `infra/freebsd/nginx.conf`
-  # and the native-Linux host's `infra/linux/nginx.conf`, plus the shared
-  # proxy snippet under infra/snippets/.
+  # files DIRECTLY under snippets/, not nested ones).
   #
-  # The two per-substrate CONFIGS are substrate-scoped (#923), like their
-  # siblings `rc_d?/1` (:jail), `systemd_unit?/1` (:linux) and
-  # `docker_image?/1` (:docker) — nginx was the only boot-substrate class
-  # that was not. Unscoped, editing `infra/linux/nginx.conf` classified
-  # COLD on the JAIL: a restart that drops every live IRC session on m42
-  # prod, for a file the jail never opens. That is precisely the
-  # 2026-06-10 incident (a Dockerfile diff cold-restarting the jail) the
-  # substrate argument exists to prevent — see the moduledoc.
+  # **`:linux` is the only substrate left that runs nginx**, so the whole
+  # class is scoped to it via `filter_on/4`, exactly like its siblings
+  # `rc_d?/1` (:jail), `systemd_unit?/1` (:linux) and `docker_image?/1`
+  # (:docker). It used to be scoped inline by a 2-arity predicate because
+  # the class was MIXED — two per-substrate configs plus a genuinely
+  # shared snippet prefix. It is not mixed any more: #485 dropped the
+  # Docker nginx container (the BEAM is published directly), and the
+  # bastille jail's nginx was deleted outright once #485 had hollowed it
+  # into a pure pass-through — the m42 HOST vhost proxies straight to the
+  # jail BEAM on :4000. Neither substrate reads `infra/snippets/*` any
+  # more, and charging a session-dropping COLD on m42 prod for a file
+  # nothing there opens is exactly the #923 failure this scoping exists
+  # to prevent (and before that, the 2026-06-10 Dockerfile diff that
+  # cold-restarted the jail — see the moduledoc).
   #
-  # Scoped HERE via a 2-arity predicate rather than `filter_on/4` because
-  # this class is MIXED: two substrate-scoped literals plus a genuinely
-  # shared prefix. Routing it through `filter_on/4` would need the class
-  # split across concatenated filters, which reorders the reported file
-  # list for no gain. `infra/snippets/*` stays substrate-independent: it
-  # IS included by every surviving nginx (jail, linux, and the e2e conf).
+  # The e2e proxy (`cicchetto/e2e/nginx-test.conf`) and the AWS box
+  # (`infra/cloud/first-boot.sh`, which FETCHES the snippet) also include
+  # it, which is why the snippet itself stays — but neither is a deploy
+  # substrate this classifier is ever called with.
   #
   # COLD means the BEAM must not be hot-swapped past this change; the
   # nginx bytes themselves are refreshed by the substrate's own install
   # script, not by the restart.
-  defp nginx?("infra/freebsd/nginx.conf", :jail), do: true
-  defp nginx?("infra/linux/nginx.conf", :linux), do: true
-  defp nginx?(path, _), do: String.starts_with?(path, "infra/snippets/")
+  defp nginx?("infra/linux/nginx.conf"), do: true
+  defp nginx?(path), do: String.starts_with?(path, "infra/snippets/")
 
   # Class 7 (H20+H21): ALL config/*.exs. SECRET_SIGNING_SALT was
   # silently HOT'd before this rule because config/config.exs didn't

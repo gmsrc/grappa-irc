@@ -49,7 +49,7 @@ if hash=$(curl -fsS -X POST "${RELOAD_URL}"); then
 	# incident degraded silently: CIC_DIST_ROOT was unset in the jail env,
 	# so the relative default resolved against the BEAM's CWD (NOT the repo
 	# root — rc.d/grappa sets no WorkingDirectory) and File.read missed the
-	# dist nginx was serving fine. Fail loud and name the fix.
+	# freshly-built dist sitting on disk. Fail loud and name the fix.
 	if [ -z "${hash}" ]; then
 		echo "[deploy-cic] ERROR: /admin/cic-bundle-changed returned 204 (empty) — grappa built the dist but could NOT read it back to broadcast the hash, so NO refresh banner fired. Set CIC_DIST_ROOT=/home/grappa/grappa/runtime/cicchetto-dist in /usr/local/etc/grappa/grappa.env and COLD-restart the BEAM. See issue #526." >&2
 		exit 1

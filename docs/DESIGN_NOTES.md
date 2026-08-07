@@ -31999,3 +31999,63 @@ it lives in the live node, it is an `rpc` verb.**
 
 `docs/OPERATIONS.md` carries the operator-facing half of this change; the
 runbook line for passkey recovery changed command.
+
+## 2026-08-07 — the jail's nginx is deleted; the host proxy is the only hop
+
+**What went.** `infra/freebsd/nginx.conf` and
+`infra/freebsd/jail_install_nginx.sh`, plus the `refresh_nginx` step
+`scripts/deploy-m42.sh` ran on EVERY path (server, `--cic`,
+`--full-restart`). The m42 HOST vhost now proxies straight to the jail BEAM
+on `:4000`. Nothing inside the jail listens on `:80` any more.
+
+**Why now.** #485 hollowed this nginx into a pure pass-through — no static
+serving, no headers, no allowlist, just `proxy_pass` to `127.0.0.1:4000` —
+and then the shell was never deleted. Measured on m42 before the change: the
+BEAM binds `*:4000` and answers `/healthz` on the jail's routable address,
+and the host vhost already does the whole job itself (`location /socket`
+with `Upgrade` + `proxy_http_version 1.1`, `X-Forwarded-For`,
+`client_max_body_size`). The jail nginx added one hop and zero behaviour.
+**The target was parity with Docker**, where #485 publishes the BEAM
+directly with nothing in front of it; the jail is now the same shape.
+
+**What it cost us to keep.** A second config to install, validate and
+reload on every deploy — the #599 armed-mine class (an unloadable config on
+disk while the running nginx serves what it parsed at boot) lived entirely
+in this file. And a per-deploy failure mode with its own diagnostic ladder:
+app deployed + healthy, nginx refresh failed, exit non-zero.
+
+**The attribution chain is unaffected, and that is not luck.**
+`RemoteIpFromProxy`'s trust matrix has three rows, and the jail moves from
+row 2 (loopback peer + XFF → trust the chain) to row 3 (non-loopback peer +
+XFF → walk the chain right-to-left, skipping reserved ranges). Row 3 already
+existed for the docker-bridge and operator-fronted-proxy shapes, so the real
+client IP still resolves for throttle keys, `sessions.ip` and the #543
+source derivation. The loopback-only admin doors are also untouched:
+`infra/freebsd/deploy.sh` and `jail_deploy_cic.sh` curl
+`http://127.0.0.1:4000/admin/{reload,cic-bundle-changed}` directly, never
+through a proxy, so they stay row 1 (`direct_loopback_peer?/1`). Removing an
+in-jail proxy strictly *narrows* the #957 fails-open surface — one fewer
+same-netns thing that could forward without setting a forwarded header.
+
+**Preflight: the nginx class is now `:linux`-scoped, whole.** It used to be
+scoped inline by a 2-arity predicate because the class was MIXED — two
+per-substrate configs plus a genuinely shared `infra/snippets/*` prefix that
+"every surviving nginx includes". That premise is dead: Docker dropped its
+nginx in #485 and the jail has just dropped its own, so `:linux` is the last
+deploy substrate that runs one. The class collapses to a plain
+`filter_on(:linux, …)`, the sibling shape of `rc_d?/1`, `systemd_unit?/1`
+and `docker_image?/1`. The load-bearing half is the snippet: it was COLD on
+EVERY substrate, so after this change a snippet edit would have dropped
+every live IRC session on m42 prod to install a file the jail no longer has
+an nginx to read — the exact #923 failure the scoping exists to prevent.
+
+**What the snippet is NOT.** `infra/snippets/locations-api.conf` stays.
+Deleting it was proposed and declined on evidence: it is `include`d by
+`infra/linux/nginx.conf:45` (installed unconditionally as step 10/11 of
+`infra/linux/install.sh`), by both server blocks of
+`cicchetto/e2e/nginx-test.conf` (bind-mounted read-only; the e2e app's own
+`PHX_HOST` *is* `nginx-test`, so a missing include fails `nginx -t` and
+takes down the whole suite, not one spec), and it is curl-fetched at boot by
+`infra/cloud/first-boot.sh:195` behind the `check-drift.sh` CI gate. Three
+live readers, one of them the CI. The rule "if only a dead substrate reads
+it, delete it" is right; its antecedent was simply false here.

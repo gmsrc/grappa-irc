@@ -113,21 +113,36 @@ EOF
     [ ! -s "$SSH_LOG" ]   # died before any ssh
 }
 
-# --- passthrough modes: app deploy + nginx self-heal, no bounce, no marker ---
+# --- passthrough modes: app deploy only, no bounce, no marker ----------------
 
-@test "--force-cold: app deploy + nginx refresh, no bounce, no marker" {
+@test "--force-cold: app deploy only, no bounce, no marker" {
     run_m42 --force-cold
     [ "$status" -eq 0 ]
     grep -q "deploy.sh --force-cold" "$SSH_LOG"
-    # #74355599 — refresh_nginx runs on EVERY path (self-heals the jail
-    # /admin/* allowlist), so a passthrough deploy is now TWO ssh calls:
-    # the app deploy + the nginx reinstall. What still distinguishes
-    # --force-cold from --full-restart is the ABSENCE of a bastille bounce
-    # and a marker write.
-    grep -q "jail_install_nginx.sh" "$SSH_LOG"
     refute grep -q "bastille restart" "$SSH_LOG"
     refute grep -q "last-deployed-sha" "$SSH_LOG"
-    [ "$(grep -c '^ssh ' "$SSH_LOG")" -eq 2 ]   # app deploy + nginx refresh
+    [ "$(grep -c '^ssh ' "$SSH_LOG")" -eq 1 ]   # app deploy, nothing else
+}
+
+# --- the jail runs no nginx: no path may ssh an nginx step -------------------
+#
+# There used to be a refresh_nginx step on EVERY path (reinstall the jail's
+# dumb-proxy config + reload). The jail nginx is gone — the m42 HOST vhost
+# proxies straight to the jail BEAM on :4000 — so an nginx ssh call on ANY
+# mode would be pushing a config at a service that is not there. Pin the
+# absence per-mode rather than once: it is the whole point of the removal,
+# and it is exactly the kind of step that gets copy-pasted back into one
+# branch of the case statement.
+
+@test "no mode ssh's an nginx step (the jail has no nginx to reload)" {
+    for mode in "" --force-hot --force-cold --cic --full-restart; do
+        : > "$SSH_LOG"
+        # shellcheck disable=SC2086  # empty mode must expand to NO argument
+        run_m42 $mode
+        [ "$status" -eq 0 ]
+        [ -s "$SSH_LOG" ]                       # it really did deploy something
+        refute grep -qi "nginx" "$SSH_LOG"
+    done
 }
 
 @test "unknown flag is a usage error (64)" {

@@ -8,8 +8,8 @@
 #
 # Output: /home/grappa/grappa/runtime/cicchetto-dist/ (vite bundle).
 # The BEAM self-serves it via Plug.Static since #485 — there is no
-# /usr/local/www/cic symlink and nginx serves no files from disk
-# (jail_install_nginx.sh installs two .conf files and nothing else).
+# /usr/local/www/cic symlink, and no nginx in the jail at all: the m42
+# HOST vhost proxies straight to the BEAM.
 #
 # `--outDir ../runtime/cicchetto-dist` aligns the jail with the Docker
 # substrate (`compose.yaml` bind-mounts `./runtime/cicchetto-dist:
