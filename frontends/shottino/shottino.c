@@ -116,6 +116,16 @@
  * window that pages back in a different stride than it opened with, for
  * no reason anyone could name. The server's own ceiling is 200. */
 #define SCROLLBACK_PAGE 80
+/* How many DISTINCT windows the ring's rows can name at once.
+ *
+ * Not a limit on windows open, nor on windows ever visited: the table is
+ * swept when it fills, keeping only what the rows still reference (see
+ * log_scope_intern_locked). So this is the number of windows that can be
+ * represented in one buffer's worth of rows, which 512 is generous for —
+ * and it costs 200KB against the 7.5MB of spelling it out per row. */
+#define LOG_SCOPES 512
+/* Two bytes a row instead of 392. Widen this and LOG_SCOPES together. */
+typedef uint16_t log_scope_id;
 #define HTTP_MAX (4 * 1024 * 1024)
 #define JOB_QUEUE 256
 #define SEEN_MESSAGES 12000
@@ -1296,9 +1306,20 @@ struct app {
     /* Index into `media` per log row, or -1. Parallel to log[] like the
      * mention/pending/id arrays. */
     int log_media[LOG_LINES];
-    /* The window each row belongs to, "[network/channel]", or "" for a
-     * row that predates every window. See log_scope_of_locked(). */
-    char log_scope[LOG_LINES][MAX_SLUG + MAX_CHANNEL + 8];
+    /* The window each row belongs to, as an index into log_scope_tab —
+     * 0 for a row that predates every window and shows in all of them.
+     * See log_scope_of_locked().
+     *
+     * INTERNED rather than stored per row. A scope is "[azzurra/#sniffo]",
+     * seventeen bytes, in a field sized for the longest name IRC allows:
+     * 392 bytes a row, which at 20000 rows was 7.5MB to hold a few dozen
+     * distinct strings over and over. The ring is a list of rows, and the
+     * set of windows those rows belong to is a much smaller thing — so it
+     * is kept as one, and the row keeps a number. */
+    log_scope_id log_scope[LOG_LINES];
+    char log_scope_tab[LOG_SCOPES][MAX_SLUG + MAX_CHANNEL + 8];
+    /* Entry 0 is the empty scope, minted at boot by the calloc. */
+    size_t log_scope_count;
     /* Where the row a push just wrote actually landed.
      *
      * The id stamp used to say `log_count - 1` — "the last row" — which
@@ -1875,7 +1896,7 @@ static void log_row_move_locked(struct app *app, size_t dst, size_t src) {
     app->log_pending[dst] = app->log_pending[src];
     app->log_ids[dst] = app->log_ids[src];
     app->log_media[dst] = app->log_media[src];
-    memcpy(app->log_scope[dst], app->log_scope[src], sizeof(app->log_scope[dst]));
+    app->log_scope[dst] = app->log_scope[src];
 }
 
 /* Which window a row belongs to, as "[network/channel]".
@@ -1891,32 +1912,89 @@ static void log_row_move_locked(struct app *app, size_t dst, size_t src) {
  * Decided HERE, at the only door into the buffer, and never at the draw
  * site: a scope computed while drawing is a scope that changes when the
  * focus does, which is the bug. Caller holds app->lock. */
-static void log_scope_of_locked(struct app *app, const char *line, char *out, size_t out_sz) {
+/* The id for a scope that is already in the table, or 0.
+ *
+ * 0 reads two ways and both are wanted. As a ROW's scope it means "this
+ * predates every window, show it everywhere". As an ANSWER here it means
+ * "no row has ever named this window" — and a window with no rows of its
+ * own shows exactly the everywhere rows, which is what the predicates
+ * below then say. Caller holds app->lock. */
+static log_scope_id log_scope_find_locked(const struct app *app, const char *scope) {
+    if (!scope || !scope[0]) return 0;
+    for (size_t k = 1; k < app->log_scope_count; k++)
+        if (strcmp(app->log_scope_tab[k], scope) == 0) return (log_scope_id)k;
+    return 0;
+}
+
+/* The scope id a window's rows carry, or 0 when none of them do.
+ *
+ * The one place the key is spelled and then looked up. Every reader
+ * wants the id and none of them want the string, and two copies of
+ * "build the key, find the id" is a second place for the fold to be
+ * forgotten. Caller holds app->lock. */
+static log_scope_id window_scope_id_locked(const struct app *app, const char *network,
+                                           const char *channel) {
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key(network, channel, scope, sizeof(scope));
+    return log_scope_find_locked(app, scope);
+}
+
+/* The id for a scope, minting one if this is the first row to name it.
+ *
+ * When the table is full it is SWEPT rather than grown or refused: the
+ * rows are walked, the ids they still reference are kept, and the rest
+ * are dropped. A refcount would be a second copy of something the ring
+ * already states, and it is the housekeeping — not the count — that
+ * drifts. Falls back to the everywhere scope only if a sweep frees
+ * nothing, which needs 511 live windows in one buffer.
+ * Caller holds app->lock. */
+static log_scope_id log_scope_intern_locked(struct app *app, const char *scope) {
+    if (!scope || !scope[0]) return 0;
+    if (app->log_scope_count == 0) app->log_scope_count = 1; /* entry 0 is "" */
+    log_scope_id found = log_scope_find_locked(app, scope);
+    if (found) return found;
+    if (app->log_scope_count == LOG_SCOPES) {
+        log_scope_id remap[LOG_SCOPES];
+        memset(remap, 0, sizeof(remap));
+        for (size_t i = 0; i < app->log_count; i++) remap[app->log_scope[i]] = 1;
+        size_t next = 1;
+        for (size_t old = 1; old < app->log_scope_count; old++) {
+            if (!remap[old]) continue;
+            if (next != old)
+                memcpy(app->log_scope_tab[next], app->log_scope_tab[old],
+                       sizeof(app->log_scope_tab[next]));
+            remap[old] = (log_scope_id)next++;
+        }
+        app->log_scope_count = next;
+        for (size_t i = 0; i < app->log_count; i++) app->log_scope[i] = remap[app->log_scope[i]];
+        if (app->log_scope_count == LOG_SCOPES) return 0;
+    }
+    size_t id = app->log_scope_count++;
+    snprintf(app->log_scope_tab[id], sizeof(app->log_scope_tab[id]), "%s", scope);
+    return (log_scope_id)id;
+}
+
+static log_scope_id log_scope_of_locked(struct app *app, const char *line) {
     if (line[0] == '[') {
         const char *close = strchr(line, ']');
         size_t n = close ? (size_t)(close - line) + 1 : 0;
-        char raw[MAX_SLUG + MAX_CHANNEL + 8];
-        if (n && n < out_sz && n < sizeof(raw)) {
+        char raw[MAX_SLUG + MAX_CHANNEL + 8], folded[MAX_SLUG + MAX_CHANNEL + 8];
+        if (n && n < sizeof(raw)) {
             /* FOLDED on the way in, so a row that says `[azzurra/#Chan]`
              * files under the same key as its `#chan` window. */
             memcpy(raw, line, n);
             raw[n] = 0;
-            ircd_fold(raw, out, out_sz);
-            return;
+            ircd_fold(raw, folded, sizeof(folded));
+            return log_scope_intern_locked(app, folded);
         }
     }
     size_t cur = focused_window_locked(app);
-    if (cur < app->window_count) {
-        /* Formatted via a local: `out` points INTO app (the scope array),
-         * and so do the arguments, which the compiler cannot prove is
-         * not an overlapping copy. */
-        const struct window *w = &app->windows[cur];
-        char scope[MAX_SLUG + MAX_CHANNEL + 8];
-        window_scope_key(w->network, w->channel, scope, sizeof(scope));
-        snprintf(out, out_sz, "%s", scope);
-    } else {
-        out[0] = 0; /* before any window exists: nowhere to file it, show it everywhere */
-    }
+    /* Before any window exists: nowhere to file it, show it everywhere. */
+    if (cur >= app->window_count) return 0;
+    const struct window *w = &app->windows[cur];
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key(w->network, w->channel, scope, sizeof(scope));
+    return log_scope_intern_locked(app, scope);
 }
 
 /* Append a row. Takes ownership of `line`. Caller holds app->lock. */
@@ -1953,7 +2031,7 @@ static void log_push_locked(struct app *app, char *line, bool mention, bool pend
     app->log_pending[i] = pending;
     app->log_ids[i] = 0;
     app->log_media[i] = -1;
-    log_scope_of_locked(app, line, app->log_scope[i], sizeof(app->log_scope[i]));
+    app->log_scope[i] = log_scope_of_locked(app, line);
     app->log_count++;
     /* Headless there is no window to file it under and nobody to read
      * it: the same line goes to stderr, which is where a service manager
@@ -1966,8 +2044,8 @@ static void log_push_locked(struct app *app, char *line, bool mention, bool pend
  * no scope at all (written before any window existed) is shown
  * everywhere — the alternative is a startup diagnostic nobody can
  * reach. */
-static bool log_row_in_scope(const struct app *app, size_t i, const char *scope) {
-    return app->log_scope[i][0] == 0 || strcmp(app->log_scope[i], scope) == 0;
+static bool log_row_in_scope(const struct app *app, size_t i, log_scope_id scope) {
+    return app->log_scope[i] == 0 || app->log_scope[i] == scope;
 }
 
 /* Is row `i` OF this window? A near-twin of the question above, and
@@ -1975,8 +2053,8 @@ static bool log_row_in_scope(const struct app *app, size_t i, const char *scope)
  * belong to no window in particular, so they are not what a window's
  * history is paged before or inserted above. "Shows here" and "happened
  * here" are two facts, and history is about the second. */
-static bool log_row_is_window(const struct app *app, size_t i, const char *scope) {
-    return app->log_scope[i][0] != 0 && strcmp(app->log_scope[i], scope) == 0;
+static bool log_row_is_window(const struct app *app, size_t i, log_scope_id scope) {
+    return app->log_scope[i] != 0 && app->log_scope[i] == scope;
 }
 
 /* The oldest server id among a window's rows, or 0 when it has none —
@@ -1990,7 +2068,7 @@ static bool log_row_is_window(const struct app *app, size_t i, const char *scope
  *
  * Rows without an id are operational lines and pending echoes: nothing
  * the server could page before. Caller holds app->lock. */
-static long window_oldest_id_locked(const struct app *app, const char *scope) {
+static long window_oldest_id_locked(const struct app *app, log_scope_id scope) {
     long oldest = 0;
     for (size_t i = 0; i < app->log_count; i++) {
         if (!log_row_is_window(app, i, scope)) continue;
@@ -2017,7 +2095,7 @@ static long window_oldest_id_locked(const struct app *app, const char *scope) {
  * as ASCENDING within a window, which is what both the append and the
  * history insert maintain. Caller holds app->lock. */
 static size_t window_divider_row_locked(const struct app *app, const struct window *w,
-                                        const char *scope) {
+                                        log_scope_id scope) {
     if (w->last_read_id <= 0) return app->log_count;
     size_t divider = app->log_count;
     size_t i = app->log_count;
@@ -2039,7 +2117,7 @@ static size_t window_divider_row_locked(const struct app *app, const struct wind
  *
  * A window with nothing in the buffer takes the tail, which is where an
  * append would have put it anyway. Caller holds app->lock. */
-static size_t window_first_row_locked(const struct app *app, const char *scope) {
+static size_t window_first_row_locked(const struct app *app, log_scope_id scope) {
     for (size_t i = 0; i < app->log_count; i++)
         if (log_row_is_window(app, i, scope)) return i;
     return app->log_count;
@@ -2079,9 +2157,7 @@ static void request_older_history_locked(struct app *app, struct window *w) {
     /* Same rule as every other fetch door: a window the bouncer has
      * never heard of has no history to ask it for. */
     if (is_local_window(w->channel)) return;
-    char scope[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key(w->network, w->channel, scope, sizeof(scope));
-    long before = window_oldest_id_locked(app, scope);
+    long before = window_oldest_id_locked(app, window_scope_id_locked(app, w->network, w->channel));
     /* No row with an id yet — nothing to page before. The window's first
      * fetch is what puts a cursor there, and until it lands there is no
      * question to ask. */
@@ -3029,8 +3105,8 @@ static void clear_active_window_log(struct app *app) {
         pthread_mutex_unlock(&app->lock);
         return;
     }
-    char key[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key(app->windows[cur].network, app->windows[cur].channel, key, sizeof(key));
+    log_scope_id key = window_scope_id_locked(app, app->windows[cur].network,
+                                              app->windows[cur].channel);
     size_t write_i = 0;
     /* COUNTED, not one log_row_removed_locked per row: that helper takes
      * an index in the ring as it stands, and here the indices being
@@ -3045,7 +3121,7 @@ static void clear_active_window_log(struct app *app) {
          * included: /clear clears the WINDOW, and a preview message left
          * behind by a cleared channel is exactly the leftover this scope
          * exists to prevent. */
-        if (strcmp(app->log_scope[read_i], key) == 0) {
+        if (log_row_is_window(app, read_i, key)) {
             free(app->log[read_i]);
             if (read_i < app->log_insert_at) gone_before_insert++;
             if (read_i < app->log_last_index) gone_before_last++;
@@ -6594,10 +6670,9 @@ static void fetch_older_scrollback(struct app *app, const char *network, const c
     size_t got = 0;
     bool full = false;
     if (ok) {
-        char scope[MAX_SLUG + MAX_CHANNEL + 8];
-        window_scope_key(network, channel, scope, sizeof(scope));
         pthread_mutex_lock(&app->lock);
-        app->log_insert_at = window_first_row_locked(app, scope);
+        app->log_insert_at =
+            window_first_row_locked(app, window_scope_id_locked(app, network, channel));
         app->log_insert_tid = pthread_self();
         app->log_insert_active = true;
         pthread_mutex_unlock(&app->lock);
@@ -8757,7 +8832,7 @@ struct pane_view {
  * `divider_row` is decided before this runs, by
  * window_divider_row_locked — see there for why it cannot be decided
  * here. Caller holds app->lock. */
-static void pane_view_collect(struct app *app, const char *scope, size_t divider_row, int width,
+static void pane_view_collect(struct app *app, log_scope_id scope, size_t divider_row, int width,
                               int scroll_h, size_t scroll_offset, struct pane_view *v) {
     v->count = 0;
     v->skip_lines = 0;
@@ -9009,8 +9084,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
     int scroll_h = height - topic_h;
     if (scroll_h < 1) return;
 
-    char wanted_prefix[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key(w->network, w->channel, wanted_prefix, sizeof(wanted_prefix));
+    log_scope_id wanted_prefix = window_scope_id_locked(app, w->network, w->channel);
     size_t divider_row = window_divider_row_locked(app, w, wanted_prefix);
     struct pane_view view;
     pane_view_collect(app, wanted_prefix, divider_row, width, scroll_h, pane->scroll_offset, &view);
@@ -11028,8 +11102,6 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
     if (strcmp(call->name, "read_scrollback") == 0) {
         if (!tool_arg(call->arguments, "target", target, sizeof(target)))
             return xasprintf("error: target is required");
-        char scope[MAX_SLUG + MAX_CHANNEL + 8];
-        window_scope_key(req->network, target, scope, sizeof(scope));
         /* Room for the whole window's worth. The old 4 KiB with a
          * thirty-line cap was already tight for a busy channel, and the
          * caller no longer truncates what comes back. */
@@ -11042,6 +11114,7 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
             if (v > 0 && v < 400) want = v;
         }
         pthread_mutex_lock(&app->lock);
+        log_scope_id scope = window_scope_id_locked(app, req->network, target);
         size_t shown = 0;
         for (size_t i = app->log_count; i > 0 && shown < (size_t)want; i--) {
             if (!log_row_in_scope(app, i - 1, scope)) continue;
@@ -13750,8 +13823,7 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
         size_t cur = focused_window_locked(app);
         if (cur >= app->window_count) return 0;
         struct window *w = &app->windows[cur];
-        char want[MAX_SLUG + MAX_CHANNEL + 8];
-        window_scope_key(w->network, w->channel, want, sizeof(want));
+        log_scope_id want = window_scope_id_locked(app, w->network, w->channel);
         for (size_t k = app->log_count; k > 0 && n < max; k--) {
             if (!log_row_in_scope(app, k - 1, want)) continue;
             const char *line = app->log[k - 1];
@@ -13798,8 +13870,7 @@ static size_t overlay_items_locked(struct app *app, struct overlay_item *out, si
     size_t cur = focused_window_locked(app);
     if (cur >= app->window_count) return 0;
     struct window *w = &app->windows[cur];
-    char want[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key(w->network, w->channel, want, sizeof(want));
+    log_scope_id want = window_scope_id_locked(app, w->network, w->channel);
     for (size_t k = app->log_count; k > 0 && n < max; k--) {
         const char *line = app->log[k - 1];
         if (!log_row_in_scope(app, k - 1, want)) continue;

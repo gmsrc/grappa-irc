@@ -468,6 +468,15 @@ static void seed_log(struct app *app, const char *line) {
  * answer — belongs to the window it happened in, and stays there. It
  * used to have no window at all and so appeared in ALL of them: leave
  * the channel where you typed /preview and its output came along. */
+/* The id a window's rows carry. Scopes are interned at the buffer's door,
+ * so one exists only once some row has named it. */
+static log_scope_id scope_id(struct app *app, const char *key) {
+    pthread_mutex_lock(&app->lock);
+    log_scope_id id = log_scope_find_locked(app, key);
+    pthread_mutex_unlock(&app->lock);
+    return id;
+}
+
 TEST(an_operational_line_belongs_to_the_window_it_happened_in) {
     struct app *app = test_app();
     CHECK(app != NULL);
@@ -480,20 +489,20 @@ TEST(an_operational_line_belongs_to_the_window_it_happened_in) {
     seed_log(app, "preparing preview of https://example.org/cat.png");
     seed_log(app, "[azzurra/#other] 10:00 <dave> different channel");
 
-    CHECK(log_row_in_scope(app, 0, "[azzurra/#chan]"));
-    CHECK(!log_row_in_scope(app, 0, "[azzurra/#other]"));
+    CHECK(log_row_in_scope(app, 0, scope_id(app, "[azzurra/#chan]")));
+    CHECK(!log_row_in_scope(app, 0, scope_id(app, "[azzurra/#other]")));
     /* A chat row is filed by its own prefix, not by what was focused. */
-    CHECK(log_row_in_scope(app, 1, "[azzurra/#other]"));
-    CHECK(!log_row_in_scope(app, 1, "[azzurra/#chan]"));
+    CHECK(log_row_in_scope(app, 1, scope_id(app, "[azzurra/#other]")));
+    CHECK(!log_row_in_scope(app, 1, scope_id(app, "[azzurra/#chan]")));
 
     /* Switching windows does not move rows already written: the scope
      * was taken when the line was written, so switching back finds it
      * where it happened. */
     app->panes[0].window = 1;
     seed_log(app, "upload finished");
-    CHECK(log_row_in_scope(app, 2, "[azzurra/#other]"));
-    CHECK(!log_row_in_scope(app, 2, "[azzurra/#chan]"));
-    CHECK(log_row_in_scope(app, 0, "[azzurra/#chan]"));
+    CHECK(log_row_in_scope(app, 2, scope_id(app, "[azzurra/#other]")));
+    CHECK(!log_row_in_scope(app, 2, scope_id(app, "[azzurra/#chan]")));
+    CHECK(log_row_in_scope(app, 0, scope_id(app, "[azzurra/#chan]")));
 
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
     pthread_mutex_destroy(&app->lock);

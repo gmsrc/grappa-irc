@@ -429,12 +429,14 @@ TEST(the_top_of_a_pane_asks_for_what_came_before_it) {
     /* The cursor is the window's own oldest id, and the page is the same
      * size the window opened with. */
     CHECK(strstr(source, "messages?before=%ld&limit=%d") != NULL);
-    CHECK(strstr(source, "long before = window_oldest_id_locked(app, scope);") != NULL);
+    CHECK(strstr(source, "window_oldest_id_locked(app, window_scope_id_locked(app, w->network,") !=
+          NULL);
 
     /* Written above the rows already there, by marking the ONE door
      * rather than teaching the ingest to insert — a page renders through
      * exactly the path a live message does. */
-    CHECK(strstr(source, "app->log_insert_at = window_first_row_locked(app, scope);") != NULL);
+    CHECK(strstr(source, "window_first_row_locked(app, window_scope_id_locked(app, network, channel))") !=
+          NULL);
     CHECK(strstr(source, "app->log_insert_active = true;") != NULL);
     /* The id stamp follows the row rather than the tail. */
     CHECK(strstr(source, "app->log_ids[app->log_last_index] = id;") != NULL);

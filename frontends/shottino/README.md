@@ -308,6 +308,12 @@ measure every row in scope, every frame, into arrays as long as the
 buffer. Sitting at the bottom of a full 20000-line ring is now cheaper
 than sitting at the bottom of the old 2000-line one.
 
+**What the ring costs.** About 26MB of client, ten times the history for
+none of the memory: a row keeps a two-byte number for its window instead
+of spelling `[azzurra/#sniffo]` out beside itself in a field sized for
+the longest name IRC allows. The spellings are kept once, in a table
+swept of whatever the rows have stopped referring to.
+
 ## The userlist
 
 `Ctrl-U` hands the arrow keys to the member list; `Esc` gives them back.

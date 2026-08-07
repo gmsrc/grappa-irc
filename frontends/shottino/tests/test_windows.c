@@ -50,6 +50,16 @@ static void free_app(struct app *app) {
     free(app);
 }
 
+/* The id a window's rows carry. Scopes are interned at the buffer's
+ * door, so one exists only once some row has named it — which is exactly
+ * what these tests are asserting about. */
+static log_scope_id scope_of(struct app *app, const char *network, const char *channel) {
+    pthread_mutex_lock(&app->lock);
+    log_scope_id id = window_scope_id_locked(app, network, channel);
+    pthread_mutex_unlock(&app->lock);
+    return id;
+}
+
 TEST(names_are_compared_under_the_ircds_casemapping) {
     CHECK(irc_name_eq("#chan", "#CHAN"));
     CHECK(irc_name_eq("AzzuRRa", "azzurra"));
@@ -90,9 +100,11 @@ TEST(a_row_files_under_its_windows_canonical_key) {
 
     /* A row whose prefix shouts, and a window whose name does not. */
     log_line(app, "[AzzuRRa/#SNIFFO] 10:00 <alice> ciao");
-    char want[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key(app->windows[0].network, app->windows[0].channel, want, sizeof(want));
-    CHECK_STR(want, "[azzurra/#sniffo]");
+    char key[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key(app->windows[0].network, app->windows[0].channel, key, sizeof(key));
+    CHECK_STR(key, "[azzurra/#sniffo]");
+    log_scope_id want = scope_of(app, app->windows[0].network, app->windows[0].channel);
+    CHECK(want != 0);
     CHECK(log_row_in_scope(app, app->log_count - 1, want));
 
     /* A different channel still does not leak in. */
@@ -136,17 +148,15 @@ TEST(a_reply_card_lands_in_the_window_that_asked) {
     add_window_ex(app, "azzurra", "#sniffo", true); /* what the user is reading */
 
     card(app, "azzurra", "--- WHOIS alice");
-    char here[MAX_SLUG + MAX_CHANNEL + 8], server[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key("azzurra", "#sniffo", here, sizeof(here));
-    window_scope_key("azzurra", "$server", server, sizeof(server));
+    log_scope_id here = scope_of(app, "azzurra", "#sniffo");
+    log_scope_id server = scope_of(app, "azzurra", "$server");
     CHECK(log_row_in_scope(app, app->log_count - 1, here));
     CHECK(!log_row_in_scope(app, app->log_count - 1, server));
 
     /* An answer from a network the reader is not in stays on that
      * network's server window rather than barging into the channel. */
     card(app, "other", "--- WHOIS bob");
-    char elsewhere[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key("other", "$server", elsewhere, sizeof(elsewhere));
+    log_scope_id elsewhere = scope_of(app, "other", "$server");
     CHECK(log_row_in_scope(app, app->log_count - 1, elsewhere));
     CHECK(!log_row_in_scope(app, app->log_count - 1, here));
     free_app(app);
@@ -324,8 +334,7 @@ TEST(a_ctcp_reply_is_an_answer_not_a_message) {
     const char *row = app->log[app->log_count - 1];
     CHECK(strstr(row, "PING reply from alice") != NULL);
     CHECK(strstr(row, "\001") == NULL);
-    char here[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key("azzurra", "#sniffo", here, sizeof(here));
+    log_scope_id here = scope_of(app, "azzurra", "#sniffo");
     CHECK(log_row_in_scope(app, app->log_count - 1, here));
 
     /* A CTCP we did not stamp is shown for what it is rather than turned
@@ -721,9 +730,8 @@ TEST(a_ping_reply_routed_to_server_still_lands_in_the_active_window) {
 
     CHECK(log_has(app, "PING reply from alice"));
     /* In the window being READ, not in $server. */
-    char here[MAX_SLUG + MAX_CHANNEL + 8], server[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key("azzurra", "#sniffo", here, sizeof(here));
-    window_scope_key("azzurra", "$server", server, sizeof(server));
+    log_scope_id here = scope_of(app, "azzurra", "#sniffo");
+    log_scope_id server = scope_of(app, "azzurra", "$server");
     CHECK(log_row_in_scope(app, app->log_count - 1, here));
     CHECK(!log_row_in_scope(app, app->log_count - 1, server));
     /* And no tab for the person we pinged. */
@@ -2826,9 +2834,8 @@ TEST(retiring_an_echo_moves_every_row_not_just_its_text) {
     app->log_ids[0] = 100; app->log_media[0] = 0;
     app->log_ids[1] = 101; app->log_media[1] = 1;
     app->log_ids[2] = 102; app->log_media[2] = 2;
-    char scope1[MAX_SLUG + MAX_CHANNEL + 8], scope2[MAX_SLUG + MAX_CHANNEL + 8];
-    snprintf(scope1, sizeof(scope1), "%s", app->log_scope[1]);
-    snprintf(scope2, sizeof(scope2), "%s", app->log_scope[2]);
+    log_scope_id scope1 = app->log_scope[1];
+    log_scope_id scope2 = app->log_scope[2];
     pthread_mutex_unlock(&app->lock);
     CHECK_LONG(app->log_count, 3);
 
@@ -2841,16 +2848,16 @@ TEST(retiring_an_echo_moves_every_row_not_just_its_text) {
     CHECK_LONG(app->log_ids[0], 101);
     CHECK_LONG(app->log_media[0], 1);
     CHECK(app->log_mentions[0]);
-    CHECK(strcmp(app->log_scope[0], scope1) == 0);
+    CHECK_LONG(app->log_scope[0], scope1);
 
     CHECK(strstr(app->log[1], "third") != NULL);
     CHECK_LONG(app->log_ids[1], 102);
     CHECK_LONG(app->log_media[1], 2);
     CHECK(!app->log_mentions[1]);
-    CHECK(strcmp(app->log_scope[1], scope2) == 0);
+    CHECK_LONG(app->log_scope[1], scope2);
     /* The two rows came from different channels, so a scope that did not
      * move would file one of them into the other's window. */
-    CHECK(strcmp(scope1, scope2) != 0);
+    CHECK(scope1 != scope2);
 
     free_app(app);
 }
@@ -2876,10 +2883,9 @@ static void feed_chan(struct app *app, bool live, long id, const char *body) {
 }
 
 static void mark_page_locked(struct app *app, const char *channel) {
-    char scope[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key("azzurra", channel, scope, sizeof(scope));
     pthread_mutex_lock(&app->lock);
-    app->log_insert_at = window_first_row_locked(app, scope);
+    app->log_insert_at =
+        window_first_row_locked(app, window_scope_id_locked(app, "azzurra", channel));
     app->log_insert_tid = pthread_self();
     app->log_insert_active = true;
     pthread_mutex_unlock(&app->lock);
@@ -2969,7 +2975,7 @@ TEST(a_page_is_asked_for_before_the_oldest_and_written_above_the_first) {
      * nowhere. It must not become #sniffo's insertion point — the
      * everywhere rows are what log_row_is_window exists to exclude. */
     log_line(app, "connected to azzurra");
-    CHECK(app->log_scope[0][0] == 0);
+    CHECK_LONG(app->log_scope[0], 0);
 
     add_window(app, "azzurra", "#sniffo");
     add_window(app, "azzurra", "#altro");
@@ -2979,9 +2985,8 @@ TEST(a_page_is_asked_for_before_the_oldest_and_written_above_the_first) {
     feed_chan(app, true, 505, "second message");
     feed_chan(app, true, 502, "first message, out of order");
 
-    char scope[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key("azzurra", "#sniffo", scope, sizeof(scope));
     pthread_mutex_lock(&app->lock);
+    log_scope_id scope = window_scope_id_locked(app, "azzurra", "#sniffo");
     long oldest = window_oldest_id_locked(app, scope);
     size_t first = window_first_row_locked(app, scope);
     pthread_mutex_unlock(&app->lock);
@@ -3067,6 +3072,86 @@ TEST(only_a_reader_at_the_top_asks_for_more) {
     CHECK(!history_wanted(true, true, false, false, false));
 }
 
+/* ── The scope table ───────────────────────────────────────────────────
+ *
+ * A row's window used to be spelled out beside it — 392 bytes a row, in
+ * a field sized for the longest name IRC allows, to hold the same
+ * seventeen characters over and over. The rows keep a number now and the
+ * strings are kept once. */
+
+TEST(a_window_is_spelled_once_however_many_rows_name_it) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window(app, "azzurra", "#sniffo");
+    add_window(app, "azzurra", "#altro");
+
+    for (int k = 0; k < 50; k++) {
+        log_line(app, "[azzurra/#sniffo] 10:0%d <a> one", k % 10);
+        log_line(app, "[azzurra/#altro] 10:0%d <b> two", k % 10);
+    }
+    /* Entry 0 is the empty scope, and two windows named themselves. */
+    CHECK_LONG(app->log_scope_count, 3);
+
+    log_scope_id sniffo = scope_of(app, "azzurra", "#sniffo");
+    log_scope_id altro = scope_of(app, "azzurra", "#altro");
+    CHECK(sniffo != 0 && altro != 0 && sniffo != altro);
+    CHECK(log_row_in_scope(app, 0, sniffo));
+    CHECK(!log_row_in_scope(app, 0, altro));
+    CHECK_STR(app->log_scope_tab[sniffo], "[azzurra/#sniffo]");
+
+    /* A window nothing has written in has no id, and 0 answers for it:
+     * as a row's value it means "shows everywhere", and as a question it
+     * means "no row is mine" — which is the truth in both directions. */
+    CHECK_LONG(scope_of(app, "azzurra", "#nobody"), 0);
+    CHECK(!log_row_is_window(app, 0, 0));
+
+    free_app(app);
+}
+
+/* The table is swept, not grown and not refused.
+ *
+ * Refcounting what the rows reference would be a second copy of what the
+ * ring already states, and it is the housekeeping that drifts, never the
+ * count. So when the table fills it is rebuilt from the rows themselves —
+ * which is also what makes the size a bound on windows PER BUFFER rather
+ * than on windows ever visited. */
+TEST(the_scope_table_is_rebuilt_from_the_rows_that_use_it) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window(app, "azzurra", "#keep");
+
+    /* Fill the table with windows nothing keeps a row in. */
+    pthread_mutex_lock(&app->lock);
+    for (size_t k = 1; k < LOG_SCOPES; k++) {
+        char key[MAX_SLUG + MAX_CHANNEL + 8];
+        snprintf(key, sizeof(key), "[azzurra/#gone%zu]", k);
+        CHECK_LONG(log_scope_intern_locked(app, key), k);
+    }
+    CHECK_LONG(app->log_scope_count, LOG_SCOPES);
+    pthread_mutex_unlock(&app->lock);
+
+    /* One row, naming one of them: the only entry the ring still uses. */
+    log_line(app, "[azzurra/#gone7] 10:00 <a> the survivor");
+    log_scope_id before = app->log_scope[0];
+    CHECK_LONG(before, 7);
+
+    /* The next window to speak finds the table full and sweeps it. */
+    log_line(app, "[azzurra/#keep] 10:01 <b> after the sweep");
+    CHECK(app->log_scope_count < LOG_SCOPES);
+
+    /* The surviving row still names its own window — by a NEW number,
+     * since the sweep renumbered what it kept. A remap that missed the
+     * rows would leave them pointing at somebody else's spelling, which
+     * is the whole failure this replaces. */
+    CHECK_STR(app->log_scope_tab[app->log_scope[0]], "[azzurra/#gone7]");
+    CHECK_STR(app->log_scope_tab[app->log_scope[1]], "[azzurra/#keep]");
+    CHECK(app->log_scope[0] != app->log_scope[1]);
+    CHECK(log_row_is_window(app, 0, scope_of(app, "azzurra", "#gone7")));
+    CHECK(log_row_is_window(app, 1, scope_of(app, "azzurra", "#keep")));
+
+    free_app(app);
+}
+
 /* ── The pane's moving window over the buffer ──────────────────────────
  *
  * The frame used to measure every row in scope into arrays as long as
@@ -3091,9 +3176,8 @@ static struct app *view_app(size_t rows) {
 /* Every row here is one line wide, so lines and rows are the same number
  * and the arithmetic is readable. */
 static void collect_at(struct app *app, size_t offset, int scroll_h, struct pane_view *v) {
-    char scope[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key("azzurra", "#sniffo", scope, sizeof(scope));
     pthread_mutex_lock(&app->lock);
+    log_scope_id scope = window_scope_id_locked(app, "azzurra", "#sniffo");
     pane_view_collect(app, scope, app->log_count, 200, scroll_h, offset, v);
     pthread_mutex_unlock(&app->lock);
 }
@@ -3168,11 +3252,9 @@ TEST(the_topmost_row_in_view_is_cut_where_the_region_starts) {
         log_push_locked(app, line, false, false);
         pthread_mutex_unlock(&app->lock);
     }
-    char scope[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key("azzurra", "#sniffo", scope, sizeof(scope));
-
     struct pane_view v;
     pthread_mutex_lock(&app->lock);
+    log_scope_id scope = window_scope_id_locked(app, "azzurra", "#sniffo");
     int h = message_display_lines(app->log[0], 20 - 2);
     pane_view_collect(app, scope, app->log_count, 20, 5, 0, &v);
     pthread_mutex_unlock(&app->lock);
@@ -3207,8 +3289,7 @@ TEST(the_unread_divider_belongs_to_a_row_not_to_the_screen) {
     pthread_mutex_lock(&app->lock);
     for (size_t k = 0; k < app->log_count; k++) app->log_ids[k] = (long)k + 1;
     w->last_read_id = 30;
-    char scope[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key("azzurra", "#sniffo", scope, sizeof(scope));
+    log_scope_id scope = window_scope_id_locked(app, "azzurra", "#sniffo");
     size_t divider = window_divider_row_locked(app, w, scope);
     pthread_mutex_unlock(&app->lock);
 
@@ -3376,7 +3457,7 @@ TEST(a_question_is_written_where_its_answer_will_land) {
     CHECK(app != NULL);
     add_window_ex(app, "azzurra", "#sniffo", true);
 
-    char want[MAX_SLUG + MAX_CHANNEL + 8];
+    log_scope_id want;
 
     /* Asked from a CHANNEL: the question still goes to $llm, and the
      * window is opened now rather than when the answer turns up. */
@@ -3385,7 +3466,7 @@ TEST(a_question_is_written_where_its_answer_will_land) {
     for (size_t i = 0; i < app->window_count; i++)
         if (irc_name_eq(app->windows[i].channel, LLM_WINDOW)) opened = true;
     CHECK(opened);
-    window_scope_key("azzurra", LLM_WINDOW, want, sizeof(want));
+    want = scope_of(app, "azzurra", LLM_WINDOW);
     CHECK(log_row_in_scope(app, app->log_count - 1, want));
     CHECK(strstr(app->log[app->log_count - 1], "what is a bouncer?") != NULL);
     CHECK(strstr(app->log[app->log_count - 1], "<you>") != NULL);
@@ -4958,6 +5039,8 @@ int main(void) {
     RUN(a_page_is_asked_for_before_the_oldest_and_written_above_the_first);
     RUN(a_page_keeps_its_place_when_another_window_is_cleared);
     RUN(only_a_reader_at_the_top_asks_for_more);
+    RUN(a_window_is_spelled_once_however_many_rows_name_it);
+    RUN(the_scope_table_is_rebuilt_from_the_rows_that_use_it);
     RUN(a_frame_looks_at_the_region_and_not_the_buffer);
     RUN(the_walk_says_when_it_ran_out_of_rows);
     RUN(the_topmost_row_in_view_is_cut_where_the_region_starts);
