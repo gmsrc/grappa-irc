@@ -216,7 +216,7 @@ const AdminVisitorsTab: Component = () => {
             subtitle={`${(visitors() ?? []).length} visitors`}
             data-testid="admin-visitors-table-card"
           >
-            <AdminTable data-testid="admin-visitors-table">
+            <AdminTable class="admin-visitors-table" data-testid="admin-visitors-table">
               <thead>
                 <tr>
                   {/* "id", not "identified": the header was the widest

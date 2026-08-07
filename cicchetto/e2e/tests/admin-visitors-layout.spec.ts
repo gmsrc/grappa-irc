@@ -62,21 +62,28 @@ test("admin Visitors tab: per-network cell is separated + delete button stays in
     const networkList = row.locator(".admin-visitor-networks");
     await expect(networkList).toHaveCSS("list-style-type", "none");
 
-    // Defect #1b — the DB-canonical connection-state emoji is rendered
-    // (a real glyph, jsdom-invisible). This is a LAYOUT/CSS lock, so
-    // assert the emoji renders with SOME valid state label + a non-empty
-    // painted glyph — NOT a specific state. connection_state is
-    // DB-canonical (:connected|:parked|:failed) and can diverge from
+    // Defect #1b — the DB-canonical connection state is VISIBLY rendered.
+    // This is a LAYOUT/CSS lock, so it asserts SOME valid state label plus
+    // a mark that actually paints — NOT a specific state. connection_state
+    // is DB-canonical (:connected|:parked|:failed) and can diverge from
     // "connected" by render time (reconnect backoff, k-line, SASL fail);
     // pinning it to "connected" would turn an upstream-IRC flake into a
-    // false layout-regression. The exact state→glyph mapping is covered
-    // by the pure connectionStateEmoji.test.ts + the tab vitest suite.
+    // false layout-regression. The exact state→label mapping is covered by
+    // the pure connectionStateEmoji.test.ts + the tab vitest suite.
+    //
+    // The admin redesign replaced the emoji glyph with a theme-derived
+    // dot, so "a non-empty painted glyph" moved from textContent to a tone
+    // class: the badge now carries NO text (the label is the aria-label,
+    // and a visually-hidden copy of it would only re-leak the raw state
+    // into textContent — see AdminVisitorsTab). The lock is the same one —
+    // something is painted, and it says which state — asserted where the
+    // paint now lives.
     const stateEmoji = row.locator(".admin-visitor-network-state").first();
     await expect(stateEmoji).toBeVisible();
     const stateLabel = await stateEmoji.getAttribute("aria-label");
     expect(["connected", "parked", "failed", "unknown"]).toContain(stateLabel);
-    const glyph = (await stateEmoji.textContent())?.trim() ?? "";
-    expect(glyph.length).toBeGreaterThan(0);
+    const toneClass = (await stateEmoji.getAttribute("class")) ?? "";
+    expect(toneClass).toMatch(/adm-badge--(ok|warn|danger|neutral)\b/);
 
     // Defect #1c — nick + slug are separated, not one glued run. The `·`
     // separator is a CSS ::before on the slug; assert the two spans carry

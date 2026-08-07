@@ -5223,6 +5223,37 @@ html.resize-dragging * {
   padding: 0;
 }
 
+/* UX-6-G ownership: BELOW 900px the PANEL owns the horizontal scroll,
+   not the table wrapper.
+
+   `.adm-table-wrap` carrying `overflow-x: auto` is the right call on
+   desktop — the card header stays put while the columns pan. On mobile
+   it is not mine to make: `ux-6-g-admin-mobile-h-scroll` locks the panel
+   as the scroller, and that lock exists because of a real iPhone report
+   ("horiz content, scrollbar, but content doesn't move"). Moving the
+   scroller one level in would have kept the gesture working and quietly
+   invalidated the regression guard — the assertion would then be
+   measuring an element that can no longer overflow, which is a green
+   test that has stopped watching anything.
+
+   So on a phone the wrapper stops scrolling, the card is allowed to grow
+   to its widest content, and the overflow lands back on the panel where
+   the spec looks for it. `min-width: 100%` keeps a narrow card
+   full-width; `overflow: visible` is required because the card clips by
+   default and would otherwise cut the table off instead of letting it
+   push. */
+@media (max-width: 899px) {
+  .adm-table-wrap {
+    overflow-x: visible;
+  }
+
+  .adm-card {
+    overflow: visible;
+    width: max-content;
+    min-width: 100%;
+  }
+}
+
 /* Truncates a data-heavy cell (e.g. Sessions' UPSTREAM, which can
    carry a full reverse-DNS name plus the raw address in parens) to a
    fixed width with an ellipsis, so it can't crowd every column after

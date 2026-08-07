@@ -60,9 +60,9 @@ test("M-8 admin Visitors tab lists + deletes a minted visitor (inline confirm tw
     // Inline-confirm two-step: click Delete → label flips to
     // "Confirm" → click again → row disappears (splice).
     const deleteBtn = page.getByTestId(`admin-visitor-delete-${visitor.id}`);
-    await expect(deleteBtn).toHaveText(/delete/i);
+    await expect(deleteBtn).toHaveText(/^delete$/i);
     await deleteBtn.click();
-    await expect(deleteBtn).toHaveText(/confirm delete/i);
+    await expect(deleteBtn).toHaveText(/^confirm$/i);
     await deleteBtn.click();
 
     // Row gone; no error banner.
