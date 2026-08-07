@@ -5136,6 +5136,54 @@ html.resize-dragging * {
   flex-shrink: 0;
 }
 
+/* Detail panel for the row a table has open (`admin/AdminDetailPanel`).
+   A sibling of the table, NOT a row inside it: a `<td colspan>` inherits
+   the table's width, and admin tables are deliberately wider than the
+   viewport, so a form in there could only be reached by swiping
+   sideways. Out here it is viewport-wide and its contents wrap.
+
+   Styled as a card with an accent left edge instead of a top stripe, so
+   it reads as attached to the table above rather than as a peer of it. */
+.adm-detail {
+  background: var(--adm-surface-0);
+  border: 1px solid var(--adm-line);
+  border-left: 3px solid var(--adm-group, var(--adm-accent));
+  border-radius: var(--adm-radius);
+  box-shadow: var(--adm-shadow);
+  overflow: hidden;
+}
+
+.adm-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--adm-space-3);
+  padding: var(--adm-space-3) var(--adm-space-4);
+  border-bottom: 1px solid var(--adm-line);
+  background: var(--adm-surface-1);
+}
+
+.adm-detail-close {
+  flex: 0 0 auto;
+  min-width: var(--tap-min);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.adm-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--adm-space-4);
+  padding: var(--adm-space-4);
+}
+
+/* Forms already carry their own padding for the in-card case; inside the
+   panel body the padding is the body's. */
+.adm-detail-body > .adm-form-grid,
+.adm-detail-body > .adm-form-row {
+  padding: 0;
+}
+
 /* Card body has no default padding: a table fills it edge-to-edge
    (the table cells already carry their own padding); a card whose
    body is NOT a table supplies its own via a local rule. */

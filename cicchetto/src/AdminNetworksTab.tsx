@@ -2,7 +2,7 @@ import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
-import AdminExpandRow from "./admin/AdminExpandRow";
+import AdminDetailPanel from "./admin/AdminDetailPanel";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
@@ -81,12 +81,6 @@ type RowEdit = {
 };
 
 type ParseResult = { ok: true; value: number | null } | { ok: false };
-
-// Admin redesign (2026-08-07 plan, Layer 4) — column count of the
-// networks table, fed to `AdminExpandRow` so the servers/featured
-// disclosure row's `colspan` follows a column edit instead of staying
-// at the hardcoded `8`.
-const NETWORK_COLUMNS = 8;
 
 // Max admission cap. 2^31-1 is the SQLite INTEGER 4-byte signed cap;
 // any operator who needs more is doing something else wrong. Guards
@@ -200,6 +194,13 @@ const AdminNetworksTab: Component = () => {
       }),
     );
   };
+
+  // The network the detail panel is open on. DERIVED from
+  // `expandedNetworkId` + the fetched list, so a refetch cannot leave
+  // the panel titled with a stale slug and a network deleted by another
+  // admin closes it by itself.
+  const expandedNetwork = (): AdminNetwork | undefined =>
+    (networks() ?? []).find((n) => n.id === expandedNetworkId());
 
   const refresh = async (): Promise<void> => {
     const t = token();
@@ -755,83 +756,87 @@ const AdminNetworksTab: Component = () => {
                           />
                         </td>
                       </tr>
-                      <Show when={expandedNetworkId() === net.id}>
-                        <AdminExpandRow
-                          columns={NETWORK_COLUMNS}
-                          class="admin-networks-servers-row"
-                          data-testid={`admin-network-servers-${net.slug}`}
-                        >
-                          <ServersDisclosure
-                            net={net}
-                            servers={serversByNetworkId[net.id] ?? []}
-                            form={
-                              serverForm[net.id] ?? {
-                                host: "",
-                                port: "6697",
-                                tls: true,
-                                source: "",
-                              }
-                            }
-                            onFormChange={(patch) =>
-                              setServerForm(
-                                produce((draft) => {
-                                  const cur = draft[net.id] ?? {
-                                    host: "",
-                                    port: "6697",
-                                    tls: true,
-                                    source: "",
-                                  };
-                                  draft[net.id] = { ...cur, ...patch };
-                                }),
-                              )
-                            }
-                            onAddServer={(e) => {
-                              void onAddServer(net, e);
-                            }}
-                            onToggleTls={(s) => {
-                              void onToggleServerTls(net, s);
-                            }}
-                            onSaveSource={(s, raw) => {
-                              void onSaveServerSource(net, s, raw);
-                            }}
-                            confirmingServerKey={serverConfirmKey()}
-                            onArmServerDelete={(key) => setServerConfirmKey(key)}
-                            onDeleteServer={(s) => {
-                              void onDeleteServer(net, s);
-                            }}
-                          />
-                          <FeaturedChannelsDisclosure
-                            net={net}
-                            featured={featuredByNetworkId[net.id] ?? []}
-                            form={featuredForm[net.id] ?? emptyFeaturedForm()}
-                            onFormChange={(patch) =>
-                              setFeaturedForm(
-                                produce((draft) => {
-                                  const cur = draft[net.id] ?? emptyFeaturedForm();
-                                  draft[net.id] = { ...cur, ...patch };
-                                }),
-                              )
-                            }
-                            onAddFeatured={(e) => {
-                              void onAddFeaturedChannel(net, e);
-                            }}
-                            onToggleEnabled={(fc) => {
-                              void onToggleFeaturedEnabled(net, fc);
-                            }}
-                            confirmingFeaturedKey={featuredConfirmKey()}
-                            onArmFeaturedDelete={(key) => setFeaturedConfirmKey(key)}
-                            onDeleteFeatured={(fc) => {
-                              void onDeleteFeaturedChannel(net, fc);
-                            }}
-                          />
-                        </AdminExpandRow>
-                      </Show>
                     </>
                   )}
                 </For>
               </tbody>
             </AdminTable>
           </AdminCard>
+        </Show>
+        <Show when={expandedNetwork()}>
+          {(n) => (
+            <AdminDetailPanel
+              title={n().slug}
+              subtitle="server pool and featured channels for this network"
+              onClose={() => setExpandedNetworkId(null)}
+              closeLabel={`collapse ${n().slug}`}
+              data-testid={`admin-network-servers-${n().slug}`}
+            >
+              <ServersDisclosure
+                net={n()}
+                servers={serversByNetworkId[n().id] ?? []}
+                form={
+                  serverForm[n().id] ?? {
+                    host: "",
+                    port: "6697",
+                    tls: true,
+                    source: "",
+                  }
+                }
+                onFormChange={(patch) =>
+                  setServerForm(
+                    produce((draft) => {
+                      const cur = draft[n().id] ?? {
+                        host: "",
+                        port: "6697",
+                        tls: true,
+                        source: "",
+                      };
+                      draft[n().id] = { ...cur, ...patch };
+                    }),
+                  )
+                }
+                onAddServer={(e) => {
+                  void onAddServer(n(), e);
+                }}
+                onToggleTls={(s) => {
+                  void onToggleServerTls(n(), s);
+                }}
+                onSaveSource={(s, raw) => {
+                  void onSaveServerSource(n(), s, raw);
+                }}
+                confirmingServerKey={serverConfirmKey()}
+                onArmServerDelete={(key) => setServerConfirmKey(key)}
+                onDeleteServer={(s) => {
+                  void onDeleteServer(n(), s);
+                }}
+              />
+              <FeaturedChannelsDisclosure
+                net={n()}
+                featured={featuredByNetworkId[n().id] ?? []}
+                form={featuredForm[n().id] ?? emptyFeaturedForm()}
+                onFormChange={(patch) =>
+                  setFeaturedForm(
+                    produce((draft) => {
+                      const cur = draft[n().id] ?? emptyFeaturedForm();
+                      draft[n().id] = { ...cur, ...patch };
+                    }),
+                  )
+                }
+                onAddFeatured={(e) => {
+                  void onAddFeaturedChannel(n(), e);
+                }}
+                onToggleEnabled={(fc) => {
+                  void onToggleFeaturedEnabled(n(), fc);
+                }}
+                confirmingFeaturedKey={featuredConfirmKey()}
+                onArmFeaturedDelete={(key) => setFeaturedConfirmKey(key)}
+                onDeleteFeatured={(fc) => {
+                  void onDeleteFeaturedChannel(n(), fc);
+                }}
+              />
+            </AdminDetailPanel>
+          )}
         </Show>
       </div>
     </div>

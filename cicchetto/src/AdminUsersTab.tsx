@@ -1,7 +1,7 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
-import AdminExpandRow from "./admin/AdminExpandRow";
+import AdminDetailPanel from "./admin/AdminDetailPanel";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import { formatInstant } from "./admin/formatInstant";
@@ -65,14 +65,6 @@ type CreateForm = {
 
 const EMPTY_CREATE: CreateForm = { name: "", password: "", is_admin: false };
 
-// Admin redesign (2026-08-07 plan, Layer 4) — the table's column count,
-// fed to `AdminExpandRow` so the password-rotation row's `colspan` is
-// DERIVED rather than the hardcoded `colspan="5"` it used to carry. It
-// is also a contract: admin-users.spec.ts reads the admin cell as
-// `row.locator("td").nth(1)`, so the column ORDER and count are pinned
-// by an e2e assertion, not just by taste.
-const USER_COLUMNS = 5;
-
 const AdminUsersTab: Component = () => {
   const [users, setUsers] = createSignal<AdminUser[] | null>(null);
   const [error, setError] = createSignal<string | null>(null);
@@ -90,6 +82,13 @@ const AdminUsersTab: Component = () => {
 
   // Per-row delete inline-confirm.
   const [confirmingId, setConfirmingId] = createSignal<string | null>(null);
+
+  // The row the rotation panel is editing. DERIVED from `rotatingId` +
+  // the fetched list, never a second copy of the user: a refetch must
+  // not leave the panel showing a stale name, and a row that vanished
+  // (deleted by another admin) closes the panel by itself.
+  const rotatingUser = (): AdminUser | undefined =>
+    (users() ?? []).find((u) => u.id === rotatingId());
 
   const refresh = async (): Promise<void> => {
     const t = token();
@@ -302,100 +301,102 @@ const AdminUsersTab: Component = () => {
               <tbody>
                 <For each={users() ?? []}>
                   {(u) => (
-                    <>
-                      <tr class="admin-users-row" data-testid={`admin-user-row-${u.id}`}>
-                        <td>{u.name}</td>
-                        <td>
-                          {/* The WORD stays: admin-users.spec.ts reads this
+                    <tr class="admin-users-row" data-testid={`admin-user-row-${u.id}`}>
+                      <td>{u.name}</td>
+                      <td>
+                        {/* The WORD stays: admin-users.spec.ts reads this
                               cell as text (`td.nth(1)` matching /yes|no/), and
                               it is a yes/no question a colour alone cannot
                               answer. Neutral rather than danger for "no" — a
                               non-admin account is the normal case. */}
-                          <AdminBadge tone={u.is_admin ? "ok" : "neutral"}>
-                            {u.is_admin ? "yes" : "no"}
-                          </AdminBadge>
-                        </td>
-                        <td>{u.live_session_count}</td>
-                        <td>{formatInstant(u.inserted_at)}</td>
-                        <td class="admin-users-actions adm-table-sticky-actions">
-                          <button
-                            type="button"
-                            class={`adm-btn ${u.is_admin ? "adm-btn--danger" : "adm-btn--ok"}`}
-                            onClick={() => {
-                              void onToggleAdmin(u);
-                            }}
-                            data-testid={`admin-user-toggle-admin-${u.id}`}
-                          >
-                            {u.is_admin ? "Demote" : "Promote"}
-                          </button>
-                          <button
-                            type="button"
-                            class="adm-btn"
-                            onClick={() => onArmRotate(u.id)}
-                            data-testid={`admin-user-rotate-password-${u.id}`}
-                          >
-                            Rotate password
-                          </button>
-                          <InlineConfirmButton
-                            idleLabel="Delete"
-                            confirmLabel="Confirm delete?"
-                            armed={confirmingId() === u.id}
-                            onArm={() => setConfirmingId(u.id)}
-                            onConfirm={() => onDelete(u)}
-                            testId={`admin-user-delete-${u.id}`}
-                            extraClass="delete-btn"
-                          />
-                        </td>
-                      </tr>
-                      <Show when={rotatingId() === u.id}>
-                        <AdminExpandRow
-                          columns={USER_COLUMNS}
-                          class="admin-users-row-rotate"
-                          data-testid={`admin-user-rotate-form-${u.id}`}
+                        <AdminBadge tone={u.is_admin ? "ok" : "neutral"}>
+                          {u.is_admin ? "yes" : "no"}
+                        </AdminBadge>
+                      </td>
+                      <td>{u.live_session_count}</td>
+                      <td>{formatInstant(u.inserted_at)}</td>
+                      <td class="admin-users-actions adm-table-sticky-actions">
+                        <button
+                          type="button"
+                          class={`adm-btn ${u.is_admin ? "adm-btn--danger" : "adm-btn--ok"}`}
+                          onClick={() => {
+                            void onToggleAdmin(u);
+                          }}
+                          data-testid={`admin-user-toggle-admin-${u.id}`}
                         >
-                          <form
-                            class="adm-form-row"
-                            onSubmit={(e) => {
-                              e.preventDefault();
-                              void onSubmitRotate(u);
-                            }}
-                          >
-                            <input
-                              placeholder={`new password for ${u.name}`}
-                              aria-label={`new password for ${u.name}`}
-                              type="password"
-                              value={passwordInput()}
-                              onInput={(e) =>
-                                setPasswordInput((e.currentTarget as HTMLInputElement).value)
-                              }
-                              data-testid={`admin-user-rotate-input-${u.id}`}
-                              required
-                            />
-                            <button
-                              type="submit"
-                              class="adm-btn adm-btn--ok"
-                              disabled={passwordInput() === ""}
-                              data-testid={`admin-user-rotate-submit-${u.id}`}
-                            >
-                              Rotate
-                            </button>
-                            <button
-                              type="button"
-                              class="adm-btn adm-btn--danger"
-                              onClick={onCancelRotate}
-                              data-testid={`admin-user-rotate-cancel-${u.id}`}
-                            >
-                              Cancel
-                            </button>
-                          </form>
-                        </AdminExpandRow>
-                      </Show>
-                    </>
+                          {u.is_admin ? "Demote" : "Promote"}
+                        </button>
+                        <button
+                          type="button"
+                          class="adm-btn"
+                          onClick={() => onArmRotate(u.id)}
+                          data-testid={`admin-user-rotate-password-${u.id}`}
+                        >
+                          Rotate password
+                        </button>
+                        <InlineConfirmButton
+                          idleLabel="Delete"
+                          confirmLabel="Confirm delete?"
+                          armed={confirmingId() === u.id}
+                          onArm={() => setConfirmingId(u.id)}
+                          onConfirm={() => onDelete(u)}
+                          testId={`admin-user-delete-${u.id}`}
+                          extraClass="delete-btn"
+                        />
+                      </td>
+                    </tr>
                   )}
                 </For>
               </tbody>
             </AdminTable>
           </AdminCard>
+        </Show>
+        <Show when={rotatingUser()}>
+          {(u) => (
+            <AdminDetailPanel
+              title={`Rotate password for ${u().name}`}
+              subtitle="PUT /admin/users/:id/password"
+              onClose={onCancelRotate}
+              closeLabel="cancel password rotation"
+              data-testid={`admin-user-rotate-form-${u().id}`}
+            >
+              <form
+                class="adm-form-grid"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void onSubmitRotate(u());
+                }}
+              >
+                <input
+                  placeholder="new password"
+                  aria-label={`new password for ${u().name}`}
+                  type="password"
+                  value={passwordInput()}
+                  onInput={(e) => setPasswordInput((e.currentTarget as HTMLInputElement).value)}
+                  data-testid={`admin-user-rotate-input-${u().id}`}
+                  required
+                />
+                <div class="adm-form-grid-actions">
+                  <button
+                    type="submit"
+                    class="adm-btn adm-btn--ok"
+                    disabled={passwordInput() === ""}
+                    data-testid={`admin-user-rotate-submit-${u().id}`}
+                  >
+                    Rotate
+                  </button>
+                  <button
+                    type="button"
+                    class="adm-btn adm-btn--danger"
+                    onClick={onCancelRotate}
+                    data-testid={`admin-user-rotate-cancel-${u().id}`}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </AdminDetailPanel>
+          )}
         </Show>
       </div>
     </div>
