@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, onCleanup, onMount } from "solid-js";
+import AdminToolbar from "./admin/AdminToolbar";
 import { isDiagEnabled, setDiagEnabled } from "./DiagFloat";
 
 // UX-6 D12 (2026-05-21) — Admin → Debug tab. Hosts the iOS PWA
@@ -127,71 +128,82 @@ const AdminDebugTab: Component = () => {
 
   return (
     <div class="admin-debug-tab" data-testid="admin-debug-tab">
-      <fieldset class="settings-fieldset settings-diag">
-        <legend>floating diag overlay</legend>
-        <label class="settings-row">
-          <span>show floating diag overlay (top-right, live during keyboard)</span>
-          <input
-            type="checkbox"
-            checked={diagFloatOn()}
-            onChange={(e) => {
-              const v = e.currentTarget.checked;
-              setDiagEnabled(v);
-              setDiagFloatOn(v);
-            }}
-            data-testid="diag-float-toggle"
-          />
-        </label>
-      </fieldset>
-      <fieldset class="settings-fieldset settings-diag">
-        <legend>viewport diagnostics</legend>
-        <div class="settings-diag-grid">
-          <span>vv.height</span>
-          <code data-testid="diag-vv-h">{Math.round(diagVvH())}</code>
-          <span>vv.width</span>
-          <code data-testid="diag-vv-w">{Math.round(diagVvW())}</code>
-          <span>window.innerHeight</span>
-          <code data-testid="diag-win-h">{Math.round(diagWinH())}</code>
-          <span>window.innerWidth</span>
-          <code data-testid="diag-win-w">{Math.round(diagWinW())}</code>
-          <span>Δ (winH − vvH)</span>
-          <code data-testid="diag-delta">{Math.round(diagWinH() - diagVvH())}</code>
-          <span>vv.scale</span>
-          <code>{diagVvScale().toFixed(2)}</code>
-          <span>vv.offsetTop</span>
-          <code>{Math.round(diagVvOffsetTop())}</code>
-          <span>--viewport-height</span>
-          <code data-testid="diag-css-var">{diagCssVar()}</code>
-          <span>--vh</span>
-          <code data-testid="diag-vh-var">{diagVhVar()}</code>
-          <span>html.is-ios</span>
-          <code data-testid="diag-is-ios">{diagIsIos() ? "true" : "false"}</code>
-          <span>active element</span>
-          <code data-testid="diag-focus">{diagFocusedTag()}</code>
-          <span>event tick</span>
-          <code data-testid="diag-event-tick">{diagEventTick()}</code>
-          <span>last event</span>
-          <code data-testid="diag-last-event">{diagLastEvent()}</code>
-        </div>
-        <details open>
-          <summary>element chain heights (clientH/scrollH [minH])</summary>
-          <p class="settings-diag-elems">
-            <code data-testid="diag-elems">{diagElems()}</code>
-          </p>
-        </details>
-        <details>
-          <summary>recent events (newest first)</summary>
-          <ol class="settings-diag-log">
-            <For each={diagLog()}>
-              {(line) => (
-                <li>
-                  <code>{line}</code>
-                </li>
-              )}
-            </For>
-          </ol>
-        </details>
-      </fieldset>
+      {/* Admin redesign (2026-08-07 plan, Layer 4) — the toolbar and the
+          scroll body only. The fieldsets keep the SettingsDrawer classes
+          they have always borrowed: those rules exist and work, this
+          surface is a live diagnostics dump rather than a data table, and
+          re-housing it in cards would be churn for a tab nobody reads for
+          more than ten seconds. What it was actually missing was the same
+          frame as the other nine tabs — without it, opening Debug looked
+          like landing in the settings drawer by mistake. */}
+      <AdminToolbar title="Debug" subtitle="live viewport + element diagnostics" />
+      <div class="adm-scroll">
+        <fieldset class="settings-fieldset settings-diag">
+          <legend>floating diag overlay</legend>
+          <label class="settings-row">
+            <span>show floating diag overlay (top-right, live during keyboard)</span>
+            <input
+              type="checkbox"
+              checked={diagFloatOn()}
+              onChange={(e) => {
+                const v = e.currentTarget.checked;
+                setDiagEnabled(v);
+                setDiagFloatOn(v);
+              }}
+              data-testid="diag-float-toggle"
+            />
+          </label>
+        </fieldset>
+        <fieldset class="settings-fieldset settings-diag">
+          <legend>viewport diagnostics</legend>
+          <div class="settings-diag-grid">
+            <span>vv.height</span>
+            <code data-testid="diag-vv-h">{Math.round(diagVvH())}</code>
+            <span>vv.width</span>
+            <code data-testid="diag-vv-w">{Math.round(diagVvW())}</code>
+            <span>window.innerHeight</span>
+            <code data-testid="diag-win-h">{Math.round(diagWinH())}</code>
+            <span>window.innerWidth</span>
+            <code data-testid="diag-win-w">{Math.round(diagWinW())}</code>
+            <span>Δ (winH − vvH)</span>
+            <code data-testid="diag-delta">{Math.round(diagWinH() - diagVvH())}</code>
+            <span>vv.scale</span>
+            <code>{diagVvScale().toFixed(2)}</code>
+            <span>vv.offsetTop</span>
+            <code>{Math.round(diagVvOffsetTop())}</code>
+            <span>--viewport-height</span>
+            <code data-testid="diag-css-var">{diagCssVar()}</code>
+            <span>--vh</span>
+            <code data-testid="diag-vh-var">{diagVhVar()}</code>
+            <span>html.is-ios</span>
+            <code data-testid="diag-is-ios">{diagIsIos() ? "true" : "false"}</code>
+            <span>active element</span>
+            <code data-testid="diag-focus">{diagFocusedTag()}</code>
+            <span>event tick</span>
+            <code data-testid="diag-event-tick">{diagEventTick()}</code>
+            <span>last event</span>
+            <code data-testid="diag-last-event">{diagLastEvent()}</code>
+          </div>
+          <details open>
+            <summary>element chain heights (clientH/scrollH [minH])</summary>
+            <p class="settings-diag-elems">
+              <code data-testid="diag-elems">{diagElems()}</code>
+            </p>
+          </details>
+          <details>
+            <summary>recent events (newest first)</summary>
+            <ol class="settings-diag-log">
+              <For each={diagLog()}>
+                {(line) => (
+                  <li>
+                    <code>{line}</code>
+                  </li>
+                )}
+              </For>
+            </ol>
+          </details>
+        </fieldset>
+      </div>
     </div>
   );
 };
