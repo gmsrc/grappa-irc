@@ -1628,6 +1628,27 @@ defmodule Grappa.Session do
   end
 
   @doc """
+  #992 — sends `ADMIN [<target>]` upstream (primes `admin_pending`). `nil`
+  = the connected server's A-line; a `target` routes the query through that
+  server (RFC 2812 §3.4.4). The 256/257/258/259 burst — or any of the three
+  error terminators, 423 ERR_NOADMININFO / 402 ERR_NOSUCHSERVER / 447
+  ERR_RESTRICTED — is drained as a typed `:server_reply` (source `:admin`)
+  wire event on `Topic.user/1`, into the same modal /motd uses.
+
+  Read-only server query, so visitors are entitled to it (mirror of /motd
+  + /lusers). Returns `:ok`, `{:error, :no_session}`, or
+  `{:error, :invalid_line}` if a non-nil target's syntax is rejected by
+  `Grappa.IRC.Client.send_admin/2`.
+  """
+  @spec send_admin(subject(), integer(), String.t() | nil) ::
+          :ok | {:error, :no_session | :invalid_line | send_transport_error()}
+  def send_admin(subject, network_id, target)
+      when is_subject(subject) and is_integer(network_id) and
+             (is_binary(target) or is_nil(target)) do
+    call_session(subject, network_id, {:send_admin, target})
+  end
+
+  @doc """
   #238 — sends `LINKS [<mask>]` upstream (primes `links_pending`). `nil`
   = the full server mesh; a `mask` filters the reply to matching server
   names (RFC 2812 §3.4.5). The 364 RPL_LINKS burst + 365 RPL_ENDOFLINKS

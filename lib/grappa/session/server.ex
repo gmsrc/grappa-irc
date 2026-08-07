@@ -839,6 +839,7 @@ defmodule Grappa.Session.Server do
           info_pending: nil | map(),
           version_pending: nil | map(),
           motd_pending: nil | map(),
+          admin_pending: nil | map(),
           # #140 — pending NAMES accumulators keyed by lowercased target
           # channel. Set up on `:send_names`; 353 RPL_NAMREPLY rows append
           # their `[prefix]nick` tokens into the entry; 366 RPL_ENDOFNAMES
@@ -1240,6 +1241,7 @@ defmodule Grappa.Session.Server do
       info_pending: nil,
       version_pending: nil,
       motd_pending: nil,
+      admin_pending: nil,
       # CP22 cluster B — pending NAMES accumulators keyed by lowercased
       # target channel. Set up on `:send_names`; 353 RPL_NAMREPLY rows
       # merge nick lists into the entry; 366 RPL_ENDOFNAMES drains via
@@ -1906,6 +1908,14 @@ defmodule Grappa.Session.Server do
   # 402 terminator) drains the modal either way.
   def handle_call({:send_motd, target}, _, state) do
     {:reply, Client.send_motd(state.client, target), %{state | motd_pending: %{lines: []}}}
+  end
+
+  # #992 — /admin [<target>]. Same optional-target shape as /motd (bahamut
+  # routes both through the same `hunt_server`), and the same
+  # target-independent priming: whichever of the four terminators comes back
+  # — 259, 423, 402 or 447 — drains the modal and clears the flag.
+  def handle_call({:send_admin, target}, _, state) do
+    {:reply, Client.send_admin(state.client, target), %{state | admin_pending: %{lines: []}}}
   end
 
   # #238/#513 — /links [<mask>]. Prime the accumulator BEFORE the send so the
