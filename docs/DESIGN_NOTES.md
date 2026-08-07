@@ -32580,3 +32580,159 @@ override reads as deliberate rather than as a specificity accident. The 44px
 tap floor stays in ABSOLUTE px (root font-size is 14px; a rem target renders
 38.5px), which makes the desktop control larger than its 2rem sibling: the
 physical constraint wins over the visual match.
+
+## 2026-08-07 — #985: the chrome band leaves the flow, and the inset stays where it already was
+
+`.shell-chrome` had been emptied by two earlier issues (#473 took archive,
+#986 took `@` mentions into the rail) and was left as a full-width `<header>`
+around ONE ☰, priced `--chrome-tap-min + 1rem + 1px` and scaling with the
+operator's text size, on every non-channel mobile window.
+
+It is now a ZERO-HEIGHT flow row whose single child overflows over the pane's
+top-right corner. Three decisions are the durable part:
+
+1. **The containing block is `.shell-chrome`, not `.shell-main`.** The obvious
+   reading ("absolutely position the cluster against `.shell-main`'s padding
+   box") requires positioning `.shell-main`, which re-anchors every
+   `position: absolute` descendant that currently resolves past it. A
+   zero-height `position: relative` row anchors the opener identically with no
+   blast radius. General rule: when a float needs an anchor, prefer creating a
+   new zero-cost containing block over positioning an existing layout box.
+
+2. **No `env(safe-area-inset-top)` at the float.** `.shell-mobile` carries the
+   inset (UX-3 BIS) and `.shell-main` is inside that padding box, so the pane's
+   top edge is already below the island. The issue text asked for the inset
+   explicitly; applying it would have double-counted — the #913 trap pointed
+   the other way. **Whether an inset is owed depends on which box you anchor
+   to, not on whether the element is near the top of the screen.** `.rail-actions-menu`
+   DOES owe it (#913) because it measures `getBoundingClientRect().top`, an
+   absolute viewport coordinate; `.shell-chrome` does not, because it anchors
+   inside an already-inset padding box.
+
+3. **A float owes its own backing.** `.shell-chrome-btn` is
+   `background: transparent`, which was free while an opaque band sat behind
+   the glyph. Over scrollback text and a themed background image it is not.
+   Same reasoning the `:root.theme-has-bg` block already records for the
+   compose box and chrome ("chrome stay solid for legibility").
+
+Accepted cost, recorded so it is not rediscovered as a bug: the ☰'s 48px box
+overlaps the top-right corner of the scrollback. The hit area is the button
+alone.
+
+### Collapsing a host to zero height makes it `hidden`, and four specs said so
+
+The element and its testids were kept deliberately (~20 specs locate the door
+here), so "nothing will break" was the expectation. It broke four specs, all
+in one way: Playwright calls an element with an EMPTY bounding box `hidden`,
+so `expect(shell-chrome).toBeVisible()` flips the moment the host stops being
+a band — even though it is still mounted and its child is still on screen.
+
+The four sites were `issue985`, `ux-5-a`, `ux-5-bm`, `ux-5-bt`; every OTHER
+reference in the tree was already `toHaveCount`, which is unaffected. In each
+of the four, the assertion was a cold-load precondition meaning "the
+non-channel chrome is up", and in three of them the very next line was already
+the assertion that carried the meaning. None was the subject of its test —
+`ux-5-a` counts hamburgers, `ux-5-bt` pins mounted-on-home / absent-on-channel,
+`ux-5-bm` pins the door and the cog's absence — so all four now witness the
+MOUNT (`toHaveCount(1)`) plus the DOOR (the opener visible), and nothing that
+was measured has been given up. `ux-5-bm`'s title was rewritten too: it read
+"standalone .shell-chrome row preserved on home", which pinned the band this
+issue removes on vjt's instruction.
+
+`issue985`'s own spec had the contradiction in a single test: it asserted the
+host VISIBLE as a precondition and its height ZERO as the outcome. Both could
+never hold. It also read the host through `boundingBox()`, which is defined to
+return null for an element Playwright deems invisible — so the property under
+test would have reported "no bounding box"; it now reads
+`getBoundingClientRect()` through the DOM.
+
+**The general rule: `toBeVisible()` is an assertion about a box, so it is the
+wrong witness for "this component is mounted" whenever the component's own job
+is to occupy no space. Witness the mount with a count and the affordance with
+its own visibility.**
+
+### The opacity guard was the defect, not the backing
+
+Point 3 above ("a float owes its own backing") shipped with an e2e guard that
+read the computed `backgroundColor` and required alpha 1. It went red against a
+perfectly opaque product. The guard scraped the alpha with
+`/rgba?\([^)]*?(?:,\s*([\d.]+))?\)$/`, and `[^)]*?` is LAZY: on a
+three-component `rgb(255, 255, 255)` it stops early and lets the optional group
+capture the BLUE channel as the alpha. `Number("255") !== 1`, red.
+
+The repair is not a wider tolerance. **Alpha exists ONLY in the four-component
+form** — CSSOM serialises an opaque colour as `rgb(r, g, b)` — so the component
+COUNT is what carries opacity, and counting it is what makes the assertion
+theme-independent: it never names a colour, and reads the same against `#fff`
+and `#0a0a0a`. An unrecognised serialisation now throws instead of passing; the
+old `alpha === undefined` arm silently accepted anything that was not
+`rgb()`/`rgba()`, `color(srgb ...)` among them.
+
+Two rules are worth more than the fix:
+
+* **Read what the browser RECEIVED, not what the tree says you served.** The
+  diagnosis came from the built CSS extracted out of `resources/` inside the
+  failing run's own `trace.zip`, plus the run's `colorScheme: light` context
+  option. The source tree can only tell you what you intended.
+* **A test that pins SOURCE TEXT is not a witness that a guard works.**
+  `shellChromeFloat.test.ts` matches the CSS declaration textually, so it turns
+  red for any edit to that line — including a correct one. It guards the
+  writing, never the behaviour.
+
+No browser runs on the dev host, so the guard was proven in CI by mutation
+instead: a temporary commit set the backing to `rgba(255, 255, 255, 0.5)` and
+run 31186523383 came back 1 failed / 636 passed, the single red being this
+assertion at `Expected: 1 / Received: 0.5`. It fails on the alpha, and the
+failure message carries the computed value so the next red needs no trace
+archaeology. The mutation was reverted; the tree is byte-identical to its
+pre-mutation state.
+
+## 2026-08-07 — #988: the proposed re-anchor is a geometric no-op
+
+#988 asked to swap `.rail-actions-menu` from `bottom: 100%` to top-anchored
+once the menu no longer fits, so a tall menu opens with `home` visible.
+
+It cannot change anything. When the content exceeds the cap, `max-height`
+resolves to `spaceAbove - inset` (#588 + #913), so the bottom-anchored box
+already runs from `inset + RAIL_MENU_TOP_GAP` down to the launcher — precisely
+the rectangle a top-anchored menu carrying the same cap would occupy. The two
+anchorings differ ONLY when the menu fits, and #988 keeps `bottom: 100%` for
+that case by its own terms.
+
+The general shape: **a capped bottom-anchored box and a capped top-anchored
+box are the same box.** Re-anchoring only moves a menu that was not being
+clipped in the first place. Where the first row can genuinely be lost is the
+CAP, not the anchor — which is exactly what #588 and #913 were.
+
+#988's premise is also unconfirmed: the issue records that the screenshot
+never arrived and the geometry was read off the code. PR #1004 therefore
+ships the measurement (an e2e that prints scrollTop / cap / box geometry at
+four viewport heights plus XXL) and the acceptance criterion as a guard, and
+no re-anchor.
+
+### The measurement has since run, and it settles both readings
+
+webkit-iphone-15, run 31179452487, five readings (four heights + XXL@360):
+`scrollTop` was **0 on every one**, including the three where the menu really
+did overflow (`scrollHeight` 435 vs `clientHeight` 427 / 337 / 267). `home`
+was the first row, wholly inside the port, and the hit-test target in all
+five. So the stray-scroll reading is dead by measurement, not by argument,
+and the no-op reading now has the magnitude it was missing.
+
+The run also caught a defect in the GUARD, not in the product. The criterion
+had been written as `firstRowTop - menuTop <= 1`, which compares a content-box
+coordinate against a BORDER-box one: `getBoundingClientRect().top` is the
+border box, while the first row begins after the border AND the padding.
+`.rail-actions-menu` carries `padding: 0.5rem` over `border: 1px`, and `rem`
+follows `--font-size` (`html, body { font-size: var(--font-size) }`) — so the
+gap was 7+1 = **8px** at the default 14px root and 10+1 = **11px** at XXL's
+20px, at every viewport height, exactly as measured. One cause, both numbers,
+to the pixel.
+
+**The general shape: a criterion about "the first row is at the top of the
+scroll port" is a statement about the CONTENT box, and must not be measured
+from the border box.** The guard now measures the menu's own chrome per pass
+and asserts the RESIDUAL is zero, so any offset that is not border + padding —
+a real scroll, a margin, a hidden sibling — fails loudly instead of being
+absorbed by a tolerance. A geometric argument that predicts a shape but no
+magnitude cannot tell you which of the two it is; only the number can.
