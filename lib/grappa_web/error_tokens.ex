@@ -128,6 +128,10 @@ defmodule GrappaWeb.ErrorTokens do
           | :probe_timeout
           | :internal
           | :session_plan_resolve_failed
+          # Operator-facing (POST /admin/reload, loopback-gated): a
+          # pending migration is contract, so the hot deploy is refused
+          # and nothing ran — see Grappa.HotReload.migrate_and_reload/0.
+          | :contract_migrations_pending
           | :invalid_message
           | :anon_collision
           | :nick_in_use

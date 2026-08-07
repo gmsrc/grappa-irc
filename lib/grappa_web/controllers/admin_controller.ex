@@ -4,7 +4,27 @@ defmodule GrappaWeb.AdminController do
 
   ## `POST /admin/reload`
 
-  Delegates to `Grappa.HotReload.reload_modified/0`: walks the app's
+  Delegates to `Grappa.HotReload.migrate_and_reload/0`, which applies
+  pending migrations on the already-open `Grappa.Repo` pool and only
+  THEN reloads modules (GH #41 — see that function for why the order is
+  load-bearing and why it refuses a pending contract migration). Two
+  outcomes join the pre-#41 one:
+
+    * `409` `%{"error" => "contract_migrations_pending", "migrations" =>
+      [path, ...]}` — a pending migration is contract; nothing ran, the
+      live BEAM is untouched, and the operator's next move is a cold
+      deploy. NOTE `curl -f` (every substrate's `substrate_reload`)
+      suppresses this body, so the deploy script can only report that
+      the POST failed, not why — `infra/lib/deploy_common.sh` names both
+      possibilities rather than guessing one.
+    * a raising migration is NOT rescued: it 5xxes, the transaction
+      rolls back, and no module is reloaded.
+
+  On success the JSON gains a `"migrated"` key (the applied versions,
+  `[]` when there was nothing pending) alongside the pre-existing
+  `"reloaded"` / `"failed"`.
+
+  The reload half walks the app's
   own `ebin` dir by absolute path and, per `.beam` file, reloads it
   if it's new (module never loaded) or changed (on-disk md5 differs
   from the loaded version's `module_info(:md5)`) via
@@ -16,11 +36,11 @@ defmodule GrappaWeb.AdminController do
   and for why soft-purge (the 2026-06-10 double-hot-deploy
   `:not_purged` live repro, and why hard purge would drop IRC
   sessions). Returns `200 OK` with JSON
-  `%{"reloaded" => ["Elixir.Mod.Name", ...], "failed" => [%{"module" =>
-  ..., "reason" => ...}, ...]}` — both empty when nothing changed;
-  a non-empty `failed` is NOT itself surfaced as a non-200 status, so
-  callers (deploy scripts) MUST inspect the body, not just the HTTP
-  status.
+  `%{"migrated" => [version, ...], "reloaded" => ["Elixir.Mod.Name",
+  ...], "failed" => [%{"module" => ..., "reason" => ...}, ...]}` — all
+  empty when nothing changed; a non-empty `failed` is NOT itself
+  surfaced as a non-200 status, so callers (deploy scripts) MUST inspect
+  the body, not just the HTTP status.
 
   ### Why not `Phoenix.CodeReloader`
 
@@ -69,7 +89,7 @@ defmodule GrappaWeb.AdminController do
 
   Module-shape changes that can't be hot-swapped (mix.lock bump,
   supervision tree restructure, struct shape change in long-lived
-  GenServer state) require the cold path —
+  GenServer state, a CONTRACT migration) require the cold path —
   `scripts/deploy.sh` (Docker), `infra/freebsd/deploy.sh --force-cold`
   (jail), or `infra/linux/deploy.sh` (Linux — always cold when the
   diff needs it, no force flag exists yet on this substrate). All
@@ -98,18 +118,29 @@ defmodule GrappaWeb.AdminController do
   alias Grappa.PubSub.Topic
   alias Grappa.WSPresence
 
-  @doc "POST /admin/reload → reload all modified modules in the running BEAM."
+  @doc "POST /admin/reload → migrate, then reload every modified module."
   @spec reload(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def reload(conn, _) do
-    %{reloaded: reloaded, failed: failed} = Grappa.HotReload.reload_modified()
+    case Grappa.HotReload.migrate_and_reload() do
+      {:ok, %{migrated: migrated, reloaded: reloaded, failed: failed}} ->
+        json(conn, %{
+          migrated: migrated,
+          reloaded: Enum.map(reloaded, &Atom.to_string/1),
+          failed:
+            for {mod, reason} <- failed do
+              %{module: Atom.to_string(mod), reason: inspect(reason)}
+            end
+        })
 
-    json(conn, %{
-      reloaded: Enum.map(reloaded, &Atom.to_string/1),
-      failed:
-        for {mod, reason} <- failed do
-          %{module: Atom.to_string(mod), reason: inspect(reason)}
-        end
-    })
+      {:error, {:contract_migrations, files}} ->
+        # 409, not 500: nothing failed and nothing is broken — the
+        # request is simply not satisfiable hot. The operator's next
+        # move is a cold deploy, and the body names the files that
+        # decided it.
+        conn
+        |> put_status(:conflict)
+        |> json(%{error: "contract_migrations_pending", migrations: files})
+    end
   end
 
   @doc "POST /admin/cic-bundle-changed → re-read bundle hash + broadcast on every user-topic."

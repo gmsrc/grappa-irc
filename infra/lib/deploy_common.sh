@@ -285,7 +285,13 @@ _deploy_hot() {
 				;;
 		esac
 	else
-		deploy_error "POST /admin/reload failed — daemon may be down or unreachable"
+		# Every substrate_reload uses `curl -f`, which discards the
+		# response body on a non-2xx — so this branch knows the POST
+		# failed and NOTHING about why. State the two live causes rather
+		# than assert the one we used to guess (#41 added the second).
+		deploy_error "POST /admin/reload failed"
+		printf '[deploy]   the daemon is down/unreachable, OR it refused the hot reload\n' >&2
+		printf '[deploy]   (HTTP 409 = a pending migration is CONTRACT → run a cold deploy)\n' >&2
 		exit 1
 	fi
 	_deploy_healthcheck_loop "$(_deploy_hot_retries)" "$(_deploy_hot_sleep)"

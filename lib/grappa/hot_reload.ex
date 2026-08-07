@@ -48,12 +48,122 @@ defmodule Grappa.HotReload do
   retry, or schedule a cold window).
   """
 
-  use Boundary, top_level?: true, deps: [], exports: []
+  use Boundary, top_level?: true, deps: [Grappa.Deploy.Preflight, Grappa.Repo], exports: []
+
+  alias Grappa.Deploy.Preflight
 
   @typedoc "Per-module failure: soft-purge refusal or load error."
   @type failure :: {module(), :old_code_in_use | term()}
 
   @type result :: %{reloaded: [module()], failed: [failure()]}
+
+  @typedoc "Applied migration versions plus the module-reload outcome."
+  @type migrate_result :: %{
+          migrated: [non_neg_integer()],
+          reloaded: [module()],
+          failed: [failure()]
+        }
+
+  @typedoc """
+  Refusal to hot-deploy: the named migration files are pending and at
+  least one of their ops is contract (or unprovable). Nothing ran.
+  """
+  @type refusal :: {:contract_migrations, [Path.t()]}
+
+  @doc """
+  Apply pending migrations on the live pool, THEN reload modules (#41).
+
+  Returns `{:ok, %{migrated: versions, reloaded: mods, failed: fails}}`,
+  or `{:error, {:contract_migrations, files}}` having done NOTHING.
+
+  ## Why in-process, and in this order
+
+  This runs in the live BEAM with `Grappa.Repo` already supervised, so
+  `Ecto.Migrator.run/3` uses the pool that is already open — ONE sqlite
+  writer, no eval node. Deliberately NOT `Ecto.Migrator.with_repo/2`
+  (`Grappa.Release.migrate/0`'s shape): that one STARTS and STOPS the
+  repo, which here would fight the supervised one.
+
+  **Migrate first, load second.** For an expand migration the still-loaded
+  old code cannot reference the new column, so it keeps running safely
+  while the DDL commits; only then does new code — which does reference
+  it — get loaded. The reverse order is the 500-on-first-query window.
+
+  **A failing migration must not reload.** No rescue here on purpose:
+  `Ecto.Migrator` raising propagates out through the controller as a
+  5xx, the transaction rolls back, old code is still loaded and still
+  correct, and the deploy script's `curl -fsS` fails LOUDLY. Rescuing
+  would convert a schema failure into a 200 with new code on stale
+  schema — the exact silent-swallow CLAUDE.md forbids at boundaries.
+
+  ## Why it refuses instead of trusting the deploy-time verdict
+
+  `Grappa.Deploy.Preflight` classifies the DIFF being deployed. What is
+  PENDING is a different set: `--force-hot` skips preflight entirely,
+  and a migration added in an earlier undeployed commit is pending
+  without appearing in this diff. Running `:up, all: true` on that set
+  unconditionally is what would make "hot also hardens --force-hot" a
+  session-dropping vector. So the last line of defence is HERE, where
+  the pending set is actually observable, and it re-uses the SAME pure
+  classifier the deploy script consults — one rule, both doors.
+  """
+  @spec migrate_and_reload() :: {:ok, migrate_result()} | {:error, refusal()}
+  def migrate_and_reload do
+    migrate_and_reload(
+      &pending_migration_files/0,
+      fn -> Ecto.Migrator.run(Grappa.Repo, :up, all: true) end,
+      &reload_modified/0
+    )
+  end
+
+  @doc """
+  `migrate_and_reload/0` with its three effects injected, so the
+  ordering and the fail-aborts-reload contract are testable without a
+  live pool. Same injected-callback shape as
+  `Grappa.Deploy.Preflight.classify/5`.
+  """
+  @spec migrate_and_reload(
+          (-> [Path.t()]),
+          (-> [non_neg_integer()]),
+          (-> result())
+        ) :: {:ok, migrate_result()} | {:error, refusal()}
+  def migrate_and_reload(pending_fn, migrate_fn, reload_fn)
+      when is_function(pending_fn, 0) and is_function(migrate_fn, 0) and
+             is_function(reload_fn, 0) do
+    case Enum.filter(pending_fn.(), &contract_migration?/1) do
+      [] ->
+        migrated = migrate_fn.()
+        %{reloaded: reloaded, failed: failed} = reload_fn.()
+        {:ok, %{migrated: migrated, reloaded: reloaded, failed: failed}}
+
+      contract ->
+        {:error, {:contract_migrations, contract}}
+    end
+  end
+
+  @doc """
+  Paths of the migrations that exist on disk and are not yet applied.
+
+  Release-safe: `priv/repo/migrations/*.exs` ships inside the release's
+  priv dir (that is how `Grappa.Release.migrate/0` runs at all), so the
+  sources the classifier reads are present on every substrate.
+  """
+  @spec pending_migration_files() :: [Path.t()]
+  def pending_migration_files do
+    dir = Ecto.Migrator.migrations_path(Grappa.Repo)
+
+    for {:down, version, _} <- Ecto.Migrator.migrations(Grappa.Repo) do
+      # A `:down` status is derived FROM a file on disk, so exactly one
+      # match is the only possible outcome; the MatchError if that ever
+      # stops holding is the loud failure we want, not a silent skip.
+      [path] = Path.wildcard(Path.join(dir, "#{version}_*.exs"))
+      path
+    end
+  end
+
+  defp contract_migration?(path) do
+    Preflight.classify_migration(File.read!(path)) == :cold
+  end
 
   @doc """
   Walk the grappa app's ebin and reload every new or changed module.

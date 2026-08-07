@@ -435,6 +435,13 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
       // Shared token, REST side — text payload over the byte cap (413).
       // The wire carries `limit`; plain copy (no formatter needed).
       return "That message is too long to send.";
+    case "contract_migrations_pending":
+      // #41 — 409 from POST /admin/reload, which is loopback-gated: the
+      // browser can never reach it, so no user will ever see this string.
+      // The arm exists because the union is generated from every REST
+      // token the server can emit and the switch is exhaustive by
+      // construction. Copy stays operator-shaped, not reassuring.
+      return "The server needs a full restart to apply a database change.";
 
     default:
       // Cic M2 reviewer fix: exhaustiveness assertion. Adding a token

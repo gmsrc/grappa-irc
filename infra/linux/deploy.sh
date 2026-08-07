@@ -124,9 +124,11 @@ substrate_build() {
 
 substrate_reload() {
 	# Hot path: tell the live BEAM to md5-walk the release's ebin and
-	# reload changed modules (Grappa.HotReload). No systemctl, no cic
-	# rebuild, no migration — preflight only returns HOT when none of
-	# those changed. The lib captures this hook's stdout as the reload
+	# reload changed modules (Grappa.HotReload). No systemctl and no cic
+	# rebuild — preflight only returns HOT when neither changed. It DOES
+	# migrate (#41): the handler applies pending EXPAND migrations on the
+	# live pool before reloading, and 409s if any pending one is
+	# contract. The lib captures this hook's stdout as the reload
 	# response body, so the pre-reload log goes to stderr (else it
 	# pollutes the JSON the "failed":[] honesty glob inspects).
 	deploy_log "POST ${RELOAD_URL}" >&2

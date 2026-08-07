@@ -166,4 +166,112 @@ defmodule Grappa.HotReloadTest do
   # (de-instrument) every module mid-run and corrupt coverage. The
   # composition is a one-liner over reload_from/1, which is fully
   # covered above.
+
+  # ---- migrate_and_reload/3 (GH #41) ---------------------------------
+  #
+  # The three effects are injected (same shape as
+  # Grappa.Deploy.Preflight.classify/5) so the ORDER and the
+  # fail-aborts-reload contract are provable without a live pool — the
+  # two properties whose violation costs live IRC sessions.
+
+  defp migration_file!(dir, name, body) do
+    path = Path.join(dir, name)
+
+    File.write!(path, """
+    defmodule Grappa.Repo.Migrations.Probe do
+      use Ecto.Migration
+
+    #{body}
+    end
+    """)
+
+    path
+  end
+
+  defp expand_migration!(dir),
+    do:
+      migration_file!(dir, "20260901000000_add_thing.exs", """
+        def change do
+          alter table(:t) do
+            add :c, :string
+          end
+        end
+      """)
+
+  defp contract_migration!(dir),
+    do:
+      migration_file!(dir, "20260901000001_drop_thing.exs", """
+        def change do
+          alter table(:t) do
+            remove :c
+          end
+        end
+      """)
+
+  defp empty_reload, do: %{reloaded: [], failed: []}
+
+  test "migrates BEFORE reloading — new code must never meet the old schema" do
+    dir = tmp_ebin("order")
+    pending = [expand_migration!(dir)]
+    {:ok, log} = Agent.start_link(fn -> [] end)
+
+    assert {:ok, %{migrated: [42], reloaded: [], failed: []}} =
+             HotReload.migrate_and_reload(
+               fn -> pending end,
+               fn ->
+                 Agent.update(log, &[:migrate | &1])
+                 [42]
+               end,
+               fn ->
+                 Agent.update(log, &[:reload | &1])
+                 empty_reload()
+               end
+             )
+
+    assert Agent.get(log, & &1) == [:reload, :migrate]
+  end
+
+  test "a raising migration aborts the reload — old code stays loaded and correct" do
+    dir = tmp_ebin("abort")
+    pending = [expand_migration!(dir)]
+
+    assert_raise RuntimeError, "ALTER TABLE failed", fn ->
+      HotReload.migrate_and_reload(
+        fn -> pending end,
+        fn -> raise "ALTER TABLE failed" end,
+        fn -> flunk("reload must not run after a failed migration") end
+      )
+    end
+  end
+
+  test "a pending CONTRACT migration is refused — nothing migrates, nothing reloads" do
+    dir = tmp_ebin("refuse")
+    contract = contract_migration!(dir)
+    pending = [expand_migration!(dir), contract]
+
+    assert {:error, {:contract_migrations, [^contract]}} =
+             HotReload.migrate_and_reload(
+               fn -> pending end,
+               fn -> flunk("must not migrate with a contract migration pending") end,
+               fn -> flunk("must not reload with a contract migration pending") end
+             )
+  end
+
+  test "nothing pending → still migrates (idempotent no-op) and reloads" do
+    assert {:ok, %{migrated: [], reloaded: [Foo], failed: []}} =
+             HotReload.migrate_and_reload(
+               fn -> [] end,
+               fn -> [] end,
+               fn -> %{reloaded: [Foo], failed: []} end
+             )
+  end
+
+  test "per-module reload failures still surface in the result" do
+    assert {:ok, %{failed: [{Foo, :old_code_in_use}]}} =
+             HotReload.migrate_and_reload(
+               fn -> [] end,
+               fn -> [] end,
+               fn -> %{reloaded: [], failed: [{Foo, :old_code_in_use}]} end
+             )
+  end
 end
