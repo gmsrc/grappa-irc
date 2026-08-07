@@ -10354,10 +10354,11 @@ html.resize-dragging * {
    with disc bullets and a ~40px indent, inside a card that had already
    paid for its own padding. */
 .home-pane-available-item {
-  padding: var(--adm-space-3);
-  background: var(--adm-surface-1);
+  padding: var(--adm-space-4);
+  background: var(--adm-surface-0);
   border: 1px solid var(--adm-line);
-  border-radius: var(--adm-radius-sm);
+  border-radius: var(--adm-radius);
+  box-shadow: var(--adm-shadow);
 }
 
 /* Desktop lays the network blocks out side by side. A single column is
@@ -10460,8 +10461,8 @@ button.home-pane-network-title:hover .home-pane-network-slug {
 }
 
 /* #135 — visitor landing sections: welcome / featured / directory link.
-   Each is a card now (admin redesign follow-up), so the stacking is the
-   parent's `gap` and they no longer carry their own bottom margin. */
+   A section is a card when its content is PROSE (welcome, featured); the
+   stacking is the parent's `gap`, so no bottom margin of its own. */
 .home-pane-section {
   margin: 0;
   padding: var(--adm-space-4);
@@ -10469,6 +10470,24 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   border: 1px solid var(--adm-line);
   border-radius: var(--adm-radius);
   box-shadow: var(--adm-shadow);
+}
+
+/* …but NOT when its content is a list whose items are already cards.
+   Those two sections were a bordered box holding bordered boxes — a
+   rectangle inside a rectangle, with the outer one adding nothing but a
+   second edge. The heading and intro sit on the backdrop instead and the
+   items keep the only border in the group.
+
+   The choice of which level keeps the card is the content's: prose needs
+   a surface to sit on, a list of things does not — the things are the
+   surfaces. */
+.home-pane-available-section,
+.home-pane-networks-section {
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .home-pane-section-title {
