@@ -32408,3 +32408,59 @@ backfill is a DATA migration; written as `execute(raw_sql)` the allowlist
 marks it COLD, correctly. Whether such backfills stay outside the classifier
 as operator-run steps is open, and is not the classifier's bug to route
 around.
+
+## 2026-08-07 — the #41 migrate, measured against a live pool (and what the measuring found)
+
+The first round of #41 shipped `migrate_and_reload/3` with all three effects
+injected, and said so: ordering and abort were proven, the migrate itself had
+never run. Those are two different questions, and the second one is the one
+whose failure never shows in CI and does show in production — a `Session.Server`
+crash takes its linked `IRC.Client` and the upstream socket with it.
+
+**The lane for it is not the one the word "integration" suggests.**
+`scripts/integration.sh` is testnet + Playwright: it measures cic through a
+browser and never touches `reload/2` or `Ecto.Migrator`. The right harness
+already existed — `test/grappa/migrations/add_user_totp_test.exs` boots a real
+`use Ecto.Repo` under `start_supervised!` against a scratch sqlite FILE and runs
+the real migrations on it. A live pool, not a sandbox.
+
+So `migrate_and_reload/3` became `migrate_and_reload/2`, taking the REPO. The
+injected-migration seam is gone; only the module reload stays a probe, for the
+reason `HotReloadTest` already documents (walking the real ebin mid-suite
+de-instruments every module and corrupts coverage). That probe is now also the
+measuring instrument: it asserts the new column is ALREADY visible when it runs,
+so "migrate first, load second" is an observation rather than a recorded call
+order. `priv: "priv/repo"` on the smoke repo is load-bearing — without it Ecto
+derives the migrations dir from the REPO NAME and
+`Ecto.Migrator.migrations_path/1`, the production call under test, would resolve
+somewhere empty and the test would pass while measuring nothing.
+
+**What the gate now proves, on a real file:** an expand applies and the column
+appears; an old-code INSERT that omits the new column still lands (the
+zero-crash-window claim, tested rather than narrated); a contract is refused by
+name with the expand BEHIND it also unapplied; a migration that fails for real
+(the column pre-created, so the ALTER raises `duplicate column name`) leaves
+`schema_migrations` untouched and never reaches the reload; and four concurrent
+readers × 40 queries across the in-handler migrate finish with ZERO errors —
+WAL + `busy_timeout` cover it, measured, not assumed.
+
+**The surprise, and it is unexplained.** Replaying the WHOLE migration graph onto
+an empty file fails **10/10 at `pool_size: 5`** and passes **10/10 at 2**,
+deterministically: `20260516184555` cannot see the column `20260516154723` adds
+one migration earlier, both via raw `execute`. It is NOT the #506 rollback→WAL
+race — replicating `Grappa.Repo.init/2`'s serial pre-switch before the pool opens
+leaves it 10/10 red.
+
+This has not bitten anyone because **every other migration path in the project
+runs through `Ecto.Migrator.with_repo/2`, which forces `pool_size: 2`** — the
+graph replay has never run wider than that anywhere. #41's handler is the first
+code to migrate on a pool it did not size, and prod opens ten connections.
+
+That made the pool width a first-class case rather than a footnote, so the gate
+now restarts the pool at **10** and drives the handler there: one pending expand
+applies, and a pending contract is still refused. That is the shape the hot path
+actually takes — ONE pending migration, wide pool — and it holds. What does NOT
+hold at width is the from-empty replay of all 80, which no production path
+performs. The cause is not identified and is deliberately not chased here;
+lowering the constant to make a suite green without the measurement would have
+been the wrong move, so the number is written down instead.

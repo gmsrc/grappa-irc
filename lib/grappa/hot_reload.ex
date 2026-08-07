@@ -108,31 +108,33 @@ defmodule Grappa.HotReload do
   classifier the deploy script consults — one rule, both doors.
   """
   @spec migrate_and_reload() :: {:ok, migrate_result()} | {:error, refusal()}
-  def migrate_and_reload do
-    migrate_and_reload(
-      &pending_migration_files/0,
-      fn -> Ecto.Migrator.run(Grappa.Repo, :up, all: true) end,
-      &reload_modified/0
-    )
-  end
+  def migrate_and_reload, do: migrate_and_reload(Grappa.Repo, &reload_modified/0)
 
   @doc """
-  `migrate_and_reload/0` with its three effects injected, so the
-  ordering and the fail-aborts-reload contract are testable without a
-  live pool. Same injected-callback shape as
-  `Grappa.Deploy.Preflight.classify/5`.
+  `migrate_and_reload/0` against an explicit repo, with only the
+  module-reload injected.
+
+  The REPO is a parameter so the test suite can drive this exact code —
+  the real gate, the real `Ecto.Migrator.run/3`, the real pending
+  enumeration — against a live supervised pool on a scratch sqlite file
+  (`test/grappa/migrations/hot_deploy_migrate_test.exs`). Injecting the
+  migration itself, as an earlier shape did, proves the ORDER and the
+  abort but never that the migrate works against a live pool at all;
+  those are two different questions.
+
+  `reload_fn` stays injected on purpose and is NOT the same compromise:
+  walking the real app ebin from a test would reload — and so
+  de-instrument — every module mid-run and corrupt coverage (the same
+  reason `reload_modified/0` itself has no direct test). Passing a
+  probe here is also how the ORDER gets measured for real: the probe
+  asserts the new column is already visible by the time it runs.
   """
-  @spec migrate_and_reload(
-          (-> [Path.t()]),
-          (-> [non_neg_integer()]),
-          (-> result())
-        ) :: {:ok, migrate_result()} | {:error, refusal()}
-  def migrate_and_reload(pending_fn, migrate_fn, reload_fn)
-      when is_function(pending_fn, 0) and is_function(migrate_fn, 0) and
-             is_function(reload_fn, 0) do
-    case Enum.filter(pending_fn.(), &contract_migration?/1) do
+  @spec migrate_and_reload(module(), (-> result())) ::
+          {:ok, migrate_result()} | {:error, refusal()}
+  def migrate_and_reload(repo, reload_fn) when is_atom(repo) and is_function(reload_fn, 0) do
+    case contract_migrations(repo) do
       [] ->
-        migrated = migrate_fn.()
+        migrated = Ecto.Migrator.run(repo, :up, all: true)
         %{reloaded: reloaded, failed: failed} = reload_fn.()
         {:ok, %{migrated: migrated, reloaded: reloaded, failed: failed}}
 
@@ -142,17 +144,26 @@ defmodule Grappa.HotReload do
   end
 
   @doc """
+  The pending migrations whose up-direction is contract or unprovable —
+  the ones that must not be applied under a live BEAM.
+  """
+  @spec contract_migrations(module()) :: [Path.t()]
+  def contract_migrations(repo) when is_atom(repo) do
+    Enum.filter(pending_migration_files(repo), &contract_migration?/1)
+  end
+
+  @doc """
   Paths of the migrations that exist on disk and are not yet applied.
 
   Release-safe: `priv/repo/migrations/*.exs` ships inside the release's
   priv dir (that is how `Grappa.Release.migrate/0` runs at all), so the
   sources the classifier reads are present on every substrate.
   """
-  @spec pending_migration_files() :: [Path.t()]
-  def pending_migration_files do
-    dir = Ecto.Migrator.migrations_path(Grappa.Repo)
+  @spec pending_migration_files(module()) :: [Path.t()]
+  def pending_migration_files(repo) when is_atom(repo) do
+    dir = Ecto.Migrator.migrations_path(repo)
 
-    for {:down, version, _} <- Ecto.Migrator.migrations(Grappa.Repo) do
+    for {:down, version, _} <- Ecto.Migrator.migrations(repo) do
       # A `:down` status is derived FROM a file on disk, so exactly one
       # match is the only possible outcome; the MatchError if that ever
       # stops holding is the loud failure we want, not a silent skip.
