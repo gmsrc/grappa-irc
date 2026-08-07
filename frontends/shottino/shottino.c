@@ -100,6 +100,11 @@
 #define MAX_LINE 1024
 #define MAX_TOPIC 4096
 #define LOG_LINES 2000
+/* One page of scrollback, wherever it is asked for: the first load of a
+ * window and every scroll-to-the-top after it. Two numbers would mean a
+ * window that pages back in a different stride than it opened with, for
+ * no reason anyone could name. The server's own ceiling is 200. */
+#define SCROLLBACK_PAGE 80
 #define HTTP_MAX (4 * 1024 * 1024)
 #define JOB_QUEUE 256
 #define SEEN_MESSAGES 12000
@@ -308,6 +313,20 @@ struct window {
      * muted tier is only claimed when we actually know. */
     char chan_modes[128];
     bool chan_modes_known;
+    /* Paging OLDER history, the two facts the scroll-to-top trigger needs
+     * and cannot derive from the buffer.
+     *
+     * `history_inflight` converges a scroll burst onto one request: the
+     * trigger fires from the DRAW path, so without it a pane parked at
+     * the top asks again every frame.
+     *
+     * `history_exhausted` latches when the server answers with an empty
+     * page — proof there is nothing older. Without it, reaching the true
+     * beginning of a channel costs one round trip per frame forever.
+     * Latched only on that proof: a failed request is not an answer, and
+     * a buffer with no room is not the server's answer either. */
+    bool history_inflight;
+    bool history_exhausted;
 };
 
 enum job_kind {
@@ -327,7 +346,8 @@ enum job_kind {
     JOB_EXEC,
     JOB_STT,
     JOB_UPLOAD,
-    JOB_CALL_PROBE
+    JOB_CALL_PROBE,
+    JOB_HISTORY
 };
 
 struct job {
@@ -732,6 +752,7 @@ static void bot_dir_path(struct app *app, char *out, size_t out_sz);
 static void stt_job(struct app *app, const struct job *job);
 static void call_probe_job(struct app *app, const struct job *job);
 static bool enqueue_job(struct app *app, struct job job);
+static bool enqueue_job_quiet(struct app *app, struct job job);
 static void upload_file_to(struct app *app, const char *path, const char *marker,
                            const char *up_net, const char *up_chan);
 
@@ -1267,6 +1288,27 @@ struct app {
     /* The window each row belongs to, "[network/channel]", or "" for a
      * row that predates every window. See log_scope_of_locked(). */
     char log_scope[LOG_LINES][MAX_SLUG + MAX_CHANNEL + 8];
+    /* Where the row a push just wrote actually landed.
+     *
+     * The id stamp used to say `log_count - 1` — "the last row" — which
+     * is true only while the buffer is append-only. Paging older history
+     * writes into the MIDDLE of it, and a stamp aimed at the tail would
+     * put a page of 1970's ids on tonight's messages and drag the unread
+     * divider up there with them. The door that places the row is the
+     * only thing that knows where it went, so it says. */
+    size_t log_last_index;
+    /* An OLDER page is being written: rows from THIS thread go here
+     * instead of at the tail, and the mark walks down the page.
+     *
+     * Redirecting the one door beats teaching every writer an insertion
+     * point — the same reason `log_scope_of_locked` decides scope here
+     * and not at the draw site. Scoped to the thread that set it because
+     * the socket thread keeps delivering live messages throughout, and
+     * those belong at the bottom where they happened; the worker is one
+     * thread, so it cannot race itself for the mark. */
+    bool log_insert_active;
+    pthread_t log_insert_tid;
+    size_t log_insert_at;
     media_protocol proto;           /* detected once, before ncurses */
     /* --ircd: the downstream IRC server. Zeroed (and disabled) in every
      * other mode, so the tee in render_message costs one branch. */
@@ -1791,7 +1833,18 @@ static bool is_channel_name(const char *name) {
  *
  * So exactly TWO functions know the full set: the shift that drops the
  * oldest row, and the move that compacts one. A NEW per-row array goes
- * in both, or it drifts again. */
+ * in both, or it drifts again.
+ *
+ * Two numbers also point INTO the ring while living outside it: where an
+ * inserted row goes, and where the last one landed. Not parallel arrays,
+ * but they rot the same way — a row leaves at index `i`, everything
+ * below slides up, and an index that did not slide with them now names a
+ * different row. So every removal says so, through the call below. */
+static void log_row_removed_locked(struct app *app, size_t i) {
+    if (app->log_insert_at > i) app->log_insert_at--;
+    if (app->log_last_index > i) app->log_last_index--;
+}
+
 static void log_shift_locked(struct app *app) {
     free(app->log[0]);
     memmove(app->log, app->log + 1, sizeof(app->log[0]) * (LOG_LINES - 1));
@@ -1801,6 +1854,7 @@ static void log_shift_locked(struct app *app) {
     memmove(app->log_media, app->log_media + 1, sizeof(app->log_media[0]) * (LOG_LINES - 1));
     memmove(app->log_scope, app->log_scope + 1, sizeof(app->log_scope[0]) * (LOG_LINES - 1));
     app->log_count--;
+    log_row_removed_locked(app, 0);
 }
 
 static void log_row_move_locked(struct app *app, size_t dst, size_t src) {
@@ -1872,6 +1926,17 @@ static void desktop_notify(const char *title, const char *body);
 static void log_push_locked(struct app *app, char *line, bool mention, bool pending) {
     if (app->log_count == LOG_LINES) log_shift_locked(app);
     size_t i = app->log_count;
+    /* An older page goes above what is already there, one row at a time,
+     * in the order the page is read (oldest first) — so the mark advances
+     * and the rows below slide down to make room. Only for the thread
+     * that set the mark: a live message arriving mid-page is news, and
+     * news goes at the bottom. */
+    if (app->log_insert_active && pthread_equal(app->log_insert_tid, pthread_self())) {
+        if (app->log_insert_at > app->log_count) app->log_insert_at = app->log_count;
+        i = app->log_insert_at++;
+        for (size_t k = app->log_count; k > i; k--) log_row_move_locked(app, k, k - 1);
+    }
+    app->log_last_index = i;
     app->log[i] = line;
     app->log_mentions[i] = mention;
     app->log_pending[i] = pending;
@@ -1892,6 +1957,95 @@ static void log_push_locked(struct app *app, char *line, bool mention, bool pend
  * reach. */
 static bool log_row_in_scope(const struct app *app, size_t i, const char *scope) {
     return app->log_scope[i][0] == 0 || strcmp(app->log_scope[i], scope) == 0;
+}
+
+/* Is row `i` OF this window? A near-twin of the question above, and
+ * deliberately not the same one: the scopeless rows shown everywhere
+ * belong to no window in particular, so they are not what a window's
+ * history is paged before or inserted above. "Shows here" and "happened
+ * here" are two facts, and history is about the second. */
+static bool log_row_is_window(const struct app *app, size_t i, const char *scope) {
+    return app->log_scope[i][0] != 0 && strcmp(app->log_scope[i], scope) == 0;
+}
+
+/* The oldest server id among a window's rows, or 0 when it has none —
+ * the cursor a `?before=` page is asked for.
+ *
+ * DERIVED, not kept beside the window: a cached "oldest" is a second
+ * copy of what the buffer already says, and it would have to be
+ * corrected by the ring shift, by /clear, by every page inserted above
+ * it and by the DM re-key — four chances to drift for a walk over 2000
+ * rows that runs once per page, not once per frame.
+ *
+ * Rows without an id are operational lines and pending echoes: nothing
+ * the server could page before. Caller holds app->lock. */
+static long window_oldest_id_locked(const struct app *app, const char *scope) {
+    long oldest = 0;
+    for (size_t i = 0; i < app->log_count; i++) {
+        if (!log_row_is_window(app, i, scope)) continue;
+        if (app->log_ids[i] <= 0) continue;
+        if (oldest == 0 || app->log_ids[i] < oldest) oldest = app->log_ids[i];
+    }
+    return oldest;
+}
+
+/* Where a page of older history goes: above the window's FIRST row —
+ * not above the row carrying the oldest id. The "joined #chan" line
+ * written before the first message is part of what the window showed at
+ * the top, and what came earlier came earlier than that too.
+ *
+ * A window with nothing in the buffer takes the tail, which is where an
+ * append would have put it anyway. Caller holds app->lock. */
+static size_t window_first_row_locked(const struct app *app, const char *scope) {
+    for (size_t i = 0; i < app->log_count; i++)
+        if (log_row_is_window(app, i, scope)) return i;
+    return app->log_count;
+}
+
+/* Is this pane asking for what came before what it is showing?
+ *
+ * Pure, and kept out of the draw path that feeds it, because the
+ * question is arithmetic and arithmetic wants a test.
+ *
+ * `pinned` is what makes this a GESTURE rather than a state. A pane
+ * shows its top the moment its window is short enough to fit, and
+ * paging back through a quiet channel nobody asked about is not what
+ * opening it means. Pinned means somebody scrolled — including PgUp in
+ * a window with nowhere left to go, since the offset is set before the
+ * draw clamps it, and that is precisely a person saying "further back"
+ * to a pane already showing everything it has.
+ *
+ * `room` because the buffer is one ring shared by every window. With
+ * none left, a row inserted at the top evicts the row it was inserted
+ * above: the window would page backwards forever without ever growing.
+ * Not an exhausted latch — free a row and there is more to be had. */
+static bool history_wanted(bool pinned, size_t scroll_offset, int max_offset, bool room,
+                           bool inflight, bool exhausted) {
+    if (!pinned || inflight || exhausted || !room) return false;
+    return (int)scroll_offset >= max_offset;
+}
+
+/* Ask the bouncer for the page before this window's oldest row.
+ *
+ * The in-flight flag is set only when the job was actually queued, so a
+ * full queue is retried on the next frame rather than latching the
+ * window shut. Caller holds app->lock (this is the draw path). */
+static void request_older_history_locked(struct app *app, struct window *w) {
+    /* Same rule as every other fetch door: a window the bouncer has
+     * never heard of has no history to ask it for. */
+    if (is_local_window(w->channel)) return;
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key(w->network, w->channel, scope, sizeof(scope));
+    long before = window_oldest_id_locked(app, scope);
+    /* No row with an id yet — nothing to page before. The window's first
+     * fetch is what puts a cursor there, and until it lands there is no
+     * question to ask. */
+    if (before <= 0) return;
+    struct job job = {.kind = JOB_HISTORY};
+    snprintf(job.network, sizeof(job.network), "%s", w->network);
+    snprintf(job.channel, sizeof(job.channel), "%s", w->channel);
+    snprintf(job.arg1, sizeof(job.arg1), "%ld", before);
+    if (enqueue_job_quiet(app, job)) w->history_inflight = true;
 }
 
 static void log_line(struct app *app, const char *fmt, ...) {
@@ -2053,6 +2207,7 @@ static void clear_matching_pending_echo(struct app *app, const char *network, co
              * one function that ignored it. */
             for (size_t k = i; k + 1 < app->log_count; k++) log_row_move_locked(app, k, k + 1);
             app->log_count--;
+            log_row_removed_locked(app, i);
             break;
         }
     }
@@ -2832,6 +2987,14 @@ static void clear_active_window_log(struct app *app) {
     char key[MAX_SLUG + MAX_CHANNEL + 8];
     window_scope_key(app->windows[cur].network, app->windows[cur].channel, key, sizeof(key));
     size_t write_i = 0;
+    /* COUNTED, not one log_row_removed_locked per row: that helper takes
+     * an index in the ring as it stands, and here the indices being
+     * corrected are still expressed in the ORIGINAL numbering while the
+     * walk removes rows out from under them. Two adjacent removals below
+     * the mark would move it one place instead of two. A row's new index
+     * is its old one less the removals before it, so that is what is
+     * counted. */
+    size_t gone_before_insert = 0, gone_before_last = 0;
     for (size_t read_i = 0; read_i < app->log_count; read_i++) {
         /* Everything filed under this window goes, its operational rows
          * included: /clear clears the WINDOW, and a preview message left
@@ -2839,12 +3002,22 @@ static void clear_active_window_log(struct app *app) {
          * exists to prevent. */
         if (strcmp(app->log_scope[read_i], key) == 0) {
             free(app->log[read_i]);
+            if (read_i < app->log_insert_at) gone_before_insert++;
+            if (read_i < app->log_last_index) gone_before_last++;
             continue;
         }
         log_row_move_locked(app, write_i, read_i);
         write_i++;
     }
     app->log_count = write_i;
+    app->log_insert_at -= gone_before_insert;
+    app->log_last_index -= gone_before_last;
+    /* Paging starts over with the buffer. The latch means "the server has
+     * nothing before the oldest row we hold", and this window no longer
+     * holds one: whatever it refills with, there is history under it
+     * again. Keeping the latch would make /clear the one way to lose
+     * scroll-back permanently. */
+    app->windows[cur].history_exhausted = false;
     for (size_t p = 0; p < app->pane_count; p++) {
         app->panes[p].scroll_offset = 0;
         app->panes[p].scroll_pinned = false;
@@ -4163,7 +4336,7 @@ static void render_message(struct app *app, const struct wire_scrollback_message
      * appended: a presence kind with nothing to say, or a hidden one,
      * would otherwise stamp its id onto somebody else's line and drag
      * the unread divider there. */
-    if (wrote && app->log_count > 0) app->log_ids[app->log_count - 1] = id;
+    if (wrote && app->log_count > 0) app->log_ids[app->log_last_index] = id;
     /* The row's inline image slot is NOT claimed here. It is claimed by
      * the draw path, the first time the row is actually on screen — the
      * #451 first-party test and the `/media` toggle are both questions
@@ -4371,30 +4544,40 @@ static void scrollback_to_client(struct app *app, const struct wire_scrollback_m
     render_message(app, m, false);
 }
 
-static void parse_messages_into(struct app *app, const char *json, size_t len,
-                                scrollback_sink sink, void *ctx) {
+/* Returns how many rows the page carried — NOT how many were drawn.
+ * "The server has nothing older" is a fact about the page, and the
+ * paging latch needs exactly that: a page of rows that all turned out to
+ * be blocked, bodyless or already seen is still a page, and there is
+ * more behind it. */
+static size_t parse_messages_into(struct app *app, const char *json, size_t len,
+                                  scrollback_sink sink, void *ctx) {
     char err[160];
     json_doc *doc = json_parse(json, len, err, sizeof(err));
     if (!doc) {
         log_line(app, "malformed scrollback response: %s", err);
-        return;
+        return 0;
     }
     const json_value *list = json_root(doc);
     if (json_type_of(list) != JSON_ARRAY) {
         json_free(doc);
-        return;
+        return 0;
     }
     size_t n = json_len(list);
+    size_t rows = 0;
     /* The server pages DESC; both destinations want oldest first. */
     for (size_t i = n; i > 0; i--) {
         struct wire_scrollback_message m;
-        if (wire_narrow_message(json_at(list, i - 1), &m)) sink(app, &m, ctx);
+        if (wire_narrow_message(json_at(list, i - 1), &m)) {
+            sink(app, &m, ctx);
+            rows++;
+        }
     }
     json_free(doc);
+    return rows;
 }
 
-static void parse_messages(struct app *app, const char *json, size_t len) {
-    parse_messages_into(app, json, len, scrollback_to_client, NULL);
+static size_t parse_messages(struct app *app, const char *json, size_t len) {
+    return parse_messages_into(app, json, len, scrollback_to_client, NULL);
 }
 
 static void draw_fill(int y, int x, int n, int pair) {
@@ -6315,13 +6498,11 @@ static void seed_state(struct app *app) {
     }
 }
 
-static void fetch_scrollback(struct app *app, struct window *w) {
-    /* Same rule as enqueue_fetch, at the other door: a window the
-     * bouncer has never heard of has no messages to ask it for. */
-    if (is_local_window(w->channel)) return;
-    char *net = url_encode(w->network);
-    char *chan = url_encode(w->channel);
-    char *path = xasprintf("/networks/%s/channels/%s/messages?limit=80", net, chan);
+static void fetch_scrollback_target(struct app *app, const char *network, const char *channel) {
+    char *net = url_encode(network);
+    char *chan = url_encode(channel);
+    char *path =
+        xasprintf("/networks/%s/channels/%s/messages?limit=%d", net, chan, SCROLLBACK_PAGE);
     free(net);
     free(chan);
     struct http_response r = http_request(app, "GET", path, NULL);
@@ -6331,17 +6512,74 @@ static void fetch_scrollback(struct app *app, struct window *w) {
     free(r.body);
 }
 
-static void fetch_scrollback_target(struct app *app, const char *network, const char *channel) {
+static void fetch_scrollback(struct app *app, struct window *w) {
+    /* Same rule as enqueue_fetch, at the other door: a window the
+     * bouncer has never heard of has no messages to ask it for. */
+    if (is_local_window(w->channel)) return;
+    fetch_scrollback_target(app, w->network, w->channel);
+}
+
+/* Page in what happened BEFORE this window's oldest row, and put it
+ * where it happened — above the rows already there.
+ *
+ * The insertion mark is set around the ingest rather than the ingest
+ * being taught to insert. A page of history goes through exactly the
+ * render a live message does — same formatting, same id dedup, same
+ * bridge, same `live = false` that keeps it from ringing phones and
+ * answering bots — and the only thing different about it is which end
+ * of the buffer it belongs at. That is one fact, so it is set in one
+ * place.
+ *
+ * An EMPTY page is the server saying there is nothing older, which is
+ * the only thing that latches the window shut. An HTTP failure is not
+ * an answer: it clears the in-flight flag and leaves the question open,
+ * so scrolling up again asks again. */
+static void fetch_older_scrollback(struct app *app, const char *network, const char *channel,
+                                   long before_id) {
     char *net = url_encode(network);
     char *chan = url_encode(channel);
-    char *path = xasprintf("/networks/%s/channels/%s/messages?limit=80", net, chan);
+    char *path = xasprintf("/networks/%s/channels/%s/messages?before=%ld&limit=%d", net, chan,
+                           before_id, SCROLLBACK_PAGE);
     free(net);
     free(chan);
     struct http_response r = http_request(app, "GET", path, NULL);
     free(path);
-    if (r.status >= 200 && r.status < 300) parse_messages(app, r.body, r.body_len);
-    else log_line(app, "GET messages failed HTTP %d", r.status);
+
+    bool ok = r.status >= 200 && r.status < 300;
+    size_t got = 0;
+    bool full = false;
+    if (ok) {
+        char scope[MAX_SLUG + MAX_CHANNEL + 8];
+        window_scope_key(network, channel, scope, sizeof(scope));
+        pthread_mutex_lock(&app->lock);
+        app->log_insert_at = window_first_row_locked(app, scope);
+        app->log_insert_tid = pthread_self();
+        app->log_insert_active = true;
+        pthread_mutex_unlock(&app->lock);
+        got = parse_messages(app, r.body, r.body_len);
+        pthread_mutex_lock(&app->lock);
+        app->log_insert_active = false;
+        full = app->log_count == LOG_LINES;
+        pthread_mutex_unlock(&app->lock);
+    } else {
+        log_line(app, "GET older messages failed HTTP %d", r.status);
+    }
     free(r.body);
+
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->window_count; i++) {
+        if (!window_matches(&app->windows[i], network, channel)) continue;
+        app->windows[i].history_inflight = false;
+        if (ok && got == 0) app->windows[i].history_exhausted = true;
+    }
+    pthread_mutex_unlock(&app->lock);
+
+    /* Said once, and only here: the trigger stops asking the moment the
+     * ring is full, so this is the page that filled it. Said at all
+     * because "the top of the buffer" and "the beginning of the channel"
+     * look identical on screen and are not the same thing. */
+    if (full)
+        log_line(app, "scrollback buffer full (%d lines) — older history stops here", LOG_LINES);
 }
 
 static char *base64_encode(const unsigned char *buf, size_t len) {
@@ -8241,6 +8479,7 @@ static void media_decode_job(struct app *app, int slot);
 static void view_fetch_and_open(struct app *app, const char *url);
 static void ircd_archive_job(struct app *app, const struct job *job);
 static bool enqueue_job(struct app *app, struct job job);
+static bool enqueue_job_quiet(struct app *app, struct job job);
 
 /* What `log_media[i]` says about a row: a slot index, or one of these.
  *
@@ -8665,6 +8904,15 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
     }
     int max_offset = total_visible_lines > scroll_h ? total_visible_lines - scroll_h : 0;
     if ((int)pane->scroll_offset > max_offset) pane->scroll_offset = (size_t)max_offset;
+    /* Reaching the top of a pane is the ask for what came before it —
+     * the same gesture cicchetto pages on, and the reason it is read
+     * HERE is that the measuring pass above is the only thing that knows
+     * where the top is. The offset counts lines from the BOTTOM, so a
+     * page landing above the view leaves the view exactly where it was;
+     * the rows the reader is looking at do not move under them. */
+    if (history_wanted(pane->scroll_pinned, pane->scroll_offset, max_offset,
+                       app->log_count < LOG_LINES, w->history_inflight, w->history_exhausted))
+        request_older_history_locked(app, w);
     int skip_lines = max_offset - (int)pane->scroll_offset;
     int used_lines = 0;
     int drawn_rows = 0;
@@ -8788,10 +9036,14 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
         if (mi >= 0 && mi < (int)app->media_count) {
             struct inline_media *m = &app->media[mi];
             if (m->state == IM_IDLE && m->cols > 0) {
-                m->state = IM_FETCHING;
                 struct job mj = {.kind = JOB_MEDIA};
                 snprintf(mj.arg1, sizeof(mj.arg1), "%d", mi);
-                enqueue_job(app, mj);
+                /* Quiet: we are holding app->lock, and the talking form
+                 * reports through log_line, which wants it. Promoted to
+                 * FETCHING only once the job is really queued — a
+                 * dropped job used to leave the picture claiming to be
+                 * on its way forever, since nothing ever asked again. */
+                if (enqueue_job_quiet(app, mj)) m->state = IM_FETCHING;
             }
             int img_y = msg_y + draw_lines;
             int room = scroll_y + scroll_h - img_y;
@@ -12562,12 +12814,19 @@ static void close_query_target(struct app *app, const char *network, const char 
     log_line(app, "closed query %s", target);
 }
 
-static bool enqueue_job(struct app *app, struct job job) {
+/* Queue a job and say nothing if the queue is full.
+ *
+ * The talking version below cannot be called from the DRAW path: it
+ * reports through log_line, which takes app->lock, which the draw path
+ * is already holding — a full queue would have hung the client rather
+ * than dropped a job. The two producers that run while drawing (an
+ * image scrolling into view, a pane reaching its top) are also the two
+ * with nothing useful to say about it: both ask again next frame. */
+static bool enqueue_job_quiet(struct app *app, struct job job) {
     pthread_mutex_lock(&app->jobs_lock);
     size_t next = (app->jobs_tail + 1) % JOB_QUEUE;
     if (next == app->jobs_head) {
         pthread_mutex_unlock(&app->jobs_lock);
-        log_line(app, "background queue full; command not sent");
         return false;
     }
     app->jobs[app->jobs_tail] = job;
@@ -12575,6 +12834,12 @@ static bool enqueue_job(struct app *app, struct job job) {
     pthread_cond_signal(&app->jobs_cond);
     pthread_mutex_unlock(&app->jobs_lock);
     return true;
+}
+
+static bool enqueue_job(struct app *app, struct job job) {
+    if (enqueue_job_quiet(app, job)) return true;
+    log_line(app, "background queue full; command not sent");
+    return false;
 }
 
 static bool dequeue_job(struct app *app, struct job *job) {
@@ -12597,6 +12862,9 @@ static void *worker_main(void *arg) {
         switch (job.kind) {
         case JOB_FETCH:
             fetch_scrollback_target(app, job.network, job.channel);
+            break;
+        case JOB_HISTORY:
+            fetch_older_scrollback(app, job.network, job.channel, strtol(job.arg1, NULL, 10));
             break;
         case JOB_READ_CURSOR:
             push_read_cursor(app, job.network, job.channel, strtol(job.arg1, NULL, 10));

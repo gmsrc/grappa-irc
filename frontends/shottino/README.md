@@ -272,6 +272,31 @@ the key) are accepted; `Ctrl-Alt-Up/Down` is the pair to rely on. Run
 `/keys` to print the code your terminal actually sends for a key — a
 binding that does not fire is then a bug report with a number in it.
 
+### Scrolling past the beginning
+
+A window opens with its last 80 messages. **Keep scrolling up and it asks
+grappa for the 80 before those**, and the 80 before those — the same
+gesture cicchetto pages on, and the same `?before=` cursor underneath it.
+Nothing to turn on and nothing to type: reaching the top of a pane is the
+request. Pressing `PgUp` in a window already showing everything it has
+counts as reaching the top, so a short window can be paged too.
+
+The new rows land **above** what you were reading, so the view does not
+jump — the offset is measured from the bottom, and what arrives arrives
+over your head.
+
+Two things stop it, and they say different things:
+
+- The server answers with an empty page. That is the beginning of the
+  channel, and the window stops asking for the session.
+- The buffer fills. Scrollback is **one ring of 2000 lines shared by
+  every window**, so the client says `scrollback buffer full (2000
+  lines) — older history stops here` rather than letting you believe you
+  reached 2019. `/clear` frees it; the bouncer still has everything.
+
+A failed request is neither: it says so and leaves the question open, so
+scrolling up again asks again.
+
 ## The userlist
 
 `Ctrl-U` hands the arrow keys to the member list; `Esc` gives them back.

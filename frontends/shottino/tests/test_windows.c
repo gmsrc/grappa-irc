@@ -2855,6 +2855,220 @@ TEST(retiring_an_echo_moves_every_row_not_just_its_text) {
     free_app(app);
 }
 
+/* ── Paging older history ──────────────────────────────────────────────
+ *
+ * Scrolling to the top of a window asks grappa for what came before it,
+ * the way cicchetto's loadMore does. The buffer is ONE ring shared by
+ * every window and it is appended to, so the whole problem is that a
+ * page of older rows does not belong at the end of it. */
+
+static void feed_chan(struct app *app, bool live, long id, const char *body) {
+    struct wire_scrollback_message m;
+    memset(&m, 0, sizeof(m));
+    m.id = id;
+    m.server_time = 1754222400;
+    m.network = "azzurra";
+    m.channel = "#sniffo";
+    m.sender = "alice";
+    m.body = body;
+    m.kind = MSG_PRIVMSG;
+    render_message(app, &m, live);
+}
+
+static void mark_page_locked(struct app *app, const char *channel) {
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key("azzurra", channel, scope, sizeof(scope));
+    pthread_mutex_lock(&app->lock);
+    app->log_insert_at = window_first_row_locked(app, scope);
+    app->log_insert_tid = pthread_self();
+    app->log_insert_active = true;
+    pthread_mutex_unlock(&app->lock);
+}
+
+static void unmark_page(struct app *app) {
+    pthread_mutex_lock(&app->lock);
+    app->log_insert_active = false;
+    pthread_mutex_unlock(&app->lock);
+}
+
+TEST(older_history_lands_above_what_is_already_there) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window(app, "azzurra", "#sniffo");
+
+    feed_chan(app, true, 500, "later");
+    feed_chan(app, true, 501, "latest");
+    CHECK_LONG(app->log_count, 2);
+
+    /* The page arrives oldest-first, which is how parse_messages hands
+     * a DESC page to the sink. */
+    mark_page_locked(app, "#sniffo");
+    feed_chan(app, false, 400, "earlier");
+    feed_chan(app, false, 401, "earlier still");
+    unmark_page(app);
+
+    CHECK_LONG(app->log_count, 4);
+    CHECK(strstr(app->log[0], "earlier") != NULL);
+    CHECK(strstr(app->log[1], "earlier still") != NULL);
+    CHECK(strstr(app->log[2], "later") != NULL);
+    CHECK(strstr(app->log[3], "latest") != NULL);
+
+    /* And every row still carries ITS id. The stamp used to say "the last
+     * row", which is true only of an append: a page written into the
+     * middle would have put 400 and 401 on tonight's two messages and
+     * dragged the unread divider up with them. */
+    CHECK_LONG(app->log_ids[0], 400);
+    CHECK_LONG(app->log_ids[1], 401);
+    CHECK_LONG(app->log_ids[2], 500);
+    CHECK_LONG(app->log_ids[3], 501);
+
+    free_app(app);
+}
+
+static void *live_row_thread(void *arg) {
+    feed_chan(arg, true, 600, "said while the page was landing");
+    return NULL;
+}
+
+/* The mark belongs to the thread that set it. The worker fetches a page
+ * over HTTP while the socket thread keeps delivering live messages, and
+ * a message arriving NOW is news: it goes at the bottom, where it
+ * happened, not into the middle of 1970. */
+TEST(a_message_arriving_during_a_page_is_still_news) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window(app, "azzurra", "#sniffo");
+    feed_chan(app, true, 500, "already here");
+
+    mark_page_locked(app, "#sniffo");
+    feed_chan(app, false, 400, "earlier");
+    pthread_t t;
+    CHECK(pthread_create(&t, NULL, live_row_thread, app) == 0);
+    pthread_join(t, NULL);
+    feed_chan(app, false, 401, "earlier still");
+    unmark_page(app);
+
+    CHECK_LONG(app->log_count, 4);
+    CHECK(strstr(app->log[0], "earlier") != NULL);
+    CHECK(strstr(app->log[1], "earlier still") != NULL);
+    CHECK(strstr(app->log[2], "already here") != NULL);
+    CHECK(strstr(app->log[3], "said while the page was landing") != NULL);
+
+    free_app(app);
+}
+
+/* The cursor is the LOWEST id the window holds, and the insertion point
+ * is its FIRST row — two different rows, deliberately. A "joined #chan"
+ * line sits above the first message and carries no id; history belongs
+ * above it, and cannot be asked for before it. */
+TEST(a_page_is_asked_for_before_the_oldest_and_written_above_the_first) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+
+    /* A row that predates every window: shown everywhere, belonging to
+     * nowhere. It must not become #sniffo's insertion point — the
+     * everywhere rows are what log_row_is_window exists to exclude. */
+    log_line(app, "connected to azzurra");
+    CHECK(app->log_scope[0][0] == 0);
+
+    add_window(app, "azzurra", "#sniffo");
+    add_window(app, "azzurra", "#altro");
+    log_line(app, "[azzurra/#altro] 10:00 <bob> elsewhere first");
+
+    log_line(app, "[azzurra/#sniffo] joined #sniffo");
+    feed_chan(app, true, 505, "second message");
+    feed_chan(app, true, 502, "first message, out of order");
+
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key("azzurra", "#sniffo", scope, sizeof(scope));
+    pthread_mutex_lock(&app->lock);
+    long oldest = window_oldest_id_locked(app, scope);
+    size_t first = window_first_row_locked(app, scope);
+    pthread_mutex_unlock(&app->lock);
+
+    /* Lowest id, not the id of the topmost row — the page boundary is an
+     * id comparison on the server and has to be one here too. */
+    CHECK_LONG(oldest, 502);
+    /* The "joined" line, which is row 2: row 0 is the scopeless one and
+     * row 1 belongs to #altro. */
+    CHECK_LONG(first, 2);
+    CHECK(strstr(app->log[first], "joined #sniffo") != NULL);
+
+    free_app(app);
+}
+
+/* A page can be landing in one window while another is cleared out from
+ * under it: the fetch is on the worker, /clear is on the UI thread.
+ *
+ * The insertion mark is an index into the ring, so every row that leaves
+ * below it takes it one place with it. Two adjacent rows leaving take it
+ * TWO — which is exactly what a per-row "is the mark above this index"
+ * test gets wrong, because after the first decrement the mark is no
+ * longer expressed in the numbering the second index is. */
+TEST(a_page_keeps_its_place_when_another_window_is_cleared) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window(app, "azzurra", "#altro");
+    add_window(app, "azzurra", "#sniffo");
+    /* /clear acts on the FOCUSED window, and that is #altro. */
+    app->pane_count = 1;
+    app->focus = 0;
+    app->panes[0].window = 0;
+
+    log_line(app, "[azzurra/#altro] 10:00 <bob> one");
+    log_line(app, "[azzurra/#altro] 10:01 <bob> two");
+    feed_chan(app, true, 500, "already here");
+    feed_chan(app, true, 501, "and here");
+    CHECK_LONG(app->log_count, 4);
+
+    mark_page_locked(app, "#sniffo");
+    CHECK_LONG(app->log_insert_at, 2);
+
+    /* Reaching the beginning of #altro is a fact about the rows it held,
+     * and /clear throws those away. */
+    app->windows[0].history_exhausted = true;
+
+    /* Both of #altro's rows go, and both were below the mark. */
+    clear_active_window_log(app);
+    CHECK_LONG(app->log_count, 2);
+    CHECK_LONG(app->log_insert_at, 0);
+    CHECK(!app->windows[0].history_exhausted);
+
+    feed_chan(app, false, 400, "earlier");
+    unmark_page(app);
+
+    CHECK_LONG(app->log_count, 3);
+    CHECK(strstr(app->log[0], "earlier") != NULL);
+    CHECK(strstr(app->log[1], "already here") != NULL);
+    CHECK(strstr(app->log[2], "and here") != NULL);
+
+    free_app(app);
+}
+
+/* Reaching the top is a GESTURE, and every one of these guards is a way
+ * of asking that is not one. */
+TEST(only_a_reader_at_the_top_asks_for_more) {
+    /* Scrolled up, and there is nothing above: ask. */
+    CHECK(history_wanted(true, 40, 40, true, false, false));
+    /* Scrolled up but not to the top: there is more in the buffer. */
+    CHECK(!history_wanted(true, 20, 40, true, false, false));
+    /* Not pinned. A short window shows its top from the moment it opens,
+     * and opening a quiet channel is not a request to read its 2019. */
+    CHECK(!history_wanted(false, 0, 0, true, false, false));
+    /* PgUp in a window with nowhere left to go IS the request: the
+     * offset is set before the draw clamps it. */
+    CHECK(history_wanted(true, 10, 0, true, false, false));
+    /* One page at a time. The trigger fires from the draw path, so
+     * without this a pane parked at the top asks every frame. */
+    CHECK(!history_wanted(true, 40, 40, true, true, false));
+    /* The server said there is nothing older. */
+    CHECK(!history_wanted(true, 40, 40, true, false, true));
+    /* No room in the ring: an inserted row would evict the row it was
+     * inserted above, and the window would page backwards forever
+     * without ever growing. Not latched — free a row and it resumes. */
+    CHECK(!history_wanted(true, 40, 40, false, false, false));
+}
+
 /* The bot's door, not its judgement.
  *
  * bot_consider spent its whole life inside the `default:` arm of
@@ -4559,6 +4773,11 @@ int main(void) {
     RUN(a_websocket_ref_is_never_handed_out_twice);
     RUN(the_model_thread_announces_that_it_stopped);
     RUN(retiring_an_echo_moves_every_row_not_just_its_text);
+    RUN(older_history_lands_above_what_is_already_there);
+    RUN(a_message_arriving_during_a_page_is_still_news);
+    RUN(a_page_is_asked_for_before_the_oldest_and_written_above_the_first);
+    RUN(a_page_keeps_its_place_when_another_window_is_cleared);
+    RUN(only_a_reader_at_the_top_asks_for_more);
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);
     RUN(an_identity_keeps_its_notes_across_the_rename);

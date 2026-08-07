@@ -385,6 +385,48 @@ TEST(the_terminal_reads_the_invites_sfu) {
     CHECK(strstr(source, "static void call_rtc_base_from(") != NULL);
 }
 
+/* Reaching the top of a pane reaches the bouncer.
+ *
+ * history_wanted and the insertion are unit-tested; what no test can
+ * observe is the WIRING — that the draw path is what asks, that it asks
+ * through the queue, and that the page it asks for is bounded by the
+ * window's own oldest row rather than by wall-clock or by nothing. */
+TEST(the_top_of_a_pane_asks_for_what_came_before_it) {
+    /* Asked from the measuring pass, which is the only thing that knows
+     * where the top is — and AFTER the clamp, or the offset compared
+     * against max_offset is one the pane never actually had. */
+    size_t clamp = (size_t)(strstr(source, "pane->scroll_offset = (size_t)max_offset;") - source);
+    const char *ask = strstr(source, "if (history_wanted(pane->scroll_pinned");
+    CHECK(ask != NULL && (size_t)(ask - source) > clamp);
+    CHECK(strstr(source, "request_older_history_locked(app, w);") != NULL);
+
+    /* Through the queue: an HTTP round trip on the draw path would stop
+     * the client for as long as the bouncer took to answer. */
+    CHECK(strstr(source, "case JOB_HISTORY:\n            fetch_older_scrollback(") != NULL);
+    /* And queued QUIETLY. The talking form reports through log_line,
+     * which takes app->lock — the lock the draw path is holding. A full
+     * queue would have hung the client instead of dropping a job. */
+    CHECK(strstr(source, "if (enqueue_job_quiet(app, job)) w->history_inflight = true;") != NULL);
+
+    /* The cursor is the window's own oldest id, and the page is the same
+     * size the window opened with. */
+    CHECK(strstr(source, "messages?before=%ld&limit=%d") != NULL);
+    CHECK(strstr(source, "long before = window_oldest_id_locked(app, scope);") != NULL);
+
+    /* Written above the rows already there, by marking the ONE door
+     * rather than teaching the ingest to insert — a page renders through
+     * exactly the path a live message does. */
+    CHECK(strstr(source, "app->log_insert_at = window_first_row_locked(app, scope);") != NULL);
+    CHECK(strstr(source, "app->log_insert_active = true;") != NULL);
+    /* The id stamp follows the row rather than the tail. */
+    CHECK(strstr(source, "app->log_ids[app->log_last_index] = id;") != NULL);
+
+    /* Only an empty page latches the window shut. An HTTP failure is not
+     * the server saying there is nothing older, and treating it as one
+     * would end paging for the session on a single blip. */
+    CHECK(strstr(source, "if (ok && got == 0) app->windows[i].history_exhausted = true;") != NULL);
+}
+
 int main(void) {
     test_use_temp_home();
 
@@ -415,6 +457,7 @@ int main(void) {
     RUN(call_new_mints_rather_than_joining);
     RUN(an_unchecked_invite_neither_rings_nor_is_remembered);
     RUN(the_terminal_reads_the_invites_sfu);
+    RUN(the_top_of_a_pane_asks_for_what_came_before_it);
     RUN(the_call_window_is_offered_never_forced);
 
     free(source);
