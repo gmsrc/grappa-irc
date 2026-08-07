@@ -1037,21 +1037,20 @@ const ServersDisclosure: Component<{
       </Show>
       <Show when={props.servers.length > 0}>
         <AdminTable
-          class="admin-network-servers-table"
+          class="admin-network-servers-table adm-table--stack"
           data-testid={`admin-network-servers-table-${props.net.slug}`}
         >
           <thead>
             <tr>
               {/* host and port were two columns for one fact — a server
                   IS `host:port`, and splitting it spent a column to say
-                  nothing. Merged, not hidden. tls / priority / enabled
-                  are the ones that defer on a phone: tls duplicates what
-                  the Enable/Disable TLS button already says, and the
-                  other two are almost never the reason you opened this. */}
+                  nothing. Merged on every viewport. The rest stay real
+                  columns: this table STACKS on a phone rather than
+                  dropping anything (`adm-table--stack`). */}
               <th class="adm-table-grow">host:port</th>
-              <th class="adm-col-detail">tls</th>
-              <th class="adm-col-detail">priority</th>
-              <th class="adm-col-detail">enabled</th>
+              <th>tls</th>
+              <th>priority</th>
+              <th>enabled</th>
               <th>source</th>
               <th>actions</th>
             </tr>
@@ -1066,13 +1065,13 @@ const ServersDisclosure: Component<{
                 const [sourceDraft, setSourceDraft] = createSignal(s.source_address ?? "");
                 return (
                   <tr data-testid={`admin-network-server-row-${props.net.slug}-${s.id}`}>
-                    <td>
+                    <td data-label="host">
                       {s.host}:{s.port}
                     </td>
-                    <td class="adm-col-detail">{s.tls ? "yes" : "no"}</td>
-                    <td class="adm-col-detail">{s.priority}</td>
-                    <td class="adm-col-detail">{s.enabled ? "yes" : "no"}</td>
-                    <td>
+                    <td data-label="tls">{s.tls ? "yes" : "no"}</td>
+                    <td data-label="priority">{s.priority}</td>
+                    <td data-label="enabled">{s.enabled ? "yes" : "no"}</td>
+                    <td data-label="source">
                       <input
                         type="text"
                         placeholder="unset"
@@ -1090,7 +1089,7 @@ const ServersDisclosure: Component<{
                         Save
                       </button>
                     </td>
-                    <td>
+                    <td data-label="actions">
                       <button
                         type="button"
                         class="adm-btn"
@@ -1189,14 +1188,14 @@ const FeaturedChannelsDisclosure: Component<{
       </Show>
       <Show when={props.featured.length > 0}>
         <AdminTable
-          class="admin-network-featured-table"
+          class="admin-network-featured-table adm-table--stack"
           data-testid={`admin-network-featured-table-${props.net.slug}`}
         >
           <thead>
             <tr>
               <th class="adm-table-grow">channel</th>
-              <th class="adm-col-detail">description</th>
-              <th class="adm-col-detail">position</th>
+              <th>description</th>
+              <th>position</th>
               <th>enabled</th>
               <th>actions</th>
             </tr>
@@ -1205,11 +1204,11 @@ const FeaturedChannelsDisclosure: Component<{
             <For each={props.featured}>
               {(fc) => (
                 <tr data-testid={`admin-network-featured-row-${props.net.slug}-${fc.id}`}>
-                  <td>{fc.name}</td>
-                  <td class="adm-col-detail">{fc.description}</td>
-                  <td class="adm-col-detail">{fc.position}</td>
-                  <td>{fc.enabled ? "yes" : "no"}</td>
-                  <td>
+                  <td data-label="channel">{fc.name}</td>
+                  <td data-label="description">{fc.description}</td>
+                  <td data-label="position">{fc.position}</td>
+                  <td data-label="enabled">{fc.enabled ? "yes" : "no"}</td>
+                  <td data-label="actions">
                     <button
                       type="button"
                       class="adm-btn"

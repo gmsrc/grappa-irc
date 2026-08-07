@@ -4556,6 +4556,23 @@ html.resize-dragging * {
   border-color: color-mix(in oklab, var(--adm-warn), transparent 55%);
 }
 
+/* Every destructive verb wears danger at rest, not only once armed:
+   Delete, Unbind and Revoke all render through `.delete-btn`, so one
+   rule covers the lot and they stop looking like the neutral buttons
+   beside them.
+
+   The three-step ladder is deliberate and is the whole reason these are
+   separate rules rather than one: Disconnect is amber because it parks a
+   credential and the session comes back; Delete and friends are outlined
+   red because they remove a row; Terminate is FILLED red because it
+   kills a live pid, which is the only thing here you cannot undo by
+   re-running the verb. */
+.adm-table .delete-btn,
+.adm-form-row .delete-btn {
+  color: var(--adm-danger);
+  border-color: var(--adm-danger);
+}
+
 .adm-table .terminate-btn {
   color: var(--adm-danger);
   border-color: var(--adm-danger);
@@ -4986,6 +5003,70 @@ html.resize-dragging * {
     background: var(--adm-surface-0);
     border-right: 1px solid var(--adm-line-strong);
     box-shadow: 6px 0 6px -6px color-mix(in oklab, var(--fg), transparent 80%);
+  }
+}
+
+/* Nested tables STACK on a phone: one block per row, label beside
+   value, no horizontal scroll at all.
+
+   This is the one place stacked rows are right, and it is not a
+   contradiction of the argument that kept the main tables as tables.
+   That argument was about scanning: you read Sessions to find the odd
+   row out, and stacking puts every value on its own line where no two
+   can be compared. These are different — a handful of servers or
+   featured channels inside a detail panel you already opened, where the
+   job is to act on one, not to compare twenty. And they are nested two
+   scroll containers deep, which is where sideways panning stops being
+   survivable and starts being a bug.
+
+   Column dropping was tried here first and could not go far enough: even
+   at three columns the source editor plus Disable TLS plus Delete
+   overflow 402px, and the source editor is the reason the row is
+   interactive at all, so it cannot be the thing that defers. */
+@media (max-width: 899px) {
+  .adm-table--stack,
+  .adm-table--stack tbody,
+  .adm-table--stack tr,
+  .adm-table--stack td {
+    display: block;
+    width: auto;
+  }
+
+  /* The header row's labels move onto the cells via `data-label`. */
+  .adm-table--stack thead {
+    display: none;
+  }
+
+  .adm-table--stack tr {
+    border: 1px solid var(--adm-line);
+    border-radius: var(--adm-radius-sm);
+    padding: var(--adm-space-2);
+    margin-bottom: var(--adm-space-2);
+    background: var(--adm-surface-0);
+  }
+
+  .adm-table--stack td {
+    display: flex;
+    align-items: center;
+    gap: var(--adm-space-3);
+    border-bottom: 0;
+    padding: var(--adm-space-1) 0;
+  }
+
+  .adm-table--stack td::before {
+    content: attr(data-label);
+    flex: 0 0 5rem;
+    font-family: var(--adm-font);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--adm-text-dim);
+  }
+
+  /* Nothing to pan, so nothing may scroll — otherwise the wrapper keeps
+     its own scrollbar over content that now fits. */
+  .adm-table--stack {
+    min-width: 0;
   }
 }
 
