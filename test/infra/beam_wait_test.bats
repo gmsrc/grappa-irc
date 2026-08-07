@@ -178,7 +178,11 @@ next_entry_point() {
 @test "exactly one file under infra/ implements the wait algorithm" {
     cd "$REPO_SRC"
 
-    run grep -rl 'beam_wait_name_free()' infra
+    # Matched as a SUBSTRING, so it catches both the shared lib's
+    # `beam_wait_name_free()` and a re-copied `wait_name_free()` under
+    # the pre-#923 name — a third copy would arrive by pasting the old
+    # shape, and a pattern pinned to the new name would wave it through.
+    run grep -rl 'wait_name_free()' infra
     [ "$status" -eq 0 ]
     [ "$output" = "infra/lib/beam_wait.sh" ]
 }
