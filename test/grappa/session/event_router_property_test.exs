@@ -213,7 +213,10 @@ defmodule Grappa.Session.EventRouterPropertyTest do
           assert is_list(users)
 
         {:server_reply, source, lines} ->
-          assert source in [:info, :version, :motd]
+          # Read the SSOT, never a copy: this allowlist had already drifted
+          # narrower than the union once (#992's :admin), and a hand-spelled
+          # set here fails a legitimate effect on some future seed.
+          assert source in Grappa.Session.Wire.server_reply_sources()
           assert is_list(lines)
 
         {:rejoin_invited, channel} ->

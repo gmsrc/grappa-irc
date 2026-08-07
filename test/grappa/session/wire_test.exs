@@ -330,6 +330,30 @@ defmodule Grappa.Session.WireTest do
                lines: []
              }
     end
+
+    test "builds the #992 :admin payload (259 RPL_ADMINEMAIL drain)" do
+      assert Wire.server_reply("azzurra", :admin, ["testnet admin", "root@irc.test"]) == %{
+               kind: :server_reply,
+               network: "azzurra",
+               source: :admin,
+               lines: ["testnet admin", "root@irc.test"]
+             }
+    end
+
+    # The class guard, not another example. #992 added :admin to the type
+    # union but not to the separate list that guarded the builder, and the
+    # divergence was invisible until a live 259 crashed the Session.Server.
+    # Enumerating the SSOT means the NEXT source cannot land half-wired.
+    test "accepts every source in the closed set — no arm left unguarded" do
+      for source <- Wire.server_reply_sources() do
+        assert %{kind: :server_reply, source: ^source} =
+                 Wire.server_reply("azzurra", source, ["line"])
+      end
+    end
+
+    test "rejects an atom outside the closed set" do
+      assert_raise FunctionClauseError, fn -> Wire.server_reply("azzurra", :links, ["line"]) end
+    end
   end
 
   describe "member/1" do

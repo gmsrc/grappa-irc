@@ -321,8 +321,22 @@ defmodule Grappa.Session.Wire do
   Additive per the #447 wire contract: a client that does not know
   `:admin` ignores the frame rather than breaking, so no
   `protocol_version` bump is needed.
+
+  The union is DERIVED from `@server_reply_sources` rather than spelled
+  twice. #992 shipped `:admin` into the union but not into the copy of
+  the set that guarded `server_reply/3`, and the two silently disagreed:
+  every unit test passed while the first real 259 off a live ircd raised
+  `FunctionClauseError` inside `apply_effects/2` and took the whole
+  `Session.Server` down with it. A closed set gets ONE spelling.
   """
-  @type server_reply_source :: :info | :version | :motd | :admin
+  @server_reply_sources [:info, :version, :motd, :admin]
+
+  @type server_reply_source ::
+          unquote(
+            @server_reply_sources
+            |> Enum.reverse()
+            |> Enum.reduce(fn source, acc -> {:|, [], [source, acc]} end)
+          )
 
   @typedoc """
   #127 — ephemeral server-text reply for an EXPLICIT `/info`, `/version`
@@ -1035,6 +1049,14 @@ defmodule Grappa.Session.Wire do
   end
 
   @doc """
+  The closed `server_reply_source()` set as a runtime list, so a caller
+  that must enumerate it (tests, property allowlists) reads the SSOT
+  instead of spelling a copy that drifts the next time a source lands.
+  """
+  @spec server_reply_sources() :: [server_reply_source(), ...]
+  def server_reply_sources, do: @server_reply_sources
+
+  @doc """
   #127 — build the ephemeral `/info`, `/version` or `/motd` reply payload
   (drained on the terminator numeric). Mirror of `who_reply/3`: user-level
   topic, ephemeral — see `server_reply_payload/0`. `source` is the typed
@@ -1044,7 +1066,7 @@ defmodule Grappa.Session.Wire do
   @spec server_reply(String.t(), server_reply_source(), [String.t()]) ::
           server_reply_payload()
   def server_reply(network_slug, source, lines)
-      when is_binary(network_slug) and source in [:info, :version, :motd] and
+      when is_binary(network_slug) and source in @server_reply_sources and
              is_list(lines) do
     %{
       kind: :server_reply,
