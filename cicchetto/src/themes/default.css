@@ -5224,12 +5224,6 @@ html.resize-dragging * {
   padding: var(--adm-space-4);
 }
 
-/* A nested form (inside `.adm-subsection`, itself already inside a
-   padded expand row) must not pad twice. */
-.adm-subsection .adm-form-row {
-  padding: 0;
-}
-
 /* The form row's controls share the slack. This used to hang off
    `.adm-field`, which wrapped each control until the labels moved
    inside as placeholders — leaving the bare inputs with no flex rule at
@@ -5257,15 +5251,23 @@ html.resize-dragging * {
    A grid gives every field the same width whatever row it lands on, and
    the submit gets a row of its own spanning the full width — which also
    makes it unmissable, instead of hiding at the end of a wrapped line. */
+/* TWO columns on a phone, explicitly — not `auto-fit`. Auto-fit derives
+   the count from whatever width survives the card and form padding, and
+   at 402px that came out as one column, so an eight-field form became
+   eight full-width rows. Two is what fits a short label-as-placeholder
+   without truncating it, and it halves the scroll. Desktop keeps
+   auto-fit, where there is width to spend. */
 .adm-form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  grid-template-columns: 1fr 1fr;
   gap: var(--adm-space-3);
   padding: var(--adm-space-4);
 }
 
-.adm-subsection .adm-form-grid {
-  padding: 0;
+@media (min-width: 900px) {
+  .adm-form-grid {
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  }
 }
 
 .adm-form-grid > .adm-check {
@@ -5349,6 +5351,17 @@ html.resize-dragging * {
   gap: var(--adm-space-3);
 }
 
+/* An expand row holds two or three of these stacked (Networks: Servers
+   then Featured channels). Without a rule they ran together and the
+   second section's heading sat flush against the first section's last
+   table row — the missing top padding. A rule + real space says "new
+   section" without needing another card. */
+.adm-subsection + .adm-subsection {
+  margin-top: var(--adm-space-5);
+  padding-top: var(--adm-space-5);
+  border-top: 1px solid var(--adm-line);
+}
+
 .adm-subsection-title {
   margin: 0;
   font-family: var(--adm-font);
@@ -5357,6 +5370,19 @@ html.resize-dragging * {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--adm-text-dim);
+}
+
+/* The add-form is set into its own recessed panel so it reads as "this
+   is the thing you are about to create", clearly apart from the table of
+   things that already exist. In Networks the two sat adjacent with the
+   same background and identical-looking inputs, and the saved hosts and
+   the one being typed were indistinguishable at a glance. */
+.adm-subsection > .adm-form-row,
+.adm-subsection > .adm-form-grid {
+  padding: var(--adm-space-3);
+  background: var(--adm-surface-2);
+  border: 1px dashed var(--adm-line-strong);
+  border-radius: var(--adm-radius-sm);
 }
 
 /* Checkbox + word, side by side — the one form control `AdminField`

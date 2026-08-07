@@ -103,7 +103,12 @@ const TABS: (AdminNavTab & { key: TabKey })[] = [
 ];
 
 const AdminPane: Component<Props> = (props) => {
-  const [currentTab, setCurrentTab] = createSignal<TabKey>("visitors");
+  // Sessions, not Visitors. The old default predates this redesign and
+  // predates the grouped nav: with the tabs in a deliberate order, the
+  // console opening on the SECOND entry of the first group is arbitrary.
+  // Sessions is also the better landing — it is the "what is happening
+  // right now" view, which is why an operator opens the console at all.
+  const [currentTab, setCurrentTab] = createSignal<TabKey>("sessions");
 
   const isActive = (k: TabKey): boolean => currentTab() === k;
 

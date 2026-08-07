@@ -1,4 +1,5 @@
 import { type Component, For } from "solid-js";
+import AdminBadge, { type Tone } from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import { AdminEmpty } from "./admin/AdminStatus";
 import { formatLogInstant } from "./admin/formatInstant";
@@ -34,6 +35,68 @@ import type {
 // subscription AdminPane owns, so there is nothing to re-fetch and no
 // request that can fail. The toolbar carries the count line alone.
 
+// Admin-event kind → badge tone. All 27 arms of `renderEvent` below are
+// listed; `tsc` will not let this map fall behind them, because it is
+// keyed on the same `WireAdminEvent["kind"]` union.
+//
+// The axis is the VERB, not severity. Severity does not survive 27
+// values — half of these are neither good nor bad, they are just things
+// that happened — but "what kind of change is this" does, and it is what
+// an operator actually scans for: did something get made, altered,
+// destroyed, refused, or swept up on a timer.
+//
+//   ok       something was created or restored
+//   info     something existing was altered
+//   danger   something was destroyed or forcibly ended
+//   warn     something was refused or a guard tripped
+//   neutral  automatic housekeeping, nobody asked for it
+//
+// `circuit_open` is a warn and `circuit_close` an ok because the breaker
+// opening is the network being refused; `capacity_reject`,
+// `login_throttled` and `web_session_severed` are the other guards.
+// Reaper and upload sweeps are neutral: they are the timer doing its
+// job, and colouring them would make routine noise look like news.
+// `cap_counts_changed` is neutral for the same reason — it is a live
+// projection tick, not an operator's decision.
+const EVENT_TONE: Record<WireAdminEvent["kind"], Tone> = {
+  // created / restored
+  user_created: "ok",
+  network_created: "ok",
+  server_added: "ok",
+  credential_bound: "ok",
+  circuit_close: "ok",
+  circuit_reset: "ok",
+
+  // altered
+  user_updated: "info",
+  user_password_changed: "info",
+  network_caps_updated: "info",
+  server_updated: "info",
+  credential_updated: "info",
+
+  // destroyed / forcibly ended
+  user_deleted: "danger",
+  network_deleted: "danger",
+  server_removed: "danger",
+  credential_unbound: "danger",
+  visitor_deleted: "danger",
+  session_terminated: "danger",
+  session_disconnected: "danger",
+
+  // refused / guard tripped
+  circuit_open: "warn",
+  capacity_reject: "warn",
+  login_throttled: "warn",
+  web_session_severed: "warn",
+
+  // automatic housekeeping
+  visitor_reaped: "neutral",
+  reaper_swept: "neutral",
+  upload_reaped: "neutral",
+  uploads_swept: "neutral",
+  cap_counts_changed: "neutral",
+};
+
 const AdminEventsTab: Component = () => {
   return (
     <div class="admin-events-tab" data-testid="admin-events-tab">
@@ -54,7 +117,9 @@ const AdminEventsTab: Component = () => {
               {(ev) => (
                 <li class="adm-log-row" data-testid={`admin-event-${ev.kind}`}>
                   <time class="adm-log-at">{formatLogInstant(ev.at)}</time>
-                  <span class={`adm-log-kind kind-${ev.kind}`}>{ev.kind}</span>
+                  <AdminBadge tone={EVENT_TONE[ev.kind]} class={`kind-${ev.kind}`}>
+                    {ev.kind}
+                  </AdminBadge>
                   <span class="adm-log-text">{renderEvent(ev)}</span>
                 </li>
               )}
